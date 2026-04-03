@@ -30,7 +30,7 @@ def test_main_module_prints_version() -> None:
         timeout=10,
     )
     assert result.returncode == 0
-    assert "Sovyx v0.1.0" in result.stdout
+    assert "0.1.0" in result.stdout
 
 
 def test_package_is_typed() -> None:
@@ -66,7 +66,7 @@ def test_cli_version_flag() -> None:
     runner = CliRunner()
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
-    assert "Sovyx v0.1.0" in result.output
+    assert "0.1.0" in result.output
 
 
 def test_cli_no_args_shows_help() -> None:

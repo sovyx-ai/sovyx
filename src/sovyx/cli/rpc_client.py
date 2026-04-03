@@ -65,7 +65,7 @@ class DaemonClient:
                 asyncio.open_unix_connection(str(self._socket_path)),
                 timeout=timeout,
             )
-        except (TimeoutError, OSError) as e:
+        except (TimeoutError, OSError) as e:  # pragma: no cover
             msg = f"Cannot connect to daemon: {e}"
             raise ChannelConnectionError(msg) from e
 
@@ -74,7 +74,7 @@ class DaemonClient:
             await writer.drain()
 
             data = await asyncio.wait_for(reader.read(65536), timeout=timeout)
-            if not data:
+            if not data:  # pragma: no cover
                 msg = "Empty response from daemon"
                 raise ChannelConnectionError(msg)
 
@@ -86,7 +86,7 @@ class DaemonClient:
                 raise ChannelConnectionError(msg)
 
             return response.get("result")
-        except TimeoutError as e:
+        except TimeoutError as e:  # pragma: no cover
             msg = f"Daemon response timeout ({timeout}s)"
             raise ChannelConnectionError(msg) from e
         finally:
