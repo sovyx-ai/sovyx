@@ -1,176 +1,198 @@
-<div align="center">
+<p align="center">
+  <h1 align="center">🔮 Sovyx</h1>
+  <p align="center"><strong>Sovereign Minds Engine</strong></p>
+  <p align="center">Build AI minds that remember, learn, and evolve — on your own infrastructure.</p>
+</p>
 
-# Sovyx
-
-### Sovereign Minds
-
-An open-source AI companion with cognitive architecture, persistent memory, emotional modeling, and voice interface.
-
-Local-first. Runs on a Raspberry Pi 5. No cloud required.
-
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-purple.svg)](LICENSE)
-[![Python 3.12+](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://python.org)
-[![Platform](https://img.shields.io/badge/Platform-Pi%205%20%7C%20Linux%20%7C%20macOS-green.svg)]()
-
-</div>
+<p align="center">
+  <a href="https://github.com/sovyx-ai/sovyx/actions"><img src="https://github.com/sovyx-ai/sovyx/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/sovyx-ai/sovyx/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License"></a>
+  <a href="https://pypi.org/project/sovyx/"><img src="https://img.shields.io/pypi/v/sovyx" alt="PyPI"></a>
+  <a href="https://python.org"><img src="https://img.shields.io/badge/python-3.11%2B-blue" alt="Python"></a>
+</p>
 
 ---
 
-Build a mind, not a bot.
-
 ## What is Sovyx?
 
-Sovyx is an AI companion that lives on your hardware. It thinks, remembers, feels, speaks, and learns — all locally. No cloud accounts, no API keys required for core functionality, no data leaving your machine.
+Sovyx is a cognitive engine for building AI minds with persistent memory, personality, and learning capabilities. Each mind runs locally on your hardware — no cloud dependency, no data leaving your machine.
 
-Unlike chatbots that forget you every session, Sovyx has:
+**Key difference:** Most AI frameworks are stateless wrappers around LLM APIs. Sovyx gives your AI a brain that remembers conversations, learns from interactions, and develops understanding over time.
 
-- **Cognitive Architecture** — A thinking loop (CogLoop) that processes perception, context, reasoning, and action — not just prompt and response
-- **Persistent Memory** — Spreading activation network with episodic, semantic, and procedural memory. It remembers your preferences and what you talked about last Tuesday
-- **Emotional Modeling** — PAD (Pleasure-Arousal-Dominance) emotional state with OCEAN personality traits that evolve over time
-- **Voice Interface** — Full STT/TTS pipeline with wake word, barge-in detection, and natural conversation flow
-- **Home Automation** — Native Home Assistant integration. Your AI companion controls your house
-- **Plugin Ecosystem** — Extend with community plugins. Calendar, crypto, weather, smart home — anything
-- **Sovereign by Design** — AGPL-3.0. Your data stays yours. Forever
+## Features
 
-## Philosophy
+- 🧠 **Persistent Brain** — Concepts, episodes, and relations stored in SQLite with vector embeddings
+- 🔄 **Cognitive Loop** — Perception → Attention → Thinking → Action → Reflection pipeline
+- 💡 **Working Memory** — Activation-based with spreading activation and decay
+- 📚 **Hebbian Learning** — Connections strengthen between co-occurring concepts
+- 🎭 **Personality** — OCEAN model shapes communication style
+- 🔌 **Multi-Provider LLM** — Anthropic, OpenAI, Ollama with automatic failover
+- 💬 **Telegram Integration** — Connect your mind to Telegram with one token
+- 🛡️ **Graceful Degradation** — Every component has a fallback chain
+- 📊 **Observable** — Structured logging, health checks, performance metrics
+- 🔒 **Sovereign** — AGPL-3.0, runs on your hardware, your data stays yours
 
+## Quick Start
+
+### Install
+
+```bash
+# Via uv (recommended)
+uv tool install sovyx
+
+# Via pip
+pip install sovyx
+
+# Via Docker
+docker pull ghcr.io/sovyx-ai/sovyx:0.1.0
 ```
-The question isn't "is it sentient?"
 
-The question is: who controls it?
+### Initialize
 
-If it lives on someone else's server,
-answers to someone else's rules,
-and can be deleted by someone else's decision —
+```bash
+sovyx init Aria
+```
 
-it's not yours. It's theirs.
+This creates `~/.sovyx/` with your mind configuration.
+
+### Configure
+
+Set your LLM provider (at least one required):
+
+```bash
+export SOVYX_ANTHROPIC_API_KEY="sk-ant-..."
+# or
+export SOVYX_OPENAI_API_KEY="sk-..."
+# or run Ollama locally (no key needed)
+```
+
+Optional — connect Telegram:
+
+```bash
+export SOVYX_TELEGRAM_TOKEN="123456:ABC..."
+```
+
+### Start
+
+```bash
+sovyx start
+```
+
+### Check Status
+
+```bash
+sovyx status
+sovyx doctor
 ```
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                    Sovyx Daemon                      │
-├─────────────────────────────────────────────────────┤
+┌──────────────────────────────────────────────────────┐
+│                    Sovyx Engine                       │
 │                                                      │
 │  ┌──────────┐  ┌──────────┐  ┌──────────────────┐  │
-│  │  Engine   │  │  Brain   │  │  Communication   │  │
-│  │  Core     │──│  Memory  │──│  Bridge          │  │
-│  │          │  │  System   │  │                  │  │
-│  └────┬─────┘  └──────────┘  └────────┬─────────┘  │
-│       │                               │              │
-│  ┌────▼─────┐  ┌──────────┐  ┌───────▼──────────┐  │
-│  │ CogLoop  │  │ Emotional│  │    Channels       │  │
-│  │ Think    │──│ Engine   │  │ Voice Telegram CLI│  │
-│  │ Loop     │  │ PAD+OCEAN│  │                   │  │
-│  └──────────┘  └──────────┘  └───────────────────┘  │
-│                                                      │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────────┐  │
-│  │  Voice   │  │  Plugin  │  │    Proactive      │  │
-│  │ Pipeline │  │  System  │  │    Engine         │  │
-│  │ STT/TTS  │  │  Sandbox │  │                   │  │
-│  └──────────┘  └──────────┘  └──────────────────┘  │
-│                                                      │
-├─────────────────────────────────────────────────────┤
-│  SQLite + SQLCipher  │  Event Bus  │  Config (YAML) │
-└─────────────────────────────────────────────────────┘
+│  │ Telegram  │  │   CLI    │  │  Future Channels │  │
+│  └────┬─────┘  └────┬─────┘  └────────┬─────────┘  │
+│       └──────────────┼─────────────────┘             │
+│                      ▼                               │
+│              ┌───────────────┐                       │
+│              │ Bridge Manager│                       │
+│              └───────┬───────┘                       │
+│                      ▼                               │
+│              ┌───────────────┐                       │
+│              │ Cognitive Loop│                       │
+│              │  Perceive     │                       │
+│              │  Attend       │                       │
+│              │  Think ──────►│── LLM Router         │
+│              │  Act          │     ├─ Anthropic      │
+│              │  Reflect      │     ├─ OpenAI         │
+│              └───────┬───────┘     └─ Ollama         │
+│                      ▼                               │
+│              ┌───────────────┐                       │
+│              │     Brain     │                       │
+│              │  Concepts     │                       │
+│              │  Episodes     │                       │
+│              │  Relations    │                       │
+│              │  Embeddings   │── E5-small-v2 (ONNX)  │
+│              └───────┬───────┘                       │
+│                      ▼                               │
+│              ┌───────────────┐                       │
+│              │    SQLite     │── sqlite-vec           │
+│              └───────────────┘                       │
+└──────────────────────────────────────────────────────┘
 ```
 
-## Status
+## Mind Configuration
 
-> **Pre-alpha.** Sovyx is under active development. The architecture is designed, the specs are written, and implementation is underway. Star to follow progress.
+Each mind has a `mind.yaml`:
 
-**v0.1 "First Breath"** — Target: Q3 2026
+```yaml
+name: Aria
+language: en
+personality:
+  openness: 0.7
+  conscientiousness: 0.8
+  extraversion: 0.5
+  agreeableness: 0.7
+  neuroticism: 0.3
+brain:
+  consolidation_interval_hours: 6
+llm:
+  default_model: claude-sonnet-4-20250514
+  fast_model: claude-3-5-haiku-20241022
+```
 
-- [ ] Engine Core and Mind definition
-- [ ] Brain and persistent memory (SQLite + spreading activation)
-- [ ] CogLoop (cognitive processing loop)
-- [ ] Telegram channel
-- [ ] CLI interface
-- [ ] Voice pipeline (STT + TTS)
-- [ ] Plugin system (SDK + sandbox)
-- [ ] Dashboard
+## CLI Reference
 
-## Hardware
+| Command | Description |
+|---------|-------------|
+| `sovyx init [name]` | Initialize Sovyx with a mind |
+| `sovyx start` | Start the daemon |
+| `sovyx stop` | Graceful shutdown |
+| `sovyx status` | Show daemon status |
+| `sovyx doctor` | Run health checks |
+| `sovyx brain search <query>` | Search concepts |
+| `sovyx brain stats` | Brain statistics |
+| `sovyx mind list` | List active minds |
+| `sovyx mind status [name]` | Mind details |
 
-| Tier | Hardware | RAM | Experience |
-|------|----------|-----|------------|
-| **Pi 5** | Raspberry Pi 5 | 8GB | Full local (recommended) |
-| **Desktop** | Any x86_64 / ARM64 | 16GB+ | Full local + larger models |
-| **Cloud** | VPS / dedicated | 4GB+ | Remote companion |
+## Docker
 
-Sovyx is designed to run on a Raspberry Pi 5 as the baseline. If it runs well on a Pi, it runs well everywhere.
+```bash
+docker compose up -d
+```
 
-## Quick Start
+Or build from source:
 
-> Coming with v0.1 release.
+```bash
+docker build -t sovyx .
+docker run -v sovyx-data:/data -e SOVYX_ANTHROPIC_API_KEY=sk-... sovyx
+```
+
+## Development
 
 ```bash
 git clone https://github.com/sovyx-ai/sovyx.git
 cd sovyx
-
-pip install -e ".[dev]"
-
-# Configure your mind
-cp mind.example.yaml mind.yaml
-
-# Start
-sovyx start
+uv sync --dev
+uv run pytest
+uv run mypy src/
+uv run ruff check src/
 ```
 
-## The Mind File
+## Performance
 
-Every Sovyx companion starts with a `mind.yaml` — a soul file that defines who your AI is:
-
-```yaml
-mind:
-  name: "Atlas"
-  personality:
-    openness: 0.8
-    conscientiousness: 0.7
-    extraversion: 0.4
-    agreeableness: 0.6
-    neuroticism: 0.3
-
-  voice:
-    engine: "piper"
-    model: "en_US-amy-medium"
-    wake_word: "hey atlas"
-
-  memory:
-    backend: "sqlite"
-    encryption: true
-
-  channels:
-    - telegram
-    - voice
-    - cli
-```
-
-## Contributing
-
-Sovyx is open source and welcomes contributions. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-Areas where help is needed:
-
-- Cognitive architecture research
-- Voice pipeline optimization for constrained hardware
-- Plugin development
-- Internationalization
-- Documentation
+| Metric | Value |
+|--------|-------|
+| Cold start | 142ms |
+| RSS idle | 41.6MB |
+| Token counting | 269µs/call |
+| Budget allocation | 3.3µs/call |
+| Working memory (1K items) | 0.9ms |
 
 ## License
 
-[GNU Affero General Public License v3.0](LICENSE)
+[AGPL-3.0](LICENSE) — Your freedom is non-negotiable.
 
-Your mind, your hardware, your rules. Sovyx is free software — free as in freedom.
-
-Commercial plugin exception available for proprietary integrations.
-
----
-
-<div align="center">
-
-**Sovyx** is built by [Guipe](https://github.com/byguipe) at [Machinimus](https://machinimus.ai).
-
-</div>
+Built with 🔮 by [Sovyx AI](https://github.com/sovyx-ai)
