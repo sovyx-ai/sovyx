@@ -1,1 +1,1 @@
-"""Sovyx Cognitive — Cognitive loop: perceive, attend, think, act, reflect."""
+"""Sovyx cognitive loop — Perceive → Think → Act → Reflect."""
