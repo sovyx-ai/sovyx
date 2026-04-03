@@ -1,0 +1,23 @@
+# Sovyx Docker Compose
+# Usage: docker compose up -d
+
+services:
+  sovyx:
+    build: .
+    image: ghcr.io/sovyx-ai/sovyx:0.1.0
+    container_name: sovyx
+    restart: unless-stopped
+    volumes:
+      - sovyx-data:/data
+    environment:
+      - SOVYX_DATA_DIR=/data
+      # LLM providers (uncomment and set)
+      # - SOVYX_ANTHROPIC_API_KEY=sk-...
+      # - SOVYX_OPENAI_API_KEY=sk-...
+      # Telegram (uncomment and set)
+      # - SOVYX_TELEGRAM_TOKEN=123456:ABC...
+    ports:
+      - "7777:7777"  # Relay server (if enabled)
+
+volumes:
+  sovyx-data:
