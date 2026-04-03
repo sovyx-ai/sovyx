@@ -56,3 +56,4 @@ Thumbs.db
 
 # Sovyx data (local)
 .sovyx/
+.hypothesis/
