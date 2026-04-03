@@ -1,0 +1,24 @@
+[Unit]
+Description=Sovyx Cognitive Engine
+Documentation=https://docs.sovyx.ai
+After=network.target
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/sovyx start --foreground
+ExecStop=/usr/local/bin/sovyx stop
+Restart=on-failure
+RestartSec=5
+User=sovyx
+Group=sovyx
+StateDirectory=sovyx
+RuntimeDirectory=sovyx
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/sovyx /run/sovyx
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
