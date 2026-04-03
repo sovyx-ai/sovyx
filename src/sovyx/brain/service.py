@@ -1,0 +1,284 @@
+"""Sovyx BrainService — unified API for the brain subsystem.
+
+Orchestrates: ConceptRepository, EpisodeRepository, RelationRepository,
+EmbeddingEngine, SpreadingActivation, HebbianLearning, EbbinghausDecay,
+HybridRetrieval, WorkingMemory.
+
+Implements BrainReader + BrainWriter protocols.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from typing import TYPE_CHECKING
+
+from sovyx.engine.events import ConceptCreated, EpisodeEncoded
+from sovyx.engine.types import ConceptCategory
+from sovyx.observability.logging import get_logger
+
+if TYPE_CHECKING:
+    from sovyx.brain.concept_repo import ConceptRepository
+    from sovyx.brain.embedding import EmbeddingEngine
+    from sovyx.brain.episode_repo import EpisodeRepository
+    from sovyx.brain.learning import EbbinghausDecay, HebbianLearning
+    from sovyx.brain.models import Concept, Episode
+    from sovyx.brain.relation_repo import RelationRepository
+    from sovyx.brain.retrieval import HybridRetrieval
+    from sovyx.brain.spreading import SpreadingActivation
+    from sovyx.brain.working_memory import WorkingMemory
+    from sovyx.engine.events import EventBus
+    from sovyx.engine.types import (
+        ConceptId,
+        ConversationId,
+        EpisodeId,
+        MindId,
+    )
+
+logger = get_logger(__name__)
+
+
+class BrainService:
+    """Public brain API. Satisfies BrainReader + BrainWriter protocols.
+
+    Lifecycle: start() loads working memory from DB. stop() is a no-op
+    (working memory is ephemeral and rebuilt on start).
+    """
+
+    def __init__(
+        self,
+        concept_repo: ConceptRepository,
+        episode_repo: EpisodeRepository,
+        relation_repo: RelationRepository,
+        embedding_engine: EmbeddingEngine,
+        spreading: SpreadingActivation,
+        hebbian: HebbianLearning,
+        decay: EbbinghausDecay,
+        retrieval: HybridRetrieval,
+        working_memory: WorkingMemory,
+        event_bus: EventBus,
+    ) -> None:
+        self._concepts = concept_repo
+        self._episodes = episode_repo
+        self._relations = relation_repo
+        self._embedding = embedding_engine
+        self._spreading = spreading
+        self._hebbian = hebbian
+        self._decay = decay
+        self._retrieval = retrieval
+        self._memory = working_memory
+        self._events = event_bus
+        self._mind_id: MindId | None = None
+
+    async def start(self, mind_id: MindId) -> None:
+        """Load top-50 recent concepts into working memory."""
+        self._mind_id = mind_id
+        recent = await self._concepts.get_recent(mind_id, limit=50)
+        for concept in recent:
+            self._memory.activate(concept.id, concept.importance)
+        logger.info(
+            "brain_started",
+            mind_id=str(mind_id),
+            concepts_loaded=len(recent),
+        )
+
+    async def stop(self) -> None:
+        """Clean up resources."""
+        self._memory.clear()
+        logger.info("brain_stopped")
+
+    # ── BrainReader interface ──
+
+    async def search(
+        self,
+        query: str,
+        mind_id: MindId,
+        limit: int = 10,
+    ) -> list[tuple[Concept, float]]:
+        """Hybrid search + spreading activation.
+
+        1. HybridRetrieval.search_concepts(query)
+        2. SpreadingActivation from results
+        3. Record access for each returned concept (fire-and-forget)
+        4. Merge and return
+        """
+        results = await self._retrieval.search_concepts(query, mind_id, limit=limit)
+
+        if results:
+            seeds = [(c.id, score) for c, score in results]
+            spread = await self._spreading.activate(seeds)
+
+            # Build activation map
+            spread_map = {str(cid): act for cid, act in spread}
+
+            # Re-score with spreading activation
+            rescored: list[tuple[Concept, float]] = []
+            for concept, rrf_score in results:
+                spread_score = spread_map.get(str(concept.id), 0.0)
+                combined = rrf_score + spread_score * 0.1
+                rescored.append((concept, combined))
+
+            rescored.sort(key=lambda x: x[1], reverse=True)
+            results = rescored[:limit]
+
+        # Fire-and-forget access tracking (v12 audit fix)
+        self._track_access([c.id for c, _ in results])
+
+        return results
+
+    async def recall(
+        self,
+        query: str,
+        mind_id: MindId,
+    ) -> tuple[list[tuple[Concept, float]], list[Episode]]:
+        """Full recall: concepts (with scores) + episodes + spreading.
+
+        Returns (concepts_with_scores, episodes).
+        Scores are needed for ContextAssembler Lost-in-Middle ordering.
+        """
+        concepts = await self.search(query, mind_id)
+        episodes_with_scores = await self._retrieval.search_episodes(query, mind_id)
+        episodes = [ep for ep, _ in episodes_with_scores]
+        return concepts, episodes
+
+    async def get_concept(self, concept_id: ConceptId) -> Concept | None:
+        """Get a concept by ID."""
+        return await self._concepts.get(concept_id)
+
+    async def get_related(self, concept_id: ConceptId, limit: int = 10) -> list[Concept]:
+        """Get concepts related to the given concept via graph."""
+        neighbors = await self._relations.get_neighbors(concept_id, limit=limit)
+        concepts: list[Concept] = []
+        for neighbor_id, _ in neighbors:
+            concept = await self._concepts.get(neighbor_id)
+            if concept is not None:
+                concepts.append(concept)
+        return concepts
+
+    # ── BrainWriter interface ──
+
+    async def learn_concept(
+        self,
+        mind_id: MindId,
+        name: str,
+        content: str,
+        category: ConceptCategory = ConceptCategory.FACT,
+        source: str = "conversation",
+        **kwargs: object,
+    ) -> ConceptId:
+        """Learn a new concept with dedup check (v13 audit fix).
+
+        If a concept with the same name+category exists, reinforce it
+        instead of creating a duplicate.
+        """
+        # Dedup check via FTS5
+        existing = await self._concepts.search_by_text(name, mind_id, limit=3)
+        for concept, _rank in existing:
+            if concept.name.lower() == name.lower() and concept.category == category:
+                # Concept exists — reinforce, don't duplicate
+                if len(content) > len(concept.content):
+                    concept.content = content
+                    await self._concepts.update(concept)
+                await self._concepts.record_access(concept.id)
+                return concept.id
+
+        # New concept
+        from sovyx.brain.models import Concept
+
+        concept = Concept(
+            mind_id=mind_id,
+            name=name,
+            content=content,
+            category=category,
+            source=source,
+        )
+        concept_id = await self._concepts.create(concept)
+
+        # Activate in working memory
+        self._memory.activate(concept_id, concept.importance)
+
+        # Emit event
+        await self._events.emit(
+            ConceptCreated(
+                concept_id=str(concept_id),
+                title=name,
+                source=source,
+            )
+        )
+
+        logger.debug(
+            "concept_learned",
+            concept_id=str(concept_id),
+            name=name,
+        )
+        return concept_id
+
+    async def encode_episode(
+        self,
+        mind_id: MindId,
+        conversation_id: ConversationId,
+        user_input: str,
+        assistant_response: str,
+        importance: float = 0.5,
+        **kwargs: object,
+    ) -> EpisodeId:
+        """Encode an episode + embedding + Hebbian learning.
+
+        Strengthens connections between concepts mentioned in working memory.
+        """
+        from sovyx.brain.models import Episode
+
+        episode = Episode(
+            mind_id=mind_id,
+            conversation_id=conversation_id,
+            user_input=user_input,
+            assistant_response=assistant_response,
+            importance=importance,
+        )
+        episode_id = await self._episodes.create(episode)
+
+        # Hebbian learning on currently active concepts
+        active = self._memory.get_active_concepts(min_activation=0.3)
+        if len(active) >= 2:  # noqa: PLR2004
+            concept_ids = [cid for cid, _ in active]
+            activations = dict(active)
+            await self._hebbian.strengthen(concept_ids, activations)
+
+        # Emit event
+        await self._events.emit(
+            EpisodeEncoded(
+                episode_id=str(episode_id),
+                conversation_id=str(conversation_id),
+                importance=importance,
+            )
+        )
+
+        logger.debug(
+            "episode_encoded",
+            episode_id=str(episode_id),
+        )
+        return episode_id
+
+    async def strengthen_connection(self, concept_ids: list[ConceptId]) -> None:
+        """Hebbian learning between co-activated concepts."""
+        await self._hebbian.strengthen(concept_ids)
+
+    # ── Internal ──
+
+    def _track_access(self, concept_ids: list[ConceptId]) -> None:
+        """Fire-and-forget access tracking (v12 audit fix).
+
+        Doesn't block response. If record_access fails → log warning.
+        """
+        for cid in concept_ids:
+            asyncio.ensure_future(self._safe_record_access(cid))
+
+    async def _safe_record_access(self, concept_id: ConceptId) -> None:
+        """Record access with error swallowing."""
+        try:
+            await self._concepts.record_access(concept_id)
+        except Exception:
+            logger.warning(
+                "access_tracking_failed",
+                concept_id=str(concept_id),
+                exc_info=True,
+            )
