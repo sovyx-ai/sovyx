@@ -73,11 +73,7 @@ class HebbianLearning:
 
                 # Apply Hebbian formula with clamp
                 old_weight = relation.weight
-                delta = (
-                    self._learning_rate
-                    * (1.0 - old_weight)
-                    * co_activation
-                )
+                delta = self._learning_rate * (1.0 - old_weight) * co_activation
                 new_weight = min(1.0, old_weight + delta)
 
                 await self._relations.update_weight(relation.id, new_weight)
@@ -165,9 +161,7 @@ class EbbinghausDecay:
             (concepts_pruned, relations_pruned)
         """
         # Prune weak relations first (FK safety)
-        relations_pruned = await self._relations.delete_weak(
-            mind_id, threshold=self._min_strength
-        )
+        relations_pruned = await self._relations.delete_weak(mind_id, threshold=self._min_strength)
 
         # Prune weak concepts
         async with self._concepts._pool.write() as conn:

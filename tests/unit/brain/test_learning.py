@@ -51,9 +51,7 @@ def relation_repo(pool: DatabasePool) -> RelationRepository:
     return RelationRepository(pool)
 
 
-async def _seed_concepts(
-    repo: ConceptRepository, *names: str
-) -> list[ConceptId]:
+async def _seed_concepts(repo: ConceptRepository, *names: str) -> list[ConceptId]:
     """Create concepts and return their IDs."""
     ids: list[ConceptId] = []
     for name in names:
@@ -129,16 +127,12 @@ class TestHebbianLearning:
         for rel in relations:
             assert rel.weight <= 1.0
 
-    async def test_single_concept_no_op(
-        self, relation_repo: RelationRepository
-    ) -> None:
+    async def test_single_concept_no_op(self, relation_repo: RelationRepository) -> None:
         hebbian = HebbianLearning(relation_repo)
         count = await hebbian.strengthen([ConceptId("c1")])
         assert count == 0
 
-    async def test_empty_list_no_op(
-        self, relation_repo: RelationRepository
-    ) -> None:
+    async def test_empty_list_no_op(self, relation_repo: RelationRepository) -> None:
         hebbian = HebbianLearning(relation_repo)
         count = await hebbian.strengthen([])
         assert count == 0
@@ -199,9 +193,7 @@ class TestEbbinghausDecay:
         cid_a = await concept_repo.create(ca)
 
         # Concept B: accessed 10 times
-        cb = Concept(
-            mind_id=MIND, name="well accessed", importance=0.8
-        )
+        cb = Concept(mind_id=MIND, name="well accessed", importance=0.8)
         cid_b = await concept_repo.create(cb)
         for _ in range(10):
             await concept_repo.record_access(cid_b)
@@ -245,9 +237,7 @@ class TestEbbinghausDecay:
         ids = await _seed_concepts(concept_repo, "A", "B")
         from sovyx.brain.models import Relation
 
-        rel = Relation(
-            source_id=ids[0], target_id=ids[1], weight=0.8
-        )
+        rel = Relation(source_id=ids[0], target_id=ids[1], weight=0.8)
         rid = await relation_repo.create(rel)
 
         decay = EbbinghausDecay(concept_repo, relation_repo)
@@ -269,9 +259,7 @@ class TestEbbinghausDecay:
         await concept_repo.create(weak)
         cid_strong = await concept_repo.create(strong)
 
-        decay = EbbinghausDecay(
-            concept_repo, relation_repo, min_strength=0.01
-        )
+        decay = EbbinghausDecay(concept_repo, relation_repo, min_strength=0.01)
         concepts_pruned, _ = await decay.prune_weak(MIND)
         assert concepts_pruned == 1
 
@@ -288,18 +276,12 @@ class TestEbbinghausDecay:
         ids = await _seed_concepts(concept_repo, "A", "B", "C")
         from sovyx.brain.models import Relation
 
-        weak_rel = Relation(
-            source_id=ids[0], target_id=ids[1], weight=0.001
-        )
-        strong_rel = Relation(
-            source_id=ids[0], target_id=ids[2], weight=0.9
-        )
+        weak_rel = Relation(source_id=ids[0], target_id=ids[1], weight=0.001)
+        strong_rel = Relation(source_id=ids[0], target_id=ids[2], weight=0.9)
         await relation_repo.create(weak_rel)
         rid_strong = await relation_repo.create(strong_rel)
 
-        decay = EbbinghausDecay(
-            concept_repo, relation_repo, min_strength=0.05
-        )
+        decay = EbbinghausDecay(concept_repo, relation_repo, min_strength=0.05)
         _, relations_pruned = await decay.prune_weak(MIND)
         assert relations_pruned == 1
 
