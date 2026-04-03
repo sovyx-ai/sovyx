@@ -70,9 +70,7 @@ class TestMigration001:
         applied = await runner.run_migrations(migrations)
         assert applied == 1
 
-    async def test_tables_created(
-        self, migrated_pool: DatabasePool
-    ) -> None:
+    async def test_tables_created(self, migrated_pool: DatabasePool) -> None:
         expected_tables = {
             "concepts",
             "episodes",
@@ -80,17 +78,13 @@ class TestMigration001:
             "consolidation_log",
         }
         async with migrated_pool.read() as conn:
-            cursor = await conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
+            cursor = await conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
             rows = await cursor.fetchall()
             tables = {r[0] for r in rows}
             for table in expected_tables:
                 assert table in tables, f"Missing table: {table}"
 
-    async def test_indexes_created(
-        self, migrated_pool: DatabasePool
-    ) -> None:
+    async def test_indexes_created(self, migrated_pool: DatabasePool) -> None:
         expected_indexes = {
             "idx_concepts_mind",
             "idx_concepts_category",
@@ -105,26 +99,18 @@ class TestMigration001:
             "idx_relations_weight",
         }
         async with migrated_pool.read() as conn:
-            cursor = await conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='index'"
-            )
+            cursor = await conn.execute("SELECT name FROM sqlite_master WHERE type='index'")
             rows = await cursor.fetchall()
             indexes = {r[0] for r in rows}
             for idx in expected_indexes:
                 assert idx in indexes, f"Missing index: {idx}"
 
-    async def test_fts5_table_created(
-        self, migrated_pool: DatabasePool
-    ) -> None:
+    async def test_fts5_table_created(self, migrated_pool: DatabasePool) -> None:
         async with migrated_pool.read() as conn:
-            cursor = await conn.execute(
-                "SELECT name FROM sqlite_master WHERE name='concepts_fts'"
-            )
+            cursor = await conn.execute("SELECT name FROM sqlite_master WHERE name='concepts_fts'")
             assert await cursor.fetchone() is not None
 
-    async def test_fts5_insert_trigger(
-        self, migrated_pool: DatabasePool
-    ) -> None:
+    async def test_fts5_insert_trigger(self, migrated_pool: DatabasePool) -> None:
         """INSERT into concepts → searchable via FTS5."""
         async with migrated_pool.write() as conn:
             await conn.execute(
@@ -141,9 +127,7 @@ class TestMigration001:
             assert row is not None
             assert row[0] == "quantum physics"
 
-    async def test_fts5_delete_trigger(
-        self, migrated_pool: DatabasePool
-    ) -> None:
+    async def test_fts5_delete_trigger(self, migrated_pool: DatabasePool) -> None:
         """DELETE from concepts → removed from FTS5."""
         async with migrated_pool.write() as conn:
             await conn.execute(
@@ -160,9 +144,7 @@ class TestMigration001:
             )
             assert await cursor.fetchone() is None
 
-    async def test_fts5_update_trigger(
-        self, migrated_pool: DatabasePool
-    ) -> None:
+    async def test_fts5_update_trigger(self, migrated_pool: DatabasePool) -> None:
         """UPDATE concepts → FTS5 reflects new values."""
         async with migrated_pool.write() as conn:
             await conn.execute(
@@ -171,8 +153,7 @@ class TestMigration001:
             )
             await conn.commit()
             await conn.execute(
-                "UPDATE concepts SET name = 'new name', content = 'new content' "
-                "WHERE id = 'c1'"
+                "UPDATE concepts SET name = 'new name', content = 'new content' WHERE id = 'c1'"
             )
             await conn.commit()
 
@@ -188,22 +169,17 @@ class TestMigration001:
             )
             assert await cursor.fetchone() is not None
 
-    async def test_foreign_key_cascade(
-        self, migrated_pool: DatabasePool
-    ) -> None:
+    async def test_foreign_key_cascade(self, migrated_pool: DatabasePool) -> None:
         """DELETE concept → CASCADE deletes its relations."""
         async with migrated_pool.write() as conn:
             await conn.execute(
-                "INSERT INTO concepts (id, mind_id, name) "
-                "VALUES ('c1', 'aria', 'concept 1')"
+                "INSERT INTO concepts (id, mind_id, name) VALUES ('c1', 'aria', 'concept 1')"
             )
             await conn.execute(
-                "INSERT INTO concepts (id, mind_id, name) "
-                "VALUES ('c2', 'aria', 'concept 2')"
+                "INSERT INTO concepts (id, mind_id, name) VALUES ('c2', 'aria', 'concept 2')"
             )
             await conn.execute(
-                "INSERT INTO relations (id, source_id, target_id) "
-                "VALUES ('r1', 'c1', 'c2')"
+                "INSERT INTO relations (id, source_id, target_id) VALUES ('r1', 'c1', 'c2')"
             )
             await conn.commit()
 
@@ -212,26 +188,18 @@ class TestMigration001:
             await conn.commit()
 
         async with migrated_pool.read() as conn:
-            cursor = await conn.execute(
-                "SELECT COUNT(*) FROM relations WHERE id = 'r1'"
-            )
+            cursor = await conn.execute("SELECT COUNT(*) FROM relations WHERE id = 'r1'")
             row = await cursor.fetchone()
             assert row is not None
             assert row[0] == 0
 
-    async def test_consolidation_log_table(
-        self, migrated_pool: DatabasePool
-    ) -> None:
+    async def test_consolidation_log_table(self, migrated_pool: DatabasePool) -> None:
         async with migrated_pool.write() as conn:
-            await conn.execute(
-                "INSERT INTO consolidation_log (mind_id) VALUES ('aria')"
-            )
+            await conn.execute("INSERT INTO consolidation_log (mind_id) VALUES ('aria')")
             await conn.commit()
 
         async with migrated_pool.read() as conn:
-            cursor = await conn.execute(
-                "SELECT mind_id FROM consolidation_log"
-            )
+            cursor = await conn.execute("SELECT mind_id FROM consolidation_log")
             row = await cursor.fetchone()
             assert row is not None
             assert row[0] == "aria"
@@ -240,9 +208,7 @@ class TestMigration001:
 class TestMigration002:
     """sqlite-vec embedding tables (conditional)."""
 
-    async def test_vec_tables_created_when_available(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_vec_tables_created_when_available(self, tmp_path: Path) -> None:
         """If sqlite-vec is loadable, migration 002 creates vec tables."""
         db_path = tmp_path / "brain_vec.db"
         pool = DatabasePool(
@@ -268,15 +234,11 @@ class TestMigration002:
                     "SELECT name FROM sqlite_master WHERE name=?",
                     (table,),
                 )
-                assert await cursor.fetchone() is not None, (
-                    f"Missing: {table}"
-                )
+                assert await cursor.fetchone() is not None, f"Missing: {table}"
 
         await pool.close()
 
-    async def test_without_vec_only_migration_001(
-        self, pool: DatabasePool
-    ) -> None:
+    async def test_without_vec_only_migration_001(self, pool: DatabasePool) -> None:
         """Without sqlite-vec, only migration 001 is applied."""
         runner = MigrationRunner(pool)
         await runner.initialize()
