@@ -65,6 +65,7 @@ async def bootstrap(
         ServiceRegistry with all services wired.
     """
     from sovyx.brain.concept_repo import ConceptRepository
+    from sovyx.brain.consolidation import ConsolidationCycle, ConsolidationScheduler
     from sovyx.brain.embedding import EmbeddingEngine
     from sovyx.brain.episode_repo import EpisodeRepository
     from sovyx.brain.learning import EbbinghausDecay, HebbianLearning
@@ -163,6 +164,18 @@ async def bootstrap(
             event_bus=event_bus,
         )
         registry.register_instance(BrainService, brain_service)
+
+        # Consolidation scheduler
+        consolidation_cycle = ConsolidationCycle(
+            brain_service=brain_service,
+            decay=ebbinghaus,
+            event_bus=event_bus,
+        )
+        consolidation_scheduler = ConsolidationScheduler(
+            cycle=consolidation_cycle,
+            interval_hours=mind_config.brain.consolidation_interval_hours,
+        )
+        registry.register_instance(ConsolidationScheduler, consolidation_scheduler)
 
         # Personality
         personality = PersonalityEngine(mind_config)
