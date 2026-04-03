@@ -1,0 +1,209 @@
+"""Sovyx episode repository — hippocampus CRUD + embedding + search.
+
+All writes are atomic: episode + embedding in the same transaction.
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
+
+from sovyx.engine.errors import SearchError
+from sovyx.engine.types import ConceptId, ConversationId, EpisodeId, MindId
+from sovyx.observability.logging import get_logger
+
+if TYPE_CHECKING:
+    from sovyx.brain.embedding import EmbeddingEngine
+    from sovyx.brain.models import Episode
+    from sovyx.persistence.pool import DatabasePool
+
+logger = get_logger(__name__)
+
+
+class EpisodeRepository:
+    """Repository for brain episodes — CRUD + embedding + search.
+
+    Episodes are conversation exchanges stored in the hippocampus.
+    Embeddings are generated from user_input + assistant_response.
+    """
+
+    def __init__(self, pool: DatabasePool, embedding_engine: EmbeddingEngine) -> None:
+        self._pool = pool
+        self._embedding = embedding_engine
+
+    async def create(self, episode: Episode) -> EpisodeId:
+        """Create an episode with optional embedding.
+
+        Embedding is generated from "{user_input} {assistant_response}".
+
+        Args:
+            episode: The episode to persist.
+
+        Returns:
+            The episode ID.
+        """
+        embedding: list[float] | None = episode.embedding
+        if embedding is None and self._embedding.has_embeddings:
+            text = f"{episode.user_input} {episode.assistant_response}".strip()
+            if text:
+                embedding = await self._embedding.encode(text)
+
+        async with self._pool.transaction() as conn:
+            await conn.execute(
+                """INSERT INTO episodes
+                (id, mind_id, conversation_id, user_input, assistant_response,
+                 summary, importance, emotional_valence, emotional_arousal,
+                 concepts_mentioned, metadata, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    str(episode.id),
+                    str(episode.mind_id),
+                    str(episode.conversation_id),
+                    episode.user_input,
+                    episode.assistant_response,
+                    episode.summary,
+                    episode.importance,
+                    episode.emotional_valence,
+                    episode.emotional_arousal,
+                    json.dumps([str(c) for c in episode.concepts_mentioned]),
+                    json.dumps(episode.metadata),
+                    episode.created_at.isoformat(),
+                ),
+            )
+
+            if embedding and self._pool.has_sqlite_vec:
+                await conn.execute(
+                    "INSERT INTO episode_embeddings (episode_id, embedding) VALUES (?, ?)",
+                    (str(episode.id), json.dumps(embedding)),
+                )
+
+        logger.debug("episode_created", episode_id=str(episode.id))
+        return episode.id
+
+    async def get(self, episode_id: EpisodeId) -> Episode | None:
+        """Get an episode by ID.
+
+        Returns:
+            The episode, or None if not found.
+        """
+        async with self._pool.read() as conn:
+            cursor = await conn.execute(
+                "SELECT * FROM episodes WHERE id = ?",
+                (str(episode_id),),
+            )
+            row = await cursor.fetchone()
+
+        if row is None:
+            return None
+
+        return self._row_to_episode(row)
+
+    async def get_by_conversation(
+        self, conversation_id: ConversationId, limit: int = 50
+    ) -> list[Episode]:
+        """Get episodes for a conversation in chronological order."""
+        async with self._pool.read() as conn:
+            cursor = await conn.execute(
+                "SELECT * FROM episodes WHERE conversation_id = ? ORDER BY created_at ASC LIMIT ?",
+                (str(conversation_id), limit),
+            )
+            rows = await cursor.fetchall()
+
+        return [self._row_to_episode(r) for r in rows]
+
+    async def get_recent(self, mind_id: MindId, limit: int = 20) -> list[Episode]:
+        """Get most recent episodes ordered by created_at DESC."""
+        async with self._pool.read() as conn:
+            cursor = await conn.execute(
+                "SELECT * FROM episodes WHERE mind_id = ? ORDER BY created_at DESC LIMIT ?",
+                (str(mind_id), limit),
+            )
+            rows = await cursor.fetchall()
+
+        return [self._row_to_episode(r) for r in rows]
+
+    async def search_by_embedding(
+        self,
+        query_embedding: list[float],
+        mind_id: MindId,
+        limit: int = 5,
+    ) -> list[tuple[Episode, float]]:
+        """Search by vector similarity.
+
+        Returns:
+            List of (episode, distance) tuples ordered by distance.
+
+        Raises:
+            SearchError: If sqlite-vec is not available.
+        """
+        if not self._pool.has_sqlite_vec:
+            msg = "Vector search unavailable — sqlite-vec not loaded"
+            raise SearchError(msg)
+
+        async with self._pool.read() as conn:
+            cursor = await conn.execute(
+                """SELECT e.*, ee.distance
+                FROM episode_embeddings ee
+                JOIN episodes e ON e.id = ee.episode_id
+                WHERE e.mind_id = ?
+                AND ee.embedding MATCH ?
+                ORDER BY ee.distance
+                LIMIT ?""",
+                (str(mind_id), json.dumps(query_embedding), limit),
+            )
+            rows = await cursor.fetchall()
+
+        results: list[tuple[Episode, float]] = []
+        for row in rows:
+            episode = self._row_to_episode(row[:-1])
+            distance = float(row[-1])
+            results.append((episode, distance))
+        return results
+
+    async def delete(self, episode_id: EpisodeId) -> None:
+        """Delete an episode and its embedding."""
+        async with self._pool.transaction() as conn:
+            if self._pool.has_sqlite_vec:
+                await conn.execute(
+                    "DELETE FROM episode_embeddings WHERE episode_id = ?",
+                    (str(episode_id),),
+                )
+            await conn.execute(
+                "DELETE FROM episodes WHERE id = ?",
+                (str(episode_id),),
+            )
+
+    async def count(self, mind_id: MindId) -> int:
+        """Count episodes for a mind."""
+        async with self._pool.read() as conn:
+            cursor = await conn.execute(
+                "SELECT COUNT(*) FROM episodes WHERE mind_id = ?",
+                (str(mind_id),),
+            )
+            row = await cursor.fetchone()
+            return int(row[0]) if row else 0
+
+    @staticmethod
+    def _row_to_episode(row: object) -> Episode:
+        """Convert a database row to an Episode model."""
+        from sovyx.brain.models import Episode
+
+        r: tuple[Any, ...] = tuple(row)  # type: ignore[arg-type]
+
+        return Episode(
+            id=EpisodeId(r[0]),
+            mind_id=MindId(r[1]),
+            conversation_id=ConversationId(r[2]),
+            user_input=r[3],
+            assistant_response=r[4],
+            summary=r[5],
+            importance=float(r[6]),
+            emotional_valence=float(r[7]),
+            emotional_arousal=float(r[8]),
+            concepts_mentioned=[ConceptId(c) for c in json.loads(r[9])]
+            if isinstance(r[9], str)
+            else r[9],
+            metadata=json.loads(r[10]) if isinstance(r[10], str) else r[10],
+            created_at=(datetime.fromisoformat(r[11]) if isinstance(r[11], str) else r[11]),
+        )
