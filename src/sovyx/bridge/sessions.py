@@ -153,14 +153,18 @@ class ConversationTracker:
         v14 fix: subquery gets N most recent (DESC),
         outer query re-orders chronologically (ASC).
         """
+        # B608: self._max_turns is an internal int, not user input
+        query = (  # noqa: S608
+            "SELECT role, content FROM ("
+            "  SELECT role, content, rowid FROM conversation_turns"
+            "  WHERE conversation_id = ?"
+            "  ORDER BY rowid DESC"
+            f"  LIMIT {self._max_turns}"
+            ") sub ORDER BY rowid ASC"
+        )
         async with self._pool.read() as conn:
             cursor = await conn.execute(
-                f"""SELECT role, content FROM (
-                    SELECT role, content, rowid FROM conversation_turns
-                    WHERE conversation_id = ?
-                    ORDER BY rowid DESC
-                    LIMIT {self._max_turns}
-                ) sub ORDER BY rowid ASC""",
+                query,
                 (str(conversation_id),),
             )
             rows = await cursor.fetchall()

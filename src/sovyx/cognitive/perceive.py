@@ -18,26 +18,30 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 # Complex query markers (SPE-003 §3.2)
-_COMPLEX_MARKERS = frozenset({
-    "why",
-    "how does",
-    "explain",
-    "compare",
-    "analyze",
-    "what if",
-    "implications",
-    "trade-off",
-    "tradeoff",
-    "difference between",
-})
+_COMPLEX_MARKERS = frozenset(
+    {
+        "why",
+        "how does",
+        "explain",
+        "compare",
+        "analyze",
+        "what if",
+        "implications",
+        "trade-off",
+        "tradeoff",
+        "difference between",
+    }
+)
 
 # Simple plugin triggers
-_SIMPLE_MARKERS = frozenset({
-    "set timer",
-    "weather",
-    "reminder",
-    "what time",
-})
+_SIMPLE_MARKERS = frozenset(
+    {
+        "set timer",
+        "weather",
+        "reminder",
+        "what time",
+    }
+)
 
 
 @dataclasses.dataclass
@@ -52,9 +56,7 @@ class Perception:
     channel_id: str | None = None
     priority: int = 10
     metadata: dict[str, object] = dataclasses.field(default_factory=dict)
-    created_at: datetime = dataclasses.field(
-        default_factory=lambda: datetime.now(tz=UTC)
-    )
+    created_at: datetime = dataclasses.field(default_factory=lambda: datetime.now(tz=UTC))
 
 
 class PerceivePhase:
@@ -97,9 +99,7 @@ class PerceivePhase:
             perception.content = perception.content[: self.MAX_INPUT_CHARS]
 
         # Classify complexity
-        perception.metadata["complexity"] = self.classify_complexity(
-            perception.content
-        )
+        perception.metadata["complexity"] = self.classify_complexity(perception.content)
 
         logger.debug(
             "perception_processed",

@@ -96,7 +96,9 @@ class TestThinkPhase:
         router = _mock_router()
         router.generate = AsyncMock(side_effect=RuntimeError("fail"))
         phase = ThinkPhase(
-            _mock_assembler(), router, MindConfig(name="Aria"),
+            _mock_assembler(),
+            router,
+            MindConfig(name="Aria"),
             degradation_message="Oops!",
         )
         response, _ = await phase.process(_perception(), MIND, [])

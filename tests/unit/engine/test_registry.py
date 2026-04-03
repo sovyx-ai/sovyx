@@ -83,9 +83,7 @@ class TestResolve:
 
     async def test_unregistered_raises(self) -> None:
         reg = ServiceRegistry()
-        with pytest.raises(
-            ServiceNotRegisteredError, match="DummyService"
-        ):
+        with pytest.raises(ServiceNotRegisteredError, match="DummyService"):
             await reg.resolve(DummyService)
 
 

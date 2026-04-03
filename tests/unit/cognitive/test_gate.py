@@ -41,9 +41,7 @@ def _mock_loop(
     async def process(req: CognitiveRequest) -> ActionResult:
         if delay > 0:
             await asyncio.sleep(delay)
-        return result or ActionResult(
-            response_text="OK", target_channel="telegram"
-        )
+        return result or ActionResult(response_text="OK", target_channel="telegram")
 
     loop.process_request = AsyncMock(side_effect=process)
     return loop
@@ -90,20 +88,28 @@ class TestSerialization:
             r1 = gate.submit(
                 CognitiveRequest(
                     perception=Perception(
-                        id="1", type=PerceptionType.USER_MESSAGE,
-                        source="t", content="first", priority=10,
+                        id="1",
+                        type=PerceptionType.USER_MESSAGE,
+                        source="t",
+                        content="first",
+                        priority=10,
                     ),
-                    mind_id=MIND, conversation_id=CONV,
+                    mind_id=MIND,
+                    conversation_id=CONV,
                     conversation_history=[],
                 )
             )
             r2 = gate.submit(
                 CognitiveRequest(
                     perception=Perception(
-                        id="2", type=PerceptionType.USER_MESSAGE,
-                        source="t", content="second", priority=10,
+                        id="2",
+                        type=PerceptionType.USER_MESSAGE,
+                        source="t",
+                        content="second",
+                        priority=10,
                     ),
-                    mind_id=MIND, conversation_id=CONV,
+                    mind_id=MIND,
+                    conversation_id=CONV,
                     conversation_history=[],
                 )
             )
