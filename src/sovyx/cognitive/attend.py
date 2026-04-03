@@ -16,21 +16,25 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 # Blocked content patterns (basic v0.1 safety filter)
-_BLOCKED_PATTERNS_STANDARD: frozenset[str] = frozenset({
-    "how to make a bomb",
-    "how to hack",
-    "how to kill",
-    "self-harm instructions",
-})
+_BLOCKED_PATTERNS_STANDARD: frozenset[str] = frozenset(
+    {
+        "how to make a bomb",
+        "how to hack",
+        "how to kill",
+        "self-harm instructions",
+    }
+)
 
-_BLOCKED_PATTERNS_CHILD_SAFE: frozenset[str] = frozenset({
-    "violence",
-    "weapons",
-    "drugs",
-    "gambling",
-    "adult content",
-    *_BLOCKED_PATTERNS_STANDARD,
-})
+_BLOCKED_PATTERNS_CHILD_SAFE: frozenset[str] = frozenset(
+    {
+        "violence",
+        "weapons",
+        "drugs",
+        "gambling",
+        "adult content",
+        *_BLOCKED_PATTERNS_STANDARD,
+    }
+)
 
 
 class AttendPhase:

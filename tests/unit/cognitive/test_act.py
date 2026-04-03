@@ -85,9 +85,7 @@ class TestActPhase:
     async def test_tool_calls_handled(self) -> None:
         phase = ActPhase(ToolExecutor(), AsyncMock())
         calls = [ToolCall(id="tc1", function_name="search", arguments={})]
-        result = await phase.process(
-            _response(tool_calls=calls), [], _perception()
-        )
+        result = await phase.process(_response(tool_calls=calls), [], _perception())
         assert len(result.tool_calls_made) == 1
 
     async def test_no_reply_to_if_missing(self) -> None:

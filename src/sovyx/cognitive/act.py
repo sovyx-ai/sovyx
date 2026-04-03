@@ -45,9 +45,7 @@ class ToolExecutor:
         """Register a tool handler for future use."""
         self._tools[name] = handler
 
-    async def execute(
-        self, tool_calls: list[ToolCall]
-    ) -> list[ToolResult]:
+    async def execute(self, tool_calls: list[ToolCall]) -> list[ToolResult]:
         """Execute tool calls.
 
         v0.1: returns 'no tools available' for each call.

@@ -58,9 +58,7 @@ class CognitiveLoop:
         """Stop the cognitive loop."""
         logger.info("cognitive_loop_stopped")
 
-    async def process_request(
-        self, request: CognitiveRequest
-    ) -> ActionResult:
+    async def process_request(self, request: CognitiveRequest) -> ActionResult:
         """Process a CognitiveRequest through the full loop.
 
         NEVER raises an exception — always returns ActionResult.
@@ -69,9 +67,7 @@ class CognitiveLoop:
         try:
             # ── PERCEIVE ──
             self._state.transition(CognitivePhase.PERCEIVING)
-            perception = await self._perceive.process(
-                request.perception
-            )
+            perception = await self._perceive.process(request.perception)
 
             # ── ATTEND ──
             self._state.transition(CognitivePhase.ATTENDING)
@@ -99,9 +95,7 @@ class CognitiveLoop:
 
             # ── ACT ──
             self._state.transition(CognitivePhase.ACTING)
-            action_result = await self._act.process(
-                llm_response, assembled_msgs, perception
-            )
+            action_result = await self._act.process(llm_response, assembled_msgs, perception)
 
             # ── REFLECT ──
             self._state.transition(CognitivePhase.REFLECTING)
@@ -114,9 +108,7 @@ class CognitiveLoop:
                 )
             except Exception:
                 # Reflect is best-effort — user already got response
-                logger.warning(
-                    "reflect_phase_failed", exc_info=True
-                )
+                logger.warning("reflect_phase_failed", exc_info=True)
 
             logger.debug(
                 "cognitive_loop_complete",
@@ -126,9 +118,7 @@ class CognitiveLoop:
             return action_result
 
         except Exception as e:
-            logger.exception(
-                "cognitive_loop_error", error=str(e)
-            )
+            logger.exception("cognitive_loop_error", error=str(e))
             return ActionResult(
                 response_text="Something went wrong.",
                 target_channel=request.perception.source,

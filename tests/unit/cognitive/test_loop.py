@@ -71,9 +71,7 @@ def _mock_think() -> AsyncMock:
 def _mock_act() -> AsyncMock:
     phase = AsyncMock()
     phase.process = AsyncMock(
-        return_value=ActionResult(
-            response_text="Hello!", target_channel="telegram"
-        )
+        return_value=ActionResult(response_text="Hello!", target_channel="telegram")
     )
     return phase
 

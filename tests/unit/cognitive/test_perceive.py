@@ -78,9 +78,7 @@ class TestClassifyComplexity:
 
     def test_multi_question_higher(self) -> None:
         single = PerceivePhase.classify_complexity("What is this?")
-        multi = PerceivePhase.classify_complexity(
-            "What is this? How does it work? Why?"
-        )
+        multi = PerceivePhase.classify_complexity("What is this? How does it work? Why?")
         assert multi > single
 
     def test_simple_trigger_lower(self) -> None:

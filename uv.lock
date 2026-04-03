@@ -1664,7 +1664,7 @@ requires-dist = [
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rich", specifier = ">=13.7" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.3" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15,<0.16" },
     { name = "sqlite-vec", specifier = ">=0.1.3" },
     { name = "structlog", specifier = ">=24.1" },
     { name = "tiktoken", specifier = ">=0.7" },

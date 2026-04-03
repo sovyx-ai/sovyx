@@ -111,9 +111,7 @@ class CogLoopGate:
             try:
                 _, _, _, future = self._queue.get_nowait()
                 if not future.done():
-                    future.set_exception(
-                        CognitiveError("Gate shutting down")
-                    )
+                    future.set_exception(CognitiveError("Gate shutting down"))
             except asyncio.QueueEmpty:
                 break
         logger.info("cogloop_gate_stopped")
