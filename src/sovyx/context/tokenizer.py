@@ -55,9 +55,7 @@ class TokenCounter:
             return 0
         return len(self._get_encoding().encode(text))
 
-    def count_messages(
-        self, messages: Sequence[dict[str, str]]
-    ) -> int:
+    def count_messages(self, messages: Sequence[dict[str, str]]) -> int:
         """Count tokens in a list of messages (OpenAI/Anthropic format).
 
         Includes overhead of ~4 tokens per message for formatting.

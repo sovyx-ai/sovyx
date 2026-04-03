@@ -154,9 +154,7 @@ class TestPropertyBased:
         max_tokens=st.integers(min_value=1, max_value=50),
     )
     @settings(max_examples=30)
-    def test_truncate_respects_budget(
-        self, text: str, max_tokens: int
-    ) -> None:
+    def test_truncate_respects_budget(self, text: str, max_tokens: int) -> None:
         """Truncated text always fits within budget."""
         c = TokenCounter()
         result = c.truncate(text, max_tokens)
