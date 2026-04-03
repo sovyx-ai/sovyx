@@ -1,1 +1,1 @@
-"""Sovyx LLM — Provider adapters, router, cost guard, circuit breaker."""
+"""Sovyx LLM subsystem — providers, routing, cost control."""
