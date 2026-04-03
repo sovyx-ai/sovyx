@@ -89,3 +89,11 @@ branch = true
 [tool.coverage.report]
 fail_under = 95
 show_missing = true
+exclude_lines = [
+    "if __name__ == .__main__.",
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+]
+
+[tool.bandit]
+exclude_dirs = ["tests"]
