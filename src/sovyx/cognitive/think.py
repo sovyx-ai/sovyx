@@ -56,7 +56,11 @@ class ThinkPhase:
         try:
             # 1. Model selection (complexity-based)
             raw_complexity = perception.metadata.get("complexity", 0.5)
-            complexity = float(raw_complexity) if isinstance(raw_complexity, (int, float, str)) else 0.5
+            complexity = (
+                float(raw_complexity)
+                if isinstance(raw_complexity, (int, float, str))
+                else 0.5
+            )
             model = self._select_model(complexity)
 
             # 2. Context window from selected model
