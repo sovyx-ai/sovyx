@@ -1,1 +1,1 @@
-"""Sovyx Context — Context assembly, token budget, formatting."""
+"""Sovyx context assembly — token counting, budget, and formatting."""
