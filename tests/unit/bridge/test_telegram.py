@@ -85,9 +85,7 @@ class TestSend:
 
     async def test_send_failure_raises(self) -> None:
         ch = TelegramChannel(VALID_TOKEN, _mock_bridge())
-        ch._bot.send_message = AsyncMock(
-            side_effect=RuntimeError("API error")
-        )
+        ch._bot.send_message = AsyncMock(side_effect=RuntimeError("API error"))
         with pytest.raises(RuntimeError, match="API error"):
             await ch.send("123", "fail")
 

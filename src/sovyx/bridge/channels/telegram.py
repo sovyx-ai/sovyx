@@ -112,7 +112,8 @@ class TelegramChannel:
             kwargs["reply_to_message_id"] = int(reply_to)
         try:
             result = await self._bot.send_message(
-                chat_id=int(target), **kwargs  # type: ignore[arg-type]
+                chat_id=int(target),
+                **kwargs,  # type: ignore[arg-type]
             )
             return str(result.message_id)
         except Exception as e:
@@ -154,11 +155,7 @@ class TelegramChannel:
             channel_message_id=str(message.message_id),
             chat_id=str(message.chat.id),
             text=message.text,
-            display_name=(
-                message.from_user.full_name
-                or message.from_user.username
-                or ""
-            ),
+            display_name=(message.from_user.full_name or message.from_user.username or ""),
         )
         await self._bridge.handle_inbound(inbound)
 
@@ -167,9 +164,7 @@ class TelegramChannel:
         backoff = 1
         while self._running:
             try:
-                await self._dp.start_polling(
-                    self._bot, handle_signals=False
-                )
+                await self._dp.start_polling(self._bot, handle_signals=False)
             except asyncio.CancelledError:
                 break
             except Exception:
