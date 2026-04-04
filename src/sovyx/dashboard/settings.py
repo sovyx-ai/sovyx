@@ -79,8 +79,8 @@ def _update_log_level(config: EngineConfig, value: object) -> str | None:
 
     # Update structlog + stdlib root logger
     logging.getLogger().setLevel(getattr(logging, level))
-    # Update config object (for next get_settings call)
-    object.__setattr__(config.log, "level", level)
+    # Update config object (LoggingConfig is mutable BaseModel)
+    config.log.level = level  # type: ignore[assignment]  # Literal narrowing
 
     logger.info("log_level_changed", old=old, new=level)
     return f"{old} → {level}"
