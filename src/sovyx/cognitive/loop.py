@@ -9,6 +9,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from sovyx.cognitive.act import ActionResult
+from sovyx.engine.errors import (
+    CostLimitExceededError,
+    ProviderUnavailableError,
+)
 from sovyx.engine.types import CognitivePhase
 from sovyx.observability.logging import get_logger
 
@@ -23,6 +27,22 @@ if TYPE_CHECKING:
     from sovyx.engine.events import EventBus
 
 logger = get_logger(__name__)
+
+
+def _categorize_error(exc: Exception) -> str:
+    """Map exception to user-facing message.
+
+    Three categories:
+    - **Informable**: user action may help (budget exhausted)
+    - **Temporary**: transient, retryable (provider down)
+    - **Internal**: bugs — never expose internals to user
+    """
+    if isinstance(exc, CostLimitExceededError):
+        return "I've reached my conversation budget limit. Please try again later."
+    if isinstance(exc, ProviderUnavailableError):
+        return "I'm having trouble connecting to my AI provider. Please try again in a moment."
+    # Default: internal error — don't leak details
+    return "I encountered an unexpected error. Please try again."
 
 
 class CognitiveLoop:
@@ -118,9 +138,15 @@ class CognitiveLoop:
             return action_result
 
         except Exception as e:
-            logger.exception("cognitive_loop_error", error=str(e))
+            error_type = type(e).__name__
+            user_message = _categorize_error(e)
+            logger.exception(
+                "cognitive_loop_error",
+                error=str(e),
+                error_type=error_type,
+            )
             return ActionResult(
-                response_text="Something went wrong.",
+                response_text=user_message,
                 target_channel=request.perception.source,
                 error=True,
             )
