@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING
 from sovyx.engine.events import ConceptCreated, EpisodeEncoded
 from sovyx.engine.types import ConceptCategory
 from sovyx.observability.logging import get_logger
+from sovyx.observability.metrics import get_metrics
+from sovyx.observability.tracing import get_tracer
 
 if TYPE_CHECKING:
     from sovyx.brain.concept_repo import ConceptRepository
@@ -102,7 +104,17 @@ class BrainService:
         3. Record access for each returned concept (fire-and-forget)
         4. Merge and return
         """
-        results = await self._retrieval.search_concepts(query, mind_id, limit=limit)
+        tracer = get_tracer()
+        metrics = get_metrics()
+        with (
+            tracer.start_brain_span("search", query_length=len(query)),
+            metrics.measure_latency(metrics.brain_search_latency),
+        ):
+            results = await self._retrieval.search_concepts(
+                query,
+                mind_id,
+                limit=limit,
+            )
 
         if results:
             seeds = [(c.id, score) for c, score in results]
@@ -197,6 +209,9 @@ class BrainService:
         # Activate in working memory
         self._memory.activate(concept_id, concept.importance)
 
+        # Record metrics
+        get_metrics().concepts_created.add(1, {"source": source})
+
         # Emit event
         await self._events.emit(
             ConceptCreated(
@@ -243,6 +258,12 @@ class BrainService:
             concept_ids = [cid for cid, _ in active]
             activations = dict(active)
             await self._hebbian.strengthen(concept_ids, activations)
+
+        # Record metrics
+        get_metrics().episodes_encoded.add(
+            1,
+            {"conversation_id": str(conversation_id)},
+        )
 
         # Emit event
         await self._events.emit(
