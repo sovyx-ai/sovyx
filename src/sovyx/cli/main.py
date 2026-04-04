@@ -197,6 +197,7 @@ def doctor(
 
     from sovyx.observability.health import (
         CheckStatus,
+        HealthRegistry,
         create_offline_registry,
     )
 
@@ -314,13 +315,22 @@ def doctor(
             "(database, brain, LLM, channels).[/dim]"
         )
 
-    # Summary
+    # Summary using HealthRegistry.summary()
+    overall = HealthRegistry().summary(results)
     greens = sum(1 for r in results if r.status == CheckStatus.GREEN)
     yellows = sum(1 for r in results if r.status == CheckStatus.YELLOW)
     reds = sum(1 for r in results if r.status == CheckStatus.RED)
     total = len(results)
+
+    overall_style = {
+        CheckStatus.GREEN: "green",
+        CheckStatus.YELLOW: "yellow",
+        CheckStatus.RED: "red",
+    }.get(overall, "white")
+
     console.print(
-        f"\n[bold]{greens}[/bold]/{total} passed"
+        f"\n[{overall_style} bold]{overall.value.upper()}[/{overall_style} bold] — "
+        f"[bold]{greens}[/bold]/{total} passed"
         + (f", [yellow]{yellows} warnings[/yellow]" if yellows else "")
         + (f", [red]{reds} critical[/red]" if reds else "")
     )

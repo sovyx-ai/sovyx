@@ -15,8 +15,8 @@ from sovyx.engine.errors import (
 )
 from sovyx.engine.types import CognitivePhase
 from sovyx.observability.logging import get_logger
-from sovyx.observability.metrics import get_metrics
-from sovyx.observability.tracing import get_tracer
+from sovyx.observability.metrics import MetricsRegistry, get_metrics
+from sovyx.observability.tracing import SovyxTracer, get_tracer
 
 if TYPE_CHECKING:
     from sovyx.cognitive.act import ActPhase
@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from sovyx.cognitive.state import CognitiveStateMachine
     from sovyx.cognitive.think import ThinkPhase
     from sovyx.engine.events import EventBus
+    from sovyx.observability.metrics import _NoOpRegistry
 
 logger = get_logger(__name__)
 
@@ -102,16 +103,10 @@ class CognitiveLoop:
     async def _execute_loop(
         self,
         request: CognitiveRequest,
-        tracer: object,
-        metrics: object,
+        t: SovyxTracer,
+        m: MetricsRegistry | _NoOpRegistry,
     ) -> ActionResult:
         """Execute the cognitive loop phases with tracing and metrics."""
-        from sovyx.observability.metrics import MetricsRegistry
-        from sovyx.observability.tracing import SovyxTracer
-
-        t = tracer if isinstance(tracer, SovyxTracer) else get_tracer()
-        m = metrics if isinstance(metrics, MetricsRegistry) else get_metrics()
-
         try:
             # ── PERCEIVE ──
             self._state.transition(CognitivePhase.PERCEIVING)
