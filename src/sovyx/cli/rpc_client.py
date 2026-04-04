@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 from typing import Any
 
 from sovyx.engine.errors import ChannelConnectionError
+from sovyx.engine.rpc_protocol import rpc_recv, rpc_send
 from sovyx.observability.logging import get_logger
 
 logger = get_logger(__name__)
@@ -70,15 +70,8 @@ class DaemonClient:
             raise ChannelConnectionError(msg) from e
 
         try:
-            writer.write(json.dumps(request).encode())
-            await writer.drain()
-
-            data = await asyncio.wait_for(reader.read(65536), timeout=timeout)
-            if not data:  # pragma: no cover
-                msg = "Empty response from daemon"
-                raise ChannelConnectionError(msg)
-
-            response = json.loads(data.decode())
+            await rpc_send(writer, request)
+            response = await rpc_recv(reader, timeout=timeout)
 
             if "error" in response:
                 error = response["error"]
