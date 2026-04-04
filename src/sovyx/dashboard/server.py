@@ -250,10 +250,34 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
         )
 
     @app.get("/api/conversations", dependencies=[Depends(verify_token)])
-    async def get_conversations() -> JSONResponse:
-        """List conversations."""
-        # Placeholder — DASH-05
+    async def get_conversations(
+        limit: int = 50,
+        offset: int = 0,
+    ) -> JSONResponse:
+        """List conversations ordered by most recent activity."""
+        registry = getattr(app.state, "registry", None)
+        if registry is not None:
+            from sovyx.dashboard.conversations import list_conversations
+
+            convos = await list_conversations(registry, limit=limit, offset=offset)
+            return JSONResponse({"conversations": convos})
         return JSONResponse({"conversations": []})
+
+    @app.get("/api/conversations/{conversation_id}", dependencies=[Depends(verify_token)])
+    async def get_conversation_detail(
+        conversation_id: str,
+        limit: int = 100,
+    ) -> JSONResponse:
+        """Get messages for a specific conversation."""
+        registry = getattr(app.state, "registry", None)
+        if registry is not None:
+            from sovyx.dashboard.conversations import get_conversation_messages
+
+            messages = await get_conversation_messages(
+                registry, conversation_id, limit=limit,
+            )
+            return JSONResponse({"conversation_id": conversation_id, "messages": messages})
+        return JSONResponse({"conversation_id": conversation_id, "messages": []})
 
     @app.get("/api/brain/graph", dependencies=[Depends(verify_token)])
     async def get_brain_graph() -> JSONResponse:
@@ -399,11 +423,12 @@ class DashboardServer:
 
         self._app = create_app(self._config)
 
-        # Wire StatusCollector if registry available
+        # Wire services if registry available
         if self._registry is not None:
             from sovyx.dashboard.status import StatusCollector
 
             self._app.state.status_collector = StatusCollector(self._registry)
+            self._app.state.registry = self._registry
 
         host = self._config.host if self._config else "127.0.0.1"
         port = self._config.port if self._config else 7777

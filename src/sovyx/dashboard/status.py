@@ -117,7 +117,7 @@ class StatusCollector:
             version=__version__,
             uptime_seconds=time.time() - self._start_time,
             mind_name=mind_name,
-            active_conversations=0,  # Will be wired when ConversationTracker has count()
+            active_conversations=await self._get_conversation_count(),
             memory_concepts=concepts,
             memory_episodes=episodes,
             llm_cost_today=counters.llm_cost,
@@ -167,6 +167,16 @@ class StatusCollector:
             logger.debug("status_episodes_failed")
 
         return concepts, episodes
+
+    async def _get_conversation_count(self) -> int:
+        """Get count of active conversations."""
+        try:
+            from sovyx.dashboard.conversations import count_active_conversations
+
+            return await count_active_conversations(self._registry)
+        except Exception:  # noqa: BLE001
+            logger.debug("status_conversations_failed")
+            return 0
 
     async def _get_active_mind_id(self) -> str:
         """Get the first active mind ID for repository queries."""
