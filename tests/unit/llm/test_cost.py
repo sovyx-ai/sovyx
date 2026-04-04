@@ -12,60 +12,60 @@ from sovyx.llm.cost import CostGuard
 class TestCanAfford:
     """Budget checking."""
 
-    def test_can_afford_under_budget(self) -> None:
+    async def test_can_afford_under_budget(self) -> None:
         g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
         assert g.can_afford(1.0) is True
 
-    def test_cannot_afford_over_daily(self) -> None:
+    async def test_cannot_afford_over_daily(self) -> None:
         g = CostGuard(daily_budget=1.0, per_conversation_budget=2.0)
-        g.record(0.9, "model", "conv1")
+        await g.record(0.9, "model", "conv1")
         assert g.can_afford(0.2) is False
 
-    def test_cannot_afford_over_conversation(self) -> None:
+    async def test_cannot_afford_over_conversation(self) -> None:
         g = CostGuard(daily_budget=10.0, per_conversation_budget=0.5)
-        g.record(0.4, "model", "conv1")
+        await g.record(0.4, "model", "conv1")
         assert g.can_afford(0.2, "conv1") is False
 
-    def test_other_conversation_ok(self) -> None:
+    async def test_other_conversation_ok(self) -> None:
         g = CostGuard(daily_budget=10.0, per_conversation_budget=0.5)
-        g.record(0.4, "model", "conv1")
+        await g.record(0.4, "model", "conv1")
         assert g.can_afford(0.2, "conv2") is True
 
-    def test_no_conversation_id_skips_conv_check(self) -> None:
+    async def test_no_conversation_id_skips_conv_check(self) -> None:
         g = CostGuard(daily_budget=10.0, per_conversation_budget=0.5)
-        g.record(0.4, "model", "conv1")
+        await g.record(0.4, "model", "conv1")
         assert g.can_afford(0.2) is True
 
 
 class TestRecord:
     """Spending recording."""
 
-    def test_record_increases_daily(self) -> None:
+    async def test_record_increases_daily(self) -> None:
         g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
-        g.record(1.5, "model", "conv1")
+        await g.record(1.5, "model", "conv1")
         assert g.get_daily_spend() == 1.5
 
-    def test_record_increases_conversation(self) -> None:
+    async def test_record_increases_conversation(self) -> None:
         g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
-        g.record(0.5, "model", "conv1")
-        g.record(0.3, "model", "conv1")
+        await g.record(0.5, "model", "conv1")
+        await g.record(0.3, "model", "conv1")
         assert g.get_conversation_spend("conv1") == pytest.approx(0.8)
 
 
 class TestBudgetQueries:
     """Budget query methods."""
 
-    def test_remaining_budget(self) -> None:
+    async def test_remaining_budget(self) -> None:
         g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
-        g.record(3.0, "model", "conv1")
+        await g.record(3.0, "model", "conv1")
         assert g.get_remaining_budget() == 7.0
 
-    def test_conversation_remaining(self) -> None:
+    async def test_conversation_remaining(self) -> None:
         g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
-        g.record(1.5, "model", "conv1")
+        await g.record(1.5, "model", "conv1")
         assert g.get_conversation_remaining("conv1") == 0.5
 
-    def test_unknown_conversation(self) -> None:
+    async def test_unknown_conversation(self) -> None:
         g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
         assert g.get_conversation_spend("unknown") == 0.0
         assert g.get_conversation_remaining("unknown") == 2.0
@@ -74,12 +74,12 @@ class TestBudgetQueries:
 class TestDailyReset:
     """Daily reset clears spend at midnight UTC."""
 
-    def test_reset_clears_daily_spend(self) -> None:
+    async def test_reset_clears_daily_spend(self) -> None:
         from datetime import timedelta
         from unittest.mock import patch
 
         g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
-        g.record(5.0, "model", "conv1")
+        await g.record(5.0, "model", "conv1")
         assert g.get_daily_spend() == 5.0
 
         # Simulate next day
@@ -89,25 +89,65 @@ class TestDailyReset:
             mock_dt.side_effect = lambda *a, **k: datetime(*a, **k)
             assert g.get_daily_spend() == 0.0
 
-    def test_reset_clears_conversation_spend(self) -> None:
+    async def test_reset_clears_conversation_spend(self) -> None:
         from datetime import timedelta
         from unittest.mock import patch
 
         g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
-        g.record(1.0, "model", "conv1")
+        await g.record(1.0, "model", "conv1")
         assert g.get_conversation_spend("conv1") == 1.0
 
         tomorrow = datetime.now(tz=UTC) + timedelta(days=1)
         with patch("sovyx.llm.cost.datetime") as mock_dt:
             mock_dt.now.return_value = tomorrow
             mock_dt.side_effect = lambda *a, **k: datetime(*a, **k)
-            # After reset, can_afford should succeed for same conv
             assert g.can_afford(2.0, "conv1") is True
 
-    def test_no_reset_same_day(self) -> None:
+    async def test_no_reset_same_day(self) -> None:
         g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
-        g.record(5.0, "model", "conv1")
-        # Calling _maybe_reset multiple times same day
+        await g.record(5.0, "model", "conv1")
         g._maybe_reset()
         g._maybe_reset()
         assert g.get_daily_spend() == 5.0
+
+
+class TestPersistence:
+    """Persist and restore spend state via SQLite."""
+
+    async def test_persist_and_restore(self, tmp_path: object) -> None:
+        """Record spend → persist → new guard → restore → same spend."""
+        from pathlib import Path
+
+        from sovyx.persistence.migrations import MigrationRunner
+        from sovyx.persistence.pool import DatabasePool
+        from sovyx.persistence.schemas.system import get_system_migrations
+
+        db_path = Path(str(tmp_path)) / "system.db"
+        pool = DatabasePool(db_path=db_path, read_pool_size=1)
+        await pool.initialize()
+        runner = MigrationRunner(pool)
+        await runner.initialize()
+        await runner.run_migrations(get_system_migrations())
+
+        # Record some spend
+        g1 = CostGuard(daily_budget=10.0, per_conversation_budget=2.0, system_pool=pool)
+        await g1.record(3.5, "claude", "conv-a")
+        await g1.record(1.2, "gpt-4o", "conv-b")
+
+        # New guard, restore from same DB
+        g2 = CostGuard(daily_budget=10.0, per_conversation_budget=2.0, system_pool=pool)
+        await g2.restore()
+
+        assert g2.get_daily_spend() == pytest.approx(4.7)
+        assert g2.get_conversation_spend("conv-a") == pytest.approx(3.5)
+        assert g2.get_conversation_spend("conv-b") == pytest.approx(1.2)
+
+        await pool.close()
+
+    async def test_no_pool_no_crash(self) -> None:
+        """Without pool, persist/restore are no-ops (no crash)."""
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        await g.restore()
+        await g.record(1.0, "model", "conv1")
+        # No crash — persist silently skipped
+        assert g.get_daily_spend() == 1.0

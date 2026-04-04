@@ -95,6 +95,23 @@ class TestConcurrentResolve:
         assert final_id == results[0] or final_id == results[1]
 
     @pytest.mark.asyncio
+    async def test_no_orphan_persons(self, resolver: PersonResolver) -> None:
+        """Race condition must not create orphan persons (no mapping)."""
+        import asyncio
+
+        await asyncio.gather(
+            resolver.resolve(ChannelType.TELEGRAM, "orphan-test", "User"),
+            resolver.resolve(ChannelType.TELEGRAM, "orphan-test", "User"),
+        )
+        # Count persons vs mappings — must be equal (no orphans)
+        async with resolver._pool.read() as conn:
+            cursor = await conn.execute("SELECT COUNT(*) FROM persons")
+            persons = (await cursor.fetchone())[0]
+            cursor = await conn.execute("SELECT COUNT(*) FROM channel_mappings")
+            mappings = (await cursor.fetchone())[0]
+        assert persons == mappings, f"Orphan persons: {persons} persons vs {mappings} mappings"
+
+    @pytest.mark.asyncio
     async def test_idempotent_resolve(self, resolver: PersonResolver) -> None:
         """Multiple resolves for same user always return same ID."""
         id1 = await resolver.resolve(ChannelType.TELEGRAM, "idem-user", "User")
