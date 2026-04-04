@@ -119,10 +119,14 @@ class StatusCollector:
         """Collect a status snapshot from all services."""
         from sovyx import __version__
 
-        mind_name = await self._get_mind_name()
-        concepts, episodes = await self._get_memory_stats()
+        # Resolve mind once — used by both mind_name and memory stats
+        mind_id_str = await self._get_active_mind_id()
+        concepts, episodes = await self._get_memory_stats(mind_id_str)
 
         calls, cost, tokens, _msgs = get_counters().snapshot()
+
+        # Display "sovyx" for the default/fallback mind, real name otherwise
+        mind_name = "sovyx" if mind_id_str == "default" else mind_id_str
 
         return StatusSnapshot(
             version=__version__,
@@ -136,27 +140,13 @@ class StatusCollector:
             tokens_today=tokens,
         )
 
-    async def _get_mind_name(self) -> str:
-        """Get the active mind name."""
-        try:
-            from sovyx.engine.bootstrap import MindManager
-
-            if self._registry.is_registered(MindManager):
-                manager = await self._registry.resolve(MindManager)
-                minds = manager.get_active_minds()
-                if minds:
-                    return minds[0]
-        except Exception:  # noqa: BLE001
-            logger.debug("status_mind_name_failed")
-        return "sovyx"
-
-    async def _get_memory_stats(self) -> tuple[int, int]:
+    async def _get_memory_stats(self, mind_id_str: str) -> tuple[int, int]:
         """Get concept and episode counts from brain repositories."""
         from sovyx.engine.types import MindId
 
         concepts = 0
         episodes = 0
-        mind_id = MindId(await self._get_active_mind_id())
+        mind_id = MindId(mind_id_str)
 
         try:
             from sovyx.brain.concept_repo import ConceptRepository
