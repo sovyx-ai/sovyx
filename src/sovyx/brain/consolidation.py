@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import random
 import time
 from typing import TYPE_CHECKING
 
@@ -138,7 +139,9 @@ class ConsolidationScheduler:
         """Internal loop: sleep → consolidate → repeat."""
         while self._running:
             try:
-                await asyncio.sleep(self._interval_s)
+                # ±20% jitter to prevent thundering herd in multi-instance
+                jitter = random.uniform(0.8, 1.2)
+                await asyncio.sleep(self._interval_s * jitter)
                 await self._cycle.run(mind_id)
             except asyncio.CancelledError:
                 break
