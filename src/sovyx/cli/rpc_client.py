@@ -26,8 +26,24 @@ class DaemonClient:
         self._request_id = 0
 
     def is_daemon_running(self) -> bool:
-        """True if socket exists."""
-        return self._socket_path.exists()
+        """Check if daemon is running by probing the socket.
+
+        A stale socket file (from a crash) will fail the connect probe
+        instead of falsely reporting the daemon as running.
+        """
+        if not self._socket_path.exists():
+            return False
+        try:
+            import socket
+
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(1.0)
+            sock.connect(str(self._socket_path))
+            sock.close()
+        except (ConnectionRefusedError, OSError, TimeoutError):
+            return False
+        else:
+            return True
 
     async def call(
         self,

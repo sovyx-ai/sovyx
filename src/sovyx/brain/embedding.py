@@ -195,6 +195,10 @@ class EmbeddingEngine:
             try:
                 downloader = ModelDownloader(self._model_dir)
 
+                # TODO(P44): Compute SHA-256 from trusted download and hardcode here.
+                # The ensure_model infrastructure already supports verification —
+                # just needs the hash values.  Deferred to first deployment where
+                # the model is downloaded from HuggingFace.
                 model_path = await downloader.ensure_model(MODEL_FILENAME, MODEL_URL)
                 tokenizer_path = await downloader.ensure_model(TOKENIZER_FILENAME, TOKENIZER_URL)
 
@@ -214,7 +218,7 @@ class EmbeddingEngine:
     def _load_model(self, model_path: Path, tokenizer_path: Path) -> None:
         """Load ONNX session and tokenizer."""
         import onnxruntime as ort  # type: ignore[import-untyped]  # no stubs available
-        from tokenizers import Tokenizer  # type: ignore[import-not-found]  # HF tokenizers lacks stubs
+        from tokenizers import Tokenizer  # type: ignore[import-not-found]
 
         sess_options = ort.SessionOptions()
         sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
