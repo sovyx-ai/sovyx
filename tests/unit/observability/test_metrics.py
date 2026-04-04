@@ -351,6 +351,13 @@ class TestNoOpRegistry:
         instrument.add(1)  # should not raise
         instrument.record(42.0)  # should not raise
 
+    def test_chained_attr_access(self) -> None:
+        """Chained attribute access (noop.a.b.c) should not crash."""
+        noop = _NoOpRegistry()
+        noop.a.b  # noqa: B018
+        noop.x.y.z.add(1)  # should not raise
+        noop.deep.nested.attr.record(42.0)  # should not raise
+
 
 # ── collect_json ────────────────────────────────────────────────────────────
 

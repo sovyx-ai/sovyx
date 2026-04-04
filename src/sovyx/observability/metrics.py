@@ -191,13 +191,21 @@ class _NoOpRegistry:
     """
 
     class _NoOpInstrument:
-        """No-op instrument that accepts any call."""
+        """No-op instrument that accepts any call.
+
+        Also handles chained attribute access (e.g. ``noop.a.b``)
+        by returning itself for any unknown attribute.
+        """
 
         def add(self, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
             """No-op add."""
 
         def record(self, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
             """No-op record."""
+
+        def __getattr__(self, name: str) -> _NoOpRegistry._NoOpInstrument:
+            """Return self for any attribute access — safe chaining."""
+            return self
 
     _noop = _NoOpInstrument()
 
