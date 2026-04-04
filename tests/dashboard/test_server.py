@@ -167,15 +167,19 @@ class TestAPIRoutes:
         resp = client.get("/api/settings", headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
-        assert "mind_name" in data
-        assert "personality" in data
-        assert "channels" in data
+        assert "log_level" in data
+        assert "data_dir" in data
 
     def test_put_settings(
         self, client: TestClient, auth_headers: dict[str, str]
     ) -> None:
-        resp = client.put("/api/settings", headers=auth_headers)
+        resp = client.put(
+            "/api/settings",
+            headers=auth_headers,
+            json={"log_level": "DEBUG"},
+        )
         assert resp.status_code == 200
+        assert resp.json()["ok"] is True
 
 
 # ── WebSocket Tests ──

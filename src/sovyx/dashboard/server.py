@@ -15,7 +15,7 @@ import secrets
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -308,29 +308,39 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
 
     @app.get("/api/settings", dependencies=[Depends(verify_token)])
     async def get_settings() -> JSONResponse:
-        """Current settings."""
-        # Placeholder — DASH-09
-        return JSONResponse(
-            {
-                "mind_name": "sovyx",
-                "log_level": "INFO",
-                "data_dir": str(Path.home() / ".sovyx"),
-                "personality": {
-                    "openness": 0.7,
-                    "conscientiousness": 0.8,
-                    "extraversion": 0.4,
-                    "agreeableness": 0.6,
-                    "neuroticism": 0.3,
-                },
-                "channels": [],
-            }
-        )
+        """Current engine settings."""
+        from sovyx.dashboard.settings import get_settings as _get_settings
+        from sovyx.engine.config import EngineConfig
+
+        config = getattr(app.state, "engine_config", None)
+        if config is None:
+            try:
+                config = EngineConfig()
+            except Exception:  # noqa: BLE001
+                return JSONResponse({"log_level": "INFO", "data_dir": str(Path.home() / ".sovyx")})
+
+        return JSONResponse(_get_settings(config))
 
     @app.put("/api/settings", dependencies=[Depends(verify_token)])
-    async def update_settings() -> JSONResponse:
-        """Update settings."""
-        # Placeholder — DASH-09
-        return JSONResponse({"ok": True})
+    async def update_settings(request: Request) -> JSONResponse:
+        """Update mutable settings (e.g. log_level)."""
+        from sovyx.dashboard.settings import apply_settings
+
+        body = await request.json()
+        config = getattr(app.state, "engine_config", None)
+        if config is None:
+            from sovyx.engine.config import EngineConfig
+
+            try:
+                config = EngineConfig()
+                app.state.engine_config = config
+            except Exception:  # noqa: BLE001
+                return JSONResponse({"ok": False, "error": "no config"}, status_code=500)
+
+        config_path = getattr(app.state, "config_path", None)
+        changes = apply_settings(config, body, config_path=config_path)
+
+        return JSONResponse({"ok": True, "changes": changes})
 
     # ── WebSocket ──
 
