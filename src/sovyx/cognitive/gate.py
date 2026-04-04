@@ -13,7 +13,7 @@ import itertools
 from typing import TYPE_CHECKING
 
 from sovyx.engine.errors import CognitiveError
-from sovyx.observability.logging import get_logger
+from sovyx.observability.logging import bind_request_context, clear_request_context, get_logger
 
 if TYPE_CHECKING:
     from sovyx.cognitive.act import ActionResult
@@ -117,7 +117,12 @@ class CogLoopGate:
         logger.info("cogloop_gate_stopped")
 
     async def _worker(self) -> None:
-        """Single worker draining the queue."""
+        """Single worker draining the queue.
+
+        Binds request-scoped logging context (mind_id, conversation_id,
+        request_id) before processing each request, so every log emitted
+        during the cognitive loop carries full tracing context.
+        """
         while self._running:
             try:
                 priority, _, request, future = await asyncio.wait_for(
@@ -126,6 +131,12 @@ class CogLoopGate:
             except (TimeoutError, asyncio.CancelledError):
                 continue
 
+            # Bind structured context for the lifetime of this request
+            clear_request_context()
+            bind_request_context(
+                mind_id=str(request.mind_id),
+                conversation_id=str(request.conversation_id),
+            )
             try:
                 result = await self._loop.process_request(request)
                 if not future.done():
@@ -133,3 +144,5 @@ class CogLoopGate:
             except Exception as e:
                 if not future.done():
                     future.set_exception(e)
+            finally:
+                clear_request_context()
