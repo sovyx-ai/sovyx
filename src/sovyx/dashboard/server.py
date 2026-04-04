@@ -49,36 +49,6 @@ def _ensure_token() -> str:
     return token
 
 
-# ── Auth Dependency ──
-
-
-def _verify_bearer(authorization: str | None = None) -> str:
-    """Validate Bearer token from Authorization header.
-
-    Returns the token if valid, raises 401 otherwise.
-    """
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(
-            status_code=HTTP_401_UNAUTHORIZED,
-            detail="Missing or invalid Authorization header",
-        )
-    token = authorization.removeprefix("Bearer ").strip()
-    if not secrets.compare_digest(token, _server_token):
-        raise HTTPException(
-            status_code=HTTP_401_UNAUTHORIZED,
-            detail="Invalid token",
-        )
-    return token
-
-
-async def require_auth(
-    authorization: str | None = None,  # noqa: ARG001 — injected by FastAPI from header
-) -> None:
-    """FastAPI dependency — validates Bearer token."""
-    # FastAPI extracts the Authorization header automatically via parameter name
-    pass
-
-
 # Will be set during create_app()
 _server_token: str = ""
 
@@ -253,8 +223,8 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
 
     @app.get("/api/conversations", dependencies=[Depends(verify_token)])
     async def get_conversations(
-        limit: int = 50,
-        offset: int = 0,
+        limit: int = Query(default=50, ge=0, le=500),
+        offset: int = Query(default=0, ge=0),
     ) -> JSONResponse:
         """List conversations ordered by most recent activity."""
         registry = getattr(app.state, "registry", None)
@@ -268,7 +238,7 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
     @app.get("/api/conversations/{conversation_id}", dependencies=[Depends(verify_token)])
     async def get_conversation_detail(
         conversation_id: str,
-        limit: int = 100,
+        limit: int = Query(default=100, ge=0, le=1000),
     ) -> JSONResponse:
         """Get messages for a specific conversation."""
         registry = getattr(app.state, "registry", None)
@@ -282,7 +252,7 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
         return JSONResponse({"conversation_id": conversation_id, "messages": []})
 
     @app.get("/api/brain/graph", dependencies=[Depends(verify_token)])
-    async def get_brain_graph(limit: int = 200) -> JSONResponse:
+    async def get_brain_graph(limit: int = Query(default=200, ge=0, le=1000)) -> JSONResponse:
         """Brain knowledge graph (nodes + links for react-force-graph-2d)."""
         registry = getattr(app.state, "registry", None)
         if registry is not None:
@@ -297,7 +267,7 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
         level: str | None = None,
         module: str | None = None,
         search: str | None = None,
-        limit: int = 100,
+        limit: int = Query(default=100, ge=0, le=1000),
     ) -> JSONResponse:
         """Query structured JSON logs with filters."""
         from sovyx.dashboard.logs import query_logs
