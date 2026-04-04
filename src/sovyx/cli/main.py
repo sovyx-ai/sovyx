@@ -10,6 +10,7 @@ from rich.console import Console
 from rich.table import Table
 
 from sovyx import __version__
+from sovyx.cli.commands.logs import logs_app
 from sovyx.cli.rpc_client import DaemonClient
 
 console = Console()  # pragma: no cover
@@ -22,6 +23,7 @@ brain_app = typer.Typer(name="brain", help="Brain memory commands")
 mind_app = typer.Typer(name="mind", help="Mind management commands")
 app.add_typer(brain_app)
 app.add_typer(mind_app)
+app.add_typer(logs_app)
 
 
 def _get_client() -> DaemonClient:
