@@ -6,9 +6,12 @@ consolidation decay, and Hebbian strengthening with real DB operations.
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 from sovyx.brain.concept_repo import ConceptRepository
 from sovyx.brain.embedding import EmbeddingEngine

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
@@ -215,3 +216,46 @@ class TestLifecycle:
         await ch.start()  # Second start should be no-op
         assert ch.is_running is True
         await ch.stop()
+
+
+class TestPollLoop:
+    """Poll loop error handling (lines 163-178)."""
+
+    async def test_poll_error_retries(self) -> None:
+        """Poll loop retries on error with backoff."""
+        ch = TelegramChannel(VALID_TOKEN, _mock_bridge())
+        call_count = 0
+
+        async def failing_poll(*_args: object, **_kwargs: object) -> None:
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                msg = "connection lost"
+                raise ConnectionError(msg)
+            ch._running = False  # Stop after success
+
+        ch._dp.start_polling = AsyncMock(side_effect=failing_poll)
+        ch._running = True
+        await ch._poll_loop()
+        assert call_count == 3  # 2 failures + 1 success that stops
+
+    async def test_poll_cancelled_exits(self) -> None:
+        """CancelledError exits the loop cleanly."""
+        ch = TelegramChannel(VALID_TOKEN, _mock_bridge())
+        ch._dp.start_polling = AsyncMock(side_effect=asyncio.CancelledError)
+        await ch._poll_loop()  # Should not raise
+
+    async def test_stop_with_active_poll_task(self) -> None:
+        """Stop cancels an active poll task (line 95→99)."""
+        ch = TelegramChannel(VALID_TOKEN, _mock_bridge())
+
+        async def slow_poll(*_args: object, **_kwargs: object) -> None:
+            await asyncio.sleep(10)
+
+        ch._dp.start_polling = AsyncMock(side_effect=slow_poll)
+        ch._running = True
+        ch._poll_task = asyncio.create_task(ch._poll_loop())
+        await asyncio.sleep(0.01)  # Let it start
+        ch._bot.session.close = AsyncMock()
+        await ch.stop()
+        assert ch._running is False
