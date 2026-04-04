@@ -7,13 +7,12 @@ FROM python:3.12-slim AS build
 WORKDIR /app
 RUN pip install --no-cache-dir uv==0.10.11
 
-# Copy dependency files first (cache layer)
+# Copy everything needed for dependency resolution
 COPY pyproject.toml uv.lock ./
-RUN uv sync --no-dev --frozen
-
-# Copy source
 COPY src/ ./src/
-RUN uv pip install --no-deps .
+
+# Install all deps + package in one shot
+RUN uv sync --no-dev --frozen
 
 # ── Runtime ──────────────────────────────────────────────────────────────────
 
