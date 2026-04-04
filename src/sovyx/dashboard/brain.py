@@ -73,42 +73,95 @@ async def _get_relations(
     registry: ServiceRegistry,
     node_ids: set[str],
 ) -> list[dict[str, Any]]:
-    """Get relations between the given concept IDs."""
+    """Get relations between the given concept IDs.
+
+    Uses a single batch SQL query instead of N+1 per-concept queries.
+    """
+    if not node_ids:
+        return []
+
     try:
-        from sovyx.brain.relation_repo import RelationRepository
+        from sovyx.persistence.manager import DatabaseManager
 
-        if not registry.is_registered(RelationRepository):
-            return []
+        if not registry.is_registered(DatabaseManager):
+            # Fallback: try via RelationRepository (slower, N+1)
+            return await _get_relations_via_repo(registry, node_ids)
 
-        repo = await registry.resolve(RelationRepository)
+        db = await registry.resolve(DatabaseManager)
+        mind_id_str = await _get_active_mind_id(registry)
 
-        # Get relations for all concepts in the set
-        from sovyx.engine.types import ConceptId
+        from sovyx.engine.types import MindId
 
-        all_links: list[dict[str, Any]] = []
+        pool = db.get_brain_pool(MindId(mind_id_str))
+
+        # Single query: all relations where BOTH endpoints are in node_ids
+        placeholders = ",".join("?" for _ in node_ids)
+        ids_list = list(node_ids)
+
+        async with pool.read() as conn:
+            cursor = await conn.execute(
+                f"SELECT source_id, target_id, relation_type, weight "  # noqa: S608  # nosec B608
+                f"FROM relations "
+                f"WHERE source_id IN ({placeholders}) "
+                f"AND target_id IN ({placeholders})",
+                ids_list + ids_list,
+            )
+            rows = await cursor.fetchall()
+
         seen: set[str] = set()
+        links: list[dict[str, Any]] = []
 
-        for nid in node_ids:
-            relations = await repo.get_relations_for(ConceptId(nid))
-            for r in relations:
-                # Only include links where both endpoints are in our node set
-                src = str(r.source_id)
-                tgt = str(r.target_id)
-                if src in node_ids and tgt in node_ids:
-                    edge_key = f"{min(src, tgt)}:{max(src, tgt)}"
-                    if edge_key not in seen:
-                        seen.add(edge_key)
-                        all_links.append({
-                            "source": src,
-                            "target": tgt,
-                            "relation_type": r.relation_type.value,
-                            "weight": round(r.weight, 3),
-                        })
+        for row in rows:
+            src, tgt = str(row[0]), str(row[1])
+            edge_key = f"{min(src, tgt)}:{max(src, tgt)}"
+            if edge_key not in seen:
+                seen.add(edge_key)
+                links.append({
+                    "source": src,
+                    "target": tgt,
+                    "relation_type": str(row[2]),
+                    "weight": round(float(row[3]), 3),
+                })
 
-        return all_links
+        return links
     except Exception:  # noqa: BLE001
         logger.debug("brain_graph_relations_failed")
         return []
+
+
+async def _get_relations_via_repo(
+    registry: ServiceRegistry,
+    node_ids: set[str],
+) -> list[dict[str, Any]]:
+    """Fallback: get relations via RelationRepository (N+1, slower)."""
+    from sovyx.brain.relation_repo import RelationRepository
+
+    if not registry.is_registered(RelationRepository):
+        return []
+
+    repo = await registry.resolve(RelationRepository)
+    from sovyx.engine.types import ConceptId
+
+    all_links: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for nid in node_ids:
+        relations = await repo.get_relations_for(ConceptId(nid))
+        for r in relations:
+            src = str(r.source_id)
+            tgt = str(r.target_id)
+            if src in node_ids and tgt in node_ids:
+                edge_key = f"{min(src, tgt)}:{max(src, tgt)}"
+                if edge_key not in seen:
+                    seen.add(edge_key)
+                    all_links.append({
+                        "source": src,
+                        "target": tgt,
+                        "relation_type": r.relation_type.value,
+                        "weight": round(r.weight, 3),
+                    })
+
+    return all_links
 
 
 async def _get_active_mind_id(registry: ServiceRegistry) -> str:
@@ -122,5 +175,5 @@ async def _get_active_mind_id(registry: ServiceRegistry) -> str:
             if minds:
                 return minds[0]
     except Exception:  # noqa: BLE001
-        pass
+        logger.debug("_get_active_mind_id_failed")
     return "default"

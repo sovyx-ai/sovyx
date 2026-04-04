@@ -83,10 +83,29 @@ def _read_and_filter(
 
 
 def _tail_lines(path: Path, max_lines: int = 1000) -> list[str]:
-    """Read last N lines from a file efficiently."""
+    """Read last N lines from a file efficiently using seek-from-end.
+
+    For files up to 1MB, reads the whole file (fast enough).
+    For larger files, seeks to the last ~1MB and reads from there.
+    """
     try:
-        with path.open("r", encoding="utf-8", errors="replace") as f:
-            return list(deque(f, maxlen=max_lines))
+        file_size = path.stat().st_size
+        if file_size == 0:
+            return []
+
+        # For small files, just read all
+        max_read = 1024 * 1024  # 1MB
+        with path.open("rb") as f:
+            if file_size > max_read:
+                f.seek(-max_read, 2)  # Seek from end
+                # Skip partial first line
+                f.readline()
+            data = f.read()
+
+        lines = data.decode("utf-8", errors="replace").splitlines()
+        if len(lines) > max_lines:
+            lines = lines[-max_lines:]
+        return lines
     except OSError:
         return []
 
