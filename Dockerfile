@@ -8,7 +8,7 @@ WORKDIR /app
 RUN pip install --no-cache-dir uv==0.10.11
 
 # Copy everything needed for dependency resolution
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock README.md ./
 COPY src/ ./src/
 
 # Install all deps + package in one shot
