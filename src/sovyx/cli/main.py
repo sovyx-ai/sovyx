@@ -246,7 +246,7 @@ def doctor(
                                 name=name,
                                 status=status,
                                 message=check_data.get("message", ""),
-                                metadata=check_data.get("metadata"),
+                                metadata=check_data.get("metadata") or {},
                             )
                         )
                     else:
