@@ -107,3 +107,32 @@ class TestPropertyBased:
         assert b.temporal >= 0
         assert b.conversation >= 0
         assert b.response_reserve >= 0
+
+
+class TestOverflowNormalisation:
+    """Budget overflow normalisation for small windows (Q15 fix)."""
+
+    def test_small_window_floors_dont_exceed_total(self) -> None:
+        """With MIN_CONTEXT_WINDOW, allocations must not exceed available."""
+        m = TokenBudgetManager()
+        b = m.allocate(
+            conversation_length=0,
+            brain_result_count=0,
+            complexity=0.0,
+            context_window=2048,
+        )
+        # Sum of non-response allocations must not exceed total - response_reserve
+        usable = b.total - b.response_reserve
+        allocated = (
+            b.system_prompt + b.memory_concepts + b.memory_episodes
+            + b.temporal + b.conversation
+        )
+        assert allocated <= usable
+
+    def test_all_allocations_positive_on_small_window(self) -> None:
+        """Even with tiny window, no allocation goes negative."""
+        m = TokenBudgetManager()
+        b = m.allocate(conversation_length=0, brain_result_count=0, context_window=2048)
+        assert b.system_prompt > 0
+        assert b.response_reserve > 0
+        assert b.conversation >= 0

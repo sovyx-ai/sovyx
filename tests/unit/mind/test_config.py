@@ -79,13 +79,59 @@ class TestLLMConfig:
 
 
 class TestBrainConfig:
-    """Brain configuration."""
+    """Brain configuration with range validation."""
 
     def test_defaults(self) -> None:
         b = BrainConfig()
         assert b.consolidation_interval_hours == 6
         assert b.forgetting_enabled is True
         assert b.decay_rate == 0.1
+        assert b.max_concepts == 50000
+        assert b.min_strength == 0.01
+
+    def test_valid_ranges_accepted(self) -> None:
+        b = BrainConfig(
+            consolidation_interval_hours=1,
+            max_concepts=100,
+            decay_rate=0.0,
+            min_strength=0.0,
+        )
+        assert b.consolidation_interval_hours == 1
+        assert b.max_concepts == 100
+
+    def test_upper_bounds_accepted(self) -> None:
+        b = BrainConfig(
+            consolidation_interval_hours=168,
+            max_concepts=1_000_000,
+            decay_rate=1.0,
+            min_strength=1.0,
+        )
+        assert b.consolidation_interval_hours == 168
+        assert b.max_concepts == 1_000_000
+
+    def test_zero_interval_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="consolidation_interval_hours"):
+            BrainConfig(consolidation_interval_hours=0)
+
+    def test_negative_max_concepts_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="max_concepts"):
+            BrainConfig(max_concepts=-1)
+
+    def test_below_minimum_concepts_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="max_concepts"):
+            BrainConfig(max_concepts=50)
+
+    def test_decay_rate_overflow_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="decay_rate"):
+            BrainConfig(decay_rate=1.5)
+
+    def test_negative_decay_rate_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="decay_rate"):
+            BrainConfig(decay_rate=-0.1)
+
+    def test_interval_overflow_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="consolidation_interval_hours"):
+            BrainConfig(consolidation_interval_hours=200)
 
 
 class TestSafetyConfig:

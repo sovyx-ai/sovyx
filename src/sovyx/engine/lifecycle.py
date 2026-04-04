@@ -202,19 +202,25 @@ class LifecycleManager:
             await bridge.start()
 
     async def _shutdown_services(self) -> None:
-        """Stop services in reverse order."""
+        """Stop services in reverse dependency order.
+
+        Order: acceptors → processors → writers → stores.
+        ConsolidationScheduler must stop before DatabaseManager
+        to prevent writes to a closed pool (P28).
+        """
+        from sovyx.brain.consolidation import ConsolidationScheduler
         from sovyx.bridge.manager import BridgeManager
         from sovyx.cognitive.gate import CogLoopGate
         from sovyx.cognitive.loop import CognitiveLoop
         from sovyx.llm.router import LLMRouter
         from sovyx.persistence.manager import DatabaseManager
 
-        # 1. Stop channels
+        # 1. Stop channels (stop accepting new messages)
         if self._registry.is_registered(BridgeManager):
             bridge = await self._registry.resolve(BridgeManager)
             await bridge.stop()
 
-        # 2. Drain gate
+        # 2. Drain gate (finish in-flight requests)
         if self._registry.is_registered(CogLoopGate):
             gate = await self._registry.resolve(CogLoopGate)
             await gate.stop()
@@ -224,12 +230,17 @@ class LifecycleManager:
             loop = await self._registry.resolve(CognitiveLoop)
             await loop.stop()
 
-        # 4. Stop LLM router
+        # 4. Stop consolidation scheduler (writes to brain DB)
+        if self._registry.is_registered(ConsolidationScheduler):
+            scheduler = await self._registry.resolve(ConsolidationScheduler)
+            await scheduler.stop()
+
+        # 5. Stop LLM router (close HTTP clients)
         if self._registry.is_registered(LLMRouter):
             router = await self._registry.resolve(LLMRouter)
             await router.stop()
 
-        # 5. Stop database
+        # 6. Stop database (last — everything else must be stopped)
         if self._registry.is_registered(DatabaseManager):
             db = await self._registry.resolve(DatabaseManager)
             await db.stop()
