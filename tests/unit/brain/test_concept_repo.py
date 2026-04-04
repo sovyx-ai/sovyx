@@ -249,3 +249,34 @@ class TestMetadataSerialization:
         fetched = await repo.get(cid)
         assert fetched is not None
         assert fetched.category == ConceptCategory.PREFERENCE
+
+
+class TestFTS5Adversarial:
+    """FTS5 search should never crash on adversarial input."""
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "",                          # empty
+            "   ",                       # whitespace only
+            '"; DROP TABLE concepts --', # SQL injection attempt
+            "OR 1=1",                    # boolean injection
+            "***",                       # only special chars
+            "a" * 1000,                  # very long
+            "café résumé naïve",         # unicode with diacritics
+            "AND OR NOT NEAR",           # FTS5 operators only
+            '"unclosed quote',           # unclosed quote
+            "test*",                     # glob
+        ],
+        ids=[
+            "empty", "whitespace", "sql_injection", "boolean_injection",
+            "special_chars", "very_long", "unicode", "fts5_operators",
+            "unclosed_quote", "glob",
+        ],
+    )
+    async def test_adversarial_input_no_crash(
+        self, repo: ConceptRepository, query: str
+    ) -> None:
+        """FTS5 search returns a list (possibly empty) — never crashes."""
+        results = await repo.search_by_text(query, mind_id=MindId("test-mind"))
+        assert isinstance(results, list)
