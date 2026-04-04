@@ -144,7 +144,7 @@ class BridgeManager:
 
         NEVER raises — all errors handled internally.
         """
-        get_metrics().messages_processed.add(
+        get_metrics().messages_received.add(
             1,
             {"channel": message.channel_type.value},
         )

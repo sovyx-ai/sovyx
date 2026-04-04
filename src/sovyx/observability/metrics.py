@@ -77,9 +77,15 @@ class MetricsRegistry:
         self._meter = meter
 
         # ── Counters ────────────────────────────────────────────────
+        self.messages_received = meter.create_counter(
+            name="sovyx.messages.received",
+            description="Total messages received from channels (inbound)",
+            unit="1",
+        )
+
         self.messages_processed = meter.create_counter(
             name="sovyx.messages.processed",
-            description="Total messages processed by the cognitive loop",
+            description="Total messages fully processed through the cognitive loop",
             unit="1",
         )
 

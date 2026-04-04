@@ -88,20 +88,33 @@ class TestSetupTeardown:
 class TestCounters:
     """Counter instruments record correctly."""
 
+    def test_messages_received(
+        self,
+        registry: MetricsRegistry,
+        reader: InMemoryMetricReader,
+    ) -> None:
+        registry.messages_received.add(1, {"channel": "telegram"})
+        registry.messages_received.add(1, {"channel": "signal"})
+
+        data = collect_json(reader)
+        metric = _find_metric(data, "sovyx.messages.received")
+        assert metric is not None
+        total = sum(p["value"] for p in metric["data_points"])
+        assert total == 2
+
     def test_messages_processed(
         self,
         registry: MetricsRegistry,
         reader: InMemoryMetricReader,
     ) -> None:
-        registry.messages_processed.add(1, {"channel": "telegram"})
-        registry.messages_processed.add(1, {"channel": "telegram"})
-        registry.messages_processed.add(1, {"channel": "signal"})
+        registry.messages_processed.add(1, {"mind_id": "nyx"})
+        registry.messages_processed.add(1, {"mind_id": "nyx"})
 
         data = collect_json(reader)
         metric = _find_metric(data, "sovyx.messages.processed")
         assert metric is not None
         total = sum(p["value"] for p in metric["data_points"])
-        assert total == 3
+        assert total == 2
 
     def test_llm_calls(
         self,
@@ -364,7 +377,7 @@ class TestCollectJson:
         data = collect_json(reader)
         metric = _find_metric(data, "sovyx.messages.processed")
         assert metric is not None
-        assert metric["description"] == "Total messages processed by the cognitive loop"
+        assert metric["description"] == "Total messages fully processed through the cognitive loop"
         assert metric["unit"] == "1"
 
     def test_multiple_metrics_collected(
