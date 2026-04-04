@@ -85,7 +85,26 @@ class TestDoctor:
             mock_client.return_value.is_daemon_running.return_value = False
             result = runner.invoke(app, ["doctor"])
         assert result.exit_code == 0
-        assert "data_dir" in result.stdout
+        # New doctor uses Rich Table — check for offline check names
+        assert "Disk Space" in result.stdout or "offline" in result.stdout.lower()
+
+    def test_doctor_offline_json(self, tmp_path: Path) -> None:
+        with (
+            patch("sovyx.cli.main._get_client") as mock_client,
+            patch("sovyx.cli.main.Path.home", return_value=tmp_path),
+        ):
+            mock_client.return_value.is_daemon_running.return_value = False
+            result = runner.invoke(app, ["doctor", "--json"])
+        assert result.exit_code == 0
+        import json
+
+        data = json.loads(result.stdout)
+        assert isinstance(data, list)
+        assert len(data) >= 4  # At least 4 offline checks + config
+        names = {item["name"] for item in data}
+        assert "Disk Space" in names
+        assert "RAM" in names
+        assert "CPU" in names
 
 
 class TestBrainCommands:
@@ -142,7 +161,23 @@ class TestWithDaemon:
         assert result.exit_code == 0
 
     def test_doctor_online(self) -> None:
-        checks = {"checks": {"sqlite": True, "brain": True}}
+        checks = {
+            "checks": {
+                "sqlite": {"status": "green", "message": "ok", "metadata": None},
+                "brain": {"status": "green", "message": "indexed"},
+            }
+        }
+        with (
+            patch("sovyx.cli.main._get_client") as mock,
+            patch("sovyx.cli.main._run", return_value=checks),
+        ):
+            mock.return_value.is_daemon_running.return_value = True
+            result = runner.invoke(app, ["doctor"])
+        assert result.exit_code == 0
+
+    def test_doctor_online_legacy_bool(self) -> None:
+        """Backward compat: daemon returns simple bool checks."""
+        checks = {"checks": {"sqlite": True, "brain": False}}
         with (
             patch("sovyx.cli.main._get_client") as mock,
             patch("sovyx.cli.main._run", return_value=checks),

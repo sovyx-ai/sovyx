@@ -614,3 +614,30 @@ def create_default_registry(
     registry.register(ConsolidationCheck(is_running_fn=consolidation_fn))
     registry.register(CostBudgetCheck(get_spend_fn=cost_spend_fn, daily_budget=cost_budget))
     return registry
+
+
+def create_offline_registry(
+    *,
+    disk_path: Path | None = None,
+    model_dir: Path | None = None,
+) -> HealthRegistry:
+    """Create a HealthRegistry with only offline-capable checks.
+
+    These checks require no running daemon or live services — they probe
+    the local filesystem and system resources directly.
+
+    Offline checks:
+        - DiskSpaceCheck: Filesystem free space
+        - RAMCheck: Available system memory
+        - CPUCheck: CPU utilization
+        - ModelLoadedCheck: Embedding model files exist on disk
+
+    Returns:
+        HealthRegistry with 4 offline checks.
+    """
+    registry = HealthRegistry()
+    registry.register(DiskSpaceCheck(path=disk_path))
+    registry.register(RAMCheck())
+    registry.register(CPUCheck())
+    registry.register(ModelLoadedCheck(model_dir=model_dir))
+    return registry

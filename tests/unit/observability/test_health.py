@@ -524,3 +524,67 @@ class TestCreateDefaultRegistry:
         )
         results = await reg.run_all(timeout=5.0)
         assert len(results) == 10
+
+
+# ── Offline Registry ────────────────────────────────────────────────────────
+
+
+class TestCreateOfflineRegistry:
+    """create_offline_registry returns a registry with only offline checks."""
+
+    def test_has_four_checks(self) -> None:
+        from sovyx.observability.health import create_offline_registry
+
+        registry = create_offline_registry()
+        assert len(registry._checks) == 4
+
+    def test_check_names(self) -> None:
+        from sovyx.observability.health import create_offline_registry
+
+        registry = create_offline_registry()
+        names = {c.name for c in registry._checks}
+        assert names == {"Disk Space", "RAM", "CPU", "Embedding Model"}
+
+    @pytest.mark.asyncio
+    async def test_all_run_successfully(self) -> None:
+        from sovyx.observability.health import create_offline_registry
+
+        registry = create_offline_registry()
+        results = await registry.run_all(timeout=10.0)
+        assert len(results) == 4
+        # All should return some result (not crash)
+        for r in results:
+            assert r.name
+            assert r.status
+
+
+# ── Package Exports ─────────────────────────────────────────────────────────
+
+
+class TestObservabilityExports:
+    """Verify health types are accessible from observability package."""
+
+    def test_check_result_importable(self) -> None:
+        from sovyx.observability import CheckResult
+
+        assert CheckResult is not None
+
+    def test_check_status_importable(self) -> None:
+        from sovyx.observability import CheckStatus
+
+        assert CheckStatus.GREEN.value == "green"
+
+    def test_health_registry_importable(self) -> None:
+        from sovyx.observability import HealthRegistry
+
+        assert HealthRegistry is not None
+
+    def test_create_default_registry_importable(self) -> None:
+        from sovyx.observability import create_default_registry
+
+        assert callable(create_default_registry)
+
+    def test_create_offline_registry_importable(self) -> None:
+        from sovyx.observability import create_offline_registry
+
+        assert callable(create_offline_registry)

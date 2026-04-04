@@ -12,6 +12,7 @@ import typer
 from sovyx.cli.commands.logs import (
     _follow_log,
     _format_entry,
+    _iter_new_lines,
     _matches,
     _parse_duration,
     _parse_filters,
@@ -501,6 +502,72 @@ class TestLogsCommand:
         assert result.exit_code == 0
         output_lines = [ln for ln in result.output.strip().split("\n") if ln.strip()]
         assert len(output_lines) == 5
+
+
+# ── _iter_new_lines ─────────────────────────────────────────────────────────
+
+
+class TestIterNewLines:
+    """Generator that yields parsed JSON entries from a file handle."""
+
+    def test_yields_valid_json(self) -> None:
+        import io
+
+        data = json.dumps({"event": "test", "level": "info"}) + "\n"
+        f = io.StringIO(data)
+        entries = list(_iter_new_lines(f))
+        assert len(entries) == 1
+        assert entries[0]["event"] == "test"
+
+    def test_skips_blank_lines(self) -> None:
+        import io
+
+        data = "\n\n" + json.dumps({"event": "a"}) + "\n\n"
+        f = io.StringIO(data)
+        entries = list(_iter_new_lines(f))
+        assert len(entries) == 1
+
+    def test_skips_invalid_json(self) -> None:
+        import io
+
+        data = "not json\n" + json.dumps({"event": "valid"}) + "\n"
+        f = io.StringIO(data)
+        entries = list(_iter_new_lines(f))
+        assert len(entries) == 1
+        assert entries[0]["event"] == "valid"
+
+    def test_returns_on_eof(self) -> None:
+        import io
+
+        f = io.StringIO("")
+        entries = list(_iter_new_lines(f))
+        assert entries == []
+
+    def test_multiple_entries(self) -> None:
+        import io
+
+        lines = [json.dumps({"event": f"e{i}"}) for i in range(5)]
+        f = io.StringIO("\n".join(lines) + "\n")
+        entries = list(_iter_new_lines(f))
+        assert len(entries) == 5
+        assert [e["event"] for e in entries] == ["e0", "e1", "e2", "e3", "e4"]
+
+    def test_mixed_valid_invalid(self) -> None:
+        import io
+
+        data = (
+            json.dumps({"event": "a"})
+            + "\n"
+            + "broken{json\n"
+            + "\n"
+            + json.dumps({"event": "b"})
+            + "\n"
+        )
+        f = io.StringIO(data)
+        entries = list(_iter_new_lines(f))
+        assert len(entries) == 2
+        assert entries[0]["event"] == "a"
+        assert entries[1]["event"] == "b"
 
 
 # ── _follow_log (limited testing) ──────────────────────────────────────────
