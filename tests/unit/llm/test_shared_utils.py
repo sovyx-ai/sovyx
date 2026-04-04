@@ -52,7 +52,7 @@ class TestSafeParseJson:
     def test_malformed_json_raises(self) -> None:
         resp = _mock_response(
             status_code=200,
-            text='{invalid json: true,}',
+            text="{invalid json: true,}",
             content_type="application/json",
         )
         with pytest.raises(LLMError, match="invalid JSON"):
@@ -103,9 +103,7 @@ class TestRetryDelay:
 
     def test_retry_after_minimum(self) -> None:
         """Retry-After < 0.5 is clamped to 0.5."""
-        resp = _mock_response(
-            status_code=429, text="", content_type="", retry_after="0.1"
-        )
+        resp = _mock_response(status_code=429, text="", content_type="", retry_after="0.1")
         delay = retry_delay(0, resp)
         assert delay == 0.5
 

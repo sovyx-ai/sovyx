@@ -199,9 +199,7 @@ class TestAssembleWithBrainResults:
             mind_config=mind_config,
         )
 
-    async def test_concepts_in_system_content(
-        self, rich_assembler: ContextAssembler
-    ) -> None:
+    async def test_concepts_in_system_content(self, rich_assembler: ContextAssembler) -> None:
         result = await rich_assembler.assemble(
             current_message="tell me",
             conversation_history=[],
@@ -209,9 +207,7 @@ class TestAssembleWithBrainResults:
         )
         assert "pizza" in result.messages[0]["content"].lower()
 
-    async def test_episodes_in_system_content(
-        self, rich_assembler: ContextAssembler
-    ) -> None:
+    async def test_episodes_in_system_content(self, rich_assembler: ContextAssembler) -> None:
         result = await rich_assembler.assemble(
             current_message="tell me",
             conversation_history=[],
@@ -254,10 +250,7 @@ class TestOverflowTrimming:
             mind_config=mind_config,
         )
 
-        long_history = [
-            {"role": "user", "content": f"message {i} " * 50}
-            for i in range(30)
-        ]
+        long_history = [{"role": "user", "content": f"message {i} " * 50} for i in range(30)]
 
         # Force count_messages to always return huge number (until few msgs left)
         original = counter.count_messages

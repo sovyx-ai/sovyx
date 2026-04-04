@@ -124,8 +124,7 @@ class TestOverflowNormalisation:
         # Sum of non-response allocations must not exceed total - response_reserve
         usable = b.total - b.response_reserve
         allocated = (
-            b.system_prompt + b.memory_concepts + b.memory_episodes
-            + b.temporal + b.conversation
+            b.system_prompt + b.memory_concepts + b.memory_episodes + b.temporal + b.conversation
         )
         assert allocated <= usable
 

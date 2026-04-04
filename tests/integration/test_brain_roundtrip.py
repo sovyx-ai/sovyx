@@ -64,9 +64,7 @@ class TestConceptRoundtrip:
     """Store concept → read back → verify content."""
 
     @pytest.mark.asyncio
-    async def test_create_and_get(
-        self, concept_repo: ConceptRepository, mind_id: MindId
-    ) -> None:
+    async def test_create_and_get(self, concept_repo: ConceptRepository, mind_id: MindId) -> None:
 
         concept = Concept(
             id=ConceptId("c1"),

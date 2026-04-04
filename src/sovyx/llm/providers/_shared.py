@@ -58,10 +58,7 @@ def safe_parse_json(resp: httpx.Response, provider: str) -> dict[str, Any]:
     try:
         result: dict[str, Any] = json.loads(body)
     except json.JSONDecodeError as e:
-        msg = (
-            f"{provider} returned invalid JSON (status {resp.status_code}): "
-            f"{body[:200]}"
-        )
+        msg = f"{provider} returned invalid JSON (status {resp.status_code}): {body[:200]}"
         raise LLMError(msg) from e
 
     return result

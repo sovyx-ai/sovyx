@@ -47,9 +47,7 @@ async def brain_pool(tmp_path: Path) -> DatabasePool:
     await pool.initialize()
     runner = MigrationRunner(pool)
     await runner.initialize()
-    await runner.run_migrations(
-        get_brain_migrations(has_sqlite_vec=pool.has_sqlite_vec)
-    )
+    await runner.run_migrations(get_brain_migrations(has_sqlite_vec=pool.has_sqlite_vec))
     yield pool  # type: ignore[misc]
     await pool.close()
 
@@ -126,9 +124,7 @@ class TestFullPipeline:
         assert cid is not None
 
         # 3. Verify FTS5 search finds it directly
-        direct_results = await brain_service._concepts.search_by_text(
-            "pizza", mind_id=mind_id
-        )
+        direct_results = await brain_service._concepts.search_by_text("pizza", mind_id=mind_id)
         assert len(direct_results) > 0, "FTS5 direct search failed"
 
         # 4. Full recall through service (hybrid retrieval)

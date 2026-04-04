@@ -65,9 +65,7 @@ class TestRPCProtocol:
         reader = asyncio.StreamReader()
         transport = _NoopTransport()
         protocol = asyncio.StreamReaderProtocol(asyncio.StreamReader())
-        writer = asyncio.StreamWriter(
-            transport, protocol, reader, asyncio.get_event_loop()
-        )
+        writer = asyncio.StreamWriter(transport, protocol, reader, asyncio.get_event_loop())
 
         with pytest.raises(ValueError, match="too large"):
             await rpc_send(writer, payload)

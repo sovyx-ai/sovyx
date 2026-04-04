@@ -86,9 +86,7 @@ class LLMRouter:
         input_chars = sum(len(m.get("content", "")) for m in messages)
         est_input_tokens = input_chars // 4
         pricing = self._get_pricing(model)
-        estimated_cost = (
-            est_input_tokens * pricing[0] + max_tokens * pricing[1]
-        ) / 1_000_000
+        estimated_cost = (est_input_tokens * pricing[0] + max_tokens * pricing[1]) / 1_000_000
         if not self._cost_guard.can_afford(estimated_cost, conversation_id):
             msg = (
                 f"Budget exhausted. Daily remaining: "
