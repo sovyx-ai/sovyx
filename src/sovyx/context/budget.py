@@ -115,6 +115,32 @@ class TokenBudgetManager:
         raw_concepts = max(0, int(context_window * p_concepts))
         raw_episodes = max(0, int(context_window * p_episodes))
 
+        # Normalise: MIN floors can cause overflow on small windows.
+        # Shrink flex slots (concepts, episodes, conversation) proportionally.
+        total_allocated = (
+            raw_system + raw_temporal + raw_response
+            + raw_conversation + raw_concepts + raw_episodes
+        )
+        if total_allocated > context_window:
+            overflow = total_allocated - context_window
+            # Reduce flex slots (concepts → episodes → conversation)
+            flex_slots = [
+                ("concepts", raw_concepts),
+                ("episodes", raw_episodes),
+                ("conversation", raw_conversation - MIN_CONVERSATION),
+            ]
+            for _name, available in flex_slots:
+                reduction = min(overflow, available)
+                if _name == "concepts":
+                    raw_concepts -= reduction
+                elif _name == "episodes":
+                    raw_episodes -= reduction
+                else:
+                    raw_conversation -= reduction
+                overflow -= reduction
+                if overflow <= 0:
+                    break
+
         return TokenBudget(
             system_prompt=raw_system,
             memory_concepts=raw_concepts,
