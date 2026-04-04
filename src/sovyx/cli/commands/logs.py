@@ -146,7 +146,7 @@ def _format_entry(entry: dict[str, object]) -> Text:
     skip = {"level", "timestamp", "event", "logger", "exc_info", "stack_info"}
     ctx_parts = []
     for key, value in entry.items():
-        if key not in skip and value:
+        if key not in skip and value is not None:
             ctx_parts.append(f"{key}={value}")
     if ctx_parts:
         text.append("  ")
@@ -176,15 +176,7 @@ def _read_log_lines(
     # Read all lines, filter, then take last `limit`
     matching: list[dict[str, object]] = []
     with open(log_file, encoding="utf-8") as f:
-        # Also check rotated files for --since queries
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+        for entry in _iter_new_lines(f):
             if _matches(entry, level_min=level, filters=filters, since=since):
                 matching.append(entry)
 
