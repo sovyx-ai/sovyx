@@ -152,7 +152,7 @@ class TestAPIRoutes:
         assert resp.status_code == 200
         data = resp.json()
         assert "nodes" in data
-        assert "edges" in data
+        assert "links" in data
 
     def test_logs(
         self, client: TestClient, auth_headers: dict[str, str]
