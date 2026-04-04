@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from sovyx.engine.errors import SearchError
 from sovyx.engine.types import ConceptCategory, ConceptId, MindId
 from sovyx.observability.logging import get_logger
+from sovyx.persistence.datetime_utils import parse_db_datetime
 
 if TYPE_CHECKING:
     from sovyx.brain.embedding import EmbeddingEngine
@@ -271,9 +272,7 @@ class ConceptRepository:
         from sovyx.brain.models import Concept
 
         r: tuple[Any, ...] = tuple(row)  # type: ignore[arg-type]
-        last_accessed = None
-        if r[8] is not None:
-            last_accessed = datetime.fromisoformat(r[8]) if isinstance(r[8], str) else r[8]
+        last_accessed = parse_db_datetime(r[8])
 
         return Concept(
             id=ConceptId(r[0]),
@@ -288,6 +287,6 @@ class ConceptRepository:
             emotional_valence=float(r[9]),
             source=r[10],
             metadata=json.loads(r[11]) if isinstance(r[11], str) else r[11],
-            created_at=(datetime.fromisoformat(r[12]) if isinstance(r[12], str) else r[12]),
-            updated_at=(datetime.fromisoformat(r[13]) if isinstance(r[13], str) else r[13]),
+            created_at=parse_db_datetime(r[12]),
+            updated_at=parse_db_datetime(r[13]),
         )
