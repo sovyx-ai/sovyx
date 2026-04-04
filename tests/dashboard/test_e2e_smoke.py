@@ -138,7 +138,7 @@ class TestAPISmoke:
         assert resp.status_code == 200
 
     def test_settings_put(self, client: TestClient) -> None:
-        resp = client.put("/api/settings", headers=AUTH)
+        resp = client.put("/api/settings", headers=AUTH, json={"log_level": "DEBUG"})
         assert resp.status_code == 200
 
     def test_docs(self, client: TestClient) -> None:
