@@ -141,9 +141,7 @@ class TestBindRequestContext:
         assert len(ctx["request_id"]) == 12  # hex[:12]
 
     def test_bind_with_explicit_request_id(self) -> None:
-        bind_request_context(
-            mind_id="m", conversation_id="c", request_id="my-req-id"
-        )
+        bind_request_context(mind_id="m", conversation_id="c", request_id="my-req-id")
         ctx = get_request_context()
         assert ctx["request_id"] == "my-req-id"
 
@@ -172,9 +170,7 @@ class TestBindRequestContext:
         assert "conversation_id" not in ctx
 
     def test_bind_extra_kwargs(self) -> None:
-        bind_request_context(
-            mind_id="m", conversation_id="c", person_name="Guipe"
-        )
+        bind_request_context(mind_id="m", conversation_id="c", person_name="Guipe")
         ctx = get_request_context()
         assert ctx["person_name"] == "Guipe"
 
@@ -214,9 +210,7 @@ class TestBoundRequestContext:
         assert ctx["mind_id"] == "outer"
 
     def test_fixed_request_id(self) -> None:
-        with bound_request_context(
-            mind_id="m", conversation_id="c", request_id="fixed-123"
-        ):
+        with bound_request_context(mind_id="m", conversation_id="c", request_id="fixed-123"):
             assert get_request_context()["request_id"] == "fixed-123"
 
     def test_auto_request_id(self) -> None:
@@ -394,9 +388,7 @@ class TestJSONOutput:
 
     def test_bound_context_manager_in_json(self) -> None:
         logger = get_logger("test.json")
-        with bound_request_context(
-            mind_id="ctx-m", conversation_id="ctx-c", request_id="ctx-r"
-        ):
+        with bound_request_context(mind_id="ctx-m", conversation_id="ctx-c", request_id="ctx-r"):
             parsed = self._capture_log(logger, "info", "in_ctx")
         assert parsed["mind_id"] == "ctx-m"
         assert parsed["request_id"] == "ctx-r"
