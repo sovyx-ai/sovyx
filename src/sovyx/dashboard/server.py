@@ -280,10 +280,15 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
         return JSONResponse({"conversation_id": conversation_id, "messages": []})
 
     @app.get("/api/brain/graph", dependencies=[Depends(verify_token)])
-    async def get_brain_graph() -> JSONResponse:
-        """Brain knowledge graph (nodes + edges)."""
-        # Placeholder — DASH-07
-        return JSONResponse({"nodes": [], "edges": []})
+    async def get_brain_graph(limit: int = 200) -> JSONResponse:
+        """Brain knowledge graph (nodes + links for react-force-graph-2d)."""
+        registry = getattr(app.state, "registry", None)
+        if registry is not None:
+            from sovyx.dashboard.brain import get_brain_graph as _get_graph
+
+            graph = await _get_graph(registry, limit=limit)
+            return JSONResponse(graph)
+        return JSONResponse({"nodes": [], "links": []})
 
     @app.get("/api/logs", dependencies=[Depends(verify_token)])
     async def get_logs(
