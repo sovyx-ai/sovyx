@@ -283,3 +283,40 @@ class TestChannelManagement:
         mgr.register_channel(adapter)
         await mgr.stop()
         adapter.stop.assert_called_once()
+
+
+class TestLRULockDict:
+    """Bounded lock dictionary with LRU eviction."""
+
+    def test_eviction_at_capacity(self) -> None:
+        from sovyx.bridge.manager import _LRULockDict
+
+        d: _LRULockDict[str] = _LRULockDict(maxsize=3)
+        d.setdefault("a", asyncio.Lock())
+        d.setdefault("b", asyncio.Lock())
+        d.setdefault("c", asyncio.Lock())
+        assert len(d) == 3
+
+        # Adding 4th evicts oldest ("a")
+        d.setdefault("d", asyncio.Lock())
+        assert len(d) == 3
+        # "a" was evicted, "d" is present
+        lock_d = d.setdefault("d", asyncio.Lock())
+        assert lock_d is not None
+
+    def test_access_promotes_to_end(self) -> None:
+        from sovyx.bridge.manager import _LRULockDict
+
+        d: _LRULockDict[str] = _LRULockDict(maxsize=3)
+        lock_a = d.setdefault("a", asyncio.Lock())
+        d.setdefault("b", asyncio.Lock())
+        d.setdefault("c", asyncio.Lock())
+
+        # Access "a" to promote it
+        d.setdefault("a", asyncio.Lock())
+        # Now "b" is oldest. Adding "d" should evict "b", not "a"
+        d.setdefault("d", asyncio.Lock())
+        assert len(d) == 3
+        # "a" should still be accessible
+        result = d.setdefault("a", asyncio.Lock())
+        assert result is lock_a
