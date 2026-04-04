@@ -99,12 +99,30 @@ class DatabasePool:
             raise DatabaseConnectionError(msg) from exc
 
     async def close(self) -> None:
-        """Close all connections gracefully."""
+        """Close all connections gracefully.
+
+        Shutdown order: readers first → WAL checkpoint → writer last.
+        This ensures no readers hold shared locks during checkpoint,
+        and the WAL file is truncated before the writer closes.
+        """
+        # 1. Close readers first (release shared locks)
         for conn in self._read_conns:
             await conn.close()
         self._read_conns.clear()
 
+        # 2. WAL checkpoint before closing writer
         if self._write_conn is not None:
+            try:
+                await self._write_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                logger.debug("wal_checkpoint_completed", db_path=str(self._db_path))
+            except Exception:
+                logger.warning(
+                    "wal_checkpoint_failed",
+                    db_path=str(self._db_path),
+                    exc_info=True,
+                )
+
+            # 3. Close writer last
             await self._write_conn.close()
             self._write_conn = None
 

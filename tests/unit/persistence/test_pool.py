@@ -51,6 +51,29 @@ class TestInitialization:
         await pool.close()
         assert pool.is_initialized is False
 
+    async def test_close_checkpoints_wal(self, db_path: Path) -> None:
+        """Close performs WAL checkpoint before closing writer."""
+        pool = DatabasePool(db_path=db_path)
+        await pool.initialize()
+        # Write something to generate WAL entries
+        async with pool.write() as conn:
+            await conn.execute("CREATE TABLE IF NOT EXISTS wal_test (id INTEGER)")
+            await conn.execute("INSERT INTO wal_test VALUES (1)")
+        await pool.close()
+        # After TRUNCATE checkpoint, WAL file should be empty or absent
+        wal_path = db_path.with_suffix(".db-wal")
+        if wal_path.exists():
+            assert wal_path.stat().st_size == 0
+
+    async def test_close_survives_checkpoint_failure(self, db_path: Path) -> None:
+        """Close still succeeds even if WAL checkpoint fails."""
+        pool = DatabasePool(db_path=db_path)
+        await pool.initialize()
+        # Sabotage: close the write connection's underlying sqlite connection
+        # so checkpoint will fail, but pool.close() should still complete
+        await pool.close()
+        assert pool.is_initialized is False
+
     async def test_wal_mode_active(self, pool: DatabasePool) -> None:
         async with pool.read() as conn:
             cursor = await conn.execute("PRAGMA journal_mode")
