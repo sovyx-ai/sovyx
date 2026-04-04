@@ -128,7 +128,7 @@ class LLMRouter:
                     circuit.record_success()
 
                 # Record cost
-                self._cost_guard.record(response.cost_usd, response.model, conversation_id)
+                await self._cost_guard.record(response.cost_usd, response.model, conversation_id)
 
                 # Emit event
                 await self._events.emit(
