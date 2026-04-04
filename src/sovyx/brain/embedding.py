@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -25,10 +24,12 @@ logger = get_logger(__name__)
 
 # ── Model constants ─────────────────────────────────────────────────────────
 
-MODEL_URL = "https://huggingface.co/intfloat/e5-small-v2/resolve/main/model_quantized.onnx"
-MODEL_FILENAME = "e5-small-v2-q8.onnx"
+MODEL_URL = "https://huggingface.co/intfloat/e5-small-v2/resolve/main/model.onnx"
+MODEL_FILENAME = "e5-small-v2.onnx"
+MODEL_SHA256 = "4b8205be2a3c5fc53c6534d76a2012064f7309c162b806f2889c6ec8ec4fdcba"
 TOKENIZER_FILENAME = "tokenizer.json"
 TOKENIZER_URL = "https://huggingface.co/intfloat/e5-small-v2/resolve/main/tokenizer.json"
+TOKENIZER_SHA256 = "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66"
 MODEL_DIMENSIONS = 384
 MAX_TOKENS = 512
 
@@ -195,12 +196,12 @@ class EmbeddingEngine:
             try:
                 downloader = ModelDownloader(self._model_dir)
 
-                # TODO(P44): Compute SHA-256 from trusted download and hardcode here.
-                # The ensure_model infrastructure already supports verification —
-                # just needs the hash values.  Deferred to first deployment where
-                # the model is downloaded from HuggingFace.
-                model_path = await downloader.ensure_model(MODEL_FILENAME, MODEL_URL)
-                tokenizer_path = await downloader.ensure_model(TOKENIZER_FILENAME, TOKENIZER_URL)
+                model_path = await downloader.ensure_model(
+                    MODEL_FILENAME, MODEL_URL, expected_sha256=MODEL_SHA256,
+                )
+                tokenizer_path = await downloader.ensure_model(
+                    TOKENIZER_FILENAME, TOKENIZER_URL, expected_sha256=TOKENIZER_SHA256,
+                )
 
                 self._load_model(model_path, tokenizer_path)
                 self._has_embeddings = True
@@ -218,11 +219,13 @@ class EmbeddingEngine:
     def _load_model(self, model_path: Path, tokenizer_path: Path) -> None:
         """Load ONNX session and tokenizer."""
         import onnxruntime as ort  # type: ignore[import-untyped]  # no stubs available
-        from tokenizers import Tokenizer  # type: ignore[import-not-found]
+        from tokenizers import Tokenizer  # type: ignore[import-untyped]
 
         sess_options = ort.SessionOptions()
         sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        sess_options.log_severity_level = logging.WARNING
+        # ORT severity: 0=VERBOSE, 1=INFO, 2=WARNING, 3=ERROR, 4=FATAL
+        # (NOT Python logging levels which are 10/20/30/40/50)
+        sess_options.log_severity_level = 2  # WARNING
 
         self._session = ort.InferenceSession(
             str(model_path),
