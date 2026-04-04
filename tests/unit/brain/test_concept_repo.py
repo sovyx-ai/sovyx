@@ -307,7 +307,7 @@ class TestVecSearch:
 
         results = await repo.search_by_embedding([0.1] * 384, MIND, limit=5)
         assert len(results) > 0
-        for concept, distance in results:
+        for _concept, distance in results:
             assert isinstance(distance, float)
 
     async def test_delete_removes_embedding(self, pool: DatabasePool) -> None:
