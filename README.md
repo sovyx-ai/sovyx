@@ -1,198 +1,153 @@
-<p align="center">
-  <h1 align="center">🔮 Sovyx</h1>
-  <p align="center"><strong>Sovereign Minds Engine</strong></p>
-  <p align="center">Build AI minds that remember, learn, and evolve — on your own infrastructure.</p>
-</p>
+# 🧠 Sovyx — The AI Mind That Remembers You
 
-<p align="center">
-  <a href="https://github.com/sovyx-ai/sovyx/actions"><img src="https://github.com/sovyx-ai/sovyx/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/sovyx-ai/sovyx/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="License"></a>
-  <a href="https://pypi.org/project/sovyx/"><img src="https://img.shields.io/pypi/v/sovyx" alt="PyPI"></a>
-  <a href="https://python.org"><img src="https://img.shields.io/badge/python-3.11%2B-blue" alt="Python"></a>
-</p>
+**Sovyx** is a self-hosted AI companion engine that builds genuine, persistent memory of the people it talks to. Unlike chatbots that forget everything between sessions, Sovyx creates a cognitive model of each person — their preferences, history, personality, and context — and uses it to have meaningful conversations.
 
----
+## ✨ Features
 
-## What is Sovyx?
+- **Persistent Memory** — Concepts, episodes, and relationships stored in a brain-inspired architecture
+- **Personality Engine** — OCEAN model + configurable traits define how your Mind communicates
+- **Semantic Search** — FTS5 + sqlite-vec embedding for intelligent recall
+- **Adaptive Context** — Lost-in-Middle ordering, adaptive token budgets, 6-slot context assembly
+- **Multi-Provider LLM** — Anthropic Claude, OpenAI GPT, local Ollama — with automatic fallback
+- **Cost Control** — Daily and per-conversation budgets with persistent tracking
+- **Telegram Integration** — Talk to your Mind via Telegram
+- **Self-Hosted** — Your data stays on your hardware. Always.
 
-Sovyx is a cognitive engine for building AI minds with persistent memory, personality, and learning capabilities. Each mind runs locally on your hardware — no cloud dependency, no data leaving your machine.
+## 🚀 Quick Start
 
-**Key difference:** Most AI frameworks are stateless wrappers around LLM APIs. Sovyx gives your AI a brain that remembers conversations, learns from interactions, and develops understanding over time.
-
-## Features
-
-- 🧠 **Persistent Brain** — Concepts, episodes, and relations stored in SQLite with vector embeddings
-- 🔄 **Cognitive Loop** — Perception → Attention → Thinking → Action → Reflection pipeline
-- 💡 **Working Memory** — Activation-based with spreading activation and decay
-- 📚 **Hebbian Learning** — Connections strengthen between co-occurring concepts
-- 🎭 **Personality** — OCEAN model shapes communication style
-- 🔌 **Multi-Provider LLM** — Anthropic, OpenAI, Ollama with automatic failover
-- 💬 **Telegram Integration** — Connect your mind to Telegram with one token
-- 🛡️ **Graceful Degradation** — Every component has a fallback chain
-- 📊 **Observable** — Structured logging, health checks, performance metrics
-- 🔒 **Sovereign** — AGPL-3.0, runs on your hardware, your data stays yours
-
-## Quick Start
-
-### Install
+### 1. Install
 
 ```bash
-# Via uv (recommended)
-uv tool install sovyx
-
-# Via pip
 pip install sovyx
-
-# Via Docker
-docker pull ghcr.io/sovyx-ai/sovyx:0.1.0
 ```
 
-### Initialize
+Or with Docker:
 
 ```bash
-sovyx init Aria
+docker run -d --name sovyx \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  -e SOVYX_TELEGRAM_TOKEN=123456:ABC... \
+  ghcr.io/sovyx-ai/sovyx:latest
 ```
 
-This creates `~/.sovyx/` with your mind configuration.
-
-### Configure
-
-Set your LLM provider (at least one required):
+### 2. Initialize
 
 ```bash
-export SOVYX_ANTHROPIC_API_KEY="sk-ant-..."
-# or
-export SOVYX_OPENAI_API_KEY="sk-..."
-# or run Ollama locally (no key needed)
+sovyx init MyMind
 ```
 
-Optional — connect Telegram:
+This creates `~/.sovyx/` with your Mind configuration.
+
+### 3. Configure
+
+Edit `~/.sovyx/mymind/mind.yaml`:
+
+```yaml
+name: MyMind
+language: en
+timezone: UTC
+
+personality:
+  tone: warm
+  humor: 0.4
+  empathy: 0.8
+
+llm:
+  default_provider: anthropic
+  default_model: claude-sonnet-4-20250514
+  budget_daily_usd: 2.0
+
+channels:
+  telegram:
+    token_env: SOVYX_TELEGRAM_TOKEN
+```
+
+### 4. Set API Keys
 
 ```bash
-export SOVYX_TELEGRAM_TOKEN="123456:ABC..."
+export ANTHROPIC_API_KEY=sk-ant-...       # or OPENAI_API_KEY
+export SOVYX_TELEGRAM_TOKEN=123456:ABC...  # from @BotFather
 ```
 
-### Start
+### 5. Start
 
 ```bash
 sovyx start
 ```
 
-### Check Status
+Now message your bot on Telegram. Sovyx will remember you.
+
+## 🏗️ Architecture
+
+```
+┌─────────────┐     ┌──────────────┐     ┌─────────────┐
+│  Telegram    │────▶│  Cognitive   │────▶│  LLM Router │
+│  Bridge      │◀────│  Loop        │◀────│  (Claude/   │
+│              │     │  (OODA)      │     │   GPT/Local)│
+└─────────────┘     └──────┬───────┘     └─────────────┘
+                           │
+                    ┌──────▼───────┐
+                    │    Brain     │
+                    │  ┌─────────┐ │
+                    │  │Concepts │ │  FTS5 + sqlite-vec
+                    │  │Episodes │ │  Spreading activation
+                    │  │Relations│ │  Hebbian learning
+                    │  └─────────┘ │
+                    └──────────────┘
+```
+
+**Cognitive Loop** (OODA): Perceive → Attend → Think → Act → Reflect
+
+Each message triggers the full loop: perception extracts intent, attention prioritizes, thinking generates response via LLM with full context, action delivers, and reflection learns concepts from the exchange.
+
+## 📋 Requirements
+
+- Python 3.11+
+- SQLite 3.35+ (with FTS5)
+- 512MB RAM minimum (Pi 5 compatible)
+- LLM API key (Anthropic or OpenAI) or local Ollama
+
+## 🔧 CLI Commands
 
 ```bash
-sovyx status
-sovyx doctor
+sovyx init [name]     # Initialize Mind
+sovyx start           # Start daemon
+sovyx stop            # Stop daemon
+sovyx status          # Check status
+sovyx doctor          # Health check (v0.5)
 ```
 
-## Architecture
-
-```
-┌──────────────────────────────────────────────────────┐
-│                    Sovyx Engine                       │
-│                                                      │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────────┐  │
-│  │ Telegram  │  │   CLI    │  │  Future Channels │  │
-│  └────┬─────┘  └────┬─────┘  └────────┬─────────┘  │
-│       └──────────────┼─────────────────┘             │
-│                      ▼                               │
-│              ┌───────────────┐                       │
-│              │ Bridge Manager│                       │
-│              └───────┬───────┘                       │
-│                      ▼                               │
-│              ┌───────────────┐                       │
-│              │ Cognitive Loop│                       │
-│              │  Perceive     │                       │
-│              │  Attend       │                       │
-│              │  Think ──────►│── LLM Router         │
-│              │  Act          │     ├─ Anthropic      │
-│              │  Reflect      │     ├─ OpenAI         │
-│              └───────┬───────┘     └─ Ollama         │
-│                      ▼                               │
-│              ┌───────────────┐                       │
-│              │     Brain     │                       │
-│              │  Concepts     │                       │
-│              │  Episodes     │                       │
-│              │  Relations    │                       │
-│              │  Embeddings   │── E5-small-v2 (ONNX)  │
-│              └───────┬───────┘                       │
-│                      ▼                               │
-│              ┌───────────────┐                       │
-│              │    SQLite     │── sqlite-vec           │
-│              └───────────────┘                       │
-└──────────────────────────────────────────────────────┘
-```
-
-## Mind Configuration
-
-Each mind has a `mind.yaml`:
-
-```yaml
-name: Aria
-language: en
-personality:
-  openness: 0.7
-  conscientiousness: 0.8
-  extraversion: 0.5
-  agreeableness: 0.7
-  neuroticism: 0.3
-brain:
-  consolidation_interval_hours: 6
-llm:
-  default_model: claude-sonnet-4-20250514
-  fast_model: claude-3-5-haiku-20241022
-```
-
-## CLI Reference
-
-| Command | Description |
-|---------|-------------|
-| `sovyx init [name]` | Initialize Sovyx with a mind |
-| `sovyx start` | Start the daemon |
-| `sovyx stop` | Graceful shutdown |
-| `sovyx status` | Show daemon status |
-| `sovyx doctor` | Run health checks |
-| `sovyx brain search <query>` | Search concepts |
-| `sovyx brain stats` | Brain statistics |
-| `sovyx mind list` | List active minds |
-| `sovyx mind status [name]` | Mind details |
-
-## Docker
-
-```bash
-docker compose up -d
-```
-
-Or build from source:
-
-```bash
-docker build -t sovyx .
-docker run -v sovyx-data:/data -e SOVYX_ANTHROPIC_API_KEY=sk-... sovyx
-```
-
-## Development
+## 🧪 Development
 
 ```bash
 git clone https://github.com/sovyx-ai/sovyx.git
 cd sovyx
 uv sync --dev
-uv run pytest
-uv run mypy src/
-uv run ruff check src/
+uv run pytest                    # 1233 tests
+uv run ruff check src/ tests/   # Lint
+uv run mypy src/sovyx --strict   # Type check
 ```
 
-## Performance
+**Quality:** 96% coverage, mypy strict, ruff, bandit — enforced in CI.
 
-| Metric | Value |
-|--------|-------|
-| Cold start | 142ms |
-| RSS idle | 41.6MB |
-| Token counting | 269µs/call |
-| Budget allocation | 3.3µs/call |
-| Working memory (1K items) | 0.9ms |
+## 🗺️ Roadmap
 
-## License
+| Version | Codename | Key Features |
+|---------|----------|-------------|
+| **v0.1** | First Breath | Core engine, brain, Telegram, CLI |
+| **v0.5** | First Words | Voice pipeline, dashboard, Signal, cloud backup |
+| **v1.0** | The Mind That Remembers | Emotional engine, plugins, Home Assistant, REST API |
+| v1.1 | The Mind That Speaks | Multi-language voice, barge-in |
+| v1.2 | The Mind That Acts | Financial intelligence, autonomy |
+| v1.3 | The Mind In Your Pocket | Flutter mobile app |
+| v2.0 | The Mind That Grows | Multi-agent platform |
 
-[AGPL-3.0](LICENSE) — Your freedom is non-negotiable.
+## 📄 License
 
-Built with 🔮 by [Sovyx AI](https://github.com/sovyx-ai)
+AGPL-3.0 — See [LICENSE](LICENSE) for details.
+
+## 🔗 Links
+
+- **GitHub:** [github.com/sovyx-ai/sovyx](https://github.com/sovyx-ai/sovyx)
+- **Docs:** Coming soon
+- **Discord:** Coming soon
