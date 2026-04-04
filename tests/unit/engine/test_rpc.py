@@ -101,11 +101,12 @@ class TestDaemonClient:
         with pytest.raises(ChannelConnectionError, match="not running"):
             await client.call("ping")
 
-    def test_is_daemon_running(self, tmp_path: Path) -> None:
+    def test_stale_socket_detected(self, tmp_path: Path) -> None:
+        """A stale socket file (no listener) returns False."""
         socket_path = tmp_path / "test.sock"
-        socket_path.touch()
+        socket_path.touch()  # File exists but no daemon listening
         client = DaemonClient(socket_path)
-        assert client.is_daemon_running() is True
+        assert client.is_daemon_running() is False
 
 
 class TestDaemonRPCServer:
