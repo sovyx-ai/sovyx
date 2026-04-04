@@ -18,6 +18,7 @@ thread-safe and asyncio-safe.
 from __future__ import annotations
 
 import logging
+import logging.handlers
 import sys
 import uuid
 from contextlib import contextmanager
@@ -252,6 +253,24 @@ def setup_logging(config: LoggingConfig) -> None:
     root_logger.handlers.clear()
     root_logger.addHandler(handler)
     root_logger.setLevel(getattr(logging, config.level))
+
+    # Optional file handler (always JSON for machine parsing)
+    if config.log_file is not None:
+        config.log_file.parent.mkdir(parents=True, exist_ok=True)
+        json_formatter = structlog.stdlib.ProcessorFormatter(
+            processors=[
+                structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+                structlog.processors.JSONRenderer(),
+            ],
+        )
+        file_handler = logging.handlers.RotatingFileHandler(
+            config.log_file,
+            maxBytes=10 * 1024 * 1024,  # 10 MB
+            backupCount=3,
+            encoding="utf-8",
+        )
+        file_handler.setFormatter(json_formatter)
+        root_logger.addHandler(file_handler)
 
     _setup_done = True
 

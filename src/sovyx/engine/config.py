@@ -22,6 +22,7 @@ class LoggingConfig(BaseModel):
 
     level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     format: Literal["json", "text"] = "json"
+    log_file: Path | None = None
 
 
 class DatabaseConfig(BaseModel):
