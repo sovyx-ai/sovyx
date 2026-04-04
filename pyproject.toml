@@ -52,6 +52,7 @@ dev = [
     "ruff>=0.15,<0.16",
     "bandit>=1.7",
     "types-PyYAML>=6.0",
+    "types-psutil>=5.9",
 ]
 
 [dependency-groups]
