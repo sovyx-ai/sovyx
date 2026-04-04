@@ -47,34 +47,45 @@ class StatusSnapshot:
         }
 
 
-@dataclass
 class DashboardCounters:
     """Mutable counters updated by instrumented code via increment methods.
 
     These mirror the OTel metrics but are queryable (OTel counters are write-only).
-    Thread-safe via GIL for simple increments.
+    Uses a threading.Lock to make the check-then-reset in _maybe_reset atomic.
     """
 
-    llm_calls: int = 0
-    llm_cost: float = 0.0
-    tokens: int = 0
-    messages_received: int = 0
-    _day_key: str = ""
+    def __init__(self) -> None:
+        import threading
+
+        self._lock = threading.Lock()
+        self.llm_calls: int = 0
+        self.llm_cost: float = 0.0
+        self.tokens: int = 0
+        self.messages_received: int = 0
+        self._day_key: str = ""
 
     def record_llm_call(self, cost: float, tokens: int) -> None:
         """Record an LLM call."""
-        self._maybe_reset()
-        self.llm_calls += 1
-        self.llm_cost += cost
-        self.tokens += tokens
+        with self._lock:
+            self._maybe_reset()
+            self.llm_calls += 1
+            self.llm_cost += cost
+            self.tokens += tokens
 
     def record_message(self) -> None:
         """Record an inbound message."""
-        self._maybe_reset()
-        self.messages_received += 1
+        with self._lock:
+            self._maybe_reset()
+            self.messages_received += 1
+
+    def snapshot(self) -> tuple[int, float, int, int]:
+        """Atomic read of (llm_calls, llm_cost, tokens, messages_received)."""
+        with self._lock:
+            self._maybe_reset()
+            return self.llm_calls, self.llm_cost, self.tokens, self.messages_received
 
     def _maybe_reset(self) -> None:
-        """Reset counters at day boundary."""
+        """Reset counters at day boundary. Must be called under lock."""
         today = time.strftime("%Y-%m-%d")
         if self._day_key != today:
             self.llm_calls = 0
@@ -111,7 +122,7 @@ class StatusCollector:
         mind_name = await self._get_mind_name()
         concepts, episodes = await self._get_memory_stats()
 
-        counters = get_counters()
+        calls, cost, tokens, _msgs = get_counters().snapshot()
 
         return StatusSnapshot(
             version=__version__,
@@ -120,9 +131,9 @@ class StatusCollector:
             active_conversations=await self._get_conversation_count(),
             memory_concepts=concepts,
             memory_episodes=episodes,
-            llm_cost_today=counters.llm_cost,
-            llm_calls_today=counters.llm_calls,
-            tokens_today=counters.tokens,
+            llm_cost_today=cost,
+            llm_calls_today=calls,
+            tokens_today=tokens,
         )
 
     async def _get_mind_name(self) -> str:
@@ -189,5 +200,5 @@ class StatusCollector:
                 if minds:
                     return minds[0]
         except Exception:  # noqa: BLE001
-            pass
+            logger.debug("_get_active_mind_id_failed")
         return "default"

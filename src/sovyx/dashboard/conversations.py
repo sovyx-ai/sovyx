@@ -40,7 +40,7 @@ async def _get_conversation_pool(registry: ServiceRegistry) -> DatabasePool | No
 
                 return db.get_conversation_pool(MindId(minds[0]))
     except Exception:  # noqa: BLE001
-        pass
+        logger.debug("_get_conversation_pool_failed")
 
     # Fallback: try system pool for legacy single-db setups
     try:

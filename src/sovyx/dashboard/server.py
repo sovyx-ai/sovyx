@@ -187,7 +187,9 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
         if collector is not None:
             from sovyx.dashboard.status import StatusCollector
 
-            assert isinstance(collector, StatusCollector)
+            if not isinstance(collector, StatusCollector):
+                msg = f"status_collector is {type(collector)}, expected StatusCollector"
+                raise TypeError(msg)
             snapshot = await collector.collect()
             return JSONResponse(snapshot.to_dict())
 
@@ -366,7 +368,7 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
                 if data == "ping":
                     await websocket.send_text("pong")
         except WebSocketDisconnect:
-            pass
+            logger.debug("ws_client_disconnected")
         finally:
             await ws_manager.disconnect(websocket)
 
@@ -459,7 +461,7 @@ class DashboardServer:
                 engine_config = EngineConfig()
                 self._app.state.log_file = engine_config.log.log_file
             except Exception:  # noqa: BLE001
-                pass
+                logger.debug("engine_config_load_failed")
 
         host = self._config.host if self._config else "127.0.0.1"
         port = self._config.port if self._config else 7777
