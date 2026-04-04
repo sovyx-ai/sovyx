@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -9,6 +10,7 @@ import httpx
 
 from sovyx.engine.errors import LLMError, ProviderUnavailableError
 from sovyx.llm.models import LLMResponse
+from sovyx.llm.providers._shared import retry_delay, safe_parse_json
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
@@ -26,7 +28,6 @@ _CONTEXT_WINDOWS: dict[str, int] = {
 _DEFAULT_CONTEXT = 8_192
 
 _MAX_RETRIES = 3
-_RETRY_DELAYS = [1.0, 2.0, 4.0]
 
 
 class OllamaProvider:
@@ -94,9 +95,7 @@ class OllamaProvider:
                 if resp.status_code >= 500:  # noqa: PLR2004
                     last_error = LLMError(f"Ollama error {resp.status_code}: {resp.text}")
                     if attempt < _MAX_RETRIES - 1:
-                        import asyncio
-
-                        await asyncio.sleep(_RETRY_DELAYS[attempt])
+                        await asyncio.sleep(retry_delay(attempt, resp))
                         continue
                     break
 
@@ -104,7 +103,7 @@ class OllamaProvider:
                     error_msg = f"Ollama error {resp.status_code}: {resp.text}"
                     raise LLMError(error_msg)
 
-                data = resp.json()
+                data = safe_parse_json(resp, "Ollama")
                 latency = int((time.monotonic() - start) * 1000)
 
                 message = data.get("message", {})
@@ -135,9 +134,7 @@ class OllamaProvider:
             except httpx.TimeoutException as e:
                 last_error = e
                 if attempt < _MAX_RETRIES - 1:
-                    import asyncio
-
-                    await asyncio.sleep(_RETRY_DELAYS[attempt])
+                    await asyncio.sleep(retry_delay(attempt))
                     continue
                 break
             except httpx.ConnectError as e:
