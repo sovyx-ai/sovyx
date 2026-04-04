@@ -211,8 +211,43 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
     @app.get("/api/health", dependencies=[Depends(verify_token)])
     async def get_health() -> JSONResponse:
         """Health check results."""
-        # Placeholder — will integrate health.py in DASH-04
-        return JSONResponse({"checks": []})
+        from sovyx.observability.health import (
+            HealthRegistry,
+            create_offline_registry,
+        )
+
+        all_results = []
+
+        # Tier 1: Offline checks (always available)
+        offline = create_offline_registry()
+        offline_results = await offline.run_all(timeout=10.0)
+        all_results.extend(offline_results)
+
+        # Tier 2: Online checks (if registry has a HealthRegistry)
+        health_reg = getattr(app.state, "health_registry", None)
+        if health_reg is not None and isinstance(health_reg, HealthRegistry):
+            online_results = await health_reg.run_all(timeout=10.0)
+            all_results.extend(online_results)
+
+        # Compute overall status
+        overall = HealthRegistry().summary(all_results)
+
+        checks_json = [
+            {
+                "name": r.name,
+                "status": r.status.value,
+                "message": r.message,
+                **({"latency_ms": r.metadata["latency_ms"]} if "latency_ms" in r.metadata else {}),
+            }
+            for r in all_results
+        ]
+
+        return JSONResponse(
+            {
+                "overall": overall.value,
+                "checks": checks_json,
+            }
+        )
 
     @app.get("/api/conversations", dependencies=[Depends(verify_token)])
     async def get_conversations() -> JSONResponse:
