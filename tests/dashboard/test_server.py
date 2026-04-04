@@ -128,7 +128,15 @@ class TestAPIRoutes:
     ) -> None:
         resp = client.get("/api/health", headers=auth_headers)
         assert resp.status_code == 200
-        assert "checks" in resp.json()
+        data = resp.json()
+        assert "checks" in data
+        assert "overall" in data
+        # Should have at least offline checks (Disk, RAM, CPU)
+        assert len(data["checks"]) >= 3
+        for check in data["checks"]:
+            assert "name" in check
+            assert "status" in check
+            assert check["status"] in ("green", "yellow", "red")
 
     def test_conversations(
         self, client: TestClient, auth_headers: dict[str, str]

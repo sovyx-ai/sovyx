@@ -117,6 +117,9 @@ class TestAPISmoke:
     def test_health(self, client: TestClient) -> None:
         resp = client.get("/api/health", headers=AUTH)
         assert resp.status_code == 200
+        data = resp.json()
+        assert "overall" in data
+        assert len(data["checks"]) >= 3
 
     def test_conversations(self, client: TestClient) -> None:
         resp = client.get("/api/conversations", headers=AUTH)
