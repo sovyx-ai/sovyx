@@ -165,15 +165,7 @@ async def _get_relations_via_repo(
 
 
 async def _get_active_mind_id(registry: ServiceRegistry) -> str:
-    """Get active mind ID."""
-    try:
-        from sovyx.engine.bootstrap import MindManager
+    """Get active mind ID — delegates to shared utility."""
+    from sovyx.dashboard._shared import get_active_mind_id
 
-        if registry.is_registered(MindManager):
-            manager = await registry.resolve(MindManager)
-            minds = manager.get_active_minds()
-            if minds:
-                return minds[0]
-    except Exception:  # noqa: BLE001
-        logger.debug("_get_active_mind_id_failed")
-    return "default"
+    return await get_active_mind_id(registry)

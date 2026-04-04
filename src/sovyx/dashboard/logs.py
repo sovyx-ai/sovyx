@@ -142,8 +142,16 @@ def _matches_filters(
 
     if search is not None:
         search_lower = search.lower()
+        # Fast path: check event/message field
         event = str(entry.get("event", entry.get("message", ""))).lower()
-        if search_lower not in event and search_lower not in json.dumps(entry).lower():
-            return False
+        if search_lower in event:
+            return True  # Early match — skip other filters below
+        # Medium path: check all string values without serialization
+        for val in entry.values():
+            if isinstance(val, str) and search_lower in val.lower():
+                return True
+        # Slow path: nested dicts/lists need json serialization
+        has_nested = any(isinstance(v, (dict, list)) for v in entry.values())
+        return has_nested and search_lower in json.dumps(entry, default=str).lower()
 
     return True

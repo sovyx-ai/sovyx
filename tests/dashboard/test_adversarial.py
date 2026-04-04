@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi.testclient import TestClient
 
 from sovyx.dashboard.logs import query_logs
 from sovyx.dashboard.status import DashboardCounters, StatusSnapshot
@@ -283,6 +284,50 @@ class TestBrainGraphAdversarial:
         result = await get_brain_graph(registry, limit=0)
         assert result["nodes"] == []
         assert result["links"] == []
+
+
+# ── Query Param Validation ──
+
+
+class TestQueryParamValidation:
+    """Ensure API routes reject invalid query params."""
+
+    @pytest.fixture()
+    def client(self) -> TestClient:
+        from sovyx.dashboard.server import TOKEN_FILE, create_app
+
+        app = create_app()
+        token = TOKEN_FILE.read_text().strip()
+        self._headers = {"Authorization": f"Bearer {token}"}
+        return TestClient(app)
+
+    def test_conversations_negative_limit(self, client: TestClient) -> None:
+        resp = client.get("/api/conversations?limit=-1", headers=self._headers)
+        assert resp.status_code == 422
+
+    def test_conversations_huge_limit(self, client: TestClient) -> None:
+        resp = client.get("/api/conversations?limit=999999", headers=self._headers)
+        assert resp.status_code == 422
+
+    def test_conversations_negative_offset(self, client: TestClient) -> None:
+        resp = client.get("/api/conversations?offset=-5", headers=self._headers)
+        assert resp.status_code == 422
+
+    def test_brain_graph_negative_limit(self, client: TestClient) -> None:
+        resp = client.get("/api/brain/graph?limit=-1", headers=self._headers)
+        assert resp.status_code == 422
+
+    def test_brain_graph_huge_limit(self, client: TestClient) -> None:
+        resp = client.get("/api/brain/graph?limit=5000", headers=self._headers)
+        assert resp.status_code == 422
+
+    def test_logs_negative_limit(self, client: TestClient) -> None:
+        resp = client.get("/api/logs?limit=-1", headers=self._headers)
+        assert resp.status_code == 422
+
+    def test_logs_huge_limit(self, client: TestClient) -> None:
+        resp = client.get("/api/logs?limit=9999", headers=self._headers)
+        assert resp.status_code == 422
 
 
 # ── Event Serialization Adversarial ──
