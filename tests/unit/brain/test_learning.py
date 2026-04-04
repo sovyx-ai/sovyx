@@ -286,3 +286,53 @@ class TestEbbinghausDecay:
         assert relations_pruned == 1
 
         assert await relation_repo.get(rid_strong) is not None
+
+
+class TestHebbianCapping:
+    """Top-K capping by activation (lines 69-77)."""
+
+    async def test_caps_with_activations(
+        self, concept_repo: ConceptRepository, relation_repo: RelationRepository
+    ) -> None:
+        """When >20 concepts with activations, top-K by activation are kept."""
+        # Create 25 concepts
+        ids = []
+        for i in range(25):
+            from sovyx.brain.models import Concept
+
+            c = Concept(
+                id=ConceptId(f"cap{i}"),
+                mind_id=MIND,
+                name=f"concept-{i}",
+                content=f"content-{i}",
+            )
+            cid = await concept_repo.create(c)
+            ids.append(cid)
+
+        # Top 20 by activation = those with highest values
+        activations = {cid: float(i) for i, cid in enumerate(ids)}
+        hebbian = HebbianLearning(relation_repo=relation_repo)
+        count = await hebbian.strengthen(ids, activations=activations)
+        # Should have capped to 20 → C(20,2) = 190 pairs
+        assert count == 190
+
+    async def test_caps_without_activations(
+        self, concept_repo: ConceptRepository, relation_repo: RelationRepository
+    ) -> None:
+        """When >20 concepts without activations, first 20 are kept."""
+        ids = []
+        for i in range(25):
+            from sovyx.brain.models import Concept
+
+            c = Concept(
+                id=ConceptId(f"nocap{i}"),
+                mind_id=MIND,
+                name=f"concept-{i}",
+                content=f"content-{i}",
+            )
+            cid = await concept_repo.create(c)
+            ids.append(cid)
+
+        hebbian = HebbianLearning(relation_repo=relation_repo)
+        count = await hebbian.strengthen(ids)  # No activations
+        assert count == 190  # C(20,2)

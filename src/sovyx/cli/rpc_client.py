@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 from typing import Any
 
 from sovyx.engine.errors import ChannelConnectionError
+from sovyx.engine.rpc_protocol import rpc_recv, rpc_send
 from sovyx.observability.logging import get_logger
 
 logger = get_logger(__name__)
@@ -26,8 +26,24 @@ class DaemonClient:
         self._request_id = 0
 
     def is_daemon_running(self) -> bool:
-        """True if socket exists."""
-        return self._socket_path.exists()
+        """Check if daemon is running by probing the socket.
+
+        A stale socket file (from a crash) will fail the connect probe
+        instead of falsely reporting the daemon as running.
+        """
+        if not self._socket_path.exists():
+            return False
+        try:
+            import socket
+
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(1.0)
+            sock.connect(str(self._socket_path))
+            sock.close()
+        except (ConnectionRefusedError, OSError, TimeoutError):
+            return False
+        else:
+            return True
 
     async def call(
         self,
@@ -70,15 +86,8 @@ class DaemonClient:
             raise ChannelConnectionError(msg) from e
 
         try:
-            writer.write(json.dumps(request).encode())
-            await writer.drain()
-
-            data = await asyncio.wait_for(reader.read(65536), timeout=timeout)
-            if not data:  # pragma: no cover
-                msg = "Empty response from daemon"
-                raise ChannelConnectionError(msg)
-
-            response = json.loads(data.decode())
+            await rpc_send(writer, request)
+            response = await rpc_recv(reader, timeout=timeout)
 
             if "error" in response:
                 error = response["error"]

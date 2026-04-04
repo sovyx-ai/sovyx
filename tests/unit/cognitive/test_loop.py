@@ -155,7 +155,7 @@ class TestErrorHandling:
         loop._perceive.process = AsyncMock(side_effect=ValueError("bad input"))
         result = await loop.process_request(_request())
         assert result.error is True
-        assert "Something went wrong" in result.response_text
+        assert "unexpected error" in result.response_text
 
     async def test_think_error_returns_action_result(self) -> None:
         think = _mock_think()

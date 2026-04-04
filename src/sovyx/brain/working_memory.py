@@ -2,12 +2,10 @@
 
 In-memory cache of currently active concepts with activation decay.
 Capacity-limited with eviction of the least active concept.
-Thread-safe for asyncio via internal Lock.
+Thread-safe for asyncio cooperative scheduling.
 """
 
 from __future__ import annotations
-
-import asyncio
 
 from sovyx.engine.types import ConceptId
 
@@ -19,7 +17,7 @@ class WorkingMemory:
     Capacity limited (default: 50 active concepts).
     Concepts decay over time if not reactivated.
 
-    Concurrency: asyncio.Lock protects mutations (activate, decay_all, clear).
+    Concurrency: all methods are synchronous — atomic under asyncio cooperative scheduling.
     Read-only methods (get_activation, get_active_concepts) are safe without
     lock since dict reads are atomic in CPython.
     """
@@ -28,7 +26,6 @@ class WorkingMemory:
         self._capacity = capacity
         self._decay_rate = decay_rate
         self._activations: dict[str, float] = {}
-        self._lock = asyncio.Lock()
 
     def activate(self, concept_id: ConceptId, activation: float = 1.0) -> None:
         """Activate a concept. Reinforces if already active. Evicts weakest if full.
@@ -103,7 +100,5 @@ class WorkingMemory:
         """Maximum capacity."""
         return self._capacity
 
-    @property
-    def lock(self) -> asyncio.Lock:
-        """Internal lock for mutation serialization."""
-        return self._lock
+    # Lock removed (P13): all methods are synchronous and atomic
+    # under asyncio cooperative scheduling. No concurrent mutation possible.

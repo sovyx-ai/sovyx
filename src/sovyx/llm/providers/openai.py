@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -9,6 +10,7 @@ import httpx
 
 from sovyx.engine.errors import LLMError, ProviderUnavailableError
 from sovyx.llm.models import LLMResponse
+from sovyx.llm.providers._shared import retry_delay, safe_parse_json
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
@@ -34,7 +36,6 @@ _CONTEXT_WINDOWS: dict[str, int] = {
 }
 
 _MAX_RETRIES = 3
-_RETRY_DELAYS = [1.0, 2.0, 4.0]
 
 
 class OpenAIProvider:
@@ -103,9 +104,7 @@ class OpenAIProvider:
                 if resp.status_code == 429 or resp.status_code >= 500:  # noqa: PLR2004
                     last_error = LLMError(f"OpenAI API error {resp.status_code}: {resp.text}")
                     if attempt < _MAX_RETRIES - 1:
-                        import asyncio
-
-                        await asyncio.sleep(_RETRY_DELAYS[attempt])
+                        await asyncio.sleep(retry_delay(attempt, resp))
                         continue
                     break
 
@@ -113,12 +112,16 @@ class OpenAIProvider:
                     error_msg = f"OpenAI API error {resp.status_code}: {resp.text}"
                     raise LLMError(error_msg)
 
-                data = resp.json()
+                data = safe_parse_json(resp, "OpenAI")
                 latency = int((time.monotonic() - start) * 1000)
 
                 choice = data.get("choices", [{}])[0]
                 content = choice.get("message", {}).get("content", "")
                 finish_reason = choice.get("finish_reason", "stop")
+
+                if not content.strip():
+                    error_msg = f"OpenAI returned empty content (model={model})"
+                    raise LLMError(error_msg)
 
                 usage = data.get("usage", {})
                 tokens_in = usage.get("prompt_tokens", 0)
@@ -150,9 +153,7 @@ class OpenAIProvider:
             except httpx.TimeoutException as e:
                 last_error = e
                 if attempt < _MAX_RETRIES - 1:
-                    import asyncio
-
-                    await asyncio.sleep(_RETRY_DELAYS[attempt])
+                    await asyncio.sleep(retry_delay(attempt))
                     continue
                 break
             except httpx.ConnectError as e:

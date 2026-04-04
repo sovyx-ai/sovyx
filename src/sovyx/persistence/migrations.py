@@ -174,8 +174,69 @@ class MigrationRunner:
             )
             raise MigrationError(msg)
 
+    @staticmethod
+    def _split_sql(sql: str) -> list[str]:
+        """Split multi-statement SQL into individual statements.
+
+        Handles compound statements (CREATE TRIGGER ... BEGIN ... END;)
+        by tracking BEGIN/END nesting depth so semicolons inside
+        trigger bodies are not treated as statement terminators.
+
+        Note:
+            This is a deliberate replacement for ``executescript()``
+            which issues an implicit COMMIT, breaking transactional
+            guarantees.  See P18 / sovyx-imm-d4-persistence §4.
+        """
+        statements: list[str] = []
+        current: list[str] = []
+        depth = 0
+
+        for line in sql.splitlines():
+            stripped = line.strip()
+            # Skip pure comment lines and empty lines
+            if stripped.startswith("--") or not stripped:
+                continue
+
+            upper = stripped.upper()
+
+            # Track BEGIN/END nesting for triggers/blocks.
+            # BEGIN can appear at the end of a TRIGGER declaration line
+            # e.g. "CREATE TRIGGER ... AFTER INSERT ON t BEGIN"
+            # END appears as "END;" on its own line.
+            if " BEGIN" in f" {upper}" and not upper.startswith("END"):
+                # Check if the line contains BEGIN as a keyword
+                # (not part of another word)
+                words = upper.split()
+                if "BEGIN" in words:
+                    depth += 1
+
+            current.append(line)
+
+            # END; on its own line closes a BEGIN block.
+            # Plain END (without ;) is a CASE expression terminator, not a block close.
+            if upper.rstrip().rstrip(";") == "END" and stripped.endswith(";") and depth > 0:
+                depth -= 1
+
+            # Statement ends at ; only when NOT inside a BEGIN...END block
+            if stripped.endswith(";") and depth == 0:
+                stmt = "\n".join(current).strip().rstrip(";").strip()
+                if stmt:
+                    statements.append(stmt)
+                current = []
+
+        # Handle trailing content without semicolon
+        remaining = "\n".join(current).strip().rstrip(";").strip()
+        if remaining:
+            statements.append(remaining)
+
+        return statements
+
     async def _apply(self, migration: Migration) -> None:
         """Apply a single migration in a transaction.
+
+        Uses individual ``execute()`` calls instead of ``executescript()``
+        to preserve transactional integrity (executescript issues an
+        implicit COMMIT which defeats the transaction context manager).
 
         Raises:
             MigrationError: If the SQL execution fails.
@@ -189,7 +250,8 @@ class MigrationRunner:
 
         try:
             async with self._pool.transaction() as conn:
-                await conn.executescript(migration.sql_up)
+                for statement in self._split_sql(migration.sql_up):
+                    await conn.execute(statement)
                 duration_ms = int((time.monotonic() - start) * 1000)
                 await conn.execute(
                     "INSERT INTO _schema (version, description, checksum, duration_ms) "

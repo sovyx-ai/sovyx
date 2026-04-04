@@ -117,7 +117,7 @@ class TestCostGuard:
 
     async def test_blocks_when_over_budget(self, event_bus: AsyncMock) -> None:
         guard = CostGuard(daily_budget=0.005, per_conversation_budget=0.005)
-        guard.record(0.005, "model", "conv1")
+        await guard.record(0.005, "model", "conv1")
 
         p1 = _mock_provider("test")
         router = LLMRouter([p1], guard, event_bus)

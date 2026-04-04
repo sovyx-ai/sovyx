@@ -6,12 +6,12 @@ All writes are atomic: episode + embedding in the same transaction.
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from sovyx.engine.errors import SearchError
 from sovyx.engine.types import ConceptId, ConversationId, EpisodeId, MindId
 from sovyx.observability.logging import get_logger
+from sovyx.persistence.datetime_utils import parse_db_datetime
 
 if TYPE_CHECKING:
     from sovyx.brain.embedding import EmbeddingEngine
@@ -148,8 +148,8 @@ class EpisodeRepository:
                 JOIN episodes e ON e.id = ee.episode_id
                 WHERE e.mind_id = ?
                 AND ee.embedding MATCH ?
-                ORDER BY ee.distance
-                LIMIT ?""",
+                AND k = ?
+                ORDER BY ee.distance""",
                 (str(mind_id), json.dumps(query_embedding), limit),
             )
             rows = await cursor.fetchall()
@@ -205,5 +205,5 @@ class EpisodeRepository:
             if isinstance(r[9], str)
             else r[9],
             metadata=json.loads(r[10]) if isinstance(r[10], str) else r[10],
-            created_at=(datetime.fromisoformat(r[11]) if isinstance(r[11], str) else r[11]),
+            created_at=parse_db_datetime(r[11]),
         )

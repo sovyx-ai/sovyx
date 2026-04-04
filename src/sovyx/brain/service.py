@@ -68,6 +68,7 @@ class BrainService:
         self._memory = working_memory
         self._events = event_bus
         self._mind_id: MindId | None = None
+        self._background_tasks: set[asyncio.Task[None]] = set()
 
     async def start(self, mind_id: MindId) -> None:
         """Load top-50 recent concepts into working memory."""
@@ -265,12 +266,15 @@ class BrainService:
     # ── Internal ──
 
     def _track_access(self, concept_ids: list[ConceptId]) -> None:
-        """Fire-and-forget access tracking (v12 audit fix).
+        """Fire-and-forget access tracking with task lifecycle management.
 
-        Doesn't block response. If record_access fails → log warning.
+        Uses a task set to prevent garbage collection of running tasks
+        (replacing ``ensure_future`` which loses references).
         """
         for cid in concept_ids:
-            asyncio.ensure_future(self._safe_record_access(cid))
+            task = asyncio.create_task(self._safe_record_access(cid))
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
 
     async def _safe_record_access(self, concept_id: ConceptId) -> None:
         """Record access with error swallowing."""

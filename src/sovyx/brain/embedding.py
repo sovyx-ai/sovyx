@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -25,10 +24,12 @@ logger = get_logger(__name__)
 
 # ── Model constants ─────────────────────────────────────────────────────────
 
-MODEL_URL = "https://huggingface.co/intfloat/e5-small-v2/resolve/main/model_quantized.onnx"
-MODEL_FILENAME = "e5-small-v2-q8.onnx"
+MODEL_URL = "https://huggingface.co/intfloat/e5-small-v2/resolve/main/model.onnx"
+MODEL_FILENAME = "e5-small-v2.onnx"
+MODEL_SHA256 = "4b8205be2a3c5fc53c6534d76a2012064f7309c162b806f2889c6ec8ec4fdcba"
 TOKENIZER_FILENAME = "tokenizer.json"
 TOKENIZER_URL = "https://huggingface.co/intfloat/e5-small-v2/resolve/main/tokenizer.json"
+TOKENIZER_SHA256 = "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66"
 MODEL_DIMENSIONS = 384
 MAX_TOKENS = 512
 
@@ -172,43 +173,59 @@ class EmbeddingEngine:
         self._tokenizer: Any = None
         self._has_embeddings = False
         self._loaded = False
+        self._init_lock = asyncio.Lock()
 
     async def ensure_loaded(self) -> None:
         """Ensure model is loaded. Downloads if necessary.
 
+        Uses double-checked locking to prevent concurrent downloads:
+        fast path (no lock) for already-loaded case, lock for first init.
+
         If the model is unavailable (no internet, ONNX fails),
         sets has_embeddings=False for FTS5 fallback. Does NOT raise.
         """
+        # Fast path: already loaded
         if self._loaded:
             return
 
-        try:
-            downloader = ModelDownloader(self._model_dir)
+        async with self._init_lock:
+            # Double-check after acquiring lock
+            if self._loaded:
+                return
 
-            model_path = await downloader.ensure_model(MODEL_FILENAME, MODEL_URL)
-            tokenizer_path = await downloader.ensure_model(TOKENIZER_FILENAME, TOKENIZER_URL)
+            try:
+                downloader = ModelDownloader(self._model_dir)
 
-            self._load_model(model_path, tokenizer_path)
-            self._has_embeddings = True
-            self._loaded = True
-            logger.info("embedding_engine_loaded", model_dir=str(self._model_dir))
+                model_path = await downloader.ensure_model(
+                    MODEL_FILENAME, MODEL_URL, expected_sha256=MODEL_SHA256,
+                )
+                tokenizer_path = await downloader.ensure_model(
+                    TOKENIZER_FILENAME, TOKENIZER_URL, expected_sha256=TOKENIZER_SHA256,
+                )
 
-        except Exception:
-            logger.warning(
-                "embedding_model_unavailable_fts5_fallback",
-                exc_info=True,
-            )
-            self._has_embeddings = False
-            self._loaded = True
+                self._load_model(model_path, tokenizer_path)
+                self._has_embeddings = True
+                self._loaded = True
+                logger.info("embedding_engine_loaded", model_dir=str(self._model_dir))
+
+            except Exception:
+                logger.warning(
+                    "embedding_model_unavailable_fts5_fallback",
+                    exc_info=True,
+                )
+                self._has_embeddings = False
+                self._loaded = True
 
     def _load_model(self, model_path: Path, tokenizer_path: Path) -> None:
         """Load ONNX session and tokenizer."""
-        import onnxruntime as ort  # type: ignore[import-untyped]
-        from tokenizers import Tokenizer  # type: ignore[import-not-found]
+        import onnxruntime as ort  # type: ignore[import-untyped]  # no stubs available
+        from tokenizers import Tokenizer  # type: ignore[import-untyped]
 
         sess_options = ort.SessionOptions()
         sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        sess_options.log_severity_level = logging.WARNING
+        # ORT severity: 0=VERBOSE, 1=INFO, 2=WARNING, 3=ERROR, 4=FATAL
+        # (NOT Python logging levels which are 10/20/30/40/50)
+        sess_options.log_severity_level = 2  # WARNING
 
         self._session = ort.InferenceSession(
             str(model_path),
@@ -279,8 +296,9 @@ class EmbeddingEngine:
 
     def _encode_sync(self, texts: list[str]) -> list[list[float]]:
         """Synchronous encoding (runs in thread pool)."""
-        assert self._tokenizer is not None  # noqa: S101
-        assert self._session is not None  # noqa: S101
+        if self._tokenizer is None or self._session is None:
+            msg = "EmbeddingEngine not loaded — call ensure_loaded() first"
+            raise RuntimeError(msg)
 
         encoded = self._tokenizer.encode_batch(texts)
 

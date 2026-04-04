@@ -157,3 +157,46 @@ class TestConsolidationScheduler:
 
         # Should have been called at least twice (survived first failure)
         assert call_count >= 2  # noqa: PLR2004
+
+
+class TestJitter:
+    """Consolidation jitter prevents thundering herd (Q19)."""
+
+    async def test_sleep_interval_has_jitter(self) -> None:
+        """Sleep time varies between 80%-120% of base interval."""
+        from unittest.mock import patch
+
+        sleep_times: list[float] = []
+        call_count = 0
+
+        async def fake_consolidate() -> None:
+            pass
+
+        original_sleep = asyncio.sleep
+
+        async def recording_sleep(seconds: float) -> None:
+            nonlocal call_count
+            sleep_times.append(seconds)
+            call_count += 1
+            if call_count >= 5:
+                raise asyncio.CancelledError
+            await original_sleep(0)  # Don't actually wait
+
+        cycle = AsyncMock()
+        cycle.run_cycle = AsyncMock(side_effect=fake_consolidate)
+        scheduler = ConsolidationScheduler(cycle, interval_hours=1.0)
+
+        with patch("asyncio.sleep", side_effect=recording_sleep):
+            try:
+                scheduler._running = True
+                await scheduler._loop(MindId("test"))
+            except asyncio.CancelledError:
+                pass
+
+        # All sleep times should be in [0.8*3600, 1.2*3600]
+        base = 3600.0
+        for t in sleep_times:
+            assert 0.79 * base <= t <= 1.21 * base, f"Sleep {t} outside jitter range"
+        # Not all identical (jitter is random)
+        if len(sleep_times) >= 3:
+            assert len(set(sleep_times)) > 1, "All sleep times identical — jitter not working"

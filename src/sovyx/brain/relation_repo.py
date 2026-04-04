@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from sovyx.engine.types import ConceptId, MindId, RelationId, RelationType
 from sovyx.observability.logging import get_logger
+from sovyx.persistence.datetime_utils import parse_db_datetime
 
 if TYPE_CHECKING:
     from sovyx.brain.models import Relation
@@ -265,6 +266,6 @@ class RelationRepository:
             relation_type=RelationType(r[3]),
             weight=float(r[4]),
             co_occurrence_count=int(r[5]),
-            last_activated=(datetime.fromisoformat(r[6]) if isinstance(r[6], str) else r[6]),
-            created_at=(datetime.fromisoformat(r[7]) if isinstance(r[7], str) else r[7]),
+            last_activated=parse_db_datetime(r[6]),
+            created_at=parse_db_datetime(r[7]),
         )

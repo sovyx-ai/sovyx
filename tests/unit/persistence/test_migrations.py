@@ -263,3 +263,87 @@ class TestMigrationRunner:
             row = await cursor.fetchone()
             assert row is not None
             assert row[0] >= 0
+
+
+class TestSplitSql:
+    """MigrationRunner._split_sql parser tests."""
+
+    def test_single_statement(self) -> None:
+        result = MigrationRunner._split_sql("CREATE TABLE t (id INTEGER)")
+        assert result == ["CREATE TABLE t (id INTEGER)"]
+
+    def test_multiple_statements(self) -> None:
+        sql = "CREATE TABLE a (id INTEGER);\nCREATE TABLE b (id INTEGER);"
+        result = MigrationRunner._split_sql(sql)
+        assert len(result) == 2
+        assert "a" in result[0]
+        assert "b" in result[1]
+
+    def test_empty_statements_skipped(self) -> None:
+        sql = "CREATE TABLE t (id INTEGER);; ;"
+        result = MigrationRunner._split_sql(sql)
+        assert len(result) == 1
+
+    def test_comments_skipped(self) -> None:
+        sql = "-- This is a comment\nCREATE TABLE t (id INTEGER);"
+        result = MigrationRunner._split_sql(sql)
+        # Comment line after split becomes standalone, gets filtered
+        assert any("CREATE TABLE" in s for s in result)
+
+    def test_whitespace_handling(self) -> None:
+        sql = "\n\n  CREATE TABLE t (id INTEGER)  \n\n"
+        result = MigrationRunner._split_sql(sql)
+        assert len(result) == 1
+        assert result[0].startswith("CREATE TABLE")
+
+    def test_trigger_with_begin_end(self) -> None:
+        """Trigger body preserved as single statement."""
+        sql = (
+            "CREATE TRIGGER t AFTER INSERT ON x BEGIN\n"
+            "    INSERT INTO y VALUES (new.a);\n"
+            "END;\n"
+            "CREATE TABLE z (id INTEGER);"
+        )
+        result = MigrationRunner._split_sql(sql)
+        assert len(result) == 2
+        assert "BEGIN" in result[0]
+        assert "END" in result[0]
+        assert "CREATE TABLE z" in result[1]
+
+    def test_case_end_not_confused_with_trigger_end(self) -> None:
+        """CASE...END on its own line inside trigger doesn't break."""
+        sql = (
+            "CREATE TRIGGER t AFTER INSERT ON x BEGIN\n"
+            "    UPDATE y SET val = CASE WHEN new.a > 0 THEN 1\n"
+            "    ELSE 0\n"
+            "    END\n"
+            "    WHERE id = new.id;\n"
+            "END;"
+        )
+        result = MigrationRunner._split_sql(sql)
+        assert len(result) == 1
+        assert "CREATE TRIGGER" in result[0]
+        assert "CASE" in result[0]
+        assert "WHERE" in result[0]
+
+    def test_begin_date_column_not_confused(self) -> None:
+        """Column named BEGIN_DATE doesn't increment depth."""
+        sql = "CREATE TABLE t (BEGIN_DATE TEXT);\nCREATE TABLE u (id INTEGER);"
+        result = MigrationRunner._split_sql(sql)
+        assert len(result) == 2
+
+    def test_real_brain_schema_parses(self) -> None:
+        """All real migration schemas parse without error."""
+        from sovyx.persistence.schemas.brain import get_brain_migrations
+        from sovyx.persistence.schemas.conversations import get_conversation_migrations
+        from sovyx.persistence.schemas.system import get_system_migrations
+
+        for migrations in [
+            get_brain_migrations(has_sqlite_vec=True),
+            get_brain_migrations(has_sqlite_vec=False),
+            get_conversation_migrations(),
+            get_system_migrations(),
+        ]:
+            for m in migrations:
+                stmts = MigrationRunner._split_sql(m.sql_up)
+                assert len(stmts) > 0, f"v{m.version} produced 0 statements"

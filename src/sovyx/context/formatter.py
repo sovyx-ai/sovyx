@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sovyx.engine.types import ConceptCategory
 from sovyx.observability.logging import get_logger
@@ -123,10 +124,19 @@ class ContextFormatter:
     def format_temporal(self, timezone: str = "UTC") -> str:
         """Current temporal context (SPE-006 §format_temporal).
 
+        Uses ``zoneinfo.ZoneInfo`` (stdlib, zero deps) to convert UTC
+        to the mind's configured timezone.  Falls back to UTC on
+        invalid timezone names (logged as warning).
+
         Returns string like:
-        "Current date and time: Monday, March 30, 2026, 6:41 AM (UTC)."
+        "Current date and time: Monday, March 30, 2026, 6:41 AM (America/Sao_Paulo)."
         """
-        now = datetime.now(tz=UTC)
+        try:
+            tz = ZoneInfo(timezone)
+        except (ZoneInfoNotFoundError, KeyError):
+            logger.warning("invalid_timezone_falling_back_to_utc", timezone=timezone)
+            tz = UTC  # type: ignore[assignment]
+        now = datetime.now(tz=tz)
         formatted = now.strftime("%A, %B %d, %Y, %I:%M %p")
         return f"Current date and time: {formatted} ({timezone})."
 
@@ -147,6 +157,9 @@ class ContextFormatter:
     def _human_time_ago(dt: datetime) -> str:
         """Convert datetime to human-readable time ago string."""
         now = datetime.now(tz=UTC)
+        # Defensive: normalise naive datetimes (from SQLite) to UTC
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
         delta = now - dt
 
         if delta < timedelta(minutes=1):

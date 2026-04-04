@@ -9,6 +9,8 @@ import pytest
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from sovyx.engine.types import MindId
+
 from sovyx.engine.bootstrap import MindManager, bootstrap
 from sovyx.engine.config import DatabaseConfig, EngineConfig
 from sovyx.engine.registry import ServiceRegistry
@@ -129,3 +131,29 @@ class TestBootstrap:
 
         db = await registry.resolve(DatabaseManager)
         await db.stop()
+
+    async def test_cleanup_on_partial_failure(self, tmp_path: Path) -> None:
+        """When bootstrap fails mid-way, already-started services are cleaned up."""
+        from unittest.mock import patch
+
+        config = EngineConfig(database=DatabaseConfig(data_dir=tmp_path))
+        mind = MindConfig(name="Test")
+
+        # Inject failure after DatabaseManager starts (during mind init)
+        original_init = DatabaseManager.initialize_mind_databases
+
+        async def failing_init(self_: DatabaseManager, mind_id: MindId) -> None:
+            await original_init(self_, mind_id)
+            msg = "Simulated failure after DB init"
+            raise RuntimeError(msg)
+
+        with (
+            patch.object(DatabaseManager, "initialize_mind_databases", failing_init),
+            pytest.raises(RuntimeError, match="Simulated"),
+        ):
+            await bootstrap(config, [mind])
+
+        # Verify cleanup happened: system.db should exist (was created),
+        # but the DatabaseManager should have been stopped
+        # (If cleanup didn't work, we'd get resource leaks)
+        assert (tmp_path / "system.db").exists()

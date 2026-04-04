@@ -7,7 +7,8 @@ Pipeline: InboundMessage → PersonResolver → ConversationTracker →
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Protocol
+from collections import OrderedDict
+from typing import TYPE_CHECKING, Generic, Protocol, TypeVar
 
 from sovyx.bridge.protocol import InboundMessage, OutboundMessage
 from sovyx.cognitive.gate import CognitiveRequest
@@ -28,6 +29,35 @@ if TYPE_CHECKING:
     )
 
 logger = get_logger(__name__)
+
+_K = TypeVar("_K")
+
+
+class _LRULockDict(Generic[_K]):
+    """Bounded dict of asyncio.Lock instances with LRU eviction.
+
+    Prevents unbounded memory growth when conversation IDs are
+    generated per-session (e.g. one per chat message over months).
+    When *maxsize* is reached, the least-recently-used lock is evicted.
+    """
+
+    def __init__(self, maxsize: int = 500) -> None:
+        self._maxsize = maxsize
+        self._locks: OrderedDict[_K, asyncio.Lock] = OrderedDict()
+
+    def setdefault(self, key: _K, default: asyncio.Lock) -> asyncio.Lock:
+        """Get or insert a lock, promoting to most-recently-used."""
+        if key in self._locks:
+            self._locks.move_to_end(key)
+            return self._locks[key]
+        # Evict oldest if at capacity
+        while len(self._locks) >= self._maxsize:
+            self._locks.popitem(last=False)
+        self._locks[key] = default
+        return default
+
+    def __len__(self) -> int:
+        return len(self._locks)
 
 
 class PersonResolver(Protocol):
@@ -83,7 +113,7 @@ class BridgeManager:
         self._tracker = conversation_tracker
         self._mind_id = mind_id
         self._adapters: dict[ChannelType, ChannelAdapter] = {}
-        self._conv_locks: dict[ConversationId, asyncio.Lock] = {}
+        self._conv_locks: _LRULockDict[ConversationId] = _LRULockDict(maxsize=500)
 
     def register_channel(self, adapter: ChannelAdapter) -> None:
         """Register a channel adapter."""
@@ -200,6 +230,17 @@ class BridgeManager:
 
         except Exception:
             logger.exception("handle_inbound_failed")
+            # Best-effort error response so user doesn't get silence
+            try:
+                error_out = OutboundMessage(
+                    channel_type=message.channel_type,
+                    target=message.chat_id,
+                    text="Something went wrong processing your message. Please try again.",
+                    reply_to=message.channel_message_id,
+                )
+                await self._send_response(error_out)
+            except Exception:
+                logger.warning("error_response_also_failed", exc_info=True)
 
     async def _send_response(self, outbound: OutboundMessage) -> None:
         """Find correct adapter and send."""

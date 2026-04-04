@@ -11,8 +11,6 @@ import contextlib
 from typing import TYPE_CHECKING
 
 from aiogram import Bot, Dispatcher, Router
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ParseMode
 
 from sovyx.bridge.protocol import InboundMessage
 from sovyx.engine.errors import ChannelConnectionError
@@ -42,10 +40,11 @@ class TelegramChannel:
             raise ChannelConnectionError(msg)
         self._token = token.strip()
         self._bridge = bridge_manager
-        self._bot = Bot(
-            token=self._token,
-            default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN_V2),
-        )
+        # Plain text: no parse_mode. LLM output contains arbitrary
+        # markdown characters that MarkdownV2 rejects.  Plain text is
+        # functional; formatted output deferred to v0.2 via
+        # telegramify-markdown.  See sovyx-imm-d1-telegram §3.
+        self._bot = Bot(token=self._token)
         self._router = Router()
         self._dp = Dispatcher()
         self._dp.include_router(self._router)
@@ -140,9 +139,9 @@ class TelegramChannel:
         raise NotImplementedError(msg)
 
     async def send_typing(self, target: str) -> None:
-        """Stub — not supported in v0.1."""
-        msg = "send_typing not supported in v0.1"
-        raise NotImplementedError(msg)
+        """Send 'typing...' indicator to the chat."""
+        with contextlib.suppress(Exception):
+            await self._bot.send_chat_action(chat_id=int(target), action="typing")
 
     async def _on_message(self, message: Message) -> None:
         """Handle incoming Telegram message."""

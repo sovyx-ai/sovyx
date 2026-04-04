@@ -16,6 +16,10 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+# Maximum concepts for O(n²) Hebbian pairing.
+# 20 → 190 pairs; 50 → 1225 pairs (too slow for per-request).
+_MAX_HEBBIAN_CONCEPTS = 20
+
 
 class HebbianLearning:
     """Strengthen connections between co-activated concepts.
@@ -58,6 +62,22 @@ class HebbianLearning:
         """
         if len(concept_ids) < 2:  # noqa: PLR2004
             return 0
+
+        # Cap to top-K by activation to bound O(n²) pair generation.
+        # 20 concepts → 190 pairs (max ~570 DB ops). Acceptable in background.
+        if len(concept_ids) > _MAX_HEBBIAN_CONCEPTS:
+            if activations:
+                concept_ids = sorted(
+                    concept_ids,
+                    key=lambda cid: activations.get(cid, 0.0),
+                    reverse=True,
+                )[:_MAX_HEBBIAN_CONCEPTS]
+            else:
+                concept_ids = concept_ids[:_MAX_HEBBIAN_CONCEPTS]
+            logger.debug(
+                "hebbian_concepts_capped",
+                capped_to=_MAX_HEBBIAN_CONCEPTS,
+            )
 
         count = 0
         for i, id_a in enumerate(concept_ids):

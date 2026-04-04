@@ -54,12 +54,25 @@ class PersonResolver:
         if row is not None:
             return PersonId(str(row[0]))
 
-        # Create new person + mapping
+        # Atomic create: person + mapping in one transaction.
+        # Re-check inside write lock to prevent race (two concurrent
+        # resolve() calls for the same new user).
         person_id = PersonId(str(uuid.uuid4()))
         mapping_id = str(uuid.uuid4())
         name = display_name or channel_user_id
 
         async with self._pool.transaction() as conn:
+            # Double-check inside write lock (eliminates race window)
+            cursor = await conn.execute(
+                """SELECT p.id FROM persons p
+                   JOIN channel_mappings cm ON cm.person_id = p.id
+                   WHERE cm.channel_type = ? AND cm.channel_user_id = ?""",
+                (channel_type.value, channel_user_id),
+            )
+            existing = await cursor.fetchone()
+            if existing is not None:
+                return PersonId(str(existing[0]))
+
             await conn.execute(
                 "INSERT INTO persons (id, name, display_name) VALUES (?, ?, ?)",
                 (person_id, name, display_name or None),

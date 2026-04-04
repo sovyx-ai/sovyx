@@ -82,8 +82,13 @@ class LLMRouter:
             CostLimitExceededError: Budget exhausted.
             ProviderUnavailableError: All providers failed.
         """
-        # Cost check (estimate ~$0.01 per call)
-        estimated_cost = 0.01
+        # Cost estimation: chars/4 ≈ tokens (rough but order-of-magnitude correct)
+        input_chars = sum(len(m.get("content", "")) for m in messages)
+        est_input_tokens = input_chars // 4
+        pricing = self._get_pricing(model)
+        estimated_cost = (
+            est_input_tokens * pricing[0] + max_tokens * pricing[1]
+        ) / 1_000_000
         if not self._cost_guard.can_afford(estimated_cost, conversation_id):
             msg = (
                 f"Budget exhausted. Daily remaining: "
@@ -123,7 +128,7 @@ class LLMRouter:
                     circuit.record_success()
 
                 # Record cost
-                self._cost_guard.record(response.cost_usd, response.model, conversation_id)
+                await self._cost_guard.record(response.cost_usd, response.model, conversation_id)
 
                 # Emit event
                 await self._events.emit(
@@ -160,6 +165,29 @@ class LLMRouter:
             f"All providers failed: {'; '.join(errors)}" if errors else "No available providers"
         )
         raise ProviderUnavailableError(error_msg)
+
+    @staticmethod
+    def _get_pricing(model: str | None) -> tuple[float, float]:
+        """Get (input, output) pricing per 1M tokens for a model.
+
+        Falls back to a conservative default if model is unknown.
+        """
+        # Consolidated pricing table (per 1M tokens USD)
+        pricing: dict[str, tuple[float, float]] = {
+            # Anthropic
+            "claude-sonnet-4-20250514": (3.0, 15.0),
+            "claude-3-5-haiku-20241022": (1.0, 5.0),
+            "claude-opus-4-20250514": (15.0, 75.0),
+            # OpenAI
+            "gpt-4o": (5.0, 15.0),
+            "gpt-4o-mini": (0.15, 0.6),
+            "o1": (15.0, 60.0),
+            "o3-mini": (1.1, 4.4),
+        }
+        if model and model in pricing:
+            return pricing[model]
+        # Conservative default (Sonnet-class)
+        return (3.0, 15.0)
 
     async def stop(self) -> None:
         """Close all providers (best-effort)."""

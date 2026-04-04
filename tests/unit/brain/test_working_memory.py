@@ -138,11 +138,11 @@ class TestClear:
         assert wm.get_activation(ConceptId("c1")) == 0.0
 
 
-class TestLock:
-    """Lock availability."""
+class TestConcurrency:
+    """Concurrency model documentation."""
 
-    def test_has_lock(self) -> None:
-        import asyncio
-
+    def test_no_lock_needed(self) -> None:
+        """WorkingMemory has no lock — sync methods are atomic under asyncio."""
         wm = WorkingMemory()
-        assert isinstance(wm.lock, asyncio.Lock)
+        # All methods are synchronous — no concurrent mutation possible
+        assert not hasattr(wm, "lock")
