@@ -128,6 +128,9 @@ class LifecycleManager:
         # Start services in order
         await self._start_services()
 
+        # Start dashboard server (if API enabled)
+        await self._start_dashboard()
+
         # Emit engine started
         from sovyx.engine.events import EngineStarted
 
@@ -180,6 +183,31 @@ class LifecycleManager:
         logger.info("signal_received", signal=sig.name)
         self._shutdown_event.set()
 
+    async def _start_dashboard(self) -> None:
+        """Start the dashboard server if API is enabled in config."""
+        from sovyx.dashboard.server import DashboardServer
+        from sovyx.engine.config import APIConfig, EngineConfig
+
+        config: APIConfig | None = None
+        if self._registry.is_registered(EngineConfig):
+            engine_config = await self._registry.resolve(EngineConfig)
+            if not engine_config.api.enabled:
+                logger.info("dashboard_disabled")
+                return
+            config = engine_config.api
+
+        server = DashboardServer(config=config)
+        await server.start()
+        self._registry.register_instance(DashboardServer, server)
+
+    async def _stop_dashboard(self) -> None:
+        """Stop the dashboard server if running."""
+        from sovyx.dashboard.server import DashboardServer
+
+        if self._registry.is_registered(DashboardServer):
+            server = await self._registry.resolve(DashboardServer)
+            await server.stop()
+
     async def _start_services(self) -> None:
         """Start services that have start() methods."""
         from sovyx.bridge.manager import BridgeManager
@@ -204,10 +232,13 @@ class LifecycleManager:
     async def _shutdown_services(self) -> None:
         """Stop services in reverse dependency order.
 
-        Order: acceptors → processors → writers → stores.
+        Order: dashboard → acceptors → processors → writers → stores.
         ConsolidationScheduler must stop before DatabaseManager
         to prevent writes to a closed pool (P28).
         """
+        # 0. Stop dashboard (stop accepting HTTP/WS)
+        await self._stop_dashboard()
+
         from sovyx.brain.consolidation import ConsolidationScheduler
         from sovyx.bridge.manager import BridgeManager
         from sovyx.cognitive.gate import CogLoopGate
