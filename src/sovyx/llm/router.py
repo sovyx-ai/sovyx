@@ -9,6 +9,8 @@ from sovyx.engine.events import ThinkCompleted
 from sovyx.llm.circuit import CircuitBreaker
 from sovyx.llm.models import LLMResponse
 from sovyx.observability.logging import get_logger
+from sovyx.observability.metrics import get_metrics
+from sovyx.observability.tracing import get_tracer
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -113,13 +115,53 @@ class LLMRouter:
 
             try:
                 use_model = model or "default"
-                raw = await provider.generate(
-                    messages,
-                    model=use_model,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                )
+                tracer = get_tracer()
+                metrics = get_metrics()
+
+                with (
+                    tracer.start_llm_span(
+                        provider=provider.name,
+                        model=use_model,
+                    ) as span,
+                    metrics.measure_latency(
+                        metrics.llm_response_latency,
+                        {"provider": provider.name},
+                    ),
+                ):
+                    raw = await provider.generate(
+                        messages,
+                        model=use_model,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    )
+
                 response = LLMResponse(**vars(raw)) if not isinstance(raw, LLMResponse) else raw
+
+                # Record span attributes post-call
+                span.set_attribute("sovyx.llm.tokens_in", response.tokens_in)
+                span.set_attribute("sovyx.llm.tokens_out", response.tokens_out)
+                span.set_attribute("sovyx.llm.cost_usd", response.cost_usd)
+
+                # Record metrics
+                metrics.llm_calls.add(
+                    1,
+                    {
+                        "provider": provider.name,
+                        "model": response.model,
+                    },
+                )
+                metrics.tokens_used.add(
+                    response.tokens_in,
+                    {"direction": "in", "provider": provider.name},
+                )
+                metrics.tokens_used.add(
+                    response.tokens_out,
+                    {"direction": "out", "provider": provider.name},
+                )
+                metrics.llm_cost.add(
+                    response.cost_usd,
+                    {"provider": provider.name},
+                )
 
                 # Record success
                 if circuit:

@@ -16,6 +16,7 @@ from sovyx.cognitive.perceive import Perception
 from sovyx.engine.errors import CognitiveError
 from sovyx.engine.types import PerceptionType
 from sovyx.observability.logging import get_logger
+from sovyx.observability.metrics import get_metrics
 
 if TYPE_CHECKING:
     from sovyx.cognitive.gate import CogLoopGate
@@ -143,6 +144,10 @@ class BridgeManager:
 
         NEVER raises — all errors handled internally.
         """
+        get_metrics().messages_processed.add(
+            1,
+            {"channel": message.channel_type.value},
+        )
         try:
             # 1. Resolve person
             person_id = await self._resolver.resolve(
