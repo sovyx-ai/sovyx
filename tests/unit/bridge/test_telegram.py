@@ -173,10 +173,11 @@ class TestStubs:
         with pytest.raises(NotImplementedError, match="v0.1"):
             await ch.react("1", "👍")
 
-    async def test_send_typing_raises(self) -> None:
+    async def test_send_typing_no_crash(self) -> None:
+        """send_typing suppresses errors (best-effort)."""
         ch = TelegramChannel(VALID_TOKEN, _mock_bridge())
-        with pytest.raises(NotImplementedError, match="v0.1"):
-            await ch.send_typing("123")
+        # Should not raise even though bot isn't connected
+        await ch.send_typing("123")
 
 
 class TestInitialize:
