@@ -212,7 +212,9 @@ class MigrationRunner:
 
             current.append(line)
 
-            if upper.startswith("END") and depth > 0:
+            # END; on its own line closes a BEGIN block.
+            # Plain END (without ;) is a CASE expression terminator, not a block close.
+            if upper.rstrip().rstrip(";") == "END" and stripped.endswith(";") and depth > 0:
                 depth -= 1
 
             # Statement ends at ; only when NOT inside a BEGIN...END block
