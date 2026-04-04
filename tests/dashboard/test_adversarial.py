@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import threading
 from typing import TYPE_CHECKING
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -287,6 +287,130 @@ class TestBrainGraphAdversarial:
 
 
 # ── Query Param Validation ──
+
+
+class TestBroadcastConcurrency:
+    """Verify broadcast doesn't hold lock during sends."""
+
+    @pytest.mark.asyncio()
+    async def test_broadcast_releases_lock_before_send(self) -> None:
+        """A slow client shouldn't block connect/disconnect."""
+        import asyncio
+
+        from sovyx.dashboard.server import ConnectionManager
+
+        mgr = ConnectionManager()
+
+        # Create mock websockets
+        fast_ws = MagicMock()
+        fast_ws.send_json = AsyncMock()
+        slow_ws = MagicMock()
+
+        async def slow_send(msg: object) -> None:
+            await asyncio.sleep(0.1)
+
+        slow_ws.send_json = AsyncMock(side_effect=slow_send)
+        slow_ws.accept = AsyncMock()
+        fast_ws.accept = AsyncMock()
+
+        await mgr.connect(slow_ws)
+        await mgr.connect(fast_ws)
+
+        # Start broadcast (will be slow due to slow_ws)
+        broadcast_task = asyncio.create_task(mgr.broadcast({"test": 1}))
+
+        # Meanwhile, a new connection should NOT be blocked
+        new_ws = MagicMock()
+        new_ws.accept = AsyncMock()
+        # Give broadcast a moment to start
+        await asyncio.sleep(0.01)
+        # This should complete without waiting for broadcast
+        connect_task = asyncio.create_task(mgr.connect(new_ws))
+        done, _pending = await asyncio.wait({connect_task}, timeout=0.05)
+        assert len(done) == 1, "connect() was blocked by broadcast()"
+
+        await broadcast_task
+        assert mgr.active_count == 3
+
+    @pytest.mark.asyncio()
+    async def test_broadcast_removes_stale_after_send(self) -> None:
+        """Stale connections removed after failed sends."""
+        from sovyx.dashboard.server import ConnectionManager
+
+        mgr = ConnectionManager()
+        good_ws = MagicMock()
+        good_ws.send_json = AsyncMock()
+        good_ws.accept = AsyncMock()
+        bad_ws = MagicMock()
+        bad_ws.send_json = AsyncMock(side_effect=ConnectionError("gone"))
+        bad_ws.accept = AsyncMock()
+
+        await mgr.connect(good_ws)
+        await mgr.connect(bad_ws)
+        assert mgr.active_count == 2
+
+        await mgr.broadcast({"test": 1})
+        assert mgr.active_count == 1
+        good_ws.send_json.assert_called_once()
+
+
+class TestBrainGraphLinksCap:
+    """Verify brain graph links are capped."""
+
+    @pytest.mark.asyncio()
+    async def test_links_respect_max_cap(self) -> None:
+        """Links returned should not exceed max_links."""
+        import aiosqlite
+
+        from sovyx.dashboard.brain import _get_relations
+
+        conn = await aiosqlite.connect(":memory:")
+        await conn.executescript(
+            "CREATE TABLE relations (id TEXT, source_id TEXT, target_id TEXT, "
+            "relation_type TEXT, weight REAL)"
+        )
+        # Insert 50 relations between 10 nodes
+        for i in range(50):
+            src = f"c{i % 10}"
+            tgt = f"c{(i + 1) % 10}"
+            await conn.execute(
+                "INSERT INTO relations VALUES (?, ?, ?, 'related', 0.5)",
+                (f"r{i}", src, tgt),
+            )
+        await conn.commit()
+
+        class _Pool:
+            class _Ctx:
+                def __init__(self, c: aiosqlite.Connection) -> None:
+                    self._c = c
+
+                async def __aenter__(self) -> aiosqlite.Connection:
+                    return self._c
+
+                async def __aexit__(self, *a: object) -> None:
+                    pass
+
+            def __init__(self, c: aiosqlite.Connection) -> None:
+                self._c = c
+
+            def read(self) -> _Pool._Ctx:
+                return self._Ctx(self._c)
+
+        pool = _Pool(conn)
+
+        db_manager = MagicMock()
+        db_manager.get_brain_pool.return_value = pool
+
+        registry = MagicMock()
+        registry.is_registered.return_value = True
+        registry.resolve = AsyncMock(return_value=db_manager)
+
+        node_ids = {f"c{i}" for i in range(10)}
+        links = await _get_relations(registry, node_ids, max_links=5)
+
+        assert len(links) <= 5
+
+        await conn.close()
 
 
 class TestQueryParamValidation:

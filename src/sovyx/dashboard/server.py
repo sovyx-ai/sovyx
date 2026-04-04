@@ -76,16 +76,29 @@ class ConnectionManager:
         logger.debug("ws_disconnected", count=len(self._connections))
 
     async def broadcast(self, message: dict[str, Any]) -> None:
-        """Send JSON message to all connected clients."""
+        """Send JSON message to all connected clients.
+
+        Copies the connection list and releases the lock before sending,
+        so a slow client doesn't block other sends or connect/disconnect.
+        """
         async with self._lock:
-            stale: list[WebSocket] = []
-            for ws in self._connections:
-                try:
-                    await ws.send_json(message)
-                except Exception:  # noqa: BLE001
-                    stale.append(ws)
-            for ws in stale:
-                self._connections.remove(ws)
+            snapshot = list(self._connections)
+
+        if not snapshot:
+            return
+
+        stale: list[WebSocket] = []
+        for ws in snapshot:
+            try:
+                await ws.send_json(message)
+            except Exception:  # noqa: BLE001
+                stale.append(ws)
+
+        if stale:
+            async with self._lock:
+                for ws in stale:
+                    if ws in self._connections:
+                        self._connections.remove(ws)
 
     @property
     def active_count(self) -> int:
@@ -352,12 +365,18 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
             name="static-assets",
         )
 
+        _static_root = STATIC_DIR.resolve()
+
         @app.get("/{path:path}")
         async def spa_fallback(path: str) -> FileResponse:
             """SPA fallback — serve index.html for all non-API routes."""
-            # Check if a static file exists
-            file_path = STATIC_DIR / path
-            if file_path.is_file() and ".." not in path:
+            # Check if a static file exists — with path traversal protection
+            file_path = (STATIC_DIR / path).resolve()
+            if (
+                file_path.is_file()
+                and ".." not in path
+                and str(file_path).startswith(str(_static_root))
+            ):
                 return FileResponse(str(file_path))
             # Otherwise serve index.html (SPA routing)
             return FileResponse(str(STATIC_DIR / "index.html"))
