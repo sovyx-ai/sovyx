@@ -47,6 +47,8 @@ if TYPE_CHECKING:
 # ── Module constants ────────────────────────────────────────────────────────
 
 _TRACER_NAME = "sovyx"
+# Tracks the observability API version (not the package version in pyproject.toml).
+# Bump when span names, attribute schemas, or namespace conventions change.
 _TRACER_VERSION = "0.2.0"
 
 # ── SovyxTracer ────────────────────────────────────────────────────────────

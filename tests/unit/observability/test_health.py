@@ -477,9 +477,15 @@ class TestCostBudgetCheck:
         assert result.status == CheckStatus.YELLOW
 
     @pytest.mark.asyncio()
-    async def test_zero_budget(self) -> None:
+    async def test_zero_budget_zero_spend(self) -> None:
         result = await CostBudgetCheck(get_spend_fn=lambda: 0.0, daily_budget=0.0).check()
         assert result.status == CheckStatus.GREEN
+
+    @pytest.mark.asyncio()
+    async def test_zero_budget_with_spend_is_red(self) -> None:
+        """Any spend with zero budget should be RED (over budget)."""
+        result = await CostBudgetCheck(get_spend_fn=lambda: 0.5, daily_budget=0.0).check()
+        assert result.status == CheckStatus.RED
 
     @pytest.mark.asyncio()
     async def test_red_on_exception(self) -> None:

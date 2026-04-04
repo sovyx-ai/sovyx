@@ -46,6 +46,8 @@ if TYPE_CHECKING:
 # ── Metrics Registry ────────────────────────────────────────────────────────
 
 _METER_NAME = "sovyx"
+# Tracks the observability API version (not the package version in pyproject.toml).
+# Bump when instrument names, units, or attribute schemas change.
 _METER_VERSION = "0.2.0"
 
 # Module-level reference set by setup_metrics / reset by teardown_metrics.

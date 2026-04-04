@@ -151,6 +151,22 @@ class TestMatches:
         since = datetime.now(tz=UTC) - timedelta(hours=1)
         assert _matches(entry, level_min=None, filters={}, since=since) is True
 
+    def test_since_with_naive_timestamp_assumes_utc(self) -> None:
+        """Naive timestamps (no tz) should be treated as UTC, not crash."""
+        now = datetime.now(tz=UTC)
+        # Recent naive timestamp — should be included
+        recent_naive = now.strftime("%Y-%m-%dT%H:%M:%S")  # no timezone
+        entry = {"event": "test", "timestamp": recent_naive}
+        since = now - timedelta(hours=1)
+        assert _matches(entry, level_min=None, filters={}, since=since) is True
+
+    def test_since_with_old_naive_timestamp_excluded(self) -> None:
+        """Old naive timestamps should be correctly excluded."""
+        old = datetime.now(tz=UTC) - timedelta(hours=2)
+        entry = {"event": "test", "timestamp": old.strftime("%Y-%m-%dT%H:%M:%S")}
+        since = datetime.now(tz=UTC) - timedelta(hours=1)
+        assert _matches(entry, level_min=None, filters={}, since=since) is False
+
     def test_combined_filters(self) -> None:
         now = datetime.now(tz=UTC)
         entry = {
