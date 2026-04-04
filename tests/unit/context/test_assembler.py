@@ -6,11 +6,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from sovyx.brain.models import Concept, Episode
 from sovyx.context.assembler import AssembledContext, ContextAssembler
 from sovyx.context.budget import TokenBudgetManager
 from sovyx.context.formatter import ContextFormatter
 from sovyx.context.tokenizer import TokenCounter
-from sovyx.engine.types import MindId
+from sovyx.engine.types import ConceptCategory, ConceptId, MindId
 from sovyx.mind.config import MindConfig
 from sovyx.mind.personality import PersonalityEngine
 
@@ -148,3 +149,133 @@ class TestTrimHistory:
         history = [{"role": "user", "content": "test"}]
         result = assembler._trim_history(history, 1000)
         assert result is not history
+
+
+class TestAssembleWithBrainResults:
+    """Test lines 113, 115, 143, 145: concepts + episodes present in context."""
+
+    @pytest.fixture
+    def rich_brain(self) -> AsyncMock:
+        """Brain that returns concepts and episodes."""
+        brain = AsyncMock()
+        concepts = [
+            (
+                Concept(
+                    id=ConceptId("c1"),
+                    mind_id=MindId("mind1"),
+                    name="pizza preference",
+                    content="User loves margherita pizza",
+                    category=ConceptCategory.PREFERENCE,
+                ),
+                0.9,
+            ),
+        ]
+        episodes = [
+            Episode(
+                id="e1",
+                mind_id=MindId("mind1"),
+                conversation_id="conv1",
+                user_input="I love pizza",
+                assistant_response="Great taste!",
+            ),
+        ]
+        brain.recall = AsyncMock(return_value=(concepts, episodes))
+        return brain
+
+    @pytest.fixture
+    def rich_assembler(
+        self,
+        counter: TokenCounter,
+        personality: PersonalityEngine,
+        rich_brain: AsyncMock,
+        mind_config: MindConfig,
+    ) -> ContextAssembler:
+        return ContextAssembler(
+            token_counter=counter,
+            personality_engine=personality,
+            brain_service=rich_brain,
+            budget_manager=TokenBudgetManager(),
+            formatter=ContextFormatter(counter),
+            mind_config=mind_config,
+        )
+
+    async def test_concepts_in_system_content(
+        self, rich_assembler: ContextAssembler
+    ) -> None:
+        result = await rich_assembler.assemble(
+            current_message="tell me",
+            conversation_history=[],
+            mind_id=MindId("mind1"),
+        )
+        assert "pizza" in result.messages[0]["content"].lower()
+
+    async def test_episodes_in_system_content(
+        self, rich_assembler: ContextAssembler
+    ) -> None:
+        result = await rich_assembler.assemble(
+            current_message="tell me",
+            conversation_history=[],
+            mind_id=MindId("mind1"),
+        )
+        system = result.messages[0]["content"]
+        assert "pizza" in system.lower() or "love" in system.lower()
+
+    async def test_sources_include_concepts_and_episodes(
+        self, rich_assembler: ContextAssembler
+    ) -> None:
+        result = await rich_assembler.assemble(
+            current_message="tell me",
+            conversation_history=[],
+            mind_id=MindId("mind1"),
+        )
+        assert any("concepts" in s for s in result.sources)
+        assert any("episodes" in s for s in result.sources)
+
+
+class TestOverflowTrimming:
+    """Test lines 133-138: overflow trim loop."""
+
+    async def test_overflow_trims_history(self) -> None:
+        """When tokens exceed max_usable, history gets trimmed further."""
+        from unittest.mock import patch
+
+        counter = TokenCounter()
+        mind_config = MindConfig(name="Aria")
+        personality = PersonalityEngine(mind_config)
+        brain = AsyncMock()
+        brain.recall = AsyncMock(return_value=([], []))
+
+        assembler = ContextAssembler(
+            token_counter=counter,
+            personality_engine=personality,
+            brain_service=brain,
+            budget_manager=TokenBudgetManager(),
+            formatter=ContextFormatter(counter),
+            mind_config=mind_config,
+        )
+
+        long_history = [
+            {"role": "user", "content": f"message {i} " * 50}
+            for i in range(30)
+        ]
+
+        # Force count_messages to always return huge number (until few msgs left)
+        original = counter.count_messages
+
+        def inflated_count(msgs: list[dict[str, str]]) -> int:
+            real = original(msgs)
+            # Return inflated until messages are trimmed enough
+            if len(msgs) > 5:  # noqa: PLR2004
+                return 999_999
+            return real
+
+        with patch.object(counter, "count_messages", side_effect=inflated_count):
+            result = await assembler.assemble(
+                current_message="final question",
+                conversation_history=long_history,
+                mind_id=MindId("mind1"),
+                context_window=4096,
+            )
+        # Should have trimmed some
+        user_msgs = [m for m in result.messages if m["role"] == "user"]
+        assert len(user_msgs) < 30

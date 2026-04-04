@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 
 from sovyx.persistence.datetime_utils import parse_db_datetime
 
@@ -45,7 +45,7 @@ class TestParseDbDatetime:
         assert result == dt
 
     def test_non_utc_timezone_preserved(self) -> None:
-        tz = timezone.utc  # Same as UTC for this test
+        tz = UTC  # Same as UTC for this test
         dt = datetime(2026, 3, 15, 10, 30, 0, tzinfo=tz)
         result = parse_db_datetime(dt)
         assert result is not None

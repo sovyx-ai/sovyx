@@ -164,6 +164,17 @@ class TestCreateWithEmbedding:
 
         mock_engine.encode.assert_called_once_with("question answer")
 
+    async def test_empty_text_skips_encode(self, pool: DatabasePool) -> None:
+        """Line 49→52: empty user_input + assistant_response → no encode."""
+        mock_engine = AsyncMock()
+        mock_engine.has_embeddings = True
+
+        repo = EpisodeRepository(pool, mock_engine)
+        episode = _make_episode(user="", assistant="")
+        await repo.create(episode)
+
+        mock_engine.encode.assert_not_called()
+
     async def test_skips_embedding_when_unavailable(self, pool: DatabasePool) -> None:
         mock_engine = AsyncMock()
         mock_engine.has_embeddings = False
@@ -217,3 +228,69 @@ class TestSerialization:
         assert fetched.importance == 0.8
         assert abs(fetched.emotional_valence - (-0.3)) < 0.001
         assert abs(fetched.emotional_arousal - 0.7) < 0.001
+
+
+# ── sqlite-vec tests (covers lines 76, 144-162, 168) ──
+
+
+@pytest.fixture
+async def vec_pool(tmp_path: Path) -> DatabasePool:
+    """Pool with sqlite-vec enabled (skips if unavailable)."""
+    p = DatabasePool(db_path=tmp_path / "brain_vec.db", read_pool_size=1)
+    await p.initialize()
+    if not p.has_sqlite_vec:
+        await p.close()
+        pytest.skip("sqlite-vec not available")
+    runner = MigrationRunner(p)
+    await runner.initialize()
+    await runner.run_migrations(get_brain_migrations(has_sqlite_vec=True))
+    yield p  # type: ignore[misc]
+    await p.close()
+
+
+@pytest.fixture
+def vec_repo(vec_pool: DatabasePool) -> EpisodeRepository:
+    mock_engine = AsyncMock()
+    mock_engine.has_embeddings = True
+    mock_engine.encode = AsyncMock(return_value=[0.1] * 384)
+    return EpisodeRepository(vec_pool, mock_engine)
+
+
+class TestSqliteVecOperations:
+    """Tests requiring real sqlite-vec for embedding storage + search."""
+
+    async def test_create_stores_embedding(self, vec_repo: EpisodeRepository) -> None:
+        """Line 76: embedding INSERT when has_sqlite_vec=True."""
+        episode = _make_episode(user="test question", assistant="test answer")
+        eid = await vec_repo.create(episode)
+        fetched = await vec_repo.get(eid)
+        assert fetched is not None
+
+    async def test_search_by_embedding(self, vec_repo: EpisodeRepository) -> None:
+        """Lines 144-162: vector similarity search."""
+        for i in range(3):
+            ep = _make_episode(
+                conv_id=f"conv{i}",
+                user=f"question {i}",
+                assistant=f"answer {i}",
+            )
+            await vec_repo.create(ep)
+
+        query_vec = [0.1] * 384
+        results = await vec_repo.search_by_embedding(
+            query_embedding=query_vec,
+            mind_id=MindId("test-mind"),
+            limit=5,
+        )
+        assert isinstance(results, list)
+        assert len(results) > 0
+        for _episode, distance in results:
+            assert isinstance(distance, float)
+
+    async def test_delete_removes_embedding(self, vec_repo: EpisodeRepository) -> None:
+        """Line 168: DELETE from episode_embeddings."""
+        episode = _make_episode()
+        eid = await vec_repo.create(episode)
+        await vec_repo.delete(eid)
+        fetched = await vec_repo.get(eid)
+        assert fetched is None

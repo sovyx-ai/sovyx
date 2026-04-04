@@ -233,6 +233,34 @@ class TestCreateWithEmbedding:
         mock_engine.encode.assert_not_called()
 
 
+    async def test_empty_name_and_content_skips_encode(
+        self,
+        pool: DatabasePool,
+    ) -> None:
+        """Line 48→51: empty name+content → no encode called."""
+        mock_engine = AsyncMock()
+        mock_engine.has_embeddings = True
+
+        repo = ConceptRepository(pool, mock_engine)
+        concept = _make_concept("", content="")
+        await repo.create(concept)
+
+        mock_engine.encode.assert_not_called()
+
+    async def test_delete_concept(
+        self,
+        pool: DatabasePool,
+    ) -> None:
+        """Line 165: delete with sqlite-vec=False (no embedding table)."""
+        mock_engine = AsyncMock()
+        mock_engine.has_embeddings = False
+        repo = ConceptRepository(pool, mock_engine)
+        concept = _make_concept("deletable")
+        cid = await repo.create(concept)
+        await repo.delete(cid)
+        assert await repo.get(cid) is None
+
+
 class TestMetadataSerialization:
     """JSON serialization of metadata field."""
 
