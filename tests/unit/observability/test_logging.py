@@ -5,6 +5,8 @@ from __future__ import annotations
 import io
 import json
 import logging
+import logging.handlers
+from pathlib import Path  # noqa: TC003
 from typing import Any
 
 import pytest
@@ -421,3 +423,64 @@ class TestGetLogger:
         assert hasattr(logger, "warning")
         assert hasattr(logger, "error")
         assert hasattr(logger, "exception")
+
+
+# ── File Handler ────────────────────────────────────────────────────────────
+
+
+class TestFileHandler:
+    """setup_logging with log_file creates a RotatingFileHandler."""
+
+    def test_creates_log_file(self, tmp_path: Path) -> None:
+        log_file = tmp_path / "logs" / "test.log"
+        config = LoggingConfig(level="DEBUG", format="json", log_file=log_file)
+        setup_logging(config)
+
+        # Directory should be created
+        assert log_file.parent.exists()
+
+        # Root logger should have 2 handlers (stderr + file)
+        root = logging.getLogger()
+        assert len(root.handlers) == 2
+
+        # Write a log and check the file
+        logger = get_logger("test.file")
+        logger.info("file_test_event", component="brain")
+
+        # Flush handlers
+        for handler in root.handlers:
+            handler.flush()
+
+        assert log_file.exists()
+        content = log_file.read_text()
+        assert "file_test_event" in content
+
+        # File output should be JSON
+        import json
+
+        parsed = json.loads(content.strip())
+        assert parsed["event"] == "file_test_event"
+        assert parsed["component"] == "brain"
+
+    def test_file_handler_is_rotating(self, tmp_path: Path) -> None:
+        log_file = tmp_path / "test.log"
+        config = LoggingConfig(level="DEBUG", format="json", log_file=log_file)
+        setup_logging(config)
+
+        root = logging.getLogger()
+        file_handlers = [
+            h for h in root.handlers if isinstance(h, logging.handlers.RotatingFileHandler)
+        ]
+        assert len(file_handlers) == 1
+        assert file_handlers[0].maxBytes == 10 * 1024 * 1024
+        assert file_handlers[0].backupCount == 3
+
+    def test_no_file_handler_when_none(self) -> None:
+        config = LoggingConfig(level="INFO", format="json", log_file=None)
+        setup_logging(config)
+
+        root = logging.getLogger()
+        file_handlers = [
+            h for h in root.handlers if isinstance(h, logging.handlers.RotatingFileHandler)
+        ]
+        assert len(file_handlers) == 0
