@@ -174,8 +174,36 @@ class MigrationRunner:
             )
             raise MigrationError(msg)
 
+    @staticmethod
+    def _split_sql(sql: str) -> list[str]:
+        """Split multi-statement SQL into individual statements.
+
+        Strips comments and empty lines, splits on ``;``.
+        Each returned string is a single executable SQL statement.
+
+        Note:
+            This is a deliberate replacement for ``executescript()``
+            which issues an implicit COMMIT, breaking transactional
+            guarantees.  See P18 / sovyx-imm-d4-persistence §4.
+        """
+        statements: list[str] = []
+        for stmt in sql.split(";"):
+            # Strip comment lines before checking content
+            lines = [
+                line for line in stmt.strip().splitlines()
+                if not line.strip().startswith("--")
+            ]
+            cleaned = "\n".join(lines).strip()
+            if cleaned:
+                statements.append(cleaned)
+        return statements
+
     async def _apply(self, migration: Migration) -> None:
         """Apply a single migration in a transaction.
+
+        Uses individual ``execute()`` calls instead of ``executescript()``
+        to preserve transactional integrity (executescript issues an
+        implicit COMMIT which defeats the transaction context manager).
 
         Raises:
             MigrationError: If the SQL execution fails.
@@ -189,7 +217,8 @@ class MigrationRunner:
 
         try:
             async with self._pool.transaction() as conn:
-                await conn.executescript(migration.sql_up)
+                for statement in self._split_sql(migration.sql_up):
+                    await conn.execute(statement)
                 duration_ms = int((time.monotonic() - start) * 1000)
                 await conn.execute(
                     "INSERT INTO _schema (version, description, checksum, duration_ms) "
