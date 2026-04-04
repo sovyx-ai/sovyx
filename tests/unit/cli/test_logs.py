@@ -219,6 +219,33 @@ class TestFormatEntry:
         text = _format_entry(entry)
         assert "test" in text.plain
 
+    def test_zero_values_not_hidden(self) -> None:
+        """Falsy but valid values like 0 and 0.0 must appear in output."""
+        entry = {
+            "timestamp": "2026-04-04T15:30:45Z",
+            "level": "info",
+            "event": "llm_response",
+            "tokens_in": 0,
+            "cost_usd": 0.0,
+            "filtered": False,
+        }
+        text = _format_entry(entry)
+        plain = text.plain
+        assert "tokens_in=0" in plain
+        assert "cost_usd=0.0" in plain
+        assert "filtered=False" in plain
+
+    def test_none_values_hidden(self) -> None:
+        """None values should be excluded from context display."""
+        entry = {
+            "timestamp": "2026-04-04T15:30:45Z",
+            "level": "info",
+            "event": "test",
+            "optional_field": None,
+        }
+        text = _format_entry(entry)
+        assert "optional_field" not in text.plain
+
 
 # ── _read_log_lines ─────────────────────────────────────────────────────────
 
