@@ -183,31 +183,147 @@ def status() -> None:
 
 
 @app.command()
-def doctor() -> None:
-    """Run health checks."""
+def doctor(
+    output_json: bool = typer.Option(False, "--json", help="Machine-readable JSON output"),
+) -> None:
+    """Run health checks on the Sovyx installation.
+
+    Offline checks (always available): disk, RAM, CPU, model files, config.
+    Online checks (daemon required): database, brain, LLM, channels,
+    consolidation, cost budget.
+    """
+    import asyncio
+    import json
+
+    from sovyx.observability.health import (
+        CheckStatus,
+        create_offline_registry,
+    )
+
+    results = []
+
+    # ── Tier 1: Offline checks (always run) ─────────────────────────
+    offline = create_offline_registry()
+    offline_results = asyncio.run(offline.run_all(timeout=10.0))
+    results.extend(offline_results)
+
+    # Config validation (extra offline check)
+    data_dir = Path.home() / ".sovyx"
+    config_file = data_dir / "system.yaml"
+    from sovyx.observability.health import CheckResult
+
+    if config_file.exists():
+        results.append(
+            CheckResult(
+                name="Config",
+                status=CheckStatus.GREEN,
+                message=f"system.yaml found ({config_file.stat().st_size} bytes)",
+            )
+        )
+    else:
+        results.append(
+            CheckResult(
+                name="Config",
+                status=CheckStatus.YELLOW,
+                message="system.yaml not found (using defaults)",
+            )
+        )
+
+    # ── Tier 2: Online checks (daemon required) ─────────────────────
     client = _get_client()
-    if not client.is_daemon_running():
-        console.print("[yellow]Daemon not running — limited checks only[/yellow]")
-        # Offline checks
-        data_dir = Path.home() / ".sovyx"
-        checks = {
-            "data_dir": data_dir.exists(),
-            "system.yaml": (data_dir / "system.yaml").exists(),
-        }
-        for name, ok in checks.items():
-            icon = "[green]✓[/green]" if ok else "[red]✗[/red]"
-            console.print(f"  {icon} {name}")
+    daemon_running = client.is_daemon_running()
+
+    if daemon_running:
+        try:
+            rpc_result = _run(client.call("doctor"))
+            if isinstance(rpc_result, dict):
+                for name, check_data in rpc_result.get("checks", {}).items():
+                    if isinstance(check_data, dict):
+                        status_str = check_data.get("status", "green")
+                        status = CheckStatus(status_str)
+                        results.append(
+                            CheckResult(
+                                name=name,
+                                status=status,
+                                message=check_data.get("message", ""),
+                                metadata=check_data.get("metadata"),
+                            )
+                        )
+                    else:
+                        ok = bool(check_data)
+                        results.append(
+                            CheckResult(
+                                name=name,
+                                status=CheckStatus.GREEN if ok else CheckStatus.RED,
+                                message="ok" if ok else "failed",
+                            )
+                        )
+        except Exception as exc:  # pragma: no cover
+            results.append(
+                CheckResult(
+                    name="Daemon RPC",
+                    status=CheckStatus.RED,
+                    message=f"RPC call failed: {exc}",
+                )
+            )
+
+    # ── Output ──────────────────────────────────────────────────────
+    if output_json:
+        import dataclasses
+
+        json_out = [dataclasses.asdict(r) for r in results]
+        for item in json_out:
+            item["status"] = item["status"].value
+        typer.echo(json.dumps(json_out, indent=2))
         return
 
-    try:
-        result = _run(client.call("doctor"))
-        if isinstance(result, dict):
-            checks = result.get("checks", {})
-            for name, ok in checks.items():
-                icon = "[green]✓[/green]" if ok else "[red]✗[/red]"
-                console.print(f"  {icon} {name}")
-    except Exception as e:  # pragma: no cover
-        console.print(f"[red]Error: {e}[/red]")
+    from rich.table import Table
+
+    status_icon = {
+        CheckStatus.GREEN: "[green]✓[/green]",
+        CheckStatus.YELLOW: "[yellow]⚠[/yellow]",
+        CheckStatus.RED: "[red]✗[/red]",
+    }
+
+    table = Table(title="Sovyx Health Check", show_lines=False)
+    table.add_column("", width=3)
+    table.add_column("Check", min_width=20)
+    table.add_column("Status", min_width=10)
+    table.add_column("Message")
+
+    for r in results:
+        icon = status_icon.get(r.status, "?")
+        status_style = {
+            CheckStatus.GREEN: "green",
+            CheckStatus.YELLOW: "yellow",
+            CheckStatus.RED: "red",
+        }.get(r.status, "white")
+        table.add_row(
+            icon,
+            r.name,
+            f"[{status_style}]{r.status.value}[/{status_style}]",
+            r.message,
+        )
+
+    console.print(table)
+
+    if not daemon_running:
+        console.print(
+            "\n[yellow]Daemon not running — showing offline checks only.[/yellow]"
+            "\n[dim]Start the daemon for full health checks "
+            "(database, brain, LLM, channels).[/dim]"
+        )
+
+    # Summary
+    greens = sum(1 for r in results if r.status == CheckStatus.GREEN)
+    yellows = sum(1 for r in results if r.status == CheckStatus.YELLOW)
+    reds = sum(1 for r in results if r.status == CheckStatus.RED)
+    total = len(results)
+    console.print(
+        f"\n[bold]{greens}[/bold]/{total} passed"
+        + (f", [yellow]{yellows} warnings[/yellow]" if yellows else "")
+        + (f", [red]{reds} critical[/red]" if reds else "")
+    )
 
 
 # Brain commands

@@ -17,6 +17,11 @@ import re
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
+    from typing import TextIO
 
 import typer
 from rich.console import Console
@@ -195,6 +200,28 @@ def _read_log_lines(
     return len(to_show)
 
 
+def _iter_new_lines(
+    file_handle: TextIO,
+) -> Generator[dict[str, object], None, None]:
+    """Yield parsed JSON log entries from a file handle.
+
+    Reads available lines from the current position. Returns when
+    no more lines are available (caller decides whether to retry).
+    Skips blank lines and invalid JSON silently.
+    """
+    while True:
+        line = file_handle.readline()
+        if not line:
+            return
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            yield json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+
 def _follow_log(  # pragma: no cover
     log_file: Path,
     *,
@@ -209,33 +236,18 @@ def _follow_log(  # pragma: no cover
             time.sleep(0.5)
 
     with open(log_file, encoding="utf-8") as f:
-        # Seek to end
         f.seek(0, 2)
         console.print("[dim]Following logs (Ctrl+C to stop)...[/dim]")
 
         try:
             while True:
-                line = f.readline()
-                if not line:
-                    time.sleep(0.1)
-                    continue
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if _matches(
-                    entry,
-                    level_min=level,
-                    filters=filters,
-                    since=None,
-                ):
-                    if raw_json:
-                        console.print(json.dumps(entry))
-                    else:
-                        console.print(_format_entry(entry))
+                for entry in _iter_new_lines(f):
+                    if _matches(entry, level_min=level, filters=filters, since=None):
+                        if raw_json:
+                            console.print(json.dumps(entry))
+                        else:
+                            console.print(_format_entry(entry))
+                time.sleep(0.1)
         except KeyboardInterrupt:
             console.print("\n[dim]Stopped following.[/dim]")
 
