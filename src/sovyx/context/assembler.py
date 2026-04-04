@@ -10,6 +10,8 @@ import dataclasses
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
+from sovyx.observability.metrics import get_metrics
+from sovyx.observability.tracing import get_tracer
 
 if TYPE_CHECKING:
     from sovyx.brain.service import BrainService
@@ -84,6 +86,32 @@ class ContextAssembler:
         Returns:
             AssembledContext ready for LLM call.
         """
+        tracer = get_tracer()
+        metrics = get_metrics()
+
+        with (
+            tracer.start_context_span(mind_id=str(mind_id)),
+            metrics.measure_latency(metrics.context_assembly_latency),
+        ):
+            return await self._assemble_inner(
+                mind_id,
+                current_message,
+                conversation_history,
+                person_name,
+                complexity,
+                context_window,
+            )
+
+    async def _assemble_inner(
+        self,
+        mind_id: MindId,
+        current_message: str,
+        conversation_history: list[dict[str, str]],
+        person_name: str | None,
+        complexity: float,
+        context_window: int,
+    ) -> AssembledContext:
+        """Inner assembly logic (separated for tracing/metrics wrapper)."""
         # 1. Budget allocation
         brain_results = await self._brain.recall(current_message, mind_id)
         concepts, episodes = brain_results

@@ -15,6 +15,8 @@ from sovyx.engine.errors import (
 )
 from sovyx.engine.types import CognitivePhase
 from sovyx.observability.logging import get_logger
+from sovyx.observability.metrics import get_metrics
+from sovyx.observability.tracing import get_tracer
 
 if TYPE_CHECKING:
     from sovyx.cognitive.act import ActPhase
@@ -84,14 +86,42 @@ class CognitiveLoop:
         NEVER raises an exception — always returns ActionResult.
         State machine always resets to IDLE via finally block.
         """
+        tracer = get_tracer()
+        metrics = get_metrics()
+
+        with (
+            tracer.start_span(
+                "cognitive.loop",
+                mind_id=str(request.mind_id),
+                conversation_id=str(request.conversation_id),
+            ),
+            metrics.measure_latency(metrics.cognitive_loop_latency),
+        ):
+            return await self._execute_loop(request, tracer, metrics)
+
+    async def _execute_loop(
+        self,
+        request: CognitiveRequest,
+        tracer: object,
+        metrics: object,
+    ) -> ActionResult:
+        """Execute the cognitive loop phases with tracing and metrics."""
+        from sovyx.observability.metrics import MetricsRegistry
+        from sovyx.observability.tracing import SovyxTracer
+
+        t = tracer if isinstance(tracer, SovyxTracer) else get_tracer()
+        m = metrics if isinstance(metrics, MetricsRegistry) else get_metrics()
+
         try:
             # ── PERCEIVE ──
             self._state.transition(CognitivePhase.PERCEIVING)
-            perception = await self._perceive.process(request.perception)
+            with t.start_cognitive_span("perceive", mind_id=str(request.mind_id)):
+                perception = await self._perceive.process(request.perception)
 
             # ── ATTEND ──
             self._state.transition(CognitivePhase.ATTENDING)
-            should_process = await self._attend.process(perception)
+            with t.start_cognitive_span("attend"):
+                should_process = await self._attend.process(perception)
 
             if not should_process:
                 logger.debug(
@@ -106,29 +136,37 @@ class CognitiveLoop:
 
             # ── THINK ──
             self._state.transition(CognitivePhase.THINKING)
-            llm_response, assembled_msgs = await self._think.process(
-                perception=perception,
-                mind_id=request.mind_id,
-                conversation_history=request.conversation_history,
-                person_name=request.person_name,
-            )
+            with t.start_cognitive_span("think"):
+                llm_response, assembled_msgs = await self._think.process(
+                    perception=perception,
+                    mind_id=request.mind_id,
+                    conversation_history=request.conversation_history,
+                    person_name=request.person_name,
+                )
 
             # ── ACT ──
             self._state.transition(CognitivePhase.ACTING)
-            action_result = await self._act.process(llm_response, assembled_msgs, perception)
+            with t.start_cognitive_span("act"):
+                action_result = await self._act.process(
+                    llm_response,
+                    assembled_msgs,
+                    perception,
+                )
 
             # ── REFLECT ──
             self._state.transition(CognitivePhase.REFLECTING)
-            try:
-                await self._reflect.process(
-                    perception=perception,
-                    response=llm_response,
-                    mind_id=request.mind_id,
-                    conversation_id=request.conversation_id,
-                )
-            except Exception:
-                # Reflect is best-effort — user already got response
-                logger.warning("reflect_phase_failed", exc_info=True)
+            with t.start_cognitive_span("reflect"):
+                try:
+                    await self._reflect.process(
+                        perception=perception,
+                        response=llm_response,
+                        mind_id=request.mind_id,
+                        conversation_id=request.conversation_id,
+                    )
+                except Exception:
+                    logger.warning("reflect_phase_failed", exc_info=True)
+
+            m.messages_processed.add(1, {"mind_id": str(request.mind_id)})
 
             logger.debug(
                 "cognitive_loop_complete",
@@ -140,6 +178,7 @@ class CognitiveLoop:
         except Exception as e:
             error_type = type(e).__name__
             user_message = _categorize_error(e)
+            m.errors.add(1, {"error_type": error_type, "module": "cognitive"})
             logger.exception(
                 "cognitive_loop_error",
                 error=str(e),
