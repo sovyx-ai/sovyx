@@ -61,3 +61,42 @@ class TestCircuitBreaker:
         cb.record_failure()
         # Only 1 failure after reset, not 3
         assert cb.state == "closed"
+
+    def test_full_recovery_cycle(self) -> None:
+        """CLOSED → OPEN → HALF_OPEN → CLOSED (full cycle)."""
+        from unittest.mock import patch
+
+        cb = CircuitBreaker(failure_threshold=2, recovery_timeout_s=10)
+
+        # CLOSED → OPEN
+        cb.record_failure()
+        cb.record_failure()
+        assert cb.state == "open"
+        assert not cb.can_call()
+
+        # OPEN → HALF_OPEN (after timeout)
+        with patch("time.monotonic", return_value=cb._last_failure_time + 11):
+            assert cb.state == "half_open"
+            assert cb.can_call()
+
+        # HALF_OPEN → CLOSED (on success)
+        cb.record_success()
+        assert cb.state == "closed"
+        assert cb.can_call()
+
+    def test_half_open_failure_reopens(self) -> None:
+        """HALF_OPEN → OPEN on another failure."""
+        from unittest.mock import patch
+
+        cb = CircuitBreaker(failure_threshold=2, recovery_timeout_s=10)
+        cb.record_failure()
+        cb.record_failure()
+
+        # Force half_open
+        with patch("time.monotonic", return_value=cb._last_failure_time + 11):
+            _ = cb.state  # trigger transition
+
+        # Fail again → back to open
+        cb.record_failure()
+        cb.record_failure()
+        assert cb.state == "open"
