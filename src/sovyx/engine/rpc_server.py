@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+from sovyx.engine.rpc_protocol import rpc_recv, rpc_send
 from sovyx.observability.logging import get_logger
 
 logger = get_logger(__name__)
@@ -70,22 +71,15 @@ class DaemonRPCServer:
     ) -> None:
         """Handle a single client connection."""
         try:
-            data = await asyncio.wait_for(reader.read(65536), timeout=10.0)
-            if not data:
-                return
-
-            request = json.loads(data.decode())
+            request = await rpc_recv(reader)
             response = await self._process_request(request)
-            writer.write(json.dumps(response).encode())
-            await writer.drain()
+            await rpc_send(writer, response)
         except TimeoutError:
             error_resp = self._error_response(None, -32000, "Request timeout")
-            writer.write(json.dumps(error_resp).encode())
-            await writer.drain()
-        except json.JSONDecodeError:
+            await rpc_send(writer, error_resp)
+        except (json.JSONDecodeError, asyncio.IncompleteReadError):
             error_resp = self._error_response(None, -32700, "Parse error")
-            writer.write(json.dumps(error_resp).encode())
-            await writer.drain()
+            await rpc_send(writer, error_resp)
         except Exception:
             logger.exception("rpc_connection_error")
         finally:
