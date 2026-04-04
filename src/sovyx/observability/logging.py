@@ -32,12 +32,6 @@ if TYPE_CHECKING:
 
 # ── Request Context (via structlog.contextvars) ─────────────────────────────
 
-# Keys managed by the request context.  Other modules may bind extra
-# keys — these are the ones we guarantee and clear on reset.
-_REQUEST_CONTEXT_KEYS: frozenset[str] = frozenset(
-    {"mind_id", "conversation_id", "request_id", "correlation_id"},
-)
-
 
 def bind_request_context(
     *,
