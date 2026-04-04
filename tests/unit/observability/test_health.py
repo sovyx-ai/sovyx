@@ -204,6 +204,14 @@ class TestDiskSpaceCheck:
     def test_name(self) -> None:
         assert DiskSpaceCheck().name == "Disk Space"
 
+    @pytest.mark.asyncio()
+    async def test_nonexistent_path_returns_red(self) -> None:
+        """DiskSpaceCheck with nonexistent path returns RED, not crash."""
+        check = DiskSpaceCheck(path=Path("/nonexistent/path/xyz"))
+        result = await check.check()
+        assert result.status == CheckStatus.RED
+        assert "Cannot check disk" in result.message
+
 
 # ── RAMCheck ────────────────────────────────────────────────────────────────
 
