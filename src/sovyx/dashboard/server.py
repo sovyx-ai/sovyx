@@ -294,11 +294,17 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
     async def get_logs(
         level: str | None = None,
         module: str | None = None,
+        search: str | None = None,
         limit: int = 100,
     ) -> JSONResponse:
-        """Query structured logs."""
-        # Placeholder — DASH-08
-        return JSONResponse({"entries": []})
+        """Query structured JSON logs with filters."""
+        from sovyx.dashboard.logs import query_logs
+
+        log_file = getattr(app.state, "log_file", None)
+        entries = query_logs(
+            log_file, level=level, module=module, search=search, limit=limit,
+        )
+        return JSONResponse({"entries": entries})
 
     @app.get("/api/settings", dependencies=[Depends(verify_token)])
     async def get_settings() -> JSONResponse:
@@ -434,6 +440,16 @@ class DashboardServer:
 
             self._app.state.status_collector = StatusCollector(self._registry)
             self._app.state.registry = self._registry
+
+        # Wire log file path for log queries
+        if self._config is not None:
+            from sovyx.engine.config import EngineConfig
+
+            try:
+                engine_config = EngineConfig()
+                self._app.state.log_file = engine_config.log.log_file
+            except Exception:  # noqa: BLE001
+                pass
 
         host = self._config.host if self._config else "127.0.0.1"
         port = self._config.port if self._config else 7777
