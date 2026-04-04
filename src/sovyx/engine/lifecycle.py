@@ -196,7 +196,7 @@ class LifecycleManager:
                 return
             config = engine_config.api
 
-        server = DashboardServer(config=config)
+        server = DashboardServer(config=config, registry=self._registry)
         await server.start()
         self._registry.register_instance(DashboardServer, server)
 
