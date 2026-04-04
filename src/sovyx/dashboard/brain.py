@@ -94,25 +94,33 @@ async def _get_relations(
 
         pool = db.get_brain_pool(MindId(mind_id_str))
 
-        # Single query: all relations where BOTH endpoints are in node_ids
-        placeholders = ",".join("?" for _ in node_ids)
+        # Batch query: relations where source OR target is in node_ids,
+        # then filter in Python to keep only edges where BOTH endpoints are in set.
+        # Chunked to stay within SQLite bind param limits (999 on older versions).
         ids_list = list(node_ids)
+        rows: list[Any] = []
+        chunk_size = 900  # Single IN clause, stays under 999
 
         async with pool.read() as conn:
-            cursor = await conn.execute(
-                f"SELECT source_id, target_id, relation_type, weight "  # noqa: S608  # nosec B608
-                f"FROM relations "
-                f"WHERE source_id IN ({placeholders}) "
-                f"AND target_id IN ({placeholders})",
-                ids_list + ids_list,
-            )
-            rows = await cursor.fetchall()
+            for i in range(0, len(ids_list), chunk_size):
+                chunk = ids_list[i : i + chunk_size]
+                placeholders = ",".join("?" for _ in chunk)
+                cursor = await conn.execute(
+                    f"SELECT source_id, target_id, relation_type, weight "  # noqa: S608  # nosec B608
+                    f"FROM relations "
+                    f"WHERE source_id IN ({placeholders})",
+                    chunk,
+                )
+                rows.extend(await cursor.fetchall())
 
         seen: set[str] = set()
         links: list[dict[str, Any]] = []
 
         for row in rows:
             src, tgt = str(row[0]), str(row[1])
+            # Filter: both endpoints must be in the visible node set
+            if tgt not in node_ids:
+                continue
             edge_key = f"{min(src, tgt)}:{max(src, tgt)}"
             if edge_key not in seen:
                 seen.add(edge_key)

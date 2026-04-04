@@ -75,7 +75,7 @@ async def list_conversations(
                 "channel": row[2],
                 "message_count": row[3],
                 "last_message_at": row[4],
-                "status": row[5] if len(row) > 5 else "active",
+                "status": row[5],
             }
             for row in rows
         ]
