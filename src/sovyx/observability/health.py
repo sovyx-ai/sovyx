@@ -542,7 +542,11 @@ class CostBudgetCheck(HealthCheck):
             )
         try:
             spend = self._get_spend_fn()
-            pct = (spend / self._daily_budget * 100) if self._daily_budget > 0 else 0
+            if self._daily_budget <= 0:
+                # Zero or negative budget: any spend is over budget
+                pct = 100.0 if spend > 0 else 0.0
+            else:
+                pct = spend / self._daily_budget * 100
             meta = {
                 "daily_spend": round(spend, 4),
                 "daily_budget": self._daily_budget,
