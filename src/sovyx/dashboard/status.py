@@ -85,8 +85,8 @@ class DashboardCounters:
             return self.llm_calls, self.llm_cost, self.tokens, self.messages_received
 
     def _maybe_reset(self) -> None:
-        """Reset counters at day boundary. Must be called under lock."""
-        today = time.strftime("%Y-%m-%d")
+        """Reset counters at UTC day boundary. Must be called under lock."""
+        today = time.strftime("%Y-%m-%d", time.gmtime())
         if self._day_key != today:
             self.llm_calls = 0
             self.llm_cost = 0.0

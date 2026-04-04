@@ -8,7 +8,6 @@ Event types are mapped to dashboard-friendly JSON payloads.
 
 from __future__ import annotations
 
-import time
 from typing import TYPE_CHECKING, Any
 
 from sovyx.observability.logging import get_logger
@@ -98,7 +97,7 @@ def _serialize_event(event: Event) -> dict[str, Any]:
 
     base: dict[str, Any] = {
         "type": type(event).__name__,
-        "timestamp": event.timestamp.isoformat() if event.timestamp else time.time(),
+        "timestamp": event.timestamp.isoformat(),
         "correlation_id": event.correlation_id,
     }
 
