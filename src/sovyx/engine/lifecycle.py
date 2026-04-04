@@ -200,6 +200,13 @@ class LifecycleManager:
         await server.start()
         self._registry.register_instance(DashboardServer, server)
 
+        # Wire WebSocket event bridge
+        if server.ws_manager is not None:
+            from sovyx.dashboard.events import DashboardEventBridge
+
+            bridge = DashboardEventBridge(server.ws_manager, self._events)
+            bridge.subscribe_all()
+
     async def _stop_dashboard(self) -> None:
         """Stop the dashboard server if running."""
         from sovyx.dashboard.server import DashboardServer
