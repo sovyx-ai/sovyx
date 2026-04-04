@@ -73,7 +73,7 @@ class CogLoopGate:
         Raises:
             CognitiveError: On timeout or queue full.
         """
-        future: asyncio.Future[ActionResult] = asyncio.get_event_loop().create_future()
+        future: asyncio.Future[ActionResult] = asyncio.get_running_loop().create_future()
         item = (
             request.perception.priority,
             next(self._counter),
