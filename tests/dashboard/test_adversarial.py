@@ -345,11 +345,12 @@ class TestEventSerializationAdversarial:
         assert result["type"] == "Event"
         assert result["data"] == {}
 
-    def test_event_with_none_timestamp(self) -> None:
-        """Event with None timestamp should use time.time() fallback."""
+    def test_event_timestamp_is_isoformat(self) -> None:
+        """Event timestamp is always an ISO format string."""
         from sovyx.dashboard.events import _serialize_event
         from sovyx.engine.events import EngineStarted
 
         event = EngineStarted()
         result = _serialize_event(event)
-        assert result["timestamp"] is not None
+        assert isinstance(result["timestamp"], str)
+        assert "T" in result["timestamp"]  # ISO 8601
