@@ -230,6 +230,17 @@ class BridgeManager:
 
         except Exception:
             logger.exception("handle_inbound_failed")
+            # Best-effort error response so user doesn't get silence
+            try:
+                error_out = OutboundMessage(
+                    channel_type=message.channel_type,
+                    target=message.chat_id,
+                    text="Something went wrong processing your message. Please try again.",
+                    reply_to=message.channel_message_id,
+                )
+                await self._send_response(error_out)
+            except Exception:
+                logger.warning("error_response_also_failed", exc_info=True)
 
     async def _send_response(self, outbound: OutboundMessage) -> None:
         """Find correct adapter and send."""

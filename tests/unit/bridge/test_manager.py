@@ -166,6 +166,21 @@ class TestErrorHandling:
         sent_text = adapter.send.call_args[0][1]
         assert "went wrong" in sent_text
 
+    async def test_unexpected_error_sends_error_response(self) -> None:
+        """When pipeline crashes unexpectedly, user still gets error message."""
+        gate = _mock_gate()
+        gate.submit = AsyncMock(side_effect=RuntimeError("unexpected DB failure"))
+        adapter = _mock_adapter()
+        mgr = _manager(gate=gate)
+        mgr.register_channel(adapter)
+
+        await mgr.handle_inbound(_inbound())
+
+        # Error response sent to user (not silence)
+        adapter.send.assert_called_once()
+        sent_text = adapter.send.call_args[0][1]
+        assert "went wrong" in sent_text.lower() or "try again" in sent_text.lower()
+
     async def test_send_failure_no_crash(self) -> None:
         adapter = _mock_adapter()
         adapter.send = AsyncMock(side_effect=RuntimeError("network error"))
