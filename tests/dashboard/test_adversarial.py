@@ -413,6 +413,46 @@ class TestBrainGraphLinksCap:
         await conn.close()
 
 
+class TestSettingsInputValidation:
+    """PUT /api/settings rejects malformed input gracefully."""
+
+    @pytest.fixture()
+    def _client(self) -> TestClient:
+        from sovyx.dashboard import server as srv
+
+        app = srv.create_app()
+        self._headers = {"Authorization": f"Bearer {srv._server_token}"}
+        return TestClient(app, raise_server_exceptions=False)
+
+    def test_invalid_json_body(self, _client: TestClient) -> None:
+        headers = {**self._headers, "Content-Type": "application/json"}
+        r = _client.put("/api/settings", content="not json", headers=headers)
+        assert r.status_code == 422
+        assert r.json()["ok"] is False
+
+    def test_array_body_rejected(self, _client: TestClient) -> None:
+        r = _client.put("/api/settings", json=[1, 2], headers=self._headers)
+        assert r.status_code == 422
+        assert "object" in r.json()["error"].lower()
+
+    def test_string_body_rejected(self, _client: TestClient) -> None:
+        r = _client.put("/api/settings", json="hello", headers=self._headers)
+        assert r.status_code == 422
+
+    def test_number_body_rejected(self, _client: TestClient) -> None:
+        r = _client.put("/api/settings", json=42, headers=self._headers)
+        assert r.status_code == 422
+
+    def test_null_body_rejected(self, _client: TestClient) -> None:
+        r = _client.put("/api/settings", json=None, headers=self._headers)
+        assert r.status_code == 422
+
+    def test_valid_dict_accepted(self, _client: TestClient) -> None:
+        r = _client.put("/api/settings", json={"log_level": "INFO"}, headers=self._headers)
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+
+
 class TestQueryParamValidation:
     """Ensure API routes reject invalid query params."""
 
