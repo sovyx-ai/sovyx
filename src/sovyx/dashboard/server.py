@@ -311,7 +311,19 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
         """Update mutable settings (e.g. log_level)."""
         from sovyx.dashboard.settings import apply_settings
 
-        body = await request.json()
+        try:
+            body = await request.json()
+        except (ValueError, UnicodeDecodeError):
+            return JSONResponse(
+                {"ok": False, "error": "Invalid JSON body"},
+                status_code=422,
+            )
+
+        if not isinstance(body, dict):
+            return JSONResponse(
+                {"ok": False, "error": "Expected JSON object"},
+                status_code=422,
+            )
         config = getattr(app.state, "engine_config", None)
         if config is None:
             from sovyx.engine.config import EngineConfig
