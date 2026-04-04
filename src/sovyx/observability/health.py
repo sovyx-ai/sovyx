@@ -160,7 +160,14 @@ class DiskSpaceCheck(HealthCheck):
         return "Disk Space"
 
     async def check(self) -> CheckResult:
-        usage = shutil.disk_usage(self._path)
+        try:
+            usage = shutil.disk_usage(self._path)
+        except (FileNotFoundError, OSError) as exc:
+            return CheckResult(
+                name=self.name,
+                status=CheckStatus.RED,
+                message=f"Cannot check disk: {exc}",
+            )
         free_gb = usage.free / (1024**3)
         meta = {
             "free_gb": round(free_gb, 2),
