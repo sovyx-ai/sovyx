@@ -28,11 +28,11 @@ CONV = ConversationId("conv1")
 @pytest.fixture
 async def pool(tmp_path: Path) -> DatabasePool:
     """Pool with brain schema applied."""
-    p = DatabasePool(db_path=tmp_path / "brain.db", read_pool_size=1)
+    p = DatabasePool(db_path=tmp_path / "brain.db", read_pool_size=1, load_extensions=["vec0"])
     await p.initialize()
     runner = MigrationRunner(p)
     await runner.initialize()
-    await runner.run_migrations(get_brain_migrations(has_sqlite_vec=False))
+    await runner.run_migrations(get_brain_migrations(has_sqlite_vec=p.has_sqlite_vec))
     yield p  # type: ignore[misc]
     await p.close()
 
@@ -145,9 +145,19 @@ class TestGetRecent:
 class TestSearchByEmbedding:
     """Vector search."""
 
-    async def test_raises_without_sqlite_vec(self, repo: EpisodeRepository) -> None:
+    async def test_raises_without_sqlite_vec(self, tmp_path: Path) -> None:
+        """SearchError when sqlite-vec not loaded."""
+        no_vec_pool = DatabasePool(db_path=tmp_path / "no_vec.db", read_pool_size=1)
+        await no_vec_pool.initialize()
+        runner = MigrationRunner(no_vec_pool)
+        await runner.initialize()
+        await runner.run_migrations(get_brain_migrations(has_sqlite_vec=False))
+        mock_engine = AsyncMock()
+        mock_engine.has_embeddings = False
+        repo = EpisodeRepository(no_vec_pool, mock_engine)
         with pytest.raises(SearchError, match="sqlite-vec"):
             await repo.search_by_embedding([0.1] * 384, MIND)
+        await no_vec_pool.close()
 
 
 class TestCreateWithEmbedding:
@@ -234,26 +244,14 @@ class TestSerialization:
 
 
 @pytest.fixture
-async def vec_pool(tmp_path: Path) -> DatabasePool:
-    """Pool with sqlite-vec enabled (skips if unavailable)."""
-    p = DatabasePool(db_path=tmp_path / "brain_vec.db", read_pool_size=1)
-    await p.initialize()
-    if not p.has_sqlite_vec:
-        await p.close()
+def vec_repo(pool: DatabasePool) -> EpisodeRepository:
+    """Repository with has_embeddings=True for sqlite-vec tests."""
+    if not pool.has_sqlite_vec:
         pytest.skip("sqlite-vec not available")
-    runner = MigrationRunner(p)
-    await runner.initialize()
-    await runner.run_migrations(get_brain_migrations(has_sqlite_vec=True))
-    yield p  # type: ignore[misc]
-    await p.close()
-
-
-@pytest.fixture
-def vec_repo(vec_pool: DatabasePool) -> EpisodeRepository:
     mock_engine = AsyncMock()
     mock_engine.has_embeddings = True
     mock_engine.encode = AsyncMock(return_value=[0.1] * 384)
-    return EpisodeRepository(vec_pool, mock_engine)
+    return EpisodeRepository(pool, mock_engine)
 
 
 class TestSqliteVecOperations:
@@ -279,7 +277,7 @@ class TestSqliteVecOperations:
         query_vec = [0.1] * 384
         results = await vec_repo.search_by_embedding(
             query_embedding=query_vec,
-            mind_id=MindId("test-mind"),
+            mind_id=MIND,
             limit=5,
         )
         assert isinstance(results, list)
