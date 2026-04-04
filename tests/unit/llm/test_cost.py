@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from sovyx.llm.cost import CostGuard
@@ -67,3 +69,45 @@ class TestBudgetQueries:
         g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
         assert g.get_conversation_spend("unknown") == 0.0
         assert g.get_conversation_remaining("unknown") == 2.0
+
+
+class TestDailyReset:
+    """Daily reset clears spend at midnight UTC."""
+
+    def test_reset_clears_daily_spend(self) -> None:
+        from datetime import timedelta
+        from unittest.mock import patch
+
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        g.record(5.0, "model", "conv1")
+        assert g.get_daily_spend() == 5.0
+
+        # Simulate next day
+        tomorrow = datetime.now(tz=UTC) + timedelta(days=1)
+        with patch("sovyx.llm.cost.datetime") as mock_dt:
+            mock_dt.now.return_value = tomorrow
+            mock_dt.side_effect = lambda *a, **k: datetime(*a, **k)
+            assert g.get_daily_spend() == 0.0
+
+    def test_reset_clears_conversation_spend(self) -> None:
+        from datetime import timedelta
+        from unittest.mock import patch
+
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        g.record(1.0, "model", "conv1")
+        assert g.get_conversation_spend("conv1") == 1.0
+
+        tomorrow = datetime.now(tz=UTC) + timedelta(days=1)
+        with patch("sovyx.llm.cost.datetime") as mock_dt:
+            mock_dt.now.return_value = tomorrow
+            mock_dt.side_effect = lambda *a, **k: datetime(*a, **k)
+            # After reset, can_afford should succeed for same conv
+            assert g.can_afford(2.0, "conv1") is True
+
+    def test_no_reset_same_day(self) -> None:
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        g.record(5.0, "model", "conv1")
+        # Calling _maybe_reset multiple times same day
+        g._maybe_reset()
+        g._maybe_reset()
+        assert g.get_daily_spend() == 5.0
