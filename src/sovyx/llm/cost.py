@@ -86,13 +86,15 @@ class CostGuard:
         if self._system_pool is None or not self._dirty:
             return
 
-        state = json.dumps({
-            "date": str(self._last_reset),
-            "daily_spend": round(self._daily_spend, 8),
-            "conversation_spend": {
-                k: round(v, 8) for k, v in self._conversation_spend.items()
-            },
-        })
+        state = json.dumps(
+            {
+                "date": str(self._last_reset),
+                "daily_spend": round(self._daily_spend, 8),
+                "conversation_spend": {
+                    k: round(v, 8) for k, v in self._conversation_spend.items()
+                },
+            }
+        )
 
         try:
             async with self._system_pool.write() as conn:

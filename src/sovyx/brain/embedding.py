@@ -197,10 +197,14 @@ class EmbeddingEngine:
                 downloader = ModelDownloader(self._model_dir)
 
                 model_path = await downloader.ensure_model(
-                    MODEL_FILENAME, MODEL_URL, expected_sha256=MODEL_SHA256,
+                    MODEL_FILENAME,
+                    MODEL_URL,
+                    expected_sha256=MODEL_SHA256,
                 )
                 tokenizer_path = await downloader.ensure_model(
-                    TOKENIZER_FILENAME, TOKENIZER_URL, expected_sha256=TOKENIZER_SHA256,
+                    TOKENIZER_FILENAME,
+                    TOKENIZER_URL,
+                    expected_sha256=TOKENIZER_SHA256,
                 )
 
                 self._load_model(model_path, tokenizer_path)

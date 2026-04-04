@@ -50,7 +50,7 @@ jobs:
       - name: Install dependencies
         run: uv sync --dev
       - name: Bandit scan
-        run: uv run bandit -r src/ -c pyproject.toml || uv run bandit -r src/
+        run: uv run bandit -r src/sovyx/ --configfile pyproject.toml
 
   test:
     name: Test (Python ${{ matrix.python-version }})

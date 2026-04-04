@@ -118,8 +118,12 @@ class TokenBudgetManager:
         # Normalise: MIN floors can cause overflow on small windows.
         # Shrink flex slots (concepts, episodes, conversation) proportionally.
         total_allocated = (
-            raw_system + raw_temporal + raw_response
-            + raw_conversation + raw_concepts + raw_episodes
+            raw_system
+            + raw_temporal
+            + raw_response
+            + raw_conversation
+            + raw_concepts
+            + raw_episodes
         )
         if total_allocated > context_window:
             overflow = total_allocated - context_window
