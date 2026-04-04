@@ -57,14 +57,18 @@ class LLMConfig(BaseModel):
 
 
 class BrainConfig(BaseModel):
-    """Brain memory system configuration."""
+    """Brain memory system configuration.
 
-    consolidation_interval_hours: int = 6
+    All numerical fields are range-validated to prevent silent misconfiguration.
+    Invalid values raise ``ValidationError`` at startup (fail-fast).
+    """
+
+    consolidation_interval_hours: int = Field(default=6, ge=1, le=168)
     dream_time: str = "02:00"
-    max_concepts: int = 50000
+    max_concepts: int = Field(default=50000, ge=100, le=1_000_000)
     forgetting_enabled: bool = True
-    decay_rate: float = 0.1
-    min_strength: float = 0.01
+    decay_rate: float = Field(default=0.1, ge=0.0, le=1.0)
+    min_strength: float = Field(default=0.01, ge=0.0, le=1.0)
 
 
 class TelegramChannelConfig(BaseModel):
