@@ -138,6 +138,10 @@ class AnthropicProvider:
                     if block.get("type") == "text":
                         content += block.get("text", "")
 
+                if not content.strip():
+                    error_msg = f"Anthropic returned empty content (model={model})"
+                    raise LLMError(error_msg)
+
                 usage = data.get("usage", {})
                 tokens_in = usage.get("input_tokens", 0)
                 tokens_out = usage.get("output_tokens", 0)

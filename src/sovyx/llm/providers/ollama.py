@@ -109,6 +109,10 @@ class OllamaProvider:
                 message = data.get("message", {})
                 content = message.get("content", "")
 
+                if not content.strip():
+                    error_msg = f"Ollama returned empty content (model={model})"
+                    raise LLMError(error_msg)
+
                 tokens_in = data.get("prompt_eval_count", 0)
                 tokens_out = data.get("eval_count", 0)
 

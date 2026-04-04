@@ -119,6 +119,10 @@ class OpenAIProvider:
                 content = choice.get("message", {}).get("content", "")
                 finish_reason = choice.get("finish_reason", "stop")
 
+                if not content.strip():
+                    error_msg = f"OpenAI returned empty content (model={model})"
+                    raise LLMError(error_msg)
+
                 usage = data.get("usage", {})
                 tokens_in = usage.get("prompt_tokens", 0)
                 tokens_out = usage.get("completion_tokens", 0)
