@@ -31,7 +31,9 @@ async def get_brain_graph(
     nodes = await _get_concepts(registry, limit=limit)
     node_ids = {n["id"] for n in nodes}
 
-    links = await _get_relations(registry, node_ids)
+    # Cap links at 3x nodes to keep response size bounded
+    max_links = limit * 3
+    links = await _get_relations(registry, node_ids, max_links=max_links)
 
     return {"nodes": nodes, "links": links}
 
@@ -72,6 +74,7 @@ async def _get_concepts(
 async def _get_relations(
     registry: ServiceRegistry,
     node_ids: set[str],
+    max_links: int = 600,
 ) -> list[dict[str, Any]]:
     """Get relations between the given concept IDs.
 
@@ -117,6 +120,8 @@ async def _get_relations(
         links: list[dict[str, Any]] = []
 
         for row in rows:
+            if len(links) >= max_links:
+                break
             src, tgt = str(row[0]), str(row[1])
             # Filter: both endpoints must be in the visible node set
             if tgt not in node_ids:
