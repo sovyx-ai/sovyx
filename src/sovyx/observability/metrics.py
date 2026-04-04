@@ -9,7 +9,8 @@ Usage::
     from sovyx.observability.metrics import get_metrics
 
     m = get_metrics()
-    m.messages_processed.add(1, {"channel": "telegram"})
+    m.messages_received.add(1, {"channel": "telegram"})
+    m.messages_processed.add(1, {"mind_id": "nyx"})
 
     with m.measure_latency(m.llm_response_latency):
         response = await provider.generate(...)
@@ -58,7 +59,8 @@ class MetricsRegistry:
     and reused for the lifetime of the application.
 
     Attributes (Counters):
-        messages_processed: Total messages processed by the cognitive loop.
+        messages_received: Messages received from channels (label: channel).
+        messages_processed: Messages fully processed through cognitive loop (label: mind_id).
         llm_calls: Total LLM provider calls (label: provider, model).
         errors: Total errors by category (label: error_type, module).
         tokens_used: Total tokens consumed (label: direction=in|out, provider).
