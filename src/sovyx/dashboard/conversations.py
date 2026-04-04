@@ -30,15 +30,11 @@ async def _get_conversation_pool(registry: ServiceRegistry) -> DatabasePool | No
     db = await registry.resolve(DatabaseManager)
     # Conversations are per-mind; use first available mind
     try:
-        from sovyx.engine.bootstrap import MindManager
+        from sovyx.dashboard._shared import get_active_mind_id
+        from sovyx.engine.types import MindId
 
-        if registry.is_registered(MindManager):
-            manager = await registry.resolve(MindManager)
-            minds = manager.get_active_minds()
-            if minds:
-                from sovyx.engine.types import MindId
-
-                return db.get_conversation_pool(MindId(minds[0]))
+        mind_id = await get_active_mind_id(registry)
+        return db.get_conversation_pool(MindId(mind_id))
     except Exception:  # noqa: BLE001
         logger.debug("_get_conversation_pool_failed")
 

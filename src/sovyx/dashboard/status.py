@@ -152,28 +152,27 @@ class StatusCollector:
 
     async def _get_memory_stats(self) -> tuple[int, int]:
         """Get concept and episode counts from brain repositories."""
+        from sovyx.engine.types import MindId
+
         concepts = 0
         episodes = 0
+        mind_id = MindId(await self._get_active_mind_id())
 
         try:
             from sovyx.brain.concept_repo import ConceptRepository
-            from sovyx.engine.types import MindId
 
             if self._registry.is_registered(ConceptRepository):
                 c_repo = await self._registry.resolve(ConceptRepository)
-                mind_id = MindId(await self._get_active_mind_id())
                 concepts = await c_repo.count(mind_id)
         except Exception:  # noqa: BLE001
             logger.debug("status_concepts_failed")
 
         try:
             from sovyx.brain.episode_repo import EpisodeRepository
-            from sovyx.engine.types import MindId as MindId2
 
             if self._registry.is_registered(EpisodeRepository):
                 e_repo = await self._registry.resolve(EpisodeRepository)
-                mind_id2 = MindId2(await self._get_active_mind_id())
-                episodes = await e_repo.count(mind_id2)
+                episodes = await e_repo.count(mind_id)
         except Exception:  # noqa: BLE001
             logger.debug("status_episodes_failed")
 
@@ -191,14 +190,6 @@ class StatusCollector:
 
     async def _get_active_mind_id(self) -> str:
         """Get the first active mind ID for repository queries."""
-        try:
-            from sovyx.engine.bootstrap import MindManager
+        from sovyx.dashboard._shared import get_active_mind_id
 
-            if self._registry.is_registered(MindManager):
-                manager = await self._registry.resolve(MindManager)
-                minds = manager.get_active_minds()
-                if minds:
-                    return minds[0]
-        except Exception:  # noqa: BLE001
-            logger.debug("_get_active_mind_id_failed")
-        return "default"
+        return await get_active_mind_id(self._registry)
