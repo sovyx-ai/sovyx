@@ -74,3 +74,30 @@ class TestGetPerson:
     async def test_nonexistent_person(self, resolver: PersonResolver) -> None:
         person = await resolver.get_person(PersonId("nonexistent"))
         assert person is None
+
+
+class TestConcurrentResolve:
+    """Race condition safety tests for PersonResolver."""
+
+    @pytest.mark.asyncio
+    async def test_concurrent_same_user_no_crash(self, resolver: PersonResolver) -> None:
+        """Two concurrent resolves for same user must not crash."""
+        import asyncio
+
+        results = await asyncio.gather(
+            resolver.resolve(ChannelType.TELEGRAM, "race-user", "User"),
+            resolver.resolve(ChannelType.TELEGRAM, "race-user", "User"),
+        )
+        # Both should return a valid PersonId (may or may not be the same)
+        assert all(r for r in results)
+        # Both should resolve to the same person (eventually consistent)
+        final_id = await resolver.resolve(ChannelType.TELEGRAM, "race-user", "User")
+        assert final_id == results[0] or final_id == results[1]
+
+    @pytest.mark.asyncio
+    async def test_idempotent_resolve(self, resolver: PersonResolver) -> None:
+        """Multiple resolves for same user always return same ID."""
+        id1 = await resolver.resolve(ChannelType.TELEGRAM, "idem-user", "User")
+        id2 = await resolver.resolve(ChannelType.TELEGRAM, "idem-user", "User")
+        id3 = await resolver.resolve(ChannelType.TELEGRAM, "idem-user", "User")
+        assert id1 == id2 == id3

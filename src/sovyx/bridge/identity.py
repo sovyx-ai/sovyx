@@ -54,7 +54,10 @@ class PersonResolver:
         if row is not None:
             return PersonId(str(row[0]))
 
-        # Create new person + mapping
+        # Create new person + mapping (idempotent — race-safe).
+        # Two concurrent calls for the same user may both reach this point.
+        # INSERT OR IGNORE ensures only the first succeeds; the re-fetch
+        # below returns the winner's person_id to both callers.
         person_id = PersonId(str(uuid.uuid4()))
         mapping_id = str(uuid.uuid4())
         name = display_name or channel_user_id
@@ -65,18 +68,30 @@ class PersonResolver:
                 (person_id, name, display_name or None),
             )
             await conn.execute(
-                """INSERT INTO channel_mappings
+                """INSERT OR IGNORE INTO channel_mappings
                    (id, person_id, channel_type, channel_user_id)
                    VALUES (?, ?, ?, ?)""",
                 (mapping_id, person_id, channel_type.value, channel_user_id),
             )
 
+        # Re-fetch to get the actual winner's person_id (may differ
+        # from ours if a concurrent call inserted first).
+        async with self._pool.read() as conn:
+            cursor = await conn.execute(
+                """SELECT p.id FROM persons p
+                   JOIN channel_mappings cm ON cm.person_id = p.id
+                   WHERE cm.channel_type = ? AND cm.channel_user_id = ?""",
+                (channel_type.value, channel_user_id),
+            )
+            row = await cursor.fetchone()
+
+        resolved_id = PersonId(str(row[0])) if row else person_id
         logger.info(
             "person_created",
-            person_id=person_id,
+            person_id=resolved_id,
             channel=channel_type.value,
         )
-        return person_id
+        return resolved_id
 
     async def get_person(self, person_id: PersonId) -> dict[str, object] | None:
         """Get person details by ID."""
