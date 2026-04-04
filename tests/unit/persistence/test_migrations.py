@@ -273,7 +273,7 @@ class TestSplitSql:
         assert result == ["CREATE TABLE t (id INTEGER)"]
 
     def test_multiple_statements(self) -> None:
-        sql = "CREATE TABLE a (id INTEGER); CREATE TABLE b (id INTEGER);"
+        sql = "CREATE TABLE a (id INTEGER);\nCREATE TABLE b (id INTEGER);"
         result = MigrationRunner._split_sql(sql)
         assert len(result) == 2
         assert "a" in result[0]

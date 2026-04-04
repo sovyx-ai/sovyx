@@ -178,8 +178,9 @@ class MigrationRunner:
     def _split_sql(sql: str) -> list[str]:
         """Split multi-statement SQL into individual statements.
 
-        Strips comments and empty lines, splits on ``;``.
-        Each returned string is a single executable SQL statement.
+        Handles compound statements (CREATE TRIGGER ... BEGIN ... END;)
+        by tracking BEGIN/END nesting depth so semicolons inside
+        trigger bodies are not treated as statement terminators.
 
         Note:
             This is a deliberate replacement for ``executescript()``
@@ -187,15 +188,45 @@ class MigrationRunner:
             guarantees.  See P18 / sovyx-imm-d4-persistence §4.
         """
         statements: list[str] = []
-        for stmt in sql.split(";"):
-            # Strip comment lines before checking content
-            lines = [
-                line for line in stmt.strip().splitlines()
-                if not line.strip().startswith("--")
-            ]
-            cleaned = "\n".join(lines).strip()
-            if cleaned:
-                statements.append(cleaned)
+        current: list[str] = []
+        depth = 0
+
+        for line in sql.splitlines():
+            stripped = line.strip()
+            # Skip pure comment lines and empty lines
+            if stripped.startswith("--") or not stripped:
+                continue
+
+            upper = stripped.upper()
+
+            # Track BEGIN/END nesting for triggers/blocks.
+            # BEGIN can appear at the end of a TRIGGER declaration line
+            # e.g. "CREATE TRIGGER ... AFTER INSERT ON t BEGIN"
+            # END appears as "END;" on its own line.
+            if " BEGIN" in f" {upper}" and not upper.startswith("END"):
+                # Check if the line contains BEGIN as a keyword
+                # (not part of another word)
+                words = upper.split()
+                if "BEGIN" in words:
+                    depth += 1
+
+            current.append(line)
+
+            if upper.startswith("END") and depth > 0:
+                depth -= 1
+
+            # Statement ends at ; only when NOT inside a BEGIN...END block
+            if stripped.endswith(";") and depth == 0:
+                stmt = "\n".join(current).strip().rstrip(";").strip()
+                if stmt:
+                    statements.append(stmt)
+                current = []
+
+        # Handle trailing content without semicolon
+        remaining = "\n".join(current).strip().rstrip(";").strip()
+        if remaining:
+            statements.append(remaining)
+
         return statements
 
     async def _apply(self, migration: Migration) -> None:
