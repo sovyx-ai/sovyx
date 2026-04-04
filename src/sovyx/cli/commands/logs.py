@@ -100,10 +100,13 @@ def _matches(
         if isinstance(ts, str) and ts:
             try:
                 entry_time = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                # Assume UTC for naive timestamps (no timezone info)
+                if entry_time.tzinfo is None:
+                    entry_time = entry_time.replace(tzinfo=UTC)
                 if entry_time < since:
                     return False
-            except ValueError:
-                pass  # Can't parse → include it
+            except (ValueError, TypeError):
+                pass  # Can't parse or compare → include it
 
     # Key=value filters
     for key, value in filters.items():
