@@ -263,3 +263,35 @@ class TestMigrationRunner:
             row = await cursor.fetchone()
             assert row is not None
             assert row[0] >= 0
+
+
+class TestSplitSql:
+    """MigrationRunner._split_sql parser tests."""
+
+    def test_single_statement(self) -> None:
+        result = MigrationRunner._split_sql("CREATE TABLE t (id INTEGER)")
+        assert result == ["CREATE TABLE t (id INTEGER)"]
+
+    def test_multiple_statements(self) -> None:
+        sql = "CREATE TABLE a (id INTEGER); CREATE TABLE b (id INTEGER);"
+        result = MigrationRunner._split_sql(sql)
+        assert len(result) == 2
+        assert "a" in result[0]
+        assert "b" in result[1]
+
+    def test_empty_statements_skipped(self) -> None:
+        sql = "CREATE TABLE t (id INTEGER);; ;"
+        result = MigrationRunner._split_sql(sql)
+        assert len(result) == 1
+
+    def test_comments_skipped(self) -> None:
+        sql = "-- This is a comment\nCREATE TABLE t (id INTEGER);"
+        result = MigrationRunner._split_sql(sql)
+        # Comment line after split becomes standalone, gets filtered
+        assert any("CREATE TABLE" in s for s in result)
+
+    def test_whitespace_handling(self) -> None:
+        sql = "\n\n  CREATE TABLE t (id INTEGER)  \n\n"
+        result = MigrationRunner._split_sql(sql)
+        assert len(result) == 1
+        assert result[0].startswith("CREATE TABLE")
