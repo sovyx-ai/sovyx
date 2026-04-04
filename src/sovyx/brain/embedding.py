@@ -172,34 +172,44 @@ class EmbeddingEngine:
         self._tokenizer: Any = None
         self._has_embeddings = False
         self._loaded = False
+        self._init_lock = asyncio.Lock()
 
     async def ensure_loaded(self) -> None:
         """Ensure model is loaded. Downloads if necessary.
 
+        Uses double-checked locking to prevent concurrent downloads:
+        fast path (no lock) for already-loaded case, lock for first init.
+
         If the model is unavailable (no internet, ONNX fails),
         sets has_embeddings=False for FTS5 fallback. Does NOT raise.
         """
+        # Fast path: already loaded
         if self._loaded:
             return
 
-        try:
-            downloader = ModelDownloader(self._model_dir)
+        async with self._init_lock:
+            # Double-check after acquiring lock
+            if self._loaded:
+                return
 
-            model_path = await downloader.ensure_model(MODEL_FILENAME, MODEL_URL)
-            tokenizer_path = await downloader.ensure_model(TOKENIZER_FILENAME, TOKENIZER_URL)
+            try:
+                downloader = ModelDownloader(self._model_dir)
 
-            self._load_model(model_path, tokenizer_path)
-            self._has_embeddings = True
-            self._loaded = True
-            logger.info("embedding_engine_loaded", model_dir=str(self._model_dir))
+                model_path = await downloader.ensure_model(MODEL_FILENAME, MODEL_URL)
+                tokenizer_path = await downloader.ensure_model(TOKENIZER_FILENAME, TOKENIZER_URL)
 
-        except Exception:
-            logger.warning(
-                "embedding_model_unavailable_fts5_fallback",
-                exc_info=True,
-            )
-            self._has_embeddings = False
-            self._loaded = True
+                self._load_model(model_path, tokenizer_path)
+                self._has_embeddings = True
+                self._loaded = True
+                logger.info("embedding_engine_loaded", model_dir=str(self._model_dir))
+
+            except Exception:
+                logger.warning(
+                    "embedding_model_unavailable_fts5_fallback",
+                    exc_info=True,
+                )
+                self._has_embeddings = False
+                self._loaded = True
 
     def _load_model(self, model_path: Path, tokenizer_path: Path) -> None:
         """Load ONNX session and tokenizer."""
@@ -279,8 +289,9 @@ class EmbeddingEngine:
 
     def _encode_sync(self, texts: list[str]) -> list[list[float]]:
         """Synchronous encoding (runs in thread pool)."""
-        assert self._tokenizer is not None  # noqa: S101
-        assert self._session is not None  # noqa: S101
+        if self._tokenizer is None or self._session is None:
+            msg = "EmbeddingEngine not loaded — call ensure_loaded() first"
+            raise RuntimeError(msg)
 
         encoded = self._tokenizer.encode_batch(texts)
 
