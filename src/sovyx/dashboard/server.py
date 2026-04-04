@@ -26,6 +26,7 @@ from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
     from sovyx.engine.config import APIConfig
+    from sovyx.engine.registry import ServiceRegistry
 
 logger = get_logger(__name__)
 
@@ -182,10 +183,20 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
     @app.get("/api/status", dependencies=[Depends(verify_token)])
     async def get_status() -> JSONResponse:
         """System status overview."""
-        # Placeholder — will be wired to real services in DASH-03
+        collector = getattr(app.state, "status_collector", None)
+        if collector is not None:
+            from sovyx.dashboard.status import StatusCollector
+
+            assert isinstance(collector, StatusCollector)
+            snapshot = await collector.collect()
+            return JSONResponse(snapshot.to_dict())
+
+        # Fallback when no registry is wired (e.g., tests, standalone)
+        from sovyx import __version__
+
         return JSONResponse(
             {
-                "version": "0.1.0",
+                "version": __version__,
                 "uptime_seconds": 0,
                 "mind_name": "sovyx",
                 "active_conversations": 0,
@@ -326,8 +337,13 @@ class DashboardServer:
     Integrates with Engine startup/shutdown.
     """
 
-    def __init__(self, config: APIConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: APIConfig | None = None,
+        registry: ServiceRegistry | None = None,
+    ) -> None:
         self._config = config
+        self._registry = registry
         self._server: Any | None = None
         self._app: FastAPI | None = None
 
@@ -347,6 +363,12 @@ class DashboardServer:
         import uvicorn
 
         self._app = create_app(self._config)
+
+        # Wire StatusCollector if registry available
+        if self._registry is not None:
+            from sovyx.dashboard.status import StatusCollector
+
+            self._app.state.status_collector = StatusCollector(self._registry)
 
         host = self._config.host if self._config else "127.0.0.1"
         port = self._config.port if self._config else 7777
