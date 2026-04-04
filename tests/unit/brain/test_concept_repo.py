@@ -26,11 +26,11 @@ MIND = MindId("aria")
 @pytest.fixture
 async def pool(tmp_path: Path) -> DatabasePool:
     """Pool with brain schema applied."""
-    p = DatabasePool(db_path=tmp_path / "brain.db", read_pool_size=1)
+    p = DatabasePool(db_path=tmp_path / "brain.db", read_pool_size=1, load_extensions=["vec0"])
     await p.initialize()
     runner = MigrationRunner(p)
     await runner.initialize()
-    await runner.run_migrations(get_brain_migrations(has_sqlite_vec=False))
+    await runner.run_migrations(get_brain_migrations(has_sqlite_vec=p.has_sqlite_vec))
     yield p  # type: ignore[misc]
     await p.close()
 
@@ -181,10 +181,19 @@ class TestSearchByText:
 class TestSearchByEmbedding:
     """Vector search."""
 
-    async def test_raises_without_sqlite_vec(self, repo: ConceptRepository) -> None:
+    async def test_raises_without_sqlite_vec(self, tmp_path: Path) -> None:
         """SearchError when sqlite-vec not available."""
+        no_vec_pool = DatabasePool(db_path=tmp_path / "no_vec.db", read_pool_size=1)
+        await no_vec_pool.initialize()
+        runner = MigrationRunner(no_vec_pool)
+        await runner.initialize()
+        await runner.run_migrations(get_brain_migrations(has_sqlite_vec=False))
+        mock_engine = AsyncMock()
+        mock_engine.has_embeddings = False
+        repo = ConceptRepository(no_vec_pool, mock_engine)
         with pytest.raises(SearchError, match="sqlite-vec"):
             await repo.search_by_embedding([0.1] * 384, MIND)
+        await no_vec_pool.close()
 
 
 class TestCreateWithEmbedding:
@@ -277,6 +286,44 @@ class TestMetadataSerialization:
         fetched = await repo.get(cid)
         assert fetched is not None
         assert fetched.category == ConceptCategory.PREFERENCE
+
+
+class TestVecSearch:
+    """Vector similarity search (requires sqlite-vec)."""
+
+    async def test_search_by_embedding(self, pool: DatabasePool) -> None:
+        """Lines 203-221: vector similarity search."""
+        if not pool.has_sqlite_vec:
+            pytest.skip("sqlite-vec not available")
+
+        mock_engine = AsyncMock()
+        mock_engine.has_embeddings = True
+        mock_engine.encode = AsyncMock(return_value=[0.1] * 384)
+
+        repo = ConceptRepository(pool, mock_engine)
+        for i in range(3):
+            c = _make_concept(f"vec-concept-{i}", content=f"content {i}")
+            await repo.create(c)
+
+        results = await repo.search_by_embedding([0.1] * 384, MIND, limit=5)
+        assert len(results) > 0
+        for concept, distance in results:
+            assert isinstance(distance, float)
+
+    async def test_delete_removes_embedding(self, pool: DatabasePool) -> None:
+        """Line 164→169: DELETE from concept_embeddings."""
+        if not pool.has_sqlite_vec:
+            pytest.skip("sqlite-vec not available")
+
+        mock_engine = AsyncMock()
+        mock_engine.has_embeddings = True
+        mock_engine.encode = AsyncMock(return_value=[0.2] * 384)
+
+        repo = ConceptRepository(pool, mock_engine)
+        c = _make_concept("deletable-vec")
+        cid = await repo.create(c)
+        await repo.delete(cid)
+        assert await repo.get(cid) is None
 
 
 class TestFTS5Adversarial:

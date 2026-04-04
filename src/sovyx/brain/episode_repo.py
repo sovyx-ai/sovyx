@@ -148,8 +148,8 @@ class EpisodeRepository:
                 JOIN episodes e ON e.id = ee.episode_id
                 WHERE e.mind_id = ?
                 AND ee.embedding MATCH ?
-                ORDER BY ee.distance
-                LIMIT ?""",
+                AND k = ?
+                ORDER BY ee.distance""",
                 (str(mind_id), json.dumps(query_embedding), limit),
             )
             rows = await cursor.fetchall()

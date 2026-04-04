@@ -207,8 +207,8 @@ class ConceptRepository:
                 JOIN concepts c ON c.id = ce.concept_id
                 WHERE c.mind_id = ?
                 AND ce.embedding MATCH ?
-                ORDER BY ce.distance
-                LIMIT ?""",
+                AND k = ?
+                ORDER BY ce.distance""",
                 (str(mind_id), json.dumps(query_embedding), limit),
             )
             rows = await cursor.fetchall()
