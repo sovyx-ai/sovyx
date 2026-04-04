@@ -214,6 +214,18 @@ def setup_logging(config: LoggingConfig) -> None:
     """
     global _setup_done  # noqa: PLW0603
 
+    # Guard: close existing file handlers before reconfiguring.
+    # Prevents file descriptor leaks on repeated setup_logging() calls
+    # (common in tests, hot-reload, or daemon reconfiguration).
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers:
+        if isinstance(handler, logging.handlers.RotatingFileHandler):
+            handler.close()
+
+    # Reset structlog cache so new config takes effect on all loggers.
+    if _setup_done:
+        structlog.reset_defaults()
+
     shared_processors: list[structlog.types.Processor] = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_log_level,

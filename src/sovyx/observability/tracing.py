@@ -49,12 +49,6 @@ if TYPE_CHECKING:
 _TRACER_NAME = "sovyx"
 _TRACER_VERSION = "0.2.0"
 
-# Valid cognitive phases for span names
-_COGNITIVE_PHASES = frozenset(
-    {"perceive", "attend", "think", "act", "reflect", "consolidate"},
-)
-
-
 # ── SovyxTracer ────────────────────────────────────────────────────────────
 
 

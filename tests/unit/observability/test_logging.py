@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import logging.handlers
+from collections.abc import Generator  # noqa: TC003
 from pathlib import Path  # noqa: TC003
 from typing import Any
 
@@ -431,6 +432,16 @@ class TestGetLogger:
 class TestFileHandler:
     """setup_logging with log_file creates a RotatingFileHandler."""
 
+    @pytest.fixture(autouse=True)
+    def _cleanup_handlers(self) -> Generator[None, None, None]:
+        """Close and remove file handlers after each test."""
+        yield
+        root = logging.getLogger()
+        for handler in list(root.handlers):
+            if isinstance(handler, logging.handlers.RotatingFileHandler):
+                handler.close()
+                root.removeHandler(handler)
+
     def test_creates_log_file(self, tmp_path: Path) -> None:
         log_file = tmp_path / "logs" / "test.log"
         config = LoggingConfig(level="DEBUG", format="json", log_file=log_file)
@@ -474,6 +485,24 @@ class TestFileHandler:
         assert len(file_handlers) == 1
         assert file_handlers[0].maxBytes == 10 * 1024 * 1024
         assert file_handlers[0].backupCount == 3
+
+    def test_repeated_setup_closes_old_handlers(self, tmp_path: Path) -> None:
+        log_file = tmp_path / "test.log"
+        config = LoggingConfig(level="DEBUG", format="json", log_file=log_file)
+
+        # Call setup_logging twice
+        setup_logging(config)
+        setup_logging(config)
+
+        # Should still only have 2 handlers (not 3 or 4)
+        root = logging.getLogger()
+        assert len(root.handlers) == 2  # 1 stderr + 1 file
+
+        # File handlers specifically
+        file_handlers = [
+            h for h in root.handlers if isinstance(h, logging.handlers.RotatingFileHandler)
+        ]
+        assert len(file_handlers) == 1
 
     def test_no_file_handler_when_none(self) -> None:
         config = LoggingConfig(level="INFO", format="json", log_file=None)
