@@ -208,7 +208,10 @@ async def bootstrap(
 
         providers.append(OllamaProvider())
 
-        cost_guard = CostGuard(daily_budget=50.0, per_conversation_budget=5.0)
+        cost_guard = CostGuard(
+            daily_budget=mind_config.llm.budget_daily_usd,
+            per_conversation_budget=mind_config.llm.budget_per_conversation_usd,
+        )
         router = LLMRouter(
             providers=providers,
             cost_guard=cost_guard,
