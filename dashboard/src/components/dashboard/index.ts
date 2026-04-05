@@ -5,3 +5,5 @@ export { LogRow } from "./log-row";
 export { MetricChart, Sparkline } from "./metric-chart";
 export { LetterAvatar, MindAvatar } from "./letter-avatar";
 export { ChannelBadge } from "./channel-badge";
+export { ChatBubble } from "./chat-bubble";
+export { ChatThread } from "./chat-thread";
