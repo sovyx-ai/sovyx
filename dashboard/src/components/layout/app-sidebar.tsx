@@ -6,6 +6,8 @@ import {
   ScrollText,
   Settings,
   Activity,
+  PuzzleIcon,
+  ChevronsUpDownIcon,
 } from "lucide-react";
 import {
   Sidebar,
@@ -59,6 +61,7 @@ export function AppSidebar() {
                   {status?.mind_name ?? "Loading..."}
                 </span>
               </div>
+              <ChevronsUpDownIcon className="ml-auto size-4 text-muted-foreground/50" />
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
@@ -84,6 +87,21 @@ export function AppSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+
+        {/* v1.0 Placeholders */}
+        <SidebarGroup>
+          <SidebarGroupLabel>Coming Soon</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton disabled tooltip="Plugins — v1.0">
+                  <PuzzleIcon />
+                  <span className="text-muted-foreground">Plugins</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
       </SidebarContent>
 
       <SidebarFooter>
@@ -97,6 +115,13 @@ export function AppSidebar() {
                   : "Connecting..."}
               </span>
             </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <div className="px-2 py-1">
+              <span className="text-[10px] text-muted-foreground/50">
+                Sovyx v0.5.0-dev
+              </span>
+            </div>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>

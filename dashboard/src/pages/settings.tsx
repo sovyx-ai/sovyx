@@ -9,6 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { useDashboardStore } from "@/stores/dashboard";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
+import { TabPlaceholder } from "@/components/coming-soon";
 import type { Settings } from "@/types/api";
 
 type LogLevel = Settings["log_level"];
@@ -223,6 +224,25 @@ export default function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+      {/* v1.0 Placeholder Tabs */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {[
+          "Mind Configuration",
+          "Channels",
+          "API Keys",
+          "Providers",
+          "Plugins",
+          "Privacy",
+          "Export / Import",
+          "Webhooks",
+        ].map((tab) => (
+          <Card key={tab} className="border-dashed">
+            <CardContent className="py-6">
+              <TabPlaceholder label={tab} />
+            </CardContent>
+          </Card>
+        ))}
+      </div>
     </div>
   );
 }
