@@ -1,85 +1,45 @@
 /**
- * Global dashboard store — zustand
- * Single source of truth for real-time state.
+ * Global dashboard store — zustand v5 slices pattern
+ *
+ * FE-00c: Refactored from monolithic to 6 slices:
+ *   connection, status, conversations, brain, logs, settings
+ *
+ * Each slice is in stores/slices/ for separation of concerns.
+ * Combined into one bounded store with devtools middleware.
  */
 import { create } from "zustand";
-import type {
-  SystemStatus,
-  HealthCheck,
-  Conversation,
-  LogEntry,
-  WsEvent,
-} from "@/types/api";
+import { devtools } from "zustand/middleware";
 
-interface DashboardState {
-  // ── Connection ──
-  connected: boolean;
-  setConnected: (v: boolean) => void;
+import {
+  createConnectionSlice,
+  type ConnectionSlice,
+} from "./slices/connection";
+import { createStatusSlice, type StatusSlice } from "./slices/status";
+import {
+  createConversationsSlice,
+  type ConversationsSlice,
+} from "./slices/conversations";
+import { createBrainSlice, type BrainSlice } from "./slices/brain";
+import { createLogsSlice, type LogsSlice } from "./slices/logs";
+import { createSettingsSlice, type SettingsSlice } from "./slices/settings";
 
-  // ── Status ──
-  status: SystemStatus | null;
-  setStatus: (s: SystemStatus) => void;
+export type DashboardState = ConnectionSlice &
+  StatusSlice &
+  ConversationsSlice &
+  BrainSlice &
+  LogsSlice &
+  SettingsSlice;
 
-  // ── Health ──
-  healthChecks: HealthCheck[];
-  setHealthChecks: (checks: HealthCheck[]) => void;
-
-  // ── Conversations ──
-  conversations: Conversation[];
-  setConversations: (convs: Conversation[]) => void;
-  activeConversationId: string | null;
-  setActiveConversationId: (id: string | null) => void;
-
-  // ── Logs ──
-  logs: LogEntry[];
-  addLog: (entry: LogEntry) => void;
-  clearLogs: () => void;
-
-  // ── Activity feed ──
-  recentEvents: WsEvent[];
-  addEvent: (event: WsEvent) => void;
-}
-
-const MAX_LOGS = 5000;
-const MAX_EVENTS = 50;
-
-export const useDashboardStore = create<DashboardState>((set) => ({
-  // Connection
-  connected: false,
-  setConnected: (v) => set({ connected: v }),
-
-  // Status
-  status: null,
-  setStatus: (s) => set({ status: s }),
-
-  // Health
-  healthChecks: [],
-  setHealthChecks: (checks) => set({ healthChecks: checks }),
-
-  // Conversations
-  conversations: [],
-  setConversations: (convs) => set({ conversations: convs }),
-  activeConversationId: null,
-  setActiveConversationId: (id) => set({ activeConversationId: id }),
-
-  // Logs — ring buffer (keep last MAX_LOGS)
-  logs: [],
-  addLog: (entry) =>
-    set((state) => ({
-      logs:
-        state.logs.length >= MAX_LOGS
-          ? [...state.logs.slice(-MAX_LOGS + 1), entry]
-          : [...state.logs, entry],
-    })),
-  clearLogs: () => set({ logs: [] }),
-
-  // Activity — keep last MAX_EVENTS
-  recentEvents: [],
-  addEvent: (event) =>
-    set((state) => ({
-      recentEvents:
-        state.recentEvents.length >= MAX_EVENTS
-          ? [...state.recentEvents.slice(-MAX_EVENTS + 1), event]
-          : [...state.recentEvents, event],
-    })),
-}));
+export const useDashboardStore = create<DashboardState>()(
+  devtools(
+    (...a) => ({
+      ...createConnectionSlice(...a),
+      ...createStatusSlice(...a),
+      ...createConversationsSlice(...a),
+      ...createBrainSlice(...a),
+      ...createLogsSlice(...a),
+      ...createSettingsSlice(...a),
+    }),
+    { name: "sovyx-dashboard" },
+  ),
+);
