@@ -59,7 +59,7 @@ export function StatCard({
             </span>
           )}
           {subtitle && (
-            <span className="text-xs text-muted-foreground">{subtitle}</span>
+            <span className="truncate text-xs text-muted-foreground">{subtitle}</span>
           )}
         </div>
       </CardContent>

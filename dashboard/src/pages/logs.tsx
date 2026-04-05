@@ -103,7 +103,7 @@ export default function LogsPage() {
   return (
     <div className="flex h-[calc(100vh-6rem)] flex-col gap-4">
       {/* Header + Filters */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold">{t("title")}</h1>
           <p className="text-sm text-muted-foreground">
@@ -113,7 +113,7 @@ export default function LogsPage() {
 
         <div className="flex items-center gap-2">
           {/* Level filter */}
-          <div className="flex rounded-md border border-border/50">
+          <div className="flex overflow-x-auto rounded-md border border-border/50">
             {LOG_LEVELS.map((level) => (
               <button
                 key={level}
