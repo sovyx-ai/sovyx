@@ -31,6 +31,7 @@ class StatusSnapshot:
     llm_cost_today: float
     llm_calls_today: int
     tokens_today: int
+    messages_today: int
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to JSON-compatible dict."""
@@ -44,6 +45,7 @@ class StatusSnapshot:
             "llm_cost_today": round(self.llm_cost_today, 4),
             "llm_calls_today": self.llm_calls_today,
             "tokens_today": self.tokens_today,
+            "messages_today": self.messages_today,
         }
 
 
@@ -123,7 +125,7 @@ class StatusCollector:
         mind_id_str = await self._get_active_mind_id()
         concepts, episodes = await self._get_memory_stats(mind_id_str)
 
-        calls, cost, tokens, _msgs = get_counters().snapshot()
+        calls, cost, tokens, msgs = get_counters().snapshot()
 
         # Display "sovyx" for the default/fallback mind, real name otherwise
         mind_name = "sovyx" if mind_id_str == "default" else mind_id_str
@@ -138,6 +140,7 @@ class StatusCollector:
             llm_cost_today=cost,
             llm_calls_today=calls,
             tokens_today=tokens,
+            messages_today=msgs,
         )
 
     async def _get_memory_stats(self, mind_id_str: str) -> tuple[int, int]:
