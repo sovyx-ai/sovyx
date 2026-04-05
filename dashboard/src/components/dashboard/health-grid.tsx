@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Tooltip,
@@ -31,16 +32,17 @@ function overallStatus(checks: HealthCheck[]): HealthStatus {
 }
 
 export function HealthGrid({ checks, className }: HealthGridProps) {
+  const { t } = useTranslation("overview");
   const overall = overallStatus(checks);
   const greenCount = checks.filter((c) => c.status === "green").length;
 
   return (
     <Card className={className}>
       <CardHeader className="flex flex-row items-center justify-between pb-2">
-        <CardTitle className="text-sm font-medium">Health Checks</CardTitle>
+        <CardTitle className="text-sm font-medium">{t("health.title")}</CardTitle>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <span className={STATUS_CLASSES[overall]} />
-          {greenCount}/{checks.length} passing
+          {t("common:health.checksPass", { passed: greenCount, total: checks.length })}
         </div>
       </CardHeader>
       <CardContent>

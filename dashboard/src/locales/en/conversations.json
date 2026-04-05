@@ -1,0 +1,22 @@
+{
+  "title": "Conversations",
+  "search": "Search conversations...",
+  "filter": {
+    "channel": "Channel",
+    "allChannels": "All channels"
+  },
+  "list": {
+    "empty": "No conversations yet",
+    "live": "Live"
+  },
+  "detail": {
+    "via": "via {{channel}}",
+    "timeAgo": "{{time}} ago",
+    "metadata": "Metadata",
+    "model": "Model",
+    "tokens": "Tokens: {{input}} in / {{output}} out",
+    "cost": "Cost: ${{amount}}",
+    "cognitiveTrace": "Cognitive Trace",
+    "traceTotal": "{{duration}}ms total"
+  }
+}
