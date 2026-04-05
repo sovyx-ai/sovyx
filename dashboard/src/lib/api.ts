@@ -47,6 +47,14 @@ async function request<T>(
   });
 
   if (!response.ok) {
+    // 401 → clear token, show auth modal
+    if (response.status === 401) {
+      clearToken();
+      // Lazy import to avoid circular deps
+      const { useDashboardStore } = await import("@/stores/dashboard");
+      useDashboardStore.getState().setAuthenticated(false);
+      useDashboardStore.getState().setShowTokenModal(true);
+    }
     const body = await response.text().catch(() => "Unknown error");
     throw new ApiError(response.status, body);
   }
