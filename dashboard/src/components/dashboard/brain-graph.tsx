@@ -66,7 +66,7 @@ export function BrainGraph({ data, width, height, onNodeClick }: BrainGraphProps
       if (globalScale > 1.5 || isHovered) {
         const label = node.name;
         const fontSize = Math.max(10 / globalScale, 2);
-        ctx.font = `${fontSize}px Inter, sans-serif`;
+        ctx.font = `${fontSize}px "Geist Sans", ui-sans-serif, sans-serif`;
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
         ctx.fillStyle = "rgba(255,255,255,0.85)";
