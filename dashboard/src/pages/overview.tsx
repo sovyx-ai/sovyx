@@ -1,8 +1,9 @@
 import { useTranslation } from "react-i18next";
-import { DollarSignIcon, BrainIcon, MessageSquareIcon, ActivityIcon } from "lucide-react";
+import { DollarSignIcon, BrainIcon, MessageSquareIcon, ActivityIcon, MicIcon, HeartIcon, ListTodoIcon } from "lucide-react";
 import { useDashboardStore } from "@/stores/dashboard";
 import { StatCard, HealthGrid, ActivityFeed, MetricChart } from "@/components/dashboard";
 import { formatUptime, formatCost, formatNumber } from "@/lib/format";
+import { ComingSoon } from "@/components/coming-soon";
 
 export default function OverviewPage() {
   const { t } = useTranslation(["overview", "common"]);
@@ -85,6 +86,25 @@ export default function OverviewPage() {
 
       {/* Activity Feed */}
       <ActivityFeed events={recentEvents} />
+
+      {/* v1.0 Placeholders */}
+      <div className="grid gap-4 md:grid-cols-3">
+        <ComingSoon
+          title="Voice"
+          description="Real-time voice interaction with the engine."
+          icon={<MicIcon className="size-10" />}
+        />
+        <ComingSoon
+          title="Emotional Timeline"
+          description="Mood and emotional state tracking over time."
+          icon={<HeartIcon className="size-10" />}
+        />
+        <ComingSoon
+          title="Tasks & Productivity"
+          description="Task tracking, reminders, and productivity insights."
+          icon={<ListTodoIcon className="size-10" />}
+        />
+      </div>
     </div>
   );
 }
