@@ -1,0 +1,28 @@
+{
+  "title": "Logs",
+  "autoScroll": "Auto-scroll",
+  "search": "Search logs...",
+  "filter": {
+    "level": "Level",
+    "module": "Module",
+    "allLevels": "All levels",
+    "allModules": "All modules"
+  },
+  "levels": {
+    "debug": "DEBUG",
+    "info": "INFO",
+    "warning": "WARN",
+    "error": "ERROR",
+    "critical": "CRIT"
+  },
+  "table": {
+    "time": "Time",
+    "level": "Level",
+    "module": "Module",
+    "event": "Event"
+  },
+  "footer": {
+    "showing": "Showing {{shown}} of {{total}} entries",
+    "export": "Export JSON"
+  }
+}

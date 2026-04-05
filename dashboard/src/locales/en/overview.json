@@ -1,0 +1,39 @@
+{
+  "title": "Overview",
+  "subtitle": "System status at a glance",
+  "cards": {
+    "engineStatus": "Engine Status",
+    "uptime": "Uptime: {{duration}}",
+    "messages": "Messages",
+    "messagesToday": "{{count}} today",
+    "brainConcepts": "Brain",
+    "conceptCount": "{{count}} concepts",
+    "episodeCount": "{{count}} episodes",
+    "llmCost": "LLM Cost",
+    "costToday": "${{amount}} today",
+    "callsToday": "{{count}} calls"
+  },
+  "health": {
+    "title": "Health Checks",
+    "expand": "Show details"
+  },
+  "chart": {
+    "costTitle": "LLM Cost (24h)",
+    "noData": "No cost data yet"
+  },
+  "feed": {
+    "title": "Recent Activity",
+    "empty": "No activity yet. Events will appear here in real-time."
+  },
+  "placeholders": {
+    "voice": "Voice Pipeline",
+    "voiceDesc": "Voice pipeline not configured",
+    "voiceAction": "Setup →",
+    "proactive": "Proactive Engine",
+    "proactiveDesc": "Your mind will suggest things before you ask",
+    "emotional": "Emotional Timeline",
+    "emotionalDesc": "Coming in v1.0",
+    "tasks": "Tasks & Habits",
+    "tasksDesc": "Coming in v1.0"
+  }
+}

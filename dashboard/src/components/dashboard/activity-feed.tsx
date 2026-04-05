@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import type { WsEvent, WsEventType } from "@/types/api";
@@ -114,18 +115,19 @@ function eventSummary(event: WsEvent): string {
 }
 
 export function ActivityFeed({ events, className }: ActivityFeedProps) {
+  const { t } = useTranslation("overview");
   const reversed = [...events].reverse();
 
   return (
     <Card className={className}>
       <CardHeader className="pb-2">
-        <CardTitle className="text-sm font-medium">Recent Activity</CardTitle>
+        <CardTitle className="text-sm font-medium">{t("feed.title")}</CardTitle>
       </CardHeader>
       <CardContent>
         <ScrollArea className="h-64">
           {reversed.length === 0 ? (
             <p className="py-8 text-center text-sm text-muted-foreground">
-              No activity yet. Events will appear here in real-time.
+              {t("feed.empty")}
             </p>
           ) : (
             <div className="space-y-1">

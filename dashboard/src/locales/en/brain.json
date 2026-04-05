@@ -1,0 +1,30 @@
+{
+  "title": "Brain Explorer",
+  "search": "Search concepts...",
+  "filter": {
+    "category": "Category",
+    "allCategories": "All categories"
+  },
+  "stats": {
+    "concepts": "{{count}} concepts",
+    "relations": "{{count}} relations",
+    "lastConsolidation": "Last consolidation: {{time}}"
+  },
+  "categories": {
+    "fact": "Fact",
+    "preference": "Preference",
+    "entity": "Entity",
+    "skill": "Skill",
+    "belief": "Belief",
+    "event": "Event",
+    "relationship": "Relationship"
+  },
+  "detail": {
+    "selected": "Selected: {{name}}",
+    "importance": "Importance",
+    "confidence": "Confidence",
+    "accessCount": "Access count",
+    "related": "{{count}} related concepts",
+    "viewDetail": "View Detail →"
+  }
+}

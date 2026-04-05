@@ -1,0 +1,68 @@
+{
+  "app": {
+    "name": "Sovyx Dashboard",
+    "version": "v{{version}}"
+  },
+  "nav": {
+    "overview": "Overview",
+    "conversations": "Conversations",
+    "brain": "Brain Explorer",
+    "logs": "Logs",
+    "settings": "Settings"
+  },
+  "status": {
+    "online": "Online",
+    "offline": "Offline",
+    "degraded": "Degraded",
+    "loading": "Loading...",
+    "error": "Error",
+    "connected": "Connected",
+    "disconnected": "Disconnected",
+    "reconnecting": "Reconnecting..."
+  },
+  "actions": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "reset": "Reset",
+    "retry": "Retry",
+    "close": "Close",
+    "expand": "Expand",
+    "collapse": "Collapse",
+    "loadMore": "Load More",
+    "search": "Search...",
+    "export": "Export",
+    "copy": "Copy"
+  },
+  "time": {
+    "justNow": "just now",
+    "minutesAgo_one": "{{count}} min ago",
+    "minutesAgo_other": "{{count}} min ago",
+    "hoursAgo_one": "{{count}}h ago",
+    "hoursAgo_other": "{{count}}h ago",
+    "daysAgo_one": "{{count}}d ago",
+    "daysAgo_other": "{{count}}d ago"
+  },
+  "health": {
+    "healthy": "Healthy",
+    "warning": "Warning",
+    "critical": "Critical",
+    "allGreen": "All systems operational",
+    "checksPass": "{{passed}}/{{total}} passing"
+  },
+  "errors": {
+    "generic": "Something went wrong",
+    "network": "Network error. Check your connection.",
+    "notFound": "Not found",
+    "unauthorized": "Unauthorized",
+    "tryAgain": "Try again"
+  },
+  "comingSoon": {
+    "title": "Coming in {{version}}",
+    "description": "This feature is under development."
+  },
+  "sidebar": {
+    "collapse": "Toggle Sidebar",
+    "health": "Health",
+    "cmdK": "Cmd+K"
+  }
+}
