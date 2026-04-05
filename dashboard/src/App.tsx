@@ -1,6 +1,18 @@
 import { RouterProvider } from "react-router";
 import { router } from "./router";
+import { TokenEntryModal } from "./components/auth/token-entry-modal";
+import { useAuth } from "./hooks/use-auth";
 
 export default function App() {
-  return <RouterProvider router={router} />;
+  const { ready } = useAuth();
+
+  return (
+    <>
+      <RouterProvider router={router} />
+      <TokenEntryModal />
+      {!ready && (
+        <div className="fixed inset-0 z-40 bg-background/80 backdrop-blur-sm" />
+      )}
+    </>
+  );
 }
