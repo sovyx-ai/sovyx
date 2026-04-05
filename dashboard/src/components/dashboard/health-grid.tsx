@@ -13,26 +13,26 @@ interface HealthGridProps {
 }
 
 const STATUS_CLASSES: Record<HealthStatus, string> = {
-  GREEN: "status-dot-green",
-  YELLOW: "status-dot-yellow",
-  RED: "status-dot-red",
+  green: "status-dot-green",
+  yellow: "status-dot-yellow",
+  red: "status-dot-red",
 };
 
 const STATUS_BG: Record<HealthStatus, string> = {
-  GREEN: "bg-[var(--color-success)]/10",
-  YELLOW: "bg-[var(--color-warning)]/10",
-  RED: "bg-destructive/10",
+  green: "bg-[var(--color-success)]/10",
+  yellow: "bg-[var(--color-warning)]/10",
+  red: "bg-destructive/10",
 };
 
 function overallStatus(checks: HealthCheck[]): HealthStatus {
-  if (checks.some((c) => c.status === "RED")) return "RED";
-  if (checks.some((c) => c.status === "YELLOW")) return "YELLOW";
-  return "GREEN";
+  if (checks.some((c) => c.status === "red")) return "red";
+  if (checks.some((c) => c.status === "yellow")) return "yellow";
+  return "green";
 }
 
 export function HealthGrid({ checks, className }: HealthGridProps) {
   const overall = overallStatus(checks);
-  const greenCount = checks.filter((c) => c.status === "GREEN").length;
+  const greenCount = checks.filter((c) => c.status === "green").length;
 
   return (
     <Card className={className}>
@@ -40,7 +40,7 @@ export function HealthGrid({ checks, className }: HealthGridProps) {
         <CardTitle className="text-sm font-medium">Health Checks</CardTitle>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <span className={STATUS_CLASSES[overall]} />
-          {greenCount}/{checks.length}
+          {greenCount}/{checks.length} passing
         </div>
       </CardHeader>
       <CardContent>
