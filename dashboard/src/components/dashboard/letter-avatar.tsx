@@ -1,45 +1,63 @@
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+/**
+ * Deterministic letter avatar — generates a consistent color based on ID hash.
+ * Colors use HEX values aligned with the Sovyx design system.
+ */
+
 import { cn } from "@/lib/utils";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 
 const AVATAR_COLORS = [
-  "oklch(0.70 0.18 160)", // emerald
-  "oklch(0.65 0.18 250)", // blue
-  "oklch(0.60 0.22 285)", // violet
-  "oklch(0.70 0.15 350)", // pink
-  "oklch(0.75 0.16 70)",  // amber
-  "oklch(0.65 0.15 175)", // teal
-  "oklch(0.70 0.18 50)",  // orange
-  "oklch(0.70 0.18 130)", // lime
+  "#22C55E",  // success green
+  "#3B82F6",  // info blue
+  "#8B5CF6",  // brand violet
+  "#EC4899",  // pink
+  "#F59E0B",  // warning amber
+  "#22D3EE",  // accent cyan
+  "#FB923C",  // orange
+  "#A78BFA",  // brand muted
 ] as const;
 
-function getAvatarColor(name: string): string {
-  const hash = name
-    .split("")
-    .reduce((acc, char) => acc + char.charCodeAt(0), 0);
-  return AVATAR_COLORS[hash % AVATAR_COLORS.length] ?? AVATAR_COLORS[0];
+function hashString(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash);
 }
 
 interface LetterAvatarProps {
   name: string;
+  size?: number;
   className?: string;
 }
 
-export function LetterAvatar({ name, className }: LetterAvatarProps) {
-  const color = getAvatarColor(name);
-  const initial = name.charAt(0).toUpperCase();
+export function LetterAvatar({ name, size = 32, className }: LetterAvatarProps) {
+  const letter = (name[0] ?? "?").toUpperCase();
+  const color = AVATAR_COLORS[hashString(name) % AVATAR_COLORS.length];
 
   return (
-    <Avatar className={cn("size-8", className)}>
-      <AvatarFallback
-        style={{ backgroundColor: color, color: "white" }}
-        className="text-xs font-medium"
-      >
-        {initial}
-      </AvatarFallback>
-    </Avatar>
+    <div
+      className={className}
+      style={{
+        width: size,
+        height: size,
+        borderRadius: "var(--svx-radius-full)",
+        backgroundColor: color,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize: size * 0.45,
+        fontWeight: 600,
+        color: "var(--svx-color-text-inverse)",
+        flexShrink: 0,
+      }}
+    >
+      {letter}
+    </div>
   );
 }
 
+/** Mind avatar — crystal ball emoji on brand background. */
 export function MindAvatar({ className }: { className?: string }) {
   return (
     <Avatar className={cn("size-8", className)}>
