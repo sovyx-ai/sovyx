@@ -86,7 +86,7 @@ export default function BrainPage() {
       {/* Graph */}
       <Card className="overflow-hidden">
         <CardContent className="p-0">
-          <div ref={containerRef} className="h-[calc(100vh-20rem)] min-h-[400px]">
+          <div ref={containerRef} className="h-[calc(100vh-20rem)] min-h-[300px] sm:min-h-[400px]">
             {loading ? (
               <div className="flex h-full items-center justify-center">
                 <div className="size-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />

@@ -99,7 +99,7 @@ export default function ConversationsPage() {
       {/* Left: Conversation List */}
       <Card
         className={cn(
-          "flex w-80 shrink-0 flex-col",
+          "flex w-full shrink-0 flex-col md:w-80",
           activeId && "hidden md:flex",
         )}
       >
@@ -155,7 +155,7 @@ export default function ConversationsPage() {
       </Card>
 
       {/* Right: Chat Detail */}
-      <Card className="flex flex-1 flex-col">
+      <Card className={cn("flex flex-1 flex-col", !activeId && "hidden md:flex")}>
         {activeConv ? (
           <>
             {/* Detail Header */}
