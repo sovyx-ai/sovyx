@@ -1,7 +1,18 @@
+/**
+ * Conversations page — split panel (list + detail).
+ *
+ * Desktop: list (w-80) + detail side by side.
+ * Mobile: list-only → tap navigates to detail → back button returns.
+ *
+ * Data: GET /api/conversations (list), GET /api/conversations/:id (messages).
+ * Detail response: {conversation_id, messages[]} — conversation metadata from list cache.
+ *
+ * Ref: Architecture §3.2
+ */
+
 import { useEffect, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { SearchIcon, MessageSquareIcon, ArrowLeftIcon } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -11,6 +22,7 @@ import { formatTimeAgo } from "@/lib/format";
 import { LetterAvatar } from "@/components/dashboard/letter-avatar";
 import { ChannelBadge } from "@/components/dashboard/channel-badge";
 import { ChatThread } from "@/components/dashboard/chat-thread";
+import { StatusDot } from "@/components/dashboard/status-dot";
 import type { Conversation, ConversationsResponse, Message } from "@/types/api";
 import { EmptyState } from "@/components/empty-state";
 import { cn } from "@/lib/utils";
@@ -55,6 +67,7 @@ export default function ConversationsPage() {
   );
 
   // Fetch messages when active conversation changes
+  // Backend returns {conversation_id, messages[]} — NOT {conversation, messages[]}
   useEffect(() => {
     if (!activeId) {
       setActiveMessages([]);
@@ -92,21 +105,25 @@ export default function ConversationsPage() {
       )
     : conversations;
 
+  // Get conversation metadata from list cache (NOT from detail endpoint)
   const activeConv = conversations.find((c) => c.id === activeId);
 
   return (
     <div className="flex h-[calc(100vh-6rem)] gap-4">
-      {/* Left: Conversation List */}
-      <Card
+      {/* ── Left: Conversation List (DASH-12) ── */}
+      <div
         className={cn(
-          "flex w-full shrink-0 flex-col md:w-80",
+          "flex w-full shrink-0 flex-col rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] md:w-80",
           activeId && "hidden md:flex",
         )}
       >
-        <CardHeader className="shrink-0 space-y-3 pb-3">
-          <CardTitle className="text-sm font-medium">{t("title")}</CardTitle>
+        {/* List header */}
+        <div className="shrink-0 space-y-3 p-4 pb-3">
+          <h2 className="text-sm font-medium text-[var(--svx-color-text-primary)]">
+            {t("title")}
+          </h2>
           <div className="relative">
-            <SearchIcon className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+            <SearchIcon className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-[var(--svx-color-text-tertiary)]" />
             <Input
               placeholder={t("search")}
               value={search}
@@ -114,18 +131,20 @@ export default function ConversationsPage() {
               className="h-8 pl-8 text-xs"
             />
           </div>
-        </CardHeader>
-        <CardContent className="flex-1 overflow-hidden p-0">
+        </div>
+
+        {/* List body */}
+        <div className="flex-1 overflow-hidden">
           <ScrollArea className="h-full">
             {filtered.length === 0 && !loading ? (
               <EmptyState
                 icon={<MessageSquareIcon className="size-8" />}
                 title={t("list.empty")}
-                description="Conversations will appear here when messages are received."
+                description="Send a message via Telegram to get started."
                 className="py-12"
               />
             ) : (
-              <div className="divide-y divide-border/50">
+              <div className="divide-y divide-[var(--svx-color-border-subtle)]">
                 {filtered.map((conv) => (
                   <ConversationRow
                     key={conv.id}
@@ -151,58 +170,72 @@ export default function ConversationsPage() {
               </div>
             )}
           </ScrollArea>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
-      {/* Right: Chat Detail */}
-      <Card className={cn("flex flex-1 flex-col", !activeId && "hidden md:flex")}>
+      {/* ── Right: Chat Detail (DASH-13 + DASH-14) ── */}
+      <div
+        className={cn(
+          "flex flex-1 flex-col rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)]",
+          !activeId && "hidden md:flex",
+        )}
+      >
         {activeConv ? (
           <>
-            {/* Detail Header */}
-            <CardHeader className="shrink-0 border-b border-border/50 pb-3">
+            {/* Detail header */}
+            <div className="shrink-0 border-b border-[var(--svx-color-border-subtle)] p-4 pb-3">
               <div className="flex items-center gap-3">
                 <Button
                   variant="ghost"
                   size="icon"
                   className="size-8 md:hidden"
                   onClick={() => setActiveId(null)}
+                  aria-label="Back to conversations"
                 >
                   <ArrowLeftIcon className="size-4" />
                 </Button>
                 <LetterAvatar name={activeConv.participant || "?"} />
                 <div>
-                  <CardTitle className="text-sm font-medium">
+                  <h2 className="text-sm font-medium text-[var(--svx-color-text-primary)]">
                     {activeConv.participant || "Unknown"}
-                  </CardTitle>
+                  </h2>
                   <div className="flex items-center gap-2 pt-0.5">
                     <ChannelBadge channel={activeConv.channel} />
-                    <span className="text-[10px] text-muted-foreground">
+                    <span className="text-[10px] text-[var(--svx-color-text-tertiary)]">
                       {activeConv.message_count} msgs
                     </span>
                   </div>
                 </div>
               </div>
-            </CardHeader>
+            </div>
 
             {/* Messages */}
-            <CardContent className="flex-1 overflow-hidden p-0">
+            <div className="flex-1 overflow-hidden">
               <ChatThread
                 messages={activeMessages}
-                participantName={activeConv.participant || "User"}
+                participantName={activeConv.participant || "Owner"}
                 loading={loadingMessages}
               />
-            </CardContent>
+            </div>
+
+            {/* Send placeholder */}
+            <div className="shrink-0 border-t border-[var(--svx-color-border-subtle)] p-3">
+              <div className="flex items-center gap-2 rounded-[var(--svx-radius-md)] bg-[var(--svx-color-bg-input)] px-3 py-2 text-xs text-[var(--svx-color-text-disabled)]">
+                <MessageSquareIcon className="size-3.5" />
+                Send from dashboard coming in v1.0
+              </div>
+            </div>
           </>
         ) : (
-          <CardContent className="flex h-full items-center justify-center">
+          <div className="flex h-full items-center justify-center">
             <EmptyState
               icon={<MessageSquareIcon className="size-10" />}
               title="Select a conversation"
               description="Choose from the list to view messages."
             />
-          </CardContent>
+          </div>
         )}
-      </Card>
+      </div>
     </div>
   );
 }
@@ -223,25 +256,26 @@ function ConversationRow({ conversation, active, onClick }: ConversationRowProps
       type="button"
       onClick={onClick}
       className={cn(
-        "flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-secondary/50",
-        active && "border-l-2 border-primary bg-secondary/30",
+        "flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors",
+        "hover:bg-[var(--svx-color-bg-hover)]",
+        active && "border-l-2 border-[var(--svx-color-brand-primary)] bg-[var(--svx-color-bg-active)]",
       )}
     >
-      <LetterAvatar name={c.participant || "?"} className="size-7" />
+      <LetterAvatar name={c.participant || "?"} size={28} />
 
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
-          <span className="truncate text-xs font-medium">
+          <span className="truncate text-xs font-medium text-[var(--svx-color-text-primary)]">
             {c.participant || "Unknown"}
           </span>
-          <span className="shrink-0 text-[10px] text-muted-foreground">
+          <span className="shrink-0 text-[10px] text-[var(--svx-color-text-tertiary)]">
             {formatTimeAgo(c.last_message_at)}
           </span>
         </div>
         <div className="flex items-center gap-1.5 pt-0.5">
           <ChannelBadge channel={c.channel} />
           {c.status === "active" && (
-            <span className="status-dot-green" title="Active" />
+            <StatusDot status="online" size="sm" />
           )}
         </div>
       </div>
