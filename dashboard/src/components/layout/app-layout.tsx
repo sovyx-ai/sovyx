@@ -47,7 +47,7 @@ export function AppLayout() {
         <AppSidebar />
         <SidebarInset>
           <header
-            className="flex h-12 shrink-0 items-center gap-2 border-b px-2 sm:px-4"
+            className="flex h-12 shrink-0 items-center gap-2 border-b border-[var(--svx-color-border-subtle)] px-2 sm:px-4"
             role="banner"
           >
             <SidebarTrigger className="-ml-1" aria-label="Toggle sidebar" />
@@ -64,7 +64,7 @@ export function AppLayout() {
                 <BellIcon className="size-4" aria-hidden="true" />
               </Button>
               <kbd
-                className="hidden items-center gap-1 rounded border border-border/50 bg-secondary/50 px-1.5 py-0.5 font-code text-[10px] text-muted-foreground md:inline-flex"
+                className="hidden items-center gap-1 rounded-[var(--svx-radius-sm)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-subtle)] px-1.5 py-0.5 font-code text-[10px] text-[var(--svx-color-text-tertiary)] md:inline-flex"
                 aria-label="Press Command+K to open command palette"
               >
                 ⌘K
