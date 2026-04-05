@@ -1,15 +1,5 @@
 import type { ConceptCategory } from "@/types/api";
-import { CATEGORY_LABELS } from "./brain-graph";
-
-const CATEGORY_COLORS: Record<ConceptCategory, string> = {
-  fact: "#22d3ee",
-  preference: "#ec4899",
-  entity: "#38bdf8",
-  skill: "#a855f7",
-  belief: "#f59e0b",
-  event: "#fb923c",
-  relationship: "#2dd4bf",
-};
+import { CATEGORY_LABELS, CATEGORY_COLORS } from "@/lib/constants";
 
 interface CategoryLegendProps {
   counts?: Record<string, number>;

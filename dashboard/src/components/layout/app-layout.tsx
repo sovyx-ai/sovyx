@@ -1,5 +1,4 @@
 import { Outlet, useLocation } from "react-router";
-import { AnimatePresence } from "framer-motion";
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -52,11 +51,9 @@ export function AppLayout() {
             </div>
           </header>
           <main id="main-content" className="flex-1 overflow-auto p-4 md:p-6" role="main">
-            <AnimatePresence mode="wait">
-              <PageTransition key={location.pathname}>
-                <Outlet />
-              </PageTransition>
-            </AnimatePresence>
+            <PageTransition key={location.pathname}>
+              <Outlet />
+            </PageTransition>
           </main>
         </SidebarInset>
       </SidebarProvider>
