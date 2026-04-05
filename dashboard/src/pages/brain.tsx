@@ -1,11 +1,12 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { BrainIcon, InfoIcon } from "lucide-react";
+import { InfoIcon, SparklesIcon } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useDashboardStore } from "@/stores/dashboard";
 import { api } from "@/lib/api";
 import { BrainGraph } from "@/components/dashboard/brain-graph";
 import { CategoryLegend } from "@/components/dashboard/category-legend";
+import { EmptyState } from "@/components/empty-state";
 import type { BrainNode, BrainGraph as BrainGraphType } from "@/types/api";
 
 export default function BrainPage() {
@@ -91,10 +92,12 @@ export default function BrainPage() {
                 <div className="size-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
               </div>
             ) : brainNodes.length === 0 ? (
-              <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
-                <BrainIcon className="size-10 opacity-30" />
-                <p className="text-sm">{t("empty")}</p>
-              </div>
+              <EmptyState
+                icon={<SparklesIcon className="size-10" />}
+                title={t("empty")}
+                description="Concepts will appear as the engine learns from conversations."
+                className="h-full"
+              />
             ) : (
               <BrainGraph
                 data={graphData}
