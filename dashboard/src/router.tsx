@@ -4,6 +4,13 @@ import { createBrowserRouter } from "react-router";
 import { AppLayout } from "@/components/layout/app-layout";
 import { ErrorBoundary } from "@/components/error-boundary";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  OverviewSkeleton,
+  ConversationsSkeleton,
+  BrainSkeleton,
+  LogsSkeleton,
+  SettingsSkeleton,
+} from "@/components/skeletons";
 
 const OverviewPage = lazy(() => import("@/pages/overview"));
 const ConversationsPage = lazy(() => import("@/pages/conversations"));
@@ -12,22 +19,23 @@ const LogsPage = lazy(() => import("@/pages/logs"));
 const SettingsPage = lazy(() => import("@/pages/settings"));
 const NotFoundPage = lazy(() => import("@/pages/not-found"));
 
-function PageWrapper({ children }: { children: React.ReactNode }) {
+function PageWrapper({
+  children,
+  fallback,
+}: {
+  children: React.ReactNode;
+  fallback?: React.ReactNode;
+}) {
+  const defaultFallback = (
+    <div className="space-y-4">
+      <Skeleton className="h-8 w-48" />
+      <Skeleton className="h-48 w-full" />
+    </div>
+  );
+
   return (
     <ErrorBoundary>
-      <Suspense
-        fallback={
-          <div className="space-y-4">
-            <Skeleton className="h-8 w-48" />
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <Skeleton className="h-32" />
-              <Skeleton className="h-32" />
-              <Skeleton className="h-32" />
-            </div>
-            <Skeleton className="h-48 w-full" />
-          </div>
-        }
-      >
+      <Suspense fallback={fallback ?? defaultFallback}>
         {children}
       </Suspense>
     </ErrorBoundary>
@@ -41,7 +49,7 @@ export const router = createBrowserRouter([
       {
         index: true,
         element: (
-          <PageWrapper>
+          <PageWrapper fallback={<OverviewSkeleton />}>
             <OverviewPage />
           </PageWrapper>
         ),
@@ -49,7 +57,7 @@ export const router = createBrowserRouter([
       {
         path: "conversations",
         element: (
-          <PageWrapper>
+          <PageWrapper fallback={<ConversationsSkeleton />}>
             <ConversationsPage />
           </PageWrapper>
         ),
@@ -57,7 +65,7 @@ export const router = createBrowserRouter([
       {
         path: "brain",
         element: (
-          <PageWrapper>
+          <PageWrapper fallback={<BrainSkeleton />}>
             <BrainPage />
           </PageWrapper>
         ),
@@ -65,7 +73,7 @@ export const router = createBrowserRouter([
       {
         path: "logs",
         element: (
-          <PageWrapper>
+          <PageWrapper fallback={<LogsSkeleton />}>
             <LogsPage />
           </PageWrapper>
         ),
@@ -73,7 +81,7 @@ export const router = createBrowserRouter([
       {
         path: "settings",
         element: (
-          <PageWrapper>
+          <PageWrapper fallback={<SettingsSkeleton />}>
             <SettingsPage />
           </PageWrapper>
         ),
