@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useDashboardStore } from "@/stores/dashboard";
 import { api } from "@/lib/api";
 import { BrainGraph } from "@/components/dashboard/brain-graph";
-import { CategoryLegend } from "@/components/dashboard/category-legend";
+import { CategoryLegend, RelationLegend } from "@/components/dashboard/category-legend";
 import { EmptyState } from "@/components/empty-state";
 import type { BrainNode, BrainGraph as BrainGraphType } from "@/types/api";
 
@@ -80,8 +80,11 @@ export default function BrainPage() {
         </div>
       </div>
 
-      {/* Legend */}
-      <CategoryLegend counts={categoryCounts} />
+      {/* Legends */}
+      <div className="space-y-2">
+        <CategoryLegend counts={categoryCounts} />
+        {brainLinks.length > 0 && <RelationLegend />}
+      </div>
 
       {/* Graph */}
       <Card className="overflow-hidden">
