@@ -1,22 +1,9 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
+import { PageTransition } from "./page-transition";
 
-// Test with reduced motion
-describe("PageTransition reduced motion", () => {
-  it("renders children regardless of motion preference", async () => {
-    // Mock useReducedMotion to return true
-    vi.doMock("framer-motion", () => ({
-      motion: {
-        div: ({ children, ...props }: Record<string, unknown>) => {
-          const { variants: _v, initial: _i, animate: _a, exit: _e, transition: _t, ...rest } = props;
-          return <div data-testid="motion-div" {...rest}>{children}</div>;
-        },
-      },
-      useReducedMotion: () => true,
-    }));
-
-    const { PageTransition } = await import("./page-transition");
-
+describe("PageTransition", () => {
+  it("renders children", () => {
     render(
       <PageTransition>
         <p>Hello</p>
@@ -24,5 +11,16 @@ describe("PageTransition reduced motion", () => {
     );
 
     expect(screen.getByText("Hello")).toBeInTheDocument();
+  });
+
+  it("wraps children in animation container", () => {
+    render(
+      <PageTransition>
+        <p>Content</p>
+      </PageTransition>,
+    );
+
+    const wrapper = screen.getByText("Content").parentElement;
+    expect(wrapper).toHaveClass("animate-page-in");
   });
 });
