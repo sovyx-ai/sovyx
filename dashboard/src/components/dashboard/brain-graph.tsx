@@ -1,27 +1,10 @@
 import { useCallback, useRef, useEffect, useState } from "react";
 import ForceGraph2D, { type ForceGraphMethods } from "react-force-graph-2d";
-import type { BrainNode, BrainLink, ConceptCategory } from "@/types/api";
+import type { BrainNode, BrainLink } from "@/types/api";
+import { CATEGORY_COLORS, CATEGORY_LABELS } from "@/lib/constants";
 
-// ── Category colors (OKLCH → hex approximations for canvas) ──
-const CATEGORY_COLORS: Record<ConceptCategory, string> = {
-  fact: "#22d3ee",       // cyan
-  preference: "#ec4899", // pink
-  entity: "#38bdf8",     // sky
-  skill: "#a855f7",      // purple
-  belief: "#f59e0b",     // amber
-  event: "#fb923c",      // orange
-  relationship: "#2dd4bf", // teal
-};
-
-export const CATEGORY_LABELS: Record<ConceptCategory, string> = {
-  fact: "Fact",
-  preference: "Preference",
-  entity: "Entity",
-  skill: "Skill",
-  belief: "Belief",
-  event: "Event",
-  relationship: "Relationship",
-};
+// Re-export for backwards compatibility
+export { CATEGORY_LABELS };
 
 interface GraphData {
   nodes: BrainNode[];
