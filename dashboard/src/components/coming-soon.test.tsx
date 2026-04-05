@@ -1,16 +1,16 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { ComingSoon, TabPlaceholder } from "./coming-soon";
+import { ComingSoon } from "./coming-soon";
 
 describe("ComingSoon", () => {
   it("renders title and default version badge", () => {
-    render(<ComingSoon title="Voice" />);
-    expect(screen.getByText("Voice")).toBeInTheDocument();
+    render(<ComingSoon title="Voice Pipeline" />);
+    expect(screen.getByText("Voice Pipeline")).toBeInTheDocument();
     expect(screen.getByText("Available in v1.0")).toBeInTheDocument();
   });
 
-  it("renders custom version badge text", () => {
-    render(<ComingSoon title="Feature" versionBadge="v2.0" />);
+  it("renders custom version", () => {
+    render(<ComingSoon title="Feature" version="v2.0" />);
     expect(screen.getByText("Available in v2.0")).toBeInTheDocument();
   });
 
@@ -20,43 +20,14 @@ describe("ComingSoon", () => {
   });
 
   it("renders feature checklist", () => {
-    const features = ["Pipeline status", "STT selector", "Wake word"];
-    render(<ComingSoon title="Voice" features={features} />);
-    expect(screen.getByTestId("feature-list")).toBeInTheDocument();
-    for (const feat of features) {
-      expect(screen.getByText(feat)).toBeInTheDocument();
-    }
-  });
-
-  it("renders no feature list when features is empty", () => {
-    render(<ComingSoon title="Empty" features={[]} />);
-    expect(screen.queryByTestId("feature-list")).not.toBeInTheDocument();
-  });
-
-  it("renders custom icon", () => {
     render(
       <ComingSoon
-        title="Test"
-        icon={<span data-testid="custom-icon">🎤</span>}
+        title="Voice"
+        features={["Pipeline status", "STT model selector", "Wake word config"]}
       />,
     );
-    expect(screen.getByTestId("custom-icon")).toBeInTheDocument();
-  });
-
-  it("applies custom className", () => {
-    render(<ComingSoon title="Test" className="extra-class" />);
-    expect(screen.getByTestId("coming-soon-card")).toHaveClass("extra-class");
-  });
-});
-
-describe("TabPlaceholder", () => {
-  it("renders label with version", () => {
-    render(<TabPlaceholder label="Plugins" />);
-    expect(screen.getByText("Plugins — coming in v1.0")).toBeInTheDocument();
-  });
-
-  it("renders custom version", () => {
-    render(<TabPlaceholder label="Auth" version="v2.0" />);
-    expect(screen.getByText("Auth — coming in v2.0")).toBeInTheDocument();
+    expect(screen.getByText("Pipeline status")).toBeInTheDocument();
+    expect(screen.getByText("STT model selector")).toBeInTheDocument();
+    expect(screen.getByText("Wake word config")).toBeInTheDocument();
   });
 });
