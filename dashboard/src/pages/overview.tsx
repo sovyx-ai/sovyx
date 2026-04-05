@@ -65,7 +65,7 @@ export default function OverviewPage() {
           value={status ? formatCost(status.llm_cost_today) : "—"}
           subtitle={
             status
-              ? t("cards.callsToday", { count: status.llm_calls_today })
+              ? `${formatNumber(status.llm_calls_today)} calls · ${formatNumber(status.tokens_today)} tokens`
               : undefined
           }
           icon={<DollarSignIcon className="size-4" />}
