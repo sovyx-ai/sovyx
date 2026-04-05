@@ -1,6 +1,21 @@
+/**
+ * StatCard — Overview stat card with design token system.
+ *
+ * Displays a key metric with:
+ * - Title (xs, text-secondary)
+ * - Value (display size, text-primary)
+ * - Optional status dot (StatusDot component)
+ * - Optional icon (Lucide)
+ * - Optional trend indicator (up/down arrow)
+ * - Optional subtitle (secondary text)
+ *
+ * Ref: Architecture §3.1, META-01 §8 (Cards spec)
+ */
+
 import type { ReactNode } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { StatusDot, healthStatusToState } from "./status-dot";
+import type { HealthStatus } from "./status-dot";
 
 interface StatCardProps {
   title: string;
@@ -8,15 +23,9 @@ interface StatCardProps {
   subtitle?: string;
   icon?: ReactNode;
   trend?: { value: number; label: string };
-  status?: "green" | "red" | "yellow";
+  status?: HealthStatus;
   className?: string;
 }
-
-const STATUS_LABEL: Record<string, string> = {
-  green: "Healthy",
-  red: "Error",
-  yellow: "Warning",
-};
 
 export function StatCard({
   title,
@@ -28,50 +37,62 @@ export function StatCard({
   className,
 }: StatCardProps) {
   return (
-    <Card className={cn("glass", className)} role="group" aria-label={title}>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-        <CardTitle className="text-sm font-medium text-muted-foreground">
+    <div
+      className={cn(
+        "rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-4 transition-colors",
+        "hover:border-[var(--svx-color-border-strong)]",
+        className,
+      )}
+      role="group"
+      aria-label={title}
+    >
+      {/* Header: title + icon/status */}
+      <div className="flex items-center justify-between pb-2">
+        <span className="text-xs font-medium text-[var(--svx-color-text-secondary)]">
           {title}
-        </CardTitle>
+        </span>
         <div className="flex items-center gap-2">
-          {status && (
-            <span
-              className={
-                status === "green"
-                  ? "status-dot-green"
-                  : status === "red"
-                    ? "status-dot-red"
-                    : "status-dot-yellow"
-              }
-              role="status"
-              aria-label={STATUS_LABEL[status]}
-            />
-          )}
+          {status && <StatusDot status={healthStatusToState(status)} size="sm" />}
           {icon && (
-            <span className="text-muted-foreground" aria-hidden="true">{icon}</span>
+            <span className="text-[var(--svx-color-text-tertiary)]" aria-hidden="true">
+              {icon}
+            </span>
           )}
         </div>
-      </CardHeader>
-      <CardContent>
-        <div className="text-2xl font-bold" aria-live="polite">{value}</div>
-        <div className="flex items-center gap-2">
+      </div>
+
+      {/* Value */}
+      <div
+        className="text-2xl font-bold tracking-tight text-[var(--svx-color-text-primary)]"
+        aria-live="polite"
+      >
+        {value}
+      </div>
+
+      {/* Footer: trend + subtitle */}
+      {(trend || subtitle) && (
+        <div className="mt-1 flex items-center gap-2">
           {trend && (
             <span
               className={cn(
                 "text-xs font-medium",
-                trend.value >= 0 ? "text-[var(--color-success)]" : "text-destructive",
+                trend.value >= 0
+                  ? "text-[var(--svx-color-success)]"
+                  : "text-[var(--svx-color-error)]",
               )}
               aria-label={`${trend.value >= 0 ? "Up" : "Down"} ${Math.abs(trend.value)}% ${trend.label}`}
             >
               {trend.value >= 0 ? "↑" : "↓"}
-              {Math.abs(trend.value)}% {trend.label}
+              {Math.abs(trend.value)}%
             </span>
           )}
           {subtitle && (
-            <span className="truncate text-xs text-muted-foreground">{subtitle}</span>
+            <span className="truncate text-xs text-[var(--svx-color-text-tertiary)]">
+              {subtitle}
+            </span>
           )}
         </div>
-      </CardContent>
-    </Card>
+      )}
+    </div>
   );
 }
