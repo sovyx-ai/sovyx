@@ -7,7 +7,26 @@
  * Accent: Violet (🔮 identidade Nyx)
  * Font: Inter (body) + JetBrains Mono (code)
  * Always dark. No light mode.
+ *
+ * FE-00e: Local fonts, focus ring, font-code utility, favicon
  */
+
+/* ── Local Fonts (no CDN — CSP-safe) ── */
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/inter-variable.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono-variable.woff2") format("woff2");
+}
 
 @custom-variant dark (&:is(.dark *));
 
@@ -198,4 +217,38 @@
   border-radius: 9999px;
   background-color: var(--color-warning);
   animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+/* ── Font utility for code/logs ── */
+.font-code {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+}
+
+/* ── Focus-visible ring (a11y) ── */
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* ── Selection color ── */
+::selection {
+  background: oklch(0.60 0.22 285 / 0.3);
+  color: oklch(0.95 0 0);
+}
+
+/* ── Scrollbar (subtle dark) ── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: oklch(0.30 0.01 270);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.40 0.01 270);
 }
