@@ -19,6 +19,10 @@ const LogsPage = lazy(() => import("@/pages/logs"));
 const SettingsPage = lazy(() => import("@/pages/settings"));
 const AboutPage = lazy(() => import("@/pages/about"));
 const VoicePage = lazy(() => import("@/pages/voice"));
+const EmotionsPage = lazy(() => import("@/pages/emotions"));
+const ProductivityPage = lazy(() => import("@/pages/productivity"));
+const PluginsPage = lazy(() => import("@/pages/plugins"));
+const HomePage = lazy(() => import("@/pages/home"));
 const NotFoundPage = lazy(() => import("@/pages/not-found"));
 
 function PageWrapper({
@@ -89,6 +93,14 @@ export const router = createBrowserRouter([
         ),
       },
       {
+        path: "about",
+        element: (
+          <PageWrapper>
+            <AboutPage />
+          </PageWrapper>
+        ),
+      },
+      {
         path: "voice",
         element: (
           <PageWrapper>
@@ -97,10 +109,34 @@ export const router = createBrowserRouter([
         ),
       },
       {
-        path: "about",
+        path: "emotions",
         element: (
           <PageWrapper>
-            <AboutPage />
+            <EmotionsPage />
+          </PageWrapper>
+        ),
+      },
+      {
+        path: "productivity",
+        element: (
+          <PageWrapper>
+            <ProductivityPage />
+          </PageWrapper>
+        ),
+      },
+      {
+        path: "plugins",
+        element: (
+          <PageWrapper>
+            <PluginsPage />
+          </PageWrapper>
+        ),
+      },
+      {
+        path: "home",
+        element: (
+          <PageWrapper>
+            <HomePage />
           </PageWrapper>
         ),
       },
