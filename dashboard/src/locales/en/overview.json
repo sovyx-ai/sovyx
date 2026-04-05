@@ -1,8 +1,8 @@
 {
   "title": "Overview",
-  "subtitle": "System status at a glance",
+  "subtitle": "Your Mind at a glance",
   "cards": {
-    "engineStatus": "Engine Status",
+    "engineStatus": "Mind Status",
     "uptime": "Uptime: {{duration}}",
     "messages": "Messages",
     "messagesToday": "{{count}} today",
@@ -29,8 +29,8 @@
     "voice": "Voice Pipeline",
     "voiceDesc": "Voice pipeline not configured",
     "voiceAction": "Setup →",
-    "proactive": "Proactive Engine",
-    "proactiveDesc": "Your mind will suggest things before you ask",
+    "proactive": "Proactive Thinking",
+    "proactiveDesc": "Your Mind will anticipate before you ask",
     "emotional": "Emotional Timeline",
     "emotionalDesc": "Coming in v1.0",
     "tasks": "Tasks & Habits",

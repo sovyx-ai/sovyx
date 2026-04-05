@@ -6,7 +6,7 @@
     "allChannels": "All channels"
   },
   "list": {
-    "empty": "No conversations yet",
+    "empty": "No conversations yet. Send a message to start a dialogue with your Mind.",
     "live": "Live"
   },
   "detail": {
@@ -17,6 +17,7 @@
     "tokens": "Tokens: {{input}} in / {{output}} out",
     "cost": "Cost: ${{amount}}",
     "cognitiveTrace": "Cognitive Trace",
-    "traceTotal": "{{duration}}ms total"
+    "traceTotal": "{{duration}}ms total",
+    "participant": "Participant"
   }
 }

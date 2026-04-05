@@ -14,12 +14,12 @@
   },
   "general": {
     "logLevel": "Log Level",
-    "logLevelDesc": "Set the minimum log level for the dashboard.",
+    "logLevelDesc": "Set the minimum log level for the Mind.",
     "dataDir": "Data Directory",
-    "dataDirDesc": "Where Sovyx stores its data (read-only).",
+    "dataDirDesc": "Where Sovyx keeps its memories (read-only).",
     "telemetry": "Telemetry",
     "telemetryDesc": "Send anonymous usage data to help improve Sovyx.",
-    "saved": "Settings saved successfully.",
+    "saved": "Settings saved.",
     "saveFailed": "Failed to save settings."
   },
   "about": {
