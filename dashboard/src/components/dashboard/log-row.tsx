@@ -41,21 +41,20 @@ export function LogRow({ entry }: LogRowProps) {
   const [expanded, setExpanded] = useState(false);
 
   const handleClick = (e: MouseEvent) => {
-    if (entry.metadata && Object.keys(entry.metadata).length > 0) {
-      e.stopPropagation();
-      setExpanded((v) => !v);
-    }
+    e.stopPropagation();
+    setExpanded((v) => !v);
   };
 
-  const hasMetadata =
-    entry.metadata != null && Object.keys(entry.metadata).length > 0;
+  // Extract known fields; rest is extra structured data
+  const { timestamp: _ts, level: _lv, logger: _lg, event: _ev, ...extraFields } = entry;
+  const hasExtra = Object.keys(extraFields).length > 0;
 
   return (
     <div
       className={cn(
         "font-code border-b border-border/50 px-3 py-1.5 text-xs transition-colors",
         LEVEL_BG[entry.level],
-        hasMetadata && "cursor-pointer hover:bg-secondary/50",
+        hasExtra && "cursor-pointer hover:bg-secondary/50",
       )}
       onClick={handleClick}
     >
@@ -66,14 +65,14 @@ export function LogRow({ entry }: LogRowProps) {
         <span className={cn("w-12 shrink-0 font-medium", LEVEL_STYLES[entry.level])}>
           {entry.level.padEnd(5)}
         </span>
-        <span className="shrink-0 text-primary/70">{entry.module}</span>
+        <span className="shrink-0 text-primary/70">{entry.logger}</span>
         <span className="min-w-0 truncate text-foreground">
-          {entry.message}
+          {entry.event}
         </span>
       </div>
-      {expanded && hasMetadata && (
+      {expanded && hasExtra && (
         <pre className="mt-1 overflow-x-auto rounded bg-secondary/50 p-2 text-[10px] text-muted-foreground">
-          {JSON.stringify(entry.metadata, null, 2)}
+          {JSON.stringify(extraFields, null, 2)}
         </pre>
       )}
     </div>

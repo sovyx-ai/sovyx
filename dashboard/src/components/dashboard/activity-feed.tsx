@@ -12,35 +12,60 @@ const EVENT_CONFIG: Record<
   WsEventType,
   { icon: string; color: string; label: string }
 > = {
-  "conversation.message": {
+  PerceptionReceived: {
     icon: "💬",
     color: "text-[var(--color-info)]",
     label: "Message",
   },
-  "cognitive.transition": {
+  ThinkCompleted: {
     icon: "⚡",
     color: "text-[var(--color-warning)]",
-    label: "Cognitive",
+    label: "Think",
   },
-  "brain.concept_created": {
+  ResponseSent: {
+    icon: "📤",
+    color: "text-[var(--color-info)]",
+    label: "Response",
+  },
+  ConceptCreated: {
     icon: "🧠",
     color: "text-primary",
     label: "Concept",
   },
-  "health.alert": {
+  EpisodeEncoded: {
+    icon: "🧠",
+    color: "text-primary/70",
+    label: "Episode",
+  },
+  ServiceHealthChanged: {
     icon: "🔴",
     color: "text-destructive",
     label: "Health",
   },
-  "llm.response": {
-    icon: "🤖",
-    color: "text-[var(--color-success)]",
-    label: "LLM",
+  ConsolidationCompleted: {
+    icon: "🔄",
+    color: "text-primary",
+    label: "Consolidation",
   },
-  "log.entry": {
-    icon: "📋",
-    color: "text-muted-foreground",
-    label: "Log",
+  EngineStarted: {
+    icon: "🚀",
+    color: "text-[var(--color-success)]",
+    label: "Engine",
+  },
+  EngineStopping: {
+    icon: "⏹",
+    color: "text-[var(--color-warning)]",
+    label: "Engine",
+  },
+  ChannelConnected: {
+    icon: "🔗",
+    color: "text-[var(--color-success)]",
+    label: "Channel",
+  },
+  ChannelDisconnected: {
+    icon: "🔌",
+    color: "text-destructive",
+    label: "Channel",
   },
 };
 
@@ -59,22 +84,32 @@ function formatTime(iso: string): string {
 }
 
 function eventSummary(event: WsEvent): string {
-  const payload = event.payload as Record<string, unknown>;
+  const data = event.data as Record<string, unknown>;
   switch (event.type) {
-    case "conversation.message":
-      return `${payload["participant"] ?? "user"}: ${String(payload["content"] ?? "").slice(0, 60)}`;
-    case "brain.concept_created":
-      return `Created: ${String(payload["label"] ?? "unknown")}`;
-    case "llm.response":
-      return `${payload["model"] ?? "?"} — ${payload["tokens"] ?? "?"} tokens`;
-    case "health.alert":
-      return `${payload["check"] ?? "?"}: ${payload["status"] ?? "?"}`;
-    case "cognitive.transition":
-      return `${payload["from"] ?? "?"} → ${payload["to"] ?? "?"}`;
-    case "log.entry":
-      return String(payload["message"] ?? "");
+    case "PerceptionReceived":
+      return `from ${data["source"] ?? "?"} (${data["person_id"] ?? "unknown"})`;
+    case "ThinkCompleted":
+      return `${data["model"] ?? "?"} — ${data["tokens_in"] ?? 0}+${data["tokens_out"] ?? 0} tokens — $${Number(data["cost_usd"] ?? 0).toFixed(4)}`;
+    case "ResponseSent":
+      return `via ${data["channel"] ?? "?"} (${data["latency_ms"] ?? "?"}ms)`;
+    case "ConceptCreated":
+      return `Created: ${String(data["title"] ?? "unknown")}`;
+    case "EpisodeEncoded":
+      return `importance: ${Number(data["importance"] ?? 0).toFixed(2)}`;
+    case "ServiceHealthChanged":
+      return `${data["service"] ?? "?"}: ${data["status"] ?? "?"}`;
+    case "ConsolidationCompleted":
+      return `merged: ${data["merged"] ?? 0}, pruned: ${data["pruned"] ?? 0}, strengthened: ${data["strengthened"] ?? 0}`;
+    case "EngineStarted":
+      return "Engine started";
+    case "EngineStopping":
+      return `Stopping: ${data["reason"] ?? "shutdown"}`;
+    case "ChannelConnected":
+      return `${data["channel_type"] ?? "?"} connected`;
+    case "ChannelDisconnected":
+      return `${data["channel_type"] ?? "?"} disconnected: ${data["reason"] ?? "unknown"}`;
     default:
-      return JSON.stringify(payload).slice(0, 60);
+      return JSON.stringify(data).slice(0, 60);
   }
 }
 
@@ -95,7 +130,11 @@ export function ActivityFeed({ events, className }: ActivityFeedProps) {
           ) : (
             <div className="space-y-1">
               {reversed.map((event, i) => {
-                const config = EVENT_CONFIG[event.type];
+                const config = EVENT_CONFIG[event.type] ?? {
+                  icon: "❓",
+                  color: "text-muted-foreground",
+                  label: event.type,
+                };
                 return (
                   <div
                     key={`${event.timestamp}-${i}`}

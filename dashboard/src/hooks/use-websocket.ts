@@ -4,7 +4,7 @@
  */
 import { useEffect, useRef, useCallback } from "react";
 import { useDashboardStore } from "@/stores/dashboard";
-import type { WsEvent, LogEntry, HealthCheck, SystemStatus } from "@/types/api";
+import type { WsEvent, SystemStatus } from "@/types/api";
 
 const WS_BASE = import.meta.env.VITE_WS_URL ?? `ws://${window.location.host}`;
 const MAX_BACKOFF_MS = 30_000;
@@ -30,14 +30,11 @@ export function useWebSocket(): void {
         addEvent(event);
 
         switch (event.type) {
-          case "health.alert":
-            setHealthChecks(event.payload as HealthCheck[]);
+          case "ServiceHealthChanged":
+            // Trigger a health refresh on next poll cycle
             break;
-          case "log.entry":
-            addLog(event.payload as LogEntry);
-            break;
-          case "llm.response":
-            // Status refresh will be handled by periodic poll or next status event
+          case "ThinkCompleted":
+            // LLM cost update — status refresh will pick it up
             break;
           default:
             break;
