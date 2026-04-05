@@ -7,3 +7,5 @@ export { LetterAvatar, MindAvatar } from "./letter-avatar";
 export { ChannelBadge } from "./channel-badge";
 export { ChatBubble } from "./chat-bubble";
 export { ChatThread } from "./chat-thread";
+export { BrainGraph, CATEGORY_LABELS } from "./brain-graph";
+export { CategoryLegend } from "./category-legend";
