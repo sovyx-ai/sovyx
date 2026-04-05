@@ -3,12 +3,15 @@
 @import "shadcn/tailwind.css";
 
 /*
- * Sovyx Design System — Dark Minimal + Glassmorphism Cirúrgico
- * Accent: Violet (🔮 identidade Nyx)
+ * Sovyx Design System v2 — Dark Minimal + Glassmorphism Cirúrgico
+ * Source of truth: BRD-003 (Brand Identity) + META-01 (Visual Identity)
+ * Token prefix: --svx-*
  * Font: Geist Sans (body) + Geist Mono (code)
- * Always dark. No light mode.
+ * Always dark. No light mode. "Sovyx operates in the dark."
  *
- * FE-00e: Local fonts, focus ring, font-code utility, favicon
+ * Architecture: --svx-* tokens are the SINGLE SOURCE OF TRUTH.
+ * shadcn vars (--background, --foreground, etc.) MAP to --svx-* tokens.
+ * Never define colors outside this system.
  */
 
 /* ── Local Fonts (no CDN — CSP-safe, local-first) ── */
@@ -35,7 +38,7 @@
   --font-mono: "Geist Mono", ui-monospace, monospace;
   --font-heading: var(--font-sans);
 
-  /* Color tokens → Tailwind utilities (bg-background, text-foreground, etc.) */
+  /* ── shadcn → Tailwind bridge (bg-background, text-foreground, etc.) ── */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -73,88 +76,165 @@
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
 
-  /* Semantic tokens (custom) */
+  /* Semantic color tokens (Tailwind utilities: bg-success, text-warning, etc.) */
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-info: var(--info);
 
-  /* Radius scale */
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
+  /* Radius scale — exposed to Tailwind (rounded-sm, rounded-md, etc.) */
+  --radius-sm: var(--svx-radius-sm);
+  --radius-md: var(--svx-radius-md);
+  --radius-lg: var(--svx-radius-lg);
+  --radius-xl: var(--svx-radius-xl);
+  --radius-2xl: var(--svx-radius-2xl);
+  --radius-full: var(--svx-radius-full);
 }
 
 /*
- * Sovyx is dark-only. We define tokens on :root directly.
- * No .dark class needed — the <html class="dark"> in index.html
- * ensures shadcn components pick up dark variants.
+ * ═══════════════════════════════════════════════════
+ *  SOVYX DESIGN TOKENS (--svx-*) — SINGLE SOURCE OF TRUTH
+ *  All values from BRD-003 Brand Identity Specification
+ * ═══════════════════════════════════════════════════
  */
 :root {
-  /* ── Base ── */
-  --background: oklch(0.13 0.01 270);
-  --foreground: oklch(0.95 0 0);
+  /* ── Backgrounds ── */
+  --svx-color-bg-base: #0A0A0F;          /* Void — page background */
+  --svx-color-bg-subtle: #0F0F17;        /* Alternating sections */
+  --svx-color-bg-surface: #12121A;       /* Abyss — cards, panels */
+  --svx-color-bg-elevated: #1A1A2E;      /* Modals, dropdowns */
+  --svx-color-bg-overlay: rgba(10, 10, 15, 0.80);  /* Modal backdrop (blur) */
+  --svx-color-bg-hover: rgba(139, 92, 246, 0.08);  /* Item hover */
+  --svx-color-bg-active: rgba(139, 92, 246, 0.12); /* Selected state */
+  --svx-color-bg-input: #0F0F17;         /* Inputs, textareas */
 
-  /* ── Cards ── */
-  --card: oklch(0.16 0.01 270);
-  --card-foreground: oklch(0.95 0 0);
+  /* ── Text ── */
+  --svx-color-text-primary: #F8FAFC;     /* Main text */
+  --svx-color-text-secondary: #94A3B8;   /* Labels, descriptions */
+  --svx-color-text-tertiary: #64748B;    /* Timestamps, hints */
+  --svx-color-text-disabled: #475569;    /* Disabled elements */
+  --svx-color-text-inverse: #0A0A0F;     /* Text on light backgrounds */
+  --svx-color-text-link: #A78BFA;        /* Links (Pulse) */
+  --svx-color-text-code: #C4B5FD;        /* Inline code (Neuron) */
 
-  /* ── Popover ── */
-  --popover: oklch(0.16 0.01 270);
-  --popover-foreground: oklch(0.95 0 0);
+  /* ── Brand ── */
+  --svx-color-brand-primary: #8B5CF6;    /* Synapse — THE brand color */
+  --svx-color-brand-hover: #7C3AED;      /* Hover (more saturated) */
+  --svx-color-brand-active: #6D28D9;     /* Pressed (darker) */
+  --svx-color-brand-subtle: rgba(139, 92, 246, 0.15); /* Tags, badges */
+  --svx-color-brand-muted: #A78BFA;      /* Pulse — brand in text */
 
-  /* ── Primary — Violet 🔮 ── */
-  --primary: oklch(0.60 0.22 285);
-  --primary-foreground: oklch(1 0 0);
-
-  /* ── Secondary ── */
-  --secondary: oklch(0.22 0.01 270);
-  --secondary-foreground: oklch(0.95 0 0);
-
-  /* ── Muted ── */
-  --muted: oklch(0.22 0.01 270);
-  --muted-foreground: oklch(0.55 0.01 270);
-
-  /* ── Accent — Violet desaturado ── */
-  --accent: oklch(0.25 0.08 285);
-  --accent-foreground: oklch(0.95 0 0);
-
-  /* ── Destructive ── */
-  --destructive: oklch(0.65 0.22 25);
-  --destructive-foreground: oklch(1 0 0);
-
-  /* ── Border / Input / Ring ── */
-  --border: oklch(0.25 0.01 270);
-  --input: oklch(0.22 0.01 270);
-  --ring: oklch(0.60 0.22 285);
-
-  /* ── Radius ── */
-  --radius: 0.75rem;
+  /* ── Accent ── */
+  --svx-color-accent-cyan: #22D3EE;      /* Awaken — online, alive */
+  --svx-color-accent-cyan-subtle: rgba(34, 211, 238, 0.15); /* Cyan badges */
 
   /* ── Semantic ── */
-  --success: oklch(0.70 0.18 155);
-  --warning: oklch(0.78 0.16 70);
-  --info: oklch(0.65 0.18 250);
+  --svx-color-success: #22C55E;          /* Alive — success, online */
+  --svx-color-success-subtle: rgba(34, 197, 94, 0.15);
+  --svx-color-warning: #F59E0B;          /* Alert — warning */
+  --svx-color-warning-subtle: rgba(245, 158, 11, 0.15);
+  --svx-color-error: #EF4444;            /* Critical — error */
+  --svx-color-error-subtle: rgba(239, 68, 68, 0.15);
+  --svx-color-info: #3B82F6;             /* Info — informational */
+  --svx-color-info-subtle: rgba(59, 130, 246, 0.15);
+
+  /* ── Borders ── */
+  --svx-color-border-default: #1E293B;   /* Default borders */
+  --svx-color-border-subtle: #151B2B;    /* Separators */
+  --svx-color-border-strong: #334155;    /* Hover, emphasis (WCAG 3:1 on surface) */
+  --svx-color-border-focus: #8B5CF6;     /* Focus ring */
+  --svx-color-border-error: #EF4444;     /* Input error state */
+
+  /* ── Radius scale (px values) ── */
+  --svx-radius-sm: 4px;                  /* Badges, tags */
+  --svx-radius-md: 8px;                  /* Inputs, buttons, small cards */
+  --svx-radius-lg: 12px;                 /* Cards, modals */
+  --svx-radius-xl: 16px;                 /* Feature cards */
+  --svx-radius-2xl: 24px;               /* Large containers */
+  --svx-radius-full: 9999px;            /* Pills, avatars */
+
+  /* ── Elevation shadows ── */
+  --svx-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --svx-shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.4), 0 2px 4px -2px rgba(0, 0, 0, 0.3);
+  --svx-shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.5), 0 4px 6px -4px rgba(0, 0, 0, 0.4);
+  --svx-shadow-glow: 0 0 20px rgba(139, 92, 246, 0.3);
+  --svx-shadow-glow-sm: 0 0 12px rgba(139, 92, 246, 0.15);
+
+  /* ── Animation timing ── */
+  --svx-ease-default: cubic-bezier(0.4, 0, 0.2, 1);
+  --svx-ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --svx-ease-out: cubic-bezier(0, 0, 0.2, 1);
+  --svx-duration-fast: 100ms;
+  --svx-duration-normal: 200ms;
+  --svx-duration-slow: 300ms;
+
+  /*
+   * ═══════════════════════════════════════════════
+   *  SHADCN VARIABLE MAPPING (--svx-* → shadcn vars)
+   *  shadcn components read these. DO NOT delete.
+   * ═══════════════════════════════════════════════
+   */
+
+  /* ── Base ── */
+  --background: var(--svx-color-bg-base);
+  --foreground: var(--svx-color-text-primary);
+
+  /* ── Cards ── */
+  --card: var(--svx-color-bg-surface);
+  --card-foreground: var(--svx-color-text-primary);
+
+  /* ── Popover ── */
+  --popover: var(--svx-color-bg-surface);
+  --popover-foreground: var(--svx-color-text-primary);
+
+  /* ── Primary — Synapse Violet 🔮 ── */
+  --primary: var(--svx-color-brand-primary);
+  --primary-foreground: var(--svx-color-text-inverse);
+
+  /* ── Secondary ── */
+  --secondary: var(--svx-color-bg-surface);
+  --secondary-foreground: var(--svx-color-text-primary);
+
+  /* ── Muted ── */
+  --muted: var(--svx-color-bg-surface);
+  --muted-foreground: var(--svx-color-text-secondary);
+
+  /* ── Accent ── */
+  --accent: var(--svx-color-bg-elevated);
+  --accent-foreground: var(--svx-color-text-primary);
+
+  /* ── Destructive ── */
+  --destructive: var(--svx-color-error);
+  --destructive-foreground: #FFFFFF;
+
+  /* ── Border / Input / Ring ── */
+  --border: var(--svx-color-border-default);
+  --input: var(--svx-color-bg-input);
+  --ring: var(--svx-color-border-focus);
+
+  /* ── Radius (shadcn base) ── */
+  --radius: var(--svx-radius-lg);
+
+  /* ── Semantic ── */
+  --success: var(--svx-color-success);
+  --warning: var(--svx-color-warning);
+  --info: var(--svx-color-info);
 
   /* ── Sidebar ── */
-  --sidebar: oklch(0.14 0.01 270);
-  --sidebar-foreground: oklch(0.95 0 0);
-  --sidebar-primary: oklch(0.60 0.22 285);
-  --sidebar-primary-foreground: oklch(1 0 0);
-  --sidebar-accent: oklch(0.25 0.08 285);
-  --sidebar-accent-foreground: oklch(0.95 0 0);
-  --sidebar-border: oklch(0.20 0.01 270);
-  --sidebar-ring: oklch(0.60 0.22 285);
+  --sidebar: var(--svx-color-bg-subtle);
+  --sidebar-foreground: var(--svx-color-text-primary);
+  --sidebar-primary: var(--svx-color-brand-primary);
+  --sidebar-primary-foreground: var(--svx-color-text-inverse);
+  --sidebar-accent: var(--svx-color-bg-hover);
+  --sidebar-accent-foreground: var(--svx-color-text-primary);
+  --sidebar-border: var(--svx-color-border-subtle);
+  --sidebar-ring: var(--svx-color-border-focus);
 
   /* ── Charts ── */
-  --chart-1: oklch(0.60 0.22 285);   /* violet (primary) */
-  --chart-2: oklch(0.70 0.18 155);   /* green (success) */
-  --chart-3: oklch(0.65 0.18 250);   /* blue (info) */
-  --chart-4: oklch(0.78 0.16 70);    /* amber (warning) */
-  --chart-5: oklch(0.65 0.22 25);    /* red (destructive) */
+  --chart-1: var(--svx-color-brand-primary);    /* violet */
+  --chart-2: var(--svx-color-success);           /* green */
+  --chart-3: var(--svx-color-info);              /* blue */
+  --chart-4: var(--svx-color-warning);           /* amber */
+  --chart-5: var(--svx-color-error);             /* red */
 }
 
 @layer base {
@@ -170,20 +250,20 @@
   }
 }
 
-/* ── Glassmorphism — CIRÚRGICO: stat cards, modais, command palette ── */
+/* ── Glassmorphism — CIRÚRGICO: stat cards, modals, command palette ── */
 .glass {
-  background: oklch(0.16 0.01 270 / 0.7);
+  background: rgba(18, 18, 26, 0.7);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  border: 1px solid oklch(1 0 0 / 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-/* ── Glow sutil para elementos interativos ── */
+/* ── Glow for interactive elements ── */
 .glow-primary {
-  box-shadow: 0 0 20px oklch(0.60 0.22 285 / 0.15);
+  box-shadow: var(--svx-shadow-glow);
 }
 
-/* ── Status dot pulsante ── */
+/* ── Status dot animations ── */
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
@@ -192,30 +272,30 @@
   display: inline-block;
   height: 0.5rem;
   width: 0.5rem;
-  border-radius: 9999px;
+  border-radius: var(--svx-radius-full);
 }
 .status-dot-green {
   display: inline-block;
   height: 0.5rem;
   width: 0.5rem;
-  border-radius: 9999px;
-  background-color: var(--color-success);
+  border-radius: var(--svx-radius-full);
+  background-color: var(--svx-color-accent-cyan);
   animation: pulse-dot 2s ease-in-out infinite;
 }
 .status-dot-red {
   display: inline-block;
   height: 0.5rem;
   width: 0.5rem;
-  border-radius: 9999px;
-  background-color: var(--color-destructive);
+  border-radius: var(--svx-radius-full);
+  background-color: var(--svx-color-error);
   animation: pulse-dot 1s ease-in-out infinite;
 }
 .status-dot-yellow {
   display: inline-block;
   height: 0.5rem;
   width: 0.5rem;
-  border-radius: 9999px;
-  background-color: var(--color-warning);
+  border-radius: var(--svx-radius-full);
+  background-color: var(--svx-color-warning);
   animation: pulse-dot 1.5s ease-in-out infinite;
 }
 
@@ -224,27 +304,27 @@
   font-family: "Geist Mono", ui-monospace, monospace;
 }
 
-/* ── Focus-visible ring (a11y) ── */
+/* ── Focus-visible ring (a11y — WCAG 2.4.7) ── */
 :focus-visible {
-  outline: 2px solid var(--ring);
+  outline: 2px solid var(--svx-color-border-focus);
   outline-offset: 2px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--svx-radius-sm);
 }
 
-/* ── Skip Navigation (a11y) ── */
+/* ── Skip Navigation (a11y — WCAG 2.4.1) ── */
 .skip-nav {
   position: absolute;
   top: -100%;
   left: 0.5rem;
   z-index: 9999;
   padding: 0.5rem 1rem;
-  background: var(--color-primary);
-  color: var(--color-primary-foreground);
-  border-radius: var(--radius);
+  background: var(--svx-color-brand-primary);
+  color: var(--svx-color-text-inverse);
+  border-radius: var(--svx-radius-md);
   font-size: 0.875rem;
   font-weight: 500;
   text-decoration: none;
-  transition: top 0.15s ease;
+  transition: top var(--svx-duration-fast) var(--svx-ease-out);
 }
 .skip-nav:focus {
   top: 0.5rem;
@@ -275,27 +355,27 @@
 }
 
 .animate-page-in {
-  animation: page-in 0.2s ease-out both;
+  animation: page-in var(--svx-duration-normal) var(--svx-ease-out) both;
 }
 
 /* ── Selection color ── */
 ::selection {
-  background: oklch(0.60 0.22 285 / 0.3);
-  color: oklch(0.95 0 0);
+  background: rgba(139, 92, 246, 0.3);
+  color: var(--svx-color-text-primary);
 }
 
-/* ── Scrollbar (subtle dark) ── */
+/* ── Scrollbar (subtle dark — 6px, rounded) ── */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: transparent;
+  background: var(--svx-color-bg-subtle);
 }
 ::-webkit-scrollbar-thumb {
-  background: oklch(0.30 0.01 270);
+  background: var(--svx-color-border-strong);
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: oklch(0.40 0.01 270);
+  background: var(--svx-color-text-tertiary);
 }

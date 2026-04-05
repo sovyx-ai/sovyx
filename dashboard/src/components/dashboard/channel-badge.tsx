@@ -1,10 +1,11 @@
 import { cn } from "@/lib/utils";
 
 const CHANNEL_CONFIG: Record<string, { icon: string; label: string; color: string }> = {
-  telegram: { icon: "✈️", label: "Telegram", color: "text-[oklch(0.65_0.15_230)]" },
-  discord: { icon: "💬", label: "Discord", color: "text-[oklch(0.60_0.18_275)]" },
-  signal: { icon: "🔒", label: "Signal", color: "text-[oklch(0.65_0.15_230)]" },
+  telegram: { icon: "✈️", label: "Telegram", color: "text-[#3B82F6]" },    /* info blue */
+  discord: { icon: "💬", label: "Discord", color: "text-[#8B5CF6]" },      /* brand violet */
+  signal: { icon: "🔒", label: "Signal", color: "text-[#3B82F6]" },        /* info blue */
   cli: { icon: "⌨️", label: "CLI", color: "text-muted-foreground" },
+  api: { icon: "🔗", label: "API", color: "text-muted-foreground" },
 };
 
 interface ChannelBadgeProps {
