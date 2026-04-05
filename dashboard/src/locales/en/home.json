@@ -1,0 +1,11 @@
+{
+  "title": "Home Integration",
+  "description": "Control your smart home through your Mind. Home Assistant integration, routines, presence detection.",
+  "features": {
+    "entityList": "Home Assistant entity list",
+    "quickActions": "Quick actions",
+    "automationStatus": "Automation status",
+    "cameraSnapshots": "Camera snapshots"
+  },
+  "badge": "Available in v1.0"
+}

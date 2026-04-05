@@ -1,0 +1,12 @@
+{
+  "title": "Voice Pipeline",
+  "description": "Talk to your Mind with natural voice. Wake word detection, local STT/TTS, emotional voice modulation.",
+  "features": {
+    "pipelineStatus": "Pipeline status monitor",
+    "sttTtsSelector": "STT/TTS model selector",
+    "wakeWord": "Wake word configuration",
+    "latencyGauge": "Latency gauge",
+    "voiceTest": "Voice test playground"
+  },
+  "badge": "Available in v1.0"
+}

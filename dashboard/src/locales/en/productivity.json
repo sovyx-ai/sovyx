@@ -1,0 +1,12 @@
+{
+  "title": "Daily Productivity",
+  "description": "Morning briefings, task management, habit tracking, and daily journal — all managed by your Mind.",
+  "features": {
+    "morningBriefing": "Morning briefing",
+    "taskManager": "Task manager",
+    "habitTracker": "Habit tracker",
+    "dailyJournal": "Daily journal",
+    "calendarSync": "Calendar sync"
+  },
+  "badge": "Available in v1.0"
+}

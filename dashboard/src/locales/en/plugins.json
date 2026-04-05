@@ -1,0 +1,12 @@
+{
+  "title": "Plugin Marketplace",
+  "description": "Extend your Mind with community plugins. Weather, finance, smart home, and hundreds more.",
+  "features": {
+    "searchBrowse": "Search & browse plugins",
+    "installUpdate": "Install and update",
+    "perPluginConfig": "Per-plugin configuration",
+    "analytics": "Plugin analytics",
+    "sandboxStatus": "Sandbox status"
+  },
+  "badge": "Available in v1.0"
+}
