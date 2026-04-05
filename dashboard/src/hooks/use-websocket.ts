@@ -14,7 +14,7 @@
  */
 import { useEffect, useRef, useCallback } from "react";
 import { useDashboardStore } from "@/stores/dashboard";
-import type { WsEvent, SystemStatus, HealthResponse } from "@/types/api";
+import type { WsEvent, SystemStatus, HealthResponse, LogEntry, BrainGraph, Message } from "@/types/api";
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
 const WS_BASE = import.meta.env.VITE_WS_URL ?? `ws://${window.location.host}`;
@@ -57,6 +57,48 @@ async function refreshHealth(): Promise<void> {
   }
 }
 
+/** Push a WS event as a log entry to the store. */
+function pushEventAsLog(event: WsEvent): void {
+  const entry: LogEntry = {
+    timestamp: event.timestamp,
+    level: "INFO",
+    logger: "sovyx.dashboard.events",
+    event: `[${event.type}] ${event.data ? JSON.stringify(event.data) : ""}`.slice(0, 500),
+  };
+  useDashboardStore.getState().addLog(entry);
+}
+
+/** Refresh brain graph from API. */
+async function refreshBrain(): Promise<void> {
+  try {
+    const res = await fetch(`${API_BASE}/api/brain/graph?limit=200`, { headers: authHeaders() });
+    if (res.ok) {
+      const data = (await res.json()) as BrainGraph;
+      useDashboardStore.getState().setBrainGraph(data);
+    }
+  } catch {
+    // Will retry on next event
+  }
+}
+
+/** Refresh active conversation messages if one is selected. */
+async function refreshActiveConversation(): Promise<void> {
+  const { activeConversationId, setActiveMessages } = useDashboardStore.getState();
+  if (!activeConversationId) return;
+  try {
+    const res = await fetch(
+      `${API_BASE}/api/conversations/${activeConversationId}`,
+      { headers: authHeaders() },
+    );
+    if (res.ok) {
+      const data = (await res.json()) as { conversation_id: string; messages: Message[] };
+      setActiveMessages(data.messages);
+    }
+  } catch {
+    // Will retry
+  }
+}
+
 export function useWebSocket(): void {
   const wsRef = useRef<WebSocket | null>(null);
   const backoffRef = useRef(INITIAL_BACKOFF_MS);
@@ -75,40 +117,53 @@ export function useWebSocket(): void {
       try {
         const event = JSON.parse(raw.data as string) as WsEvent;
 
-        // All events go to activity feed
+        // All events go to activity feed + logs
         addEvent(event);
+        pushEventAsLog(event);
 
         // Targeted refreshes for specific events
         switch (event.type) {
           case "ServiceHealthChanged":
-            // Health status changed — refresh health checks
             void refreshHealth();
             break;
 
           case "ThinkCompleted":
           case "ResponseSent":
-            // LLM cost/tokens changed — refresh status counters
+            // LLM cost/tokens changed + new message in conversation
             void refreshStatus();
+            void refreshActiveConversation();
+            break;
+
+          case "PerceptionReceived":
+            // New user message — refresh active conversation
+            void refreshActiveConversation();
             break;
 
           case "ConceptCreated":
           case "EpisodeEncoded":
-          case "ConsolidationCompleted":
-            // Brain stats changed — refresh status (concept/episode counts)
+            // Brain changed — refresh status + brain graph
             void refreshStatus();
+            void refreshBrain();
+            break;
+
+          case "ConsolidationCompleted":
+            // Major brain change — refresh all brain data
+            void refreshStatus();
+            void refreshBrain();
             break;
 
           case "EngineStarted":
             // Full refresh on engine start
             void refreshStatus();
             void refreshHealth();
+            void refreshBrain();
             break;
 
           case "EngineStopping":
-          case "PerceptionReceived":
           case "ChannelConnected":
           case "ChannelDisconnected":
-            // Activity-only events — no targeted refresh needed
+            // Activity-only events — status refresh for channel count
+            void refreshStatus();
             break;
         }
       } catch {
