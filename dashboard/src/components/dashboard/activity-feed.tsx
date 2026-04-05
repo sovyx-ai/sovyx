@@ -1,8 +1,31 @@
+/**
+ * ActivityFeed — Real-time cognitive cycle event stream.
+ *
+ * Displays WS events with per-type Lucide icons, timestamps,
+ * model name and cost on ThinkCompleted events.
+ * Auto-follow with break-on-scroll pattern (handled by parent).
+ *
+ * Ref: Architecture §3.1, META-04 §6
+ */
+
 import { useTranslation } from "react-i18next";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  EyeIcon,
+  BrainIcon,
+  MessageSquareIcon,
+  LightbulbIcon,
+  BookmarkIcon,
+  MergeIcon,
+  PlugIcon,
+  RocketIcon,
+  SquareIcon,
+  AlertTriangleIcon,
+  CircleHelpIcon,
+} from "lucide-react";
 import type { WsEvent, WsEventType } from "@/types/api";
 import { cn } from "@/lib/utils";
+import type { ReactNode } from "react";
 
 interface ActivityFeedProps {
   events: WsEvent[];
@@ -11,63 +34,69 @@ interface ActivityFeedProps {
 
 const EVENT_CONFIG: Record<
   WsEventType,
-  { icon: string; color: string; label: string }
+  { icon: ReactNode; color: string; label: string }
 > = {
   PerceptionReceived: {
-    icon: "💬",
-    color: "text-[var(--color-info)]",
-    label: "Message",
+    icon: <EyeIcon className="size-3.5" />,
+    color: "text-[var(--svx-color-info)]",
+    label: "Perception",
   },
   ThinkCompleted: {
-    icon: "⚡",
-    color: "text-[var(--color-warning)]",
+    icon: <BrainIcon className="size-3.5" />,
+    color: "text-[var(--svx-color-brand-primary)]",
     label: "Think",
   },
   ResponseSent: {
-    icon: "📤",
-    color: "text-[var(--color-info)]",
+    icon: <MessageSquareIcon className="size-3.5" />,
+    color: "text-[var(--svx-color-info)]",
     label: "Response",
   },
   ConceptCreated: {
-    icon: "🧠",
-    color: "text-primary",
+    icon: <LightbulbIcon className="size-3.5" />,
+    color: "text-[var(--svx-color-accent-cyan)]",
     label: "Concept",
   },
   EpisodeEncoded: {
-    icon: "🧠",
-    color: "text-primary/70",
+    icon: <BookmarkIcon className="size-3.5" />,
+    color: "text-[var(--svx-color-brand-muted)]",
     label: "Episode",
   },
   ServiceHealthChanged: {
-    icon: "🔴",
-    color: "text-destructive",
+    icon: <AlertTriangleIcon className="size-3.5" />,
+    color: "text-[var(--svx-color-warning)]",
     label: "Health",
   },
   ConsolidationCompleted: {
-    icon: "🔄",
-    color: "text-primary",
+    icon: <MergeIcon className="size-3.5" />,
+    color: "text-[var(--svx-color-brand-primary)]",
     label: "Consolidation",
   },
   EngineStarted: {
-    icon: "🚀",
-    color: "text-[var(--color-success)]",
-    label: "Engine",
+    icon: <RocketIcon className="size-3.5" />,
+    color: "text-[var(--svx-color-success)]",
+    label: "Engine Started",
   },
   EngineStopping: {
-    icon: "⏹",
-    color: "text-[var(--color-warning)]",
-    label: "Engine",
+    icon: <SquareIcon className="size-3.5" />,
+    color: "text-[var(--svx-color-warning)]",
+    label: "Engine Stopping",
   },
   ChannelConnected: {
-    icon: "🔗",
-    color: "text-[var(--color-success)]",
+    icon: <PlugIcon className="size-3.5" />,
+    color: "text-[var(--svx-color-success)]",
     label: "Channel",
   },
   ChannelDisconnected: {
-    icon: "🔌",
-    color: "text-destructive",
+    icon: <PlugIcon className="size-3.5" />,
+    color: "text-[var(--svx-color-error)]",
     label: "Channel",
   },
+};
+
+const FALLBACK_CONFIG = {
+  icon: <CircleHelpIcon className="size-3.5" />,
+  color: "text-[var(--svx-color-text-tertiary)]",
+  label: "Event",
 };
 
 function formatTime(iso: string): string {
@@ -88,27 +117,27 @@ function eventSummary(event: WsEvent): string {
   const data = event.data as Record<string, unknown>;
   switch (event.type) {
     case "PerceptionReceived":
-      return `from ${data["source"] ?? "?"} (${data["person_id"] ?? "unknown"})`;
+      return `from ${String(data["source"] ?? "?")} (${String(data["person_id"] ?? "unknown")})`;
     case "ThinkCompleted":
-      return `${data["model"] ?? "?"} — ${data["tokens_in"] ?? 0}+${data["tokens_out"] ?? 0} tokens — $${Number(data["cost_usd"] ?? 0).toFixed(4)}`;
+      return `${String(data["model"] ?? "?")} — ${Number(data["tokens_in"] ?? 0)}+${Number(data["tokens_out"] ?? 0)} tokens — $${Number(data["cost_usd"] ?? 0).toFixed(4)}`;
     case "ResponseSent":
-      return `via ${data["channel"] ?? "?"} (${data["latency_ms"] ?? "?"}ms)`;
+      return `via ${String(data["channel"] ?? "?")} (${String(data["latency_ms"] ?? "?")}ms)`;
     case "ConceptCreated":
       return `Created: ${String(data["title"] ?? "unknown")}`;
     case "EpisodeEncoded":
       return `importance: ${Number(data["importance"] ?? 0).toFixed(2)}`;
     case "ServiceHealthChanged":
-      return `${data["service"] ?? "?"}: ${data["status"] ?? "?"}`;
+      return `${String(data["service"] ?? "?")}: ${String(data["status"] ?? "?")}`;
     case "ConsolidationCompleted":
-      return `merged: ${data["merged"] ?? 0}, pruned: ${data["pruned"] ?? 0}, strengthened: ${data["strengthened"] ?? 0}`;
+      return `merged: ${String(data["merged"] ?? 0)}, pruned: ${String(data["pruned"] ?? 0)}, strengthened: ${String(data["strengthened"] ?? 0)}`;
     case "EngineStarted":
       return "Engine started";
     case "EngineStopping":
-      return `Stopping: ${data["reason"] ?? "shutdown"}`;
+      return `Stopping: ${String(data["reason"] ?? "shutdown")}`;
     case "ChannelConnected":
-      return `${data["channel_type"] ?? "?"} connected`;
+      return `${String(data["channel_type"] ?? "?")} connected`;
     case "ChannelDisconnected":
-      return `${data["channel_type"] ?? "?"} disconnected: ${data["reason"] ?? "unknown"}`;
+      return `${String(data["channel_type"] ?? "?")} disconnected: ${String(data["reason"] ?? "unknown")}`;
     default:
       return JSON.stringify(data).slice(0, 60);
   }
@@ -119,54 +148,58 @@ export function ActivityFeed({ events, className }: ActivityFeedProps) {
   const reversed = [...events].reverse();
 
   return (
-    <Card className={className}>
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm font-medium">{t("feed.title")}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <ScrollArea className="h-64">
-          {reversed.length === 0 ? (
-            <p className="py-8 text-center text-sm text-muted-foreground">
-              {t("feed.empty")}
-            </p>
-          ) : (
-            <div className="space-y-1" role="log" aria-label="Activity feed" aria-live="polite">
-              {reversed.map((event, i) => {
-                const config = EVENT_CONFIG[event.type] ?? {
-                  icon: "❓",
-                  color: "text-muted-foreground",
-                  label: event.type,
-                };
-                return (
-                  <div
-                    key={`${event.timestamp}-${i}`}
-                    className="flex items-start gap-3 rounded-md px-2 py-1.5 text-xs transition-colors hover:bg-secondary"
-                    role="article"
-                    aria-label={`${config.label} at ${formatTime(event.timestamp)}`}
+    <div
+      className={cn(
+        "rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-4",
+        className,
+      )}
+    >
+      {/* Header */}
+      <h2 className="mb-3 text-sm font-medium text-[var(--svx-color-text-primary)]">
+        {t("feed.title")}
+      </h2>
+
+      <ScrollArea className="h-64">
+        {reversed.length === 0 ? (
+          <p className="py-8 text-center text-sm text-[var(--svx-color-text-tertiary)]">
+            {t("feed.empty")}
+          </p>
+        ) : (
+          <div className="space-y-0.5" role="log" aria-label="Activity feed" aria-live="polite">
+            {reversed.map((event, i) => {
+              const config = EVENT_CONFIG[event.type] ?? FALLBACK_CONFIG;
+              return (
+                <div
+                  key={`${event.timestamp}-${i}`}
+                  className="flex items-start gap-3 rounded-[var(--svx-radius-md)] px-2 py-1.5 text-xs transition-colors hover:bg-[var(--svx-color-bg-hover)]"
+                  role="article"
+                  aria-label={`${config.label} at ${formatTime(event.timestamp)}`}
+                >
+                  <span
+                    className={cn("mt-0.5 shrink-0", config.color)}
+                    aria-hidden="true"
                   >
-                    <span className="mt-0.5 shrink-0 text-sm" aria-hidden="true">
-                      {config.icon}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className={cn("font-medium", config.color)}>
-                          {config.label}
-                        </span>
-                        <span className="text-muted-foreground">
-                          {formatTime(event.timestamp)}
-                        </span>
-                      </div>
-                      <p className="truncate text-muted-foreground">
-                        {eventSummary(event)}
-                      </p>
+                    {config.icon}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className={cn("font-medium", config.color)}>
+                        {config.label}
+                      </span>
+                      <span className="text-[var(--svx-color-text-tertiary)]">
+                        {formatTime(event.timestamp)}
+                      </span>
                     </div>
+                    <p className="truncate text-[var(--svx-color-text-tertiary)]">
+                      {eventSummary(event)}
+                    </p>
                   </div>
-                );
-              })}
-            </div>
-          )}
-        </ScrollArea>
-      </CardContent>
-    </Card>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </ScrollArea>
+    </div>
   );
 }
