@@ -7,6 +7,7 @@ import {
   BrainIcon,
   FileTextIcon,
   SettingsIcon,
+  InfoIcon,
   TrashIcon,
   RefreshCwIcon,
 } from "lucide-react";
@@ -96,6 +97,14 @@ export function CommandPalette() {
       action: () => run(() => navigate("/settings")),
       group: "navigation",
       keywords: ["config", "preferences"],
+    },
+    {
+      id: "nav-about",
+      label: "About",
+      icon: <InfoIcon className="size-4" />,
+      action: () => run(() => navigate("/about")),
+      group: "navigation",
+      keywords: ["version", "license", "info"],
     },
     {
       id: "action-clear-logs",

@@ -17,6 +17,7 @@ const ConversationsPage = lazy(() => import("@/pages/conversations"));
 const BrainPage = lazy(() => import("@/pages/brain"));
 const LogsPage = lazy(() => import("@/pages/logs"));
 const SettingsPage = lazy(() => import("@/pages/settings"));
+const AboutPage = lazy(() => import("@/pages/about"));
 const NotFoundPage = lazy(() => import("@/pages/not-found"));
 
 function PageWrapper({
@@ -83,6 +84,14 @@ export const router = createBrowserRouter([
         element: (
           <PageWrapper fallback={<SettingsSkeleton />}>
             <SettingsPage />
+          </PageWrapper>
+        ),
+      },
+      {
+        path: "about",
+        element: (
+          <PageWrapper>
+            <AboutPage />
           </PageWrapper>
         ),
       },
