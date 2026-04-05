@@ -15,10 +15,11 @@ import secrets
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.status import HTTP_401_UNAUTHORIZED, HTTP_503_SERVICE_UNAVAILABLE
 
 from sovyx.dashboard import STATIC_DIR
@@ -105,6 +106,47 @@ class ConnectionManager:
         return len(self._connections)
 
 
+# ── Security Headers Middleware ──
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add security headers to all responses.
+
+    Headers:
+    - X-Content-Type-Options: nosniff (prevent MIME sniffing)
+    - X-Frame-Options: DENY (prevent clickjacking)
+    - Referrer-Policy: strict-origin-when-cross-origin
+    - Content-Security-Policy: restrictive CSP for dashboard
+    - Permissions-Policy: disable unnecessary browser features
+    """
+
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: RequestResponseEndpoint,
+    ) -> Response:
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = (
+            "camera=(), microphone=(), geolocation=(), payment=()"
+        )
+        # CSP: allow self + inline styles (Tailwind) + wss for WebSocket
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "font-src 'self' data:; "
+            "img-src 'self' data: blob:; "
+            "connect-src 'self' ws: wss:; "
+            "frame-ancestors 'none'; "
+            "base-uri 'self'; "
+            "form-action 'self'"
+        )
+        return response
+
+
 # ── App Factory ──
 
 
@@ -133,6 +175,9 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Security headers
+    app.add_middleware(SecurityHeadersMiddleware)
 
     # Shared state
     ws_manager = ConnectionManager()

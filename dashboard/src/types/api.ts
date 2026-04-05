@@ -36,6 +36,7 @@ export interface SystemStatus {
   llm_cost_today: number;
   llm_calls_today: number;
   tokens_today: number;
+  messages_today: number;
 }
 
 // ── Conversations ──
