@@ -15,7 +15,7 @@ export default function AboutPage() {
     <div className="mx-auto max-w-2xl space-y-6">
       <div className="text-center">
         <h1 className="text-3xl font-bold">🔮 Sovyx</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
+        <p className="mt-1 text-sm text-[var(--svx-color-text-secondary)]">
           Sovereign AI Companion Engine
         </p>
       </div>
@@ -106,10 +106,10 @@ export default function AboutPage() {
 
       {/* Footer */}
       <div className="text-center">
-        <p className="flex items-center justify-center gap-1 text-xs text-muted-foreground">
-          Built with <HeartIcon className="size-3 text-destructive" /> by Sovyx AI
+        <p className="flex items-center justify-center gap-1 text-xs text-[var(--svx-color-text-secondary)]">
+          Built with <HeartIcon className="size-3 text-[var(--svx-color-error)]" /> by Sovyx AI
         </p>
-        <p className="mt-1 text-[10px] text-muted-foreground/50">
+        <p className="mt-1 text-[10px] text-[var(--svx-color-text-disabled)]">
           Your mind, your data, your sovereignty.
         </p>
       </div>
