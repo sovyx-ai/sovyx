@@ -9,6 +9,7 @@ import { useDashboardStore } from "@/stores/dashboard";
 import { api } from "@/lib/api";
 import { LogRow } from "@/components/dashboard/log-row";
 import type { LogEntry } from "@/types/api";
+import { EmptyState } from "@/components/empty-state";
 import { cn } from "@/lib/utils";
 
 type LogLevel = LogEntry["level"] | "ALL";
@@ -162,10 +163,12 @@ export default function LogsPage() {
               <div className="size-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
             </div>
           ) : filtered.length === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
-              <FileTextIcon className="size-8 opacity-30" />
-              <p className="text-sm">{t("empty")}</p>
-            </div>
+            <EmptyState
+              icon={<FileTextIcon className="size-10" />}
+              title={t("empty")}
+              description="Log entries will stream here in real-time as the engine runs."
+              className="h-full"
+            />
           ) : (
             <div
               ref={parentRef}

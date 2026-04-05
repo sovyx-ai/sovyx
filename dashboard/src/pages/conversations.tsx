@@ -12,6 +12,7 @@ import { LetterAvatar } from "@/components/dashboard/letter-avatar";
 import { ChannelBadge } from "@/components/dashboard/channel-badge";
 import { ChatThread } from "@/components/dashboard/chat-thread";
 import type { Conversation, ConversationsResponse, Message } from "@/types/api";
+import { EmptyState } from "@/components/empty-state";
 import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 50;
@@ -117,10 +118,12 @@ export default function ConversationsPage() {
         <CardContent className="flex-1 overflow-hidden p-0">
           <ScrollArea className="h-full">
             {filtered.length === 0 && !loading ? (
-              <div className="flex flex-col items-center justify-center gap-2 py-12 text-muted-foreground">
-                <MessageSquareIcon className="size-6 opacity-50" />
-                <p className="text-xs">{t("list.empty")}</p>
-              </div>
+              <EmptyState
+                icon={<MessageSquareIcon className="size-8" />}
+                title={t("list.empty")}
+                description="Conversations will appear here when messages are received."
+                className="py-12"
+              />
             ) : (
               <div className="divide-y divide-border/50">
                 {filtered.map((conv) => (
@@ -192,10 +195,11 @@ export default function ConversationsPage() {
           </>
         ) : (
           <CardContent className="flex h-full items-center justify-center">
-            <div className="text-center text-muted-foreground">
-              <MessageSquareIcon className="mx-auto size-10 opacity-30" />
-              <p className="mt-3 text-sm">Select a conversation</p>
-            </div>
+            <EmptyState
+              icon={<MessageSquareIcon className="size-10" />}
+              title="Select a conversation"
+              description="Choose from the list to view messages."
+            />
           </CardContent>
         )}
       </Card>
