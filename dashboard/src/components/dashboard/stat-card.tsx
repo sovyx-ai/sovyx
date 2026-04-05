@@ -12,6 +12,12 @@ interface StatCardProps {
   className?: string;
 }
 
+const STATUS_LABEL: Record<string, string> = {
+  green: "Healthy",
+  red: "Error",
+  yellow: "Warning",
+};
+
 export function StatCard({
   title,
   value,
@@ -22,7 +28,7 @@ export function StatCard({
   className,
 }: StatCardProps) {
   return (
-    <Card className={cn("glass", className)}>
+    <Card className={cn("glass", className)} role="group" aria-label={title}>
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
         <CardTitle className="text-sm font-medium text-muted-foreground">
           {title}
@@ -37,15 +43,17 @@ export function StatCard({
                     ? "status-dot-red"
                     : "status-dot-yellow"
               }
+              role="status"
+              aria-label={STATUS_LABEL[status]}
             />
           )}
           {icon && (
-            <span className="text-muted-foreground">{icon}</span>
+            <span className="text-muted-foreground" aria-hidden="true">{icon}</span>
           )}
         </div>
       </CardHeader>
       <CardContent>
-        <div className="text-2xl font-bold">{value}</div>
+        <div className="text-2xl font-bold" aria-live="polite">{value}</div>
         <div className="flex items-center gap-2">
           {trend && (
             <span
@@ -53,6 +61,7 @@ export function StatCard({
                 "text-xs font-medium",
                 trend.value >= 0 ? "text-[var(--color-success)]" : "text-destructive",
               )}
+              aria-label={`${trend.value >= 0 ? "Up" : "Down"} ${Math.abs(trend.value)}% ${trend.label}`}
             >
               {trend.value >= 0 ? "↑" : "↓"}
               {Math.abs(trend.value)}% {trend.label}

@@ -231,6 +231,37 @@
   border-radius: var(--radius-sm);
 }
 
+/* ── Skip Navigation (a11y) ── */
+.skip-nav {
+  position: absolute;
+  top: -100%;
+  left: 0.5rem;
+  z-index: 9999;
+  padding: 0.5rem 1rem;
+  background: var(--color-primary);
+  color: var(--color-primary-foreground);
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+  font-weight: 500;
+  text-decoration: none;
+  transition: top 0.15s ease;
+}
+.skip-nav:focus {
+  top: 0.5rem;
+}
+
+/* ── Reduced Motion (a11y — WCAG 2.3.3) ── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* ── Selection color ── */
 ::selection {
   background: oklch(0.60 0.22 285 / 0.3);

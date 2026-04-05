@@ -130,7 +130,7 @@ export function ActivityFeed({ events, className }: ActivityFeedProps) {
               {t("feed.empty")}
             </p>
           ) : (
-            <div className="space-y-1">
+            <div className="space-y-1" role="log" aria-label="Activity feed" aria-live="polite">
               {reversed.map((event, i) => {
                 const config = EVENT_CONFIG[event.type] ?? {
                   icon: "❓",
@@ -141,8 +141,10 @@ export function ActivityFeed({ events, className }: ActivityFeedProps) {
                   <div
                     key={`${event.timestamp}-${i}`}
                     className="flex items-start gap-3 rounded-md px-2 py-1.5 text-xs transition-colors hover:bg-secondary"
+                    role="article"
+                    aria-label={`${config.label} at ${formatTime(event.timestamp)}`}
                   >
-                    <span className="mt-0.5 shrink-0 text-sm">
+                    <span className="mt-0.5 shrink-0 text-sm" aria-hidden="true">
                       {config.icon}
                     </span>
                     <div className="min-w-0 flex-1">

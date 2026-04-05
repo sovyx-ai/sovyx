@@ -39,6 +39,8 @@ function ConnectionDot() {
   return (
     <span
       className={connected ? "status-dot-green" : "status-dot-red"}
+      role="status"
+      aria-label={connected ? "Connected" : "Disconnected"}
       title={connected ? "Connected" : "Disconnected"}
     />
   );
@@ -49,7 +51,7 @@ export function AppSidebar() {
   const status = useDashboardStore((s) => s.status);
 
   return (
-    <Sidebar collapsible="icon">
+    <Sidebar collapsible="icon" aria-label="Main navigation">
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
