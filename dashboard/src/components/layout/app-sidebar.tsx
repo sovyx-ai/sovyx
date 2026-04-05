@@ -8,6 +8,7 @@ import {
   Activity,
   PuzzleIcon,
   ChevronsUpDownIcon,
+  InfoIcon,
 } from "lucide-react";
 import {
   Sidebar,
@@ -30,6 +31,7 @@ const NAV_ITEMS = [
   { title: "Brain Explorer", icon: Brain, path: "/brain" },
   { title: "Logs", icon: ScrollText, path: "/logs" },
   { title: "Settings", icon: Settings, path: "/settings" },
+  { title: "About", icon: InfoIcon, path: "/about" },
 ] as const;
 
 function ConnectionDot() {
