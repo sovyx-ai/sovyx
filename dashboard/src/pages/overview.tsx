@@ -10,6 +10,7 @@ export default function OverviewPage() {
   const healthChecks = useDashboardStore((s) => s.healthChecks);
   const connected = useDashboardStore((s) => s.connected);
   const recentEvents = useDashboardStore((s) => s.recentEvents);
+  const costData = useDashboardStore((s) => s.costData);
 
   return (
     <div className="space-y-6">
@@ -73,21 +74,14 @@ export default function OverviewPage() {
       {/* Health Grid */}
       <HealthGrid checks={healthChecks} />
 
-      {/* Charts */}
-      <div className="grid gap-4 md:grid-cols-2">
-        <MetricChart
-          title={t("chart.costTitle")}
-          data={[]}
-          color="var(--color-chart-1)"
-          unit="$"
-        />
-        <MetricChart
-          title="Latency (24h)"
-          data={[]}
-          color="var(--color-chart-3)"
-          unit="ms"
-        />
-      </div>
+      {/* Cost Chart */}
+      <MetricChart
+        title={t("chart.costTitle")}
+        data={costData}
+        color="var(--chart-1)"
+        unit="$"
+        label="Cost"
+      />
 
       {/* Activity Feed */}
       <ActivityFeed events={recentEvents} />

@@ -1,16 +1,22 @@
+import { useId } from "react";
 import {
   AreaChart,
   Area,
+  CartesianGrid,
   XAxis,
   YAxis,
-  Tooltip as RechartsTooltip,
-  ResponsiveContainer,
 } from "recharts";
+import {
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from "@/components/ui/chart";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
-interface DataPoint {
-  time: string;
+export interface DataPoint {
+  time: number; // Unix ms timestamp
   value: number;
 }
 
@@ -19,16 +25,37 @@ interface MetricChartProps {
   data: DataPoint[];
   color?: string;
   unit?: string;
+  label?: string;
   className?: string;
+}
+
+function formatChartTime(ts: number): string {
+  const d = new Date(ts);
+  return d.toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
 }
 
 export function MetricChart({
   title,
   data,
-  color = "var(--color-primary)",
+  color = "var(--chart-1)",
   unit = "",
+  label,
   className,
 }: MetricChartProps) {
+  const gradientId = useId();
+  const dataLabel = label ?? title;
+
+  const chartConfig: ChartConfig = {
+    value: {
+      label: dataLabel,
+      color,
+    },
+  };
+
   return (
     <Card className={className}>
       <CardHeader className="pb-2">
@@ -38,52 +65,61 @@ export function MetricChart({
       </CardHeader>
       <CardContent>
         {data.length === 0 ? (
-          <div className="flex h-32 items-center justify-center text-xs text-muted-foreground">
+          <div className="flex h-[140px] items-center justify-center text-xs text-muted-foreground">
             No data yet
           </div>
         ) : (
-          <ResponsiveContainer width="100%" height={140}>
-            <AreaChart data={data}>
-              <defs>
-                <linearGradient id={`grad-${title}`} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={color} stopOpacity={0.3} />
-                  <stop offset="100%" stopColor={color} stopOpacity={0} />
-                </linearGradient>
-              </defs>
+          <ChartContainer config={chartConfig} className="h-[140px] w-full">
+            <AreaChart accessibilityLayer data={data}>
+              <CartesianGrid vertical={false} strokeDasharray="3 3" />
               <XAxis
                 dataKey="time"
-                tick={{ fontSize: 10, fill: "hsl(240 5% 55%)" }}
-                axisLine={false}
+                type="number"
+                scale="time"
+                domain={["dataMin", "dataMax"]}
+                tickFormatter={formatChartTime}
                 tickLine={false}
+                axisLine={false}
+                tickMargin={8}
               />
               <YAxis
-                tick={{ fontSize: 10, fill: "hsl(240 5% 55%)" }}
-                axisLine={false}
                 tickLine={false}
+                axisLine={false}
                 width={40}
+                tickFormatter={(v: number) => `${v}${unit}`}
               />
-              <RechartsTooltip
-                contentStyle={{
-                  backgroundColor: "hsl(240 10% 6%)",
-                  border: "1px solid hsl(240 5% 12%)",
-                  borderRadius: "8px",
-                  fontSize: "12px",
-                }}
-                labelStyle={{ color: "hsl(0 0% 95%)" }}
-                formatter={(value) => [
-                  `${String(value)}${unit}`,
-                  title,
-                ]}
+              <ChartTooltip
+                content={
+                  <ChartTooltipContent
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    labelFormatter={(_: any, payload: readonly any[]) => {
+                      if (payload?.[0]?.payload?.time) {
+                        return formatChartTime(payload[0].payload.time as number);
+                      }
+                      return "";
+                    }}
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    formatter={(value: any) => [`${String(value)}${unit}`, dataLabel] as any}
+                  />
+                }
               />
+              <defs>
+                <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="var(--color-value)" stopOpacity={0.3} />
+                  <stop offset="100%" stopColor="var(--color-value)" stopOpacity={0} />
+                </linearGradient>
+              </defs>
               <Area
                 type="monotone"
                 dataKey="value"
-                stroke={color}
+                stroke="var(--color-value)"
                 strokeWidth={2}
-                fill={`url(#grad-${title})`}
+                fill={`url(#${gradientId})`}
+                dot={false}
+                activeDot={{ r: 4 }}
               />
             </AreaChart>
-          </ResponsiveContainer>
+          </ChartContainer>
         )}
       </CardContent>
     </Card>
@@ -100,25 +136,29 @@ interface SparklineProps {
 
 export function Sparkline({
   data,
-  color = "var(--color-primary)",
+  color = "var(--chart-1)",
   className,
 }: SparklineProps) {
-  const chartData = data.map((value, i) => ({ time: String(i), value }));
+  const chartData = data.map((value, i) => ({ time: i, value }));
+  const chartConfig: ChartConfig = {
+    value: { label: "value", color },
+  };
 
   return (
     <div className={cn("h-8 w-24", className)}>
-      <ResponsiveContainer width="100%" height="100%">
+      <ChartContainer config={chartConfig} className="h-full w-full">
         <AreaChart data={chartData}>
           <Area
             type="monotone"
             dataKey="value"
-            stroke={color}
+            stroke="var(--color-value)"
             strokeWidth={1.5}
-            fill={color}
+            fill="var(--color-value)"
             fillOpacity={0.1}
+            dot={false}
           />
         </AreaChart>
-      </ResponsiveContainer>
+      </ChartContainer>
     </div>
   );
 }
