@@ -62,6 +62,7 @@ describe("Dashboard Store", () => {
         store.addEvent({
           type: "ThinkCompleted",
           timestamp: new Date().toISOString(),
+          correlation_id: `c-${i}`,
           data: {},
         } as WsEvent);
       }
@@ -72,6 +73,7 @@ describe("Dashboard Store", () => {
   describe("status slice", () => {
     it("sets status", () => {
       useDashboardStore.getState().setStatus({
+        version: "0.1.0",
         mind_name: "test",
         uptime_seconds: 100,
         active_conversations: 2,
@@ -124,16 +126,18 @@ describe("Dashboard Store", () => {
       store.addEvent({
         type: "ThinkCompleted",
         timestamp: new Date().toISOString(),
+        correlation_id: "c-1",
         data: { cost_usd: 0.05 },
       } as WsEvent);
       store.addEvent({
         type: "ThinkCompleted",
         timestamp: new Date().toISOString(),
+        correlation_id: "c-2",
         data: { cost_usd: 0.03 },
       } as WsEvent);
       const costData = useDashboardStore.getState().costData;
       expect(costData).toHaveLength(2);
-      expect(costData[1].value).toBeCloseTo(0.08, 4);
+      expect(costData[1]!.value).toBeCloseTo(0.08, 4);
     });
 
     it("ignores events without cost", () => {
@@ -142,6 +146,7 @@ describe("Dashboard Store", () => {
       useDashboardStore.getState().addEvent({
         type: "PerceptionReceived",
         timestamp: new Date().toISOString(),
+        correlation_id: "c-3",
         data: {},
       } as WsEvent);
       expect(useDashboardStore.getState().costData).toHaveLength(0);
