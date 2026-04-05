@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { Outlet, useLocation } from "react-router";
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
@@ -11,11 +12,31 @@ import { Button } from "@/components/ui/button";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { CommandPalette } from "@/components/command-palette";
 
+/** Maps route paths to page titles (WCAG 2.4.2). */
+const ROUTE_TITLES: Record<string, string> = {
+  "/": "Overview — Sovyx",
+  "/conversations": "Conversations — Sovyx",
+  "/brain": "Brain — Sovyx",
+  "/logs": "Logs — Sovyx",
+  "/settings": "Settings — Sovyx",
+  "/about": "About — Sovyx",
+  "/voice": "Voice — Sovyx",
+  "/emotions": "Emotions — Sovyx",
+  "/productivity": "Productivity — Sovyx",
+  "/plugins": "Plugins — Sovyx",
+  "/home": "Home — Sovyx",
+};
+
 export function AppLayout() {
   const location = useLocation();
 
   // Connect WebSocket at layout level (stays alive across page navigations)
   useWebSocket();
+
+  // Update document.title per route (WCAG 2.4.2 — Page Titled)
+  useEffect(() => {
+    document.title = ROUTE_TITLES[location.pathname] ?? "Sovyx";
+  }, [location.pathname]);
 
   return (
     <TooltipProvider>

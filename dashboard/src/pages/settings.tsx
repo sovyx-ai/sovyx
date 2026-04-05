@@ -114,7 +114,7 @@ export default function SettingsPage() {
           {/* Log Level */}
           <div className="space-y-2">
             <Label className="text-xs">{t("fields.logLevel")}</Label>
-            <div className="flex rounded-md border border-border/50">
+            <div className="flex rounded-md border border-[var(--svx-color-border-strong)]">
               {LOG_LEVELS.map((level) => (
                 <button
                   key={level}
