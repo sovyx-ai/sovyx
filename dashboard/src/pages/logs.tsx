@@ -16,12 +16,12 @@ type LogLevel = LogEntry["level"] | "ALL";
 const LOG_LEVELS: LogLevel[] = ["ALL", "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"];
 
 const LEVEL_COLORS: Record<LogLevel, string> = {
-  ALL: "text-foreground",
-  DEBUG: "text-muted-foreground",
-  INFO: "text-[var(--color-success)]",
-  WARNING: "text-[var(--color-warning)]",
-  ERROR: "text-destructive",
-  CRITICAL: "text-destructive",
+  ALL: "text-[var(--svx-color-text-primary)]",
+  DEBUG: "text-[var(--svx-color-text-tertiary)]",
+  INFO: "text-[var(--svx-color-success)]",
+  WARNING: "text-[var(--svx-color-warning)]",
+  ERROR: "text-[var(--svx-color-error)]",
+  CRITICAL: "text-[var(--svx-color-error)]",
 };
 
 export default function LogsPage() {
