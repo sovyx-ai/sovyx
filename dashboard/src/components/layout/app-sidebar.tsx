@@ -1,15 +1,29 @@
+/**
+ * AppSidebar — Main navigation sidebar.
+ *
+ * Uses shadcn Sidebar component with built-in mobile Sheet drawer.
+ * 3 nav groups: Core (6 pages), Upcoming (5 placeholder pages), System (about).
+ * Footer: connection dot + uptime + version.
+ * Mind switcher: placeholder for multi-mind (v0.5).
+ *
+ * Ref: Architecture §4, DASH-26/27/28
+ */
+
 import { useLocation, Link } from "react-router";
 import {
-  LayoutDashboard,
-  MessageSquare,
-  Brain,
-  ScrollText,
-  Settings,
-  Activity,
-  PuzzleIcon,
-  ChevronsUpDownIcon,
+  LayoutDashboardIcon,
+  MessageSquareIcon,
+  BrainIcon,
+  ScrollTextIcon,
+  SettingsIcon,
   InfoIcon,
   MicIcon,
+  HeartIcon,
+  ListTodoIcon,
+  PuzzleIcon,
+  HomeIcon,
+  ChevronsUpDownIcon,
+  ActivityIcon,
 } from "lucide-react";
 import {
   Sidebar,
@@ -24,60 +38,61 @@ import {
   SidebarMenuItem,
   SidebarRail,
 } from "@/components/ui/sidebar";
+import { StatusDot } from "@/components/dashboard/status-dot";
 import { useDashboardStore } from "@/stores/dashboard";
 
-const NAV_ITEMS = [
-  { title: "Overview", icon: LayoutDashboard, path: "/" },
-  { title: "Conversations", icon: MessageSquare, path: "/conversations" },
-  { title: "Brain Explorer", icon: Brain, path: "/brain" },
-  { title: "Logs", icon: ScrollText, path: "/logs" },
-  { title: "Settings", icon: Settings, path: "/settings" },
-  { title: "About", icon: InfoIcon, path: "/about" },
+const CORE_NAV = [
+  { title: "Overview", icon: LayoutDashboardIcon, path: "/" },
+  { title: "Conversations", icon: MessageSquareIcon, path: "/conversations" },
+  { title: "Brain Explorer", icon: BrainIcon, path: "/brain" },
+  { title: "Logs", icon: ScrollTextIcon, path: "/logs" },
+  { title: "Settings", icon: SettingsIcon, path: "/settings" },
 ] as const;
 
-function ConnectionDot() {
-  const connected = useDashboardStore((s) => s.connected);
-  return (
-    <span
-      className={connected ? "status-dot-green" : "status-dot-red"}
-      role="status"
-      aria-label={connected ? "Connected" : "Disconnected"}
-      title={connected ? "Connected" : "Disconnected"}
-    />
-  );
-}
+const UPCOMING_NAV = [
+  { title: "Voice", icon: MicIcon, path: "/voice" },
+  { title: "Emotions", icon: HeartIcon, path: "/emotions" },
+  { title: "Productivity", icon: ListTodoIcon, path: "/productivity" },
+  { title: "Plugins", icon: PuzzleIcon, path: "/plugins" },
+  { title: "Home", icon: HomeIcon, path: "/home" },
+] as const;
 
 export function AppSidebar() {
   const location = useLocation();
   const status = useDashboardStore((s) => s.status);
+  const connected = useDashboardStore((s) => s.connected);
 
   return (
     <Sidebar collapsible="icon" aria-label="Main navigation">
+      {/* ── Mind Switcher (DASH-26 placeholder) ── */}
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" render={<Link to="/" />}>
-              <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                <Activity className="size-4" />
+              <div className="flex aspect-square size-8 items-center justify-center rounded-[var(--svx-radius-md)] bg-[var(--svx-color-brand-primary)] text-[var(--svx-color-text-inverse)]">
+                <ActivityIcon className="size-4" />
               </div>
               <div className="grid flex-1 text-left text-sm leading-tight">
-                <span className="truncate font-semibold">🔮 Sovyx</span>
-                <span className="truncate text-xs text-muted-foreground">
-                  {status?.mind_name ?? "Loading..."}
+                <span className="truncate font-semibold text-[var(--svx-color-text-primary)]">
+                  🔮 {status?.mind_name ?? "Sovyx"}
+                </span>
+                <span className="truncate text-xs text-[var(--svx-color-text-tertiary)]">
+                  {connected ? "Online" : "Connecting..."}
                 </span>
               </div>
-              <ChevronsUpDownIcon className="ml-auto size-4 text-muted-foreground/50" />
+              <ChevronsUpDownIcon className="ml-auto size-4 text-[var(--svx-color-text-disabled)]" />
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
 
       <SidebarContent>
+        {/* ── Core Navigation (DASH-27) ── */}
         <SidebarGroup>
-          <SidebarGroupLabel>Navigation</SidebarGroupLabel>
+          <SidebarGroupLabel>Core</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {NAV_ITEMS.map((item) => (
+              {CORE_NAV.map((item) => (
                 <SidebarMenuItem key={item.path}>
                   <SidebarMenuButton
                     render={<Link to={item.path} />}
@@ -93,38 +108,46 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {/* v1.0 Placeholders */}
+        {/* ── Upcoming Features ── */}
         <SidebarGroup>
-          <SidebarGroupLabel>Coming Soon</SidebarGroupLabel>
+          <SidebarGroupLabel>Upcoming</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  render={<Link to="/voice" />}
-                  isActive={location.pathname === "/voice"}
-                  tooltip="Voice Pipeline — v1.0"
-                >
-                  <MicIcon />
-                  <span className="text-muted-foreground">Voice</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton disabled tooltip="Plugins — v1.0">
-                  <PuzzleIcon />
-                  <span className="text-muted-foreground">Plugins</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
+              {UPCOMING_NAV.map((item) => (
+                <SidebarMenuItem key={item.path}>
+                  <SidebarMenuButton
+                    render={<Link to={item.path} />}
+                    isActive={location.pathname === item.path}
+                    tooltip={item.title}
+                  >
+                    <item.icon />
+                    <span>{item.title}</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              ))}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
 
+      {/* ── Footer (DASH-28) ── */}
       <SidebarFooter>
         <SidebarMenu>
           <SidebarMenuItem>
+            <SidebarMenuButton
+              render={<Link to="/about" />}
+              isActive={location.pathname === "/about"}
+              tooltip="About"
+              size="sm"
+            >
+              <InfoIcon />
+              <span>About</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
             <SidebarMenuButton size="sm">
-              <ConnectionDot />
-              <span className="text-xs text-muted-foreground">
+              <StatusDot status={connected ? "online" : "offline"} size="sm" />
+              <span className="text-xs text-[var(--svx-color-text-tertiary)]">
                 {status
                   ? `Up ${formatUptime(status.uptime_seconds)}`
                   : "Connecting..."}
@@ -133,8 +156,8 @@ export function AppSidebar() {
           </SidebarMenuItem>
           <SidebarMenuItem>
             <div className="px-2 py-1">
-              <span className="text-[10px] text-muted-foreground/50">
-                Sovyx v0.5.0-dev
+              <span className="text-[10px] text-[var(--svx-color-text-disabled)]">
+                Sovyx v{status?.version ?? "0.1.0"}
               </span>
             </div>
           </SidebarMenuItem>
