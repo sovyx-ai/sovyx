@@ -1,8 +1,11 @@
-import { DollarSign, Brain } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { DollarSignIcon, BrainIcon, MessageSquareIcon, ActivityIcon } from "lucide-react";
 import { useDashboardStore } from "@/stores/dashboard";
 import { StatCard, HealthGrid, ActivityFeed, MetricChart } from "@/components/dashboard";
+import { formatUptime, formatCost, formatNumber } from "@/lib/format";
 
 export default function OverviewPage() {
+  const { t } = useTranslation(["overview", "common"]);
   const status = useDashboardStore((s) => s.status);
   const healthChecks = useDashboardStore((s) => s.healthChecks);
   const connected = useDashboardStore((s) => s.connected);
@@ -10,49 +13,70 @@ export default function OverviewPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Overview</h1>
+      <div>
+        <h1 className="text-2xl font-bold">{t("title")}</h1>
+        <p className="text-sm text-muted-foreground">{t("subtitle")}</p>
+      </div>
 
-      {/* Stat cards */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      {/* 4 Stat Cards */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {/* Engine Status */}
         <StatCard
-          title="Status"
-          value={connected ? "Online" : "Offline"}
+          title={t("cards.engineStatus")}
+          value={connected ? t("common:status.online") : t("common:status.offline")}
           subtitle={
             status
-              ? `${status.active_conversations} active conversations`
-              : "Connecting..."
+              ? t("cards.uptime", { duration: formatUptime(status.uptime_seconds) })
+              : t("common:status.loading")
           }
           status={connected ? "green" : "red"}
+          icon={<ActivityIcon className="size-4" />}
         />
+
+        {/* Messages */}
         <StatCard
-          title="LLM Cost Today"
-          value={`$${status?.llm_cost_today.toFixed(2) ?? "—"}`}
+          title={t("cards.messages")}
+          value={status ? formatNumber(status.messages_today) : "—"}
           subtitle={
             status
-              ? `${status.llm_calls_today} calls · ${status.tokens_today.toLocaleString()} tokens`
+              ? `${formatNumber(status.active_conversations)} active`
               : undefined
           }
-          icon={<DollarSign className="size-4" />}
+          icon={<MessageSquareIcon className="size-4" />}
         />
+
+        {/* Brain */}
         <StatCard
-          title="Memory"
-          value={status?.memory_concepts.toLocaleString() ?? "—"}
+          title={t("cards.brainConcepts")}
+          value={status ? formatNumber(status.memory_concepts) : "—"}
           subtitle={
             status
-              ? `concepts · ${status.memory_episodes.toLocaleString()} episodes`
+              ? t("cards.episodeCount", { count: status.memory_episodes })
               : undefined
           }
-          icon={<Brain className="size-4" />}
+          icon={<BrainIcon className="size-4" />}
+        />
+
+        {/* LLM Cost */}
+        <StatCard
+          title={t("cards.llmCost")}
+          value={status ? formatCost(status.llm_cost_today) : "—"}
+          subtitle={
+            status
+              ? t("cards.callsToday", { count: status.llm_calls_today })
+              : undefined
+          }
+          icon={<DollarSignIcon className="size-4" />}
         />
       </div>
 
-      {/* Health grid */}
+      {/* Health Grid */}
       <HealthGrid checks={healthChecks} />
 
       {/* Charts */}
       <div className="grid gap-4 md:grid-cols-2">
         <MetricChart
-          title="LLM Cost (24h)"
+          title={t("chart.costTitle")}
           data={[]}
           color="var(--color-chart-1)"
           unit="$"
@@ -65,9 +89,8 @@ export default function OverviewPage() {
         />
       </div>
 
-      {/* Activity feed */}
+      {/* Activity Feed */}
       <ActivityFeed events={recentEvents} />
-
     </div>
   );
 }
