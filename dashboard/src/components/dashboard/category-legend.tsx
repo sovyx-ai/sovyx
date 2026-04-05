@@ -25,6 +25,7 @@ export function CategoryLegend({ counts }: CategoryLegendProps) {
           <span
             className="inline-block size-2.5 rounded-full"
             style={{ backgroundColor: CATEGORY_COLORS[cat] }}
+            aria-hidden="true"
           />
           <span className="text-[11px] text-muted-foreground">
             {CATEGORY_LABELS[cat]}

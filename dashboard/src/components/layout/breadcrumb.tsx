@@ -27,12 +27,12 @@ export function Breadcrumb() {
 
   if (!route) {
     return (
-      <nav className="flex items-center gap-2 text-sm">
+      <nav className="flex items-center gap-2 text-sm" aria-label="Breadcrumb">
         <Link to="/" className="text-muted-foreground hover:text-foreground transition-colors">
           Sovyx
         </Link>
-        <span className="text-muted-foreground">/</span>
-        <span className="text-foreground">Not Found</span>
+        <span className="text-muted-foreground" aria-hidden="true">/</span>
+        <span className="text-foreground" aria-current="page">Not Found</span>
       </nav>
     );
   }
@@ -40,7 +40,7 @@ export function Breadcrumb() {
   const Icon = route.icon;
 
   return (
-    <nav className="flex items-center gap-2 text-sm">
+    <nav className="flex items-center gap-2 text-sm" aria-label="Breadcrumb">
       {location.pathname !== "/" && (
         <>
           <Link
@@ -49,12 +49,12 @@ export function Breadcrumb() {
           >
             Sovyx
           </Link>
-          <span className="text-muted-foreground">/</span>
+          <span className="text-muted-foreground" aria-hidden="true">/</span>
         </>
       )}
       <div className="flex items-center gap-1.5">
-        <Icon className="size-3.5 text-muted-foreground" />
-        <span className="font-medium text-foreground">{route.label}</span>
+        <Icon className="size-3.5 text-muted-foreground" aria-hidden="true" />
+        <span className="font-medium text-foreground" aria-current="page">{route.label}</span>
       </div>
     </nav>
   );

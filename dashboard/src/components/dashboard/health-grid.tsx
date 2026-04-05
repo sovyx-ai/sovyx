@@ -55,8 +55,11 @@ export function HealthGrid({ checks, className }: HealthGridProps) {
                     "flex items-center gap-2 rounded-md px-3 py-2 text-xs transition-colors",
                     STATUS_BG[check.status],
                   )}
+                  role="status"
+                  aria-label={`${check.name}: ${check.status}`}
+                  tabIndex={0}
                 >
-                  <span className={STATUS_CLASSES[check.status]} />
+                  <span className={STATUS_CLASSES[check.status]} aria-hidden="true" />
                   <span className="truncate">{check.name}</span>
                 </div>
               </TooltipTrigger>
