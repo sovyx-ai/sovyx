@@ -113,7 +113,7 @@ export default function LogsPage() {
 
         <div className="flex items-center gap-2">
           {/* Level filter */}
-          <div className="flex overflow-x-auto rounded-md border border-border/50">
+          <div className="flex overflow-x-auto rounded-md border border-[var(--svx-color-border-strong)]">
             {LOG_LEVELS.map((level) => (
               <button
                 key={level}
