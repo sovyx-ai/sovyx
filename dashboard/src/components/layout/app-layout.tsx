@@ -8,6 +8,7 @@ import { AppSidebar } from "./app-sidebar";
 import { Breadcrumb } from "./breadcrumb";
 import { PageTransition } from "./page-transition";
 import { useWebSocket } from "@/hooks/use-websocket";
+import { CommandPalette } from "@/components/command-palette";
 
 export function AppLayout() {
   const location = useLocation();
@@ -35,6 +36,7 @@ export function AppLayout() {
         </SidebarInset>
       </SidebarProvider>
       <Toaster />
+      <CommandPalette />
     </TooltipProvider>
   );
 }
