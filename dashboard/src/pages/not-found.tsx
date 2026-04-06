@@ -8,7 +8,7 @@ export default function NotFoundPage() {
 
   return (
     <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 text-center">
-      <div className="text-6xl">🔮</div>
+      <div className="text-6xl font-bold text-[var(--svx-color-brand-primary)]">S</div>
       <h1 className="text-3xl font-bold">404</h1>
       <p className="text-[var(--svx-color-text-secondary)]">
         {t("errors.notFoundPage")}

@@ -24,7 +24,7 @@ export default function AboutPage() {
   return (
     <div className="mx-auto max-w-2xl space-y-6">
       <div className="text-center">
-        <h1 className="text-3xl font-bold">🔮 {t("title")}</h1>
+        <h1 className="text-3xl font-bold">{t("title")}</h1>
         <p className="mt-1 text-sm text-[var(--svx-color-text-secondary)]">
           {t("tagline")}
         </p>

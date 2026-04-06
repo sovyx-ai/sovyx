@@ -9,7 +9,7 @@ import AboutPage from "./about";
 describe("AboutPage", () => {
   it("renders page title", () => {
     render(<AboutPage />);
-    expect(screen.getByText("🔮 Sovyx")).toBeInTheDocument();
+    expect(screen.getByText("Sovyx")).toBeInTheDocument();
   });
 
   it("renders version and license section", () => {
