@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { DollarSignIcon, BrainIcon, MessageSquareIcon, ActivityIcon, MicIcon, HeartIcon, ListTodoIcon } from "lucide-react";
 import { useDashboardStore } from "@/stores/dashboard";
-import { StatCard, HealthGrid, ActivityFeed, MetricChart } from "@/components/dashboard";
+import { StatCard, StatCardSkeleton, HealthGrid, ActivityFeed, MetricChart } from "@/components/dashboard";
 import { formatUptime, formatCost, formatNumber } from "@/lib/format";
 import { ComingSoon } from "@/components/coming-soon";
 
@@ -20,56 +20,51 @@ export default function OverviewPage() {
         <p className="text-sm text-[var(--svx-color-text-secondary)]">{t("subtitle")}</p>
       </div>
 
-      {/* 4 Stat Cards */}
+      {/* 4 Stat Cards — skeleton while loading */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {/* Engine Status */}
-        <StatCard
-          title={t("cards.engineStatus")}
-          value={connected ? t("common:status.online") : t("common:status.offline")}
-          subtitle={
-            status
-              ? t("cards.uptime", { duration: formatUptime(status.uptime_seconds) })
-              : t("common:status.loading")
-          }
-          status={connected ? "green" : "red"}
-          icon={<ActivityIcon className="size-4" />}
-        />
+        {!status ? (
+          <>
+            <StatCardSkeleton />
+            <StatCardSkeleton />
+            <StatCardSkeleton />
+            <StatCardSkeleton />
+          </>
+        ) : (
+          <>
+            {/* Engine Status */}
+            <StatCard
+              title={t("cards.engineStatus")}
+              value={connected ? t("common:status.online") : t("common:status.offline")}
+              subtitle={t("cards.uptime", { duration: formatUptime(status.uptime_seconds) })}
+              status={connected ? "green" : "red"}
+              icon={<ActivityIcon className="size-4" />}
+            />
 
-        {/* Messages */}
-        <StatCard
-          title={t("cards.messages")}
-          value={status ? formatNumber(status.messages_today) : "—"}
-          subtitle={
-            status
-              ? `${formatNumber(status.active_conversations)} active`
-              : undefined
-          }
-          icon={<MessageSquareIcon className="size-4" />}
-        />
+            {/* Messages */}
+            <StatCard
+              title={t("cards.messages")}
+              value={formatNumber(status.messages_today)}
+              subtitle={`${formatNumber(status.active_conversations)} active`}
+              icon={<MessageSquareIcon className="size-4" />}
+            />
 
-        {/* Brain */}
-        <StatCard
-          title={t("cards.brainConcepts")}
-          value={status ? formatNumber(status.memory_concepts) : "—"}
-          subtitle={
-            status
-              ? t("cards.episodeCount", { count: status.memory_episodes })
-              : undefined
-          }
-          icon={<BrainIcon className="size-4" />}
-        />
+            {/* Brain */}
+            <StatCard
+              title={t("cards.brainConcepts")}
+              value={formatNumber(status.memory_concepts)}
+              subtitle={t("cards.episodeCount", { count: status.memory_episodes })}
+              icon={<BrainIcon className="size-4" />}
+            />
 
-        {/* LLM Cost */}
-        <StatCard
-          title={t("cards.llmCost")}
-          value={status ? formatCost(status.llm_cost_today) : "—"}
-          subtitle={
-            status
-              ? `${formatNumber(status.llm_calls_today)} calls · ${formatNumber(status.tokens_today)} tokens`
-              : undefined
-          }
-          icon={<DollarSignIcon className="size-4" />}
-        />
+            {/* LLM Cost */}
+            <StatCard
+              title={t("cards.llmCost")}
+              value={formatCost(status.llm_cost_today)}
+              subtitle={`${formatNumber(status.llm_calls_today)} calls · ${formatNumber(status.tokens_today)} tokens`}
+              icon={<DollarSignIcon className="size-4" />}
+            />
+          </>
+        )}
       </div>
 
       {/* Health Grid */}

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { StatCard } from "./stat-card";
+import { StatCard, StatCardSkeleton } from "./stat-card";
 
 describe("StatCard", () => {
   it("has role=group with aria-label from title", () => {
@@ -65,5 +65,57 @@ describe("StatCard", () => {
     const { container } = render(<StatCard title="Test" value="0" />);
     const card = container.firstChild as HTMLElement;
     expect(card.className).toContain("svx-color-bg-surface");
+  });
+});
+
+describe("StatCardSkeleton", () => {
+  it("renders with role=group and aria-label Loading", () => {
+    render(<StatCardSkeleton />);
+    const group = screen.getByRole("group", { name: "Loading" });
+    expect(group).toBeInTheDocument();
+  });
+
+  it("uses design tokens for card styling", () => {
+    const { container } = render(<StatCardSkeleton />);
+    const card = container.firstChild as HTMLElement;
+    expect(card.className).toContain("svx-color-bg-surface");
+    expect(card.className).toContain("svx-color-border-default");
+  });
+
+  it("renders three shimmer bars (title, value, subtitle)", () => {
+    const { container } = render(<StatCardSkeleton />);
+    const shimmers = container.querySelectorAll("[class*='animate-']");
+    // title shimmer + icon shimmer + value shimmer + subtitle shimmer = 4
+    expect(shimmers.length).toBe(4);
+  });
+
+  it("shimmer bars use shimmer animation", () => {
+    const { container } = render(<StatCardSkeleton />);
+    const shimmer = container.querySelector("[class*='animate-']") as HTMLElement;
+    expect(shimmer.className).toContain("shimmer");
+  });
+
+  it("shimmer bars have gradient background-image", () => {
+    const { container } = render(<StatCardSkeleton />);
+    const shimmer = container.querySelector("[class*='animate-']") as HTMLElement;
+    expect(shimmer.style.backgroundImage).toContain("linear-gradient");
+  });
+
+  it("accepts custom className", () => {
+    const { container } = render(<StatCardSkeleton className="custom-test-class" />);
+    const card = container.firstChild as HTMLElement;
+    expect(card.className).toContain("custom-test-class");
+  });
+
+  it("matches StatCard dimensions (same padding and radius)", () => {
+    const { container: skelContainer } = render(<StatCardSkeleton />);
+    const { container: cardContainer } = render(<StatCard title="T" value="0" />);
+    const skel = skelContainer.firstChild as HTMLElement;
+    const card = cardContainer.firstChild as HTMLElement;
+    // Both use same radius and padding tokens
+    expect(skel.className).toContain("p-4");
+    expect(card.className).toContain("p-4");
+    expect(skel.className).toContain("svx-radius-lg");
+    expect(card.className).toContain("svx-radius-lg");
   });
 });
