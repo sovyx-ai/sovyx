@@ -67,7 +67,7 @@ export function LetterAvatar({ name, size = 32, className }: LetterAvatarProps) 
 export function MindAvatar({ className }: { className?: string }) {
   return (
     <Avatar className={cn("size-8", className)}>
-      <AvatarFallback className="bg-primary text-primary-foreground text-xs">
+      <AvatarFallback className="bg-[var(--svx-color-brand-primary)] text-[var(--svx-color-text-inverse)] text-xs">
         🔮
       </AvatarFallback>
     </Avatar>

@@ -11,7 +11,7 @@ export default function App() {
       <RouterProvider router={router} />
       <TokenEntryModal />
       {!ready && (
-        <div className="fixed inset-0 z-40 bg-background/80 backdrop-blur-sm" />
+        <div className="fixed inset-0 z-40 bg-[var(--svx-color-bg-base)]/80 backdrop-blur-sm" />
       )}
     </>
   );
