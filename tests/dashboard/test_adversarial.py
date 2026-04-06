@@ -140,6 +140,7 @@ class TestSnapshotEdgeCases:
             version="0.1.0", uptime_seconds=0.0, mind_name="test",
             active_conversations=0, memory_concepts=0, memory_episodes=0,
             llm_cost_today=0.0, llm_calls_today=0, tokens_today=0,
+            messages_today=0,
         )
         d = snap.to_dict()
         assert d["uptime_seconds"] == 0.0
@@ -149,7 +150,7 @@ class TestSnapshotEdgeCases:
             version="0.1.0", uptime_seconds=31536000.123456,  # 1 year
             mind_name="test", active_conversations=0, memory_concepts=0,
             memory_episodes=0, llm_cost_today=0.0, llm_calls_today=0,
-            tokens_today=0,
+            tokens_today=0, messages_today=0,
         )
         d = snap.to_dict()
         assert d["uptime_seconds"] == 31536000.1
@@ -159,6 +160,7 @@ class TestSnapshotEdgeCases:
             version="0.1.0", uptime_seconds=100, mind_name="Ñyx 🔮 日本語",
             active_conversations=0, memory_concepts=0, memory_episodes=0,
             llm_cost_today=0.0, llm_calls_today=0, tokens_today=0,
+            messages_today=0,
         )
         d = snap.to_dict()
         assert d["mind_name"] == "Ñyx 🔮 日本語"
@@ -168,6 +170,7 @@ class TestSnapshotEdgeCases:
             version="0.1.0", uptime_seconds=100, mind_name="test",
             active_conversations=0, memory_concepts=0, memory_episodes=0,
             llm_cost_today=0.00001, llm_calls_today=1, tokens_today=1,
+            messages_today=0,
         )
         d = snap.to_dict()
         assert d["llm_cost_today"] == 0.0  # Rounded to 4 decimals

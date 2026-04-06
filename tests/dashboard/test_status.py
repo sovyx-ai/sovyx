@@ -70,6 +70,7 @@ class TestStatusSnapshot:
             llm_cost_today=0.12345,
             llm_calls_today=7,
             tokens_today=1500,
+            messages_today=25,
         )
         d = snap.to_dict()
         assert d["version"] == "0.1.0"

@@ -9,6 +9,7 @@ import {
   PuzzleIcon,
   ChevronsUpDownIcon,
   InfoIcon,
+  MicIcon,
 } from "lucide-react";
 import {
   Sidebar,
@@ -97,6 +98,16 @@ export function AppSidebar() {
           <SidebarGroupLabel>Coming Soon</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  render={<Link to="/voice" />}
+                  isActive={location.pathname === "/voice"}
+                  tooltip="Voice Pipeline — v1.0"
+                >
+                  <MicIcon />
+                  <span className="text-muted-foreground">Voice</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
               <SidebarMenuItem>
                 <SidebarMenuButton disabled tooltip="Plugins — v1.0">
                   <PuzzleIcon />
