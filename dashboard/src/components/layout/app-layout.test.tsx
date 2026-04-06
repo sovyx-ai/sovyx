@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
+import "@/lib/i18n"; // Init i18n with all namespaces
 import { AppLayout } from "./app-layout";
 
 // Mock hooks
@@ -12,9 +13,9 @@ vi.mock("@/stores/dashboard", () => ({
   useDashboardStore: () => null,
 }));
 
-function renderLayout() {
+function renderLayout(path = "/") {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[path]}>
       <AppLayout />
     </MemoryRouter>,
   );
@@ -55,20 +56,13 @@ describe("AppLayout accessibility", () => {
   });
 
   it("sets document.title based on route (WCAG 2.4.2)", () => {
-    render(
-      <MemoryRouter initialEntries={["/brain"]}>
-        <AppLayout />
-      </MemoryRouter>,
-    );
-    expect(document.title).toBe("Brain — Sovyx");
+    renderLayout("/brain");
+    // nav.brain = "Brain Explorer"
+    expect(document.title).toBe("Brain Explorer — Sovyx");
   });
 
   it("falls back to 'Sovyx' for unknown routes", () => {
-    render(
-      <MemoryRouter initialEntries={["/nonexistent"]}>
-        <AppLayout />
-      </MemoryRouter>,
-    );
+    renderLayout("/nonexistent");
     expect(document.title).toBe("Sovyx");
   });
 });

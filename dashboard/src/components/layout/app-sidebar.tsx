@@ -6,10 +6,13 @@
  * Footer: connection dot + uptime + version.
  * Mind switcher: placeholder for multi-mind (v0.5).
  *
+ * FINAL-08: Full i18n — zero hardcoded English strings.
+ *
  * Ref: Architecture §4, DASH-26/27/28
  */
 
 import { useLocation, Link } from "react-router";
+import { useTranslation } from "react-i18next";
 import {
   LayoutDashboardIcon,
   MessageSquareIcon,
@@ -25,6 +28,7 @@ import {
   ChevronsUpDownIcon,
   ActivityIcon,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -41,26 +45,47 @@ import {
 import { StatusDot } from "@/components/dashboard/status-dot";
 import { useDashboardStore } from "@/stores/dashboard";
 
-const CORE_NAV = [
-  { title: "Overview", icon: LayoutDashboardIcon, path: "/" },
-  { title: "Conversations", icon: MessageSquareIcon, path: "/conversations" },
-  { title: "Brain Explorer", icon: BrainIcon, path: "/brain" },
-  { title: "Logs", icon: ScrollTextIcon, path: "/logs" },
-  { title: "Settings", icon: SettingsIcon, path: "/settings" },
-] as const;
+interface NavItem {
+  titleKey: string;
+  icon: LucideIcon;
+  path: string;
+}
 
-const UPCOMING_NAV = [
-  { title: "Voice", icon: MicIcon, path: "/voice" },
-  { title: "Emotions", icon: HeartIcon, path: "/emotions" },
-  { title: "Productivity", icon: ListTodoIcon, path: "/productivity" },
-  { title: "Plugins", icon: PuzzleIcon, path: "/plugins" },
-  { title: "Home", icon: HomeIcon, path: "/home" },
-] as const;
+const CORE_NAV: NavItem[] = [
+  { titleKey: "nav.overview", icon: LayoutDashboardIcon, path: "/" },
+  { titleKey: "nav.conversations", icon: MessageSquareIcon, path: "/conversations" },
+  { titleKey: "nav.brain", icon: BrainIcon, path: "/brain" },
+  { titleKey: "nav.logs", icon: ScrollTextIcon, path: "/logs" },
+  { titleKey: "nav.settings", icon: SettingsIcon, path: "/settings" },
+];
+
+const UPCOMING_NAV: NavItem[] = [
+  { titleKey: "nav.voice", icon: MicIcon, path: "/voice" },
+  { titleKey: "nav.emotions", icon: HeartIcon, path: "/emotions" },
+  { titleKey: "nav.productivity", icon: ListTodoIcon, path: "/productivity" },
+  { titleKey: "nav.plugins", icon: PuzzleIcon, path: "/plugins" },
+  { titleKey: "nav.home", icon: HomeIcon, path: "/home" },
+];
 
 export function AppSidebar() {
+  const { t } = useTranslation("common");
   const location = useLocation();
   const status = useDashboardStore((s) => s.status);
   const connectionState = useDashboardStore((s) => s.connectionState);
+
+  const connectionLabel =
+    connectionState === "connected"
+      ? t("status.online")
+      : connectionState === "reconnecting"
+        ? t("status.reconnecting")
+        : t("sidebar.connecting");
+
+  const uptimeLabel =
+    connectionState === "reconnecting"
+      ? t("status.reconnecting")
+      : status
+        ? t("sidebar.uptime", { duration: formatUptime(status.uptime_seconds) })
+        : t("sidebar.connecting");
 
   return (
     <Sidebar collapsible="icon" aria-label="Main navigation">
@@ -77,7 +102,7 @@ export function AppSidebar() {
                   🔮 {status?.mind_name ?? "Sovyx"}
                 </span>
                 <span className="truncate text-xs text-[var(--svx-color-text-tertiary)]">
-                  {connectionState === "connected" ? "Online" : connectionState === "reconnecting" ? "Reconnecting..." : "Connecting..."}
+                  {connectionLabel}
                 </span>
               </div>
               <ChevronsUpDownIcon className="ml-auto size-4 text-[var(--svx-color-text-disabled)]" />
@@ -89,7 +114,7 @@ export function AppSidebar() {
       <SidebarContent>
         {/* ── Core Navigation (DASH-27) ── */}
         <SidebarGroup>
-          <SidebarGroupLabel>Core</SidebarGroupLabel>
+          <SidebarGroupLabel>{t("sidebar.core")}</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {CORE_NAV.map((item) => (
@@ -97,10 +122,10 @@ export function AppSidebar() {
                   <SidebarMenuButton
                     render={<Link to={item.path} />}
                     isActive={location.pathname === item.path}
-                    tooltip={item.title}
+                    tooltip={t(item.titleKey)}
                   >
                     <item.icon />
-                    <span>{item.title}</span>
+                    <span>{t(item.titleKey)}</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
@@ -110,7 +135,7 @@ export function AppSidebar() {
 
         {/* ── Upcoming Features ── */}
         <SidebarGroup>
-          <SidebarGroupLabel>Upcoming</SidebarGroupLabel>
+          <SidebarGroupLabel>{t("sidebar.upcoming")}</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {UPCOMING_NAV.map((item) => (
@@ -118,10 +143,10 @@ export function AppSidebar() {
                   <SidebarMenuButton
                     render={<Link to={item.path} />}
                     isActive={location.pathname === item.path}
-                    tooltip={item.title}
+                    tooltip={t(item.titleKey)}
                   >
                     <item.icon />
-                    <span>{item.title}</span>
+                    <span>{t(item.titleKey)}</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
@@ -137,11 +162,11 @@ export function AppSidebar() {
             <SidebarMenuButton
               render={<Link to="/about" />}
               isActive={location.pathname === "/about"}
-              tooltip="About"
+              tooltip={t("nav.about")}
               size="sm"
             >
               <InfoIcon />
-              <span>About</span>
+              <span>{t("nav.about")}</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
@@ -151,18 +176,14 @@ export function AppSidebar() {
                 size="sm"
               />
               <span className="text-xs text-[var(--svx-color-text-tertiary)]">
-                {connectionState === "reconnecting"
-                  ? "Reconnecting..."
-                  : status
-                    ? `Up ${formatUptime(status.uptime_seconds)}`
-                    : "Connecting..."}
+                {uptimeLabel}
               </span>
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
             <div className="px-2 py-1">
               <span className="text-[10px] text-[var(--svx-color-text-disabled)]">
-                Sovyx v{status?.version ?? "0.1.0"}
+                {t("app.name")} {t("app.version", { version: status?.version ?? "0.1.0" })}
               </span>
             </div>
           </SidebarMenuItem>

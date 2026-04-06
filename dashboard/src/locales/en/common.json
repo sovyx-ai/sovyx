@@ -13,7 +13,8 @@
     "emotions": "Emotions",
     "productivity": "Productivity",
     "plugins": "Plugins",
-    "home": "Home"
+    "home": "Home",
+    "about": "About"
   },
   "status": {
     "online": "Online",
@@ -97,7 +98,14 @@
   "sidebar": {
     "collapse": "Toggle Sidebar",
     "health": "Health",
-    "cmdK": "Cmd+K"
+    "cmdK": "Cmd+K",
+    "core": "Core",
+    "upcoming": "Upcoming",
+    "connecting": "Connecting...",
+    "uptime": "Up {{duration}}",
+    "skipToContent": "Skip to main content",
+    "notifications": "Notifications",
+    "cmdKLabel": "Press Command+K to open command palette"
   },
   "brand": {
     "mind": "Mind",

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router";
+import "@/lib/i18n"; // Init i18n with all namespaces
 import { Breadcrumb } from "./breadcrumb";
 
 function renderAtPath(path: string) {
@@ -32,21 +33,20 @@ describe("Breadcrumb accessibility", () => {
     }
   });
 
-  it("shows Not Found for unknown routes with aria-current", () => {
+  it("shows not-found text for unknown routes with aria-current", () => {
     renderAtPath("/unknown-route");
-    const notFound = screen.getByText("Not Found");
+    // common:errors.notFound = "This path doesn't exist in the Mind"
+    const notFound = screen.getByText(/doesn't exist/);
     expect(notFound).toHaveAttribute("aria-current", "page");
   });
 
   it("resolves trailing slash to correct route", () => {
     renderAtPath("/about/");
     expect(screen.getByText("About")).toBeInTheDocument();
-    expect(screen.queryByText("Not Found")).not.toBeInTheDocument();
   });
 
   it("resolves nested path to parent route", () => {
     renderAtPath("/conversations/abc-123");
     expect(screen.getByText("Conversations")).toBeInTheDocument();
-    expect(screen.queryByText("Not Found")).not.toBeInTheDocument();
   });
 });

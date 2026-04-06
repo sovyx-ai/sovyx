@@ -1,4 +1,5 @@
 import { useLocation, Link } from "react-router";
+import { useTranslation } from "react-i18next";
 import {
   LayoutDashboard,
   MessageSquare,
@@ -15,22 +16,22 @@ import {
 import type { LucideIcon } from "lucide-react";
 
 interface RouteInfo {
-  label: string;
+  labelKey: string;
   icon: LucideIcon;
 }
 
 const ROUTE_MAP: Record<string, RouteInfo> = {
-  "/": { label: "Overview", icon: LayoutDashboard },
-  "/conversations": { label: "Conversations", icon: MessageSquare },
-  "/brain": { label: "Brain Explorer", icon: Brain },
-  "/logs": { label: "Logs", icon: ScrollText },
-  "/settings": { label: "Settings", icon: Settings },
-  "/voice": { label: "Voice Pipeline", icon: Mic },
-  "/about": { label: "About", icon: Info },
-  "/emotions": { label: "Emotional Intelligence", icon: Heart },
-  "/productivity": { label: "Productivity", icon: ListTodo },
-  "/plugins": { label: "Plugin Marketplace", icon: Puzzle },
-  "/home": { label: "Home Integration", icon: Home },
+  "/": { labelKey: "nav.overview", icon: LayoutDashboard },
+  "/conversations": { labelKey: "nav.conversations", icon: MessageSquare },
+  "/brain": { labelKey: "nav.brain", icon: Brain },
+  "/logs": { labelKey: "nav.logs", icon: ScrollText },
+  "/settings": { labelKey: "nav.settings", icon: Settings },
+  "/voice": { labelKey: "nav.voice", icon: Mic },
+  "/about": { labelKey: "nav.about", icon: Info },
+  "/emotions": { labelKey: "nav.emotions", icon: Heart },
+  "/productivity": { labelKey: "nav.productivity", icon: ListTodo },
+  "/plugins": { labelKey: "nav.plugins", icon: Puzzle },
+  "/home": { labelKey: "nav.home", icon: Home },
 };
 
 /**
@@ -52,6 +53,7 @@ function resolveRoute(pathname: string): RouteInfo | undefined {
 }
 
 export function Breadcrumb() {
+  const { t } = useTranslation("common");
   const location = useLocation();
   const route = resolveRoute(location.pathname);
 
@@ -62,7 +64,7 @@ export function Breadcrumb() {
           Sovyx
         </Link>
         <span className="text-[var(--svx-color-text-secondary)]" aria-hidden="true">/</span>
-        <span className="text-[var(--svx-color-text-primary)]" aria-current="page">Not Found</span>
+        <span className="text-[var(--svx-color-text-primary)]" aria-current="page">{t("errors.notFound")}</span>
       </nav>
     );
   }
@@ -84,7 +86,7 @@ export function Breadcrumb() {
       )}
       <div className="flex items-center gap-1.5">
         <Icon className="size-3.5 text-[var(--svx-color-text-secondary)]" aria-hidden="true" />
-        <span className="font-medium text-[var(--svx-color-text-primary)]" aria-current="page">{route.label}</span>
+        <span className="font-medium text-[var(--svx-color-text-primary)]" aria-current="page">{t(route.labelKey)}</span>
       </div>
     </nav>
   );
