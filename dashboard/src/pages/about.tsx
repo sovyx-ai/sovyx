@@ -10,6 +10,7 @@
 import { useTranslation } from "react-i18next";
 import { ExternalLinkIcon, ShieldIcon, CodeIcon, HeartIcon } from "lucide-react";
 import { useDashboardStore } from "@/stores/dashboard";
+import { formatUptime } from "@/lib/format";
 
 export default function AboutPage() {
   const { t } = useTranslation("about");
@@ -117,12 +118,3 @@ export default function AboutPage() {
 }
 
 declare const __REACT_VERSION__: string;
-
-function formatUptime(seconds: number): string {
-  const days = Math.floor(seconds / 86400);
-  const hours = Math.floor((seconds % 86400) / 3600);
-  if (days > 0) return `${days}d ${hours}h`;
-  const mins = Math.floor((seconds % 3600) / 60);
-  if (hours > 0) return `${hours}h ${mins}m`;
-  return `${mins}m`;
-}

@@ -1,5 +1,8 @@
 /**
  * Formatting utilities for the dashboard.
+ *
+ * ZERO-01: Single source of truth for all formatters.
+ * All time/number formatting lives here — no local copies in components.
  */
 
 /** Format seconds into human-readable duration (e.g. "2d 14h", "3h 25m", "45s") */
@@ -37,4 +40,49 @@ export function formatTimeAgo(iso: string): string {
   if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
   if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
   return `${Math.floor(secs / 86400)}d ago`;
+}
+
+/**
+ * Format ISO timestamp to HH:mm:ss (24h).
+ * Used by: activity feed, log rows — anywhere precise seconds matter.
+ */
+export function formatTimePrecise(iso: string): string {
+  try {
+    return new Date(iso).toLocaleTimeString("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+  } catch {
+    return "—";
+  }
+}
+
+/**
+ * Format ISO timestamp to HH:mm (24h).
+ * Used by: chat bubbles — compact time without seconds.
+ */
+export function formatTimeShort(iso: string): string {
+  try {
+    return new Date(iso).toLocaleTimeString("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+  } catch {
+    return "—";
+  }
+}
+
+/**
+ * Format unix millisecond timestamp to HH:mm (24h).
+ * Used by: recharts axis/tooltip — receives numeric timestamps.
+ */
+export function formatChartTime(ts: number): string {
+  return new Date(ts).toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
 }

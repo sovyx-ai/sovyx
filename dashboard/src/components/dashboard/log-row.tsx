@@ -9,6 +9,7 @@
 
 import { useState, type MouseEvent } from "react";
 import type { LogEntry } from "@/types/api";
+import { formatTimePrecise } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 interface LogRowProps {
@@ -31,19 +32,7 @@ const LEVEL_BG: Record<LogEntry["level"], string> = {
   CRITICAL: "bg-[var(--svx-color-error-subtle)]",
 };
 
-function formatLogTime(iso: string): string {
-  try {
-    const d = new Date(iso);
-    return d.toLocaleTimeString("en-US", {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    });
-  } catch {
-    return "—";
-  }
-}
+
 
 export function LogRow({ entry }: LogRowProps) {
   const [expanded, setExpanded] = useState(false);
@@ -68,7 +57,7 @@ export function LogRow({ entry }: LogRowProps) {
     >
       <div className="flex items-baseline gap-3">
         <span className="shrink-0 text-[var(--svx-color-text-tertiary)]">
-          {formatLogTime(entry.timestamp)}
+          {formatTimePrecise(entry.timestamp)}
         </span>
         <span className={cn("w-12 shrink-0 font-medium", LEVEL_STYLES[entry.level])}>
           {entry.level.padEnd(5)}
