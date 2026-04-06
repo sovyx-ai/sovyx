@@ -8,10 +8,11 @@ from typing import TYPE_CHECKING
 from sovyx.engine.registry import ServiceRegistry
 from sovyx.observability.logging import get_logger
 
+from sovyx.engine.config import EngineConfig
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from sovyx.engine.config import EngineConfig
     from sovyx.mind.config import MindConfig
 
 logger = get_logger(__name__)
@@ -106,6 +107,9 @@ async def bootstrap(
     _closables: list[object] = []  # cleanup on failure (reverse order)
 
     try:
+        # 0. EngineConfig (so lifecycle/dashboard can resolve it)
+        registry.register_instance(EngineConfig, engine_config)
+
         # 1. EventBus
         event_bus = EventBus()
         registry.register_instance(EventBus, event_bus)

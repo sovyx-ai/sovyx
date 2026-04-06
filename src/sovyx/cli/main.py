@@ -105,14 +105,15 @@ def start(
     console.print("[bold]Starting Sovyx daemon...[/bold]")
 
     from sovyx.engine.bootstrap import bootstrap
-    from sovyx.engine.config import EngineConfig
+    from sovyx.engine.config import EngineConfig, load_engine_config
     from sovyx.engine.events import EventBus
     from sovyx.engine.lifecycle import LifecycleManager
     from sovyx.engine.rpc_server import DaemonRPCServer
     from sovyx.mind.config import MindConfig
 
     async def _start() -> None:
-        config = EngineConfig()
+        system_yaml = Path.home() / ".sovyx" / "system.yaml"
+        config = load_engine_config(config_path=system_yaml if system_yaml.exists() else None)
         mind_config = MindConfig(name="Aria")  # v0.1: single mind
 
         # Load mind.yaml if exists
