@@ -4,6 +4,7 @@
  * ZERO-01: Single source of truth for all formatters.
  * All time/number formatting lives here — no local copies in components.
  */
+import i18n from "@/lib/i18n";
 
 /** Format seconds into human-readable duration (e.g. "2d 14h", "3h 25m", "45s") */
 export function formatUptime(seconds: number): string {
@@ -31,15 +32,15 @@ export function formatNumber(n: number): string {
   return n.toLocaleString("en-US");
 }
 
-/** Format relative time from ISO string */
+/** Format relative time from ISO string (i18n-aware via common:time.*) */
 export function formatTimeAgo(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
   const secs = Math.floor(diff / 1000);
 
-  if (secs < 60) return "just now";
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
-  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
-  return `${Math.floor(secs / 86400)}d ago`;
+  if (secs < 60) return i18n.t("common:time.justNow");
+  if (secs < 3600) return i18n.t("common:time.minutesAgo", { count: Math.floor(secs / 60) });
+  if (secs < 86400) return i18n.t("common:time.hoursAgo", { count: Math.floor(secs / 3600) });
+  return i18n.t("common:time.daysAgo", { count: Math.floor(secs / 86400) });
 }
 
 /**

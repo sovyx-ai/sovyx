@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import "@/lib/i18n";
 import { formatUptime, formatCost, formatNumber, formatTimeAgo } from "./format";
 
 describe("formatUptime", () => {
@@ -58,7 +59,7 @@ describe("formatTimeAgo", () => {
 
   it("formats minutes ago", () => {
     const date = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-    expect(formatTimeAgo(date)).toBe("5m ago");
+    expect(formatTimeAgo(date)).toBe("5 min ago");
   });
 
   it("formats hours ago", () => {
