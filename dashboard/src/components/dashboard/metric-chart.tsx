@@ -138,39 +138,4 @@ export function MetricChart({
   );
 }
 
-// ── Compact sparkline variant ──
 
-interface SparklineProps {
-  data: number[];
-  color?: string;
-  className?: string;
-}
-
-export function Sparkline({
-  data,
-  color = "var(--chart-1)",
-  className,
-}: SparklineProps) {
-  const chartData = data.map((value, i) => ({ time: i, value }));
-  const chartConfig: ChartConfig = {
-    value: { label: "value", color },
-  };
-
-  return (
-    <div className={cn("h-8 w-24", className)}>
-      <ChartContainer config={chartConfig} className="h-full w-full">
-        <AreaChart data={chartData}>
-          <Area
-            type="monotone"
-            dataKey="value"
-            stroke="var(--color-value)"
-            strokeWidth={1.5}
-            fill="var(--color-value)"
-            fillOpacity={0.1}
-            dot={false}
-          />
-        </AreaChart>
-      </ChartContainer>
-    </div>
-  );
-}
