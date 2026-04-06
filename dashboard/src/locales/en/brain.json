@@ -21,10 +21,19 @@
   },
   "detail": {
     "selected": "Selected: {{name}}",
+    "category": "Category",
     "importance": "Importance",
     "confidence": "Confidence",
     "accessCount": "Access count",
     "related": "{{count}} related concepts",
-    "viewDetail": "View Detail →"
+    "viewDetail": "View Detail →",
+    "close": "Close detail"
+  },
+  "empty": "No concepts yet",
+  "emptyDescription": "Concepts will appear as the engine learns from conversations.",
+  "error": {
+    "loadFailed": "Failed to load brain graph",
+    "engineHint": "Check that the engine is running.",
+    "retry": "Retry"
   }
 }

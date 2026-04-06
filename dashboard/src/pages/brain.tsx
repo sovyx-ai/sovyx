@@ -41,7 +41,7 @@ export default function BrainPage() {
         setBrainGraph(data);
       } catch (err) {
         if (isAbortError(err)) return; // Navigation away — ignore
-        setError("Failed to load brain graph");
+        setError(t("error.loadFailed"));
       } finally {
         setLoading(false);
       }
@@ -109,9 +109,9 @@ export default function BrainPage() {
             <EmptyState
               icon={<AlertTriangleIcon className="size-10" />}
               title={error}
-              description="Check that the engine is running."
+              description={t("error.engineHint")}
               action={{
-                label: "Retry",
+                label: t("error.retry"),
                 onClick: () => void fetchGraph(),
               }}
               className="h-full"
@@ -124,7 +124,7 @@ export default function BrainPage() {
             <EmptyState
               icon={<SparklesIcon className="size-10" />}
               title={t("empty")}
-              description="Concepts will appear as the engine learns from conversations."
+              description={t("emptyDescription")}
               className="h-full"
             />
           ) : (
@@ -151,26 +151,26 @@ export default function BrainPage() {
               size="icon"
               className="size-6"
               onClick={() => setSelectedNode(null)}
-              aria-label="Close detail"
+              aria-label={t("detail.close")}
             >
               ✕
             </Button>
           </div>
           <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4">
             <div>
-              <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">{t("details.category")}</dt>
+              <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">{t("detail.category")}</dt>
               <dd className="font-medium capitalize">{selectedNode.category}</dd>
             </div>
             <div>
-              <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">{t("details.importance")}</dt>
+              <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">{t("detail.importance")}</dt>
               <dd className="font-medium">{(selectedNode.importance * 100).toFixed(0)}%</dd>
             </div>
             <div>
-              <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">{t("details.confidence")}</dt>
+              <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">{t("detail.confidence")}</dt>
               <dd className="font-medium">{(selectedNode.confidence * 100).toFixed(0)}%</dd>
             </div>
             <div>
-              <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">{t("details.accessCount")}</dt>
+              <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">{t("detail.accessCount")}</dt>
               <dd className="font-medium">{selectedNode.access_count}</dd>
             </div>
           </dl>

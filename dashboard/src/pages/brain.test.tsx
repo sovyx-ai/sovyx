@@ -63,7 +63,7 @@ describe("BrainPage", () => {
     mockApi.get.mockResolvedValueOnce({ nodes: [], edges: [] });
     render(<BrainPage />);
     await waitFor(() => {
-      expect(screen.getByText(/empty/i)).toBeInTheDocument();
+      expect(screen.getByText(/no concepts yet/i)).toBeInTheDocument();
     });
   });
 });
