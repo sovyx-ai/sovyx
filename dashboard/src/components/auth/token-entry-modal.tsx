@@ -77,15 +77,14 @@ export function TokenEntryModal() {
       >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <KeyIcon className="size-5 text-primary" />
+            <KeyIcon className="size-5 text-[var(--svx-color-brand-primary)]" />
             {t("app.name")}
           </DialogTitle>
           <DialogDescription>
-            Paste your dashboard token to continue. You can find it by running{" "}
+            {t("auth.description")}{" "}
             <code className="font-code rounded bg-[var(--svx-color-bg-elevated)] px-1.5 py-0.5 text-xs">
-              cat ~/.sovyx/token
-            </code>{" "}
-            on your server.
+              {t("auth.command")}
+            </code>
           </DialogDescription>
         </DialogHeader>
 
@@ -93,7 +92,7 @@ export function TokenEntryModal() {
           <div className="flex gap-2">
             <Input
               type="password"
-              placeholder="svx_..."
+              placeholder={t("auth.placeholder")}
               value={token}
               onChange={(e) => {
                 setTokenValue(e.target.value);
@@ -113,9 +112,9 @@ export function TokenEntryModal() {
                 <Loader2Icon className="mr-2 size-4 animate-spin" />
               )}
               {state === "valid" && (
-                <CheckCircleIcon className="mr-2 size-4 text-green-400" />
+                <CheckCircleIcon className="mr-2 size-4 text-[var(--svx-color-success)]" />
               )}
-              {state === "valid" ? "Connected" : "Connect"}
+              {state === "valid" ? t("auth.connected") : t("auth.connect")}
             </Button>
           </div>
 
