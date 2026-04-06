@@ -1,4 +1,14 @@
+/**
+ * MetricChart — Token-consistent chart card for overview metrics.
+ *
+ * Uses raw divs with --svx-* tokens instead of shadcn Card.
+ * Shows branded empty animation when no data.
+ *
+ * Ref: Architecture §3.1, REFINE-09
+ */
+
 import { useId } from "react";
+import { useTranslation } from "react-i18next";
 import {
   AreaChart,
   Area,
@@ -12,7 +22,6 @@ import {
   ChartTooltipContent,
   type ChartConfig,
 } from "@/components/ui/chart";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ChartEmptyAnimation } from "@/components/empty-state-animations";
 import { cn } from "@/lib/utils";
 
@@ -47,6 +56,7 @@ export function MetricChart({
   label,
   className,
 }: MetricChartProps) {
+  const { t } = useTranslation("overview");
   const gradientId = useId();
   const dataLabel = label ?? title;
 
@@ -58,73 +68,79 @@ export function MetricChart({
   };
 
   return (
-    <Card className={className}>
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm font-medium text-[var(--svx-color-text-secondary)]">
-          {title}
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        {data.length === 0 ? (
-          <div className="flex h-[140px] flex-col items-center justify-center gap-2">
-            <ChartEmptyAnimation />
-            <span className="text-xs text-[var(--svx-color-text-tertiary)]">No data yet</span>
-          </div>
-        ) : (
-          <ChartContainer config={chartConfig} className="h-[140px] w-full">
-            <AreaChart accessibilityLayer data={data}>
-              <CartesianGrid vertical={false} strokeDasharray="3 3" />
-              <XAxis
-                dataKey="time"
-                type="number"
-                scale="time"
-                domain={["dataMin", "dataMax"]}
-                tickFormatter={formatChartTime}
-                tickLine={false}
-                axisLine={false}
-                tickMargin={8}
-              />
-              <YAxis
-                tickLine={false}
-                axisLine={false}
-                width={40}
-                tickFormatter={(v: number) => `${v}${unit}`}
-              />
-              <ChartTooltip
-                content={
-                  <ChartTooltipContent
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    labelFormatter={(_: any, payload: readonly any[]) => {
-                      if (payload?.[0]?.payload?.time) {
-                        return formatChartTime(payload[0].payload.time as number);
-                      }
-                      return "";
-                    }}
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    formatter={(value: any) => [`${String(value)}${unit}`, dataLabel] as any}
-                  />
-                }
-              />
-              <defs>
-                <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="var(--color-value)" stopOpacity={0.3} />
-                  <stop offset="100%" stopColor="var(--color-value)" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <Area
-                type="monotone"
-                dataKey="value"
-                stroke="var(--color-value)"
-                strokeWidth={2}
-                fill={`url(#${gradientId})`}
-                dot={false}
-                activeDot={{ r: 4 }}
-              />
-            </AreaChart>
-          </ChartContainer>
-        )}
-      </CardContent>
-    </Card>
+    <div
+      className={cn(
+        "rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-4",
+        className,
+      )}
+    >
+      {/* Header */}
+      <h2 className="mb-3 text-sm font-medium text-[var(--svx-color-text-secondary)]">
+        {title}
+      </h2>
+
+      {/* Chart or empty */}
+      {data.length === 0 ? (
+        <div className="flex h-[140px] flex-col items-center justify-center gap-2">
+          <ChartEmptyAnimation />
+          <span className="text-xs text-[var(--svx-color-text-tertiary)]">
+            {t("chart.noData")}
+          </span>
+        </div>
+      ) : (
+        <ChartContainer config={chartConfig} className="h-[140px] w-full">
+          <AreaChart accessibilityLayer data={data}>
+            <CartesianGrid vertical={false} strokeDasharray="3 3" />
+            <XAxis
+              dataKey="time"
+              type="number"
+              scale="time"
+              domain={["dataMin", "dataMax"]}
+              tickFormatter={formatChartTime}
+              tickLine={false}
+              axisLine={false}
+              tickMargin={8}
+            />
+            <YAxis
+              tickLine={false}
+              axisLine={false}
+              width={40}
+              tickFormatter={(v: number) => `${v}${unit}`}
+            />
+            <ChartTooltip
+              content={
+                <ChartTooltipContent
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  labelFormatter={(_: any, payload: readonly any[]) => {
+                    if (payload?.[0]?.payload?.time) {
+                      return formatChartTime(payload[0].payload.time as number);
+                    }
+                    return "";
+                  }}
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  formatter={(value: any) => [`${String(value)}${unit}`, dataLabel] as any}
+                />
+              }
+            />
+            <defs>
+              <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="var(--color-value)" stopOpacity={0.3} />
+                <stop offset="100%" stopColor="var(--color-value)" stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <Area
+              type="monotone"
+              dataKey="value"
+              stroke="var(--color-value)"
+              strokeWidth={2}
+              fill={`url(#${gradientId})`}
+              dot={false}
+              activeDot={{ r: 4 }}
+            />
+          </AreaChart>
+        </ChartContainer>
+      )}
+    </div>
   );
 }
 
