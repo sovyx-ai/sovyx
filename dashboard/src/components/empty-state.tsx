@@ -1,3 +1,9 @@
+/**
+ * EmptyState — Generic empty state for pages with no data.
+ *
+ * Ref: DASH-42
+ */
+
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -16,11 +22,11 @@ interface EmptyStateProps {
 export function EmptyState({ icon, title, description, action, className }: EmptyStateProps) {
   return (
     <div className={cn("flex flex-col items-center justify-center gap-3 py-16 text-center", className)}>
-      <div className="text-muted-foreground/40">{icon}</div>
+      <div className="text-[var(--svx-color-text-disabled)]">{icon}</div>
       <div>
-        <h3 className="text-sm font-medium text-foreground/80">{title}</h3>
+        <h3 className="text-sm font-medium text-[var(--svx-color-text-secondary)]">{title}</h3>
         {description && (
-          <p className="mt-1 max-w-xs text-xs text-muted-foreground">{description}</p>
+          <p className="mt-1 max-w-xs text-xs text-[var(--svx-color-text-tertiary)]">{description}</p>
         )}
       </div>
       {action && (
