@@ -168,7 +168,8 @@ class TestLifecycleManager:
         pid_path = tmp_path / "sovyx.pid"
 
         mgr = LifecycleManager(registry, event_bus, pid_path)
-        await mgr.start()
+        with patch.object(mgr, "_start_dashboard", new_callable=AsyncMock):
+            await mgr.start()
 
         # Set shutdown event after a delay
         async def trigger() -> None:
