@@ -92,8 +92,18 @@ class TokenCounter:
         tokens = enc.encode(text)
         if len(tokens) <= max_tokens:
             return text
-        truncated = enc.decode(tokens[:max_tokens])
-        return truncated
+        # Slice at the token boundary and decode.
+        # tiktoken's decode→encode roundtrip is NOT stable for certain
+        # byte sequences (e.g. invalid UTF-8 like \x80\x81): decoding
+        # 1 token can produce text that re-encodes to 2 tokens.
+        # Guard: shrink until the result truly fits the budget.
+        limit = max_tokens
+        while limit > 0:
+            truncated = enc.decode(tokens[:limit])
+            if len(enc.encode(truncated)) <= max_tokens:
+                return truncated
+            limit -= 1
+        return ""
 
     def fits(self, text: str, max_tokens: int) -> bool:
         """Check if text fits within max_tokens.
