@@ -100,3 +100,134 @@ class TestQueryLogs:
         f.write_text(content + "\n")
         result = query_logs(f, search="gpt-4o")
         assert len(result) == 1
+
+    def test_search_in_nested_dict(self, tmp_path: Path) -> None:
+        """Search finds text inside nested dict/list values."""
+        f = tmp_path / "nested.log"
+        entry = json.dumps({
+            "event": "generic",
+            "level": "info",
+            "logger": "test",
+            "details": {"inner_key": "secret_needle_here"},
+        })
+        f.write_text(entry + "\n")
+        result = query_logs(f, search="secret_needle_here")
+        assert len(result) == 1
+        assert result[0]["event"] == "generic"
+
+    def test_search_nested_no_match(self, tmp_path: Path) -> None:
+        """Search in nested dict that does NOT match returns empty."""
+        f = tmp_path / "nested_no.log"
+        entry = json.dumps({
+            "event": "generic",
+            "level": "info",
+            "logger": "test",
+            "details": {"inner_key": "nothing_useful"},
+        })
+        f.write_text(entry + "\n")
+        result = query_logs(f, search="totally_absent_string")
+        assert len(result) == 0
+
+    def test_large_file_seek_path(self, tmp_path: Path) -> None:
+        """Files >1MB use seek-from-end path."""
+        f = tmp_path / "large.log"
+        # Each line ~120 bytes; need >1MB = >8700 lines
+        lines: list[str] = []
+        for i in range(9000):
+            lines.append(json.dumps({
+                "event": f"entry_{i:06d}",
+                "level": "info",
+                "logger": "sovyx.test",
+                "ts": "2026-04-04T10:00:00",
+                "pad": "x" * 50,
+            }))
+        f.write_text("\n".join(lines) + "\n")
+        assert f.stat().st_size > 1024 * 1024  # Confirm >1MB
+
+        result = query_logs(f, limit=10)
+        assert len(result) == 10
+        # Most recent (last written) should be first
+        assert result[0]["event"] == "entry_008999"
+
+    def test_tail_lines_max_lines_truncation(self, tmp_path: Path) -> None:
+        """When file has more lines than limit*10, tail truncates."""
+        f = tmp_path / "many.log"
+        # limit=1 → max_lines=10 inside _read_and_filter
+        # Write 50 lines to exceed that
+        lines = []
+        for i in range(50):
+            lines.append(json.dumps({
+                "event": f"line_{i:03d}",
+                "level": "info",
+                "logger": "test",
+            }))
+        f.write_text("\n".join(lines) + "\n")
+        result = query_logs(f, limit=1)
+        assert len(result) == 1
+        # Should be the most recent line
+        assert result[0]["event"] == "line_049"
+
+    def test_oserror_returns_empty(self, tmp_path: Path) -> None:
+        """OSError during file read returns empty list."""
+        # Use a directory path instead of a file — stat() works but open() fails
+        d = tmp_path / "fakefile.log"
+        d.mkdir()
+        # Create a dummy file inside so stat shows non-zero size
+        (d / "x").write_text("data")
+        # query_logs checks .exists() which is True for dirs, but open("rb") will fail
+        # Actually, Path.exists() is True for dirs too
+        # The _tail_lines will get OSError when trying to open a dir
+        result = query_logs(d)
+        assert result == []
+
+    def test_query_logs_exception_fallback(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When _read_and_filter raises, query_logs catches and returns []."""
+        f = tmp_path / "ok.log"
+        f.write_text(json.dumps({"event": "test", "level": "info"}) + "\n")
+
+        from sovyx.dashboard import logs as logs_mod
+
+        def _boom(*args: object, **kwargs: object) -> list[dict[str, object]]:
+            msg = "synthetic failure"
+            raise RuntimeError(msg)
+
+        monkeypatch.setattr(logs_mod, "_read_and_filter", _boom)
+        result = query_logs(f)
+        assert result == []
+
+    def test_filter_uses_severity_fallback(self, tmp_path: Path) -> None:
+        """Level filter checks 'severity' field when 'level' is absent."""
+        f = tmp_path / "severity.log"
+        entry = json.dumps({"event": "alt", "severity": "WARNING", "logger": "test"})
+        f.write_text(entry + "\n")
+        result = query_logs(f, level="WARNING")
+        assert len(result) == 1
+
+    def test_filter_uses_module_fallback(self, tmp_path: Path) -> None:
+        """Module filter checks 'module' field when 'logger' is absent."""
+        f = tmp_path / "modfield.log"
+        entry = json.dumps({"event": "x", "level": "info", "module": "sovyx.alt"})
+        f.write_text(entry + "\n")
+        result = query_logs(f, module="sovyx.alt")
+        assert len(result) == 1
+
+    def test_search_in_event_message_field(self, tmp_path: Path) -> None:
+        """Search matches the 'message' field fallback."""
+        f = tmp_path / "msg.log"
+        entry = json.dumps({"message": "deployment_ready", "level": "info", "logger": "t"})
+        f.write_text(entry + "\n")
+        result = query_logs(f, search="deployment")
+        assert len(result) == 1
+
+    def test_search_with_list_nested_value(self, tmp_path: Path) -> None:
+        """Search finds text inside nested list values."""
+        f = tmp_path / "list_nested.log"
+        entry = json.dumps({
+            "event": "batch",
+            "level": "info",
+            "logger": "test",
+            "items": ["alpha", "beta_target", "gamma"],
+        })
+        f.write_text(entry + "\n")
+        result = query_logs(f, search="beta_target")
+        assert len(result) == 1
