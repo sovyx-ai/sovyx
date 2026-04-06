@@ -1,0 +1,22 @@
+{
+  "title": "Sovyx",
+  "tagline": "Sovereign AI Companion Engine",
+  "versionLicense": "Version & License",
+  "version": "Version",
+  "license": "License",
+  "licenseValue": "AGPL-3.0",
+  "dashboard": "Dashboard",
+  "dashboardValue": "React {{version}}",
+  "engineUptime": "Engine Uptime",
+  "system": "System",
+  "mind": "Mind",
+  "concepts": "Concepts",
+  "episodes": "Episodes",
+  "llmCallsToday": "LLM Calls Today",
+  "links": "Links",
+  "github": "GitHub",
+  "documentation": "Documentation",
+  "builtWith": "Built with",
+  "builtBy": "by Sovyx AI",
+  "sovereignty": "Your mind, your data, your sovereignty."
+}
