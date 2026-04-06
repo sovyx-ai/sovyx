@@ -59,10 +59,21 @@
   },
   "errors": {
     "generic": "Something went wrong",
+    "unexpected": "An unexpected error occurred.",
     "network": "The Mind is unreachable. Check your connection.",
     "notFound": "This path doesn't exist in the Mind",
+    "notFoundPage": "This page doesn't exist in your Mind's memory.",
     "unauthorized": "Authentication expired. Re-enter your token.",
-    "tryAgain": "Try again"
+    "tryAgain": "Try Again",
+    "backToOverview": "Back to Overview"
+  },
+  "command": {
+    "placeholder": "Type a command or search...",
+    "empty": "No results found.",
+    "navigation": "Navigation",
+    "actions": "Actions",
+    "clearLogs": "Clear Logs",
+    "refreshData": "Refresh Data"
   },
   "comingSoon": {
     "title": "Coming in {{version}}",

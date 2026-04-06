@@ -3,6 +3,7 @@
  *
  * Uses --svx-* tokens. No shadcn Card wrapper (matches other pages).
  * Shows error message in dev mode, generic message in prod.
+ * Uses i18n.t() directly (class components can't use hooks).
  *
  * Ref: DASH-36, Architecture §7
  */
@@ -10,6 +11,7 @@
 import { Component, type ReactNode } from "react";
 import { AlertTriangleIcon, RefreshCwIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import i18n from "@/lib/i18n";
 
 interface Props {
   children: ReactNode;
@@ -44,15 +46,15 @@ export class ErrorBoundary extends Component<Props, State> {
           <AlertTriangleIcon className="size-10 text-[var(--svx-color-error)] opacity-60" />
           <div>
             <h2 className="text-lg font-semibold text-[var(--svx-color-text-primary)]">
-              Something went wrong
+              {i18n.t("common:errors.generic")}
             </h2>
             <p className="mt-1 text-sm text-[var(--svx-color-text-secondary)]">
-              {this.state.error?.message ?? "An unexpected error occurred."}
+              {this.state.error?.message ?? i18n.t("common:errors.unexpected")}
             </p>
           </div>
           <Button onClick={this.handleRetry} variant="secondary" className="gap-2">
             <RefreshCwIcon className="size-4" />
-            Try Again
+            {i18n.t("common:errors.tryAgain")}
           </Button>
         </div>
       );
