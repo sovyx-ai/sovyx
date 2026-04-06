@@ -7,25 +7,20 @@
     "uptime": "Uptime: {{duration}}",
     "justBooted": "Just woke up — ready to think",
     "messages": "Messages",
-    "messagesToday": "{{count}} today",
     "messagesFresh": "—",
     "messagesHint": "Awaiting first message",
+    "activeCount": "{{count}} active",
     "brainConcepts": "Brain",
-    "conceptCount": "{{count}} concepts",
     "episodeCount": "{{count}} episodes",
     "brainFresh": "Empty",
     "brainHint": "Learns from conversation",
     "llmCost": "LLM Cost",
-    "costToday": "${{amount}} today",
-    "callsToday": "{{count}} calls",
     "costFresh": "—",
     "costHint": "No calls yet today",
-    "activeCount": "{{count}} active",
     "costSubtitle": "{{calls}} calls · {{tokens}} tokens"
   },
   "health": {
-    "title": "Health Checks",
-    "expand": "Show details"
+    "title": "Health Checks"
   },
   "chart": {
     "costTitle": "LLM Cost (24h)",
@@ -40,9 +35,6 @@
   "placeholders": {
     "voice": "Voice Pipeline",
     "voiceDesc": "Real-time voice interaction with your Mind.",
-    "voiceAction": "Setup →",
-    "proactive": "Proactive Thinking",
-    "proactiveDesc": "Your Mind will anticipate before you ask",
     "emotional": "Emotional Timeline",
     "emotionalDesc": "Mood and emotional state tracking over time.",
     "tasks": "Tasks & Habits",
