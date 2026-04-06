@@ -21,6 +21,11 @@ import conversations from "@/locales/en/conversations.json";
 import brain from "@/locales/en/brain.json";
 import logs from "@/locales/en/logs.json";
 import settings from "@/locales/en/settings.json";
+import voice from "@/locales/en/voice.json";
+import emotions from "@/locales/en/emotions.json";
+import productivity from "@/locales/en/productivity.json";
+import plugins from "@/locales/en/plugins.json";
+import home from "@/locales/en/home.json";
 
 void i18n.use(initReactI18next).init({
   resources: {
@@ -31,12 +36,17 @@ void i18n.use(initReactI18next).init({
       brain,
       logs,
       settings,
+      voice,
+      emotions,
+      productivity,
+      plugins,
+      home,
     },
   },
   lng: "en",
   fallbackLng: "en",
   defaultNS: "common",
-  ns: ["common", "overview", "conversations", "brain", "logs", "settings"],
+  ns: ["common", "overview", "conversations", "brain", "logs", "settings", "voice", "emotions", "productivity", "plugins", "home"],
   interpolation: {
     escapeValue: false, // React already escapes
   },

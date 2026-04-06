@@ -37,4 +37,13 @@ describe("Accessibility — CSS audit", () => {
     expect(html).toContain("viewport");
     expect(html).toContain("width=device-width");
   });
+
+  it("interactive borders use border-strong for WCAG 3:1 contrast", () => {
+    expect(css).toContain("--input: var(--svx-color-border-strong)");
+  });
+
+  it("html always has dark class", () => {
+    const html = readFileSync(resolve(__dirname, "../index.html"), "utf-8");
+    expect(html).toMatch(/class=["'][^"']*dark[^"']*["']/);
+  });
 });

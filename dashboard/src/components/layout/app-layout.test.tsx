@@ -53,4 +53,22 @@ describe("AppLayout accessibility", () => {
     const kbd = screen.getByLabelText(/command.*k.*command palette/i);
     expect(kbd).toBeInTheDocument();
   });
+
+  it("sets document.title based on route (WCAG 2.4.2)", () => {
+    render(
+      <MemoryRouter initialEntries={["/brain"]}>
+        <AppLayout />
+      </MemoryRouter>,
+    );
+    expect(document.title).toBe("Brain — Sovyx");
+  });
+
+  it("falls back to 'Sovyx' for unknown routes", () => {
+    render(
+      <MemoryRouter initialEntries={["/nonexistent"]}>
+        <AppLayout />
+      </MemoryRouter>,
+    );
+    expect(document.title).toBe("Sovyx");
+  });
 });
