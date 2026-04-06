@@ -1,22 +1,11 @@
 import type { Message } from "@/types/api";
 import { LetterAvatar, MindAvatar } from "./letter-avatar";
+import { formatTimeShort } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 interface ChatBubbleProps {
   message: Message;
   participantName: string;
-}
-
-function formatMessageTime(iso: string): string {
-  try {
-    return new Date(iso).toLocaleTimeString("en-US", {
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    });
-  } catch {
-    return "—";
-  }
 }
 
 export function ChatBubble({ message, participantName }: ChatBubbleProps) {
@@ -56,7 +45,7 @@ export function ChatBubble({ message, participantName }: ChatBubbleProps) {
           <p className="whitespace-pre-wrap break-words">{message.content}</p>
         </div>
         <span className="block text-[10px] text-[var(--svx-color-text-secondary)] px-1">
-          {formatMessageTime(message.timestamp)}
+          {formatTimeShort(message.timestamp)}
         </span>
       </div>
     </div>

@@ -25,6 +25,7 @@ import {
   CircleHelpIcon,
 } from "lucide-react";
 import type { WsEvent, WsEventType } from "@/types/api";
+import { formatTimePrecise } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { ReactNode } from "react";
 
@@ -91,20 +92,6 @@ const FALLBACK_CONFIG = {
 /** Resolve event type label from i18n. */
 function eventLabel(type: string, t: TFunction): string {
   return t(`events.${type}`, { defaultValue: t("events.unknown") });
-}
-
-function formatTime(iso: string): string {
-  try {
-    const d = new Date(iso);
-    return d.toLocaleTimeString("en-US", {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    });
-  } catch {
-    return "—";
-  }
 }
 
 function eventSummary(event: WsEvent): string {
@@ -175,7 +162,7 @@ export function ActivityFeed({ events, className }: ActivityFeedProps) {
                   key={`${event.timestamp}-${i}`}
                   className="flex items-start gap-3 rounded-[var(--svx-radius-md)] px-2 py-1.5 text-xs transition-colors hover:bg-[var(--svx-color-bg-hover)]"
                   role="article"
-                  aria-label={`${label} at ${formatTime(event.timestamp)}`}
+                  aria-label={`${label} at ${formatTimePrecise(event.timestamp)}`}
                 >
                   <span
                     className={cn("mt-0.5 shrink-0", config.color)}
@@ -189,7 +176,7 @@ export function ActivityFeed({ events, className }: ActivityFeedProps) {
                         {label}
                       </span>
                       <span className="text-[var(--svx-color-text-tertiary)]">
-                        {formatTime(event.timestamp)}
+                        {formatTimePrecise(event.timestamp)}
                       </span>
                     </div>
                     <p className="truncate text-[var(--svx-color-text-tertiary)]">

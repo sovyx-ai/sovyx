@@ -23,6 +23,7 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart";
 import { ChartEmptyAnimation } from "@/components/empty-state-animations";
+import { formatChartTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export interface DataPoint {
@@ -37,15 +38,6 @@ interface MetricChartProps {
   unit?: string;
   label?: string;
   className?: string;
-}
-
-function formatChartTime(ts: number): string {
-  const d = new Date(ts);
-  return d.toLocaleTimeString("en-US", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
 }
 
 export function MetricChart({
