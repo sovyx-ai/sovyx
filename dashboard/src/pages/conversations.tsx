@@ -226,7 +226,7 @@ export default function ConversationsPage() {
                     <ChannelBadge channel={activeChannel} />
                     {activeConv && (
                       <span className="text-[10px] text-[var(--svx-color-text-tertiary)]">
-                        {activeConv.message_count} msgs
+                        {activeConv.message_count} {activeConv.message_count === 1 ? "message" : "messages"}
                       </span>
                     )}
                   </div>
