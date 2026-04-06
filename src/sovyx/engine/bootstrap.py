@@ -170,6 +170,8 @@ async def bootstrap(
                 event_bus=event_bus,
             )
             registry.register_instance(BrainService, brain_service)
+            registry.register_instance(ConceptRepository, concept_repo)
+            registry.register_instance(RelationRepository, relation_repo)
 
             # Consolidation scheduler
             consolidation_cycle = ConsolidationCycle(
