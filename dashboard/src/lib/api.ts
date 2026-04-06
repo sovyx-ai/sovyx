@@ -1,6 +1,14 @@
 /**
  * Sovyx Dashboard — API client
- * Thin fetch wrapper with Bearer auth and error handling.
+ *
+ * Thin fetch wrapper with:
+ * - Bearer auth (token from localStorage)
+ * - 401 → clear token + show auth modal
+ * - AbortSignal support for cancellation
+ * - Content-Type only on requests with body (POLISH-12 fix)
+ * - Typed ApiError for non-2xx responses
+ *
+ * Ref: POLISH-01, POLISH-12
  */
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? "";
@@ -27,15 +35,24 @@ export class ApiError extends Error {
   }
 }
 
+/** Check if an error is from an aborted fetch (not a real error). */
+export function isAbortError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === "AbortError";
+}
+
 async function request<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {
-    "Content-Type": "application/json",
     ...((options.headers as Record<string, string>) ?? {}),
   };
+
+  // Only set Content-Type when there's a body (POLISH-12: not on GET/DELETE)
+  if (options.body) {
+    headers["Content-Type"] = "application/json";
+  }
 
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
@@ -47,10 +64,8 @@ async function request<T>(
   });
 
   if (!response.ok) {
-    // 401 → clear token, show auth modal
     if (response.status === 401) {
       clearToken();
-      // Lazy import to avoid circular deps
       const { useDashboardStore } = await import("@/stores/dashboard");
       useDashboardStore.getState().setAuthenticated(false);
       useDashboardStore.getState().setShowTokenModal(true);
@@ -63,19 +78,23 @@ async function request<T>(
 }
 
 export const api = {
-  get: <T>(path: string) => request<T>(path),
+  get: <T>(path: string, options?: RequestInit) =>
+    request<T>(path, options),
 
-  post: <T>(path: string, body?: unknown) =>
+  post: <T>(path: string, body?: unknown, options?: RequestInit) =>
     request<T>(path, {
+      ...options,
       method: "POST",
       body: body ? JSON.stringify(body) : undefined,
     }),
 
-  put: <T>(path: string, body?: unknown) =>
+  put: <T>(path: string, body?: unknown, options?: RequestInit) =>
     request<T>(path, {
+      ...options,
       method: "PUT",
       body: body ? JSON.stringify(body) : undefined,
     }),
 
-  delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
+  delete: <T>(path: string, options?: RequestInit) =>
+    request<T>(path, { ...options, method: "DELETE" }),
 };
