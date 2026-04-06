@@ -208,7 +208,7 @@
 
   /* ── Border / Input / Ring ── */
   --border: var(--svx-color-border-default);
-  --input: var(--svx-color-bg-input);
+  --input: var(--svx-color-border-strong);  /* Interactive borders use #334155 (WCAG 3:1 on surface) */
   --ring: var(--svx-color-border-focus);
 
   /* ── Radius (shadcn base) ── */
