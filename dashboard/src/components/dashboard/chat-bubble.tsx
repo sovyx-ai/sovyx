@@ -50,7 +50,7 @@ export function ChatBubble({ message, participantName }: ChatBubbleProps) {
             "rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
             isUser
               ? "rounded-tl-sm bg-[var(--svx-color-bg-elevated)] text-[var(--svx-color-text-primary)]"
-              : "rounded-tr-sm bg-primary/15 text-[var(--svx-color-text-primary)]",
+              : "rounded-tr-sm bg-[var(--svx-color-brand-subtle)] text-[var(--svx-color-text-primary)]",
           )}
         >
           <p className="whitespace-pre-wrap break-words">{message.content}</p>

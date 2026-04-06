@@ -24,7 +24,7 @@ export function ChatThread({ messages, participantName, loading }: ChatThreadPro
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center">
-        <div className="size-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+        <div className="size-6 animate-spin rounded-full border-2 border-[var(--svx-color-brand-primary)] border-t-transparent" />
       </div>
     );
   }
@@ -34,7 +34,7 @@ export function ChatThread({ messages, participantName, loading }: ChatThreadPro
       <EmptyState
         icon={<MessageSquareIcon className="size-8" />}
         title={t("list.empty")}
-        description="No messages in this conversation yet."
+        description={t("detail.emptyThread")}
         className="h-full"
       />
     );

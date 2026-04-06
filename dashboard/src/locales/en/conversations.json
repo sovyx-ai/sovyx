@@ -25,7 +25,8 @@
     "messageCount_other": "{{count}} messages",
     "selectTitle": "Select a conversation",
     "selectHint": "Choose from the list to view messages.",
-    "sendPlaceholder": "Send from dashboard coming in v1.0"
+    "sendPlaceholder": "Send from dashboard coming in v1.0",
+    "emptyThread": "No messages in this conversation yet."
   },
   "error": {
     "loadFailed": "Failed to load conversations",
