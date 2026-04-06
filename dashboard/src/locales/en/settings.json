@@ -2,7 +2,6 @@
   "title": "Settings",
   "tabs": {
     "general": "General",
-    "about": "About",
     "mind": "Mind",
     "channels": "Channels",
     "apiKeys": "API Keys",
@@ -14,11 +13,7 @@
   },
   "general": {
     "logLevel": "Log Level",
-    "logLevelDesc": "Set the minimum log level for the Mind.",
     "dataDir": "Data Directory",
-    "dataDirDesc": "Where Sovyx keeps its memories (read-only).",
-    "telemetry": "Telemetry",
-    "telemetryDesc": "Send anonymous usage data to help improve Sovyx.",
     "saved": "Settings saved.",
     "saveFailed": "Failed to save settings.",
     "loadFailed": "Failed to load settings.",
@@ -32,19 +27,5 @@
     "relayLabel": "Relay",
     "enabled": "Enabled",
     "disabled": "Disabled"
-  },
-  "about": {
-    "version": "Version",
-    "license": "License",
-    "uptime": "Uptime",
-    "systemInfo": "System Info",
-    "links": "Links",
-    "docs": "Documentation",
-    "github": "GitHub",
-    "discord": "Community"
-  },
-  "placeholder": {
-    "comingSoon": "Coming in {{version}}",
-    "locked": "This section requires additional APIs."
   }
 }

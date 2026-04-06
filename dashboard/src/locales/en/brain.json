@@ -1,14 +1,9 @@
 {
   "title": "Brain Explorer",
   "search": "Search concepts...",
-  "filter": {
-    "category": "Category",
-    "allCategories": "All categories"
-  },
   "stats": {
     "concepts": "{{count}} concepts",
-    "relations": "{{count}} relations",
-    "lastConsolidation": "Last consolidation: {{time}}"
+    "relations": "{{count}} relations"
   },
   "categories": {
     "fact": "Fact",
@@ -29,13 +24,10 @@
     "emotional": "Emotional"
   },
   "detail": {
-    "selected": "Selected: {{name}}",
     "category": "Category",
     "importance": "Importance",
     "confidence": "Confidence",
     "accessCount": "Access count",
-    "related": "{{count}} related concepts",
-    "viewDetail": "View Detail →",
     "close": "Close detail"
   },
   "empty": "No concepts yet",

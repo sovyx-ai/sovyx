@@ -5,35 +5,11 @@
   "empty": "Waiting for logs…",
   "emptyDescription": "Log entries will stream here in real-time as the engine runs.",
   "follow": "Follow",
-  "autoScroll": "Auto-scroll",
   "search": "Search logs...",
-  "filter": {
-    "level": "Level",
-    "module": "Module",
-    "allLevels": "All levels",
-    "allModules": "All modules"
-  },
-  "levels": {
-    "debug": "DEBUG",
-    "info": "INFO",
-    "warning": "WARN",
-    "error": "ERROR",
-    "critical": "CRIT"
-  },
-  "table": {
-    "time": "Time",
-    "level": "Level",
-    "module": "Module",
-    "event": "Event"
-  },
   "actions": {
     "clear": "Clear logs"
   },
   "error": {
     "loadFailed": "Failed to load logs"
-  },
-  "footer": {
-    "showing": "Showing {{shown}} of {{total}} entries",
-    "export": "Export JSON"
   }
 }
