@@ -112,9 +112,7 @@ class TestAuth:
 
 
 class TestAPIRoutes:
-    def test_status(
-        self, client: TestClient, auth_headers: dict[str, str]
-    ) -> None:
+    def test_status(self, client: TestClient, auth_headers: dict[str, str]) -> None:
         resp = client.get("/api/status", headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
@@ -123,9 +121,7 @@ class TestAPIRoutes:
         assert "uptime_seconds" in data
         assert "llm_cost_today" in data
 
-    def test_health(
-        self, client: TestClient, auth_headers: dict[str, str]
-    ) -> None:
+    def test_health(self, client: TestClient, auth_headers: dict[str, str]) -> None:
         resp = client.get("/api/health", headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
@@ -138,41 +134,31 @@ class TestAPIRoutes:
             assert "status" in check
             assert check["status"] in ("green", "yellow", "red")
 
-    def test_conversations(
-        self, client: TestClient, auth_headers: dict[str, str]
-    ) -> None:
+    def test_conversations(self, client: TestClient, auth_headers: dict[str, str]) -> None:
         resp = client.get("/api/conversations", headers=auth_headers)
         assert resp.status_code == 200
         assert "conversations" in resp.json()
 
-    def test_brain_graph(
-        self, client: TestClient, auth_headers: dict[str, str]
-    ) -> None:
+    def test_brain_graph(self, client: TestClient, auth_headers: dict[str, str]) -> None:
         resp = client.get("/api/brain/graph", headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
         assert "nodes" in data
         assert "links" in data
 
-    def test_logs(
-        self, client: TestClient, auth_headers: dict[str, str]
-    ) -> None:
+    def test_logs(self, client: TestClient, auth_headers: dict[str, str]) -> None:
         resp = client.get("/api/logs", headers=auth_headers)
         assert resp.status_code == 200
         assert "entries" in resp.json()
 
-    def test_get_settings(
-        self, client: TestClient, auth_headers: dict[str, str]
-    ) -> None:
+    def test_get_settings(self, client: TestClient, auth_headers: dict[str, str]) -> None:
         resp = client.get("/api/settings", headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
         assert "log_level" in data
         assert "data_dir" in data
 
-    def test_put_settings(
-        self, client: TestClient, auth_headers: dict[str, str]
-    ) -> None:
+    def test_put_settings(self, client: TestClient, auth_headers: dict[str, str]) -> None:
         resp = client.put(
             "/api/settings",
             headers=auth_headers,
@@ -198,9 +184,7 @@ class TestWebSocket:
         with pytest.raises(WebSocketDisconnect), client.websocket_connect("/ws?token=wrong"):
             pass  # pragma: no cover
 
-    def test_ws_valid_token_connects(
-        self, client: TestClient, token: str
-    ) -> None:
+    def test_ws_valid_token_connects(self, client: TestClient, token: str) -> None:
         with client.websocket_connect(f"/ws?token={token}") as ws:
             ws.send_text("ping")
             data = ws.receive_text()
@@ -249,9 +233,7 @@ class TestDashboardServer:
 
 
 class TestSPAFallback:
-    def test_unknown_path_without_static(
-        self, client: TestClient
-    ) -> None:
+    def test_unknown_path_without_static(self, client: TestClient) -> None:
         """Without static files, unknown paths return 503."""
         resp = client.get("/some/random/path")
         # Depends on whether static dir exists

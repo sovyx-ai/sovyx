@@ -36,7 +36,7 @@ def dashboard_info(
             api_cfg = cfg.get("api", {})
             host = api_cfg.get("host", host)
             port = api_cfg.get("port", port)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  # nosec B110 — best-effort config read; defaults are safe
             pass
 
     url = f"http://{host}:{port}"

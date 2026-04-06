@@ -10,7 +10,10 @@ from sovyx.dashboard.brain import get_brain_graph
 
 
 def _mock_concept(
-    cid: str, name: str, category: str = "fact", importance: float = 0.5,
+    cid: str,
+    name: str,
+    category: str = "fact",
+    importance: float = 0.5,
 ) -> MagicMock:
     c = MagicMock()
     c.id = cid

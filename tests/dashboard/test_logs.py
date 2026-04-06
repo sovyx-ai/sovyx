@@ -88,11 +88,7 @@ class TestQueryLogs:
 
     def test_malformed_lines_skipped(self, tmp_path: Path) -> None:
         f = tmp_path / "bad.log"
-        f.write_text(
-            'not json\n'
-            '{"event": "good", "level": "info", "logger": "test"}\n'
-            '{broken\n'
-        )
+        f.write_text('not json\n{"event": "good", "level": "info", "logger": "test"}\n{broken\n')
         result = query_logs(f)
         assert len(result) == 1
         assert result[0]["event"] == "good"

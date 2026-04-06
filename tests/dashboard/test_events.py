@@ -47,8 +47,11 @@ class TestSerializeEvent:
 
     def test_think_completed(self) -> None:
         event = ThinkCompleted(
-            tokens_in=100, tokens_out=50, model="gpt-4o",
-            cost_usd=0.005, latency_ms=1200,
+            tokens_in=100,
+            tokens_out=50,
+            model="gpt-4o",
+            cost_usd=0.005,
+            latency_ms=1200,
         )
         result = _serialize_event(event)
         assert result["data"]["tokens_in"] == 100

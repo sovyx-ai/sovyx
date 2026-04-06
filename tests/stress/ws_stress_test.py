@@ -48,15 +48,15 @@ EVENT_TYPES = [
 
 # Weight distribution — more common events get higher weight
 EVENT_WEIGHTS = [
-    3,   # ServiceHealthChanged
+    3,  # ServiceHealthChanged
     10,  # PerceptionReceived
-    8,   # ThinkCompleted
-    8,   # ResponseSent
-    5,   # ConceptCreated
-    3,   # EpisodeEncoded
-    2,   # ConsolidationCompleted
-    1,   # ChannelConnected
-    1,   # ChannelDisconnected
+    8,  # ThinkCompleted
+    8,  # ResponseSent
+    5,  # ConceptCreated
+    3,  # EpisodeEncoded
+    2,  # ConsolidationCompleted
+    1,  # ChannelConnected
+    1,  # ChannelDisconnected
 ]
 
 

@@ -137,9 +137,15 @@ class TestCountersEdgeCases:
 class TestSnapshotEdgeCases:
     def test_zero_uptime(self) -> None:
         snap = StatusSnapshot(
-            version="0.1.0", uptime_seconds=0.0, mind_name="test",
-            active_conversations=0, memory_concepts=0, memory_episodes=0,
-            llm_cost_today=0.0, llm_calls_today=0, tokens_today=0,
+            version="0.1.0",
+            uptime_seconds=0.0,
+            mind_name="test",
+            active_conversations=0,
+            memory_concepts=0,
+            memory_episodes=0,
+            llm_cost_today=0.0,
+            llm_calls_today=0,
+            tokens_today=0,
             messages_today=0,
         )
         d = snap.to_dict()
@@ -147,19 +153,31 @@ class TestSnapshotEdgeCases:
 
     def test_huge_uptime(self) -> None:
         snap = StatusSnapshot(
-            version="0.1.0", uptime_seconds=31536000.123456,  # 1 year
-            mind_name="test", active_conversations=0, memory_concepts=0,
-            memory_episodes=0, llm_cost_today=0.0, llm_calls_today=0,
-            tokens_today=0, messages_today=0,
+            version="0.1.0",
+            uptime_seconds=31536000.123456,  # 1 year
+            mind_name="test",
+            active_conversations=0,
+            memory_concepts=0,
+            memory_episodes=0,
+            llm_cost_today=0.0,
+            llm_calls_today=0,
+            tokens_today=0,
+            messages_today=0,
         )
         d = snap.to_dict()
         assert d["uptime_seconds"] == 31536000.1
 
     def test_unicode_mind_name(self) -> None:
         snap = StatusSnapshot(
-            version="0.1.0", uptime_seconds=100, mind_name="Ñyx 🔮 日本語",
-            active_conversations=0, memory_concepts=0, memory_episodes=0,
-            llm_cost_today=0.0, llm_calls_today=0, tokens_today=0,
+            version="0.1.0",
+            uptime_seconds=100,
+            mind_name="Ñyx 🔮 日本語",
+            active_conversations=0,
+            memory_concepts=0,
+            memory_episodes=0,
+            llm_cost_today=0.0,
+            llm_calls_today=0,
+            tokens_today=0,
             messages_today=0,
         )
         d = snap.to_dict()
@@ -167,9 +185,15 @@ class TestSnapshotEdgeCases:
 
     def test_very_small_cost(self) -> None:
         snap = StatusSnapshot(
-            version="0.1.0", uptime_seconds=100, mind_name="test",
-            active_conversations=0, memory_concepts=0, memory_episodes=0,
-            llm_cost_today=0.00001, llm_calls_today=1, tokens_today=1,
+            version="0.1.0",
+            uptime_seconds=100,
+            mind_name="test",
+            active_conversations=0,
+            memory_concepts=0,
+            memory_episodes=0,
+            llm_cost_today=0.00001,
+            llm_calls_today=1,
+            tokens_today=1,
             messages_today=0,
         )
         d = snap.to_dict()
@@ -213,7 +237,7 @@ class TestLogQueryAdversarial:
         """Binary data mixed with JSON should not crash."""
         f = tmp_path / "garbage.log"
         good = json.dumps({"event": "good", "level": "info"})
-        f.write_bytes(b'\x80\xff\xfe\n' + good.encode() + b'\n' + b'\x00\x01\x02\n')
+        f.write_bytes(b"\x80\xff\xfe\n" + good.encode() + b"\n" + b"\x00\x01\x02\n")
 
         result = query_logs(f)
         assert len(result) == 1

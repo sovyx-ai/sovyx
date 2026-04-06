@@ -243,7 +243,8 @@ class TestConversationIntegration:
 
     @pytest.mark.asyncio()
     async def test_conversation_pool_fallback_to_system(
-        self, conv_pool: _TestPool,
+        self,
+        conv_pool: _TestPool,
     ) -> None:
         """When get_conversation_pool throws, falls back to system pool."""
         db_manager = MagicMock()
@@ -333,7 +334,8 @@ class TestBrainGraphIntegration:
 
     @pytest.mark.asyncio()
     async def test_relations_filters_to_node_set(
-        self, brain_pool: _TestPool,
+        self,
+        brain_pool: _TestPool,
     ) -> None:
         registry = _make_registry_with_pool(brain_pool, pool_type="brain")
 

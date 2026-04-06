@@ -129,12 +129,14 @@ async def _get_relations(
             edge_key = f"{min(src, tgt)}:{max(src, tgt)}"
             if edge_key not in seen:
                 seen.add(edge_key)
-                links.append({
-                    "source": src,
-                    "target": tgt,
-                    "relation_type": str(row[2]),
-                    "weight": round(float(row[3]), 3),
-                })
+                links.append(
+                    {
+                        "source": src,
+                        "target": tgt,
+                        "relation_type": str(row[2]),
+                        "weight": round(float(row[3]), 3),
+                    }
+                )
 
         return links
     except Exception:  # noqa: BLE001
@@ -167,12 +169,14 @@ async def _get_relations_via_repo(
                 edge_key = f"{min(src, tgt)}:{max(src, tgt)}"
                 if edge_key not in seen:
                     seen.add(edge_key)
-                    all_links.append({
-                        "source": src,
-                        "target": tgt,
-                        "relation_type": r.relation_type.value,
-                        "weight": round(r.weight, 3),
-                    })
+                    all_links.append(
+                        {
+                            "source": src,
+                            "target": tgt,
+                            "relation_type": r.relation_type.value,
+                            "weight": round(r.weight, 3),
+                        }
+                    )
 
     return all_links
 
