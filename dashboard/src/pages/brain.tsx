@@ -91,7 +91,7 @@ export default function BrainPage() {
         <div>
           <h1 className="text-2xl font-bold">{t("title")}</h1>
           <p className="text-sm text-[var(--svx-color-text-secondary)]">
-            {brainNodes.length} {t("stats.concepts")} · {brainLinks.length} {t("stats.connections")}
+            {t("stats.concepts", { count: brainNodes.length })} · {t("stats.relations", { count: brainLinks.length })}
           </p>
         </div>
       </div>
