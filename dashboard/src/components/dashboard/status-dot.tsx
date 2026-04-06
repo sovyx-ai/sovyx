@@ -98,7 +98,7 @@ export function StatusDot({ status, size = "md", showLabel = false, className }:
         aria-label={label}
       />
       {showLabel && (
-        <span className="text-xs text-muted-foreground">{label}</span>
+        <span className="text-xs text-[var(--svx-color-text-secondary)]">{label}</span>
       )}
     </span>
   );

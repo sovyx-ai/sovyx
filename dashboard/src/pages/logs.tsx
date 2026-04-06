@@ -106,7 +106,7 @@ export default function LogsPage() {
       <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold">{t("title")}</h1>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-sm text-[var(--svx-color-text-secondary)]">
             {filtered.length} entries
           </p>
         </div>
@@ -122,8 +122,8 @@ export default function LogsPage() {
                 className={cn(
                   "px-2 py-1 text-[10px] font-medium transition-colors",
                   level === levelFilter
-                    ? "bg-secondary text-foreground"
-                    : cn("hover:bg-secondary/50", LEVEL_COLORS[level]),
+                    ? "bg-[var(--svx-color-bg-elevated)] text-[var(--svx-color-text-primary)]"
+                    : cn("hover:bg-[var(--svx-color-bg-elevated)]", LEVEL_COLORS[level]),
                 )}
               >
                 {level}
@@ -146,7 +146,7 @@ export default function LogsPage() {
 
       {/* Search */}
       <div className="relative">
-        <SearchIcon className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+        <SearchIcon className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-[var(--svx-color-text-secondary)]" />
         <Input
           placeholder={t("search")}
           value={search}
