@@ -60,6 +60,13 @@
     "allGreen": "All systems operational",
     "checksPass": "{{passed}}/{{total}} passing"
   },
+  "auth": {
+    "description": "Paste your dashboard token to continue. Find it by running:",
+    "command": "cat ~/.sovyx/token",
+    "placeholder": "Paste token here…",
+    "connect": "Connect",
+    "connected": "Connected"
+  },
   "errors": {
     "generic": "Something went wrong",
     "unexpected": "An unexpected error occurred.",
