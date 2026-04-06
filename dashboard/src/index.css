@@ -286,6 +286,12 @@
   50% { transform: translate(-30px, 20px) scale(1.1); opacity: 0.6; }
 }
 
+/* ── Shimmer skeleton animation ── */
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
 /* ── Status dot animations ── */
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; }

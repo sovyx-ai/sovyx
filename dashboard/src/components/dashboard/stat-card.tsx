@@ -8,12 +8,60 @@
  * - Optional icon (Lucide)
  * - Optional trend indicator (up/down arrow)
  * - Optional subtitle (secondary text)
+ * - Skeleton variant for loading state (REFINE-07)
  *
  * Ref: Architecture §3.1, META-01 §8 (Cards spec)
  */
 
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
+
+/**
+ * Shimmer skeleton bar — reusable animated placeholder.
+ */
+function Shimmer({ className }: { className?: string }) {
+  return (
+    <div
+      className={cn(
+        "animate-[shimmer_1.5s_ease-in-out_infinite] rounded bg-[var(--svx-color-bg-elevated)]",
+        className,
+      )}
+      style={{
+        backgroundImage:
+          "linear-gradient(90deg, transparent 0%, var(--svx-color-bg-hover) 50%, transparent 100%)",
+        backgroundSize: "200% 100%",
+      }}
+    />
+  );
+}
+
+/**
+ * StatCardSkeleton — Loading placeholder matching StatCard layout.
+ */
+export function StatCardSkeleton({ className }: { className?: string }) {
+  return (
+    <div
+      className={cn(
+        "rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-4",
+        className,
+      )}
+      role="group"
+      aria-label="Loading"
+    >
+      {/* Title shimmer */}
+      <div className="flex items-center justify-between pb-2">
+        <Shimmer className="h-3 w-20" />
+        <Shimmer className="size-4 rounded-full" />
+      </div>
+      {/* Value shimmer */}
+      <Shimmer className="h-7 w-24" />
+      {/* Subtitle shimmer */}
+      <div className="mt-2">
+        <Shimmer className="h-3 w-16" />
+      </div>
+    </div>
+  );
+}
 import { StatusDot, healthStatusToState } from "./status-dot";
 import type { HealthStatus } from "./status-dot";
 
