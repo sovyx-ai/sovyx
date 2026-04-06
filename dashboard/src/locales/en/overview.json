@@ -27,6 +27,20 @@
     "costLabel": "Cost",
     "noData": "No cost data yet"
   },
+  "events": {
+    "PerceptionReceived": "Perception",
+    "ThinkCompleted": "Think",
+    "ResponseSent": "Response",
+    "ConceptCreated": "Concept",
+    "EpisodeEncoded": "Episode",
+    "ServiceHealthChanged": "Health",
+    "ConsolidationCompleted": "Consolidation",
+    "EngineStarted": "Engine Started",
+    "EngineStopping": "Engine Stopping",
+    "ChannelConnected": "Channel",
+    "ChannelDisconnected": "Channel",
+    "unknown": "Event"
+  },
   "feed": {
     "title": "Recent Activity",
     "empty": "Listening for cognitive events…",

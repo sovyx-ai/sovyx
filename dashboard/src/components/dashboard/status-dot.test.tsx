@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
+import "@/lib/i18n";
 import { StatusDot, healthStatusToState } from "./status-dot";
 import type { StatusDotState, HealthStatus } from "./status-dot";
 

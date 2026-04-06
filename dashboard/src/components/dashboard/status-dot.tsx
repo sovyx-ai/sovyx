@@ -12,6 +12,7 @@
  * Respects prefers-reduced-motion (handled by global CSS rule).
  */
 
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 
 export type StatusDotState = "online" | "idle" | "thinking" | "dreaming" | "error" | "offline";
@@ -57,13 +58,13 @@ const STATUS_CONFIG: Record<StatusDotState, { color: string; animation: string }
   },
 };
 
-const STATUS_LABELS: Record<StatusDotState, string> = {
-  online: "Online",
-  idle: "Idle",
-  thinking: "Thinking",
-  dreaming: "Dreaming",
-  error: "Error",
-  offline: "Offline",
+const STATUS_LABEL_KEYS: Record<StatusDotState, string> = {
+  online: "status.online",
+  idle: "status.idle",
+  thinking: "status.thinking",
+  dreaming: "status.dreaming",
+  error: "status.error",
+  offline: "status.offline",
 };
 
 interface StatusDotProps {
@@ -82,8 +83,9 @@ const SIZE_CLASSES = {
 } as const;
 
 export function StatusDot({ status, size = "md", showLabel = false, className }: StatusDotProps) {
+  const { t } = useTranslation("common");
   const config = STATUS_CONFIG[status];
-  const label = STATUS_LABELS[status];
+  const label = t(STATUS_LABEL_KEYS[status]);
 
   return (
     <span className={cn("inline-flex items-center gap-1.5", className)}>

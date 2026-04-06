@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
+import "@/lib/i18n";
 import { StatCard, StatCardSkeleton } from "./stat-card";
 
 describe("StatCard", () => {
