@@ -1,5 +1,13 @@
+/**
+ * About page — version, system info, links.
+ *
+ * POLISH-06: Replaced shadcn Card wrappers with --svx-* token divs.
+ * Consistent with all other pages.
+ *
+ * Ref: Architecture §3.6
+ */
+
 import { ExternalLinkIcon, ShieldIcon, CodeIcon, HeartIcon } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { useDashboardStore } from "@/stores/dashboard";
 
 const LINKS = [
@@ -21,30 +29,30 @@ export default function AboutPage() {
 
       {/* Version + License */}
       <section className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-4">
-        <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-[var(--svx-color-text-primary)]">
+        <h2 className="flex items-center gap-2 text-sm font-medium text-[var(--svx-color-text-primary)]">
           <ShieldIcon className="size-4" />
-          Version & License
+          Version &amp; License
         </h2>
-        <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
+        <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
           <div>
-            <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">Version</dt>
-            <dd className="font-mono font-medium">0.5.0-dev</dd>
+            <dt className="text-[10px] uppercase text-[var(--svx-color-text-tertiary)]">Version</dt>
+            <dd className="font-code font-medium">v{status?.version ?? "0.1.0"}</dd>
           </div>
           <div>
-            <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">License</dt>
-            <dd className="flex items-center gap-2">
-              <Badge variant="secondary" className="font-mono text-[10px]">
+            <dt className="text-[10px] uppercase text-[var(--svx-color-text-tertiary)]">License</dt>
+            <dd>
+              <span className="inline-flex rounded-[var(--svx-radius-full)] bg-[var(--svx-color-bg-elevated)] px-2 py-0.5 font-code text-[10px]">
                 AGPL-3.0
-              </Badge>
+              </span>
             </dd>
           </div>
           <div>
-            <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">Dashboard</dt>
-            <dd className="font-mono text-xs">React {__REACT_VERSION__}</dd>
+            <dt className="text-[10px] uppercase text-[var(--svx-color-text-tertiary)]">Dashboard</dt>
+            <dd className="font-code text-xs">React {__REACT_VERSION__}</dd>
           </div>
           <div>
-            <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">Engine Uptime</dt>
-            <dd className="font-mono text-xs">
+            <dt className="text-[10px] uppercase text-[var(--svx-color-text-tertiary)]">Engine Uptime</dt>
+            <dd className="font-code text-xs">
               {status ? formatUptime(status.uptime_seconds) : "—"}
             </dd>
           </div>
@@ -53,38 +61,38 @@ export default function AboutPage() {
 
       {/* System Info */}
       <section className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-4">
-        <h2 className="mb-3 text-sm font-semibold text-[var(--svx-color-text-primary)]">System</h2>
-        <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
+        <h2 className="text-sm font-medium text-[var(--svx-color-text-primary)]">System</h2>
+        <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
           <div>
-            <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">Mind</dt>
+            <dt className="text-[10px] uppercase text-[var(--svx-color-text-tertiary)]">Mind</dt>
             <dd className="font-medium">{status?.mind_name ?? "—"}</dd>
           </div>
           <div>
-            <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">Concepts</dt>
-            <dd className="font-mono text-xs">{status?.memory_concepts?.toLocaleString() ?? "—"}</dd>
+            <dt className="text-[10px] uppercase text-[var(--svx-color-text-tertiary)]">Concepts</dt>
+            <dd className="font-code text-xs">{status?.memory_concepts?.toLocaleString() ?? "—"}</dd>
           </div>
           <div>
-            <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">Episodes</dt>
-            <dd className="font-mono text-xs">{status?.memory_episodes?.toLocaleString() ?? "—"}</dd>
+            <dt className="text-[10px] uppercase text-[var(--svx-color-text-tertiary)]">Episodes</dt>
+            <dd className="font-code text-xs">{status?.memory_episodes?.toLocaleString() ?? "—"}</dd>
           </div>
           <div>
-            <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">LLM Calls Today</dt>
-            <dd className="font-mono text-xs">{status?.llm_calls_today?.toLocaleString() ?? "—"}</dd>
+            <dt className="text-[10px] uppercase text-[var(--svx-color-text-tertiary)]">LLM Calls Today</dt>
+            <dd className="font-code text-xs">{status?.llm_calls_today?.toLocaleString() ?? "—"}</dd>
           </div>
         </dl>
       </section>
 
       {/* Links */}
       <section className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-4">
-        <h2 className="mb-3 text-sm font-semibold text-[var(--svx-color-text-primary)]">Links</h2>
-        <div className="flex flex-wrap gap-3">
+        <h2 className="text-sm font-medium text-[var(--svx-color-text-primary)]">Links</h2>
+        <div className="mt-3 flex flex-wrap gap-3">
           {LINKS.map((link) => (
             <a
               key={link.label}
               href={link.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 rounded-md bg-[var(--svx-color-bg-elevated)] px-3 py-1.5 text-xs font-medium text-[var(--svx-color-text-secondary)] transition-colors hover:bg-[var(--svx-color-bg-elevated)] hover:text-[var(--svx-color-text-primary)]"
+              className="inline-flex items-center gap-1.5 rounded-[var(--svx-radius-md)] bg-[var(--svx-color-bg-elevated)] px-3 py-1.5 text-xs font-medium text-[var(--svx-color-text-secondary)] transition-colors hover:bg-[var(--svx-color-bg-hover)] hover:text-[var(--svx-color-text-primary)]"
             >
               <link.icon className="size-3.5" />
               {link.label}
@@ -106,7 +114,6 @@ export default function AboutPage() {
   );
 }
 
-// Injected at build time via Vite define
 declare const __REACT_VERSION__: string;
 
 function formatUptime(seconds: number): string {

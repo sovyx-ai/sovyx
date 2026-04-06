@@ -49,10 +49,7 @@ const RELATION_LINE_DASH: Record<RelationType, number[] | null> = {
   emotional: [1, 3],          // fine dot
 };
 
-/** Brand glow color for hover — rgba of --svx-color-brand-primary */
-const BRAND_GLOW = "rgba(139, 92, 246, 0.25)";
-const CONTRADICTS_COLOR = "rgba(239, 68, 68, 0.4)";
-const DEFAULT_LINK_COLOR = "rgba(148, 163, 184, 0.15)";
+import { GRAPH_COLORS } from "@/lib/constants";
 
 export function BrainGraph({ data, width, height, onNodeClick }: BrainGraphProps) {
   const fgRef = useRef<ForceGraphMethods<BrainNode>>(undefined);
@@ -81,7 +78,7 @@ export function BrainGraph({ data, width, height, onNodeClick }: BrainGraphProps
       if (isHovered) {
         ctx.beginPath();
         ctx.arc(x, y, radius + 4 / globalScale, 0, 2 * Math.PI);
-        ctx.fillStyle = BRAND_GLOW;
+        ctx.fillStyle = GRAPH_COLORS.brandGlow;
         ctx.fill();
       }
 
@@ -123,7 +120,7 @@ export function BrainGraph({ data, width, height, onNodeClick }: BrainGraphProps
   // Relation type → color (contradicts = red, rest = subtle gray)
   const linkColor = useCallback(
     (link: BrainLink) =>
-      link.relation_type === "contradicts" ? CONTRADICTS_COLOR : DEFAULT_LINK_COLOR,
+      link.relation_type === "contradicts" ? GRAPH_COLORS.contradicts : GRAPH_COLORS.defaultLink,
     [],
   );
 
