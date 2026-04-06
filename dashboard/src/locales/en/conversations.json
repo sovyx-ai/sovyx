@@ -1,25 +1,11 @@
 {
   "title": "Conversations",
   "search": "Search conversations...",
-  "filter": {
-    "channel": "Channel",
-    "allChannels": "All channels"
-  },
   "list": {
     "empty": "No conversations yet",
-    "emptyHint": "Send a message via Telegram to start a dialogue with your Mind.",
-    "live": "Live"
+    "emptyHint": "Send a message via Telegram to start a dialogue with your Mind."
   },
   "detail": {
-    "via": "via {{channel}}",
-    "timeAgo": "{{time}} ago",
-    "metadata": "Metadata",
-    "model": "Model",
-    "tokens": "Tokens: {{input}} in / {{output}} out",
-    "cost": "Cost: ${{amount}}",
-    "cognitiveTrace": "Cognitive Trace",
-    "traceTotal": "{{duration}}ms total",
-    "participant": "Participant",
     "backLabel": "Back to conversations",
     "messageCount_one": "{{count}} message",
     "messageCount_other": "{{count}} messages",
