@@ -67,6 +67,10 @@
     "connect": "Connect",
     "connected": "Connected"
   },
+  "trend": {
+    "up": "Up {{value}}% {{label}}",
+    "down": "Down {{value}}% {{label}}"
+  },
   "errors": {
     "generic": "Something went wrong",
     "unexpected": "An unexpected error occurred.",
