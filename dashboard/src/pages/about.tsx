@@ -1,5 +1,4 @@
 import { ExternalLinkIcon, ShieldIcon, CodeIcon, HeartIcon } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useDashboardStore } from "@/stores/dashboard";
 
@@ -21,74 +20,64 @@ export default function AboutPage() {
       </div>
 
       {/* Version + License */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-sm">
-            <ShieldIcon className="size-4" />
-            Version & License
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
-            <div>
-              <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">Version</dt>
-              <dd className="font-mono font-medium">0.5.0-dev</dd>
-            </div>
-            <div>
-              <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">License</dt>
-              <dd className="flex items-center gap-2">
-                <Badge variant="secondary" className="font-mono text-[10px]">
-                  AGPL-3.0
-                </Badge>
-              </dd>
-            </div>
-            <div>
-              <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">Dashboard</dt>
-              <dd className="font-mono text-xs">React {__REACT_VERSION__}</dd>
-            </div>
-            <div>
-              <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">Engine Uptime</dt>
-              <dd className="font-mono text-xs">
-                {status ? formatUptime(status.uptime_seconds) : "—"}
-              </dd>
-            </div>
-          </dl>
-        </CardContent>
-      </Card>
+      <section className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-4">
+        <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-[var(--svx-color-text-primary)]">
+          <ShieldIcon className="size-4" />
+          Version & License
+        </h2>
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
+          <div>
+            <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">Version</dt>
+            <dd className="font-mono font-medium">0.5.0-dev</dd>
+          </div>
+          <div>
+            <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">License</dt>
+            <dd className="flex items-center gap-2">
+              <Badge variant="secondary" className="font-mono text-[10px]">
+                AGPL-3.0
+              </Badge>
+            </dd>
+          </div>
+          <div>
+            <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">Dashboard</dt>
+            <dd className="font-mono text-xs">React {__REACT_VERSION__}</dd>
+          </div>
+          <div>
+            <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">Engine Uptime</dt>
+            <dd className="font-mono text-xs">
+              {status ? formatUptime(status.uptime_seconds) : "—"}
+            </dd>
+          </div>
+        </dl>
+      </section>
 
       {/* System Info */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm">System</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
-            <div>
-              <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">Mind</dt>
-              <dd className="font-medium">{status?.mind_name ?? "—"}</dd>
-            </div>
-            <div>
-              <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">Concepts</dt>
-              <dd className="font-mono text-xs">{status?.memory_concepts?.toLocaleString() ?? "—"}</dd>
-            </div>
-            <div>
-              <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">Episodes</dt>
-              <dd className="font-mono text-xs">{status?.memory_episodes?.toLocaleString() ?? "—"}</dd>
-            </div>
-            <div>
-              <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">LLM Calls Today</dt>
-              <dd className="font-mono text-xs">{status?.llm_calls_today?.toLocaleString() ?? "—"}</dd>
-            </div>
-          </dl>
-        </CardContent>
-      </Card>
+      <section className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-4">
+        <h2 className="mb-3 text-sm font-semibold text-[var(--svx-color-text-primary)]">System</h2>
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
+          <div>
+            <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">Mind</dt>
+            <dd className="font-medium">{status?.mind_name ?? "—"}</dd>
+          </div>
+          <div>
+            <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">Concepts</dt>
+            <dd className="font-mono text-xs">{status?.memory_concepts?.toLocaleString() ?? "—"}</dd>
+          </div>
+          <div>
+            <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">Episodes</dt>
+            <dd className="font-mono text-xs">{status?.memory_episodes?.toLocaleString() ?? "—"}</dd>
+          </div>
+          <div>
+            <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">LLM Calls Today</dt>
+            <dd className="font-mono text-xs">{status?.llm_calls_today?.toLocaleString() ?? "—"}</dd>
+          </div>
+        </dl>
+      </section>
 
       {/* Links */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm">Links</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-wrap gap-3">
+      <section className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-4">
+        <h2 className="mb-3 text-sm font-semibold text-[var(--svx-color-text-primary)]">Links</h2>
+        <div className="flex flex-wrap gap-3">
           {LINKS.map((link) => (
             <a
               key={link.label}
@@ -101,8 +90,8 @@ export default function AboutPage() {
               {link.label}
             </a>
           ))}
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
       {/* Footer */}
       <div className="text-center">
