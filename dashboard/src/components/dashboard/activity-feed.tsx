@@ -94,33 +94,37 @@ function eventLabel(type: string, t: TFunction): string {
   return t(`events.${type}`, { defaultValue: t("events.unknown") });
 }
 
-function eventSummary(event: WsEvent): string {
-  const data = event.data as Record<string, unknown>;
+/** Build event summary string from WS event data via i18n templates. */
+function eventSummary(event: WsEvent, t: TFunction): string {
+  const d = event.data as Record<string, unknown>;
+  const s = (key: string, fallback = "?") => String(d[key] ?? fallback);
+  const n = (key: string, fallback = 0) => Number(d[key] ?? fallback);
+
   switch (event.type) {
     case "PerceptionReceived":
-      return `from ${String(data["source"] ?? "?")} (${String(data["person_id"] ?? "unknown")})`;
+      return t("eventSummary.PerceptionReceived", { source: s("source"), person: s("person_id", "unknown") });
     case "ThinkCompleted":
-      return `${String(data["model"] ?? "?")} — ${Number(data["tokens_in"] ?? 0)}+${Number(data["tokens_out"] ?? 0)} tokens — $${Number(data["cost_usd"] ?? 0).toFixed(4)}`;
+      return t("eventSummary.ThinkCompleted", { model: s("model"), tokensIn: n("tokens_in"), tokensOut: n("tokens_out"), cost: n("cost_usd").toFixed(4) });
     case "ResponseSent":
-      return `via ${String(data["channel"] ?? "?")} (${String(data["latency_ms"] ?? "?")}ms)`;
+      return t("eventSummary.ResponseSent", { channel: s("channel"), latency: s("latency_ms") });
     case "ConceptCreated":
-      return `Created: ${String(data["title"] ?? "unknown")}`;
+      return t("eventSummary.ConceptCreated", { title: s("title", "unknown") });
     case "EpisodeEncoded":
-      return `importance: ${Number(data["importance"] ?? 0).toFixed(2)}`;
+      return t("eventSummary.EpisodeEncoded", { importance: n("importance").toFixed(2) });
     case "ServiceHealthChanged":
-      return `${String(data["service"] ?? "?")}: ${String(data["status"] ?? "?")}`;
+      return t("eventSummary.ServiceHealthChanged", { service: s("service"), status: s("status") });
     case "ConsolidationCompleted":
-      return `merged: ${String(data["merged"] ?? 0)}, pruned: ${String(data["pruned"] ?? 0)}, strengthened: ${String(data["strengthened"] ?? 0)}`;
+      return t("eventSummary.ConsolidationCompleted", { merged: s("merged", "0"), pruned: s("pruned", "0"), strengthened: s("strengthened", "0") });
     case "EngineStarted":
-      return "Engine started";
+      return t("eventSummary.EngineStarted");
     case "EngineStopping":
-      return `Stopping: ${String(data["reason"] ?? "shutdown")}`;
+      return t("eventSummary.EngineStopping", { reason: s("reason", "shutdown") });
     case "ChannelConnected":
-      return `${String(data["channel_type"] ?? "?")} connected`;
+      return t("eventSummary.ChannelConnected", { channel: s("channel_type") });
     case "ChannelDisconnected":
-      return `${String(data["channel_type"] ?? "?")} disconnected: ${String(data["reason"] ?? "unknown")}`;
+      return t("eventSummary.ChannelDisconnected", { channel: s("channel_type"), reason: s("reason", "unknown") });
     default:
-      return JSON.stringify(data).slice(0, 60);
+      return JSON.stringify(d).slice(0, 60);
   }
 }
 
@@ -180,7 +184,7 @@ export function ActivityFeed({ events, className }: ActivityFeedProps) {
                       </span>
                     </div>
                     <p className="truncate text-[var(--svx-color-text-tertiary)]">
-                      {eventSummary(event)}
+                      {eventSummary(event, t)}
                     </p>
                   </div>
                 </div>

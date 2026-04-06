@@ -41,6 +41,19 @@
     "ChannelDisconnected": "Channel",
     "unknown": "Event"
   },
+  "eventSummary": {
+    "PerceptionReceived": "from {{source}} ({{person}})",
+    "ThinkCompleted": "{{model}} — {{tokensIn}}+{{tokensOut}} tokens — ${{cost}}",
+    "ResponseSent": "via {{channel}} ({{latency}}ms)",
+    "ConceptCreated": "Created: {{title}}",
+    "EpisodeEncoded": "importance: {{importance}}",
+    "ServiceHealthChanged": "{{service}}: {{status}}",
+    "ConsolidationCompleted": "merged: {{merged}}, pruned: {{pruned}}, strengthened: {{strengthened}}",
+    "EngineStarted": "Engine started",
+    "EngineStopping": "Stopping: {{reason}}",
+    "ChannelConnected": "{{channel}} connected",
+    "ChannelDisconnected": "{{channel}} disconnected: {{reason}}"
+  },
   "feed": {
     "title": "Recent Activity",
     "empty": "Listening for cognitive events…",
