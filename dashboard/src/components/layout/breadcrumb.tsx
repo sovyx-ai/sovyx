@@ -33,9 +33,27 @@ const ROUTE_MAP: Record<string, RouteInfo> = {
   "/home": { label: "Home Integration", icon: Home },
 };
 
+/**
+ * Normalize pathname and find matching route.
+ * Handles trailing slashes and nested paths (e.g. /conversations/123 → /conversations).
+ */
+function resolveRoute(pathname: string): RouteInfo | undefined {
+  // Strip trailing slash (except root)
+  const normalized = pathname.length > 1 && pathname.endsWith("/")
+    ? pathname.slice(0, -1)
+    : pathname;
+
+  // Exact match first
+  if (ROUTE_MAP[normalized]) return ROUTE_MAP[normalized];
+
+  // Prefix match for nested routes (e.g. /conversations/abc → /conversations)
+  const base = "/" + normalized.split("/").filter(Boolean)[0];
+  return ROUTE_MAP[base];
+}
+
 export function Breadcrumb() {
   const location = useLocation();
-  const route = ROUTE_MAP[location.pathname];
+  const route = resolveRoute(location.pathname);
 
   if (!route) {
     return (

@@ -115,14 +115,14 @@ export default function ConversationsPage() {
   const filtered = search
     ? conversations.filter(
         (c) =>
-          c.participant.toLowerCase().includes(search.toLowerCase()) ||
+          (c.participant_name ?? c.participant).toLowerCase().includes(search.toLowerCase()) ||
           c.channel.toLowerCase().includes(search.toLowerCase()),
       )
     : conversations;
 
   // Get conversation metadata from list cache, with fallback (POLISH-04)
   const activeConv = conversations.find((c) => c.id === activeId);
-  const activeLabel = activeConv?.participant || activeId?.slice(0, 8) || "Unknown";
+  const activeLabel = activeConv?.participant_name || activeConv?.participant?.slice(0, 8) || t("unknownParticipant");
   const activeChannel = activeConv?.channel || "unknown";
 
   return (
@@ -290,11 +290,11 @@ function ConversationRow({ conversation, active, onClick }: ConversationRowProps
         active && "border-l-2 border-[var(--svx-color-brand-primary)] bg-[var(--svx-color-bg-active)]",
       )}
     >
-      <LetterAvatar name={c.participant || "?"} size={28} />
+      <LetterAvatar name={c.participant_name || c.participant || "?"} size={28} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
           <span className="truncate text-xs font-medium text-[var(--svx-color-text-primary)]">
-            {c.participant || "Unknown"}
+            {c.participant_name || c.participant?.slice(0, 8) || "Unknown"}
           </span>
           <span className="shrink-0 text-[10px] text-[var(--svx-color-text-tertiary)]">
             {formatTimeAgo(c.last_message_at)}
