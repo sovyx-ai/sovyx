@@ -71,7 +71,8 @@ export function BrainGraph({ data, width, height, onNodeClick }: BrainGraphProps
       if (x === undefined || y === undefined) return;
 
       const radius = 3 + node.importance * 9; // 3-12px
-      const color = CATEGORY_COLORS[node.category] ?? "#94a3b8";
+      // Canvas API requires hex — fallback maps to --svx-color-text-secondary
+      const color = CATEGORY_COLORS[node.category] ?? GRAPH_COLORS.textSecondary;
       const isHovered = hoveredNode === node.id;
 
       // Glow ring for hovered node (rendered BEFORE the node)

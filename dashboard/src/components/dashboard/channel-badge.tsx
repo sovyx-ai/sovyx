@@ -1,9 +1,9 @@
 import { cn } from "@/lib/utils";
 
 const CHANNEL_CONFIG: Record<string, { icon: string; label: string; color: string }> = {
-  telegram: { icon: "✈️", label: "Telegram", color: "text-[#3B82F6]" },    /* info blue */
-  discord: { icon: "💬", label: "Discord", color: "text-[#8B5CF6]" },      /* brand violet */
-  signal: { icon: "🔒", label: "Signal", color: "text-[#3B82F6]" },        /* info blue */
+  telegram: { icon: "✈️", label: "Telegram", color: "text-[var(--svx-color-info)]" },
+  discord: { icon: "💬", label: "Discord", color: "text-[var(--svx-color-brand-primary)]" },
+  signal: { icon: "🔒", label: "Signal", color: "text-[var(--svx-color-info)]" },
   cli: { icon: "⌨️", label: "CLI", color: "text-[var(--svx-color-text-secondary)]" },
   api: { icon: "🔗", label: "API", color: "text-[var(--svx-color-text-secondary)]" },
 };
