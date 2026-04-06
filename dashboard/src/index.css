@@ -369,7 +369,7 @@
 @keyframes page-in {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
@@ -380,6 +380,28 @@
 .animate-page-in {
   animation: page-in var(--svx-duration-normal) var(--svx-ease-out) both;
 }
+
+/* ── Stagger animations for child sections ── */
+.animate-page-in > * {
+  animation: page-in 250ms var(--svx-ease-out) both;
+}
+
+.animate-page-in > *:nth-child(1) { animation-delay: 0ms; }
+.animate-page-in > *:nth-child(2) { animation-delay: 50ms; }
+.animate-page-in > *:nth-child(3) { animation-delay: 100ms; }
+.animate-page-in > *:nth-child(4) { animation-delay: 150ms; }
+.animate-page-in > *:nth-child(5) { animation-delay: 200ms; }
+.animate-page-in > *:nth-child(n+6) { animation-delay: 250ms; }
+
+/* Stagger grid children (stat cards, health checks) */
+.animate-page-in [class*="grid"] > * {
+  animation: page-in 200ms var(--svx-ease-out) both;
+}
+
+.animate-page-in [class*="grid"] > *:nth-child(1) { animation-delay: 60ms; }
+.animate-page-in [class*="grid"] > *:nth-child(2) { animation-delay: 110ms; }
+.animate-page-in [class*="grid"] > *:nth-child(3) { animation-delay: 160ms; }
+.animate-page-in [class*="grid"] > *:nth-child(4) { animation-delay: 210ms; }
 
 /* ── Selection color ── */
 ::selection {
