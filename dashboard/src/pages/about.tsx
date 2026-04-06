@@ -117,4 +117,4 @@ export default function AboutPage() {
   );
 }
 
-declare const __REACT_VERSION__: string;
+
