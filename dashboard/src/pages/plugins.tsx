@@ -1,19 +1,17 @@
+import { useTranslation } from "react-i18next";
 import { PuzzleIcon } from "lucide-react";
 import { ComingSoon } from "@/components/coming-soon";
 
 export default function PluginsPage() {
+  const { t } = useTranslation("plugins");
+  const features = t("features", { returnObjects: true }) as Record<string, string>;
+
   return (
     <ComingSoon
       icon={<PuzzleIcon className="size-8" />}
-      title="Plugin Marketplace"
-      description="Extend your Mind with community plugins. Weather, finance, smart home, and hundreds more."
-      features={[
-        "Search & browse marketplace",
-        "One-click install & update",
-        "Per-plugin configuration (JSON Schema)",
-        "Plugin analytics & usage",
-        "Sandbox status & permissions",
-      ]}
+      title={t("title")}
+      description={t("description")}
+      features={Object.values(features)}
       version="v1.0"
     />
   );

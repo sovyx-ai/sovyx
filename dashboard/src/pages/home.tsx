@@ -1,18 +1,17 @@
+import { useTranslation } from "react-i18next";
 import { HomeIcon } from "lucide-react";
 import { ComingSoon } from "@/components/coming-soon";
 
 export default function HomePage() {
+  const { t } = useTranslation("home");
+  const features = t("features", { returnObjects: true }) as Record<string, string>;
+
   return (
     <ComingSoon
       icon={<HomeIcon className="size-8" />}
-      title="Home Integration"
-      description="Control your smart home through your Mind. Home Assistant integration, routines, and presence detection."
-      features={[
-        "Home Assistant entity list",
-        "Quick actions & routines",
-        "Automation status",
-        "Camera snapshots",
-      ]}
+      title={t("title")}
+      description={t("description")}
+      features={Object.values(features)}
       version="v1.0"
     />
   );

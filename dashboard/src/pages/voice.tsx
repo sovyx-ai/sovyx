@@ -1,19 +1,17 @@
+import { useTranslation } from "react-i18next";
 import { MicIcon } from "lucide-react";
 import { ComingSoon } from "@/components/coming-soon";
 
 export default function VoicePage() {
+  const { t } = useTranslation("voice");
+  const features = t("features", { returnObjects: true }) as Record<string, string>;
+
   return (
     <ComingSoon
       icon={<MicIcon className="size-8" />}
-      title="Voice Pipeline"
-      description="Talk to your Mind with natural voice. Wake word detection, local STT/TTS, emotional voice modulation."
-      features={[
-        "Pipeline status monitor",
-        "STT/TTS model selector",
-        "Wake word configuration",
-        "Latency gauge",
-        "Voice test playground",
-      ]}
+      title={t("title")}
+      description={t("description")}
+      features={Object.values(features)}
       version="v1.0"
     />
   );
