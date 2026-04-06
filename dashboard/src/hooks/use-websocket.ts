@@ -147,6 +147,7 @@ export function useWebSocket(): void {
   const healthTimerRef = useRef<ReturnType<typeof setInterval>>(undefined);
 
   const setConnected = useDashboardStore((s) => s.setConnected);
+  const setConnectionState = useDashboardStore((s) => s.setConnectionState);
   const addEvent = useDashboardStore((s) => s.addEvent);
 
   const handleMessage = useCallback(
@@ -227,8 +228,12 @@ export function useWebSocket(): void {
     ws.onmessage = handleMessage;
 
     ws.onclose = () => {
-      setConnected(false);
-      if (!mountedRef.current) return;
+      if (!mountedRef.current) {
+        setConnected(false);
+        return;
+      }
+      // Show "reconnecting" state instead of just "disconnected"
+      setConnectionState("reconnecting");
 
       const delay = backoffRef.current;
       backoffRef.current = Math.min(delay * 2, MAX_BACKOFF_MS);

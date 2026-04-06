@@ -60,7 +60,7 @@ const UPCOMING_NAV = [
 export function AppSidebar() {
   const location = useLocation();
   const status = useDashboardStore((s) => s.status);
-  const connected = useDashboardStore((s) => s.connected);
+  const connectionState = useDashboardStore((s) => s.connectionState);
 
   return (
     <Sidebar collapsible="icon" aria-label="Main navigation">
@@ -77,7 +77,7 @@ export function AppSidebar() {
                   🔮 {status?.mind_name ?? "Sovyx"}
                 </span>
                 <span className="truncate text-xs text-[var(--svx-color-text-tertiary)]">
-                  {connected ? "Online" : "Connecting..."}
+                  {connectionState === "connected" ? "Online" : connectionState === "reconnecting" ? "Reconnecting..." : "Connecting..."}
                 </span>
               </div>
               <ChevronsUpDownIcon className="ml-auto size-4 text-[var(--svx-color-text-disabled)]" />
@@ -146,11 +146,16 @@ export function AppSidebar() {
           </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton size="sm">
-              <StatusDot status={connected ? "online" : "offline"} size="sm" />
+              <StatusDot
+                status={connectionState === "connected" ? "online" : connectionState === "reconnecting" ? "thinking" : "offline"}
+                size="sm"
+              />
               <span className="text-xs text-[var(--svx-color-text-tertiary)]">
-                {status
-                  ? `Up ${formatUptime(status.uptime_seconds)}`
-                  : "Connecting..."}
+                {connectionState === "reconnecting"
+                  ? "Reconnecting..."
+                  : status
+                    ? `Up ${formatUptime(status.uptime_seconds)}`
+                    : "Connecting..."}
               </span>
             </SidebarMenuButton>
           </SidebarMenuItem>
