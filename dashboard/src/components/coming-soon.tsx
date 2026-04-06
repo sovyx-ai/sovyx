@@ -11,6 +11,7 @@
  */
 
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { RocketIcon, CircleIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -31,6 +32,8 @@ export function ComingSoon({
   version = "v1.0",
   className,
 }: ComingSoonProps) {
+  const { t } = useTranslation("common");
+
   return (
     <div
       className={cn(
@@ -71,7 +74,7 @@ export function ComingSoon({
 
       {/* Version badge */}
       <span className="mt-4 inline-flex rounded-[var(--svx-radius-full)] bg-[var(--svx-color-bg-elevated)] px-3 py-1 text-[10px] font-medium text-[var(--svx-color-text-tertiary)]">
-        Available in {version}
+        {t("comingSoon.title", { version })}
       </span>
     </div>
   );
