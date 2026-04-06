@@ -5,10 +5,9 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
+from sovyx.engine.config import EngineConfig
 from sovyx.engine.registry import ServiceRegistry
 from sovyx.observability.logging import get_logger
-
-from sovyx.engine.config import EngineConfig
 
 if TYPE_CHECKING:
     from collections.abc import Sequence

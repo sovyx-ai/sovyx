@@ -105,7 +105,7 @@ def start(
     console.print("[bold]Starting Sovyx daemon...[/bold]")
 
     from sovyx.engine.bootstrap import bootstrap
-    from sovyx.engine.config import EngineConfig, load_engine_config
+    from sovyx.engine.config import load_engine_config
     from sovyx.engine.events import EventBus
     from sovyx.engine.lifecycle import LifecycleManager
     from sovyx.engine.rpc_server import DaemonRPCServer
