@@ -104,14 +104,31 @@ export default function ConversationsPage() {
     return () => controller.abort();
   }, [activeId, setActiveMessages]);
 
-  // Initial load with AbortController
+  // Initial load with AbortController — inline to avoid exhaustive-deps on fetchConversations
   useEffect(() => {
     const controller = new AbortController();
     listAbortRef.current = controller;
-    void fetchConversations(0, controller.signal);
+
+    (async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const data = await api.get<ConversationsResponse>(
+          `/api/conversations?limit=${PAGE_SIZE}&offset=0`,
+          { signal: controller.signal },
+        );
+        setConversations(data.conversations);
+        setHasMore(data.conversations.length === PAGE_SIZE);
+      } catch (err) {
+        if (isAbortError(err)) return;
+        setError(t("error.loadFailed"));
+      } finally {
+        setLoading(false);
+      }
+    })();
+
     return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [setConversations, t]);
 
   const filtered = search
     ? conversations.filter(

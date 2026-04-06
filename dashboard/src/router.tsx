@@ -1,3 +1,8 @@
+/**
+ * Route configuration — exports `router` (non-component), which triggers
+ * react-refresh/only-export-components. This is intentional: this file is
+ * a route config, not a component module. HMR works via the lazy() imports.
+ */
 /* eslint-disable react-refresh/only-export-components */
 import { lazy, Suspense } from "react";
 import { createBrowserRouter } from "react-router";

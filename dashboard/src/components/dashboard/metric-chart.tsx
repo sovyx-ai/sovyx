@@ -110,15 +110,17 @@ export function MetricChart({
             <ChartTooltip
               content={
                 <ChartTooltipContent
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  labelFormatter={(_: any, payload: readonly any[]) => {
-                    if (payload?.[0]?.payload?.time) {
-                      return formatChartTime(payload[0].payload.time as number);
-                    }
-                    return "";
+                  labelFormatter={(
+                    _: React.ReactNode,
+                    payload: ReadonlyArray<{ payload?: Record<string, unknown> }>,
+                  ) => {
+                    const time = payload?.[0]?.payload?.time;
+                    return typeof time === "number" ? formatChartTime(time) : "";
                   }}
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  formatter={(value: any) => [`${String(value)}${unit}`, dataLabel] as any}
+                  formatter={(value: unknown) => [
+                    `${String(value ?? "")}${unit}`,
+                    dataLabel,
+                  ]}
                 />
               }
             />
