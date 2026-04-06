@@ -9,6 +9,7 @@
  */
 
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   EyeIcon,
@@ -34,70 +35,63 @@ interface ActivityFeedProps {
 
 const EVENT_CONFIG: Record<
   WsEventType,
-  { icon: ReactNode; color: string; label: string }
+  { icon: ReactNode; color: string }
 > = {
   PerceptionReceived: {
     icon: <EyeIcon className="size-3.5" />,
     color: "text-[var(--svx-color-info)]",
-    label: "Perception",
   },
   ThinkCompleted: {
     icon: <BrainIcon className="size-3.5" />,
     color: "text-[var(--svx-color-brand-primary)]",
-    label: "Think",
   },
   ResponseSent: {
     icon: <MessageSquareIcon className="size-3.5" />,
     color: "text-[var(--svx-color-info)]",
-    label: "Response",
   },
   ConceptCreated: {
     icon: <LightbulbIcon className="size-3.5" />,
     color: "text-[var(--svx-color-accent-cyan)]",
-    label: "Concept",
   },
   EpisodeEncoded: {
     icon: <BookmarkIcon className="size-3.5" />,
     color: "text-[var(--svx-color-brand-muted)]",
-    label: "Episode",
   },
   ServiceHealthChanged: {
     icon: <AlertTriangleIcon className="size-3.5" />,
     color: "text-[var(--svx-color-warning)]",
-    label: "Health",
   },
   ConsolidationCompleted: {
     icon: <MergeIcon className="size-3.5" />,
     color: "text-[var(--svx-color-brand-primary)]",
-    label: "Consolidation",
   },
   EngineStarted: {
     icon: <RocketIcon className="size-3.5" />,
     color: "text-[var(--svx-color-success)]",
-    label: "Engine Started",
   },
   EngineStopping: {
     icon: <SquareIcon className="size-3.5" />,
     color: "text-[var(--svx-color-warning)]",
-    label: "Engine Stopping",
   },
   ChannelConnected: {
     icon: <PlugIcon className="size-3.5" />,
     color: "text-[var(--svx-color-success)]",
-    label: "Channel",
   },
   ChannelDisconnected: {
     icon: <PlugIcon className="size-3.5" />,
     color: "text-[var(--svx-color-error)]",
-    label: "Channel",
   },
 };
 
 const FALLBACK_CONFIG = {
   icon: <CircleHelpIcon className="size-3.5" />,
   color: "text-[var(--svx-color-text-tertiary)]",
-  label: "Event",
 };
+
+/** Resolve event type label from i18n. */
+function eventLabel(type: string, t: TFunction): string {
+  return t(`events.${type}`, { defaultValue: t("events.unknown") });
+}
 
 function formatTime(iso: string): string {
   try {
@@ -146,6 +140,7 @@ function eventSummary(event: WsEvent): string {
 export function ActivityFeed({ events, className }: ActivityFeedProps) {
   const { t } = useTranslation("overview");
   const reversed = [...events].reverse();
+  const getLabel = (type: string) => eventLabel(type, t);
 
   return (
     <div
@@ -174,12 +169,13 @@ export function ActivityFeed({ events, className }: ActivityFeedProps) {
           <div className="space-y-0.5" role="log" aria-label="Activity feed" aria-live="polite">
             {reversed.map((event, i) => {
               const config = EVENT_CONFIG[event.type] ?? FALLBACK_CONFIG;
+              const label = getLabel(event.type);
               return (
                 <div
                   key={`${event.timestamp}-${i}`}
                   className="flex items-start gap-3 rounded-[var(--svx-radius-md)] px-2 py-1.5 text-xs transition-colors hover:bg-[var(--svx-color-bg-hover)]"
                   role="article"
-                  aria-label={`${config.label} at ${formatTime(event.timestamp)}`}
+                  aria-label={`${label} at ${formatTime(event.timestamp)}`}
                 >
                   <span
                     className={cn("mt-0.5 shrink-0", config.color)}
@@ -190,7 +186,7 @@ export function ActivityFeed({ events, className }: ActivityFeedProps) {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span className={cn("font-medium", config.color)}>
-                        {config.label}
+                        {label}
                       </span>
                       <span className="text-[var(--svx-color-text-tertiary)]">
                         {formatTime(event.timestamp)}

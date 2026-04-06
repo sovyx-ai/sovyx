@@ -19,6 +19,15 @@
     "event": "Event",
     "relationship": "Relationship"
   },
+  "relations": {
+    "related_to": "Related",
+    "part_of": "Part of",
+    "causes": "Causes",
+    "contradicts": "Contradicts",
+    "example_of": "Example",
+    "temporal": "Temporal",
+    "emotional": "Emotional"
+  },
   "detail": {
     "selected": "Selected: {{name}}",
     "category": "Category",

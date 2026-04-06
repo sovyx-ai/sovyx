@@ -24,7 +24,10 @@
     "error": "Error",
     "connected": "Connected",
     "disconnected": "Disconnected",
-    "reconnecting": "Reconnecting..."
+    "reconnecting": "Reconnecting...",
+    "idle": "Idle",
+    "thinking": "Thinking",
+    "dreaming": "Dreaming"
   },
   "actions": {
     "save": "Save",

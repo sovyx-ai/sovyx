@@ -4,19 +4,22 @@
  * Ref: Architecture §3.3, META-04 §5
  */
 
+import { useTranslation } from "react-i18next";
 import type { ConceptCategory, RelationType } from "@/types/api";
-import { CATEGORY_LABELS, CATEGORY_COLORS } from "@/lib/constants";
+import { CATEGORY_COLORS } from "@/lib/constants";
 
 interface CategoryLegendProps {
   counts?: Record<string, number>;
 }
 
+const CATEGORIES: ConceptCategory[] = ["fact", "preference", "entity", "skill", "belief", "event", "relationship"];
+
 export function CategoryLegend({ counts }: CategoryLegendProps) {
-  const categories = Object.keys(CATEGORY_LABELS) as ConceptCategory[];
+  const { t } = useTranslation("brain");
 
   return (
     <div className="flex flex-wrap gap-3">
-      {categories.map((cat) => (
+      {CATEGORIES.map((cat) => (
         <div key={cat} className="flex items-center gap-1.5">
           <span
             className="inline-block size-2.5 rounded-full"
@@ -24,7 +27,7 @@ export function CategoryLegend({ counts }: CategoryLegendProps) {
             aria-hidden="true"
           />
           <span className="text-[11px] text-[var(--svx-color-text-secondary)]">
-            {CATEGORY_LABELS[cat]}
+            {t(`categories.${cat}`)}
             {counts?.[cat] != null && (
               <span className="ml-1 text-[var(--svx-color-text-primary)] opacity-70">
                 {counts[cat]}
@@ -38,15 +41,6 @@ export function CategoryLegend({ counts }: CategoryLegendProps) {
 }
 
 /** Relation type legend — shows line styles. */
-const RELATION_LABELS: Record<RelationType, string> = {
-  related_to: "Related",
-  part_of: "Part of",
-  causes: "Causes",
-  contradicts: "Contradicts",
-  example_of: "Example",
-  temporal: "Temporal",
-  emotional: "Emotional",
-};
 
 const RELATION_STYLES: Record<RelationType, string> = {
   related_to: "border-solid",
@@ -58,8 +52,11 @@ const RELATION_STYLES: Record<RelationType, string> = {
   emotional: "border-dotted",
 };
 
+const RELATION_TYPES: RelationType[] = ["related_to", "part_of", "causes", "contradicts", "example_of", "temporal", "emotional"];
+
 export function RelationLegend() {
-  const types = Object.keys(RELATION_LABELS) as RelationType[];
+  const { t } = useTranslation("brain");
+  const types = RELATION_TYPES;
 
   return (
     <div className="flex flex-wrap gap-3">
@@ -74,7 +71,7 @@ export function RelationLegend() {
             aria-hidden="true"
           />
           <span className="text-[11px] text-[var(--svx-color-text-secondary)]">
-            {RELATION_LABELS[type]}
+            {t(`relations.${type}`)}
           </span>
         </div>
       ))}
