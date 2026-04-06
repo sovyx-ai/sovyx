@@ -11,7 +11,13 @@ export const CATEGORY_LABELS: Record<ConceptCategory, string> = {
   relationship: "Relationship",
 };
 
-/** Color mapping for brain concept categories (hex for canvas rendering). */
+/**
+ * Color mapping for brain concept categories.
+ *
+ * ⚠️ INTENTIONAL HEX VALUES: Canvas 2D API cannot read CSS custom properties.
+ * react-force-graph-2d renders nodes via <canvas>, requiring raw hex/rgba.
+ * Each color is documented with its closest --svx-* token equivalent.
+ */
 export const CATEGORY_COLORS: Record<ConceptCategory, string> = {
   fact: "#22d3ee",       // cyan — matches --svx-color-accent-cyan
   preference: "#ec4899", // pink

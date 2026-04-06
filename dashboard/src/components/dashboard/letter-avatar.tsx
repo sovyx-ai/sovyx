@@ -6,15 +6,21 @@
 import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 
+/**
+ * Avatar color palette — hex values for inline style={{ backgroundColor }}.
+ * Each color is documented with its --svx-* token equivalent.
+ * Hex is required here because inline styles need resolved values for
+ * deterministic color assignment (hash-based).
+ */
 const AVATAR_COLORS = [
-  "#22C55E",  // success green
-  "#3B82F6",  // info blue
-  "#8B5CF6",  // brand violet
-  "#EC4899",  // pink
-  "#F59E0B",  // warning amber
-  "#22D3EE",  // accent cyan
-  "#FB923C",  // orange
-  "#A78BFA",  // brand muted
+  "#22C55E",  // --svx-color-success
+  "#3B82F6",  // --svx-color-info
+  "#8B5CF6",  // --svx-color-brand-primary
+  "#EC4899",  // pink (no direct token — accent palette)
+  "#F59E0B",  // --svx-color-warning
+  "#22D3EE",  // --svx-color-accent-cyan
+  "#FB923C",  // orange (no direct token — accent palette)
+  "#A78BFA",  // --svx-color-brand-muted
 ] as const;
 
 function hashString(str: string): number {

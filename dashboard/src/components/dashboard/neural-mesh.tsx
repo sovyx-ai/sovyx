@@ -1,6 +1,12 @@
 /**
  * NeuralMesh — Atmospheric animated background.
  *
+ * ⚠️ INTENTIONAL RGBA VALUES: CSS gradients in inline styles cannot
+ * reference CSS custom properties. All colors are rgba equivalents of:
+ * - rgba(139,92,246,...) → --svx-color-brand-primary (#8B5CF6)
+ * - rgba(167,139,250,...) → --svx-color-brand-muted (#A78BFA)
+ * - rgba(34,211,238,...) → --svx-color-accent-cyan (#22D3EE)
+ *
  * Multi-layer CSS-only effect:
  * 1. Dot grid with gentle pulse (neural network nodes)
  * 2. Floating gradient orbs (brand colors: Synapse, Pulse, Awaken)
