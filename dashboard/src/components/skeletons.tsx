@@ -7,6 +7,7 @@
  */
 
 import { Skeleton } from "@/components/ui/skeleton";
+import { StatCardSkeleton } from "@/components/dashboard/stat-card";
 
 const cardClass = "rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)]";
 
@@ -19,11 +20,7 @@ export function OverviewSkeleton() {
       </div>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className={`${cardClass} p-4`}>
-            <Skeleton className="h-4 w-20" />
-            <Skeleton className="mt-3 h-7 w-16" />
-            <Skeleton className="mt-2 h-3 w-28" />
-          </div>
+          <StatCardSkeleton key={i} />
         ))}
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
