@@ -46,6 +46,11 @@ class TestGetSettings:
         result = get_settings(config)
         assert result["log_file"] is None
 
+    def test_data_dir_as_string(self) -> None:
+        config = _mock_config()
+        result = get_settings(config)
+        assert isinstance(result["data_dir"], str)
+
 
 class TestApplySettings:
     def test_update_log_level(self) -> None:
@@ -112,3 +117,47 @@ class TestApplySettings:
             assert root.level == logging.ERROR
         finally:
             root.setLevel(old_level)
+
+    def test_persist_failure_does_not_crash(self, tmp_path: Path) -> None:
+        """Cover _persist_to_yaml exception path (lines 106-107)."""
+        config = _mock_config()
+        # Use a path that exists but is a directory → write fails
+        yaml_path = tmp_path / "not_a_file"
+        yaml_path.mkdir()
+
+        # Should not raise — _persist_to_yaml catches the exception
+        changes = apply_settings(config, {"log_level": "WARNING"}, config_path=yaml_path)
+        assert "log_level" in changes
+
+    def test_persist_new_file(self, tmp_path: Path) -> None:
+        """Persist to a new file that doesn't exist yet."""
+        config = _mock_config()
+        yaml_path = tmp_path / "new_system.yaml"
+
+        apply_settings(config, {"log_level": "DEBUG"}, config_path=yaml_path)
+
+        data = yaml.safe_load(yaml_path.read_text())
+        assert data["log"]["level"] == "DEBUG"
+
+    def test_no_changes_no_persist(self, tmp_path: Path) -> None:
+        """If no changes, don't persist even with path."""
+        config = _mock_config()
+        yaml_path = tmp_path / "system.yaml"
+        yaml_path.write_text("log:\n  level: INFO\n")
+
+        apply_settings(config, {"log_level": "INFO"}, config_path=yaml_path)
+
+        # File should be unchanged
+        data = yaml.safe_load(yaml_path.read_text())
+        assert data["log"]["level"] == "INFO"
+
+    def test_multiple_updates(self) -> None:
+        """Apply multiple fields, only mutable ones change."""
+        config = _mock_config()
+        changes = apply_settings(config, {
+            "log_level": "DEBUG",
+            "unknown": "value",
+            "another_unknown": 42,
+        })
+        assert len(changes) == 1
+        assert "log_level" in changes

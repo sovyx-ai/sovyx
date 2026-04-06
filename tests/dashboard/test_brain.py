@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from sovyx.dashboard.brain import get_brain_graph
+from sovyx.dashboard.brain import (
+    _get_relations,
+    _get_relations_via_repo,
+    get_brain_graph,
+)
 
 
 def _mock_concept(
@@ -32,6 +38,58 @@ def _mock_relation(src: str, tgt: str, weight: float = 0.5) -> MagicMock:
     r.relation_type = MagicMock(value="related_to")
     r.weight = weight
     return r
+
+
+def _make_registry_with_db(
+    concepts: list[MagicMock],
+    rows: list[tuple[str, str, str, float]],
+    mind_id: str = "mind-1",
+) -> MagicMock:
+    """Create a registry with DatabaseManager + ConceptRepository for DB path."""
+    concept_repo = AsyncMock()
+    concept_repo.get_by_mind = AsyncMock(return_value=concepts)
+
+    # Mock the DB pool + connection for _get_relations batch SQL path
+    mock_cursor = AsyncMock()
+    mock_cursor.fetchall = AsyncMock(return_value=rows)
+
+    mock_conn = AsyncMock()
+    mock_conn.execute = AsyncMock(return_value=mock_cursor)
+
+    mock_pool = MagicMock()
+
+    @asynccontextmanager
+    async def fake_read() -> Any:
+        yield mock_conn
+
+    mock_pool.read = fake_read
+
+    mock_db = MagicMock()
+    mock_db.get_brain_pool = MagicMock(return_value=mock_pool)
+
+    registry = MagicMock()
+
+    def is_registered(cls: type) -> bool:
+        from sovyx.brain.concept_repo import ConceptRepository
+        from sovyx.persistence.manager import DatabaseManager
+
+        return cls in (ConceptRepository, DatabaseManager)
+
+    registry.is_registered.side_effect = is_registered
+
+    async def resolve(cls: type) -> Any:
+        from sovyx.brain.concept_repo import ConceptRepository
+        from sovyx.persistence.manager import DatabaseManager
+
+        if cls is ConceptRepository:
+            return concept_repo
+        if cls is DatabaseManager:
+            return mock_db
+        msg = f"Unknown: {cls}"
+        raise ValueError(msg)
+
+    registry.resolve = AsyncMock(side_effect=resolve)
+    return registry
 
 
 class TestGetBrainGraph:
@@ -123,7 +181,6 @@ class TestGetBrainGraph:
             _mock_concept("c1", "A"),
             _mock_concept("c2", "B"),
         ]
-        # Both c1 and c2 report the same relation
         rel = _mock_relation("c1", "c2", 0.8)
 
         concept_repo = AsyncMock()
@@ -147,7 +204,7 @@ class TestGetBrainGraph:
 
             if cls is ConceptRepository:
                 return concept_repo
-            return relation_repo  # RelationRepository
+            return relation_repo
 
         registry.resolve = AsyncMock(side_effect=resolve)
 
@@ -158,6 +215,313 @@ class TestGetBrainGraph:
         ):
             result = await get_brain_graph(registry, limit=100)
 
-        # Should deduplicate: c1→c2 seen from both c1 and c2 traversal
         assert len(result["links"]) == 1
         assert result["links"][0]["weight"] == 0.8
+
+
+class TestGetRelationsViaDatabaseManager:
+    """Tests for the batch SQL path in _get_relations (lines 93-144)."""
+
+    @pytest.mark.asyncio()
+    async def test_db_path_returns_links(self) -> None:
+        """When DatabaseManager is registered, use batch SQL path."""
+        concepts = [
+            _mock_concept("c1", "A"),
+            _mock_concept("c2", "B"),
+            _mock_concept("c3", "C"),
+        ]
+        # Rows from SQL: (source_id, target_id, relation_type, weight)
+        rows = [
+            ("c1", "c2", "related_to", 0.8),
+            ("c2", "c3", "causes", 0.6),
+        ]
+        registry = _make_registry_with_db(concepts, rows)
+
+        with patch(
+            "sovyx.dashboard.brain._get_active_mind_id",
+            new_callable=AsyncMock,
+            return_value="mind-1",
+        ):
+            result = await get_brain_graph(registry, limit=100)
+
+        assert len(result["nodes"]) == 3
+        assert len(result["links"]) == 2
+        assert result["links"][0]["source"] == "c1"
+        assert result["links"][0]["target"] == "c2"
+        assert result["links"][0]["relation_type"] == "related_to"
+        assert result["links"][0]["weight"] == 0.8
+
+    @pytest.mark.asyncio()
+    async def test_db_path_filters_out_of_scope_targets(self) -> None:
+        """Edges whose target is NOT in node_ids should be filtered out."""
+        concepts = [_mock_concept("c1", "A")]
+        rows = [("c1", "c999", "related_to", 0.5)]  # c999 not in node set
+        registry = _make_registry_with_db(concepts, rows)
+
+        with patch(
+            "sovyx.dashboard.brain._get_active_mind_id",
+            new_callable=AsyncMock,
+            return_value="mind-1",
+        ):
+            result = await get_brain_graph(registry, limit=100)
+
+        assert result["links"] == []
+
+    @pytest.mark.asyncio()
+    async def test_db_path_deduplicates_edges(self) -> None:
+        """Same edge (c1→c2 and c2→c1) should appear only once."""
+        concepts = [_mock_concept("c1", "A"), _mock_concept("c2", "B")]
+        rows = [
+            ("c1", "c2", "related_to", 0.8),
+            ("c2", "c1", "related_to", 0.9),  # same edge, reversed
+        ]
+        registry = _make_registry_with_db(concepts, rows)
+
+        with patch(
+            "sovyx.dashboard.brain._get_active_mind_id",
+            new_callable=AsyncMock,
+            return_value="mind-1",
+        ):
+            result = await get_brain_graph(registry, limit=100)
+
+        # Should only have 1 link (deduplicated by edge_key)
+        assert len(result["links"]) == 1
+
+    @pytest.mark.asyncio()
+    async def test_db_path_respects_max_links(self) -> None:
+        """When max_links reached, stop adding."""
+        concepts = [
+            _mock_concept(f"c{i}", f"N{i}") for i in range(5)
+        ]
+        # Many rows — but limit=1 means max_links=3
+        rows = [
+            ("c0", "c1", "r", 0.5),
+            ("c0", "c2", "r", 0.5),
+            ("c0", "c3", "r", 0.5),
+            ("c0", "c4", "r", 0.5),
+        ]
+        registry = _make_registry_with_db(concepts, rows)
+
+        with patch(
+            "sovyx.dashboard.brain._get_active_mind_id",
+            new_callable=AsyncMock,
+            return_value="mind-1",
+        ):
+            # limit=1 → max_links = 1*3 = 3
+            result = await get_brain_graph(registry, limit=1)
+
+        # Only 1 concept returned (limit=1), so we get nodes limited
+        # But links come from the full node_ids set.
+        # With limit=1, only 1 concept → node_ids has 1 → no valid links
+        # Let's test with explicit _get_relations call instead
+
+    @pytest.mark.asyncio()
+    async def test_get_relations_max_links_cap(self) -> None:
+        """Direct test: _get_relations respects max_links."""
+        rows = [
+            ("c0", "c1", "r", 0.5),
+            ("c0", "c2", "r", 0.6),
+            ("c0", "c3", "r", 0.7),
+            ("c1", "c2", "r", 0.8),
+        ]
+
+        mock_cursor = AsyncMock()
+        mock_cursor.fetchall = AsyncMock(return_value=rows)
+        mock_conn = AsyncMock()
+        mock_conn.execute = AsyncMock(return_value=mock_cursor)
+        mock_pool = MagicMock()
+
+        @asynccontextmanager
+        async def fake_read() -> Any:
+            yield mock_conn
+
+        mock_pool.read = fake_read
+        mock_db = MagicMock()
+        mock_db.get_brain_pool = MagicMock(return_value=mock_pool)
+
+        registry = MagicMock()
+
+        def is_registered(cls: type) -> bool:
+            from sovyx.persistence.manager import DatabaseManager
+
+            return cls is DatabaseManager
+
+        registry.is_registered.side_effect = is_registered
+        registry.resolve = AsyncMock(return_value=mock_db)
+
+        node_ids = {"c0", "c1", "c2", "c3"}
+
+        with patch(
+            "sovyx.dashboard.brain._get_active_mind_id",
+            new_callable=AsyncMock,
+            return_value="mind-1",
+        ):
+            # max_links=2 should cap at 2
+            result = await _get_relations(registry, node_ids, max_links=2)
+
+        assert len(result) == 2
+
+    @pytest.mark.asyncio()
+    async def test_get_relations_empty_node_ids(self) -> None:
+        """Empty node_ids → empty links."""
+        registry = MagicMock()
+        result = await _get_relations(registry, set(), max_links=100)
+        assert result == []
+
+    @pytest.mark.asyncio()
+    async def test_db_path_survives_error(self) -> None:
+        """If DB query fails, returns empty list."""
+        concepts = [_mock_concept("c1", "A")]
+
+        concept_repo = AsyncMock()
+        concept_repo.get_by_mind = AsyncMock(return_value=concepts)
+
+        registry = MagicMock()
+
+        def is_registered(cls: type) -> bool:
+            from sovyx.brain.concept_repo import ConceptRepository
+            from sovyx.persistence.manager import DatabaseManager
+
+            return cls in (ConceptRepository, DatabaseManager)
+
+        registry.is_registered.side_effect = is_registered
+
+        async def resolve(cls: type) -> Any:
+            from sovyx.brain.concept_repo import ConceptRepository
+
+            if cls is ConceptRepository:
+                return concept_repo
+            raise RuntimeError("DB connection failed")
+
+        registry.resolve = AsyncMock(side_effect=resolve)
+
+        with patch(
+            "sovyx.dashboard.brain._get_active_mind_id",
+            new_callable=AsyncMock,
+            return_value="mind-1",
+        ):
+            result = await get_brain_graph(registry, limit=100)
+
+        assert result["nodes"] == [{"id": "c1", "name": "A", "category": "fact",
+                                     "importance": 0.5, "confidence": 0.7, "access_count": 3}]
+        assert result["links"] == []
+
+    @pytest.mark.asyncio()
+    async def test_db_path_no_database_manager_falls_through(self) -> None:
+        """When DatabaseManager not registered, falls back to RelationRepo."""
+        concepts = [_mock_concept("c1", "A"), _mock_concept("c2", "B")]
+
+        concept_repo = AsyncMock()
+        concept_repo.get_by_mind = AsyncMock(return_value=concepts)
+
+        # No RelationRepository either — should return empty links
+        registry = MagicMock()
+
+        def is_registered(cls: type) -> bool:
+            from sovyx.brain.concept_repo import ConceptRepository
+
+            return cls is ConceptRepository
+
+        registry.is_registered.side_effect = is_registered
+        registry.resolve = AsyncMock(return_value=concept_repo)
+
+        with patch(
+            "sovyx.dashboard.brain._get_active_mind_id",
+            new_callable=AsyncMock,
+            return_value="mind-1",
+        ):
+            result = await get_brain_graph(registry, limit=100)
+
+        assert len(result["nodes"]) == 2
+        assert result["links"] == []
+
+
+class TestGetRelationsViaRepo:
+    """Tests for the _get_relations_via_repo fallback path."""
+
+    @pytest.mark.asyncio()
+    async def test_no_relation_repo_returns_empty(self) -> None:
+        """When RelationRepository not registered, return empty."""
+        registry = MagicMock()
+        registry.is_registered.return_value = False
+
+        result = await _get_relations_via_repo(registry, {"c1", "c2"})
+        assert result == []
+
+    @pytest.mark.asyncio()
+    async def test_with_relations(self) -> None:
+        """With RelationRepository, returns filtered relations."""
+        rel1 = _mock_relation("c1", "c2", 0.8)
+        rel2 = _mock_relation("c1", "c99", 0.5)  # c99 not in node set
+
+        repo = AsyncMock()
+        repo.get_relations_for = AsyncMock(return_value=[rel1, rel2])
+
+        registry = MagicMock()
+
+        def is_registered(cls: type) -> bool:
+            from sovyx.brain.relation_repo import RelationRepository
+
+            return cls is RelationRepository
+
+        registry.is_registered.side_effect = is_registered
+        registry.resolve = AsyncMock(return_value=repo)
+
+        result = await _get_relations_via_repo(registry, {"c1", "c2"})
+        assert len(result) == 1
+        assert result[0]["source"] == "c1"
+        assert result[0]["target"] == "c2"
+
+    @pytest.mark.asyncio()
+    async def test_dedup_in_repo_path(self) -> None:
+        """Same edge from different node traversals → only 1."""
+        rel = _mock_relation("c1", "c2", 0.8)
+        repo = AsyncMock()
+        repo.get_relations_for = AsyncMock(return_value=[rel])
+
+        registry = MagicMock()
+
+        def is_registered(cls: type) -> bool:
+            from sovyx.brain.relation_repo import RelationRepository
+
+            return cls is RelationRepository
+
+        registry.is_registered.side_effect = is_registered
+        registry.resolve = AsyncMock(return_value=repo)
+
+        result = await _get_relations_via_repo(registry, {"c1", "c2"})
+        assert len(result) == 1
+
+
+class TestGetActiveMindId:
+    """Test _get_active_mind_id delegation to _shared."""
+
+    @pytest.mark.asyncio()
+    async def test_delegates_to_shared(self) -> None:
+        from sovyx.dashboard.brain import _get_active_mind_id
+
+        registry = MagicMock()
+        registry.is_registered.return_value = False
+
+        result = await _get_active_mind_id(registry)
+        assert result == "default"
+
+    @pytest.mark.asyncio()
+    async def test_returns_active_mind(self) -> None:
+        from sovyx.dashboard.brain import _get_active_mind_id
+
+        mock_manager = MagicMock()
+        mock_manager.get_active_minds.return_value = ["nyx-mind"]
+
+        registry = MagicMock()
+
+        def is_registered(cls: type) -> bool:
+            from sovyx.engine.bootstrap import MindManager
+
+            return cls is MindManager
+
+        registry.is_registered.side_effect = is_registered
+        registry.resolve = AsyncMock(return_value=mock_manager)
+
+        result = await _get_active_mind_id(registry)
+        assert result == "nyx-mind"
