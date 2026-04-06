@@ -136,9 +136,9 @@ export default function ConversationsPage() {
         )}
       >
         <div className="shrink-0 space-y-3 p-4 pb-3">
-          <h2 className="text-sm font-medium text-[var(--svx-color-text-primary)]">
+          <h1 className="text-sm font-medium text-[var(--svx-color-text-primary)]">
             {t("title")}
-          </h2>
+          </h1>
           <div className="relative">
             <SearchIcon className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-[var(--svx-color-text-tertiary)]" />
             <Input
