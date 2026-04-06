@@ -1,16 +1,21 @@
 /**
- * WebSocket hook with auto-reconnect (exponential backoff).
+ * WebSocket hook with auto-reconnect + debounced API refreshes.
  *
- * FE-00b: Rewritten to handle all 11 real event types from
- * DashboardEventBridge._serialize_event(). Events are:
+ * DASH-32: Added debouncing to prevent API call bursts when rapid WS events
+ * arrive (e.g., 5 ConceptCreated in 200ms during consolidation would previously
+ * trigger 5 simultaneous refreshBrain() + refreshStatus() calls).
  *
+ * Each refresh target (status, health, brain, conversation) has its own
+ * debounce timer. Trailing-edge: only the last call in the window fires.
+ * Window: 300ms (fast enough for perceived real-time, slow enough to batch).
+ *
+ * Events handled (11 real from DashboardEventBridge._serialize_event()):
  *   EngineStarted, EngineStopping, ServiceHealthChanged,
  *   PerceptionReceived, ThinkCompleted, ResponseSent,
  *   ConceptCreated, EpisodeEncoded, ConsolidationCompleted,
  *   ChannelConnected, ChannelDisconnected
  *
- * All events go to the activity feed. Specific events trigger
- * targeted refreshes (health, status).
+ * Ref: DASH-32, Architecture §6, META-05
  */
 import { useEffect, useRef, useCallback } from "react";
 import { useDashboardStore } from "@/stores/dashboard";
@@ -22,6 +27,7 @@ const MAX_BACKOFF_MS = 30_000;
 const INITIAL_BACKOFF_MS = 1_000;
 const STATUS_POLL_MS = 5_000;
 const HEALTH_POLL_MS = 10_000;
+const DEBOUNCE_MS = 300;
 
 function getToken(): string {
   return localStorage.getItem("sovyx_token") ?? "";
@@ -31,7 +37,24 @@ function authHeaders(): HeadersInit {
   return { Authorization: `Bearer ${getToken()}` };
 }
 
-/** Fetch status from REST API and update store. */
+// ── Debounce utility (trailing edge, per-key) ──
+
+const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function debouncedCall(key: string, fn: () => void, ms = DEBOUNCE_MS): void {
+  const existing = debounceTimers.get(key);
+  if (existing) clearTimeout(existing);
+  debounceTimers.set(
+    key,
+    setTimeout(() => {
+      debounceTimers.delete(key);
+      fn();
+    }, ms),
+  );
+}
+
+// ── API refresh functions ──
+
 async function refreshStatus(): Promise<void> {
   try {
     const res = await fetch(`${API_BASE}/api/status`, { headers: authHeaders() });
@@ -44,7 +67,6 @@ async function refreshStatus(): Promise<void> {
   }
 }
 
-/** Fetch health checks from REST API and update store. */
 async function refreshHealth(): Promise<void> {
   try {
     const res = await fetch(`${API_BASE}/api/health`, { headers: authHeaders() });
@@ -57,18 +79,6 @@ async function refreshHealth(): Promise<void> {
   }
 }
 
-/** Push a WS event as a log entry to the store. */
-function pushEventAsLog(event: WsEvent): void {
-  const entry: LogEntry = {
-    timestamp: event.timestamp,
-    level: "INFO",
-    logger: "sovyx.dashboard.events",
-    event: `[${event.type}] ${event.data ? JSON.stringify(event.data) : ""}`.slice(0, 500),
-  };
-  useDashboardStore.getState().addLog(entry);
-}
-
-/** Refresh brain graph from API. */
 async function refreshBrain(): Promise<void> {
   try {
     const res = await fetch(`${API_BASE}/api/brain/graph?limit=200`, { headers: authHeaders() });
@@ -81,7 +91,6 @@ async function refreshBrain(): Promise<void> {
   }
 }
 
-/** Refresh active conversation messages if one is selected. */
 async function refreshActiveConversation(): Promise<void> {
   const { activeConversationId, setActiveMessages } = useDashboardStore.getState();
   if (!activeConversationId) return;
@@ -99,6 +108,37 @@ async function refreshActiveConversation(): Promise<void> {
   }
 }
 
+/** Push a WS event as a log entry to the store. */
+function pushEventAsLog(event: WsEvent): void {
+  const entry: LogEntry = {
+    timestamp: event.timestamp,
+    level: "INFO",
+    logger: "sovyx.dashboard.events",
+    event: `[${event.type}] ${event.data ? JSON.stringify(event.data) : ""}`.slice(0, 500),
+  };
+  useDashboardStore.getState().addLog(entry);
+}
+
+// ── Debounced wrappers (each target gets its own timer) ──
+
+function debouncedRefreshStatus(): void {
+  debouncedCall("status", () => void refreshStatus());
+}
+
+function debouncedRefreshHealth(): void {
+  debouncedCall("health", () => void refreshHealth());
+}
+
+function debouncedRefreshBrain(): void {
+  debouncedCall("brain", () => void refreshBrain());
+}
+
+function debouncedRefreshConversation(): void {
+  debouncedCall("conversation", () => void refreshActiveConversation());
+}
+
+// ── Hook ──
+
 export function useWebSocket(): void {
   const wsRef = useRef<WebSocket | null>(null);
   const backoffRef = useRef(INITIAL_BACKOFF_MS);
@@ -111,49 +151,44 @@ export function useWebSocket(): void {
 
   const handleMessage = useCallback(
     (raw: MessageEvent) => {
-      // Ignore pong responses
       if (raw.data === "pong") return;
 
       try {
         const event = JSON.parse(raw.data as string) as WsEvent;
 
-        // All events go to activity feed + logs
+        // All events go to activity feed + logs (immediate, no debounce)
         addEvent(event);
         pushEventAsLog(event);
 
-        // Targeted refreshes for specific events
+        // Targeted refreshes — DEBOUNCED to prevent API bursts
         switch (event.type) {
           case "ServiceHealthChanged":
-            void refreshHealth();
+            debouncedRefreshHealth();
             break;
 
           case "ThinkCompleted":
           case "ResponseSent":
-            // LLM cost/tokens changed + new message in conversation
-            void refreshStatus();
-            void refreshActiveConversation();
+            debouncedRefreshStatus();
+            debouncedRefreshConversation();
             break;
 
           case "PerceptionReceived":
-            // New user message — refresh active conversation
-            void refreshActiveConversation();
+            debouncedRefreshConversation();
             break;
 
           case "ConceptCreated":
           case "EpisodeEncoded":
-            // Brain changed — refresh status + brain graph
-            void refreshStatus();
-            void refreshBrain();
+            debouncedRefreshStatus();
+            debouncedRefreshBrain();
             break;
 
           case "ConsolidationCompleted":
-            // Major brain change — refresh all brain data
-            void refreshStatus();
-            void refreshBrain();
+            debouncedRefreshStatus();
+            debouncedRefreshBrain();
             break;
 
           case "EngineStarted":
-            // Full refresh on engine start
+            // Full refresh on engine start — immediate, not debounced
             void refreshStatus();
             void refreshHealth();
             void refreshBrain();
@@ -162,8 +197,7 @@ export function useWebSocket(): void {
           case "EngineStopping":
           case "ChannelConnected":
           case "ChannelDisconnected":
-            // Activity-only events — status refresh for channel count
-            void refreshStatus();
+            debouncedRefreshStatus();
             break;
         }
       } catch {
@@ -185,7 +219,7 @@ export function useWebSocket(): void {
       setConnected(true);
       backoffRef.current = INITIAL_BACKOFF_MS;
 
-      // Initial data load on (re)connect
+      // Initial data load on (re)connect — immediate
       void refreshStatus();
       void refreshHealth();
     };
@@ -196,7 +230,6 @@ export function useWebSocket(): void {
       setConnected(false);
       if (!mountedRef.current) return;
 
-      // Exponential backoff reconnect
       const delay = backoffRef.current;
       backoffRef.current = Math.min(delay * 2, MAX_BACKOFF_MS);
       setTimeout(connect, delay);
@@ -207,7 +240,7 @@ export function useWebSocket(): void {
     };
   }, [setConnected, handleMessage]);
 
-  // Periodic polling for status and health (supplements WebSocket events)
+  // Periodic polling (supplements WS events)
   useEffect(() => {
     statusTimerRef.current = setInterval(() => void refreshStatus(), STATUS_POLL_MS);
     healthTimerRef.current = setInterval(() => void refreshHealth(), HEALTH_POLL_MS);
@@ -226,6 +259,9 @@ export function useWebSocket(): void {
     return () => {
       mountedRef.current = false;
       wsRef.current?.close();
+      // Clean up debounce timers
+      for (const timer of debounceTimers.values()) clearTimeout(timer);
+      debounceTimers.clear();
     };
   }, [connect]);
 }
