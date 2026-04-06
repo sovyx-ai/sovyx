@@ -2,7 +2,6 @@ import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { SearchIcon, ArrowDownIcon, TrashIcon, FileTextIcon, AlertTriangleIcon } from "lucide-react";
-import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useDashboardStore } from "@/stores/dashboard";
@@ -162,8 +161,7 @@ export default function LogsPage() {
       </div>
 
       {/* Log viewer */}
-      <Card className="flex-1 overflow-hidden">
-        <CardContent className="h-full p-0">
+      <div className="flex-1 overflow-hidden rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)]">
           {error ? (
             <EmptyState
               icon={<AlertTriangleIcon className="size-10" />}
@@ -220,8 +218,7 @@ export default function LogsPage() {
               </div>
             </div>
           )}
-        </CardContent>
-      </Card>
+      </div>
 
       {/* Auto-follow indicator */}
       {!autoFollow && filtered.length > 0 && (
