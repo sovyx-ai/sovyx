@@ -6,6 +6,5 @@
     "quickActions": "Quick actions",
     "automationStatus": "Automation status",
     "cameraSnapshots": "Camera snapshots"
-  },
-  "badge": "Available in v1.0"
+  }
 }

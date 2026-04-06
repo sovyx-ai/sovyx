@@ -7,6 +7,5 @@
     "perPluginConfig": "Per-plugin configuration",
     "analytics": "Plugin analytics",
     "sandboxStatus": "Sandbox status"
-  },
-  "badge": "Available in v1.0"
+  }
 }

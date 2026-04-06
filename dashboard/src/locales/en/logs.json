@@ -26,6 +26,9 @@
     "module": "Module",
     "event": "Event"
   },
+  "actions": {
+    "clear": "Clear logs"
+  },
   "error": {
     "loadFailed": "Failed to load logs"
   },

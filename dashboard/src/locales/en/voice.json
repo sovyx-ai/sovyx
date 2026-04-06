@@ -7,6 +7,5 @@
     "wakeWord": "Wake word configuration",
     "latencyGauge": "Latency gauge",
     "voiceTest": "Voice test playground"
-  },
-  "badge": "Available in v1.0"
+  }
 }
