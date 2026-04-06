@@ -163,19 +163,19 @@ export default function SettingsPage() {
       {/* ── Engine Info (READ-ONLY) ── */}
       <section className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-4">
         <h2 className="text-sm font-medium text-[var(--svx-color-text-primary)]">
-          Engine Configuration
+          {t("general.engineConfig")}
         </h2>
         <p className="mt-1 text-xs text-[var(--svx-color-text-tertiary)]">
           {t("general.engineConfigDesc")}
         </p>
 
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
-          <ReadOnlyField label="Data Directory" value={settings.data_dir} mono />
-          <ReadOnlyField label="Log Format" value={settings.log_format} />
-          <ReadOnlyField label="Log File" value={settings.log_file ?? "stdout"} mono />
-          <ReadOnlyField label="Telemetry" value={settings.telemetry_enabled ? "Enabled" : "Disabled"} />
-          <ReadOnlyField label="API" value={`${settings.api_host}:${settings.api_port}`} mono />
-          <ReadOnlyField label="Relay" value={settings.relay_enabled ? "Enabled" : "Disabled"} />
+          <ReadOnlyField label={t("general.dataDir")} value={settings.data_dir} mono />
+          <ReadOnlyField label={t("general.logFormat")} value={settings.log_format} />
+          <ReadOnlyField label={t("general.logFile")} value={settings.log_file ?? "stdout"} mono />
+          <ReadOnlyField label={t("general.telemetryLabel")} value={settings.telemetry_enabled ? t("general.enabled") : t("general.disabled")} />
+          <ReadOnlyField label={t("general.apiEndpoint")} value={`${settings.api_host}:${settings.api_port}`} mono />
+          <ReadOnlyField label={t("general.relayLabel")} value={settings.relay_enabled ? t("general.enabled") : t("general.disabled")} />
         </div>
       </section>
 
