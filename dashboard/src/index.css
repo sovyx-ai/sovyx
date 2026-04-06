@@ -353,6 +353,175 @@
   top: 0.5rem;
 }
 
+/* ── Empty State Branded Animations (REFINE-06) ── */
+
+/* Brain: Neural mesh with pulsing nodes */
+.empty-anim-brain {
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.empty-anim-brain__svg {
+  width: 120px;
+  height: 80px;
+}
+
+.empty-anim-brain__line {
+  stroke: var(--svx-color-brand-primary);
+  stroke-width: 1;
+  opacity: 0.2;
+  animation: brain-line-pulse 3s ease-in-out infinite;
+}
+
+.empty-anim-brain__line--1 { animation-delay: 0ms; }
+.empty-anim-brain__line--2 { animation-delay: 400ms; }
+.empty-anim-brain__line--3 { animation-delay: 800ms; }
+.empty-anim-brain__line--4 { animation-delay: 1200ms; }
+.empty-anim-brain__line--5 { animation-delay: 600ms; }
+
+@keyframes brain-line-pulse {
+  0%, 100% { opacity: 0.15; }
+  50% { opacity: 0.4; }
+}
+
+.empty-anim-brain__node {
+  fill: var(--svx-color-brand-primary);
+  opacity: 0.5;
+  animation: brain-node-pulse 2.5s ease-in-out infinite;
+}
+
+.empty-anim-brain__node--1 { animation-delay: 0ms; }
+.empty-anim-brain__node--2 { animation-delay: 600ms; }
+.empty-anim-brain__node--3 { animation-delay: 1200ms; }
+.empty-anim-brain__node--4 { animation-delay: 300ms; }
+
+@keyframes brain-node-pulse {
+  0%, 100% { opacity: 0.3; r: inherit; }
+  50% { opacity: 0.8; }
+}
+
+/* Conversations: Chat bubble with typing dots */
+.empty-anim-chat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.empty-anim-chat__bubble {
+  display: flex;
+  gap: 4px;
+  padding: 8px 14px;
+  border-radius: 12px;
+  background: var(--svx-color-brand-subtle);
+  animation: chat-bubble-in 0.6s var(--svx-ease-out) both;
+}
+
+.empty-anim-chat__bubble--1 {
+  animation-delay: 0ms;
+  align-self: flex-start;
+  margin-left: -12px;
+}
+
+.empty-anim-chat__bubble--2 {
+  animation-delay: 400ms;
+  align-self: flex-end;
+  margin-right: -12px;
+  opacity: 0.6;
+}
+
+@keyframes chat-bubble-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.95); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.empty-anim-chat__dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--svx-color-brand-muted);
+  animation: chat-dot-bounce 1.4s ease-in-out infinite;
+}
+
+.empty-anim-chat__dot:nth-child(2) { animation-delay: 200ms; }
+.empty-anim-chat__dot:nth-child(3) { animation-delay: 400ms; }
+
+@keyframes chat-dot-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+
+/* Logs: Terminal cursor blinking */
+.empty-anim-terminal {
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.empty-anim-terminal__line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--svx-font-mono, "Geist Mono", monospace);
+  font-size: 14px;
+}
+
+.empty-anim-terminal__prompt {
+  color: var(--svx-color-brand-muted);
+  opacity: 0.7;
+}
+
+.empty-anim-terminal__cursor {
+  width: 8px;
+  height: 16px;
+  background: var(--svx-color-brand-primary);
+  animation: terminal-blink 1s step-end infinite;
+}
+
+@keyframes terminal-blink {
+  0%, 100% { opacity: 0.8; }
+  50% { opacity: 0; }
+}
+
+/* Chart: Flat-line pulse that "wakes up" */
+.empty-anim-pulse {
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  padding: 0 16px;
+}
+
+.empty-anim-pulse__svg {
+  width: 100%;
+  max-width: 200px;
+  height: 40px;
+}
+
+.empty-anim-pulse__baseline {
+  stroke: var(--svx-color-border-subtle);
+  stroke-width: 1;
+  opacity: 0.3;
+}
+
+.empty-anim-pulse__line {
+  stroke: var(--svx-color-brand-primary);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 300;
+  stroke-dashoffset: 300;
+  animation: pulse-draw 3s ease-in-out infinite;
+}
+
+@keyframes pulse-draw {
+  0% { stroke-dashoffset: 300; opacity: 0.3; }
+  40% { stroke-dashoffset: 0; opacity: 0.8; }
+  60% { stroke-dashoffset: 0; opacity: 0.8; }
+  100% { stroke-dashoffset: -300; opacity: 0.3; }
+}
+
 /* ── Reduced Motion (a11y — WCAG 2.3.3) ── */
 @media (prefers-reduced-motion: reduce) {
   *,

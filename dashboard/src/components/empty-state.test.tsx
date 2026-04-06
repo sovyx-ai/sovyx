@@ -39,4 +39,26 @@ describe("EmptyState", () => {
     render(<EmptyState icon={<span>🔮</span>} title="Empty" />);
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
+
+  it("renders animation slot instead of icon when provided", () => {
+    render(
+      <EmptyState
+        icon={<span data-testid="icon">🔮</span>}
+        animation={<div data-testid="animation">animated</div>}
+        title="Branded"
+      />,
+    );
+    expect(screen.getByTestId("animation")).toBeInTheDocument();
+    expect(screen.queryByTestId("icon")).not.toBeInTheDocument();
+  });
+
+  it("falls back to icon when animation is not provided", () => {
+    render(
+      <EmptyState
+        icon={<span data-testid="icon">🔮</span>}
+        title="Fallback"
+      />,
+    );
+    expect(screen.getByTestId("icon")).toBeInTheDocument();
+  });
 });

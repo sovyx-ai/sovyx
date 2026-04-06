@@ -15,6 +15,7 @@ import { api, isAbortError } from "@/lib/api";
 import { BrainGraph } from "@/components/dashboard/brain-graph";
 import { CategoryLegend, RelationLegend } from "@/components/dashboard/category-legend";
 import { EmptyState } from "@/components/empty-state";
+import { BrainEmptyAnimation } from "@/components/empty-state-animations";
 import { Button } from "@/components/ui/button";
 import type { BrainNode, BrainGraph as BrainGraphType } from "@/types/api";
 
@@ -123,6 +124,7 @@ export default function BrainPage() {
           ) : brainNodes.length === 0 ? (
             <EmptyState
               icon={<SparklesIcon className="size-10" />}
+              animation={<BrainEmptyAnimation />}
               title={t("empty")}
               description={t("emptyDescription")}
               className="h-full"

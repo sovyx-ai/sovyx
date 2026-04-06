@@ -23,6 +23,7 @@ import { ChatThread } from "@/components/dashboard/chat-thread";
 import { StatusDot } from "@/components/dashboard/status-dot";
 import type { Conversation, ConversationsResponse, Message } from "@/types/api";
 import { EmptyState } from "@/components/empty-state";
+import { ConversationsEmptyAnimation } from "@/components/empty-state-animations";
 import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 50;
@@ -161,6 +162,7 @@ export default function ConversationsPage() {
             ) : filtered.length === 0 && !loading ? (
               <EmptyState
                 icon={<MessageSquareIcon className="size-8" />}
+                animation={<ConversationsEmptyAnimation />}
                 title={t("list.empty")}
                 description="Send a message via Telegram to get started."
                 className="py-12"
@@ -260,6 +262,7 @@ export default function ConversationsPage() {
           <div className="flex h-full items-center justify-center">
             <EmptyState
               icon={<MessageSquareIcon className="size-10" />}
+              animation={<ConversationsEmptyAnimation />}
               title="Select a conversation"
               description="Choose from the list to view messages."
             />
