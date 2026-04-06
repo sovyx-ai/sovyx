@@ -15,6 +15,7 @@ from sovyx.engine.events import (
     EngineStarted,
     EngineStopping,
     EpisodeEncoded,
+    Event,
     EventBus,
     PerceptionReceived,
     ResponseSent,
@@ -91,6 +92,35 @@ class TestSerializeEvent:
         result = _serialize_event(ChannelDisconnected(channel_type="signal", reason="timeout"))
         assert result["data"]["reason"] == "timeout"
 
+    def test_unknown_event_type_returns_empty_data(self) -> None:
+        """Cover the else branch: unknown event type → data = {}."""
+        # Create a bare Event (base class, not one of the known subclasses)
+        event = Event()
+        result = _serialize_event(event)
+        assert result["type"] == "Event"
+        assert result["data"] == {}
+        assert "timestamp" in result
+        assert "correlation_id" in result
+
+    def test_all_events_have_correlation_id(self) -> None:
+        """Every serialized event must have a correlation_id."""
+        events = [
+            EngineStarted(),
+            EngineStopping(reason="test"),
+            ServiceHealthChanged(service="X", status="green"),
+            PerceptionReceived(source="s", person_id="p"),
+            ThinkCompleted(tokens_in=1, tokens_out=1, model="m", cost_usd=0.0, latency_ms=1),
+            ResponseSent(channel="c", latency_ms=1),
+            ConceptCreated(concept_id="c", title="t", source="s"),
+            EpisodeEncoded(episode_id="e", importance=0.5),
+            ConsolidationCompleted(merged=0, pruned=0, strengthened=0, duration_s=0.0),
+            ChannelConnected(channel_type="t"),
+            ChannelDisconnected(channel_type="t", reason="r"),
+        ]
+        for evt in events:
+            result = _serialize_event(evt)
+            assert result["correlation_id"] is not None
+
 
 class TestDashboardEventBridge:
     def test_subscribe_all(self) -> None:
@@ -144,3 +174,33 @@ class TestDashboardEventBridge:
         await bus.emit(EngineStarted())
 
         ws.broadcast.assert_not_called()
+
+    @pytest.mark.asyncio()
+    async def test_broadcasts_all_11_event_types(self) -> None:
+        """Every known event type should be broadcast when clients are connected."""
+        ws = MagicMock()
+        type(ws).active_count = PropertyMock(return_value=1)
+        ws.broadcast = AsyncMock()
+
+        bus = EventBus()
+        bridge = DashboardEventBridge(ws, bus)
+        bridge.subscribe_all()
+
+        events = [
+            EngineStarted(),
+            EngineStopping(reason="test"),
+            ServiceHealthChanged(service="X", status="green"),
+            PerceptionReceived(source="s", person_id="p"),
+            ThinkCompleted(tokens_in=1, tokens_out=1, model="m", cost_usd=0.0, latency_ms=1),
+            ResponseSent(channel="c", latency_ms=1),
+            ConceptCreated(concept_id="c", title="t", source="s"),
+            EpisodeEncoded(episode_id="e", importance=0.5),
+            ConsolidationCompleted(merged=0, pruned=0, strengthened=0, duration_s=0.0),
+            ChannelConnected(channel_type="t"),
+            ChannelDisconnected(channel_type="t", reason="r"),
+        ]
+
+        for evt in events:
+            await bus.emit(evt)
+
+        assert ws.broadcast.call_count == 11

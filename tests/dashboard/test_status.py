@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -52,6 +52,23 @@ class TestDashboardCounters:
         # Should have reset: 0 + 1 = 1
         assert c.llm_calls == 1
 
+    def test_snapshot_returns_tuple(self) -> None:
+        c = DashboardCounters()
+        c.record_llm_call(cost=0.1, tokens=200)
+        c.record_message()
+        calls, cost, tokens, msgs = c.snapshot()
+        assert calls == 1
+        assert cost == pytest.approx(0.1)
+        assert tokens == 200
+        assert msgs == 1
+
+    def test_snapshot_resets_on_day_boundary(self) -> None:
+        c = DashboardCounters()
+        c._day_key = "2020-01-01"
+        c.llm_calls = 99
+        calls, _, _, _ = c.snapshot()
+        assert calls == 0  # Reset happened
+
     def test_get_counters_singleton(self) -> None:
         c1 = get_counters()
         c2 = get_counters()
@@ -82,6 +99,7 @@ class TestStatusSnapshot:
         assert d["llm_cost_today"] == 0.1235  # rounded to 4 decimals
         assert d["llm_calls_today"] == 7
         assert d["tokens_today"] == 1500
+        assert d["messages_today"] == 25
 
 
 class TestStatusCollector:
@@ -150,3 +168,115 @@ class TestStatusCollector:
         # Should not raise — returns defaults
         assert snap.mind_name == "sovyx"
         assert snap.memory_concepts == 0
+
+    @pytest.mark.asyncio()
+    async def test_collect_with_concept_and_episode_repos(self) -> None:
+        """Cover _get_memory_stats with both repos registered."""
+        mock_concept_repo = AsyncMock()
+        mock_concept_repo.count = AsyncMock(return_value=42)
+
+        mock_episode_repo = AsyncMock()
+        mock_episode_repo.count = AsyncMock(return_value=15)
+
+        registry = MagicMock()
+
+        def is_registered(cls: type) -> bool:
+            from sovyx.brain.concept_repo import ConceptRepository
+            from sovyx.brain.episode_repo import EpisodeRepository
+
+            return cls in (ConceptRepository, EpisodeRepository)
+
+        registry.is_registered.side_effect = is_registered
+
+        async def resolve(cls: type) -> AsyncMock:
+            from sovyx.brain.concept_repo import ConceptRepository
+            from sovyx.brain.episode_repo import EpisodeRepository
+
+            if cls is ConceptRepository:
+                return mock_concept_repo
+            if cls is EpisodeRepository:
+                return mock_episode_repo
+            msg = f"Unknown: {cls}"
+            raise ValueError(msg)
+
+        registry.resolve = AsyncMock(side_effect=resolve)
+
+        collector = StatusCollector(registry)
+        snap = await collector.collect()
+
+        assert snap.memory_concepts == 42
+        assert snap.memory_episodes == 15
+
+    @pytest.mark.asyncio()
+    async def test_collect_episode_repo_error_returns_zero(self) -> None:
+        """Cover the episode exception path in _get_memory_stats."""
+        mock_concept_repo = AsyncMock()
+        mock_concept_repo.count = AsyncMock(return_value=10)
+
+        registry = MagicMock()
+
+        def is_registered(cls: type) -> bool:
+            from sovyx.brain.concept_repo import ConceptRepository
+            from sovyx.brain.episode_repo import EpisodeRepository
+
+            return cls in (ConceptRepository, EpisodeRepository)
+
+        registry.is_registered.side_effect = is_registered
+
+        async def resolve(cls: type) -> AsyncMock:
+            from sovyx.brain.concept_repo import ConceptRepository
+
+            if cls is ConceptRepository:
+                return mock_concept_repo
+            raise RuntimeError("episode repo broken")
+
+        registry.resolve = AsyncMock(side_effect=resolve)
+
+        collector = StatusCollector(registry)
+        snap = await collector.collect()
+
+        assert snap.memory_concepts == 10
+        assert snap.memory_episodes == 0  # Fallback on error
+
+    @pytest.mark.asyncio()
+    async def test_collect_conversation_count(self) -> None:
+        """Cover _get_conversation_count success path."""
+        registry = MagicMock()
+        registry.is_registered.return_value = False
+
+        with patch(
+            "sovyx.dashboard.status.StatusCollector._get_conversation_count",
+            new_callable=AsyncMock,
+            return_value=7,
+        ):
+            collector = StatusCollector(registry)
+            snap = await collector.collect()
+
+        assert snap.active_conversations == 7
+
+    @pytest.mark.asyncio()
+    async def test_collect_conversation_count_error(self) -> None:
+        """Cover _get_conversation_count error → returns 0."""
+        registry = MagicMock()
+        registry.is_registered.return_value = False
+
+        with patch(
+            "sovyx.dashboard.conversations.count_active_conversations",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("no conversations"),
+        ):
+            collector = StatusCollector(registry)
+            snap = await collector.collect()
+
+        assert snap.active_conversations == 0
+
+    @pytest.mark.asyncio()
+    async def test_default_start_time(self) -> None:
+        """Cover start_time=None → defaults to time.time()."""
+        registry = MagicMock()
+        registry.is_registered.return_value = False
+
+        collector = StatusCollector(registry)  # No start_time
+        snap = await collector.collect()
+        assert snap.uptime_seconds >= 0
+        assert snap.uptime_seconds < 5  # Should be very small
