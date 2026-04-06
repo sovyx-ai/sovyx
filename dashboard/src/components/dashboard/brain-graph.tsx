@@ -22,9 +22,7 @@
 import { useCallback, useRef, useEffect, useState } from "react";
 import ForceGraph2D, { type ForceGraphMethods } from "react-force-graph-2d";
 import type { BrainNode, BrainLink, RelationType } from "@/types/api";
-import { CATEGORY_COLORS, CATEGORY_LABELS } from "@/lib/constants";
-
-export { CATEGORY_LABELS };
+import { CATEGORY_COLORS } from "@/lib/constants";
 
 interface GraphData {
   nodes: BrainNode[];

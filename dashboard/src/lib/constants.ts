@@ -1,16 +1,5 @@
 import type { ConceptCategory } from "@/types/api";
 
-/** Human-readable labels for brain concept categories. */
-export const CATEGORY_LABELS: Record<ConceptCategory, string> = {
-  fact: "Fact",
-  preference: "Preference",
-  entity: "Entity",
-  skill: "Skill",
-  belief: "Belief",
-  event: "Event",
-  relationship: "Relationship",
-};
-
 /**
  * Color mapping for brain concept categories.
  *
