@@ -20,7 +20,18 @@
     "telemetry": "Telemetry",
     "telemetryDesc": "Send anonymous usage data to help improve Sovyx.",
     "saved": "Settings saved.",
-    "saveFailed": "Failed to save settings."
+    "saveFailed": "Failed to save settings.",
+    "loadFailed": "Failed to load settings.",
+    "engineConfig": "Engine Configuration",
+    "engineConfigDesc": "Read-only. Edit system.yaml to change these values.",
+    "runtimeSettings": "Runtime-mutable settings. Changes take effect immediately.",
+    "logFormat": "Log Format",
+    "logFile": "Log File",
+    "telemetryLabel": "Telemetry",
+    "apiEndpoint": "API",
+    "relayLabel": "Relay",
+    "enabled": "Enabled",
+    "disabled": "Disabled"
   },
   "about": {
     "version": "Version",

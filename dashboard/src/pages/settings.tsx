@@ -56,7 +56,7 @@ export default function SettingsPage() {
       setSelectedLevel(data.log_level);
     } catch (err) {
       if (isAbortError(err)) return;
-      toast.error("Failed to load settings");
+      toast.error(t("general.loadFailed"));
     } finally {
       setLoading(false);
     }
@@ -109,7 +109,7 @@ export default function SettingsPage() {
             {t("title")}
           </h1>
           <p className="text-sm text-[var(--svx-color-text-secondary)]">
-            Engine configuration and feature settings
+            {t("general.engineConfigDesc")}
           </p>
         </div>
         <Button
@@ -132,7 +132,7 @@ export default function SettingsPage() {
           {t("tabs.general")}
         </h2>
         <p className="mt-1 text-xs text-[var(--svx-color-text-tertiary)]">
-          Runtime-mutable settings. Changes take effect immediately.
+          {t("general.runtimeSettings")}
         </p>
 
         <div className="mt-4 space-y-4">
@@ -166,7 +166,7 @@ export default function SettingsPage() {
           Engine Configuration
         </h2>
         <p className="mt-1 text-xs text-[var(--svx-color-text-tertiary)]">
-          Read-only. Edit system.yaml to change these values.
+          {t("general.engineConfigDesc")}
         </p>
 
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
