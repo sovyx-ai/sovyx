@@ -314,7 +314,9 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
             from sovyx.dashboard.conversations import get_conversation_messages
 
             messages = await get_conversation_messages(
-                registry, conversation_id, limit=limit,
+                registry,
+                conversation_id,
+                limit=limit,
             )
             return JSONResponse({"conversation_id": conversation_id, "messages": messages})
         return JSONResponse({"conversation_id": conversation_id, "messages": []})
@@ -342,7 +344,11 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
 
         log_file = getattr(app.state, "log_file", None)
         entries = query_logs(
-            log_file, level=level, module=module, search=search, limit=limit,
+            log_file,
+            level=level,
+            module=module,
+            search=search,
+            limit=limit,
         )
         return JSONResponse({"entries": entries})
 

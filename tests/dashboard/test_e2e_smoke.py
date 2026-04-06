@@ -22,6 +22,10 @@ from sovyx.dashboard.server import create_app
 if TYPE_CHECKING:
     from pathlib import Path
 
+# Skip entire module when dashboard hasn't been built (CI without frontend build step)
+_has_build = STATIC_DIR.exists() and (STATIC_DIR / "index.html").exists()
+pytestmark = pytest.mark.skipif(not _has_build, reason="Dashboard not built (run npm run build)")
+
 
 @pytest.fixture(autouse=True)
 def _setup_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

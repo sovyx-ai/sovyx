@@ -46,7 +46,11 @@ def query_logs(
 
     try:
         return _read_and_filter(
-            log_file, level=level, module=module, search=search, limit=limit,
+            log_file,
+            level=level,
+            module=module,
+            search=search,
+            limit=limit,
         )
     except Exception:  # noqa: BLE001
         logger.debug("query_logs_failed", log_file=str(log_file))
