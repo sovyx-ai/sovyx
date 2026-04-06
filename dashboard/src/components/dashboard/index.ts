@@ -9,3 +9,5 @@ export { ChatBubble } from "./chat-bubble";
 export { ChatThread } from "./chat-thread";
 export { BrainGraph, CATEGORY_LABELS } from "./brain-graph";
 export { CategoryLegend } from "./category-legend";
+export { StatusDot } from "./status-dot";
+export { NeuralMesh } from "./neural-mesh";

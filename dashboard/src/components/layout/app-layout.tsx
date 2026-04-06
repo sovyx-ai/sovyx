@@ -11,6 +11,7 @@ import { BellIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useWebSocket } from "@/hooks/use-websocket";
 import { CommandPalette } from "@/components/command-palette";
+import { NeuralMesh } from "@/components/dashboard/neural-mesh";
 
 /** Maps route paths to page titles (WCAG 2.4.2). */
 const ROUTE_TITLES: Record<string, string> = {
@@ -71,10 +72,13 @@ export function AppLayout() {
               </kbd>
             </div>
           </header>
-          <main id="main-content" className="flex-1 overflow-auto p-4 md:p-6" role="main">
-            <PageTransition key={location.pathname}>
-              <Outlet />
-            </PageTransition>
+          <main id="main-content" className="relative flex-1 overflow-auto p-4 md:p-6" role="main">
+            <NeuralMesh />
+            <div className="relative">
+              <PageTransition key={location.pathname}>
+                <Outlet />
+              </PageTransition>
+            </div>
           </main>
         </SidebarInset>
       </SidebarProvider>
