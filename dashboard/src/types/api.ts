@@ -52,7 +52,8 @@ export interface Message {
 /** Conversation list item — from list_conversations() */
 export interface Conversation {
   id: string;
-  participant: string; // person_id
+  participant: string; // person_id (UUID)
+  participant_name?: string; // resolved display name from persons table
   channel: string;
   message_count: number;
   last_message_at: string; // ISO datetime

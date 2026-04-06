@@ -19,5 +19,6 @@
     "cognitiveTrace": "Cognitive Trace",
     "traceTotal": "{{duration}}ms total",
     "participant": "Participant"
-  }
+  },
+  "unknownParticipant": "Unknown"
 }

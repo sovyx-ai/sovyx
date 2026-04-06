@@ -45,6 +45,38 @@ async def _get_conversation_pool(registry: ServiceRegistry) -> DatabasePool | No
         return None
 
 
+async def _resolve_person_names(
+    registry: ServiceRegistry,
+    person_ids: list[str],
+) -> dict[str, str]:
+    """Resolve person UUIDs to display names via system.db persons table.
+
+    Returns a mapping of person_id -> display_name (or name as fallback).
+    Unknown IDs are silently omitted from the result.
+    """
+    if not person_ids:
+        return {}
+
+    from sovyx.persistence.manager import DatabaseManager
+
+    try:
+        db = await registry.resolve(DatabaseManager)
+        system_pool = db.get_system_pool()
+
+        placeholders = ",".join("?" for _ in person_ids)
+        async with system_pool.read() as conn:
+            cursor = await conn.execute(
+                f"SELECT id, COALESCE(display_name, name) FROM persons WHERE id IN ({placeholders})",  # noqa: S608
+                person_ids,
+            )
+            rows = await cursor.fetchall()
+
+        return {row[0]: row[1] for row in rows}
+    except Exception:  # noqa: BLE001
+        logger.debug("resolve_person_names_failed", count=len(person_ids))
+        return {}
+
+
 async def list_conversations(
     registry: ServiceRegistry,
     *,
@@ -68,10 +100,15 @@ async def list_conversations(
             )
             rows = await cursor.fetchall()
 
+        # Resolve person UUIDs to human-readable names
+        person_ids = list({row[1] for row in rows if row[1]})
+        name_map = await _resolve_person_names(registry, person_ids)
+
         return [
             {
                 "id": row[0],
                 "participant": row[1],
+                "participant_name": name_map.get(row[1]),
                 "channel": row[2],
                 "message_count": row[3],
                 "last_message_at": row[4],

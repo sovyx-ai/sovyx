@@ -37,4 +37,16 @@ describe("Breadcrumb accessibility", () => {
     const notFound = screen.getByText("Not Found");
     expect(notFound).toHaveAttribute("aria-current", "page");
   });
+
+  it("resolves trailing slash to correct route", () => {
+    renderAtPath("/about/");
+    expect(screen.getByText("About")).toBeInTheDocument();
+    expect(screen.queryByText("Not Found")).not.toBeInTheDocument();
+  });
+
+  it("resolves nested path to parent route", () => {
+    renderAtPath("/conversations/abc-123");
+    expect(screen.getByText("Conversations")).toBeInTheDocument();
+    expect(screen.queryByText("Not Found")).not.toBeInTheDocument();
+  });
 });
