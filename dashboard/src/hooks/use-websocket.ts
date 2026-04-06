@@ -9,6 +9,10 @@
  * debounce timer. Trailing-edge: only the last call in the window fires.
  * Window: 300ms (fast enough for perceived real-time, slow enough to batch).
  *
+ * ZERO-02: Refresh functions use centralized api.get() instead of raw fetch.
+ * Only the WS URL construction reads the token directly (WebSocket API
+ * doesn't support custom headers — token must go in query string).
+ *
  * Events handled (11 real from DashboardEventBridge._serialize_event()):
  *   EngineStarted, EngineStopping, ServiceHealthChanged,
  *   PerceptionReceived, ThinkCompleted, ResponseSent,
@@ -19,9 +23,17 @@
  */
 import { useEffect, useRef, useCallback } from "react";
 import { useDashboardStore } from "@/stores/dashboard";
-import type { WsEvent, SystemStatus, HealthResponse, LogEntry, BrainGraph, Message } from "@/types/api";
+import { api } from "@/lib/api";
+import type {
+  WsEvent,
+  SystemStatus,
+  HealthResponse,
+  LogEntry,
+  BrainGraph,
+  ConversationsResponse,
+  ConversationDetailResponse,
+} from "@/types/api";
 
-const API_BASE = import.meta.env.VITE_API_URL ?? "";
 const WS_BASE = import.meta.env.VITE_WS_URL ?? `ws://${window.location.host}`;
 const MAX_BACKOFF_MS = 30_000;
 const INITIAL_BACKOFF_MS = 1_000;
@@ -29,12 +41,9 @@ const STATUS_POLL_MS = 5_000;
 const HEALTH_POLL_MS = 10_000;
 const DEBOUNCE_MS = 300;
 
-function getToken(): string {
+/** Read token for WS URL query param (WebSocket API has no custom headers). */
+function getWsToken(): string {
   return localStorage.getItem("sovyx_token") ?? "";
-}
-
-function authHeaders(): HeadersInit {
-  return { Authorization: `Bearer ${getToken()}` };
 }
 
 // ── Debounce utility (trailing edge, per-key) ──
@@ -53,15 +62,12 @@ function debouncedCall(key: string, fn: () => void, ms = DEBOUNCE_MS): void {
   );
 }
 
-// ── API refresh functions ──
+// ── API refresh functions (via centralized api.get) ──
 
 async function refreshStatus(): Promise<void> {
   try {
-    const res = await fetch(`${API_BASE}/api/status`, { headers: authHeaders() });
-    if (res.ok) {
-      const data = (await res.json()) as SystemStatus;
-      useDashboardStore.getState().setStatus(data);
-    }
+    const data = await api.get<SystemStatus>("/api/status");
+    useDashboardStore.getState().setStatus(data);
   } catch {
     // Will retry on next poll
   }
@@ -69,11 +75,8 @@ async function refreshStatus(): Promise<void> {
 
 async function refreshHealth(): Promise<void> {
   try {
-    const res = await fetch(`${API_BASE}/api/health`, { headers: authHeaders() });
-    if (res.ok) {
-      const data = (await res.json()) as HealthResponse;
-      useDashboardStore.getState().setHealthChecks(data.checks);
-    }
+    const data = await api.get<HealthResponse>("/api/health");
+    useDashboardStore.getState().setHealthChecks(data.checks);
   } catch {
     // Will retry on next poll
   }
@@ -81,11 +84,8 @@ async function refreshHealth(): Promise<void> {
 
 async function refreshBrain(): Promise<void> {
   try {
-    const res = await fetch(`${API_BASE}/api/brain/graph?limit=200`, { headers: authHeaders() });
-    if (res.ok) {
-      const data = (await res.json()) as BrainGraph;
-      useDashboardStore.getState().setBrainGraph(data);
-    }
+    const data = await api.get<BrainGraph>("/api/brain/graph?limit=200");
+    useDashboardStore.getState().setBrainGraph(data);
   } catch {
     // Will retry on next event
   }
@@ -95,16 +95,23 @@ async function refreshActiveConversation(): Promise<void> {
   const { activeConversationId, setActiveMessages } = useDashboardStore.getState();
   if (!activeConversationId) return;
   try {
-    const res = await fetch(
-      `${API_BASE}/api/conversations/${activeConversationId}`,
-      { headers: authHeaders() },
+    const data = await api.get<ConversationDetailResponse>(
+      `/api/conversations/${activeConversationId}`,
     );
-    if (res.ok) {
-      const data = (await res.json()) as { conversation_id: string; messages: Message[] };
-      setActiveMessages(data.messages);
-    }
+    setActiveMessages(data.messages);
   } catch {
     // Will retry
+  }
+}
+
+async function refreshConversationList(): Promise<void> {
+  try {
+    const data = await api.get<ConversationsResponse>(
+      "/api/conversations?limit=50&offset=0",
+    );
+    useDashboardStore.getState().setConversations(data.conversations);
+  } catch {
+    // Will retry on next event
   }
 }
 
@@ -135,19 +142,6 @@ function debouncedRefreshBrain(): void {
 
 function debouncedRefreshConversation(): void {
   debouncedCall("conversation", () => void refreshActiveConversation());
-}
-
-/** Refresh conversation list (for new messages updating last_message_at). */
-async function refreshConversationList(): Promise<void> {
-  try {
-    const res = await fetch(`${API_BASE}/api/conversations?limit=50&offset=0`, { headers: authHeaders() });
-    if (res.ok) {
-      const data = (await res.json()) as { conversations: Array<Record<string, unknown>> };
-      useDashboardStore.getState().setConversations(data.conversations as never);
-    }
-  } catch {
-    // Will retry on next event
-  }
 }
 
 function debouncedRefreshConversationList(): void {
@@ -188,12 +182,12 @@ export function useWebSocket(): void {
           case "ResponseSent":
             debouncedRefreshStatus();
             debouncedRefreshConversation();
-            debouncedRefreshConversationList(); // Update list (last_message_at, count)
+            debouncedRefreshConversationList();
             break;
 
           case "PerceptionReceived":
             debouncedRefreshConversation();
-            debouncedRefreshConversationList(); // New message → update list
+            debouncedRefreshConversationList();
             break;
 
           case "ConceptCreated":
@@ -231,7 +225,7 @@ export function useWebSocket(): void {
     if (!mountedRef.current) return;
 
     const ws = new WebSocket(
-      `${WS_BASE}/ws?token=${encodeURIComponent(getToken())}`,
+      `${WS_BASE}/ws?token=${encodeURIComponent(getWsToken())}`,
     );
     wsRef.current = ws;
 
@@ -251,7 +245,6 @@ export function useWebSocket(): void {
         setConnected(false);
         return;
       }
-      // Show "reconnecting" state instead of just "disconnected"
       setConnectionState("reconnecting");
 
       const delay = backoffRef.current;
@@ -283,7 +276,6 @@ export function useWebSocket(): void {
     return () => {
       mountedRef.current = false;
       wsRef.current?.close();
-      // Clean up debounce timers
       for (const timer of debounceTimers.values()) clearTimeout(timer);
       debounceTimers.clear();
     };

@@ -11,7 +11,7 @@
  * Ref: POLISH-01, POLISH-12
  */
 
-const BASE_URL = import.meta.env.VITE_API_URL ?? "";
+export const BASE_URL = import.meta.env.VITE_API_URL ?? "";
 
 function getToken(): string | null {
   return localStorage.getItem("sovyx_token");

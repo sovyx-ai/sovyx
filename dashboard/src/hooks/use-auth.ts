@@ -9,8 +9,7 @@
  */
 import { useEffect } from "react";
 import { useDashboardStore } from "@/stores/dashboard";
-
-const API_BASE = import.meta.env.VITE_API_URL ?? "";
+import { BASE_URL } from "@/lib/api";
 
 export function useAuth(): { ready: boolean } {
   const authenticated = useDashboardStore((s) => s.authenticated);
@@ -26,7 +25,7 @@ export function useAuth(): { ready: boolean } {
     }
 
     // Validate existing token
-    fetch(`${API_BASE}/api/status`, {
+    fetch(`${BASE_URL}/api/status`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((res) => {
