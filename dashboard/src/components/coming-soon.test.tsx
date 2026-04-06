@@ -1,17 +1,17 @@
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen } from "@/test/test-utils";
 import { ComingSoon } from "./coming-soon";
 
 describe("ComingSoon", () => {
   it("renders title and default version badge", () => {
     render(<ComingSoon title="Voice Pipeline" />);
     expect(screen.getByText("Voice Pipeline")).toBeInTheDocument();
-    expect(screen.getByText("Available in v1.0")).toBeInTheDocument();
+    expect(screen.getByText("Coming in v1.0")).toBeInTheDocument();
   });
 
   it("renders custom version", () => {
     render(<ComingSoon title="Feature" version="v2.0" />);
-    expect(screen.getByText("Available in v2.0")).toBeInTheDocument();
+    expect(screen.getByText("Coming in v2.0")).toBeInTheDocument();
   });
 
   it("renders description", () => {

@@ -24,6 +24,6 @@ describe("VoicePage", () => {
 
   it("shows v1.0 version badge", () => {
     render(<VoicePage />);
-    expect(screen.getByText("Available in v1.0")).toBeInTheDocument();
+    expect(screen.getByText("Coming in v1.0")).toBeInTheDocument();
   });
 });
