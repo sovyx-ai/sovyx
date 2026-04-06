@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
 
 import pytest
 
@@ -331,7 +333,7 @@ class TestGetRelationsViaDatabaseManager:
         mock_pool = MagicMock()
 
         @asynccontextmanager
-        async def fake_read() -> Any:
+        async def fake_read() -> AsyncGenerator[AsyncMock, None]:
             yield mock_conn
 
         mock_pool.read = fake_read
@@ -385,7 +387,7 @@ class TestGetRelationsViaDatabaseManager:
 
         registry.is_registered.side_effect = is_registered
 
-        async def resolve(cls: type) -> Any:
+        async def resolve(cls: type) -> object:
             from sovyx.brain.concept_repo import ConceptRepository
 
             if cls is ConceptRepository:
