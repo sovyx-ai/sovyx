@@ -49,4 +49,49 @@ describe("OverviewPage", () => {
     // Health checks should be visible
     expect(screen.getByText(/database/i)).toBeInTheDocument();
   });
+
+  it("shows fresh-engine state when all metrics are zero", () => {
+    useDashboardStore.setState({
+      status: {
+        version: "0.5.0",
+        uptime_seconds: 10,
+        mind_name: "FreshMind",
+        active_conversations: 0,
+        memory_concepts: 0,
+        memory_episodes: 0,
+        llm_calls_today: 0,
+        llm_cost_today: 0,
+        tokens_today: 0,
+        messages_today: 0,
+      },
+      connected: true,
+    });
+    render(<OverviewPage />);
+    // Should show fresh subtitle
+    expect(screen.getByText(/bring it to life/i)).toBeInTheDocument();
+    // Messages and LLM Cost cards show dash instead of "0"
+    const dashes = screen.getAllByText("—");
+    expect(dashes.length).toBe(2);
+    // Brain card should show "Empty"
+    expect(screen.getByText("Empty")).toBeInTheDocument();
+    // Should show contextual hints
+    expect(screen.getByText(/awaiting first message/i)).toBeInTheDocument();
+    expect(screen.getByText(/learns from conversation/i)).toBeInTheDocument();
+  });
+
+  it("shows normal values when engine has activity", () => {
+    render(<OverviewPage />);
+    // Should show normal subtitle
+    expect(screen.getByText(/at a glance/i)).toBeInTheDocument();
+    // Should show actual numbers, not fresh labels
+    expect(screen.getByText("5")).toBeInTheDocument(); // messages
+    expect(screen.getByText("150")).toBeInTheDocument(); // concepts
+  });
+
+  it("shows skeletons when status is null", () => {
+    useDashboardStore.setState({ status: null });
+    render(<OverviewPage />);
+    const skeletons = screen.getAllByRole("group", { name: "Loading" });
+    expect(skeletons).toHaveLength(4);
+  });
 });
