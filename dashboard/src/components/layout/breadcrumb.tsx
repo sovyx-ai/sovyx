@@ -5,6 +5,12 @@ import {
   Brain,
   ScrollText,
   Settings,
+  Mic,
+  Info,
+  Heart,
+  ListTodo,
+  Puzzle,
+  Home,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -19,6 +25,12 @@ const ROUTE_MAP: Record<string, RouteInfo> = {
   "/brain": { label: "Brain Explorer", icon: Brain },
   "/logs": { label: "Logs", icon: ScrollText },
   "/settings": { label: "Settings", icon: Settings },
+  "/voice": { label: "Voice Pipeline", icon: Mic },
+  "/about": { label: "About", icon: Info },
+  "/emotions": { label: "Emotional Intelligence", icon: Heart },
+  "/productivity": { label: "Productivity", icon: ListTodo },
+  "/plugins": { label: "Plugin Marketplace", icon: Puzzle },
+  "/home": { label: "Home Integration", icon: Home },
 };
 
 export function Breadcrumb() {
