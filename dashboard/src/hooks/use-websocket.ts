@@ -137,6 +137,23 @@ function debouncedRefreshConversation(): void {
   debouncedCall("conversation", () => void refreshActiveConversation());
 }
 
+/** Refresh conversation list (for new messages updating last_message_at). */
+async function refreshConversationList(): Promise<void> {
+  try {
+    const res = await fetch(`${API_BASE}/api/conversations?limit=50&offset=0`, { headers: authHeaders() });
+    if (res.ok) {
+      const data = (await res.json()) as { conversations: Array<Record<string, unknown>> };
+      useDashboardStore.getState().setConversations(data.conversations as never);
+    }
+  } catch {
+    // Will retry on next event
+  }
+}
+
+function debouncedRefreshConversationList(): void {
+  debouncedCall("conversation-list", () => void refreshConversationList());
+}
+
 // ── Hook ──
 
 export function useWebSocket(): void {
@@ -171,10 +188,12 @@ export function useWebSocket(): void {
           case "ResponseSent":
             debouncedRefreshStatus();
             debouncedRefreshConversation();
+            debouncedRefreshConversationList(); // Update list (last_message_at, count)
             break;
 
           case "PerceptionReceived":
             debouncedRefreshConversation();
+            debouncedRefreshConversationList(); // New message → update list
             break;
 
           case "ConceptCreated":
