@@ -181,14 +181,14 @@ export default function SettingsPage() {
 
       {/* ── 8 Placeholder Sections (v1.0) ── */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <PlaceholderSection icon={UserIcon} title="Mind" version="v0.5" />
-        <PlaceholderSection icon={RadioIcon} title="Channels" version="v0.5" />
-        <PlaceholderSection icon={KeyIcon} title="API Keys" version="v0.5" />
-        <PlaceholderSection icon={CpuIcon} title="LLM Providers" version="v0.5" />
-        <PlaceholderSection icon={PuzzleIcon} title="Plugins" version="v1.0" />
-        <PlaceholderSection icon={ShieldIcon} title="Privacy" version="v1.0" />
-        <PlaceholderSection icon={DownloadIcon} title="Export / Import" version="v1.0" />
-        <PlaceholderSection icon={WebhookIcon} title="Webhooks" version="v1.0" />
+        <PlaceholderSection icon={UserIcon} title={t("tabs.mind")} versionLabel={t("common:comingSoon.title", { version: "v0.5" })} />
+        <PlaceholderSection icon={RadioIcon} title={t("tabs.channels")} versionLabel={t("common:comingSoon.title", { version: "v0.5" })} />
+        <PlaceholderSection icon={KeyIcon} title={t("tabs.apiKeys")} versionLabel={t("common:comingSoon.title", { version: "v0.5" })} />
+        <PlaceholderSection icon={CpuIcon} title={t("tabs.providers")} versionLabel={t("common:comingSoon.title", { version: "v0.5" })} />
+        <PlaceholderSection icon={PuzzleIcon} title={t("tabs.plugins")} versionLabel={t("common:comingSoon.title", { version: "v1.0" })} />
+        <PlaceholderSection icon={ShieldIcon} title={t("tabs.privacy")} versionLabel={t("common:comingSoon.title", { version: "v1.0" })} />
+        <PlaceholderSection icon={DownloadIcon} title={t("tabs.exportImport")} versionLabel={t("common:comingSoon.title", { version: "v1.0" })} />
+        <PlaceholderSection icon={WebhookIcon} title={t("tabs.webhooks")} versionLabel={t("common:comingSoon.title", { version: "v1.0" })} />
       </div>
     </div>
   );
@@ -217,11 +217,11 @@ function ReadOnlyField({ label, value, mono }: { label: string; value: string; m
 function PlaceholderSection({
   icon: Icon,
   title,
-  version,
+  versionLabel,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   title: string;
-  version: string;
+  versionLabel: string;
 }) {
   return (
     <div className="rounded-[var(--svx-radius-lg)] border border-dashed border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-4">
@@ -232,7 +232,7 @@ function PlaceholderSection({
         </span>
       </div>
       <p className="mt-2 text-xs text-[var(--svx-color-text-disabled)]">
-        Available in {version}
+        {versionLabel}
       </p>
     </div>
   );
