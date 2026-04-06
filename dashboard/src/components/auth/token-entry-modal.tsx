@@ -9,13 +9,11 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { setToken } from "@/lib/api";
+import { setToken, BASE_URL } from "@/lib/api";
 import { useDashboardStore } from "@/stores/dashboard";
 import { Loader2Icon, KeyIcon, CheckCircleIcon, XCircleIcon } from "lucide-react";
 
 type ValidationState = "idle" | "validating" | "valid" | "invalid";
-
-const API_BASE = import.meta.env.VITE_API_URL ?? "";
 
 export function TokenEntryModal() {
   const { t } = useTranslation("common");
@@ -35,7 +33,7 @@ export function TokenEntryModal() {
     setErrorMsg("");
 
     try {
-      const res = await fetch(`${API_BASE}/api/status`, {
+      const res = await fetch(`${BASE_URL}/api/status`, {
         headers: { Authorization: `Bearer ${trimmed}` },
       });
 
