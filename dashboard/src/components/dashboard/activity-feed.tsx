@@ -161,9 +161,15 @@ export function ActivityFeed({ events, className }: ActivityFeedProps) {
 
       <ScrollArea className="h-64">
         {reversed.length === 0 ? (
-          <p className="py-8 text-center text-sm text-[var(--svx-color-text-tertiary)]">
-            {t("feed.empty")}
-          </p>
+          <div className="flex flex-col items-center gap-1.5 py-8 text-center">
+            <div className="flex items-center gap-1.5 text-xs text-[var(--svx-color-text-tertiary)]">
+              <span className="inline-block size-1.5 animate-[pulse-dot_2s_ease-in-out_infinite] rounded-full bg-[var(--svx-color-brand-primary)]" />
+              {t("feed.empty")}
+            </div>
+            <p className="text-[10px] text-[var(--svx-color-text-disabled)]">
+              {t("feed.emptyHint")}
+            </p>
+          </div>
         ) : (
           <div className="space-y-0.5" role="log" aria-label="Activity feed" aria-live="polite">
             {reversed.map((event, i) => {
