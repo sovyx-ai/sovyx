@@ -27,7 +27,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { useDashboardStore } from "@/stores/dashboard";
-import { api } from "@/lib/api";
+import { api, isAbortError } from "@/lib/api";
 import { toast } from "sonner";
 import type { Settings } from "@/types/api";
 import { cn } from "@/lib/utils";
@@ -47,22 +47,25 @@ export default function SettingsPage() {
   // The ONLY mutable field
   const dirty = settings != null && selectedLevel !== settings.log_level;
 
-  // Fetch settings
-  const fetchSettings = useCallback(async () => {
+  // Fetch settings with AbortController (POLISH-01)
+  const fetchSettings = useCallback(async (signal?: AbortSignal) => {
     try {
       setLoading(true);
-      const data = await api.get<Settings>("/api/settings");
+      const data = await api.get<Settings>("/api/settings", { signal });
       setSettings(data);
       setSelectedLevel(data.log_level);
-    } catch {
-      // 401 handled
+    } catch (err) {
+      if (isAbortError(err)) return;
+      toast.error("Failed to load settings");
     } finally {
       setLoading(false);
     }
   }, [setSettings]);
 
   useEffect(() => {
-    void fetchSettings();
+    const controller = new AbortController();
+    void fetchSettings(controller.signal);
+    return () => controller.abort();
   }, [fetchSettings]);
 
   // Save — ONLY sends log_level (the only mutable field)

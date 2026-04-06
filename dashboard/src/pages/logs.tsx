@@ -1,12 +1,12 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { SearchIcon, ArrowDownIcon, TrashIcon, FileTextIcon } from "lucide-react";
+import { SearchIcon, ArrowDownIcon, TrashIcon, FileTextIcon, AlertTriangleIcon } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useDashboardStore } from "@/stores/dashboard";
-import { api } from "@/lib/api";
+import { api, isAbortError } from "@/lib/api";
 import { LogRow } from "@/components/dashboard/log-row";
 import type { LogEntry } from "@/types/api";
 import { EmptyState } from "@/components/empty-state";
@@ -34,28 +34,33 @@ export default function LogsPage() {
   const [levelFilter, setLevelFilter] = useState<LogLevel>("ALL");
   const [autoFollow, setAutoFollow] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const parentRef = useRef<HTMLDivElement>(null);
   const prevLogCountRef = useRef(0);
 
-  // Fetch initial logs
-  const fetchLogs = useCallback(async () => {
+  // Fetch initial logs with AbortController (POLISH-01)
+  const fetchLogs = useCallback(async (signal?: AbortSignal) => {
     try {
       setLoading(true);
+      setError(null);
       const params = new URLSearchParams({ limit: "500" });
       if (levelFilter !== "ALL") params.set("level", levelFilter);
       if (search) params.set("search", search);
-      const data = await api.get<{ entries: LogEntry[] }>(`/api/logs?${params}`);
+      const data = await api.get<{ entries: LogEntry[] }>(`/api/logs?${params}`, { signal });
       setLogs(data.entries);
-    } catch {
-      // 401 handled
+    } catch (err) {
+      if (isAbortError(err)) return;
+      setError("Failed to load logs");
     } finally {
       setLoading(false);
     }
   }, [levelFilter, search, setLogs]);
 
   useEffect(() => {
-    void fetchLogs();
+    const controller = new AbortController();
+    void fetchLogs(controller.signal);
+    return () => controller.abort();
   }, [fetchLogs]);
 
   // Filtered logs
@@ -158,9 +163,16 @@ export default function LogsPage() {
       {/* Log viewer */}
       <Card className="flex-1 overflow-hidden">
         <CardContent className="h-full p-0">
-          {loading && logs.length === 0 ? (
+          {error ? (
+            <EmptyState
+              icon={<AlertTriangleIcon className="size-10" />}
+              title={error}
+              action={{ label: "Retry", onClick: () => void fetchLogs() }}
+              className="h-full"
+            />
+          ) : loading && logs.length === 0 ? (
             <div className="flex h-full items-center justify-center">
-              <div className="size-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+              <div className="size-6 animate-spin rounded-full border-2 border-[var(--svx-color-brand-primary)] border-t-transparent" />
             </div>
           ) : filtered.length === 0 ? (
             <EmptyState

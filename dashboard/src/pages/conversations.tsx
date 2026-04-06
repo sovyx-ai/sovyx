@@ -1,23 +1,21 @@
 /**
  * Conversations page — split panel (list + detail).
  *
- * Desktop: list (w-80) + detail side by side.
- * Mobile: list-only → tap navigates to detail → back button returns.
- *
- * Data: GET /api/conversations (list), GET /api/conversations/:id (messages).
- * Detail response: {conversation_id, messages[]} — conversation metadata from list cache.
+ * POLISH-01: AbortController on both list and detail fetches.
+ * POLISH-02: Error states with retry.
+ * POLISH-04: Graceful fallback when list cache is empty.
  *
  * Ref: Architecture §3.2
  */
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { SearchIcon, MessageSquareIcon, ArrowLeftIcon } from "lucide-react";
+import { SearchIcon, MessageSquareIcon, ArrowLeftIcon, AlertTriangleIcon } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useDashboardStore } from "@/stores/dashboard";
-import { api } from "@/lib/api";
+import { api, isAbortError } from "@/lib/api";
 import { formatTimeAgo } from "@/lib/format";
 import { LetterAvatar } from "@/components/dashboard/letter-avatar";
 import { ChannelBadge } from "@/components/dashboard/channel-badge";
@@ -40,16 +38,23 @@ export default function ConversationsPage() {
 
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [messageError, setMessageError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
 
-  // Fetch conversation list
+  // Abort ref for list fetches
+  const listAbortRef = useRef<AbortController | null>(null);
+
+  // Fetch conversation list with AbortController
   const fetchConversations = useCallback(
-    async (offset = 0) => {
+    async (offset = 0, signal?: AbortSignal) => {
       try {
         setLoading(true);
+        setError(null);
         const data = await api.get<ConversationsResponse>(
           `/api/conversations?limit=${PAGE_SIZE}&offset=${offset}`,
+          { signal },
         );
         if (offset === 0) {
           setConversations(data.conversations);
@@ -57,8 +62,9 @@ export default function ConversationsPage() {
           setConversations([...conversations, ...data.conversations]);
         }
         setHasMore(data.conversations.length === PAGE_SIZE);
-      } catch {
-        // 401 handled by interceptor
+      } catch (err) {
+        if (isAbortError(err)) return;
+        setError("Failed to load conversations");
       } finally {
         setLoading(false);
       }
@@ -67,21 +73,26 @@ export default function ConversationsPage() {
   );
 
   // Fetch messages when active conversation changes
-  // Backend returns {conversation_id, messages[]} — NOT {conversation, messages[]}
   useEffect(() => {
     if (!activeId) {
       setActiveMessages([]);
+      setMessageError(null);
       return;
     }
 
+    const controller = new AbortController();
     const fetchMessages = async () => {
       setLoadingMessages(true);
+      setMessageError(null);
       try {
         const data = await api.get<{ conversation_id: string; messages: Message[] }>(
           `/api/conversations/${activeId}`,
+          { signal: controller.signal },
         );
         setActiveMessages(data.messages);
-      } catch {
+      } catch (err) {
+        if (isAbortError(err)) return;
+        setMessageError("Failed to load messages");
         setActiveMessages([]);
       } finally {
         setLoadingMessages(false);
@@ -89,11 +100,15 @@ export default function ConversationsPage() {
     };
 
     void fetchMessages();
+    return () => controller.abort();
   }, [activeId, setActiveMessages]);
 
-  // Initial load
+  // Initial load with AbortController
   useEffect(() => {
-    void fetchConversations(0);
+    const controller = new AbortController();
+    listAbortRef.current = controller;
+    void fetchConversations(0, controller.signal);
+    return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -105,19 +120,20 @@ export default function ConversationsPage() {
       )
     : conversations;
 
-  // Get conversation metadata from list cache (NOT from detail endpoint)
+  // Get conversation metadata from list cache, with fallback (POLISH-04)
   const activeConv = conversations.find((c) => c.id === activeId);
+  const activeLabel = activeConv?.participant || activeId?.slice(0, 8) || "Unknown";
+  const activeChannel = activeConv?.channel || "unknown";
 
   return (
     <div className="flex h-[calc(100vh-6rem)] gap-4">
-      {/* ── Left: Conversation List (DASH-12) ── */}
+      {/* ── Left: Conversation List ── */}
       <div
         className={cn(
           "flex w-full shrink-0 flex-col rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] md:w-80",
           activeId && "hidden md:flex",
         )}
       >
-        {/* List header */}
         <div className="shrink-0 space-y-3 p-4 pb-3">
           <h2 className="text-sm font-medium text-[var(--svx-color-text-primary)]">
             {t("title")}
@@ -133,10 +149,16 @@ export default function ConversationsPage() {
           </div>
         </div>
 
-        {/* List body */}
         <div className="flex-1 overflow-hidden">
           <ScrollArea className="h-full">
-            {filtered.length === 0 && !loading ? (
+            {error ? (
+              <EmptyState
+                icon={<AlertTriangleIcon className="size-8" />}
+                title={error}
+                action={{ label: "Retry", onClick: () => void fetchConversations(0) }}
+                className="py-12"
+              />
+            ) : filtered.length === 0 && !loading ? (
               <EmptyState
                 icon={<MessageSquareIcon className="size-8" />}
                 title={t("list.empty")}
@@ -156,7 +178,7 @@ export default function ConversationsPage() {
               </div>
             )}
 
-            {hasMore && (
+            {hasMore && !error && (
               <div className="p-3 text-center">
                 <Button
                   variant="ghost"
@@ -173,16 +195,15 @@ export default function ConversationsPage() {
         </div>
       </div>
 
-      {/* ── Right: Chat Detail (DASH-13 + DASH-14) ── */}
+      {/* ── Right: Chat Detail ── */}
       <div
         className={cn(
           "flex flex-1 flex-col rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)]",
           !activeId && "hidden md:flex",
         )}
       >
-        {activeConv ? (
+        {activeId ? (
           <>
-            {/* Detail header */}
             <div className="shrink-0 border-b border-[var(--svx-color-border-subtle)] p-4 pb-3">
               <div className="flex items-center gap-3">
                 <Button
@@ -194,31 +215,40 @@ export default function ConversationsPage() {
                 >
                   <ArrowLeftIcon className="size-4" />
                 </Button>
-                <LetterAvatar name={activeConv.participant || "?"} />
+                <LetterAvatar name={activeLabel} />
                 <div>
                   <h2 className="text-sm font-medium text-[var(--svx-color-text-primary)]">
-                    {activeConv.participant || "Unknown"}
+                    {activeLabel}
                   </h2>
                   <div className="flex items-center gap-2 pt-0.5">
-                    <ChannelBadge channel={activeConv.channel} />
-                    <span className="text-[10px] text-[var(--svx-color-text-tertiary)]">
-                      {activeConv.message_count} msgs
-                    </span>
+                    <ChannelBadge channel={activeChannel} />
+                    {activeConv && (
+                      <span className="text-[10px] text-[var(--svx-color-text-tertiary)]">
+                        {activeConv.message_count} msgs
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* Messages */}
             <div className="flex-1 overflow-hidden">
-              <ChatThread
-                messages={activeMessages}
-                participantName={activeConv.participant || "Owner"}
-                loading={loadingMessages}
-              />
+              {messageError ? (
+                <EmptyState
+                  icon={<AlertTriangleIcon className="size-8" />}
+                  title={messageError}
+                  action={{ label: "Retry", onClick: () => setActiveId(activeId) }}
+                  className="h-full"
+                />
+              ) : (
+                <ChatThread
+                  messages={activeMessages}
+                  participantName={activeLabel}
+                  loading={loadingMessages}
+                />
+              )}
             </div>
 
-            {/* Send placeholder */}
             <div className="shrink-0 border-t border-[var(--svx-color-border-subtle)] p-3">
               <div className="flex items-center gap-2 rounded-[var(--svx-radius-md)] bg-[var(--svx-color-bg-input)] px-3 py-2 text-xs text-[var(--svx-color-text-disabled)]">
                 <MessageSquareIcon className="size-3.5" />
@@ -250,7 +280,6 @@ interface ConversationRowProps {
 
 function ConversationRow({ conversation, active, onClick }: ConversationRowProps) {
   const c = conversation;
-
   return (
     <button
       type="button"
@@ -262,7 +291,6 @@ function ConversationRow({ conversation, active, onClick }: ConversationRowProps
       )}
     >
       <LetterAvatar name={c.participant || "?"} size={28} />
-
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
           <span className="truncate text-xs font-medium text-[var(--svx-color-text-primary)]">
@@ -274,9 +302,7 @@ function ConversationRow({ conversation, active, onClick }: ConversationRowProps
         </div>
         <div className="flex items-center gap-1.5 pt-0.5">
           <ChannelBadge channel={c.channel} />
-          {c.status === "active" && (
-            <StatusDot status="online" size="sm" />
-          )}
+          {c.status === "active" && <StatusDot status="online" size="sm" />}
         </div>
       </div>
     </button>
