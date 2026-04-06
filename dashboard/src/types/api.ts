@@ -64,9 +64,13 @@ export interface ConversationsResponse {
   conversations: Conversation[];
 }
 
-/** GET /api/conversations/:id response */
+/**
+ * GET /api/conversations/:id response
+ * Backend returns {conversation_id, messages[]} — NOT {conversation, messages[]}.
+ * Conversation metadata (participant, channel) comes from the list cache.
+ */
 export interface ConversationDetailResponse {
-  conversation: Conversation;
+  conversation_id: string;
   messages: Message[];
 }
 
