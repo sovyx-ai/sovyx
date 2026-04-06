@@ -21,6 +21,9 @@ class MockResizeObserver {
 }
 window.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver;
 
+// Mock Element.getAnimations (used by @base-ui ScrollArea)
+Element.prototype.getAnimations = () => [];
+
 // Mock matchMedia
 Object.defineProperty(window, "matchMedia", {
   value: (query: string) => ({
