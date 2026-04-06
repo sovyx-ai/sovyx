@@ -13,6 +13,7 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ChartEmptyAnimation } from "@/components/empty-state-animations";
 import { cn } from "@/lib/utils";
 
 export interface DataPoint {
@@ -65,8 +66,9 @@ export function MetricChart({
       </CardHeader>
       <CardContent>
         {data.length === 0 ? (
-          <div className="flex h-[140px] items-center justify-center text-xs text-[var(--svx-color-text-secondary)]">
-            No data yet
+          <div className="flex h-[140px] flex-col items-center justify-center gap-2">
+            <ChartEmptyAnimation />
+            <span className="text-xs text-[var(--svx-color-text-tertiary)]">No data yet</span>
           </div>
         ) : (
           <ChartContainer config={chartConfig} className="h-[140px] w-full">

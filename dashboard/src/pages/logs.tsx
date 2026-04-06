@@ -10,6 +10,7 @@ import { api, isAbortError } from "@/lib/api";
 import { LogRow } from "@/components/dashboard/log-row";
 import type { LogEntry } from "@/types/api";
 import { EmptyState } from "@/components/empty-state";
+import { LogsEmptyAnimation } from "@/components/empty-state-animations";
 import { cn } from "@/lib/utils";
 
 type LogLevel = LogEntry["level"] | "ALL";
@@ -177,6 +178,7 @@ export default function LogsPage() {
           ) : filtered.length === 0 ? (
             <EmptyState
               icon={<FileTextIcon className="size-10" />}
+              animation={<LogsEmptyAnimation />}
               title={t("empty")}
               description="Log entries will stream here in real-time as the engine runs."
               className="h-full"

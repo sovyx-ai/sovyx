@@ -1,5 +1,6 @@
 {
   "title": "Logs",
+  "empty": "Waiting for logs…",
   "autoScroll": "Auto-scroll",
   "search": "Search logs...",
   "filter": {
