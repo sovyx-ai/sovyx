@@ -52,7 +52,7 @@ export default function LogsPage() {
       setLogs(data.entries);
     } catch (err) {
       if (isAbortError(err)) return;
-      setError("Failed to load logs");
+      setError(t("error.loadFailed"));
     } finally {
       setLoading(false);
     }
@@ -113,7 +113,7 @@ export default function LogsPage() {
         <div>
           <h1 className="text-2xl font-bold">{t("title")}</h1>
           <p className="text-sm text-[var(--svx-color-text-secondary)]">
-            {filtered.length} entries
+            {t("entryCount", { count: filtered.length })}
           </p>
         </div>
 
@@ -168,7 +168,7 @@ export default function LogsPage() {
             <EmptyState
               icon={<AlertTriangleIcon className="size-10" />}
               title={error}
-              action={{ label: "Retry", onClick: () => void fetchLogs() }}
+              action={{ label: t("common:actions.retry"), onClick: () => void fetchLogs() }}
               className="h-full"
             />
           ) : loading && logs.length === 0 ? (
@@ -180,7 +180,7 @@ export default function LogsPage() {
               icon={<FileTextIcon className="size-10" />}
               animation={<LogsEmptyAnimation />}
               title={t("empty")}
-              description="Log entries will stream here in real-time as the engine runs."
+              description={t("emptyDescription")}
               className="h-full"
             />
           ) : (
@@ -235,7 +235,7 @@ export default function LogsPage() {
           }}
         >
           <ArrowDownIcon className="size-3.5" />
-          Follow
+          {t("follow")}
         </Button>
       )}
     </div>
