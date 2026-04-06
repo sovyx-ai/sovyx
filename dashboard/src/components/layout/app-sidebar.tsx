@@ -100,7 +100,7 @@ export function AppSidebar() {
               </div>
               <div className="grid flex-1 text-left text-sm leading-tight">
                 <span className="truncate font-semibold text-[var(--svx-color-text-primary)]">
-                  🔮 {status?.mind_name ?? "Sovyx"}
+                  {status?.mind_name ?? "Sovyx"}
                 </span>
                 <span className="truncate text-xs text-[var(--svx-color-text-tertiary)]">
                   {connectionLabel}

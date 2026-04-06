@@ -63,12 +63,12 @@ export function LetterAvatar({ name, size = 32, className }: LetterAvatarProps) 
   );
 }
 
-/** Mind avatar — crystal ball emoji on brand background. */
+/** Mind avatar — brand initial on primary background. */
 export function MindAvatar({ className }: { className?: string }) {
   return (
     <Avatar className={cn("size-8", className)}>
-      <AvatarFallback className="bg-[var(--svx-color-brand-primary)] text-[var(--svx-color-text-inverse)] text-xs">
-        🔮
+      <AvatarFallback className="bg-[var(--svx-color-brand-primary)] text-[var(--svx-color-text-inverse)] text-xs font-bold">
+        S
       </AvatarFallback>
     </Avatar>
   );
