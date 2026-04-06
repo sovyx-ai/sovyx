@@ -27,6 +27,7 @@ export function ChannelBadge({ channel, className }: ChannelBadgeProps) {
         config.color,
         className,
       )}
+      title={config.label}
     >
       {config.icon} {config.label}
     </span>
