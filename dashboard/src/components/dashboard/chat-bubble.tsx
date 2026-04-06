@@ -49,13 +49,13 @@ export function ChatBubble({ message, participantName }: ChatBubbleProps) {
           className={cn(
             "rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
             isUser
-              ? "rounded-tl-sm bg-secondary text-foreground"
-              : "rounded-tr-sm bg-primary/15 text-foreground",
+              ? "rounded-tl-sm bg-[var(--svx-color-bg-elevated)] text-[var(--svx-color-text-primary)]"
+              : "rounded-tr-sm bg-primary/15 text-[var(--svx-color-text-primary)]",
           )}
         >
           <p className="whitespace-pre-wrap break-words">{message.content}</p>
         </div>
-        <span className="block text-[10px] text-muted-foreground px-1">
+        <span className="block text-[10px] text-[var(--svx-color-text-secondary)] px-1">
           {formatMessageTime(message.timestamp)}
         </span>
       </div>

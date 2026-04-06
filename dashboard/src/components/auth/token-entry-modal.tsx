@@ -82,7 +82,7 @@ export function TokenEntryModal() {
           </DialogTitle>
           <DialogDescription>
             Paste your dashboard token to continue. You can find it by running{" "}
-            <code className="font-code rounded bg-secondary px-1.5 py-0.5 text-xs">
+            <code className="font-code rounded bg-[var(--svx-color-bg-elevated)] px-1.5 py-0.5 text-xs">
               cat ~/.sovyx/token
             </code>{" "}
             on your server.
@@ -120,7 +120,7 @@ export function TokenEntryModal() {
           </div>
 
           {state === "invalid" && (
-            <div className="flex items-center gap-2 text-sm text-destructive">
+            <div className="flex items-center gap-2 text-sm text-[var(--svx-color-error)]">
               <XCircleIcon className="size-4 shrink-0" />
               {errorMsg}
             </div>

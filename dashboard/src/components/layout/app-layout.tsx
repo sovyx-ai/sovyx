@@ -57,7 +57,7 @@ export function AppLayout() {
               <Button
                 variant="ghost"
                 size="icon"
-                className="relative size-8 text-muted-foreground"
+                className="relative size-8 text-[var(--svx-color-text-secondary)]"
                 disabled
                 aria-label="Notifications — coming in v1.0"
               >

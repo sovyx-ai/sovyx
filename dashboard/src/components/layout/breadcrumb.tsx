@@ -28,11 +28,11 @@ export function Breadcrumb() {
   if (!route) {
     return (
       <nav className="flex items-center gap-2 text-sm" aria-label="Breadcrumb">
-        <Link to="/" className="text-muted-foreground hover:text-foreground transition-colors">
+        <Link to="/" className="text-[var(--svx-color-text-secondary)] hover:text-[var(--svx-color-text-primary)] transition-colors">
           Sovyx
         </Link>
-        <span className="text-muted-foreground" aria-hidden="true">/</span>
-        <span className="text-foreground" aria-current="page">Not Found</span>
+        <span className="text-[var(--svx-color-text-secondary)]" aria-hidden="true">/</span>
+        <span className="text-[var(--svx-color-text-primary)]" aria-current="page">Not Found</span>
       </nav>
     );
   }
@@ -45,16 +45,16 @@ export function Breadcrumb() {
         <>
           <Link
             to="/"
-            className="text-muted-foreground transition-colors hover:text-foreground"
+            className="text-[var(--svx-color-text-secondary)] transition-colors hover:text-[var(--svx-color-text-primary)]"
           >
             Sovyx
           </Link>
-          <span className="text-muted-foreground" aria-hidden="true">/</span>
+          <span className="text-[var(--svx-color-text-secondary)]" aria-hidden="true">/</span>
         </>
       )}
       <div className="flex items-center gap-1.5">
-        <Icon className="size-3.5 text-muted-foreground" aria-hidden="true" />
-        <span className="font-medium text-foreground" aria-current="page">{route.label}</span>
+        <Icon className="size-3.5 text-[var(--svx-color-text-secondary)]" aria-hidden="true" />
+        <span className="font-medium text-[var(--svx-color-text-primary)]" aria-current="page">{route.label}</span>
       </div>
     </nav>
   );

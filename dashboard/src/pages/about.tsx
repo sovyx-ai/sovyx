@@ -31,11 +31,11 @@ export default function AboutPage() {
         <CardContent>
           <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
             <div>
-              <dt className="text-[10px] uppercase text-muted-foreground">Version</dt>
+              <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">Version</dt>
               <dd className="font-mono font-medium">0.5.0-dev</dd>
             </div>
             <div>
-              <dt className="text-[10px] uppercase text-muted-foreground">License</dt>
+              <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">License</dt>
               <dd className="flex items-center gap-2">
                 <Badge variant="secondary" className="font-mono text-[10px]">
                   AGPL-3.0
@@ -43,11 +43,11 @@ export default function AboutPage() {
               </dd>
             </div>
             <div>
-              <dt className="text-[10px] uppercase text-muted-foreground">Dashboard</dt>
+              <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">Dashboard</dt>
               <dd className="font-mono text-xs">React {__REACT_VERSION__}</dd>
             </div>
             <div>
-              <dt className="text-[10px] uppercase text-muted-foreground">Engine Uptime</dt>
+              <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">Engine Uptime</dt>
               <dd className="font-mono text-xs">
                 {status ? formatUptime(status.uptime_seconds) : "—"}
               </dd>
@@ -64,19 +64,19 @@ export default function AboutPage() {
         <CardContent>
           <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
             <div>
-              <dt className="text-[10px] uppercase text-muted-foreground">Mind</dt>
+              <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">Mind</dt>
               <dd className="font-medium">{status?.mind_name ?? "—"}</dd>
             </div>
             <div>
-              <dt className="text-[10px] uppercase text-muted-foreground">Concepts</dt>
+              <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">Concepts</dt>
               <dd className="font-mono text-xs">{status?.memory_concepts?.toLocaleString() ?? "—"}</dd>
             </div>
             <div>
-              <dt className="text-[10px] uppercase text-muted-foreground">Episodes</dt>
+              <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">Episodes</dt>
               <dd className="font-mono text-xs">{status?.memory_episodes?.toLocaleString() ?? "—"}</dd>
             </div>
             <div>
-              <dt className="text-[10px] uppercase text-muted-foreground">LLM Calls Today</dt>
+              <dt className="text-[10px] uppercase text-[var(--svx-color-text-secondary)]">LLM Calls Today</dt>
               <dd className="font-mono text-xs">{status?.llm_calls_today?.toLocaleString() ?? "—"}</dd>
             </div>
           </dl>
@@ -95,7 +95,7 @@ export default function AboutPage() {
               href={link.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 rounded-md bg-secondary/50 px-3 py-1.5 text-xs font-medium text-foreground/80 transition-colors hover:bg-secondary hover:text-foreground"
+              className="inline-flex items-center gap-1.5 rounded-md bg-[var(--svx-color-bg-elevated)] px-3 py-1.5 text-xs font-medium text-[var(--svx-color-text-secondary)] transition-colors hover:bg-[var(--svx-color-bg-elevated)] hover:text-[var(--svx-color-text-primary)]"
             >
               <link.icon className="size-3.5" />
               {link.label}

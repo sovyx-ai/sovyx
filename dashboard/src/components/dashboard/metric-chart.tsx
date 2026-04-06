@@ -59,13 +59,13 @@ export function MetricChart({
   return (
     <Card className={className}>
       <CardHeader className="pb-2">
-        <CardTitle className="text-sm font-medium text-muted-foreground">
+        <CardTitle className="text-sm font-medium text-[var(--svx-color-text-secondary)]">
           {title}
         </CardTitle>
       </CardHeader>
       <CardContent>
         {data.length === 0 ? (
-          <div className="flex h-[140px] items-center justify-center text-xs text-muted-foreground">
+          <div className="flex h-[140px] items-center justify-center text-xs text-[var(--svx-color-text-secondary)]">
             No data yet
           </div>
         ) : (
