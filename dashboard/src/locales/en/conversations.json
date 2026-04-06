@@ -6,7 +6,8 @@
     "allChannels": "All channels"
   },
   "list": {
-    "empty": "No conversations yet. Send a message to start a dialogue with your Mind.",
+    "empty": "No conversations yet",
+    "emptyHint": "Send a message via Telegram to start a dialogue with your Mind.",
     "live": "Live"
   },
   "detail": {
@@ -18,7 +19,17 @@
     "cost": "Cost: ${{amount}}",
     "cognitiveTrace": "Cognitive Trace",
     "traceTotal": "{{duration}}ms total",
-    "participant": "Participant"
+    "participant": "Participant",
+    "backLabel": "Back to conversations",
+    "messageCount_one": "{{count}} message",
+    "messageCount_other": "{{count}} messages",
+    "selectTitle": "Select a conversation",
+    "selectHint": "Choose from the list to view messages.",
+    "sendPlaceholder": "Send from dashboard coming in v1.0"
+  },
+  "error": {
+    "loadFailed": "Failed to load conversations",
+    "messagesFailed": "Failed to load messages"
   },
   "unknownParticipant": "Unknown"
 }
