@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -59,7 +60,7 @@ def _make_registry_with_db(
     mock_pool = MagicMock()
 
     @asynccontextmanager
-    async def fake_read() -> Any:
+    async def fake_read() -> AsyncGenerator[AsyncMock, None]:
         yield mock_conn
 
     mock_pool.read = fake_read
@@ -77,7 +78,7 @@ def _make_registry_with_db(
 
     registry.is_registered.side_effect = is_registered
 
-    async def resolve(cls: type) -> Any:
+    async def resolve(cls: type) -> object:
         from sovyx.brain.concept_repo import ConceptRepository
         from sovyx.persistence.manager import DatabaseManager
 
@@ -308,12 +309,10 @@ class TestGetRelationsViaDatabaseManager:
             return_value="mind-1",
         ):
             # limit=1 → max_links = 1*3 = 3
-            result = await get_brain_graph(registry, limit=1)
+            graph = await get_brain_graph(registry, limit=1)
 
-        # Only 1 concept returned (limit=1), so we get nodes limited
-        # But links come from the full node_ids set.
-        # With limit=1, only 1 concept → node_ids has 1 → no valid links
-        # Let's test with explicit _get_relations call instead
+        # limit=1 → only 1 concept node returned, so most links filtered
+        assert isinstance(graph["links"], list)
 
     @pytest.mark.asyncio()
     async def test_get_relations_max_links_cap(self) -> None:
