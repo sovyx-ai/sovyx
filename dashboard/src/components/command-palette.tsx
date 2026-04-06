@@ -105,7 +105,7 @@ export function CommandPalette() {
     },
     {
       id: "nav-about",
-      label: "About",
+      label: t("nav.about"),
       icon: <InfoIcon className="size-4" />,
       action: () => run(() => navigate("/about")),
       group: "navigation",
@@ -153,7 +153,7 @@ export function CommandPalette() {
     },
     {
       id: "action-clear-logs",
-      label: "Clear Logs",
+      label: t("command.clearLogs"),
       icon: <TrashIcon className="size-4" />,
       action: () => run(() => clearLogs()),
       group: "actions",
@@ -161,7 +161,7 @@ export function CommandPalette() {
     },
     {
       id: "action-refresh",
-      label: "Refresh Data",
+      label: t("command.refreshData"),
       icon: <RefreshCwIcon className="size-4" />,
       action: () => run(() => window.location.reload()),
       group: "actions",
@@ -174,10 +174,10 @@ export function CommandPalette() {
 
   return (
     <CommandDialog open={open} onOpenChange={setOpen}>
-      <CommandInput placeholder="Type a command or search..." />
+      <CommandInput placeholder={t("command.placeholder")} />
       <CommandList>
-        <CommandEmpty>No results found.</CommandEmpty>
-        <CommandGroup heading="Navigation">
+        <CommandEmpty>{t("command.empty")}</CommandEmpty>
+        <CommandGroup heading={t("command.navigation")}>
           {navActions.map((item) => (
             <CommandItem
               key={item.id}
@@ -190,7 +190,7 @@ export function CommandPalette() {
           ))}
         </CommandGroup>
         <CommandSeparator />
-        <CommandGroup heading="Actions">
+        <CommandGroup heading={t("command.actions")}>
           {quickActions.map((item) => (
             <CommandItem
               key={item.id}
