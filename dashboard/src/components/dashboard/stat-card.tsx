@@ -14,6 +14,7 @@
  */
 
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 
 /**
@@ -84,6 +85,8 @@ export function StatCard({
   status,
   className,
 }: StatCardProps) {
+  const { t } = useTranslation("common");
+
   return (
     <div
       className={cn(
@@ -128,7 +131,7 @@ export function StatCard({
                   ? "text-[var(--svx-color-success)]"
                   : "text-[var(--svx-color-error)]",
               )}
-              aria-label={`${trend.value >= 0 ? "Up" : "Down"} ${Math.abs(trend.value)}% ${trend.label}`}
+              aria-label={t(trend.value >= 0 ? "trend.up" : "trend.down", { value: Math.abs(trend.value), label: trend.label })}
             >
               {trend.value >= 0 ? "↑" : "↓"}
               {Math.abs(trend.value)}%
