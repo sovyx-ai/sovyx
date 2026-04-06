@@ -19,7 +19,9 @@
     "costToday": "${{amount}} today",
     "callsToday": "{{count}} calls",
     "costFresh": "—",
-    "costHint": "No calls yet today"
+    "costHint": "No calls yet today",
+    "activeCount": "{{count}} active",
+    "costSubtitle": "{{calls}} calls · {{tokens}} tokens"
   },
   "health": {
     "title": "Health Checks",
@@ -27,6 +29,7 @@
   },
   "chart": {
     "costTitle": "LLM Cost (24h)",
+    "costLabel": "Cost",
     "noData": "No cost data yet"
   },
   "feed": {
@@ -36,13 +39,13 @@
   },
   "placeholders": {
     "voice": "Voice Pipeline",
-    "voiceDesc": "Voice pipeline not configured",
+    "voiceDesc": "Real-time voice interaction with your Mind.",
     "voiceAction": "Setup →",
     "proactive": "Proactive Thinking",
     "proactiveDesc": "Your Mind will anticipate before you ask",
     "emotional": "Emotional Timeline",
-    "emotionalDesc": "Coming in v1.0",
+    "emotionalDesc": "Mood and emotional state tracking over time.",
     "tasks": "Tasks & Habits",
-    "tasksDesc": "Coming in v1.0"
+    "tasksDesc": "Task tracking, reminders, and productivity insights."
   }
 }

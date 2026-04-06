@@ -65,7 +65,7 @@ export default function OverviewPage() {
               value={freshValue(status.messages_today, formatNumber, t("cards.messagesFresh"))}
               subtitle={
                 status.active_conversations > 0
-                  ? `${formatNumber(status.active_conversations)} active`
+                  ? t("cards.activeCount", { count: formatNumber(status.active_conversations) })
                   : t("cards.messagesHint")
               }
               icon={<MessageSquareIcon className="size-4" />}
@@ -89,7 +89,7 @@ export default function OverviewPage() {
               value={freshValue(status.llm_cost_today, formatCost, t("cards.costFresh"))}
               subtitle={
                 status.llm_calls_today > 0
-                  ? `${formatNumber(status.llm_calls_today)} calls · ${formatNumber(status.tokens_today)} tokens`
+                  ? t("cards.costSubtitle", { calls: formatNumber(status.llm_calls_today), tokens: formatNumber(status.tokens_today) })
                   : t("cards.costHint")
               }
               icon={<DollarSignIcon className="size-4" />}
@@ -107,7 +107,7 @@ export default function OverviewPage() {
         data={costData}
         color="var(--chart-1)"
         unit="$"
-        label="Cost"
+        label={t("chart.costLabel")}
       />
 
       {/* Activity Feed */}
@@ -116,18 +116,18 @@ export default function OverviewPage() {
       {/* v1.0 Placeholders */}
       <div className="grid gap-4 md:grid-cols-3">
         <ComingSoon
-          title="Voice"
-          description="Real-time voice interaction with the engine."
+          title={t("placeholders.voice")}
+          description={t("placeholders.voiceDesc")}
           icon={<MicIcon className="size-10" />}
         />
         <ComingSoon
-          title="Emotional Timeline"
-          description="Mood and emotional state tracking over time."
+          title={t("placeholders.emotional")}
+          description={t("placeholders.emotionalDesc")}
           icon={<HeartIcon className="size-10" />}
         />
         <ComingSoon
-          title="Tasks & Productivity"
-          description="Task tracking, reminders, and productivity insights."
+          title={t("placeholders.tasks")}
+          description={t("placeholders.tasksDesc")}
           icon={<ListTodoIcon className="size-10" />}
         />
       </div>
