@@ -1,6 +1,10 @@
 {
   "title": "Logs",
+  "entryCount_one": "{{count}} entry",
+  "entryCount_other": "{{count}} entries",
   "empty": "Waiting for logs…",
+  "emptyDescription": "Log entries will stream here in real-time as the engine runs.",
+  "follow": "Follow",
   "autoScroll": "Auto-scroll",
   "search": "Search logs...",
   "filter": {
@@ -21,6 +25,9 @@
     "level": "Level",
     "module": "Module",
     "event": "Event"
+  },
+  "error": {
+    "loadFailed": "Failed to load logs"
   },
   "footer": {
     "showing": "Showing {{shown}} of {{total}} entries",
