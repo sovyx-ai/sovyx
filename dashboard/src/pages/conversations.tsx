@@ -65,7 +65,7 @@ export default function ConversationsPage() {
         setHasMore(data.conversations.length === PAGE_SIZE);
       } catch (err) {
         if (isAbortError(err)) return;
-        setError("Failed to load conversations");
+        setError(t("error.loadFailed"));
       } finally {
         setLoading(false);
       }
@@ -93,7 +93,7 @@ export default function ConversationsPage() {
         setActiveMessages(data.messages);
       } catch (err) {
         if (isAbortError(err)) return;
-        setMessageError("Failed to load messages");
+        setMessageError(t("error.messagesFailed"));
         setActiveMessages([]);
       } finally {
         setLoadingMessages(false);
@@ -156,7 +156,7 @@ export default function ConversationsPage() {
               <EmptyState
                 icon={<AlertTriangleIcon className="size-8" />}
                 title={error}
-                action={{ label: "Retry", onClick: () => void fetchConversations(0) }}
+                action={{ label: t("common:actions.retry"), onClick: () => void fetchConversations(0) }}
                 className="py-12"
               />
             ) : filtered.length === 0 && !loading ? (
@@ -164,7 +164,7 @@ export default function ConversationsPage() {
                 icon={<MessageSquareIcon className="size-8" />}
                 animation={<ConversationsEmptyAnimation />}
                 title={t("list.empty")}
-                description="Send a message via Telegram to get started."
+                description={t("list.emptyHint")}
                 className="py-12"
               />
             ) : (
@@ -213,7 +213,7 @@ export default function ConversationsPage() {
                   size="icon"
                   className="size-8 md:hidden"
                   onClick={() => setActiveId(null)}
-                  aria-label="Back to conversations"
+                  aria-label={t("detail.backLabel")}
                 >
                   <ArrowLeftIcon className="size-4" />
                 </Button>
@@ -226,7 +226,7 @@ export default function ConversationsPage() {
                     <ChannelBadge channel={activeChannel} />
                     {activeConv && (
                       <span className="text-[10px] text-[var(--svx-color-text-tertiary)]">
-                        {activeConv.message_count} {activeConv.message_count === 1 ? "message" : "messages"}
+                        {t("detail.messageCount", { count: activeConv.message_count })}
                       </span>
                     )}
                   </div>
@@ -239,7 +239,7 @@ export default function ConversationsPage() {
                 <EmptyState
                   icon={<AlertTriangleIcon className="size-8" />}
                   title={messageError}
-                  action={{ label: "Retry", onClick: () => setActiveId(activeId) }}
+                  action={{ label: t("common:actions.retry"), onClick: () => setActiveId(activeId) }}
                   className="h-full"
                 />
               ) : (
@@ -254,7 +254,7 @@ export default function ConversationsPage() {
             <div className="shrink-0 border-t border-[var(--svx-color-border-subtle)] p-3">
               <div className="flex items-center gap-2 rounded-[var(--svx-radius-md)] bg-[var(--svx-color-bg-input)] px-3 py-2 text-xs text-[var(--svx-color-text-disabled)]">
                 <MessageSquareIcon className="size-3.5" />
-                Send from dashboard coming in v1.0
+                {t("detail.sendPlaceholder")}
               </div>
             </div>
           </>
@@ -263,8 +263,8 @@ export default function ConversationsPage() {
             <EmptyState
               icon={<MessageSquareIcon className="size-10" />}
               animation={<ConversationsEmptyAnimation />}
-              title="Select a conversation"
-              description="Choose from the list to view messages."
+              title={t("detail.selectTitle")}
+              description={t("detail.selectHint")}
             />
           </div>
         )}
@@ -282,6 +282,7 @@ interface ConversationRowProps {
 }
 
 function ConversationRow({ conversation, active, onClick }: ConversationRowProps) {
+  const { t } = useTranslation("conversations");
   const c = conversation;
   return (
     <button
@@ -297,7 +298,7 @@ function ConversationRow({ conversation, active, onClick }: ConversationRowProps
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
           <span className="truncate text-xs font-medium text-[var(--svx-color-text-primary)]">
-            {c.participant_name || c.participant?.slice(0, 8) || "Unknown"}
+            {c.participant_name || c.participant?.slice(0, 8) || t("unknownParticipant")}
           </span>
           <span className="shrink-0 text-[10px] text-[var(--svx-color-text-tertiary)]">
             {formatTimeAgo(c.last_message_at)}
