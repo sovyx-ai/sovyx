@@ -1,17 +1,25 @@
 {
   "title": "Overview",
   "subtitle": "Your Mind at a glance",
+  "subtitleFresh": "Your Mind is awake. Start a conversation to bring it to life.",
   "cards": {
     "engineStatus": "Mind Status",
     "uptime": "Uptime: {{duration}}",
+    "justBooted": "Just woke up — ready to think",
     "messages": "Messages",
     "messagesToday": "{{count}} today",
+    "messagesFresh": "—",
+    "messagesHint": "Awaiting first message",
     "brainConcepts": "Brain",
     "conceptCount": "{{count}} concepts",
     "episodeCount": "{{count}} episodes",
+    "brainFresh": "Empty",
+    "brainHint": "Learns from conversation",
     "llmCost": "LLM Cost",
     "costToday": "${{amount}} today",
-    "callsToday": "{{count}} calls"
+    "callsToday": "{{count}} calls",
+    "costFresh": "—",
+    "costHint": "No calls yet today"
   },
   "health": {
     "title": "Health Checks",
@@ -23,7 +31,8 @@
   },
   "feed": {
     "title": "Recent Activity",
-    "empty": "No activity yet. Events will appear here in real-time."
+    "empty": "Listening for cognitive events…",
+    "emptyHint": "Activity will appear here as your Mind thinks."
   },
   "placeholders": {
     "voice": "Voice Pipeline",

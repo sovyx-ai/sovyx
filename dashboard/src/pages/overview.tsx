@@ -5,6 +5,14 @@ import { StatCard, StatCardSkeleton, HealthGrid, ActivityFeed, MetricChart } fro
 import { formatUptime, formatCost, formatNumber } from "@/lib/format";
 import { ComingSoon } from "@/components/coming-soon";
 
+/**
+ * Format a stat value for fresh-engine state.
+ * Shows contextual text instead of dead "0" when the engine has no data yet.
+ */
+function freshValue(value: number, formatter: (n: number) => string, freshLabel: string): string {
+  return value === 0 ? freshLabel : formatter(value);
+}
+
 export default function OverviewPage() {
   const { t } = useTranslation(["overview", "common"]);
   const status = useDashboardStore((s) => s.status);
@@ -13,11 +21,18 @@ export default function OverviewPage() {
   const recentEvents = useDashboardStore((s) => s.recentEvents);
   const costData = useDashboardStore((s) => s.costData);
 
+  /** True when engine just started with no activity */
+  const isFresh = status
+    ? status.messages_today === 0 && status.memory_concepts === 0 && status.llm_calls_today === 0
+    : false;
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold">{t("title")}</h1>
-        <p className="text-sm text-[var(--svx-color-text-secondary)]">{t("subtitle")}</p>
+        <p className="text-sm text-[var(--svx-color-text-secondary)]">
+          {isFresh ? t("subtitleFresh") : t("subtitle")}
+        </p>
       </div>
 
       {/* 4 Stat Cards — skeleton while loading */}
@@ -35,7 +50,11 @@ export default function OverviewPage() {
             <StatCard
               title={t("cards.engineStatus")}
               value={connected ? t("common:status.online") : t("common:status.offline")}
-              subtitle={t("cards.uptime", { duration: formatUptime(status.uptime_seconds) })}
+              subtitle={
+                isFresh && connected
+                  ? t("cards.justBooted")
+                  : t("cards.uptime", { duration: formatUptime(status.uptime_seconds) })
+              }
               status={connected ? "green" : "red"}
               icon={<ActivityIcon className="size-4" />}
             />
@@ -43,24 +62,36 @@ export default function OverviewPage() {
             {/* Messages */}
             <StatCard
               title={t("cards.messages")}
-              value={formatNumber(status.messages_today)}
-              subtitle={`${formatNumber(status.active_conversations)} active`}
+              value={freshValue(status.messages_today, formatNumber, t("cards.messagesFresh"))}
+              subtitle={
+                status.active_conversations > 0
+                  ? `${formatNumber(status.active_conversations)} active`
+                  : t("cards.messagesHint")
+              }
               icon={<MessageSquareIcon className="size-4" />}
             />
 
             {/* Brain */}
             <StatCard
               title={t("cards.brainConcepts")}
-              value={formatNumber(status.memory_concepts)}
-              subtitle={t("cards.episodeCount", { count: status.memory_episodes })}
+              value={freshValue(status.memory_concepts, formatNumber, t("cards.brainFresh"))}
+              subtitle={
+                status.memory_concepts > 0
+                  ? t("cards.episodeCount", { count: status.memory_episodes })
+                  : t("cards.brainHint")
+              }
               icon={<BrainIcon className="size-4" />}
             />
 
             {/* LLM Cost */}
             <StatCard
               title={t("cards.llmCost")}
-              value={formatCost(status.llm_cost_today)}
-              subtitle={`${formatNumber(status.llm_calls_today)} calls · ${formatNumber(status.tokens_today)} tokens`}
+              value={freshValue(status.llm_cost_today, formatCost, t("cards.costFresh"))}
+              subtitle={
+                status.llm_calls_today > 0
+                  ? `${formatNumber(status.llm_calls_today)} calls · ${formatNumber(status.tokens_today)} tokens`
+                  : t("cards.costHint")
+              }
               icon={<DollarSignIcon className="size-4" />}
             />
           </>
