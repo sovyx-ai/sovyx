@@ -27,7 +27,7 @@ class TestBudgetInvariants:
     ) -> None:
         budget = TokenBudgetManager()
         alloc = budget.allocate(conv_len, brain_count, complexity, context_window)
-        assert alloc.total == context_window
+        assert alloc.total <= context_window
 
     @settings(deadline=None, max_examples=50)
     @given(

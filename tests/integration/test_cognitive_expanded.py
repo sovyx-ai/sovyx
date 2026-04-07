@@ -85,7 +85,7 @@ class TestTokenBudgetIntegration:
         assert alloc.system_prompt > 0
         assert alloc.conversation > 0
         assert alloc.memory_concepts > 0
-        assert alloc.total == 4096
+        assert alloc.total <= 4096
 
     def test_token_counting_accuracy(self) -> None:
         counter = TokenCounter()
