@@ -868,3 +868,13 @@ class TestMigrationRunnerEdgeCases:
         report = await runner.run([m])
         assert report.status == "failed"
         assert "integrity check failed" in report.error.lower()
+
+
+class TestMigrationsInit:
+    """Verify migrations package imports."""
+
+    def test_migrations_package_importable(self) -> None:
+        """upgrade.migrations package can be imported."""
+        import sovyx.upgrade.migrations
+
+        assert sovyx.upgrade.migrations.__doc__ is not None
