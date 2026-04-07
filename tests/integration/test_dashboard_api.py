@@ -161,3 +161,131 @@ class TestSettingsEndpoint:
         assert r.status_code == 200
         data = r.json()
         assert isinstance(data, dict)
+
+
+class TestConfigEndpointNoMind:
+    """GET/PUT /api/config — without mind_config wired."""
+
+    async def test_get_config_no_mind_returns_503(self, client: AsyncClient) -> None:
+        r = await client.get("/api/config", headers=_auth())
+        assert r.status_code == 503
+
+    async def test_put_config_no_mind_returns_503(self, client: AsyncClient) -> None:
+        r = await client.put(
+            "/api/config",
+            headers=_auth(),
+            json={"personality": {"tone": "direct"}},
+        )
+        assert r.status_code == 503
+
+    async def test_get_config_requires_auth(self, client: AsyncClient) -> None:
+        r = await client.get("/api/config")
+        assert r.status_code == 401
+
+    async def test_put_config_requires_auth(self, client: AsyncClient) -> None:
+        r = await client.put("/api/config", json={"name": "test"})
+        assert r.status_code == 401
+
+
+@pytest.fixture()
+def app_with_mind(api_config: APIConfig) -> object:
+    """Create FastAPI app with mind_config wired."""
+    from sovyx.mind.config import MindConfig
+
+    with patch("sovyx.dashboard.server.TOKEN_FILE") as mock_tf:
+        mock_tf.exists.return_value = True
+        mock_tf.read_text.return_value = _TOKEN
+        fa = create_app(api_config)
+        fa.state.mind_config = MindConfig(name="TestMind")  # type: ignore[union-attr]
+        return fa
+
+
+@pytest.fixture()
+async def client_with_mind(app_with_mind: object) -> AsyncClient:  # type: ignore[override]
+    """Async HTTP client with mind config wired."""
+    transport = ASGITransport(app=app_with_mind)  # type: ignore[arg-type]
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c  # type: ignore[misc]
+
+
+class TestConfigEndpointWithMind:
+    """GET/PUT /api/config — with mind_config."""
+
+    async def test_get_config_returns_personality(
+        self, client_with_mind: AsyncClient,
+    ) -> None:
+        r = await client_with_mind.get("/api/config", headers=_auth())
+        assert r.status_code == 200
+        data = r.json()
+        assert data["name"] == "TestMind"
+        assert "personality" in data
+        assert "ocean" in data
+        assert data["personality"]["tone"] == "warm"
+
+    async def test_put_config_updates_personality(
+        self, client_with_mind: AsyncClient,
+    ) -> None:
+        r = await client_with_mind.put(
+            "/api/config",
+            headers=_auth(),
+            json={"personality": {"tone": "direct", "humor": 0.9}},
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["ok"] is True
+        assert "personality.tone" in data["changes"]
+        assert "personality.humor" in data["changes"]
+
+        # Verify GET reflects changes
+        r2 = await client_with_mind.get("/api/config", headers=_auth())
+        assert r2.json()["personality"]["tone"] == "direct"
+        assert r2.json()["personality"]["humor"] == 0.9
+
+    async def test_put_config_invalid_json(
+        self, client_with_mind: AsyncClient,
+    ) -> None:
+        headers = {**_auth(), "Content-Type": "application/json"}
+        r = await client_with_mind.put(
+            "/api/config",
+            headers=headers,
+            content=b"not json",
+        )
+        assert r.status_code == 422
+
+    async def test_put_config_ocean(
+        self, client_with_mind: AsyncClient,
+    ) -> None:
+        r = await client_with_mind.put(
+            "/api/config",
+            headers=_auth(),
+            json={"ocean": {"openness": 0.95, "neuroticism": 0.1}},
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["ok"] is True
+
+    async def test_put_config_immutable_ignored(
+        self, client_with_mind: AsyncClient,
+    ) -> None:
+        r = await client_with_mind.put(
+            "/api/config",
+            headers=_auth(),
+            json={"brain": {"decay_rate": 0.99}},
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["ok"] is True
+        assert data["changes"] == {}
+
+    async def test_put_config_empty_body(
+        self, client_with_mind: AsyncClient,
+    ) -> None:
+        r = await client_with_mind.put(
+            "/api/config",
+            headers=_auth(),
+            json={},
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["ok"] is True
+        assert data["changes"] == {}

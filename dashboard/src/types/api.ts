@@ -258,3 +258,87 @@ export interface SettingsUpdate {
 export interface SettingsUpdateResponse {
   changes: Record<string, string>; // "field": "old → new"
 }
+
+// ── Mind Config ──
+
+export type ToneType = "warm" | "neutral" | "direct" | "playful";
+export type ContentFilter = "none" | "standard" | "strict";
+
+/** Personality traits (0.0-1.0 range) */
+export interface PersonalityConfig {
+  tone: ToneType;
+  formality: number;
+  humor: number;
+  assertiveness: number;
+  curiosity: number;
+  empathy: number;
+  verbosity: number;
+}
+
+/** Big Five personality model */
+export interface OceanConfig {
+  openness: number;
+  conscientiousness: number;
+  extraversion: number;
+  agreeableness: number;
+  neuroticism: number;
+}
+
+/** Safety guardrails */
+export interface SafetyConfig {
+  child_safe_mode: boolean;
+  financial_confirmation: boolean;
+  content_filter: ContentFilter;
+}
+
+/** Brain memory system (read-only in dashboard) */
+export interface BrainConfigView {
+  consolidation_interval_hours: number;
+  dream_time: string;
+  max_concepts: number;
+  forgetting_enabled: boolean;
+  decay_rate: number;
+  min_strength: number;
+}
+
+/** LLM provider config (read-only in dashboard) */
+export interface LLMConfigView {
+  default_provider: string;
+  default_model: string;
+  fast_model: string;
+  temperature: number;
+  streaming: boolean;
+  budget_daily_usd: number;
+  budget_per_conversation_usd: number;
+}
+
+/** GET /api/config response */
+export interface MindConfigResponse {
+  name: string;
+  id: string;
+  language: string;
+  timezone: string;
+  template: string;
+  personality: PersonalityConfig;
+  ocean: OceanConfig;
+  safety: SafetyConfig;
+  brain: BrainConfigView;
+  llm: LLMConfigView;
+}
+
+/** PUT /api/config request — mutable sections only */
+export interface MindConfigUpdate {
+  personality?: Partial<PersonalityConfig>;
+  ocean?: Partial<OceanConfig>;
+  safety?: Partial<SafetyConfig>;
+  name?: string;
+  language?: string;
+  timezone?: string;
+}
+
+/** PUT /api/config response */
+export interface MindConfigUpdateResponse {
+  ok: boolean;
+  changes: Record<string, string>;
+  error?: string;
+}
