@@ -567,3 +567,121 @@ class TestAlertManagerProperties:
             assert len(alerts) == 1
         else:
             assert len(alerts) == 0
+
+
+# ── Event category coverage ────────────────────────────────────────────
+
+
+class TestAlertEventCategories:
+    """Cover AlertFired/AlertResolved category properties."""
+
+    def test_alert_fired_category(self) -> None:
+        """AlertFired event has ENGINE category."""
+        from sovyx.engine.events import EventCategory
+
+        event = AlertFired(
+            rule_name="test", severity="critical", message="x",
+            current_value=1.0, threshold=0.5,
+        )
+        assert event.category == EventCategory.ENGINE
+
+    def test_alert_resolved_category(self) -> None:
+        """AlertResolved event has ENGINE category."""
+        from sovyx.engine.events import EventCategory
+
+        event = AlertResolved(rule_name="test", severity="warning", message="resolved")
+        assert event.category == EventCategory.ENGINE
+
+
+# ── SLO integration edge cases ─────────────────────────────────────────
+
+
+class TestSLOAlertEdgeCases:
+    """Cover SLO breached-without-burn-rate and non-breached skip paths."""
+
+    @pytest.mark.asyncio
+    async def test_slo_breached_no_burn_rate_generates_warning(self) -> None:
+        """SLO breached but no burn rate alert → WARNING severity."""
+        from sovyx.observability.slo import (
+            AlertSeverity as SLOAlertSeverity,
+        )
+        from sovyx.observability.slo import (
+            SLOReport,
+            SLOStatus,
+        )
+
+        mgr = AlertManager()
+        mock_monitor = MagicMock()
+        report = SLOReport(
+            name="test_slo",
+            target=0.995,
+            current_rate=0.990,
+            burn_rate_1h=0.0,
+            error_budget_remaining_pct=-10.0,
+            alert_severity=SLOAlertSeverity.NONE,
+            event_count=100,
+            status=SLOStatus.BREACHED,
+            unit="ratio",
+            threshold=0.995,
+        )
+        mock_monitor.get_report.return_value = {"test": report}
+        mgr._slo_monitor = mock_monitor
+
+        alerts = await mgr.evaluate()
+        slo_alerts = [a for a in alerts if a.rule_name.startswith("slo_")]
+        assert len(slo_alerts) == 1
+        assert slo_alerts[0].severity == AlertSeverity.WARNING
+
+    @pytest.mark.asyncio
+    async def test_slo_healthy_no_burn_rate_skipped(self) -> None:
+        """SLO healthy with no burn rate alert → skipped (no alert)."""
+        from sovyx.observability.slo import (
+            AlertSeverity as SLOAlertSeverity,
+        )
+        from sovyx.observability.slo import (
+            SLOReport,
+            SLOStatus,
+        )
+
+        mgr = AlertManager()
+        mock_monitor = MagicMock()
+        report = SLOReport(
+            name="test_slo",
+            target=0.995,
+            current_rate=0.999,
+            burn_rate_1h=0.0,
+            error_budget_remaining_pct=90.0,
+            alert_severity=SLOAlertSeverity.NONE,
+            event_count=100,
+            status=SLOStatus.MET,
+            unit="ratio",
+            threshold=0.995,
+        )
+        mock_monitor.get_report.return_value = {"test": report}
+        mgr._slo_monitor = mock_monitor
+
+        alerts = await mgr.evaluate()
+        slo_alerts = [a for a in alerts if a.rule_name.startswith("slo_")]
+        assert len(slo_alerts) == 0
+
+
+# ── Status summary edge cases ──────────────────────────────────────────
+
+
+class TestStatusSummaryEdgeCases:
+    """Cover firing rule with unknown name in status summary."""
+
+    @pytest.mark.asyncio
+    async def test_status_counts_firing_rules_by_severity(self) -> None:
+        """Status summary counts firing rules by severity correctly."""
+        mgr = AlertManager()
+        rule1 = _make_rule(name="r1", severity=AlertSeverity.WARNING, threshold=0.5)
+        rule2 = _make_rule(name="r2", severity=AlertSeverity.CRITICAL, threshold=0.3)
+        mgr.add_rule(rule1)
+        mgr.add_rule(rule2)
+        mgr.record_metric("test_metric", 1.0)
+        await mgr.evaluate()
+        status = mgr.get_alert_summary()
+        assert status["firing_count"] == 2
+        assert status["severity_counts"][AlertSeverity.WARNING.value] >= 1
+        assert status["severity_counts"][AlertSeverity.CRITICAL.value] >= 1
