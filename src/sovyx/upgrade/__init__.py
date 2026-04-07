@@ -1,4 +1,4 @@
-"""Upgrade — Schema versioning, migrations, export/import, diagnostics, backup, blue-green."""
+"""Upgrade — Schema versioning, migration, blue-green upgrade, diagnostics, and backup."""
 
 from __future__ import annotations
 
@@ -11,11 +11,9 @@ from sovyx.upgrade.backup_manager import (
 )
 from sovyx.upgrade.blue_green import (
     BlueGreenUpgrader,
-    InstallError,
     UpgradeError,
     UpgradePhase,
     UpgradeResult,
-    VerificationError,
     VersionInstaller,
 )
 from sovyx.upgrade.doctor import DiagnosticReport, DiagnosticResult, DiagnosticStatus, Doctor
@@ -38,7 +36,6 @@ __all__ = [
     "ExportManifest",
     "ImportInfo",
     "ImportValidationError",
-    "InstallError",
     "MigrationRunner",
     "MindExporter",
     "MindImporter",
@@ -46,6 +43,5 @@ __all__ = [
     "UpgradeError",
     "UpgradePhase",
     "UpgradeResult",
-    "VerificationError",
     "VersionInstaller",
 ]
