@@ -1,5 +1,13 @@
-"""Sovyx Observability — Structured logging, request context, metrics, tracing, health, SLOs."""
+"""Sovyx Observability — logging, metrics, tracing, health, SLOs, alerts."""
 
+from sovyx.observability.alerts import (
+    Alert,
+    AlertFired,
+    AlertManager,
+    AlertRule,
+    AlertSeverity,
+    create_default_alert_manager,
+)
 from sovyx.observability.health import (
     CheckResult,
     CheckStatus,
@@ -39,6 +47,11 @@ from sovyx.observability.tracing import (
 )
 
 __all__ = [
+    "Alert",
+    "AlertFired",
+    "AlertManager",
+    "AlertRule",
+    "AlertSeverity",
     "CheckResult",
     "CheckStatus",
     "HealthCheck",
@@ -50,6 +63,7 @@ __all__ = [
     "SLOStatus",
     "SLOTracker",
     "SovyxTracer",
+    "create_default_alert_manager",
     "create_default_monitor",
     "bind_request_context",
     "bound_request_context",
