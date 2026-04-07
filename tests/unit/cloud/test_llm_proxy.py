@@ -636,6 +636,21 @@ class TestRouteRequest:
         # Should have tried default models then fallback
         assert len(backend.calls) == len(default_models) + 1
 
+    async def test_fallback_with_unresolvable_alias(self) -> None:
+        """Fallback aliases that can't be resolved are silently skipped."""
+        config = ProxyConfig(
+            model_aliases={"test/model": ["provider/m1"]},
+            fallbacks={"test/model": ["nonexistent-alias"]},
+        )
+        backend = MockBackend()
+        service = _make_service(backend=backend, config=config)
+        resp = await service.route_request(
+            "test/model", _simple_messages(), user_id="u1",
+        )
+        assert resp.content == "Hello, world!"
+        # Only the primary model was tried (fallback was unresolvable)
+        assert len(backend.calls) == 1
+
     async def test_finish_reason_propagated(self) -> None:
         backend = MockBackend(response={
             "content": "partial",
@@ -822,6 +837,214 @@ class TestLiteLLMBackend:
         backend = LiteLLMBackend()
         assert isinstance(backend, LLMProviderBackend)
 
+    async def test_completion_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test successful completion via mocked litellm."""
+        import sys
+        import types
+
+        backend = LiteLLMBackend()
+
+        class _MockMessage:
+            content = "Hello from litellm"
+
+        class _MockChoice:
+            message = _MockMessage()
+            finish_reason = "stop"
+
+        class _MockUsage:
+            prompt_tokens = 10
+            completion_tokens = 15
+
+        class _MockResponse:
+            choices = [_MockChoice()]
+            usage = _MockUsage()
+            model = "openai/gpt-4o"
+            _hidden_params = {"response_cost": 0.005}
+
+        async def _fake_acompletion(**kwargs: object) -> _MockResponse:
+            return _MockResponse()
+
+        fake_litellm = types.ModuleType("litellm")
+        fake_litellm.acompletion = _fake_acompletion  # type: ignore[attr-defined]
+        fake_litellm.drop_params = False  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "litellm", fake_litellm)
+
+        try:
+            result = await backend.completion(
+                model="openai/gpt-4o",
+                messages=[{"role": "user", "content": "hi"}],
+                api_key="sk-test",
+                timeout=30,
+                max_retries=2,
+                drop_params=True,
+            )
+        finally:
+            sys.modules.pop("litellm", None)
+
+        assert result["content"] == "Hello from litellm"
+        assert result["model"] == "openai/gpt-4o"
+        assert result["prompt_tokens"] == 10
+        assert result["completion_tokens"] == 15
+        assert result["cost"] == 0.005
+        assert result["finish_reason"] == "stop"
+
+    async def test_completion_no_choices(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test response with empty choices list."""
+        import sys
+        import types
+
+        backend = LiteLLMBackend()
+
+        class _MockResponse:
+            choices: list[object] = []
+            usage = None
+            model = "openai/gpt-4o"
+            _hidden_params: dict[str, object] = {}
+
+        async def _fake_acompletion(**kwargs: object) -> _MockResponse:
+            return _MockResponse()
+
+        fake_litellm = types.ModuleType("litellm")
+        fake_litellm.acompletion = _fake_acompletion  # type: ignore[attr-defined]
+        fake_litellm.drop_params = False  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "litellm", fake_litellm)
+
+        try:
+            result = await backend.completion(
+                model="openai/gpt-4o",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+        finally:
+            sys.modules.pop("litellm", None)
+
+        assert result["content"] == ""
+        assert result["finish_reason"] == "stop"
+        assert result["prompt_tokens"] == 0
+        assert result["completion_tokens"] == 0
+        assert result["cost"] == 0.0
+
+    async def test_completion_no_message_on_choice(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test choice with no message attribute."""
+        import sys
+        import types
+
+        backend = LiteLLMBackend()
+
+        class _MockChoice:
+            message = None
+            finish_reason = "length"
+
+        class _MockResponse:
+            choices = [_MockChoice()]
+            usage = None
+            model = "openai/gpt-4o"
+            _hidden_params = {"response_cost": "not-a-float"}
+
+        async def _fake_acompletion(**kwargs: object) -> _MockResponse:
+            return _MockResponse()
+
+        fake_litellm = types.ModuleType("litellm")
+        fake_litellm.acompletion = _fake_acompletion  # type: ignore[attr-defined]
+        fake_litellm.drop_params = False  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "litellm", fake_litellm)
+
+        try:
+            result = await backend.completion(
+                model="openai/gpt-4o",
+                messages=[{"role": "user", "content": "hi"}],
+                drop_params=False,
+            )
+        finally:
+            sys.modules.pop("litellm", None)
+
+        assert result["content"] == ""
+        assert result["finish_reason"] == "length"
+        assert result["cost"] == 0.0
+
+    async def test_completion_litellm_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that litellm exceptions are wrapped in ProxyError."""
+        import sys
+        import types
+
+        backend = LiteLLMBackend()
+
+        async def _fake_acompletion(**kwargs: object) -> None:
+            msg = "API quota exceeded"
+            raise RuntimeError(msg)
+
+        fake_litellm = types.ModuleType("litellm")
+        fake_litellm.acompletion = _fake_acompletion  # type: ignore[attr-defined]
+        fake_litellm.drop_params = False  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "litellm", fake_litellm)
+
+        try:
+            with pytest.raises(ProxyError, match="LiteLLM call failed"):
+                await backend.completion(
+                    model="openai/gpt-4o",
+                    messages=[{"role": "user", "content": "hi"}],
+                )
+        finally:
+            sys.modules.pop("litellm", None)
+
+    async def test_completion_null_finish_reason(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test finish_reason=None normalizes to 'stop'."""
+        import sys
+        import types
+
+        backend = LiteLLMBackend()
+
+        class _MockMessage:
+            content = "done"
+
+        class _MockChoice:
+            message = _MockMessage()
+            finish_reason = None
+
+        class _MockUsage:
+            prompt_tokens = 5
+            completion_tokens = 3
+
+        class _MockResponse:
+            choices = [_MockChoice()]
+            usage = _MockUsage()
+            model = "anthropic/claude-3-haiku"
+            _hidden_params: dict[str, object] = {}
+
+        async def _fake_acompletion(**kwargs: object) -> _MockResponse:
+            return _MockResponse()
+
+        fake_litellm = types.ModuleType("litellm")
+        fake_litellm.acompletion = _fake_acompletion  # type: ignore[attr-defined]
+        fake_litellm.drop_params = False  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "litellm", fake_litellm)
+
+        try:
+            result = await backend.completion(
+                model="anthropic/claude-3-haiku",
+                messages=[{"role": "user", "content": "hi"}],
+                api_key=None,
+            )
+        finally:
+            sys.modules.pop("litellm", None)
+
+        assert result["finish_reason"] == "stop"
+        assert result["prompt_tokens"] == 5
+        assert result["completion_tokens"] == 3
+
+    async def test_completion_import_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test ProxyError raised when litellm is not installed."""
+        import sys
+
+        backend = LiteLLMBackend()
+        # Setting to None in sys.modules causes ImportError on `import litellm`
+        monkeypatch.setitem(sys.modules, "litellm", None)
+
+        with pytest.raises(ProxyError, match="litellm is required"):
+            await backend.completion(
+                model="openai/gpt-4o",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
 
 # ── Integration-style Tests ───────────────────────────────────────────────
 
@@ -901,3 +1124,282 @@ class TestIntegration:
         failures = [r for r in results if isinstance(r, RateLimitExceededError)]
         assert len(successes) == 10
         assert len(failures) == 5
+
+
+# ── LiteLLMBackend Full Tests (mocked litellm) ──────────────────────────
+
+
+class TestLiteLLMBackendCompletion:
+    """Tests for LiteLLMBackend.completion with mocked litellm module."""
+
+    async def test_successful_completion(self) -> None:
+        """LiteLLMBackend calls litellm.acompletion and normalizes response."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_message = MagicMock()
+        mock_message.content = "test response"
+
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        mock_choice.finish_reason = "stop"
+
+        mock_usage = MagicMock()
+        mock_usage.prompt_tokens = 10
+        mock_usage.completion_tokens = 20
+
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response.usage = mock_usage
+        mock_response.model = "anthropic/claude-sonnet-4-20250514"
+        mock_response._hidden_params = {"response_cost": 0.001}
+
+        mock_litellm = MagicMock()
+        mock_litellm.acompletion = AsyncMock(return_value=mock_response)
+
+        backend = LiteLLMBackend()
+        with patch.dict("sys.modules", {"litellm": mock_litellm}):
+            result = await backend.completion(
+                model="anthropic/claude-sonnet-4-20250514",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+        assert result["content"] == "test response"
+        assert result["model"] == "anthropic/claude-sonnet-4-20250514"
+        assert result["prompt_tokens"] == 10
+        assert result["completion_tokens"] == 20
+        assert result["cost"] == 0.001
+        assert result["finish_reason"] == "stop"
+
+    async def test_completion_with_api_key(self) -> None:
+        """BYOK api_key is passed through to litellm."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_response = MagicMock()
+        mock_response.choices = []
+        mock_response.usage = None
+        mock_response.model = "openai/gpt-4o"
+        mock_response._hidden_params = {}
+
+        mock_litellm = MagicMock()
+        mock_litellm.acompletion = AsyncMock(return_value=mock_response)
+
+        backend = LiteLLMBackend()
+        with patch.dict("sys.modules", {"litellm": mock_litellm}):
+            result = await backend.completion(
+                model="openai/gpt-4o",
+                messages=[{"role": "user", "content": "hi"}],
+                api_key="sk-test-key",
+            )
+
+        call_kwargs = mock_litellm.acompletion.call_args[1]
+        assert call_kwargs["api_key"] == "sk-test-key"
+        # Empty choices → defaults
+        assert result["content"] == ""
+        assert result["finish_reason"] == "stop"
+        assert result["prompt_tokens"] == 0
+        assert result["completion_tokens"] == 0
+
+    async def test_completion_with_drop_params(self) -> None:
+        """drop_params=True sets litellm.drop_params."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_response = MagicMock()
+        mock_response.choices = []
+        mock_response.usage = None
+        mock_response.model = "test"
+        mock_response._hidden_params = {}
+
+        mock_litellm = MagicMock()
+        mock_litellm.acompletion = AsyncMock(return_value=mock_response)
+
+        backend = LiteLLMBackend()
+        with patch.dict("sys.modules", {"litellm": mock_litellm}):
+            await backend.completion(
+                model="test", messages=[], drop_params=True,
+            )
+        assert mock_litellm.drop_params is True
+
+    async def test_completion_without_drop_params(self) -> None:
+        """drop_params=False does not set litellm.drop_params."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_response = MagicMock()
+        mock_response.choices = []
+        mock_response.usage = None
+        mock_response.model = "test"
+        mock_response._hidden_params = {}
+
+        mock_litellm = MagicMock()
+        mock_litellm.acompletion = AsyncMock(return_value=mock_response)
+
+        backend = LiteLLMBackend()
+        with patch.dict("sys.modules", {"litellm": mock_litellm}):
+            await backend.completion(
+                model="test", messages=[], drop_params=False,
+            )
+        # drop_params should NOT have been set
+        assert not hasattr(mock_litellm, "drop_params") or mock_litellm.drop_params is not True
+
+    async def test_completion_litellm_import_error(self) -> None:
+        """Missing litellm raises ProxyError."""
+        from unittest.mock import patch
+
+        backend = LiteLLMBackend()
+        with (
+            patch.dict("sys.modules", {"litellm": None}),
+            pytest.raises(ProxyError, match="litellm is required"),
+        ):
+            await backend.completion(
+                model="test", messages=[{"role": "user", "content": "hi"}],
+            )
+
+    async def test_completion_litellm_call_fails(self) -> None:
+        """Exception from litellm.acompletion is wrapped in ProxyError."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_litellm = MagicMock()
+        mock_litellm.acompletion = AsyncMock(
+            side_effect=RuntimeError("connection refused"),
+        )
+
+        backend = LiteLLMBackend()
+        with (
+            patch.dict("sys.modules", {"litellm": mock_litellm}),
+            pytest.raises(ProxyError, match="LiteLLM call failed"),
+        ):
+            await backend.completion(
+                model="test", messages=[{"role": "user", "content": "hi"}],
+            )
+
+    async def test_completion_no_usage(self) -> None:
+        """Response with no usage object → zero tokens."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_choice = MagicMock()
+        mock_choice.message = MagicMock(content="yes")
+        mock_choice.finish_reason = "length"
+
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response.usage = None
+        mock_response.model = "test"
+        mock_response._hidden_params = {"response_cost": 0.0}
+
+        mock_litellm = MagicMock()
+        mock_litellm.acompletion = AsyncMock(return_value=mock_response)
+
+        backend = LiteLLMBackend()
+        with patch.dict("sys.modules", {"litellm": mock_litellm}):
+            result = await backend.completion(model="test", messages=[])
+
+        assert result["prompt_tokens"] == 0
+        assert result["completion_tokens"] == 0
+        assert result["content"] == "yes"
+        assert result["finish_reason"] == "length"
+
+    async def test_completion_non_float_cost(self) -> None:
+        """Non-float cost in _hidden_params defaults to 0.0."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_response = MagicMock()
+        mock_response.choices = []
+        mock_response.usage = None
+        mock_response.model = "test"
+        mock_response._hidden_params = {"response_cost": "not-a-float"}
+
+        mock_litellm = MagicMock()
+        mock_litellm.acompletion = AsyncMock(return_value=mock_response)
+
+        backend = LiteLLMBackend()
+        with patch.dict("sys.modules", {"litellm": mock_litellm}):
+            result = await backend.completion(model="test", messages=[])
+
+        assert result["cost"] == 0.0
+
+    async def test_completion_missing_cost_key(self) -> None:
+        """Missing response_cost in _hidden_params defaults to 0.0."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_response = MagicMock()
+        mock_response.choices = []
+        mock_response.usage = None
+        mock_response.model = "test"
+        mock_response._hidden_params = {}
+
+        mock_litellm = MagicMock()
+        mock_litellm.acompletion = AsyncMock(return_value=mock_response)
+
+        backend = LiteLLMBackend()
+        with patch.dict("sys.modules", {"litellm": mock_litellm}):
+            result = await backend.completion(model="test", messages=[])
+
+        assert result["cost"] == 0.0
+
+    async def test_completion_null_finish_reason(self) -> None:
+        """None finish_reason defaults to 'stop'."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_choice = MagicMock()
+        mock_choice.message = MagicMock(content="ok")
+        mock_choice.finish_reason = None
+
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response.usage = MagicMock(prompt_tokens=5, completion_tokens=3)
+        mock_response.model = "test"
+        mock_response._hidden_params = {"response_cost": 0.01}
+
+        mock_litellm = MagicMock()
+        mock_litellm.acompletion = AsyncMock(return_value=mock_response)
+
+        backend = LiteLLMBackend()
+        with patch.dict("sys.modules", {"litellm": mock_litellm}):
+            result = await backend.completion(model="test", messages=[])
+
+        assert result["finish_reason"] == "stop"
+
+    async def test_completion_choice_without_message(self) -> None:
+        """Choice with no message attr → empty content."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_choice = MagicMock(spec=[])  # no attrs at all
+        mock_choice.finish_reason = "stop"
+        mock_choice.message = None
+
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response.usage = None
+        mock_response.model = "test"
+        mock_response._hidden_params = {}
+
+        mock_litellm = MagicMock()
+        mock_litellm.acompletion = AsyncMock(return_value=mock_response)
+
+        backend = LiteLLMBackend()
+        with patch.dict("sys.modules", {"litellm": mock_litellm}):
+            result = await backend.completion(model="test", messages=[])
+
+        assert result["content"] == ""
+
+    async def test_completion_timeout_and_retries(self) -> None:
+        """Custom timeout and max_retries are passed to litellm."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_response = MagicMock()
+        mock_response.choices = []
+        mock_response.usage = None
+        mock_response.model = "test"
+        mock_response._hidden_params = {}
+
+        mock_litellm = MagicMock()
+        mock_litellm.acompletion = AsyncMock(return_value=mock_response)
+
+        backend = LiteLLMBackend()
+        with patch.dict("sys.modules", {"litellm": mock_litellm}):
+            await backend.completion(
+                model="test", messages=[], timeout=120, max_retries=5,
+            )
+
+        call_kwargs = mock_litellm.acompletion.call_args[1]
+        assert call_kwargs["timeout"] == 120
+        assert call_kwargs["num_retries"] == 5

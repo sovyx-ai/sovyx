@@ -222,6 +222,12 @@ class TestGetBrainVersion:
         db = tmp_path / "missing.db"
         assert _get_brain_version(db) == "unknown"
 
+    def test_corrupt_db_returns_unknown(self, tmp_path: Path) -> None:
+        """Covers the except Exception branch in _get_brain_version."""
+        db = tmp_path / "corrupt.db"
+        db.write_bytes(b"not a valid sqlite file at all")
+        assert _get_brain_version(db) == "unknown"
+
 
 class TestGetSovyxVersion:
     """Tests for _get_sovyx_version helper."""
@@ -230,6 +236,17 @@ class TestGetSovyxVersion:
         version = _get_sovyx_version()
         assert isinstance(version, str)
         assert len(version) > 0
+
+    def test_importlib_error_returns_unknown(self) -> None:
+        """Covers the except Exception branch in _get_sovyx_version."""
+        from unittest.mock import patch
+
+        with patch(
+            "importlib.metadata.version",
+            side_effect=Exception("no such package"),
+        ):
+            result = _get_sovyx_version()
+        assert result == "unknown"
 
 
 class TestBackupServiceInit:
@@ -597,6 +614,25 @@ class TestBoto3R2Client:
 
         result = client.delete_objects(["a", "b"], "bucket")
         assert result == 2
+
+    def test_constructor_creates_boto3_client(self) -> None:
+        """Boto3R2Client.__init__ creates an S3 client with config."""
+        from unittest.mock import MagicMock, patch
+
+        mock_boto3 = MagicMock()
+        config = _make_config()
+
+        with patch.dict("sys.modules", {"boto3": mock_boto3}):
+            client = Boto3R2Client(config)
+
+        mock_boto3.client.assert_called_once_with(
+            "s3",
+            endpoint_url=config.r2_endpoint_url,
+            aws_access_key_id=config.r2_access_key_id,
+            aws_secret_access_key=config.r2_secret_access_key,
+            region_name="auto",
+        )
+        assert client._bucket == config.r2_bucket
 
     def test_list_objects_paginates(self) -> None:
         mock_client = MagicMock()
