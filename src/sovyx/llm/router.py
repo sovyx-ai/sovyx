@@ -1,7 +1,16 @@
-"""Sovyx LLM Router — multi-provider routing with failover, cost, and circuit breaking."""
+"""Sovyx LLM Router — multi-provider routing with failover, cost, and circuit breaking.
+
+v0.5 adds complexity-based routing: simple queries go to cheap/local models
+(Flash, Haiku, Ollama) while complex queries go to expensive/powerful models
+(Sonnet, Pro, GPT-4o). Reduces cost by ~85% on mixed workloads.
+
+Ref: SPE-007 §5, Pre-Compute V05-37.
+"""
 
 from __future__ import annotations
 
+import dataclasses
+from enum import Enum
 from typing import TYPE_CHECKING
 
 from sovyx.engine.errors import CostLimitExceededError, ProviderUnavailableError
@@ -20,6 +29,148 @@ if TYPE_CHECKING:
     from sovyx.llm.cost import CostGuard
 
 logger = get_logger(__name__)
+
+
+# ── Complexity Classification ───────────────────────────────────────
+
+
+class ComplexityLevel(Enum):
+    """Message complexity level for model routing."""
+
+    SIMPLE = "simple"
+    MODERATE = "moderate"
+    COMPLEX = "complex"
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class ComplexitySignals:
+    """Signals used to estimate message complexity.
+
+    Attributes:
+        message_length: Total character count of all messages.
+        turn_count: Number of conversation turns.
+        has_tool_use: Whether tool use is requested.
+        has_code: Whether the message contains code.
+        explicit_model: User explicitly requested a model.
+    """
+
+    message_length: int = 0
+    turn_count: int = 0
+    has_tool_use: bool = False
+    has_code: bool = False
+    explicit_model: bool = False
+
+
+# Thresholds for complexity classification
+_SIMPLE_MAX_LENGTH = 500
+_SIMPLE_MAX_TURNS = 3
+_COMPLEX_MIN_LENGTH = 2000
+_COMPLEX_MIN_TURNS = 8
+
+# Model tiers for routing
+_SIMPLE_MODELS: set[str] = {
+    "gemini-2.0-flash",
+    "claude-3-5-haiku-20241022",
+    "gpt-4o-mini",
+}
+
+_COMPLEX_MODELS: set[str] = {
+    "claude-sonnet-4-20250514",
+    "gemini-2.5-pro-preview-03-25",
+    "gpt-4o",
+}
+
+
+def classify_complexity(signals: ComplexitySignals) -> ComplexityLevel:
+    """Classify message complexity based on heuristic signals.
+
+    The classifier uses a simple scoring system:
+        - Short messages (< 500 chars) with few turns → SIMPLE
+        - Long messages (> 2000 chars), many turns, or code/tools → COMPLEX
+        - Everything else → MODERATE
+
+    Args:
+        signals: Input signals for classification.
+
+    Returns:
+        Complexity level.
+    """
+    # Explicit model request bypasses classification
+    if signals.explicit_model:
+        return ComplexityLevel.MODERATE
+
+    # Tool use or code always complex
+    if signals.has_tool_use or signals.has_code:
+        return ComplexityLevel.COMPLEX
+
+    # Score-based classification
+    score = 0.0
+
+    # Length signal
+    if signals.message_length <= _SIMPLE_MAX_LENGTH:
+        score -= 1.0
+    elif signals.message_length >= _COMPLEX_MIN_LENGTH:
+        score += 1.0
+
+    # Turn count signal
+    if signals.turn_count <= _SIMPLE_MAX_TURNS:
+        score -= 0.5
+    elif signals.turn_count >= _COMPLEX_MIN_TURNS:
+        score += 1.0
+
+    if score <= -1.0:
+        return ComplexityLevel.SIMPLE
+    if score >= 1.0:
+        return ComplexityLevel.COMPLEX
+    return ComplexityLevel.MODERATE
+
+
+def extract_signals(messages: Sequence[dict[str, str]]) -> ComplexitySignals:
+    """Extract complexity signals from a message list.
+
+    Args:
+        messages: Chat messages (role + content).
+
+    Returns:
+        Extracted signals.
+    """
+    total_length = sum(len(m.get("content", "")) for m in messages)
+    turn_count = sum(1 for m in messages if m.get("role") in ("user", "assistant"))
+    has_code = any(
+        "```" in m.get("content", "") or "def " in m.get("content", "") for m in messages
+    )
+
+    return ComplexitySignals(
+        message_length=total_length,
+        turn_count=turn_count,
+        has_code=has_code,
+    )
+
+
+def select_model_for_complexity(
+    complexity: ComplexityLevel,
+    available_models: Sequence[str],
+) -> str | None:
+    """Select the best model for a given complexity level.
+
+    Args:
+        complexity: Classified complexity.
+        available_models: Models available from registered providers.
+
+    Returns:
+        Selected model name, or ``None`` if no match.
+    """
+    if complexity == ComplexityLevel.SIMPLE:
+        for model in available_models:
+            if model in _SIMPLE_MODELS:
+                return model
+    elif complexity == ComplexityLevel.COMPLEX:
+        for model in available_models:
+            if model in _COMPLEX_MODELS:
+                return model
+
+    # MODERATE or no tier match → first available
+    return available_models[0] if available_models else None
 
 
 class LLMRouter:
@@ -84,6 +235,24 @@ class LLMRouter:
             CostLimitExceededError: Budget exhausted.
             ProviderUnavailableError: All providers failed.
         """
+        # ── Complexity-based routing ──
+        if model is None:
+            signals = extract_signals(messages)
+            complexity = classify_complexity(signals)
+            available = [
+                m for p in self._providers if p.is_available for m in self._get_provider_models(p)
+            ]
+            routed_model = select_model_for_complexity(complexity, available)
+            if routed_model:
+                model = routed_model
+                logger.debug(
+                    "complexity_routed",
+                    complexity=complexity.value,
+                    model=model,
+                    signals_length=signals.message_length,
+                    signals_turns=signals.turn_count,
+                )
+
         # Cost estimation: chars/4 ≈ tokens (rough but order-of-magnitude correct)
         input_chars = sum(len(m.get("content", "")) for m in messages)
         est_input_tokens = input_chars // 4
@@ -207,6 +376,25 @@ class LLMRouter:
         raise ProviderUnavailableError(error_msg)
 
     @staticmethod
+    def _get_provider_models(provider: LLMProvider) -> list[str]:
+        """Get known models for a provider based on its name.
+
+        Returns a list of model names this provider is known to serve.
+        Used for complexity-based routing.
+        """
+        _models_by_provider: dict[str, list[str]] = {
+            "anthropic": [
+                "claude-sonnet-4-20250514",
+                "claude-3-5-haiku-20241022",
+                "claude-opus-4-20250514",
+            ],
+            "openai": ["gpt-4o", "gpt-4o-mini", "o1", "o3-mini"],
+            "google": ["gemini-2.0-flash", "gemini-2.5-pro-preview-03-25"],
+            "ollama": [],  # Local models vary
+        }
+        return _models_by_provider.get(provider.name, [])
+
+    @staticmethod
     def _get_pricing(model: str | None) -> tuple[float, float]:
         """Get (input, output) pricing per 1M tokens for a model.
 
@@ -223,6 +411,9 @@ class LLMRouter:
             "gpt-4o-mini": (0.15, 0.6),
             "o1": (15.0, 60.0),
             "o3-mini": (1.1, 4.4),
+            # Google
+            "gemini-2.0-flash": (0.10, 0.40),
+            "gemini-2.5-pro-preview-03-25": (1.25, 10.0),
         }
         if model and model in pricing:
             return pricing[model]

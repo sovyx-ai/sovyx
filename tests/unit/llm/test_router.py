@@ -9,7 +9,14 @@ import pytest
 from sovyx.engine.errors import CostLimitExceededError, ProviderUnavailableError
 from sovyx.llm.cost import CostGuard
 from sovyx.llm.models import LLMResponse
-from sovyx.llm.router import LLMRouter
+from sovyx.llm.router import (
+    ComplexityLevel,
+    ComplexitySignals,
+    LLMRouter,
+    classify_complexity,
+    extract_signals,
+    select_model_for_complexity,
+)
 
 
 def _mock_provider(
@@ -209,9 +216,7 @@ class TestEventEmission:
 class TestNonLLMResponseConversion:
     """Provider returns a non-LLMResponse object (converted via vars())."""
 
-    async def test_raw_object_converted(
-        self, cost_guard: CostGuard, event_bus: AsyncMock
-    ) -> None:
+    async def test_raw_object_converted(self, cost_guard: CostGuard, event_bus: AsyncMock) -> None:
         """When provider returns a non-LLMResponse, router wraps it."""
         import dataclasses
 
@@ -293,3 +298,112 @@ class TestGetContextWindowNoModel:
     def test_no_model_none_explicit(self) -> None:
         router = LLMRouter([], CostGuard(10, 2), AsyncMock())
         assert router.get_context_window(None) == 128_000
+
+
+class TestComplexitySignals:
+    """Tests for ComplexitySignals dataclass."""
+
+    def test_defaults(self) -> None:
+        s = ComplexitySignals()
+        assert s.message_length == 0
+        assert s.turn_count == 0
+        assert s.has_tool_use is False
+        assert s.has_code is False
+        assert s.explicit_model is False
+
+
+class TestClassifyComplexity:
+    """Tests for classify_complexity function."""
+
+    def test_short_message_is_simple(self) -> None:
+        result = classify_complexity(ComplexitySignals(message_length=100, turn_count=1))
+        assert result == ComplexityLevel.SIMPLE
+
+    def test_long_message_is_complex(self) -> None:
+        result = classify_complexity(ComplexitySignals(message_length=3000, turn_count=10))
+        assert result == ComplexityLevel.COMPLEX
+
+    def test_tool_use_is_complex(self) -> None:
+        result = classify_complexity(ComplexitySignals(has_tool_use=True))
+        assert result == ComplexityLevel.COMPLEX
+
+    def test_code_is_complex(self) -> None:
+        result = classify_complexity(ComplexitySignals(has_code=True))
+        assert result == ComplexityLevel.COMPLEX
+
+    def test_medium_is_moderate(self) -> None:
+        result = classify_complexity(ComplexitySignals(message_length=1000, turn_count=5))
+        assert result == ComplexityLevel.MODERATE
+
+    def test_explicit_model_is_moderate(self) -> None:
+        result = classify_complexity(ComplexitySignals(explicit_model=True))
+        assert result == ComplexityLevel.MODERATE
+
+    def test_many_turns_is_complex(self) -> None:
+        result = classify_complexity(ComplexitySignals(message_length=1000, turn_count=10))
+        assert result == ComplexityLevel.COMPLEX
+
+
+class TestExtractSignals:
+    """Tests for extract_signals function."""
+
+    def test_basic(self) -> None:
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there"},
+        ]
+        signals = extract_signals(messages)
+        assert signals.message_length == len("Hello") + len("Hi there")
+        assert signals.turn_count == 2
+        assert signals.has_code is False
+
+    def test_code_detection(self) -> None:
+        messages = [{"role": "user", "content": "```python\ndef foo():\n    pass\n```"}]
+        signals = extract_signals(messages)
+        assert signals.has_code is True
+
+    def test_def_detection(self) -> None:
+        messages = [{"role": "user", "content": "def calculate_tax(amount):"}]
+        signals = extract_signals(messages)
+        assert signals.has_code is True
+
+    def test_system_not_counted_as_turn(self) -> None:
+        messages = [
+            {"role": "system", "content": "You are helpful"},
+            {"role": "user", "content": "Hello"},
+        ]
+        signals = extract_signals(messages)
+        assert signals.turn_count == 1
+
+    def test_empty_messages(self) -> None:
+        signals = extract_signals([])
+        assert signals.message_length == 0
+        assert signals.turn_count == 0
+
+
+class TestSelectModel:
+    """Tests for select_model_for_complexity function."""
+
+    def test_simple_selects_cheap(self) -> None:
+        available = ["claude-sonnet-4-20250514", "gemini-2.0-flash", "gpt-4o"]
+        model = select_model_for_complexity(ComplexityLevel.SIMPLE, available)
+        assert model == "gemini-2.0-flash"
+
+    def test_complex_selects_powerful(self) -> None:
+        available = ["gemini-2.0-flash", "claude-sonnet-4-20250514", "gpt-4o-mini"]
+        model = select_model_for_complexity(ComplexityLevel.COMPLEX, available)
+        assert model == "claude-sonnet-4-20250514"
+
+    def test_moderate_selects_first(self) -> None:
+        available = ["gemini-2.0-flash", "gpt-4o"]
+        model = select_model_for_complexity(ComplexityLevel.MODERATE, available)
+        assert model == "gemini-2.0-flash"
+
+    def test_empty_available_returns_none(self) -> None:
+        model = select_model_for_complexity(ComplexityLevel.SIMPLE, [])
+        assert model is None
+
+    def test_no_tier_match_returns_first(self) -> None:
+        available = ["some-custom-model"]
+        model = select_model_for_complexity(ComplexityLevel.SIMPLE, available)
+        assert model == "some-custom-model"
