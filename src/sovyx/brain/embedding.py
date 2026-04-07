@@ -238,7 +238,9 @@ class EmbeddingEngine:
         )
         self._tokenizer = Tokenizer.from_file(str(tokenizer_path))
         self._tokenizer.enable_truncation(max_length=MAX_TOKENS)
-        self._tokenizer.enable_padding(length=MAX_TOKENS, pad_id=0, pad_token="[PAD]")
+        self._tokenizer.enable_padding(  # nosec B106 — tokenizer pad token, not a password
+            length=MAX_TOKENS, pad_id=0, pad_token="[PAD]",
+        )
 
     async def encode(self, text: str, *, is_query: bool = False) -> list[float]:
         """Generate embedding for a single text.

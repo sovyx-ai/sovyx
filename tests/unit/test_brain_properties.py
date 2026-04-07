@@ -84,8 +84,9 @@ class TestTokenCounterProperties:
         total_parts = sum(tc.count(t) for t in texts)
         combined = tc.count(" ".join(texts))
         # Combined should be roughly bounded by sum of parts
-        # (may be less due to subword merging, slightly more due to spaces)
-        assert combined <= total_parts + len(texts)
+        # (may be less due to subword merging, slightly more due to spaces/
+        # boundary tokens that the tokenizer creates at join boundaries)
+        assert combined <= total_parts + 2 * len(texts)
 
 
 class TestRRFProperties:

@@ -89,4 +89,4 @@ def retry_delay(attempt: int, resp: httpx.Response | None = None) -> float:
 
     # Full Jitter: random(0, min(cap, base × 2^attempt))
     exp_delay = min(_MAX_DELAY, _BASE_DELAY * math.pow(2, attempt))
-    return random.uniform(0, exp_delay)
+    return random.uniform(0, exp_delay)  # nosec B311 — non-crypto jitter for backoff
