@@ -59,6 +59,9 @@ dev = [
 
 [dependency-groups]
 dev = ["sovyx[dev]"]
+docs = [
+    "mkdocs-material>=9.7.6",
+]
 
 [project.scripts]
 sovyx = "sovyx.cli.main:app"

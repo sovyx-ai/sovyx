@@ -62,3 +62,4 @@ Thumbs.db
 src/sovyx/dashboard/static/
 dashboard/coverage/
 erebus/
+site/
