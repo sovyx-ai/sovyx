@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import signal
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
 
@@ -197,3 +198,113 @@ class TestLifecycleManager:
         event_types = [type(c[0][0]) for c in calls]
         assert EngineStarted in event_types
         assert EngineStopping in event_types
+
+
+class TestLifecycleCoverageGaps:
+    """Cover remaining lifecycle paths for ≥96% coverage."""
+
+    @pytest.mark.asyncio()
+    async def test_shutdown_timeout(self, tmp_path: Path) -> None:
+        """When shutdown_services takes too long, timeout is logged."""
+        registry = ServiceRegistry()
+        event_bus = AsyncMock()
+        event_bus.emit = AsyncMock()
+        pid_path = tmp_path / "sovyx.pid"
+
+        mgr = LifecycleManager(registry, event_bus, pid_path)
+        mgr.SHUTDOWN_TIMEOUT = 0.01  # very short
+
+        async def slow_shutdown() -> None:
+            await asyncio.sleep(5)
+
+        with patch.object(mgr, "_start_dashboard", new_callable=AsyncMock):
+            await mgr.start()
+
+        with patch.object(mgr, "_shutdown_services", side_effect=slow_shutdown):
+            await mgr.stop()  # should hit TimeoutError internally
+
+        # Engine should still complete stop (pid released)
+        assert not pid_path.exists()
+
+    @pytest.mark.asyncio()
+    async def test_signal_handler_sets_event(self, tmp_path: Path) -> None:
+        """_handle_signal sets the shutdown event."""
+        registry = ServiceRegistry()
+        event_bus = AsyncMock()
+        event_bus.emit = AsyncMock()
+        pid_path = tmp_path / "sovyx.pid"
+
+        mgr = LifecycleManager(registry, event_bus, pid_path)
+        assert not mgr._shutdown_event.is_set()  # noqa: SLF001
+
+        mgr._handle_signal(signal.SIGTERM)  # noqa: SLF001
+        assert mgr._shutdown_event.is_set()  # noqa: SLF001
+
+    @pytest.mark.asyncio()
+    async def test_install_signal_handlers(self, tmp_path: Path) -> None:
+        """_install_signal_handlers adds handlers to the event loop."""
+        registry = ServiceRegistry()
+        event_bus = AsyncMock()
+        event_bus.emit = AsyncMock()
+        pid_path = tmp_path / "sovyx.pid"
+
+        mgr = LifecycleManager(registry, event_bus, pid_path)
+
+        loop = asyncio.get_running_loop()
+        with patch.object(loop, "add_signal_handler") as mock_add:
+            mgr._install_signal_handlers()  # noqa: SLF001
+            assert mock_add.call_count == 2  # noqa: PLR2004
+            sigs = {call[0][0] for call in mock_add.call_args_list}
+            assert signal.SIGTERM in sigs
+            assert signal.SIGINT in sigs
+
+    @pytest.mark.asyncio()
+    async def test_dashboard_disabled(self, tmp_path: Path) -> None:
+        """When API is disabled, dashboard is not started."""
+        from sovyx.engine.config import APIConfig, EngineConfig
+
+        registry = ServiceRegistry()
+        event_bus = AsyncMock()
+        event_bus.emit = AsyncMock()
+        pid_path = tmp_path / "sovyx.pid"
+
+        config = EngineConfig()
+        config.api = APIConfig(enabled=False)
+        registry.register_instance(EngineConfig, config)
+
+        mgr = LifecycleManager(registry, event_bus, pid_path)
+        await mgr._start_dashboard()  # noqa: SLF001
+
+        # DashboardServer should NOT be registered
+        from sovyx.dashboard.server import DashboardServer
+        assert not registry.is_registered(DashboardServer)
+
+    @pytest.mark.asyncio()
+    async def test_stop_dashboard_when_running(self, tmp_path: Path) -> None:
+        """_stop_dashboard stops the server when registered."""
+        from sovyx.dashboard.server import DashboardServer
+
+        registry = ServiceRegistry()
+        event_bus = AsyncMock()
+        event_bus.emit = AsyncMock()
+        pid_path = tmp_path / "sovyx.pid"
+
+        mock_server = AsyncMock()
+        registry.register_instance(DashboardServer, mock_server)
+
+        mgr = LifecycleManager(registry, event_bus, pid_path)
+        await mgr._stop_dashboard()  # noqa: SLF001
+
+        mock_server.stop.assert_awaited_once()
+
+    @pytest.mark.asyncio()
+    async def test_stop_dashboard_not_registered(self, tmp_path: Path) -> None:
+        """_stop_dashboard is a no-op when no dashboard registered."""
+        registry = ServiceRegistry()
+        event_bus = AsyncMock()
+        event_bus.emit = AsyncMock()
+        pid_path = tmp_path / "sovyx.pid"
+
+        mgr = LifecycleManager(registry, event_bus, pid_path)
+        # Should not raise
+        await mgr._stop_dashboard()  # noqa: SLF001
