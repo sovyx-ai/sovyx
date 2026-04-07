@@ -415,6 +415,60 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
 
         return JSONResponse({"ok": True, "changes": changes})
 
+    # ── Mind Config (personality, OCEAN, safety) ──
+
+    @app.get("/api/config", dependencies=[Depends(verify_token)])
+    async def get_config() -> JSONResponse:
+        """Current mind configuration (personality, OCEAN, safety, brain, LLM)."""
+        from sovyx.dashboard.config import get_config as _get_config
+
+        mind_config = getattr(app.state, "mind_config", None)
+        if mind_config is None:
+            return JSONResponse(
+                {"error": "No mind configuration loaded"},
+                status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        return JSONResponse(_get_config(mind_config))
+
+    @app.put("/api/config", dependencies=[Depends(verify_token)])
+    async def update_config(request: Request) -> JSONResponse:
+        """Update mutable mind config (personality, OCEAN, safety, name, language, timezone)."""
+        from sovyx.dashboard.config import apply_config
+
+        try:
+            body = await request.json()
+        except (ValueError, UnicodeDecodeError):
+            return JSONResponse(
+                {"ok": False, "error": "Invalid JSON body"},
+                status_code=422,
+            )
+
+        if not isinstance(body, dict):
+            return JSONResponse(
+                {"ok": False, "error": "Expected JSON object"},
+                status_code=422,
+            )
+
+        mind_config = getattr(app.state, "mind_config", None)
+        if mind_config is None:
+            return JSONResponse(
+                {"ok": False, "error": "No mind configuration loaded"},
+                status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        mind_yaml_path = getattr(app.state, "mind_yaml_path", None)
+        changes = apply_config(mind_config, body, mind_yaml_path=mind_yaml_path)
+
+        # Broadcast config change event to WebSocket clients
+        if changes:
+            await ws_manager.broadcast({
+                "type": "ConfigUpdated",
+                "data": {"changes": changes},
+            })
+
+        return JSONResponse({"ok": True, "changes": changes})
+
     # ── WebSocket ──
 
     @app.websocket("/ws")
@@ -529,6 +583,16 @@ class DashboardServer:
 
             self._app.state.status_collector = StatusCollector(self._registry)
             self._app.state.registry = self._registry
+
+            # Wire MindConfig from PersonalityEngine (if registered)
+            try:
+                from sovyx.mind.personality import PersonalityEngine
+
+                if self._registry.is_registered(PersonalityEngine):
+                    personality = await self._registry.resolve(PersonalityEngine)
+                    self._app.state.mind_config = personality._config  # noqa: SLF001
+            except Exception:  # noqa: BLE001
+                logger.debug("mind_config_wire_failed")
 
         # Wire log file path for log queries
         if self._config is not None:
