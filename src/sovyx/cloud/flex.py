@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol
 
+from sovyx.engine.errors import CloudError
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
@@ -220,7 +221,7 @@ class StripePaymentGateway(Protocol):
 # ── Exceptions ────────────────────────────────────────────────────────────
 
 
-class FlexError(Exception):
+class FlexError(CloudError):
     """Base exception for flex balance operations."""
 
 

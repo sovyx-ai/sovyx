@@ -26,6 +26,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from sovyx.engine.errors import CloudError
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
@@ -160,11 +161,11 @@ class SubscriptionInfo:
 # ── Webhook signature verification ──────────────────────────────────────
 
 
-class WebhookSignatureError(Exception):
+class WebhookSignatureError(CloudError):
     """Raised when webhook signature verification fails."""
 
 
-class WebhookPayloadError(Exception):
+class WebhookPayloadError(CloudError):
     """Raised when webhook payload is invalid."""
 
 

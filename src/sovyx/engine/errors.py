@@ -234,3 +234,11 @@ class PluginLoadError(PluginError):
 
 class PluginCrashError(PluginError):
     """Plugin crashed during execution."""
+
+
+class CloudError(SovyxError):
+    """Error in cloud/SaaS subsystem."""
+
+
+class VoiceError(SovyxError):
+    """Error in voice pipeline subsystem."""

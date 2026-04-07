@@ -21,6 +21,7 @@ from datetime import UTC, date, datetime
 from enum import Enum
 from typing import Any
 
+from sovyx.engine.errors import CloudError
 from sovyx.observability.logging import get_logger
 
 logger = get_logger(__name__)
@@ -185,7 +186,7 @@ class MeteringSnapshot:
 # ── Exceptions ────────────────────────────────────────────────────────────
 
 
-class ProxyError(Exception):
+class ProxyError(CloudError):
     """Base exception for LLM proxy errors."""
 
 

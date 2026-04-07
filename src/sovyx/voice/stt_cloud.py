@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx
 
+from sovyx.engine.errors import VoiceError
 from sovyx.observability.logging import get_logger
 from sovyx.voice.stt import (
     _DEFAULT_SAMPLE_RATE,
@@ -428,5 +429,5 @@ class CloudSTT(STTEngine):
 # ---------------------------------------------------------------------------
 
 
-class CloudSTTError(Exception):
+class CloudSTTError(VoiceError):
     """Error during cloud STT transcription."""
