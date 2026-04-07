@@ -173,12 +173,8 @@ class SileroVAD:
         )
 
         # Persistent LSTM state (h0, c0) — survives between frames
-        self._state: npt.NDArray[np.float32] = np.zeros(
-            _LSTM_STATE_SHAPE, dtype=np.float32
-        )
-        self._sr: npt.NDArray[np.int64] = np.array(
-            [self._config.sample_rate], dtype=np.int64
-        )
+        self._state: npt.NDArray[np.float32] = np.zeros(_LSTM_STATE_SHAPE, dtype=np.float32)
+        self._sr: npt.NDArray[np.int64] = np.array([self._config.sample_rate], dtype=np.int64)
 
         # FSM bookkeeping
         self._vad_state = VADState.SILENCE
@@ -215,10 +211,7 @@ class SileroVAD:
 
         expected = self._config.window_size
         if audio_frame.shape != (expected,):
-            msg = (
-                f"Expected frame of {expected} samples, "
-                f"got shape {audio_frame.shape}"
-            )
+            msg = f"Expected frame of {expected} samples, got shape {audio_frame.shape}"
             raise ValueError(msg)
 
         # Normalise to float32 [-1, 1]

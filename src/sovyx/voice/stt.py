@@ -122,10 +122,7 @@ class MoonshineConfig:
     def __post_init__(self) -> None:
         """Validate configuration values."""
         if self.model_size not in _MODEL_SPECS:
-            msg = (
-                f"Unknown model_size {self.model_size!r}; "
-                f"choose from {sorted(_MODEL_SPECS)}"
-            )
+            msg = f"Unknown model_size {self.model_size!r}; choose from {sorted(_MODEL_SPECS)}"
             raise ValueError(msg)
         if self.update_interval <= 0:
             msg = "update_interval must be positive"
@@ -315,6 +312,7 @@ class MoonshineSTT(STTEngine):
         self._ensure_ready()
 
         from moonshine_voice import TranscriptEventListener
+
         self._state = STTState.TRANSCRIBING
 
         queue: asyncio.Queue[PartialTranscription] = asyncio.Queue()
@@ -358,9 +356,7 @@ class MoonshineSTT(STTEngine):
         try:
             async for audio_chunk, sample_rate in audio_stream:
                 chunk_list = (
-                    audio_chunk.tolist()
-                    if hasattr(audio_chunk, "tolist")
-                    else audio_chunk
+                    audio_chunk.tolist() if hasattr(audio_chunk, "tolist") else audio_chunk
                 )
                 stream.add_audio(chunk_list, sample_rate)
 

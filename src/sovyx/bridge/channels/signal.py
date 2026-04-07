@@ -111,7 +111,6 @@ class SignalChannel:
                 is not registered.
         """
         try:
-
             async with aiohttp.ClientSession() as session:
                 url = f"{self._api_url}/v1/about"
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
@@ -203,7 +202,6 @@ class SignalChannel:
     async def send_typing(self, target: str) -> None:
         """Send typing indicator (best-effort, may not be supported)."""
         with contextlib.suppress(Exception):
-
             payload = {
                 "recipient": target,
             }

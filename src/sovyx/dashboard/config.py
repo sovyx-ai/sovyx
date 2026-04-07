@@ -22,14 +22,16 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 # Fields that can be modified at runtime via PUT /api/config
-_MUTABLE_SECTIONS = frozenset({
-    "personality",
-    "ocean",
-    "safety",
-    "name",
-    "language",
-    "timezone",
-})
+_MUTABLE_SECTIONS = frozenset(
+    {
+        "personality",
+        "ocean",
+        "safety",
+        "name",
+        "language",
+        "timezone",
+    }
+)
 
 
 def get_config(mind_config: MindConfig) -> dict[str, Any]:

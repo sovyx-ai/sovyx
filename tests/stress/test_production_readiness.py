@@ -100,7 +100,7 @@ class TestErrorRecovery:
 
     async def test_404_then_200(self, client: AsyncClient) -> None:
         r = await client.get("/api/nonexistent", headers=_auth())
-        assert r.status_code in {404, 200}  # SPA catch-all may return 200
+        assert r.status_code in {404, 200, 503}  # SPA catch-all or unbootstrapped
         r = await client.get("/api/status", headers=_auth())
         # 503 acceptable when registry not bootstrapped (e.g. CI)
         assert r.status_code in {200, 503}

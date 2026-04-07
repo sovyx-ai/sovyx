@@ -261,9 +261,7 @@ class AlertManager:
         """
         if metric_name not in self._metrics:
             self._metrics[metric_name] = deque(maxlen=self._max_samples)
-        self._metrics[metric_name].append(
-            MetricSample(timestamp=time.monotonic(), value=value)
-        )
+        self._metrics[metric_name].append(MetricSample(timestamp=time.monotonic(), value=value))
 
     def get_metric_value_in_window(
         self, metric_name: str, window_seconds: int
@@ -301,9 +299,7 @@ class AlertManager:
 
         Returns an Alert if the rule fires, None otherwise.
         """
-        total, count = self.get_metric_value_in_window(
-            rule.metric_name, rule.window_seconds
-        )
+        total, count = self.get_metric_value_in_window(rule.metric_name, rule.window_seconds)
 
         if count < rule.min_events:
             return None
@@ -471,10 +467,7 @@ class AlertManager:
         Returns:
             List of rule names in FIRING state.
         """
-        return [
-            name for name, state in self._states.items()
-            if state == AlertState.FIRING
-        ]
+        return [name for name, state in self._states.items() if state == AlertState.FIRING]
 
     def get_alert_summary(self) -> dict[str, Any]:
         """Return a summary of alert state for dashboard/API consumption.

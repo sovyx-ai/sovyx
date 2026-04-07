@@ -486,10 +486,12 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
 
         # Broadcast config change event to WebSocket clients
         if changes:
-            await ws_manager.broadcast({
-                "type": "ConfigUpdated",
-                "data": {"changes": changes},
-            })
+            await ws_manager.broadcast(
+                {
+                    "type": "ConfigUpdated",
+                    "data": {"changes": changes},
+                }
+            )
 
         return JSONResponse({"ok": True, "changes": changes})
 

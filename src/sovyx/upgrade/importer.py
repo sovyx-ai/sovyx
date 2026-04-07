@@ -145,23 +145,17 @@ class MindImporter:
         # Import concepts
         concepts_dir = smf_dir / "concepts"
         if concepts_dir.is_dir():
-            info.concepts_imported = await self._import_concepts_from_dir(
-                concepts_dir, mind_id
-            )
+            info.concepts_imported = await self._import_concepts_from_dir(concepts_dir, mind_id)
 
         # Import relations
         synapses_file = smf_dir / "metadata" / "synapses.json"
         if synapses_file.is_file():
-            info.relations_imported = await self._import_relations_from_file(
-                synapses_file
-            )
+            info.relations_imported = await self._import_relations_from_file(synapses_file)
 
         # Import conversations
         convos_dir = smf_dir / "conversations"
         if convos_dir.is_dir():
-            info.episodes_imported = await self._import_episodes_from_dir(
-                convos_dir, mind_id
-            )
+            info.episodes_imported = await self._import_episodes_from_dir(convos_dir, mind_id)
 
         logger.info(
             "smf_import_complete",
@@ -216,9 +210,7 @@ class MindImporter:
             mind_id = manifest["mind_id"]
 
             # Determine target directory
-            target_dir = db_restore_dir or (
-                Path.home() / ".sovyx" / "minds" / mind_id
-            )
+            target_dir = db_restore_dir or (Path.home() / ".sovyx" / "minds" / mind_id)
             target_db = target_dir / "brain.db"
 
             if target_db.exists() and not overwrite:
@@ -289,10 +281,7 @@ class MindImporter:
             raise ImportValidationError(msg)
 
         if not isinstance(version, int) or version > _MAX_FORMAT_VERSION:
-            msg = (
-                f"Unsupported format version: {version}. "
-                f"Max supported: {_MAX_FORMAT_VERSION}"
-            )
+            msg = f"Unsupported format version: {version}. Max supported: {_MAX_FORMAT_VERSION}"
             raise ImportValidationError(msg)
 
         if not manifest.get("mind_id"):
@@ -525,11 +514,11 @@ class MindImporter:
 
         for line in body.split("\n"):
             if line.startswith("**User:**"):
-                user_input = line[len("**User:**"):].strip()
+                user_input = line[len("**User:**") :].strip()
             elif line.startswith("**Assistant:**"):
-                assistant_response = line[len("**Assistant:**"):].strip()
+                assistant_response = line[len("**Assistant:**") :].strip()
             elif line.startswith("**Summary:**"):
-                summary = line[len("**Summary:**"):].strip()
+                summary = line[len("**Summary:**") :].strip()
 
         return {
             "id": meta.get("id", filepath.stem),
@@ -564,7 +553,7 @@ def _split_frontmatter(text: str) -> tuple[str | None, str]:
         return None, text
 
     frontmatter = text[3:end_idx].strip()
-    body = text[end_idx + 3:].strip()
+    body = text[end_idx + 3 :].strip()
     return frontmatter, body
 
 

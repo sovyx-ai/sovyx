@@ -273,9 +273,7 @@ class JarvisIllusion:
 
     # -- Filler selection (SUP-005 §1.3) ------------------------------------
 
-    def select_category(
-        self, user_input: str, intent: str | None = None
-    ) -> FillerCategory:
+    def select_category(self, user_input: str, intent: str | None = None) -> FillerCategory:
         """Select appropriate filler category based on user input.
 
         Args:
@@ -314,9 +312,7 @@ class JarvisIllusion:
         phrases = list(self._config.filler_bank.get(cat, ()))
         if not phrases:
             # Fallback to transitional
-            phrases = list(
-                self._config.filler_bank.get(FillerCategory.TRANSITIONAL, ("...",))
-            )
+            phrases = list(self._config.filler_bank.get(FillerCategory.TRANSITIONAL, ("...",)))
 
         # Repetition avoidance
         recent = list(self._history)
@@ -328,9 +324,7 @@ class JarvisIllusion:
         self._history.append(choice)
         return choice
 
-    def _filter_repetitions(
-        self, phrases: list[str], recent: list[str]
-    ) -> list[str]:
+    def _filter_repetitions(self, phrases: list[str], recent: list[str]) -> list[str]:
         """Remove phrases that would exceed consecutive repetition limit.
 
         Args:
@@ -432,9 +426,7 @@ def split_at_boundaries(text: str) -> list[str]:
     parts = re.split(r"(?<=[.!?;:\u2014\n])\s+", text)
     result: list[str] = []
     for part in parts:
-        if len(part.split()) >= _TEXT_MIN_WORDS or part.rstrip().endswith(
-            (".", "!", "?")
-        ):
+        if len(part.split()) >= _TEXT_MIN_WORDS or part.rstrip().endswith((".", "!", "?")):
             result.append(part)
         elif result:
             result[-1] += " " + part
