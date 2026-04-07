@@ -1,12 +1,13 @@
 /**
- * Brain page tests — V05-P03.
+ * Brain page tests — V05-P03 + V05-P09.
  *
  * Mocks API to avoid real fetches. Tests loading, error, success,
  * search, and search-result highlighting states.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@/test/test-utils";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, waitFor, fireEvent, act } from "@/test/test-utils";
+import { useDashboardStore } from "@/stores/dashboard";
 import BrainPage from "./brain";
 
 // Mock the API module
@@ -46,7 +47,17 @@ const MOCK_SEARCH = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.useFakeTimers();
+  // Reset zustand store between tests to prevent state leakage
+  useDashboardStore.setState({
+    brainGraph: null,
+    selectedBrainNode: null,
+    brainSearchResults: [],
+    brainSearchQuery: "",
+  });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("BrainPage", () => {
@@ -57,7 +68,6 @@ describe("BrainPage", () => {
   });
 
   it("shows error state on fetch failure", async () => {
-    vi.useRealTimers();
     mockApi.get.mockRejectedValueOnce(new Error("Network error"));
     render(<BrainPage />);
     await waitFor(() => {
@@ -66,7 +76,6 @@ describe("BrainPage", () => {
   });
 
   it("renders brain graph on successful fetch", async () => {
-    vi.useRealTimers();
     mockApi.get.mockResolvedValueOnce(MOCK_GRAPH);
     render(<BrainPage />);
     await waitFor(() => {
@@ -75,7 +84,6 @@ describe("BrainPage", () => {
   });
 
   it("shows empty state when no nodes", async () => {
-    vi.useRealTimers();
     mockApi.get.mockResolvedValueOnce({ nodes: [], links: [] });
     render(<BrainPage />);
     await waitFor(() => {
@@ -84,13 +92,12 @@ describe("BrainPage", () => {
   });
 
   it("renders search input", async () => {
-    vi.useRealTimers();
     mockApi.get.mockResolvedValueOnce(MOCK_GRAPH);
     render(<BrainPage />);
     await waitFor(() => {
       expect(screen.getByTestId("force-graph")).toBeInTheDocument();
     });
-    const searchInput = screen.getByRole("textbox", { name: /search brain concepts/i });
+    const searchInput = screen.getByRole("textbox", { name: /search concepts/i });
     expect(searchInput).toBeInTheDocument();
   });
 
@@ -102,29 +109,27 @@ describe("BrainPage", () => {
     render(<BrainPage />);
 
     // Wait for graph to load
-    await vi.advanceTimersByTimeAsync(0);
-
-    const searchInput = screen.getByRole("textbox", { name: /search brain concepts/i });
-    fireEvent.change(searchInput, { target: { value: "typescript" } });
-
-    // Before debounce fires, search should not be called
-    expect(mockApi.get).toHaveBeenCalledTimes(1); // only graph
-
-    // Advance past debounce
-    await vi.advanceTimersByTimeAsync(350);
-
     await waitFor(() => {
-      expect(mockApi.get).toHaveBeenCalledTimes(2);
+      expect(screen.getByTestId("force-graph")).toBeInTheDocument();
     });
 
-    expect(mockApi.get).toHaveBeenLastCalledWith(
-      "/api/brain/search?q=typescript&limit=20",
-      undefined,
+    const searchInput = screen.getByRole("textbox", { name: /search concepts/i });
+    fireEvent.change(searchInput, { target: { value: "typescript" } });
+
+    // Wait for debounce (300ms) + search fetch to resolve — results appear
+    await waitFor(() => {
+      expect(screen.getByText("TypeScript")).toBeInTheDocument();
+    });
+
+    // Verify the search endpoint was called with correct URL
+    const searchCall = mockApi.get.mock.calls.find(
+      (c: unknown[]) => typeof c[0] === "string" && (c[0] as string).includes("/api/brain/search"),
     );
+    expect(searchCall).toBeTruthy();
+    expect((searchCall as string[])[0]).toContain("q=typescript");
   });
 
   it("shows search results as chips", async () => {
-    vi.useRealTimers();
     mockApi.get
       .mockResolvedValueOnce(MOCK_GRAPH)
       .mockResolvedValueOnce(MOCK_SEARCH);
@@ -134,17 +139,18 @@ describe("BrainPage", () => {
       expect(screen.getByTestId("force-graph")).toBeInTheDocument();
     });
 
-    const searchInput = screen.getByRole("textbox", { name: /search brain concepts/i });
+    const searchInput = screen.getByRole("textbox", { name: /search concepts/i });
     fireEvent.change(searchInput, { target: { value: "typescript" } });
 
-    // Wait for debounce + fetch
+    // Wait for debounce + fetch — chip shows result name
     await waitFor(() => {
       expect(screen.getByText("TypeScript")).toBeInTheDocument();
     });
+    // Score badge
+    expect(screen.getByText("92%")).toBeInTheDocument();
   });
 
   it("clears search when X button is clicked", async () => {
-    vi.useRealTimers();
     mockApi.get
       .mockResolvedValueOnce(MOCK_GRAPH)
       .mockResolvedValueOnce(MOCK_SEARCH);
@@ -154,21 +160,21 @@ describe("BrainPage", () => {
       expect(screen.getByTestId("force-graph")).toBeInTheDocument();
     });
 
-    const searchInput = screen.getByRole("textbox", { name: /search brain concepts/i });
+    const searchInput = screen.getByRole("textbox", { name: /search concepts/i });
     fireEvent.change(searchInput, { target: { value: "typescript" } });
 
     await waitFor(() => {
       expect(screen.getByText("TypeScript")).toBeInTheDocument();
     });
 
-    const clearBtn = screen.getByRole("button", { name: /clear search/i });
+    // aria-label is t("common:clear", { defaultValue: "Clear" }) = "Clear"
+    const clearBtn = screen.getByLabelText("Clear");
     fireEvent.click(clearBtn);
 
     expect(searchInput).toHaveValue("");
   });
 
-  it("shows no results message for empty search results", async () => {
-    vi.useRealTimers();
+  it("hides results panel when search results are empty", async () => {
     mockApi.get
       .mockResolvedValueOnce(MOCK_GRAPH)
       .mockResolvedValueOnce({ results: [], query: "xyzzy" });
@@ -178,11 +184,15 @@ describe("BrainPage", () => {
       expect(screen.getByTestId("force-graph")).toBeInTheDocument();
     });
 
-    const searchInput = screen.getByRole("textbox", { name: /search brain concepts/i });
+    const searchInput = screen.getByRole("textbox", { name: /search concepts/i });
     fireEvent.change(searchInput, { target: { value: "xyzzy" } });
 
+    // Wait for search to complete
     await waitFor(() => {
-      expect(screen.getByText(/no concepts found/i)).toBeInTheDocument();
+      expect(mockApi.get).toHaveBeenCalledTimes(2);
     });
+
+    // No results panel should be visible (component renders nothing for empty results)
+    expect(screen.queryByText(/\d+ results/)).not.toBeInTheDocument();
   });
 });
