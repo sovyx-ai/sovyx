@@ -145,6 +145,10 @@ class TokenBudgetManager:
                 if overflow <= 0:
                     break
 
+        actual_total = (
+            raw_system + raw_concepts + raw_episodes
+            + raw_temporal + raw_conversation + raw_response
+        )
         return TokenBudget(
             system_prompt=raw_system,
             memory_concepts=raw_concepts,
@@ -152,5 +156,5 @@ class TokenBudgetManager:
             temporal=raw_temporal,
             conversation=raw_conversation,
             response_reserve=raw_response,
-            total=context_window,
+            total=actual_total,
         )
