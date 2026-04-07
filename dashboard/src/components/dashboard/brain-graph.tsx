@@ -34,6 +34,8 @@ interface BrainGraphProps {
   width: number;
   height: number;
   onNodeClick?: (node: BrainNode) => void;
+  /** Set of node IDs to highlight (e.g. from search results). */
+  highlightedNodeIds?: Set<string>;
 }
 
 /** Line dash patterns per relation type — from immersion node. */
@@ -49,7 +51,7 @@ const RELATION_LINE_DASH: Record<RelationType, number[] | null> = {
 
 import { GRAPH_COLORS } from "@/lib/constants";
 
-export function BrainGraph({ data, width, height, onNodeClick }: BrainGraphProps) {
+export function BrainGraph({ data, width, height, onNodeClick, highlightedNodeIds }: BrainGraphProps) {
   const fgRef = useRef<ForceGraphMethods<BrainNode>>(undefined);
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
 
@@ -61,7 +63,9 @@ export function BrainGraph({ data, width, height, onNodeClick }: BrainGraphProps
     return () => clearTimeout(timer);
   }, [data]);
 
-  // Custom node renderer with glow on hover
+  const hasHighlights = highlightedNodeIds != null && highlightedNodeIds.size > 0;
+
+  // Custom node renderer with glow on hover and search highlight
   const nodeCanvasObject = useCallback(
     (node: BrainNode, ctx: CanvasRenderingContext2D, globalScale: number) => {
       const x = (node as unknown as { x: number }).x;
@@ -72,6 +76,17 @@ export function BrainGraph({ data, width, height, onNodeClick }: BrainGraphProps
       // Canvas API requires hex — fallback maps to --svx-color-text-secondary
       const color = CATEGORY_COLORS[node.category] ?? GRAPH_COLORS.textSecondary;
       const isHovered = hoveredNode === node.id;
+      const isHighlighted = highlightedNodeIds?.has(node.id) ?? false;
+      // Dim non-matching nodes when search is active
+      const isDimmed = hasHighlights && !isHighlighted && !isHovered;
+
+      // Highlight ring for search matches (pulsing glow)
+      if (isHighlighted) {
+        ctx.beginPath();
+        ctx.arc(x, y, radius + 6 / globalScale, 0, 2 * Math.PI);
+        ctx.fillStyle = GRAPH_COLORS.searchHighlight ?? "rgba(168, 85, 247, 0.35)";
+        ctx.fill();
+      }
 
       // Glow ring for hovered node (rendered BEFORE the node)
       if (isHovered) {
@@ -85,29 +100,36 @@ export function BrainGraph({ data, width, height, onNodeClick }: BrainGraphProps
       ctx.beginPath();
       ctx.arc(x, y, radius, 0, 2 * Math.PI);
       ctx.fillStyle = color;
-      ctx.globalAlpha = 0.3 + node.confidence * 0.7;
+      ctx.globalAlpha = isDimmed ? 0.12 : 0.3 + node.confidence * 0.7;
       ctx.fill();
 
       // Border
-      ctx.strokeStyle = color;
-      ctx.lineWidth = isHovered ? 2 : 1;
-      ctx.globalAlpha = 1;
+      ctx.strokeStyle = isHighlighted ? (GRAPH_COLORS.searchBorder ?? "#a855f7") : color;
+      ctx.lineWidth = isHighlighted ? 2.5 : isHovered ? 2 : 1;
+      ctx.globalAlpha = isDimmed ? 0.2 : 1;
       ctx.stroke();
 
-      // Label (visible when zoomed in or hovered)
-      if (globalScale > 1.5 || isHovered) {
+      // Reset alpha
+      ctx.globalAlpha = 1;
+
+      // Label (visible when zoomed in, hovered, or highlighted)
+      if (globalScale > 1.5 || isHovered || isHighlighted) {
         const label = node.name;
         const fontSize = Math.max(10 / globalScale, 2);
-        ctx.font = `${fontSize}px "Geist Sans", ui-sans-serif, sans-serif`;
+        ctx.font = `${isHighlighted ? "bold " : ""}${fontSize}px "Geist Sans", ui-sans-serif, sans-serif`;
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
-        ctx.fillStyle = isHovered
-          ? "rgba(248, 250, 252, 0.95)"  // text-primary when hovered
-          : "rgba(248, 250, 252, 0.7)";   // slightly dimmer otherwise
+        ctx.fillStyle = isDimmed
+          ? "rgba(248, 250, 252, 0.2)"
+          : isHighlighted
+            ? "rgba(248, 250, 252, 1.0)"
+            : isHovered
+              ? "rgba(248, 250, 252, 0.95)"
+              : "rgba(248, 250, 252, 0.7)";
         ctx.fillText(label, x, y + radius + 2);
       }
     },
-    [hoveredNode],
+    [hoveredNode, highlightedNodeIds, hasHighlights],
   );
 
   // Relation type → line dash

@@ -191,6 +191,7 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
     # Shared state
     ws_manager = ConnectionManager()
     app.state.ws_manager = ws_manager
+    app.state.auth_token = _server_token
 
     # ── Auth dependency (using Header) ──
 
@@ -331,6 +332,20 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
             graph = await _get_graph(registry, limit=limit)
             return JSONResponse(graph)
         return JSONResponse({"nodes": [], "links": []})
+
+    @app.get("/api/brain/search", dependencies=[Depends(verify_token)])
+    async def brain_search(
+        q: str = Query(default="", max_length=500),
+        limit: int = Query(default=20, ge=1, le=100),
+    ) -> JSONResponse:
+        """Semantic search over brain concepts (hybrid FTS+vector)."""
+        registry = getattr(app.state, "registry", None)
+        if registry is not None:
+            from sovyx.dashboard.brain import search_brain
+
+            results = await search_brain(registry, q, limit=limit)
+            return JSONResponse({"results": results, "query": q})
+        return JSONResponse({"results": [], "query": q})
 
     @app.get("/api/logs", dependencies=[Depends(verify_token)])
     async def get_logs(

@@ -101,6 +101,48 @@ class TestBrainEndpoint:
         assert "nodes" in data or isinstance(data, dict)
 
 
+class TestBrainSearchEndpoint:
+    """GET /api/brain/search."""
+
+    async def test_search_no_query_returns_empty(self, client: AsyncClient) -> None:
+        """Empty query returns empty results."""
+        r = await client.get("/api/brain/search?q=", headers=_auth())
+        assert r.status_code == 200
+        data = r.json()
+        assert data["results"] == []
+        assert data["query"] == ""
+
+    async def test_search_returns_structure(self, client: AsyncClient) -> None:
+        """Search returns correct response structure even without a registry."""
+        r = await client.get("/api/brain/search?q=test", headers=_auth())
+        assert r.status_code == 200
+        data = r.json()
+        assert "results" in data
+        assert "query" in data
+        assert data["query"] == "test"
+        assert isinstance(data["results"], list)
+
+    async def test_search_limit_param(self, client: AsyncClient) -> None:
+        """Limit parameter is accepted."""
+        r = await client.get("/api/brain/search?q=test&limit=5", headers=_auth())
+        assert r.status_code == 200
+        data = r.json()
+        assert isinstance(data["results"], list)
+
+    async def test_search_requires_auth(self, client: AsyncClient) -> None:
+        """Search endpoint requires authentication."""
+        r = await client.get("/api/brain/search?q=test")
+        assert r.status_code == 401
+
+    async def test_search_limit_validation(self, client: AsyncClient) -> None:
+        """Limit must be between 1 and 100."""
+        r = await client.get("/api/brain/search?q=test&limit=0", headers=_auth())
+        assert r.status_code == 422
+
+        r = await client.get("/api/brain/search?q=test&limit=101", headers=_auth())
+        assert r.status_code == 422
+
+
 class TestLogsEndpoint:
     """GET /api/logs."""
 
