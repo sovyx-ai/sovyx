@@ -41,7 +41,10 @@ nav:
   - Configuration: configuration.md
   - API Reference: api.md
   - Voice: voice.md
+  - Upgrade Guide: upgrade.md
   - Plugins: plugins.md
+  - ADRs:
+    - Observability: adr/ADR-002-observability-fixes.md
 
 markdown_extensions:
   - admonition
