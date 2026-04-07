@@ -228,3 +228,82 @@ Prometheus-compatible metrics endpoint (no authentication required).
 | `sovyx_brain_concepts_total` | gauge | Total concepts in brain |
 | `sovyx_llm_cost_usd_total` | counter | Cumulative LLM cost |
 | `sovyx_active_minds` | gauge | Currently active minds |
+
+---
+
+## v0.5 Endpoints
+
+### Backup
+
+#### `POST /api/backup`
+
+Create a manual backup of the database.
+
+**Response:**
+```json
+{
+  "path": "/home/user/.sovyx/backups/backup_manual_20260407.db",
+  "trigger": "manual",
+  "size_bytes": 524288,
+  "encrypted": false,
+  "created_at": "2026-04-07T17:00:00Z"
+}
+```
+
+### License
+
+#### `GET /api/license`
+
+Get current license status.
+
+**Response:**
+```json
+{
+  "status": "valid",
+  "tier": "pro",
+  "expires_in_days": 25,
+  "grace_days_remaining": 0,
+  "can_operate": true
+}
+```
+
+### Upgrade
+
+#### `GET /api/upgrade/check`
+
+Check if an upgrade is available.
+
+**Response:**
+```json
+{
+  "current_version": "0.5.0",
+  "has_pending": true,
+  "pending_count": 2,
+  "migrations": [
+    {"version": "0.6.0", "description": "Add voice tables"}
+  ]
+}
+```
+
+#### `POST /api/upgrade`
+
+Start the upgrade process. Returns the upgrade report.
+
+### Doctor
+
+#### `GET /api/doctor`
+
+Run all diagnostic checks and return the report.
+
+**Response:**
+```json
+{
+  "healthy": true,
+  "passed": 11,
+  "warned": 0,
+  "failed": 0,
+  "results": [
+    {"check": "db_integrity", "status": "pass", "message": "OK", "duration_ms": 12}
+  ]
+}
+```

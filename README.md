@@ -4,14 +4,24 @@
 
 ## ✨ Features
 
+### Core
 - **Persistent Memory** — Concepts, episodes, and relationships stored in a brain-inspired architecture
 - **Personality Engine** — OCEAN model + configurable traits define how your Mind communicates
 - **Semantic Search** — FTS5 + sqlite-vec embedding for intelligent recall
 - **Adaptive Context** — Lost-in-Middle ordering, adaptive token budgets, 6-slot context assembly
-- **Multi-Provider LLM** — Anthropic Claude, OpenAI GPT, local Ollama — with automatic fallback
+- **Multi-Provider LLM** — Anthropic Claude, OpenAI GPT, Google Gemini, local Ollama — with automatic failover and complexity-based routing
 - **Cost Control** — Daily and per-conversation budgets with persistent tracking
-- **Telegram Integration** — Talk to your Mind via Telegram
 - **Self-Hosted** — Your data stays on your hardware. Always.
+
+### v0.5 "First Words" — NEW
+- **🎙️ Voice Pipeline** — Wake word detection, VAD, local STT/TTS (Silero, Moonshine, Piper, Kokoro), Home Assistant integration via Wyoming
+- **📊 Dashboard** — Real-time web UI with brain visualization, conversations, logs, settings, and system status
+- **☁️ Cloud Backup** — Zero-knowledge encrypted backups (Argon2id + AES-256-GCM), Stripe billing, usage metering
+- **📡 Signal Integration** — Talk to your Mind via Signal (via signal-cli-rest-api)
+- **📈 Observability** — SLO monitoring, Prometheus /metrics, alerting, cost tracking
+- **🔄 Zero-Downtime Upgrades** — Blue-green upgrade pipeline with automatic rollback
+- **🏋️ Benchmarks** — Performance budgets per hardware tier (Pi5, N100, GPU), baseline regression detection
+- **🔌 Telegram + Signal** — Multi-channel messaging
 
 ## 🚀 Quick Start
 
