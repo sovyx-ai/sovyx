@@ -34,6 +34,21 @@ from sovyx.cloud.billing import (
     WebhookSignatureError,
 )
 from sovyx.cloud.crypto import BackupCrypto
+from sovyx.cloud.dunning import (
+    CustomerResolver,
+    DunningEmail,
+    DunningRecord,
+    DunningService,
+    DunningState,
+    DunningStore,
+    EmailSender,
+    EmailType,
+    InMemoryCustomerResolver,
+    InMemoryDunningStore,
+    InMemoryEmailSender,
+    NoopSubscriptionDowngrader,
+    SubscriptionDowngrader,
+)
 from sovyx.cloud.flex import (
     BalanceTransaction,
     FlexBalance,
@@ -98,6 +113,20 @@ __all__ = [
     "AllProvidersFailedError",
     "BackupConfig",
     "BackupCrypto",
+    # dunning
+    "CustomerResolver",
+    "DunningEmail",
+    "DunningRecord",
+    "DunningService",
+    "DunningState",
+    "DunningStore",
+    "EmailSender",
+    "EmailType",
+    "InMemoryCustomerResolver",
+    "InMemoryDunningStore",
+    "InMemoryEmailSender",
+    "NoopSubscriptionDowngrader",
+    "SubscriptionDowngrader",
     "BackupInfo",
     "BackupMetadata",
     "BackupScheduler",
