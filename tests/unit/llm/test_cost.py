@@ -1,4 +1,4 @@
-"""Tests for sovyx.llm.cost — CostGuard."""
+"""Tests for sovyx.llm.cost — CostGuard + CostBreakdown."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from sovyx.llm.cost import CostGuard
+from sovyx.llm.cost import CostBreakdown, CostGuard
 
 
 class TestCanAfford:
@@ -238,3 +238,214 @@ class TestPersistence:
         await g.record(1.0, "model", "conv1")
         # Should not raise, spend still tracked in-memory
         assert g.get_daily_spend() == 1.0
+
+    async def test_persist_and_restore_breakdown(self, tmp_path: object) -> None:
+        """Record with provider/mind → persist → restore → breakdown intact."""
+        from pathlib import Path
+
+        from sovyx.persistence.migrations import MigrationRunner
+        from sovyx.persistence.pool import DatabasePool
+        from sovyx.persistence.schemas.system import get_system_migrations
+
+        db_path = Path(str(tmp_path)) / "breakdown.db"
+        pool = DatabasePool(db_path=db_path, read_pool_size=1)
+        await pool.initialize()
+        runner = MigrationRunner(pool)
+        await runner.initialize()
+        await runner.run_migrations(get_system_migrations())
+
+        g1 = CostGuard(daily_budget=10.0, per_conversation_budget=2.0, system_pool=pool)
+        await g1.record(
+            1.5, "claude-3-opus", "conv-a",
+            provider="anthropic", mind_id="main", tokens=500,
+        )
+        await g1.record(
+            0.3, "gpt-4o", "conv-b",
+            provider="openai", mind_id="research", tokens=200,
+        )
+
+        g2 = CostGuard(daily_budget=10.0, per_conversation_budget=2.0, system_pool=pool)
+        await g2.restore()
+
+        bd = g2.get_breakdown("day")
+        assert bd.total_cost == pytest.approx(1.8)
+        assert bd.total_tokens == 700
+        assert bd.by_provider["anthropic"] == pytest.approx(1.5)
+        assert bd.by_provider["openai"] == pytest.approx(0.3)
+        assert bd.by_mind["main"] == pytest.approx(1.5)
+        assert bd.by_mind["research"] == pytest.approx(0.3)
+        assert bd.tokens_by_provider["anthropic"] == 500
+        assert bd.tokens_by_provider["openai"] == 200
+
+        await pool.close()
+
+
+class TestRecordCost:
+    """Tests for record_cost convenience method."""
+
+    async def test_record_cost_tracks_provider(self) -> None:
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        await g.record_cost(
+            provider="anthropic", mind_id="default",
+            tokens=1000, cost=0.5, model="claude-3-opus",
+        )
+        assert g.get_provider_spend("anthropic") == pytest.approx(0.5)
+
+    async def test_record_cost_tracks_mind(self) -> None:
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        await g.record_cost(
+            provider="openai", mind_id="research",
+            tokens=500, cost=0.2, model="gpt-4o",
+        )
+        assert g.get_mind_spend("research") == pytest.approx(0.2)
+
+    async def test_record_cost_accumulates(self) -> None:
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        await g.record_cost("anthropic", "main", 100, 0.1)
+        await g.record_cost("anthropic", "main", 200, 0.2)
+        assert g.get_provider_spend("anthropic") == pytest.approx(0.3)
+        assert g.get_mind_spend("main") == pytest.approx(0.3)
+
+    async def test_record_cost_also_tracks_daily(self) -> None:
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        await g.record_cost("anthropic", "main", 100, 0.5)
+        assert g.get_daily_spend() == pytest.approx(0.5)
+
+    async def test_record_cost_with_conversation(self) -> None:
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        await g.record_cost(
+            "anthropic", "main", 100, 0.5,
+            conversation_id="conv1",
+        )
+        assert g.get_conversation_spend("conv1") == pytest.approx(0.5)
+
+
+class TestCostBreakdown:
+    """Tests for get_breakdown and CostBreakdown."""
+
+    async def test_empty_breakdown(self) -> None:
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        bd = g.get_breakdown("day")
+        assert bd.total_cost == 0.0
+        assert bd.total_tokens == 0
+        assert bd.by_provider == {}
+        assert bd.by_mind == {}
+        assert bd.by_model == {}
+
+    async def test_breakdown_multiple_providers(self) -> None:
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        await g.record(1.0, "claude-3-opus", "c1", provider="anthropic", tokens=500)
+        await g.record(0.5, "gpt-4o", "c2", provider="openai", tokens=300)
+        await g.record(0.0, "llama3", "c3", provider="ollama", tokens=100)
+
+        bd = g.get_breakdown("day")
+        assert bd.total_cost == pytest.approx(1.5)
+        assert bd.total_tokens == 900
+        assert len(bd.by_provider) == 3
+        assert bd.by_provider["anthropic"] == pytest.approx(1.0)
+        assert bd.by_provider["openai"] == pytest.approx(0.5)
+        assert bd.by_provider["ollama"] == pytest.approx(0.0)
+
+    async def test_breakdown_multiple_minds(self) -> None:
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        await g.record(0.8, "model", "c1", mind_id="main", tokens=400)
+        await g.record(0.3, "model", "c2", mind_id="research", tokens=150)
+        await g.record(0.1, "model", "c3", mind_id="creative", tokens=50)
+
+        bd = g.get_breakdown("day")
+        assert bd.by_mind["main"] == pytest.approx(0.8)
+        assert bd.by_mind["research"] == pytest.approx(0.3)
+        assert bd.by_mind["creative"] == pytest.approx(0.1)
+        assert bd.tokens_by_mind["main"] == 400
+        assert bd.tokens_by_mind["research"] == 150
+
+    async def test_breakdown_by_model(self) -> None:
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        await g.record(1.0, "claude-3-opus", "c1", provider="anthropic")
+        await g.record(0.5, "claude-3-opus", "c2", provider="anthropic")
+        await g.record(0.2, "claude-3-haiku", "c3", provider="anthropic")
+
+        bd = g.get_breakdown("day")
+        assert bd.by_model["claude-3-opus"] == pytest.approx(1.5)
+        assert bd.by_model["claude-3-haiku"] == pytest.approx(0.2)
+
+    async def test_breakdown_unsupported_period(self) -> None:
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        with pytest.raises(ValueError, match="Unsupported period"):
+            g.get_breakdown("week")
+
+    async def test_breakdown_resets_on_new_day(self) -> None:
+        from datetime import timedelta
+        from unittest.mock import patch
+
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        await g.record(1.0, "model", "c1", provider="anthropic", mind_id="main", tokens=100)
+
+        bd = g.get_breakdown("day")
+        assert bd.total_cost == pytest.approx(1.0)
+
+        tomorrow = datetime.now(tz=UTC) + timedelta(days=1)
+        with patch("sovyx.llm.cost.datetime") as mock_dt:
+            mock_dt.now.return_value = tomorrow
+            mock_dt.side_effect = lambda *a, **k: datetime(*a, **k)
+            bd = g.get_breakdown("day")
+            assert bd.total_cost == 0.0
+            assert bd.by_provider == {}
+            assert bd.by_mind == {}
+
+    async def test_record_without_provider_mind(self) -> None:
+        """Record without provider/mind still tracks daily and model."""
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        await g.record(0.5, "model", "c1")
+        assert g.get_daily_spend() == pytest.approx(0.5)
+        bd = g.get_breakdown("day")
+        assert bd.by_model["model"] == pytest.approx(0.5)
+        assert bd.by_provider == {}
+        assert bd.by_mind == {}
+
+
+class TestProviderMindQueries:
+    """Tests for per-provider and per-mind query methods."""
+
+    async def test_get_provider_spend_unknown(self) -> None:
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        assert g.get_provider_spend("unknown") == 0.0
+
+    async def test_get_mind_spend_unknown(self) -> None:
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        assert g.get_mind_spend("unknown") == 0.0
+
+    async def test_get_model_spend_unknown(self) -> None:
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        assert g.get_model_spend("unknown") == 0.0
+
+    async def test_get_provider_spend_accumulated(self) -> None:
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        await g.record(0.5, "m1", "c1", provider="anthropic")
+        await g.record(0.3, "m2", "c2", provider="anthropic")
+        assert g.get_provider_spend("anthropic") == pytest.approx(0.8)
+
+    async def test_get_mind_spend_accumulated(self) -> None:
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        await g.record(0.2, "m1", "c1", mind_id="main")
+        await g.record(0.4, "m2", "c2", mind_id="main")
+        assert g.get_mind_spend("main") == pytest.approx(0.6)
+
+
+class TestCostBreakdownDataclass:
+    """CostBreakdown dataclass behavior."""
+
+    def test_frozen(self) -> None:
+        bd = CostBreakdown(total_cost=1.0)
+        with pytest.raises(AttributeError):
+            bd.total_cost = 2.0  # type: ignore[misc]
+
+    def test_defaults(self) -> None:
+        bd = CostBreakdown()
+        assert bd.total_cost == 0.0
+        assert bd.total_tokens == 0
+        assert bd.by_provider == {}
+        assert bd.by_mind == {}
+        assert bd.by_model == {}
+        assert bd.tokens_by_provider == {}
+        assert bd.tokens_by_mind == {}
