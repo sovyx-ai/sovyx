@@ -74,12 +74,14 @@ class ConnectionManager:
         self._lock = asyncio.Lock()
 
     async def connect(self, websocket: WebSocket) -> None:
+        """Accept and register a WebSocket connection."""
         await websocket.accept()
         async with self._lock:
             self._connections.append(websocket)
         logger.debug("ws_connected", count=len(self._connections))
 
     async def disconnect(self, websocket: WebSocket) -> None:
+        """Remove a WebSocket connection."""
         async with self._lock:
             if websocket in self._connections:
                 self._connections.remove(websocket)
@@ -112,6 +114,7 @@ class ConnectionManager:
 
     @property
     def active_count(self) -> int:
+        """Number of active WebSocket connections."""
         return len(self._connections)
 
 
@@ -134,6 +137,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         request: Request,
         call_next: RequestResponseEndpoint,
     ) -> Response:
+        """Apply security headers to all responses."""
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
@@ -204,6 +208,7 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
     async def verify_token(
         credentials: HTTPAuthorizationCredentials | None = _security_dep,  # noqa: B008
     ) -> str:
+        """Verify a dashboard authentication token."""
         if credentials is None:
             raise HTTPException(
                 status_code=HTTP_401_UNAUTHORIZED,
@@ -588,10 +593,12 @@ class DashboardServer:
 
     @property
     def app(self) -> FastAPI | None:
+        """ASGI application instance."""
         return self._app
 
     @property
     def ws_manager(self) -> ConnectionManager | None:
+        """WebSocket connection manager."""
         if self._app:
             mgr: ConnectionManager = self._app.state.ws_manager
             return mgr

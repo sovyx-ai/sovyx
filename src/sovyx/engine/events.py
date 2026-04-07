@@ -67,6 +67,7 @@ class EngineStarted(Event):
 
     @property
     def category(self) -> EventCategory:
+        """Event category."""
         return EventCategory.ENGINE
 
 
@@ -78,6 +79,7 @@ class EngineStopping(Event):
 
     @property
     def category(self) -> EventCategory:
+        """Event category."""
         return EventCategory.ENGINE
 
 
@@ -91,6 +93,7 @@ class ServiceHealthChanged(Event):
 
     @property
     def category(self) -> EventCategory:
+        """Event category."""
         return EventCategory.ENGINE
 
 
@@ -109,6 +112,7 @@ class PerceptionReceived(Event):
 
     @property
     def category(self) -> EventCategory:
+        """Event category."""
         return EventCategory.COGNITIVE
 
 
@@ -126,6 +130,7 @@ class ThinkCompleted(Event):
 
     @property
     def category(self) -> EventCategory:
+        """Event category."""
         return EventCategory.COGNITIVE
 
 
@@ -140,6 +145,7 @@ class ResponseSent(Event):
 
     @property
     def category(self) -> EventCategory:
+        """Event category."""
         return EventCategory.COGNITIVE
 
 
@@ -156,6 +162,7 @@ class ConceptCreated(Event):
 
     @property
     def category(self) -> EventCategory:
+        """Event category."""
         return EventCategory.BRAIN
 
 
@@ -169,6 +176,7 @@ class EpisodeEncoded(Event):
 
     @property
     def category(self) -> EventCategory:
+        """Event category."""
         return EventCategory.BRAIN
 
 
@@ -183,6 +191,7 @@ class ConsolidationCompleted(Event):
 
     @property
     def category(self) -> EventCategory:
+        """Event category."""
         return EventCategory.BRAIN
 
 
@@ -198,6 +207,7 @@ class ChannelConnected(Event):
 
     @property
     def category(self) -> EventCategory:
+        """Event category."""
         return EventCategory.BRIDGE
 
 
@@ -210,6 +220,7 @@ class ChannelDisconnected(Event):
 
     @property
     def category(self) -> EventCategory:
+        """Event category."""
         return EventCategory.BRIDGE
 
 
