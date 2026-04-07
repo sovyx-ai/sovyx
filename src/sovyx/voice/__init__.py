@@ -15,6 +15,15 @@ from sovyx.voice.audio import (
     detect_platform,
     normalize_lufs,
 )
+from sovyx.voice.auto_select import (
+    HardwareProfile,
+    HardwareTier,
+    ModelSelection,
+    VoiceModelAutoSelector,
+    detect_hardware,
+    get_fallback,
+    select_models,
+)
 from sovyx.voice.jarvis import (
     FILLER_BANK,
     FillerCategory,
@@ -68,6 +77,13 @@ from sovyx.voice.wyoming import (
 
 __all__ = [
     "AudioCapture",
+    "HardwareProfile",
+    "HardwareTier",
+    "ModelSelection",
+    "VoiceModelAutoSelector",
+    "detect_hardware",
+    "get_fallback",
+    "select_models",
     "AudioCaptureConfig",
     "AudioChunk",
     "CloudSTT",
