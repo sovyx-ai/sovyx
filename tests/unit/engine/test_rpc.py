@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import pytest
 
@@ -168,5 +171,69 @@ class TestDaemonRPCServer:
             r2 = await client.call("inc")
             assert r1 == 1
             assert r2 == 2  # noqa: PLR2004
+        finally:
+            await server.stop()
+
+
+class TestRPCServerCoverageGaps:
+    """Cover remaining RPC server paths."""
+
+    @pytest.mark.asyncio()
+    async def test_stop_without_start(self, tmp_path: Path) -> None:
+        """Stop when server was never started is safe."""
+        socket_path = tmp_path / "test.sock"
+        server = DaemonRPCServer(socket_path)
+        await server.stop()  # _server is None — should not raise
+        assert not socket_path.exists()
+
+    @pytest.mark.asyncio()
+    async def test_handle_timeout_error(self, tmp_path: Path) -> None:
+        """TimeoutError during connection handling sends error response."""
+        socket_path = tmp_path / "test.sock"
+        server = DaemonRPCServer(socket_path)
+
+        await server.start()
+        try:
+            with patch(
+                "sovyx.engine.rpc_server.rpc_recv",
+                side_effect=TimeoutError("timed out"),
+            ):
+                reader, writer = await asyncio.open_unix_connection(str(socket_path))
+                # Server sends length-prefixed error response
+                from sovyx.engine.rpc_protocol import _HEADER_SIZE
+
+                header = await asyncio.wait_for(
+                    reader.readexactly(_HEADER_SIZE), timeout=2.0,
+                )
+                length = int.from_bytes(header, "big")
+                raw = await asyncio.wait_for(
+                    reader.readexactly(length), timeout=2.0,
+                )
+                data = json.loads(raw.decode())
+                assert data["error"]["code"] == -32000
+                assert "timeout" in data["error"]["message"].lower()
+                writer.close()
+                await writer.wait_closed()
+        finally:
+            await server.stop()
+
+    @pytest.mark.asyncio()
+    async def test_handle_generic_exception(self, tmp_path: Path) -> None:
+        """Generic exception during handling is logged silently."""
+        socket_path = tmp_path / "test.sock"
+        server = DaemonRPCServer(socket_path)
+
+        await server.start()
+        try:
+            with patch(
+                "sovyx.engine.rpc_server.rpc_recv",
+                side_effect=RuntimeError("unexpected"),
+            ):
+                reader, writer = await asyncio.open_unix_connection(str(socket_path))
+                # Connection should be closed by server
+                _ = await asyncio.wait_for(reader.read(4096), timeout=2.0)
+                # Server may or may not send data before closing
+                writer.close()
+                await writer.wait_closed()
         finally:
             await server.stop()
