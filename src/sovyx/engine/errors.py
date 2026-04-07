@@ -94,9 +94,41 @@ class BrainError(SovyxError):
 class ConceptNotFoundError(BrainError):
     """Concept with given ID does not exist."""
 
+    concept_id: str = ""
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        concept_id: str = "",
+        context: dict[str, object] | None = None,
+    ) -> None:
+        self.concept_id = concept_id
+        ctx = dict(context or {})
+        if concept_id:
+            ctx["concept_id"] = concept_id
+        msg = message or f"Concept not found: {concept_id}"
+        super().__init__(msg, context=ctx)
+
 
 class EpisodeNotFoundError(BrainError):
     """Episode with given ID does not exist."""
+
+    episode_id: str = ""
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        episode_id: str = "",
+        context: dict[str, object] | None = None,
+    ) -> None:
+        self.episode_id = episode_id
+        ctx = dict(context or {})
+        if episode_id:
+            ctx["episode_id"] = episode_id
+        msg = message or f"Episode not found: {episode_id}"
+        super().__init__(msg, context=ctx)
 
 
 class EmbeddingError(BrainError):
@@ -204,6 +236,22 @@ class MindError(SovyxError):
 
 class MindNotFoundError(MindError):
     """Mind with given ID does not exist."""
+
+    mind_id: str = ""
+
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        mind_id: str = "",
+        context: dict[str, object] | None = None,
+    ) -> None:
+        self.mind_id = mind_id
+        ctx = dict(context or {})
+        if mind_id:
+            ctx["mind_id"] = mind_id
+        msg = message or f"Mind not found: {mind_id}"
+        super().__init__(msg, context=ctx)
 
 
 class MindConfigError(MindError):
