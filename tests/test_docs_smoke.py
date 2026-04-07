@@ -36,7 +36,10 @@ class TestDocsStructure:
         assert (DOCS_DIR / page).exists(), f"docs/{page} not found"
 
 
-_has_mkdocs = bool(subprocess.run(["mkdocs", "--version"], capture_output=True).returncode == 0)  # noqa: S603, S607
+try:
+    _has_mkdocs = subprocess.run(["mkdocs", "--version"], capture_output=True).returncode == 0  # noqa: S603, S607
+except FileNotFoundError:
+    _has_mkdocs = False
 
 
 @pytest.mark.skipif(not _has_mkdocs, reason="mkdocs not installed")
