@@ -87,22 +87,22 @@ def _create_smf_dir(
         cat_dir = smf / "concepts" / "fact"
         cat_dir.mkdir(parents=True)
         concept_md = (
-            '---\n'
+            "---\n"
             'id: "c-001"\n'
-            'type: fact\n'
-            'category: fact\n'
+            "type: fact\n"
+            "category: fact\n"
             'created: "2026-02-10"\n'
             'updated: "2026-03-15"\n'
             'source: "conversation"\n'
-            'confidence: 0.9\n'
-            'importance: 0.8\n'
-            'emotional_valence: 0.1\n'
-            'access_count: 3\n'
-            '---\n'
-            '\n'
-            '# Likes Coffee\n'
-            '\n'
-            'User drinks coffee daily.\n'
+            "confidence: 0.9\n"
+            "importance: 0.8\n"
+            "emotional_valence: 0.1\n"
+            "access_count: 3\n"
+            "---\n"
+            "\n"
+            "# Likes Coffee\n"
+            "\n"
+            "User drinks coffee daily.\n"
         )
         (cat_dir / "likes-coffee.md").write_text(concept_md)
 
@@ -127,22 +127,22 @@ def _create_smf_dir(
         conv_dir = smf / "conversations"
         conv_dir.mkdir()
         ep_md = (
-            '---\n'
+            "---\n"
             'id: "ep-001"\n'
             'conversation_id: "conv-001"\n'
             'created: "2026-03-15"\n'
-            'importance: 0.6\n'
-            'emotional_valence: 0.2\n'
-            'emotional_arousal: 0.1\n'
-            '---\n'
-            '\n'
-            '# Episode — 2026-03-15\n'
-            '\n'
-            '**User:** Hello\n'
-            '\n'
-            '**Assistant:** Hi there!\n'
-            '\n'
-            '**Summary:** A greeting.\n'
+            "importance: 0.6\n"
+            "emotional_valence: 0.2\n"
+            "emotional_arousal: 0.1\n"
+            "---\n"
+            "\n"
+            "# Episode — 2026-03-15\n"
+            "\n"
+            "**User:** Hello\n"
+            "\n"
+            "**Assistant:** Hi there!\n"
+            "\n"
+            "**Summary:** A greeting.\n"
         )
         (conv_dir / "ep-001.md").write_text(ep_md)
 
@@ -265,9 +265,7 @@ class TestImportSmf:
 
     @pytest.mark.asyncio()
     async def test_concepts_only(self, tmp_path: Path) -> None:
-        smf_dir = _create_smf_dir(
-            tmp_path, relations=False, episodes=False
-        )
+        smf_dir = _create_smf_dir(tmp_path, relations=False, episodes=False)
         pool = _make_pool()
         importer = MindImporter(pool)
 
@@ -371,9 +369,7 @@ class TestImportArchive:
         importer = MindImporter(pool)
 
         restore_dir = tmp_path / "restore"
-        info = await importer.import_archive(
-            archive, db_restore_dir=restore_dir
-        )
+        info = await importer.import_archive(archive, db_restore_dir=restore_dir)
 
         assert info.mind_id == "test-mind"
         assert info.source_format == "sovyx-mind"
@@ -413,9 +409,7 @@ class TestImportArchive:
         pool = _make_pool()
         importer = MindImporter(pool)
 
-        info = await importer.import_archive(
-            archive, db_restore_dir=restore_dir, overwrite=True
-        )
+        info = await importer.import_archive(archive, db_restore_dir=restore_dir, overwrite=True)
         assert info.mind_id == "test-mind"
 
     @pytest.mark.asyncio()
@@ -473,9 +467,7 @@ class TestImportArchive:
         migrations = [MagicMock()]
         importer = MindImporter(pool, migration_runner=mock_runner, migrations=migrations)
 
-        info = await importer.import_archive(
-            archive, db_restore_dir=tmp_path / "r"
-        )
+        info = await importer.import_archive(archive, db_restore_dir=tmp_path / "r")
         assert info.migrations_applied == ["v0.5.0: add voice table"]
 
 
@@ -495,9 +487,7 @@ class TestManifestValidation:
 
     def test_validate_future_version(self) -> None:
         with pytest.raises(ImportValidationError, match="Unsupported"):
-            MindImporter._validate_manifest(
-                {"format_version": 999, "mind_id": "x"}
-            )
+            MindImporter._validate_manifest({"format_version": 999, "mind_id": "x"})
 
     def test_validate_valid(self) -> None:
         # Should not raise
@@ -512,16 +502,16 @@ class TestConceptParsing:
 
     def test_parse_valid_concept(self, tmp_path: Path) -> None:
         md = (
-            '---\n'
+            "---\n"
             'id: "c-test"\n'
-            'category: preference\n'
-            'confidence: 0.95\n'
-            'importance: 0.8\n'
-            '---\n'
-            '\n'
-            '# Coffee Lover\n'
-            '\n'
-            'Drinks espresso daily.\n'
+            "category: preference\n"
+            "confidence: 0.95\n"
+            "importance: 0.8\n"
+            "---\n"
+            "\n"
+            "# Coffee Lover\n"
+            "\n"
+            "Drinks espresso daily.\n"
         )
         filepath = tmp_path / "test.md"
         filepath.write_text(md)
@@ -550,9 +540,7 @@ class TestConceptParsing:
         assert result is None
 
     def test_parse_missing_file(self, tmp_path: Path) -> None:
-        result = MindImporter._parse_concept_file(
-            tmp_path / "ghost.md", "m"
-        )
+        result = MindImporter._parse_concept_file(tmp_path / "ghost.md", "m")
         assert result is None
 
 
@@ -564,20 +552,20 @@ class TestEpisodeParsing:
 
     def test_parse_valid_episode(self, tmp_path: Path) -> None:
         md = (
-            '---\n'
+            "---\n"
             'id: "ep-test"\n'
             'conversation_id: "conv-1"\n'
             'created: "2026-03-15"\n'
-            'importance: 0.7\n'
-            '---\n'
-            '\n'
-            '# Episode\n'
-            '\n'
-            '**User:** Hello world\n'
-            '\n'
-            '**Assistant:** Hi there!\n'
-            '\n'
-            '**Summary:** A greeting exchange.\n'
+            "importance: 0.7\n"
+            "---\n"
+            "\n"
+            "# Episode\n"
+            "\n"
+            "**User:** Hello world\n"
+            "\n"
+            "**Assistant:** Hi there!\n"
+            "\n"
+            "**Summary:** A greeting exchange.\n"
         )
         filepath = tmp_path / "ep.md"
         filepath.write_text(md)
@@ -596,3 +584,163 @@ class TestEpisodeParsing:
 
         result = MindImporter._parse_episode_file(filepath, "m")
         assert result is None
+
+
+# ── Coverage Gap Tests (lines 339, 366, 422, 475, 506-519) ──────────
+
+
+class TestImporterCoverageGaps:
+    """Tests targeting uncovered lines in importer.py."""
+
+    @pytest.mark.asyncio()
+    async def test_import_synapses_unicode_error(self, tmp_path: Path) -> None:
+        """Line 339: UnicodeDecodeError in synapses file."""
+        pool = AsyncMock()
+        importer = MindImporter(pool=pool)
+        synapses_file = tmp_path / "synapses.json"
+        synapses_file.write_bytes(b"\x80\x81\x82")  # invalid UTF-8
+        count = await importer._import_relations_from_file(synapses_file)
+        assert count == 0
+
+    @pytest.mark.asyncio()
+    async def test_import_synapses_non_list(self, tmp_path: Path) -> None:
+        """Line 343: synapses data is not a list."""
+        pool = AsyncMock()
+        importer = MindImporter(pool=pool)
+        synapses_file = tmp_path / "synapses.json"
+        synapses_file.write_text('{"not": "a list"}')
+        count = await importer._import_relations_from_file(synapses_file)
+        assert count == 0
+
+    @pytest.mark.asyncio()
+    async def test_import_episodes_from_dir(self, tmp_path: Path) -> None:
+        """Line 366: episode file that fails to parse returns None."""
+        pool = AsyncMock()
+        pool.write = _fake_write_ctx
+        importer = MindImporter(pool=pool)
+
+        convos_dir = tmp_path / "conversations"
+        convos_dir.mkdir()
+
+        # Valid episode
+        ep1 = convos_dir / "ep1.md"
+        ep1.write_text("---\nid: ep1\n---\n**User:** hello\n**Assistant:** hi\n")
+
+        # Invalid episode (no frontmatter)
+        ep2 = convos_dir / "ep2.md"
+        ep2.write_text("No frontmatter here")
+
+        count = await importer._import_episodes_from_dir(convos_dir, "mind1")
+        assert count == 1
+
+    def test_parse_episode_with_summary(self, tmp_path: Path) -> None:
+        """Line 506-507: episode body with **Summary:** line."""
+        pool = AsyncMock()
+        importer = MindImporter(pool=pool)
+        ep = tmp_path / "ep.md"
+        ep.write_text(
+            "---\nid: ep1\nimportance: 0.8\n---\n"
+            "**User:** test question\n"
+            "**Assistant:** test answer\n"
+            "**Summary:** a brief summary\n"
+        )
+        result = importer._parse_episode_file(ep, "mind1")
+        assert result is not None
+        assert result["summary"] == "a brief summary"
+        assert result["user_input"] == "test question"
+        assert result["assistant_response"] == "test answer"
+
+    def test_parse_episode_os_error(self, tmp_path: Path) -> None:
+        """Line 475: OSError reading episode file."""
+        pool = AsyncMock()
+        importer = MindImporter(pool=pool)
+        result = importer._parse_episode_file(tmp_path / "nonexistent.md", "m1")
+        assert result is None
+
+    def test_parse_episode_invalid_yaml(self, tmp_path: Path) -> None:
+        """Line 515-516: YAML parse error in episode frontmatter."""
+        pool = AsyncMock()
+        importer = MindImporter(pool=pool)
+        ep = tmp_path / "bad.md"
+        ep.write_text("---\n:::invalid[yaml\n---\nBody\n")
+        result = importer._parse_episode_file(ep, "mind1")
+        assert result is None
+
+    def test_parse_episode_non_dict_yaml(self, tmp_path: Path) -> None:
+        """Line 519: YAML parses to non-dict (e.g. list)."""
+        pool = AsyncMock()
+        importer = MindImporter(pool=pool)
+        ep = tmp_path / "list.md"
+        ep.write_text("---\n- item1\n- item2\n---\nBody\n")
+        result = importer._parse_episode_file(ep, "mind1")
+        assert result is None
+
+
+def _fake_write_ctx() -> AsyncMock:
+    """Create a mock async context manager for pool.write()."""
+    mock_conn = AsyncMock()
+    mock_ctx = AsyncMock()
+    mock_ctx.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_ctx.__aexit__ = AsyncMock(return_value=False)
+    return mock_ctx
+
+
+class TestImporterMetadataEdgeCases:
+    """Test metadata serialization edge cases."""
+
+    @pytest.mark.asyncio()
+    async def test_insert_concept_with_dict_metadata(self, tmp_path: Path) -> None:
+        """Line 366: metadata as dict gets JSON-serialized."""
+        pool = AsyncMock()
+        mock_conn = AsyncMock()
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+        pool.write = MagicMock(return_value=mock_ctx)
+
+        importer = MindImporter(pool=pool)
+        concept = {
+            "id": "c1",
+            "mind_id": "m1",
+            "name": "test",
+            "content": "content",
+            "category": "fact",
+            "importance": 0.5,
+            "confidence": 0.5,
+            "access_count": 0,
+            "emotional_valence": 0.0,
+            "source": "import",
+            "metadata": {"key": "value"},  # dict, not string
+            "created_at": "",
+            "updated_at": "",
+        }
+        await importer._insert_concept(concept)
+        mock_conn.execute.assert_awaited_once()
+
+    @pytest.mark.asyncio()
+    async def test_insert_episode_with_dict_metadata(self, tmp_path: Path) -> None:
+        """Line 422: episode metadata as dict gets JSON-serialized."""
+        pool = AsyncMock()
+        mock_conn = AsyncMock()
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+        pool.write = MagicMock(return_value=mock_ctx)
+
+        importer = MindImporter(pool=pool)
+        episode = {
+            "id": "e1",
+            "mind_id": "m1",
+            "conversation_id": "conv1",
+            "user_input": "hello",
+            "assistant_response": "hi",
+            "summary": None,
+            "importance": 0.5,
+            "emotional_valence": 0.0,
+            "emotional_arousal": 0.0,
+            "concepts_mentioned": ["c1", "c2"],
+            "metadata": {"nested": True},  # dict, not string
+            "created_at": "",
+        }
+        await importer._insert_episode(episode)
+        mock_conn.execute.assert_awaited_once()
