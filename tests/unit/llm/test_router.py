@@ -204,3 +204,92 @@ class TestEventEmission:
 
         await router.generate([{"role": "user", "content": "Hi"}])
         event_bus.emit.assert_called_once()
+
+
+class TestNonLLMResponseConversion:
+    """Provider returns a non-LLMResponse object (converted via vars())."""
+
+    async def test_raw_object_converted(
+        self, cost_guard: CostGuard, event_bus: AsyncMock
+    ) -> None:
+        """When provider returns a non-LLMResponse, router wraps it."""
+        import dataclasses
+
+        @dataclasses.dataclass
+        class RawResponse:
+            content: str = "raw"
+            model: str = "m"
+            tokens_in: int = 5
+            tokens_out: int = 3
+            latency_ms: int = 50
+            cost_usd: float = 0.0005
+            finish_reason: str = "stop"
+            provider: str = "raw-prov"
+            tool_calls: list[object] | None = None
+
+        p1 = _mock_provider("test")
+        p1.generate = AsyncMock(return_value=RawResponse())
+        router = LLMRouter([p1], cost_guard, event_bus)
+
+        result = await router.generate([{"role": "user", "content": "Hi"}])
+        assert isinstance(result, LLMResponse)
+        assert result.content == "raw"
+        assert result.provider == "raw-prov"
+
+
+class TestCircuitOpenSkip:
+    """Circuit open causes provider skip with error message."""
+
+    async def test_circuit_open_skips_and_reports(
+        self, cost_guard: CostGuard, event_bus: AsyncMock
+    ) -> None:
+        p1 = _mock_provider("anthropic", error=RuntimeError("fail"))
+        router = LLMRouter([p1], cost_guard, event_bus, circuit_breaker_failures=1)
+
+        # First call fails, opens circuit
+        with pytest.raises(ProviderUnavailableError, match="All providers"):
+            await router.generate([{"role": "user", "content": "1"}])
+
+        # Second call: circuit open, no provider available
+        with pytest.raises(ProviderUnavailableError, match="circuit open"):
+            await router.generate([{"role": "user", "content": "2"}])
+
+
+class TestPricingTable:
+    """_get_pricing coverage for known and unknown models."""
+
+    def test_known_model(self) -> None:
+        assert LLMRouter._get_pricing("gpt-4o") == (5.0, 15.0)
+
+    def test_unknown_model(self) -> None:
+        assert LLMRouter._get_pricing("some-unknown-model") == (3.0, 15.0)
+
+    def test_none_model(self) -> None:
+        assert LLMRouter._get_pricing(None) == (3.0, 15.0)
+
+    def test_all_known_models_have_pricing(self) -> None:
+        known = [
+            "claude-sonnet-4-20250514",
+            "claude-3-5-haiku-20241022",
+            "claude-opus-4-20250514",
+            "gpt-4o",
+            "gpt-4o-mini",
+            "o1",
+            "o3-mini",
+        ]
+        for m in known:
+            inp, out = LLMRouter._get_pricing(m)
+            assert inp > 0
+            assert out > 0
+
+
+class TestGetContextWindowNoModel:
+    """get_context_window with no model arg."""
+
+    def test_no_model_returns_default(self) -> None:
+        router = LLMRouter([], CostGuard(10, 2), AsyncMock())
+        assert router.get_context_window() == 128_000
+
+    def test_no_model_none_explicit(self) -> None:
+        router = LLMRouter([], CostGuard(10, 2), AsyncMock())
+        assert router.get_context_window(None) == 128_000
