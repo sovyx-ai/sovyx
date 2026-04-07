@@ -49,8 +49,7 @@ class TestMkDocsBuild:
             timeout=60,
         )
         assert result.returncode == 0, (
-            f"mkdocs build failed:\nstdout: {result.stdout[-500:]}\n"
-            f"stderr: {result.stderr[-500:]}"
+            f"mkdocs build failed:\nstdout: {result.stdout[-500:]}\nstderr: {result.stderr[-500:]}"
         )
 
     def test_site_index_generated(self) -> None:

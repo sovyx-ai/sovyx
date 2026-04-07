@@ -293,9 +293,7 @@ class TestGetRelationsViaDatabaseManager:
     @pytest.mark.asyncio()
     async def test_db_path_respects_max_links(self) -> None:
         """When max_links reached, stop adding."""
-        concepts = [
-            _mock_concept(f"c{i}", f"N{i}") for i in range(5)
-        ]
+        concepts = [_mock_concept(f"c{i}", f"N{i}") for i in range(5)]
         # Many rows — but limit=1 means max_links=3
         rows = [
             ("c0", "c1", "r", 0.5),
@@ -403,8 +401,16 @@ class TestGetRelationsViaDatabaseManager:
         ):
             result = await get_brain_graph(registry, limit=100)
 
-        assert result["nodes"] == [{"id": "c1", "name": "A", "category": "fact",
-                                     "importance": 0.5, "confidence": 0.7, "access_count": 3}]
+        assert result["nodes"] == [
+            {
+                "id": "c1",
+                "name": "A",
+                "category": "fact",
+                "importance": 0.5,
+                "confidence": 0.7,
+                "access_count": 3,
+            }
+        ]
         assert result["links"] == []
 
     @pytest.mark.asyncio()

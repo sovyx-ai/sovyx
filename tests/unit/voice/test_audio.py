@@ -186,7 +186,11 @@ class TestAudioCaptureConfig:
 
     def test_custom(self) -> None:
         cfg = AudioCaptureConfig(
-            sample_rate=44100, channels=2, chunk_ms=10, device=3, queue_maxsize=50,
+            sample_rate=44100,
+            channels=2,
+            chunk_ms=10,
+            device=3,
+            queue_maxsize=50,
         )
         assert cfg.sample_rate == 44100
         assert cfg.channels == 2
@@ -341,7 +345,8 @@ class TestAudioCapture:
         sys.modules["sounddevice"] = mock_sd
         try:
             rate = AudioCapture.negotiate_sample_rate(
-                device=None, preferred=16000,
+                device=None,
+                preferred=16000,
             )
             assert rate == 16000
         finally:
@@ -365,7 +370,8 @@ class TestAudioCapture:
         sys.modules["sounddevice"] = mock_sd
         try:
             rate = AudioCapture.negotiate_sample_rate(
-                device=None, preferred=16000,
+                device=None,
+                preferred=16000,
             )
             assert rate == 44100
         finally:
@@ -475,7 +481,9 @@ class TestAudioDucker:
 
     def test_fade_in_after_speaking(self) -> None:
         ducker = AudioDucker(
-            duck_level_db=-12.0, fade_in_ms=50, sample_rate=1000,
+            duck_level_db=-12.0,
+            fade_in_ms=50,
+            sample_rate=1000,
         )
         bg = np.full(100, 0.5, dtype=np.float32)
         ducker.duck(bg, is_speaking=True)
@@ -517,13 +525,19 @@ class TestOutputChunk:
     def test_priority_ordering(self) -> None:
         zeros = np.zeros(10, dtype=np.float32)
         filler = OutputChunk(
-            audio=zeros, sample_rate=22050, priority=OutputPriority.FILLER,
+            audio=zeros,
+            sample_rate=22050,
+            priority=OutputPriority.FILLER,
         )
         normal = OutputChunk(
-            audio=zeros, sample_rate=22050, priority=OutputPriority.NORMAL,
+            audio=zeros,
+            sample_rate=22050,
+            priority=OutputPriority.NORMAL,
         )
         low = OutputChunk(
-            audio=zeros, sample_rate=22050, priority=OutputPriority.LOW,
+            audio=zeros,
+            sample_rate=22050,
+            priority=OutputPriority.LOW,
         )
         assert filler < normal
         assert normal < low
@@ -537,7 +551,8 @@ class TestOutputChunk:
 
     def test_lt_not_implemented_for_other_types(self) -> None:
         chunk = OutputChunk(
-            audio=np.zeros(10, dtype=np.float32), sample_rate=22050,
+            audio=np.zeros(10, dtype=np.float32),
+            sample_rate=22050,
         )
         assert chunk.__lt__("not a chunk") is NotImplemented
 
@@ -610,7 +625,8 @@ class TestAudioOutput:
         out = AudioOutput()
         for _ in range(3):
             await out.enqueue(
-                np.zeros(100, dtype=np.float32), sample_rate=22050,
+                np.zeros(100, dtype=np.float32),
+                sample_rate=22050,
             )
         assert out.queue_size == 3
 
@@ -725,7 +741,8 @@ class TestAudioOutput:
             out = AudioOutput()
             audio = np.zeros(100, dtype=np.float32)
             await asyncio.wait_for(
-                out._play_chunk(audio, 22050), timeout=2.0,
+                out._play_chunk(audio, 22050),
+                timeout=2.0,
             )
         finally:
             if saved is not None:
@@ -742,7 +759,9 @@ class TestAudioOutput:
         out = AudioOutput()
         audio = np.zeros(100, dtype=np.float32)
         await out.enqueue(
-            audio, sample_rate=48000, priority=OutputPriority.FILLER,
+            audio,
+            sample_rate=48000,
+            priority=OutputPriority.FILLER,
         )
         assert out.queue_size == 1
 

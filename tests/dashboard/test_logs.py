@@ -104,12 +104,14 @@ class TestQueryLogs:
     def test_search_in_nested_dict(self, tmp_path: Path) -> None:
         """Search finds text inside nested dict/list values."""
         f = tmp_path / "nested.log"
-        entry = json.dumps({
-            "event": "generic",
-            "level": "info",
-            "logger": "test",
-            "details": {"inner_key": "secret_needle_here"},
-        })
+        entry = json.dumps(
+            {
+                "event": "generic",
+                "level": "info",
+                "logger": "test",
+                "details": {"inner_key": "secret_needle_here"},
+            }
+        )
         f.write_text(entry + "\n")
         result = query_logs(f, search="secret_needle_here")
         assert len(result) == 1
@@ -118,12 +120,14 @@ class TestQueryLogs:
     def test_search_nested_no_match(self, tmp_path: Path) -> None:
         """Search in nested dict that does NOT match returns empty."""
         f = tmp_path / "nested_no.log"
-        entry = json.dumps({
-            "event": "generic",
-            "level": "info",
-            "logger": "test",
-            "details": {"inner_key": "nothing_useful"},
-        })
+        entry = json.dumps(
+            {
+                "event": "generic",
+                "level": "info",
+                "logger": "test",
+                "details": {"inner_key": "nothing_useful"},
+            }
+        )
         f.write_text(entry + "\n")
         result = query_logs(f, search="totally_absent_string")
         assert len(result) == 0
@@ -134,13 +138,17 @@ class TestQueryLogs:
         # Each line ~120 bytes; need >1MB = >8700 lines
         lines: list[str] = []
         for i in range(9000):
-            lines.append(json.dumps({
-                "event": f"entry_{i:06d}",
-                "level": "info",
-                "logger": "sovyx.test",
-                "ts": "2026-04-04T10:00:00",
-                "pad": "x" * 50,
-            }))
+            lines.append(
+                json.dumps(
+                    {
+                        "event": f"entry_{i:06d}",
+                        "level": "info",
+                        "logger": "sovyx.test",
+                        "ts": "2026-04-04T10:00:00",
+                        "pad": "x" * 50,
+                    }
+                )
+            )
         f.write_text("\n".join(lines) + "\n")
         assert f.stat().st_size > 1024 * 1024  # Confirm >1MB
 
@@ -156,11 +164,15 @@ class TestQueryLogs:
         # Write 50 lines to exceed that
         lines = []
         for i in range(50):
-            lines.append(json.dumps({
-                "event": f"line_{i:03d}",
-                "level": "info",
-                "logger": "test",
-            }))
+            lines.append(
+                json.dumps(
+                    {
+                        "event": f"line_{i:03d}",
+                        "level": "info",
+                        "logger": "test",
+                    }
+                )
+            )
         f.write_text("\n".join(lines) + "\n")
         result = query_logs(f, limit=1)
         assert len(result) == 1
@@ -224,12 +236,14 @@ class TestQueryLogs:
     def test_search_with_list_nested_value(self, tmp_path: Path) -> None:
         """Search finds text inside nested list values."""
         f = tmp_path / "list_nested.log"
-        entry = json.dumps({
-            "event": "batch",
-            "level": "info",
-            "logger": "test",
-            "items": ["alpha", "beta_target", "gamma"],
-        })
+        entry = json.dumps(
+            {
+                "event": "batch",
+                "level": "info",
+                "logger": "test",
+                "items": ["alpha", "beta_target", "gamma"],
+            }
+        )
         f.write_text(entry + "\n")
         result = query_logs(f, search="beta_target")
         assert len(result) == 1

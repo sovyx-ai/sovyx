@@ -300,9 +300,12 @@ class TestFSMTransitions:
         """SILENCE → ONSET → SPEECH → OFFSET → SILENCE complete cycle."""
         config = VADConfig(min_onset_frames=2, min_offset_frames=2)
         probs = [
-            0.6, 0.7,   # onset (2 frames)
-            0.9, 0.8,   # speech
-            0.1, 0.1,   # offset (2 frames → silence)
+            0.6,
+            0.7,  # onset (2 frames)
+            0.9,
+            0.8,  # speech
+            0.1,
+            0.1,  # offset (2 frames → silence)
         ]
         vad = _build_vad(probs, config=config)
         frame = _speech_frame()

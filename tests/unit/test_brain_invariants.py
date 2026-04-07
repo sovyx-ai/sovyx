@@ -53,7 +53,9 @@ class TestConceptInvariants:
         confidence=st.floats(0, 1),
     )
     def test_importance_and_confidence_bounded(
-        self, importance: float, confidence: float,
+        self,
+        importance: float,
+        confidence: float,
     ) -> None:
         c = Concept(
             id=ConceptId("test"),

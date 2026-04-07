@@ -129,9 +129,7 @@ class TestIssuance:
         assert isinstance(token, str)
         assert len(token) > 0
 
-    async def test_issue_invalid_tier(
-        self, server_service: LicenseService, user_id: UUID
-    ) -> None:
+    async def test_issue_invalid_tier(self, server_service: LicenseService, user_id: UUID) -> None:
         with pytest.raises(ValueError, match="Invalid tier"):
             await server_service.issue_license(user_id, "premium")
 
@@ -199,9 +197,7 @@ class TestIssuance:
 class TestValidation:
     """Token validation via validate()."""
 
-    async def test_valid_token(
-        self, server_service: LicenseService, user_id: UUID
-    ) -> None:
+    async def test_valid_token(self, server_service: LicenseService, user_id: UUID) -> None:
         token = await server_service.issue_license(user_id, "cloud")
         info = server_service.validate(token)
         assert info.status == LicenseStatus.VALID
@@ -241,9 +237,7 @@ class TestValidation:
         info = other_service.validate(token)
         assert info.status == LicenseStatus.INVALID
 
-    async def test_tampered_token(
-        self, server_service: LicenseService, user_id: UUID
-    ) -> None:
+    async def test_tampered_token(self, server_service: LicenseService, user_id: UUID) -> None:
         token = await server_service.issue_license(user_id, "cloud")
         # Flip a character in the payload
         parts = token.split(".")
@@ -345,40 +339,65 @@ class TestLicenseClaims:
     def test_account_id(self) -> None:
         uid = str(uuid4())
         claims = LicenseClaims(
-            sub=uid, tier="free", features=[], minds_max=2,
-            iat=0, exp=999999999, refresh_before=999999999,
+            sub=uid,
+            tier="free",
+            features=[],
+            minds_max=2,
+            iat=0,
+            exp=999999999,
+            refresh_before=999999999,
         )
         assert claims.account_id == uid
 
     def test_is_refresh_due_false(self) -> None:
         future = int(time.time()) + 86400 * 10
         claims = LicenseClaims(
-            sub="x", tier="free", features=[], minds_max=2,
-            iat=0, exp=future, refresh_before=future,
+            sub="x",
+            tier="free",
+            features=[],
+            minds_max=2,
+            iat=0,
+            exp=future,
+            refresh_before=future,
         )
         assert claims.is_refresh_due is False
 
     def test_is_refresh_due_true(self) -> None:
         past = int(time.time()) - 100
         claims = LicenseClaims(
-            sub="x", tier="free", features=[], minds_max=2,
-            iat=0, exp=past + 86400 * 7, refresh_before=past,
+            sub="x",
+            tier="free",
+            features=[],
+            minds_max=2,
+            iat=0,
+            exp=past + 86400 * 7,
+            refresh_before=past,
         )
         assert claims.is_refresh_due is True
 
     def test_seconds_until_expiry_positive(self) -> None:
         future_exp = int(time.time()) + 3600
         claims = LicenseClaims(
-            sub="x", tier="free", features=[], minds_max=2,
-            iat=0, exp=future_exp, refresh_before=0,
+            sub="x",
+            tier="free",
+            features=[],
+            minds_max=2,
+            iat=0,
+            exp=future_exp,
+            refresh_before=0,
         )
         assert claims.seconds_until_expiry > 0
 
     def test_seconds_until_expiry_negative(self) -> None:
         past_exp = int(time.time()) - 3600
         claims = LicenseClaims(
-            sub="x", tier="free", features=[], minds_max=2,
-            iat=0, exp=past_exp, refresh_before=0,
+            sub="x",
+            tier="free",
+            features=[],
+            minds_max=2,
+            iat=0,
+            exp=past_exp,
+            refresh_before=0,
         )
         assert claims.seconds_until_expiry < 0
 
@@ -420,9 +439,7 @@ class TestLicenseInfo:
 class TestTokenCaching:
     """set_token() and is_valid() integration."""
 
-    async def test_set_valid_token(
-        self, server_service: LicenseService, user_id: UUID
-    ) -> None:
+    async def test_set_valid_token(self, server_service: LicenseService, user_id: UUID) -> None:
         token = await server_service.issue_license(user_id, "cloud")
         info = server_service.set_token(token)
         assert info.status == LicenseStatus.VALID
@@ -440,10 +457,12 @@ class TestTokenCaching:
         now = int(time.time())
         exp = now - 86400  # expired 1 day ago
         claims = {
-            "sub": str(user_id), "tier": "cloud",
+            "sub": str(user_id),
+            "tier": "cloud",
             "features": TIER_FEATURES["cloud"],
             "minds_max": TIER_MIND_LIMITS["cloud"],
-            "iat": exp - 7 * 86400, "exp": exp,
+            "iat": exp - 7 * 86400,
+            "exp": exp,
             "refresh_before": exp - 2 * 86400,
         }
         token = jwt.encode(claims, private_key, algorithm=JWT_ALGORITHM)
@@ -669,10 +688,12 @@ class TestPropertyBased:
         now = int(time.time())
         exp = now - expired_secs
         claims = {
-            "sub": str(uuid4()), "tier": "cloud",
+            "sub": str(uuid4()),
+            "tier": "cloud",
             "features": TIER_FEATURES["cloud"],
             "minds_max": TIER_MIND_LIMITS["cloud"],
-            "iat": exp - 7 * 86400, "exp": exp,
+            "iat": exp - 7 * 86400,
+            "exp": exp,
             "refresh_before": exp - 2 * 86400,
         }
         token = jwt.encode(claims, key, algorithm=JWT_ALGORITHM)
@@ -693,10 +714,12 @@ class TestPropertyBased:
         now = int(time.time())
         exp = now - expired_secs
         claims = {
-            "sub": str(uuid4()), "tier": "cloud",
+            "sub": str(uuid4()),
+            "tier": "cloud",
             "features": TIER_FEATURES["cloud"],
             "minds_max": TIER_MIND_LIMITS["cloud"],
-            "iat": exp - 7 * 86400, "exp": exp,
+            "iat": exp - 7 * 86400,
+            "exp": exp,
             "refresh_before": exp - 2 * 86400,
         }
         token = jwt.encode(claims, key, algorithm=JWT_ALGORITHM)

@@ -71,12 +71,14 @@ class MockBackend(LLMProviderBackend):
         max_retries: int = 3,
         drop_params: bool = True,
     ) -> dict[str, Any]:
-        self.calls.append({
-            "model": model,
-            "messages": messages,
-            "api_key": api_key,
-            "timeout": timeout,
-        })
+        self.calls.append(
+            {
+                "model": model,
+                "messages": messages,
+                "api_key": api_key,
+                "timeout": timeout,
+            }
+        )
         if self._fail or model in self._fail_models:
             msg = f"Provider error for {model}"
             raise ProxyError(msg)
@@ -331,17 +333,19 @@ class TestInMemoryMeteringStore:
         store = InMemoryMeteringStore()
         now = datetime.now(UTC)
         for uid in ["u1", "u2"]:
-            await store.record(UsageRecord(
-                user_id=uid,
-                model="m",
-                provider_model="p",
-                prompt_tokens=10,
-                completion_tokens=0,
-                cost_usd=0.01,
-                latency_ms=50.0,
-                success=True,
-                timestamp=now,
-            ))
+            await store.record(
+                UsageRecord(
+                    user_id=uid,
+                    model="m",
+                    provider_model="p",
+                    prompt_tokens=10,
+                    completion_tokens=0,
+                    cost_usd=0.01,
+                    latency_ms=50.0,
+                    success=True,
+                    timestamp=now,
+                )
+            )
 
         snap = await store.get_snapshot("u1", now.date())
         assert snap.total_requests == 1
@@ -350,16 +354,32 @@ class TestInMemoryMeteringStore:
         store = InMemoryMeteringStore()
         today = datetime.now(UTC)
         yesterday = datetime(2020, 1, 1, tzinfo=UTC)
-        await store.record(UsageRecord(
-            user_id="u1", model="m", provider_model="p",
-            prompt_tokens=10, completion_tokens=0, cost_usd=0.01,
-            latency_ms=50.0, success=True, timestamp=today,
-        ))
-        await store.record(UsageRecord(
-            user_id="u1", model="m", provider_model="p",
-            prompt_tokens=5, completion_tokens=0, cost_usd=0.005,
-            latency_ms=50.0, success=True, timestamp=yesterday,
-        ))
+        await store.record(
+            UsageRecord(
+                user_id="u1",
+                model="m",
+                provider_model="p",
+                prompt_tokens=10,
+                completion_tokens=0,
+                cost_usd=0.01,
+                latency_ms=50.0,
+                success=True,
+                timestamp=today,
+            )
+        )
+        await store.record(
+            UsageRecord(
+                user_id="u1",
+                model="m",
+                provider_model="p",
+                prompt_tokens=5,
+                completion_tokens=0,
+                cost_usd=0.005,
+                latency_ms=50.0,
+                success=True,
+                timestamp=yesterday,
+            )
+        )
 
         snap = await store.get_snapshot("u1", today.date())
         assert snap.total_requests == 1
@@ -368,34 +388,58 @@ class TestInMemoryMeteringStore:
     async def test_snapshot_counts_failures(self) -> None:
         store = InMemoryMeteringStore()
         now = datetime.now(UTC)
-        await store.record(UsageRecord(
-            user_id="u1", model="m", provider_model="p",
-            prompt_tokens=0, completion_tokens=0, cost_usd=0.0,
-            latency_ms=50.0, success=False, error="timeout",
-            timestamp=now,
-        ))
+        await store.record(
+            UsageRecord(
+                user_id="u1",
+                model="m",
+                provider_model="p",
+                prompt_tokens=0,
+                completion_tokens=0,
+                cost_usd=0.0,
+                latency_ms=50.0,
+                success=False,
+                error="timeout",
+                timestamp=now,
+            )
+        )
         snap = await store.get_snapshot("u1", now.date())
         assert snap.failed_requests == 1
 
     async def test_daily_tokens(self) -> None:
         store = InMemoryMeteringStore()
         now = datetime.now(UTC)
-        await store.record(UsageRecord(
-            user_id="u1", model="m", provider_model="p",
-            prompt_tokens=100, completion_tokens=200, cost_usd=0.01,
-            latency_ms=50.0, success=True, timestamp=now,
-        ))
+        await store.record(
+            UsageRecord(
+                user_id="u1",
+                model="m",
+                provider_model="p",
+                prompt_tokens=100,
+                completion_tokens=200,
+                cost_usd=0.01,
+                latency_ms=50.0,
+                success=True,
+                timestamp=now,
+            )
+        )
         tokens = await store.get_daily_tokens("u1", now.date())
         assert tokens == 300
 
     async def test_daily_tokens_default_today(self) -> None:
         store = InMemoryMeteringStore()
         now = datetime.now(UTC)
-        await store.record(UsageRecord(
-            user_id="u1", model="m", provider_model="p",
-            prompt_tokens=50, completion_tokens=50, cost_usd=0.005,
-            latency_ms=50.0, success=True, timestamp=now,
-        ))
+        await store.record(
+            UsageRecord(
+                user_id="u1",
+                model="m",
+                provider_model="p",
+                prompt_tokens=50,
+                completion_tokens=50,
+                cost_usd=0.005,
+                latency_ms=50.0,
+                success=True,
+                timestamp=now,
+            )
+        )
         tokens = await store.get_daily_tokens("u1")
         assert tokens == 100
 
@@ -403,9 +447,15 @@ class TestInMemoryMeteringStore:
         store = InMemoryMeteringStore()
         now = datetime.now(UTC)
         rec = UsageRecord(
-            user_id="u1", model="m", provider_model="p",
-            prompt_tokens=10, completion_tokens=10, cost_usd=0.001,
-            latency_ms=50.0, success=True, timestamp=now,
+            user_id="u1",
+            model="m",
+            provider_model="p",
+            prompt_tokens=10,
+            completion_tokens=10,
+            cost_usd=0.001,
+            latency_ms=50.0,
+            success=True,
+            timestamp=now,
         )
         await store.record(rec)
         assert len(store.records) == 1
@@ -423,16 +473,32 @@ class TestInMemoryMeteringStore:
     async def test_multiple_models_aggregation(self) -> None:
         store = InMemoryMeteringStore()
         now = datetime.now(UTC)
-        await store.record(UsageRecord(
-            user_id="u1", model="sovyx/default", provider_model="p1",
-            prompt_tokens=10, completion_tokens=10, cost_usd=0.01,
-            latency_ms=50.0, success=True, timestamp=now,
-        ))
-        await store.record(UsageRecord(
-            user_id="u1", model="sovyx/fast", provider_model="p2",
-            prompt_tokens=5, completion_tokens=5, cost_usd=0.005,
-            latency_ms=30.0, success=True, timestamp=now,
-        ))
+        await store.record(
+            UsageRecord(
+                user_id="u1",
+                model="sovyx/default",
+                provider_model="p1",
+                prompt_tokens=10,
+                completion_tokens=10,
+                cost_usd=0.01,
+                latency_ms=50.0,
+                success=True,
+                timestamp=now,
+            )
+        )
+        await store.record(
+            UsageRecord(
+                user_id="u1",
+                model="sovyx/fast",
+                provider_model="p2",
+                prompt_tokens=5,
+                completion_tokens=5,
+                cost_usd=0.005,
+                latency_ms=30.0,
+                success=True,
+                timestamp=now,
+            )
+        )
         snap = await store.get_snapshot("u1", now.date())
         assert snap.total_requests == 2
         assert snap.by_model["sovyx/default"] == 20
@@ -645,24 +711,30 @@ class TestRouteRequest:
         backend = MockBackend()
         service = _make_service(backend=backend, config=config)
         resp = await service.route_request(
-            "test/model", _simple_messages(), user_id="u1",
+            "test/model",
+            _simple_messages(),
+            user_id="u1",
         )
         assert resp.content == "Hello, world!"
         # Only the primary model was tried (fallback was unresolvable)
         assert len(backend.calls) == 1
 
     async def test_finish_reason_propagated(self) -> None:
-        backend = MockBackend(response={
-            "content": "partial",
-            "model": "m",
-            "prompt_tokens": 5,
-            "completion_tokens": 100,
-            "cost": 0.01,
-            "finish_reason": "length",
-        })
+        backend = MockBackend(
+            response={
+                "content": "partial",
+                "model": "m",
+                "prompt_tokens": 5,
+                "completion_tokens": 100,
+                "cost": 0.01,
+                "finish_reason": "length",
+            }
+        )
         service = _make_service(backend=backend)
         resp = await service.route_request(
-            "sovyx/default", _simple_messages(), user_id="u1",
+            "sovyx/default",
+            _simple_messages(),
+            user_id="u1",
         )
         assert resp.finish_reason == "length"
 
@@ -682,7 +754,9 @@ class TestUsageQueries:
         metering = InMemoryMeteringStore()
         service = _make_service(metering=metering)
         await service.route_request(
-            "sovyx/default", _simple_messages(), user_id="u1",
+            "sovyx/default",
+            _simple_messages(),
+            user_id="u1",
         )
         snap = await service.get_usage("u1")
         assert snap.total_requests == 1
@@ -692,7 +766,9 @@ class TestUsageQueries:
         metering = InMemoryMeteringStore()
         service = _make_service(metering=metering)
         await service.route_request(
-            "sovyx/default", _simple_messages(), user_id="u1",
+            "sovyx/default",
+            _simple_messages(),
+            user_id="u1",
         )
         tokens = await service.get_daily_tokens("u1")
         assert tokens == 30
@@ -779,7 +855,9 @@ class TestPropertyBased:
         completion_tokens=st.integers(min_value=0, max_value=100000),
     )
     def test_usage_record_total_tokens_invariant(
-        self, prompt_tokens: int, completion_tokens: int,
+        self,
+        prompt_tokens: int,
+        completion_tokens: int,
     ) -> None:
         record = UsageRecord(
             user_id="u1",
@@ -800,7 +878,9 @@ class TestPropertyBased:
         completion_tokens=st.integers(min_value=0, max_value=100000),
     )
     def test_proxy_response_total_tokens_invariant(
-        self, prompt_tokens: int, completion_tokens: int,
+        self,
+        prompt_tokens: int,
+        completion_tokens: int,
     ) -> None:
         resp = ProxyResponse(
             content="test",
@@ -1055,8 +1135,10 @@ class TestIntegration:
         service = _make_service(metering=metering)
         for user in ["alice", "bob", "charlie"]:
             await service.route_request(
-                "sovyx/default", _simple_messages(),
-                user_id=user, tier=RateTier.CLOUD,
+                "sovyx/default",
+                _simple_messages(),
+                user_id=user,
+                tier=RateTier.CLOUD,
             )
         assert len(metering.records) == 3
         for user in ["alice", "bob", "charlie"]:
@@ -1088,20 +1170,26 @@ class TestIntegration:
 
         # First request succeeds
         resp = await service.route_request(
-            "test/model", _simple_messages(), user_id="u1",
+            "test/model",
+            _simple_messages(),
+            user_id="u1",
         )
         assert resp.content == "Hello, world!"
 
         # Second request also succeeds
         resp2 = await service.route_request(
-            "test/model", _simple_messages(), user_id="u1",
+            "test/model",
+            _simple_messages(),
+            user_id="u1",
         )
         assert resp2.content == "Hello, world!"
 
         # Third request fails (all providers fail)
         with pytest.raises(AllProvidersFailedError):
             await service.route_request(
-                "test/model", _simple_messages(), user_id="u1",
+                "test/model",
+                _simple_messages(),
+                user_id="u1",
             )
 
         assert len(metering.records) == 3
@@ -1114,8 +1202,10 @@ class TestIntegration:
         # Send requests concurrently — some should fail at FREE tier
         tasks = [
             service.route_request(
-                "sovyx/default", _simple_messages(),
-                user_id="concurrent_user", tier=RateTier.FREE,
+                "sovyx/default",
+                _simple_messages(),
+                user_id="concurrent_user",
+                tier=RateTier.FREE,
             )
             for _ in range(15)
         ]
@@ -1215,7 +1305,9 @@ class TestLiteLLMBackendCompletion:
         backend = LiteLLMBackend()
         with patch.dict("sys.modules", {"litellm": mock_litellm}):
             await backend.completion(
-                model="test", messages=[], drop_params=True,
+                model="test",
+                messages=[],
+                drop_params=True,
             )
         assert mock_litellm.drop_params is True
 
@@ -1235,7 +1327,9 @@ class TestLiteLLMBackendCompletion:
         backend = LiteLLMBackend()
         with patch.dict("sys.modules", {"litellm": mock_litellm}):
             await backend.completion(
-                model="test", messages=[], drop_params=False,
+                model="test",
+                messages=[],
+                drop_params=False,
             )
         # drop_params should NOT have been set
         assert not hasattr(mock_litellm, "drop_params") or mock_litellm.drop_params is not True
@@ -1250,7 +1344,8 @@ class TestLiteLLMBackendCompletion:
             pytest.raises(ProxyError, match="litellm is required"),
         ):
             await backend.completion(
-                model="test", messages=[{"role": "user", "content": "hi"}],
+                model="test",
+                messages=[{"role": "user", "content": "hi"}],
             )
 
     async def test_completion_litellm_call_fails(self) -> None:
@@ -1268,7 +1363,8 @@ class TestLiteLLMBackendCompletion:
             pytest.raises(ProxyError, match="LiteLLM call failed"),
         ):
             await backend.completion(
-                model="test", messages=[{"role": "user", "content": "hi"}],
+                model="test",
+                messages=[{"role": "user", "content": "hi"}],
             )
 
     async def test_completion_no_usage(self) -> None:
@@ -1397,7 +1493,10 @@ class TestLiteLLMBackendCompletion:
         backend = LiteLLMBackend()
         with patch.dict("sys.modules", {"litellm": mock_litellm}):
             await backend.completion(
-                model="test", messages=[], timeout=120, max_retries=5,
+                model="test",
+                messages=[],
+                timeout=120,
+                max_retries=5,
             )
 
         call_kwargs = mock_litellm.acompletion.call_args[1]

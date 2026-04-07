@@ -229,9 +229,7 @@ class TestPropertyBased:
         correct=st.text(min_size=1, max_size=50),
         wrong=st.text(min_size=1, max_size=50),
     )
-    def test_wrong_password_never_decrypts(
-        self, data: bytes, correct: str, wrong: str
-    ) -> None:
+    def test_wrong_password_never_decrypts(self, data: bytes, correct: str, wrong: str) -> None:
         """A wrong password should never produce the original plaintext."""
         if correct == wrong:
             return  # Skip when passwords happen to match

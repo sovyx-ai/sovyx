@@ -21,11 +21,13 @@ def app() -> object:
     with patch("sovyx.dashboard.server.TOKEN_FILE") as mock_tf:
         mock_tf.exists.return_value = True
         mock_tf.read_text.return_value = _TOKEN
-        return create_app(APIConfig(
-            host="127.0.0.1",
-            port=0,
-            cors_origins=["http://localhost:7777"],
-        ))
+        return create_app(
+            APIConfig(
+                host="127.0.0.1",
+                port=0,
+                cors_origins=["http://localhost:7777"],
+            )
+        )
 
 
 @pytest.fixture()

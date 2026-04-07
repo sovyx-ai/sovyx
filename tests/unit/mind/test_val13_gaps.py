@@ -70,7 +70,9 @@ class TestPersonalityDescriptors:
 
 class TestMindConfigReadError:
     def test_unreadable_file_raises(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """OSError during read raises MindConfigError."""
         from sovyx.mind.config import MindConfigError, load_mind_config

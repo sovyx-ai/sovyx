@@ -212,7 +212,8 @@ class TestConfigEndpointWithMind:
     """GET/PUT /api/config — with mind_config."""
 
     async def test_get_config_returns_personality(
-        self, client_with_mind: AsyncClient,
+        self,
+        client_with_mind: AsyncClient,
     ) -> None:
         r = await client_with_mind.get("/api/config", headers=_auth())
         assert r.status_code == 200
@@ -223,7 +224,8 @@ class TestConfigEndpointWithMind:
         assert data["personality"]["tone"] == "warm"
 
     async def test_put_config_updates_personality(
-        self, client_with_mind: AsyncClient,
+        self,
+        client_with_mind: AsyncClient,
     ) -> None:
         r = await client_with_mind.put(
             "/api/config",
@@ -242,7 +244,8 @@ class TestConfigEndpointWithMind:
         assert r2.json()["personality"]["humor"] == 0.9
 
     async def test_put_config_invalid_json(
-        self, client_with_mind: AsyncClient,
+        self,
+        client_with_mind: AsyncClient,
     ) -> None:
         headers = {**_auth(), "Content-Type": "application/json"}
         r = await client_with_mind.put(
@@ -253,7 +256,8 @@ class TestConfigEndpointWithMind:
         assert r.status_code == 422
 
     async def test_put_config_ocean(
-        self, client_with_mind: AsyncClient,
+        self,
+        client_with_mind: AsyncClient,
     ) -> None:
         r = await client_with_mind.put(
             "/api/config",
@@ -265,7 +269,8 @@ class TestConfigEndpointWithMind:
         assert data["ok"] is True
 
     async def test_put_config_immutable_ignored(
-        self, client_with_mind: AsyncClient,
+        self,
+        client_with_mind: AsyncClient,
     ) -> None:
         r = await client_with_mind.put(
             "/api/config",
@@ -278,7 +283,8 @@ class TestConfigEndpointWithMind:
         assert data["changes"] == {}
 
     async def test_put_config_empty_body(
-        self, client_with_mind: AsyncClient,
+        self,
+        client_with_mind: AsyncClient,
     ) -> None:
         r = await client_with_mind.put(
             "/api/config",

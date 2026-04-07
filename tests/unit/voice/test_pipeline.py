@@ -886,7 +886,9 @@ class TestPipelineEvents:
     async def test_event_bus_none_doesnt_crash(self) -> None:
         """Pipeline works without an event bus."""
         config = VoicePipelineConfig(
-            mind_id="no-bus", silence_frames_end=2, max_recording_frames=5,
+            mind_id="no-bus",
+            silence_frames_end=2,
+            max_recording_frames=5,
         )
         vad = _make_vad(speech=True)
         ww = _make_wake_word(detected=True)
@@ -894,8 +896,13 @@ class TestPipelineEvents:
         tts = _make_tts()
 
         pipeline = VoicePipeline(
-            config=config, vad=vad, wake_word=ww, stt=stt, tts=tts,
-            event_bus=None, on_perception=None,
+            config=config,
+            vad=vad,
+            wake_word=ww,
+            stt=stt,
+            tts=tts,
+            event_bus=None,
+            on_perception=None,
         )
         await pipeline.start()
 
@@ -917,7 +924,9 @@ class TestPipelineFullCycle:
         """IDLE → WAKE → RECORDING → TRANSCRIBING → THINKING → speak → IDLE."""
         cb = AsyncMock()
         pipeline, refs = _make_pipeline(
-            vad_speech=True, ww_detected=True, stt_text="turn on the lights",
+            vad_speech=True,
+            ww_detected=True,
+            stt_text="turn on the lights",
             on_perception=cb,
         )
         await pipeline.start()
@@ -984,7 +993,10 @@ class TestEdgeCases:
         """Exception in on_perception doesn't crash the pipeline."""
         cb = AsyncMock(side_effect=RuntimeError("callback boom"))
         pipeline, refs = _make_pipeline(
-            vad_speech=True, ww_detected=True, stt_text="oops", on_perception=cb,
+            vad_speech=True,
+            ww_detected=True,
+            stt_text="oops",
+            on_perception=cb,
         )
         await pipeline.start()
 
@@ -1206,7 +1218,9 @@ class TestPipelineCoverageGaps:
     async def test_wake_detected_plays_beep(self) -> None:
         """Wake word detection triggers confirmation beep."""
         pipeline, refs = _make_pipeline(
-            wake_word_enabled=True, ww_detected=True, vad_speech=True,
+            wake_word_enabled=True,
+            ww_detected=True,
+            vad_speech=True,
         )
         await pipeline.start()
 

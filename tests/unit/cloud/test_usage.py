@@ -134,9 +134,7 @@ class TestFlexBalance:
         assert result.remaining == 4000
         assert result.blocked is False
 
-    async def test_flex_exact_balance(
-        self, store: InMemoryUsageStore, charger: AsyncMock
-    ) -> None:
+    async def test_flex_exact_balance(self, store: InMemoryUsageStore, charger: AsyncMock) -> None:
         await store.save_usage(
             "acc-1",
             AccountUsage(
@@ -181,7 +179,8 @@ class TestAutoTopup:
     """Stage 3: auto-topup via card charge."""
 
     async def test_auto_topup_success(
-        self, store: InMemoryUsageStore,
+        self,
+        store: InMemoryUsageStore,
     ) -> None:
         charger = AsyncMock(spec=AutoTopupCharger)
         charger.charge.return_value = 10_000  # Purchased 10k tokens
@@ -208,7 +207,8 @@ class TestAutoTopup:
         charger.charge.assert_awaited_once_with("acc-1", 1000)
 
     async def test_auto_topup_disabled(
-        self, store: InMemoryUsageStore,
+        self,
+        store: InMemoryUsageStore,
     ) -> None:
         charger = AsyncMock(spec=AutoTopupCharger)
         charger.charge.return_value = 10_000
@@ -233,7 +233,8 @@ class TestAutoTopup:
         charger.charge.assert_not_awaited()
 
     async def test_auto_topup_charge_fails(
-        self, store: InMemoryUsageStore,
+        self,
+        store: InMemoryUsageStore,
     ) -> None:
         charger = AsyncMock(spec=AutoTopupCharger)
         charger.charge.return_value = 0  # Card charge failed
@@ -257,7 +258,8 @@ class TestAutoTopup:
         assert result.blocked is True
 
     async def test_auto_topup_insufficient_purchase(
-        self, store: InMemoryUsageStore,
+        self,
+        store: InMemoryUsageStore,
     ) -> None:
         """Auto-topup succeeds but purchased tokens still not enough."""
         charger = AsyncMock(spec=AutoTopupCharger)
@@ -287,7 +289,8 @@ class TestAutoTopup:
         assert flex.balance == 100  # Purchased amount saved despite hard limit
 
     async def test_auto_topup_no_charger(
-        self, store: InMemoryUsageStore,
+        self,
+        store: InMemoryUsageStore,
     ) -> None:
         """Auto-topup enabled but no charger configured."""
         await store.save_usage(
@@ -316,7 +319,8 @@ class TestHardLimit:
     """Stage 4: blocked when all stages exhausted."""
 
     async def test_hard_limit_no_flex(
-        self, store: InMemoryUsageStore,
+        self,
+        store: InMemoryUsageStore,
     ) -> None:
         await store.save_usage(
             "acc-1",
@@ -336,7 +340,8 @@ class TestHardLimit:
         assert result.account_id == "acc-1"
 
     async def test_hard_limit_request_exceeds_all(
-        self, store: InMemoryUsageStore,
+        self,
+        store: InMemoryUsageStore,
     ) -> None:
         """Request larger than included + flex combined."""
         await store.save_usage(
@@ -366,7 +371,8 @@ class TestPeriodReset:
     """Billing period auto-reset and manual reset."""
 
     async def test_auto_reset_on_new_month(
-        self, store: InMemoryUsageStore,
+        self,
+        store: InMemoryUsageStore,
     ) -> None:
         # Set usage in March
         await store.save_usage(
@@ -379,16 +385,15 @@ class TestPeriodReset:
         )
 
         # Charge in April → should auto-reset
-        cascade = UsageCascade(
-            store, now_fn=lambda: _fixed_now(date(2026, 4, 7))
-        )
+        cascade = UsageCascade(store, now_fn=lambda: _fixed_now(date(2026, 4, 7)))
         result = await cascade.charge("acc-1", 100)
         assert result.stage == CascadeStage.INCLUDED
         assert result.tokens_charged == 100
         assert result.remaining == TIER_MONTHLY_TOKENS[UsageTier.FREE] - 100
 
     async def test_auto_reset_year_boundary(
-        self, store: InMemoryUsageStore,
+        self,
+        store: InMemoryUsageStore,
     ) -> None:
         await store.save_usage(
             "acc-1",
@@ -399,15 +404,14 @@ class TestPeriodReset:
             ),
         )
 
-        cascade = UsageCascade(
-            store, now_fn=lambda: _fixed_now(date(2026, 1, 5))
-        )
+        cascade = UsageCascade(store, now_fn=lambda: _fixed_now(date(2026, 1, 5)))
         result = await cascade.charge("acc-1", 100)
         assert result.stage == CascadeStage.INCLUDED
         assert result.remaining == TIER_MONTHLY_TOKENS[UsageTier.FREE] - 100
 
     async def test_no_reset_same_month(
-        self, store: InMemoryUsageStore,
+        self,
+        store: InMemoryUsageStore,
     ) -> None:
         await store.save_usage(
             "acc-1",
@@ -418,15 +422,14 @@ class TestPeriodReset:
             ),
         )
 
-        cascade = UsageCascade(
-            store, now_fn=lambda: _fixed_now(date(2026, 4, 28))
-        )
+        cascade = UsageCascade(store, now_fn=lambda: _fixed_now(date(2026, 4, 28)))
         result = await cascade.charge("acc-1", 100)
         assert result.stage == CascadeStage.INCLUDED
         assert result.remaining == TIER_MONTHLY_TOKENS[UsageTier.FREE] - 5100
 
     async def test_manual_reset(
-        self, store: InMemoryUsageStore,
+        self,
+        store: InMemoryUsageStore,
     ) -> None:
         await store.save_usage(
             "acc-1",
@@ -461,7 +464,8 @@ class TestAccountStatus:
         assert status["auto_topup_enabled"] is False
 
     async def test_status_after_charges(
-        self, store: InMemoryUsageStore,
+        self,
+        store: InMemoryUsageStore,
     ) -> None:
         await store.save_usage(
             "acc-1",
@@ -509,7 +513,8 @@ class TestThreadSafety:
     """Concurrent access safety via per-account locks."""
 
     async def test_concurrent_charges_same_account(
-        self, store: InMemoryUsageStore,
+        self,
+        store: InMemoryUsageStore,
     ) -> None:
         """Multiple concurrent charges on same account shouldn't exceed quota."""
         cascade = UsageCascade(store, now_fn=lambda: _fixed_now())
@@ -531,7 +536,8 @@ class TestThreadSafety:
         assert total_charged == quota  # Exactly quota consumed
 
     async def test_concurrent_charges_different_accounts(
-        self, store: InMemoryUsageStore,
+        self,
+        store: InMemoryUsageStore,
     ) -> None:
         """Different accounts should not interfere with each other."""
         cascade = UsageCascade(store, now_fn=lambda: _fixed_now())
@@ -583,7 +589,8 @@ class TestTierOverride:
     """Tier can be overridden per-charge."""
 
     async def test_override_upgrades_quota(
-        self, store: InMemoryUsageStore,
+        self,
+        store: InMemoryUsageStore,
     ) -> None:
         cascade = UsageCascade(store, now_fn=lambda: _fixed_now())
         free_quota = TIER_MONTHLY_TOKENS[UsageTier.FREE]
@@ -607,7 +614,8 @@ class TestFullCascadeFlow:
     """End-to-end cascade through all stages."""
 
     async def test_included_then_flex_then_hard_limit(
-        self, store: InMemoryUsageStore,
+        self,
+        store: InMemoryUsageStore,
     ) -> None:
         cascade = UsageCascade(store, now_fn=lambda: _fixed_now())
         quota = TIER_MONTHLY_TOKENS[UsageTier.FREE]
@@ -630,7 +638,8 @@ class TestFullCascadeFlow:
         assert r3.blocked is True
 
     async def test_included_then_auto_topup(
-        self, store: InMemoryUsageStore,
+        self,
+        store: InMemoryUsageStore,
     ) -> None:
         charger = AsyncMock(spec=AutoTopupCharger)
         charger.charge.return_value = 50_000
@@ -684,9 +693,7 @@ class TestPropertyBased:
         tokens=st.integers(min_value=1, max_value=1_000_000),
         tier=st.sampled_from(list(UsageTier)),
     )
-    async def test_charge_never_exceeds_quota(
-        self, tokens: int, tier: UsageTier
-    ) -> None:
+    async def test_charge_never_exceeds_quota(self, tokens: int, tier: UsageTier) -> None:
         """Charge result is always valid: either tokens charged or blocked."""
         store = InMemoryUsageStore()
         cascade = UsageCascade(store, now_fn=lambda: _fixed_now())
@@ -725,7 +732,8 @@ class TestEdgeCases:
     """Misc edge cases."""
 
     async def test_new_account_defaults_to_free(
-        self, store: InMemoryUsageStore,
+        self,
+        store: InMemoryUsageStore,
     ) -> None:
         """Charging a brand new account uses FREE tier defaults."""
         cascade = UsageCascade(store, now_fn=lambda: _fixed_now())
@@ -739,7 +747,8 @@ class TestEdgeCases:
         assert result.blocked is False
 
     async def test_large_token_charge_exceeds_free(
-        self, store: InMemoryUsageStore,
+        self,
+        store: InMemoryUsageStore,
     ) -> None:
         """Single charge larger than entire FREE quota → hard limit."""
         cascade = UsageCascade(store, now_fn=lambda: _fixed_now())
@@ -749,7 +758,8 @@ class TestEdgeCases:
         assert result.blocked is True
 
     async def test_flex_balance_persisted_after_charge(
-        self, store: InMemoryUsageStore,
+        self,
+        store: InMemoryUsageStore,
     ) -> None:
         await store.save_usage(
             "acc-1",

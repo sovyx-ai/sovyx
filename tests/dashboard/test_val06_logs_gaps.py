@@ -92,12 +92,12 @@ class TestParseLineEdges:
         """Blank and whitespace-only lines are skipped."""
         log_file = tmp_path / "blanks.log"
         log_file.write_text(
-            '\n'
-            '   \n'
+            "\n"
+            "   \n"
             '{"event": "real", "level": "INFO"}\n'
-            '\t\n'
+            "\t\n"
             '{"event": "also-real", "level": "DEBUG"}\n'
-            '\n'
+            "\n"
         )
         result = query_logs(log_file)
         assert len(result) == 2

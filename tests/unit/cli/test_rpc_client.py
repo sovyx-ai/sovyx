@@ -34,9 +34,7 @@ async def _start_mock_daemon(
 ) -> asyncio.AbstractServer:
     """Start a Unix socket server that replies with a fixed response."""
 
-    async def handler(
-        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ) -> None:
+    async def handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         if close_early:
             writer.close()
             await writer.wait_closed()
@@ -191,9 +189,7 @@ class TestCall:
         sock = tmp_path / "daemon.sock"
         received_params: list[dict[str, Any]] = []
 
-        async def handler(
-            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-        ) -> None:
+        async def handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
             header = await reader.readexactly(_HEADER_SIZE)
             length = int.from_bytes(header, "big")
             data = await reader.readexactly(length)
@@ -220,9 +216,7 @@ class TestCall:
         sock = tmp_path / "daemon.sock"
         received_params: list[dict[str, Any]] = []
 
-        async def handler(
-            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-        ) -> None:
+        async def handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
             header = await reader.readexactly(_HEADER_SIZE)
             length = int.from_bytes(header, "big")
             data = await reader.readexactly(length)

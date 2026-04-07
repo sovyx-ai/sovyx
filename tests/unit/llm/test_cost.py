@@ -189,11 +189,13 @@ class TestPersistence:
         await runner.run_migrations(get_system_migrations())
 
         # Insert stale state (yesterday)
-        stale = json.dumps({
-            "date": "1999-01-01",
-            "daily_spend": 99.0,
-            "conversation_spend": {"old": 50.0},
-        })
+        stale = json.dumps(
+            {
+                "date": "1999-01-01",
+                "daily_spend": 99.0,
+                "conversation_spend": {"old": 50.0},
+            }
+        )
         async with pool.write() as conn:
             await conn.execute(
                 "INSERT INTO engine_state (key, value, updated_at)"
@@ -256,12 +258,20 @@ class TestPersistence:
 
         g1 = CostGuard(daily_budget=10.0, per_conversation_budget=2.0, system_pool=pool)
         await g1.record(
-            1.5, "claude-3-opus", "conv-a",
-            provider="anthropic", mind_id="main", tokens=500,
+            1.5,
+            "claude-3-opus",
+            "conv-a",
+            provider="anthropic",
+            mind_id="main",
+            tokens=500,
         )
         await g1.record(
-            0.3, "gpt-4o", "conv-b",
-            provider="openai", mind_id="research", tokens=200,
+            0.3,
+            "gpt-4o",
+            "conv-b",
+            provider="openai",
+            mind_id="research",
+            tokens=200,
         )
 
         g2 = CostGuard(daily_budget=10.0, per_conversation_budget=2.0, system_pool=pool)
@@ -286,16 +296,22 @@ class TestRecordCost:
     async def test_record_cost_tracks_provider(self) -> None:
         g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
         await g.record_cost(
-            provider="anthropic", mind_id="default",
-            tokens=1000, cost=0.5, model="claude-3-opus",
+            provider="anthropic",
+            mind_id="default",
+            tokens=1000,
+            cost=0.5,
+            model="claude-3-opus",
         )
         assert g.get_provider_spend("anthropic") == pytest.approx(0.5)
 
     async def test_record_cost_tracks_mind(self) -> None:
         g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
         await g.record_cost(
-            provider="openai", mind_id="research",
-            tokens=500, cost=0.2, model="gpt-4o",
+            provider="openai",
+            mind_id="research",
+            tokens=500,
+            cost=0.2,
+            model="gpt-4o",
         )
         assert g.get_mind_spend("research") == pytest.approx(0.2)
 
@@ -314,7 +330,10 @@ class TestRecordCost:
     async def test_record_cost_with_conversation(self) -> None:
         g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
         await g.record_cost(
-            "anthropic", "main", 100, 0.5,
+            "anthropic",
+            "main",
+            100,
+            0.5,
             conversation_id="conv1",
         )
         assert g.get_conversation_spend("conv1") == pytest.approx(0.5)

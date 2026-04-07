@@ -170,9 +170,12 @@ class TestApplyConfigPersonality:
 
     def test_multiple_traits(self) -> None:
         cfg = _make_config()
-        changes = apply_config(cfg, {
-            "personality": {"humor": 0.9, "empathy": 0.3, "tone": "playful"},
-        })
+        changes = apply_config(
+            cfg,
+            {
+                "personality": {"humor": 0.9, "empathy": 0.3, "tone": "playful"},
+            },
+        )
         assert len(changes) == 3
         assert cfg.personality.humor == 0.9
         assert cfg.personality.empathy == 0.3
@@ -191,15 +194,18 @@ class TestApplyConfigOcean:
 
     def test_update_all_traits(self) -> None:
         cfg = _make_config()
-        changes = apply_config(cfg, {
-            "ocean": {
-                "openness": 0.1,
-                "conscientiousness": 0.2,
-                "extraversion": 0.3,
-                "agreeableness": 0.4,
-                "neuroticism": 0.5,
+        changes = apply_config(
+            cfg,
+            {
+                "ocean": {
+                    "openness": 0.1,
+                    "conscientiousness": 0.2,
+                    "extraversion": 0.3,
+                    "agreeableness": 0.4,
+                    "neuroticism": 0.5,
+                },
             },
-        })
+        )
         assert len(changes) == 5
         assert cfg.ocean.openness == 0.1
 
@@ -321,12 +327,15 @@ class TestApplyConfigMixed:
 
     def test_mixed_sections(self) -> None:
         cfg = _make_config()
-        changes = apply_config(cfg, {
-            "personality": {"tone": "playful"},
-            "ocean": {"openness": 0.99},
-            "name": "NewMind",
-            "safety": {"content_filter": "strict"},
-        })
+        changes = apply_config(
+            cfg,
+            {
+                "personality": {"tone": "playful"},
+                "ocean": {"openness": 0.99},
+                "name": "NewMind",
+                "safety": {"content_filter": "strict"},
+            },
+        )
         assert len(changes) == 4
         assert cfg.personality.tone == "playful"
         assert cfg.ocean.openness == 0.99
@@ -335,11 +344,14 @@ class TestApplyConfigMixed:
 
     def test_mixed_valid_and_invalid(self) -> None:
         cfg = _make_config()
-        changes = apply_config(cfg, {
-            "personality": {"tone": "direct"},
-            "brain": {"decay_rate": 0.99},  # immutable
-            "unknown": "value",  # unknown
-        })
+        changes = apply_config(
+            cfg,
+            {
+                "personality": {"tone": "direct"},
+                "brain": {"decay_rate": 0.99},  # immutable
+                "unknown": "value",  # unknown
+            },
+        )
         assert len(changes) == 1
         assert "personality.tone" in changes
 
@@ -386,11 +398,15 @@ class TestPersistence:
     def test_persist_preserves_existing_keys(self, tmp_path: Path) -> None:
         cfg = _make_config()
         yaml_path = tmp_path / "mind.yaml"
-        yaml_path.write_text(yaml.dump({
-            "name": "TestMind",
-            "template": "assistant",
-            "llm": {"temperature": 0.7},
-        }))
+        yaml_path.write_text(
+            yaml.dump(
+                {
+                    "name": "TestMind",
+                    "template": "assistant",
+                    "llm": {"temperature": 0.7},
+                }
+            )
+        )
 
         apply_config(cfg, {"personality": {"tone": "direct"}}, mind_yaml_path=yaml_path)
 
@@ -405,7 +421,9 @@ class TestPersistence:
 
         # Should not raise
         changes = apply_config(
-            cfg, {"personality": {"tone": "direct"}}, mind_yaml_path=yaml_path,
+            cfg,
+            {"personality": {"tone": "direct"}},
+            mind_yaml_path=yaml_path,
         )
         assert "personality.tone" in changes
 
@@ -425,7 +443,9 @@ class TestPersistence:
         yaml_path.write_text("name: TestMind\n")
 
         apply_config(
-            cfg, {"safety": {"child_safe_mode": True}}, mind_yaml_path=yaml_path,
+            cfg,
+            {"safety": {"child_safe_mode": True}},
+            mind_yaml_path=yaml_path,
         )
 
         data = yaml.safe_load(yaml_path.read_text())

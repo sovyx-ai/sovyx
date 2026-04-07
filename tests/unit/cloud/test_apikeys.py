@@ -330,24 +330,18 @@ class TestCreate:
         assert info.name == "My Key"
 
     @pytest.mark.asyncio()
-    async def test_create_live_environment(
-        self, service: APIKeyService, user_id: UUID
-    ) -> None:
+    async def test_create_live_environment(self, service: APIKeyService, user_id: UUID) -> None:
         raw_key, _ = await service.create(user_id, environment="live")
         assert raw_key.startswith(KEY_PREFIX_LIVE)
 
     @pytest.mark.asyncio()
-    async def test_create_test_environment(
-        self, service: APIKeyService, user_id: UUID
-    ) -> None:
+    async def test_create_test_environment(self, service: APIKeyService, user_id: UUID) -> None:
         raw_key, info = await service.create(user_id, environment="test")
         assert raw_key.startswith(KEY_PREFIX_TEST)
         assert info.key_prefix == KEY_PREFIX_TEST
 
     @pytest.mark.asyncio()
-    async def test_create_invalid_environment(
-        self, service: APIKeyService, user_id: UUID
-    ) -> None:
+    async def test_create_invalid_environment(self, service: APIKeyService, user_id: UUID) -> None:
         with pytest.raises(ValueError, match="Invalid environment"):
             await service.create(user_id, environment="staging")
 
@@ -359,26 +353,18 @@ class TestCreate:
         assert info.scopes == Scope.READ
 
     @pytest.mark.asyncio()
-    async def test_create_custom_scopes(
-        self, service: APIKeyService, user_id: UUID
-    ) -> None:
-        _, info = await service.create(
-            user_id, scopes=Scope.READ | Scope.WRITE
-        )
+    async def test_create_custom_scopes(self, service: APIKeyService, user_id: UUID) -> None:
+        _, info = await service.create(user_id, scopes=Scope.READ | Scope.WRITE)
         assert Scope.READ in info.scopes
         assert Scope.WRITE in info.scopes
 
     @pytest.mark.asyncio()
-    async def test_create_custom_rate_limit(
-        self, service: APIKeyService, user_id: UUID
-    ) -> None:
+    async def test_create_custom_rate_limit(self, service: APIKeyService, user_id: UUID) -> None:
         _, info = await service.create(user_id, rate_limit=120)
         assert info.rate_limit == 120
 
     @pytest.mark.asyncio()
-    async def test_create_with_expiry(
-        self, service: APIKeyService, user_id: UUID
-    ) -> None:
+    async def test_create_with_expiry(self, service: APIKeyService, user_id: UUID) -> None:
         exp = int(time.time()) + 86400
         _, info = await service.create(user_id, expires_at=exp)
         assert info.expires_at == exp
@@ -401,21 +387,17 @@ class TestCreate:
     ) -> None:
         raw_key, info = await service.create(user_id)
         prefix = info.key_prefix
-        random_part = raw_key[len(prefix):]
+        random_part = raw_key[len(prefix) :]
         assert info.key_suffix == random_part[-KEY_SUFFIX_LENGTH:]
 
     @pytest.mark.asyncio()
-    async def test_create_unique_keys(
-        self, service: APIKeyService, user_id: UUID
-    ) -> None:
+    async def test_create_unique_keys(self, service: APIKeyService, user_id: UUID) -> None:
         key1, _ = await service.create(user_id, "Key 1")
         key2, _ = await service.create(user_id, "Key 2")
         assert key1 != key2
 
     @pytest.mark.asyncio()
-    async def test_create_key_length(
-        self, service: APIKeyService, user_id: UUID
-    ) -> None:
+    async def test_create_key_length(self, service: APIKeyService, user_id: UUID) -> None:
         raw_key, _ = await service.create(user_id)
         # svx_live_ (9) + base64url(32 bytes) = 9 + 43 = 52 chars
         assert len(raw_key) > len(KEY_PREFIX_LIVE) + 20  # reasonable minimum
@@ -428,9 +410,7 @@ class TestValidate:
     """Key validation tests."""
 
     @pytest.mark.asyncio()
-    async def test_validate_valid_key(
-        self, service: APIKeyService, user_id: UUID
-    ) -> None:
+    async def test_validate_valid_key(self, service: APIKeyService, user_id: UUID) -> None:
         raw_key, info = await service.create(user_id, scopes=Scope.READ | Scope.WRITE)
         result = await service.validate(raw_key)
         assert result is not None
@@ -444,21 +424,15 @@ class TestValidate:
         assert result is None
 
     @pytest.mark.asyncio()
-    async def test_validate_revoked_key(
-        self, service: APIKeyService, user_id: UUID
-    ) -> None:
+    async def test_validate_revoked_key(self, service: APIKeyService, user_id: UUID) -> None:
         raw_key, info = await service.create(user_id)
         await service.revoke(info.id)
         result = await service.validate(raw_key)
         assert result is None
 
     @pytest.mark.asyncio()
-    async def test_validate_expired_key(
-        self, service: APIKeyService, user_id: UUID
-    ) -> None:
-        raw_key, _ = await service.create(
-            user_id, expires_at=int(time.time()) - 1
-        )
+    async def test_validate_expired_key(self, service: APIKeyService, user_id: UUID) -> None:
+        raw_key, _ = await service.create(user_id, expires_at=int(time.time()) - 1)
         result = await service.validate(raw_key)
         assert result is None
 
@@ -498,9 +472,7 @@ class TestRevoke:
     """Key revocation tests."""
 
     @pytest.mark.asyncio()
-    async def test_revoke_success(
-        self, service: APIKeyService, user_id: UUID
-    ) -> None:
+    async def test_revoke_success(self, service: APIKeyService, user_id: UUID) -> None:
         _, info = await service.create(user_id)
         assert await service.revoke(info.id) is True
 
@@ -509,9 +481,7 @@ class TestRevoke:
         assert await service.revoke(uuid4()) is False
 
     @pytest.mark.asyncio()
-    async def test_revoke_already_revoked(
-        self, service: APIKeyService, user_id: UUID
-    ) -> None:
+    async def test_revoke_already_revoked(self, service: APIKeyService, user_id: UUID) -> None:
         _, info = await service.create(user_id)
         assert await service.revoke(info.id) is True
         assert await service.revoke(info.id) is False
@@ -536,16 +506,12 @@ class TestListKeys:
     """Key listing tests."""
 
     @pytest.mark.asyncio()
-    async def test_list_empty(
-        self, service: APIKeyService, user_id: UUID
-    ) -> None:
+    async def test_list_empty(self, service: APIKeyService, user_id: UUID) -> None:
         result = await service.list_keys(user_id)
         assert result == []
 
     @pytest.mark.asyncio()
-    async def test_list_multiple(
-        self, service: APIKeyService, user_id: UUID
-    ) -> None:
+    async def test_list_multiple(self, service: APIKeyService, user_id: UUID) -> None:
         await service.create(user_id, "Key 1")
         await service.create(user_id, "Key 2")
         await service.create(user_id, "Key 3")
@@ -555,9 +521,7 @@ class TestListKeys:
         assert names == {"Key 1", "Key 2", "Key 3"}
 
     @pytest.mark.asyncio()
-    async def test_list_includes_revoked(
-        self, service: APIKeyService, user_id: UUID
-    ) -> None:
+    async def test_list_includes_revoked(self, service: APIKeyService, user_id: UUID) -> None:
         _, info1 = await service.create(user_id, "Active")
         _, info2 = await service.create(user_id, "Revoked")
         await service.revoke(info2.id)
@@ -565,9 +529,7 @@ class TestListKeys:
         assert len(result) == 2
 
     @pytest.mark.asyncio()
-    async def test_list_no_hashes_exposed(
-        self, service: APIKeyService, user_id: UUID
-    ) -> None:
+    async def test_list_no_hashes_exposed(self, service: APIKeyService, user_id: UUID) -> None:
         await service.create(user_id)
         keys = await service.list_keys(user_id)
         for k in keys:
@@ -592,9 +554,7 @@ class TestGetKey:
     """Single key retrieval."""
 
     @pytest.mark.asyncio()
-    async def test_get_key_found(
-        self, service: APIKeyService, user_id: UUID
-    ) -> None:
+    async def test_get_key_found(self, service: APIKeyService, user_id: UUID) -> None:
         _, info = await service.create(user_id, "Test Key")
         result = await service.get_key(info.id)
         assert result is not None

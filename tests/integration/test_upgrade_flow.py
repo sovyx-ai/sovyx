@@ -44,8 +44,7 @@ async def pool(tmp_path: Path) -> object:
     # Create a minimal schema so migrations have something to work with
     async with p.write() as conn:
         await conn.execute(
-            "CREATE TABLE IF NOT EXISTS concepts "
-            "(id TEXT PRIMARY KEY, name TEXT, content TEXT)"
+            "CREATE TABLE IF NOT EXISTS concepts (id TEXT PRIMARY KEY, name TEXT, content TEXT)"
         )
         await conn.execute(
             "INSERT INTO concepts (id, name, content) VALUES (?, ?, ?)",
@@ -60,9 +59,7 @@ class TestUpgradeFlowIntegration:
     """Full upgrade simulation with real SQLite."""
 
     @pytest.mark.asyncio()
-    async def test_single_migration_success(
-        self, pool: object, tmp_path: Path
-    ) -> None:
+    async def test_single_migration_success(self, pool: object, tmp_path: Path) -> None:
         """Apply one migration, verify schema version recorded."""
         sv = SchemaVersion(pool)
         await sv.initialize()
@@ -81,16 +78,12 @@ class TestUpgradeFlowIntegration:
 
         # Verify column actually exists
         async with pool.read() as conn:
-            cursor = await conn.execute(
-                "SELECT tags FROM concepts WHERE id = 'c1'"
-            )
+            cursor = await conn.execute("SELECT tags FROM concepts WHERE id = 'c1'")
             row = await cursor.fetchone()
             assert row is not None
 
     @pytest.mark.asyncio()
-    async def test_multi_step_migration(
-        self, pool: object, tmp_path: Path
-    ) -> None:
+    async def test_multi_step_migration(self, pool: object, tmp_path: Path) -> None:
         """Apply multiple ordered migrations."""
         sv = SchemaVersion(pool)
         await sv.initialize()
@@ -115,9 +108,7 @@ class TestUpgradeFlowIntegration:
         assert len(report.applied) == 2
 
     @pytest.mark.asyncio()
-    async def test_failed_migration_restores_backup(
-        self, pool: object, tmp_path: Path
-    ) -> None:
+    async def test_failed_migration_restores_backup(self, pool: object, tmp_path: Path) -> None:
         """If a migration fails, database is restored from backup."""
         sv = SchemaVersion(pool)
         await sv.initialize()
@@ -147,9 +138,7 @@ class TestUpgradeFlowIntegration:
         assert len(backups) >= 1
 
     @pytest.mark.asyncio()
-    async def test_idempotent_reruns(
-        self, pool: object, tmp_path: Path
-    ) -> None:
+    async def test_idempotent_reruns(self, pool: object, tmp_path: Path) -> None:
         """Running the same migrations twice only applies them once."""
         sv = SchemaVersion(pool)
         await sv.initialize()
@@ -172,9 +161,7 @@ class TestUpgradeFlowIntegration:
         assert len(report2.applied) == 0
 
     @pytest.mark.asyncio()
-    async def test_data_migration_with_real_db(
-        self, pool: object, tmp_path: Path
-    ) -> None:
+    async def test_data_migration_with_real_db(self, pool: object, tmp_path: Path) -> None:
         """Data migration function runs against real DB."""
         sv = SchemaVersion(pool)
         await sv.initialize()
@@ -203,8 +190,6 @@ class TestUpgradeFlowIntegration:
 
         # Verify data was actually transformed
         async with pool.read() as conn:
-            cursor = await conn.execute(
-                "SELECT name FROM concepts WHERE id = 'c1'"
-            )
+            cursor = await conn.execute("SELECT name FROM concepts WHERE id = 'c1'")
             row = await cursor.fetchone()
             assert row[0] == "TEST-CONCEPT"

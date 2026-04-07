@@ -68,9 +68,9 @@ class ConversationTracker:
                 try:
                     last_at = datetime.fromisoformat(last_msg).replace(tzinfo=UTC)
                 except ValueError:
-                    last_at = cutoff  # Force new conversation
+                    last_at = datetime.min.replace(tzinfo=UTC)  # Force new conversation
             else:
-                last_at = cutoff
+                last_at = datetime.min.replace(tzinfo=UTC)
 
             if last_at >= cutoff:
                 # Resume existing conversation

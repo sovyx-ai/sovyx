@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import pytest
 
@@ -11,9 +13,11 @@ if TYPE_CHECKING:
 
     from sovyx.engine.types import MindId
 
+from sovyx.bridge.manager import BridgeManager
 from sovyx.engine.bootstrap import MindManager, bootstrap
 from sovyx.engine.config import DatabaseConfig, EngineConfig
 from sovyx.engine.registry import ServiceRegistry
+from sovyx.llm.router import LLMRouter
 from sovyx.mind.config import MindConfig
 from sovyx.persistence.manager import DatabaseManager
 
@@ -127,12 +131,7 @@ class TestBootstrap:
 
         system_yaml = tmp_path / "system.yaml"
         system_yaml.write_text(
-            "api:\n"
-            "  host: '0.0.0.0'\n"
-            "  port: 9999\n"
-            "  enabled: true\n"
-            "log:\n"
-            "  level: DEBUG\n"
+            "api:\n  host: '0.0.0.0'\n  port: 9999\n  enabled: true\nlog:\n  level: DEBUG\n"
         )
         config = load_engine_config(config_path=system_yaml)
 
@@ -297,3 +296,86 @@ class TestBootstrap:
         # but the DatabaseManager should have been stopped
         # (If cleanup didn't work, we'd get resource leaks)
         assert (tmp_path / "system.db").exists()
+
+
+class TestBootstrapCoverageGaps:
+    """Cover remaining bootstrap paths."""
+
+    @pytest.mark.asyncio(loop_scope="function")
+    @pytest.mark.timeout(10)
+    async def test_no_minds_raises(self, tmp_path: Path) -> None:
+        """Bootstrap with empty minds list raises ValueError."""
+        config = EngineConfig(database=DatabaseConfig(data_dir=tmp_path))
+        with (
+            patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}),
+            pytest.raises(ValueError, match="No minds configured"),
+        ):
+            await bootstrap(config, [])
+
+    @pytest.mark.asyncio(loop_scope="function")
+    @pytest.mark.timeout(15)
+    async def test_openai_provider_included(self, tmp_path: Path) -> None:
+        """When OPENAI_API_KEY is set, OpenAI provider is in the router."""
+        config = EngineConfig(database=DatabaseConfig(data_dir=tmp_path))
+        mind = MindConfig(name="Test")
+        with patch.dict(
+            os.environ,
+            {
+                "ANTHROPIC_API_KEY": "sk-ant-test",
+                "OPENAI_API_KEY": "sk-test-openai",
+            },
+        ):
+            registry = await bootstrap(config, [mind])
+        router = await registry.resolve(LLMRouter)
+        names = [type(p).__name__ for p in router._providers]  # noqa: SLF001
+        assert "OpenAIProvider" in names
+        await router.stop()
+
+    @pytest.mark.asyncio(loop_scope="function")
+    @pytest.mark.timeout(15)
+    async def test_telegram_channel_registered(self, tmp_path: Path) -> None:
+        """When SOVYX_TELEGRAM_TOKEN is set, Telegram channel is registered."""
+        from unittest.mock import MagicMock
+
+        config = EngineConfig(database=DatabaseConfig(data_dir=tmp_path))
+        mind = MindConfig(name="Test")
+
+        from sovyx.engine.types import ChannelType
+
+        mock_telegram = MagicMock()
+        mock_telegram.channel_type = ChannelType.TELEGRAM
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "ANTHROPIC_API_KEY": "sk-ant-test",
+                    "SOVYX_TELEGRAM_TOKEN": "123456:ABC",
+                },
+            ),
+            patch(
+                "sovyx.bridge.channels.telegram.TelegramChannel",
+                return_value=mock_telegram,
+            ),
+        ):
+            registry = await bootstrap(config, [mind])
+        bridge = await registry.resolve(BridgeManager)
+        assert len(bridge._adapters) >= 1  # noqa: SLF001
+
+    @pytest.mark.asyncio(loop_scope="function")
+    @pytest.mark.timeout(15)
+    async def test_cleanup_on_failure(self, tmp_path: Path) -> None:
+        """On bootstrap failure, closable resources are cleaned up."""
+        config = EngineConfig(database=DatabaseConfig(data_dir=tmp_path))
+        mind = MindConfig(name="Test")
+
+        with (
+            patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}),
+            patch.object(
+                MindManager,
+                "load_mind",
+                side_effect=RuntimeError("Late failure"),
+            ),
+            pytest.raises(RuntimeError, match="Late failure"),
+        ):
+            await bootstrap(config, [mind])

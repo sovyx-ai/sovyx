@@ -40,9 +40,7 @@ class TestAnthropicGaps:
         )
 
         with (
-            patch.object(
-                provider._client, "post", new_callable=AsyncMock, return_value=mock_resp
-            ),
+            patch.object(provider._client, "post", new_callable=AsyncMock, return_value=mock_resp),
             pytest.raises(LLMError, match="empty content"),
         ):
             await provider.generate(
@@ -70,9 +68,7 @@ class TestAnthropicGaps:
         )
 
         with (
-            patch.object(
-                provider._client, "post", new_callable=AsyncMock, return_value=mock_resp
-            ),
+            patch.object(provider._client, "post", new_callable=AsyncMock, return_value=mock_resp),
             pytest.raises(LLMError, match="empty content"),
         ):
             await provider.generate(
@@ -117,9 +113,7 @@ class TestAnthropicGaps:
         )
 
         with (
-            patch.object(
-                provider._client, "post", new_callable=AsyncMock, return_value=mock_resp
-            ),
+            patch.object(provider._client, "post", new_callable=AsyncMock, return_value=mock_resp),
             patch("sovyx.llm.providers.anthropic.retry_delay", return_value=0.0),
             pytest.raises(LLMError, match="429"),
         ):
@@ -152,9 +146,7 @@ class TestOpenAIGaps:
         )
 
         with (
-            patch.object(
-                provider._client, "post", new_callable=AsyncMock, return_value=mock_resp
-            ),
+            patch.object(provider._client, "post", new_callable=AsyncMock, return_value=mock_resp),
             pytest.raises(LLMError, match="empty content"),
         ):
             await provider.generate(
@@ -196,9 +188,7 @@ class TestOllamaGaps:
         )
 
         with (
-            patch.object(
-                provider._client, "post", new_callable=AsyncMock, return_value=mock_resp
-            ),
+            patch.object(provider._client, "post", new_callable=AsyncMock, return_value=mock_resp),
             pytest.raises(LLMError, match="empty content"),
         ):
             await provider.generate(

@@ -88,11 +88,13 @@ class FakeR2Client:
         for full_key, data in self.storage.items():
             stored_bucket, key = full_key.split("/", maxsplit=1)
             if stored_bucket == bucket and key.startswith(prefix):
-                result.append({
-                    "Key": key,
-                    "Size": len(data),
-                    "LastModified": datetime.now(tz=UTC),
-                })
+                result.append(
+                    {
+                        "Key": key,
+                        "Size": len(data),
+                        "LastModified": datetime.now(tz=UTC),
+                    }
+                )
         return result
 
     def delete_objects(self, keys: list[str], bucket: str) -> int:
@@ -405,7 +407,8 @@ class TestRestoreBackup:
     """Tests for BackupService.restore_backup."""
 
     def _create_and_backup(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> tuple[BackupService, FakeR2Client, BackupMetadata, Path]:
         """Helper: create a DB, back it up, return service + metadata."""
         db_path = tmp_path / "brain.db"
@@ -474,7 +477,10 @@ class TestListBackups:
         r2 = FakeR2Client()
         config = _make_config()
         service = BackupService(
-            db_path=tmp_path / "brain.db", r2_client=r2, password="pass", config=config,
+            db_path=tmp_path / "brain.db",
+            r2_client=r2,
+            password="pass",
+            config=config,
         )
         assert service.list_backups() == []
 
@@ -514,7 +520,10 @@ class TestListBackups:
         r2.storage["sovyx-backups/user-123/default/not-a-backup.txt"] = b"junk"
 
         service = BackupService(
-            db_path=tmp_path / "brain.db", r2_client=r2, password="pass", config=config,
+            db_path=tmp_path / "brain.db",
+            r2_client=r2,
+            password="pass",
+            config=config,
         )
         backups = service.list_backups()
         assert len(backups) == 0
@@ -529,7 +538,10 @@ class TestFullRoundtrip:
         r2 = FakeR2Client()
         config = _make_config()
         service = BackupService(
-            db_path=db_path, r2_client=r2, password="strong-pass", config=config,
+            db_path=db_path,
+            r2_client=r2,
+            password="strong-pass",
+            config=config,
         )
 
         # Create
@@ -581,7 +593,9 @@ class TestBoto3R2Client:
 
         client.upload_bytes(b"data", "key.enc.gz", "bucket")
         mock_client.put_object.assert_called_once_with(
-            Bucket="bucket", Key="key.enc.gz", Body=b"data",
+            Bucket="bucket",
+            Key="key.enc.gz",
+            Body=b"data",
         )
 
     def test_download_calls_get_object(self) -> None:
@@ -664,7 +678,10 @@ class TestEdgeCases:
         r2 = FakeR2Client()
         config = _make_config()
         service = BackupService(
-            db_path=db_path, r2_client=r2, password="pass", config=config,
+            db_path=db_path,
+            r2_client=r2,
+            password="pass",
+            config=config,
         )
         meta = service.create_backup()  # no tmp_dir
         assert meta.size_bytes > 0
@@ -677,7 +694,10 @@ class TestEdgeCases:
         # Insert object with bad timestamp format
         r2.storage["sovyx-backups/user-123/default/BADTIME_abc123.enc.gz"] = b"x"
         service = BackupService(
-            db_path=tmp_path / "brain.db", r2_client=r2, password="p", config=config,
+            db_path=tmp_path / "brain.db",
+            r2_client=r2,
+            password="p",
+            config=config,
         )
         backups = service.list_backups()
         assert len(backups) == 0
@@ -713,7 +733,9 @@ class TestPropertyBased:
         password=st.text(min_size=1, max_size=50),
     )
     def test_compress_encrypt_decrypt_decompress_roundtrip(
-        self, data: bytes, password: str,
+        self,
+        data: bytes,
+        password: str,
     ) -> None:
         """The internal pipeline (compress → encrypt → decrypt → decompress) is lossless."""
         compressed = gzip.compress(data, compresslevel=GZIP_LEVEL)
@@ -729,7 +751,8 @@ class TestPropertyBased:
     )
     @given(password=st.text(min_size=1, max_size=50))
     def test_checksum_is_deterministic_for_same_encrypted_blob(
-        self, password: str,
+        self,
+        password: str,
     ) -> None:
         """SHA-256 checksum of the same encrypted blob is always the same."""
         data = b"deterministic-test"

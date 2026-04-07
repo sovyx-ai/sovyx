@@ -49,30 +49,43 @@ class TestSLODefinition:
 
     def test_error_budget(self) -> None:
         defn = SLODefinition(
-            name="Avail", description="99.5%", target=0.995,
-            threshold=1.0, unit="bool",
+            name="Avail",
+            description="99.5%",
+            target=0.995,
+            threshold=1.0,
+            unit="bool",
         )
         assert defn.error_budget == pytest.approx(0.005)
 
     def test_error_budget_100pct_target(self) -> None:
         defn = SLODefinition(
-            name="Perfect", description="100%", target=1.0,
-            threshold=1.0, unit="bool",
+            name="Perfect",
+            description="100%",
+            target=1.0,
+            threshold=1.0,
+            unit="bool",
         )
         assert defn.error_budget == 0.0
 
     def test_custom_window_days(self) -> None:
         defn = SLODefinition(
-            name="Weekly", description="Weekly SLO", target=0.99,
-            threshold=50.0, unit="ms", window_days=7,
+            name="Weekly",
+            description="Weekly SLO",
+            target=0.99,
+            threshold=50.0,
+            unit="ms",
+            window_days=7,
         )
         assert defn.window_days == 7
         assert defn.error_budget == pytest.approx(0.01)
 
     def test_frozen(self) -> None:
         defn = SLODefinition(
-            name="Frozen", description="Immutable", target=0.99,
-            threshold=1.0, unit="bool",
+            name="Frozen",
+            description="Immutable",
+            target=0.99,
+            threshold=1.0,
+            unit="bool",
         )
         with pytest.raises(AttributeError):
             defn.name = "Changed"  # type: ignore[misc]
@@ -175,8 +188,11 @@ class TestSLOTracker:
 
     def test_max_events_eviction(self) -> None:
         defn = SLODefinition(
-            name="Small", description="test", target=0.99,
-            threshold=1.0, unit="bool",
+            name="Small",
+            description="test",
+            target=0.99,
+            threshold=1.0,
+            unit="bool",
         )
         tracker = SLOTracker(defn, max_events=10)
         for i in range(20):
@@ -238,8 +254,11 @@ class TestSLOTracker:
 
     def test_burn_rate_zero_budget(self) -> None:
         defn = SLODefinition(
-            name="Perfect", description="100%", target=1.0,
-            threshold=1.0, unit="bool",
+            name="Perfect",
+            description="100%",
+            target=1.0,
+            threshold=1.0,
+            unit="bool",
         )
         tracker = SLOTracker(defn)
         tracker.record_event(success=False, value=0.0)
@@ -270,8 +289,11 @@ class TestSLOTracker:
 
     def test_error_budget_remaining_zero_budget_defn(self) -> None:
         defn = SLODefinition(
-            name="Perfect", description="100%", target=1.0,
-            threshold=1.0, unit="bool",
+            name="Perfect",
+            description="100%",
+            target=1.0,
+            threshold=1.0,
+            unit="bool",
         )
         tracker = SLOTracker(defn)
         assert tracker.get_error_budget_remaining_pct() == 100.0
@@ -543,8 +565,11 @@ class TestPropertyBased:
     def test_success_rate_bounded(self, success_count: int, failure_count: int) -> None:
         """Success rate must always be in [0.0, 1.0]."""
         defn = SLODefinition(
-            name="Test", description="test", target=0.95,
-            threshold=100.0, unit="ms",
+            name="Test",
+            description="test",
+            target=0.95,
+            threshold=100.0,
+            unit="ms",
         )
         tracker = SLOTracker(defn, max_events=10000)
         for _ in range(success_count):
@@ -561,8 +586,11 @@ class TestPropertyBased:
     def test_error_budget_non_negative(self, target: float) -> None:
         """Error budget must be in [0.0, 0.5]."""
         defn = SLODefinition(
-            name="Test", description="test", target=target,
-            threshold=1.0, unit="bool",
+            name="Test",
+            description="test",
+            target=target,
+            threshold=1.0,
+            unit="bool",
         )
         assert 0.0 <= defn.error_budget <= 0.5
 
@@ -573,8 +601,11 @@ class TestPropertyBased:
     def test_burn_rate_non_negative(self, n_events: int) -> None:
         """Burn rate must always be >= 0."""
         defn = SLODefinition(
-            name="Test", description="test", target=0.95,
-            threshold=100.0, unit="ms",
+            name="Test",
+            description="test",
+            target=0.95,
+            threshold=100.0,
+            unit="ms",
         )
         tracker = SLOTracker(defn, max_events=10000)
         for _ in range(n_events):
@@ -589,8 +620,11 @@ class TestPropertyBased:
     def test_error_budget_remaining_bounded(self, n_success: int, n_failure: int) -> None:
         """Error budget remaining must be in [0, 100]."""
         defn = SLODefinition(
-            name="Test", description="test", target=0.95,
-            threshold=100.0, unit="ms",
+            name="Test",
+            description="test",
+            target=0.95,
+            threshold=100.0,
+            unit="ms",
         )
         tracker = SLOTracker(defn, max_events=10000)
         for _ in range(n_success):

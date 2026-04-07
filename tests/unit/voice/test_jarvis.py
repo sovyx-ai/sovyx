@@ -211,37 +211,23 @@ class TestFillerSelection:
     def test_intent_overrides_heuristic(self) -> None:
         ji = _make_illusion()
         # Even though input ends with ?, command intent wins
-        assert (
-            ji.select_category("Set timer?", intent="command")
-            == FillerCategory.ACKNOWLEDGING
-        )
+        assert ji.select_category("Set timer?", intent="command") == FillerCategory.ACKNOWLEDGING
 
     def test_intent_question(self) -> None:
         ji = _make_illusion()
-        assert (
-            ji.select_category("anything", intent="question")
-            == FillerCategory.THINKING
-        )
+        assert ji.select_category("anything", intent="question") == FillerCategory.THINKING
 
     def test_intent_confirmation(self) -> None:
         ji = _make_illusion()
-        assert (
-            ji.select_category("yes", intent="confirmation")
-            == FillerCategory.CONFIRMING
-        )
+        assert ji.select_category("yes", intent="confirmation") == FillerCategory.CONFIRMING
 
     def test_intent_complex(self) -> None:
         ji = _make_illusion()
-        assert (
-            ji.select_category("x", intent="complex") == FillerCategory.CHECKING
-        )
+        assert ji.select_category("x", intent="complex") == FillerCategory.CHECKING
 
     def test_unknown_intent_uses_transitional(self) -> None:
         ji = _make_illusion()
-        assert (
-            ji.select_category("hi", intent="unknown_intent")
-            == FillerCategory.TRANSITIONAL
-        )
+        assert ji.select_category("hi", intent="unknown_intent") == FillerCategory.TRANSITIONAL
 
     def test_select_filler_returns_string(self) -> None:
         ji = _make_illusion()
@@ -281,11 +267,7 @@ class TestRepetitionAvoidance:
             max_same_in_row=2,
             filler_bank={
                 FillerCategory.TRANSITIONAL: ("A.", "B.", "C."),
-                **{
-                    k: v
-                    for k, v in FILLER_BANK.items()
-                    if k != FillerCategory.TRANSITIONAL
-                },
+                **{k: v for k, v in FILLER_BANK.items() if k != FillerCategory.TRANSITIONAL},
             },
         )
         ji = _make_illusion(config=cfg)
@@ -303,11 +285,7 @@ class TestRepetitionAvoidance:
             max_same_in_row=3,
             filler_bank={
                 FillerCategory.TRANSITIONAL: ("A.",),
-                **{
-                    k: v
-                    for k, v in FILLER_BANK.items()
-                    if k != FillerCategory.TRANSITIONAL
-                },
+                **{k: v for k, v in FILLER_BANK.items() if k != FillerCategory.TRANSITIONAL},
             },
         )
         ji = _make_illusion(config=cfg)
@@ -323,11 +301,7 @@ class TestRepetitionAvoidance:
             max_same_in_row=1,
             filler_bank={
                 FillerCategory.TRANSITIONAL: ("A.",),
-                **{
-                    k: v
-                    for k, v in FILLER_BANK.items()
-                    if k != FillerCategory.TRANSITIONAL
-                },
+                **{k: v for k, v in FILLER_BANK.items() if k != FillerCategory.TRANSITIONAL},
             },
         )
         ji = _make_illusion(config=cfg)
@@ -560,9 +534,7 @@ class TestPlayFillerAfterDelay:
         output = _make_output()
         cancel = asyncio.Event()
         # Question input → THINKING category
-        await ji.play_filler_after_delay(
-            output, cancel, user_input="What time is it?"
-        )
+        await ji.play_filler_after_delay(output, cancel, user_input="What time is it?")
         # Verify a filler was played (from THINKING category ideally)
         output.play_immediate.assert_awaited_once()
 

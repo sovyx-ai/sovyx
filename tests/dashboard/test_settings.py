@@ -154,10 +154,13 @@ class TestApplySettings:
     def test_multiple_updates(self) -> None:
         """Apply multiple fields, only mutable ones change."""
         config = _mock_config()
-        changes = apply_settings(config, {
-            "log_level": "DEBUG",
-            "unknown": "value",
-            "another_unknown": 42,
-        })
+        changes = apply_settings(
+            config,
+            {
+                "log_level": "DEBUG",
+                "unknown": "value",
+                "another_unknown": 42,
+            },
+        )
         assert len(changes) == 1
         assert "log_level" in changes

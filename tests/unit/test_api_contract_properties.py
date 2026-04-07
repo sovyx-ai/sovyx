@@ -59,10 +59,13 @@ class TestConversationIdFuzz:
         ],
     )
     async def test_random_ids_never_crash(
-        self, client: AsyncClient, conv_id: str,
+        self,
+        client: AsyncClient,
+        conv_id: str,
     ) -> None:
         r = await client.get(
-            f"/api/conversations/{conv_id}", headers=_auth(),
+            f"/api/conversations/{conv_id}",
+            headers=_auth(),
         )
         # 503 is acceptable when registry is not bootstrapped (CI without full setup)
         assert r.status_code in {200, 404, 422, 503}
@@ -83,7 +86,10 @@ class TestLogsQueryFuzz:
         ],
     )
     async def test_log_params_never_crash(
-        self, client: AsyncClient, level: str, limit: int,
+        self,
+        client: AsyncClient,
+        level: str,
+        limit: int,
     ) -> None:
         r = await client.get(
             "/api/logs",

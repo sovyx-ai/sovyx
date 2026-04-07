@@ -400,9 +400,7 @@ class TestEventSerializationRoundtrip:
         source=_safe_text,
     )
     @settings(max_examples=200, deadline=None)
-    def test_concept_created_roundtrip(
-        self, concept_id: str, title: str, source: str
-    ) -> None:
+    def test_concept_created_roundtrip(self, concept_id: str, title: str, source: str) -> None:
         event = ConceptCreated(concept_id=concept_id, title=title, source=source)
         payload = _serialize_event(event)
         assert payload["data"]["concept_id"] == concept_id
@@ -455,9 +453,7 @@ class TestEventSerializationRoundtrip:
         reason=_safe_text,
     )
     @settings(max_examples=200, deadline=None)
-    def test_channel_disconnected_roundtrip(
-        self, channel_type: str, reason: str
-    ) -> None:
+    def test_channel_disconnected_roundtrip(self, channel_type: str, reason: str) -> None:
         event = ChannelDisconnected(channel_type=channel_type, reason=reason)
         payload = _serialize_event(event)
         assert payload["data"]["channel_type"] == channel_type

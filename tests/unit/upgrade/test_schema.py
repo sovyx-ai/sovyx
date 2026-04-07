@@ -276,25 +276,19 @@ class TestSchemaVersion:
     """SchemaVersion tracking with real SQLite."""
 
     @pytest.mark.asyncio()
-    async def test_fresh_db_returns_zero(
-        self, schema_version: SchemaVersion
-    ) -> None:
+    async def test_fresh_db_returns_zero(self, schema_version: SchemaVersion) -> None:
         current = await schema_version.get_current()
         assert current == SemVer.zero()
 
     @pytest.mark.asyncio()
-    async def test_record_and_get_current(
-        self, schema_version: SchemaVersion
-    ) -> None:
+    async def test_record_and_get_current(self, schema_version: SchemaVersion) -> None:
         m = _make_migration("1.0.0", "initial")
         await schema_version.record(m, duration_ms=42)
         current = await schema_version.get_current()
         assert current == SemVer(1, 0, 0)
 
     @pytest.mark.asyncio()
-    async def test_multiple_records_returns_latest(
-        self, schema_version: SchemaVersion
-    ) -> None:
+    async def test_multiple_records_returns_latest(self, schema_version: SchemaVersion) -> None:
         await schema_version.record(_make_migration("1.0.0"), 10)
         await schema_version.record(_make_migration("1.1.0"), 20)
         await schema_version.record(_make_migration("2.0.0"), 30)
@@ -302,9 +296,7 @@ class TestSchemaVersion:
         assert current == SemVer(2, 0, 0)
 
     @pytest.mark.asyncio()
-    async def test_get_pending_filters_correctly(
-        self, schema_version: SchemaVersion
-    ) -> None:
+    async def test_get_pending_filters_correctly(self, schema_version: SchemaVersion) -> None:
         migrations = [
             _make_migration("1.0.0"),
             _make_migration("1.1.0"),
@@ -316,25 +308,19 @@ class TestSchemaVersion:
         assert pending[1].version == "2.0.0"
 
     @pytest.mark.asyncio()
-    async def test_get_pending_empty_when_up_to_date(
-        self, schema_version: SchemaVersion
-    ) -> None:
+    async def test_get_pending_empty_when_up_to_date(self, schema_version: SchemaVersion) -> None:
         migrations = [_make_migration("1.0.0")]
         pending = schema_version.get_pending(SemVer(1, 0, 0), migrations)
         assert pending == []
 
     @pytest.mark.asyncio()
-    async def test_get_pending_all_when_fresh(
-        self, schema_version: SchemaVersion
-    ) -> None:
+    async def test_get_pending_all_when_fresh(self, schema_version: SchemaVersion) -> None:
         migrations = [_make_migration("1.0.0"), _make_migration("1.1.0")]
         pending = schema_version.get_pending(SemVer.zero(), migrations)
         assert len(pending) == 2
 
     @pytest.mark.asyncio()
-    async def test_get_pending_sorted(
-        self, schema_version: SchemaVersion
-    ) -> None:
+    async def test_get_pending_sorted(self, schema_version: SchemaVersion) -> None:
         migrations = [
             _make_migration("2.0.0"),
             _make_migration("1.0.0"),
@@ -344,9 +330,7 @@ class TestSchemaVersion:
         assert [m.version for m in pending] == ["1.0.0", "1.5.0", "2.0.0"]
 
     @pytest.mark.asyncio()
-    async def test_get_history(
-        self, schema_version: SchemaVersion
-    ) -> None:
+    async def test_get_history(self, schema_version: SchemaVersion) -> None:
         m1 = _make_migration("1.0.0", "first")
         m2 = _make_migration("1.1.0", "second")
         await schema_version.record(m1, 10)
@@ -359,9 +343,7 @@ class TestSchemaVersion:
         assert history[1]["version"] == "1.1.0"
 
     @pytest.mark.asyncio()
-    async def test_get_history_empty(
-        self, schema_version: SchemaVersion
-    ) -> None:
+    async def test_get_history_empty(self, schema_version: SchemaVersion) -> None:
         history = await schema_version.get_history()
         assert history == []
 
@@ -383,9 +365,7 @@ class TestMigrationRunner:
         )
 
     @pytest.mark.asyncio()
-    async def test_no_pending_returns_up_to_date(
-        self, runner: MigrationRunner
-    ) -> None:
+    async def test_no_pending_returns_up_to_date(self, runner: MigrationRunner) -> None:
         report = await runner.run([])
         assert report.status == "up_to_date"
         assert report.applied == []
@@ -432,9 +412,7 @@ class TestMigrationRunner:
         self,
         runner: MigrationRunner,
     ) -> None:
-        m = _make_migration(
-            "1.0.0", "v1", ["CREATE TABLE idem_t (id INT)"]
-        )
+        m = _make_migration("1.0.0", "v1", ["CREATE TABLE idem_t (id INT)"])
         report1 = await runner.run([m])
         assert report1.status == "success"
 
@@ -447,12 +425,8 @@ class TestMigrationRunner:
         runner: MigrationRunner,
         schema_version: SchemaVersion,
     ) -> None:
-        good = _make_migration(
-            "1.0.0", "good", ["CREATE TABLE rollback_t (id INT)"]
-        )
-        bad = _make_migration(
-            "1.1.0", "bad", ["INVALID SQL STATEMENT THAT WILL FAIL"]
-        )
+        good = _make_migration("1.0.0", "good", ["CREATE TABLE rollback_t (id INT)"])
+        bad = _make_migration("1.1.0", "bad", ["INVALID SQL STATEMENT THAT WILL FAIL"])
         report = await runner.run([good, bad])
         assert report.status == "failed"
         assert "bad" in report.error.lower() or "INVALID" in report.error
@@ -503,9 +477,7 @@ class TestMigrationRunner:
         runner: MigrationRunner,
         tmp_path: Path,
     ) -> None:
-        m = _make_migration(
-            "1.0.0", "v1", ["CREATE TABLE bk_t (id INT)"]
-        )
+        m = _make_migration("1.0.0", "v1", ["CREATE TABLE bk_t (id INT)"])
         await runner.run([m])
         backups = list((tmp_path / "backups").glob("sovyx_upgrade_*.db"))
         assert len(backups) >= 1
@@ -596,9 +568,7 @@ class TestMigrationRunnerDiscovery:
         pkg_dir.mkdir()
         (pkg_dir / "__init__.py").write_text("# empty")
 
-        with patch(
-            "sovyx.upgrade.schema.importlib.import_module"
-        ) as mock_import:
+        with patch("sovyx.upgrade.schema.importlib.import_module") as mock_import:
             mock_mod = MagicMock()
             mock_mod.__file__ = str(pkg_dir / "__init__.py")
             mock_import.return_value = mock_mod
@@ -699,8 +669,7 @@ class TestSchemaVersionEdgeCases:
         """If stored version is not valid semver, return 0.0.0."""
         async with _pool.write() as conn:
             await conn.execute(
-                "INSERT INTO _schema_version (version, checksum, description) "
-                "VALUES (?, ?, ?)",
+                "INSERT INTO _schema_version (version, checksum, description) VALUES (?, ?, ?)",
                 ("not-semver", "abc", "corrupted"),
             )
             await conn.commit()
@@ -820,9 +789,7 @@ class TestMigrationRunnerEdgeCases:
     @pytest.mark.asyncio()
     async def test_discover_none_pkg_file(self) -> None:
         """Discovery returns empty if package has no __file__."""
-        with patch(
-            "sovyx.upgrade.schema.importlib.import_module"
-        ) as mock_import:
+        with patch("sovyx.upgrade.schema.importlib.import_module") as mock_import:
             mock_mod = MagicMock()
             mock_mod.__file__ = None
             mock_import.return_value = mock_mod

@@ -39,9 +39,7 @@ def _mock_onnx_session(scores: list[float]) -> MagicMock:
 
     score_iter = iter(scores)
 
-    def _run(
-        _names: object, inputs: dict[str, object]
-    ) -> list[np.ndarray]:  # noqa: ARG001
+    def _run(_names: object, inputs: dict[str, object]) -> list[np.ndarray]:  # noqa: ARG001
         try:
             score = next(score_iter)
         except StopIteration:
@@ -450,31 +448,23 @@ class TestVerifiers:
         assert result.transcription == "<no-stt>"
 
     def test_stt_verifier_matches(self) -> None:
-        verifier = create_stt_verifier(
-            _transcribe_sovyx, frozenset({"sovyx", "hey sovyx"})
-        )
+        verifier = create_stt_verifier(_transcribe_sovyx, frozenset({"sovyx", "hey sovyx"}))
         result = verifier(np.zeros(1280, dtype=np.float32))
         assert result.verified is True
         assert "hey sovyx" in result.transcription
 
     def test_stt_verifier_no_match(self) -> None:
-        verifier = create_stt_verifier(
-            _transcribe_hello, frozenset({"sovyx", "hey sovyx"})
-        )
+        verifier = create_stt_verifier(_transcribe_hello, frozenset({"sovyx", "hey sovyx"}))
         result = verifier(np.zeros(1280, dtype=np.float32))
         assert result.verified is False
 
     def test_stt_verifier_case_insensitive(self) -> None:
-        verifier = create_stt_verifier(
-            _transcribe_uppercase, frozenset({"sovyx"})
-        )
+        verifier = create_stt_verifier(_transcribe_uppercase, frozenset({"sovyx"}))
         result = verifier(np.zeros(1280, dtype=np.float32))
         assert result.verified is True
 
     def test_stt_verifier_variant_matching(self) -> None:
-        verifier = create_stt_verifier(
-            _transcribe_variant, frozenset({"sovyx", "so vyx"})
-        )
+        verifier = create_stt_verifier(_transcribe_variant, frozenset({"sovyx", "so vyx"}))
         result = verifier(np.zeros(1280, dtype=np.float32))
         assert result.verified is True
 
@@ -533,9 +523,7 @@ class TestWakeWordEvent:
     """Tests for WakeWordEvent dataclass."""
 
     def test_event_fields(self) -> None:
-        event = WakeWordEvent(
-            detected=True, score=0.85, state=WakeWordState.COOLDOWN
-        )
+        event = WakeWordEvent(detected=True, score=0.85, state=WakeWordState.COOLDOWN)
         assert event.detected is True
         assert event.score == 0.85
         assert event.state == WakeWordState.COOLDOWN

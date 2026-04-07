@@ -52,10 +52,12 @@ def downgrader() -> NoopSubscriptionDowngrader:
 
 @pytest.fixture()
 def resolver() -> InMemoryCustomerResolver:
-    return InMemoryCustomerResolver({
-        "cus_123": "user@example.com",
-        "cus_456": "other@example.com",
-    })
+    return InMemoryCustomerResolver(
+        {
+            "cus_123": "user@example.com",
+            "cus_456": "other@example.com",
+        }
+    )
 
 
 class _FakeClock:
@@ -141,9 +143,7 @@ class TestConstants:
 
     def test_state_email_map_complete(self) -> None:
         """All PAST_DUE states map to an email type."""
-        past_due_states = [
-            s for s in DunningState if s.value.startswith("past_due")
-        ]
+        past_due_states = [s for s in DunningState if s.value.startswith("past_due")]
         for state in past_due_states:
             assert state in STATE_EMAIL_MAP
 
@@ -326,7 +326,8 @@ class TestInMemoryDunningStore:
 
     @pytest.mark.asyncio()
     async def test_list_active_filters_canceled(
-        self, store: InMemoryDunningStore,
+        self,
+        store: InMemoryDunningStore,
     ) -> None:
         active = DunningRecord(
             subscription_id="sub_1",
@@ -366,7 +367,8 @@ class TestInMemoryEmailSender:
 class TestNoopSubscriptionDowngrader:
     @pytest.mark.asyncio()
     async def test_records_downgrade(
-        self, downgrader: NoopSubscriptionDowngrader,
+        self,
+        downgrader: NoopSubscriptionDowngrader,
     ) -> None:
         ok = await downgrader.downgrade_to_free("sub_1", "cus_1")
         assert ok is True
@@ -666,7 +668,8 @@ class TestGetStatus:
 
     @pytest.mark.asyncio()
     async def test_returns_none_if_not_in_dunning(
-        self, service: DunningService,
+        self,
+        service: DunningService,
     ) -> None:
         status = await service.get_status("sub_nope")
         assert status is None

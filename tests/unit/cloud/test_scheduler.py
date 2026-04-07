@@ -147,9 +147,7 @@ class TestRetentionPolicy:
         now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
 
         # Create 5 daily backups
-        backups = [
-            _make_backup_info(f"d{i}", now - timedelta(days=i)) for i in range(5)
-        ]
+        backups = [_make_backup_info(f"d{i}", now - timedelta(days=i)) for i in range(5)]
 
         result = policy.apply(backups, now=now)
         assert len(result.keep) == 3
@@ -165,9 +163,7 @@ class TestRetentionPolicy:
         now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
 
         # Backups spread across 4 weeks
-        backups = [
-            _make_backup_info(f"w{i}", now - timedelta(weeks=i)) for i in range(4)
-        ]
+        backups = [_make_backup_info(f"w{i}", now - timedelta(weeks=i)) for i in range(4)]
 
         result = policy.apply(backups, now=now)
         assert len(result.keep) == 2
@@ -179,9 +175,7 @@ class TestRetentionPolicy:
         now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
 
         # Backups spread across 5 months
-        backups = [
-            _make_backup_info(f"m{i}", now - timedelta(days=30 * i)) for i in range(5)
-        ]
+        backups = [_make_backup_info(f"m{i}", now - timedelta(days=30 * i)) for i in range(5)]
 
         result = policy.apply(backups, now=now)
         assert len(result.keep) == 3
@@ -238,9 +232,7 @@ class TestRetentionPolicy:
         policy = RetentionPolicy(keep_daily=0, keep_weekly=0, keep_monthly=0)
         now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
 
-        backups = [
-            _make_backup_info(f"b{i}", now - timedelta(days=i)) for i in range(5)
-        ]
+        backups = [_make_backup_info(f"b{i}", now - timedelta(days=i)) for i in range(5)]
 
         result = policy.apply(backups, now=now)
         assert len(result.keep) == 0
@@ -286,8 +278,7 @@ class TestRetentionPolicy:
         )
         now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
         backups = [
-            _make_backup_info(f"b{i}", now - timedelta(hours=i * 6))
-            for i in range(n_backups)
+            _make_backup_info(f"b{i}", now - timedelta(hours=i * 6)) for i in range(n_backups)
         ]
 
         result = policy.apply(backups, now=now)
@@ -315,8 +306,7 @@ class TestRetentionPolicy:
         )
         now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
         backups = [
-            _make_backup_info(f"b{i}", now - timedelta(hours=i * 6))
-            for i in range(n_backups)
+            _make_backup_info(f"b{i}", now - timedelta(hours=i * 6)) for i in range(n_backups)
         ]
 
         result = policy.apply(backups, now=now)
@@ -652,8 +642,7 @@ class TestBackupScheduler:
 
         # Create backups that should be pruned
         old_backups = [
-            _make_backup_info(f"old{i}", now - timedelta(days=40 + i))
-            for i in range(5)
+            _make_backup_info(f"old{i}", now - timedelta(days=40 + i)) for i in range(5)
         ]
         service.list_backups.return_value = old_backups
 
@@ -769,9 +758,7 @@ class TestSchedulerIntegration:
         now = datetime(2026, 4, 7, 12, 0, tzinfo=UTC)
 
         # 40 daily backups — only 30 should be kept (business tier)
-        existing_backups = [
-            _make_backup_info(f"b{i}", now - timedelta(days=i)) for i in range(40)
-        ]
+        existing_backups = [_make_backup_info(f"b{i}", now - timedelta(days=i)) for i in range(40)]
         service.list_backups.return_value = existing_backups
 
         callback = AsyncMock()

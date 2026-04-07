@@ -539,9 +539,7 @@ class TestConfigureAutoTopup:
     async def test_configure_invalid_amount_raises(self) -> None:
         svc, _ = _make_service()
         with pytest.raises(InvalidTopupAmountError):
-            await svc.configure_auto_topup(
-                "acc-1", enabled=True, amount_cents=777
-            )
+            await svc.configure_auto_topup("acc-1", enabled=True, amount_cents=777)
 
     @pytest.mark.asyncio
     async def test_disable_with_invalid_amount_ok(self) -> None:
@@ -549,9 +547,7 @@ class TestConfigureAutoTopup:
         svc, store = _make_service()
         await _seed_balance(store, "acc-1", 1000, auto_topup_enabled=True)
         # Disabling doesn't validate amount
-        result = await svc.configure_auto_topup(
-            "acc-1", enabled=False, amount_cents=777
-        )
+        result = await svc.configure_auto_topup("acc-1", enabled=False, amount_cents=777)
         assert result.auto_topup_enabled is False
 
 
@@ -601,9 +597,7 @@ class TestConcurrency:
 
         # 20 concurrent deductions of $0.60 each = $12 total
         # Only ~16 should succeed ($10 / $0.60 ≈ 16)
-        results = await asyncio.gather(
-            *[svc.deduct("acc-1", 0.60) for _ in range(20)]
-        )
+        results = await asyncio.gather(*[svc.deduct("acc-1", 0.60) for _ in range(20)])
         success_count = sum(1 for r in results if r is True)
         final_balance = await svc.get_balance("acc-1")
 
@@ -706,9 +700,7 @@ class TestPropertyBased:
         deduct_cents=st.integers(min_value=1, max_value=50000),
     )
     @pytest.mark.asyncio
-    async def test_deduct_never_goes_negative(
-        self, balance: int, deduct_cents: int
-    ) -> None:
+    async def test_deduct_never_goes_negative(self, balance: int, deduct_cents: int) -> None:
         """Balance never goes below zero after deduction."""
         svc, store = _make_service()
         await _seed_balance(store, "acc-1", balance)
@@ -717,9 +709,11 @@ class TestPropertyBased:
         assert final >= 0.0
 
     @settings(deadline=None, suppress_health_check=[HealthCheck.too_slow])
-    @given(invalid_cents=st.integers(min_value=1, max_value=99999).filter(
-        lambda x: x not in VALID_TOPUP_AMOUNTS_CENTS
-    ))
+    @given(
+        invalid_cents=st.integers(min_value=1, max_value=99999).filter(
+            lambda x: x not in VALID_TOPUP_AMOUNTS_CENTS
+        )
+    )
     @pytest.mark.asyncio
     async def test_invalid_topup_always_rejected(self, invalid_cents: int) -> None:
         """Non-valid topup amounts are always rejected."""

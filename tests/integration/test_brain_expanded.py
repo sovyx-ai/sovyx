@@ -48,9 +48,7 @@ def relation_repo(brain_pool: DatabasePool) -> RelationRepository:
 class TestMultiMindIsolation:
     """Concepts from different minds are isolated."""
 
-    async def test_search_only_returns_own_mind(
-        self, concept_repo: ConceptRepository
-    ) -> None:
+    async def test_search_only_returns_own_mind(self, concept_repo: ConceptRepository) -> None:
         mind_a = MindId("mind-alpha")
         mind_b = MindId("mind-beta")
 
@@ -82,9 +80,7 @@ class TestMultiMindIsolation:
         assert len(results_a) == 1
         assert len(results_b) == 1
 
-    async def test_get_by_id_cross_mind(
-        self, concept_repo: ConceptRepository
-    ) -> None:
+    async def test_get_by_id_cross_mind(self, concept_repo: ConceptRepository) -> None:
         """get() returns concept regardless of mind (by ID)."""
         mind = MindId("mind-cross")
         cid = await concept_repo.create(
@@ -129,9 +125,7 @@ class TestConceptUpdate:
 class TestSearchRanking:
     """FTS5 search returns more relevant results first."""
 
-    async def test_exact_match_ranks_higher(
-        self, concept_repo: ConceptRepository
-    ) -> None:
+    async def test_exact_match_ranks_higher(self, concept_repo: ConceptRepository) -> None:
         mind = MindId("mind-rank")
 
         # Create a concept with exact match

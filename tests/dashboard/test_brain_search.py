@@ -79,10 +79,16 @@ class TestSearchBrain:
         registry = _registry_with_repo(fts_results=[(c1, -5.0), (c2, -2.0)])
 
         with (
-            patch("sovyx.dashboard.brain._get_active_mind_id",
-                  new_callable=AsyncMock, return_value="m1"),
-            patch("sovyx.dashboard.brain._get_query_embedding",
-                  new_callable=AsyncMock, return_value=None),
+            patch(
+                "sovyx.dashboard.brain._get_active_mind_id",
+                new_callable=AsyncMock,
+                return_value="m1",
+            ),
+            patch(
+                "sovyx.dashboard.brain._get_query_embedding",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
         ):
             results = await search_brain(registry, "Python", limit=10)
 
@@ -105,10 +111,16 @@ class TestSearchBrain:
         )
 
         with (
-            patch("sovyx.dashboard.brain._get_active_mind_id",
-                  new_callable=AsyncMock, return_value="m1"),
-            patch("sovyx.dashboard.brain._get_query_embedding",
-                  new_callable=AsyncMock, return_value=[0.1]),
+            patch(
+                "sovyx.dashboard.brain._get_active_mind_id",
+                new_callable=AsyncMock,
+                return_value="m1",
+            ),
+            patch(
+                "sovyx.dashboard.brain._get_query_embedding",
+                new_callable=AsyncMock,
+                return_value=[0.1],
+            ),
         ):
             results = await search_brain(registry, "Python", limit=10)
 
@@ -123,10 +135,16 @@ class TestSearchBrain:
         registry = _registry_with_repo(fts_results=concepts)
 
         with (
-            patch("sovyx.dashboard.brain._get_active_mind_id",
-                  new_callable=AsyncMock, return_value="m1"),
-            patch("sovyx.dashboard.brain._get_query_embedding",
-                  new_callable=AsyncMock, return_value=None),
+            patch(
+                "sovyx.dashboard.brain._get_active_mind_id",
+                new_callable=AsyncMock,
+                return_value="m1",
+            ),
+            patch(
+                "sovyx.dashboard.brain._get_query_embedding",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
         ):
             results = await search_brain(registry, "test", limit=3)
 
@@ -139,10 +157,16 @@ class TestSearchBrain:
         registry = _registry_with_repo(fts_results=[(c1, -10.0), (c2, -0.5)])
 
         with (
-            patch("sovyx.dashboard.brain._get_active_mind_id",
-                  new_callable=AsyncMock, return_value="m1"),
-            patch("sovyx.dashboard.brain._get_query_embedding",
-                  new_callable=AsyncMock, return_value=None),
+            patch(
+                "sovyx.dashboard.brain._get_active_mind_id",
+                new_callable=AsyncMock,
+                return_value="m1",
+            ),
+            patch(
+                "sovyx.dashboard.brain._get_query_embedding",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
         ):
             results = await search_brain(registry, "test", limit=10)
 
@@ -153,8 +177,9 @@ class TestSearchBrain:
     async def test_no_repo(self) -> None:
         registry = MagicMock()
         registry.is_registered = MagicMock(return_value=False)
-        with patch("sovyx.dashboard.brain._get_active_mind_id",
-                    new_callable=AsyncMock, return_value="m1"):
+        with patch(
+            "sovyx.dashboard.brain._get_active_mind_id", new_callable=AsyncMock, return_value="m1"
+        ):
             assert await search_brain(registry, "test", limit=10) == []
 
     @pytest.mark.asyncio
@@ -166,10 +191,16 @@ class TestSearchBrain:
         registry.resolve = AsyncMock(return_value=repo)
 
         with (
-            patch("sovyx.dashboard.brain._get_active_mind_id",
-                  new_callable=AsyncMock, return_value="m1"),
-            patch("sovyx.dashboard.brain._get_query_embedding",
-                  new_callable=AsyncMock, return_value=None),
+            patch(
+                "sovyx.dashboard.brain._get_active_mind_id",
+                new_callable=AsyncMock,
+                return_value="m1",
+            ),
+            patch(
+                "sovyx.dashboard.brain._get_query_embedding",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
         ):
             results = await search_brain(registry, "test", limit=10)
         assert results == []
@@ -182,10 +213,16 @@ class TestSearchBrain:
         registry = _registry_with_repo(vec_results=[(c1, 0.0), (c2, 1.0)])
 
         with (
-            patch("sovyx.dashboard.brain._get_active_mind_id",
-                  new_callable=AsyncMock, return_value="m1"),
-            patch("sovyx.dashboard.brain._get_query_embedding",
-                  new_callable=AsyncMock, return_value=[0.1]),
+            patch(
+                "sovyx.dashboard.brain._get_active_mind_id",
+                new_callable=AsyncMock,
+                return_value="m1",
+            ),
+            patch(
+                "sovyx.dashboard.brain._get_query_embedding",
+                new_callable=AsyncMock,
+                return_value=[0.1],
+            ),
         ):
             results = await search_brain(registry, "test", limit=10)
 
@@ -201,17 +238,29 @@ class TestSearchBrain:
         registry = _registry_with_repo(fts_results=[(c, -1.0)])
 
         with (
-            patch("sovyx.dashboard.brain._get_active_mind_id",
-                  new_callable=AsyncMock, return_value="m1"),
-            patch("sovyx.dashboard.brain._get_query_embedding",
-                  new_callable=AsyncMock, return_value=None),
+            patch(
+                "sovyx.dashboard.brain._get_active_mind_id",
+                new_callable=AsyncMock,
+                return_value="m1",
+            ),
+            patch(
+                "sovyx.dashboard.brain._get_query_embedding",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
         ):
             results = await search_brain(registry, "test", limit=10)
 
         r = results[0]
         assert set(r.keys()) == {
-            "id", "name", "category", "importance",
-            "confidence", "access_count", "score", "match_type",
+            "id",
+            "name",
+            "category",
+            "importance",
+            "confidence",
+            "access_count",
+            "score",
+            "match_type",
         }
 
 
@@ -239,9 +288,16 @@ class TestBrainSearchEndpoint:
     def test_wired_search(self, tmp_path_factory: pytest.TempPathFactory) -> None:
         client, hdr = _make_client(tmp_path_factory)
         mock_results = [
-            {"id": "c1", "name": "Python", "score": 0.95,
-             "category": "skill", "importance": 0.8,
-             "confidence": 0.9, "access_count": 5, "match_type": "text"},
+            {
+                "id": "c1",
+                "name": "Python",
+                "score": 0.95,
+                "category": "skill",
+                "importance": 0.8,
+                "confidence": 0.9,
+                "access_count": 5,
+                "match_type": "text",
+            },
         ]
         with patch(
             "sovyx.dashboard.brain.search_brain",
@@ -273,3 +329,147 @@ class TestBrainSearchEndpoint:
     def test_limit_max(self, tmp_path_factory: pytest.TempPathFactory) -> None:
         client, hdr = _make_client(tmp_path_factory)
         assert client.get("/api/brain/search?q=t&limit=999", headers=hdr).status_code == 422
+
+
+# ── Coverage gap tests (embedding + vector paths) ───────────────────────
+
+
+class TestGetQueryEmbedding:
+    """Tests for _get_query_embedding helper."""
+
+    @pytest.mark.asyncio()
+    async def test_embedding_available(self) -> None:
+        """When EmbeddingEngine is registered and has embeddings, returns vector."""
+        from sovyx.dashboard.brain import _get_query_embedding
+
+        mock_engine = AsyncMock()
+        mock_engine.has_embeddings = True
+        mock_engine.encode = AsyncMock(return_value=[0.1, 0.2, 0.3])
+
+        registry = MagicMock()
+        registry.is_registered = MagicMock(return_value=True)
+        registry.resolve = AsyncMock(return_value=mock_engine)
+
+        with patch("sovyx.dashboard.brain.EmbeddingEngine", create=True):
+            result = await _get_query_embedding(registry, "test query")
+
+        assert result == [0.1, 0.2, 0.3]
+
+    @pytest.mark.asyncio()
+    async def test_embedding_not_registered(self) -> None:
+        """When EmbeddingEngine is not registered, returns None."""
+        from sovyx.dashboard.brain import _get_query_embedding
+
+        registry = MagicMock()
+        registry.is_registered = MagicMock(return_value=False)
+
+        result = await _get_query_embedding(registry, "test query")
+        assert result is None
+
+    @pytest.mark.asyncio()
+    async def test_embedding_no_embeddings(self) -> None:
+        """When engine exists but has_embeddings=False, returns None."""
+        from sovyx.dashboard.brain import _get_query_embedding
+
+        mock_engine = AsyncMock()
+        mock_engine.has_embeddings = False
+
+        registry = MagicMock()
+        registry.is_registered = MagicMock(return_value=True)
+        registry.resolve = AsyncMock(return_value=mock_engine)
+
+        result = await _get_query_embedding(registry, "test query")
+        assert result is None
+
+    @pytest.mark.asyncio()
+    async def test_embedding_exception(self) -> None:
+        """When encode raises, returns None gracefully."""
+        from sovyx.dashboard.brain import _get_query_embedding
+
+        registry = MagicMock()
+        registry.is_registered = MagicMock(side_effect=RuntimeError("boom"))
+
+        result = await _get_query_embedding(registry, "test query")
+        assert result is None
+
+
+class TestSearchBrainVectorPath:
+    """Tests for vector search integration in search_brain."""
+
+    @pytest.mark.asyncio()
+    async def test_fts_plus_vector_merge(self) -> None:
+        """FTS5 and vector results are merged and deduplicated."""
+        concept_a = _mock_concept("c1", "Alpha")
+        concept_b = _mock_concept("c2", "Beta")
+
+        repo = AsyncMock()
+        repo.search_by_text = AsyncMock(return_value=[(concept_a, -0.5)])
+        repo.search_by_embedding = AsyncMock(return_value=[(concept_b, 0.3)])
+
+        registry = MagicMock()
+        registry.is_registered = MagicMock(return_value=True)
+        registry.resolve = AsyncMock(return_value=repo)
+
+        with (
+            patch("sovyx.dashboard.brain._get_active_mind_id", return_value="mind1"),
+            patch(
+                "sovyx.dashboard.brain._get_query_embedding",
+                return_value=[0.1, 0.2],
+            ),
+        ):
+            results = await search_brain(registry, "test", limit=10)
+
+        assert len(results) == 2  # noqa: PLR2004
+        ids = {r["id"] for r in results}
+        assert "c1" in ids
+        assert "c2" in ids
+
+    @pytest.mark.asyncio()
+    async def test_vector_search_exception(self) -> None:
+        """Vector search failure doesn't break overall search."""
+        concept_a = _mock_concept("c1", "Alpha")
+
+        repo = AsyncMock()
+        repo.search_by_text = AsyncMock(return_value=[(concept_a, -0.5)])
+        repo.search_by_embedding = AsyncMock(side_effect=RuntimeError("vec failed"))
+
+        registry = MagicMock()
+        registry.is_registered = MagicMock(return_value=True)
+        registry.resolve = AsyncMock(return_value=repo)
+
+        with (
+            patch("sovyx.dashboard.brain._get_active_mind_id", return_value="mind1"),
+            patch(
+                "sovyx.dashboard.brain._get_query_embedding",
+                return_value=[0.1, 0.2],
+            ),
+        ):
+            results = await search_brain(registry, "test")
+
+        assert len(results) == 1
+        assert results[0]["id"] == "c1"
+
+    @pytest.mark.asyncio()
+    async def test_fts_search_exception(self) -> None:
+        """FTS search failure still returns vector results."""
+        concept_b = _mock_concept("c2", "Beta")
+
+        repo = AsyncMock()
+        repo.search_by_text = AsyncMock(side_effect=RuntimeError("fts failed"))
+        repo.search_by_embedding = AsyncMock(return_value=[(concept_b, 0.2)])
+
+        registry = MagicMock()
+        registry.is_registered = MagicMock(return_value=True)
+        registry.resolve = AsyncMock(return_value=repo)
+
+        with (
+            patch("sovyx.dashboard.brain._get_active_mind_id", return_value="mind1"),
+            patch(
+                "sovyx.dashboard.brain._get_query_embedding",
+                return_value=[0.1, 0.2],
+            ),
+        ):
+            results = await search_brain(registry, "test")
+
+        assert len(results) == 1
+        assert results[0]["id"] == "c2"
