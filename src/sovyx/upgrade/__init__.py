@@ -1,4 +1,4 @@
-"""Upgrade — Schema versioning, migration runner, Mind export/import, diagnostics, and backup."""
+"""Upgrade — Schema versioning, migrations, export/import, diagnostics, backup, blue-green."""
 
 from __future__ import annotations
 
@@ -8,6 +8,15 @@ from sovyx.upgrade.backup_manager import (
     BackupIntegrityError,
     BackupManager,
     BackupTrigger,
+)
+from sovyx.upgrade.blue_green import (
+    BlueGreenUpgrader,
+    InstallError,
+    UpgradeError,
+    UpgradePhase,
+    UpgradeResult,
+    VerificationError,
+    VersionInstaller,
 )
 from sovyx.upgrade.doctor import DiagnosticReport, DiagnosticResult, DiagnosticStatus, Doctor
 from sovyx.upgrade.exporter import ExportInfo, ExportManifest, MindExporter
@@ -20,16 +29,23 @@ __all__ = [
     "BackupIntegrityError",
     "BackupManager",
     "BackupTrigger",
+    "BlueGreenUpgrader",
     "DiagnosticReport",
     "DiagnosticResult",
     "DiagnosticStatus",
     "Doctor",
     "ExportInfo",
     "ExportManifest",
-    "MigrationRunner",
-    "MindExporter",
     "ImportInfo",
     "ImportValidationError",
+    "InstallError",
+    "MigrationRunner",
+    "MindExporter",
     "MindImporter",
     "SchemaVersion",
+    "UpgradeError",
+    "UpgradePhase",
+    "UpgradeResult",
+    "VerificationError",
+    "VersionInstaller",
 ]
