@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
 
 from sovyx.engine.errors import ServiceNotRegisteredError
@@ -160,3 +162,96 @@ class TestShutdown:
         reg.register_instance(DummyService, DummyService())
         await reg.shutdown_all()
         assert reg.is_registered(DummyService) is False
+
+
+class TestRegistryCoverageGaps:
+    """Cover remaining registry paths."""
+
+    @pytest.mark.asyncio()
+    async def test_resolve_unregistered_raises(self) -> None:
+        """Resolve raises ServiceNotRegisteredError for unknown interface."""
+        from sovyx.engine.errors import ServiceNotRegisteredError
+
+        reg = ServiceRegistry()
+        with pytest.raises(ServiceNotRegisteredError, match="str"):
+            await reg.resolve(str)
+
+    @pytest.mark.asyncio()
+    async def test_shutdown_skips_none_instances(self) -> None:
+        """shutdown_all skips interfaces with no cached instance."""
+        reg = ServiceRegistry()
+        # Register factory but never resolve (no cached instance)
+        reg.register_singleton(str, lambda: "hello")
+        # Should not raise
+        await reg.shutdown_all()
+
+    @pytest.mark.asyncio()
+    async def test_shutdown_skips_no_shutdown_method(self) -> None:
+        """shutdown_all skips instances without shutdown method."""
+        reg = ServiceRegistry()
+        reg.register_instance(str, "hello")
+        # str has no shutdown() — should skip silently
+        await reg.shutdown_all()
+
+    @pytest.mark.asyncio()
+    async def test_shutdown_calls_async_shutdown(self) -> None:
+        """shutdown_all handles async shutdown methods."""
+        reg = ServiceRegistry()
+        mock_svc = AsyncMock()
+        mock_svc.shutdown = AsyncMock()
+        reg.register_instance(type(mock_svc), mock_svc)
+        await reg.shutdown_all()
+        mock_svc.shutdown.assert_awaited_once()
+
+    @pytest.mark.asyncio()
+    async def test_shutdown_suppresses_exception(self) -> None:
+        """shutdown_all logs but doesn't propagate shutdown errors."""
+        reg = ServiceRegistry()
+        mock_svc = AsyncMock()
+        mock_svc.shutdown = AsyncMock(side_effect=RuntimeError("boom"))
+        reg.register_instance(type(mock_svc), mock_svc)
+        # Should not raise
+        await reg.shutdown_all()
+
+    @pytest.mark.asyncio()
+    async def test_register_factory_then_resolve(self) -> None:
+        """Register via factory, resolve creates and caches."""
+        reg = ServiceRegistry()
+        reg.register_singleton(list, lambda: [1, 2, 3])
+        result = await reg.resolve(list)
+        assert result == [1, 2, 3]
+        # Second resolve returns same cached instance
+        result2 = await reg.resolve(list)
+        assert result is result2
+
+    def test_init_order_no_duplicates(self) -> None:
+        """Re-registering instance doesn't duplicate init_order."""
+        reg = ServiceRegistry()
+        reg.register_instance(str, "a")
+        reg.register_instance(str, "b")
+        assert reg._init_order.count(str) == 1  # noqa: SLF001
+
+    @pytest.mark.asyncio()
+    async def test_resolve_factory_twice_no_duplicate_order(self) -> None:
+        """Resolving factory twice doesn't duplicate init_order."""
+        reg = ServiceRegistry()
+        reg.register_singleton(list, lambda: [1, 2])
+        await reg.resolve(list)
+        # Manually re-add to factories to force the branch
+        reg._factories[list] = lambda: [3, 4]  # noqa: SLF001
+        del reg._instances[list]  # noqa: SLF001
+        await reg.resolve(list)
+        assert reg._init_order.count(list) == 1  # noqa: SLF001
+
+    @pytest.mark.asyncio()
+    async def test_shutdown_non_callable_shutdown_attr(self) -> None:
+        """shutdown_all handles non-callable shutdown attribute."""
+        reg = ServiceRegistry()
+
+        class FakeService:
+            shutdown = "not callable"
+
+        svc = FakeService()
+        reg.register_instance(FakeService, svc)
+        # Should not raise — skips non-callable
+        await reg.shutdown_all()
