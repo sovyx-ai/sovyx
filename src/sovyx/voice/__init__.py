@@ -2,6 +2,19 @@
 
 from __future__ import annotations
 
+from sovyx.voice.audio import (
+    AudioCapture,
+    AudioCaptureConfig,
+    AudioDucker,
+    AudioOutput,
+    AudioOutputConfig,
+    AudioPlatform,
+    OutputChunk,
+    OutputPriority,
+    RingBuffer,
+    detect_platform,
+    normalize_lufs,
+)
 from sovyx.voice.pipeline import (
     AudioOutputQueue,
     BargeInDetector,
@@ -31,12 +44,23 @@ from sovyx.voice.wake_word import (
 )
 
 __all__ = [
+    "AudioCapture",
+    "AudioCaptureConfig",
     "AudioChunk",
+    "AudioDucker",
+    "AudioOutput",
+    "AudioOutputConfig",
     "AudioOutputQueue",
+    "AudioPlatform",
     "BargeInDetector",
     "JarvisIllusion",
     "KokoroConfig",
     "KokoroTTS",
+    "OutputChunk",
+    "OutputPriority",
+    "RingBuffer",
+    "detect_platform",
+    "normalize_lufs",
     "MoonshineConfig",
     "MoonshineSTT",
     "PartialTranscription",
