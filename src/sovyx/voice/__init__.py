@@ -1,4 +1,4 @@
-"""voice — Voice activity detection, wake word, and speech processing pipeline."""
+"""voice — Voice activity detection, wake word, speech processing, and TTS pipeline."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ from sovyx.voice.stt import (
     TranscriptionResult,
     TranscriptionSegment,
 )
+from sovyx.voice.tts_piper import AudioChunk, PiperConfig, PiperTTS, TTSEngine
 from sovyx.voice.vad import SileroVAD, VADConfig, VADEvent, VADState
 from sovyx.voice.wake_word import (
     VerificationResult,
@@ -21,12 +22,16 @@ from sovyx.voice.wake_word import (
 )
 
 __all__ = [
+    "AudioChunk",
     "MoonshineConfig",
     "MoonshineSTT",
     "PartialTranscription",
+    "PiperConfig",
+    "PiperTTS",
     "STTEngine",
     "STTState",
     "SileroVAD",
+    "TTSEngine",
     "TranscriptionResult",
     "TranscriptionSegment",
     "VADConfig",
