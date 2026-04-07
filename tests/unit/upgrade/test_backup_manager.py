@@ -548,9 +548,7 @@ class TestEncryptedCreate:
         crypto = MagicMock()
         crypto.encrypt = MagicMock(side_effect=lambda data, pw: b"ENC:" + data)
 
-        mgr = BackupManager(
-            pool, backup_dir=backup_dir, crypto=crypto, passphrase="secret"
-        )
+        mgr = BackupManager(pool, backup_dir=backup_dir, crypto=crypto, passphrase="secret")
         info = await mgr.create_backup(BackupTrigger.MIGRATION)
 
         assert info.encrypted is True
@@ -569,9 +567,7 @@ class TestEncryptedCreate:
         crypto = MagicMock()
         crypto.encrypt = MagicMock(side_effect=RuntimeError("encrypt failed"))
 
-        mgr = BackupManager(
-            pool, backup_dir=backup_dir, crypto=crypto, passphrase="secret"
-        )
+        mgr = BackupManager(pool, backup_dir=backup_dir, crypto=crypto, passphrase="secret")
         with pytest.raises(BackupError, match="encrypt"):
             await mgr.create_backup(BackupTrigger.MIGRATION)
 
