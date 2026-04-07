@@ -127,6 +127,68 @@ class TestFits:
         assert counter.fits("", 0) is True
 
 
+class TestTruncateUnstableRoundtrip:
+    """Edge case: decode→encode roundtrip produces MORE tokens than input slice."""
+
+    def test_shrink_loop_triggers(self, counter: TokenCounter) -> None:
+        """Force the while-limit shrink path (lines 100-106).
+
+        We monkeypatch encode so the first decode→re-encode exceeds the
+        budget, forcing the loop to shrink ``limit`` at least once.
+        """
+        from unittest.mock import patch
+
+        enc = counter._get_encoding()
+        original_encode = enc.encode
+
+        call_count = 0
+
+        def encode_with_inflation(text: str, **kw: object) -> list[int]:  # noqa: ANN001
+            nonlocal call_count
+            call_count += 1
+            real = original_encode(text, **kw)
+            # After the initial encode (call 1) and the first re-encode
+            # inside the shrink guard (call 2), inflate the result so
+            # the guard fails and limit is decremented.
+            if call_count == 2:  # noqa: PLR2004
+                return real + [0] * 5  # inflate
+            return real
+
+        text = "hello world this is a test"
+        with patch.object(enc, "encode", side_effect=encode_with_inflation):
+            result = counter.truncate(text, 3)
+
+        # Should still return something valid (possibly shorter)
+        assert isinstance(result, str)
+        # The real encode of the result must fit
+        assert counter.count(result) <= 3
+
+    def test_shrink_loop_exhausts_to_empty(self, counter: TokenCounter) -> None:
+        """When every decoded slice re-encodes larger, return empty string."""
+        from unittest.mock import patch
+
+        enc = counter._get_encoding()
+        original_encode = enc.encode
+
+        first = True
+
+        def always_inflate(text: str, **kw: object) -> list[int]:  # noqa: ANN001
+            nonlocal first
+            real = original_encode(text, **kw)
+            if first:
+                first = False
+                return real
+            # Every re-encode is inflated beyond any budget
+            return real + [0] * 9999
+
+        # Text must encode to MORE tokens than max_tokens to enter the loop
+        text = "the quick brown fox jumps over the lazy dog and more words here"
+        with patch.object(enc, "encode", side_effect=always_inflate):
+            result = counter.truncate(text, 3)
+
+        assert result == ""
+
+
 class TestCaching:
     """Encoding caching."""
 

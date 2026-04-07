@@ -196,7 +196,8 @@ class TestPersistence:
         })
         async with pool.write() as conn:
             await conn.execute(
-                "INSERT INTO engine_state (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+                "INSERT INTO engine_state (key, value, updated_at)"
+                " VALUES (?, ?, CURRENT_TIMESTAMP)",
                 ("cost_guard_state", stale),
             )
             await conn.commit()

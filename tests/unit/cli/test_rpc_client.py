@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import json
-import tempfile
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 import pytest
 
 from sovyx.cli.rpc_client import DEFAULT_SOCKET_PATH, DaemonClient
 from sovyx.engine.errors import ChannelConnectionError
 from sovyx.engine.rpc_protocol import _HEADER_SIZE
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -101,7 +101,8 @@ class TestIsDaemonRunning:
     async def test_daemon_running(self, tmp_path: Path) -> None:
         """Real Unix server listening → True."""
         sock = tmp_path / "test.sock"
-        server = await _start_mock_daemon(sock, response={"jsonrpc": "2.0", "id": 1, "result": "ok"})
+        resp = {"jsonrpc": "2.0", "id": 1, "result": "ok"}
+        server = await _start_mock_daemon(sock, response=resp)
         try:
             client = DaemonClient(socket_path=sock)
             assert client.is_daemon_running() is True
@@ -298,9 +299,11 @@ class TestCall:
         sock = tmp_path / "daemon.sock"
         client = DaemonClient(socket_path=sock)
 
-        with patch.object(client, "is_daemon_running", return_value=True):
-            with pytest.raises((ChannelConnectionError, OSError, FileNotFoundError)):
-                await client.call("status", timeout=0.5)
+        with (
+            patch.object(client, "is_daemon_running", return_value=True),
+            pytest.raises((ChannelConnectionError, OSError, FileNotFoundError)),
+        ):
+            await client.call("status", timeout=0.5)
 
     @pytest.mark.asyncio
     async def test_writer_closed_after_call(self, tmp_path: Path) -> None:
