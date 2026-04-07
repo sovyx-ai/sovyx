@@ -11,6 +11,12 @@ from sovyx.cloud.backup import (
     RestoreResult,
 )
 from sovyx.cloud.crypto import BackupCrypto
+from sovyx.cloud.license import (
+    LicenseClaims,
+    LicenseInfo,
+    LicenseService,
+    LicenseStatus,
+)
 from sovyx.cloud.scheduler import (
     BackupScheduler,
     RetentionPolicy,
@@ -26,6 +32,10 @@ __all__ = [
     "BackupMetadata",
     "BackupScheduler",
     "BackupService",
+    "LicenseClaims",
+    "LicenseInfo",
+    "LicenseService",
+    "LicenseStatus",
     "PruneResult",
     "RestoreResult",
     "RetentionPolicy",
