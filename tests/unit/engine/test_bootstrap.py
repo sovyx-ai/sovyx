@@ -379,3 +379,28 @@ class TestBootstrapCoverageGaps:
             pytest.raises(RuntimeError, match="Late failure"),
         ):
             await bootstrap(config, [mind])
+
+    @pytest.mark.asyncio(loop_scope="function")
+    @pytest.mark.timeout(15)
+    async def test_cleanup_failure_suppressed(self, tmp_path: Path) -> None:
+        """When cleanup itself fails, original error still propagates."""
+        from sovyx.llm.router import LLMRouter
+
+        config = EngineConfig(database=DatabaseConfig(data_dir=tmp_path))
+        mind = MindConfig(name="Test")
+
+        with (
+            patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test"}),
+            patch.object(
+                MindManager,
+                "load_mind",
+                side_effect=RuntimeError("main failure"),
+            ),
+            patch.object(
+                LLMRouter,
+                "stop",
+                side_effect=RuntimeError("cleanup also failed"),
+            ),
+            pytest.raises(RuntimeError, match="main failure"),
+        ):
+            await bootstrap(config, [mind])
