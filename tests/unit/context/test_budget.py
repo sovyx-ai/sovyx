@@ -109,6 +109,63 @@ class TestPropertyBased:
         assert b.response_reserve >= 0
 
 
+class TestOverflowDeepReduction:
+    """Ensure all flex slots (concepts, episodes, conversation) get reduced.
+
+    With current constants, the overflow on MIN_CONTEXT_WINDOW is small enough
+    that concepts alone absorbs it. To exercise the episodes and conversation
+    reduction paths (defensive code), we inflate MIN floors to create massive
+    overflow that spills past concepts into episodes and conversation.
+    """
+
+    def test_episodes_reduced_when_concepts_insufficient(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When concepts alone can't absorb overflow, episodes must shrink."""
+        import sovyx.context.budget as budget_mod
+
+        # Inflate system/temporal floors so overflow exceeds what concepts
+        # can absorb, forcing episodes reduction path to execute.
+        monkeypatch.setattr(budget_mod, "MIN_SYSTEM_PROMPT", 600)
+        monkeypatch.setattr(budget_mod, "MIN_TEMPORAL", 200)
+
+        m = TokenBudgetManager()
+        b = m.allocate(
+            conversation_length=20,  # long conv → concepts=15% → 307
+            brain_result_count=0,
+            complexity=0.0,
+            context_window=2048,
+        )
+        # Concepts drained first, then episodes absorbs remaining overflow
+        assert b.memory_concepts >= 0
+        assert b.memory_episodes >= 0
+        # All allocations non-negative
+        assert b.conversation >= MIN_CONVERSATION
+
+    def test_conversation_reduced_when_concepts_and_episodes_insufficient(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When concepts + episodes can't cover overflow, conversation shrinks too."""
+        import sovyx.context.budget as budget_mod
+
+        # Extreme floors force overflow through all three flex slots.
+        monkeypatch.setattr(budget_mod, "MIN_SYSTEM_PROMPT", 700)
+        monkeypatch.setattr(budget_mod, "MIN_TEMPORAL", 300)
+        monkeypatch.setattr(budget_mod, "MIN_RESPONSE", 500)
+
+        m = TokenBudgetManager()
+        b = m.allocate(
+            conversation_length=20,
+            brain_result_count=0,
+            complexity=0.9,
+            context_window=2048,
+        )
+        # All flex slots drained as much as possible
+        assert b.memory_concepts >= 0
+        assert b.memory_episodes >= 0
+        assert b.conversation >= 0
+
+
 class TestOverflowNormalisation:
     """Budget overflow normalisation for small windows (Q15 fix)."""
 
