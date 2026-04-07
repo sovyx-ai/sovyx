@@ -118,9 +118,6 @@ class PerformanceBudget:
     """
 
     def __init__(self, tier: HardwareTier) -> None:
-        if tier not in _TIER_LIMITS:
-            msg = f"Unknown hardware tier: {tier}"
-            raise ValueError(msg)
         self._tier = tier
         self._limits = _TIER_LIMITS[tier]
 
@@ -209,7 +206,4 @@ class PerformanceBudget:
         Raises:
             ValueError: If tier is unknown.
         """
-        if tier not in _TIER_LIMITS:
-            msg = f"Unknown hardware tier: {tier}"
-            raise ValueError(msg)
         return _TIER_LIMITS[tier]
