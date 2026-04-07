@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+from sovyx.voice.pipeline import (
+    AudioOutputQueue,
+    BargeInDetector,
+    JarvisIllusion,
+    VoicePipeline,
+    VoicePipelineConfig,
+    VoicePipelineState,
+)
 from sovyx.voice.stt import (
     MoonshineConfig,
     MoonshineSTT,
@@ -24,6 +32,9 @@ from sovyx.voice.wake_word import (
 
 __all__ = [
     "AudioChunk",
+    "AudioOutputQueue",
+    "BargeInDetector",
+    "JarvisIllusion",
     "KokoroConfig",
     "KokoroTTS",
     "MoonshineConfig",
@@ -41,6 +52,9 @@ __all__ = [
     "VADEvent",
     "VADState",
     "VerificationResult",
+    "VoicePipeline",
+    "VoicePipelineConfig",
+    "VoicePipelineState",
     "WakeWordConfig",
     "WakeWordDetector",
     "WakeWordEvent",
