@@ -1,4 +1,4 @@
-"""Sovyx Observability — Structured logging, request context, metrics, tracing, health."""
+"""Sovyx Observability — Structured logging, request context, metrics, tracing, health, SLOs."""
 
 from sovyx.observability.health import (
     CheckResult,
@@ -23,6 +23,14 @@ from sovyx.observability.metrics import (
     setup_metrics,
     teardown_metrics,
 )
+from sovyx.observability.slo import (
+    SLODefinition,
+    SLOMonitor,
+    SLOReport,
+    SLOStatus,
+    SLOTracker,
+    create_default_monitor,
+)
 from sovyx.observability.tracing import (
     SovyxTracer,
     get_tracer,
@@ -36,7 +44,13 @@ __all__ = [
     "HealthCheck",
     "HealthRegistry",
     "MetricsRegistry",
+    "SLODefinition",
+    "SLOMonitor",
+    "SLOReport",
+    "SLOStatus",
+    "SLOTracker",
     "SovyxTracer",
+    "create_default_monitor",
     "bind_request_context",
     "bound_request_context",
     "clear_request_context",
