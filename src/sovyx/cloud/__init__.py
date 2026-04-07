@@ -18,6 +18,21 @@ from sovyx.cloud.backup import (
     PruneResult,
     RestoreResult,
 )
+from sovyx.cloud.billing import (
+    BillingConfig,
+    BillingService,
+    CheckoutResult,
+    EventStore,
+    InMemoryEventStore,
+    PortalResult,
+    SubscriptionInfo,
+    SubscriptionTier,
+    WebhookEvent,
+    WebhookHandler,
+    WebhookPayloadError,
+    WebhookResult,
+    WebhookSignatureError,
+)
 from sovyx.cloud.crypto import BackupCrypto
 from sovyx.cloud.license import (
     LicenseClaims,
@@ -34,6 +49,19 @@ from sovyx.cloud.scheduler import (
 )
 
 __all__ = [
+    "BillingConfig",
+    "BillingService",
+    "CheckoutResult",
+    "EventStore",
+    "InMemoryEventStore",
+    "PortalResult",
+    "SubscriptionInfo",
+    "SubscriptionTier",
+    "WebhookEvent",
+    "WebhookHandler",
+    "WebhookPayloadError",
+    "WebhookResult",
+    "WebhookSignatureError",
     "APIKeyInfo",
     "APIKeyRecord",
     "APIKeyService",
