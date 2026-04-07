@@ -88,7 +88,9 @@ class TestSQLiViaWebSocket:
         ],
     )
     def test_sqli_in_ws_message(
-        self, sync_client: TestClient, payload: str,
+        self,
+        sync_client: TestClient,
+        payload: str,
     ) -> None:
         with sync_client.websocket_connect(f"/ws?token={_TOKEN}") as ws:
             ws.send_text(payload)

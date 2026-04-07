@@ -133,11 +133,13 @@ class MockStreamWriter:
                 continue
             payload_len = header.get("payload_length", 0)
             payload = data[nl_idx + 1 : nl_idx + 1 + payload_len] if payload_len else b""
-            events.append(WyomingEvent(
-                type=header.get("type", ""),
-                data=header.get("data", {}),
-                payload=payload,
-            ))
+            events.append(
+                WyomingEvent(
+                    type=header.get("type", ""),
+                    data=header.get("data", {}),
+                    payload=payload,
+                )
+            )
         return events
 
 
@@ -224,9 +226,11 @@ class TestWyomingEvent:
     async def test_read_event_with_payload(self) -> None:
         """Read an event with binary payload."""
         payload = b"\x00\x01" * 100
-        reader = MockStreamReader([
-            WyomingEvent(type="audio-chunk", data={"rate": 16000}, payload=payload),
-        ])
+        reader = MockStreamReader(
+            [
+                WyomingEvent(type="audio-chunk", data={"rate": 16000}, payload=payload),
+            ]
+        )
         event = await WyomingEvent.read_from(reader)
         assert event is not None
         assert event.type == "audio-chunk"
@@ -450,9 +454,11 @@ class TestHandlerDescribe:
     @pytest.mark.asyncio
     async def test_describe_returns_info(self) -> None:
         """describe → info response with all services."""
-        handler, reader, writer = _make_handler([
-            WyomingEvent(type="describe"),
-        ])
+        handler, reader, writer = _make_handler(
+            [
+                WyomingEvent(type="describe"),
+            ]
+        )
         await handler.run()
 
         events = writer.get_events()
@@ -1184,11 +1190,16 @@ class TestWyomingEventDataLength:
     async def test_read_event_with_data_length(self) -> None:
         """Event with data_length reads extra JSON and merges into data."""
         extra = json.dumps({"language": "pt", "extra_key": 42}).encode("utf-8")
-        header = json.dumps({
-            "type": "transcribe",
-            "data": {"model": "moonshine"},
-            "data_length": len(extra),
-        }) + "\n"
+        header = (
+            json.dumps(
+                {
+                    "type": "transcribe",
+                    "data": {"model": "moonshine"},
+                    "data_length": len(extra),
+                }
+            )
+            + "\n"
+        )
 
         reader = RawStreamReader()
         reader.add_readline(header.encode("utf-8"))
@@ -1204,10 +1215,15 @@ class TestWyomingEventDataLength:
     @pytest.mark.asyncio
     async def test_read_event_data_length_corrupt(self) -> None:
         """Corrupt data_length payload returns None."""
-        header = json.dumps({
-            "type": "transcribe",
-            "data_length": 10,
-        }) + "\n"
+        header = (
+            json.dumps(
+                {
+                    "type": "transcribe",
+                    "data_length": 10,
+                }
+            )
+            + "\n"
+        )
 
         reader = RawStreamReader()
         reader.add_readline(header.encode("utf-8"))
@@ -1219,10 +1235,15 @@ class TestWyomingEventDataLength:
     @pytest.mark.asyncio
     async def test_read_event_data_length_incomplete(self) -> None:
         """Incomplete data_length read returns None."""
-        header = json.dumps({
-            "type": "transcribe",
-            "data_length": 100,
-        }) + "\n"
+        header = (
+            json.dumps(
+                {
+                    "type": "transcribe",
+                    "data_length": 100,
+                }
+            )
+            + "\n"
+        )
 
         reader = RawStreamReader()
         reader.add_readline(header.encode("utf-8"))
@@ -1239,10 +1260,15 @@ class TestWyomingEventPayloadLength:
     async def test_read_event_with_payload(self) -> None:
         """Event with payload_length reads binary payload."""
         payload = b"\x00\x01\x02\x03" * 100
-        header = json.dumps({
-            "type": "audio-chunk",
-            "payload_length": len(payload),
-        }) + "\n"
+        header = (
+            json.dumps(
+                {
+                    "type": "audio-chunk",
+                    "payload_length": len(payload),
+                }
+            )
+            + "\n"
+        )
 
         reader = RawStreamReader()
         reader.add_readline(header.encode("utf-8"))
@@ -1256,10 +1282,15 @@ class TestWyomingEventPayloadLength:
     @pytest.mark.asyncio
     async def test_read_event_payload_incomplete(self) -> None:
         """Incomplete payload read returns None."""
-        header = json.dumps({
-            "type": "audio-chunk",
-            "payload_length": 1000,
-        }) + "\n"
+        header = (
+            json.dumps(
+                {
+                    "type": "audio-chunk",
+                    "payload_length": 1000,
+                }
+            )
+            + "\n"
+        )
 
         reader = RawStreamReader()
         reader.add_readline(header.encode("utf-8"))
@@ -1496,12 +1527,15 @@ class TestWyomingZeroconfRegistration:
 
         with (
             patch("sovyx.voice.wyoming.get_local_ip", return_value="192.168.1.100"),
-            patch.dict("sys.modules", {
-                "zeroconf": MagicMock(ServiceInfo=MagicMock(return_value=mock_si)),
-                "zeroconf.asyncio": MagicMock(
-                    AsyncZeroconf=MagicMock(return_value=mock_azc_instance),
-                ),
-            }),
+            patch.dict(
+                "sys.modules",
+                {
+                    "zeroconf": MagicMock(ServiceInfo=MagicMock(return_value=mock_si)),
+                    "zeroconf.asyncio": MagicMock(
+                        AsyncZeroconf=MagicMock(return_value=mock_azc_instance),
+                    ),
+                },
+            ),
         ):
             await server._register_zeroconf()
 

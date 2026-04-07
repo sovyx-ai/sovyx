@@ -77,17 +77,17 @@ def _make_pool(
 
 def _sample_concept_row() -> tuple[object, ...]:
     return (
-        "c-001",          # id
-        "test-mind",      # mind_id
-        "likes-coffee",   # name
+        "c-001",  # id
+        "test-mind",  # mind_id
+        "likes-coffee",  # name
         "User likes strong black coffee.",  # content
-        "preference",     # category
-        0.8,              # importance
-        0.9,              # confidence
-        5,                # access_count
+        "preference",  # category
+        0.8,  # importance
+        0.9,  # confidence
+        5,  # access_count
         "2026-03-15T10:00:00",  # last_accessed
-        0.3,              # emotional_valence
-        "conversation",   # source
+        0.3,  # emotional_valence
+        "conversation",  # source
         '{"key": "val"}',  # metadata
         "2026-02-10T08:30:00",  # created_at
         "2026-03-15T14:22:00",  # updated_at
@@ -96,29 +96,29 @@ def _sample_concept_row() -> tuple[object, ...]:
 
 def _sample_episode_row() -> tuple[object, ...]:
     return (
-        "ep-001",         # id
-        "test-mind",      # mind_id
-        "conv-001",       # conversation_id
+        "ep-001",  # id
+        "test-mind",  # mind_id
+        "conv-001",  # conversation_id
         "What is coffee?",  # user_input
         "A brewed drink.",  # assistant_response
         "User asked about coffee",  # summary
-        0.6,              # importance
-        0.2,              # emotional_valence
-        0.1,              # emotional_arousal
-        '["c-001"]',      # concepts_mentioned
-        "{}",             # metadata
+        0.6,  # importance
+        0.2,  # emotional_valence
+        0.1,  # emotional_arousal
+        '["c-001"]',  # concepts_mentioned
+        "{}",  # metadata
         "2026-03-15T07:30:00",  # created_at
     )
 
 
 def _sample_relation_row() -> tuple[object, ...]:
     return (
-        "r-001",          # id
-        "c-001",          # source_id
-        "c-002",          # target_id
-        "related_to",     # relation_type
-        0.7,              # weight
-        3,                # co_occurrence_count
+        "r-001",  # id
+        "c-001",  # source_id
+        "c-002",  # target_id
+        "related_to",  # relation_type
+        0.7,  # weight
+        3,  # co_occurrence_count
         "2026-03-15T10:00:00",  # last_activated
         "2026-02-15T09:00:00",  # created_at
     )
@@ -213,9 +213,7 @@ class TestExportSmf:
         pool = _make_pool(concepts=[_sample_concept_row()])
         exporter = MindExporter(pool)
 
-        info = await exporter.export_smf(
-            "test-mind", tmp_path / "smf", mind_name="Test"
-        )
+        info = await exporter.export_smf("test-mind", tmp_path / "smf", mind_name="Test")
 
         assert info.manifest.statistics["total_concepts"] == 1
         # Concept should be under concepts/preference/

@@ -195,7 +195,11 @@ class TestVoicePipelineIntegration:
 
         config = VoicePipelineConfig(mind_id="lifecycle-test")
         pipeline = VoicePipeline(
-            config=config, vad=vad, wake_word=None, stt=stt, tts=tts,
+            config=config,
+            vad=vad,
+            wake_word=None,
+            stt=stt,
+            tts=tts,
         )
 
         assert not pipeline.is_running
@@ -222,7 +226,11 @@ class TestVoicePipelineIntegration:
             fillers_enabled=False,
         )
         pipeline = VoicePipeline(
-            config=config, vad=vad, wake_word=None, stt=stt, tts=tts,
+            config=config,
+            vad=vad,
+            wake_word=None,
+            stt=stt,
+            tts=tts,
         )
         await pipeline.start()
         pipeline._state = VoicePipelineState.SPEAKING

@@ -46,8 +46,12 @@ class TestConcurrentRequests:
 
     async def test_20_concurrent_mixed_endpoints(self, client: AsyncClient) -> None:
         endpoints = [
-            "/api/status", "/api/health", "/api/brain/graph",
-            "/api/logs", "/api/settings", "/api/conversations",
+            "/api/status",
+            "/api/health",
+            "/api/brain/graph",
+            "/api/logs",
+            "/api/settings",
+            "/api/conversations",
         ]
         tasks = [
             client.get(ep, headers=_auth())

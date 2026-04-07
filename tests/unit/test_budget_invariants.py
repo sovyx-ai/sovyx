@@ -19,7 +19,11 @@ class TestBudgetInvariants:
         context_window=st.integers(2048, 200000),
     )
     def test_total_equals_context_window(
-        self, conv_len: int, brain_count: int, complexity: float, context_window: int,
+        self,
+        conv_len: int,
+        brain_count: int,
+        complexity: float,
+        context_window: int,
     ) -> None:
         budget = TokenBudgetManager()
         alloc = budget.allocate(conv_len, brain_count, complexity, context_window)
@@ -33,7 +37,11 @@ class TestBudgetInvariants:
         context_window=st.integers(2048, 200000),
     )
     def test_all_slots_non_negative(
-        self, conv_len: int, brain_count: int, complexity: float, context_window: int,
+        self,
+        conv_len: int,
+        brain_count: int,
+        complexity: float,
+        context_window: int,
     ) -> None:
         budget = TokenBudgetManager()
         alloc = budget.allocate(conv_len, brain_count, complexity, context_window)
@@ -52,13 +60,21 @@ class TestBudgetInvariants:
         context_window=st.integers(2048, 200000),
     )
     def test_slots_sum_to_total(
-        self, conv_len: int, brain_count: int, complexity: float, context_window: int,
+        self,
+        conv_len: int,
+        brain_count: int,
+        complexity: float,
+        context_window: int,
     ) -> None:
         budget = TokenBudgetManager()
         alloc = budget.allocate(conv_len, brain_count, complexity, context_window)
         slot_sum = (
-            alloc.system_prompt + alloc.memory_concepts + alloc.memory_episodes
-            + alloc.temporal + alloc.conversation + alloc.response_reserve
+            alloc.system_prompt
+            + alloc.memory_concepts
+            + alloc.memory_episodes
+            + alloc.temporal
+            + alloc.conversation
+            + alloc.response_reserve
         )
         # Rounding: each of 6 slots is floored, so sum can be up to 6 less than total
         assert alloc.total - 6 <= slot_sum <= alloc.total

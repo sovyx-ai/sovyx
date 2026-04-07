@@ -119,7 +119,8 @@ class TestOverflowDeepReduction:
     """
 
     def test_episodes_reduced_when_concepts_insufficient(
-        self, monkeypatch: pytest.MonkeyPatch,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """When concepts alone can't absorb overflow, episodes must shrink."""
         import sovyx.context.budget as budget_mod
@@ -143,7 +144,8 @@ class TestOverflowDeepReduction:
         assert b.conversation >= MIN_CONVERSATION
 
     def test_conversation_reduced_when_concepts_and_episodes_insufficient(
-        self, monkeypatch: pytest.MonkeyPatch,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """When concepts + episodes can't cover overflow, conversation shrinks too."""
         import sovyx.context.budget as budget_mod

@@ -114,9 +114,7 @@ class TestWorkingMemoryCapacity:
         n_activations=st.integers(min_value=0, max_value=200),
     )
     @settings(max_examples=500, deadline=None)
-    def test_size_never_exceeds_capacity(
-        self, capacity: int, n_activations: int
-    ) -> None:
+    def test_size_never_exceeds_capacity(self, capacity: int, n_activations: int) -> None:
         wm = WorkingMemory(capacity=capacity)
         for i in range(n_activations):
             wm.activate(ConceptId(f"c{i}"), activation=float(i % 10) / 10.0 + 0.1)
@@ -147,9 +145,7 @@ class TestWorkingMemoryCapacity:
         n_decays=st.integers(min_value=1, max_value=100),
     )
     @settings(max_examples=200, deadline=None)
-    def test_decay_reduces_or_maintains_size(
-        self, capacity: int, n_decays: int
-    ) -> None:
+    def test_decay_reduces_or_maintains_size(self, capacity: int, n_decays: int) -> None:
         wm = WorkingMemory(capacity=capacity, decay_rate=0.3)
         # Fill to capacity
         for i in range(capacity):
@@ -189,9 +185,7 @@ class TestSpreadingActivationConvergence:
 
         # Mock relation repo that returns fixed neighbors
         mock_repo = AsyncMock()
-        neighbor_pairs = [
-            (ConceptId(f"neighbor-{j}"), 0.5) for j in range(n_neighbors)
-        ]
+        neighbor_pairs = [(ConceptId(f"neighbor-{j}"), 0.5) for j in range(n_neighbors)]
         mock_repo.get_neighbors = AsyncMock(return_value=neighbor_pairs)
 
         sa = SpreadingActivation(
@@ -384,9 +378,7 @@ class TestCrossInvariants:
         activation=st.floats(min_value=0.01, max_value=1.0, allow_nan=False),
     )
     @settings(max_examples=200, deadline=None)
-    def test_working_memory_activations_positive(
-        self, capacity: int, activation: float
-    ) -> None:
+    def test_working_memory_activations_positive(self, capacity: int, activation: float) -> None:
         """All activations in working memory are positive."""
         wm = WorkingMemory(capacity=capacity)
         for i in range(capacity + 5):
@@ -401,9 +393,7 @@ class TestCrossInvariants:
         arousal=_signed_unit_float,
     )
     @settings(max_examples=500, deadline=None)
-    def test_emotional_dimensions_bounded(
-        self, valence: float, arousal: float
-    ) -> None:
+    def test_emotional_dimensions_bounded(self, valence: float, arousal: float) -> None:
         """Emotional valence and arousal ∈ [-1.0, 1.0]."""
         e = Episode(
             mind_id=MindId("m"),

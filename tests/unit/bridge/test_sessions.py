@@ -171,3 +171,41 @@ class TestEndConversation:
 
         conv2, _ = await tracker.get_or_create(MIND, PERSON, ChannelType.TELEGRAM)
         assert conv1 != conv2
+
+
+class TestSessionEdgeCases:
+    """Cover edge cases in session timestamp parsing."""
+
+    async def test_invalid_timestamp_creates_new(
+        self,
+        tracker: ConversationTracker,
+    ) -> None:
+        """When last_message_at is an invalid string, create new conversation."""
+        # Create a conversation and corrupt its timestamp
+        conv1, _ = await tracker.get_or_create(MIND, PERSON, ChannelType.TELEGRAM)
+
+        async with tracker._pool.transaction() as conn:  # noqa: SLF001
+            await conn.execute(
+                "UPDATE conversations SET last_message_at = 'not-a-date' WHERE id = ?",
+                (str(conv1),),
+            )
+
+        # Should detect invalid timestamp and create new
+        conv2, _ = await tracker.get_or_create(MIND, PERSON, ChannelType.TELEGRAM)
+        assert conv1 != conv2
+
+    async def test_null_timestamp_creates_new(
+        self,
+        tracker: ConversationTracker,
+    ) -> None:
+        """When last_message_at is NULL, create new conversation."""
+        conv1, _ = await tracker.get_or_create(MIND, PERSON, ChannelType.TELEGRAM)
+
+        async with tracker._pool.transaction() as conn:  # noqa: SLF001
+            await conn.execute(
+                "UPDATE conversations SET last_message_at = 'garbage' WHERE id = ?",
+                (str(conv1),),
+            )
+
+        conv2, _ = await tracker.get_or_create(MIND, PERSON, ChannelType.TELEGRAM)
+        assert conv1 != conv2

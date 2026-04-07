@@ -177,7 +177,9 @@ class TestAudioChunk:
     def test_custom_values(self) -> None:
         audio = np.array([1, 2, 3], dtype=np.int16)
         chunk = AudioChunk(
-            audio=audio, sample_rate=24000, duration_ms=100.0,
+            audio=audio,
+            sample_rate=24000,
+            duration_ms=100.0,
         )
         assert chunk.sample_rate == 24000
         assert chunk.duration_ms == 100.0
@@ -373,7 +375,8 @@ class TestPiperConstruction:
 
     def test_num_speakers_after_init(self, tmp_path: Path) -> None:
         piper = _build_piper(
-            tmp_path, voice_config=_MULTI_SPEAKER_CONFIG,
+            tmp_path,
+            voice_config=_MULTI_SPEAKER_CONFIG,
         )
         assert piper.num_speakers == 4
 
@@ -392,7 +395,8 @@ class TestInitialization:
 
     @pytest.mark.asyncio
     async def test_initialize_success(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         piper = _build_uninitialized_piper(tmp_path)
 
@@ -402,7 +406,8 @@ class TestInitialization:
         mock_ort.InferenceSession.return_value = MagicMock()
 
         with patch.dict(
-            "sys.modules", {"onnxruntime": mock_ort},
+            "sys.modules",
+            {"onnxruntime": mock_ort},
         ):
             await piper.initialize()
 
@@ -410,12 +415,14 @@ class TestInitialization:
 
     @pytest.mark.asyncio
     async def test_initialize_missing_model(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         cfg = PiperConfig()
         config_path = tmp_path / f"{cfg.voice}.onnx.json"
         config_path.write_text(
-            json.dumps(_VOICE_CONFIG), encoding="utf-8",
+            json.dumps(_VOICE_CONFIG),
+            encoding="utf-8",
         )
         piper = PiperTTS(model_dir=tmp_path, config=cfg)
 
@@ -424,7 +431,8 @@ class TestInitialization:
 
     @pytest.mark.asyncio
     async def test_initialize_missing_config(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         cfg = PiperConfig()
         model_path = tmp_path / f"{cfg.voice}.onnx"
@@ -432,7 +440,8 @@ class TestInitialization:
         piper = PiperTTS(model_dir=tmp_path, config=cfg)
 
         with pytest.raises(
-            FileNotFoundError, match="config not found",
+            FileNotFoundError,
+            match="config not found",
         ):
             await piper.initialize()
 
@@ -456,14 +465,16 @@ class TestPhonemization:
     """Tests for PiperTTS._phonemize and _phonemes_to_ids."""
 
     def test_phonemize_not_initialized_raises(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         piper = PiperTTS(model_dir=tmp_path)
         with pytest.raises(RuntimeError, match="not initialized"):
             piper._phonemize("hello")
 
     def test_phonemize_calls_espeak(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         piper = _build_piper(tmp_path)
 
@@ -477,47 +488,52 @@ class TestPhonemization:
         assert result == [["h", "ɛ", "l", "oʊ"]]
 
     def test_phonemes_to_ids_basic(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         piper = _build_piper(tmp_path)
         phonemes = ["h", "ɛ", "l", "oʊ"]
         ids = piper._phonemes_to_ids(phonemes)
 
         # BOS + (h+PAD + ɛ+PAD + l+PAD + oʊ+PAD) + EOS
-        assert ids[0] == 1   # BOS = ^
+        assert ids[0] == 1  # BOS = ^
         assert ids[-1] == 2  # EOS = $
         assert ids[1] == 10  # h
-        assert ids[2] == 0   # PAD
+        assert ids[2] == 0  # PAD
         assert ids[3] == 11  # ɛ
-        assert ids[4] == 0   # PAD
+        assert ids[4] == 0  # PAD
         assert ids[5] == 12  # l
-        assert ids[6] == 0   # PAD
+        assert ids[6] == 0  # PAD
         assert ids[7] == 13  # oʊ
-        assert ids[8] == 0   # PAD
+        assert ids[8] == 0  # PAD
 
     def test_phonemes_to_ids_unknown_skipped(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         piper = _build_piper(tmp_path)
         ids = piper._phonemes_to_ids(["h", "UNKNOWN", "l"])
         assert ids == [1, 10, 0, 12, 0, 2]
 
     def test_phonemes_to_ids_empty(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         piper = _build_piper(tmp_path)
         ids = piper._phonemes_to_ids([])
         assert ids == [1, 2]
 
     def test_phonemes_to_ids_not_initialized_raises(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         piper = PiperTTS(model_dir=tmp_path)
         with pytest.raises(RuntimeError, match="not initialized"):
             piper._phonemes_to_ids(["h"])
 
     def test_phonemes_to_ids_truncation(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         piper = _build_piper(tmp_path)
         phonemes = ["h"] * 30000
@@ -543,7 +559,8 @@ class TestSynthesizeIds:
 
     def test_multi_speaker(self, tmp_path: Path) -> None:
         piper = _build_piper(
-            tmp_path, voice_config=_MULTI_SPEAKER_CONFIG,
+            tmp_path,
+            voice_config=_MULTI_SPEAKER_CONFIG,
         )
         tracker: dict[str, Any] = {}
         piper._session.run = _tracking_run(tracker)  # type: ignore[union-attr]
@@ -553,10 +570,12 @@ class TestSynthesizeIds:
         assert tracker["inputs"]["sid"][0] == 2
 
     def test_multi_speaker_default_id(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         piper = _build_piper(
-            tmp_path, voice_config=_MULTI_SPEAKER_CONFIG,
+            tmp_path,
+            voice_config=_MULTI_SPEAKER_CONFIG,
         )
         tracker: dict[str, Any] = {}
         piper._session.run = _tracking_run(tracker)  # type: ignore[union-attr]
@@ -565,7 +584,8 @@ class TestSynthesizeIds:
         assert tracker["inputs"]["sid"][0] == 0
 
     def test_single_speaker_no_sid(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         piper = _build_piper(tmp_path)
         tracker: dict[str, Any] = {}
@@ -575,7 +595,8 @@ class TestSynthesizeIds:
         assert "sid" not in tracker["inputs"]
 
     def test_session_not_loaded_raises(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         piper = PiperTTS(model_dir=tmp_path)
         with pytest.raises(RuntimeError, match="session not loaded"):
@@ -585,19 +606,24 @@ class TestSynthesizeIds:
         """Audio outside [-1,1] should clip to int16 range."""
         piper = _build_piper(tmp_path)
         piper._session.run = _tracking_run(  # type: ignore[union-attr]
-            {}, audio_shape=(1, 1, 100), fill=2.0,
+            {},
+            audio_shape=(1, 1, 100),
+            fill=2.0,
         )
         audio = piper._synthesize_ids([1, 2])
         assert np.all(audio == 32767)
 
     def test_scales_match_config(self, tmp_path: Path) -> None:
         cfg = PiperConfig(
-            noise_scale=0.5, length_scale=1.2, noise_w=0.9,
+            noise_scale=0.5,
+            length_scale=1.2,
+            noise_w=0.9,
         )
         piper = _build_piper(tmp_path, config=cfg)
         tracker: dict[str, Any] = {}
         piper._session.run = _tracking_run(  # type: ignore[union-attr]
-            tracker, audio_shape=(1, 1, 100),
+            tracker,
+            audio_shape=(1, 1, 100),
         )
         piper._synthesize_ids([1, 2])
 
@@ -615,7 +641,8 @@ class TestSynthesize:
 
     @pytest.mark.asyncio
     async def test_synthesize_text(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         piper = _build_piper(tmp_path, audio_length=4410)
         _, modules = _mock_phonemize_module([["h", "ɛ", "l", "oʊ"]])
@@ -630,7 +657,8 @@ class TestSynthesize:
 
     @pytest.mark.asyncio
     async def test_synthesize_empty_text(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         piper = _build_piper(tmp_path)
         chunk = await piper.synthesize("")
@@ -639,7 +667,8 @@ class TestSynthesize:
 
     @pytest.mark.asyncio
     async def test_synthesize_whitespace_only(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         piper = _build_piper(tmp_path)
         chunk = await piper.synthesize("   \n\t  ")
@@ -648,7 +677,8 @@ class TestSynthesize:
 
     @pytest.mark.asyncio
     async def test_synthesize_multiple_sentences(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         piper = _build_piper(tmp_path, audio_length=2205)
         _, modules = _mock_phonemize_module([["h", "ɛ"], ["w", "ɜ"]])
@@ -661,7 +691,8 @@ class TestSynthesize:
 
     @pytest.mark.asyncio
     async def test_synthesize_empty_phonemes(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         piper = _build_piper(tmp_path)
         _, modules = _mock_phonemize_module([[]])
@@ -673,7 +704,8 @@ class TestSynthesize:
 
     @pytest.mark.asyncio
     async def test_synthesize_auto_initializes(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """Synthesize on uninitialized engine should auto-init."""
         piper = _build_uninitialized_piper(tmp_path)
@@ -681,9 +713,7 @@ class TestSynthesize:
         mock_ort = MagicMock()
         mock_ort.SessionOptions.return_value = MagicMock()
         mock_ort.GraphOptimizationLevel.ORT_ENABLE_ALL = 99
-        mock_ort.InferenceSession.return_value = (
-            _make_mock_session(4410)
-        )
+        mock_ort.InferenceSession.return_value = _make_mock_session(4410)
 
         _, ph_modules = _mock_phonemize_module([["h", "ɛ"]])
         modules = {"onnxruntime": mock_ort, **ph_modules}
@@ -696,7 +726,8 @@ class TestSynthesize:
 
     @pytest.mark.asyncio
     async def test_synthesize_with_speaker_id(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         cfg = PiperConfig(speaker_id=2)
         piper = _build_piper(
@@ -716,12 +747,15 @@ class TestSynthesize:
 
     @pytest.mark.asyncio
     async def test_sentence_silence_length(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """Silence between sentences matches config."""
         cfg = PiperConfig(sentence_silence=0.5)
         piper = _build_piper(
-            tmp_path, config=cfg, audio_length=100,
+            tmp_path,
+            config=cfg,
+            audio_length=100,
         )
         _, modules = _mock_phonemize_module([["h"], ["w"]])
 
@@ -743,7 +777,8 @@ class TestSynthesizeStreaming:
 
     @pytest.mark.asyncio
     async def test_streaming_yields_per_sentence(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         piper = _build_piper(tmp_path, audio_length=2205)
         _, modules = _mock_phonemize_module([["h", "ɛ"]])
@@ -758,7 +793,8 @@ class TestSynthesizeStreaming:
 
     @pytest.mark.asyncio
     async def test_streaming_empty_input(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         piper = _build_piper(tmp_path)
 
@@ -771,7 +807,8 @@ class TestSynthesizeStreaming:
 
     @pytest.mark.asyncio
     async def test_streaming_single_chunk(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         piper = _build_piper(tmp_path, audio_length=2205)
         _, modules = _mock_phonemize_module([["h"]])
@@ -786,7 +823,8 @@ class TestSynthesizeStreaming:
 
     @pytest.mark.asyncio
     async def test_streaming_whitespace_only(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         piper = _build_piper(tmp_path)
 
@@ -799,16 +837,15 @@ class TestSynthesizeStreaming:
 
     @pytest.mark.asyncio
     async def test_streaming_auto_initializes(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         piper = _build_uninitialized_piper(tmp_path)
 
         mock_ort = MagicMock()
         mock_ort.SessionOptions.return_value = MagicMock()
         mock_ort.GraphOptimizationLevel.ORT_ENABLE_ALL = 99
-        mock_ort.InferenceSession.return_value = (
-            _make_mock_session(2205)
-        )
+        mock_ort.InferenceSession.return_value = _make_mock_session(2205)
 
         _, ph_modules = _mock_phonemize_module([["h"]])
         modules = {"onnxruntime": mock_ort, **ph_modules}
@@ -831,7 +868,8 @@ class TestListVoices:
     """Tests for PiperTTS.list_voices."""
 
     def test_list_voices_empty_dir(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         piper = PiperTTS(model_dir=tmp_path)
         assert piper.list_voices() == []
@@ -841,7 +879,8 @@ class TestListVoices:
         assert piper.list_voices() == []
 
     def test_list_voices_with_models(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         for name in [
             "de_DE-thorsten-medium",
@@ -850,7 +889,8 @@ class TestListVoices:
         ]:
             (tmp_path / f"{name}.onnx").write_bytes(b"model")
             (tmp_path / f"{name}.onnx.json").write_text(
-                "{}", encoding="utf-8",
+                "{}",
+                encoding="utf-8",
             )
 
         piper = PiperTTS(model_dir=tmp_path)
@@ -862,16 +902,19 @@ class TestListVoices:
         assert "en_GB-alan-low" in voices
 
     def test_list_voices_orphan_config(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         (tmp_path / "orphan.onnx.json").write_text(
-            "{}", encoding="utf-8",
+            "{}",
+            encoding="utf-8",
         )
         piper = PiperTTS(model_dir=tmp_path)
         assert piper.list_voices() == []
 
     def test_list_voices_orphan_model(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         (tmp_path / "orphan.onnx").write_bytes(b"model")
         piper = PiperTTS(model_dir=tmp_path)
@@ -888,7 +931,8 @@ class TestEdgeCases:
 
     @pytest.mark.asyncio
     async def test_synthesize_after_close(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """Synthesize after close should re-initialize."""
         piper = _build_uninitialized_piper(tmp_path)
@@ -896,9 +940,7 @@ class TestEdgeCases:
         mock_ort = MagicMock()
         mock_ort.SessionOptions.return_value = MagicMock()
         mock_ort.GraphOptimizationLevel.ORT_ENABLE_ALL = 99
-        mock_ort.InferenceSession.return_value = (
-            _make_mock_session(4410)
-        )
+        mock_ort.InferenceSession.return_value = _make_mock_session(4410)
 
         _, ph_modules = _mock_phonemize_module([["h"]])
         modules = {"onnxruntime": mock_ort, **ph_modules}
@@ -915,14 +957,16 @@ class TestEdgeCases:
             assert len(chunk2.audio) > 0
 
     def test_model_dir_stored_as_path(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         piper = PiperTTS(model_dir=tmp_path)
         assert isinstance(piper._model_dir, Path)
 
     @pytest.mark.asyncio
     async def test_duration_ms_calculation(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         piper = _build_piper(tmp_path, audio_length=22050)
         _, modules = _mock_phonemize_module([["h"]])
@@ -949,7 +993,8 @@ class TestEdgeCases:
         ),
     )
     def test_split_sentences_never_loses_text(
-        self, text: str,
+        self,
+        text: str,
     ) -> None:
         """Splitting+joining preserves all content."""
         parts = _split_sentences(text)

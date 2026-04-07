@@ -69,7 +69,10 @@ class TestHardwareProfile:
 
     def test_default_gpu_vram(self) -> None:
         p = HardwareProfile(
-            tier=HardwareTier.PI5, ram_mb=4096, cpu_cores=4, has_gpu=False,
+            tier=HardwareTier.PI5,
+            ram_mb=4096,
+            cpu_cores=4,
+            has_gpu=False,
         )
         assert p.gpu_vram_mb == 0
 
@@ -187,7 +190,11 @@ class TestDetectHardware:
     @patch("sovyx.voice.auto_select.os.sysconf", side_effect=[4096, 2_097_152])  # 8GB
     @patch("sovyx.voice.auto_select._detect_gpu", return_value=(False, 0))
     def test_pi5_detection(
-        self, _gpu: MagicMock, _sys: MagicMock, _cpu: MagicMock, _mach: MagicMock,
+        self,
+        _gpu: MagicMock,
+        _sys: MagicMock,
+        _cpu: MagicMock,
+        _mach: MagicMock,
     ) -> None:
         profile = detect_hardware()
         assert profile.tier == HardwareTier.PI5
@@ -200,7 +207,11 @@ class TestDetectHardware:
     @patch("sovyx.voice.auto_select.os.sysconf", side_effect=[4096, 8_388_608])  # 32GB
     @patch("sovyx.voice.auto_select._detect_gpu", return_value=(True, 12000))
     def test_gpu_detection(
-        self, _gpu: MagicMock, _sys: MagicMock, _cpu: MagicMock, _mach: MagicMock,
+        self,
+        _gpu: MagicMock,
+        _sys: MagicMock,
+        _cpu: MagicMock,
+        _mach: MagicMock,
     ) -> None:
         profile = detect_hardware()
         assert profile.tier == HardwareTier.DESKTOP_GPU
@@ -212,7 +223,11 @@ class TestDetectHardware:
     @patch("sovyx.voice.auto_select.os.sysconf", side_effect=[4096, 4_194_304])  # 16GB
     @patch("sovyx.voice.auto_select._detect_gpu", return_value=(False, 0))
     def test_cpu_count_none_defaults_to_1(
-        self, _gpu: MagicMock, _sys: MagicMock, _cpu: MagicMock, _mach: MagicMock,
+        self,
+        _gpu: MagicMock,
+        _sys: MagicMock,
+        _cpu: MagicMock,
+        _mach: MagicMock,
     ) -> None:
         profile = detect_hardware()
         assert profile.cpu_cores == 1
@@ -485,7 +500,9 @@ class TestVoiceModelAutoSelector:
     @patch("sovyx.voice.auto_select.detect_hardware")
     def test_select_models_auto_detects(self, mock_detect: MagicMock) -> None:
         mock_detect.return_value = _profile(
-            HardwareTier.DESKTOP_GPU, has_gpu=True, gpu_vram_mb=8000,
+            HardwareTier.DESKTOP_GPU,
+            has_gpu=True,
+            gpu_vram_mb=8000,
         )
         selector = VoiceModelAutoSelector()
         ms = selector.select_models()

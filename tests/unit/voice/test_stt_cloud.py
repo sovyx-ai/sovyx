@@ -419,9 +419,7 @@ class TestCloudSTTTranscribe:
             await engine.close()
 
     @pytest.mark.asyncio()
-    async def test_api_error_status(
-        self, config: CloudSTTConfig, audio_1s: np.ndarray
-    ) -> None:
+    async def test_api_error_status(self, config: CloudSTTConfig, audio_1s: np.ndarray) -> None:
         mock_response = MagicMock()
         mock_response.status_code = 429
         mock_response.text = "Rate limit exceeded"
@@ -443,9 +441,7 @@ class TestCloudSTTTranscribe:
             await engine.close()
 
     @pytest.mark.asyncio()
-    async def test_api_network_error(
-        self, config: CloudSTTConfig, audio_1s: np.ndarray
-    ) -> None:
+    async def test_api_network_error(self, config: CloudSTTConfig, audio_1s: np.ndarray) -> None:
         mock_client = AsyncMock()
         mock_client.post.side_effect = ConnectionError("Network down")
 
@@ -462,9 +458,7 @@ class TestCloudSTTTranscribe:
             await engine.close()
 
     @pytest.mark.asyncio()
-    async def test_api_invalid_json(
-        self, config: CloudSTTConfig, audio_1s: np.ndarray
-    ) -> None:
+    async def test_api_invalid_json(self, config: CloudSTTConfig, audio_1s: np.ndarray) -> None:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.side_effect = ValueError("bad json")
@@ -525,9 +519,7 @@ class TestCloudSTTTranscribe:
             await engine.close()
 
     @pytest.mark.asyncio()
-    async def test_text_stripped(
-        self, config: CloudSTTConfig, audio_1s: np.ndarray
-    ) -> None:
+    async def test_text_stripped(self, config: CloudSTTConfig, audio_1s: np.ndarray) -> None:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"text": "  hello world  "}
@@ -547,9 +539,7 @@ class TestCloudSTTTranscribe:
             await engine.close()
 
     @pytest.mark.asyncio()
-    async def test_empty_text_response(
-        self, config: CloudSTTConfig, audio_1s: np.ndarray
-    ) -> None:
+    async def test_empty_text_response(self, config: CloudSTTConfig, audio_1s: np.ndarray) -> None:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"text": ""}
@@ -618,9 +608,7 @@ class TestCloudSTTTranscribe:
             await engine.close()
 
     @pytest.mark.asyncio()
-    async def test_custom_sample_rate(
-        self, config: CloudSTTConfig
-    ) -> None:
+    async def test_custom_sample_rate(self, config: CloudSTTConfig) -> None:
         audio = np.zeros(44100, dtype=np.float32)  # 1s at 44.1kHz
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -670,9 +658,7 @@ class TestCloudSTTStreaming:
     """Streaming transcription (batch fallback)."""
 
     @pytest.mark.asyncio()
-    async def test_streaming_collects_and_transcribes(
-        self, config: CloudSTTConfig
-    ) -> None:
+    async def test_streaming_collects_and_transcribes(self, config: CloudSTTConfig) -> None:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"text": "streaming result"}
@@ -727,9 +713,7 @@ class TestCloudSTTStreaming:
             await engine.close()
 
     @pytest.mark.asyncio()
-    async def test_streaming_state_recovery(
-        self, config: CloudSTTConfig
-    ) -> None:
+    async def test_streaming_state_recovery(self, config: CloudSTTConfig) -> None:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"text": "ok"}

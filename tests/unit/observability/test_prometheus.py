@@ -280,6 +280,7 @@ class TestPrometheusExporterGauges:
 
         def _callback(options: object) -> list[object]:
             from opentelemetry.metrics import Observation
+
             return [Observation(42, {"source": "test"})]
 
         meter.create_observable_gauge(
@@ -429,11 +430,7 @@ class TestPrometheusExporterNaming:
 
         text = exporter.export()
         # All metric lines (non-comment) should start with sovyx_
-        metric_lines = [
-            line
-            for line in text.split("\n")
-            if line and not line.startswith("#")
-        ]
+        metric_lines = [line for line in text.split("\n") if line and not line.startswith("#")]
         for line in metric_lines:
             assert line.startswith("sovyx_"), f"Missing sovyx_ prefix: {line}"
 
@@ -538,17 +535,13 @@ class TestMetricsEndpoint:
         resp = client.get("/metrics")
         assert "text/plain" in resp.headers["content-type"]
 
-    def test_no_reader_returns_placeholder(
-        self, tmp_path_factory: pytest.TempPathFactory
-    ) -> None:
+    def test_no_reader_returns_placeholder(self, tmp_path_factory: pytest.TempPathFactory) -> None:
         client, _ = _make_client(tmp_path_factory)
         resp = client.get("/metrics")
         assert resp.status_code == 200
         assert "No metrics" in resp.text
 
-    def test_with_reader_returns_metrics(
-        self, tmp_path_factory: pytest.TempPathFactory
-    ) -> None:
+    def test_with_reader_returns_metrics(self, tmp_path_factory: pytest.TempPathFactory) -> None:
         tmp = tmp_path_factory.mktemp("test_reader")
         token = secrets.token_urlsafe(32)
         (tmp / "token").write_text(token)
@@ -578,9 +571,7 @@ class TestMetricsEndpoint:
         finally:
             teardown_metrics()
 
-    def test_other_api_still_requires_auth(
-        self, tmp_path_factory: pytest.TempPathFactory
-    ) -> None:
+    def test_other_api_still_requires_auth(self, tmp_path_factory: pytest.TempPathFactory) -> None:
         """Verify /metrics being open doesn't affect other endpoints."""
         client, _ = _make_client(tmp_path_factory)
         # /metrics is open

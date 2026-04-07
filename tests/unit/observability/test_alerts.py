@@ -580,8 +580,11 @@ class TestAlertEventCategories:
         from sovyx.engine.events import EventCategory
 
         event = AlertFired(
-            rule_name="test", severity="critical", message="x",
-            current_value=1.0, threshold=0.5,
+            rule_name="test",
+            severity="critical",
+            message="x",
+            current_value=1.0,
+            threshold=0.5,
         )
         assert event.category == EventCategory.ENGINE
 
