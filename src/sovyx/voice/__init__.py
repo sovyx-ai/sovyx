@@ -40,6 +40,7 @@ from sovyx.voice.stt import (
     TranscriptionResult,
     TranscriptionSegment,
 )
+from sovyx.voice.stt_cloud import CloudSTT, CloudSTTConfig, CloudSTTError, needs_cloud_fallback
 from sovyx.voice.tts_kokoro import KokoroConfig, KokoroTTS
 from sovyx.voice.tts_piper import AudioChunk, PiperConfig, PiperTTS, TTSEngine
 from sovyx.voice.vad import SileroVAD, VADConfig, VADEvent, VADState
@@ -55,6 +56,9 @@ __all__ = [
     "AudioCapture",
     "AudioCaptureConfig",
     "AudioChunk",
+    "CloudSTT",
+    "CloudSTTConfig",
+    "CloudSTTError",
     "AudioDucker",
     "AudioOutput",
     "AudioOutputConfig",
@@ -96,5 +100,6 @@ __all__ = [
     "WakeWordState",
     "split_at_boundaries",
     "synthesize_beep",
+    "needs_cloud_fallback",
     "validate_jarvis_config",
 ]
