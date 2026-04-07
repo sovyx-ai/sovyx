@@ -140,7 +140,7 @@ class ConsolidationScheduler:
         while self._running:
             try:
                 # ±20% jitter to prevent thundering herd in multi-instance
-                jitter = random.uniform(0.8, 1.2)
+                jitter = random.uniform(0.8, 1.2)  # nosec B311 — non-crypto jitter
                 await asyncio.sleep(self._interval_s * jitter)
                 await self._cycle.run(mind_id)
             except asyncio.CancelledError:

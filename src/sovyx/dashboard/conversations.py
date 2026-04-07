@@ -66,7 +66,7 @@ async def _resolve_person_names(
         placeholders = ",".join("?" for _ in person_ids)
         async with system_pool.read() as conn:
             cursor = await conn.execute(
-                f"SELECT id, COALESCE(display_name, name) FROM persons WHERE id IN ({placeholders})",  # noqa: S608, E501
+                f"SELECT id, COALESCE(display_name, name) FROM persons WHERE id IN ({placeholders})",  # noqa: S608, E501  # nosec B608 — placeholders are ?-params
                 person_ids,
             )
             rows = await cursor.fetchall()
