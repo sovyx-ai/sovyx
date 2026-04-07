@@ -31,4 +31,8 @@ export const GRAPH_COLORS = {
   defaultLink: "rgba(148, 163, 184, 0.15)",
   /** Text fallback — --svx-color-text-secondary */
   textSecondary: "#94a3b8",
+  /** Search result highlight glow — purple at 35% */
+  searchHighlight: "rgba(168, 85, 247, 0.35)",
+  /** Search result border — --svx-color-accent-purple (#A855F7) */
+  searchBorder: "#a855f7",
 } as const;

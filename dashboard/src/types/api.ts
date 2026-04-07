@@ -121,6 +121,24 @@ export interface BrainGraph {
   links: BrainLink[];
 }
 
+/** Single brain search result — from /api/brain/search */
+export interface BrainSearchResult {
+  id: string;
+  name: string;
+  category: ConceptCategory;
+  importance: number;
+  confidence: number;
+  access_count: number;
+  score: number;
+  match_type?: "text" | "vector";
+}
+
+/** GET /api/brain/search response */
+export interface BrainSearchResponse {
+  results: BrainSearchResult[];
+  query: string;
+}
+
 // ── Logs ──
 
 /**
