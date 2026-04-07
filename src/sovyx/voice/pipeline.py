@@ -10,7 +10,6 @@ Ref: SPE-010 §8 (VoicePipeline), §13 (state machine), IMPL-004 §1.7 (timing)
 from __future__ import annotations
 
 import asyncio
-import random
 import time
 from dataclasses import dataclass
 from enum import Enum, auto
@@ -364,157 +363,16 @@ class BargeInDetector:
 
 
 # ---------------------------------------------------------------------------
-# JarvisIllusion — filler injection for perceived latency reduction
+# JarvisIllusion — re-exported from jarvis.py (V05-24)
 # ---------------------------------------------------------------------------
 
+from sovyx.voice.jarvis import (  # noqa: E402
+    JarvisConfig,
+    JarvisIllusion,
+    split_at_boundaries,
+)
 
-class JarvisIllusion:
-    """Manages filler phrases and confirmation beeps to reduce perceived latency.
-
-    Three techniques (SPE-010 §7):
-        1. **Confirmation beep** — immediate feedback on wake word detection.
-        2. **Filler phrases** — natural thinking sounds while LLM processes.
-        3. **Speculative TTS** — start synthesis before LLM finishes (handled by pipeline).
-
-    Args:
-        config: Pipeline configuration with filler settings.
-        tts: TTS engine for synthesizing fillers.
-    """
-
-    def __init__(self, config: VoicePipelineConfig, tts: TTSEngine) -> None:
-        self._config = config
-        self._tts = tts
-        self._beep_cache: AudioChunk | None = None
-        self._filler_cache: dict[str, AudioChunk] = {}
-
-    async def pre_cache(self) -> None:
-        """Pre-synthesize fillers and beep at startup for instant playback."""
-        # Synthesize beep (short tone)
-        if self._config.confirmation_tone == "beep":
-            self._beep_cache = await self._synthesize_beep()
-
-        # Pre-cache filler phrases
-        for phrase in self._config.filler_phrases:
-            try:
-                self._filler_cache[phrase] = await self._tts.synthesize(phrase)
-            except Exception:
-                logger.warning("Failed to cache filler", phrase=phrase)
-
-    async def play_beep(self, output: AudioOutputQueue) -> None:
-        """Play the confirmation beep immediately.
-
-        Args:
-            output: Audio output queue.
-        """
-        if self._beep_cache is not None:
-            await output.play_immediate(self._beep_cache)
-
-    async def play_filler_after_delay(
-        self,
-        output: AudioOutputQueue,
-        cancel_event: asyncio.Event,
-    ) -> bool:
-        """Play a filler phrase if LLM hasn't responded within delay.
-
-        Args:
-            output: Audio output queue.
-            cancel_event: Set this event to cancel filler playback.
-
-        Returns:
-            ``True`` if a filler was played, ``False`` if cancelled.
-        """
-        delay_s = self._config.filler_delay_ms / 1000.0
-        try:
-            await asyncio.wait_for(cancel_event.wait(), timeout=delay_s)
-            return False  # LLM responded in time — no filler needed
-        except TimeoutError:
-            # LLM still thinking — play filler
-            phrase = random.choice(self._config.filler_phrases)  # noqa: S311
-            chunk = self._filler_cache.get(phrase)
-            if chunk is None:
-                try:
-                    chunk = await self._tts.synthesize(phrase)
-                except Exception:
-                    logger.warning("Filler synthesis failed", phrase=phrase)
-                    return False
-            await output.play_immediate(chunk)
-            return True
-
-    def get_cached_filler(self, phrase: str) -> AudioChunk | None:
-        """Return a cached filler chunk or None.
-
-        Args:
-            phrase: The filler phrase text.
-
-        Returns:
-            Cached audio chunk or ``None`` if not cached.
-        """
-        return self._filler_cache.get(phrase)
-
-    @property
-    def beep_cached(self) -> bool:
-        """Whether the confirmation beep is cached."""
-        return self._beep_cache is not None
-
-    @property
-    def cached_filler_count(self) -> int:
-        """Number of cached filler phrases."""
-        return len(self._filler_cache)
-
-    @staticmethod
-    async def _synthesize_beep() -> AudioChunk:
-        """Generate a short sine-wave beep (440Hz, 50ms).
-
-        Returns:
-            A short beep audio chunk.
-        """
-        import numpy as np
-
-        from sovyx.voice.tts_piper import AudioChunk as _AudioChunk
-
-        sample_rate = 22050
-        duration = 0.05  # 50ms
-        t = np.linspace(0, duration, int(sample_rate * duration), dtype=np.float32)
-        # 440Hz sine, fade in/out
-        sine = np.sin(2 * np.pi * 440 * t)
-        fade_len = int(sample_rate * 0.005)
-        sine[:fade_len] *= np.linspace(0, 1, fade_len)
-        sine[-fade_len:] *= np.linspace(1, 0, fade_len)
-        audio = (sine * 16000).astype(np.int16)
-        return _AudioChunk(audio=audio, sample_rate=sample_rate, duration_ms=duration * 1000)
-
-
-# ---------------------------------------------------------------------------
-# Text splitter for streaming TTS
-# ---------------------------------------------------------------------------
-
-
-def split_at_boundaries(text: str) -> list[str]:
-    """Split text at sentence boundaries for incremental TTS.
-
-    Boundaries: ``. ! ? ; : —`` and newlines.
-    Minimum chunk: 3 words (avoids synthesizing single words).
-
-    Args:
-        text: Text to split.
-
-    Returns:
-        List of text segments.
-    """
-    import re
-
-    parts = re.split(r"(?<=[.!?;:\u2014\n])\s+", text)
-    result: list[str] = []
-    for part in parts:
-        if len(part.split()) >= _TEXT_MIN_WORDS or part.rstrip().endswith(
-            (".", "!", "?")
-        ):
-            result.append(part)
-        elif result:
-            result[-1] += " " + part
-        else:
-            result.append(part)
-    return result
+__all_jarvis__ = ["JarvisIllusion", "JarvisConfig", "split_at_boundaries"]
 
 
 # ---------------------------------------------------------------------------
@@ -576,7 +434,12 @@ class VoicePipeline:
 
         # Sub-components
         self._output = AudioOutputQueue()
-        self._jarvis = JarvisIllusion(config, tts)
+        jarvis_cfg = JarvisConfig(
+            fillers_enabled=config.fillers_enabled,
+            filler_delay_ms=config.filler_delay_ms,
+            confirmation_tone=config.confirmation_tone,
+        )
+        self._jarvis = JarvisIllusion(jarvis_cfg, tts)
         self._barge_in = BargeInDetector(vad, self._output, config.barge_in_threshold)
 
         # Tasks
