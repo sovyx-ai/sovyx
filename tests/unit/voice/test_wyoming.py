@@ -1132,3 +1132,417 @@ class TestProperties:
         chunk_bytes = rate * cfg.snd_width * cfg.snd_channels * cfg.output_chunk_ms // 1000
         assert chunk_bytes > 0
         assert chunk_bytes == rate * 2 * 100 // 1000
+
+
+# ===========================================================================
+# Coverage gap tests — wyoming.py wire format + handler + server
+# ===========================================================================
+
+
+class RawStreamReader:
+    """StreamReader that returns raw bytes in sequence (for precise wire tests)."""
+
+    def __init__(self) -> None:
+        self._reads: list[bytes] = []
+        self._idx = 0
+
+    def add_readline(self, data: bytes) -> None:
+        self._reads.append(("line", data))  # type: ignore[arg-type]
+
+    def add_readexactly(self, data: bytes) -> None:
+        self._reads.append(("exact", data))  # type: ignore[arg-type]
+
+    def add_readline_eof(self) -> None:
+        self._reads.append(("line", b""))  # type: ignore[arg-type]
+
+    async def readline(self) -> bytes:
+        if self._idx >= len(self._reads):
+            return b""
+        kind, data = self._reads[self._idx]
+        self._idx += 1
+        if kind != "line":
+            # Skip to next line entry
+            return b""
+        return data
+
+    async def readexactly(self, n: int) -> bytes:
+        if self._idx >= len(self._reads):
+            raise asyncio.IncompleteReadError(b"", n)
+        kind, data = self._reads[self._idx]
+        self._idx += 1
+        if kind != "exact":
+            raise asyncio.IncompleteReadError(b"", n)
+        if len(data) < n:
+            raise asyncio.IncompleteReadError(data, n)
+        return data[:n]
+
+
+class TestWyomingEventDataLength:
+    """Cover data_length extra JSON reading path (lines 210-215)."""
+
+    @pytest.mark.asyncio
+    async def test_read_event_with_data_length(self) -> None:
+        """Event with data_length reads extra JSON and merges into data."""
+        extra = json.dumps({"language": "pt", "extra_key": 42}).encode("utf-8")
+        header = json.dumps({
+            "type": "transcribe",
+            "data": {"model": "moonshine"},
+            "data_length": len(extra),
+        }) + "\n"
+
+        reader = RawStreamReader()
+        reader.add_readline(header.encode("utf-8"))
+        reader.add_readexactly(extra)
+
+        event = await WyomingEvent.read_from(reader)
+        assert event is not None
+        assert event.type == "transcribe"
+        assert event.data["model"] == "moonshine"
+        assert event.data["language"] == "pt"
+        assert event.data["extra_key"] == 42
+
+    @pytest.mark.asyncio
+    async def test_read_event_data_length_corrupt(self) -> None:
+        """Corrupt data_length payload returns None."""
+        header = json.dumps({
+            "type": "transcribe",
+            "data_length": 10,
+        }) + "\n"
+
+        reader = RawStreamReader()
+        reader.add_readline(header.encode("utf-8"))
+        reader.add_readexactly(b"not json!!")
+
+        event = await WyomingEvent.read_from(reader)
+        assert event is None
+
+    @pytest.mark.asyncio
+    async def test_read_event_data_length_incomplete(self) -> None:
+        """Incomplete data_length read returns None."""
+        header = json.dumps({
+            "type": "transcribe",
+            "data_length": 100,
+        }) + "\n"
+
+        reader = RawStreamReader()
+        reader.add_readline(header.encode("utf-8"))
+        reader.add_readexactly(b"short")  # only 5 bytes, need 100
+
+        event = await WyomingEvent.read_from(reader)
+        assert event is None
+
+
+class TestWyomingEventPayloadLength:
+    """Cover payload_length reading path (lines 223-224)."""
+
+    @pytest.mark.asyncio
+    async def test_read_event_with_payload(self) -> None:
+        """Event with payload_length reads binary payload."""
+        payload = b"\x00\x01\x02\x03" * 100
+        header = json.dumps({
+            "type": "audio-chunk",
+            "payload_length": len(payload),
+        }) + "\n"
+
+        reader = RawStreamReader()
+        reader.add_readline(header.encode("utf-8"))
+        reader.add_readexactly(payload)
+
+        event = await WyomingEvent.read_from(reader)
+        assert event is not None
+        assert event.type == "audio-chunk"
+        assert event.payload == payload
+
+    @pytest.mark.asyncio
+    async def test_read_event_payload_incomplete(self) -> None:
+        """Incomplete payload read returns None."""
+        header = json.dumps({
+            "type": "audio-chunk",
+            "payload_length": 1000,
+        }) + "\n"
+
+        reader = RawStreamReader()
+        reader.add_readline(header.encode("utf-8"))
+        reader.add_readexactly(b"short")  # < 1000 bytes
+
+        event = await WyomingEvent.read_from(reader)
+        assert event is None
+
+
+class TestWyomingHandlerRunClose:
+    """Cover handler run() loop and close() error paths."""
+
+    @pytest.mark.asyncio
+    async def test_run_connection_error(self) -> None:
+        """run() handles ConnectionError gracefully."""
+        reader = MockStreamReader()
+
+        # Make readline raise ConnectionError
+        async def _raise_conn(*a: object) -> bytes:
+            raise ConnectionError("peer disconnected")
+
+        reader.readline = _raise_conn  # type: ignore[assignment]
+        writer = MockStreamWriter()
+
+        handler = WyomingClientHandler(
+            reader=reader,
+            writer=writer,
+            config=WyomingConfig(),
+            stt_engine=None,
+            tts_engine=None,
+            wake_engine=None,
+            cogloop=None,
+        )
+        await handler.run()
+        assert handler.closed is True
+
+    @pytest.mark.asyncio
+    async def test_close_connection_error(self) -> None:
+        """close() handles OSError from writer gracefully."""
+        reader = MockStreamReader()
+        writer = MockStreamWriter()
+
+        async def _raise_os() -> None:
+            raise OSError("broken pipe")
+
+        writer.wait_closed = _raise_os  # type: ignore[assignment]
+
+        handler = WyomingClientHandler(
+            reader=reader,
+            writer=writer,
+            config=WyomingConfig(),
+            stt_engine=None,
+            tts_engine=None,
+            wake_engine=None,
+            cogloop=None,
+        )
+        await handler.close()
+        assert handler.closed is True
+
+    @pytest.mark.asyncio
+    async def test_write_event_when_closed(self) -> None:
+        """_write_event does nothing when handler is closed."""
+        handler, reader, writer = _make_handler()
+        await handler.close()
+        event = WyomingEvent(type="test", data={})
+        await handler._write_event(event)
+        # Should not have written after first close events
+        # (the close itself writes nothing extra)
+
+
+class TestWyomingHandlerTranscribeDisconnect:
+    """Cover transcribe with client disconnect mid-audio."""
+
+    @pytest.mark.asyncio
+    async def test_transcribe_client_disconnect_mid_stream(self) -> None:
+        """Client disconnects during audio stream → handler returns."""
+        stt = AsyncMock()
+
+        # Sequence: transcribe event, audio-start, then None (disconnect)
+        events = [
+            WyomingEvent(type="transcribe", data={"language": "en"}),
+            WyomingEvent(type="audio-start", data={}),
+        ]
+        handler, reader, writer = _make_handler(events=events, stt_engine=stt)
+
+        # After the 2 events, readline returns b"" (EOF = None event)
+        await handler.run()
+        # Should not crash; stt.transcribe should NOT have been called
+        stt.transcribe.assert_not_called()
+
+
+class TestWyomingHandlerDetectFlow:
+    """Cover detect flow with audio chunks → detection."""
+
+    @pytest.mark.asyncio
+    async def test_detect_found_via_audio_chunks(self) -> None:
+        """detect flow: audio-chunk with detected wake word sends detection event."""
+        wake = MagicMock()
+        wake.process_frame.return_value = MockWakeResult(detected=True, name="hey_sovyx")
+
+        # Build events: detect → audio-chunk (with payload)
+        pcm_data = np.zeros(512, dtype=np.int16).tobytes()
+        events = [
+            WyomingEvent(type="detect", data={}),
+            WyomingEvent(type="audio-chunk", data={}, payload=pcm_data),
+        ]
+        handler, reader, writer = _make_handler(events=events, wake_engine=wake)
+        await handler.run()
+
+        out_events = writer.get_events()
+        # First event is describe, then detection
+        event_types = [e.type for e in out_events]
+        assert "detection" in event_types
+
+    @pytest.mark.asyncio
+    async def test_detect_audio_stop_sends_not_detected(self) -> None:
+        """detect flow: audio-stop without detection sends not-detected."""
+        wake = MagicMock()
+        wake.process_frame.return_value = MockWakeResult(detected=False)
+
+        events = [
+            WyomingEvent(type="detect", data={}),
+            WyomingEvent(type="audio-stop", data={}),
+        ]
+        handler, reader, writer = _make_handler(events=events, wake_engine=wake)
+        await handler.run()
+
+        out_events = writer.get_events()
+        event_types = [e.type for e in out_events]
+        assert "not-detected" in event_types
+
+    @pytest.mark.asyncio
+    async def test_detect_disconnect_mid_stream(self) -> None:
+        """detect flow: disconnect mid-stream returns gracefully."""
+        wake = MagicMock()
+        wake.process_frame.return_value = MockWakeResult(detected=False)
+
+        events = [
+            WyomingEvent(type="detect", data={}),
+            # No more events → None → return
+        ]
+        handler, reader, writer = _make_handler(events=events, wake_engine=wake)
+        await handler.run()
+        assert handler.closed is True
+
+
+class TestWyomingServerStopZeroconf:
+    """Cover server stop with zeroconf cleanup."""
+
+    @pytest.mark.asyncio
+    async def test_server_stop_with_active_handlers(self) -> None:
+        """stop() closes all active handlers."""
+        config = WyomingConfig(port=0)
+        server = SovyxWyomingServer(
+            config=config,
+            stt_engine=None,
+            tts_engine=None,
+            wake_engine=None,
+            cogloop=None,
+        )
+        # Add a mock handler
+        mock_handler = AsyncMock()
+        mock_handler.close = AsyncMock()
+        server._handlers.append(mock_handler)
+        server._running = True
+
+        await server.stop()
+        mock_handler.close.assert_called_once()
+        assert len(server._handlers) == 0
+
+    @pytest.mark.asyncio
+    async def test_server_stop_with_zeroconf(self) -> None:
+        """stop() unregisters zeroconf service."""
+        config = WyomingConfig(port=0)
+        server = SovyxWyomingServer(
+            config=config,
+            stt_engine=None,
+            tts_engine=None,
+            wake_engine=None,
+            cogloop=None,
+        )
+        server._running = True
+
+        mock_zc = AsyncMock()
+        mock_zc.async_unregister_all_services = AsyncMock()
+        mock_zc.async_close = AsyncMock()
+        server._zeroconf = mock_zc
+
+        await server.stop()
+        mock_zc.async_unregister_all_services.assert_called_once()
+        mock_zc.async_close.assert_called_once()
+        assert server._zeroconf is None
+
+    @pytest.mark.asyncio
+    async def test_server_stop_zeroconf_error(self) -> None:
+        """stop() handles zeroconf unregister failure gracefully."""
+        config = WyomingConfig(port=0)
+        server = SovyxWyomingServer(
+            config=config,
+            stt_engine=None,
+            tts_engine=None,
+            wake_engine=None,
+            cogloop=None,
+        )
+        server._running = True
+
+        mock_zc = AsyncMock()
+        mock_zc.async_unregister_all_services.side_effect = RuntimeError("zc error")
+        server._zeroconf = mock_zc
+
+        await server.stop()  # Should not raise
+        assert server._zeroconf is None
+
+
+class TestWyomingZeroconfRegistration:
+    """Cover _register_zeroconf and _unregister_zeroconf paths."""
+
+    @pytest.mark.asyncio
+    async def test_register_zeroconf_success(self) -> None:
+        """_register_zeroconf registers service via mDNS."""
+        config = WyomingConfig(port=10500, name="test-sovyx")
+        server = SovyxWyomingServer(
+            config=config,
+            stt_engine=None,
+            tts_engine=None,
+            wake_engine=None,
+            cogloop=None,
+        )
+
+        mock_azc_instance = AsyncMock()
+        mock_azc_instance.async_register_service = AsyncMock()
+
+        mock_si = MagicMock()
+
+        with (
+            patch("sovyx.voice.wyoming.get_local_ip", return_value="192.168.1.100"),
+            patch.dict("sys.modules", {
+                "zeroconf": MagicMock(ServiceInfo=MagicMock(return_value=mock_si)),
+                "zeroconf.asyncio": MagicMock(
+                    AsyncZeroconf=MagicMock(return_value=mock_azc_instance),
+                ),
+            }),
+        ):
+            await server._register_zeroconf()
+
+        assert server._zeroconf is not None
+        mock_azc_instance.async_register_service.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_unregister_zeroconf(self) -> None:
+        """_unregister_zeroconf calls unregister + close."""
+        config = WyomingConfig(port=0)
+        server = SovyxWyomingServer(
+            config=config,
+            stt_engine=None,
+            tts_engine=None,
+            wake_engine=None,
+            cogloop=None,
+        )
+        mock_zc = AsyncMock()
+        server._zeroconf = mock_zc
+
+        await server._unregister_zeroconf()
+        mock_zc.async_unregister_all_services.assert_called_once()
+        mock_zc.async_close.assert_called_once()
+
+
+class TestWyomingHandlerIntentRoute:
+    """Cover the intent/transcript dispatch path."""
+
+    @pytest.mark.asyncio
+    async def test_transcript_dispatches_to_intent(self) -> None:
+        """'transcript' event routes to _handle_intent."""
+        cogloop = AsyncMock()
+        cogloop.generate_response.return_value = "I understood that"
+
+        events = [
+            WyomingEvent(type="transcript", data={"text": "turn on lights"}),
+        ]
+        handler, reader, writer = _make_handler(events=events, cogloop=cogloop)
+        await handler.run()
+
+        cogloop.generate_response.assert_called_once_with("turn on lights")
+        out_events = writer.get_events()
+        event_types = [e.type for e in out_events]
+        assert "handled" in event_types
