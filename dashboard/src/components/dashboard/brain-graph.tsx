@@ -10,13 +10,14 @@
  * - Opacity: 0.3-1.0 from confidence (0.0-1.0)
  * - Hover: brand glow effect + label
  * - Click: triggers detail panel
+ * - Search highlight: non-matching nodes dimmed when search is active
  *
  * Links:
  * - Line dash: per relation_type (solid, dashed, dotted, etc.)
  * - Width: 0.5-3px from weight
  * - Color: subtle gray (contradicts = red)
  *
- * Ref: Architecture §3.3, META-04 §5
+ * Ref: Architecture §3.3, META-04 §5, V05-P03 search highlight
  */
 
 import { useCallback, useRef, useEffect, useState } from "react";
@@ -80,11 +81,11 @@ export function BrainGraph({ data, width, height, onNodeClick, highlightedNodeId
       // Dim non-matching nodes when search is active
       const isDimmed = hasHighlights && !isHighlighted && !isHovered;
 
-      // Highlight ring for search matches (pulsing glow)
-      if (isHighlighted) {
+      // Highlight ring for search-matched nodes
+      if (isHighlighted && !isHovered) {
         ctx.beginPath();
-        ctx.arc(x, y, radius + 6 / globalScale, 0, 2 * Math.PI);
-        ctx.fillStyle = GRAPH_COLORS.searchHighlight ?? "rgba(168, 85, 247, 0.35)";
+        ctx.arc(x, y, radius + 3 / globalScale, 0, 2 * Math.PI);
+        ctx.fillStyle = GRAPH_COLORS.searchHighlight ?? GRAPH_COLORS.brandGlow;
         ctx.fill();
       }
 
@@ -100,34 +101,32 @@ export function BrainGraph({ data, width, height, onNodeClick, highlightedNodeId
       ctx.beginPath();
       ctx.arc(x, y, radius, 0, 2 * Math.PI);
       ctx.fillStyle = color;
-      ctx.globalAlpha = isDimmed ? 0.12 : 0.3 + node.confidence * 0.7;
+      ctx.globalAlpha = isDimmed ? 0.12 : (0.3 + node.confidence * 0.7);
       ctx.fill();
 
       // Border
-      ctx.strokeStyle = isHighlighted ? (GRAPH_COLORS.searchBorder ?? "#a855f7") : color;
-      ctx.lineWidth = isHighlighted ? 2.5 : isHovered ? 2 : 1;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = isHighlighted ? 2 : (isHovered ? 2 : 1);
       ctx.globalAlpha = isDimmed ? 0.2 : 1;
       ctx.stroke();
-
-      // Reset alpha
-      ctx.globalAlpha = 1;
 
       // Label (visible when zoomed in, hovered, or highlighted)
       if (globalScale > 1.5 || isHovered || isHighlighted) {
         const label = node.name;
         const fontSize = Math.max(10 / globalScale, 2);
-        ctx.font = `${isHighlighted ? "bold " : ""}${fontSize}px "Geist Sans", ui-sans-serif, sans-serif`;
+        ctx.font = `${fontSize}px "Geist Sans", ui-sans-serif, sans-serif`;
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
         ctx.fillStyle = isDimmed
           ? "rgba(248, 250, 252, 0.2)"
-          : isHighlighted
-            ? "rgba(248, 250, 252, 1.0)"
-            : isHovered
-              ? "rgba(248, 250, 252, 0.95)"
-              : "rgba(248, 250, 252, 0.7)";
+          : isHovered
+            ? "rgba(248, 250, 252, 0.95)"
+            : "rgba(248, 250, 252, 0.7)";
+        ctx.globalAlpha = 1;
         ctx.fillText(label, x, y + radius + 2);
       }
+
+      ctx.globalAlpha = 1; // Reset
     },
     [hoveredNode, highlightedNodeIds, hasHighlights],
   );
