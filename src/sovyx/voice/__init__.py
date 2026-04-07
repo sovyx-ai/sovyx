@@ -11,6 +11,7 @@ from sovyx.voice.stt import (
     TranscriptionResult,
     TranscriptionSegment,
 )
+from sovyx.voice.tts_kokoro import KokoroConfig, KokoroTTS
 from sovyx.voice.tts_piper import AudioChunk, PiperConfig, PiperTTS, TTSEngine
 from sovyx.voice.vad import SileroVAD, VADConfig, VADEvent, VADState
 from sovyx.voice.wake_word import (
@@ -23,6 +24,8 @@ from sovyx.voice.wake_word import (
 
 __all__ = [
     "AudioChunk",
+    "KokoroConfig",
+    "KokoroTTS",
     "MoonshineConfig",
     "MoonshineSTT",
     "PartialTranscription",
