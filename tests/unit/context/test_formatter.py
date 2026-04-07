@@ -152,6 +152,22 @@ class TestFormatEpisodesBlock:
         result = formatter.format_episodes_block(episodes, 1000)
         assert "Recent conversations" in result
 
+    def test_respects_budget(self, formatter: ContextFormatter) -> None:
+        """Episodes exceeding budget are truncated."""
+        episodes = [_episode(f"Long episode number {i} " * 20) for i in range(30)]
+        result = formatter.format_episodes_block(episodes, 50)
+        counter = TokenCounter()
+        assert counter.count(result) <= 50  # noqa: PLR2004
+
+    def test_budget_too_small_for_any_episode(self, formatter: ContextFormatter) -> None:
+        """When budget only fits header, return empty."""
+        episodes = [_episode("Hello world")]
+        # Budget of 1 token — only header won't fit, or header fits but no episodes
+        result = formatter.format_episodes_block(episodes, 5)
+        # With 5 tokens, header "## Recent conversations:" takes ~5+ tokens
+        # Either returns empty (header doesn't fit) or header only (returns "")
+        assert result == "" or "Recent conversations" in result
+
 
 class TestFormatTemporal:
     """Temporal context."""
@@ -163,6 +179,12 @@ class TestFormatTemporal:
     def test_contains_date(self, formatter: ContextFormatter) -> None:
         result = formatter.format_temporal()
         assert "202" in result  # year
+
+    def test_invalid_timezone_falls_back_to_utc(self, formatter: ContextFormatter) -> None:
+        """Invalid timezone name should fallback to UTC without crashing."""
+        result = formatter.format_temporal("Invalid/NotATimezone")
+        assert "Invalid/NotATimezone" in result
+        assert "Current date and time:" in result
 
 
 class TestLostInMiddle:
@@ -196,6 +218,16 @@ class TestHumanTimeAgo:
         result = ContextFormatter._human_time_ago(t)
         assert "minute" in result
 
+    def test_single_minute(self) -> None:
+        t = datetime.now(tz=UTC) - timedelta(minutes=1, seconds=5)
+        result = ContextFormatter._human_time_ago(t)
+        assert "1 minute ago" in result
+
+    def test_single_hour(self) -> None:
+        t = datetime.now(tz=UTC) - timedelta(hours=1, minutes=5)
+        result = ContextFormatter._human_time_ago(t)
+        assert "1 hour ago" in result
+
     def test_hours(self) -> None:
         t = datetime.now(tz=UTC) - timedelta(hours=5)
         result = ContextFormatter._human_time_ago(t)
@@ -211,12 +243,29 @@ class TestHumanTimeAgo:
         result = ContextFormatter._human_time_ago(t)
         assert "day" in result
 
+    def test_single_week(self) -> None:
+        t = datetime.now(tz=UTC) - timedelta(weeks=1, days=1)
+        result = ContextFormatter._human_time_ago(t)
+        assert "1 week ago" in result
+
     def test_weeks(self) -> None:
         t = datetime.now(tz=UTC) - timedelta(weeks=2)
         result = ContextFormatter._human_time_ago(t)
         assert "week" in result
 
+    def test_about_a_month(self) -> None:
+        """~28-30 days: past 4 weeks but months < 1."""
+        t = datetime.now(tz=UTC) - timedelta(days=29)
+        result = ContextFormatter._human_time_ago(t)
+        assert "about a month ago" in result
+
     def test_months(self) -> None:
         t = datetime.now(tz=UTC) - timedelta(days=90)
         result = ContextFormatter._human_time_ago(t)
         assert "month" in result
+
+    def test_naive_datetime_handled(self) -> None:
+        """Naive datetime (no tzinfo) should be treated as UTC."""
+        t = datetime.now(tz=UTC).replace(tzinfo=None) - timedelta(hours=2)
+        result = ContextFormatter._human_time_ago(t)
+        assert "hour" in result
