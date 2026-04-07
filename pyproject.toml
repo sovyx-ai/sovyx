@@ -80,6 +80,15 @@ Homepage = "https://sovyx.ai"
 Repository = "https://github.com/sovyx-ai/sovyx"
 Documentation = "https://docs.sovyx.ai"
 
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "dashboard/node_modules",
+    ".context",
+    "benchmarks/.benchmarks",
+    "site",
+    ".venv",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/sovyx"]
 
