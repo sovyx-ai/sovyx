@@ -343,36 +343,52 @@ class TestBargeInDetector:
 
 
 class TestJarvisIllusion:
-    """Tests for filler phrase injection and beep caching."""
+    """Tests for filler phrase injection and beep caching (pipeline compat)."""
 
     @pytest.mark.asyncio
     async def test_pre_cache_beep(self) -> None:
+        from sovyx.voice.jarvis import JarvisConfig
+
         tts = _make_tts()
-        config = VoicePipelineConfig(confirmation_tone="beep")
+        config = JarvisConfig(confirmation_tone="beep")
         jarvis = JarvisIllusion(config, tts)
         await jarvis.pre_cache()
         assert jarvis.beep_cached is True
 
     @pytest.mark.asyncio
     async def test_pre_cache_no_beep(self) -> None:
+        from sovyx.voice.jarvis import JarvisConfig
+
         tts = _make_tts()
-        config = VoicePipelineConfig(confirmation_tone="none")
+        config = JarvisConfig(confirmation_tone="none")
         jarvis = JarvisIllusion(config, tts)
         await jarvis.pre_cache()
         assert jarvis.beep_cached is False
 
     @pytest.mark.asyncio
     async def test_pre_cache_fillers(self) -> None:
+        from sovyx.voice.jarvis import FillerCategory, JarvisConfig
+
         tts = _make_tts()
-        config = VoicePipelineConfig(filler_phrases=("Hmm...", "Let me check..."))
+        config = JarvisConfig(
+            filler_bank={
+                FillerCategory.TRANSITIONAL: ("Hmm...", "Let me check..."),
+                FillerCategory.THINKING: (),
+                FillerCategory.CHECKING: (),
+                FillerCategory.ACKNOWLEDGING: (),
+                FillerCategory.CONFIRMING: (),
+            }
+        )
         jarvis = JarvisIllusion(config, tts)
         await jarvis.pre_cache()
         assert jarvis.cached_filler_count == 2
 
     @pytest.mark.asyncio
     async def test_play_beep(self) -> None:
+        from sovyx.voice.jarvis import JarvisConfig
+
         tts = _make_tts()
-        config = VoicePipelineConfig(confirmation_tone="beep")
+        config = JarvisConfig(confirmation_tone="beep")
         jarvis = JarvisIllusion(config, tts)
         await jarvis.pre_cache()
         output = AudioOutputQueue()
@@ -382,8 +398,10 @@ class TestJarvisIllusion:
     @pytest.mark.asyncio
     async def test_filler_cancelled_when_fast(self) -> None:
         """If LLM responds fast, filler is cancelled."""
+        from sovyx.voice.jarvis import JarvisConfig
+
         tts = _make_tts()
-        config = VoicePipelineConfig(filler_delay_ms=200)
+        config = JarvisConfig(filler_delay_ms=200)
         jarvis = JarvisIllusion(config, tts)
         await jarvis.pre_cache()
         output = AudioOutputQueue()
@@ -395,8 +413,19 @@ class TestJarvisIllusion:
     @pytest.mark.asyncio
     async def test_filler_plays_on_timeout(self) -> None:
         """If LLM doesn't respond, filler plays after delay."""
+        from sovyx.voice.jarvis import FillerCategory, JarvisConfig
+
         tts = _make_tts()
-        config = VoicePipelineConfig(filler_delay_ms=10, filler_phrases=("Hmm...",))
+        config = JarvisConfig(
+            filler_delay_ms=10,
+            filler_bank={
+                FillerCategory.TRANSITIONAL: ("Hmm...",),
+                FillerCategory.THINKING: ("Hmm...",),
+                FillerCategory.CHECKING: ("Hmm...",),
+                FillerCategory.ACKNOWLEDGING: ("Hmm...",),
+                FillerCategory.CONFIRMING: ("Hmm...",),
+            },
+        )
         jarvis = JarvisIllusion(config, tts)
         await jarvis.pre_cache()
         output = AudioOutputQueue()
@@ -407,23 +436,45 @@ class TestJarvisIllusion:
 
     @pytest.mark.asyncio
     async def test_get_cached_filler_hit(self) -> None:
+        from sovyx.voice.jarvis import FillerCategory, JarvisConfig
+
         tts = _make_tts()
-        config = VoicePipelineConfig(filler_phrases=("Hmm...",))
+        config = JarvisConfig(
+            filler_bank={
+                FillerCategory.TRANSITIONAL: ("Hmm...",),
+                FillerCategory.THINKING: (),
+                FillerCategory.CHECKING: (),
+                FillerCategory.ACKNOWLEDGING: (),
+                FillerCategory.CONFIRMING: (),
+            }
+        )
         jarvis = JarvisIllusion(config, tts)
         await jarvis.pre_cache()
         assert jarvis.get_cached_filler("Hmm...") is not None
 
     @pytest.mark.asyncio
     async def test_get_cached_filler_miss(self) -> None:
+        from sovyx.voice.jarvis import FillerCategory, JarvisConfig
+
         tts = _make_tts()
-        config = VoicePipelineConfig(filler_phrases=("Hmm...",))
+        config = JarvisConfig(
+            filler_bank={
+                FillerCategory.TRANSITIONAL: ("Hmm...",),
+                FillerCategory.THINKING: (),
+                FillerCategory.CHECKING: (),
+                FillerCategory.ACKNOWLEDGING: (),
+                FillerCategory.CONFIRMING: (),
+            }
+        )
         jarvis = JarvisIllusion(config, tts)
         await jarvis.pre_cache()
         assert jarvis.get_cached_filler("Not cached") is None
 
     @pytest.mark.asyncio
     async def test_synthesize_beep(self) -> None:
-        chunk = await JarvisIllusion._synthesize_beep()
+        from sovyx.voice.jarvis import synthesize_beep
+
+        chunk = synthesize_beep()
         assert chunk.sample_rate == 22050
         assert chunk.duration_ms == pytest.approx(50.0)
         assert len(chunk.audio) > 0

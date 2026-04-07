@@ -15,10 +15,18 @@ from sovyx.voice.audio import (
     detect_platform,
     normalize_lufs,
 )
+from sovyx.voice.jarvis import (
+    FILLER_BANK,
+    FillerCategory,
+    JarvisConfig,
+    JarvisIllusion,
+    split_at_boundaries,
+    synthesize_beep,
+    validate_jarvis_config,
+)
 from sovyx.voice.pipeline import (
     AudioOutputQueue,
     BargeInDetector,
-    JarvisIllusion,
     VoicePipeline,
     VoicePipelineConfig,
     VoicePipelineState,
@@ -53,6 +61,9 @@ __all__ = [
     "AudioOutputQueue",
     "AudioPlatform",
     "BargeInDetector",
+    "FILLER_BANK",
+    "FillerCategory",
+    "JarvisConfig",
     "JarvisIllusion",
     "KokoroConfig",
     "KokoroTTS",
@@ -83,4 +94,7 @@ __all__ = [
     "WakeWordDetector",
     "WakeWordEvent",
     "WakeWordState",
+    "split_at_boundaries",
+    "synthesize_beep",
+    "validate_jarvis_config",
 ]
