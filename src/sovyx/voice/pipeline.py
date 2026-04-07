@@ -622,11 +622,7 @@ class VoicePipeline:
         if not self._config.barge_in_enabled:
             return {"state": "SPEAKING"}
 
-        if (
-            vad_event.is_speech
-            and self._output.is_playing
-            and self._barge_in.check_frame(frame)
-        ):
+        if vad_event.is_speech and self._output.is_playing and self._barge_in.check_frame(frame):
             self._output.interrupt()
             self._cancel_filler()
             await self._emit(BargeInEvent(mind_id=self._config.mind_id))
@@ -812,9 +808,7 @@ class VoicePipeline:
 
         if self._config.fillers_enabled:
             self._filler_task = asyncio.create_task(
-                self._jarvis.play_filler_after_delay(
-                    self._output, self._first_token_event
-                )
+                self._jarvis.play_filler_after_delay(self._output, self._first_token_event)
             )
 
     # -- Internal helpers ----------------------------------------------------

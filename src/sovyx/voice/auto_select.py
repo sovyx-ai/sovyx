@@ -200,7 +200,10 @@ def _read_cpuinfo() -> str:
 
 
 def _detect_tier(
-    machine: str, ram_mb: int, has_gpu: bool, gpu_vram_mb: int,
+    machine: str,
+    ram_mb: int,
+    has_gpu: bool,
+    gpu_vram_mb: int,
 ) -> HardwareTier:
     """Determine hardware tier from system properties.
 

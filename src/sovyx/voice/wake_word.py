@@ -258,9 +258,7 @@ class WakeWordDetector:
             providers=["CPUExecutionProvider"],
         )
 
-        self._verifier: VerifierFn = verifier or default_verifier(
-            self._config.wake_variants
-        )
+        self._verifier: VerifierFn = verifier or default_verifier(self._config.wake_variants)
 
         # State machine
         self._state = WakeWordState.IDLE
@@ -300,10 +298,7 @@ class WakeWordDetector:
 
         expected = self._config.frame_samples
         if audio_frame.shape != (expected,):
-            msg = (
-                f"Expected frame of {expected} samples, "
-                f"got shape {audio_frame.shape}"
-            )
+            msg = f"Expected frame of {expected} samples, got shape {audio_frame.shape}"
             raise ValueError(msg)
 
         # Normalise to float32
@@ -381,9 +376,7 @@ class WakeWordDetector:
             self._frame_counter = 1
             self._peak_score = score
             self._audio_buffer = [audio.copy()]
-            logger.debug(
-                "Wake word stage-1 triggered", score=score
-            )
+            logger.debug("Wake word stage-1 triggered", score=score)
             # If window is just 1 frame, evaluate immediately
             if self._frame_counter >= self._config.stage2_window_frames:
                 return self._evaluate_stage2()

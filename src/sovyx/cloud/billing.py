@@ -42,6 +42,7 @@ if TYPE_CHECKING:
         @property
         def billing_portal(self) -> Any: ...  # noqa: ANN401
 
+
 logger = get_logger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────────

@@ -167,9 +167,7 @@ class LicenseService:
             raise ValueError(msg)
 
         self._private_key = private_key
-        self._public_key = public_key or (
-            private_key.public_key() if private_key else None
-        )
+        self._public_key = public_key or (private_key.public_key() if private_key else None)
         self._current_token: str | None = None
         self._refresh_task: asyncio.Task[None] | None = None
         self._refresh_callback: RefreshCallback | None = None

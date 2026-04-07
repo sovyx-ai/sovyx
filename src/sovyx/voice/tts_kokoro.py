@@ -38,9 +38,20 @@ _MODEL_Q8 = "kokoro-v1.0-q8.onnx"
 _VOICES_FILE = "voices-v1.0.bin"
 
 # Supported languages (kokoro-onnx)
-_SUPPORTED_LANGUAGES = frozenset({
-    "en-us", "en-gb", "ja", "zh", "ko", "fr", "es", "hi", "it", "pt-br",
-})
+_SUPPORTED_LANGUAGES = frozenset(
+    {
+        "en-us",
+        "en-gb",
+        "ja",
+        "zh",
+        "ko",
+        "fr",
+        "es",
+        "hi",
+        "it",
+        "pt-br",
+    }
+)
 
 # Speed range (kokoro-onnx enforces internally, but we validate early)
 _MIN_SPEED = 0.1
@@ -230,10 +241,7 @@ class KokoroTTS(TTSEngine):
             if full_path.exists():
                 return full_path
 
-        msg = (
-            f"Kokoro model not found in {self._model_dir}. "
-            f"Expected {_MODEL_Q8} or {_MODEL_FULL}"
-        )
+        msg = f"Kokoro model not found in {self._model_dir}. Expected {_MODEL_Q8} or {_MODEL_FULL}"
         raise FileNotFoundError(msg)
 
     # -- Public API --------------------------------------------------------

@@ -108,13 +108,16 @@ class CostGuard:
                 self._conversation_spend = state.get("conversation_spend", {})
                 # Restore breakdown data
                 self._provider_spend = defaultdict(
-                    float, state.get("provider_spend", {}),
+                    float,
+                    state.get("provider_spend", {}),
                 )
                 self._mind_spend = defaultdict(
-                    float, state.get("mind_spend", {}),
+                    float,
+                    state.get("mind_spend", {}),
                 )
                 self._model_spend = defaultdict(
-                    float, state.get("model_spend", {}),
+                    float,
+                    state.get("model_spend", {}),
                 )
                 self._provider_tokens = defaultdict(
                     int,
@@ -153,15 +156,9 @@ class CostGuard:
                 "conversation_spend": {
                     k: round(v, 8) for k, v in self._conversation_spend.items()
                 },
-                "provider_spend": {
-                    k: round(v, 8) for k, v in self._provider_spend.items()
-                },
-                "mind_spend": {
-                    k: round(v, 8) for k, v in self._mind_spend.items()
-                },
-                "model_spend": {
-                    k: round(v, 8) for k, v in self._model_spend.items()
-                },
+                "provider_spend": {k: round(v, 8) for k, v in self._provider_spend.items()},
+                "mind_spend": {k: round(v, 8) for k, v in self._mind_spend.items()},
+                "model_spend": {k: round(v, 8) for k, v in self._model_spend.items()},
                 "provider_tokens": dict(self._provider_tokens),
                 "mind_tokens": dict(self._mind_tokens),
                 "total_tokens": self._total_tokens,

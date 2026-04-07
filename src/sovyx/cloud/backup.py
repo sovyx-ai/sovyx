@@ -192,11 +192,13 @@ class Boto3R2Client:
         paginator = self._client.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for obj in page.get("Contents", []):
-                result.append({
-                    "Key": obj["Key"],
-                    "Size": obj["Size"],
-                    "LastModified": obj["LastModified"],
-                })
+                result.append(
+                    {
+                        "Key": obj["Key"],
+                        "Size": obj["Size"],
+                        "LastModified": obj["LastModified"],
+                    }
+                )
         return result
 
     def delete_objects(self, keys: list[str], bucket: str) -> int:

@@ -26,10 +26,10 @@ logger = get_logger(__name__)
 # ── Constants ────────────────────────────────────────────────────────────
 
 RETRY_DELAYS_SECONDS: tuple[int, ...] = (
-    3600,      # 1 hour
-    14400,     # 4 hours
-    86400,     # 24 hours
-    259200,    # 72 hours
+    3600,  # 1 hour
+    14400,  # 4 hours
+    86400,  # 24 hours
+    259200,  # 72 hours
 )
 """Exponential backoff intervals for Stripe retry attempts."""
 
@@ -306,11 +306,7 @@ class InMemoryDunningStore(DunningStore):
 
     async def list_active(self) -> list[DunningRecord]:
         """List all non-canceled dunning records."""
-        return [
-            r
-            for r in self._records.values()
-            if r.state != DunningState.CANCELED
-        ]
+        return [r for r in self._records.values() if r.state != DunningState.CANCELED]
 
 
 class InMemoryEmailSender(EmailSender):
@@ -327,12 +323,14 @@ class InMemoryEmailSender(EmailSender):
         template_data: dict[str, Any],
     ) -> bool:
         """Record email as sent."""
-        self.sent.append({
-            "to": to_email,
-            "subject": subject,
-            "template_id": template_id,
-            "data": template_data,
-        })
+        self.sent.append(
+            {
+                "to": to_email,
+                "subject": subject,
+                "template_id": template_id,
+                "data": template_data,
+            }
+        )
         return True
 
 
@@ -350,11 +348,13 @@ class NoopSubscriptionDowngrader(SubscriptionDowngrader):
         reason: str = "dunning_expired",
     ) -> bool:
         """Record downgrade call."""
-        self.downgrades.append({
-            "subscription_id": subscription_id,
-            "customer_id": customer_id,
-            "reason": reason,
-        })
+        self.downgrades.append(
+            {
+                "subscription_id": subscription_id,
+                "customer_id": customer_id,
+                "reason": reason,
+            }
+        )
         return True
 
 
@@ -544,9 +544,8 @@ class DunningService:
             new_state = _days_to_state(int(days_elapsed))
 
             # Never regress state — only advance forward
-            if (
-                new_state == record.state
-                or _STATE_ORDER.index(new_state) <= _STATE_ORDER.index(record.state)
+            if new_state == record.state or _STATE_ORDER.index(new_state) <= _STATE_ORDER.index(
+                record.state
             ):
                 continue
 

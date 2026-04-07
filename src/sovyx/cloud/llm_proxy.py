@@ -197,8 +197,7 @@ class RateLimitExceededError(ProxyError):
         self.tier = tier
         self.limit = limit
         super().__init__(
-            f"Rate limit exceeded for user {user_id}: "
-            f"{limit} req/min ({tier.value} tier)"
+            f"Rate limit exceeded for user {user_id}: {limit} req/min ({tier.value} tier)"
         )
 
 
@@ -216,9 +215,7 @@ class AllProvidersFailedError(ProxyError):
     def __init__(self, model: str, errors: list[str]) -> None:
         self.model = model
         self.errors = errors
-        super().__init__(
-            f"All providers failed for {model}: {'; '.join(errors)}"
-        )
+        super().__init__(f"All providers failed for {model}: {'; '.join(errors)}")
 
 
 # ── Rate Limiter ──────────────────────────────────────────────────────────
@@ -354,8 +351,7 @@ class InMemoryMeteringStore(MeteringStore):
             Aggregated metering snapshot.
         """
         matching = [
-            r for r in self._records
-            if r.user_id == user_id and r.timestamp.date() == period
+            r for r in self._records if r.user_id == user_id and r.timestamp.date() == period
         ]
 
         by_model: dict[str, int] = defaultdict(int)
@@ -670,16 +666,18 @@ class LLMProxyService:
                 )
 
                 # Record success metering
-                await self._metering.record(UsageRecord(
-                    user_id=user_id,
-                    model=model,
-                    provider_model=response.provider_model,
-                    prompt_tokens=response.prompt_tokens,
-                    completion_tokens=response.completion_tokens,
-                    cost_usd=response.cost_usd,
-                    latency_ms=elapsed_ms,
-                    success=True,
-                ))
+                await self._metering.record(
+                    UsageRecord(
+                        user_id=user_id,
+                        model=model,
+                        provider_model=response.provider_model,
+                        prompt_tokens=response.prompt_tokens,
+                        completion_tokens=response.completion_tokens,
+                        cost_usd=response.cost_usd,
+                        latency_ms=elapsed_ms,
+                        success=True,
+                    )
+                )
 
                 logger.debug(
                     "llm_proxy_success",
@@ -704,17 +702,19 @@ class LLMProxyService:
 
         # All providers failed — record failure metering
         elapsed_ms = (time.monotonic() - start_time) * 1000
-        await self._metering.record(UsageRecord(
-            user_id=user_id,
-            model=model,
-            provider_model="none",
-            prompt_tokens=0,
-            completion_tokens=0,
-            cost_usd=0.0,
-            latency_ms=elapsed_ms,
-            success=False,
-            error="; ".join(errors),
-        ))
+        await self._metering.record(
+            UsageRecord(
+                user_id=user_id,
+                model=model,
+                provider_model="none",
+                prompt_tokens=0,
+                completion_tokens=0,
+                cost_usd=0.0,
+                latency_ms=elapsed_ms,
+                success=False,
+                error="; ".join(errors),
+            )
+        )
 
         raise AllProvidersFailedError(model, errors)
 

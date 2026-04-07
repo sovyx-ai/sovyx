@@ -82,7 +82,9 @@ class STTEngineProtocol(Protocol):
     """Protocol for STT engines compatible with Wyoming."""
 
     async def transcribe(
-        self, audio: np.ndarray, sample_rate: int = _MIC_RATE,
+        self,
+        audio: np.ndarray,
+        sample_rate: int = _MIC_RATE,
     ) -> STTResult:
         """Transcribe audio to text. Returns object with .text attribute."""
         ...  # pragma: no cover
@@ -526,14 +528,16 @@ class WyomingClientHandler:
         sample_rate: int = chunk.sample_rate
 
         # Stream audio-start → audio-chunk(s) → audio-stop
-        await self._write_event(WyomingEvent(
-            type="audio-start",
-            data={
-                "rate": sample_rate,
-                "width": self._config.snd_width,
-                "channels": self._config.snd_channels,
-            },
-        ))
+        await self._write_event(
+            WyomingEvent(
+                type="audio-start",
+                data={
+                    "rate": sample_rate,
+                    "width": self._config.snd_width,
+                    "channels": self._config.snd_channels,
+                },
+            )
+        )
 
         # Send in chunks
         chunk_size = (
@@ -545,15 +549,17 @@ class WyomingClientHandler:
         )
         for i in range(0, len(audio_bytes), chunk_size):
             chunk_data = audio_bytes[i : i + chunk_size]
-            await self._write_event(WyomingEvent(
-                type="audio-chunk",
-                data={
-                    "rate": sample_rate,
-                    "width": self._config.snd_width,
-                    "channels": self._config.snd_channels,
-                },
-                payload=chunk_data,
-            ))
+            await self._write_event(
+                WyomingEvent(
+                    type="audio-chunk",
+                    data={
+                        "rate": sample_rate,
+                        "width": self._config.snd_width,
+                        "channels": self._config.snd_channels,
+                    },
+                    payload=chunk_data,
+                )
+            )
 
         await self._write_event(WyomingEvent(type="audio-stop"))
 
@@ -571,15 +577,18 @@ class WyomingClientHandler:
 
             if chunk_event.type == "audio-chunk":
                 audio_np = pcm_bytes_to_ndarray(
-                    chunk_event.payload, self._config.mic_width,
+                    chunk_event.payload,
+                    self._config.mic_width,
                 )
                 result = self._wake.process_frame(audio_np)
                 if hasattr(result, "detected") and result.detected:
                     name = getattr(result, "name", "hey_sovyx")
-                    await self._write_event(WyomingEvent(
-                        type="detection",
-                        data={"name": name, "timestamp": None},
-                    ))
+                    await self._write_event(
+                        WyomingEvent(
+                            type="detection",
+                            data={"name": name, "timestamp": None},
+                        )
+                    )
                     return
             elif chunk_event.type == "audio-stop":
                 await self._write_event(WyomingEvent(type="not-detected"))
@@ -589,23 +598,32 @@ class WyomingClientHandler:
         """Handle intent via CogLoop: transcript → response."""
         text = event.data.get("text", "")
         if not text or self._cogloop is None:
-            await self._write_event(WyomingEvent(
-                type="not-handled", data={"text": text},
-            ))
+            await self._write_event(
+                WyomingEvent(
+                    type="not-handled",
+                    data={"text": text},
+                )
+            )
             return
 
         try:
             response = await self._cogloop.generate_response(text)
 
             # Send handled with full response
-            await self._write_event(WyomingEvent(
-                type="handled", data={"text": response},
-            ))
+            await self._write_event(
+                WyomingEvent(
+                    type="handled",
+                    data={"text": response},
+                )
+            )
         except Exception:
             logger.exception("wyoming_intent_handling_failed")
-            await self._write_event(WyomingEvent(
-                type="not-handled", data={"text": text},
-            ))
+            await self._write_event(
+                WyomingEvent(
+                    type="not-handled",
+                    data={"text": text},
+                )
+            )
 
 
 # ---------------------------------------------------------------------------

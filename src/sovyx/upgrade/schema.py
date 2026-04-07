@@ -312,9 +312,7 @@ class MigrationRunner:
         try:
             for migration in pending:
                 await self._apply_one(migration)
-                report.applied.append(
-                    f"v{migration.version}: {migration.description}"
-                )
+                report.applied.append(f"v{migration.version}: {migration.description}")
 
             # 2. Integrity check
             await self._verify_integrity()
@@ -416,10 +414,7 @@ class MigrationRunner:
         except MigrationError:
             raise
         except Exception as exc:
-            msg = (
-                f"Upgrade migration v{migration.version} "
-                f"({migration.description}) failed: {exc}"
-            )
+            msg = f"Upgrade migration v{migration.version} ({migration.description}) failed: {exc}"
             raise MigrationError(msg) from exc
 
         duration_ms = int((time.monotonic() - start) * 1000)

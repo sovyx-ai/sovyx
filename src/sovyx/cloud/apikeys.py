@@ -401,4 +401,3 @@ def _record_to_info(record: APIKeyRecord) -> APIKeyInfo:
         revoked_at=record.revoked_at,
         last_used_at=record.last_used_at,
     )
-

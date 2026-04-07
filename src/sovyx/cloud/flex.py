@@ -31,9 +31,7 @@ logger = get_logger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────────────
 
-VALID_TOPUP_AMOUNTS_CENTS: frozenset[int] = frozenset(
-    {500, 1000, 2500, 5000, 10000}
-)
+VALID_TOPUP_AMOUNTS_CENTS: frozenset[int] = frozenset({500, 1000, 2500, 5000, 10000})
 """Valid top-up amounts in cents: $5, $10, $25, $50, $100."""
 
 DEFAULT_AUTO_TOPUP_THRESHOLD_CENTS = 200
@@ -429,16 +427,12 @@ class FlexBalanceService:
         amount_cents = round(amount * 100)
 
         if amount_cents not in VALID_TOPUP_AMOUNTS_CENTS:
-            valid = ", ".join(
-                f"${c / 100:.0f}" for c in sorted(VALID_TOPUP_AMOUNTS_CENTS)
-            )
+            valid = ", ".join(f"${c / 100:.0f}" for c in sorted(VALID_TOPUP_AMOUNTS_CENTS))
             msg = f"Invalid topup amount ${amount:.2f}. Valid amounts: {valid}"
             raise InvalidTopupAmountError(msg)
 
         async with self._locks[account_id]:
-            return await self._topup_locked(
-                account_id, amount_cents, stripe_payment_intent
-            )
+            return await self._topup_locked(account_id, amount_cents, stripe_payment_intent)
 
     async def _topup_locked(
         self,
@@ -522,13 +516,8 @@ class FlexBalanceService:
             raise ValueError(msg)
 
         if enabled and amount_cents not in VALID_TOPUP_AMOUNTS_CENTS:
-            valid = ", ".join(
-                f"${c / 100:.0f}" for c in sorted(VALID_TOPUP_AMOUNTS_CENTS)
-            )
-            msg = (
-                f"Invalid auto-topup amount ${amount_cents / 100:.2f}. "
-                f"Valid amounts: {valid}"
-            )
+            valid = ", ".join(f"${c / 100:.0f}" for c in sorted(VALID_TOPUP_AMOUNTS_CENTS))
+            msg = f"Invalid auto-topup amount ${amount_cents / 100:.2f}. Valid amounts: {valid}"
             raise InvalidTopupAmountError(msg)
 
         async with self._locks[account_id]:

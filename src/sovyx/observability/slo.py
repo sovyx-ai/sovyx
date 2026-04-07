@@ -112,10 +112,7 @@ class BurnRateAlertRule:
             return False
         long_burn = long_window_error_rate / error_budget
         short_burn = short_window_error_rate / error_budget
-        return (
-            long_burn >= self.burn_rate_threshold
-            and short_burn >= self.burn_rate_threshold
-        )
+        return long_burn >= self.burn_rate_threshold and short_burn >= self.burn_rate_threshold
 
 
 @dataclass(frozen=True)
@@ -253,11 +250,13 @@ class SLOTracker:
             success: Whether this event met the SLO threshold.
             value: The raw measured value (e.g., latency in ms, cost in USD).
         """
-        self._events.append(SLOEvent(
-            timestamp=time.monotonic(),
-            success=success,
-            value=value,
-        ))
+        self._events.append(
+            SLOEvent(
+                timestamp=time.monotonic(),
+                success=success,
+                value=value,
+            )
+        )
 
     def error_rate_in_window(self, window_seconds: float) -> float:
         """Calculate error rate within a time window.
@@ -336,10 +335,9 @@ class SLOTracker:
             long_rate = self.error_rate_in_window(rule.long_window_minutes * 60)
             short_rate = self.error_rate_in_window(rule.short_window_minutes * 60)
 
-            if (
-                rule.check(long_rate, short_rate, self._definition.error_budget)
-                and _severity_rank(rule.severity) > _severity_rank(triggered)
-            ):
+            if rule.check(long_rate, short_rate, self._definition.error_budget) and _severity_rank(
+                rule.severity
+            ) > _severity_rank(triggered):
                 triggered = rule.severity
 
         return triggered

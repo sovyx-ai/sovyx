@@ -312,9 +312,7 @@ class UsageCascade:
 
         # Stage 3: Auto-topup
         if flex.auto_topup_enabled and self._charger is not None:
-            purchased = await self._charger.charge(
-                account_id, flex.auto_topup_amount_cents
-            )
+            purchased = await self._charger.charge(account_id, flex.auto_topup_amount_cents)
             if purchased > 0:
                 flex.balance += purchased
                 if flex.balance >= tokens:

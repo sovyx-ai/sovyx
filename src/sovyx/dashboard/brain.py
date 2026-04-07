@@ -140,7 +140,9 @@ async def search_brain(
         fts_results: list[dict[str, Any]] = []
         try:
             raw_fts = await repo.search_by_text(
-                query, mind_id, limit=limit * 2,
+                query,
+                mind_id,
+                limit=limit * 2,
             )
             for concept, rank in raw_fts:
                 score = 1.0 / (1.0 + abs(float(rank)))
@@ -156,13 +158,17 @@ async def search_brain(
         if embedding is not None:
             try:
                 raw_vec = await repo.search_by_embedding(
-                    embedding, mind_id, limit=limit * 2,
+                    embedding,
+                    mind_id,
+                    limit=limit * 2,
                 )
                 for concept, distance in raw_vec:
                     score = max(0.0, 1.0 - float(distance))
                     vec_results.append(
                         _concept_to_search_result(
-                            concept, score, "vector",
+                            concept,
+                            score,
+                            "vector",
                         ),
                     )
             except Exception:  # noqa: BLE001
@@ -183,7 +189,9 @@ async def search_brain(
 
     except Exception:  # noqa: BLE001
         logger.warning(
-            "brain_search_failed", query=query, exc_info=True,
+            "brain_search_failed",
+            query=query,
+            exc_info=True,
         )
         return []
 

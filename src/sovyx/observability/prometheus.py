@@ -216,16 +216,12 @@ class PrometheusExporter:
                 cumulative += counts[-1] if len(counts) > len(bounds) else 0
             inf_labels = dict(attrs) if attrs else {}
             inf_labels["le"] = "+Inf"
-            lines.append(
-                f"{name_with_unit}_bucket{_format_labels(inf_labels)} {cumulative}"
-            )
+            lines.append(f"{name_with_unit}_bucket{_format_labels(inf_labels)} {cumulative}")
 
             # _sum and _count
             base_labels = _format_labels(attrs)
             if hasattr(point, "sum"):
-                lines.append(
-                    f"{name_with_unit}_sum{base_labels} {self._format_value(point.sum)}"
-                )
+                lines.append(f"{name_with_unit}_sum{base_labels} {self._format_value(point.sum)}")
             if hasattr(point, "count"):
                 lines.append(f"{name_with_unit}_count{base_labels} {point.count}")
 
