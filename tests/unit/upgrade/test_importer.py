@@ -543,6 +543,13 @@ class TestConceptParsing:
         result = MindImporter._parse_concept_file(tmp_path / "ghost.md", "m")
         assert result is None
 
+    def test_parse_non_dict_yaml(self, tmp_path: Path) -> None:
+        """Line 475: YAML parses to non-dict (e.g. list) in concept file."""
+        filepath = tmp_path / "list_meta.md"
+        filepath.write_text("---\n- item1\n- item2\n---\n# Title\nBody\n")
+        result = MindImporter._parse_concept_file(filepath, "m")
+        assert result is None
+
 
 # ── Episode Parsing ─────────────────────────────────────────────────
 
@@ -662,7 +669,7 @@ class TestImporterCoverageGaps:
         pool = AsyncMock()
         importer = MindImporter(pool=pool)
         ep = tmp_path / "bad.md"
-        ep.write_text("---\n:::invalid[yaml\n---\nBody\n")
+        ep.write_text("---\nkey: [invalid\n---\nBody\n")
         result = importer._parse_episode_file(ep, "mind1")
         assert result is None
 

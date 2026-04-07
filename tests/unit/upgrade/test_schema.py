@@ -828,3 +828,76 @@ class TestMigrationRunnerEdgeCases:
             mock_import.return_value = mock_mod
             result = MigrationRunner.discover_migrations("no.file.pkg")
             assert result == []
+
+    @pytest.mark.asyncio()
+    async def test_data_migration_raises_migration_error(
+        self,
+        runner: MigrationRunner,
+    ) -> None:
+        """Line 417: MigrationError from data_migration re-raised directly."""
+
+        async def dm_raises_migration_error(conn: object) -> None:
+            raise MigrationError("deliberate migration error")
+
+        m = _make_migration(
+            "1.0.0",
+            "dm reraise",
+            ["CREATE TABLE dm_reraise_t (id INT)"],
+            data_migration=dm_raises_migration_error,
+        )
+        report = await runner.run([m])
+        assert report.status == "failed"
+        assert "deliberate migration error" in report.error
+
+    @pytest.mark.asyncio()
+    async def test_sql_raises_migration_error(
+        self,
+        runner: MigrationRunner,
+    ) -> None:
+        """Generic Exception from SQL wraps in MigrationError."""
+        m = _make_migration(
+            "1.0.0",
+            "bad sql",
+            ["THIS IS NOT VALID SQL AT ALL"],
+        )
+        report = await runner.run([m])
+        assert report.status == "failed"
+
+    @pytest.mark.asyncio()
+    async def test_integrity_check_failure(
+        self,
+        runner: MigrationRunner,
+    ) -> None:
+        """Lines 480-482: integrity_check returns non-ok result."""
+        m = _make_migration("1.0.0", "ok migration", ["CREATE TABLE ic_t (id INT)"])
+
+        original_verify = runner._verify_integrity  # noqa: SLF001
+
+        async def bad_integrity() -> None:
+            # Patch the pool's read to return a corrupt integrity check
+            from unittest.mock import AsyncMock as _AM
+            from unittest.mock import MagicMock as _MM
+
+            old_read = runner._pool.read  # noqa: SLF001
+
+            class _BadReadCM:
+                async def __aenter__(self_inner):  # noqa: N805
+                    conn = _MM()
+                    cursor = _MM()
+                    cursor.fetchone = _AM(return_value=("database disk image is malformed",))
+                    conn.execute = _AM(return_value=cursor)
+                    return conn
+
+                async def __aexit__(self_inner, *a):  # noqa: N805
+                    pass
+
+            runner._pool.read = _MM(return_value=_BadReadCM())  # noqa: SLF001
+            try:
+                await original_verify()
+            finally:
+                runner._pool.read = old_read  # noqa: SLF001
+
+        runner._verify_integrity = bad_integrity  # noqa: SLF001
+        report = await runner.run([m])
+        assert report.status == "failed"
+        assert "integrity check failed" in report.error.lower()
