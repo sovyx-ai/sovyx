@@ -1055,3 +1055,233 @@ class TestEdgeCases:
         pipeline._cancel_filler()
         pipeline._cancel_filler()
         # No error
+
+
+# ===========================================================================
+# Coverage gap tests — pipeline.py
+# ===========================================================================
+
+
+class TestAudioOutputQueueEdgeCases:
+    """Cover interrupt/clear QueueEmpty race and _play_audio branches."""
+
+    @pytest.mark.asyncio
+    async def test_interrupt_empty_queue(self) -> None:
+        """interrupt() on empty queue doesn't raise."""
+        q = AudioOutputQueue()
+        q.interrupt()  # no items — hits QueueEmpty in loop
+        assert q._interrupted is True
+
+    @pytest.mark.asyncio
+    async def test_clear_empty_queue(self) -> None:
+        """clear() on empty queue doesn't raise."""
+        q = AudioOutputQueue()
+        q.clear()  # no items — hits QueueEmpty in loop
+
+    @pytest.mark.asyncio
+    async def test_play_audio_sounddevice_path(self) -> None:
+        """_play_audio uses sounddevice when available."""
+        from sovyx.voice.pipeline import _play_audio
+
+        chunk = _audio_chunk(10)
+        mock_sd = MagicMock()
+        mock_sd.play = MagicMock()
+        mock_sd.wait = MagicMock()
+        with patch.dict("sys.modules", {"sounddevice": mock_sd}):
+            await _play_audio(chunk)
+        mock_sd.play.assert_called_once()
+        mock_sd.wait.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_play_audio_import_error_zero_duration(self) -> None:
+        """_play_audio with ImportError and 0 duration returns immediately."""
+        from sovyx.voice.pipeline import _play_audio
+
+        chunk = AudioChunk(
+            audio=np.zeros(10, dtype=np.int16),
+            sample_rate=22050,
+            duration_ms=0.0,
+        )
+        with patch.dict("sys.modules", {"sounddevice": None}):
+            # sounddevice=None forces ImportError on import
+            await _play_audio(chunk)
+
+
+class TestBargeInDetectorMonitor:
+    """Cover the BargeInDetector.monitor() loop with active playback."""
+
+    @pytest.mark.asyncio
+    async def test_monitor_barge_in_during_playback(self) -> None:
+        """monitor() detects barge-in when output is_playing and speech frames."""
+        vad = _make_vad(speech=True)
+        output = AudioOutputQueue()
+        detector = BargeInDetector(vad, output, threshold_frames=2)
+
+        # Simulate is_playing for a few iterations then stop
+        play_count = 0
+
+        @property  # type: ignore[misc]
+        def _fake_playing(self: AudioOutputQueue) -> bool:
+            nonlocal play_count
+            play_count += 1
+            return play_count <= 5
+
+        with patch.object(type(output), "is_playing", _fake_playing):
+            result = await detector.monitor(get_frame=lambda: _speech_frame())
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_monitor_none_frame_skipped(self) -> None:
+        """monitor() skips None frames and waits."""
+        vad = _make_vad(speech=True)
+        output = AudioOutputQueue()
+        detector = BargeInDetector(vad, output, threshold_frames=1)
+
+        frames_returned = 0
+
+        def get_frame() -> np.ndarray | None:
+            nonlocal frames_returned
+            frames_returned += 1
+            if frames_returned <= 2:
+                return None
+            return _speech_frame()
+
+        play_count = 0
+
+        @property  # type: ignore[misc]
+        def _fake_playing(self: AudioOutputQueue) -> bool:
+            nonlocal play_count
+            play_count += 1
+            return play_count <= 10
+
+        with patch.object(type(output), "is_playing", _fake_playing):
+            result = await detector.monitor(get_frame=get_frame)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_monitor_silence_resets_consecutive(self) -> None:
+        """Silence frames reset the consecutive counter."""
+        speech_vad = _make_vad(speech=True)
+        output = AudioOutputQueue()
+        detector = BargeInDetector(speech_vad, output, threshold_frames=3)
+
+        frame_idx = 0
+
+        def get_frame() -> np.ndarray:
+            nonlocal frame_idx
+            frame_idx += 1
+            return _speech_frame() if frame_idx != 2 else _silence_frame()
+
+        # Override check_frame to alternate
+        checks = [True, False, True, True, True]
+        check_idx = 0
+
+        def _patched_check(frame: np.ndarray) -> bool:
+            nonlocal check_idx
+            if check_idx < len(checks):
+                val = checks[check_idx]
+                check_idx += 1
+                return val
+            return True
+
+        detector.check_frame = _patched_check  # type: ignore[assignment]
+
+        play_count = 0
+
+        @property  # type: ignore[misc]
+        def _fake_playing(self: AudioOutputQueue) -> bool:
+            nonlocal play_count
+            play_count += 1
+            return play_count <= 10
+
+        with patch.object(type(output), "is_playing", _fake_playing):
+            result = await detector.monitor(get_frame=get_frame)
+        assert result is True
+
+
+class TestPipelineCoverageGaps:
+    """Cover remaining pipeline.py uncovered lines."""
+
+    @pytest.mark.asyncio
+    async def test_wake_detected_plays_beep(self) -> None:
+        """Wake word detection triggers confirmation beep."""
+        pipeline, refs = _make_pipeline(
+            wake_word_enabled=True, ww_detected=True, vad_speech=True,
+        )
+        await pipeline.start()
+
+        # Force wake word detected state
+        pipeline._state = VoicePipelineState.IDLE
+        refs["ww"].process_frame.return_value.detected = True
+
+        with patch.object(pipeline._jarvis, "play_beep", new_callable=AsyncMock) as mock_beep:
+            result = await pipeline.feed_frame(_speech_frame())
+
+        # Should transition through WAKE_DETECTED
+        if result.get("event") == "wake_word_detected":
+            mock_beep.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_speaking_not_playing_returns_idle(self) -> None:
+        """SPEAKING state transitions to IDLE when output finishes."""
+        pipeline, refs = _make_pipeline()
+        await pipeline.start()
+        pipeline._state = VoicePipelineState.SPEAKING
+        pipeline._output._playing = False
+
+        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+            result = await pipeline.feed_frame(_silence_frame())
+
+        assert result["state"] == "IDLE"
+        assert result.get("event") == "tts_completed"
+
+    @pytest.mark.asyncio
+    async def test_speaking_still_playing(self) -> None:
+        """SPEAKING state stays SPEAKING while output is playing."""
+        pipeline, refs = _make_pipeline()
+        await pipeline.start()
+        pipeline._state = VoicePipelineState.SPEAKING
+        pipeline._output._playing = True
+
+        result = await pipeline.feed_frame(_silence_frame())
+        assert result["state"] == "SPEAKING"
+
+    @pytest.mark.asyncio
+    async def test_end_recording_empty_utterance(self) -> None:
+        """_end_recording with no frames returns IDLE."""
+        pipeline, refs = _make_pipeline()
+        await pipeline.start()
+        pipeline._state = VoicePipelineState.RECORDING
+        pipeline._utterance_frames = []
+
+        result = await pipeline._end_recording()
+        assert result["state"] == "IDLE"
+        assert result["event"] == "empty_recording"
+
+    @pytest.mark.asyncio
+    async def test_flush_stream_tts_failure(self) -> None:
+        """flush_stream handles TTS synthesis failure gracefully."""
+        pipeline, refs = _make_pipeline()
+        await pipeline.start()
+        pipeline._state = VoicePipelineState.SPEAKING
+        pipeline._text_buffer = "pending text"
+        refs["tts"].synthesize.side_effect = RuntimeError("TTS error")
+
+        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+            await pipeline.flush_stream()
+
+        # Should still transition to IDLE despite error
+        assert pipeline.state == VoicePipelineState.IDLE
+        assert pipeline._text_buffer == ""
+
+    @pytest.mark.asyncio
+    async def test_transition_to_recording_barge_in(self) -> None:
+        """_transition_to_recording sets up RECORDING state."""
+        pipeline, refs = _make_pipeline()
+        await pipeline.start()
+        frame = _speech_frame()
+
+        result = await pipeline._transition_to_recording(frame)
+        assert result["state"] == "RECORDING"
+        assert result["event"] == "barge_in_recording"
+        assert len(pipeline._utterance_frames) == 1
