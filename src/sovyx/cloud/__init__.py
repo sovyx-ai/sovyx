@@ -63,6 +63,16 @@ from sovyx.cloud.scheduler import (
     ScheduleTier,
     TierSchedule,
 )
+from sovyx.cloud.usage import (
+    AccountUsage,
+    AutoTopupCharger,
+    CascadeStage,
+    ChargeResult,
+    FlexAccount,
+    InMemoryUsageStore,
+    UsageCascade,
+    UsageTier,
+)
 
 __all__ = [
     "APIKeyInfo",
@@ -114,4 +124,13 @@ __all__ = [
     "WebhookPayloadError",
     "WebhookResult",
     "WebhookSignatureError",
+    # usage
+    "AccountUsage",
+    "AutoTopupCharger",
+    "CascadeStage",
+    "ChargeResult",
+    "FlexAccount",
+    "InMemoryUsageStore",
+    "UsageCascade",
+    "UsageTier",
 ]
