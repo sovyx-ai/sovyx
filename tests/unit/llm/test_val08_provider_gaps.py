@@ -205,3 +205,67 @@ class TestOllamaGaps:
         # Default is the _DEFAULT_CONTEXT value
         ctx = provider.get_context_window("unknown-model-xyz")
         assert ctx > 0
+
+
+class TestOllamaOpenAICoverageGaps:
+    """Cover remaining ollama + openai paths."""
+
+    def test_ollama_context_window_default(self) -> None:
+        """get_context_window without model returns default."""
+        from sovyx.llm.providers.ollama import OllamaProvider
+
+        provider = OllamaProvider()
+        window = provider.get_context_window()
+        assert window > 0
+
+    def test_openai_context_window_default(self) -> None:
+        """get_context_window without model returns 128k."""
+        from sovyx.llm.providers.openai import OpenAIProvider
+
+        provider = OpenAIProvider(api_key="sk-test")
+        window = provider.get_context_window()
+        assert window == 128_000  # noqa: PLR2004
+
+    @pytest.mark.asyncio()
+    async def test_ollama_unexpected_error_at_end_of_retries(self) -> None:
+        """When all retries fail with non-timeout error, raises LLMError."""
+        import httpx
+
+        from sovyx.llm.providers.ollama import OllamaProvider
+
+        provider = OllamaProvider()
+        with (
+            patch.object(
+                provider._client,  # noqa: SLF001
+                "post",
+                side_effect=httpx.ConnectError("refused"),
+            ),
+            pytest.raises(LLMError),
+        ):
+            await provider.generate(
+                [{"role": "user", "content": "hi"}],
+                model="llama3",
+            )
+        await provider.close()
+
+    @pytest.mark.asyncio()
+    async def test_openai_unexpected_error_at_end_of_retries(self) -> None:
+        """When all retries fail with non-timeout error, raises LLMError."""
+        import httpx
+
+        from sovyx.llm.providers.openai import OpenAIProvider
+
+        provider = OpenAIProvider(api_key="sk-test")
+        with (
+            patch.object(
+                provider._client,  # noqa: SLF001
+                "post",
+                side_effect=httpx.ConnectError("refused"),
+            ),
+            pytest.raises(LLMError),
+        ):
+            await provider.generate(
+                [{"role": "user", "content": "hi"}],
+                model="gpt-4o",
+            )
+        await provider.close()
