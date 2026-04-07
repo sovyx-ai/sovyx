@@ -402,9 +402,17 @@ class TestRollback:
 
     @pytest.mark.asyncio()
     async def test_unexpected_error_rollback(self, tmp_path: Path) -> None:
-        """Non-UpgradeError exceptions still trigger rollback."""
+        """Non-UpgradeError exceptions still trigger rollback (line 263-271).
+
+        We must bypass phase-level try/except wrappers so the bare Exception
+        propagates to the top-level ``except Exception`` block in ``upgrade()``.
+        """
         upgrader = _make_upgrader(tmp_path)
-        upgrader._doctor.run_all = AsyncMock(side_effect=ValueError("Unexpected"))
+        # Patch the phase method itself (not an inner call) so the phase
+        # wrapper is skipped and the raw Exception reaches lines 263-271.
+        upgrader._phase_verify = AsyncMock(  # noqa: SLF001
+            side_effect=RuntimeError("totally unexpected"),
+        )
         result = await upgrader.upgrade("0.5.0", "0.6.0")
         assert result.status == "failed"
         assert result.rolled_back is True
