@@ -157,9 +157,11 @@ class DiskSpaceCheck(HealthCheck):
 
     @property
     def name(self) -> str:
+        """Health check name."""
         return "Disk Space"
 
     async def check(self) -> CheckResult:
+        """Execute health check."""
         try:
             usage = shutil.disk_usage(self._path)
         except (FileNotFoundError, OSError) as exc:
@@ -207,9 +209,11 @@ class RAMCheck(HealthCheck):
 
     @property
     def name(self) -> str:
+        """Health check name."""
         return "RAM"
 
     async def check(self) -> CheckResult:
+        """Execute health check."""
         import psutil
 
         mem = psutil.virtual_memory()
@@ -252,9 +256,11 @@ class CPUCheck(HealthCheck):
 
     @property
     def name(self) -> str:
+        """Health check name."""
         return "CPU"
 
     async def check(self) -> CheckResult:
+        """Execute health check."""
         import psutil
 
         # interval=None returns since last call (instant, non-blocking)
@@ -295,9 +301,11 @@ class DatabaseCheck(HealthCheck):
 
     @property
     def name(self) -> str:
+        """Health check name."""
         return "Database"
 
     async def check(self) -> CheckResult:
+        """Execute health check."""
         if self._write_fn is None:
             return CheckResult(
                 name=self.name,
@@ -328,9 +336,11 @@ class BrainIndexedCheck(HealthCheck):
 
     @property
     def name(self) -> str:
+        """Health check name."""
         return "Brain Index"
 
     async def check(self) -> CheckResult:
+        """Execute health check."""
         if self._is_loaded_fn is None:
             return CheckResult(
                 name=self.name,
@@ -367,9 +377,11 @@ class LLMReachableCheck(HealthCheck):
 
     @property
     def name(self) -> str:
+        """Health check name."""
         return "LLM Providers"
 
     async def check(self) -> CheckResult:
+        """Execute health check."""
         if self._provider_status_fn is None:
             return CheckResult(
                 name=self.name,
@@ -411,9 +423,11 @@ class ModelLoadedCheck(HealthCheck):
 
     @property
     def name(self) -> str:
+        """Health check name."""
         return "Embedding Model"
 
     async def check(self) -> CheckResult:
+        """Execute health check."""
         if not self._model_dir.exists():
             return CheckResult(
                 name=self.name,
@@ -445,9 +459,11 @@ class ChannelConnectedCheck(HealthCheck):
 
     @property
     def name(self) -> str:
+        """Health check name."""
         return "Channels"
 
     async def check(self) -> CheckResult:
+        """Execute health check."""
         if self._channel_status_fn is None:
             return CheckResult(
                 name=self.name,
@@ -489,9 +505,11 @@ class ConsolidationCheck(HealthCheck):
 
     @property
     def name(self) -> str:
+        """Health check name."""
         return "Consolidation"
 
     async def check(self) -> CheckResult:
+        """Execute health check."""
         if self._is_running_fn is None:
             return CheckResult(
                 name=self.name,
@@ -538,9 +556,11 @@ class CostBudgetCheck(HealthCheck):
 
     @property
     def name(self) -> str:
+        """Health check name."""
         return "Cost Budget"
 
     async def check(self) -> CheckResult:
+        """Execute health check."""
         if self._get_spend_fn is None:
             return CheckResult(
                 name=self.name,

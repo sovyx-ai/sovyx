@@ -319,6 +319,7 @@ class MoonshineSTT(STTEngine):
 
         class _StreamingListener(TranscriptEventListener):  # type: ignore[misc]
             def on_line_started(self, event: object) -> None:
+                """Called when a new transcription line begins."""
                 queue.put_nowait(
                     PartialTranscription(
                         text=event.line.text,  # type: ignore[attr-defined]
@@ -328,6 +329,7 @@ class MoonshineSTT(STTEngine):
                 )
 
             def on_line_text_changed(self, event: object) -> None:
+                """Called when transcription text updates."""
                 queue.put_nowait(
                     PartialTranscription(
                         text=event.line.text,  # type: ignore[attr-defined]
@@ -337,6 +339,7 @@ class MoonshineSTT(STTEngine):
                 )
 
             def on_line_completed(self, event: object) -> None:
+                """Called when a transcription line is finalized."""
                 queue.put_nowait(
                     PartialTranscription(
                         text=event.line.text,  # type: ignore[attr-defined]
@@ -406,6 +409,7 @@ class MoonshineSTT(STTEngine):
 
         class _OneShotListener(TranscriptEventListener):  # type: ignore[misc]
             def on_line_completed(self, event: object) -> None:
+                """Called when a transcription line is finalized."""
                 if not result_future.done():
                     loop.call_soon_threadsafe(
                         result_future.set_result,
