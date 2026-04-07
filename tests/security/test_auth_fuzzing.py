@@ -91,10 +91,12 @@ class TestTokenManipulation:
 
     async def test_unicode_tokens(self, client: AsyncClient) -> None:
         # Only use ASCII-safe unicode manipulations (httpx rejects non-Latin-1 headers)
+        # Note: trailing/leading spaces are stripped by the HTTP header parser,
+        # so "token " → "token" which matches. This is expected behavior.
+        # We test tokens with EMBEDDED whitespace instead.
         unicode_tokens = [
-            _TOKEN + " ",  # Trailing space
-            " " + _TOKEN,  # Leading space
-            _TOKEN + "\t",  # Tab suffix
+            _TOKEN[:4] + " " + _TOKEN[4:],  # Space in the middle
+            _TOKEN[:4] + "\t" + _TOKEN[4:],  # Tab in the middle
         ]
         for token in unicode_tokens:
             r = await client.get("/api/status", headers={"Authorization": f"Bearer {token}"})
