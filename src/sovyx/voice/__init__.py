@@ -51,6 +51,20 @@ from sovyx.voice.wake_word import (
     WakeWordEvent,
     WakeWordState,
 )
+from sovyx.voice.wyoming import (
+    SovyxWyomingServer,
+    STTResult,
+    TTSResult,
+    WakeWordResult,
+    WyomingClientHandler,
+    WyomingConfig,
+    WyomingEvent,
+    build_service_info,
+    get_local_ip,
+    ndarray_to_pcm_bytes,
+    pcm_bytes_to_ndarray,
+    write_event,
+)
 
 __all__ = [
     "AudioCapture",
@@ -102,4 +116,16 @@ __all__ = [
     "synthesize_beep",
     "needs_cloud_fallback",
     "validate_jarvis_config",
+    "STTResult",
+    "SovyxWyomingServer",
+    "TTSResult",
+    "WakeWordResult",
+    "WyomingClientHandler",
+    "WyomingConfig",
+    "WyomingEvent",
+    "build_service_info",
+    "get_local_ip",
+    "ndarray_to_pcm_bytes",
+    "pcm_bytes_to_ndarray",
+    "write_event",
 ]
