@@ -63,3 +63,8 @@ src/sovyx/dashboard/static/
 dashboard/coverage/
 erebus/
 site/
+
+# Context privado (specs, patterns, decisões — NUNCA vai pro GitHub)
+.context/
+CLAUDE.md
+.cursorrules
