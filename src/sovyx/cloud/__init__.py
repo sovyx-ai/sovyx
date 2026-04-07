@@ -2,6 +2,14 @@
 
 from __future__ import annotations
 
+from sovyx.cloud.apikeys import (
+    APIKeyInfo,
+    APIKeyRecord,
+    APIKeyService,
+    APIKeyStore,
+    APIKeyValidation,
+    Scope,
+)
 from sovyx.cloud.backup import (
     BackupConfig,
     BackupInfo,
@@ -26,6 +34,11 @@ from sovyx.cloud.scheduler import (
 )
 
 __all__ = [
+    "APIKeyInfo",
+    "APIKeyRecord",
+    "APIKeyService",
+    "APIKeyStore",
+    "APIKeyValidation",
     "BackupConfig",
     "BackupCrypto",
     "BackupInfo",
@@ -41,5 +54,6 @@ __all__ = [
     "RetentionPolicy",
     "RetentionResult",
     "ScheduleTier",
+    "Scope",
     "TierSchedule",
 ]
