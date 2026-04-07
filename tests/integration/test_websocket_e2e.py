@@ -13,7 +13,7 @@ from unittest.mock import patch
 import pytest
 from starlette.testclient import TestClient
 
-from sovyx.dashboard.events import DashboardEventBridge, _serialize_event
+from sovyx.dashboard.events import DashboardEventBridge
 from sovyx.dashboard.server import ConnectionManager, create_app
 from sovyx.engine.config import APIConfig
 from sovyx.engine.events import (

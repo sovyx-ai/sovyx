@@ -15,7 +15,7 @@ All tests use deadline=None and max_examples=200.
 from __future__ import annotations
 
 import dataclasses
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from hypothesis import given, settings
 from hypothesis import strategies as st
@@ -28,7 +28,6 @@ from sovyx.engine.events import (
     ChannelDisconnected,
     ConceptCreated,
     ConsolidationCompleted,
-    EngineStarted,
     EngineStopping,
     EpisodeEncoded,
     PerceptionReceived,
@@ -44,7 +43,6 @@ from sovyx.engine.types import (
     MindId,
     RelationId,
     RelationType,
-    generate_id,
 )
 from sovyx.observability.health import CheckResult, CheckStatus
 
