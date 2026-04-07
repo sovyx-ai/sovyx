@@ -160,3 +160,57 @@ class TestCognitiveRequest:
         assert req.mind_id == MIND
         assert req.conversation_id == CONV
         assert req.person_name is None
+
+
+class TestGateCoverageGaps:
+    """Cover remaining gate paths."""
+
+    @pytest.mark.asyncio()
+    async def test_stop_drains_pending_queue(self) -> None:
+        """Stop sets exception on pending futures in queue."""
+        from sovyx.cognitive.gate import CogLoopGate
+        from sovyx.engine.errors import CognitiveError
+
+        mock_loop = AsyncMock()
+        # Make process_request block so items stay in queue
+        mock_loop.process_request = AsyncMock(side_effect=asyncio.CancelledError)
+        gate = CogLoopGate(mock_loop)
+
+        # Don't start worker — manually add items to queue
+        gate._running = True  # noqa: SLF001
+        loop = asyncio.get_running_loop()
+        future1: asyncio.Future[object] = loop.create_future()
+        future2: asyncio.Future[object] = loop.create_future()
+        await gate._queue.put((0, 0, AsyncMock(), future1))  # noqa: SLF001
+        await gate._queue.put((1, 1, AsyncMock(), future2))  # noqa: SLF001
+
+        # Stop should drain the queue (both items)
+        await gate.stop()
+
+        assert future1.done()
+        assert future2.done()
+        with pytest.raises(CognitiveError, match="shutting down"):
+            future1.result()
+        with pytest.raises(CognitiveError, match="shutting down"):
+            future2.result()
+
+    @pytest.mark.asyncio()
+    async def test_worker_exception_sets_future(self) -> None:
+        """When process_request raises, future gets the exception."""
+        from sovyx.cognitive.gate import CogLoopGate
+
+        mock_loop = AsyncMock()
+        mock_loop.process_request = AsyncMock(
+            side_effect=RuntimeError("process failed"),
+        )
+        gate = CogLoopGate(mock_loop)
+        await gate.start()
+
+        try:
+            with pytest.raises(RuntimeError, match="process failed"):
+                await asyncio.wait_for(
+                    gate.submit(AsyncMock(mind_id="m", conversation_id="c")),
+                    timeout=2.0,
+                )
+        finally:
+            await gate.stop()
