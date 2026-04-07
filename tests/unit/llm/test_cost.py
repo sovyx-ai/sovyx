@@ -151,3 +151,89 @@ class TestPersistence:
         await g.record(1.0, "model", "conv1")
         # No crash — persist silently skipped
         assert g.get_daily_spend() == 1.0
+
+    async def test_restore_empty_table(self, tmp_path: object) -> None:
+        """Restore with no saved state → starts fresh (row is None path)."""
+        from pathlib import Path
+
+        from sovyx.persistence.migrations import MigrationRunner
+        from sovyx.persistence.pool import DatabasePool
+        from sovyx.persistence.schemas.system import get_system_migrations
+
+        db_path = Path(str(tmp_path)) / "empty.db"
+        pool = DatabasePool(db_path=db_path, read_pool_size=1)
+        await pool.initialize()
+        runner = MigrationRunner(pool)
+        await runner.initialize()
+        await runner.run_migrations(get_system_migrations())
+
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0, system_pool=pool)
+        await g.restore()
+        assert g.get_daily_spend() == 0.0
+        await pool.close()
+
+    async def test_restore_stale_date(self, tmp_path: object) -> None:
+        """Restore with state from a different day → starts fresh."""
+        import json
+        from pathlib import Path
+
+        from sovyx.persistence.migrations import MigrationRunner
+        from sovyx.persistence.pool import DatabasePool
+        from sovyx.persistence.schemas.system import get_system_migrations
+
+        db_path = Path(str(tmp_path)) / "stale.db"
+        pool = DatabasePool(db_path=db_path, read_pool_size=1)
+        await pool.initialize()
+        runner = MigrationRunner(pool)
+        await runner.initialize()
+        await runner.run_migrations(get_system_migrations())
+
+        # Insert stale state (yesterday)
+        stale = json.dumps({
+            "date": "1999-01-01",
+            "daily_spend": 99.0,
+            "conversation_spend": {"old": 50.0},
+        })
+        async with pool.write() as conn:
+            await conn.execute(
+                "INSERT INTO engine_state (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+                ("cost_guard_state", stale),
+            )
+            await conn.commit()
+
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0, system_pool=pool)
+        await g.restore()
+        # Should NOT restore stale data
+        assert g.get_daily_spend() == 0.0
+        await pool.close()
+
+    async def test_restore_db_error(self) -> None:
+        """Restore with broken pool → no crash (except path)."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_pool = MagicMock()
+        # Make read() context manager raise
+        cm = AsyncMock()
+        cm.__aenter__ = AsyncMock(side_effect=RuntimeError("db broken"))
+        cm.__aexit__ = AsyncMock(return_value=False)
+        mock_pool.read.return_value = cm
+
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0, system_pool=mock_pool)
+        await g.restore()  # Should not raise
+        assert g.get_daily_spend() == 0.0
+
+    async def test_persist_db_error(self) -> None:
+        """Persist with broken pool → no crash (except path)."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_pool = MagicMock()
+        cm = AsyncMock()
+        cm.__aenter__ = AsyncMock(side_effect=RuntimeError("db broken"))
+        cm.__aexit__ = AsyncMock(return_value=False)
+        mock_pool.write.return_value = cm
+
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0, system_pool=mock_pool)
+        # record sets _dirty=True and calls persist
+        await g.record(1.0, "model", "conv1")
+        # Should not raise, spend still tracked in-memory
+        assert g.get_daily_spend() == 1.0
