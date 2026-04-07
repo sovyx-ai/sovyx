@@ -243,3 +243,43 @@ class TestVoicePipelineIntegration:
 
         assert pipeline.state == VoicePipelineState.IDLE
         await pipeline.stop()
+
+    @pytest.mark.asyncio()
+    async def test_barge_in_interrupts_playback(self) -> None:
+        """User speaking during TTS triggers barge-in (stops playback)."""
+        vad = MagicMock()
+        vad.process_frame = MagicMock(
+            return_value=VADEvent(state=VADState.SPEECH, is_speech=True, probability=0.95),
+        )
+        stt = AsyncMock()
+        stt.transcribe = AsyncMock(return_value="stop talking")
+        tts = AsyncMock()
+        tts.synthesize = AsyncMock(
+            return_value=[AudioChunk(audio=np.zeros(320, dtype=np.int16), sample_rate=_SAMPLE_RATE)],
+        )
+
+        config = VoicePipelineConfig(
+            barge_in_enabled=True,
+            barge_in_threshold=1,
+            wake_word_enabled=False,
+            fillers_enabled=False,
+        )
+        pipeline = VoicePipeline(
+            config=config,
+            vad=vad,
+            wake_word=None,
+            stt=stt,
+            tts=tts,
+        )
+        await pipeline.start()
+        # Simulate: pipeline is speaking (TTS playing)
+        pipeline._state = VoicePipelineState.SPEAKING
+        pipeline._output._is_playing = True  # noqa: SLF001
+
+        # Feed a speech frame — should trigger barge-in
+        frame = _speech_frame()
+        await pipeline.feed_frame(frame)
+
+        # After barge-in: pipeline should go to RECORDING, not stay SPEAKING
+        assert pipeline.state != VoicePipelineState.SPEAKING
+        await pipeline.stop()
