@@ -290,6 +290,30 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
             }
         )
 
+    @app.get("/metrics")
+    async def prometheus_metrics() -> Response:
+        """Prometheus scrape endpoint — OpenMetrics text format.
+
+        No authentication required (Prometheus scrapers don't send Bearer).
+        Reads from the OTel InMemoryMetricReader and converts to Prometheus
+        exposition format.
+        """
+        reader = getattr(app.state, "metrics_reader", None)
+        if reader is None:
+            return Response(
+                content="# No metrics available\n",
+                media_type="text/plain; version=0.0.4; charset=utf-8",
+            )
+
+        from sovyx.observability.prometheus import PrometheusExporter
+
+        exporter = PrometheusExporter(reader)
+        text = exporter.export()
+        return Response(
+            content=text or "# No metrics collected yet\n",
+            media_type="text/plain; version=0.0.4; charset=utf-8",
+        )
+
     @app.get("/api/conversations", dependencies=[Depends(verify_token)])
     async def get_conversations(
         limit: int = Query(default=50, ge=0, le=500),
