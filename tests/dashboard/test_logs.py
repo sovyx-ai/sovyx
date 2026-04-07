@@ -180,7 +180,9 @@ class TestQueryLogs:
         result = query_logs(d)
         assert result == []
 
-    def test_query_logs_exception_fallback(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_query_logs_exception_fallback(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """When _read_and_filter raises, query_logs catches and returns []."""
         f = tmp_path / "ok.log"
         f.write_text(json.dumps({"event": "test", "level": "info"}) + "\n")
