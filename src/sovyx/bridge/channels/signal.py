@@ -68,11 +68,18 @@ class SignalChannel:
         self._api_url = api_url.rstrip("/")
         self._running = False
         self._poll_task: asyncio.Task[None] | None = None
+        self._session: aiohttp.ClientSession | None = None
 
     @property
     def channel_type(self) -> ChannelType:
         """The type of channel."""
         return ChannelType.SIGNAL
+
+    def _get_session(self) -> aiohttp.ClientSession:
+        """Return the persistent session, creating one if needed."""
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        return self._session
 
     @property
     def capabilities(self) -> set[str]:
@@ -111,17 +118,17 @@ class SignalChannel:
                 is not registered.
         """
         try:
-            async with aiohttp.ClientSession() as session:
-                url = f"{self._api_url}/v1/about"
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                    if resp.status != 200:  # noqa: PLR2004
-                        msg = f"signal-cli-rest-api returned {resp.status}"
-                        raise ChannelConnectionError(msg)
-                    data = await resp.json()
-                    logger.info(
-                        "signal_api_connected",
-                        version=data.get("versions", {}).get("signal-cli", "unknown"),
-                    )
+            session = self._get_session()
+            url = f"{self._api_url}/v1/about"
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                if resp.status != 200:  # noqa: PLR2004
+                    msg = f"signal-cli-rest-api returned {resp.status}"
+                    raise ChannelConnectionError(msg)
+                data = await resp.json()
+                logger.info(
+                    "signal_api_connected",
+                    version=data.get("versions", {}).get("signal-cli", "unknown"),
+                )
         except ChannelConnectionError:
             raise
         except Exception as exc:
@@ -132,6 +139,7 @@ class SignalChannel:
         """Start polling for incoming messages."""
         if self._running:
             return
+        self._session = aiohttp.ClientSession()
         self._running = True
         self._poll_task = asyncio.create_task(self._poll_loop())
         logger.info("signal_channel_started", phone=self._phone)
@@ -143,6 +151,9 @@ class SignalChannel:
             self._poll_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._poll_task
+        if self._session and not self._session.closed:
+            await self._session.close()
+            self._session = None
         logger.info("signal_channel_stopped")
 
     async def send(
@@ -172,26 +183,26 @@ class SignalChannel:
         }
 
         try:
-            async with aiohttp.ClientSession() as session:
-                url = f"{self._api_url}/v2/send"
-                async with session.post(
-                    url,
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=_SEND_TIMEOUT),
-                ) as resp:
-                    if resp.status not in (200, 201):
-                        body = await resp.text()
-                        msg = f"Signal send failed ({resp.status}): {body}"
-                        raise ChannelConnectionError(msg)
-                    # Signal REST API returns timestamps, not message IDs
-                    result = await resp.json()
-                    timestamp = str(result.get("timestamp", "0"))
-                    logger.debug(
-                        "signal_message_sent",
-                        target=target,
-                        timestamp=timestamp,
-                    )
-                    return timestamp
+            session = self._get_session()
+            url = f"{self._api_url}/v2/send"
+            async with session.post(
+                url,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=_SEND_TIMEOUT),
+            ) as resp:
+                if resp.status not in (200, 201):
+                    body = await resp.text()
+                    msg = f"Signal send failed ({resp.status}): {body}"
+                    raise ChannelConnectionError(msg)
+                # Signal REST API returns timestamps, not message IDs
+                result = await resp.json()
+                timestamp = str(result.get("timestamp", "0"))
+                logger.debug(
+                    "signal_message_sent",
+                    target=target,
+                    timestamp=timestamp,
+                )
+                return timestamp
         except ChannelConnectionError:
             raise
         except Exception as exc:
@@ -205,14 +216,14 @@ class SignalChannel:
             payload = {
                 "recipient": target,
             }
-            async with aiohttp.ClientSession() as session:
-                url = f"{self._api_url}/v1/typing-indicator/{quote(self._phone)}"
-                async with session.put(
-                    url,
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=5),
-                ) as _:
-                    pass
+            session = self._get_session()
+            url = f"{self._api_url}/v1/typing-indicator/{quote(self._phone)}"
+            async with session.put(
+                url,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as _:
+                pass
 
     async def edit(self, message_id: str, new_text: str) -> None:
         """Not supported by Signal."""
@@ -256,13 +267,11 @@ class SignalChannel:
         phone_encoded = quote(self._phone)
         url = f"{self._api_url}/v1/receive/{phone_encoded}"
 
-        async with (
-            aiohttp.ClientSession() as session,
-            session.get(
-                url,
-                timeout=aiohttp.ClientTimeout(total=_RECEIVE_TIMEOUT),
-            ) as resp,
-        ):
+        session = self._get_session()
+        async with session.get(
+            url,
+            timeout=aiohttp.ClientTimeout(total=_RECEIVE_TIMEOUT),
+        ) as resp:
             if resp.status != 200:  # noqa: PLR2004
                 return
 
