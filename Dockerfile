@@ -22,7 +22,7 @@ LABEL org.opencontainers.image.title="Sovyx" \
       org.opencontainers.image.description="Sovereign Minds Engine" \
       org.opencontainers.image.source="https://github.com/sovyx-ai/sovyx" \
       org.opencontainers.image.licenses="AGPL-3.0" \
-      org.opencontainers.image.version="0.1.0"
+      org.opencontainers.image.version="0.5.0"
 
 # Create non-root user
 RUN groupadd --system sovyx && \
