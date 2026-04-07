@@ -186,11 +186,11 @@ export default function BrainPage() {
           <SearchIcon className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-[var(--svx-color-text-secondary)]" />
           <input
             ref={searchInputRef}
+            aria-label={t("search")}
+            placeholder={t("search")}
             value={brainSearchQuery}
             onChange={(e) => handleSearchChange(e.target.value)}
-            placeholder={t("search")}
             className="h-9 w-full rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] pl-8 pr-8 text-sm text-[var(--svx-color-text-primary)] placeholder:text-[var(--svx-color-text-secondary)] focus:border-[var(--svx-color-brand-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--svx-color-brand-primary)]"
-            aria-label={t("search")}
           />
           {brainSearchQuery && (
             <button

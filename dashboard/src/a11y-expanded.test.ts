@@ -67,7 +67,8 @@ describe("Accessibility — ARIA & Semantic HTML", () => {
 
   it("forms have labels or aria-label on inputs", () => {
     for (const src of components) {
-      const inputs = src.match(/<(input|textarea|select)\s[^>]*>/g) ?? [];
+      // Match JSX input elements — handle curly-brace expressions that may contain '>'
+      const inputs = src.match(/<(input|textarea|select)\s(?:[^>{}]|\{[^}]*\})*\/?>/gs) ?? [];
       for (const inp of inputs) {
         const hasLabel = /aria-label|aria-labelledby|id=|placeholder=/.test(inp);
         expect(hasLabel, `Form input should have accessible label: ${inp.slice(0, 100)}`).toBe(true);
