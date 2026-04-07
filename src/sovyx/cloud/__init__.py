@@ -34,6 +34,21 @@ from sovyx.cloud.billing import (
     WebhookSignatureError,
 )
 from sovyx.cloud.crypto import BackupCrypto
+from sovyx.cloud.flex import (
+    BalanceTransaction,
+    FlexBalance,
+    FlexBalanceService,
+    FlexError,
+    FlexStore,
+    InMemoryFlexStore,
+    InvalidTopupAmountError,
+    MaxBalanceExceededError,
+    PaymentError,
+    StripePaymentGateway,
+    TopupResult,
+    TopupStatus,
+    TransactionType,
+)
 from sovyx.cloud.license import (
     LicenseClaims,
     LicenseInfo,
@@ -124,6 +139,20 @@ __all__ = [
     "WebhookPayloadError",
     "WebhookResult",
     "WebhookSignatureError",
+    # flex
+    "BalanceTransaction",
+    "FlexBalance",
+    "FlexBalanceService",
+    "FlexError",
+    "FlexStore",
+    "InMemoryFlexStore",
+    "InvalidTopupAmountError",
+    "MaxBalanceExceededError",
+    "PaymentError",
+    "StripePaymentGateway",
+    "TopupResult",
+    "TopupStatus",
+    "TransactionType",
     # usage
     "AccountUsage",
     "AutoTopupCharger",
