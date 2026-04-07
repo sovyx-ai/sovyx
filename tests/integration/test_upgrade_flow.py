@@ -7,7 +7,6 @@ Uses a real SQLite database (via :class:`ConnectionPool`) instead of mocks.
 from __future__ import annotations
 
 from pathlib import Path  # noqa: TC003
-from typing import Any
 
 import pytest
 
@@ -62,7 +61,7 @@ class TestUpgradeFlowIntegration:
 
     @pytest.mark.asyncio()
     async def test_single_migration_success(
-        self, pool: Any, tmp_path: Path
+        self, pool: object, tmp_path: Path
     ) -> None:
         """Apply one migration, verify schema version recorded."""
         sv = SchemaVersion(pool)
@@ -90,7 +89,7 @@ class TestUpgradeFlowIntegration:
 
     @pytest.mark.asyncio()
     async def test_multi_step_migration(
-        self, pool: Any, tmp_path: Path
+        self, pool: object, tmp_path: Path
     ) -> None:
         """Apply multiple ordered migrations."""
         sv = SchemaVersion(pool)
@@ -117,7 +116,7 @@ class TestUpgradeFlowIntegration:
 
     @pytest.mark.asyncio()
     async def test_failed_migration_restores_backup(
-        self, pool: Any, tmp_path: Path
+        self, pool: object, tmp_path: Path
     ) -> None:
         """If a migration fails, database is restored from backup."""
         sv = SchemaVersion(pool)
@@ -149,7 +148,7 @@ class TestUpgradeFlowIntegration:
 
     @pytest.mark.asyncio()
     async def test_idempotent_reruns(
-        self, pool: Any, tmp_path: Path
+        self, pool: object, tmp_path: Path
     ) -> None:
         """Running the same migrations twice only applies them once."""
         sv = SchemaVersion(pool)
@@ -174,7 +173,7 @@ class TestUpgradeFlowIntegration:
 
     @pytest.mark.asyncio()
     async def test_data_migration_with_real_db(
-        self, pool: Any, tmp_path: Path
+        self, pool: object, tmp_path: Path
     ) -> None:
         """Data migration function runs against real DB."""
         sv = SchemaVersion(pool)
@@ -182,7 +181,7 @@ class TestUpgradeFlowIntegration:
 
         runner = MigrationRunner(pool, sv, backup_dir=tmp_path / "backups")
 
-        async def uppercase_names(conn: Any) -> None:
+        async def uppercase_names(conn: object) -> None:
             cursor = await conn.execute("SELECT id, name FROM concepts")
             rows = await cursor.fetchall()
             for row in rows:

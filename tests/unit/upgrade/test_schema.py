@@ -875,20 +875,20 @@ class TestMigrationRunnerEdgeCases:
 
         async def bad_integrity() -> None:
             # Patch the pool's read to return a corrupt integrity check
-            from unittest.mock import AsyncMock as _AM
-            from unittest.mock import MagicMock as _MM
+            from unittest.mock import AsyncMock as _AM  # noqa: N814
+            from unittest.mock import MagicMock as _MM  # noqa: N814
 
             old_read = runner._pool.read  # noqa: SLF001
 
             class _BadReadCM:
-                async def __aenter__(self_inner):  # noqa: N805
+                async def __aenter__(self_inner) -> object:  # noqa: N805
                     conn = _MM()
                     cursor = _MM()
                     cursor.fetchone = _AM(return_value=("database disk image is malformed",))
                     conn.execute = _AM(return_value=cursor)
                     return conn
 
-                async def __aexit__(self_inner, *a):  # noqa: N805
+                async def __aexit__(self_inner, *a: object) -> None:  # noqa: N805
                     pass
 
             runner._pool.read = _MM(return_value=_BadReadCM())  # noqa: SLF001
