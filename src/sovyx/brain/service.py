@@ -239,14 +239,15 @@ class BrainService:
         new_concept_ids: list[ConceptId] | None = None,
         **kwargs: object,
     ) -> EpisodeId:
-        """Encode an episode + embedding + Hebbian learning.
+        """Encode an episode + embedding + star topology Hebbian learning.
 
-        Strengthens connections between concepts mentioned in working memory.
+        Uses star topology: new concepts pair with each other (within-turn)
+        and with top-K existing concepts by activation (cross-turn).
+        Existing concepts only reinforce pre-existing relations.
 
         Args:
-            new_concept_ids: Concepts learned this turn — guaranteed inclusion
-                in Hebbian pairing even when the concept count exceeds the cap.
-                Prevents newly learned concepts from becoming isolated islands.
+            new_concept_ids: Concepts learned this turn — form the hub
+                of the star topology. Each connects to top-K existing.
         """
         from sovyx.brain.models import Episode
 
@@ -259,15 +260,17 @@ class BrainService:
         )
         episode_id = await self._episodes.create(episode)
 
-        # Hebbian learning on currently active concepts
+        # Star topology Hebbian learning
         active = self._memory.get_active_concepts(min_activation=0.3)
         if len(active) >= 2:  # noqa: PLR2004
-            concept_ids = [cid for cid, _ in active]
             activations = dict(active)
-            await self._hebbian.strengthen(
-                concept_ids,
+            new_set = set(new_concept_ids or [])
+            new_ids = [cid for cid, _ in active if cid in new_set]
+            existing_ids = [cid for cid, _ in active if cid not in new_set]
+            await self._hebbian.strengthen_star(
+                new_ids,
+                existing_ids,
                 activations,
-                priority_ids=new_concept_ids,
             )
 
         # Record metrics

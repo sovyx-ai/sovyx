@@ -16,9 +16,9 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-# Maximum concepts for O(n²) Hebbian pairing.
-# 20 → 190 pairs; 50 → 1225 pairs (too slow for per-request).
-_MAX_HEBBIAN_CONCEPTS = 20
+# Default K for star topology cross-turn pairing.
+# Each new concept pairs with top-K existing by activation.
+_STAR_K = 15
 
 
 class HebbianLearning:
@@ -48,19 +48,18 @@ class HebbianLearning:
         self,
         concept_ids: list[ConceptId],
         activations: dict[ConceptId, float] | None = None,
-        *,
-        priority_ids: list[ConceptId] | None = None,
     ) -> int:
-        """Strengthen relations between all pairs of provided concepts.
+        """Strengthen relations between all pairs — within-turn only.
+
+        Used by ``strengthen_connection()`` for small concept sets
+        extracted from a single message (typically 2-8 concepts).
+        For cross-turn Hebbian learning, use ``strengthen_star()``.
 
         Creates relations if they don't exist. Increments co-occurrence.
 
         Args:
-            concept_ids: Concepts that co-occurred.
+            concept_ids: Concepts that co-occurred in the same turn.
             activations: Optional activation levels per concept.
-            priority_ids: Concepts that MUST be included even when capping
-                (e.g. newly learned concepts from this turn). Prevents
-                island formation in the knowledge graph.
 
         Returns:
             Number of relations strengthened or created.
@@ -68,52 +67,10 @@ class HebbianLearning:
         if len(concept_ids) < 2:  # noqa: PLR2004
             return 0
 
-        # Cap to top-K by activation to bound O(n²) pair generation.
-        # 20 concepts → 190 pairs (max ~570 DB ops). Acceptable in background.
-        if len(concept_ids) > _MAX_HEBBIAN_CONCEPTS:
-            priority_set = set(priority_ids or [])
-            if activations:
-                # Split into priority (must-include) and rest
-                rest = [c for c in concept_ids if c not in priority_set]
-                rest_sorted = sorted(
-                    rest,
-                    key=lambda cid: activations.get(cid, 0.0),
-                    reverse=True,
-                )
-                # Priority first, fill remaining slots with top-activated
-                slots = max(0, _MAX_HEBBIAN_CONCEPTS - len(priority_set))
-                concept_ids = list(priority_set) + rest_sorted[:slots]
-            else:
-                # Without activations, priority first, then fill
-                rest = [c for c in concept_ids if c not in priority_set]
-                slots = max(0, _MAX_HEBBIAN_CONCEPTS - len(priority_set))
-                concept_ids = list(priority_set) + rest[:slots]
-            logger.debug(
-                "hebbian_concepts_capped",
-                capped_to=_MAX_HEBBIAN_CONCEPTS,
-                priority_kept=len(priority_set),
-            )
-
         count = 0
         for i, id_a in enumerate(concept_ids):
             for id_b in concept_ids[i + 1 :]:
-                co_activation = 1.0
-                if activations:
-                    act_a = activations.get(id_a, 1.0)
-                    act_b = activations.get(id_b, 1.0)
-                    co_activation = min(act_a, act_b)
-
-                # Get or create the relation
-                relation = await self._relations.get_or_create(id_a, id_b)
-
-                # Apply Hebbian formula with clamp
-                old_weight = relation.weight
-                delta = self._learning_rate * (1.0 - old_weight) * co_activation
-                new_weight = min(1.0, old_weight + delta)
-
-                await self._relations.update_weight(relation.id, new_weight)
-                await self._relations.increment_co_occurrence(id_a, id_b)
-                count += 1
+                count += await self._strengthen_pair(id_a, id_b, activations)
 
         logger.debug(
             "hebbian_strengthen",
@@ -121,6 +78,157 @@ class HebbianLearning:
             relations_updated=count,
         )
         return count
+
+    async def strengthen_star(
+        self,
+        new_ids: list[ConceptId],
+        existing_ids: list[ConceptId],
+        activations: dict[ConceptId, float] | None = None,
+        *,
+        k: int = _STAR_K,
+    ) -> int:
+        """Star topology Hebbian — linear scaling, zero islands.
+
+        Three pairing layers:
+        1. **Within-turn:** all new_ids paired with each other (O(n²) on
+           small set — typically 2-8 concepts per message).
+        2. **Cross-turn:** each new_id paired with top-K existing_ids by
+           activation. Linear: O(new × K) instead of O(n²) on full set.
+        3. **Existing reinforcement:** for remaining existing_ids,
+           strengthen ONLY pre-existing relations (SELECT before UPDATE,
+           never create new). Prevents spurious edges between unrelated
+           old concepts.
+
+        Args:
+            new_ids: Concepts learned this turn.
+            existing_ids: Previously active concepts from working memory.
+            activations: Activation levels per concept (for co_activation
+                weighting and top-K selection).
+            k: Number of existing concepts each new concept connects to.
+
+        Returns:
+            Number of relations strengthened or created.
+        """
+        if not new_ids and not existing_ids:
+            return 0
+
+        count = 0
+
+        # Layer 1: Within-turn — new concepts pair with each other
+        for i, id_a in enumerate(new_ids):
+            for id_b in new_ids[i + 1 :]:
+                count += await self._strengthen_pair(id_a, id_b, activations)
+
+        # Layer 2: Cross-turn — each new concept pairs with top-K existing
+        if new_ids and existing_ids:
+            top_existing = self._top_k_by_activation(existing_ids, activations, k)
+            for new_id in new_ids:
+                for existing_id in top_existing:
+                    count += await self._strengthen_pair(new_id, existing_id, activations)
+
+        # Layer 3: Existing reinforcement — update ONLY pre-existing relations
+        if len(existing_ids) >= 2:  # noqa: PLR2004
+            count += await self._reinforce_existing(existing_ids, activations)
+
+        logger.debug(
+            "hebbian_star",
+            new=len(new_ids),
+            existing=len(existing_ids),
+            k=k,
+            relations_updated=count,
+        )
+        return count
+
+    async def _strengthen_pair(
+        self,
+        id_a: ConceptId,
+        id_b: ConceptId,
+        activations: dict[ConceptId, float] | None,
+    ) -> int:
+        """Strengthen a single pair — get_or_create + Hebbian formula.
+
+        Returns:
+            1 if strengthened, 0 otherwise.
+        """
+        co_activation = 1.0
+        if activations:
+            act_a = activations.get(id_a, 1.0)
+            act_b = activations.get(id_b, 1.0)
+            co_activation = min(act_a, act_b)
+
+        relation = await self._relations.get_or_create(id_a, id_b)
+
+        old_weight = relation.weight
+        delta = self._learning_rate * (1.0 - old_weight) * co_activation
+        new_weight = min(1.0, old_weight + delta)
+
+        await self._relations.update_weight(relation.id, new_weight)
+        await self._relations.increment_co_occurrence(id_a, id_b)
+        return 1
+
+    async def _reinforce_existing(
+        self,
+        existing_ids: list[ConceptId],
+        activations: dict[ConceptId, float] | None,
+    ) -> int:
+        """Reinforce only pre-existing relations between existing concepts.
+
+        Does NOT create new relations — prevents spurious edges between
+        unrelated old concepts that happen to both be in working memory.
+
+        Returns:
+            Number of relations reinforced.
+        """
+        count = 0
+        existing_set = set(existing_ids)
+        checked: set[tuple[str, str]] = set()
+
+        for cid in existing_ids:
+            neighbors = await self._relations.get_neighbors(cid, limit=50)
+            for neighbor_id, _weight in neighbors:
+                if neighbor_id not in existing_set:
+                    continue
+                # Canonical pair key to avoid double-processing
+                pair = (
+                    min(str(cid), str(neighbor_id)),
+                    max(str(cid), str(neighbor_id)),
+                )
+                if pair in checked:
+                    continue
+                checked.add(pair)
+
+                co_activation = 1.0
+                if activations:
+                    act_a = activations.get(cid, 1.0)
+                    act_b = activations.get(neighbor_id, 1.0)
+                    co_activation = min(act_a, act_b)
+
+                relation = await self._relations.get_or_create(cid, neighbor_id)
+                old_weight = relation.weight
+                delta = self._learning_rate * (1.0 - old_weight) * co_activation
+                new_weight = min(1.0, old_weight + delta)
+                await self._relations.update_weight(relation.id, new_weight)
+                count += 1
+
+        return count
+
+    @staticmethod
+    def _top_k_by_activation(
+        concept_ids: list[ConceptId],
+        activations: dict[ConceptId, float] | None,
+        k: int,
+    ) -> list[ConceptId]:
+        """Return top-K concepts sorted by activation descending.
+
+        If no activations provided, returns first K concepts.
+        """
+        if not activations:
+            return concept_ids[:k]
+        return sorted(
+            concept_ids,
+            key=lambda cid: activations.get(cid, 0.0),
+            reverse=True,
+        )[:k]
 
 
 class EbbinghausDecay:

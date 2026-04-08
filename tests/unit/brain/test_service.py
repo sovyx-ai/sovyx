@@ -313,14 +313,14 @@ class TestEncodeEpisode:
     async def test_encode_triggers_hebbian(
         self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
     ) -> None:
-        """Hebbian learning fires when ≥2 concepts active."""
+        """Star topology Hebbian fires when ≥2 concepts active."""
         wm = mock_deps["working_memory"]
         assert isinstance(wm, WorkingMemory)
         wm.activate(ConceptId("c1"), 0.8)
         wm.activate(ConceptId("c2"), 0.6)
 
         await brain.encode_episode(MIND, ConversationId("conv1"), "hello", "hi")
-        mock_deps["hebbian"].strengthen.assert_called_once()  # type: ignore[union-attr]
+        mock_deps["hebbian"].strengthen_star.assert_called_once()  # type: ignore[union-attr]
 
     async def test_encode_no_hebbian_with_single_concept(
         self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
@@ -330,7 +330,7 @@ class TestEncodeEpisode:
         wm.activate(ConceptId("c1"), 0.8)
 
         await brain.encode_episode(MIND, ConversationId("conv1"), "hello", "hi")
-        mock_deps["hebbian"].strengthen.assert_not_called()  # type: ignore[union-attr]
+        mock_deps["hebbian"].strengthen_star.assert_not_called()  # type: ignore[union-attr]
 
 
 class TestGetRelated:

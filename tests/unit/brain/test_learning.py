@@ -288,51 +288,183 @@ class TestEbbinghausDecay:
         assert await relation_repo.get(rid_strong) is not None
 
 
-class TestHebbianCapping:
-    """Top-K capping by activation (lines 69-77)."""
+class TestStarTopology:
+    """Star topology Hebbian: strengthen_star()."""
 
-    async def test_caps_with_activations(
+    async def test_star_new_to_existing(
         self, concept_repo: ConceptRepository, relation_repo: RelationRepository
     ) -> None:
-        """When >20 concepts with activations, top-K by activation are kept."""
-        # Create 25 concepts
-        ids = []
-        for i in range(25):
-            from sovyx.brain.models import Concept
+        """5 new + 15 existing → within-turn + cross-turn pairs."""
+        new_names = [f"new-{i}" for i in range(5)]
+        existing_names = [f"existing-{i}" for i in range(15)]
+        new_ids = await _seed_concepts(concept_repo, *new_names)
+        existing_ids = await _seed_concepts(concept_repo, *existing_names)
 
-            c = Concept(
-                id=ConceptId(f"cap{i}"),
-                mind_id=MIND,
-                name=f"concept-{i}",
-                content=f"content-{i}",
-            )
-            cid = await concept_repo.create(c)
-            ids.append(cid)
-
-        # Top 20 by activation = those with highest values
-        activations = {cid: float(i) for i, cid in enumerate(ids)}
+        activations = {cid: 0.5 for cid in [*new_ids, *existing_ids]}
         hebbian = HebbianLearning(relation_repo=relation_repo)
-        count = await hebbian.strengthen(ids, activations=activations)
-        # Should have capped to 20 → C(20,2) = 190 pairs
-        assert count == 190
+        count = await hebbian.strengthen_star(new_ids, existing_ids, activations)
 
-    async def test_caps_without_activations(
+        # Within-turn: C(5,2) = 10 pairs
+        # Cross-turn: 5 new × 15 existing = 75 pairs
+        # Existing reinforcement: 0 (no pre-existing relations)
+        assert count == 85  # noqa: PLR2004
+
+        # Every new concept should have edges
+        for nid in new_ids:
+            neighbors = await relation_repo.get_neighbors(nid)
+            assert len(neighbors) >= 1, f"New concept {nid} has no neighbors"
+
+    async def test_star_no_cap_50_concepts(
         self, concept_repo: ConceptRepository, relation_repo: RelationRepository
     ) -> None:
-        """When >20 concepts without activations, first 20 are kept."""
-        ids = []
-        for i in range(25):
-            from sovyx.brain.models import Concept
+        """50 concepts total — no cap, all new connected to existing."""
+        new_names = [f"n{i}" for i in range(5)]
+        existing_names = [f"e{i}" for i in range(45)]
 
-            c = Concept(
-                id=ConceptId(f"nocap{i}"),
-                mind_id=MIND,
-                name=f"concept-{i}",
-                content=f"content-{i}",
-            )
-            cid = await concept_repo.create(c)
-            ids.append(cid)
+        new_ids = []
+        for name in new_names:
+            c = Concept(mind_id=MIND, name=name)
+            new_ids.append(await concept_repo.create(c))
+        existing_ids = []
+        for name in existing_names:
+            c = Concept(mind_id=MIND, name=name)
+            existing_ids.append(await concept_repo.create(c))
+
+        activations = {cid: float(i) * 0.01 for i, cid in enumerate([*existing_ids, *new_ids])}
+        hebbian = HebbianLearning(relation_repo=relation_repo)
+        count = await hebbian.strengthen_star(new_ids, existing_ids, activations)
+
+        # Within: C(5,2)=10, Cross: 5×15=75 (K=15), existing: 0 pre-existing
+        assert count == 85  # noqa: PLR2004
+
+        # All new concepts connected
+        for nid in new_ids:
+            neighbors = await relation_repo.get_neighbors(nid)
+            assert len(neighbors) >= 1
+
+    async def test_star_existing_only_updates(
+        self, concept_repo: ConceptRepository, relation_repo: RelationRepository
+    ) -> None:
+        """Existing-only reinforcement: updates pre-existing, no new spurious."""
+        ids = await _seed_concepts(concept_repo, "A", "B", "C")
+
+        # Pre-create a relation between A and B
+        from sovyx.brain.models import Relation
+
+        rel = Relation(source_id=ids[0], target_id=ids[1], weight=0.5)
+        await relation_repo.create(rel)
 
         hebbian = HebbianLearning(relation_repo=relation_repo)
-        count = await hebbian.strengthen(ids)  # No activations
-        assert count == 190  # C(20,2)
+        # No new concepts, all existing
+        count = await hebbian.strengthen_star([], ids)
+
+        # Only A-B reinforced (pre-existing), not A-C or B-C
+        assert count == 1
+
+        # A-C should NOT have a relation
+        relations_c = await relation_repo.get_relations_for(ids[2])
+        assert len(relations_c) == 0
+
+    async def test_star_empty_new(
+        self, concept_repo: ConceptRepository, relation_repo: RelationRepository
+    ) -> None:
+        """No new concepts → only existing reinforcement (graceful)."""
+        ids = await _seed_concepts(concept_repo, "X", "Y")
+        hebbian = HebbianLearning(relation_repo=relation_repo)
+        count = await hebbian.strengthen_star([], ids)
+        # No pre-existing relations → 0
+        assert count == 0
+
+    async def test_star_empty_both(self, relation_repo: RelationRepository) -> None:
+        """Both empty → no-op."""
+        hebbian = HebbianLearning(relation_repo=relation_repo)
+        count = await hebbian.strengthen_star([], [])
+        assert count == 0
+
+    async def test_star_vs_allpairs_connectivity(
+        self, concept_repo: ConceptRepository, relation_repo: RelationRepository
+    ) -> None:
+        """Star topology produces a connected graph for mixed new+existing."""
+        new_ids = await _seed_concepts(concept_repo, "alpha", "beta", "gamma")
+        existing_ids = await _seed_concepts(concept_repo, "delta", "epsilon", "zeta")
+
+        activations = {cid: 0.8 for cid in [*new_ids, *existing_ids]}
+        hebbian = HebbianLearning(relation_repo=relation_repo)
+        await hebbian.strengthen_star(new_ids, existing_ids, activations)
+
+        # BFS from alpha should reach all new + existing it connected to
+        visited: set[str] = set()
+        queue = [new_ids[0]]
+        while queue:
+            node = queue.pop(0)
+            if str(node) in visited:
+                continue
+            visited.add(str(node))
+            neighbors = await relation_repo.get_neighbors(node, limit=50)
+            for neighbor_id, _ in neighbors:
+                if str(neighbor_id) not in visited:
+                    queue.append(neighbor_id)
+
+        # All new concepts must be reachable from alpha
+        for nid in new_ids:
+            assert str(nid) in visited, f"{nid} not reachable"
+        # At least some existing concepts reachable
+        existing_reached = sum(1 for eid in existing_ids if str(eid) in visited)
+        assert existing_reached >= 1
+
+    async def test_star_k_custom(
+        self, concept_repo: ConceptRepository, relation_repo: RelationRepository
+    ) -> None:
+        """Custom K limits cross-turn connections."""
+        new_ids = await _seed_concepts(concept_repo, "new1")
+        existing_ids = await _seed_concepts(concept_repo, "ex1", "ex2", "ex3", "ex4", "ex5")
+
+        activations = {cid: float(i) for i, cid in enumerate(existing_ids)}
+        hebbian = HebbianLearning(relation_repo=relation_repo)
+        count = await hebbian.strengthen_star(new_ids, existing_ids, activations, k=2)
+
+        # Within: C(1,2)=0, Cross: 1×2=2 (K=2), existing: 0
+        assert count == 2  # noqa: PLR2004
+
+        neighbors = await relation_repo.get_neighbors(new_ids[0])
+        assert len(neighbors) == 2  # noqa: PLR2004
+
+    async def test_star_without_activations(
+        self, concept_repo: ConceptRepository, relation_repo: RelationRepository
+    ) -> None:
+        """Star works without activations — uses positional K selection."""
+        new_ids = await _seed_concepts(concept_repo, "n1", "n2")
+        existing_ids = await _seed_concepts(concept_repo, "e1", "e2", "e3")
+
+        hebbian = HebbianLearning(relation_repo=relation_repo)
+        count = await hebbian.strengthen_star(new_ids, existing_ids)
+
+        # Within: C(2,2)=1, Cross: 2×3=6 (K=15 > 3), existing: 0
+        assert count == 7  # noqa: PLR2004
+
+    async def test_star_existing_reinforce_without_activations(
+        self, concept_repo: ConceptRepository, relation_repo: RelationRepository
+    ) -> None:
+        """Existing reinforcement works without activations (co_activation=1.0)."""
+        ids = await _seed_concepts(concept_repo, "P", "Q", "R")
+        from sovyx.brain.models import Relation
+
+        # Pre-create P-Q relation
+        await relation_repo.create(Relation(source_id=ids[0], target_id=ids[1], weight=0.5))
+
+        hebbian = HebbianLearning(relation_repo=relation_repo)
+        count = await hebbian.strengthen_star([], ids)
+        assert count == 1  # only P-Q reinforced
+
+    async def test_star_single_existing_no_reinforce(
+        self, concept_repo: ConceptRepository, relation_repo: RelationRepository
+    ) -> None:
+        """Single existing concept — no reinforcement needed (< 2)."""
+        ids = await _seed_concepts(concept_repo, "solo")
+        new_ids = await _seed_concepts(concept_repo, "fresh")
+
+        hebbian = HebbianLearning(relation_repo=relation_repo)
+        count = await hebbian.strengthen_star(new_ids, ids)
+
+        # Within: 0 (single new), Cross: 1×1=1, Existing: 0 (<2)
+        assert count == 1
