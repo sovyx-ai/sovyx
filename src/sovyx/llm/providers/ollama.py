@@ -53,8 +53,14 @@ class OllamaProvider:
         return True
 
     def supports_model(self, model: str) -> bool:
-        """Ollama can serve any local model."""
-        return True
+        """Ollama serves local models only.
+
+        Cloud models (claude-*, gpt-*, gemini-*, o1*, o3*) are rejected
+        so the router doesn't incorrectly route to Ollama or use
+        Ollama's 8K context window for cloud model calculations.
+        """
+        _cloud_prefixes = ("claude-", "gpt-", "gemini-", "o1", "o3")
+        return not model.startswith(_cloud_prefixes)
 
     def get_context_window(self, model: str | None = None) -> int:
         """Context window for the model."""
