@@ -265,115 +265,158 @@ class LLMRouter:
             )
             raise CostLimitExceededError(msg)
 
+        # Build model fallback chain: requested model first, then equivalents
+        models_to_try: list[str | None] = [model]
+        if model:
+            models_to_try.extend(self._get_equivalent_models(model))
+
         errors: list[str] = []
 
-        for provider in self._providers:
-            # Skip if model specified and provider doesn't support it
-            if model and not provider.supports_model(model):
-                continue
+        for try_model in models_to_try:
+            for provider in self._providers:
+                # Skip if model specified and provider doesn't support it
+                if try_model and not provider.supports_model(try_model):
+                    continue
 
-            # Skip if provider not available
-            if not provider.is_available:
-                continue
+                # Skip if provider not available
+                if not provider.is_available:
+                    continue
 
-            # Skip if circuit is open
-            circuit = self._circuits.get(provider.name)
-            if circuit and not circuit.can_call():
-                errors.append(f"{provider.name}: circuit open")
-                continue
+                # Skip if circuit is open
+                circuit = self._circuits.get(provider.name)
+                if circuit and not circuit.can_call():
+                    errors.append(f"{provider.name}: circuit open")
+                    continue
 
-            try:
-                use_model = model or "default"
-                tracer = get_tracer()
-                metrics = get_metrics()
+                try:
+                    use_model = try_model or "default"
+                    if try_model and try_model != model:
+                        logger.info(
+                            "cross_provider_fallback",
+                            original_model=model,
+                            fallback_model=try_model,
+                            provider=provider.name,
+                        )
+                    tracer = get_tracer()
+                    metrics = get_metrics()
 
-                with (
-                    tracer.start_llm_span(
-                        provider=provider.name,
-                        model=use_model,
-                    ) as span,
-                    metrics.measure_latency(
-                        metrics.llm_response_latency,
+                    with (
+                        tracer.start_llm_span(
+                            provider=provider.name,
+                            model=use_model,
+                        ) as span,
+                        metrics.measure_latency(
+                            metrics.llm_response_latency,
+                            {"provider": provider.name},
+                        ),
+                    ):
+                        raw = await provider.generate(
+                            messages,
+                            model=use_model,
+                            temperature=temperature,
+                            max_tokens=max_tokens,
+                        )
+
+                    response = (
+                        LLMResponse(**vars(raw)) if not isinstance(raw, LLMResponse) else raw
+                    )
+
+                    # Record span attributes post-call
+                    span.set_attribute("sovyx.llm.tokens_in", response.tokens_in)
+                    span.set_attribute("sovyx.llm.tokens_out", response.tokens_out)
+                    span.set_attribute("sovyx.llm.cost_usd", response.cost_usd)
+
+                    # Record metrics
+                    metrics.llm_calls.add(
+                        1,
+                        {
+                            "provider": provider.name,
+                            "model": response.model,
+                        },
+                    )
+                    metrics.tokens_used.add(
+                        response.tokens_in,
+                        {"direction": "in", "provider": provider.name},
+                    )
+                    metrics.tokens_used.add(
+                        response.tokens_out,
+                        {"direction": "out", "provider": provider.name},
+                    )
+                    metrics.llm_cost.add(
+                        response.cost_usd,
                         {"provider": provider.name},
-                    ),
-                ):
-                    raw = await provider.generate(
-                        messages,
-                        model=use_model,
-                        temperature=temperature,
-                        max_tokens=max_tokens,
                     )
 
-                response = LLMResponse(**vars(raw)) if not isinstance(raw, LLMResponse) else raw
+                    # Record success
+                    if circuit:
+                        circuit.record_success()
 
-                # Record span attributes post-call
-                span.set_attribute("sovyx.llm.tokens_in", response.tokens_in)
-                span.set_attribute("sovyx.llm.tokens_out", response.tokens_out)
-                span.set_attribute("sovyx.llm.cost_usd", response.cost_usd)
+                    # Record cost
+                    await self._cost_guard.record(
+                        response.cost_usd, response.model, conversation_id
+                    )
 
-                # Record metrics
-                metrics.llm_calls.add(
-                    1,
-                    {
-                        "provider": provider.name,
-                        "model": response.model,
-                    },
-                )
-                metrics.tokens_used.add(
-                    response.tokens_in,
-                    {"direction": "in", "provider": provider.name},
-                )
-                metrics.tokens_used.add(
-                    response.tokens_out,
-                    {"direction": "out", "provider": provider.name},
-                )
-                metrics.llm_cost.add(
-                    response.cost_usd,
-                    {"provider": provider.name},
-                )
+                    # Emit event
+                    await self._events.emit(
+                        ThinkCompleted(
+                            model=response.model,
+                            tokens_in=response.tokens_in,
+                            tokens_out=response.tokens_out,
+                            latency_ms=response.latency_ms,
+                        )
+                    )
 
-                # Record success
-                if circuit:
-                    circuit.record_success()
-
-                # Record cost
-                await self._cost_guard.record(response.cost_usd, response.model, conversation_id)
-
-                # Emit event
-                await self._events.emit(
-                    ThinkCompleted(
+                    logger.info(
+                        "llm_response",
+                        provider=provider.name,
                         model=response.model,
-                        tokens_in=response.tokens_in,
-                        tokens_out=response.tokens_out,
-                        latency_ms=response.latency_ms,
+                        tokens=response.tokens_in + response.tokens_out,
+                        cost=round(response.cost_usd, 6),
                     )
-                )
 
-                logger.info(
-                    "llm_response",
-                    provider=provider.name,
-                    model=response.model,
-                    tokens=response.tokens_in + response.tokens_out,
-                    cost=round(response.cost_usd, 6),
-                )
+                    return response
 
-                return response
-
-            except Exception as e:
-                if circuit:
-                    circuit.record_failure()
-                errors.append(f"{provider.name}: {e}")
-                logger.warning(
-                    "provider_failed",
-                    provider=provider.name,
-                    error=str(e),
-                )
-                continue
+                except Exception as e:
+                    if circuit:
+                        circuit.record_failure()
+                    errors.append(f"{provider.name}: {e}")
+                    logger.warning(
+                        "provider_failed",
+                        provider=provider.name,
+                        error=str(e),
+                    )
+                    continue
 
         error_msg = (
             f"All providers failed: {'; '.join(errors)}" if errors else "No available providers"
         )
         raise ProviderUnavailableError(error_msg)
+
+    @staticmethod
+    def _get_equivalent_models(model: str) -> list[str]:
+        """Get equivalent models from other providers for cross-provider fallback.
+
+        When the primary model fails on all its providers, the router tries
+        equivalent-tier models from other providers before giving up.
+
+        Equivalence tiers:
+            - Flagship: claude-sonnet ↔ gpt-4o ↔ gemini-2.5-pro
+            - Fast: claude-haiku ↔ gpt-4o-mini ↔ gemini-flash
+        """
+        _equivalence: dict[str, list[str]] = {
+            # Flagship tier
+            "claude-sonnet-4-20250514": ["gpt-4o", "gemini-2.5-pro-preview-03-25"],
+            "gpt-4o": ["claude-sonnet-4-20250514", "gemini-2.5-pro-preview-03-25"],
+            "gemini-2.5-pro-preview-03-25": ["claude-sonnet-4-20250514", "gpt-4o"],
+            # Fast tier
+            "claude-3-5-haiku-20241022": ["gpt-4o-mini", "gemini-2.0-flash"],
+            "gpt-4o-mini": ["claude-3-5-haiku-20241022", "gemini-2.0-flash"],
+            "gemini-2.0-flash": ["gpt-4o-mini", "claude-3-5-haiku-20241022"],
+            # Reasoning tier
+            "claude-opus-4-20250514": ["o1"],
+            "o1": ["claude-opus-4-20250514"],
+        }
+        return _equivalence.get(model, [])
 
     @staticmethod
     def _get_provider_models(provider: LLMProvider) -> list[str]:
