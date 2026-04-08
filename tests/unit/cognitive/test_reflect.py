@@ -1214,3 +1214,137 @@ class TestConceptsMentioned:
         # Should NOT be 0.5 — dynamic scoring
         assert kw["importance"] != pytest.approx(0.5, abs=0.01)
         assert kw["importance"] > 0.3
+
+
+# ── Episode summary generation ────────────────────────────────────────
+
+
+class TestEpisodeSummary:
+    """LLM-based episode summary generation."""
+
+    async def test_summary_passed_to_encode(self, mock_brain: AsyncMock) -> None:
+        """Summary from LLM is passed through to encode_episode."""
+        # 3 calls: extraction, relation classification, summary
+        concepts_resp = LLMResponse(
+            content=json.dumps(
+                [
+                    {
+                        "name": "Python",
+                        "content": "knows Python",
+                        "category": "skill",
+                        "sentiment": 0.3,
+                    },
+                    {
+                        "name": "Django",
+                        "content": "uses Django",
+                        "category": "skill",
+                        "sentiment": 0.2,
+                    },
+                ]
+            ),
+            model="gpt-4o-mini",
+            tokens_in=50,
+            tokens_out=50,
+            latency_ms=100,
+            cost_usd=0.0001,
+            finish_reason="stop",
+            provider="openai",
+        )
+        relations_resp = LLMResponse(
+            content="[]",
+            model="gpt-4o-mini",
+            tokens_in=10,
+            tokens_out=10,
+            latency_ms=50,
+            cost_usd=0.0,
+            finish_reason="stop",
+            provider="openai",
+        )
+        summary_resp = LLMResponse(
+            content="User discussed their Python and Django expertise.",
+            model="gpt-4o-mini",
+            tokens_in=20,
+            tokens_out=15,
+            latency_ms=80,
+            cost_usd=0.0001,
+            finish_reason="stop",
+            provider="openai",
+        )
+        router = AsyncMock()
+        router.generate = AsyncMock(side_effect=[concepts_resp, relations_resp, summary_resp])
+        mock_brain.learn_concept = AsyncMock(side_effect=[ConceptId("c1"), ConceptId("c2")])
+
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(_perception("test"), _response(), MIND, CONV)
+
+        kw = mock_brain.encode_episode.call_args.kwargs
+        assert kw["summary"] == "User discussed their Python and Django expertise."
+
+    async def test_summary_failure_passes_none(self, mock_brain: AsyncMock) -> None:
+        """LLM failure for summary → None (graceful fallback)."""
+        concepts_resp = LLMResponse(
+            content="[]",
+            model="gpt-4o-mini",
+            tokens_in=10,
+            tokens_out=10,
+            latency_ms=50,
+            cost_usd=0.0,
+            finish_reason="stop",
+            provider="openai",
+        )
+        router = AsyncMock()
+        router.generate = AsyncMock(side_effect=[concepts_resp, RuntimeError("fail")])
+
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(_perception("My name is Guipe"), _response(), MIND, CONV)
+
+        kw = mock_brain.encode_episode.call_args.kwargs
+        assert kw["summary"] is None
+
+    async def test_no_summary_without_router(self, mock_brain: AsyncMock) -> None:
+        """No router → no summary."""
+        phase = ReflectPhase(mock_brain, llm_router=None)
+        await phase.process(_perception("hi"), _response(), MIND, CONV)
+
+        kw = mock_brain.encode_episode.call_args.kwargs
+        assert kw["summary"] is None
+
+    async def test_summary_strips_quotes(self, mock_brain: AsyncMock) -> None:
+        """Summary wrapped in quotes → stripped."""
+        phase = ReflectPhase(mock_brain, llm_router=AsyncMock())
+        # Mock the internal _generate_summary directly
+        summary_resp = LLMResponse(
+            content='"User likes coding."',
+            model="gpt-4o-mini",
+            tokens_in=10,
+            tokens_out=10,
+            latency_ms=50,
+            cost_usd=0.0,
+            finish_reason="stop",
+            provider="openai",
+        )
+        phase._router = AsyncMock()  # type: ignore[assignment]
+        phase._router.generate = AsyncMock(return_value=summary_resp)  # type: ignore[union-attr]
+        result = await phase._generate_summary("test", "ok")
+        assert result == "User likes coding."
+
+    async def test_summary_truncates_long_response(self, mock_brain: AsyncMock) -> None:
+        """Very long summary → truncated to 200 chars."""
+        phase = ReflectPhase(mock_brain, llm_router=AsyncMock())
+        long_text = "x" * 300
+        summary_resp = LLMResponse(
+            content=long_text,
+            model="gpt-4o-mini",
+            tokens_in=10,
+            tokens_out=100,
+            latency_ms=50,
+            cost_usd=0.0,
+            finish_reason="stop",
+            provider="openai",
+        )
+        phase._router = AsyncMock()  # type: ignore[assignment]
+        phase._router.generate = AsyncMock(return_value=summary_resp)  # type: ignore[union-attr]
+        result = await phase._generate_summary("test", "ok")
+        assert result is not None
+        assert len(result) == 200
+        assert result.endswith("...")

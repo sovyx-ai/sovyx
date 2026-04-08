@@ -475,6 +475,9 @@ class ReflectPhase:
             max_valence=episode_arousal,  # arousal = max |sentiment|
         )
 
+        # Generate episode summary via LLM (optional)
+        summary = await self._generate_summary(perception.content, response.content)
+
         # Encode episode — pass new concept IDs as star topology hubs
         # (each connects to top-K existing by activation)
         try:
@@ -488,6 +491,7 @@ class ReflectPhase:
                 emotional_valence=episode_valence,
                 emotional_arousal=episode_arousal,
                 concepts_mentioned=concept_ids or None,
+                summary=summary,
             )
         except Exception:
             logger.warning("episode_encoding_failed", exc_info=True)
@@ -642,6 +646,43 @@ class ReflectPhase:
 
         except Exception:
             logger.debug("relation_classification_failed", exc_info=True)
+            return None
+
+    async def _generate_summary(
+        self,
+        user_input: str,
+        assistant_response: str,
+    ) -> str | None:
+        """Generate a 1-sentence summary of the exchange via LLM.
+
+        Returns None if LLM is unavailable or fails (graceful fallback
+        to raw truncation in format_episode).
+        """
+        if not self._router:
+            return None
+
+        try:
+            prompt = (
+                "Summarize this exchange in ONE concise sentence "
+                "(max 30 words):\n"
+                f"User: {user_input[:200]}\n"
+                f"Assistant: {assistant_response[:200]}"
+            )
+            resp = await self._router.generate(
+                messages=[{"role": "user", "content": prompt}],
+                model=self._fast_model or None,
+                temperature=0.1,
+                max_tokens=64,
+            )
+            summary = resp.content.strip()
+            # Remove wrapping quotes if present
+            if summary.startswith('"') and summary.endswith('"'):
+                summary = summary[1:-1]
+            if len(summary) > 200:  # noqa: PLR2004
+                summary = summary[:197] + "..."
+            return summary if summary else None
+        except Exception:
+            logger.debug("summary_generation_failed", exc_info=True)
             return None
 
     @staticmethod

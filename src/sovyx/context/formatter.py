@@ -62,12 +62,18 @@ class ContextFormatter:
     def format_episode(self, episode: Episode) -> str:
         """Format a single episode for LLM context.
 
+        Uses episode.summary when available (dense, ~20 tokens).
+        Falls back to truncated user_input (current behavior).
+
         Format: "🕐 {time_ago}: {summary_or_truncated_input}"
         """
         time_ago = self._human_time_ago(episode.created_at)
-        text = episode.user_input
-        if len(text) > 100:  # noqa: PLR2004
-            text = text[:97] + "..."
+        if episode.summary:
+            text = episode.summary
+        else:
+            text = episode.user_input
+            if len(text) > 100:  # noqa: PLR2004
+                text = text[:97] + "..."
         return f"🕐 {time_ago}: {text}"
 
     def format_concepts_block(
