@@ -28,6 +28,7 @@ from sovyx.cognitive.reflect import (
     ReflectPhase,
     _estimate_sentiment,
     clamp_sentiment,
+    compute_episode_importance,
     get_importance,
     resolve_category,
 )
@@ -1099,3 +1100,117 @@ class TestConceptExtractionFailure:
         phase = ReflectPhase(mock_brain)
         await phase.process(_perception("My name is Test"), _response(), MIND, CONV)
         mock_brain.encode_episode.assert_called_once()
+
+
+# ── Episode importance + concepts_mentioned ───────────────────────────
+
+
+class TestEpisodeImportance:
+    """Dynamic episode importance scoring."""
+
+    def test_short_neutral_message_low_importance(self) -> None:
+        """Short message, no concepts, no emotion → low importance."""
+        imp = compute_episode_importance("hi", 0, 0.0)
+        assert imp < 0.4
+
+    def test_long_message_higher_importance(self) -> None:
+        """Longer message → higher importance."""
+        short_imp = compute_episode_importance("hi", 0, 0.0)
+        long_imp = compute_episode_importance("x" * 400, 0, 0.0)
+        assert long_imp > short_imp
+
+    def test_more_concepts_higher_importance(self) -> None:
+        """More extracted concepts → higher importance."""
+        imp_0 = compute_episode_importance("test", 0, 0.0)
+        imp_5 = compute_episode_importance("test", 5, 0.0)
+        assert imp_5 > imp_0
+
+    def test_emotional_message_higher_importance(self) -> None:
+        """High emotional valence → higher importance."""
+        neutral = compute_episode_importance("test", 1, 0.0)
+        emotional = compute_episode_importance("test", 1, 0.9)
+        assert emotional > neutral
+
+    def test_importance_always_bounded(self) -> None:
+        """Property: importance always in [0.1, 1.0]."""
+        # Minimum case
+        assert compute_episode_importance("", 0, 0.0) >= 0.1
+        # Maximum case
+        assert compute_episode_importance("x" * 10000, 100, 1.0) <= 1.0
+
+    def test_importance_capped_at_one(self) -> None:
+        """Even extreme inputs stay ≤ 1.0."""
+        imp = compute_episode_importance("x" * 5000, 20, 1.0)
+        assert imp == pytest.approx(1.0, abs=0.01)
+
+    def test_realistic_hi_message(self) -> None:
+        """'hi' → ~0.3 importance."""
+        imp = compute_episode_importance("hi", 0, 0.0)
+        assert 0.1 <= imp <= 0.4
+
+    def test_realistic_rich_message(self) -> None:
+        """Long opinionated message → ~0.8."""
+        msg = (
+            "I've been using Rust for 3 years and I absolutely love it. "
+            "It changed how I think about memory safety."
+        )
+        imp = compute_episode_importance(msg, 4, 0.8)
+        assert imp >= 0.7
+
+
+class TestConceptsMentioned:
+    """concepts_mentioned wiring from reflect to episode."""
+
+    async def test_concepts_passed_to_encode(self, mock_brain: AsyncMock) -> None:
+        """Extracted concept IDs are passed as concepts_mentioned."""
+        concepts = [
+            {
+                "name": "Python",
+                "content": "knows Python",
+                "category": "skill",
+                "sentiment": 0.3,
+            },
+        ]
+        router = _mock_llm_response(concepts)
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(_perception("test"), _response(), MIND, CONV)
+
+        kw = mock_brain.encode_episode.call_args.kwargs
+        assert kw["concepts_mentioned"] is not None
+        assert len(kw["concepts_mentioned"]) == 1
+
+    async def test_no_concepts_none_mentioned(self, mock_brain: AsyncMock) -> None:
+        """No concepts extracted → concepts_mentioned is None."""
+        phase = ReflectPhase(mock_brain)
+        await phase.process(_perception("What time is it?"), _response(), MIND, CONV)
+        kw = mock_brain.encode_episode.call_args.kwargs
+        assert kw["concepts_mentioned"] is None
+
+    async def test_importance_not_hardcoded(self, mock_brain: AsyncMock) -> None:
+        """Episode importance is dynamic, not always 0.5."""
+        concepts = [
+            {
+                "name": "Rust Expert",
+                "content": "loves Rust",
+                "category": "skill",
+                "sentiment": 0.8,
+            },
+            {
+                "name": "Memory Safety",
+                "content": "cares about memory",
+                "category": "belief",
+                "sentiment": 0.6,
+            },
+        ]
+        router = _mock_llm_response(concepts)
+        mock_brain.learn_concept = AsyncMock(side_effect=[ConceptId("c1"), ConceptId("c2")])
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        long_msg = (
+            "I love Rust because of memory safety. It completely changed how I build systems."
+        )
+        await phase.process(_perception(long_msg), _response(), MIND, CONV)
+
+        kw = mock_brain.encode_episode.call_args.kwargs
+        # Should NOT be 0.5 — dynamic scoring
+        assert kw["importance"] != pytest.approx(0.5, abs=0.01)
+        assert kw["importance"] > 0.3

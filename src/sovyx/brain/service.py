@@ -275,6 +275,7 @@ class BrainService:
         new_concept_ids: list[ConceptId] | None = None,
         emotional_valence: float = 0.0,
         emotional_arousal: float = 0.0,
+        concepts_mentioned: list[ConceptId] | None = None,
         **kwargs: object,
     ) -> EpisodeId:
         """Encode an episode + embedding + star topology Hebbian learning.
@@ -290,6 +291,8 @@ class BrainService:
                 (-1.0 to 1.0). Computed from extracted concept sentiments.
             emotional_arousal: Intensity of emotion in the exchange
                 (0.0 to 1.0). Max absolute sentiment across concepts.
+            concepts_mentioned: Concept IDs extracted from this exchange.
+                Stored on the episode for future retrieval/linking.
         """
         from sovyx.brain.models import Episode
 
@@ -301,6 +304,7 @@ class BrainService:
             importance=importance,
             emotional_valence=max(-1.0, min(1.0, emotional_valence)),
             emotional_arousal=max(-1.0, min(1.0, emotional_arousal)),
+            concepts_mentioned=concepts_mentioned or [],
         )
         episode_id = await self._episodes.create(episode)
 
