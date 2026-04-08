@@ -38,7 +38,7 @@ class TestPerformanceBudget:
         budget = PerformanceBudget(HardwareTier.PI5)
         assert budget.tier == HardwareTier.PI5
         assert budget.limits.startup_ms == 5000  # noqa: PLR2004
-        assert budget.limits.rss_mb == 600  # noqa: PLR2004
+        assert budget.limits.rss_mb == 650  # noqa: PLR2004
 
     def test_n100_tier(self) -> None:
         budget = PerformanceBudget(HardwareTier.N100)
