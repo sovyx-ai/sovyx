@@ -346,6 +346,33 @@ def get_importance(category: str) -> float:
     return _IMPORTANCE.get(category, _DEFAULT_IMPORTANCE)
 
 
+def compute_episode_importance(
+    message: str,
+    num_concepts: int,
+    max_valence: float,
+) -> float:
+    """Compute dynamic episode importance from message characteristics.
+
+    Scoring formula:
+    - Base: 0.3 + message_length / 500 (longer = more content)
+    - Concepts: +0.05 per concept (up to 6)
+    - Emotion: +0.1 * |max_valence| (emotional = memorable)
+    - Clamped to [0.1, 1.0]
+
+    Args:
+        message: The user's input message.
+        num_concepts: Number of concepts extracted from the message.
+        max_valence: Maximum absolute sentiment across concepts.
+
+    Returns:
+        Episode importance in [0.1, 1.0].
+    """
+    base = min(0.7, 0.3 + len(message) / 500)
+    concept_bonus = 0.05 * min(num_concepts, 6)
+    emotion_bonus = 0.1 * abs(max_valence)
+    return max(0.1, min(1.0, base + concept_bonus + emotion_bonus))
+
+
 def clamp_sentiment(value: float) -> float:
     """Clamp a sentiment value to [-1.0, 1.0].
 
@@ -441,6 +468,13 @@ class ReflectPhase:
             episode_valence = clamp_sentiment(sum(sentiments) / len(sentiments))
             episode_arousal = clamp_sentiment(max(abs(s) for s in sentiments))
 
+        # Dynamic episode importance based on message characteristics
+        episode_importance = compute_episode_importance(
+            message=perception.content,
+            num_concepts=len(concept_ids),
+            max_valence=episode_arousal,  # arousal = max |sentiment|
+        )
+
         # Encode episode — pass new concept IDs as star topology hubs
         # (each connects to top-K existing by activation)
         try:
@@ -449,10 +483,11 @@ class ReflectPhase:
                 conversation_id=conversation_id,
                 user_input=perception.content,
                 assistant_response=response.content,
-                importance=0.5,
+                importance=episode_importance,
                 new_concept_ids=concept_ids or None,
                 emotional_valence=episode_valence,
                 emotional_arousal=episode_arousal,
+                concepts_mentioned=concept_ids or None,
             )
         except Exception:
             logger.warning("episode_encoding_failed", exc_info=True)
