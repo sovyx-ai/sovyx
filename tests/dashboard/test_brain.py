@@ -530,16 +530,14 @@ class TestOrphanAudit:
         mock_db.get_brain_pool = MagicMock(return_value=mock_pool)
 
         # Set up RelationRepo for orphan rescue
-        from sovyx.engine.types import ConceptId
-
         relation_repo = AsyncMock()
 
-        async def get_neighbors(cid: ConceptId, limit: int = 10) -> list[tuple[ConceptId, float]]:
+        async def get_relations_for(cid: object) -> list[MagicMock]:
             if str(cid) == "c3":
-                return [(ConceptId("c1"), 0.3)]
+                return [_mock_relation("c1", "c3", 0.3)]
             return []
 
-        relation_repo.get_neighbors = AsyncMock(side_effect=get_neighbors)
+        relation_repo.get_relations_for = AsyncMock(side_effect=get_relations_for)
 
         concept_repo = AsyncMock()
         concept_repo.get_by_mind = AsyncMock(return_value=concepts)

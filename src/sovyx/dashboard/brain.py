@@ -286,16 +286,18 @@ async def _get_relations(
             for i in range(0, len(ids_list), chunk_size):
                 chunk = ids_list[i : i + chunk_size]
                 placeholders = ",".join("?" for _ in chunk)
-                # Bidirectional query (defense-in-depth) + ORDER BY weight DESC
+                # Bidirectional query (defense-in-depth)
                 cursor = await conn.execute(
                     f"SELECT source_id, target_id, relation_type, weight "  # noqa: S608  # nosec B608
                     f"FROM relations "
                     f"WHERE source_id IN ({placeholders}) "
-                    f"OR target_id IN ({placeholders}) "
-                    f"ORDER BY weight DESC",
+                    f"OR target_id IN ({placeholders}) ",
                     chunk + chunk,
                 )
                 rows.extend(await cursor.fetchall())
+
+        # Global sort by weight DESC — ensures strongest edges survive cap
+        rows.sort(key=lambda r: float(r[3]), reverse=True)
 
         seen: set[str] = set()
         links: list[dict[str, Any]] = []
@@ -387,13 +389,18 @@ async def _rescue_orphans(
         seen: set[str] = set()
 
         for orphan in orphan_ids:
-            neighbors = await repo.get_neighbors(ConceptId(orphan), limit=3)
-            for neighbor_id, weight in neighbors:
-                nid = str(neighbor_id)
-                if nid not in node_ids:
+            relations = await repo.get_relations_for(ConceptId(orphan))
+            # Sort by weight DESC, take top 3 that connect to visible nodes
+            relations.sort(key=lambda r: r.weight, reverse=True)
+            added = 0
+            for rel in relations:
+                if added >= 3:  # noqa: PLR2004
+                    break
+                src, tgt = str(rel.source_id), str(rel.target_id)
+                other = tgt if src == orphan else src
+                if other not in node_ids:
                     continue
-                src, tgt = min(orphan, nid), max(orphan, nid)
-                edge_key = f"{src}:{tgt}"
+                edge_key = f"{min(src, tgt)}:{max(src, tgt)}"
                 if edge_key in seen:
                     continue
                 seen.add(edge_key)
@@ -401,10 +408,11 @@ async def _rescue_orphans(
                     {
                         "source": src,
                         "target": tgt,
-                        "relation_type": "related_to",
-                        "weight": round(weight, 3),
+                        "relation_type": rel.relation_type.value,
+                        "weight": round(rel.weight, 3),
                     }
                 )
+                added += 1
 
         return rescued
     except Exception:  # noqa: BLE001
