@@ -22,7 +22,7 @@ uv sync --dev
 
 # Verify installation
 uv run python -m sovyx
-# → Sovyx v0.1.0
+# → Sovyx v0.5.1
 ```
 
 ### Running Checks
