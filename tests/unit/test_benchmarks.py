@@ -61,6 +61,6 @@ class TestCogLoopBenchmarks:
         not __import__("pathlib").Path("/proc/self/status").exists(),
         reason="No /proc filesystem",
     )
-    def test_rss_idle_under_512mb(self) -> None:
+    def test_rss_idle_under_budget(self) -> None:
         result = bench_rss_idle()
         assert result.get("pass") is True
