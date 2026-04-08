@@ -233,6 +233,7 @@ def status_snapshot_strategy(draw: st.DrawFn) -> StatusSnapshot:
         llm_calls_today=draw(_pos_int),
         tokens_today=draw(_pos_int),
         messages_today=draw(_pos_int),
+        cost_history=draw(st.just([])),
     )
 
 
@@ -254,6 +255,7 @@ class TestStatusSnapshotRoundtrip:
             "llm_calls_today",
             "tokens_today",
             "messages_today",
+            "cost_history",
         }
 
     @given(snap=status_snapshot_strategy())
