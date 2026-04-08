@@ -174,8 +174,8 @@ class ReflectPhase:
             except Exception:
                 logger.warning("hebbian_failed", exc_info=True)
 
-        # Encode episode — pass new concept IDs so Hebbian cap
-        # always includes them (prevents isolated island formation)
+        # Encode episode — pass new concept IDs as star topology hubs
+        # (each connects to top-K existing by activation)
         try:
             await self._brain.encode_episode(
                 mind_id=mind_id,
