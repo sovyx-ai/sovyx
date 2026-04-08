@@ -34,13 +34,34 @@ async def get_brain_graph(
         {"nodes": [...], "links": [...]} where:
         - nodes: {id, name, category, importance, confidence, access_count}
         - links: {source, target, relation_type, weight}
+
+    Connectivity guarantee: every node has ≥1 edge in the response.
+    Small graphs (<500 nodes) get a generous cap; large graphs are
+    capped at ``limit × 3`` but orphan audit ensures no islands.
     """
     nodes = await _get_concepts(registry, limit=limit)
     node_ids = {n["id"] for n in nodes}
 
-    # Cap links at 3x nodes to keep response size bounded
-    max_links = limit * 3
+    # Dynamic cap: generous for small graphs, bounded for large
+    max_links = len(node_ids) * 30 if len(node_ids) < 500 else limit * 3  # noqa: PLR2004
+
     links = await _get_relations(registry, node_ids, max_links=max_links)
+
+    # Orphan audit: find nodes with zero edges, fetch their top relations
+    linked_ids = set()
+    for link in links:
+        linked_ids.add(link["source"])
+        linked_ids.add(link["target"])
+    orphans = node_ids - linked_ids
+
+    if orphans:
+        rescue_links = await _rescue_orphans(registry, orphans, node_ids)
+        links.extend(rescue_links)
+        logger.debug(
+            "orphan_audit",
+            orphans_found=len(orphans),
+            edges_rescued=len(rescue_links),
+        )
 
     return {"nodes": nodes, "links": links}
 
@@ -259,17 +280,20 @@ async def _get_relations(
 
         ids_list = list(node_ids)
         rows: list[Any] = []
-        chunk_size = 900
+        chunk_size = 450  # halved: each ID appears in 2 placeholders
 
         async with pool.read() as conn:
             for i in range(0, len(ids_list), chunk_size):
                 chunk = ids_list[i : i + chunk_size]
                 placeholders = ",".join("?" for _ in chunk)
+                # Bidirectional query (defense-in-depth) + ORDER BY weight DESC
                 cursor = await conn.execute(
                     f"SELECT source_id, target_id, relation_type, weight "  # noqa: S608  # nosec B608
                     f"FROM relations "
-                    f"WHERE source_id IN ({placeholders})",
-                    chunk,
+                    f"WHERE source_id IN ({placeholders}) "
+                    f"OR target_id IN ({placeholders}) "
+                    f"ORDER BY weight DESC",
+                    chunk + chunk,
                 )
                 rows.extend(await cursor.fetchall())
 
@@ -280,7 +304,8 @@ async def _get_relations(
             if len(links) >= max_links:
                 break
             src, tgt = str(row[0]), str(row[1])
-            if tgt not in node_ids:
+            # Both ends must be in the visible node set
+            if src not in node_ids or tgt not in node_ids:
                 continue
             edge_key = f"{min(src, tgt)}:{max(src, tgt)}"
             if edge_key not in seen:
@@ -335,6 +360,56 @@ async def _get_relations_via_repo(
                     )
 
     return all_links
+
+
+async def _rescue_orphans(
+    registry: ServiceRegistry,
+    orphan_ids: set[str],
+    node_ids: set[str],
+) -> list[dict[str, Any]]:
+    """Fetch top-3 relations by weight for each orphan node.
+
+    Guarantees every node has ≥1 edge in the graph response.
+    Only includes edges where both endpoints are in ``node_ids``.
+    """
+    if not orphan_ids:
+        return []
+
+    try:
+        from sovyx.brain.relation_repo import RelationRepository
+        from sovyx.engine.types import ConceptId
+
+        if not registry.is_registered(RelationRepository):
+            return []
+
+        repo = await registry.resolve(RelationRepository)
+        rescued: list[dict[str, Any]] = []
+        seen: set[str] = set()
+
+        for orphan in orphan_ids:
+            neighbors = await repo.get_neighbors(ConceptId(orphan), limit=3)
+            for neighbor_id, weight in neighbors:
+                nid = str(neighbor_id)
+                if nid not in node_ids:
+                    continue
+                src, tgt = min(orphan, nid), max(orphan, nid)
+                edge_key = f"{src}:{tgt}"
+                if edge_key in seen:
+                    continue
+                seen.add(edge_key)
+                rescued.append(
+                    {
+                        "source": src,
+                        "target": tgt,
+                        "relation_type": "related_to",
+                        "weight": round(weight, 3),
+                    }
+                )
+
+        return rescued
+    except Exception:  # noqa: BLE001
+        logger.debug("orphan_rescue_failed", exc_info=True)
+        return []
 
 
 async def _get_active_mind_id(registry: ServiceRegistry) -> str:

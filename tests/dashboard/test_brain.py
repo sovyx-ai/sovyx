@@ -500,6 +500,170 @@ class TestGetRelationsViaRepo:
         assert len(result) == 1
 
 
+class TestOrphanAudit:
+    """Orphan rescue: every node gets ≥1 edge."""
+
+    @pytest.mark.asyncio()
+    async def test_orphan_gets_rescued(self) -> None:
+        """Node with zero edges in main query gets rescued via repo."""
+        concepts = [
+            _mock_concept("c1", "A"),
+            _mock_concept("c2", "B"),
+            _mock_concept("c3", "Orphan"),
+        ]
+        # Only c1-c2 edge — c3 is orphaned
+        rows = [("c1", "c2", "related_to", 0.8)]
+
+        # Set up DB path for main relations
+        mock_cursor = AsyncMock()
+        mock_cursor.fetchall = AsyncMock(return_value=rows)
+        mock_conn = AsyncMock()
+        mock_conn.execute = AsyncMock(return_value=mock_cursor)
+        mock_pool = MagicMock()
+
+        @asynccontextmanager
+        async def fake_read() -> AsyncGenerator[AsyncMock, None]:
+            yield mock_conn
+
+        mock_pool.read = fake_read
+        mock_db = MagicMock()
+        mock_db.get_brain_pool = MagicMock(return_value=mock_pool)
+
+        # Set up RelationRepo for orphan rescue
+        from sovyx.engine.types import ConceptId
+
+        relation_repo = AsyncMock()
+
+        async def get_neighbors(cid: ConceptId, limit: int = 10) -> list[tuple[ConceptId, float]]:
+            if str(cid) == "c3":
+                return [(ConceptId("c1"), 0.3)]
+            return []
+
+        relation_repo.get_neighbors = AsyncMock(side_effect=get_neighbors)
+
+        concept_repo = AsyncMock()
+        concept_repo.get_by_mind = AsyncMock(return_value=concepts)
+
+        registry = MagicMock()
+
+        def is_registered(cls: type) -> bool:
+            from sovyx.brain.concept_repo import ConceptRepository
+            from sovyx.brain.relation_repo import RelationRepository
+            from sovyx.persistence.manager import DatabaseManager
+
+            return cls in (ConceptRepository, DatabaseManager, RelationRepository)
+
+        registry.is_registered.side_effect = is_registered
+
+        async def resolve(cls: type) -> object:
+            from sovyx.brain.concept_repo import ConceptRepository
+            from sovyx.brain.relation_repo import RelationRepository
+            from sovyx.persistence.manager import DatabaseManager
+
+            if cls is ConceptRepository:
+                return concept_repo
+            if cls is DatabaseManager:
+                return mock_db
+            if cls is RelationRepository:
+                return relation_repo
+            msg = f"Unknown: {cls}"
+            raise ValueError(msg)
+
+        registry.resolve = AsyncMock(side_effect=resolve)
+
+        with patch(
+            "sovyx.dashboard.brain._get_active_mind_id",
+            new_callable=AsyncMock,
+            return_value="mind-1",
+        ):
+            result = await get_brain_graph(registry, limit=100)
+
+        # All 3 nodes should have edges
+        linked = set()
+        for link in result["links"]:
+            linked.add(link["source"])
+            linked.add(link["target"])
+        assert "c3" in linked, "Orphan c3 should be rescued"
+        assert len(result["links"]) == 2  # noqa: PLR2004  # c1-c2 + c3-c1
+
+    @pytest.mark.asyncio()
+    async def test_no_orphans_no_rescue(self) -> None:
+        """When all nodes are connected, rescue is not needed."""
+        concepts = [_mock_concept("c1", "A"), _mock_concept("c2", "B")]
+        rows = [("c1", "c2", "related_to", 0.8)]
+        registry = _make_registry_with_db(concepts, rows)
+
+        with patch(
+            "sovyx.dashboard.brain._get_active_mind_id",
+            new_callable=AsyncMock,
+            return_value="mind-1",
+        ):
+            result = await get_brain_graph(registry, limit=100)
+
+        assert len(result["links"]) == 1
+        linked = set()
+        for link in result["links"]:
+            linked.add(link["source"])
+            linked.add(link["target"])
+        assert linked == {"c1", "c2"}
+
+
+class TestDynamicCap:
+    """Dynamic max_links: generous for small, bounded for large."""
+
+    @pytest.mark.asyncio()
+    async def test_small_graph_generous_cap(self) -> None:
+        """<500 nodes → max_links = nodes × 30."""
+        concepts = [_mock_concept(f"c{i}", f"N{i}") for i in range(10)]
+        # Create many rows — should all be returned (10×30=300 cap)
+        rows = [(f"c{i}", f"c{j}", "r", 0.5) for i in range(10) for j in range(i + 1, 10)]
+        registry = _make_registry_with_db(concepts, rows)
+
+        with patch(
+            "sovyx.dashboard.brain._get_active_mind_id",
+            new_callable=AsyncMock,
+            return_value="mind-1",
+        ):
+            result = await get_brain_graph(registry, limit=200)
+
+        # C(10,2) = 45 links, all should be present (cap=300)
+        assert len(result["links"]) == 45  # noqa: PLR2004
+
+
+class TestRescueOrphansEdgeCases:
+    """Edge cases for _rescue_orphans."""
+
+    @pytest.mark.asyncio()
+    async def test_rescue_empty_orphans(self) -> None:
+        """Empty orphan set → empty result."""
+        from sovyx.dashboard.brain import _rescue_orphans
+
+        registry = MagicMock()
+        result = await _rescue_orphans(registry, set(), {"c1"})
+        assert result == []
+
+    @pytest.mark.asyncio()
+    async def test_rescue_no_relation_repo(self) -> None:
+        """RelationRepository not registered → empty result."""
+        from sovyx.dashboard.brain import _rescue_orphans
+
+        registry = MagicMock()
+        registry.is_registered.return_value = False
+        result = await _rescue_orphans(registry, {"c1"}, {"c1", "c2"})
+        assert result == []
+
+    @pytest.mark.asyncio()
+    async def test_rescue_error_returns_empty(self) -> None:
+        """Exception in rescue → graceful empty return."""
+        from sovyx.dashboard.brain import _rescue_orphans
+
+        registry = MagicMock()
+        registry.is_registered.return_value = True
+        registry.resolve = AsyncMock(side_effect=RuntimeError("boom"))
+        result = await _rescue_orphans(registry, {"c1"}, {"c1", "c2"})
+        assert result == []
+
+
 class TestGetActiveMindId:
     """Test _get_active_mind_id delegation to _shared."""
 
