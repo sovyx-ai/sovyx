@@ -10,7 +10,7 @@ for fine-grained billing dashboards (SPE-026 §7).
 from __future__ import annotations
 
 import json
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING
@@ -23,6 +23,9 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 _STATE_KEY = "cost_guard_state"
+
+# Maximum entries in the cost log ring buffer (24h at ~5min interval ≈ 288).
+_MAX_COST_LOG = 288
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,6 +82,8 @@ class CostGuard:
         self._provider_tokens: dict[str, int] = defaultdict(int)
         self._mind_tokens: dict[str, int] = defaultdict(int)
         self._total_tokens: int = 0
+        # Ring buffer: (unix_ms, cost_usd, model, cumulative_usd)
+        self._cost_log: deque[tuple[int, float, str, float]] = deque(maxlen=_MAX_COST_LOG)
 
     async def restore(self) -> None:
         """Restore spend state from engine_state (call once at startup).
@@ -128,6 +133,16 @@ class CostGuard:
                     {k: int(v) for k, v in state.get("mind_tokens", {}).items()},
                 )
                 self._total_tokens = int(state.get("total_tokens", 0))
+                # Restore cost log ring buffer
+                raw_log = state.get("cost_log", [])
+                self._cost_log = deque(
+                    (
+                        (int(e[0]), float(e[1]), str(e[2]), float(e[3]))
+                        for e in raw_log
+                        if len(e) == 4  # noqa: PLR2004
+                    ),
+                    maxlen=_MAX_COST_LOG,
+                )
                 logger.info(
                     "cost_guard_restored",
                     daily_spend=round(self._daily_spend, 4),
@@ -162,6 +177,7 @@ class CostGuard:
                 "provider_tokens": dict(self._provider_tokens),
                 "mind_tokens": dict(self._mind_tokens),
                 "total_tokens": self._total_tokens,
+                "cost_log": list(self._cost_log),
             }
         )
 
@@ -191,6 +207,7 @@ class CostGuard:
             self._provider_tokens.clear()
             self._mind_tokens.clear()
             self._total_tokens = 0
+            self._cost_log.clear()
             self._last_reset = today
             self._dirty = True
 
@@ -256,6 +273,9 @@ class CostGuard:
         if model:
             self._model_spend[model] += cost
         self._total_tokens += tokens
+        # Append to cost log ring buffer for dashboard charts
+        ts_ms = int(datetime.now(tz=UTC).timestamp() * 1000)
+        self._cost_log.append((ts_ms, cost, model, self._daily_spend))
         self._dirty = True
         logger.debug(
             "cost_recorded",
@@ -364,3 +384,20 @@ class CostGuard:
         """Get total daily spend for a specific model."""
         self._maybe_reset()
         return self._model_spend.get(model, 0.0)
+
+    def get_cost_history(self) -> list[dict[str, object]]:
+        """Return the cost log as a list of dicts for the dashboard.
+
+        Each entry: ``{"time": unix_ms, "cost": usd, "model": str, "cumulative": usd}``.
+        Ordered chronologically (oldest first).
+        """
+        self._maybe_reset()
+        return [
+            {
+                "time": ts_ms,
+                "cost": round(cost, 6),
+                "model": model,
+                "cumulative": round(cumulative, 6),
+            }
+            for ts_ms, cost, model, cumulative in self._cost_log
+        ]

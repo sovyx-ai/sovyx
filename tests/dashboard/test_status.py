@@ -281,3 +281,51 @@ class TestStatusCollector:
         snap = await collector.collect()
         assert snap.uptime_seconds >= 0
         assert snap.uptime_seconds < 5  # Should be very small
+
+
+class TestCostHistory:
+    """StatusCollector.cost_history integration."""
+
+    @pytest.mark.asyncio()
+    async def test_cost_history_in_snapshot(self) -> None:
+        """StatusSnapshot includes cost_history when CostGuard available."""
+        from sovyx.llm.cost import CostGuard
+
+        guard = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        await guard.record(0.01, "gpt-4o", "c1", provider="openai", tokens=100)
+
+        registry = MagicMock()
+        registry.is_registered.side_effect = lambda t: t is CostGuard
+        registry.resolve = AsyncMock(return_value=guard)
+
+        collector = StatusCollector(registry)
+        snap = await collector.collect()
+        d = snap.to_dict()
+
+        assert "cost_history" in d
+        assert len(d["cost_history"]) == 1
+        assert d["cost_history"][0]["model"] == "gpt-4o"
+
+    @pytest.mark.asyncio()
+    async def test_cost_history_empty_when_no_guard(self) -> None:
+        """cost_history is empty list when CostGuard not registered."""
+        registry = MagicMock()
+        registry.is_registered.return_value = False
+
+        collector = StatusCollector(registry)
+        snap = await collector.collect()
+        assert snap.cost_history == []
+        assert snap.to_dict()["cost_history"] == []
+
+    @pytest.mark.asyncio()
+    async def test_cost_history_error_returns_empty(self) -> None:
+        """cost_history gracefully returns [] on resolve error."""
+        from sovyx.llm.cost import CostGuard
+
+        registry = MagicMock()
+        registry.is_registered.side_effect = lambda t: t is CostGuard
+        registry.resolve = AsyncMock(side_effect=RuntimeError("broken"))
+
+        collector = StatusCollector(registry)
+        snap = await collector.collect()
+        assert snap.cost_history == []

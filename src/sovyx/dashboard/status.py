@@ -7,7 +7,7 @@ Uses the ServiceRegistry to resolve services lazily.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from sovyx.observability.logging import get_logger
@@ -32,6 +32,7 @@ class StatusSnapshot:
     llm_calls_today: int
     tokens_today: int
     messages_today: int
+    cost_history: list[dict[str, object]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to JSON-compatible dict."""
@@ -46,6 +47,7 @@ class StatusSnapshot:
             "llm_calls_today": self.llm_calls_today,
             "tokens_today": self.tokens_today,
             "messages_today": self.messages_today,
+            "cost_history": self.cost_history,
         }
 
 
@@ -141,6 +143,7 @@ class StatusCollector:
             llm_calls_today=calls,
             tokens_today=tokens,
             messages_today=msgs,
+            cost_history=await self._get_cost_history(),
         )
 
     async def _get_memory_stats(self, mind_id_str: str) -> tuple[int, int]:
@@ -186,3 +189,15 @@ class StatusCollector:
         from sovyx.dashboard._shared import get_active_mind_id
 
         return await get_active_mind_id(self._registry)
+
+    async def _get_cost_history(self) -> list[dict[str, object]]:
+        """Get cost log from CostGuard if available."""
+        try:
+            from sovyx.llm.cost import CostGuard
+
+            if self._registry.is_registered(CostGuard):
+                guard = await self._registry.resolve(CostGuard)
+                return guard.get_cost_history()
+        except Exception:  # noqa: BLE001
+            logger.debug("status_cost_history_failed")
+        return []

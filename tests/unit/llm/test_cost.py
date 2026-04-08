@@ -468,3 +468,68 @@ class TestCostBreakdownDataclass:
         assert bd.by_model == {}
         assert bd.tokens_by_provider == {}
         assert bd.tokens_by_mind == {}
+
+
+class TestCostHistory:
+    """Cost log ring buffer for dashboard charts."""
+
+    async def test_empty_history(self) -> None:
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        assert g.get_cost_history() == []
+
+    async def test_record_populates_history(self) -> None:
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        await g.record(0.01, "gpt-4o", "c1", provider="openai", tokens=100)
+        history = g.get_cost_history()
+        assert len(history) == 1
+        entry = history[0]
+        assert entry["cost"] == 0.01
+        assert entry["model"] == "gpt-4o"
+        assert entry["cumulative"] == 0.01
+        assert isinstance(entry["time"], int)
+        assert entry["time"] > 0
+
+    async def test_cumulative_grows(self) -> None:
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        await g.record(0.01, "gpt-4o", "c1", provider="openai", tokens=100)
+        await g.record(0.02, "gpt-4o", "c1", provider="openai", tokens=200)
+        await g.record(0.03, "claude", "c1", provider="anthropic", tokens=150)
+        history = g.get_cost_history()
+        assert len(history) == 3  # noqa: PLR2004
+        assert history[0]["cumulative"] == 0.01
+        assert history[1]["cumulative"] == 0.03
+        assert history[2]["cumulative"] == 0.06
+
+    async def test_ring_buffer_max_size(self) -> None:
+        from sovyx.llm.cost import _MAX_COST_LOG
+
+        g = CostGuard(daily_budget=1000.0, per_conversation_budget=1000.0)
+        for i in range(_MAX_COST_LOG + 50):
+            await g.record(0.001, f"m{i}", "c1")
+        history = g.get_cost_history()
+        assert len(history) == _MAX_COST_LOG
+        # Oldest entries evicted — first entry model should be "m50"
+        assert history[0]["model"] == "m50"
+
+    async def test_daily_reset_clears_history(self) -> None:
+        from datetime import date as datemod
+        from unittest.mock import patch
+
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        await g.record(0.01, "gpt-4o", "c1")
+        assert len(g.get_cost_history()) == 1
+
+        # Simulate next day
+        tomorrow = datemod(2099, 1, 2)
+        with patch("sovyx.llm.cost.datetime") as mock_dt:
+            mock_dt.now.return_value = type("DT", (), {"date": lambda self: tomorrow})()
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            # Force reset by accessing
+            history = g.get_cost_history()
+            assert len(history) == 0
+
+    async def test_history_entries_have_correct_structure(self) -> None:
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        await g.record(0.005, "claude-sonnet-4-20250514", "c1", provider="anthropic", tokens=500)
+        entry = g.get_cost_history()[0]
+        assert set(entry.keys()) == {"time", "cost", "model", "cumulative"}

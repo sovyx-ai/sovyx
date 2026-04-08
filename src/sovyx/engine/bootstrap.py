@@ -254,6 +254,7 @@ async def bootstrap(
                 system_pool=db_manager.get_system_pool(),
             )
             await cost_guard.restore()
+            registry.register_instance(CostGuard, cost_guard)
             router = LLMRouter(
                 providers=providers,
                 cost_guard=cost_guard,
