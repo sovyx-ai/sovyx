@@ -59,7 +59,7 @@ export function WelcomeBanner() {
     >
       <div className="mb-6">
         <h2 className="text-xl font-bold text-[var(--svx-color-text-primary)]">
-          {t("welcome.title", { defaultValue: "Welcome to Sovyx! 🧠" })}
+          {t("welcome.title", { defaultValue: "Welcome to Sovyx" })}
         </h2>
         <p className="mt-1 text-sm text-[var(--svx-color-text-secondary)]">
           {t("welcome.subtitle", {

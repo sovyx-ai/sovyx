@@ -139,8 +139,9 @@ async def bootstrap(
             await db_manager.initialize_mind_databases(mind_id)
             brain_pool = db_manager.get_brain_pool(mind_id)
 
-            # Brain components
+            # Brain components — preload embedding model on startup
             embedding = EmbeddingEngine()
+            await embedding.ensure_loaded()
             concept_repo = ConceptRepository(brain_pool, embedding)
             episode_repo = EpisodeRepository(brain_pool, embedding)
             relation_repo = RelationRepository(brain_pool)
