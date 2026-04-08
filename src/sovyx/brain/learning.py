@@ -48,6 +48,8 @@ class HebbianLearning:
         self,
         concept_ids: list[ConceptId],
         activations: dict[ConceptId, float] | None = None,
+        *,
+        priority_ids: list[ConceptId] | None = None,
     ) -> int:
         """Strengthen relations between all pairs of provided concepts.
 
@@ -56,6 +58,9 @@ class HebbianLearning:
         Args:
             concept_ids: Concepts that co-occurred.
             activations: Optional activation levels per concept.
+            priority_ids: Concepts that MUST be included even when capping
+                (e.g. newly learned concepts from this turn). Prevents
+                island formation in the knowledge graph.
 
         Returns:
             Number of relations strengthened or created.
@@ -66,17 +71,27 @@ class HebbianLearning:
         # Cap to top-K by activation to bound O(n²) pair generation.
         # 20 concepts → 190 pairs (max ~570 DB ops). Acceptable in background.
         if len(concept_ids) > _MAX_HEBBIAN_CONCEPTS:
+            priority_set = set(priority_ids or [])
             if activations:
-                concept_ids = sorted(
-                    concept_ids,
+                # Split into priority (must-include) and rest
+                rest = [c for c in concept_ids if c not in priority_set]
+                rest_sorted = sorted(
+                    rest,
                     key=lambda cid: activations.get(cid, 0.0),
                     reverse=True,
-                )[:_MAX_HEBBIAN_CONCEPTS]
+                )
+                # Priority first, fill remaining slots with top-activated
+                slots = max(0, _MAX_HEBBIAN_CONCEPTS - len(priority_set))
+                concept_ids = list(priority_set) + rest_sorted[:slots]
             else:
-                concept_ids = concept_ids[:_MAX_HEBBIAN_CONCEPTS]
+                # Without activations, priority first, then fill
+                rest = [c for c in concept_ids if c not in priority_set]
+                slots = max(0, _MAX_HEBBIAN_CONCEPTS - len(priority_set))
+                concept_ids = list(priority_set) + rest[:slots]
             logger.debug(
                 "hebbian_concepts_capped",
                 capped_to=_MAX_HEBBIAN_CONCEPTS,
+                priority_kept=len(priority_set),
             )
 
         count = 0

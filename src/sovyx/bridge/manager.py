@@ -153,6 +153,11 @@ class BridgeManager:
             1,
             {"channel": message.channel_type.value},
         )
+
+        # Update dashboard counters (queryable, non-OTel)
+        from sovyx.dashboard.status import get_counters
+
+        get_counters().record_message()
         try:
             # 1. Resolve person
             person_id = await self._resolver.resolve(

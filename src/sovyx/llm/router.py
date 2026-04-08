@@ -363,6 +363,14 @@ class LLMRouter:
                         response.cost_usd, response.model, conversation_id
                     )
 
+                    # Update dashboard counters (non-OTel, queryable)
+                    from sovyx.dashboard.status import get_counters
+
+                    get_counters().record_llm_call(
+                        response.cost_usd,
+                        response.tokens_in + response.tokens_out,
+                    )
+
                     # Emit event
                     await self._events.emit(
                         ThinkCompleted(

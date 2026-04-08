@@ -235,11 +235,18 @@ class BrainService:
         user_input: str,
         assistant_response: str,
         importance: float = 0.5,
+        *,
+        new_concept_ids: list[ConceptId] | None = None,
         **kwargs: object,
     ) -> EpisodeId:
         """Encode an episode + embedding + Hebbian learning.
 
         Strengthens connections between concepts mentioned in working memory.
+
+        Args:
+            new_concept_ids: Concepts learned this turn — guaranteed inclusion
+                in Hebbian pairing even when the concept count exceeds the cap.
+                Prevents newly learned concepts from becoming isolated islands.
         """
         from sovyx.brain.models import Episode
 
@@ -257,7 +264,11 @@ class BrainService:
         if len(active) >= 2:  # noqa: PLR2004
             concept_ids = [cid for cid, _ in active]
             activations = dict(active)
-            await self._hebbian.strengthen(concept_ids, activations)
+            await self._hebbian.strengthen(
+                concept_ids,
+                activations,
+                priority_ids=new_concept_ids,
+            )
 
         # Record metrics
         get_metrics().episodes_encoded.add(

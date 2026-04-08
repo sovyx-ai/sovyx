@@ -670,6 +670,9 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
             )
 
         from sovyx.dashboard.chat import handle_chat_message
+        from sovyx.dashboard.status import get_counters
+
+        get_counters().record_message()
 
         try:
             result = await handle_chat_message(
