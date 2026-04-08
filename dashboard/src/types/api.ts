@@ -179,7 +179,8 @@ export type WsEventType =
   | "EpisodeEncoded"
   | "ConsolidationCompleted"
   | "ChannelConnected"
-  | "ChannelDisconnected";
+  | "ChannelDisconnected"
+  | "ChatMessage";
 
 export interface WsEvent<T = Record<string, unknown>> {
   type: WsEventType;
