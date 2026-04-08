@@ -117,6 +117,19 @@ class TestFormatEpisode:
         assert len(result) < 200  # noqa: PLR2004
         assert "..." in result
 
+    def test_summary_used_when_available(self, formatter: ContextFormatter) -> None:
+        ep = _episode("Very long user input that would be truncated")
+        ep.summary = "User asked a question about coding."
+        result = formatter.format_episode(ep)
+        assert "User asked a question about coding." in result
+        assert "Very long user input" not in result
+
+    def test_fallback_to_input_without_summary(self, formatter: ContextFormatter) -> None:
+        ep = _episode("Hello there")
+        ep.summary = None
+        result = formatter.format_episode(ep)
+        assert "Hello there" in result
+
 
 class TestFormatConceptsBlock:
     """Concepts block formatting."""
