@@ -83,7 +83,7 @@ async def handle_chat_message(
 
     # v0.5: single-mind — get mind_id from BridgeManager
     bridge = await registry.resolve(BridgeManager)
-    mind_id = bridge._mind_id  # noqa: SLF001
+    mind_id = bridge.mind_id
 
     # ── Resolve person (auto-create on first contact) ──
     person_id = await person_resolver.resolve(

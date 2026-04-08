@@ -48,7 +48,7 @@ def _make_mock_registry(
     mock_gate.submit = AsyncMock(return_value=action_result)
 
     mock_bridge = MagicMock()
-    mock_bridge._mind_id = "aria"  # noqa: SLF001
+    mock_bridge.mind_id = "aria"
 
     async def _resolve(interface: type) -> object:
         from sovyx.bridge.identity import PersonResolver
