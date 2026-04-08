@@ -198,6 +198,7 @@ async def _query_concepts(
                 "type": "concepts_learned",
                 "timestamp": group_timestamps[minute_key],
                 "data": {
+                    "names": [c["name"] for c in concepts],
                     "concepts": [{"name": c["name"], "category": c["category"]} for c in concepts],
                     "count": len(concepts),
                 },
