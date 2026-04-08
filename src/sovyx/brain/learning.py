@@ -176,34 +176,35 @@ class HebbianLearning:
         Does NOT create new relations — prevents spurious edges between
         unrelated old concepts that happen to both be in working memory.
 
+        Uses ``get_relations_for`` to fetch actual existing relations
+        instead of ``get_or_create`` to guarantee no spurious creation.
+
         Returns:
             Number of relations reinforced.
         """
         count = 0
-        existing_set = set(existing_ids)
-        checked: set[tuple[str, str]] = set()
+        existing_set = set(str(eid) for eid in existing_ids)
+        checked: set[str] = set()
 
         for cid in existing_ids:
-            neighbors = await self._relations.get_neighbors(cid, limit=50)
-            for neighbor_id, _weight in neighbors:
-                if neighbor_id not in existing_set:
+            relations = await self._relations.get_relations_for(cid)
+            for relation in relations:
+                # Both ends must be in existing set
+                src, tgt = str(relation.source_id), str(relation.target_id)
+                if src not in existing_set or tgt not in existing_set:
                     continue
-                # Canonical pair key to avoid double-processing
-                pair = (
-                    min(str(cid), str(neighbor_id)),
-                    max(str(cid), str(neighbor_id)),
-                )
-                if pair in checked:
+                # Deduplicate by relation ID
+                rid = str(relation.id)
+                if rid in checked:
                     continue
-                checked.add(pair)
+                checked.add(rid)
 
                 co_activation = 1.0
                 if activations:
-                    act_a = activations.get(cid, 1.0)
-                    act_b = activations.get(neighbor_id, 1.0)
+                    act_a = activations.get(relation.source_id, 1.0)
+                    act_b = activations.get(relation.target_id, 1.0)
                     co_activation = min(act_a, act_b)
 
-                relation = await self._relations.get_or_create(cid, neighbor_id)
                 old_weight = relation.weight
                 delta = self._learning_rate * (1.0 - old_weight) * co_activation
                 new_weight = min(1.0, old_weight + delta)
