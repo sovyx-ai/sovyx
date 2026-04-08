@@ -31,6 +31,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.status import HTTP_401_UNAUTHORIZED, HTTP_503_SERVICE_UNAVAILABLE
 
+from sovyx import __version__
 from sovyx.dashboard import STATIC_DIR
 from sovyx.observability.logging import get_logger
 
@@ -174,7 +175,7 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
 
     app = FastAPI(
         title="Sovyx Dashboard",
-        version="0.1.0",
+        version=__version__,
         docs_url="/api/docs",
         redoc_url=None,
     )
@@ -647,8 +648,12 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
                 user_name=user_name,
                 conversation_id=conversation_id,
             )
-        except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=422)
+        except ValueError:
+            logger.warning("dashboard_chat_validation_failed", exc_info=True)
+            return JSONResponse(
+                {"error": "Invalid message format."},
+                status_code=422,
+            )
         except Exception:
             logger.exception("dashboard_chat_failed")
             return JSONResponse(

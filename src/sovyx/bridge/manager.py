@@ -116,6 +116,11 @@ class BridgeManager:
         self._adapters: dict[ChannelType, ChannelAdapter] = {}
         self._conv_locks: _LRULockDict[ConversationId] = _LRULockDict(maxsize=500)
 
+    @property
+    def mind_id(self) -> str:
+        """Public accessor for the active mind identifier."""
+        return self._mind_id
+
     def register_channel(self, adapter: ChannelAdapter) -> None:
         """Register a channel adapter."""
         self._adapters[adapter.channel_type] = adapter

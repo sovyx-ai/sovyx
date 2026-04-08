@@ -116,7 +116,7 @@ def _make_mock_registry(
 
     # BridgeManager mock (for mind_id access)
     mock_bridge = MagicMock()
-    mock_bridge._mind_id = "aria"  # noqa: SLF001
+    mock_bridge.mind_id = "aria"
 
     # Wire resolve() to return the right mock per type
     async def _resolve(interface: type) -> object:
