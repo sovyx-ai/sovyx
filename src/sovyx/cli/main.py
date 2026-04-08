@@ -118,21 +118,14 @@ def init(
     else:
         console.print(f"[dim]• {system_yaml} already exists[/dim]")
 
-    # Create mind.yaml
+    # Create mind.yaml using full config (auto-detects LLM provider from env)
     mind_dir = data_dir / name.lower()
     mind_dir.mkdir(parents=True, exist_ok=True)
     mind_yaml = mind_dir / "mind.yaml"
     if not mind_yaml.exists():
-        mind_yaml.write_text(
-            f"name: {name}\n"
-            f"language: en\n"
-            f"personality:\n"
-            f"  openness: 0.7\n"
-            f"  conscientiousness: 0.8\n"
-            f"  extraversion: 0.5\n"
-            f"  agreeableness: 0.7\n"
-            f"  neuroticism: 0.3\n"
-        )
+        from sovyx.mind.config import create_default_mind_config
+
+        create_default_mind_config(name, mind_dir)
         console.print(f"[green]✓[/green] Created mind '{name}' at {mind_yaml}")
     else:
         console.print(f"[dim]• Mind '{name}' already exists[/dim]")
