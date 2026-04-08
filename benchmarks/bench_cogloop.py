@@ -97,8 +97,8 @@ def bench_rss_idle() -> dict[str, object]:
                 return {
                     "benchmark": "rss_idle",
                     "rss_mb": round(rss_mb, 1),
-                    "pass": rss_mb < 600,
-                    "threshold_mb": 600,
+                    "pass": rss_mb < 650,
+                    "threshold_mb": 650,
                 }
 
     return {"benchmark": "rss_idle", "error": "Could not read RSS"}

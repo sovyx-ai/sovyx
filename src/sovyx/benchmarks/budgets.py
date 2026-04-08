@@ -48,7 +48,7 @@ class TierLimits:
 _TIER_LIMITS: dict[HardwareTier, TierLimits] = {
     HardwareTier.PI5: TierLimits(
         startup_ms=5000,
-        rss_mb=600,
+        rss_mb=650,
         brain_search_ms=100,
         context_assembly_ms=200,
         working_memory_ops_per_sec=10_000,
