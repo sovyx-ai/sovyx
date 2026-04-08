@@ -63,7 +63,7 @@
   },
   "auth": {
     "description": "Paste your dashboard token to continue. Find it by running:",
-    "command": "cat ~/.sovyx/token",
+    "command": "sovyx token",
     "placeholder": "Paste token here…",
     "connect": "Connect",
     "connected": "Connected"
