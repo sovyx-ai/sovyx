@@ -8,7 +8,7 @@ Separate from settings.py which handles EngineConfig (log level, etc.).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import yaml
 
@@ -171,7 +171,7 @@ def _apply_personality(
         tone = str(updates["tone"]).lower()
         if tone in valid_tones and tone != p.tone:
             old = p.tone
-            p.tone = tone  # type: ignore[assignment]
+            p.tone = cast("Any", tone)
             changes["personality.tone"] = f"{old} → {tone}"
 
     # Float traits [0.0, 1.0]
@@ -240,7 +240,7 @@ def _apply_safety(
         cf = str(updates["content_filter"]).lower()
         if cf in valid_filters and cf != s.content_filter:
             old_cf = s.content_filter
-            s.content_filter = cf  # type: ignore[assignment]  # Literal narrowing
+            s.content_filter = cast("Any", cf)
             changes["safety.content_filter"] = f"{old_cf} → {cf}"
 
 

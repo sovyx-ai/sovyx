@@ -283,6 +283,11 @@ class MigrationRunner:
         self._version = schema_version
         self._backup_dir = backup_dir or Path.home() / ".sovyx" / "backups"
 
+    @property
+    def schema_version(self) -> SchemaVersion:
+        """Public accessor for the schema version tracker."""
+        return self._version
+
     # ── public API ──────────────────────────────────────────────
 
     async def run(
@@ -456,7 +461,7 @@ class MigrationRunner:
         Closes the pool, copies the backup over the original, then
         re-initializes.
         """
-        db_path = self._pool._db_path  # noqa: SLF001
+        db_path = self._pool.db_path
         await self._pool.close()
         shutil.copy2(backup_path, db_path)
         await self._pool.initialize()

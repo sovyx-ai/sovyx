@@ -443,7 +443,7 @@ class BlueGreenUpgrader:
         from sovyx.upgrade.schema import SemVer
 
         SemVer.parse(current_version)  # validate format
-        schema_version = self._migration_runner._version  # noqa: SLF001
+        schema_version = self._migration_runner.schema_version
         db_version = await schema_version.get_current()
         pending = schema_version.get_pending(db_version, self._migrations)
 

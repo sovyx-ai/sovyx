@@ -71,6 +71,11 @@ class DatabasePool:
         self._initialized = False
         self._has_sqlite_vec = False
 
+    @property
+    def db_path(self) -> Path:
+        """Public accessor for the database file path."""
+        return self._db_path
+
     async def initialize(self) -> None:
         """Open connections, apply pragmas, load extensions.
 

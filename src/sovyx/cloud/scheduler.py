@@ -483,9 +483,9 @@ class BackupScheduler:
 
             # Delete pruned backups via R2
             keys_to_delete = [b.r2_key for b in result.prune]
-            deleted_count = self._service._r2.delete_objects(  # noqa: SLF001
+            deleted_count = self._service.r2.delete_objects(
                 keys_to_delete,
-                self._service._config.r2_bucket,  # noqa: SLF001
+                self._service.backup_config.r2_bucket,
             )
 
             from sovyx.cloud.backup import PruneResult

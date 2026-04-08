@@ -183,7 +183,7 @@ def _pool(tmp_path: Path) -> MagicMock:
     db_path = tmp_path / "test.db"
 
     pool = MagicMock()
-    pool._db_path = db_path  # noqa: SLF001
+    pool.db_path = db_path
 
     # We'll store a real connection reference for consistent reads/writes
     _conn_holder: dict[str, aiosqlite.Connection | None] = {"conn": None}

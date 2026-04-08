@@ -184,7 +184,8 @@ class Boto3R2Client:
     def download_bytes(self, key: str, bucket: str) -> bytes:
         """Download bytes from R2."""
         response = self._client.get_object(Bucket=bucket, Key=key)
-        return response["Body"].read()  # type: ignore[no-any-return]
+        data: bytes = response["Body"].read()
+        return data
 
     def list_objects(self, prefix: str, bucket: str) -> list[dict[str, Any]]:
         """List objects under prefix."""
@@ -301,6 +302,16 @@ class BackupService:
         self._password = password
         self._config = config
         self._prefix = f"{config.user_id}/{config.mind_id}"
+
+    @property
+    def r2(self) -> R2Client:
+        """Public accessor for the R2 storage client."""
+        return self._r2
+
+    @property
+    def backup_config(self) -> BackupConfig:
+        """Public accessor for the backup configuration."""
+        return self._config
 
     def create_backup(self, *, tmp_dir: Path | None = None) -> BackupMetadata:
         """Create an encrypted backup and upload to R2.

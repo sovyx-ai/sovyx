@@ -42,7 +42,7 @@ class WorkingMemory:
         else:
             # Evict weakest if at capacity
             if len(self._activations) >= self._capacity:
-                weakest = min(self._activations, key=self._activations.get)  # type: ignore[arg-type]
+                weakest = min(self._activations, key=lambda k: self._activations.get(k, 0.0))
                 del self._activations[weakest]
             self._activations[key] = activation
 

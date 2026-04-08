@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from sovyx.engine.errors import SearchError
 from sovyx.engine.types import ConceptCategory, ConceptId, MindId
@@ -271,7 +271,7 @@ class ConceptRepository:
         """Convert a database row to a Concept model."""
         from sovyx.brain.models import Concept
 
-        r: tuple[Any, ...] = tuple(row)  # type: ignore[arg-type]
+        r = tuple(row)  # type: ignore[arg-type,var-annotated]  # aiosqlite.Row → tuple
         last_accessed = parse_db_datetime(r[8])
 
         return Concept(
