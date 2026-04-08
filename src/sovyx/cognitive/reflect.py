@@ -174,7 +174,8 @@ class ReflectPhase:
             except Exception:
                 logger.warning("hebbian_failed", exc_info=True)
 
-        # Encode episode
+        # Encode episode — pass new concept IDs so Hebbian cap
+        # always includes them (prevents isolated island formation)
         try:
             await self._brain.encode_episode(
                 mind_id=mind_id,
@@ -182,6 +183,7 @@ class ReflectPhase:
                 user_input=perception.content,
                 assistant_response=response.content,
                 importance=0.5,
+                new_concept_ids=concept_ids or None,
             )
         except Exception:
             logger.warning("episode_encoding_failed", exc_info=True)
