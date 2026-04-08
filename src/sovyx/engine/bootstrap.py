@@ -209,17 +209,44 @@ async def bootstrap(
             registry.register_instance(ContextAssembler, assembler)
 
             # LLM Providers + Router
-            providers: list[AnthropicProvider | OpenAIProvider | OllamaProvider] = []
+            from sovyx.llm.providers.google import GoogleProvider
+
+            providers: list[
+                AnthropicProvider | OpenAIProvider | GoogleProvider | OllamaProvider
+            ] = []
 
             anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
             if anthropic_key:
                 providers.append(AnthropicProvider(api_key=anthropic_key))
+                logger.info("llm_provider_registered", provider="anthropic")
 
             openai_key = os.environ.get("OPENAI_API_KEY", "")
             if openai_key:
                 providers.append(OpenAIProvider(api_key=openai_key))
+                logger.info("llm_provider_registered", provider="openai")
+
+            google_key = os.environ.get("GOOGLE_API_KEY", "")
+            if google_key:
+                providers.append(GoogleProvider(api_key=google_key))
+                logger.info("llm_provider_registered", provider="google")
 
             providers.append(OllamaProvider())
+
+            # Validate: at least one cloud provider or explicit Ollama setup
+            cloud_providers = [p for p in providers if p.name != "ollama"]
+            if not cloud_providers:
+                logger.warning(
+                    "no_api_keys_detected",
+                    hint="Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY. "
+                    "Falling back to Ollama (requires local model).",
+                )
+
+            logger.info(
+                "llm_router_config",
+                default_model=mind_config.llm.default_model,
+                default_provider=mind_config.llm.default_provider,
+                providers=[p.name for p in providers if p.is_available],
+            )
 
             cost_guard = CostGuard(
                 daily_budget=mind_config.llm.budget_daily_usd,
