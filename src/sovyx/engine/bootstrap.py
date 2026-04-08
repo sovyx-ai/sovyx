@@ -272,7 +272,11 @@ async def bootstrap(
                 mind_config=mind_config,
             )
             act = ActPhase(tool_executor=ToolExecutor(), llm_router=router)
-            reflect = ReflectPhase(brain_service=brain_service)
+            reflect = ReflectPhase(
+                brain_service=brain_service,
+                llm_router=router,
+                fast_model=mind_config.llm.fast_model,
+            )
 
             cog_loop = CognitiveLoop(
                 state_machine=state_machine,

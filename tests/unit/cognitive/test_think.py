@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
+
+if TYPE_CHECKING:
+    import pytest
 
 from sovyx.cognitive.perceive import Perception
 from sovyx.cognitive.think import ThinkPhase
@@ -108,20 +112,24 @@ class TestThinkPhase:
 class TestModelSelection:
     """Model routing by complexity."""
 
-    def test_low_complexity_fast_model(self) -> None:
+    def test_low_complexity_fast_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
         phase = ThinkPhase(_mock_assembler(), _mock_router(), MindConfig(name="Aria"))
         assert phase._select_model(0.1) == "claude-3-5-haiku-20241022"
 
-    def test_high_complexity_default_model(self) -> None:
+    def test_high_complexity_default_model(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
         phase = ThinkPhase(_mock_assembler(), _mock_router(), MindConfig(name="Aria"))
         assert phase._select_model(0.5) == "claude-sonnet-4-20250514"
 
-    def test_boundary_complexity(self) -> None:
+    def test_boundary_complexity(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
         phase = ThinkPhase(_mock_assembler(), _mock_router(), MindConfig(name="Aria"))
         assert phase._select_model(0.3) == "claude-sonnet-4-20250514"
         assert phase._select_model(0.29) == "claude-3-5-haiku-20241022"
 
-    async def test_model_passed_to_router(self) -> None:
+    async def test_model_passed_to_router(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
         router = _mock_router()
         phase = ThinkPhase(_mock_assembler(), router, MindConfig(name="Aria"))
         await phase.process(_perception(complexity=0.1), MIND, [])
