@@ -86,6 +86,48 @@ _EXTRACTION_PROMPT = (
     "User message: {message}"
 )
 
+# ── Relation classification prompt ──────────────────────────────────────
+# Classifies the relationship between concept pairs extracted from
+# the same message. Only used for within-turn pairs (≤C(n,2) where n~4-5).
+
+_RELATION_PROMPT = (
+    "Given these concepts extracted from a user message, "
+    "classify the relationship between each pair.\n"
+    "Return a JSON array of objects with:\n"
+    '- "a": name of first concept\n'
+    '- "b": name of second concept\n'
+    '- "relation": one of the types below\n'
+    "\n"
+    "Relation types:\n"
+    '- "related_to": general association (default)\n'
+    '- "part_of": A is a component/subset of B\n'
+    '- "causes": A leads to or causes B\n'
+    '- "contradicts": A conflicts with or opposes B\n'
+    '- "example_of": A is an instance/example of B\n'
+    '- "temporal": A happened before/after/during B\n'
+    '- "emotional": A has an emotional connection to B\n'
+    "\n"
+    "Rules:\n"
+    "- Pick the MOST specific relation, not related_to\n"
+    "- If unsure, use related_to\n"
+    "- Return ONLY the JSON array\n"
+    "\n"
+    "Concepts: {concepts}\n"
+    "User message: {message}"
+)
+
+_VALID_RELATIONS = frozenset(
+    {
+        "related_to",
+        "part_of",
+        "causes",
+        "contradicts",
+        "example_of",
+        "temporal",
+        "emotional",
+    }
+)
+
 # ── Category mapping ───────────────────────────────────────────────────
 # Maps LLM output strings → ConceptCategory enum values.
 # Every ConceptCategory MUST have ≥1 key mapping to it.
@@ -381,9 +423,14 @@ class ReflectPhase:
                 )
 
         # Hebbian learning between co-mentioned concepts
+        # Classify relation types via LLM for within-turn pairs
+        relation_types: dict[tuple[str, str], str] | None = None
+        if len(concept_ids) >= 2 and self._router:  # noqa: PLR2004
+            relation_types = await self._classify_relations(extracted, concept_ids)
+
         if len(concept_ids) >= 2:  # noqa: PLR2004
             try:
-                await self._brain.strengthen_connection(concept_ids)
+                await self._brain.strengthen_connection(concept_ids, relation_types=relation_types)
             except Exception:
                 logger.warning("hebbian_failed", exc_info=True)
 
@@ -477,6 +524,89 @@ class ReflectPhase:
 
         except Exception:
             logger.debug("llm_extraction_failed_using_regex", exc_info=True)
+            return None
+
+    async def _classify_relations(
+        self,
+        extracted: list[ExtractedConcept],
+        concept_ids: list[ConceptId],
+    ) -> dict[tuple[str, str], str] | None:
+        """Classify relation types between within-turn concept pairs.
+
+        Uses a second LLM call to determine how concepts relate.
+        Only called when ≥2 concepts were extracted and LLM is available.
+
+        Args:
+            extracted: The extracted concepts (for names).
+            concept_ids: The corresponding concept IDs (parallel array).
+
+        Returns:
+            Dict mapping (canonical_id_a, canonical_id_b) → relation type
+            string, or None on failure.
+        """
+        if not self._router or len(extracted) < 2:  # noqa: PLR2004
+            return None
+
+        try:
+            # Build concept list for the prompt
+            names = [ec.name for ec in extracted[: len(concept_ids)]]
+            concepts_str = ", ".join(f'"{n}"' for n in names)
+
+            # Reconstruct the original message from first concept
+            # (we don't have it directly, so use concept names)
+            prompt = _RELATION_PROMPT.format(
+                concepts=concepts_str,
+                message=concepts_str,  # names suffice for classification
+            )
+
+            resp = await self._router.generate(
+                messages=[{"role": "user", "content": prompt}],
+                model=self._fast_model or None,
+                temperature=0.1,
+                max_tokens=512,
+            )
+
+            text = resp.content.strip()
+            if text.startswith("```"):
+                text = re.sub(r"^```(?:json)?\n?", "", text)
+                text = re.sub(r"\n?```$", "", text)
+
+            pairs_raw = json.loads(text)
+            if not isinstance(pairs_raw, list):
+                return None
+
+            # Build name → concept_id mapping
+            name_to_id: dict[str, str] = {}
+            for ec, cid in zip(extracted, concept_ids, strict=False):
+                name_to_id[ec.name.lower()] = str(cid)
+
+            result: dict[tuple[str, str], str] = {}
+            for pair in pairs_raw:
+                if not isinstance(pair, dict):
+                    continue
+                a_name = str(pair.get("a", "")).strip().lower()
+                b_name = str(pair.get("b", "")).strip().lower()
+                rel = str(pair.get("relation", "related_to")).strip().lower()
+
+                if rel not in _VALID_RELATIONS:
+                    rel = "related_to"
+
+                a_id = name_to_id.get(a_name)
+                b_id = name_to_id.get(b_name)
+                if a_id and b_id and a_id != b_id:
+                    # Canonical order
+                    key = (min(a_id, b_id), max(a_id, b_id))
+                    result[key] = rel
+
+            logger.debug(
+                "llm_relation_classification",
+                pairs=len(result),
+                cost=round(resp.cost_usd, 6),
+            )
+            return result if result else None
+
+        except Exception:
+            logger.debug("relation_classification_failed", exc_info=True)
             return None
 
     @staticmethod

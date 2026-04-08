@@ -468,3 +468,74 @@ class TestStarTopology:
 
         # Within: 0 (single new), Cross: 1×1=1, Existing: 0 (<2)
         assert count == 1
+
+
+class TestLookupRelationType:
+    """Tests for _lookup_relation_type static method."""
+
+    def test_lookup_found(self) -> None:
+        """Known pair returns the mapped RelationType."""
+        from sovyx.engine.types import ConceptId, RelationType
+
+        rt = HebbianLearning._lookup_relation_type(
+            ConceptId("a"),
+            ConceptId("b"),
+            {("a", "b"): "part_of"},
+        )
+        assert rt == RelationType.PART_OF
+
+    def test_lookup_canonical_order(self) -> None:
+        """Lookup uses canonical (min, max) key ordering."""
+        from sovyx.engine.types import ConceptId, RelationType
+
+        rt = HebbianLearning._lookup_relation_type(
+            ConceptId("z"),
+            ConceptId("a"),
+            {("a", "z"): "causes"},
+        )
+        assert rt == RelationType.CAUSES
+
+    def test_lookup_missing_returns_none(self) -> None:
+        """Missing pair returns None."""
+        from sovyx.engine.types import ConceptId
+
+        rt = HebbianLearning._lookup_relation_type(
+            ConceptId("a"),
+            ConceptId("b"),
+            {("x", "y"): "part_of"},
+        )
+        assert rt is None
+
+    def test_lookup_none_map_returns_none(self) -> None:
+        """None relation_types returns None."""
+        from sovyx.engine.types import ConceptId
+
+        rt = HebbianLearning._lookup_relation_type(
+            ConceptId("a"),
+            ConceptId("b"),
+            None,
+        )
+        assert rt is None
+
+    def test_lookup_invalid_value_returns_none(self) -> None:
+        """Invalid relation type string returns None."""
+        from sovyx.engine.types import ConceptId
+
+        rt = HebbianLearning._lookup_relation_type(
+            ConceptId("a"),
+            ConceptId("b"),
+            {("a", "b"): "INVALID"},
+        )
+        assert rt is None
+
+    def test_all_relation_types_resolvable(self) -> None:
+        """Every RelationType value resolves correctly."""
+        from sovyx.engine.types import ConceptId, RelationType
+
+        for rtype in RelationType:
+            rt = HebbianLearning._lookup_relation_type(
+                ConceptId("a"),
+                ConceptId("b"),
+                {("a", "b"): rtype.value},
+            )
+            assert rt == rtype

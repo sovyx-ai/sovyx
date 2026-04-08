@@ -321,9 +321,22 @@ class BrainService:
         )
         return episode_id
 
-    async def strengthen_connection(self, concept_ids: list[ConceptId]) -> None:
-        """Hebbian learning between co-activated concepts."""
-        await self._hebbian.strengthen(concept_ids)
+    async def strengthen_connection(
+        self,
+        concept_ids: list[ConceptId],
+        *,
+        relation_types: dict[tuple[str, str], str] | None = None,
+    ) -> None:
+        """Hebbian learning between co-activated concepts.
+
+        Args:
+            concept_ids: Concepts that co-occurred in the same turn.
+            relation_types: Optional mapping of (concept_id_a, concept_id_b)
+                to RelationType value string. Used for within-turn typed
+                relations from LLM classification. Keys use canonical
+                order (min, max) of string IDs.
+        """
+        await self._hebbian.strengthen(concept_ids, relation_types=relation_types)
 
     def decay_working_memory(self) -> None:
         """Apply decay to all concepts in working memory.

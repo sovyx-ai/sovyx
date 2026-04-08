@@ -604,6 +604,343 @@ class TestLLMExtraction:
         mock_brain.learn_concept.assert_called_once()
 
 
+# ── Relation type classification ───────────────────────────────────────
+
+
+class TestRelationClassification:
+    """LLM-based relation type classification between concept pairs."""
+
+    async def test_relation_types_passed_to_strengthen(self, mock_brain: AsyncMock) -> None:
+        """Classified relation types are passed to strengthen_connection."""
+        # First call: concept extraction
+        # Second call: relation classification
+        concepts_resp = LLMResponse(
+            content=json.dumps(
+                [
+                    {
+                        "name": "Python",
+                        "content": "knows Python",
+                        "category": "skill",
+                        "sentiment": 0.3,
+                    },
+                    {
+                        "name": "Django",
+                        "content": "uses Django",
+                        "category": "skill",
+                        "sentiment": 0.2,
+                    },
+                ]
+            ),
+            model="gpt-4o-mini",
+            tokens_in=50,
+            tokens_out=50,
+            latency_ms=100,
+            cost_usd=0.0001,
+            finish_reason="stop",
+            provider="openai",
+        )
+        relations_resp = LLMResponse(
+            content=json.dumps(
+                [
+                    {
+                        "a": "Python",
+                        "b": "Django",
+                        "relation": "part_of",
+                    },
+                ]
+            ),
+            model="gpt-4o-mini",
+            tokens_in=30,
+            tokens_out=30,
+            latency_ms=80,
+            cost_usd=0.0001,
+            finish_reason="stop",
+            provider="openai",
+        )
+        router = AsyncMock()
+        router.generate = AsyncMock(side_effect=[concepts_resp, relations_resp])
+
+        # Make learn_concept return different IDs
+        mock_brain.learn_concept = AsyncMock(side_effect=[ConceptId("c1"), ConceptId("c2")])
+
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(_perception("test"), _response(), MIND, CONV)
+
+        # strengthen_connection should be called with relation_types
+        mock_brain.strengthen_connection.assert_called_once()
+        call_kwargs = mock_brain.strengthen_connection.call_args.kwargs
+        assert call_kwargs["relation_types"] is not None
+        # The key uses canonical order (min, max) of string IDs
+        rt = call_kwargs["relation_types"]
+        key = (min("c1", "c2"), max("c1", "c2"))
+        assert rt[key] == "part_of"
+
+    async def test_relation_classification_failure_still_strengthens(
+        self, mock_brain: AsyncMock
+    ) -> None:
+        """If relation classification fails, Hebbian still runs."""
+        concepts_resp = LLMResponse(
+            content=json.dumps(
+                [
+                    {
+                        "name": "Alpha",
+                        "content": "concept Alpha",
+                        "category": "fact",
+                        "sentiment": 0.0,
+                    },
+                    {
+                        "name": "Beta",
+                        "content": "concept Beta",
+                        "category": "fact",
+                        "sentiment": 0.0,
+                    },
+                ]
+            ),
+            model="gpt-4o-mini",
+            tokens_in=50,
+            tokens_out=50,
+            latency_ms=100,
+            cost_usd=0.0001,
+            finish_reason="stop",
+            provider="openai",
+        )
+        router = AsyncMock()
+        router.generate = AsyncMock(side_effect=[concepts_resp, RuntimeError("API error")])
+        mock_brain.learn_concept = AsyncMock(side_effect=[ConceptId("c1"), ConceptId("c2")])
+
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(_perception("test"), _response(), MIND, CONV)
+
+        # strengthen_connection still called (with None relation_types)
+        mock_brain.strengthen_connection.assert_called_once()
+        call_kwargs = mock_brain.strengthen_connection.call_args.kwargs
+        assert call_kwargs["relation_types"] is None
+
+    async def test_no_classification_without_router(self, mock_brain: AsyncMock) -> None:
+        """No relation classification when LLM router is None."""
+        phase = ReflectPhase(mock_brain)
+        await phase.process(
+            _perception("My name is Guipe and I love coding"),
+            _response(),
+            MIND,
+            CONV,
+        )
+        # strengthen_connection called with None relation_types
+        call_kwargs = mock_brain.strengthen_connection.call_args.kwargs
+        assert call_kwargs["relation_types"] is None
+
+    async def test_invalid_relation_defaults_to_related(self, mock_brain: AsyncMock) -> None:
+        """Unknown relation type defaults to related_to."""
+        concepts_resp = LLMResponse(
+            content=json.dumps(
+                [
+                    {
+                        "name": "Xray",
+                        "content": "concept x",
+                        "category": "fact",
+                        "sentiment": 0.0,
+                    },
+                    {
+                        "name": "Yank",
+                        "content": "concept y",
+                        "category": "fact",
+                        "sentiment": 0.0,
+                    },
+                ]
+            ),
+            model="gpt-4o-mini",
+            tokens_in=50,
+            tokens_out=50,
+            latency_ms=100,
+            cost_usd=0.0001,
+            finish_reason="stop",
+            provider="openai",
+        )
+        relations_resp = LLMResponse(
+            content=json.dumps(
+                [
+                    {"a": "Xray", "b": "Yank", "relation": "INVALID_TYPE"},
+                ]
+            ),
+            model="gpt-4o-mini",
+            tokens_in=30,
+            tokens_out=30,
+            latency_ms=80,
+            cost_usd=0.0001,
+            finish_reason="stop",
+            provider="openai",
+        )
+        router = AsyncMock()
+        router.generate = AsyncMock(side_effect=[concepts_resp, relations_resp])
+        mock_brain.learn_concept = AsyncMock(side_effect=[ConceptId("c1"), ConceptId("c2")])
+
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(_perception("test"), _response(), MIND, CONV)
+
+        call_kwargs = mock_brain.strengthen_connection.call_args.kwargs
+        rt = call_kwargs["relation_types"]
+        key = (min("c1", "c2"), max("c1", "c2"))
+        assert rt[key] == "related_to"
+
+    async def test_all_valid_relation_types_accepted(self, mock_brain: AsyncMock) -> None:
+        """All 7 relation types are accepted."""
+        from sovyx.cognitive.reflect import _VALID_RELATIONS
+        from sovyx.engine.types import RelationType
+
+        # Every RelationType value should be in _VALID_RELATIONS
+        for rt in RelationType:
+            assert rt.value in _VALID_RELATIONS, f"RelationType.{rt.name} not in _VALID_RELATIONS"
+
+    async def test_classify_markdown_code_block(self, mock_brain: AsyncMock) -> None:
+        """Relation response wrapped in markdown code block."""
+        concepts_resp = LLMResponse(
+            content=json.dumps(
+                [
+                    {
+                        "name": "Python",
+                        "content": "knows Python",
+                        "category": "skill",
+                        "sentiment": 0.0,
+                    },
+                    {
+                        "name": "Django",
+                        "content": "uses Django",
+                        "category": "skill",
+                        "sentiment": 0.0,
+                    },
+                ]
+            ),
+            model="gpt-4o-mini",
+            tokens_in=50,
+            tokens_out=50,
+            latency_ms=100,
+            cost_usd=0.0001,
+            finish_reason="stop",
+            provider="openai",
+        )
+        relations_resp = LLMResponse(
+            content=('```json\n[{"a":"Python","b":"Django","relation":"part_of"}]\n```'),
+            model="gpt-4o-mini",
+            tokens_in=30,
+            tokens_out=30,
+            latency_ms=80,
+            cost_usd=0.0001,
+            finish_reason="stop",
+            provider="openai",
+        )
+        router = AsyncMock()
+        router.generate = AsyncMock(side_effect=[concepts_resp, relations_resp])
+        mock_brain.learn_concept = AsyncMock(side_effect=[ConceptId("c1"), ConceptId("c2")])
+
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(_perception("test"), _response(), MIND, CONV)
+        rt = mock_brain.strengthen_connection.call_args.kwargs["relation_types"]
+        assert rt is not None
+
+    async def test_classify_non_list_response(self, mock_brain: AsyncMock) -> None:
+        """Relation response that is not a list → returns None."""
+        concepts_resp = LLMResponse(
+            content=json.dumps(
+                [
+                    {
+                        "name": "Alpha",
+                        "content": "alpha",
+                        "category": "fact",
+                        "sentiment": 0.0,
+                    },
+                    {
+                        "name": "Beta",
+                        "content": "beta",
+                        "category": "fact",
+                        "sentiment": 0.0,
+                    },
+                ]
+            ),
+            model="gpt-4o-mini",
+            tokens_in=50,
+            tokens_out=50,
+            latency_ms=100,
+            cost_usd=0.0001,
+            finish_reason="stop",
+            provider="openai",
+        )
+        relations_resp = LLMResponse(
+            content='{"not": "a list"}',
+            model="gpt-4o-mini",
+            tokens_in=10,
+            tokens_out=10,
+            latency_ms=80,
+            cost_usd=0.0001,
+            finish_reason="stop",
+            provider="openai",
+        )
+        router = AsyncMock()
+        router.generate = AsyncMock(side_effect=[concepts_resp, relations_resp])
+        mock_brain.learn_concept = AsyncMock(side_effect=[ConceptId("c1"), ConceptId("c2")])
+
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(_perception("test"), _response(), MIND, CONV)
+        rt = mock_brain.strengthen_connection.call_args.kwargs["relation_types"]
+        assert rt is None
+
+    async def test_classify_non_dict_items_skipped(self, mock_brain: AsyncMock) -> None:
+        """Non-dict items in relation list are skipped."""
+        concepts_resp = LLMResponse(
+            content=json.dumps(
+                [
+                    {
+                        "name": "Alpha",
+                        "content": "alpha",
+                        "category": "fact",
+                        "sentiment": 0.0,
+                    },
+                    {
+                        "name": "Beta",
+                        "content": "beta",
+                        "category": "fact",
+                        "sentiment": 0.0,
+                    },
+                ]
+            ),
+            model="gpt-4o-mini",
+            tokens_in=50,
+            tokens_out=50,
+            latency_ms=100,
+            cost_usd=0.0001,
+            finish_reason="stop",
+            provider="openai",
+        )
+        relations_resp = LLMResponse(
+            content=('["not_a_dict", {"a":"Alpha","b":"Beta","relation":"causes"}]'),
+            model="gpt-4o-mini",
+            tokens_in=30,
+            tokens_out=30,
+            latency_ms=80,
+            cost_usd=0.0001,
+            finish_reason="stop",
+            provider="openai",
+        )
+        router = AsyncMock()
+        router.generate = AsyncMock(side_effect=[concepts_resp, relations_resp])
+        mock_brain.learn_concept = AsyncMock(side_effect=[ConceptId("c1"), ConceptId("c2")])
+
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(_perception("test"), _response(), MIND, CONV)
+        rt = mock_brain.strengthen_connection.call_args.kwargs["relation_types"]
+        assert rt is not None
+        key = (min("c1", "c2"), max("c1", "c2"))
+        assert rt[key] == "causes"
+
+    async def test_classify_with_single_concept_returns_none(self, mock_brain: AsyncMock) -> None:
+        """Classification not called with < 2 concepts."""
+        phase = ReflectPhase(mock_brain, llm_router=AsyncMock())
+        result = await phase._classify_relations(  # noqa: SLF001
+            [ExtractedConcept("A", "a", "fact")],
+            [ConceptId("c1")],
+        )
+        assert result is None
+
+
 # ── Episode emotional signals ─────────────────────────────────────────
 
 
