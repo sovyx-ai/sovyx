@@ -203,12 +203,19 @@ class LLMRouter:
     def get_context_window(self, model: str | None = None) -> int:
         """Get context window from the provider that serves this model.
 
-        Uses supports_model() to resolve provider.
+        Checks the primary model first, then equivalent models (cross-provider
+        fallback), so context budget matches the model that will actually run.
         """
         if model:
+            # Check primary model
             for provider in self._providers:
                 if provider.supports_model(model):
                     return provider.get_context_window(model)
+            # Check equivalent models (will be used via cross-provider fallback)
+            for equiv in self._get_equivalent_models(model):
+                for provider in self._providers:
+                    if provider.supports_model(equiv):
+                        return provider.get_context_window(equiv)
         return 128_000  # safe fallback
 
     async def generate(
