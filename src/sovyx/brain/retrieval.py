@@ -177,6 +177,6 @@ class HybridRetrieval:
             concept_map[cid] = concept
 
         # Sort by RRF score DESC
-        sorted_ids = sorted(scores, key=scores.get, reverse=True)  # type: ignore[arg-type]
+        sorted_ids = sorted(scores, key=lambda k: scores.get(k, 0.0), reverse=True)
 
         return [(concept_map[cid], scores[cid]) for cid in sorted_ids[:limit]]

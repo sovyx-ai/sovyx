@@ -5,6 +5,7 @@ SPE-006 §5: The LLM is a human reader. Formatting matters as much as content.
 
 from __future__ import annotations
 
+import datetime as _dt
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -131,12 +132,13 @@ class ContextFormatter:
         Returns string like:
         "Current date and time: Monday, March 30, 2026, 6:41 AM (America/Sao_Paulo)."
         """
+        resolved_tz: ZoneInfo | _dt.timezone
         try:
-            tz = ZoneInfo(timezone)
+            resolved_tz = ZoneInfo(timezone)
         except (ZoneInfoNotFoundError, KeyError):
             logger.warning("invalid_timezone_falling_back_to_utc", timezone=timezone)
-            tz = UTC  # type: ignore[assignment]
-        now = datetime.now(tz=tz)
+            resolved_tz = UTC
+        now = datetime.now(tz=resolved_tz)
         formatted = now.strftime("%A, %B %d, %Y, %I:%M %p")
         return f"Current date and time: {formatted} ({timezone})."
 

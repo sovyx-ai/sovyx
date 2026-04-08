@@ -6,7 +6,7 @@ CRUD for relations between concepts with graph traversal queries.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from sovyx.engine.types import ConceptId, MindId, RelationId, RelationType
 from sovyx.observability.logging import get_logger
@@ -257,7 +257,7 @@ class RelationRepository:
         """Convert a database row to a Relation model."""
         from sovyx.brain.models import Relation as RelationModel
 
-        r: tuple[Any, ...] = tuple(row)  # type: ignore[arg-type]
+        r = tuple(row)  # type: ignore[arg-type,var-annotated]  # aiosqlite.Row → tuple
 
         return RelationModel(
             id=RelationId(r[0]),

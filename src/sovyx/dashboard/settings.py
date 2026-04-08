@@ -8,7 +8,7 @@ Persists changes to system.yaml when possible.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import yaml
 
@@ -80,7 +80,7 @@ def _update_log_level(config: EngineConfig, value: object) -> str | None:
     # Update structlog + stdlib root logger
     logging.getLogger().setLevel(getattr(logging, level))
     # Update config object (LoggingConfig is mutable BaseModel)
-    config.log.level = level  # type: ignore[assignment]  # Literal narrowing
+    config.log.level = cast("Any", level)
 
     logger.info("log_level_changed", old=old, new=level)
     return f"{old} → {level}"

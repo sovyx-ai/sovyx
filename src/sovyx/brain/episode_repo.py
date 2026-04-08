@@ -6,7 +6,7 @@ All writes are atomic: episode + embedding in the same transaction.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from sovyx.engine.errors import SearchError
 from sovyx.engine.types import ConceptId, ConversationId, EpisodeId, MindId
@@ -189,7 +189,7 @@ class EpisodeRepository:
         """Convert a database row to an Episode model."""
         from sovyx.brain.models import Episode
 
-        r: tuple[Any, ...] = tuple(row)  # type: ignore[arg-type]
+        r = tuple(row)  # type: ignore[arg-type,var-annotated]  # aiosqlite.Row → tuple
 
         return Episode(
             id=EpisodeId(r[0]),

@@ -74,11 +74,11 @@ def _make_upgrader(
     mig_report.error = migration_error
     mig_report.applied = migration_applied or ["v0.6.0: add column"]
     migration_runner.run = AsyncMock(return_value=mig_report)
-    migration_runner._version = AsyncMock()  # noqa: SLF001
-    migration_runner._version.get_current = AsyncMock(  # noqa: SLF001
+    migration_runner.schema_version = AsyncMock()
+    migration_runner.schema_version.get_current = AsyncMock(
         return_value=MagicMock(__str__=lambda self: "0.5.0")
     )
-    migration_runner._version.get_pending = MagicMock(return_value=[])  # noqa: SLF001
+    migration_runner.schema_version.get_pending = MagicMock(return_value=[])
 
     # Doctor mock
     doctor = AsyncMock()
@@ -410,7 +410,7 @@ class TestRollback:
         upgrader = _make_upgrader(tmp_path)
         # Patch the phase method itself (not an inner call) so the phase
         # wrapper is skipped and the raw Exception reaches lines 263-271.
-        upgrader._phase_verify = AsyncMock(  # noqa: SLF001
+        upgrader._phase_verify = AsyncMock(
             side_effect=RuntimeError("totally unexpected"),
         )
         result = await upgrader.upgrade("0.5.0", "0.6.0")
@@ -445,7 +445,7 @@ class TestCheckUpgrade:
         mock_migration = MagicMock()
         mock_migration.version = "0.6.0"
         mock_migration.description = "add feature"
-        upgrader._migration_runner._version.get_pending = MagicMock(  # noqa: SLF001
+        upgrader._migration_runner.schema_version.get_pending = MagicMock(
             return_value=[mock_migration]
         )
         info = await upgrader.check_upgrade_available("0.5.0")
@@ -485,7 +485,7 @@ class TestEdgeCaseExceptions:
         """Non-UpgradeError from migration_runner.run becomes UpgradeError."""
         upgrader = _make_upgrader(tmp_path)
         # Replace migration runner's run with raw exception
-        upgrader._migration_runner.run = AsyncMock(  # noqa: SLF001
+        upgrader._migration_runner.run = AsyncMock(
             side_effect=RuntimeError("sqlite locked"),
         )
         result = await upgrader.upgrade("0.4.0", "0.5.0")

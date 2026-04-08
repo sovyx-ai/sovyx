@@ -119,6 +119,33 @@ class ConnectionManager:
         return len(self._connections)
 
 
+# ── Request ID Middleware ──
+
+
+class RequestIdMiddleware(BaseHTTPMiddleware):
+    """Attach a unique request ID to every request/response.
+
+    - Reads ``X-Request-Id`` from incoming headers (proxy-forwarded)
+    - Generates a UUID4 if absent
+    - Sets ``request.state.request_id`` for downstream use
+    - Echoes ``X-Request-Id`` in the response for client correlation
+    """
+
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: RequestResponseEndpoint,
+    ) -> Response:
+        """Inject request ID into request state and response headers."""
+        import uuid
+
+        request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+        request.state.request_id = request_id
+        response = await call_next(request)
+        response.headers["X-Request-Id"] = request_id
+        return response
+
+
 # ── Security Headers Middleware ──
 
 
@@ -189,6 +216,9 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Request ID tracing
+    app.add_middleware(RequestIdMiddleware)
 
     # Security headers
     app.add_middleware(SecurityHeadersMiddleware)
@@ -797,7 +827,7 @@ class DashboardServer:
 
                 if self._registry.is_registered(PersonalityEngine):
                     personality = await self._registry.resolve(PersonalityEngine)
-                    self._app.state.mind_config = personality._config  # noqa: SLF001
+                    self._app.state.mind_config = personality.config
             except Exception:  # noqa: BLE001
                 logger.debug("mind_config_wire_failed")
 

@@ -78,6 +78,11 @@ class PersonalityEngine:
     def __init__(self, mind_config: MindConfig) -> None:
         self._config = mind_config
 
+    @property
+    def config(self) -> MindConfig:
+        """Public accessor for the underlying mind configuration."""
+        return self._config
+
     def generate_system_prompt(
         self,
         emotional_state: dict[str, float] | None = None,

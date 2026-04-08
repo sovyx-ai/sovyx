@@ -7,7 +7,7 @@ Shutdown in reverse initialization order.
 from __future__ import annotations
 
 import contextlib
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, TypeVar, cast
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -91,7 +91,7 @@ class ServiceRegistry:
         """
         # Check cached instances first
         if interface in self._instances:
-            return self._instances[interface]  # type: ignore[return-value]
+            return cast("T", self._instances[interface])
 
         # Check factories
         if interface in self._factories:
@@ -100,7 +100,7 @@ class ServiceRegistry:
             self._instances[interface] = instance
             if interface not in self._init_order:
                 self._init_order.append(interface)
-            return instance  # type: ignore[return-value]
+            return cast("T", instance)
 
         msg = f"Service not registered: {interface.__name__}"
         raise ServiceNotRegisteredError(msg)
