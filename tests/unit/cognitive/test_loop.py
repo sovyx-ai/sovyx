@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 from sovyx.cognitive.act import ActionResult
 from sovyx.cognitive.gate import CognitiveRequest
@@ -186,6 +186,70 @@ class TestErrorHandling:
         loop._perceive.process = AsyncMock(side_effect=Exception("catastrophic"))
         result = await loop.process_request(_request())
         assert isinstance(result, ActionResult)
+
+
+class TestWorkingMemoryDecay:
+    """Decay after reflect phase."""
+
+    async def test_decay_called_after_reflect(self) -> None:
+        """Brain.decay_working_memory() is called after successful reflect."""
+        mock_brain = Mock()
+        mock_brain.decay_working_memory = Mock()
+        loop = CognitiveLoop(
+            state_machine=CognitiveStateMachine(),
+            perceive=_mock_perceive(),
+            attend=_mock_attend(True),
+            think=_mock_think(),
+            act=_mock_act(),
+            reflect=_mock_reflect(),
+            event_bus=AsyncMock(),
+            brain=mock_brain,
+        )
+        result = await loop.process_request(_request())
+        assert result.response_text == "Hello!"
+        mock_brain.decay_working_memory.assert_called_once()
+
+    async def test_decay_failure_does_not_break_loop(self) -> None:
+        """Decay failure is swallowed — loop still returns response."""
+        mock_brain = Mock()
+        mock_brain.decay_working_memory = Mock(side_effect=RuntimeError("boom"))
+        loop = CognitiveLoop(
+            state_machine=CognitiveStateMachine(),
+            perceive=_mock_perceive(),
+            attend=_mock_attend(True),
+            think=_mock_think(),
+            act=_mock_act(),
+            reflect=_mock_reflect(),
+            event_bus=AsyncMock(),
+            brain=mock_brain,
+        )
+        result = await loop.process_request(_request())
+        assert result.response_text == "Hello!"
+        assert result.error is False
+
+    async def test_no_brain_no_decay(self) -> None:
+        """Without brain (None), decay is skipped gracefully."""
+        loop = _loop()  # no brain param
+        result = await loop.process_request(_request())
+        assert result.response_text == "Hello!"
+
+    async def test_decay_not_called_when_filtered(self) -> None:
+        """Filtered requests skip reflect+decay entirely."""
+        mock_brain = Mock()
+        mock_brain.decay_working_memory = Mock()
+        loop = CognitiveLoop(
+            state_machine=CognitiveStateMachine(),
+            perceive=_mock_perceive(),
+            attend=_mock_attend(False),  # filtered
+            think=_mock_think(),
+            act=_mock_act(),
+            reflect=_mock_reflect(),
+            event_bus=AsyncMock(),
+            brain=mock_brain,
+        )
+        result = await loop.process_request(_request())
+        assert result.filtered is True
+        mock_brain.decay_working_memory.assert_not_called()
 
 
 class TestLifecycle:

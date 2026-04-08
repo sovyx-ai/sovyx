@@ -286,6 +286,7 @@ async def bootstrap(
                 act=act,
                 reflect=reflect,
                 event_bus=event_bus,
+                brain=brain_service,
             )
             registry.register_instance(CognitiveLoop, cog_loop)
 

@@ -22,7 +22,7 @@ class WorkingMemory:
     lock since dict reads are atomic in CPython.
     """
 
-    def __init__(self, capacity: int = 50, decay_rate: float = 0.1) -> None:
+    def __init__(self, capacity: int = 50, decay_rate: float = 0.15) -> None:
         self._capacity = capacity
         self._decay_rate = decay_rate
         self._activations: dict[str, float] = {}

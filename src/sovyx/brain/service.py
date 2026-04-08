@@ -192,6 +192,10 @@ class BrainService:
                     concept.content = content
                     await self._concepts.update(concept)
                 await self._concepts.record_access(concept.id)
+                # Re-activate in working memory so decayed concepts
+                # regain visibility for star topology's top-K selection.
+                # Uses max(current, 0.5) — won't overwrite spreading-boosted ones.
+                self._memory.activate(concept.id, 0.5)
                 return concept.id
 
         # New concept
@@ -297,6 +301,15 @@ class BrainService:
     async def strengthen_connection(self, concept_ids: list[ConceptId]) -> None:
         """Hebbian learning between co-activated concepts."""
         await self._hebbian.strengthen(concept_ids)
+
+    def decay_working_memory(self) -> None:
+        """Apply decay to all concepts in working memory.
+
+        Called after reflect phase to simulate natural forgetting.
+        Concepts not re-activated will gradually lose activation,
+        making room for newer, more relevant concepts in star topology.
+        """
+        self._memory.decay_all()
 
     # ── Internal ──
 

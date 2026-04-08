@@ -19,6 +19,7 @@ from sovyx.observability.metrics import MetricsRegistry, get_metrics
 from sovyx.observability.tracing import SovyxTracer, get_tracer
 
 if TYPE_CHECKING:
+    from sovyx.brain.service import BrainService
     from sovyx.cognitive.act import ActPhase
     from sovyx.cognitive.attend import AttendPhase
     from sovyx.cognitive.gate import CognitiveRequest
@@ -64,6 +65,7 @@ class CognitiveLoop:
         act: ActPhase,
         reflect: ReflectPhase,
         event_bus: EventBus,
+        brain: BrainService | None = None,
     ) -> None:
         self._state = state_machine
         self._perceive = perceive
@@ -72,6 +74,7 @@ class CognitiveLoop:
         self._act = act
         self._reflect = reflect
         self._events = event_bus
+        self._brain = brain
 
     async def start(self) -> None:
         """Start the cognitive loop."""
@@ -160,6 +163,15 @@ class CognitiveLoop:
                     )
                 except Exception:
                     logger.warning("reflect_phase_failed", exc_info=True)
+
+                # Decay working memory after reflect — concepts not
+                # re-activated will gradually fade, keeping star topology
+                # focused on recent/relevant concepts.
+                try:
+                    if self._brain is not None:
+                        self._brain.decay_working_memory()
+                except Exception:
+                    logger.warning("working_memory_decay_failed", exc_info=True)
 
             m.messages_processed.add(1, {"mind_id": str(request.mind_id)})
 

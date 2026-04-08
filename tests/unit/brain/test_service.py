@@ -291,6 +291,49 @@ class TestLearnConcept:
         assert cid == ConceptId("new-id")
         mock_deps["concept_repo"].create.assert_called_once()  # type: ignore[union-attr]
 
+    async def test_learn_dedup_activates_working_memory(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        """Dedup path re-activates concept in working memory (decay fix)."""
+        existing = _concept("Python", "existing-id")
+        existing.category = ConceptCategory.FACT
+        mock_deps["concept_repo"].search_by_text = AsyncMock(  # type: ignore[union-attr]
+            return_value=[(existing, -1.0)]
+        )
+
+        # Pre-decay: activate then decay to simulate old concept
+        wm = mock_deps["working_memory"]
+        assert isinstance(wm, WorkingMemory)
+        wm.activate(ConceptId("existing-id"), 0.5)
+        wm.decay_all()
+        decayed_activation = wm.get_activation(ConceptId("existing-id"))
+        assert decayed_activation < 0.5  # confirm it decayed
+
+        # Re-learn same concept (dedup path)
+        await brain.learn_concept(MIND, "Python", "content")
+
+        # Should be re-activated to 0.5 (not left at decayed value)
+        new_activation = wm.get_activation(ConceptId("existing-id"))
+        assert new_activation == 0.5
+
+
+class TestDecayWorkingMemory:
+    """decay_working_memory() — delegates to working memory."""
+
+    async def test_decay_reduces_activation(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        wm = mock_deps["working_memory"]
+        assert isinstance(wm, WorkingMemory)
+        wm.activate(ConceptId("c1"), 0.8)
+
+        brain.decay_working_memory()
+
+        activation = wm.get_activation(ConceptId("c1"))
+        assert activation < 0.8
+        # decay_rate=0.15: 0.8 * 0.85 = 0.68
+        assert abs(activation - 0.68) < 0.01
+
 
 class TestEncodeEpisode:
     """encode_episode() — create + Hebbian."""
