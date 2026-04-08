@@ -39,6 +39,7 @@
     "EngineStopping": "Engine Stopping",
     "ChannelConnected": "Channel",
     "ChannelDisconnected": "Channel",
+    "ChatMessage": "Chat",
     "unknown": "Event"
   },
   "eventSummary": {
@@ -52,7 +53,8 @@
     "EngineStarted": "Engine started",
     "EngineStopping": "Stopping: {{reason}}",
     "ChannelConnected": "{{channel}} connected",
-    "ChannelDisconnected": "{{channel}} disconnected: {{reason}}"
+    "ChannelDisconnected": "{{channel}} disconnected: {{reason}}",
+    "ChatMessage": "{{defaultValue}}"
   },
   "feed": {
     "title": "Live Feed",

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -714,6 +715,7 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
         await ws_manager.broadcast(
             {
                 "type": "ChatMessage",
+                "timestamp": datetime.now(UTC).isoformat(),
                 "data": {
                     "conversation_id": result["conversation_id"],
                     "response_preview": result["response"][:200] if result["response"] else "",

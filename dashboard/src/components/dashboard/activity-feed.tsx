@@ -16,6 +16,7 @@ import {
   EyeIcon,
   BrainIcon,
   MessageSquareIcon,
+  MessageCircleIcon,
   LightbulbIcon,
   BookmarkIcon,
   MergeIcon,
@@ -84,6 +85,10 @@ const EVENT_CONFIG: Record<
     icon: <PlugIcon className="size-3.5" />,
     color: "text-[var(--svx-color-error)]",
   },
+  ChatMessage: {
+    icon: <MessageCircleIcon className="size-3.5" />,
+    color: "text-[var(--svx-color-brand-primary)]",
+  },
 };
 
 const FALLBACK_CONFIG = {
@@ -125,6 +130,8 @@ function eventSummary(event: WsEvent, t: TFunction): string {
       return t("eventSummary.ChannelConnected", { channel: s("channel_type") });
     case "ChannelDisconnected":
       return t("eventSummary.ChannelDisconnected", { channel: s("channel_type"), reason: s("reason", "unknown") });
+    case "ChatMessage":
+      return t("eventSummary.ChatMessage", { defaultValue: s("response_preview", "Chat response sent") });
     default:
       return JSON.stringify(d).slice(0, 60);
   }
