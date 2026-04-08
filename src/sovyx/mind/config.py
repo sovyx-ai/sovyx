@@ -44,16 +44,55 @@ class OceanConfig(BaseModel):
 
 
 class LLMConfig(BaseModel):
-    """LLM provider configuration."""
+    """LLM provider configuration.
 
-    default_provider: str = "anthropic"
-    default_model: str = "claude-sonnet-4-20250514"
-    fast_model: str = "claude-3-5-haiku-20241022"
+    Auto-detection: if no explicit model is set in mind.yaml, the default
+    model is chosen based on available API keys:
+        - ANTHROPIC_API_KEY set → claude-sonnet-4-20250514
+        - OPENAI_API_KEY set (no Anthropic) → gpt-4o
+        - Neither → claude-sonnet-4-20250514 (will fail with clear error)
+    """
+
+    default_provider: str = ""
+    default_model: str = ""
+    fast_model: str = ""
     local_model: str = "llama3.2:1b"
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     streaming: bool = True
     budget_daily_usd: float = Field(default=2.0, ge=0.0)
     budget_per_conversation_usd: float = Field(default=0.5, ge=0.0)
+
+    @model_validator(mode="after")
+    def auto_detect_provider(self) -> LLMConfig:
+        """Auto-detect LLM provider from available API keys."""
+        import os
+
+        has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY"))
+        has_openai = bool(os.environ.get("OPENAI_API_KEY"))
+
+        if not self.default_model:
+            if has_anthropic:
+                self.default_model = "claude-sonnet-4-20250514"
+            elif has_openai:
+                self.default_model = "gpt-4o"
+            else:
+                self.default_model = "claude-sonnet-4-20250514"
+
+        if not self.default_provider:
+            if has_anthropic:
+                self.default_provider = "anthropic"
+            elif has_openai:
+                self.default_provider = "openai"
+            else:
+                self.default_provider = "anthropic"
+
+        if not self.fast_model:
+            if has_openai and not has_anthropic:
+                self.fast_model = "gpt-4o-mini"
+            else:
+                self.fast_model = "claude-3-5-haiku-20241022"
+
+        return self
 
 
 class BrainConfig(BaseModel):
