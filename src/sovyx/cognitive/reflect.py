@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
@@ -21,16 +22,32 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+
+# ── Extracted concept data ─────────────────────────────────────────────
+
+
+@dataclass(frozen=True, slots=True)
+class ExtractedConcept:
+    """A concept extracted from user input (LLM or regex)."""
+
+    name: str
+    content: str
+    category: str
+    sentiment: float = 0.0  # -1.0 (negative) to 1.0 (positive)
+
+
 # ── LLM extraction prompt ──────────────────────────────────────────────
 # Covers all 7 ConceptCategory values with clear definitions and examples
 # so the LLM can reliably distinguish between them.
 
-_EXTRACTION_PROMPT = (  # noqa: E501
+_EXTRACTION_PROMPT = (
     "Extract knowledge from the user message into structured concepts.\n"
     "Return a JSON array of objects with these fields:\n"
     '- "name": short label (2-5 words)\n'
     '- "content": one-sentence description of what was learned\n'
     '- "category": one of the categories below\n'
+    '- "sentiment": float from -1.0 to 1.0 '
+    "(emotional tone of this concept)\n"
     "\n"
     "Categories (pick the MOST specific one):\n"
     '- "entity": person, org, place, or named thing '
@@ -47,6 +64,13 @@ _EXTRACTION_PROMPT = (  # noqa: E501
     '(e.g. "migrated to AWS last month")\n'
     '- "relationship": connection between entities '
     '(e.g. "manages a team of 5", "reports to CTO")\n'
+    "\n"
+    "Sentiment guide:\n"
+    "- Positive (0.3 to 1.0): love, enjoy, excited, great\n"
+    "- Neutral (~0.0): factual statements, introductions\n"
+    "- Negative (-1.0 to -0.3): hate, frustrate, terrible\n"
+    '- Example: "loves PostgreSQL" → 0.8, '
+    '"hates ORMs" → -0.7, "uses Docker" → 0.0\n'
     "\n"
     "Rules:\n"
     "- Extract ALL meaningful information\n"
@@ -102,6 +126,58 @@ _IMPORTANCE: dict[str, float] = {
 # Default importance for unknown categories
 _DEFAULT_IMPORTANCE = 0.5
 
+# ── Sentiment heuristics for regex fallback ────────────────────────────
+# Maps pattern groups to default sentiment when LLM is unavailable.
+
+_POSITIVE_WORDS = frozenset(
+    {
+        "love",
+        "like",
+        "prefer",
+        "enjoy",
+        "great",
+        "awesome",
+        "excellent",
+        "best",
+        "amazing",
+        "adoro",
+        "gosto",
+        "curto",
+    }
+)
+_NEGATIVE_WORDS = frozenset(
+    {
+        "hate",
+        "dislike",
+        "avoid",
+        "terrible",
+        "worst",
+        "awful",
+        "frustrating",
+        "harmful",
+        "bad",
+        "odeio",
+        "detesto",
+    }
+)
+
+
+def _estimate_sentiment(text: str) -> float:
+    """Heuristic sentiment estimation for regex fallback.
+
+    Returns a rough sentiment score based on keyword presence.
+    """
+    lower = text.lower()
+    words = set(lower.split())
+    pos = len(words & _POSITIVE_WORDS)
+    neg = len(words & _NEGATIVE_WORDS)
+    if pos > neg:
+        return min(0.6, 0.3 * pos)
+    if neg > pos:
+        return max(-0.6, -0.3 * neg)
+    return 0.0
+
+
 # ── Regex fallback patterns ────────────────────────────────────────────
 
 _ENTITY_PATTERNS = [
@@ -116,26 +192,31 @@ _PREFERENCE_PATTERNS = [
     ),
     re.compile(r"(?:i (?:hate|dislike|avoid))\s+(.+?)(?:\.|,|!|$)", re.IGNORECASE),
     re.compile(
-        r"(?:eu (?:gosto|adoro|prefiro|curto|uso))\s+(?:de |do |da )?(.+?)(?:\.|,|!|$)",
+        r"(?:eu (?:gosto|adoro|prefiro|curto|uso))"
+        r"\s+(?:de |do |da )?(.+?)(?:\.|,|!|$)",
         re.IGNORECASE,
     ),
     re.compile(
-        r"(?:my (?:stack|tools?|setup) (?:is|includes?|:))\s*(.+?)(?:\.|!|$)",
+        r"(?:my (?:stack|tools?|setup) (?:is|includes?|:))"
+        r"\s*(.+?)(?:\.|!|$)",
         re.IGNORECASE,
     ),
 ]
 
 _FACT_PATTERNS = [
     re.compile(
-        r"(?:i (?:work at|work for|live in|study at|am building|built))\s+(.+?)(?:\.|,|!|$)",
+        r"(?:i (?:work at|work for|live in|study at|am building|built))"
+        r"\s+(.+?)(?:\.|,|!|$)",
         re.IGNORECASE,
     ),
     re.compile(
-        r"(?:i'm (?:building|developing|working on|learning))\s+(.+?)(?:\.|,|!|$)",
+        r"(?:i'm (?:building|developing|working on|learning))"
+        r"\s+(.+?)(?:\.|,|!|$)",
         re.IGNORECASE,
     ),
     re.compile(
-        r"(?:(?:trabalho|moro|estudo) (?:na|no|em|na))\s+(.+?)(?:\.|,|!|$)",
+        r"(?:(?:trabalho|moro|estudo) (?:na|no|em|na))"
+        r"\s+(.+?)(?:\.|,|!|$)",
         re.IGNORECASE,
     ),
 ]
@@ -169,12 +250,14 @@ _BELIEF_PATTERNS = [
 
 _EVENT_PATTERNS = [
     re.compile(
-        r"(?:i (?:started|finished|completed|launched|migrated|deployed|graduated))"
+        r"(?:i (?:started|finished|completed|launched|migrated"
+        r"|deployed|graduated))"
         r"\s+(.+?)(?:\.|,|!|$)",
         re.IGNORECASE,
     ),
     re.compile(
-        r"(?:last (?:week|month|year)|recently|yesterday|in \d{4})\s*[,:]?\s*"
+        r"(?:last (?:week|month|year)|recently|yesterday|in \d{4})"
+        r"\s*[,:]?\s*"
         r"(?:i |we )?(.+?)(?:\.|,|!|$)",
         re.IGNORECASE,
     ),
@@ -182,11 +265,13 @@ _EVENT_PATTERNS = [
 
 _RELATIONSHIP_PATTERNS = [
     re.compile(
-        r"(?:i (?:manage|lead|report to|work with|mentor))\s+(.+?)(?:\.|,|!|$)",
+        r"(?:i (?:manage|lead|report to|work with|mentor))"
+        r"\s+(.+?)(?:\.|,|!|$)",
         re.IGNORECASE,
     ),
     re.compile(
-        r"(?:my (?:team|manager|boss|colleague|partner) (?:is|are))\s+(.+?)(?:\.|,|!|$)",
+        r"(?:my (?:team|manager|boss|colleague|partner) (?:is|are))"
+        r"\s+(.+?)(?:\.|,|!|$)",
         re.IGNORECASE,
     ),
 ]
@@ -219,13 +304,25 @@ def get_importance(category: str) -> float:
     return _IMPORTANCE.get(category, _DEFAULT_IMPORTANCE)
 
 
+def clamp_sentiment(value: float) -> float:
+    """Clamp a sentiment value to [-1.0, 1.0].
+
+    Args:
+        value: Raw sentiment value.
+
+    Returns:
+        Clamped value in [-1.0, 1.0].
+    """
+    return max(-1.0, min(1.0, value))
+
+
 class ReflectPhase:
     """After response: encode episode + extract concepts + Hebbian.
 
     1. Create episode with user_input + assistant_response
     2. Extract concepts via LLM (falls back to regex if unavailable)
     3. Hebbian learning between co-mentioned concepts
-    4. Update working memory
+    4. Update working memory with emotional valence
     """
 
     def __init__(
@@ -249,7 +346,7 @@ class ReflectPhase:
         from sovyx.engine.types import ConceptCategory
 
         # Extract concepts — LLM first, regex fallback
-        extracted: list[tuple[str, str, str]] = []
+        extracted: list[ExtractedConcept] = []
 
         if self._router:
             llm_extracted = await self._extract_with_llm(perception.content)
@@ -261,22 +358,25 @@ class ReflectPhase:
 
         # Learn extracted concepts
         concept_ids: list[ConceptId] = []
-        for name, content, cat_key in extracted:
+        sentiments: list[float] = []
+        for ec in extracted:
             try:
-                resolved = resolve_category(cat_key)
+                resolved = resolve_category(ec.category)
                 category = ConceptCategory(resolved)
                 cid = await self._brain.learn_concept(
                     mind_id=mind_id,
-                    name=name,
-                    content=content,
+                    name=ec.name,
+                    content=ec.content,
                     category=category,
                     source="conversation",
+                    emotional_valence=ec.sentiment,
                 )
                 concept_ids.append(cid)
+                sentiments.append(ec.sentiment)
             except Exception:
                 logger.warning(
                     "concept_extraction_failed",
-                    name=name,
+                    name=ec.name,
                     exc_info=True,
                 )
 
@@ -286,6 +386,13 @@ class ReflectPhase:
                 await self._brain.strengthen_connection(concept_ids)
             except Exception:
                 logger.warning("hebbian_failed", exc_info=True)
+
+        # Compute episode emotional signals from extracted concepts
+        episode_valence = 0.0
+        episode_arousal = 0.0
+        if sentiments:
+            episode_valence = clamp_sentiment(sum(sentiments) / len(sentiments))
+            episode_arousal = clamp_sentiment(max(abs(s) for s in sentiments))
 
         # Encode episode — pass new concept IDs as star topology hubs
         # (each connects to top-K existing by activation)
@@ -297,6 +404,8 @@ class ReflectPhase:
                 assistant_response=response.content,
                 importance=0.5,
                 new_concept_ids=concept_ids or None,
+                emotional_valence=episode_valence,
+                emotional_arousal=episode_arousal,
             )
         except Exception:
             logger.warning("episode_encoding_failed", exc_info=True)
@@ -305,9 +414,11 @@ class ReflectPhase:
             "reflect_complete",
             concepts_extracted=len(extracted),
             concepts_learned=len(concept_ids),
+            episode_valence=round(episode_valence, 2),
+            episode_arousal=round(episode_arousal, 2),
         )
 
-    async def _extract_with_llm(self, message: str) -> list[tuple[str, str, str]] | None:
+    async def _extract_with_llm(self, message: str) -> list[ExtractedConcept] | None:
         """Extract concepts using LLM. Returns None on failure."""
         if not self._router:
             return None
@@ -332,15 +443,29 @@ class ReflectPhase:
             if not isinstance(concepts_raw, list):
                 return None
 
-            result: list[tuple[str, str, str]] = []
+            result: list[ExtractedConcept] = []
             for item in concepts_raw:
                 if not isinstance(item, dict):
                     continue
                 name = str(item.get("name", "")).strip()
                 content = str(item.get("content", "")).strip()
                 category = str(item.get("category", "fact")).strip().lower()
+                # Parse sentiment — default 0.0 if missing or invalid
+                raw_sentiment = item.get("sentiment", 0.0)
+                try:
+                    sentiment = clamp_sentiment(float(raw_sentiment))
+                except (TypeError, ValueError):
+                    sentiment = 0.0
+
                 if name and content and len(name) > 1:
-                    result.append((name, content, category))
+                    result.append(
+                        ExtractedConcept(
+                            name=name,
+                            content=content,
+                            category=category,
+                            sentiment=sentiment,
+                        )
+                    )
 
             logger.debug(
                 "llm_concept_extraction",
@@ -355,61 +480,94 @@ class ReflectPhase:
             return None
 
     @staticmethod
-    def _extract_with_regex(message: str) -> list[tuple[str, str, str]]:
+    def _extract_with_regex(message: str) -> list[ExtractedConcept]:
         """Fallback: extract concepts using regex patterns.
 
         Covers all 7 categories with pattern-based extraction.
         Less accurate than LLM but works offline.
+        Includes heuristic sentiment estimation.
         """
-        extracted: list[tuple[str, str, str]] = []
+        extracted: list[ExtractedConcept] = []
 
         for pattern in _ENTITY_PATTERNS:
             match = pattern.search(message)
             if match:
                 name = match.group(1).strip()
                 if len(name) > 1:
-                    extracted.append((name, f"User's name is {name}", "entity"))
+                    extracted.append(
+                        ExtractedConcept(name, f"User's name is {name}", "entity", 0.0)
+                    )
 
         for pattern in _PREFERENCE_PATTERNS:
             match = pattern.search(message)
             if match:
                 pref = match.group(1).strip()
                 if len(pref) > 1:
-                    extracted.append((pref, f"User prefers {pref}", "preference"))
+                    sentiment = _estimate_sentiment(message)
+                    extracted.append(
+                        ExtractedConcept(
+                            pref,
+                            f"User prefers {pref}",
+                            "preference",
+                            sentiment,
+                        )
+                    )
 
         for pattern in _FACT_PATTERNS:
             match = pattern.search(message)
             if match:
                 fact = match.group(1).strip()
                 if len(fact) > 1:
-                    extracted.append((fact, f"User {fact}", "fact"))
+                    extracted.append(ExtractedConcept(fact, f"User {fact}", "fact", 0.0))
 
         for pattern in _SKILL_PATTERNS:
             match = pattern.search(message)
             if match:
                 skill = match.group(1).strip()
                 if len(skill) > 1:
-                    extracted.append((skill, f"User codes with {skill}", "skill"))
+                    extracted.append(
+                        ExtractedConcept(
+                            skill,
+                            f"User codes with {skill}",
+                            "skill",
+                            0.0,
+                        )
+                    )
 
         for pattern in _BELIEF_PATTERNS:
             match = pattern.search(message)
             if match:
                 belief = match.group(1).strip()
                 if len(belief) > 1:
-                    extracted.append((belief, f"User believes {belief}", "belief"))
+                    sentiment = _estimate_sentiment(message)
+                    extracted.append(
+                        ExtractedConcept(
+                            belief,
+                            f"User believes {belief}",
+                            "belief",
+                            sentiment,
+                        )
+                    )
 
         for pattern in _EVENT_PATTERNS:
             match = pattern.search(message)
             if match:
                 event = match.group(1).strip()
                 if len(event) > 1:
-                    extracted.append((event, f"User {event}", "event"))
+                    extracted.append(ExtractedConcept(event, f"User {event}", "event", 0.0))
 
         for pattern in _RELATIONSHIP_PATTERNS:
             match = pattern.search(message)
             if match:
                 rel = match.group(1).strip()
                 if len(rel) > 1:
-                    extracted.append((rel, f"User's relationship: {rel}", "relationship"))
+                    extracted.append(
+                        ExtractedConcept(
+                            rel,
+                            f"User's relationship: {rel}",
+                            "relationship",
+                            0.0,
+                        )
+                    )
 
         return extracted

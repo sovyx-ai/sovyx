@@ -176,12 +176,18 @@ class BrainService:
         content: str,
         category: ConceptCategory = ConceptCategory.FACT,
         source: str = "conversation",
+        *,
+        emotional_valence: float = 0.0,
         **kwargs: object,
     ) -> ConceptId:
         """Learn a new concept with dedup check (v13 audit fix).
 
         If a concept with the same name+category exists, reinforce it
         instead of creating a duplicate.
+
+        Args:
+            emotional_valence: Sentiment score (-1.0 to 1.0) for this
+                concept. On dedup, uses weighted average with existing.
         """
         # Dedup check via FTS5
         existing = await self._concepts.search_by_text(name, mind_id, limit=3)
@@ -190,7 +196,15 @@ class BrainService:
                 # Concept exists — reinforce, don't duplicate
                 if len(content) > len(concept.content):
                     concept.content = content
-                    await self._concepts.update(concept)
+                # Update emotional valence: weighted average
+                # (existing has more history, weight it 2:1)
+                if emotional_valence != 0.0:
+                    old_v = concept.emotional_valence
+                    concept.emotional_valence = max(
+                        -1.0,
+                        min(1.0, (old_v * 2 + emotional_valence) / 3),
+                    )
+                await self._concepts.update(concept)
                 await self._concepts.record_access(concept.id)
                 # Re-activate in working memory so decayed concepts
                 # regain visibility for star topology's top-K selection.
@@ -207,6 +221,7 @@ class BrainService:
             content=content,
             category=category,
             source=source,
+            emotional_valence=max(-1.0, min(1.0, emotional_valence)),
         )
         concept_id = await self._concepts.create(concept)
 
@@ -241,6 +256,8 @@ class BrainService:
         importance: float = 0.5,
         *,
         new_concept_ids: list[ConceptId] | None = None,
+        emotional_valence: float = 0.0,
+        emotional_arousal: float = 0.0,
         **kwargs: object,
     ) -> EpisodeId:
         """Encode an episode + embedding + star topology Hebbian learning.
@@ -252,6 +269,10 @@ class BrainService:
         Args:
             new_concept_ids: Concepts learned this turn — form the hub
                 of the star topology. Each connects to top-K existing.
+            emotional_valence: Average sentiment of the exchange
+                (-1.0 to 1.0). Computed from extracted concept sentiments.
+            emotional_arousal: Intensity of emotion in the exchange
+                (0.0 to 1.0). Max absolute sentiment across concepts.
         """
         from sovyx.brain.models import Episode
 
@@ -261,6 +282,8 @@ class BrainService:
             user_input=user_input,
             assistant_response=assistant_response,
             importance=importance,
+            emotional_valence=max(-1.0, min(1.0, emotional_valence)),
+            emotional_arousal=max(-1.0, min(1.0, emotional_arousal)),
         )
         episode_id = await self._episodes.create(episode)
 
