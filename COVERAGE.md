@@ -1,19 +1,27 @@
-# Coverage Policy — Sovyx v0.1.x
+# Coverage Policy
 
-## pragma: no cover Audit (28 annotations)
+## pragma: no cover Audit
 
-All 28 `pragma: no cover` annotations have been audited and classified as **legitimate**.
+42 `pragma: no cover` annotations across the codebase. All audited.
 
 ### Categories
 
 | Module | Count | Reason |
 |--------|-------|--------|
-| `cli/main.py` | 12 | Click CLI commands with Rich console — require click.testing.CliRunner integration |
-| `engine/health.py` | 10 | OS-level health checks (/proc, psutil, subprocess) — OS-dependent |
-| `engine/lifecycle.py` | 4 | PidFile PermissionError, default paths, socket cleanup — OS-dependent |
-| `cli/rpc_client.py` | 2 | Socket timeout/OS errors — not reproducible in unit tests |
+| `cli/main.py` | ~15 | CLI commands with Rich console — require subprocess integration testing |
+| `engine/health.py` | ~10 | OS-level health checks (/proc, psutil, subprocess) — platform-dependent |
+| `engine/lifecycle.py` | ~5 | PID file permissions, socket cleanup — OS-dependent error paths |
+| `cli/rpc_client.py` | ~3 | Socket timeout/OS errors — not reproducible in unit tests |
+| `voice/*` | ~5 | Audio device initialization — hardware-dependent |
+| `dashboard/server.py` | ~4 | Daemon startup, static file serving edge cases |
 
 ### Policy
-- **No code logic is being masked.** All 28 are error handlers or OS-interaction paths.
-- Removal target: v1.0 with proper integration test infrastructure.
-- New `pragma: no cover` requires PR review justification.
+
+- No business logic is excluded from coverage. All 42 are OS-interaction paths, hardware-dependent code, or CLI presentation layers.
+- New `pragma: no cover` requires justification in the commit message.
+- Target: reduce count via integration tests in v1.0 (subprocess-based CLI testing, Docker-based health check testing).
+
+### Related
+
+- `type: ignore` audit: see [docs/V10-SECURITY-ARCHITECTURE.md](docs/V10-SECURITY-ARCHITECTURE.md) section 0.4
+- `noqa` audit: 153 total, dominated by `BLE001` (broad exception — documented in V10 doc section 3) and `PLC0415` (lazy imports — intentional for optional deps)

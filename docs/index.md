@@ -10,7 +10,7 @@ Sovyx is a self-hosted AI companion engine that builds genuine, persistent memor
 - **Personality Engine** — OCEAN model + configurable traits define how your Mind communicates
 - **Semantic Search** — FTS5 + sqlite-vec embedding for intelligent recall
 - **Adaptive Context** — Lost-in-Middle ordering, adaptive token budgets, 6-slot context assembly
-- **Multi-Provider LLM** — Anthropic Claude, OpenAI GPT, local Ollama — with automatic fallback
+- **Multi-Provider LLM** — Anthropic Claude, OpenAI GPT, Google Gemini, local Ollama — with automatic failover
 - **Cost Control** — Daily and per-conversation budgets with persistent tracking
 - **Dashboard** — Real-time web UI for brain visualization, logs, and settings
 - **Voice Pipeline** — Wake word, STT, TTS with hardware-adaptive model selection (v0.5)
@@ -53,7 +53,7 @@ Learn more in [Architecture](architecture.md).
 - Python 3.11+
 - SQLite 3.35+ (with FTS5)
 - 512MB RAM minimum (Raspberry Pi 5 compatible)
-- LLM API key (Anthropic or OpenAI) or local Ollama
+- LLM API key (Anthropic, OpenAI, or Google) or local Ollama
 
 ## License
 
