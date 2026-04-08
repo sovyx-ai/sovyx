@@ -212,6 +212,24 @@ class TestEventEmission:
         await router.generate([{"role": "user", "content": "Hi"}])
         event_bus.emit.assert_called_once()
 
+    async def test_think_completed_includes_cost(
+        self, cost_guard: CostGuard, event_bus: AsyncMock
+    ) -> None:
+        """ThinkCompleted event must include cost_usd from provider response."""
+        from sovyx.engine.events import ThinkCompleted
+
+        p1 = _mock_provider("test")
+        router = LLMRouter([p1], cost_guard, event_bus)
+
+        await router.generate([{"role": "user", "content": "Hi"}])
+        event_bus.emit.assert_called_once()
+
+        emitted_event = event_bus.emit.call_args[0][0]
+        assert isinstance(emitted_event, ThinkCompleted)
+        assert emitted_event.cost_usd == 0.001, (  # noqa: PLR2004
+            f"cost_usd should be 0.001 from mock, got {emitted_event.cost_usd}"
+        )
+
 
 class TestNonLLMResponseConversion:
     """Provider returns a non-LLMResponse object (converted via vars())."""
