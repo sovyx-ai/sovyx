@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from sovyx.engine.types import RelationType
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
@@ -48,6 +49,8 @@ class HebbianLearning:
         self,
         concept_ids: list[ConceptId],
         activations: dict[ConceptId, float] | None = None,
+        *,
+        relation_types: dict[tuple[str, str], str] | None = None,
     ) -> int:
         """Strengthen relations between all pairs — within-turn only.
 
@@ -60,6 +63,9 @@ class HebbianLearning:
         Args:
             concept_ids: Concepts that co-occurred in the same turn.
             activations: Optional activation levels per concept.
+            relation_types: Optional mapping of (id_a_str, id_b_str) →
+                RelationType value. Keys use canonical order (min, max).
+                Pairs not in the map default to RELATED_TO.
 
         Returns:
             Number of relations strengthened or created.
@@ -70,7 +76,10 @@ class HebbianLearning:
         count = 0
         for i, id_a in enumerate(concept_ids):
             for id_b in concept_ids[i + 1 :]:
-                count += await self._strengthen_pair(id_a, id_b, activations)
+                rel_type = self._lookup_relation_type(id_a, id_b, relation_types)
+                count += await self._strengthen_pair(
+                    id_a, id_b, activations, relation_type=rel_type
+                )
 
         logger.debug(
             "hebbian_strengthen",
@@ -144,8 +153,14 @@ class HebbianLearning:
         id_a: ConceptId,
         id_b: ConceptId,
         activations: dict[ConceptId, float] | None,
+        *,
+        relation_type: RelationType | None = None,
     ) -> int:
         """Strengthen a single pair — get_or_create + Hebbian formula.
+
+        Args:
+            relation_type: If provided, used for the relation. Defaults
+                to RELATED_TO when None.
 
         Returns:
             1 if strengthened, 0 otherwise.
@@ -156,7 +171,8 @@ class HebbianLearning:
             act_b = activations.get(id_b, 1.0)
             co_activation = min(act_a, act_b)
 
-        relation = await self._relations.get_or_create(id_a, id_b)
+        rt = relation_type or RelationType.RELATED_TO
+        relation = await self._relations.get_or_create(id_a, id_b, relation_type=rt)
 
         old_weight = relation.weight
         delta = self._learning_rate * (1.0 - old_weight) * co_activation
@@ -165,6 +181,35 @@ class HebbianLearning:
         await self._relations.update_weight(relation.id, new_weight)
         await self._relations.increment_co_occurrence(id_a, id_b)
         return 1
+
+    @staticmethod
+    def _lookup_relation_type(
+        id_a: ConceptId,
+        id_b: ConceptId,
+        relation_types: dict[tuple[str, str], str] | None,
+    ) -> RelationType | None:
+        """Look up a relation type from the classification map.
+
+        Uses canonical ordering (min, max) for the key lookup.
+
+        Returns:
+            The RelationType if found in the map, else None.
+        """
+        if not relation_types:
+            return None
+
+        key = (
+            min(str(id_a), str(id_b)),
+            max(str(id_a), str(id_b)),
+        )
+        raw = relation_types.get(key)
+        if raw is None:
+            return None
+
+        try:
+            return RelationType(raw)
+        except ValueError:
+            return None
 
     async def _reinforce_existing(
         self,
