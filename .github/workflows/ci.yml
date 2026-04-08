@@ -52,6 +52,35 @@ jobs:
       - name: Bandit scan
         run: uv run bandit -r src/sovyx/ --configfile pyproject.toml
 
+  dashboard:
+    name: Dashboard Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: dashboard/package-lock.json
+      - name: Install dependencies
+        working-directory: dashboard
+        run: npm ci
+      - name: TypeScript check
+        working-directory: dashboard
+        run: npx tsc -b tsconfig.app.json
+      - name: Run tests
+        working-directory: dashboard
+        run: npx vitest run
+      - name: Build production bundle
+        working-directory: dashboard
+        run: npm run build
+      - name: Verify static output
+        run: |
+          test -f src/sovyx/dashboard/static/index.html
+          echo "✓ Static assets built successfully"
+
   test:
     name: Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
