@@ -229,6 +229,32 @@ export interface ChannelEventData {
   reason?: string; // only in ChannelDisconnected
 }
 
+// ── Chat ──
+
+/** POST /api/chat request body */
+export interface ChatRequest {
+  message: string;
+  user_name?: string;
+  conversation_id?: string | null;
+}
+
+/** POST /api/chat response */
+export interface ChatResponse {
+  response: string;
+  conversation_id: string;
+  mind_id: string;
+  timestamp?: string;
+}
+
+/** Local chat message for the thread UI */
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  timestamp: string;
+  mind_id?: string;
+}
+
 // ── Settings ──
 
 /**

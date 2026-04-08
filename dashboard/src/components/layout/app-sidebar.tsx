@@ -17,6 +17,7 @@ import { formatUptime } from "@/lib/format";
 import {
   LayoutDashboardIcon,
   MessageSquareIcon,
+  MessageCircleIcon,
   BrainIcon,
   ScrollTextIcon,
   SettingsIcon,
@@ -54,6 +55,7 @@ interface NavItem {
 
 const CORE_NAV: NavItem[] = [
   { titleKey: "nav.overview", icon: LayoutDashboardIcon, path: "/" },
+  { titleKey: "nav.chat", icon: MessageCircleIcon, path: "/chat" },
   { titleKey: "nav.conversations", icon: MessageSquareIcon, path: "/conversations" },
   { titleKey: "nav.brain", icon: BrainIcon, path: "/brain" },
   { titleKey: "nav.logs", icon: ScrollTextIcon, path: "/logs" },

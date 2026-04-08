@@ -1,0 +1,17 @@
+{
+  "title": "Chat",
+  "subtitle": "Talk directly with your mind",
+  "placeholder": "Type a message...",
+  "send": "Send",
+  "sending": "Thinking...",
+  "empty": {
+    "title": "Start a conversation",
+    "description": "Send a message to begin chatting with your mind."
+  },
+  "error": {
+    "sendFailed": "Failed to send message. Please try again.",
+    "loadFailed": "Something went wrong. Please try again."
+  },
+  "newChat": "New Chat",
+  "you": "You"
+}
