@@ -1,0 +1,125 @@
+name: Publish to PyPI
+
+# Triggered only on version tags — never on branch pushes.
+# This ensures every PyPI release maps 1:1 to a git tag.
+on:
+  push:
+    tags:
+      - "v*"
+
+# Prevent concurrent publishes for the same tag
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ── Gate: run full CI before publishing ──
+  ci:
+    name: CI Gate
+    uses: ./.github/workflows/ci.yml
+
+  # ── Build distribution artifacts ──
+  build:
+    name: Build sdist + wheel
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Build dashboard assets
+        working-directory: dashboard
+        run: |
+          npm ci
+          npm run build
+
+      - name: Verify dashboard static output
+        run: test -f src/sovyx/dashboard/static/index.html
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION=$(grep '^version' pyproject.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) does not match pyproject.toml ($PKG_VERSION)"
+            exit 1
+          fi
+          echo "VERSION=$TAG_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Verify dist contents
+        run: |
+          ls -la dist/
+          # Ensure both sdist and wheel exist
+          test -f dist/sovyx-${{ steps.version.outputs.VERSION }}.tar.gz
+          test -f dist/sovyx-${{ steps.version.outputs.VERSION }}-py3-none-any.whl
+          echo "✓ Artifacts verified: sdist + wheel for v${{ steps.version.outputs.VERSION }}"
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
+  # ── Publish to PyPI ──
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # Required for trusted publishing (OIDC)
+    environment:
+      name: pypi
+      url: https://pypi.org/project/sovyx/${{ needs.build.outputs.VERSION || '' }}/
+    steps:
+      - name: Download dist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        # Uses OIDC trusted publishing — no API token needed.
+        # Configure at: https://pypi.org/manage/project/sovyx/settings/publishing/
+        # Trusted publisher: GitHub Actions, repo sovyx-ai/sovyx,
+        # workflow publish.yml, environment pypi
+
+  # ── Create GitHub Release ──
+  release:
+    name: GitHub Release
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download dist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*
+          fail_on_unmatched_files: true
