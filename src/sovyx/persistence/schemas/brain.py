@@ -122,6 +122,69 @@ CREATE VIRTUAL TABLE episode_embeddings USING vec0(
 );
 """
 
+# ── Migration 003: Canonical relation ordering ─────────────────────────────
+
+_MIGRATION_003_SQL = """\
+-- Merge bidirectional duplicate relations into canonical order.
+-- Canonical: source_id = min(source_id, target_id) by string comparison.
+--
+-- Strategy:
+--   1. Identify pairs where both A→B and B→A exist (non-canonical = B→A where B > A).
+--   2. For each pair: merge co_occurrence (sum), weight (max) into canonical row.
+--   3. Delete non-canonical rows.
+--   4. Flip remaining non-canonical rows that have no canonical counterpart.
+
+-- Step 1+2: Merge duplicates — add co_occurrence and take max weight
+-- from the non-canonical row into the canonical row.
+UPDATE relations
+SET co_occurrence_count = co_occurrence_count + (
+        SELECT r2.co_occurrence_count
+        FROM relations r2
+        WHERE r2.source_id = relations.target_id
+          AND r2.target_id = relations.source_id
+          AND r2.relation_type = relations.relation_type
+    ),
+    weight = MAX(weight, (
+        SELECT r2.weight
+        FROM relations r2
+        WHERE r2.source_id = relations.target_id
+          AND r2.target_id = relations.source_id
+          AND r2.relation_type = relations.relation_type
+    ))
+WHERE source_id < target_id
+  AND EXISTS (
+      SELECT 1 FROM relations r2
+      WHERE r2.source_id = relations.target_id
+        AND r2.target_id = relations.source_id
+        AND r2.relation_type = relations.relation_type
+  );
+
+-- Step 3: Delete the non-canonical half of merged duplicates.
+DELETE FROM relations
+WHERE source_id > target_id
+  AND EXISTS (
+      SELECT 1 FROM relations r2
+      WHERE r2.source_id = relations.target_id
+        AND r2.target_id = relations.source_id
+        AND r2.relation_type = relations.relation_type
+  );
+
+-- Step 4: Flip remaining non-canonical rows (no canonical counterpart).
+-- SQLite doesn't support UPDATE with self-join on same table easily,
+-- so we use a temp table approach.
+CREATE TEMPORARY TABLE _flip_relations AS
+SELECT id, target_id AS new_source, source_id AS new_target
+FROM relations
+WHERE source_id > target_id;
+
+UPDATE relations
+SET source_id = (SELECT new_source FROM _flip_relations WHERE _flip_relations.id = relations.id),
+    target_id = (SELECT new_target FROM _flip_relations WHERE _flip_relations.id = relations.id)
+WHERE id IN (SELECT id FROM _flip_relations);
+
+DROP TABLE IF EXISTS _flip_relations;
+"""
+
 # ── Pre-computed checksums ──────────────────────────────────────────────────
 
 _MIGRATION_001 = Migration(
@@ -138,6 +201,13 @@ _MIGRATION_002 = Migration(
     checksum=Migration.compute_checksum(_MIGRATION_002_SQL),
 )
 
+_MIGRATION_003 = Migration(
+    version=3,
+    description="canonical relation ordering — merge bidirectional duplicates",
+    sql_up=_MIGRATION_003_SQL,
+    checksum=Migration.compute_checksum(_MIGRATION_003_SQL),
+)
+
 
 def get_brain_migrations(*, has_sqlite_vec: bool = True) -> list[Migration]:
     """Return brain database migrations.
@@ -149,6 +219,10 @@ def get_brain_migrations(*, has_sqlite_vec: bool = True) -> list[Migration]:
     If sqlite-vec is installed later, the next restart detects that
     migration 002 hasn't been applied and applies it automatically.
 
+    Migration 003 (canonical relation ordering) is always included —
+    it merges bidirectional duplicate relations and flips non-canonical
+    rows so that ``source_id < target_id`` (string comparison).
+
     Args:
         has_sqlite_vec: Whether the sqlite-vec extension is available.
 
@@ -158,4 +232,5 @@ def get_brain_migrations(*, has_sqlite_vec: bool = True) -> list[Migration]:
     migrations = [_MIGRATION_001]
     if has_sqlite_vec:
         migrations.append(_MIGRATION_002)
+    migrations.append(_MIGRATION_003)
     return migrations

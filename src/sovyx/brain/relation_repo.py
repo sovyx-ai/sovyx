@@ -1,6 +1,10 @@
 """Sovyx relation repository — synapse management for concept graph.
 
 CRUD for relations between concepts with graph traversal queries.
+
+Canonical ordering: all relations are stored with ``min(source, target)``
+as ``source_id`` to eliminate bidirectional duplicates.  ``A→B`` and
+``B→A`` both resolve to the same canonical row.
 """
 
 from __future__ import annotations
@@ -19,6 +23,20 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+def _canonical_order(a: ConceptId, b: ConceptId) -> tuple[ConceptId, ConceptId]:
+    """Return (source, target) in canonical order: min first.
+
+    Ensures that the pair (A, B) and (B, A) always map to the same
+    database row, eliminating bidirectional duplicates.
+
+    Uses string comparison on the ID values — stable and deterministic
+    regardless of ID format (UUIDs, ULIDs, etc.).
+    """
+    if str(a) <= str(b):
+        return a, b
+    return b, a
+
+
 class RelationRepository:
     """Repository for brain relations (synapses between concepts).
 
@@ -32,12 +50,17 @@ class RelationRepository:
     async def create(self, relation: Relation) -> RelationId:
         """Create a relation between two concepts.
 
+        Source and target are canonicalized (``min`` first) on write to
+        prevent bidirectional duplicates.
+
         Args:
             relation: The relation to persist.
 
         Returns:
             The relation ID.
         """
+        src, tgt = _canonical_order(relation.source_id, relation.target_id)
+
         async with self._pool.write() as conn:
             await conn.execute(
                 """INSERT INTO relations
@@ -46,8 +69,8 @@ class RelationRepository:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     str(relation.id),
-                    str(relation.source_id),
-                    str(relation.target_id),
+                    str(src),
+                    str(tgt),
                     relation.relation_type.value,
                     relation.weight,
                     relation.co_occurrence_count,
@@ -60,8 +83,8 @@ class RelationRepository:
         logger.debug(
             "relation_created",
             relation_id=str(relation.id),
-            source=str(relation.source_id),
-            target=str(relation.target_id),
+            source=str(src),
+            target=str(tgt),
         )
         return relation.id
 
@@ -143,14 +166,16 @@ class RelationRepository:
         """Increment co-occurrence count and update last_activated.
 
         If the relation doesn't exist, creates it with weight=0.3.
+        Input order does not matter — canonicalized before query.
         """
+        src, tgt = _canonical_order(source_id, target_id)
         now = datetime.now(UTC).isoformat()
 
         async with self._pool.write() as conn:
             cursor = await conn.execute(
                 "SELECT id FROM relations "
                 "WHERE source_id = ? AND target_id = ? AND relation_type = ?",
-                (str(source_id), str(target_id), RelationType.RELATED_TO.value),
+                (str(src), str(tgt), RelationType.RELATED_TO.value),
             )
             row = await cursor.fetchone()
 
@@ -172,8 +197,8 @@ class RelationRepository:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         new_id,
-                        str(source_id),
-                        str(target_id),
+                        str(src),
+                        str(tgt),
                         RelationType.RELATED_TO.value,
                         0.3,
                         1,
@@ -191,19 +216,25 @@ class RelationRepository:
     ) -> Relation:
         """Get existing relation or create a new one.
 
+        Input order does not matter — the pair is canonicalized before
+        lookup and creation.  ``get_or_create(A, B)`` and
+        ``get_or_create(B, A)`` always resolve to the same row.
+
         Args:
-            source_id: Source concept.
-            target_id: Target concept.
+            source_id: One concept in the pair.
+            target_id: The other concept in the pair.
             relation_type: Type of relation.
 
         Returns:
             The existing or newly created relation.
         """
+        src, tgt = _canonical_order(source_id, target_id)
+
         async with self._pool.read() as conn:
             cursor = await conn.execute(
                 "SELECT * FROM relations "
                 "WHERE source_id = ? AND target_id = ? AND relation_type = ?",
-                (str(source_id), str(target_id), relation_type.value),
+                (str(src), str(tgt), relation_type.value),
             )
             row = await cursor.fetchone()
 
@@ -213,8 +244,8 @@ class RelationRepository:
         from sovyx.brain.models import Relation as RelationModel
 
         relation = RelationModel(
-            source_id=source_id,
-            target_id=target_id,
+            source_id=src,
+            target_id=tgt,
             relation_type=relation_type,
         )
         await self.create(relation)
