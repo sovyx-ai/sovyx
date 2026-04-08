@@ -185,6 +185,8 @@ async def bootstrap(
                 brain_service=brain_service,
                 decay=ebbinghaus,
                 event_bus=event_bus,
+                concept_repo=concept_repo,
+                relation_repo=relation_repo,
             )
             consolidation_scheduler = ConsolidationScheduler(
                 cycle=consolidation_cycle,
