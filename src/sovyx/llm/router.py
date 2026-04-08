@@ -377,6 +377,7 @@ class LLMRouter:
                             model=response.model,
                             tokens_in=response.tokens_in,
                             tokens_out=response.tokens_out,
+                            cost_usd=response.cost_usd,
                             latency_ms=response.latency_ms,
                         )
                     )
