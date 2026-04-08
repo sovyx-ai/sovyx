@@ -208,6 +208,10 @@ class BrainService:
                 concept.metadata["corroboration_count"] = corr
                 concept.confidence = min(1.0, concept.confidence + 0.1)
 
+                # Importance reinforcement: repeated mention = more important
+                # +0.05 per encounter, counters Ebbinghaus decay naturally
+                concept.importance = min(1.0, concept.importance + 0.05)
+
                 # Update emotional valence: weighted average
                 # (existing has more history, weight it 2:1)
                 if emotional_valence != 0.0:

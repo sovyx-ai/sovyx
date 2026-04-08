@@ -182,6 +182,20 @@ class ConceptRepository:
             )
             await conn.commit()
 
+    async def boost_importance(self, concept_id: ConceptId, delta: float) -> None:
+        """Boost a concept's importance by delta, capped at 1.0.
+
+        Args:
+            concept_id: The concept to boost.
+            delta: Amount to add (positive). Clamped to [0.0, 1.0].
+        """
+        async with self._pool.write() as conn:
+            await conn.execute(
+                "UPDATE concepts SET importance = MIN(1.0, importance + ?) WHERE id = ?",
+                (max(0.0, delta), str(concept_id)),
+            )
+            await conn.commit()
+
     async def search_by_embedding(
         self,
         query_embedding: list[float],

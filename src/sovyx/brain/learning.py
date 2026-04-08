@@ -37,13 +37,18 @@ class HebbianLearning:
     Weight is always clamped to [0, 1] to maintain invariant.
     """
 
+    _CO_ACTIVATION_THRESHOLD = 0.7
+    _IMPORTANCE_BOOST = 0.02
+
     def __init__(
         self,
         relation_repo: RelationRepository,
         learning_rate: float = 0.1,
+        concept_repo: ConceptRepository | None = None,
     ) -> None:
         self._relations = relation_repo
         self._learning_rate = learning_rate
+        self._concepts = concept_repo
 
     async def strengthen(
         self,
@@ -180,6 +185,13 @@ class HebbianLearning:
 
         await self._relations.update_weight(relation.id, new_weight)
         await self._relations.increment_co_occurrence(id_a, id_b)
+
+        # Importance reinforcement: highly co-activated pairs get
+        # a small importance boost (counters Ebbinghaus decay)
+        if co_activation > self._CO_ACTIVATION_THRESHOLD and self._concepts is not None:
+            await self._concepts.boost_importance(id_a, self._IMPORTANCE_BOOST)
+            await self._concepts.boost_importance(id_b, self._IMPORTANCE_BOOST)
+
         return 1
 
     @staticmethod

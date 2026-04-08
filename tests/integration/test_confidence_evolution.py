@@ -18,7 +18,9 @@ if TYPE_CHECKING:
 
 from sovyx.brain.concept_repo import ConceptRepository
 from sovyx.brain.embedding import EmbeddingEngine
+from sovyx.brain.learning import HebbianLearning
 from sovyx.brain.models import Concept
+from sovyx.brain.relation_repo import RelationRepository
 from sovyx.engine.types import ConceptCategory, ConceptId, MindId
 from sovyx.persistence.migrations import MigrationRunner
 from sovyx.persistence.pool import DatabasePool
@@ -34,9 +36,7 @@ async def brain_pool(tmp_path: Path) -> DatabasePool:
     await pool.initialize()
     runner = MigrationRunner(pool)
     await runner.initialize()
-    await runner.run_migrations(
-        get_brain_migrations(has_sqlite_vec=pool.has_sqlite_vec)
-    )
+    await runner.run_migrations(get_brain_migrations(has_sqlite_vec=pool.has_sqlite_vec))
     return pool
 
 
@@ -71,6 +71,9 @@ async def _learn_with_confidence(
             corr += 1
             concept.metadata["corroboration_count"] = corr
             concept.confidence = min(1.0, concept.confidence + 0.1)
+
+            # Importance reinforcement
+            concept.importance = min(1.0, concept.importance + 0.05)
 
             # Emotional valence weighted average (2:1 existing:new)
             if emotional_valence != 0.0:
@@ -247,3 +250,184 @@ class TestConfidenceEvolution:
         raw_meta = json.dumps(concept.metadata)
         parsed = json.loads(raw_meta)
         assert parsed["corroboration_count"] == 2
+
+
+class TestImportanceReinforcement:
+    """Importance grows with repeated access and high co-activation."""
+
+    async def test_importance_grows_on_dedup(self, concept_repo: ConceptRepository) -> None:
+        """Repeated encounters boost importance by 0.05 each."""
+        # First encounter: default importance 0.5
+        cid = await _learn_with_confidence(
+            concept_repo, "Python", "knows Python", ConceptCategory.SKILL
+        )
+        c1 = await concept_repo.get(cid)
+        assert c1 is not None
+        initial = c1.importance
+
+        # Second encounter: +0.05
+        await _learn_with_confidence(concept_repo, "Python", "knows Python", ConceptCategory.SKILL)
+        c2 = await concept_repo.get(cid)
+        assert c2 is not None
+        assert c2.importance == pytest.approx(initial + 0.05, abs=0.01)
+
+    async def test_importance_capped_at_one(self, concept_repo: ConceptRepository) -> None:
+        """Importance never exceeds 1.0."""
+        cid = ConceptId("")
+        for _ in range(30):
+            cid = await _learn_with_confidence(
+                concept_repo,
+                "Python",
+                "knows Python",
+                ConceptCategory.SKILL,
+            )
+        concept = await concept_repo.get(cid)
+        assert concept is not None
+        assert 0.0 <= concept.importance <= 1.0
+
+    async def test_boost_importance_method(self, concept_repo: ConceptRepository) -> None:
+        """ConceptRepository.boost_importance works correctly."""
+        concept = Concept(
+            mind_id=MIND,
+            name="Test",
+            content="test",
+            category=ConceptCategory.FACT,
+        )
+        cid = await concept_repo.create(concept)
+
+        # Boost by 0.1
+        await concept_repo.boost_importance(cid, 0.1)
+        c = await concept_repo.get(cid)
+        assert c is not None
+        assert c.importance == pytest.approx(0.6, abs=0.01)
+
+        # Boost to max
+        await concept_repo.boost_importance(cid, 10.0)
+        c = await concept_repo.get(cid)
+        assert c is not None
+        assert c.importance == pytest.approx(1.0, abs=0.01)
+
+    async def test_boost_negative_delta_ignored(self, concept_repo: ConceptRepository) -> None:
+        """Negative delta is clamped to 0."""
+        concept = Concept(
+            mind_id=MIND,
+            name="Neg",
+            content="test",
+            category=ConceptCategory.FACT,
+        )
+        cid = await concept_repo.create(concept)
+        await concept_repo.boost_importance(cid, -0.5)
+        c = await concept_repo.get(cid)
+        assert c is not None
+        assert c.importance == pytest.approx(0.5, abs=0.01)
+
+    async def test_hebbian_high_coactivation_boosts_importance(
+        self, brain_pool: DatabasePool, concept_repo: ConceptRepository
+    ) -> None:
+        """High co-activation (>0.7) boosts both concepts' importance."""
+        relation_repo = RelationRepository(pool=brain_pool)
+        hebbian = HebbianLearning(
+            relation_repo=relation_repo,
+            concept_repo=concept_repo,
+        )
+
+        # Create two concepts
+        c1 = Concept(
+            mind_id=MIND,
+            name="A",
+            content="a",
+            category=ConceptCategory.FACT,
+        )
+        c2 = Concept(
+            mind_id=MIND,
+            name="B",
+            content="b",
+            category=ConceptCategory.FACT,
+        )
+        id1 = await concept_repo.create(c1)
+        id2 = await concept_repo.create(c2)
+
+        # Strengthen with high activation (>0.7)
+        activations = {id1: 0.9, id2: 0.85}
+        await hebbian.strengthen([id1, id2], activations=activations)
+
+        r1 = await concept_repo.get(id1)
+        r2 = await concept_repo.get(id2)
+        assert r1 is not None
+        assert r2 is not None
+        # Both should have importance > 0.5 (boosted by 0.02)
+        assert r1.importance == pytest.approx(0.52, abs=0.01)
+        assert r2.importance == pytest.approx(0.52, abs=0.01)
+
+    async def test_hebbian_low_coactivation_no_boost(
+        self, brain_pool: DatabasePool, concept_repo: ConceptRepository
+    ) -> None:
+        """Low co-activation (<=0.7) does NOT boost importance."""
+        relation_repo = RelationRepository(pool=brain_pool)
+        hebbian = HebbianLearning(
+            relation_repo=relation_repo,
+            concept_repo=concept_repo,
+        )
+
+        c1 = Concept(
+            mind_id=MIND,
+            name="X",
+            content="x",
+            category=ConceptCategory.FACT,
+        )
+        c2 = Concept(
+            mind_id=MIND,
+            name="Y",
+            content="y",
+            category=ConceptCategory.FACT,
+        )
+        id1 = await concept_repo.create(c1)
+        id2 = await concept_repo.create(c2)
+
+        # Low activation
+        activations = {id1: 0.5, id2: 0.6}
+        await hebbian.strengthen([id1, id2], activations=activations)
+
+        r1 = await concept_repo.get(id1)
+        r2 = await concept_repo.get(id2)
+        assert r1 is not None
+        assert r2 is not None
+        # Importance unchanged at 0.5
+        assert r1.importance == pytest.approx(0.5, abs=0.01)
+        assert r2.importance == pytest.approx(0.5, abs=0.01)
+
+    async def test_hebbian_no_concept_repo_no_boost(
+        self, brain_pool: DatabasePool, concept_repo: ConceptRepository
+    ) -> None:
+        """Without concept_repo, no importance boost (backward compat)."""
+        relation_repo = RelationRepository(pool=brain_pool)
+        hebbian = HebbianLearning(
+            relation_repo=relation_repo,
+            # concept_repo NOT passed
+        )
+
+        c1 = Concept(
+            mind_id=MIND,
+            name="P",
+            content="p",
+            category=ConceptCategory.FACT,
+        )
+        c2 = Concept(
+            mind_id=MIND,
+            name="Q",
+            content="q",
+            category=ConceptCategory.FACT,
+        )
+        id1 = await concept_repo.create(c1)
+        id2 = await concept_repo.create(c2)
+
+        activations = {id1: 0.9, id2: 0.9}
+        await hebbian.strengthen([id1, id2], activations=activations)
+
+        r1 = await concept_repo.get(id1)
+        r2 = await concept_repo.get(id2)
+        assert r1 is not None
+        assert r2 is not None
+        # No boost without concept_repo
+        assert r1.importance == pytest.approx(0.5, abs=0.01)
+        assert r2.importance == pytest.approx(0.5, abs=0.01)
