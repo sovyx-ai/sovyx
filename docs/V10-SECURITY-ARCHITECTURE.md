@@ -1086,6 +1086,62 @@ class AuditEntry:
 
 ---
 
+## 7. Brain Architecture (v0.5.11)
+
+Brain hardening shipped in v0.5.11 addresses 5 interacting failures across
+4 layers (DB, Algorithm, Working Memory, API) that caused isolated nodes
+in the Brain Explorer graph.
+
+### 7.1 Canonical Relation Ordering
+
+All relations stored with `min(source, target)` as `source_id`.
+Eliminates bidirectional duplicates: `A->B` and `B->A` resolve to the same row.
+
+- `_canonical_order(a, b)` applied in `create()`, `get_or_create()`, `increment_co_occurrence()`
+- Migration v3 merges pre-existing duplicates (sum co_occurrence, max weight)
+- UNIQUE constraint on `(source_id, target_id, relation_type)` enforces at DB level
+
+### 7.2 Star Topology Hebbian Learning
+
+Replaces O(n^2) all-pairs with linear scaling:
+
+```
+Layer 1: Within-turn — new concepts pair with each other (O(n^2) on small set, ~3-8 concepts)
+Layer 2: Cross-turn  — each new concept pairs with top-K existing by activation (K=15)
+Layer 3: Existing     — reinforce ONLY pre-existing relations (no spurious edges)
+```
+
+- `HebbianLearning.strengthen_star(new_ids, existing_ids, activations, k=15)`
+- `strengthen()` kept for within-turn only (called by `strengthen_connection()`)
+- `BrainService.encode_episode()` separates active concepts into new vs existing
+
+### 7.3 Working Memory Decay
+
+- `decay_rate = 0.15` (after 5 turns: 0.22 activation, after 10: 0.098)
+- `decay_all()` called after reflect phase in `CognitiveLoop._execute_loop()`
+- Dedup path in `learn_concept()` re-activates concepts to 0.5 (prevents decay-induced invisibility)
+- Spreading activation boosts relevant old concepts (natural priority)
+
+### 7.4 Graph API Connectivity Guarantee
+
+- `ORDER BY weight DESC` — strongest edges first
+- Bidirectional query (`source IN OR target IN`) — defense-in-depth
+- Dynamic cap: `nodes * 30` for <500 nodes, `limit * 3` for large graphs
+- Orphan audit: nodes with 0 edges rescued via top-3 relations from RelationRepository
+
+### 7.5 Regression Testing
+
+`tests/integration/test_brain_connectivity.py` — 6 tests with real SQLite:
+- BFS connectivity: single connected component after 5 and 8 messages
+- Canonical ordering: every row has `source_id <= target_id`
+- Concept reuse: dedup path maintains connectivity
+- Decay resilience: early concepts stay connected after 7 rounds of decay
+- Linear scaling: relation count < quadratic maximum
+
+Marked with `@pytest.mark.no_islands` for CI regression.
+
+---
+
 ## Appendix A: Files Modified Per Phase
 
 ### Phase 1 (Security Hardening)
