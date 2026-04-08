@@ -13,6 +13,7 @@ from sovyx import __version__
 from sovyx.cli.commands.dashboard import dashboard_app
 from sovyx.cli.commands.logs import logs_app
 from sovyx.cli.rpc_client import DaemonClient
+from sovyx.dashboard.server import TOKEN_FILE
 
 console = Console()  # pragma: no cover
 app = typer.Typer(
@@ -46,6 +47,55 @@ def main(
     if version:
         console.print(f"sovyx {__version__}")
         raise typer.Exit()
+
+
+@app.command()
+def token(
+    copy: bool = typer.Option(False, "--copy", "-c", help="Copy token to clipboard"),
+) -> None:
+    """Show the dashboard authentication token.
+
+    Quick access to the API token needed for dashboard login.
+    Equivalent to `sovyx dashboard --token`.
+    """
+    if not TOKEN_FILE.exists():
+        console.print(
+            "[yellow]Token not generated yet.[/yellow]\n"
+            "[dim]Start Sovyx first: [bold]sovyx start[/bold][/dim]",
+        )
+        raise typer.Exit(1)
+
+    token_value = TOKEN_FILE.read_text().strip()
+    if not token_value:
+        console.print("[red]Token file is empty.[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"\n[bold]🔑 Dashboard Token[/bold]\n\n  {token_value}\n")
+
+    if copy:
+        try:
+            import subprocess
+
+            subprocess.run(  # noqa: S603, S607
+                ["xclip", "-selection", "clipboard"],
+                input=token_value.encode(),
+                check=True,
+                capture_output=True,
+            )
+            console.print("[green]✓ Copied to clipboard[/green]")
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            try:
+                subprocess.run(  # noqa: S603, S607
+                    ["pbcopy"],
+                    input=token_value.encode(),
+                    check=True,
+                    capture_output=True,
+                )
+                console.print("[green]✓ Copied to clipboard[/green]")
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                console.print("[dim]Clipboard not available — copy manually.[/dim]")
+
+    console.print("[dim]Use this token to authenticate with the dashboard.[/dim]\n")
 
 
 @app.command()

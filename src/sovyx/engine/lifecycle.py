@@ -131,6 +131,9 @@ class LifecycleManager:
         # Start dashboard server (if API enabled)
         await self._start_dashboard()
 
+        # Print startup banner with dashboard URL + token
+        self._print_startup_banner()
+
         # Emit engine started
         from sovyx.engine.events import EngineStarted
 
@@ -177,6 +180,65 @@ class LifecycleManager:
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, self._handle_signal, sig)
+
+    def _print_startup_banner(self) -> None:
+        """Print startup banner with dashboard URL and token.
+
+        DASH-07: Shows users how to access the dashboard immediately
+        after `sovyx start`.
+        """
+        from sovyx.dashboard.server import TOKEN_FILE
+
+        host = "127.0.0.1"
+        port = 7777
+
+        try:
+            from sovyx.engine.config import EngineConfig
+
+            if self._registry.is_registered(EngineConfig):
+                import asyncio
+
+                async def _get_config() -> tuple[str, int]:
+                    cfg = await self._registry.resolve(EngineConfig)
+                    return cfg.api.host, cfg.api.port
+
+                # Use existing loop if available
+                loop = asyncio.get_running_loop()
+                task = loop.create_task(_get_config())
+                # Can't await in sync — use defaults if not resolved yet
+                if task.done():
+                    host, port = task.result()
+        except Exception:  # noqa: BLE001 — banner is best-effort
+            pass
+
+        url = f"http://{host}:{port}"
+
+        token_display = "[not generated]"
+        if TOKEN_FILE.exists():
+            token_value = TOKEN_FILE.read_text().strip()
+            if token_value:
+                token_display = token_value
+
+        banner = (
+            "\n"
+            "╔══════════════════════════════════════════════╗\n"
+            "║           🔮 Sovyx — Mind Engine             ║\n"
+            "╠══════════════════════════════════════════════╣\n"
+            f"║  Dashboard:  {url:<32} ║\n"
+            f"║  Token:      {token_display:<32} ║\n"
+            "╠══════════════════════════════════════════════╣\n"
+            "║  Paste the token in the dashboard login.     ║\n"
+            "║  Or run: sovyx token                         ║\n"
+            "╚══════════════════════════════════════════════╝\n"
+        )
+
+        # Use print() instead of logger for console visibility
+        print(banner)  # noqa: T201
+        logger.info(
+            "startup_banner",
+            dashboard_url=url,
+            token_available=TOKEN_FILE.exists(),
+        )
 
     def _handle_signal(self, sig: signal.Signals) -> None:
         """Handle shutdown signal."""
