@@ -283,6 +283,67 @@ class RelationRepository:
             logger.info("weak_relations_deleted", mind_id=str(mind_id), count=count)
         return count
 
+    async def transfer_relations(self, from_id: ConceptId, to_id: ConceptId) -> int:
+        """Transfer all relations from one concept to another.
+
+        Used during concept merging. Updates source_id/target_id
+        to point to the surviving concept. Deletes duplicate relations
+        that would violate the canonical order unique constraint.
+
+        Args:
+            from_id: The concept being merged (will be deleted).
+            to_id: The surviving concept.
+
+        Returns:
+            Number of relations transferred.
+        """
+        async with self._pool.write() as conn:
+            # Get all relations involving from_id
+            cursor = await conn.execute(
+                "SELECT id, source_id, target_id FROM relations "
+                "WHERE source_id = ? OR target_id = ?",
+                (str(from_id), str(from_id)),
+            )
+            rows = await cursor.fetchall()
+            transferred = 0
+
+            for row in rows:
+                rid, src, tgt = str(row[0]), str(row[1]), str(row[2])
+                # Compute new endpoints
+                new_src = str(to_id) if src == str(from_id) else src
+                new_tgt = str(to_id) if tgt == str(from_id) else tgt
+
+                # Skip self-loops
+                if new_src == new_tgt:
+                    await conn.execute("DELETE FROM relations WHERE id = ?", (rid,))
+                    continue
+
+                # Canonical order
+                can_src = min(new_src, new_tgt)
+                can_tgt = max(new_src, new_tgt)
+
+                # Check if relation already exists for survivor
+                dup = await conn.execute(
+                    "SELECT id FROM relations WHERE source_id = ? AND target_id = ?",
+                    (can_src, can_tgt),
+                )
+                existing = await dup.fetchone()
+
+                if existing:
+                    # Duplicate — delete the transferred one
+                    await conn.execute("DELETE FROM relations WHERE id = ?", (rid,))
+                else:
+                    # Transfer
+                    await conn.execute(
+                        "UPDATE relations SET source_id = ?, target_id = ? WHERE id = ?",
+                        (can_src, can_tgt, rid),
+                    )
+                    transferred += 1
+
+            await conn.commit()
+
+        return transferred
+
     @staticmethod
     def _row_to_relation(row: object) -> Relation:
         """Convert a database row to a Relation model."""

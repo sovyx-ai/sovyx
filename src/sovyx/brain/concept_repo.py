@@ -14,6 +14,27 @@ from sovyx.engine.types import ConceptCategory, ConceptId, MindId
 from sovyx.observability.logging import get_logger
 from sovyx.persistence.datetime_utils import parse_db_datetime
 
+
+def _levenshtein(s: str, t: str) -> int:
+    """Compute Levenshtein edit distance between two strings.
+
+    Simple DP implementation — only used on short concept names.
+    """
+    if len(s) < len(t):
+        return _levenshtein(t, s)
+    if not t:
+        return len(s)
+
+    prev = list(range(len(t) + 1))
+    for i, sc in enumerate(s):
+        curr = [i + 1]
+        for j, tc in enumerate(t):
+            cost = 0 if sc == tc else 1
+            curr.append(min(curr[j] + 1, prev[j + 1] + 1, prev[j] + cost))
+        prev = curr
+    return prev[-1]
+
+
 if TYPE_CHECKING:
     from sovyx.brain.embedding import EmbeddingEngine
     from sovyx.brain.models import Concept
@@ -269,6 +290,68 @@ class ConceptRepository:
             rank = float(row[-1])
             results.append((concept, rank))
         return results
+
+    async def find_merge_candidates(self, mind_id: MindId) -> list[tuple[Concept, Concept]]:
+        """Find pairs of concepts that are merge candidates.
+
+        Criteria: same mind, same category, and one name is a substring
+        of the other (e.g. "PostgreSQL" and "PostgreSQL Preference").
+
+        Returns:
+            List of (survivor, to_merge) tuples. Survivor has higher
+            importance. Limited to 10 pairs per cycle to avoid overload.
+        """
+        concepts = await self.get_by_mind(mind_id)
+        pairs: list[tuple[Concept, Concept]] = []
+
+        # Group by category for efficient comparison
+        by_cat: dict[str, list[Concept]] = {}
+        for c in concepts:
+            by_cat.setdefault(c.category.value, []).append(c)
+
+        for cat_concepts in by_cat.values():
+            for i, a in enumerate(cat_concepts):
+                for b in cat_concepts[i + 1 :]:
+                    if self._is_merge_candidate(a, b):
+                        # Survivor = higher importance
+                        if a.importance >= b.importance:
+                            pairs.append((a, b))
+                        else:
+                            pairs.append((b, a))
+                        if len(pairs) >= 10:  # noqa: PLR2004
+                            return pairs
+
+        return pairs
+
+    @staticmethod
+    def _is_merge_candidate(a: Concept, b: Concept) -> bool:
+        """Check if two concepts should be merged.
+
+        Criteria (must match ALL):
+        - Same category (enforced by caller grouping)
+        - One name contains the other OR Levenshtein distance ≤ 3
+
+        Returns:
+            True if the pair should be merged.
+        """
+        na = a.name.lower().strip()
+        nb = b.name.lower().strip()
+
+        # Exact match (shouldn't happen with dedup, but defensive)
+        if na == nb:
+            return True
+
+        # Name containment: "PostgreSQL" in "PostgreSQL Preference"
+        if na in nb or nb in na:
+            return True
+
+        # Simple Levenshtein ≤ 3
+        if len(na) > 2 and len(nb) > 2:  # noqa: PLR2004
+            dist = _levenshtein(na, nb)
+            if dist <= 3:  # noqa: PLR2004
+                return True
+
+        return False
 
     async def count(self, mind_id: MindId) -> int:
         """Count concepts for a mind."""
