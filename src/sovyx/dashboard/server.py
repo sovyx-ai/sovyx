@@ -500,6 +500,77 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
 
         return JSONResponse({"ok": True, "changes": changes})
 
+    # ── Channels (active channel status) ──
+
+    @app.get("/api/channels", dependencies=[Depends(verify_token)])
+    async def channels(request: Request) -> JSONResponse:
+        """Return active channel status.
+
+        Lists all available channels and whether they are connected.
+        Dashboard is always active when the engine is running.
+        """
+        registry = getattr(app.state, "registry", None)
+        channel_list: list[dict[str, object]] = [
+            {
+                "name": "dashboard",
+                "type": "dashboard",
+                "connected": registry is not None,
+            },
+        ]
+
+        if registry is not None:
+            # Check registered channel adapters
+            try:
+                from sovyx.bridge.channels.telegram import TelegramChannel
+
+                if registry.is_registered(TelegramChannel):
+                    channel_list.append({
+                        "name": "Telegram",
+                        "type": "telegram",
+                        "connected": True,
+                    })
+                else:
+                    channel_list.append({
+                        "name": "Telegram",
+                        "type": "telegram",
+                        "connected": False,
+                    })
+            except ImportError:
+                channel_list.append({
+                    "name": "Telegram",
+                    "type": "telegram",
+                    "connected": False,
+                })
+
+            try:
+                from sovyx.bridge.channels.signal import SignalChannel
+
+                if registry.is_registered(SignalChannel):
+                    channel_list.append({
+                        "name": "Signal",
+                        "type": "signal",
+                        "connected": True,
+                    })
+                else:
+                    channel_list.append({
+                        "name": "Signal",
+                        "type": "signal",
+                        "connected": False,
+                    })
+            except ImportError:
+                channel_list.append({
+                    "name": "Signal",
+                    "type": "signal",
+                    "connected": False,
+                })
+        else:
+            channel_list.extend([
+                {"name": "Telegram", "type": "telegram", "connected": False},
+                {"name": "Signal", "type": "signal", "connected": False},
+            ])
+
+        return JSONResponse({"channels": channel_list})
+
     # ── Chat (direct conversation via dashboard) ──
 
     @app.post("/api/chat", dependencies=[Depends(verify_token)])
