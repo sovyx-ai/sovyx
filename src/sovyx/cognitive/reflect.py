@@ -192,9 +192,7 @@ class ReflectPhase:
             concepts_learned=len(concept_ids),
         )
 
-    async def _extract_with_llm(
-        self, message: str
-    ) -> list[tuple[str, str, str]] | None:
+    async def _extract_with_llm(self, message: str) -> list[tuple[str, str, str]] | None:
         """Extract concepts using LLM. Returns None on failure."""
         if not self._router:
             return None
