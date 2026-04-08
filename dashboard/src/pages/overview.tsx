@@ -4,6 +4,8 @@ import { useDashboardStore } from "@/stores/dashboard";
 import { StatCard, StatCardSkeleton, HealthGrid, ActivityFeed, MetricChart } from "@/components/dashboard";
 import { formatUptime, formatCost, formatNumber } from "@/lib/format";
 import { ComingSoon } from "@/components/coming-soon";
+import { WelcomeBanner } from "@/components/dashboard/welcome-banner";
+import { ChannelStatusCard } from "@/components/dashboard/channel-status";
 
 /**
  * Format a stat value for fresh-engine state.
@@ -34,6 +36,9 @@ export default function OverviewPage() {
           {isFresh ? t("subtitleFresh") : t("subtitle")}
         </p>
       </div>
+
+      {/* Welcome Banner — shown on first use */}
+      {isFresh && connected && <WelcomeBanner />}
 
       {/* 4 Stat Cards — skeleton while loading */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -110,8 +115,15 @@ export default function OverviewPage() {
         label={t("chart.costLabel")}
       />
 
-      {/* Activity Feed */}
-      <ActivityFeed events={recentEvents} />
+      {/* Channel Status + Activity Feed */}
+      <div className="grid gap-4 lg:grid-cols-3">
+        <div className="lg:col-span-1">
+          <ChannelStatusCard />
+        </div>
+        <div className="lg:col-span-2">
+          <ActivityFeed events={recentEvents} />
+        </div>
+      </div>
 
       {/* v1.0 Placeholders */}
       <div className="grid gap-4 md:grid-cols-3">

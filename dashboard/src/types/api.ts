@@ -255,6 +255,15 @@ export interface ChatMessage {
   mind_id?: string;
 }
 
+// ── Channels ──
+
+/** Channel status from GET /api/channels */
+export interface ChannelStatus {
+  name: string;
+  type: string;
+  connected: boolean;
+}
+
 // ── Settings ──
 
 /**
