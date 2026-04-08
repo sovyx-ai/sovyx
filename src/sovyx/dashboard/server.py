@@ -282,6 +282,7 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
                 "llm_calls_today": 0,
                 "tokens_today": 0,
                 "messages_today": 0,
+                "cost_history": [],
             }
         )
 
