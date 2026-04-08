@@ -1,10 +1,12 @@
 """Tests for sovyx.cognitive.reflect — ReflectPhase.
 
 Covers:
-- LLM-based concept extraction (mocked)
+- LLM-based concept extraction (mocked) with sentiment
 - Regex fallback extraction for all 7 categories
 - Category mapping (canonical + aliases)
 - Importance assignment
+- Sentiment extraction and clamping
+- Episode emotional valence/arousal computation
 - Episode encoding
 - Hebbian learning trigger
 - Failure resilience
@@ -22,7 +24,10 @@ from hypothesis import strategies as st
 from sovyx.cognitive.perceive import Perception
 from sovyx.cognitive.reflect import (
     _CATEGORY_MAP,
+    ExtractedConcept,
     ReflectPhase,
+    _estimate_sentiment,
+    clamp_sentiment,
     get_importance,
     resolve_category,
 )
@@ -61,8 +66,8 @@ def _response(content: str = "OK") -> LLMResponse:
     )
 
 
-def _mock_llm_response(concepts: list[dict[str, str]]) -> AsyncMock:
-    """Create a mock LLM router that returns the given concepts as JSON."""
+def _mock_llm_response(concepts: list[dict[str, object]]) -> AsyncMock:
+    """Create a mock LLM router that returns concepts as JSON."""
     router = AsyncMock()
     router.generate = AsyncMock(
         return_value=LLMResponse(
@@ -95,7 +100,6 @@ class TestCategoryMapping:
     """Every ConceptCategory value must be reachable via _CATEGORY_MAP."""
 
     def test_all_categories_covered(self) -> None:
-        """Property: every ConceptCategory value has >=1 key in _CATEGORY_MAP."""
         mapped_values = set(_CATEGORY_MAP.values())
         for cat in ConceptCategory:
             assert cat.value in mapped_values, (
@@ -103,7 +107,6 @@ class TestCategoryMapping:
             )
 
     def test_direct_mappings(self) -> None:
-        """Each canonical category maps to itself."""
         for cat in ConceptCategory:
             assert resolve_category(cat.value) == cat.value
 
@@ -143,7 +146,6 @@ class TestCategoryMapping:
 
     @given(st.text(min_size=0, max_size=50))
     def test_resolve_never_crashes(self, raw: str) -> None:
-        """Property: resolve_category never raises for any input."""
         result = resolve_category(raw)
         assert isinstance(result, str)
         assert len(result) > 0
@@ -153,7 +155,6 @@ class TestImportance:
     """Importance assignment by category."""
 
     def test_all_categories_have_importance(self) -> None:
-        """Every canonical category has an importance value."""
         for cat in ConceptCategory:
             imp = get_importance(cat.value)
             assert 0.0 < imp <= 1.0, f"{cat.value} importance={imp}"
@@ -168,6 +169,50 @@ class TestImportance:
         assert get_importance("relationship") >= get_importance("fact")
 
 
+# ── Sentiment tests ────────────────────────────────────────────────────
+
+
+class TestSentiment:
+    """Sentiment extraction and clamping."""
+
+    def test_clamp_in_range(self) -> None:
+        assert clamp_sentiment(0.5) == 0.5
+        assert clamp_sentiment(-0.5) == -0.5
+
+    def test_clamp_above_max(self) -> None:
+        assert clamp_sentiment(2.0) == 1.0
+
+    def test_clamp_below_min(self) -> None:
+        assert clamp_sentiment(-2.0) == -1.0
+
+    @given(st.floats(allow_nan=False, allow_infinity=False))
+    def test_clamp_always_bounded(self, v: float) -> None:
+        result = clamp_sentiment(v)
+        assert -1.0 <= result <= 1.0
+
+    def test_estimate_positive(self) -> None:
+        assert _estimate_sentiment("I love this great tool") > 0.0
+
+    def test_estimate_negative(self) -> None:
+        assert _estimate_sentiment("I hate this terrible thing") < 0.0
+
+    def test_estimate_neutral(self) -> None:
+        assert _estimate_sentiment("I work at Google") == 0.0
+
+    def test_extracted_concept_default_sentiment(self) -> None:
+        ec = ExtractedConcept(name="Test", content="test", category="fact")
+        assert ec.sentiment == 0.0
+
+    def test_extracted_concept_with_sentiment(self) -> None:
+        ec = ExtractedConcept(
+            name="Python",
+            content="loves Python",
+            category="preference",
+            sentiment=0.8,
+        )
+        assert ec.sentiment == 0.8
+
+
 # ── Regex fallback extraction ──────────────────────────────────────────
 
 
@@ -178,24 +223,31 @@ class TestRegexExtraction:
         phase = ReflectPhase(mock_brain)
         await phase.process(_perception("My name is Guipe"), _response(), MIND, CONV)
         mock_brain.learn_concept.assert_called_once()
-        call_kwargs = mock_brain.learn_concept.call_args.kwargs
-        assert call_kwargs["name"] == "Guipe"
-        assert call_kwargs["category"] == ConceptCategory.ENTITY
+        kw = mock_brain.learn_concept.call_args.kwargs
+        assert kw["name"] == "Guipe"
+        assert kw["category"] == ConceptCategory.ENTITY
 
     async def test_entity_portuguese(self, mock_brain: AsyncMock) -> None:
         phase = ReflectPhase(mock_brain)
         await phase.process(_perception("Meu nome é Renan"), _response(), MIND, CONV)
         mock_brain.learn_concept.assert_called_once()
-        call_kwargs = mock_brain.learn_concept.call_args.kwargs
-        assert call_kwargs["name"] == "Renan"
-        assert call_kwargs["category"] == ConceptCategory.ENTITY
+        kw = mock_brain.learn_concept.call_args.kwargs
+        assert kw["name"] == "Renan"
+        assert kw["category"] == ConceptCategory.ENTITY
 
     async def test_preference_english(self, mock_brain: AsyncMock) -> None:
         phase = ReflectPhase(mock_brain)
         await phase.process(_perception("I love coffee"), _response(), MIND, CONV)
         mock_brain.learn_concept.assert_called_once()
-        call_kwargs = mock_brain.learn_concept.call_args.kwargs
-        assert call_kwargs["category"] == ConceptCategory.PREFERENCE
+        kw = mock_brain.learn_concept.call_args.kwargs
+        assert kw["category"] == ConceptCategory.PREFERENCE
+
+    async def test_preference_has_positive_sentiment(self, mock_brain: AsyncMock) -> None:
+        """Regex preference extraction includes sentiment."""
+        phase = ReflectPhase(mock_brain)
+        await phase.process(_perception("I love great coffee"), _response(), MIND, CONV)
+        kw = mock_brain.learn_concept.call_args.kwargs
+        assert kw["emotional_valence"] > 0.0
 
     async def test_preference_portuguese(self, mock_brain: AsyncMock) -> None:
         phase = ReflectPhase(mock_brain)
@@ -206,45 +258,58 @@ class TestRegexExtraction:
         phase = ReflectPhase(mock_brain)
         await phase.process(_perception("I work at Google"), _response(), MIND, CONV)
         mock_brain.learn_concept.assert_called_once()
-        call_kwargs = mock_brain.learn_concept.call_args.kwargs
-        assert call_kwargs["category"] == ConceptCategory.FACT
+        kw = mock_brain.learn_concept.call_args.kwargs
+        assert kw["category"] == ConceptCategory.FACT
 
     async def test_skill_english(self, mock_brain: AsyncMock) -> None:
         phase = ReflectPhase(mock_brain)
         await phase.process(_perception("I code in Rust"), _response(), MIND, CONV)
         mock_brain.learn_concept.assert_called_once()
-        call_kwargs = mock_brain.learn_concept.call_args.kwargs
-        assert call_kwargs["category"] == ConceptCategory.SKILL
+        kw = mock_brain.learn_concept.call_args.kwargs
+        assert kw["category"] == ConceptCategory.SKILL
 
     async def test_belief_english(self, mock_brain: AsyncMock) -> None:
         phase = ReflectPhase(mock_brain)
         await phase.process(_perception("I think ORMs are harmful"), _response(), MIND, CONV)
         mock_brain.learn_concept.assert_called_once()
-        call_kwargs = mock_brain.learn_concept.call_args.kwargs
-        assert call_kwargs["category"] == ConceptCategory.BELIEF
+        kw = mock_brain.learn_concept.call_args.kwargs
+        assert kw["category"] == ConceptCategory.BELIEF
 
     async def test_belief_portuguese(self, mock_brain: AsyncMock) -> None:
         phase = ReflectPhase(mock_brain)
         await phase.process(
-            _perception("Eu acho que microservices são overrated"), _response(), MIND, CONV
+            _perception("Eu acho que microservices são overrated"),
+            _response(),
+            MIND,
+            CONV,
         )
         mock_brain.learn_concept.assert_called_once()
-        call_kwargs = mock_brain.learn_concept.call_args.kwargs
-        assert call_kwargs["category"] == ConceptCategory.BELIEF
+        kw = mock_brain.learn_concept.call_args.kwargs
+        assert kw["category"] == ConceptCategory.BELIEF
 
     async def test_event_english(self, mock_brain: AsyncMock) -> None:
         phase = ReflectPhase(mock_brain)
-        await phase.process(_perception("I migrated to AWS last month"), _response(), MIND, CONV)
+        await phase.process(
+            _perception("I migrated to AWS last month"),
+            _response(),
+            MIND,
+            CONV,
+        )
         mock_brain.learn_concept.assert_called_once()
-        call_kwargs = mock_brain.learn_concept.call_args.kwargs
-        assert call_kwargs["category"] == ConceptCategory.EVENT
+        kw = mock_brain.learn_concept.call_args.kwargs
+        assert kw["category"] == ConceptCategory.EVENT
 
     async def test_relationship_english(self, mock_brain: AsyncMock) -> None:
         phase = ReflectPhase(mock_brain)
-        await phase.process(_perception("I manage a team of 5 engineers"), _response(), MIND, CONV)
+        await phase.process(
+            _perception("I manage a team of 5 engineers"),
+            _response(),
+            MIND,
+            CONV,
+        )
         mock_brain.learn_concept.assert_called_once()
-        call_kwargs = mock_brain.learn_concept.call_args.kwargs
-        assert call_kwargs["category"] == ConceptCategory.RELATIONSHIP
+        kw = mock_brain.learn_concept.call_args.kwargs
+        assert kw["category"] == ConceptCategory.RELATIONSHIP
 
     async def test_no_concepts_extracted(self, mock_brain: AsyncMock) -> None:
         phase = ReflectPhase(mock_brain)
@@ -259,22 +324,55 @@ class TestLLMExtraction:
     """LLM-based concept extraction with mocked router."""
 
     async def test_llm_returns_all_categories(self, mock_brain: AsyncMock) -> None:
-        """LLM response with all 7 categories → all resolved correctly."""
         concepts = [
-            {"name": "John Doe", "content": "User's name is John", "category": "entity"},
-            {"name": "Python Expert", "content": "User knows Python", "category": "skill"},
-            {"name": "Prefers Vim", "content": "Prefers Vim", "category": "preference"},
-            {"name": "Hates ORM", "content": "ORMs add complexity", "category": "belief"},
-            {"name": "AWS Migration", "content": "User migrated to AWS", "category": "event"},
-            {"name": "Team Lead", "content": "User leads a team", "category": "relationship"},
-            {"name": "Remote Worker", "content": "User works remotely", "category": "fact"},
+            {
+                "name": "John Doe",
+                "content": "User's name is John",
+                "category": "entity",
+                "sentiment": 0.0,
+            },
+            {
+                "name": "Python Expert",
+                "content": "Knows Python",
+                "category": "skill",
+                "sentiment": 0.3,
+            },
+            {
+                "name": "Prefers Vim",
+                "content": "Prefers Vim",
+                "category": "preference",
+                "sentiment": 0.5,
+            },
+            {
+                "name": "Hates ORM",
+                "content": "ORMs add complexity",
+                "category": "belief",
+                "sentiment": -0.7,
+            },
+            {
+                "name": "AWS Migration",
+                "content": "Migrated to AWS",
+                "category": "event",
+                "sentiment": 0.2,
+            },
+            {
+                "name": "Team Lead",
+                "content": "Leads a team",
+                "category": "relationship",
+                "sentiment": 0.1,
+            },
+            {
+                "name": "Remote Worker",
+                "content": "Works remotely",
+                "category": "fact",
+                "sentiment": 0.0,
+            },
         ]
         router = _mock_llm_response(concepts)
         phase = ReflectPhase(mock_brain, llm_router=router)
         await phase.process(_perception("test message"), _response(), MIND, CONV)
         assert mock_brain.learn_concept.call_count == 7  # noqa: PLR2004
 
-        # Collect all categories passed to learn_concept
         categories_used = set()
         for call in mock_brain.learn_concept.call_args_list:
             categories_used.add(call.kwargs["category"])
@@ -287,56 +385,135 @@ class TestLLMExtraction:
         assert ConceptCategory.RELATIONSHIP in categories_used
         assert ConceptCategory.FACT in categories_used
 
-    async def test_llm_alias_opinion_becomes_belief(self, mock_brain: AsyncMock) -> None:
-        """LLM returning 'opinion' category → resolved to BELIEF."""
+    async def test_llm_sentiment_passed_through(self, mock_brain: AsyncMock) -> None:
+        """LLM sentiment values are passed to learn_concept."""
         concepts = [
-            {"name": "GraphQL Bad", "content": "GraphQL is bad", "category": "opinion"},
+            {
+                "name": "Loves Rust",
+                "content": "loves Rust",
+                "category": "preference",
+                "sentiment": 0.9,
+            },
         ]
         router = _mock_llm_response(concepts)
         phase = ReflectPhase(mock_brain, llm_router=router)
         await phase.process(_perception("test"), _response(), MIND, CONV)
-        call_kwargs = mock_brain.learn_concept.call_args.kwargs
-        assert call_kwargs["category"] == ConceptCategory.BELIEF
+        kw = mock_brain.learn_concept.call_args.kwargs
+        assert kw["emotional_valence"] == pytest.approx(0.9, abs=0.01)
+
+    async def test_llm_sentiment_clamped(self, mock_brain: AsyncMock) -> None:
+        """Out-of-range sentiment values are clamped."""
+        concepts = [
+            {
+                "name": "Extreme",
+                "content": "extreme",
+                "category": "belief",
+                "sentiment": 5.0,
+            },
+        ]
+        router = _mock_llm_response(concepts)
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(_perception("test"), _response(), MIND, CONV)
+        kw = mock_brain.learn_concept.call_args.kwargs
+        assert kw["emotional_valence"] == pytest.approx(1.0, abs=0.01)
+
+    async def test_llm_missing_sentiment_defaults_zero(self, mock_brain: AsyncMock) -> None:
+        """Missing sentiment field defaults to 0.0."""
+        concepts = [
+            {"name": "Test", "content": "test", "category": "fact"},
+        ]
+        router = _mock_llm_response(concepts)
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(_perception("test"), _response(), MIND, CONV)
+        kw = mock_brain.learn_concept.call_args.kwargs
+        assert kw["emotional_valence"] == 0.0
+
+    async def test_llm_invalid_sentiment_defaults_zero(self, mock_brain: AsyncMock) -> None:
+        """Non-numeric sentiment defaults to 0.0."""
+        concepts = [
+            {
+                "name": "Test",
+                "content": "test",
+                "category": "fact",
+                "sentiment": "not a number",
+            },
+        ]
+        router = _mock_llm_response(concepts)
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(_perception("test"), _response(), MIND, CONV)
+        kw = mock_brain.learn_concept.call_args.kwargs
+        assert kw["emotional_valence"] == 0.0
+
+    async def test_llm_alias_opinion_becomes_belief(self, mock_brain: AsyncMock) -> None:
+        concepts = [
+            {
+                "name": "GraphQL Bad",
+                "content": "GraphQL is bad",
+                "category": "opinion",
+                "sentiment": -0.5,
+            },
+        ]
+        router = _mock_llm_response(concepts)
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(_perception("test"), _response(), MIND, CONV)
+        kw = mock_brain.learn_concept.call_args.kwargs
+        assert kw["category"] == ConceptCategory.BELIEF
 
     async def test_llm_alias_project_becomes_entity(self, mock_brain: AsyncMock) -> None:
-        """LLM returning 'project' category → resolved to ENTITY."""
         concepts = [
-            {"name": "Sovyx", "content": "User is building Sovyx", "category": "project"},
+            {
+                "name": "Sovyx",
+                "content": "Building Sovyx",
+                "category": "project",
+                "sentiment": 0.4,
+            },
         ]
         router = _mock_llm_response(concepts)
         phase = ReflectPhase(mock_brain, llm_router=router)
         await phase.process(_perception("test"), _response(), MIND, CONV)
-        call_kwargs = mock_brain.learn_concept.call_args.kwargs
-        assert call_kwargs["category"] == ConceptCategory.ENTITY
+        kw = mock_brain.learn_concept.call_args.kwargs
+        assert kw["category"] == ConceptCategory.ENTITY
 
     async def test_llm_skill_not_collapsed_to_fact(self, mock_brain: AsyncMock) -> None:
-        """TASK-01 fix: 'skill' category must map to SKILL, not FACT."""
         concepts = [
-            {"name": "Rust Expert", "content": "User knows Rust", "category": "skill"},
+            {
+                "name": "Rust Expert",
+                "content": "Knows Rust",
+                "category": "skill",
+                "sentiment": 0.3,
+            },
         ]
         router = _mock_llm_response(concepts)
         phase = ReflectPhase(mock_brain, llm_router=router)
         await phase.process(_perception("test"), _response(), MIND, CONV)
-        call_kwargs = mock_brain.learn_concept.call_args.kwargs
-        assert call_kwargs["category"] == ConceptCategory.SKILL
+        kw = mock_brain.learn_concept.call_args.kwargs
+        assert kw["category"] == ConceptCategory.SKILL
 
     async def test_llm_unknown_category_defaults_to_fact(self, mock_brain: AsyncMock) -> None:
-        """Unknown LLM category → defaults to FACT."""
         concepts = [
-            {"name": "Something", "content": "Unknown category", "category": "xyzzy"},
+            {
+                "name": "Something",
+                "content": "Unknown",
+                "category": "xyzzy",
+                "sentiment": 0.0,
+            },
         ]
         router = _mock_llm_response(concepts)
         phase = ReflectPhase(mock_brain, llm_router=router)
         await phase.process(_perception("test"), _response(), MIND, CONV)
-        call_kwargs = mock_brain.learn_concept.call_args.kwargs
-        assert call_kwargs["category"] == ConceptCategory.FACT
+        kw = mock_brain.learn_concept.call_args.kwargs
+        assert kw["category"] == ConceptCategory.FACT
 
     async def test_llm_markdown_code_block(self, mock_brain: AsyncMock) -> None:
-        """LLM wrapping response in markdown code block."""
         router = AsyncMock()
         router.generate = AsyncMock(
             return_value=LLMResponse(
-                content='```json\n[{"name": "Test", "content": "test", "category": "fact"}]\n```',
+                content=(
+                    "```json\n"
+                    '[{"name":"Test","content":"test",'
+                    '"category":"fact","sentiment":0.0}]\n'
+                    "```"
+                ),
                 model="gpt-4o-mini",
                 tokens_in=10,
                 tokens_out=10,
@@ -351,24 +528,12 @@ class TestLLMExtraction:
         mock_brain.learn_concept.assert_called_once()
 
     async def test_llm_empty_array(self, mock_brain: AsyncMock) -> None:
-        """LLM returning empty array → falls back to regex."""
         router = _mock_llm_response([])
         phase = ReflectPhase(mock_brain, llm_router=router)
         await phase.process(_perception("My name is Guipe"), _response(), MIND, CONV)
-        # Should fall back to regex and extract entity
-        mock_brain.learn_concept.assert_called_once()
-
-    async def test_llm_failure_falls_back_to_regex(self, mock_brain: AsyncMock) -> None:
-        """LLM error → graceful fallback to regex."""
-        router = AsyncMock()
-        router.generate = AsyncMock(side_effect=RuntimeError("API error"))
-        phase = ReflectPhase(mock_brain, llm_router=router)
-        await phase.process(_perception("My name is Guipe"), _response(), MIND, CONV)
-        # Regex fallback should still extract
         mock_brain.learn_concept.assert_called_once()
 
     async def test_llm_returns_non_list(self, mock_brain: AsyncMock) -> None:
-        """LLM returning a dict instead of array → fallback to regex."""
         router = AsyncMock()
         router.generate = AsyncMock(
             return_value=LLMResponse(
@@ -384,15 +549,17 @@ class TestLLMExtraction:
         )
         phase = ReflectPhase(mock_brain, llm_router=router)
         await phase.process(_perception("I love Python"), _response(), MIND, CONV)
-        # Regex fallback
         mock_brain.learn_concept.assert_called_once()
 
     async def test_llm_non_dict_items_skipped(self, mock_brain: AsyncMock) -> None:
-        """LLM returning array with non-dict items → skipped."""
         router = AsyncMock()
         router.generate = AsyncMock(
             return_value=LLMResponse(
-                content='["not a dict", {"name": "OK", "content": "ok", "category": "fact"}]',
+                content=(
+                    '["not a dict", '
+                    '{"name":"OK","content":"ok",'
+                    '"category":"fact","sentiment":0.0}]'
+                ),
                 model="gpt-4o-mini",
                 tokens_in=10,
                 tokens_out=10,
@@ -404,17 +571,21 @@ class TestLLMExtraction:
         )
         phase = ReflectPhase(mock_brain, llm_router=router)
         await phase.process(_perception("test"), _response(), MIND, CONV)
-        # Only the valid dict item should be learned
         mock_brain.learn_concept.assert_called_once()
 
     async def test_llm_extract_without_router(self, mock_brain: AsyncMock) -> None:
-        """_extract_with_llm returns None when no router configured."""
         phase = ReflectPhase(mock_brain, llm_router=None)
-        result = await phase._extract_with_llm("test")
+        result = await phase._extract_with_llm("test")  # noqa: SLF001
         assert result is None
 
+    async def test_llm_failure_falls_back_to_regex(self, mock_brain: AsyncMock) -> None:
+        router = AsyncMock()
+        router.generate = AsyncMock(side_effect=RuntimeError("API error"))
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(_perception("My name is Guipe"), _response(), MIND, CONV)
+        mock_brain.learn_concept.assert_called_once()
+
     async def test_llm_invalid_json(self, mock_brain: AsyncMock) -> None:
-        """LLM returning invalid JSON → fallback to regex."""
         router = AsyncMock()
         router.generate = AsyncMock(
             return_value=LLMResponse(
@@ -430,8 +601,101 @@ class TestLLMExtraction:
         )
         phase = ReflectPhase(mock_brain, llm_router=router)
         await phase.process(_perception("I love Python"), _response(), MIND, CONV)
-        # Regex fallback
         mock_brain.learn_concept.assert_called_once()
+
+
+# ── Episode emotional signals ─────────────────────────────────────────
+
+
+class TestEpisodeEmotional:
+    """Episode emotional_valence and emotional_arousal from concepts."""
+
+    async def test_positive_sentiment_sets_episode_valence(self, mock_brain: AsyncMock) -> None:
+        """Positive concepts → positive episode valence."""
+        concepts = [
+            {
+                "name": "Loves Rust",
+                "content": "loves Rust",
+                "category": "preference",
+                "sentiment": 0.8,
+            },
+        ]
+        router = _mock_llm_response(concepts)
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(_perception("test"), _response(), MIND, CONV)
+        kw = mock_brain.encode_episode.call_args.kwargs
+        assert kw["emotional_valence"] > 0.0
+
+    async def test_negative_sentiment_sets_episode_valence(self, mock_brain: AsyncMock) -> None:
+        """Negative concepts → negative episode valence."""
+        concepts = [
+            {
+                "name": "Hates ORM",
+                "content": "hates ORM",
+                "category": "belief",
+                "sentiment": -0.7,
+            },
+        ]
+        router = _mock_llm_response(concepts)
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(_perception("test"), _response(), MIND, CONV)
+        kw = mock_brain.encode_episode.call_args.kwargs
+        assert kw["emotional_valence"] < 0.0
+
+    async def test_arousal_is_max_abs_sentiment(self, mock_brain: AsyncMock) -> None:
+        """Arousal = max |sentiment| across concepts."""
+        concepts = [
+            {
+                "name": "Neutral",
+                "content": "neutral",
+                "category": "fact",
+                "sentiment": 0.1,
+            },
+            {
+                "name": "Strong",
+                "content": "strong",
+                "category": "belief",
+                "sentiment": -0.9,
+            },
+        ]
+        router = _mock_llm_response(concepts)
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(_perception("test"), _response(), MIND, CONV)
+        kw = mock_brain.encode_episode.call_args.kwargs
+        assert kw["emotional_arousal"] == pytest.approx(0.9, abs=0.01)
+
+    async def test_no_concepts_zero_valence(self, mock_brain: AsyncMock) -> None:
+        """No concepts → zero valence and arousal."""
+        phase = ReflectPhase(mock_brain)
+        await phase.process(_perception("What time is it?"), _response(), MIND, CONV)
+        kw = mock_brain.encode_episode.call_args.kwargs
+        assert kw["emotional_valence"] == 0.0
+        assert kw["emotional_arousal"] == 0.0
+
+    async def test_mixed_sentiment_averages(self, mock_brain: AsyncMock) -> None:
+        """Mixed sentiments → averaged valence."""
+        concepts = [
+            {
+                "name": "Good",
+                "content": "good",
+                "category": "preference",
+                "sentiment": 0.6,
+            },
+            {
+                "name": "Bad",
+                "content": "bad",
+                "category": "belief",
+                "sentiment": -0.4,
+            },
+        ]
+        router = _mock_llm_response(concepts)
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(_perception("test"), _response(), MIND, CONV)
+        kw = mock_brain.encode_episode.call_args.kwargs
+        # Average of 0.6 and -0.4 = 0.1
+        assert kw["emotional_valence"] == pytest.approx(0.1, abs=0.01)
+        # Arousal = max(0.6, 0.4) = 0.6
+        assert kw["emotional_arousal"] == pytest.approx(0.6, abs=0.01)
 
 
 # ── Episode encoding ──────────────────────────────────────────────────
@@ -444,14 +708,13 @@ class TestEpisodeEncoding:
         phase = ReflectPhase(mock_brain)
         await phase.process(_perception("Hello"), _response("Hi"), MIND, CONV)
         mock_brain.encode_episode.assert_called_once()
-        call_kwargs = mock_brain.encode_episode.call_args.kwargs
-        assert call_kwargs["user_input"] == "Hello"
-        assert call_kwargs["assistant_response"] == "Hi"
+        kw = mock_brain.encode_episode.call_args.kwargs
+        assert kw["user_input"] == "Hello"
+        assert kw["assistant_response"] == "Hi"
 
     async def test_episode_failure_no_crash(self, mock_brain: AsyncMock) -> None:
         mock_brain.encode_episode = AsyncMock(side_effect=RuntimeError("fail"))
         phase = ReflectPhase(mock_brain)
-        # Should not raise
         await phase.process(_perception("Hello"), _response(), MIND, CONV)
 
 
@@ -463,11 +726,12 @@ class TestHebbianLearning:
 
     async def test_hebbian_with_multiple_concepts(self, mock_brain: AsyncMock) -> None:
         phase = ReflectPhase(mock_brain)
-        # Both entity and preference
         await phase.process(
-            _perception("My name is Guipe and I love coding"), _response(), MIND, CONV
+            _perception("My name is Guipe and I love coding"),
+            _response(),
+            MIND,
+            CONV,
         )
-        # learn_concept called twice
         assert mock_brain.learn_concept.call_count == 2  # noqa: PLR2004
         mock_brain.strengthen_connection.assert_called_once()
 
@@ -480,9 +744,11 @@ class TestHebbianLearning:
         mock_brain.strengthen_connection = AsyncMock(side_effect=RuntimeError("fail"))
         phase = ReflectPhase(mock_brain)
         await phase.process(
-            _perception("My name is Guipe and I love coding"), _response(), MIND, CONV
+            _perception("My name is Guipe and I love coding"),
+            _response(),
+            MIND,
+            CONV,
         )
-        # Should not crash
 
 
 # ── Failure resilience ────────────────────────────────────────────────
@@ -494,6 +760,5 @@ class TestConceptExtractionFailure:
     async def test_learn_failure_continues(self, mock_brain: AsyncMock) -> None:
         mock_brain.learn_concept = AsyncMock(side_effect=RuntimeError("fail"))
         phase = ReflectPhase(mock_brain)
-        # Should not crash, episode still created
         await phase.process(_perception("My name is Test"), _response(), MIND, CONV)
         mock_brain.encode_episode.assert_called_once()
