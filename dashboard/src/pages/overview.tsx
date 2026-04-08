@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { DollarSignIcon, BrainIcon, MessageSquareIcon, ActivityIcon, MicIcon, HeartIcon, ListTodoIcon } from "lucide-react";
 import { useDashboardStore } from "@/stores/dashboard";
-import { StatCard, StatCardSkeleton, HealthGrid, ActivityFeed, MetricChart } from "@/components/dashboard";
+import { StatCard, StatCardSkeleton, HealthGrid, ActivityFeed, MetricChart, CognitiveTimeline } from "@/components/dashboard";
 import { formatUptime, formatCost, formatNumber } from "@/lib/format";
 import { ComingSoon } from "@/components/coming-soon";
 import { WelcomeBanner } from "@/components/dashboard/welcome-banner";
@@ -115,15 +115,18 @@ export default function OverviewPage() {
         label={t("chart.costLabel")}
       />
 
-      {/* Channel Status + Activity Feed */}
+      {/* Channel Status + Cognitive Timeline + Live Feed */}
       <div className="grid gap-4 lg:grid-cols-3">
         <div className="lg:col-span-1">
           <ChannelStatusCard />
         </div>
         <div className="lg:col-span-2">
-          <ActivityFeed events={recentEvents} />
+          <CognitiveTimeline />
         </div>
       </div>
+
+      {/* Live Feed */}
+      <ActivityFeed events={recentEvents} />
 
       {/* v1.0 Placeholders */}
       <div className="grid gap-4 md:grid-cols-3">

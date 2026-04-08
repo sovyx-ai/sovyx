@@ -67,7 +67,17 @@ function debouncedCall(key: string, fn: () => void, ms = DEBOUNCE_MS): void {
 async function refreshStatus(): Promise<void> {
   try {
     const data = await api.get<SystemStatus>("/api/status");
-    useDashboardStore.getState().setStatus(data);
+    const store = useDashboardStore.getState();
+    store.setStatus(data);
+
+    // Hydrate cost chart from persisted history (only if chart is empty)
+    if (data.cost_history?.length && store.costData.length === 0) {
+      const points = data.cost_history.map((h) => ({
+        time: h.time,
+        value: Math.round(h.cumulative * 10000) / 10000,
+      }));
+      useDashboardStore.setState({ costData: points });
+    }
   } catch {
     // Will retry on next poll
   }
@@ -101,6 +111,14 @@ async function refreshActiveConversation(): Promise<void> {
     setActiveMessages(data.messages);
   } catch {
     // Will retry
+  }
+}
+
+async function refreshTimeline(): Promise<void> {
+  try {
+    await useDashboardStore.getState().fetchTimeline();
+  } catch {
+    // Will retry on next event
   }
 }
 
@@ -148,6 +166,10 @@ function debouncedRefreshConversationList(): void {
   debouncedCall("conversation-list", () => void refreshConversationList());
 }
 
+function debouncedRefreshTimeline(): void {
+  debouncedCall("timeline", () => void refreshTimeline(), 5_000);
+}
+
 // ── Hook ──
 
 export function useWebSocket(): void {
@@ -183,6 +205,7 @@ export function useWebSocket(): void {
             debouncedRefreshStatus();
             debouncedRefreshConversation();
             debouncedRefreshConversationList();
+            debouncedRefreshTimeline();
             break;
 
           case "PerceptionReceived":
@@ -199,6 +222,7 @@ export function useWebSocket(): void {
           case "ConsolidationCompleted":
             debouncedRefreshStatus();
             debouncedRefreshBrain();
+            debouncedRefreshTimeline();
             break;
 
           case "EngineStarted":
@@ -236,6 +260,7 @@ export function useWebSocket(): void {
       // Initial data load on (re)connect — immediate
       void refreshStatus();
       void refreshHealth();
+      void refreshTimeline();
     };
 
     ws.onmessage = handleMessage;

@@ -10,6 +10,7 @@
 import { create } from "zustand";
 import { devtools } from "zustand/middleware";
 
+import { createActivitySlice, type ActivitySlice } from "./slices/activity";
 import { createAuthSlice, type AuthSlice } from "./slices/auth";
 import {
   createConnectionSlice,
@@ -25,7 +26,8 @@ import { createLogsSlice, type LogsSlice } from "./slices/logs";
 import { createSettingsSlice, type SettingsSlice } from "./slices/settings";
 import { createChatSlice, type ChatSlice } from "./slices/chat";
 
-export type DashboardState = AuthSlice &
+export type DashboardState = ActivitySlice &
+  AuthSlice &
   ConnectionSlice &
   StatusSlice &
   ConversationsSlice &
@@ -37,6 +39,7 @@ export type DashboardState = AuthSlice &
 export const useDashboardStore = create<DashboardState>()(
   devtools(
     (...a) => ({
+      ...createActivitySlice(...a),
       ...createAuthSlice(...a),
       ...createConnectionSlice(...a),
       ...createStatusSlice(...a),

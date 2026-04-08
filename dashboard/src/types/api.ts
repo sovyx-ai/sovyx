@@ -37,6 +37,7 @@ export interface SystemStatus {
   llm_calls_today: number;
   tokens_today: number;
   messages_today: number;
+  cost_history?: CostHistoryEntry[];
 }
 
 // ── Conversations ──
@@ -227,6 +228,42 @@ export interface ConsolidationCompletedData {
 export interface ChannelEventData {
   channel_type: string;
   reason?: string; // only in ChannelDisconnected
+}
+
+// ── Activity Timeline ──
+
+/** Entry types from /api/activity/timeline */
+export type TimelineEntryType =
+  | "conversation_started"
+  | "message_exchanged"
+  | "concepts_learned"
+  | "episode_encoded"
+  | "consolidation_ran";
+
+/** Single timeline entry from the backend */
+export interface TimelineEntry {
+  type: TimelineEntryType;
+  timestamp: string;
+  data: Record<string, unknown>;
+}
+
+/** GET /api/activity/timeline response */
+export interface TimelineResponse {
+  entries: TimelineEntry[];
+  meta: {
+    hours: number;
+    limit: number;
+    total_before_limit: number;
+    sources: Record<string, number>;
+  };
+}
+
+/** Cost history entry from /api/status */
+export interface CostHistoryEntry {
+  time: number;
+  cost: number;
+  model: string;
+  cumulative: number;
 }
 
 // ── Chat ──
