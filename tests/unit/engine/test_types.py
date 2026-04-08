@@ -118,7 +118,7 @@ class TestChannelType:
     """Channel type enum."""
 
     def test_all_values(self) -> None:
-        expected = {"telegram", "discord", "signal", "cli", "api"}
+        expected = {"telegram", "discord", "signal", "cli", "api", "dashboard"}
         actual = {c.value for c in ChannelType}
         assert actual == expected
 

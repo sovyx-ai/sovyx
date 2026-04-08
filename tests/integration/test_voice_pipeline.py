@@ -254,9 +254,8 @@ class TestVoicePipelineIntegration:
         stt = AsyncMock()
         stt.transcribe = AsyncMock(return_value="stop talking")
         tts = AsyncMock()
-        tts.synthesize = AsyncMock(
-            return_value=[AudioChunk(audio=np.zeros(320, dtype=np.int16), sample_rate=_SAMPLE_RATE)],
-        )
+        chunk = AudioChunk(audio=np.zeros(320, dtype=np.int16), sample_rate=_SAMPLE_RATE)
+        tts.synthesize = AsyncMock(return_value=[chunk])
 
         config = VoicePipelineConfig(
             barge_in_enabled=True,

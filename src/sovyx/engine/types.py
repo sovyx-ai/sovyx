@@ -68,6 +68,7 @@ class ChannelType(Enum):
     SIGNAL = "signal"
     CLI = "cli"
     API = "api"
+    DASHBOARD = "dashboard"
 
 
 class CognitivePhase(Enum):
