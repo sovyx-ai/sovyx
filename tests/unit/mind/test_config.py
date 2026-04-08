@@ -67,11 +67,47 @@ class TestOceanConfig:
 class TestLLMConfig:
     """LLM configuration."""
 
-    def test_defaults(self) -> None:
+    def test_defaults_no_keys(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        llm = LLMConfig()
+        # No API keys → fields stay empty (resolved at runtime)
+        assert llm.default_model == ""
+        assert llm.fast_model == ""
+        assert llm.temperature == 0.7
+
+    def test_defaults_anthropic_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
         llm = LLMConfig()
         assert llm.default_model == "claude-sonnet-4-20250514"
         assert llm.fast_model == "claude-3-5-haiku-20241022"
-        assert llm.temperature == 0.7
+        assert llm.default_provider == "anthropic"
+
+    def test_defaults_openai_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+        llm = LLMConfig()
+        assert llm.default_model == "gpt-4o"
+        assert llm.fast_model == "gpt-4o-mini"
+        assert llm.default_provider == "openai"
+
+    def test_defaults_google_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setenv("GOOGLE_API_KEY", "test-google")
+        llm = LLMConfig()
+        assert llm.default_model == "gemini-2.5-pro-preview-03-25"
+        assert llm.fast_model == "gemini-2.0-flash"
+        assert llm.default_provider == "google"
+
+    def test_explicit_model_preserved(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        llm = LLMConfig(default_model="gpt-4-turbo")
+        assert llm.default_model == "gpt-4-turbo"
 
     def test_temperature_range(self) -> None:
         with pytest.raises(ValidationError):

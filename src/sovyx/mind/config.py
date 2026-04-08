@@ -46,11 +46,16 @@ class OceanConfig(BaseModel):
 class LLMConfig(BaseModel):
     """LLM provider configuration.
 
-    Auto-detection: if no explicit model is set in mind.yaml, the default
-    model is chosen based on available API keys:
-        - ANTHROPIC_API_KEY set → claude-sonnet-4-20250514
-        - OPENAI_API_KEY set (no Anthropic) → gpt-4o
-        - Neither → claude-sonnet-4-20250514 (will fail with clear error)
+    Runtime auto-detection: empty strings (``""``) mean "detect at startup".
+    When ``sovyx start`` runs, the model_validator resolves empties based
+    on which API keys are present in the environment:
+
+        - ANTHROPIC_API_KEY → claude-sonnet-4-20250514 (preferred)
+        - OPENAI_API_KEY → gpt-4o
+        - GOOGLE_API_KEY → gemini-2.5-pro-preview-03-25
+        - None → error at startup with clear message
+
+    Users can always override by setting explicit values in mind.yaml.
     """
 
     default_provider: str = ""
@@ -63,33 +68,42 @@ class LLMConfig(BaseModel):
     budget_per_conversation_usd: float = Field(default=0.5, ge=0.0)
 
     @model_validator(mode="after")
-    def auto_detect_provider(self) -> LLMConfig:
-        """Auto-detect LLM provider from available API keys."""
+    def resolve_provider_at_runtime(self) -> LLMConfig:
+        """Resolve empty provider/model fields from environment API keys.
+
+        This runs both at init-time (where keys may not be set yet,
+        leaving fields empty for YAML serialization) and at start-time
+        (where keys ARE set and fields get resolved).
+        """
         import os
 
         has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY"))
         has_openai = bool(os.environ.get("OPENAI_API_KEY"))
+        has_google = bool(os.environ.get("GOOGLE_API_KEY"))
 
         if not self.default_model:
             if has_anthropic:
                 self.default_model = "claude-sonnet-4-20250514"
             elif has_openai:
                 self.default_model = "gpt-4o"
-            else:
-                self.default_model = "claude-sonnet-4-20250514"
+            elif has_google:
+                self.default_model = "gemini-2.5-pro-preview-03-25"
+            # else: stays empty — bootstrap will catch this
 
         if not self.default_provider:
             if has_anthropic:
                 self.default_provider = "anthropic"
             elif has_openai:
                 self.default_provider = "openai"
-            else:
-                self.default_provider = "anthropic"
+            elif has_google:
+                self.default_provider = "google"
 
         if not self.fast_model:
             if has_openai and not has_anthropic:
                 self.fast_model = "gpt-4o-mini"
-            else:
+            elif has_google and not has_anthropic and not has_openai:
+                self.fast_model = "gemini-2.0-flash"
+            elif has_anthropic:
                 self.fast_model = "claude-3-5-haiku-20241022"
 
         return self
@@ -218,6 +232,10 @@ def load_mind_config(path: Path) -> MindConfig:
 def create_default_mind_config(name: str, data_dir: Path) -> Path:
     """Create a mind.yaml with sensible defaults.
 
+    LLM provider/model fields are intentionally omitted so that
+    runtime auto-detection (based on API keys) works at ``sovyx start``.
+    Users can add ``llm.default_model: gpt-4o`` to override.
+
     Args:
         name: Name for the mind.
         data_dir: Directory to create the file in.
@@ -229,8 +247,17 @@ def create_default_mind_config(name: str, data_dir: Path) -> Path:
     data_dir.mkdir(parents=True, exist_ok=True)
     path = data_dir / "mind.yaml"
 
+    # Serialize without LLM runtime-resolved fields so auto-detect
+    # runs fresh at each startup based on available API keys.
+    data = config.model_dump(mode="json")
+    llm = data.get("llm", {})
+    for key in ("default_provider", "default_model", "fast_model"):
+        llm.pop(key, None)
+    # Remove empty llm section entirely if only local_model + defaults remain
+    data["llm"] = llm
+
     content = yaml.dump(
-        config.model_dump(mode="json"),
+        data,
         default_flow_style=False,
         allow_unicode=True,
         sort_keys=False,
