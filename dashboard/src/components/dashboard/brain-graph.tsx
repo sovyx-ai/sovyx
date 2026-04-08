@@ -171,6 +171,7 @@ export function BrainGraph({ data, width, height, onNodeClick, highlightedNodeId
       linkLineDash={linkLineDash}
       linkColor={linkColor}
       linkWidth={linkWidth}
+      linkLabel={(link: BrainLink) => `${link.relation_type.replace("_", " ")} (${link.weight.toFixed(2)})`}
       linkDirectionalParticles={0}
       onNodeHover={(node: BrainNode | null) => setHoveredNode(node?.id ?? null)}
       onNodeClick={(node: BrainNode) => onNodeClick?.(node)}
