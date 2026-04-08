@@ -401,16 +401,14 @@ class TestGetRelationsViaDatabaseManager:
         ):
             result = await get_brain_graph(registry, limit=100)
 
-        assert result["nodes"] == [
-            {
-                "id": "c1",
-                "name": "A",
-                "category": "fact",
-                "importance": 0.5,
-                "confidence": 0.7,
-                "access_count": 3,
-            }
-        ]
+        node = result["nodes"][0]
+        assert node["id"] == "c1"
+        assert node["name"] == "A"
+        assert node["category"] == "fact"
+        assert node["importance"] == 0.5
+        assert node["confidence"] == 0.7
+        assert node["access_count"] == 3
+        assert "emotional_valence" in node
         assert result["links"] == []
 
     @pytest.mark.asyncio()
