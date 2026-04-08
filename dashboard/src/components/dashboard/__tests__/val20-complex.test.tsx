@@ -554,9 +554,29 @@ describe("CategoryLegend", () => {
 });
 
 describe("RelationLegend", () => {
-  it("renders all 7 relation types", () => {
+  it("renders all 7 relation types without counts", () => {
     const { container } = render(<RelationLegend />);
     const lines = container.querySelectorAll("[aria-hidden='true']");
     expect(lines.length).toBe(7);
+  });
+
+  it("renders only non-zero types when counts provided", () => {
+    const counts = { related_to: 10, causes: 3, part_of: 0 };
+    const { container } = render(<RelationLegend counts={counts} />);
+    const lines = container.querySelectorAll("[aria-hidden='true']");
+    // Only related_to and causes have count > 0
+    expect(lines.length).toBe(2);
+  });
+
+  it("shows count numbers next to type names", () => {
+    const counts = { related_to: 42 };
+    const { container } = render(<RelationLegend counts={counts} />);
+    expect(container.textContent).toContain("42");
+  });
+
+  it("returns null when all counts are zero", () => {
+    const counts = { related_to: 0, causes: 0 };
+    const { container } = render(<RelationLegend counts={counts} />);
+    expect(container.innerHTML).toBe("");
   });
 });

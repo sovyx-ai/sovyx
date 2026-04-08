@@ -164,6 +164,14 @@ export default function BrainPage() {
     return counts;
   }, [brainNodes]);
 
+  const relationCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const link of brainLinks) {
+      counts[link.relation_type] = (counts[link.relation_type] ?? 0) + 1;
+    }
+    return counts;
+  }, [brainLinks]);
+
   const graphData = useMemo(
     () => ({ nodes: brainNodes, links: brainLinks }),
     [brainNodes, brainLinks],
@@ -240,7 +248,7 @@ export default function BrainPage() {
       {/* Legends */}
       <div className="space-y-2">
         <CategoryLegend counts={categoryCounts} />
-        {brainLinks.length > 0 && <RelationLegend />}
+        {brainLinks.length > 0 && <RelationLegend counts={relationCounts} />}
       </div>
 
       {/* Graph container */}

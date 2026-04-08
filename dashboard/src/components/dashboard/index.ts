@@ -9,7 +9,7 @@ export { ChannelBadge } from "./channel-badge";
 export { ChatBubble } from "./chat-bubble";
 export { ChatThread } from "./chat-thread";
 export { BrainGraph } from "./brain-graph";
-export { CategoryLegend } from "./category-legend";
+export { CategoryLegend, RelationLegend } from "./category-legend";
 export { StatusDot } from "./status-dot";
 export { NeuralMesh } from "./neural-mesh";
 export { WelcomeBanner } from "./welcome-banner";
