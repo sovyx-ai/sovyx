@@ -55,9 +55,9 @@
     "ChannelDisconnected": "{{channel}} disconnected: {{reason}}"
   },
   "feed": {
-    "title": "Recent Activity",
-    "empty": "Listening for cognitive events…",
-    "emptyHint": "Activity will appear here as your Mind thinks."
+    "title": "Live Feed",
+    "empty": "Listening for events…",
+    "emptyHint": "Events appear here in real time as your Mind thinks."
   },
   "placeholders": {
     "voice": "Voice Pipeline",

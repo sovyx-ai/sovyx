@@ -1,9 +1,10 @@
 /**
- * ActivityFeed — Real-time cognitive cycle event stream.
+ * ActivityFeed — Real-time cognitive cycle event stream (Live Feed).
  *
  * Displays WS events with per-type Lucide icons, timestamps,
  * model name and cost on ThinkCompleted events.
- * Auto-follow with break-on-scroll pattern (handled by parent).
+ * Shows LIVE/Disconnected badge based on WebSocket connection state.
+ * Subtle fade-in animation on new entries.
  *
  * Ref: Architecture §3.1, META-04 §6
  */
@@ -28,6 +29,7 @@ import type { WsEvent, WsEventType } from "@/types/api";
 import { formatTimePrecise } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { ReactNode } from "react";
+import { useDashboardStore } from "@/stores/dashboard";
 
 interface ActivityFeedProps {
   events: WsEvent[];
@@ -128,8 +130,37 @@ function eventSummary(event: WsEvent, t: TFunction): string {
   }
 }
 
+/** Connection status badge */
+function ConnectionBadge({ connected }: { connected: boolean }) {
+  if (connected) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none"
+        style={{
+          background: "color-mix(in srgb, var(--svx-color-success) 15%, transparent)",
+          color: "var(--svx-color-success)",
+        }}
+      >
+        <span className="inline-block size-1.5 animate-[pulse-dot_2s_ease-in-out_infinite] rounded-full bg-current" />
+        LIVE
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium leading-none"
+      style={{
+        background: "color-mix(in srgb, var(--svx-color-error) 15%, transparent)",
+        color: "var(--svx-color-error)",
+      }}
+    >
+      <span className="inline-block size-1.5 rounded-full bg-current" />
+      Disconnected
+    </span>
+  );
+}
+
 export function ActivityFeed({ events, className }: ActivityFeedProps) {
   const { t } = useTranslation("overview");
+  const connected = useDashboardStore((s) => s.connected);
   const reversed = [...events].reverse();
   const getLabel = (type: string) => eventLabel(type, t);
 
@@ -140,14 +171,17 @@ export function ActivityFeed({ events, className }: ActivityFeedProps) {
         className,
       )}
     >
-      {/* Header */}
-      <h2 className="mb-3 text-sm font-medium text-[var(--svx-color-text-primary)]">
-        {t("feed.title")}
-      </h2>
+      {/* Header with LIVE badge */}
+      <div className="mb-3 flex items-center gap-2">
+        <h2 className="text-sm font-medium text-[var(--svx-color-text-primary)]">
+          {t("feed.title")}
+        </h2>
+        <ConnectionBadge connected={connected} />
+      </div>
 
-      <ScrollArea className="h-64">
+      <ScrollArea className="h-48">
         {reversed.length === 0 ? (
-          <div className="flex flex-col items-center gap-1.5 py-8 text-center">
+          <div className="flex flex-col items-center gap-1.5 py-6 text-center">
             <div className="flex items-center gap-1.5 text-xs text-[var(--svx-color-text-tertiary)]">
               <span className="inline-block size-1.5 animate-[pulse-dot_2s_ease-in-out_infinite] rounded-full bg-[var(--svx-color-brand-primary)]" />
               {t("feed.empty")}
@@ -157,14 +191,14 @@ export function ActivityFeed({ events, className }: ActivityFeedProps) {
             </p>
           </div>
         ) : (
-          <div className="space-y-0.5" role="log" aria-label="Activity feed" aria-live="polite">
+          <div className="space-y-px" role="log" aria-label="Live feed" aria-live="polite">
             {reversed.map((event, i) => {
               const config = EVENT_CONFIG[event.type] ?? FALLBACK_CONFIG;
               const label = getLabel(event.type);
               return (
                 <div
                   key={`${event.timestamp}-${i}`}
-                  className="flex items-start gap-3 rounded-[var(--svx-radius-md)] px-2 py-1.5 text-xs transition-colors hover:bg-[var(--svx-color-bg-hover)]"
+                  className="flex items-start gap-2.5 rounded-[var(--svx-radius-md)] px-2 py-1 text-xs animate-in fade-in-0 slide-in-from-top-1 duration-150 transition-colors hover:bg-[var(--svx-color-bg-hover)]"
                   role="article"
                   aria-label={`${label} at ${formatTimePrecise(event.timestamp)}`}
                 >
@@ -175,11 +209,11 @@ export function ActivityFeed({ events, className }: ActivityFeedProps) {
                     {config.icon}
                   </span>
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5">
                       <span className={cn("font-medium", config.color)}>
                         {label}
                       </span>
-                      <span className="text-[var(--svx-color-text-tertiary)]">
+                      <span className="text-[10px] tabular-nums text-[var(--svx-color-text-tertiary)]">
                         {formatTimePrecise(event.timestamp)}
                       </span>
                     </div>
