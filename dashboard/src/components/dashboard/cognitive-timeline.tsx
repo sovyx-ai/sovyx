@@ -59,15 +59,15 @@ function groupEntries(entries: TimelineEntry[]): Map<TimeGroup, TimelineEntry[]>
 function EntryIcon({ type }: { type: string }) {
   const cls = "size-3.5 shrink-0";
   switch (type) {
-    case "conversation_started":
+    case "conversation":
       return <MessageCircleIcon className={cls} />;
-    case "message_exchanged":
+    case "message":
       return <MessageSquareIcon className={cls} />;
     case "concepts_learned":
       return <LightbulbIcon className={cls} />;
     case "episode_encoded":
       return <BookmarkIcon className={cls} />;
-    case "consolidation_ran":
+    case "consolidation":
       return <MergeIcon className={cls} />;
     default:
       return <MessageSquareIcon className={cls} />;
@@ -78,15 +78,15 @@ function EntryIcon({ type }: { type: string }) {
 
 function entryColor(type: string): string {
   switch (type) {
-    case "conversation_started":
+    case "conversation":
       return "var(--svx-color-accent-primary)";
-    case "message_exchanged":
+    case "message":
       return "var(--svx-color-text-secondary)";
     case "concepts_learned":
       return "var(--svx-color-accent-warning)";
     case "episode_encoded":
       return "var(--svx-color-accent-success)";
-    case "consolidation_ran":
+    case "consolidation":
       return "var(--svx-color-accent-info)";
     default:
       return "var(--svx-color-text-tertiary)";
@@ -105,13 +105,13 @@ function formatTime(timestamp: string): string {
 function entrySummary(entry: TimelineEntry, t: (key: string, opts?: Record<string, unknown>) => string): string {
   const d = entry.data;
   switch (entry.type) {
-    case "conversation_started":
-      return t("timeline.conversationStarted", {
+    case "conversation":
+      return t("timeline.conversation", {
         channel: (d.channel as string) ?? "unknown",
         messages: (d.message_count as number) ?? 0,
       });
-    case "message_exchanged":
-      return (d.preview as string) ?? t("timeline.messageExchanged");
+    case "message":
+      return (d.preview as string) ?? t("timeline.message");
     case "concepts_learned": {
       const names = (d.names as string[]) ?? [];
       const count = (d.count as number) ?? names.length;
@@ -122,8 +122,8 @@ function entrySummary(entry: TimelineEntry, t: (key: string, opts?: Record<strin
       return t("timeline.episodeEncoded", {
         importance: ((d.importance as number) ?? 0).toFixed(1),
       });
-    case "consolidation_ran":
-      return t("timeline.consolidationRan", {
+    case "consolidation":
+      return t("timeline.consolidation", {
         merged: (d.merged as number) ?? 0,
         pruned: (d.pruned as number) ?? 0,
         strengthened: (d.strengthened as number) ?? 0,
@@ -214,7 +214,7 @@ function TimelineRow({ entry, t }: { entry: TimelineEntry; t: (key: string, opts
           <span className="truncate text-xs text-[var(--svx-color-text-primary)]">
             {entrySummary(entry, t)}
           </span>
-          {entry.type === "message_exchanged" && (
+          {entry.type === "message" && (
             <RoleBadge role={d.role as string} />
           )}
           {entry.type === "episode_encoded" && (
@@ -228,7 +228,7 @@ function TimelineRow({ entry, t }: { entry: TimelineEntry; t: (key: string, opts
         )}
 
         {/* Model badge for messages */}
-        {entry.type === "message_exchanged" && typeof d.model === "string" && (
+        {entry.type === "message" && typeof d.model === "string" && (
           <span className="mt-0.5 inline-block text-[10px] text-[var(--svx-color-text-tertiary)]">
             {d.model}
             {typeof d.cost_usd === "number" && d.cost_usd > 0 ? ` · $${d.cost_usd.toFixed(4)}` : ""}

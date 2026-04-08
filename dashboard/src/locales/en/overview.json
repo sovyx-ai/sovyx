@@ -74,10 +74,10 @@
     "groupJustNow": "Just now",
     "groupEarlierToday": "Earlier today",
     "groupYesterday": "Yesterday",
-    "conversationStarted": "{{channel}} conversation ({{messages}} msgs)",
-    "messageExchanged": "Message exchanged",
     "conceptsLearned": "{{count}} concepts learned",
     "episodeEncoded": "Episode encoded (importance: {{importance}})",
-    "consolidationRan": "Consolidation: {{merged}} merged, {{pruned}} pruned, {{strengthened}} strengthened"
+    "conversation": "{{channel}} conversation ({{messages}} msgs)",
+    "message": "Message exchanged",
+    "consolidation": "Consolidation: {{merged}} merged, {{pruned}} pruned, {{strengthened}} strengthened"
   }
 }
