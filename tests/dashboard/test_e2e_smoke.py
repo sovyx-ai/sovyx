@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 import pytest
 from fastapi.testclient import TestClient
 
+from sovyx import __version__
 from sovyx.dashboard import STATIC_DIR
 from sovyx.dashboard.server import create_app
 
@@ -116,7 +117,7 @@ class TestAPISmoke:
         resp = client.get("/api/status", headers=AUTH)
         assert resp.status_code == 200
         data = resp.json()
-        assert data["version"] == "0.1.0"
+        assert data["version"] == __version__
 
     def test_health(self, client: TestClient) -> None:
         resp = client.get("/api/health", headers=AUTH)

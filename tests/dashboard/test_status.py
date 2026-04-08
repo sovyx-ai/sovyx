@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from sovyx import __version__
+
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -78,7 +80,7 @@ class TestDashboardCounters:
 class TestStatusSnapshot:
     def test_to_dict(self) -> None:
         snap = StatusSnapshot(
-            version="0.1.0",
+            version=__version__,
             uptime_seconds=3661.5678,
             mind_name="Nyx",
             active_conversations=3,
@@ -90,7 +92,7 @@ class TestStatusSnapshot:
             messages_today=25,
         )
         d = snap.to_dict()
-        assert d["version"] == "0.1.0"
+        assert d["version"] == __version__
         assert d["uptime_seconds"] == 3661.6  # rounded to 1 decimal
         assert d["mind_name"] == "Nyx"
         assert d["active_conversations"] == 3
@@ -111,7 +113,7 @@ class TestStatusCollector:
         collector = StatusCollector(registry, start_time=time.time() - 100)
         snap = await collector.collect()
 
-        assert snap.version == "0.1.0"
+        assert snap.version == __version__
         assert snap.uptime_seconds >= 99  # at least 99 seconds
         assert snap.mind_name == "sovyx"  # default fallback
         assert snap.memory_concepts == 0
