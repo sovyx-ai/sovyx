@@ -323,7 +323,7 @@ export function CognitiveTimeline({ className }: CognitiveTimelineProps) {
             </p>
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-3" role="feed" aria-label="Cognitive timeline">
             {[...groups.entries()].map(([group, groupEntries]) => (
               <div key={group}>
                 {/* Group header */}
