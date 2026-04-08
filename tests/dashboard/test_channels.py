@@ -47,7 +47,9 @@ class TestChannelsEndpoint:
         assert resp.status_code == 401
 
     def test_returns_channels_without_registry(
-        self, token: str, auth_headers: dict[str, str],
+        self,
+        token: str,
+        auth_headers: dict[str, str],
     ) -> None:
         """Without registry, dashboard disconnected and others not connected."""
         app = create_app()
@@ -64,7 +66,9 @@ class TestChannelsEndpoint:
         assert dashboard["connected"] is False  # no registry
 
     def test_dashboard_connected_with_registry(
-        self, token: str, auth_headers: dict[str, str],
+        self,
+        token: str,
+        auth_headers: dict[str, str],
     ) -> None:
         """With registry, dashboard shows connected."""
         app = create_app()
@@ -81,7 +85,9 @@ class TestChannelsEndpoint:
         assert dashboard["connected"] is True
 
     def test_telegram_connected_when_registered(
-        self, token: str, auth_headers: dict[str, str],
+        self,
+        token: str,
+        auth_headers: dict[str, str],
     ) -> None:
         """Telegram shows connected when TelegramChannel is registered."""
         from sovyx.bridge.channels.telegram import TelegramChannel
@@ -103,7 +109,9 @@ class TestChannelsEndpoint:
         assert telegram["connected"] is True
 
     def test_channels_have_required_fields(
-        self, token: str, auth_headers: dict[str, str],
+        self,
+        token: str,
+        auth_headers: dict[str, str],
     ) -> None:
         """Each channel has name, type, and connected fields."""
         app = create_app()
@@ -120,7 +128,9 @@ class TestChannelsEndpoint:
             assert isinstance(ch["connected"], bool)
 
     def test_channel_types_unique(
-        self, token: str, auth_headers: dict[str, str],
+        self,
+        token: str,
+        auth_headers: dict[str, str],
     ) -> None:
         """No duplicate channel types."""
         app = create_app()

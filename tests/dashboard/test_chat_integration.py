@@ -138,7 +138,10 @@ class TestChatResponseSchema:
         assert resp.status_code == 200
         data = resp.json()
         assert set(data.keys()) == {
-            "response", "conversation_id", "mind_id", "timestamp",
+            "response",
+            "conversation_id",
+            "mind_id",
+            "timestamp",
         }
         assert isinstance(data["response"], str)
         assert isinstance(data["conversation_id"], str)

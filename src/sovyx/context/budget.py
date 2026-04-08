@@ -146,8 +146,12 @@ class TokenBudgetManager:
                     break
 
         actual_total = (
-            raw_system + raw_concepts + raw_episodes
-            + raw_temporal + raw_conversation + raw_response
+            raw_system
+            + raw_concepts
+            + raw_episodes
+            + raw_temporal
+            + raw_conversation
+            + raw_response
         )
         return TokenBudget(
             system_prompt=raw_system,

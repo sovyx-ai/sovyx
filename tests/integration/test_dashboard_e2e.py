@@ -127,7 +127,8 @@ class TestDashboardE2E:
         assert resp.json()["response"] == "I'm Aria, your sovereign mind."
 
     async def test_channels_shows_dashboard_connected(
-        self, client: AsyncClient,
+        self,
+        client: AsyncClient,
     ) -> None:
         """GET /api/channels shows dashboard as connected."""
         resp = await client.get("/api/channels", headers=_auth())
@@ -140,7 +141,8 @@ class TestDashboardE2E:
         assert dashboard["connected"] is True
 
     async def test_channels_lists_all_types(
-        self, client: AsyncClient,
+        self,
+        client: AsyncClient,
     ) -> None:
         """GET /api/channels returns dashboard, telegram, signal."""
         resp = await client.get("/api/channels", headers=_auth())
@@ -155,7 +157,8 @@ class TestDashboardE2E:
         assert resp.status_code == 200
 
     async def test_full_flow_chat_then_channels(
-        self, client: AsyncClient,
+        self,
+        client: AsyncClient,
     ) -> None:
         """Sequential flow: chat message → check channels."""
         # Step 1: Send a chat message
@@ -170,17 +173,16 @@ class TestDashboardE2E:
 
         # Step 2: Check channels (dashboard should be connected)
         channels_resp = await client.get(
-            "/api/channels", headers=_auth(),
+            "/api/channels",
+            headers=_auth(),
         )
         assert channels_resp.status_code == 200
-        dashboard = next(
-            c for c in channels_resp.json()["channels"]
-            if c["type"] == "dashboard"
-        )
+        dashboard = next(c for c in channels_resp.json()["channels"] if c["type"] == "dashboard")
         assert dashboard["connected"] is True
 
     async def test_validation_errors_are_json(
-        self, client: AsyncClient,
+        self,
+        client: AsyncClient,
     ) -> None:
         """Validation errors return consistent JSON."""
         resp = await client.post(
@@ -192,7 +194,8 @@ class TestDashboardE2E:
         assert "error" in resp.json()
 
     async def test_auth_required_on_all_endpoints(
-        self, client: AsyncClient,
+        self,
+        client: AsyncClient,
     ) -> None:
         """All API endpoints require authentication."""
         endpoints = [

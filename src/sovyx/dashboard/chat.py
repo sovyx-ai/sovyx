@@ -97,11 +97,15 @@ async def handle_chat_message(
         conv_id = ConversationId(conversation_id)
         # Load history for the existing conversation
         _, history = await conversation_tracker.get_or_create(
-            mind_id, person_id, ChannelType.DASHBOARD,
+            mind_id,
+            person_id,
+            ChannelType.DASHBOARD,
         )
     else:
         conv_id, history = await conversation_tracker.get_or_create(
-            mind_id, person_id, ChannelType.DASHBOARD,
+            mind_id,
+            person_id,
+            ChannelType.DASHBOARD,
         )
 
     # ── Build perception ──
@@ -142,7 +146,9 @@ async def handle_chat_message(
         response_text = result.response_text
         if response_text:
             await conversation_tracker.add_turn(
-                conv_id, "assistant", response_text,
+                conv_id,
+                "assistant",
+                response_text,
             )
 
     # Handle error result gracefully

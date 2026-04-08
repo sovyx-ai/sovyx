@@ -19,7 +19,9 @@ class TestTokenCommand:
     """Tests for the top-level `sovyx token` command."""
 
     def test_shows_token(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Displays the token when file exists."""
         from sovyx.cli.main import app
@@ -34,7 +36,9 @@ class TestTokenCommand:
         assert "Dashboard Token" in result.output
 
     def test_missing_token_file(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Shows error when token file doesn't exist."""
         from sovyx.cli.main import app
@@ -46,7 +50,9 @@ class TestTokenCommand:
         assert "not generated" in result.output.lower()
 
     def test_empty_token_file(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Shows error when token file is empty."""
         from sovyx.cli.main import app
@@ -60,7 +66,9 @@ class TestTokenCommand:
         assert "empty" in result.output.lower()
 
     def test_whitespace_token_stripped(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Token with whitespace is stripped."""
         from sovyx.cli.main import app
@@ -74,7 +82,9 @@ class TestTokenCommand:
         assert "my-token" in result.output
 
     def test_copy_flag_without_clipboard(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """--copy flag gracefully handles missing clipboard tools."""
         from sovyx.cli.main import app

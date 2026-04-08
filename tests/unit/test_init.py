@@ -6,12 +6,12 @@ import re
 import subprocess
 import sys
 
+from sovyx import __version__
+
 
 def test_version_exists() -> None:
     """Package exposes __version__."""
-    from sovyx import __version__
-
-    assert __version__ == "0.1.0"
+    assert re.match(r"^\d+\.\d+\.\d+$", __version__)
 
 
 def test_version_is_semver() -> None:
@@ -30,7 +30,7 @@ def test_main_module_prints_version() -> None:
         timeout=10,
     )
     assert result.returncode == 0
-    assert "0.1.0" in result.stdout
+    assert __version__ in result.stdout
 
 
 def test_package_is_typed() -> None:
@@ -66,7 +66,7 @@ def test_cli_version_flag() -> None:
     runner = CliRunner()
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
-    assert "0.1.0" in result.output
+    assert __version__ in result.output
 
 
 def test_cli_no_args_shows_help() -> None:
