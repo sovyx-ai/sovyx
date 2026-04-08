@@ -401,7 +401,7 @@ class TestStrengthenConnection:
     ) -> None:
         ids = [ConceptId("c1"), ConceptId("c2")]
         await brain.strengthen_connection(ids)
-        mock_deps["hebbian"].strengthen.assert_called_once_with(ids)  # type: ignore[union-attr]
+        mock_deps["hebbian"].strengthen.assert_called_once_with(ids, relation_types=None)  # type: ignore[union-attr]
 
 
 class TestProtocolCompliance:
