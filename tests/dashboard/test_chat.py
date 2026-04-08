@@ -228,7 +228,9 @@ class TestChatValidation:
     ) -> None:
         """Missing 'message' field returns 422."""
         resp = client.post(
-            "/api/chat", json={"user_name": "Test"}, headers=auth_headers,
+            "/api/chat",
+            json={"user_name": "Test"},
+            headers=auth_headers,
         )
         assert resp.status_code == 422
         assert "message" in resp.json()["error"].lower()
@@ -240,7 +242,9 @@ class TestChatValidation:
     ) -> None:
         """Empty string message returns 422."""
         resp = client.post(
-            "/api/chat", json={"message": ""}, headers=auth_headers,
+            "/api/chat",
+            json={"message": ""},
+            headers=auth_headers,
         )
         assert resp.status_code == 422
 
@@ -264,7 +268,9 @@ class TestChatValidation:
     ) -> None:
         """Non-string message (number) returns 422."""
         resp = client.post(
-            "/api/chat", json={"message": 12345}, headers=auth_headers,
+            "/api/chat",
+            json={"message": 12345},
+            headers=auth_headers,
         )
         assert resp.status_code == 422
 
@@ -275,7 +281,9 @@ class TestChatValidation:
     ) -> None:
         """Null message returns 422."""
         resp = client.post(
-            "/api/chat", json={"message": None}, headers=auth_headers,
+            "/api/chat",
+            json={"message": None},
+            headers=auth_headers,
         )
         assert resp.status_code == 422
 
@@ -307,7 +315,9 @@ class TestChatServiceUnavailable:
     ) -> None:
         """Without registry (engine not running), returns 503."""
         resp = client.post(
-            "/api/chat", json={"message": "Hello"}, headers=auth_headers,
+            "/api/chat",
+            json={"message": "Hello"},
+            headers=auth_headers,
         )
         assert resp.status_code == 503
         assert "Engine not running" in resp.json()["error"]
@@ -329,7 +339,9 @@ class TestChatHappyPath:
         client.app.state.registry = mock_registry  # type: ignore[union-attr]
 
         resp = client.post(
-            "/api/chat", json={"message": "Hello!"}, headers=auth_headers,
+            "/api/chat",
+            json={"message": "Hello!"},
+            headers=auth_headers,
         )
 
         assert resp.status_code == 200
@@ -349,7 +361,9 @@ class TestChatHappyPath:
         client.app.state.registry = mock_registry  # type: ignore[union-attr]
 
         resp = client.post(
-            "/api/chat", json={"message": "Hi"}, headers=auth_headers,
+            "/api/chat",
+            json={"message": "Hi"},
+            headers=auth_headers,
         )
         data = resp.json()
         # Should parse without error
@@ -386,7 +400,9 @@ class TestChatHappyPath:
         client.app.state.registry = mock_registry  # type: ignore[union-attr]
 
         resp = client.post(
-            "/api/chat", json={"message": "Hello"}, headers=auth_headers,
+            "/api/chat",
+            json={"message": "Hello"},
+            headers=auth_headers,
         )
         assert resp.status_code == 200
 
@@ -492,7 +508,8 @@ class TestChatTurnRecording:
     ) -> None:
         """Filtered response records only user turn, not assistant."""
         action_result = _make_action_result(
-            response_text="", filtered=True,
+            response_text="",
+            filtered=True,
         )
         mock_registry = _make_mock_registry(action_result=action_result)
         client.app.state.registry = mock_registry  # type: ignore[union-attr]
@@ -789,7 +806,8 @@ class TestHandleChatMessageUnit:
 
         mock_registry = _make_mock_registry()
         result = await handle_chat_message(
-            mock_registry, message="Hello",
+            mock_registry,
+            message="Hello",
         )
 
         assert "response" in result
@@ -804,7 +822,8 @@ class TestHandleChatMessageUnit:
 
         mock_registry = _make_mock_registry()
         await handle_chat_message(
-            mock_registry, message="  Hello  ",
+            mock_registry,
+            message="  Hello  ",
         )
 
         # The perception content should be stripped
@@ -823,7 +842,8 @@ class TestHandleChatMessageUnit:
         )
         with pytest.raises(CognitiveError):
             await handle_chat_message(
-                mock_registry, message="Hello",
+                mock_registry,
+                message="Hello",
             )
 
     @pytest.mark.asyncio()
@@ -833,7 +853,9 @@ class TestHandleChatMessageUnit:
 
         mock_registry = _make_mock_registry()
         await handle_chat_message(
-            mock_registry, message="Hello", timeout=60.0,
+            mock_registry,
+            message="Hello",
+            timeout=60.0,
         )
 
         gate_call = mock_registry._gate.submit.call_args

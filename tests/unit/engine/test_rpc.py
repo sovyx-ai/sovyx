@@ -203,11 +203,13 @@ class TestRPCServerCoverageGaps:
                 from sovyx.engine.rpc_protocol import _HEADER_SIZE
 
                 header = await asyncio.wait_for(
-                    reader.readexactly(_HEADER_SIZE), timeout=2.0,
+                    reader.readexactly(_HEADER_SIZE),
+                    timeout=2.0,
                 )
                 length = int.from_bytes(header, "big")
                 raw = await asyncio.wait_for(
-                    reader.readexactly(length), timeout=2.0,
+                    reader.readexactly(length),
+                    timeout=2.0,
                 )
                 data = json.loads(raw.decode())
                 assert data["error"]["code"] == -32000

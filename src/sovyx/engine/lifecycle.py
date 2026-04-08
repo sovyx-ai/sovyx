@@ -208,7 +208,7 @@ class LifecycleManager:
                 # Can't await in sync — use defaults if not resolved yet
                 if task.done():
                     host, port = task.result()
-        except Exception:  # noqa: BLE001 — banner is best-effort
+        except Exception:  # noqa: BLE001  # nosec B110 — banner is best-effort; defaults are safe
             pass
 
         url = f"http://{host}:{port}"

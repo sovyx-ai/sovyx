@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from sovyx import __version__
-
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from sovyx import __version__
 from sovyx.dashboard.status import (
     DashboardCounters,
     StatusCollector,

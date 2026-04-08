@@ -524,50 +524,64 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
                 from sovyx.bridge.channels.telegram import TelegramChannel
 
                 if registry.is_registered(TelegramChannel):
-                    channel_list.append({
-                        "name": "Telegram",
-                        "type": "telegram",
-                        "connected": True,
-                    })
+                    channel_list.append(
+                        {
+                            "name": "Telegram",
+                            "type": "telegram",
+                            "connected": True,
+                        }
+                    )
                 else:
-                    channel_list.append({
+                    channel_list.append(
+                        {
+                            "name": "Telegram",
+                            "type": "telegram",
+                            "connected": False,
+                        }
+                    )
+            except ImportError:
+                channel_list.append(
+                    {
                         "name": "Telegram",
                         "type": "telegram",
                         "connected": False,
-                    })
-            except ImportError:
-                channel_list.append({
-                    "name": "Telegram",
-                    "type": "telegram",
-                    "connected": False,
-                })
+                    }
+                )
 
             try:
                 from sovyx.bridge.channels.signal import SignalChannel
 
                 if registry.is_registered(SignalChannel):
-                    channel_list.append({
-                        "name": "Signal",
-                        "type": "signal",
-                        "connected": True,
-                    })
+                    channel_list.append(
+                        {
+                            "name": "Signal",
+                            "type": "signal",
+                            "connected": True,
+                        }
+                    )
                 else:
-                    channel_list.append({
+                    channel_list.append(
+                        {
+                            "name": "Signal",
+                            "type": "signal",
+                            "connected": False,
+                        }
+                    )
+            except ImportError:
+                channel_list.append(
+                    {
                         "name": "Signal",
                         "type": "signal",
                         "connected": False,
-                    })
-            except ImportError:
-                channel_list.append({
-                    "name": "Signal",
-                    "type": "signal",
-                    "connected": False,
-                })
+                    }
+                )
         else:
-            channel_list.extend([
-                {"name": "Telegram", "type": "telegram", "connected": False},
-                {"name": "Signal", "type": "signal", "connected": False},
-            ])
+            channel_list.extend(
+                [
+                    {"name": "Telegram", "type": "telegram", "connected": False},
+                    {"name": "Signal", "type": "signal", "connected": False},
+                ]
+            )
 
         return JSONResponse({"channels": channel_list})
 
@@ -643,13 +657,15 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
             )
 
         # Broadcast chat event to WebSocket clients for real-time updates
-        await ws_manager.broadcast({
-            "type": "ChatMessage",
-            "data": {
-                "conversation_id": result["conversation_id"],
-                "response_preview": result["response"][:200] if result["response"] else "",
-            },
-        })
+        await ws_manager.broadcast(
+            {
+                "type": "ChatMessage",
+                "data": {
+                    "conversation_id": result["conversation_id"],
+                    "response_preview": result["response"][:200] if result["response"] else "",
+                },
+            }
+        )
 
         return JSONResponse(result)
 

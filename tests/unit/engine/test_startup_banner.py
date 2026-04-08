@@ -24,7 +24,10 @@ class TestStartupBanner:
         return LifecycleManager(mock_registry, mock_events)
 
     def test_banner_shows_url(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Banner contains the dashboard URL."""
         token_file = tmp_path / "token"
@@ -38,7 +41,10 @@ class TestStartupBanner:
         assert "127.0.0.1:7777" in captured.out
 
     def test_banner_shows_token(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Banner shows the actual token."""
         token_file = tmp_path / "token"
@@ -52,11 +58,15 @@ class TestStartupBanner:
         assert "my-secret-abc" in captured.out
 
     def test_banner_no_token_file(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Banner shows placeholder when token file missing."""
         monkeypatch.setattr(
-            "sovyx.dashboard.server.TOKEN_FILE", tmp_path / "nofile",
+            "sovyx.dashboard.server.TOKEN_FILE",
+            tmp_path / "nofile",
         )
 
         lm = self._make_lifecycle()
@@ -66,7 +76,10 @@ class TestStartupBanner:
         assert "not generated" in captured.out
 
     def test_banner_mentions_sovyx_token(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Banner mentions `sovyx token` command."""
         token_file = tmp_path / "token"
@@ -80,7 +93,10 @@ class TestStartupBanner:
         assert "sovyx token" in captured.out
 
     def test_banner_has_box_drawing(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         """Banner uses box drawing characters."""
         token_file = tmp_path / "token"

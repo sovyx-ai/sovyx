@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from typer.testing import CliRunner
 
+from sovyx import __version__
 from sovyx.cli.main import app
 
 if TYPE_CHECKING:
@@ -21,7 +22,7 @@ class TestVersion:
     def test_version_flag(self) -> None:
         result = runner.invoke(app, ["--version"])
         assert result.exit_code == 0
-        assert "0.1.0" in result.stdout
+        assert __version__ in result.stdout
 
     def test_version_short(self) -> None:
         result = runner.invoke(app, ["-v"])

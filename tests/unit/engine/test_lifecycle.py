@@ -277,6 +277,7 @@ class TestLifecycleCoverageGaps:
 
         # DashboardServer should NOT be registered
         from sovyx.dashboard.server import DashboardServer
+
         assert not registry.is_registered(DashboardServer)
 
     @pytest.mark.asyncio()
