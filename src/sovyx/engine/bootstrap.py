@@ -150,7 +150,10 @@ async def bootstrap(
                 relation_repo=relation_repo,
                 working_memory=working_memory,
             )
-            hebbian = HebbianLearning(relation_repo=relation_repo)
+            hebbian = HebbianLearning(
+                relation_repo=relation_repo,
+                concept_repo=concept_repo,
+            )
             ebbinghaus = EbbinghausDecay(
                 concept_repo=concept_repo,
                 relation_repo=relation_repo,
