@@ -21,24 +21,88 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-# ── LLM extraction prompt ──
+# ── LLM extraction prompt ──────────────────────────────────────────────
+# Covers all 7 ConceptCategory values with clear definitions and examples
+# so the LLM can reliably distinguish between them.
 
-_EXTRACTION_PROMPT = """Extract key facts, preferences, and entities from the user message.
-Return a JSON array of objects with these fields:
-- "name": short label (2-5 words)
-- "content": one-sentence description of what was learned
-- "category": one of "entity", "preference", "fact", "skill", "opinion", "project"
+_EXTRACTION_PROMPT = (  # noqa: E501
+    "Extract knowledge from the user message into structured concepts.\n"
+    "Return a JSON array of objects with these fields:\n"
+    '- "name": short label (2-5 words)\n'
+    '- "content": one-sentence description of what was learned\n'
+    '- "category": one of the categories below\n'
+    "\n"
+    "Categories (pick the MOST specific one):\n"
+    '- "entity": person, org, place, or named thing '
+    '(e.g. "John", "Google")\n'
+    '- "fact": objective, verifiable info '
+    '(e.g. "works remotely", "3 years experience")\n'
+    '- "preference": like, dislike, or personal taste '
+    '(e.g. "prefers dark mode", "loves PostgreSQL")\n'
+    '- "skill": technical ability or competency '
+    '(e.g. "knows Rust", "expert in K8s")\n'
+    '- "belief": subjective opinion or value judgment '
+    '(e.g. "thinks ORMs are harmful")\n'
+    '- "event": time-bound occurrence or milestone '
+    '(e.g. "migrated to AWS last month")\n'
+    '- "relationship": connection between entities '
+    '(e.g. "manages a team of 5", "reports to CTO")\n'
+    "\n"
+    "Rules:\n"
+    "- Extract ALL meaningful information\n"
+    "- Be specific: "
+    '"thinks GraphQL adds complexity" not "dislikes GraphQL"\n'
+    "- Distinguish: "
+    '"prefers X"=preference, "thinks X is bad"=belief, '
+    '"knows X"=skill\n'
+    "- Skip greetings, filler, questions asking for info\n"
+    "- Return [] if no learnable information\n"
+    "- Return ONLY the JSON array, no other text\n"
+    "\n"
+    "User message: {message}"
+)
 
-Rules:
-- Extract ALL meaningful information (names, tools, preferences, opinions, projects, skills)
-- Be specific: "prefers raw SQL over ORMs" not "likes databases"
-- Skip greetings, filler words, questions asking for info
-- Return [] if the message contains no learnable information
-- Return ONLY the JSON array, no other text
+# ── Category mapping ───────────────────────────────────────────────────
+# Maps LLM output strings → ConceptCategory enum values.
+# Every ConceptCategory MUST have ≥1 key mapping to it.
 
-User message: {message}"""
+_CATEGORY_MAP: dict[str, str] = {
+    # Direct mappings (1:1 with ConceptCategory enum)
+    "entity": "entity",
+    "fact": "fact",
+    "preference": "preference",
+    "skill": "skill",
+    "belief": "belief",
+    "event": "event",
+    "relationship": "relationship",
+    # Aliases (LLM may use these synonyms)
+    "opinion": "belief",  # opinion IS a belief
+    "project": "entity",  # a project is a named entity
+    "person": "entity",  # person is an entity
+    "tool": "skill",  # knowing a tool is a skill
+    "technology": "skill",  # knowing a technology is a skill
+    "milestone": "event",  # milestone is a time-bound event
+    "connection": "relationship",  # synonym
+}
 
-# ── Regex fallback patterns ──
+# ── Importance by category ─────────────────────────────────────────────
+# Initial importance assigned at concept creation.
+# Higher = more likely to survive Ebbinghaus decay.
+
+_IMPORTANCE: dict[str, float] = {
+    "entity": 0.8,
+    "fact": 0.6,
+    "preference": 0.7,
+    "skill": 0.7,
+    "belief": 0.6,
+    "event": 0.7,
+    "relationship": 0.8,
+}
+
+# Default importance for unknown categories
+_DEFAULT_IMPORTANCE = 0.5
+
+# ── Regex fallback patterns ────────────────────────────────────────────
 
 _ENTITY_PATTERNS = [
     re.compile(r"(?:my name is|i'm|i am)\s+(\w+)", re.IGNORECASE),
@@ -88,14 +152,71 @@ _SKILL_PATTERNS = [
     ),
 ]
 
-_IMPORTANCE = {
-    "entity": 0.8,
-    "preference": 0.7,
-    "fact": 0.6,
-    "skill": 0.7,
-    "opinion": 0.6,
-    "project": 0.8,
-}
+_BELIEF_PATTERNS = [
+    re.compile(
+        r"(?:i (?:think|believe|feel that|consider))\s+(.+?)(?:\.|,|!|$)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:in my (?:opinion|view|experience))\s*[,:]?\s*(.+?)(?:\.|!|$)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:eu (?:acho|acredito|penso) que)\s+(.+?)(?:\.|,|!|$)",
+        re.IGNORECASE,
+    ),
+]
+
+_EVENT_PATTERNS = [
+    re.compile(
+        r"(?:i (?:started|finished|completed|launched|migrated|deployed|graduated))"
+        r"\s+(.+?)(?:\.|,|!|$)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:last (?:week|month|year)|recently|yesterday|in \d{4})\s*[,:]?\s*"
+        r"(?:i |we )?(.+?)(?:\.|,|!|$)",
+        re.IGNORECASE,
+    ),
+]
+
+_RELATIONSHIP_PATTERNS = [
+    re.compile(
+        r"(?:i (?:manage|lead|report to|work with|mentor))\s+(.+?)(?:\.|,|!|$)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?:my (?:team|manager|boss|colleague|partner) (?:is|are))\s+(.+?)(?:\.|,|!|$)",
+        re.IGNORECASE,
+    ),
+]
+
+
+def resolve_category(raw_category: str) -> str:
+    """Resolve a raw LLM category string to a canonical ConceptCategory value.
+
+    Uses ``_CATEGORY_MAP`` for alias resolution. Falls back to ``"fact"``
+    for unknown categories.
+
+    Args:
+        raw_category: The raw category string from LLM or regex extraction.
+
+    Returns:
+        A canonical category string matching a ``ConceptCategory`` enum value.
+    """
+    return _CATEGORY_MAP.get(raw_category.strip().lower(), "fact")
+
+
+def get_importance(category: str) -> float:
+    """Return initial importance for a concept category.
+
+    Args:
+        category: Canonical category string (after ``resolve_category``).
+
+    Returns:
+        Importance value in [0.0, 1.0].
+    """
+    return _IMPORTANCE.get(category, _DEFAULT_IMPORTANCE)
 
 
 class ReflectPhase:
@@ -139,19 +260,11 @@ class ReflectPhase:
             extracted = self._extract_with_regex(perception.content)
 
         # Learn extracted concepts
-        category_map = {
-            "entity": ConceptCategory.ENTITY,
-            "preference": ConceptCategory.PREFERENCE,
-            "fact": ConceptCategory.FACT,
-            "skill": ConceptCategory.FACT,
-            "opinion": ConceptCategory.PREFERENCE,
-            "project": ConceptCategory.ENTITY,
-        }
-
         concept_ids: list[ConceptId] = []
         for name, content, cat_key in extracted:
             try:
-                category = category_map.get(cat_key, ConceptCategory.FACT)
+                resolved = resolve_category(cat_key)
+                category = ConceptCategory(resolved)
                 cid = await self._brain.learn_concept(
                     mind_id=mind_id,
                     name=name,
@@ -243,7 +356,11 @@ class ReflectPhase:
 
     @staticmethod
     def _extract_with_regex(message: str) -> list[tuple[str, str, str]]:
-        """Fallback: extract concepts using regex patterns."""
+        """Fallback: extract concepts using regex patterns.
+
+        Covers all 7 categories with pattern-based extraction.
+        Less accurate than LLM but works offline.
+        """
         extracted: list[tuple[str, str, str]] = []
 
         for pattern in _ENTITY_PATTERNS:
@@ -273,5 +390,26 @@ class ReflectPhase:
                 skill = match.group(1).strip()
                 if len(skill) > 1:
                     extracted.append((skill, f"User codes with {skill}", "skill"))
+
+        for pattern in _BELIEF_PATTERNS:
+            match = pattern.search(message)
+            if match:
+                belief = match.group(1).strip()
+                if len(belief) > 1:
+                    extracted.append((belief, f"User believes {belief}", "belief"))
+
+        for pattern in _EVENT_PATTERNS:
+            match = pattern.search(message)
+            if match:
+                event = match.group(1).strip()
+                if len(event) > 1:
+                    extracted.append((event, f"User {event}", "event"))
+
+        for pattern in _RELATIONSHIP_PATTERNS:
+            match = pattern.search(message)
+            if match:
+                rel = match.group(1).strip()
+                if len(rel) > 1:
+                    extracted.append((rel, f"User's relationship: {rel}", "relationship"))
 
         return extracted
