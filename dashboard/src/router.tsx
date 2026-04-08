@@ -28,6 +28,7 @@ const EmotionsPage = lazy(() => import("@/pages/emotions"));
 const ProductivityPage = lazy(() => import("@/pages/productivity"));
 const PluginsPage = lazy(() => import("@/pages/plugins"));
 const HomePage = lazy(() => import("@/pages/home"));
+const ChatPage = lazy(() => import("@/pages/chat"));
 const NotFoundPage = lazy(() => import("@/pages/not-found"));
 
 function PageWrapper({
@@ -62,6 +63,14 @@ export const router = createBrowserRouter([
         element: (
           <PageWrapper fallback={<OverviewSkeleton />}>
             <OverviewPage />
+          </PageWrapper>
+        ),
+      },
+      {
+        path: "chat",
+        element: (
+          <PageWrapper>
+            <ChatPage />
           </PageWrapper>
         ),
       },

@@ -23,6 +23,7 @@ import {
 import { createBrainSlice, type BrainSlice } from "./slices/brain";
 import { createLogsSlice, type LogsSlice } from "./slices/logs";
 import { createSettingsSlice, type SettingsSlice } from "./slices/settings";
+import { createChatSlice, type ChatSlice } from "./slices/chat";
 
 export type DashboardState = AuthSlice &
   ConnectionSlice &
@@ -30,7 +31,8 @@ export type DashboardState = AuthSlice &
   ConversationsSlice &
   BrainSlice &
   LogsSlice &
-  SettingsSlice;
+  SettingsSlice &
+  ChatSlice;
 
 export const useDashboardStore = create<DashboardState>()(
   devtools(
@@ -42,6 +44,7 @@ export const useDashboardStore = create<DashboardState>()(
       ...createBrainSlice(...a),
       ...createLogsSlice(...a),
       ...createSettingsSlice(...a),
+      ...createChatSlice(...a),
     }),
     { name: "sovyx-dashboard" },
   ),
