@@ -194,8 +194,20 @@ class BrainService:
         for concept, _rank in existing:
             if concept.name.lower() == name.lower() and concept.category == category:
                 # Concept exists — reinforce, don't duplicate
+
+                # Update content if new is longer (more information)
                 if len(content) > len(concept.content):
                     concept.content = content
+
+                # Confidence evolution: each corroboration increases
+                # confidence by 0.1, capped at 1.0.
+                # Formula: base(0.5) + 0.1 * min(count, 5) → max 1.0
+                corr_raw = concept.metadata.get("corroboration_count", 0)
+                corr = int(corr_raw) if isinstance(corr_raw, (int, float, str)) else 0
+                corr += 1
+                concept.metadata["corroboration_count"] = corr
+                concept.confidence = min(1.0, concept.confidence + 0.1)
+
                 # Update emotional valence: weighted average
                 # (existing has more history, weight it 2:1)
                 if emotional_valence != 0.0:
@@ -204,6 +216,7 @@ class BrainService:
                         -1.0,
                         min(1.0, (old_v * 2 + emotional_valence) / 3),
                     )
+
                 await self._concepts.update(concept)
                 await self._concepts.record_access(concept.id)
                 # Re-activate in working memory so decayed concepts
