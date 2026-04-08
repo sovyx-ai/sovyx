@@ -107,7 +107,7 @@ class TestPerformanceBudget:
         budget = PerformanceBudget(HardwareTier.PI5)
         results = [
             BenchmarkResult(name="startup_ms", value=3000.0, unit="ms"),
-            BenchmarkResult(name="rss_mb", value=650.0, unit="MB"),  # over 600
+            BenchmarkResult(name="rss_mb", value=700.0, unit="MB"),  # over 650
         ]
         assert budget.all_passed(results) is False
 
