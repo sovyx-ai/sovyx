@@ -5,6 +5,27 @@ All notable changes to Sovyx will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.14] — 2026-04-08
+
+### Added — Brain Semantic Enrichment
+- Full-spectrum concept categorization — 7 categories (fact, preference, entity, skill, belief, event, relationship) with rewritten LLM extraction prompt, regex fallback for all types, and alias mapping
+- LLM-based relation type classification — second LLM call classifies within-turn concept pairs into 7 relation types (related_to, part_of, causes, contradicts, example_of, temporal, emotional)
+- Emotional valence and arousal — sentiment field (-1.0 to 1.0) extracted per concept via LLM, `ExtractedConcept` dataclass replaces raw tuples, episode-level valence (avg) and arousal (max |sentiment|)
+- Confidence evolution — +0.1 per corroboration on concept re-encounter, capped at 1.0, tracks `corroboration_count` in metadata
+- Importance reinforcement — +0.05 on dedup (repeated access), +0.02 on high co-activation (>0.7) in Hebbian learning
+- Dynamic episode importance — `compute_episode_importance()` based on input length, concept count, and emotional arousal (replaces hardcoded 0.5)
+- Episode summary generation — LLM-generated 1-sentence summary per episode, used in context formatting
+- Episode `concepts_mentioned` wiring — concept IDs from extraction now stored in episode records
+- Concept merging in consolidation — FTS5 name containment + Levenshtein distance ≤3, same mind + category; transfers relations, deletes merged concept; max 10 per cycle
+- Dashboard relation legend — shows counts per relation type, hides zero-count types, link hover tooltip with type + weight
+- Comprehensive integration test — 5 realistic messages through full pipeline, verifies ≥4 categories, ≥2 relation types, confidence growth, emotional valence, dynamic importance, summaries, merging
+
+### Changed
+- `ConsolidationCycle` — new `_merge_similar()` step between decay and prune; `merged` field reflects actual count
+- `HebbianLearning` — accepts optional `concept_repo` for importance boost; `_strengthen_pair` boosts importance when co_activation > 0.7
+- `ContextFormatter.format_episode()` — uses episode summary when available, falls back to truncated input
+- `BrainService.encode_episode()` — accepts `summary` and `concepts_mentioned` params
+
 ## [0.5.11] — 2026-04-08
 
 ### Added
