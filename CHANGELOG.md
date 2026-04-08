@@ -5,6 +5,33 @@ All notable changes to Sovyx will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.11] — 2026-04-08
+
+### Added
+- Star topology Hebbian learning — `strengthen_star()` with 3-layer pairing (within-turn, cross-turn top-K, existing reinforcement). Linear O(n*K) scaling replaces O(n^2) all-pairs
+- Canonical relation ordering — `_canonical_order(a, b)` ensures `min(source, target)` as source_id. Eliminates bidirectional duplicates at write time
+- Migration v3 — merges pre-existing duplicate relations (sum co_occurrence, max weight, flip non-canonical)
+- Working memory decay in cognitive loop — `decay_all()` called after reflect phase, rate 0.15
+- Graph API orphan audit — nodes with 0 edges rescued via top-3 relations from RelationRepository
+- Dynamic graph cap — `nodes * 30` for small graphs (<500), `limit * 3` for large
+- Bidirectional graph query — `WHERE source_id IN (...) OR target_id IN (...)`
+- Integration test suite for island prevention — 6 tests with real SQLite, BFS connectivity check
+- `@pytest.mark.no_islands` regression marker
+- `docs/brain-architecture.md` — full brain subsystem architecture documentation
+
+### Fixed
+- Hebbian island formation — new concepts no longer become isolated when total concepts > 20
+- Working memory dedup path — `learn_concept()` now re-activates concepts in working memory (0.5) on dedup, preventing decay-induced invisibility for star topology top-K selection
+- Graph API missed edges — bidirectional query catches relations where concept is in target_id column
+- Graph API ORDER BY — strongest edges returned first (weight DESC), weakest dropped if cap hit
+
+### Changed
+- `HebbianLearning.strengthen()` — removed `priority_ids` param, now within-turn only
+- `BrainService.encode_episode()` — uses `strengthen_star()` with new/existing concept separation
+- `WorkingMemory` default decay_rate — 0.10 to 0.15
+- `CognitiveLoop` — accepts optional `brain` parameter for decay integration
+- Graph API chunk_size — 900 to 450 (halved for bidirectional placeholders)
+
 ## [0.5.1] — 2026-04-08
 
 ### Added
