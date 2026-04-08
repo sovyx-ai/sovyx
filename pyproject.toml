@@ -109,6 +109,9 @@ select = ["E", "F", "W", "I", "N", "UP", "ANN", "B", "A", "SIM", "TCH"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "no_islands: brain graph connectivity regression tests",
+]
 
 [tool.coverage.run]
 source = ["sovyx"]
