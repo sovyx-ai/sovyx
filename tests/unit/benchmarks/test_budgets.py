@@ -38,7 +38,7 @@ class TestPerformanceBudget:
         budget = PerformanceBudget(HardwareTier.PI5)
         assert budget.tier == HardwareTier.PI5
         assert budget.limits.startup_ms == 5000  # noqa: PLR2004
-        assert budget.limits.rss_mb == 512  # noqa: PLR2004
+        assert budget.limits.rss_mb == 600  # noqa: PLR2004
 
     def test_n100_tier(self) -> None:
         budget = PerformanceBudget(HardwareTier.N100)
@@ -107,7 +107,7 @@ class TestPerformanceBudget:
         budget = PerformanceBudget(HardwareTier.PI5)
         results = [
             BenchmarkResult(name="startup_ms", value=3000.0, unit="ms"),
-            BenchmarkResult(name="rss_mb", value=600.0, unit="MB"),  # over 512
+            BenchmarkResult(name="rss_mb", value=650.0, unit="MB"),  # over 600
         ]
         assert budget.all_passed(results) is False
 
