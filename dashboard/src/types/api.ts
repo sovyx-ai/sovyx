@@ -234,11 +234,11 @@ export interface ChannelEventData {
 
 /** Entry types from /api/activity/timeline */
 export type TimelineEntryType =
-  | "conversation_started"
-  | "message_exchanged"
+  | "conversation"
+  | "message"
   | "concepts_learned"
   | "episode_encoded"
-  | "consolidation_ran";
+  | "consolidation";
 
 /** Single timeline entry from the backend */
 export interface TimelineEntry {
