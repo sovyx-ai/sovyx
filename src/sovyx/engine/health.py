@@ -32,7 +32,9 @@ class HealthStatus:
 
 
 class HealthChecker:
-    """10 health checks (SPE-015 §doctor).
+    """Engine health checks for ``sovyx doctor`` CLI command.
+
+    10 checks (SPE-015 §doctor):
 
     1. SQLite writable
     2. sqlite-vec available
@@ -44,6 +46,12 @@ class HealthChecker:
     8. Disk space > 100MB
     9. RSS < 85% of total RAM
     10. Event loop lag < 100ms
+
+    NOTE: The dashboard ``/api/health`` endpoint uses a different system —
+    ``sovyx.observability.health.HealthRegistry`` — with individual
+    ``HealthCheck`` subclasses wired to engine services via
+    ``DashboardServer._create_health_registry()``.  This class is for CLI
+    diagnostics only.
     """
 
     def __init__(self, registry: ServiceRegistry, start_time: float | None = None) -> None:

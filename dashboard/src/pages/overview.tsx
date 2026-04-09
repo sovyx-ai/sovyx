@@ -57,6 +57,19 @@ export default function OverviewPage() {
     }
   }, [allDone, transitioning]);
 
+  // ── Immediate refresh when onboarding banner is visible ──
+  // Default health poll is 10s — too slow for onboarding responsiveness.
+  // Trigger immediate status + health refresh on mount when banner shows.
+  useEffect(() => {
+    if (showBanner && connected) {
+      void import("@/hooks/use-websocket").then(({ refreshStatus, refreshHealth }) => {
+        void refreshStatus();
+        void refreshHealth();
+      });
+    }
+    // Only on mount + when showBanner/connected change
+  }, [showBanner, connected]);
+
   /** True when engine just started with no activity */
   const isFresh = status
     ? status.messages_today === 0 && status.memory_concepts === 0 && status.llm_calls_today === 0
