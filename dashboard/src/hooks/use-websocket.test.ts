@@ -145,7 +145,7 @@ describe("useWebSocket", () => {
     expect(state.recentEvents[0].type).toBe("EngineStarted");
   });
 
-  it("pushes WS events as log entries", () => {
+  it("WS events go to activity feed, NOT to logs store", () => {
     mockFetchSuccess();
     renderHook(() => useWebSocket());
 
@@ -162,8 +162,13 @@ describe("useWebSocket", () => {
       ),
     );
 
+    // Logs store should NOT contain WS events (fed by /api/logs polling)
     const logs = useDashboardStore.getState().logs;
-    expect(logs.some((l) => l.event.includes("ConceptCreated"))).toBe(true);
+    expect(logs.some((l) => l.event.includes("ConceptCreated"))).toBe(false);
+
+    // Activity feed SHOULD contain the event
+    const events = useDashboardStore.getState().recentEvents;
+    expect(events.some((e) => e.type === "ConceptCreated")).toBe(true);
   });
 
   it("ignores 'pong' messages", () => {
