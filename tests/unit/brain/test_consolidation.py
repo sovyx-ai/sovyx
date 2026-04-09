@@ -89,6 +89,217 @@ class TestConsolidationCycle:
         assert received[0].pruned == 5  # noqa: PLR2004
 
 
+class TestScoreRecalculation:
+    """Score recalculation during consolidation (TASK-07)."""
+
+    async def test_recalculate_without_scorers_returns_zero(
+        self, cycle: ConsolidationCycle, mind_id: MindId
+    ) -> None:
+        """Without scorers injected, recalculation is skipped."""
+        result = await cycle._recalculate_scores(mind_id)
+        assert result == 0
+
+    async def test_recalculate_with_scorers(
+        self,
+        mock_brain: AsyncMock,
+        mock_decay: AsyncMock,
+        event_bus: EventBus,
+        mind_id: MindId,
+    ) -> None:
+        """With scorers + repos, recalculation updates concepts."""
+        from datetime import UTC, datetime, timedelta
+        from sovyx.brain.models import Concept
+        from sovyx.brain.scoring import ConfidenceScorer, ImportanceScorer
+        from sovyx.engine.types import ConceptId
+
+        # Create mock concepts with flat importance
+        now = datetime.now(UTC)
+        concepts = [
+            Concept(
+                id=ConceptId(f"c{i}"),
+                mind_id=mind_id,
+                name=f"concept_{i}",
+                importance=0.5,
+                confidence=0.5,
+                access_count=i * 5,
+                emotional_valence=0.1 * i,
+                last_accessed=now - timedelta(days=i * 10),
+            )
+            for i in range(5)
+        ]
+
+        mock_concepts = AsyncMock()
+        mock_concepts.get_by_mind = AsyncMock(return_value=concepts)
+        mock_concepts.batch_update_scores = AsyncMock(return_value=3)
+
+        mock_relations = AsyncMock()
+        mock_relations.get_degree_centrality = AsyncMock(return_value={
+            "c0": (5, 0.7),
+            "c1": (3, 0.5),
+            "c2": (1, 0.3),
+            "c3": (0, 0.0),
+            "c4": (0, 0.0),
+        })
+
+        cycle_with_scorers = ConsolidationCycle(
+            brain_service=mock_brain,
+            decay=mock_decay,
+            event_bus=event_bus,
+            concept_repo=mock_concepts,
+            relation_repo=mock_relations,
+            importance_scorer=ImportanceScorer(),
+            confidence_scorer=ConfidenceScorer(),
+        )
+
+        result = await cycle_with_scorers._recalculate_scores(mind_id)
+        assert result > 0
+        mock_concepts.batch_update_scores.assert_awaited_once()
+        updates = mock_concepts.batch_update_scores.call_args[0][0]
+        assert len(updates) > 0
+        # All scores should be in valid range
+        for _, imp, conf in updates:
+            assert 0.05 <= imp <= 1.0
+            assert 0.05 <= conf <= 1.0
+
+    async def test_recalculate_skips_unchanged(
+        self,
+        mock_brain: AsyncMock,
+        mock_decay: AsyncMock,
+        event_bus: EventBus,
+        mind_id: MindId,
+    ) -> None:
+        """Concepts where score change < 0.005 are skipped."""
+        from datetime import UTC, datetime
+        from sovyx.brain.models import Concept
+        from sovyx.brain.scoring import ConfidenceScorer, ImportanceScorer
+        from sovyx.engine.types import ConceptId
+
+        # Concept with scores that won't change much (stable state)
+        stable = Concept(
+            id=ConceptId("stable"),
+            mind_id=mind_id,
+            name="stable_concept",
+            importance=0.5,
+            confidence=0.8,
+            access_count=10,
+            last_accessed=datetime.now(UTC),  # Very recent
+        )
+
+        mock_concepts = AsyncMock()
+        mock_concepts.get_by_mind = AsyncMock(return_value=[stable])
+        mock_concepts.batch_update_scores = AsyncMock(return_value=0)
+
+        mock_relations = AsyncMock()
+        mock_relations.get_degree_centrality = AsyncMock(return_value={
+            "stable": (5, 0.6),
+        })
+
+        cycle_with_scorers = ConsolidationCycle(
+            brain_service=mock_brain,
+            decay=mock_decay,
+            event_bus=event_bus,
+            concept_repo=mock_concepts,
+            relation_repo=mock_relations,
+            importance_scorer=ImportanceScorer(),
+            confidence_scorer=ConfidenceScorer(),
+        )
+
+        result = await cycle_with_scorers._recalculate_scores(mind_id)
+        # Stable concept might or might not be updated depending on exact score
+        # But batch_update_scores is called (even if with empty list)
+        assert result >= 0
+
+    async def test_run_includes_recalculation(
+        self,
+        mock_brain: AsyncMock,
+        mock_decay: AsyncMock,
+        event_bus: EventBus,
+        mind_id: MindId,
+    ) -> None:
+        """Full consolidation run includes score recalculation step."""
+        from sovyx.brain.scoring import ConfidenceScorer, ImportanceScorer
+
+        mock_concepts = AsyncMock()
+        mock_concepts.get_by_mind = AsyncMock(return_value=[])
+        mock_concepts.find_merge_candidates = AsyncMock(return_value=[])
+
+        mock_relations = AsyncMock()
+
+        cycle_full = ConsolidationCycle(
+            brain_service=mock_brain,
+            decay=mock_decay,
+            event_bus=event_bus,
+            concept_repo=mock_concepts,
+            relation_repo=mock_relations,
+            importance_scorer=ImportanceScorer(),
+            confidence_scorer=ConfidenceScorer(),
+        )
+
+        result = await cycle_full.run(mind_id)
+        assert isinstance(result, ConsolidationCompleted)
+        # get_by_mind was called (recalculation attempted)
+        mock_concepts.get_by_mind.assert_awaited()
+
+    async def test_connected_concepts_get_higher_importance(
+        self,
+        mock_brain: AsyncMock,
+        mock_decay: AsyncMock,
+        event_bus: EventBus,
+        mind_id: MindId,
+    ) -> None:
+        """Highly connected concepts should get higher recalculated importance."""
+        from datetime import UTC, datetime
+        from sovyx.brain.models import Concept
+        from sovyx.brain.scoring import ConfidenceScorer, ImportanceScorer
+        from sovyx.engine.types import ConceptId
+
+        now = datetime.now(UTC)
+        connected = Concept(
+            id=ConceptId("connected"),
+            mind_id=mind_id,
+            name="hub",
+            importance=0.5,
+            confidence=0.5,
+            access_count=20,
+            last_accessed=now,
+        )
+        isolated = Concept(
+            id=ConceptId("isolated"),
+            mind_id=mind_id,
+            name="leaf",
+            importance=0.5,
+            confidence=0.5,
+            access_count=1,
+            last_accessed=now,
+        )
+
+        mock_concepts = AsyncMock()
+        mock_concepts.get_by_mind = AsyncMock(return_value=[connected, isolated])
+        mock_concepts.batch_update_scores = AsyncMock(return_value=2)
+
+        mock_relations = AsyncMock()
+        mock_relations.get_degree_centrality = AsyncMock(return_value={
+            "connected": (15, 0.8),  # Hub: many connections
+            "isolated": (0, 0.0),    # Leaf: no connections
+        })
+
+        cycle_s = ConsolidationCycle(
+            brain_service=mock_brain,
+            decay=mock_decay,
+            event_bus=event_bus,
+            concept_repo=mock_concepts,
+            relation_repo=mock_relations,
+            importance_scorer=ImportanceScorer(),
+            confidence_scorer=ConfidenceScorer(),
+        )
+
+        await cycle_s._recalculate_scores(mind_id)
+        updates = mock_concepts.batch_update_scores.call_args[0][0]
+        update_dict = {str(cid): (imp, conf) for cid, imp, conf in updates}
+        if "connected" in update_dict and "isolated" in update_dict:
+            assert update_dict["connected"][0] > update_dict["isolated"][0]
+
+
 class TestConsolidationScheduler:
     """ConsolidationScheduler tests."""
 

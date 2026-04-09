@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import random
 import time
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from sovyx.engine.events import ConsolidationCompleted
@@ -15,9 +16,10 @@ if TYPE_CHECKING:
     from sovyx.brain.concept_repo import ConceptRepository
     from sovyx.brain.learning import EbbinghausDecay
     from sovyx.brain.relation_repo import RelationRepository
+    from sovyx.brain.scoring import ConfidenceScorer, ImportanceScorer
     from sovyx.brain.service import BrainService
     from sovyx.engine.events import EventBus
-    from sovyx.engine.types import MindId
+    from sovyx.engine.types import ConceptId, MindId
 
 logger = get_logger(__name__)
 
@@ -40,12 +42,16 @@ class ConsolidationCycle:
         event_bus: EventBus,
         concept_repo: ConceptRepository | None = None,
         relation_repo: RelationRepository | None = None,
+        importance_scorer: ImportanceScorer | None = None,
+        confidence_scorer: ConfidenceScorer | None = None,
     ) -> None:
         self._brain = brain_service
         self._decay = decay
         self._events = event_bus
         self._concepts = concept_repo
         self._relations = relation_repo
+        self._importance_scorer = importance_scorer
+        self._confidence_scorer = confidence_scorer
 
     async def run(self, mind_id: MindId) -> ConsolidationCompleted:
         """Execute one consolidation cycle.
@@ -66,6 +72,15 @@ class ConsolidationCycle:
             decayed_concepts=decayed_concepts,
             decayed_relations=decayed_relations,
         )
+
+        # Step 1.5: Recalculate importance + confidence scores
+        recalculated = await self._recalculate_scores(mind_id)
+        if recalculated > 0:
+            logger.info(
+                "consolidation_scores_recalculated",
+                mind_id=str(mind_id),
+                recalculated=recalculated,
+            )
 
         # Step 2: Merge similar concepts
         merged_count = await self._merge_similar(mind_id)
@@ -104,6 +119,91 @@ class ConsolidationCycle:
         )
 
         return event
+
+    async def _recalculate_scores(self, mind_id: MindId) -> int:
+        """Recalculate importance and confidence for all concepts.
+
+        Uses graph degree centrality, access patterns, recency, and
+        emotional weight to produce meaningful score spread.
+
+        Importance: full recalculation via ImportanceScorer with velocity
+        damping and soft ceiling.
+
+        Confidence: staleness decay via ConfidenceScorer — unaccessed
+        concepts slowly lose confidence.
+
+        Only updates concepts where scores changed meaningfully (>0.005)
+        to avoid unnecessary writes.
+
+        Returns:
+            Number of concepts with updated scores.
+        """
+        if (
+            not self._concepts
+            or not self._relations
+            or not self._importance_scorer
+            or not self._confidence_scorer
+        ):
+            return 0
+
+        # Get all concepts for this mind
+        concepts = await self._concepts.get_by_mind(mind_id, limit=10000)
+        if not concepts:
+            return 0
+
+        # Get degree centrality from graph
+        centrality = await self._relations.get_degree_centrality(mind_id)
+
+        # Compute max values for normalization
+        max_degree = max((d for d, _ in centrality.values()), default=1)
+        max_access = max((c.access_count for c in concepts), default=1)
+
+        updates: list[tuple[ConceptId, float, float]] = []
+        now = datetime.now(UTC)
+
+        for concept in concepts:
+            cid_str = str(concept.id)
+            degree, avg_weight = centrality.get(cid_str, (0, 0.0))
+
+            # Days since last access
+            ref_time = concept.last_accessed or concept.created_at
+            days = (now - ref_time).total_seconds() / 86400 if ref_time else 30.0
+
+            # Recalculate importance
+            new_importance = self._importance_scorer.recalculate(
+                current_importance=concept.importance,
+                access_count=concept.access_count,
+                degree=degree,
+                avg_weight=avg_weight,
+                max_degree=max_degree,
+                emotional_valence=concept.emotional_valence,
+                days_since_access=days,
+                max_access=max_access,
+            )
+
+            # Recalculate confidence (staleness decay)
+            new_confidence = self._confidence_scorer.score_staleness_decay(
+                current=concept.confidence,
+                days_since_access=days,
+            )
+
+            # Only update if changed meaningfully
+            if (
+                abs(new_importance - concept.importance) > 0.005
+                or abs(new_confidence - concept.confidence) > 0.005
+            ):
+                updates.append((concept.id, new_importance, new_confidence))
+
+        if updates:
+            await self._concepts.batch_update_scores(updates)
+
+        logger.info(
+            "scores_recalculated",
+            mind_id=str(mind_id),
+            total=len(concepts),
+            updated=len(updates),
+        )
+        return len(updates)
 
     async def _merge_similar(self, mind_id: MindId) -> int:
         """Merge similar concepts found by FTS5 + name similarity.
