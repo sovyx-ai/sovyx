@@ -59,8 +59,9 @@ export function useOnboardingProgress(): OnboardingProgress {
     }
 
     // Step 1: LLM configured
+    // Health check name varies: "llm_provider" (engine) or "LLM Providers" (observability)
     const llmHealthGreen = healthChecks.some(
-      (c) => c.name === "llm_provider" && c.status !== "red",
+      (c) => c.name.toLowerCase().includes("llm") && c.status !== "red",
     );
     const step1: StepState = llmHealthGreen || status.llm_calls_today > 0 ? "done" : "pending";
 

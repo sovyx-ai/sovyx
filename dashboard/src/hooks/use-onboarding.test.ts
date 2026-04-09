@@ -125,6 +125,15 @@ describe("step 1 — LLM configured", () => {
     expect(result.current.step1).toBe("pending");
   });
 
+  it("done when health check name is 'LLM Providers' (observability format)", () => {
+    useDashboardStore.setState({
+      status: makeStatus(),
+      healthChecks: [{ name: "LLM Providers", status: "green", message: "1 provider(s) available" }],
+    });
+    const { result } = renderHook(() => useOnboardingProgress());
+    expect(result.current.step1).toBe("done");
+  });
+
   it("ignores non-llm health checks", () => {
     useDashboardStore.setState({
       status: makeStatus(),
