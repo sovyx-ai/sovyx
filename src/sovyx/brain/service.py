@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
-from sovyx.engine.events import ConceptCreated, EpisodeEncoded
+from sovyx.engine.events import ConceptContradicted, ConceptCreated, EpisodeEncoded
 from sovyx.engine.types import ConceptCategory
 from sovyx.observability.logging import get_logger
 from sovyx.observability.metrics import get_metrics
@@ -242,6 +242,15 @@ class BrainService:
                         new_confidence=concept.confidence,
                         relation="CONTRADICTS",
                     )
+
+                    # Emit event for downstream consumers (dashboard, alerts)
+                    await self._events.emit(ConceptContradicted(
+                        concept_id=str(concept.id),
+                        old_content=concept.content,
+                        new_content=content,
+                        old_confidence=old_conf,
+                        new_confidence=concept.confidence,
+                    ))
 
                 elif relation == ContentRelation.EXTENDS:
                     # Extension: update content + corroboration boost

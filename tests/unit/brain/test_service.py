@@ -458,6 +458,18 @@ class TestContradictionDetection:
         assert updated.content == "Favorite color is red"  # Updated to new
         assert updated.metadata.get("last_contradiction") is True
 
+        # Verify ConceptContradicted event emitted
+        emit_calls = mock_deps["event_bus"].emit.call_args_list  # type: ignore[union-attr]
+        contradiction_events = [
+            c for c in emit_calls
+            if hasattr(c.args[0], "concept_id")
+            and c.args[0].__class__.__name__ == "ConceptContradicted"
+        ]
+        assert len(contradiction_events) == 1
+        evt = contradiction_events[0].args[0]
+        assert evt.old_confidence == pytest.approx(0.80)
+        assert evt.new_confidence == pytest.approx(0.48, abs=0.02)
+
     async def test_corroboration_no_contradiction(
         self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
     ) -> None:
