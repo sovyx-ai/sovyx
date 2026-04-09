@@ -192,6 +192,33 @@ class TestFormatConceptsBlock:
         assert "Alice" in result
 
 
+    def test_context_inclusion_count_increments(
+        self, formatter: ContextFormatter
+    ) -> None:
+        """Concepts included in context get context_inclusion_count bumped."""
+        c1 = _concept("coffee", "Loves coffee", ConceptCategory.PREFERENCE)
+        c1.metadata = {}
+        c2 = _concept("name", "Name is Guipe", ConceptCategory.ENTITY)
+        c2.metadata = {"context_inclusion_count": 3}
+
+        concepts = [(c1, 0.9), (c2, 0.8)]
+        formatter.format_concepts_block(concepts, 1000)
+
+        assert c1.metadata["context_inclusion_count"] == 1
+        assert c2.metadata["context_inclusion_count"] == 4  # noqa: PLR2004
+
+    def test_context_inclusion_not_incremented_when_excluded(
+        self, formatter: ContextFormatter
+    ) -> None:
+        """Concepts that don't fit in budget don't get counted."""
+        c1 = _concept("coffee", "Loves coffee", ConceptCategory.PREFERENCE)
+        c1.metadata = {}
+        concepts = [(c1, 0.9)]
+        # Budget too small — nothing fits
+        formatter.format_concepts_block(concepts, 5)
+        assert c1.metadata.get("context_inclusion_count", 0) == 0
+
+
 class TestFormatEpisodesBlock:
     """Episodes block formatting."""
 
