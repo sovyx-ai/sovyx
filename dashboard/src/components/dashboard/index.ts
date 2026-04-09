@@ -13,4 +13,5 @@ export { CategoryLegend, RelationLegend } from "./category-legend";
 export { StatusDot } from "./status-dot";
 export { NeuralMesh } from "./neural-mesh";
 export { WelcomeBanner } from "./welcome-banner";
+export { MindAliveCard } from "./mind-alive-card";
 export { ChannelStatusCard } from "./channel-status";

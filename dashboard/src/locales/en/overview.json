@@ -2,6 +2,7 @@
   "title": "Overview",
   "subtitle": "Your Mind at a glance",
   "subtitleFresh": "Your Mind is awake. Start a conversation to bring it to life.",
+  "subtitleProgress": "Almost there — finish setting up your Mind.",
   "cards": {
     "engineStatus": "Mind Status",
     "uptime": "Uptime: {{duration}}",
@@ -81,5 +82,32 @@
     "conversation": "{{channel}} conversation ({{messages}} msgs)",
     "message": "Message exchanged",
     "consolidation": "Consolidation: {{merged}} merged, {{pruned}} pruned, {{strengthened}} strengthened"
+  },
+  "welcome": {
+    "title": "Welcome to Sovyx",
+    "subtitle": "Your mind engine is ready. Follow these steps to get started.",
+    "progress": "{{completed}} of {{total}}",
+    "progressDone": "All done ✓",
+    "stepDone": "Done",
+    "dismissLabel": "Dismiss setup guide",
+    "step1Title": "Configure your LLM key",
+    "step1Desc": "Add your OpenAI, Anthropic, or other LLM API key in Settings.",
+    "step2Title": "Send your first message",
+    "step2Desc": "Open Chat and start a conversation with your mind. It learns from every interaction.",
+    "step3Title": "Watch your mind grow",
+    "step3Desc": "As you chat, your mind builds concepts, forms memories, and develops its personality.",
+    "goSettings": "Go to Settings",
+    "goChat": "Open Chat"
+  },
+  "alive": {
+    "title": "Your mind is alive.",
+    "concepts": "concepts",
+    "memories": "memories",
+    "channels": "channels",
+    "messages": "messages",
+    "activeFor": "Active for {{duration}}",
+    "exploreBrain": "Explore Brain",
+    "openChat": "Open Chat",
+    "dismiss": "Close"
   }
 }

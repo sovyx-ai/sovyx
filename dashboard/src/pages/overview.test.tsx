@@ -80,6 +80,8 @@ describe("OverviewPage", () => {
   });
 
   it("shows normal values when engine has activity", () => {
+    // Dismiss onboarding to avoid duplicate metric text from MindAliveCard
+    useDashboardStore.setState({ onboardingDismissed: true });
     render(<OverviewPage />);
     // Should show normal subtitle
     expect(screen.getByText(/at a glance/i)).toBeInTheDocument();
