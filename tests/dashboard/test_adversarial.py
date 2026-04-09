@@ -207,7 +207,16 @@ class TestLogQueryAdversarial:
     def test_large_file(self, tmp_path: Path) -> None:
         """10k log lines should not OOM."""
         f = tmp_path / "big.log"
-        lines = [json.dumps({"event": f"ev-{i}", "level": "info"}) for i in range(10000)]
+        lines = [
+            json.dumps(
+                {
+                    "event": f"ev-{i}",
+                    "level": "info",
+                    "timestamp": f"2026-01-01T{i // 3600:02d}:{(i % 3600) // 60:02d}:{i % 60:02d}",
+                }
+            )
+            for i in range(10000)
+        ]
         f.write_text("\n".join(lines) + "\n")
 
         result = query_logs(f, limit=50)
@@ -217,9 +226,15 @@ class TestLogQueryAdversarial:
     def test_unicode_in_logs(self, tmp_path: Path) -> None:
         f = tmp_path / "unicode.log"
         entries = [
-            json.dumps({"event": "日本語テスト", "level": "info"}),
-            json.dumps({"event": "emoji 🔮✨", "level": "info"}),
-            json.dumps({"event": "nullbyte\x00test", "level": "info"}),
+            json.dumps(
+                {"event": "日本語テスト", "level": "info", "timestamp": "2026-01-01T00:00:00"}
+            ),
+            json.dumps(
+                {"event": "emoji 🔮✨", "level": "info", "timestamp": "2026-01-01T00:00:00"}
+            ),
+            json.dumps(
+                {"event": "nullbyte\x00test", "level": "info", "timestamp": "2026-01-01T00:00:00"}
+            ),
         ]
         f.write_text("\n".join(entries) + "\n")
 
@@ -228,7 +243,12 @@ class TestLogQueryAdversarial:
 
     def test_search_unicode(self, tmp_path: Path) -> None:
         f = tmp_path / "uni.log"
-        f.write_text(json.dumps({"event": "概念作成 🧠", "level": "info"}) + "\n")
+        f.write_text(
+            json.dumps(
+                {"event": "概念作成 🧠", "level": "info", "timestamp": "2026-01-01T00:00:00"}
+            )
+            + "\n"
+        )
 
         result = query_logs(f, search="概念")
         assert len(result) == 1
@@ -236,7 +256,7 @@ class TestLogQueryAdversarial:
     def test_binary_garbage_in_log(self, tmp_path: Path) -> None:
         """Binary data mixed with JSON should not crash."""
         f = tmp_path / "garbage.log"
-        good = json.dumps({"event": "good", "level": "info"})
+        good = json.dumps({"event": "good", "level": "info", "timestamp": "2026-01-01T00:00:00"})
         f.write_bytes(b"\x80\xff\xfe\n" + good.encode() + b"\n" + b"\x00\x01\x02\n")
 
         result = query_logs(f)
@@ -248,11 +268,16 @@ class TestLogQueryAdversarial:
         f.write_text("{}\n{}\n{}\n")
 
         result = query_logs(f)
-        assert len(result) == 3
+        assert len(result) == 0  # Empty objects lack required timestamp+event
 
     def test_nested_json(self, tmp_path: Path) -> None:
         f = tmp_path / "nested.log"
-        entry = {"event": "complex", "level": "info", "data": {"nested": {"deep": True}}}
+        entry = {
+            "event": "complex",
+            "level": "info",
+            "data": {"nested": {"deep": True}},
+            "timestamp": "2026-01-01T00:00:00",
+        }
         f.write_text(json.dumps(entry) + "\n")
 
         result = query_logs(f, search="deep")
@@ -261,7 +286,7 @@ class TestLogQueryAdversarial:
     def test_very_long_line(self, tmp_path: Path) -> None:
         """Single log line with 100KB content should not crash."""
         f = tmp_path / "long.log"
-        entry = {"event": "x" * 100000, "level": "info"}
+        entry = {"event": "x" * 100000, "level": "info", "timestamp": "2026-01-01T00:00:00"}
         f.write_text(json.dumps(entry) + "\n")
 
         result = query_logs(f)
@@ -270,14 +295,20 @@ class TestLogQueryAdversarial:
 
     def test_limit_zero(self, tmp_path: Path) -> None:
         f = tmp_path / "test.log"
-        f.write_text(json.dumps({"event": "test", "level": "info"}) + "\n")
+        f.write_text(
+            json.dumps({"event": "test", "level": "info", "timestamp": "2026-01-01T00:00:00"})
+            + "\n"
+        )
 
         result = query_logs(f, limit=0)
         assert result == []
 
     def test_filter_nonexistent_level(self, tmp_path: Path) -> None:
         f = tmp_path / "test.log"
-        f.write_text(json.dumps({"event": "test", "level": "info"}) + "\n")
+        f.write_text(
+            json.dumps({"event": "test", "level": "info", "timestamp": "2026-01-01T00:00:00"})
+            + "\n"
+        )
 
         result = query_logs(f, level="TRACE")
         assert result == []

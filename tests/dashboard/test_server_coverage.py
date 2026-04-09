@@ -575,7 +575,8 @@ class TestDashboardServerLifecycle:
             await server.start()
 
         assert server.app is not None
-        assert not hasattr(server.app.state, "log_file")
+        # _resolve_log_file returns None when both registry and fallback fail
+        assert server.app.state.log_file is None
 
     @pytest.mark.asyncio()
     async def test_stop(self, token: str) -> None:

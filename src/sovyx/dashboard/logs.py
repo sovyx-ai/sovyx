@@ -158,15 +158,55 @@ def _try_read_file(path: Path, max_lines: int) -> list[str] | None:
 
 
 def _parse_line(line: str) -> dict[str, Any] | None:
-    """Parse a single JSON log line."""
+    """Parse and normalize a single JSON log line.
+
+    Normalizes field names to the canonical schema expected by the
+    dashboard frontend (``LogEntry`` TypeScript type):
+
+    - ``timestamp`` ← ``timestamp`` or ``ts``
+    - ``level`` ← ``level`` or ``severity`` (uppercased)
+    - ``logger`` ← ``logger`` or ``module``
+    - ``event`` ← ``event`` or ``message``
+
+    Entries missing both ``timestamp``/``ts`` or both ``event``/``message``
+    are discarded as corrupted (returns None).
+
+    All extra fields are preserved for search and display.
+    """
     line = line.strip()
     if not line:
         return None
     try:
         parsed: dict[str, Any] = json.loads(line)
-        return parsed
     except json.JSONDecodeError:
         return None
+
+    # ── Normalize required fields ──
+    # timestamp (required)
+    ts = parsed.get("timestamp") or parsed.get("ts")
+    if not ts:
+        return None  # Corrupted: no timestamp
+    parsed["timestamp"] = ts
+    parsed.pop("ts", None)
+
+    # event (required)
+    event = parsed.get("event") or parsed.get("message")
+    if not event:
+        return None  # Corrupted: no event/message
+    parsed["event"] = event
+    parsed.pop("message", None)  # Only remove if it was a fallback
+
+    # level (optional, default INFO)
+    level = parsed.get("level") or parsed.get("severity", "INFO")
+    parsed["level"] = str(level).upper()
+    parsed.pop("severity", None)
+
+    # logger (optional, default unknown)
+    logger_name = parsed.get("logger") or parsed.get("module", "unknown")
+    parsed["logger"] = logger_name
+    parsed.pop("module", None)  # Only remove if it was a fallback
+
+    return parsed
 
 
 def _matches_filters(

@@ -94,9 +94,9 @@ class TestParseLineEdges:
         log_file.write_text(
             "\n"
             "   \n"
-            '{"event": "real", "level": "INFO"}\n'
+            '{"event": "real", "level": "INFO", "timestamp": "2026-01-01T00:00:00"}\n'
             "\t\n"
-            '{"event": "also-real", "level": "DEBUG"}\n'
+            '{"event": "also-real", "level": "DEBUG", "timestamp": "2026-01-01T00:00:01"}\n'
             "\n"
         )
         result = query_logs(log_file)
@@ -113,6 +113,7 @@ class TestSearchNestedValues:
             "event": "request",
             "level": "INFO",
             "data": {"url": "/api/secret-endpoint", "method": "POST"},
+            "timestamp": "2026-01-01T00:00:00",
         }
         log_file.write_text(json.dumps(entry) + "\n")
 
@@ -127,6 +128,7 @@ class TestSearchNestedValues:
             "event": "batch",
             "level": "INFO",
             "items": ["alpha", "beta-target", "gamma"],
+            "timestamp": "2026-01-01T00:00:00",
         }
         log_file.write_text(json.dumps(entry) + "\n")
 
@@ -140,6 +142,7 @@ class TestSearchNestedValues:
             "event": "batch",
             "level": "INFO",
             "data": {"key": "value"},
+            "timestamp": "2026-01-01T00:00:00",
         }
         log_file.write_text(json.dumps(entry) + "\n")
 
