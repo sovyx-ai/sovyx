@@ -143,20 +143,21 @@ class ConsolidationCycle:
 
         return event
 
+    # Batch size for score recalculation (DB writes per batch)
+    _SCORE_BATCH_SIZE = 500
+    # Maximum time allowed for score recalculation (seconds)
+    _SCORE_TIMEOUT_S = 30.0
+
     async def _recalculate_scores(self, mind_id: MindId) -> int:
         """Recalculate importance and confidence for all concepts.
 
         Uses graph degree centrality, access patterns, recency, and
         emotional weight to produce meaningful score spread.
 
-        Importance: full recalculation via ImportanceScorer with velocity
-        damping and soft ceiling.
-
-        Confidence: staleness decay via ConfidenceScorer — unaccessed
-        concepts slowly lose confidence.
-
-        Only updates concepts where scores changed meaningfully (>0.005)
-        to avoid unnecessary writes.
+        Processes concepts in batches of ``_SCORE_BATCH_SIZE`` and
+        enforces a ``_SCORE_TIMEOUT_S`` total timeout. If the timeout
+        fires, already-flushed batches are committed but remaining
+        concepts are skipped with a warning.
 
         Returns:
             Number of concepts with updated scores.
@@ -181,10 +182,23 @@ class ConsolidationCycle:
         max_degree = max((d for d, _ in centrality.values()), default=1)
         max_access = max((c.access_count for c in concepts), default=1)
 
-        updates: list[tuple[ConceptId, float, float]] = []
+        total_updated = 0
         now = datetime.now(UTC)
+        deadline = time.monotonic() + self._SCORE_TIMEOUT_S
+        batch: list[tuple[ConceptId, float, float]] = []
 
         for concept in concepts:
+            # Timeout guard — flush what we have and stop
+            if time.monotonic() > deadline:
+                logger.warning(
+                    "score_recalculation_timeout",
+                    mind_id=str(mind_id),
+                    processed=total_updated + len(batch),
+                    total=len(concepts),
+                    timeout_s=self._SCORE_TIMEOUT_S,
+                )
+                break
+
             cid_str = str(concept.id)
             degree, avg_weight = centrality.get(cid_str, (0, 0.0))
 
@@ -215,18 +229,26 @@ class ConsolidationCycle:
                 abs(new_importance - concept.importance) > 0.005
                 or abs(new_confidence - concept.confidence) > 0.005
             ):
-                updates.append((concept.id, new_importance, new_confidence))
+                batch.append((concept.id, new_importance, new_confidence))
 
-        if updates:
-            await self._concepts.batch_update_scores(updates)
+            # Flush batch when full
+            if len(batch) >= self._SCORE_BATCH_SIZE:
+                await self._concepts.batch_update_scores(batch)
+                total_updated += len(batch)
+                batch = []
+
+        # Flush remaining
+        if batch:
+            await self._concepts.batch_update_scores(batch)
+            total_updated += len(batch)
 
         logger.info(
             "scores_recalculated",
             mind_id=str(mind_id),
             total=len(concepts),
-            updated=len(updates),
+            updated=total_updated,
         )
-        return len(updates)
+        return total_updated
 
     async def _normalize_scores(self, mind_id: MindId) -> int:
         """Normalize importance scores if spread is too narrow.
@@ -235,6 +257,7 @@ class ConsolidationCycle:
         over many consolidation cycles. Only activates when spread < 0.20.
 
         Preserves relative ordering and never pushes below floor (0.05).
+        Writes in batches of ``_SCORE_BATCH_SIZE``.
 
         Returns:
             Number of concepts with adjusted scores.
@@ -252,19 +275,26 @@ class ConsolidationCycle:
 
         # Check if normalization actually changed anything
         original_map = dict(scores)
-        updates: list[tuple[ConceptId, float, float]] = []
         concept_map = {str(c.id): c for c in concepts}
+        batch: list[tuple[ConceptId, float, float]] = []
+        total_updated = 0
 
         for cid_str, new_imp in normalized:
             old_imp = original_map.get(cid_str, 0.5)
             if abs(new_imp - old_imp) > 0.005:
                 concept = concept_map[cid_str]
-                updates.append((concept.id, new_imp, concept.confidence))
+                batch.append((concept.id, new_imp, concept.confidence))
 
-        if updates:
-            await self._concepts.batch_update_scores(updates)
+            if len(batch) >= self._SCORE_BATCH_SIZE:
+                await self._concepts.batch_update_scores(batch)
+                total_updated += len(batch)
+                batch = []
 
-        return len(updates)
+        if batch:
+            await self._concepts.batch_update_scores(batch)
+            total_updated += len(batch)
+
+        return total_updated
 
     async def _refresh_centroids(self, mind_id: MindId) -> int:
         """Refresh category centroid cache on BrainService.
