@@ -443,27 +443,50 @@ def compute_episode_importance(
     message: str,
     num_concepts: int,
     max_valence: float,
+    concept_importances: list[float] | None = None,
 ) -> float:
     """Compute dynamic episode importance from message characteristics.
 
-    Scoring formula:
-    - Base: 0.3 + message_length / 500 (longer = more content)
-    - Concepts: +0.05 per concept (up to 6)
-    - Emotion: +0.1 * |max_valence| (emotional = memorable)
+    Scoring formula (weights sum to 1.0):
+    - Base (0.30): 0.3 + message_length / 500 (longer = more content)
+    - Concepts (0.25): count bonus + mean concept importance
+    - Emotion (0.15): |max_valence|
+    - Concept importance signal (0.30): mean of extracted concept
+      importance scores. Episodes containing high-importance concepts
+      inherit that importance.
     - Clamped to [0.1, 1.0]
+
+    If ``concept_importances`` is empty or None, falls back to the
+    original count-only formula for backwards compatibility.
 
     Args:
         message: The user's input message.
         num_concepts: Number of concepts extracted from the message.
         max_valence: Maximum absolute sentiment across concepts.
+        concept_importances: Importance scores of extracted concepts.
 
     Returns:
         Episode importance in [0.1, 1.0].
     """
     base = min(0.7, 0.3 + len(message) / 500)
-    concept_bonus = 0.05 * min(num_concepts, 6)
+    concept_count_bonus = 0.05 * min(num_concepts, 6)
     emotion_bonus = 0.1 * abs(max_valence)
-    return max(0.1, min(1.0, base + concept_bonus + emotion_bonus))
+
+    if concept_importances:
+        mean_importance = sum(concept_importances) / len(concept_importances)
+        # Weighted: base(0.30) + concept_count(0.10) + emotion(0.15) +
+        # mean_concept_importance(0.45)
+        score = (
+            0.30 * base
+            + 0.10 * concept_count_bonus * 5  # Scale 0-0.30 → 0-1.5 → capped
+            + 0.15 * abs(max_valence)
+            + 0.45 * mean_importance
+        )
+    else:
+        # Fallback: original formula (no concept scores available)
+        score = base + concept_count_bonus + emotion_bonus
+
+    return max(0.1, min(1.0, score))
 
 
 def clamp_sentiment(value: float) -> float:
@@ -536,6 +559,8 @@ class ReflectPhase:
         # Uses embedding cosine distance → FTS5 fallback → cold start
         novelty_map = await self._compute_novelty_batch(extracted, mind_id)
 
+        concept_importances: list[float] = []
+
         for ec in extracted:
             try:
                 resolved = resolve_category(ec.category)
@@ -599,6 +624,7 @@ class ReflectPhase:
                 )
                 concept_ids.append(cid)
                 sentiments.append(ec.sentiment)
+                concept_importances.append(combined_importance)
             except Exception:
                 logger.warning(
                     "concept_extraction_failed",
@@ -625,11 +651,12 @@ class ReflectPhase:
             episode_valence = clamp_sentiment(sum(sentiments) / len(sentiments))
             episode_arousal = clamp_sentiment(max(abs(s) for s in sentiments))
 
-        # Dynamic episode importance based on message characteristics
+        # Dynamic episode importance based on message + concept scores
         episode_importance = compute_episode_importance(
             message=perception.content,
             num_concepts=len(concept_ids),
-            max_valence=episode_arousal,  # arousal = max |sentiment|
+            max_valence=episode_arousal,
+            concept_importances=concept_importances or None,
         )
 
         # Generate episode summary via LLM (optional)
