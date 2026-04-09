@@ -106,8 +106,13 @@ async def bootstrap(
     _closables: list[object] = []  # cleanup on failure (reverse order)
 
     try:
-        # 0. EngineConfig (so lifecycle/dashboard can resolve it)
+        # 0. EngineConfig + logging setup
         registry.register_instance(EngineConfig, engine_config)
+
+        # Setup structured logging with file handler (for dashboard log viewer)
+        from sovyx.observability.logging import setup_logging
+
+        setup_logging(engine_config.log)
 
         # 1. EventBus
         event_bus = EventBus()

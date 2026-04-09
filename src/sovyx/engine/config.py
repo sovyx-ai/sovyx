@@ -22,7 +22,9 @@ class LoggingConfig(BaseModel):
 
     level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     format: Literal["json", "text"] = "json"
-    log_file: Path | None = None
+    log_file: Path | None = Field(
+        default_factory=lambda: Path.home() / ".sovyx" / "logs" / "sovyx.log",
+    )
 
 
 class DatabaseConfig(BaseModel):
