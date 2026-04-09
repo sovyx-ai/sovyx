@@ -109,6 +109,47 @@ class LLMConfig(BaseModel):
         return self
 
 
+class ScoringConfig(BaseModel):
+    """Importance + confidence scoring weights.
+
+    All weight groups must sum to 1.0. Validated at startup.
+    Defaults match the hardcoded values in ``sovyx.brain.scoring``.
+    """
+
+    # ImportanceWeights
+    importance_category: float = Field(default=0.15, ge=0.0, le=1.0)
+    importance_llm: float = Field(default=0.35, ge=0.0, le=1.0)
+    importance_emotional: float = Field(default=0.10, ge=0.0, le=1.0)
+    importance_novelty: float = Field(default=0.15, ge=0.0, le=1.0)
+    importance_explicit: float = Field(default=0.25, ge=0.0, le=1.0)
+
+    # ConfidenceWeights
+    confidence_source: float = Field(default=0.35, ge=0.0, le=1.0)
+    confidence_llm: float = Field(default=0.30, ge=0.0, le=1.0)
+    confidence_explicitness: float = Field(default=0.20, ge=0.0, le=1.0)
+    confidence_richness: float = Field(default=0.15, ge=0.0, le=1.0)
+
+    @model_validator(mode="after")
+    def validate_weight_sums(self) -> ScoringConfig:
+        """Ensure importance and confidence weights each sum to 1.0."""
+        imp_sum = (
+            self.importance_category + self.importance_llm
+            + self.importance_emotional + self.importance_novelty
+            + self.importance_explicit
+        )
+        conf_sum = (
+            self.confidence_source + self.confidence_llm
+            + self.confidence_explicitness + self.confidence_richness
+        )
+        if abs(imp_sum - 1.0) > 0.01:
+            msg = f"Importance weights must sum to 1.0, got {imp_sum:.3f}"
+            raise ValueError(msg)
+        if abs(conf_sum - 1.0) > 0.01:
+            msg = f"Confidence weights must sum to 1.0, got {conf_sum:.3f}"
+            raise ValueError(msg)
+        return self
+
+
 class BrainConfig(BaseModel):
     """Brain memory system configuration.
 
@@ -122,6 +163,7 @@ class BrainConfig(BaseModel):
     forgetting_enabled: bool = True
     decay_rate: float = Field(default=0.1, ge=0.0, le=1.0)
     min_strength: float = Field(default=0.01, ge=0.0, le=1.0)
+    scoring: ScoringConfig = Field(default_factory=ScoringConfig)
 
 
 class TelegramChannelConfig(BaseModel):

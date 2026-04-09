@@ -23,6 +23,7 @@ from sovyx.mind.config import (
     OceanConfig,
     PersonalityConfig,
     SafetyConfig,
+    ScoringConfig,
     create_default_mind_config,
     load_mind_config,
 )
@@ -168,6 +169,47 @@ class TestBrainConfig:
     def test_interval_overflow_rejected(self) -> None:
         with pytest.raises(ValidationError, match="consolidation_interval_hours"):
             BrainConfig(consolidation_interval_hours=200)
+
+
+class TestScoringConfig:
+    """Scoring weight configuration (TASK-16)."""
+
+    def test_defaults_valid(self) -> None:
+        s = ScoringConfig()
+        imp_sum = (
+            s.importance_category + s.importance_llm
+            + s.importance_emotional + s.importance_novelty
+            + s.importance_explicit
+        )
+        conf_sum = (
+            s.confidence_source + s.confidence_llm
+            + s.confidence_explicitness + s.confidence_richness
+        )
+        assert abs(imp_sum - 1.0) < 0.001
+        assert abs(conf_sum - 1.0) < 0.001
+
+    def test_custom_weights_accepted(self) -> None:
+        s = ScoringConfig(
+            importance_category=0.20,
+            importance_llm=0.30,
+            importance_emotional=0.20,
+            importance_novelty=0.10,
+            importance_explicit=0.20,
+        )
+        assert s.importance_category == 0.20  # noqa: PLR2004
+
+    def test_bad_importance_sum_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="Importance weights must sum"):
+            ScoringConfig(importance_category=0.50)  # Sum > 1.0
+
+    def test_bad_confidence_sum_rejected(self) -> None:
+        with pytest.raises(ValidationError, match="Confidence weights must sum"):
+            ScoringConfig(confidence_source=0.60)  # Sum > 1.0
+
+    def test_brain_config_includes_scoring(self) -> None:
+        b = BrainConfig()
+        assert isinstance(b.scoring, ScoringConfig)
+        assert b.scoring.importance_llm == 0.35  # noqa: PLR2004
 
 
 class TestSafetyConfig:
