@@ -419,6 +419,78 @@ class TestLearnConcept:
         assert updated.importance == pytest.approx(0.62, abs=0.005)
 
 
+class TestContradictionDetection:
+    """Contradiction detection during dedup (TASK-09)."""
+
+    async def test_contradiction_reduces_confidence(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        """Contradicting content → confidence drops 40%."""
+        existing = _concept("favorite_color", "existing-id")
+        existing.category = ConceptCategory.PREFERENCE
+        existing.content = "Favorite color is blue"
+        existing.confidence = 0.80
+        mock_deps["concept_repo"].search_by_text = AsyncMock(  # type: ignore[union-attr]
+            return_value=[(existing, -1.0)]
+        )
+
+        # New content contradicts (different value, not an extension)
+        await brain.learn_concept(
+            MIND, "favorite_color", "Favorite color is red",
+            category=ConceptCategory.PREFERENCE,
+        )
+
+        updated = mock_deps["concept_repo"].update.call_args[0][0]  # type: ignore[union-attr]
+        # Contradiction: 0.80 * 0.60 = 0.48
+        assert updated.confidence == pytest.approx(0.48, abs=0.02)
+        assert updated.content == "Favorite color is red"  # Updated to new
+        assert updated.metadata.get("last_contradiction") is True
+
+    async def test_corroboration_no_contradiction(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        """Same content → corroboration, not contradiction."""
+        existing = _concept("name", "existing-id")
+        existing.category = ConceptCategory.ENTITY
+        existing.content = "Name is Alice"
+        existing.confidence = 0.60
+        mock_deps["concept_repo"].search_by_text = AsyncMock(  # type: ignore[union-attr]
+            return_value=[(existing, -1.0)]
+        )
+
+        # Longer content → extension, not contradiction
+        await brain.learn_concept(
+            MIND, "name", "Name is Alice and she lives in NY",
+            category=ConceptCategory.ENTITY,
+        )
+
+        updated = mock_deps["concept_repo"].update.call_args[0][0]  # type: ignore[union-attr]
+        # Content grew → corroboration + bump
+        assert updated.confidence > 0.60  # noqa: PLR2004
+        assert updated.content == "Name is Alice and she lives in NY"
+
+    async def test_identical_content_no_contradiction(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        """Identical content → standard corroboration."""
+        existing = _concept("hobby", "existing-id")
+        existing.category = ConceptCategory.PREFERENCE
+        existing.content = "Likes running"
+        existing.confidence = 0.70
+        mock_deps["concept_repo"].search_by_text = AsyncMock(  # type: ignore[union-attr]
+            return_value=[(existing, -1.0)]
+        )
+
+        await brain.learn_concept(
+            MIND, "hobby", "Likes running",
+            category=ConceptCategory.PREFERENCE,
+        )
+
+        updated = mock_deps["concept_repo"].update.call_args[0][0]  # type: ignore[union-attr]
+        # Standard corroboration: 0.70 + 0.08*(1-0.70) = 0.724
+        assert updated.confidence > 0.70  # noqa: PLR2004
+
+
 class TestDecayWorkingMemory:
     """decay_working_memory() — delegates to working memory."""
 
