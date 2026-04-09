@@ -39,6 +39,7 @@ from sovyx.observability.logging import get_logger
 if TYPE_CHECKING:
     from sovyx.engine.config import APIConfig
     from sovyx.engine.registry import ServiceRegistry
+    from sovyx.observability.health import HealthRegistry
 
 logger = get_logger(__name__)
 
@@ -822,6 +823,43 @@ class DashboardServer:
         self._server: Any | None = None
         self._app: FastAPI | None = None
 
+    async def _create_health_registry(self) -> HealthRegistry:
+        """Create an online HealthRegistry wired to the engine ServiceRegistry.
+
+        Resolves LLMRouter, Brain, and channel status functions from the
+        live registry so /api/health reflects actual engine state (not just
+        offline filesystem checks).
+
+        Returns:
+            HealthRegistry with online checks.  Functions that cannot be
+            resolved get ``None`` (producing YELLOW "not configured" results).
+        """
+        from sovyx.observability.health import (
+            HealthRegistry,
+            LLMReachableCheck,
+        )
+
+        registry = HealthRegistry()
+
+        # LLM provider status
+        llm_status_fn = None
+        try:
+            from sovyx.llm.router import LLMRouter
+
+            if self._registry is not None and self._registry.is_registered(LLMRouter):
+                router = await self._registry.resolve(LLMRouter)
+
+                async def _llm_status() -> list[tuple[str, bool]]:
+                    return [(p.name, p.is_available) for p in router._providers]
+
+                llm_status_fn = _llm_status
+        except Exception:  # noqa: BLE001
+            logger.debug("health_llm_wire_failed")
+
+        registry.register(LLMReachableCheck(provider_status_fn=llm_status_fn))
+
+        return registry
+
     async def _resolve_log_file(self) -> Path | None:
         """Resolve the log file path for dashboard log queries.
 
@@ -885,6 +923,9 @@ class DashboardServer:
 
             self._app.state.status_collector = StatusCollector(self._registry)
             self._app.state.registry = self._registry
+
+            # Wire online health checks so /api/health exposes LLM, Brain, etc.
+            self._app.state.health_registry = await self._create_health_registry()
 
             # Wire MindConfig from PersonalityEngine (if registered)
             try:
