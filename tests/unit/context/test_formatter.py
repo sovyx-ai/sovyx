@@ -84,21 +84,41 @@ class TestFormatConcept:
         result = formatter.format_concept(c)
         assert result.startswith("🔗")
 
-    def test_low_confidence_marker(self, formatter: ContextFormatter) -> None:
+    def test_very_low_confidence_marker(self, formatter: ContextFormatter) -> None:
         c = _concept("test", "Maybe true", confidence=0.2)
         result = formatter.format_concept(c)
-        assert "uncertain" in result
+        assert "very uncertain" in result
+        assert "do NOT state as fact" in result
+
+    def test_low_confidence_marker(self, formatter: ContextFormatter) -> None:
+        c = _concept("test", "Uncertain", confidence=0.35)
+        result = formatter.format_concept(c)
+        assert "uncertain — verify" in result
 
     def test_medium_confidence_marker(self, formatter: ContextFormatter) -> None:
-        c = _concept("test", "Probably", confidence=0.4)
+        c = _concept("test", "Probably", confidence=0.55)
         result = formatter.format_concept(c)
-        assert "not very sure" in result
+        assert "possibly" in result
 
     def test_high_confidence_no_marker(self, formatter: ContextFormatter) -> None:
         c = _concept("test", "Definitely", confidence=0.9)
         result = formatter.format_concept(c)
         assert "uncertain" not in result
         assert "sure" not in result
+        assert "possibly" not in result
+
+    # TASK-12: Importance prefix
+    def test_core_knowledge_star_prefix(self, formatter: ContextFormatter) -> None:
+        c = _concept("test", "User's name is Alice", confidence=0.9)
+        c.importance = 0.90
+        result = formatter.format_concept(c)
+        assert "⭐" in result
+
+    def test_normal_importance_no_prefix(self, formatter: ContextFormatter) -> None:
+        c = _concept("test", "Likes coffee", confidence=0.7)
+        c.importance = 0.5
+        result = formatter.format_concept(c)
+        assert "⭐" not in result
 
 
 class TestFormatEpisode:
@@ -152,6 +172,24 @@ class TestFormatConceptsBlock:
         result = formatter.format_concepts_block(concepts, 50)
         counter = TokenCounter()
         assert counter.count(result) <= 50  # noqa: PLR2004
+
+    # TASK-12: importance-weighted ordering
+    def test_high_importance_survives_budget(self, formatter: ContextFormatter) -> None:
+        """High-importance concept survives even with lower search score."""
+        important = _concept("identity", "User name is Alice", ConceptCategory.ENTITY)
+        important.importance = 0.90
+        trivial = _concept("trivia", "It was raining yesterday", ConceptCategory.FACT)
+        trivial.importance = 0.10
+
+        # Trivial has higher search score but lower importance
+        concepts = [
+            (trivial, 0.9),   # High search relevance
+            (important, 0.3),  # Low search relevance
+        ]
+        # Tight budget: only 1 concept fits besides header
+        result = formatter.format_concepts_block(concepts, 30)
+        # Important concept should be included (weighted score wins)
+        assert "Alice" in result
 
 
 class TestFormatEpisodesBlock:
@@ -215,8 +253,8 @@ class TestLostInMiddle:
         # Most relevant at start, second at end
         scores = [s for _, s in ordered]
         assert scores[0] >= scores[-1] or scores[-1] >= scores[len(scores) // 2]
-        # First item should be highest
-        assert scores[0] == 1.0
+        # First item should be highest (now weighted: 0.65*1.0 + 0.35*0.5 = 0.825)
+        assert scores[0] == max(scores)
 
 
 class TestHumanTimeAgo:

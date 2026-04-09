@@ -41,7 +41,16 @@ class ContextFormatter:
     def format_concept(self, concept: Concept, activation: float = 0.0) -> str:
         """Format a single concept for LLM context.
 
-        Format: "{emoji} {content}{confidence_marker}"
+        Format: "{emoji} {importance_prefix}{content}{confidence_marker}"
+
+        Confidence markers (recalibrated for dynamic 0.10-0.95 range):
+        - < 0.25: very uncertain — do NOT state as fact
+        - < 0.45: uncertain — verify before stating
+        - < 0.60: possibly — not fully sure
+        - >= 0.60: no marker (confident enough)
+
+        Importance prefix:
+        - >= 0.85: ⭐ (core knowledge — always prioritize)
 
         Args:
             concept: The concept to format.
@@ -52,12 +61,20 @@ class ContextFormatter:
         """
         emoji = _EMOJI_MAP.get(concept.category, _FALLBACK_EMOJI)
         text = concept.content or concept.name
+
+        # Importance prefix for core knowledge
+        prefix = "⭐ " if concept.importance >= 0.85 else ""  # noqa: PLR2004
+
+        # Confidence markers (recalibrated for dynamic scoring range)
         marker = ""
-        if concept.confidence < 0.3:  # noqa: PLR2004
+        if concept.confidence < 0.25:  # noqa: PLR2004
+            marker = " ⚠️ (very uncertain — do NOT state as fact)"
+        elif concept.confidence < 0.45:  # noqa: PLR2004
             marker = " (uncertain — verify before stating)"
-        elif concept.confidence < 0.5:  # noqa: PLR2004
-            marker = " (you're not very sure about this)"
-        return f"{emoji} {text}{marker}"
+        elif concept.confidence < 0.60:  # noqa: PLR2004
+            marker = " (possibly — you're not fully sure)"
+
+        return f"{emoji} {prefix}{text}{marker}"
 
     def format_episode(self, episode: Episode) -> str:
         """Format a single episode for LLM context.
@@ -152,11 +169,20 @@ class ContextFormatter:
     def _order_for_attention(
         items: list[tuple[Concept, float]],
     ) -> list[tuple[Concept, float]]:
-        """Lost-in-the-Middle ordering (Liu et al. 2023).
+        """Lost-in-the-Middle ordering with importance-weighted scoring.
 
-        Most relevant at start and end, least relevant in middle.
+        Combined score = 0.65 * search_relevance + 0.35 * importance.
+        This ensures high-importance concepts survive budget cuts even
+        if their text match is slightly lower.
+
+        Most relevant at start and end, least relevant in middle
+        (Liu et al. 2023).
         """
-        sorted_items = sorted(items, key=lambda x: x[1], reverse=True)
+        weighted = [
+            (concept, 0.65 * score + 0.35 * concept.importance)
+            for concept, score in items
+        ]
+        sorted_items = sorted(weighted, key=lambda x: x[1], reverse=True)
         high = sorted_items[::2]
         low = sorted_items[1::2]
         return high + list(reversed(low))
