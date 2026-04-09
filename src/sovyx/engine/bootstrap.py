@@ -109,10 +109,17 @@ async def bootstrap(
         # 0. EngineConfig + logging setup
         registry.register_instance(EngineConfig, engine_config)
 
-        # Setup structured logging with file handler (for dashboard log viewer)
+        # Setup structured logging with file handler (for dashboard log viewer).
+        # Console always uses text format for readability; file always JSON.
+        from sovyx.engine.config import LoggingConfig
         from sovyx.observability.logging import setup_logging
 
-        setup_logging(engine_config.log)
+        log_config = LoggingConfig(
+            level=engine_config.log.level,
+            format="text",
+            log_file=engine_config.log.log_file,
+        )
+        setup_logging(log_config)
 
         # 1. EventBus
         event_bus = EventBus()
