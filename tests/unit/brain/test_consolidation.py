@@ -300,6 +300,88 @@ class TestScoreRecalculation:
             assert update_dict["connected"][0] > update_dict["isolated"][0]
 
 
+class TestScoreNormalization:
+    """Score normalization during consolidation (TASK-08)."""
+
+    async def test_normalize_without_normalizer_returns_zero(
+        self, cycle: ConsolidationCycle, mind_id: MindId
+    ) -> None:
+        result = await cycle._normalize_scores(mind_id)
+        assert result == 0
+
+    async def test_normalize_narrow_spread(
+        self,
+        mock_brain: AsyncMock,
+        mock_decay: AsyncMock,
+        event_bus: EventBus,
+        mind_id: MindId,
+    ) -> None:
+        """Narrow spread (< 0.20) triggers normalization."""
+        from sovyx.brain.models import Concept
+        from sovyx.brain.scoring import ConfidenceScorer, ImportanceScorer
+        from sovyx.engine.types import ConceptId
+
+        # All concepts at ~0.5 importance (narrow spread of 0.02)
+        concepts = [
+            Concept(id=ConceptId(f"c{i}"), mind_id=mind_id, name=f"c{i}",
+                    importance=0.50 + i * 0.005, confidence=0.5)
+            for i in range(5)
+        ]
+
+        mock_concepts = AsyncMock()
+        mock_concepts.get_by_mind = AsyncMock(return_value=concepts)
+        mock_concepts.batch_update_scores = AsyncMock(return_value=5)
+
+        cycle_n = ConsolidationCycle(
+            mock_brain, mock_decay, event_bus,
+            concept_repo=mock_concepts,
+            importance_scorer=ImportanceScorer(),
+            confidence_scorer=ConfidenceScorer(),
+        )
+
+        result = await cycle_n._normalize_scores(mind_id)
+        assert result > 0
+        updates = mock_concepts.batch_update_scores.call_args[0][0]
+        # After normalization, spread should be wider
+        new_values = [imp for _, imp, _ in updates]
+        assert max(new_values) - min(new_values) > 0.3
+
+    async def test_normalize_healthy_spread_noop(
+        self,
+        mock_brain: AsyncMock,
+        mock_decay: AsyncMock,
+        event_bus: EventBus,
+        mind_id: MindId,
+    ) -> None:
+        """Healthy spread (>= 0.20) → no normalization."""
+        from sovyx.brain.models import Concept
+        from sovyx.brain.scoring import ConfidenceScorer, ImportanceScorer
+        from sovyx.engine.types import ConceptId
+
+        concepts = [
+            Concept(id=ConceptId("c0"), mind_id=mind_id, name="c0",
+                    importance=0.2, confidence=0.5),
+            Concept(id=ConceptId("c1"), mind_id=mind_id, name="c1",
+                    importance=0.5, confidence=0.5),
+            Concept(id=ConceptId("c2"), mind_id=mind_id, name="c2",
+                    importance=0.8, confidence=0.5),
+        ]
+
+        mock_concepts = AsyncMock()
+        mock_concepts.get_by_mind = AsyncMock(return_value=concepts)
+        mock_concepts.batch_update_scores = AsyncMock()
+
+        cycle_n = ConsolidationCycle(
+            mock_brain, mock_decay, event_bus,
+            concept_repo=mock_concepts,
+            importance_scorer=ImportanceScorer(),
+            confidence_scorer=ConfidenceScorer(),
+        )
+
+        result = await cycle_n._normalize_scores(mind_id)
+        assert result == 0  # No changes needed
+
+
 class TestConsolidationScheduler:
     """ConsolidationScheduler tests."""
 

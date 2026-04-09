@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from sovyx.brain.concept_repo import ConceptRepository
     from sovyx.brain.learning import EbbinghausDecay
     from sovyx.brain.relation_repo import RelationRepository
-    from sovyx.brain.scoring import ConfidenceScorer, ImportanceScorer
+    from sovyx.brain.scoring import ConfidenceScorer, ImportanceScorer, ScoreNormalizer
     from sovyx.brain.service import BrainService
     from sovyx.engine.events import EventBus
     from sovyx.engine.types import ConceptId, MindId
@@ -52,6 +52,11 @@ class ConsolidationCycle:
         self._relations = relation_repo
         self._importance_scorer = importance_scorer
         self._confidence_scorer = confidence_scorer
+        self._normalizer: ScoreNormalizer | None = None
+        if importance_scorer or confidence_scorer:
+            from sovyx.brain.scoring import ScoreNormalizer  # noqa: PLC0415
+
+            self._normalizer = ScoreNormalizer()
 
     async def run(self, mind_id: MindId) -> ConsolidationCompleted:
         """Execute one consolidation cycle.
@@ -80,6 +85,15 @@ class ConsolidationCycle:
                 "consolidation_scores_recalculated",
                 mind_id=str(mind_id),
                 recalculated=recalculated,
+            )
+
+        # Step 1.6: Normalize if needed (anti-convergence)
+        normalized = await self._normalize_scores(mind_id)
+        if normalized > 0:
+            logger.info(
+                "consolidation_scores_normalized",
+                mind_id=str(mind_id),
+                normalized=normalized,
             )
 
         # Step 2: Merge similar concepts
@@ -203,6 +217,44 @@ class ConsolidationCycle:
             total=len(concepts),
             updated=len(updates),
         )
+        return len(updates)
+
+    async def _normalize_scores(self, mind_id: MindId) -> int:
+        """Normalize importance scores if spread is too narrow.
+
+        Prevents all concepts from converging to the same importance value
+        over many consolidation cycles. Only activates when spread < 0.20.
+
+        Preserves relative ordering and never pushes below floor (0.05).
+
+        Returns:
+            Number of concepts with adjusted scores.
+        """
+        if not self._concepts or not self._normalizer:
+            return 0
+
+        concepts = await self._concepts.get_by_mind(mind_id, limit=10000)
+        if len(concepts) < 3:  # noqa: PLR2004
+            return 0
+
+        # Build importance score list
+        scores = [(str(c.id), c.importance) for c in concepts]
+        normalized = self._normalizer.normalize(scores)
+
+        # Check if normalization actually changed anything
+        original_map = dict(scores)
+        updates: list[tuple[ConceptId, float, float]] = []
+        concept_map = {str(c.id): c for c in concepts}
+
+        for cid_str, new_imp in normalized:
+            old_imp = original_map.get(cid_str, 0.5)
+            if abs(new_imp - old_imp) > 0.005:
+                concept = concept_map[cid_str]
+                updates.append((concept.id, new_imp, concept.confidence))
+
+        if updates:
+            await self._concepts.batch_update_scores(updates)
+
         return len(updates)
 
     async def _merge_similar(self, mind_id: MindId) -> int:
