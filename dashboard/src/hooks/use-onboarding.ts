@@ -23,6 +23,14 @@ export type StepState = "pending" | "active" | "done";
 /** Threshold: number of concepts for step 3 ("Mind growing") to be done. */
 const MIND_GROWING_THRESHOLD = 5;
 
+/**
+ * Known health check names for LLM provider detection.
+ * Matches against lowercase check name for robustness.
+ * - "llm providers" — observability/health.py LLMReachableCheck
+ * - "llm_provider" — engine/health.py HealthChecker (legacy)
+ */
+const LLM_CHECK_NAMES = ["llm providers", "llm_provider"];
+
 export interface OnboardingProgress {
   /** Completion state for each step. */
   step1: StepState;
@@ -58,12 +66,20 @@ export function useOnboardingProgress(): OnboardingProgress {
       return { step1: "pending" as const, step2: "pending" as const, step3: "pending" as const };
     }
 
-    // Step 1: LLM configured
-    // Health check name varies: "llm_provider" (engine) or "LLM Providers" (observability)
+    // Step 1: LLM configured — 3-layer detection
+    // Layer 1: Health check reports a cloud provider is available
+    //          (Ollama excluded server-side to prevent false positive)
     const llmHealthGreen = healthChecks.some(
-      (c) => c.name.toLowerCase().includes("llm") && c.status !== "red",
+      (c) => LLM_CHECK_NAMES.includes(c.name.toLowerCase()) && c.status !== "red",
     );
-    const step1: StepState = llmHealthGreen || status.llm_calls_today > 0 ? "done" : "pending";
+    // Layer 2: Engine has made LLM calls (proves provider works)
+    const llmCallsMade = status.llm_calls_today > 0;
+    // Layer 3: Engine has incurred LLM cost (proves provider works)
+    const llmCostIncurred = status.llm_cost_today > 0;
+
+    const step1: StepState = (llmHealthGreen || llmCallsMade || llmCostIncurred)
+      ? "done"
+      : "pending";
 
     // Step 2: First message sent (creates concepts or increments message counter)
     const hasInteraction = status.memory_concepts > 0 || status.messages_today > 0;

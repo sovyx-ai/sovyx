@@ -128,10 +128,29 @@ describe("step 1 — LLM configured", () => {
   it("done when health check name is 'LLM Providers' (observability format)", () => {
     useDashboardStore.setState({
       status: makeStatus(),
-      healthChecks: [{ name: "LLM Providers", status: "green", message: "1 provider(s) available" }],
+      healthChecks: [{ name: "LLM Providers", status: "green", message: "1 provider(s) available: openai" }],
     });
     const { result } = renderHook(() => useOnboardingProgress());
     expect(result.current.step1).toBe("done");
+  });
+
+  it("done when health check name is 'llm_provider' (engine format)", () => {
+    useDashboardStore.setState({
+      status: makeStatus(),
+      healthChecks: [{ name: "llm_provider", status: "green", message: "1 providers" }],
+    });
+    const { result } = renderHook(() => useOnboardingProgress());
+    expect(result.current.step1).toBe("done");
+  });
+
+  it("NOT done when check name contains 'llm' but is not a known LLM check", () => {
+    useDashboardStore.setState({
+      status: makeStatus(),
+      healthChecks: [{ name: "llm_something_else", status: "green", message: "ok" }],
+    });
+    const { result } = renderHook(() => useOnboardingProgress());
+    // "llm_something_else" is NOT in LLM_CHECK_NAMES → step1 stays pending
+    expect(result.current.step1).toBe("pending");
   });
 
   it("ignores non-llm health checks", () => {
@@ -466,6 +485,101 @@ describe("reactivity", () => {
     expect(result.current.allDone).toBe(true);
     expect(result.current.showBanner).toBe(false);
     expect(result.current.showAliveCard).toBe(true);
+  });
+});
+
+// ════════════════════════════════════════════════════════
+// MULTI-PROVIDER DETECTION (3-layer fallback)
+// ════════════════════════════════════════════════════════
+describe("multi-provider detection", () => {
+  it("layer 1: detects OpenAI via health check", () => {
+    useDashboardStore.setState({
+      status: makeStatus(),
+      healthChecks: [{ name: "LLM Providers", status: "green", message: "1 provider(s) available: openai" }],
+    });
+    const { result } = renderHook(() => useOnboardingProgress());
+    expect(result.current.step1).toBe("done");
+  });
+
+  it("layer 1: detects Anthropic via health check", () => {
+    useDashboardStore.setState({
+      status: makeStatus(),
+      healthChecks: [{ name: "LLM Providers", status: "green", message: "1 provider(s) available: anthropic" }],
+    });
+    const { result } = renderHook(() => useOnboardingProgress());
+    expect(result.current.step1).toBe("done");
+  });
+
+  it("layer 1: detects Google via health check", () => {
+    useDashboardStore.setState({
+      status: makeStatus(),
+      healthChecks: [{ name: "LLM Providers", status: "green", message: "1 provider(s) available: google" }],
+    });
+    const { result } = renderHook(() => useOnboardingProgress());
+    expect(result.current.step1).toBe("done");
+  });
+
+  it("layer 1: detects multiple providers", () => {
+    useDashboardStore.setState({
+      status: makeStatus(),
+      healthChecks: [{ name: "LLM Providers", status: "green", message: "3 provider(s) available: openai, anthropic, google" }],
+    });
+    const { result } = renderHook(() => useOnboardingProgress());
+    expect(result.current.step1).toBe("done");
+  });
+
+  it("layer 1: pending when LLM check is red (no cloud providers)", () => {
+    useDashboardStore.setState({
+      status: makeStatus(),
+      healthChecks: [{ name: "LLM Providers", status: "red", message: "No LLM providers available" }],
+    });
+    const { result } = renderHook(() => useOnboardingProgress());
+    expect(result.current.step1).toBe("pending");
+  });
+
+  it("layer 2: done via llm_calls_today when health check fails", () => {
+    useDashboardStore.setState({
+      status: makeStatus({ llm_calls_today: 1 }),
+      healthChecks: [{ name: "LLM Providers", status: "red", message: "No providers" }],
+    });
+    const { result } = renderHook(() => useOnboardingProgress());
+    expect(result.current.step1).toBe("done");
+  });
+
+  it("layer 3: done via llm_cost_today when health check fails and no calls", () => {
+    useDashboardStore.setState({
+      status: makeStatus({ llm_cost_today: 0.01, llm_calls_today: 0 }),
+      healthChecks: [{ name: "LLM Providers", status: "red", message: "No providers" }],
+    });
+    const { result } = renderHook(() => useOnboardingProgress());
+    expect(result.current.step1).toBe("done");
+  });
+
+  it("all 3 layers false: step1 stays pending", () => {
+    useDashboardStore.setState({
+      status: makeStatus({ llm_calls_today: 0, llm_cost_today: 0 }),
+      healthChecks: [{ name: "LLM Providers", status: "red", message: "No providers" }],
+    });
+    const { result } = renderHook(() => useOnboardingProgress());
+    expect(result.current.step1).toBe("pending");
+  });
+
+  it("Ollama-only user: pending before first call, done after", () => {
+    // Before first call — health check red (Ollama excluded server-side)
+    useDashboardStore.setState({
+      status: makeStatus({ llm_calls_today: 0 }),
+      healthChecks: [{ name: "LLM Providers", status: "red", message: "No LLM providers available" }],
+    });
+    const { result } = renderHook(() => useOnboardingProgress());
+    expect(result.current.step1).toBe("pending");
+
+    // After first call — llm_calls_today proves it works
+    act(() => {
+      useDashboardStore.setState({
+        status: makeStatus({ llm_calls_today: 1 }),
+      });
+    });
+    expect(result.current.step1).toBe("done");
   });
 });
 
