@@ -353,6 +353,75 @@ class ConceptRepository:
 
         return False
 
+    async def get_embeddings_by_category(
+        self,
+        mind_id: MindId,
+        category: str,
+        limit: int = 500,
+    ) -> list[list[float]]:
+        """Fetch concept embeddings for a given category.
+
+        Used by novelty detection to compute category centroids.
+        Returns raw embedding vectors for centroid computation.
+
+        Args:
+            mind_id: Mind to query.
+            category: ConceptCategory value (e.g. "fact", "entity").
+            limit: Max embeddings to return (for performance).
+
+        Returns:
+            List of embedding vectors (384 floats each).
+            Empty list if sqlite-vec unavailable or no embeddings found.
+        """
+        if not self._pool.has_sqlite_vec:
+            return []
+
+        async with self._pool.read() as conn:
+            cursor = await conn.execute(
+                """SELECT ce.embedding FROM concept_embeddings ce
+                JOIN concepts c ON c.id = ce.concept_id
+                WHERE c.mind_id = ? AND c.category = ?
+                LIMIT ?""",
+                (str(mind_id), category, limit),
+            )
+            rows = await cursor.fetchall()
+
+        results: list[list[float]] = []
+        for row in rows:
+            raw = row[0]
+            if isinstance(raw, str):
+                embedding = json.loads(raw)
+            elif isinstance(raw, (list, tuple)):
+                embedding = list(raw)
+            else:
+                continue
+            results.append(embedding)
+        return results
+
+    async def count_by_category(
+        self,
+        mind_id: MindId,
+        category: str,
+    ) -> int:
+        """Count concepts in a specific category.
+
+        Used by novelty detection for cold start threshold.
+
+        Args:
+            mind_id: Mind to query.
+            category: ConceptCategory value.
+
+        Returns:
+            Number of concepts in the category.
+        """
+        async with self._pool.read() as conn:
+            cursor = await conn.execute(
+                "SELECT COUNT(*) FROM concepts WHERE mind_id = ? AND category = ?",
+                (str(mind_id), category),
+            )
+            row = await cursor.fetchone()
+            return int(row[0]) if row else 0
+
     async def batch_update_scores(
         self,
         updates: list[tuple[ConceptId, float, float]],

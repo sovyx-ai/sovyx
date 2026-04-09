@@ -503,6 +503,88 @@ class TestContradictionDetection:
         assert updated.confidence > 0.70  # noqa: PLR2004
 
 
+class TestComputeNovelty:
+    """3-tier novelty detection (refinement TASK-01)."""
+
+    async def test_cold_start_below_threshold(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        """Category with < 10 concepts → cold start novelty (0.70)."""
+        mock_deps["concept_repo"].count_by_category = AsyncMock(return_value=5)  # type: ignore[union-attr]
+        result = await brain.compute_novelty("quantum physics", "fact", MIND)
+        assert result == pytest.approx(0.70)
+
+    async def test_embedding_tier_high_similarity(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        """Embedding: high cosine similarity → low novelty."""
+        mock_deps["concept_repo"].count_by_category = AsyncMock(return_value=50)  # type: ignore[union-attr]
+        mock_deps["concept_repo"].get_embeddings_by_category = AsyncMock(  # type: ignore[union-attr]
+            return_value=[[0.5] * 384]
+        )
+        mock_deps["embedding_engine"].has_embeddings = True
+        mock_deps["embedding_engine"].encode = AsyncMock(return_value=[0.5] * 384)
+        mock_deps["embedding_engine"].compute_category_centroid = AsyncMock(return_value=[0.5] * 384)
+
+        result = await brain.compute_novelty("existing topic", "fact", MIND)
+        # Cosine similarity of identical vectors = 1.0 → novelty = 0.05
+        assert result == pytest.approx(0.05)
+
+    async def test_embedding_tier_low_similarity(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        """Embedding: low cosine similarity → high novelty."""
+        mock_deps["concept_repo"].count_by_category = AsyncMock(return_value=50)  # type: ignore[union-attr]
+        # Centroid points in opposite direction
+        centroid = [1.0] + [0.0] * 383
+        new_vec = [0.0] * 383 + [1.0]
+        mock_deps["concept_repo"].get_embeddings_by_category = AsyncMock(  # type: ignore[union-attr]
+            return_value=[centroid]
+        )
+        mock_deps["embedding_engine"].has_embeddings = True
+        mock_deps["embedding_engine"].encode = AsyncMock(return_value=new_vec)
+        mock_deps["embedding_engine"].compute_category_centroid = AsyncMock(return_value=centroid)
+
+        result = await brain.compute_novelty("totally new", "fact", MIND)
+        # Cosine similarity ≈ 0.0 → novelty ≈ 0.95
+        assert result > 0.85  # noqa: PLR2004
+
+    async def test_fts5_fallback_when_no_embeddings(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        """No embeddings → falls back to FTS5 search."""
+        mock_deps["concept_repo"].count_by_category = AsyncMock(return_value=50)  # type: ignore[union-attr]
+        mock_deps["embedding_engine"].has_embeddings = False
+        # FTS5: no matches → novelty 1.0
+        mock_deps["retrieval"].search_concepts = AsyncMock(return_value=[])  # type: ignore[union-attr]
+
+        result = await brain.compute_novelty("totally new", "fact", MIND)
+        assert result >= 0.70  # noqa: PLR2004  # FTS5 returns 1.0 or cold start
+
+    async def test_embedding_error_falls_back_to_fts5(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        """Embedding failure → graceful fallback to FTS5."""
+        mock_deps["concept_repo"].count_by_category = AsyncMock(return_value=50)  # type: ignore[union-attr]
+        mock_deps["embedding_engine"].has_embeddings = True
+        mock_deps["embedding_engine"].encode = AsyncMock(side_effect=RuntimeError("model crashed"))
+        # FTS5 should handle it
+        mock_deps["retrieval"].search_concepts = AsyncMock(return_value=[])  # type: ignore[union-attr]
+
+        result = await brain.compute_novelty("test", "fact", MIND)
+        assert 0.05 <= result <= 1.0
+
+    async def test_count_error_returns_cold_start(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        """count_by_category error → cold start."""
+        mock_deps["concept_repo"].count_by_category = AsyncMock(  # type: ignore[union-attr]
+            side_effect=RuntimeError("db error")
+        )
+        result = await brain.compute_novelty("test", "fact", MIND)
+        assert result == pytest.approx(0.70)
+
+
 class TestDecayWorkingMemory:
     """decay_working_memory() — delegates to working memory."""
 
