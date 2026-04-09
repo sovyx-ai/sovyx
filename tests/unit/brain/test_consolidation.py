@@ -108,6 +108,7 @@ class TestScoreRecalculation:
     ) -> None:
         """With scorers + repos, recalculation updates concepts."""
         from datetime import UTC, datetime, timedelta
+
         from sovyx.brain.models import Concept
         from sovyx.brain.scoring import ConfidenceScorer, ImportanceScorer
         from sovyx.engine.types import ConceptId
@@ -170,6 +171,7 @@ class TestScoreRecalculation:
     ) -> None:
         """Concepts where score change < 0.005 are skipped."""
         from datetime import UTC, datetime
+
         from sovyx.brain.models import Concept
         from sovyx.brain.scoring import ConfidenceScorer, ImportanceScorer
         from sovyx.engine.types import ConceptId
@@ -249,6 +251,7 @@ class TestScoreRecalculation:
     ) -> None:
         """Highly connected concepts should get higher recalculated importance."""
         from datetime import UTC, datetime
+
         from sovyx.brain.models import Concept
         from sovyx.brain.scoring import ConfidenceScorer, ImportanceScorer
         from sovyx.engine.types import ConceptId

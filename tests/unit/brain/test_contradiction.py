@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock
 
-import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -23,7 +22,6 @@ from sovyx.brain.contradiction import (
     _detect_contradiction_heuristic,
     detect_contradiction,
 )
-
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 

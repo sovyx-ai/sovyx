@@ -569,7 +569,8 @@ class TestComputeNovelty:
         )
         mock_deps["embedding_engine"].has_embeddings = True
         mock_deps["embedding_engine"].encode = AsyncMock(return_value=[0.5] * 384)
-        mock_deps["embedding_engine"].compute_category_centroid = AsyncMock(return_value=[0.5] * 384)
+        centroid_mock = AsyncMock(return_value=[0.5] * 384)
+        mock_deps["embedding_engine"].compute_category_centroid = centroid_mock
 
         result = await brain.compute_novelty("existing topic", "fact", MIND)
         # Cosine similarity of identical vectors = 1.0 → novelty = 0.05
@@ -658,7 +659,8 @@ class TestCentroidCache:
         )
         mock_deps["embedding_engine"].has_embeddings = True
         mock_deps["embedding_engine"].encode = AsyncMock(return_value=[0.5] * 384)
-        mock_deps["embedding_engine"].compute_category_centroid = AsyncMock(return_value=[0.5] * 384)
+        centroid_mock = AsyncMock(return_value=[0.5] * 384)
+        mock_deps["embedding_engine"].compute_category_centroid = centroid_mock
 
         assert (str(MIND), "fact") not in brain._centroid_cache
         await brain.compute_novelty("test", "fact", MIND)
@@ -676,7 +678,8 @@ class TestCentroidCache:
             return_value=[[0.5] * 384]
         )
         mock_deps["embedding_engine"].has_embeddings = True
-        mock_deps["embedding_engine"].compute_category_centroid = AsyncMock(return_value=[0.5] * 384)
+        centroid_mock = AsyncMock(return_value=[0.5] * 384)
+        mock_deps["embedding_engine"].compute_category_centroid = centroid_mock
 
         cached = await brain.refresh_centroid_cache(MIND)
         assert cached == 3  # noqa: PLR2004
@@ -697,7 +700,8 @@ class TestCentroidCache:
             return_value=[[0.5] * 384]
         )
         mock_deps["embedding_engine"].has_embeddings = True
-        mock_deps["embedding_engine"].compute_category_centroid = AsyncMock(return_value=[0.5] * 384)
+        centroid_mock = AsyncMock(return_value=[0.5] * 384)
+        mock_deps["embedding_engine"].compute_category_centroid = centroid_mock
 
         cached = await brain.refresh_centroid_cache(MIND)
         assert cached == 1
