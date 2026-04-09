@@ -65,6 +65,69 @@ class TestCapacity:
         wm = WorkingMemory(capacity=25)
         assert wm.capacity == 25
 
+    # ── Importance-aware eviction (TASK-13) ──
+
+    def test_importance_protects_from_eviction(self) -> None:
+        """High-importance concept survives even with low activation."""
+        wm = WorkingMemory(capacity=3)
+        # Important concept with low activation
+        wm.activate(ConceptId("important"), 0.1, importance=0.9)
+        # Trivial concepts with moderate activation
+        wm.activate(ConceptId("trivial1"), 0.4, importance=0.1)
+        wm.activate(ConceptId("trivial2"), 0.4, importance=0.1)
+        # Full — add new concept, should evict a trivial one
+        wm.activate(ConceptId("new"), 0.5, importance=0.5)
+        # "important" should survive (combined: 0.1*0.6 + 0.9*0.4 = 0.42)
+        # "trivial" has combined: 0.4*0.6 + 0.1*0.4 = 0.28 → evicted
+        assert wm.get_activation(ConceptId("important")) > 0.0
+        assert wm.size == 3  # noqa: PLR2004
+
+    def test_trivial_evicted_before_important(self) -> None:
+        """Trivial concept evicted before important one at same activation."""
+        wm = WorkingMemory(capacity=2)
+        wm.activate(ConceptId("important"), 0.5, importance=0.9)
+        wm.activate(ConceptId("trivial"), 0.5, importance=0.1)
+        # Both at activation 0.5 — importance breaks the tie
+        wm.activate(ConceptId("new"), 0.6, importance=0.5)
+        # trivial evicted (0.5*0.6+0.1*0.4=0.34 < 0.5*0.6+0.9*0.4=0.66)
+        assert wm.get_activation(ConceptId("trivial")) == 0.0
+        assert wm.get_activation(ConceptId("important")) > 0.0
+
+    def test_importance_updated_on_reactivation(self) -> None:
+        """Re-activating a concept updates its importance."""
+        wm = WorkingMemory(capacity=3)
+        wm.activate(ConceptId("c1"), 0.5, importance=0.3)
+        wm.activate(ConceptId("c2"), 0.5, importance=0.5)
+        # Update c1 importance
+        wm.activate(ConceptId("c1"), 0.5, importance=0.9)
+        # c1 now has importance 0.9, should be protected
+        wm.activate(ConceptId("c3"), 0.5, importance=0.5)
+        wm.activate(ConceptId("c4"), 0.5, importance=0.5)
+        # c2 should be evicted (combined: 0.5*0.6+0.5*0.4=0.50)
+        # c1 survives (combined: 0.5*0.6+0.9*0.4=0.66)
+        assert wm.get_activation(ConceptId("c1")) > 0.0
+
+    def test_clear_clears_importance(self) -> None:
+        """clear() also clears importance tracking."""
+        wm = WorkingMemory()
+        wm.activate(ConceptId("c1"), 0.5, importance=0.9)
+        wm.clear()
+        assert wm.size == 0
+        # Importance should be cleared — no stale data
+        wm.activate(ConceptId("c2"), 0.5, importance=0.5)
+        wm.activate(ConceptId("c3"), 0.5, importance=0.5)
+        assert wm.size == 2  # noqa: PLR2004
+
+    def test_default_importance_backward_compat(self) -> None:
+        """activate() without importance kwarg → default 0.5."""
+        wm = WorkingMemory(capacity=2)
+        wm.activate(ConceptId("c1"), 0.5)  # No importance kwarg
+        wm.activate(ConceptId("c2"), 0.5, importance=0.9)
+        wm.activate(ConceptId("new"), 0.5, importance=0.5)
+        # c1 (default 0.5 importance) has same combined as new
+        # c2 (0.9 importance) survives for sure
+        assert wm.get_activation(ConceptId("c2")) > 0.0
+
 
 class TestGetActiveConcepts:
     """Active concept listing."""
