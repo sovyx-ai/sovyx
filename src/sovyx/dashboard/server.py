@@ -816,6 +816,44 @@ class DashboardServer:
         self._server: Any | None = None
         self._app: FastAPI | None = None
 
+    async def _resolve_log_file(self) -> Path | None:
+        """Resolve the log file path for dashboard log queries.
+
+        Resolution order:
+            1. EngineConfig from registry (authoritative — same instance
+               the bootstrap configured, respects data_dir, env vars, YAML).
+            2. Fresh EngineConfig() as fallback (if registry unavailable).
+
+        Returns:
+            Resolved log file path, or None if resolution fails entirely.
+        """
+        from sovyx.engine.config import EngineConfig
+
+        # 1. Try registry (authoritative source)
+        if self._registry is not None and self._registry.is_registered(EngineConfig):
+            try:
+                engine_config = await self._registry.resolve(EngineConfig)
+                logger.debug(
+                    "log_file_resolved_from_registry",
+                    path=str(engine_config.log.log_file),
+                )
+                return engine_config.log.log_file
+            except Exception:  # noqa: BLE001
+                logger.warning("log_file_registry_resolve_failed")
+
+        # 2. Fallback: fresh EngineConfig (reads env + defaults)
+        try:
+            engine_config = EngineConfig()
+            logger.warning(
+                "log_file_resolved_fallback",
+                path=str(engine_config.log.log_file),
+                hint="EngineConfig not in registry; using defaults",
+            )
+            return engine_config.log.log_file
+        except Exception:  # noqa: BLE001
+            logger.error("log_file_resolve_failed_entirely")
+            return None
+
     @property
     def app(self) -> FastAPI | None:
         """ASGI application instance."""
@@ -852,15 +890,10 @@ class DashboardServer:
             except Exception:  # noqa: BLE001
                 logger.debug("mind_config_wire_failed")
 
-        # Wire log file path for log queries
-        if self._config is not None:
-            from sovyx.engine.config import EngineConfig
-
-            try:
-                engine_config = EngineConfig()
-                self._app.state.log_file = engine_config.log.log_file
-            except Exception:  # noqa: BLE001
-                logger.debug("engine_config_load_failed")
+        # Wire log file path for log queries.
+        # Resolve from registry first (same config the bootstrap used),
+        # fall back to a fresh EngineConfig only if registry is unavailable.
+        self._app.state.log_file = await self._resolve_log_file()
 
         host = self._config.host if self._config else "127.0.0.1"
         port = self._config.port if self._config else 7777

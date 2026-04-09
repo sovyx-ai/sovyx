@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import secrets
-from typing import TYPE_CHECKING
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -15,10 +15,6 @@ from sovyx.dashboard.server import (
     _ensure_token,
     create_app,
 )
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
 
 # ── Fixtures ──
 
@@ -227,6 +223,70 @@ class TestDashboardServer:
         server = DashboardServer(config=config)
         assert server._config is not None
         assert server._config.port == 8888
+
+
+class TestResolveLogFile:
+    """DashboardServer._resolve_log_file resolution order."""
+
+    @pytest.mark.asyncio()
+    async def test_resolves_from_registry(self) -> None:
+        """Registry EngineConfig is used when available."""
+        from sovyx.engine.config import EngineConfig
+        from sovyx.engine.registry import ServiceRegistry
+
+        engine_config = EngineConfig(data_dir=Path("/custom/data"))
+        registry = ServiceRegistry()
+        registry.register_instance(EngineConfig, engine_config)
+
+        server = DashboardServer(registry=registry)
+        result = await server._resolve_log_file()
+        assert result == Path("/custom/data/logs/sovyx.log")
+
+    @pytest.mark.asyncio()
+    async def test_fallback_without_registry(self) -> None:
+        """No registry → falls back to fresh EngineConfig defaults."""
+        server = DashboardServer()
+        result = await server._resolve_log_file()
+        assert result == Path.home() / ".sovyx" / "logs" / "sovyx.log"
+
+    @pytest.mark.asyncio()
+    async def test_fallback_when_registry_missing_config(self) -> None:
+        """Registry exists but EngineConfig not registered → fallback."""
+        from sovyx.engine.registry import ServiceRegistry
+
+        registry = ServiceRegistry()
+        server = DashboardServer(registry=registry)
+        result = await server._resolve_log_file()
+        assert result == Path.home() / ".sovyx" / "logs" / "sovyx.log"
+
+    @pytest.mark.asyncio()
+    async def test_registry_config_with_custom_log_file(self) -> None:
+        """Explicit log_file in registry config is preserved."""
+        from sovyx.engine.config import EngineConfig, LoggingConfig
+        from sovyx.engine.registry import ServiceRegistry
+
+        custom_path = Path("/var/log/sovyx/daemon.log")
+        config = EngineConfig(log=LoggingConfig(log_file=custom_path))
+        registry = ServiceRegistry()
+        registry.register_instance(EngineConfig, config)
+
+        server = DashboardServer(registry=registry)
+        result = await server._resolve_log_file()
+        assert result == custom_path
+
+    @pytest.mark.asyncio()
+    async def test_registry_resolve_error_falls_back(self) -> None:
+        """If registry.resolve raises, falls back to default."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        registry = MagicMock()
+        registry.is_registered.return_value = True
+        registry.resolve = AsyncMock(side_effect=RuntimeError("broken"))
+
+        server = DashboardServer(registry=registry)
+        result = await server._resolve_log_file()
+        # Should fall back to default, not crash
+        assert result == Path.home() / ".sovyx" / "logs" / "sovyx.log"
 
 
 # ── SPA Fallback Tests ──
