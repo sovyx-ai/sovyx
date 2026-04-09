@@ -120,6 +120,14 @@ def init(
     else:
         console.print(f"[dim]• {system_yaml} already exists[/dim]")
 
+    # Create logs directory
+    logs_dir = data_dir / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    if not any(logs_dir.iterdir()):
+        console.print(f"[green]✓[/green] Created {logs_dir}")
+    else:
+        console.print(f"[dim]• {logs_dir} already exists[/dim]")
+
     # Create mind.yaml using full config (auto-detects LLM provider from env)
     mind_dir = data_dir / name.lower()
     mind_dir.mkdir(parents=True, exist_ok=True)
