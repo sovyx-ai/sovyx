@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
     from sovyx.engine.types import (
         ChannelType,
+        ConceptCategory,
         ConceptId,
         ConversationId,
         EpisodeId,
@@ -56,9 +57,25 @@ class BrainWriter(Protocol):
     """
 
     async def learn_concept(
-        self, mind_id: MindId, name: str, content: str, **kwargs: object
+        self,
+        mind_id: MindId,
+        name: str,
+        content: str,
+        category: ConceptCategory = ...,
+        source: str = ...,
+        *,
+        importance: float | None = None,
+        confidence: float | None = None,
+        emotional_valence: float = 0.0,
+        **kwargs: object,
     ) -> ConceptId:
-        """Learn a new concept. Returns the concept ID."""
+        """Learn a new concept. Returns the concept ID.
+
+        Args:
+            importance: Initial importance [0.0, 1.0] or None for default.
+            confidence: Initial confidence [0.0, 1.0] or None for default.
+            emotional_valence: Sentiment score [-1.0, 1.0].
+        """
         ...
 
     async def encode_episode(

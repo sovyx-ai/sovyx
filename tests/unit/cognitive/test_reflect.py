@@ -173,6 +173,43 @@ class TestImportance:
 # ── Sentiment tests ────────────────────────────────────────────────────
 
 
+class TestSourceConfidence:
+    """Source confidence mapping."""
+
+    def test_llm_explicit_highest(self) -> None:
+        from sovyx.cognitive.reflect import get_source_confidence
+
+        conf = get_source_confidence("llm_explicit")
+        assert 0.80 <= conf <= 0.90
+
+    def test_regex_fallback_lower(self) -> None:
+        from sovyx.cognitive.reflect import get_source_confidence
+
+        llm_conf = get_source_confidence("llm_explicit")
+        regex_conf = get_source_confidence("regex_fallback")
+        assert regex_conf < llm_conf
+
+    def test_unknown_source_gets_default(self) -> None:
+        from sovyx.cognitive.reflect import get_source_confidence
+
+        conf = get_source_confidence("unknown_source")
+        assert 0.40 <= conf <= 0.60
+
+    def test_all_sources_in_range(self) -> None:
+        from sovyx.cognitive.reflect import get_source_confidence
+
+        for source in ("llm_explicit", "llm_inferred", "regex_fallback", "system", "corroboration"):
+            conf = get_source_confidence(source)
+            assert 0.0 <= conf <= 1.0, f"{source} confidence={conf}"
+
+    def test_system_highest_confidence(self) -> None:
+        from sovyx.cognitive.reflect import get_source_confidence
+
+        system_conf = get_source_confidence("system")
+        llm_conf = get_source_confidence("llm_explicit")
+        assert system_conf >= llm_conf
+
+
 class TestSentiment:
     """Sentiment extraction and clamping."""
 
@@ -312,6 +349,22 @@ class TestRegexExtraction:
         kw = mock_brain.learn_concept.call_args.kwargs
         assert kw["category"] == ConceptCategory.RELATIONSHIP
 
+    async def test_regex_passes_category_importance(self, mock_brain: AsyncMock) -> None:
+        """Regex extraction passes category-based importance to learn_concept."""
+        phase = ReflectPhase(mock_brain)
+        await phase.process(_perception("My name is Guipe"), _response(), MIND, CONV)
+        kw = mock_brain.learn_concept.call_args.kwargs
+        # Entity category → importance = 0.80
+        assert kw["importance"] == pytest.approx(0.80, abs=0.01)
+
+    async def test_regex_passes_source_confidence(self, mock_brain: AsyncMock) -> None:
+        """Regex extraction passes regex_fallback confidence to learn_concept."""
+        phase = ReflectPhase(mock_brain)
+        await phase.process(_perception("My name is Guipe"), _response(), MIND, CONV)
+        kw = mock_brain.learn_concept.call_args.kwargs
+        # regex_fallback → midpoint of (0.30, 0.55) = 0.425
+        assert kw["confidence"] == pytest.approx(0.425, abs=0.01)
+
     async def test_no_concepts_extracted(self, mock_brain: AsyncMock) -> None:
         phase = ReflectPhase(mock_brain)
         await phase.process(_perception("What time is it?"), _response(), MIND, CONV)
@@ -323,6 +376,49 @@ class TestRegexExtraction:
 
 class TestLLMExtraction:
     """LLM-based concept extraction with mocked router."""
+
+    async def test_llm_passes_category_importance(self, mock_brain: AsyncMock) -> None:
+        """LLM extraction passes category-based importance to learn_concept."""
+        concepts = [
+            {"name": "John", "content": "User name", "category": "entity", "sentiment": 0.0},
+        ]
+        router = _mock_llm_response(concepts)
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(_perception("test"), _response(), MIND, CONV)
+        kw = mock_brain.learn_concept.call_args.kwargs
+        # Entity → 0.80
+        assert kw["importance"] == pytest.approx(0.80, abs=0.01)
+
+    async def test_llm_passes_llm_explicit_confidence(self, mock_brain: AsyncMock) -> None:
+        """LLM extraction passes llm_explicit confidence to learn_concept."""
+        concepts = [
+            {"name": "Test", "content": "test", "category": "fact", "sentiment": 0.0},
+        ]
+        router = _mock_llm_response(concepts)
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(_perception("test"), _response(), MIND, CONV)
+        kw = mock_brain.learn_concept.call_args.kwargs
+        # llm_explicit → midpoint of (0.75, 0.95) = 0.85
+        assert kw["confidence"] == pytest.approx(0.85, abs=0.01)
+
+    async def test_llm_different_categories_different_importance(
+        self, mock_brain: AsyncMock
+    ) -> None:
+        """Different categories produce different importance values."""
+        concepts = [
+            {"name": "Person", "content": "a person", "category": "entity", "sentiment": 0.0},
+            {"name": "Fact", "content": "a fact", "category": "fact", "sentiment": 0.0},
+        ]
+        router = _mock_llm_response(concepts)
+        mock_brain.learn_concept = AsyncMock(side_effect=[ConceptId("c1"), ConceptId("c2")])
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(_perception("test"), _response(), MIND, CONV)
+
+        calls = mock_brain.learn_concept.call_args_list
+        entity_imp = calls[0].kwargs["importance"]
+        fact_imp = calls[1].kwargs["importance"]
+        # Entity (0.80) > Fact (0.60)
+        assert entity_imp > fact_imp
 
     async def test_llm_returns_all_categories(self, mock_brain: AsyncMock) -> None:
         concepts = [

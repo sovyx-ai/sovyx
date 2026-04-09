@@ -177,6 +177,8 @@ class BrainService:
         category: ConceptCategory = ConceptCategory.FACT,
         source: str = "conversation",
         *,
+        importance: float | None = None,
+        confidence: float | None = None,
         emotional_valence: float = 0.0,
         **kwargs: object,
     ) -> ConceptId:
@@ -186,6 +188,12 @@ class BrainService:
         instead of creating a duplicate.
 
         Args:
+            importance: Initial importance score [0.0, 1.0]. If None,
+                uses model default (0.5). Callers should pass category-based
+                or LLM-assessed importance for meaningful differentiation.
+            confidence: Initial confidence score [0.0, 1.0]. If None,
+                uses model default (0.5). Callers should pass source-quality
+                based confidence for meaningful differentiation.
             emotional_valence: Sentiment score (-1.0 to 1.0) for this
                 concept. On dedup, uses weighted average with existing.
         """
@@ -196,21 +204,36 @@ class BrainService:
                 # Concept exists — reinforce, don't duplicate
 
                 # Update content if new is longer (more information)
-                if len(content) > len(concept.content):
+                content_grew = len(content) > len(concept.content)
+                if content_grew:
                     concept.content = content
 
-                # Confidence evolution: each corroboration increases
-                # confidence by 0.1, capped at 1.0.
-                # Formula: base(0.5) + 0.1 * min(count, 5) → max 1.0
+                # Confidence evolution: diminishing returns corroboration.
+                # Each mention increases confidence but with decreasing magnitude,
+                # approaching 1.0 asymptotically. Prevents flat +0.1 from
+                # making all repeated concepts equally confident.
                 corr_raw = concept.metadata.get("corroboration_count", 0)
                 corr = int(corr_raw) if isinstance(corr_raw, (int, float, str)) else 0
                 corr += 1
                 concept.metadata["corroboration_count"] = corr
-                concept.confidence = min(1.0, concept.confidence + 0.1)
+                confidence_boost = 0.08 * (1.0 - concept.confidence)
+                concept.confidence = min(1.0, concept.confidence + confidence_boost)
 
-                # Importance reinforcement: repeated mention = more important
-                # +0.05 per encounter, counters Ebbinghaus decay naturally
-                concept.importance = min(1.0, concept.importance + 0.05)
+                # Small bump if content grew (richer evidence)
+                if content_grew:
+                    concept.confidence = min(1.0, concept.confidence + 0.03)
+
+                # Importance reinforcement: factor in the incoming importance
+                # signal if it's higher than current. Weighted reinforcement
+                # replaces flat +0.05 for more nuanced evolution.
+                if importance is not None and importance > concept.importance:
+                    # Incoming signal is stronger — pull importance toward it
+                    boost = 0.03 * (importance - concept.importance)
+                    concept.importance = min(1.0, concept.importance + boost + 0.02)
+                else:
+                    # Standard reinforcement: smaller than before (0.02 vs 0.05)
+                    # to avoid inflating everything equally
+                    concept.importance = min(1.0, concept.importance + 0.02)
 
                 # Update emotional valence: weighted average
                 # (existing has more history, weight it 2:1)
@@ -223,14 +246,16 @@ class BrainService:
 
                 await self._concepts.update(concept)
                 await self._concepts.record_access(concept.id)
-                # Re-activate in working memory so decayed concepts
-                # regain visibility for star topology's top-K selection.
-                # Uses max(current, 0.5) — won't overwrite spreading-boosted ones.
-                self._memory.activate(concept.id, 0.5)
+                # Re-activate in working memory with actual importance
+                # (not flat 0.5) so concept visibility reflects true importance.
+                self._memory.activate(concept.id, concept.importance)
                 return concept.id
 
-        # New concept
+        # New concept — use provided importance/confidence or defaults
         from sovyx.brain.models import Concept
+
+        effective_importance = max(0.0, min(1.0, importance)) if importance is not None else 0.5
+        effective_confidence = max(0.0, min(1.0, confidence)) if confidence is not None else 0.5
 
         concept = Concept(
             mind_id=mind_id,
@@ -238,11 +263,13 @@ class BrainService:
             content=content,
             category=category,
             source=source,
+            importance=effective_importance,
+            confidence=effective_confidence,
             emotional_valence=max(-1.0, min(1.0, emotional_valence)),
         )
         concept_id = await self._concepts.create(concept)
 
-        # Activate in working memory
+        # Activate in working memory with actual importance
         self._memory.activate(concept_id, concept.importance)
 
         # Record metrics

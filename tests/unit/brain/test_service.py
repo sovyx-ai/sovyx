@@ -294,7 +294,7 @@ class TestLearnConcept:
     async def test_learn_dedup_activates_working_memory(
         self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
     ) -> None:
-        """Dedup path re-activates concept in working memory (decay fix)."""
+        """Dedup path re-activates concept in working memory with actual importance."""
         existing = _concept("Python", "existing-id")
         existing.category = ConceptCategory.FACT
         mock_deps["concept_repo"].search_by_text = AsyncMock(  # type: ignore[union-attr]
@@ -312,9 +312,111 @@ class TestLearnConcept:
         # Re-learn same concept (dedup path)
         await brain.learn_concept(MIND, "Python", "content")
 
-        # Should be re-activated to 0.5 (not left at decayed value)
+        # Should be re-activated to concept's actual importance (not flat 0.5)
+        # existing importance=0.7 + 0.02 standard reinforcement = 0.72
         new_activation = wm.get_activation(ConceptId("existing-id"))
-        assert new_activation == 0.5
+        assert new_activation > decayed_activation  # re-activated above decay level
+        assert new_activation >= 0.7  # at least the concept's importance
+
+
+    # ── TASK-01: importance + confidence params ──
+
+    async def test_learn_with_explicit_importance(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        """Explicit importance → concept created with that importance."""
+        await brain.learn_concept(MIND, "Alice", "User name", importance=0.9)
+        created_concept = mock_deps["concept_repo"].create.call_args[0][0]  # type: ignore[union-attr]
+        assert created_concept.importance == pytest.approx(0.9)
+
+    async def test_learn_with_explicit_confidence(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        """Explicit confidence → concept created with that confidence."""
+        await brain.learn_concept(MIND, "Alice", "User name", confidence=0.85)
+        created_concept = mock_deps["concept_repo"].create.call_args[0][0]  # type: ignore[union-attr]
+        assert created_concept.confidence == pytest.approx(0.85)
+
+    async def test_learn_without_params_defaults(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        """No importance/confidence → defaults to 0.5/0.5 (backwards compat)."""
+        await brain.learn_concept(MIND, "Test", "content")
+        created_concept = mock_deps["concept_repo"].create.call_args[0][0]  # type: ignore[union-attr]
+        assert created_concept.importance == pytest.approx(0.5)
+        assert created_concept.confidence == pytest.approx(0.5)
+
+    async def test_learn_importance_clamped(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        """Out-of-range importance → clamped to [0.0, 1.0]."""
+        await brain.learn_concept(MIND, "Test", "content", importance=1.5)
+        created = mock_deps["concept_repo"].create.call_args[0][0]  # type: ignore[union-attr]
+        assert created.importance == pytest.approx(1.0)
+
+        # Reset mock for second call
+        mock_deps["concept_repo"].create.reset_mock()  # type: ignore[union-attr]
+        await brain.learn_concept(MIND, "Test2", "content", importance=-0.3)
+        created2 = mock_deps["concept_repo"].create.call_args[0][0]  # type: ignore[union-attr]
+        assert created2.importance == pytest.approx(0.0)
+
+    async def test_learn_dedup_confidence_diminishing_returns(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        """Dedup corroboration: confidence boost has diminishing returns."""
+        existing = _concept("Python", "existing-id")
+        existing.category = ConceptCategory.FACT
+        existing.confidence = 0.8  # Already high
+        mock_deps["concept_repo"].search_by_text = AsyncMock(  # type: ignore[union-attr]
+            return_value=[(existing, -1.0)]
+        )
+
+        await brain.learn_concept(MIND, "Python", "content")
+
+        # Diminishing returns: 0.08 * (1.0 - 0.8) = 0.016
+        # New confidence: 0.8 + 0.016 = 0.816
+        mock_deps["concept_repo"].update.assert_called_once()  # type: ignore[union-attr]
+        updated = mock_deps["concept_repo"].update.call_args[0][0]  # type: ignore[union-attr]
+        assert updated.confidence == pytest.approx(0.816, abs=0.005)
+        # Must be less than old flat +0.1 would give (0.9)
+        assert updated.confidence < 0.9
+
+    async def test_learn_dedup_importance_weighted_reinforcement(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        """Dedup with higher incoming importance → weighted boost."""
+        existing = _concept("Python", "existing-id")
+        existing.category = ConceptCategory.FACT
+        existing.importance = 0.5
+        mock_deps["concept_repo"].search_by_text = AsyncMock(  # type: ignore[union-attr]
+            return_value=[(existing, -1.0)]
+        )
+
+        await brain.learn_concept(MIND, "Python", "content", importance=0.8)
+
+        updated = mock_deps["concept_repo"].update.call_args[0][0]  # type: ignore[union-attr]
+        # importance=0.8 > current 0.5, so weighted boost applies:
+        # boost = 0.03 * (0.8 - 0.5) = 0.009, + 0.02 = 0.029
+        # new = 0.5 + 0.029 = 0.529
+        assert updated.importance > 0.5  # Definitely increased
+        assert updated.importance < 0.6  # But not by flat +0.05 amount
+
+    async def test_learn_dedup_standard_reinforcement(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        """Dedup without incoming importance → standard +0.02 boost."""
+        existing = _concept("Python", "existing-id")
+        existing.category = ConceptCategory.FACT
+        existing.importance = 0.6
+        mock_deps["concept_repo"].search_by_text = AsyncMock(  # type: ignore[union-attr]
+            return_value=[(existing, -1.0)]
+        )
+
+        await brain.learn_concept(MIND, "Python", "content")
+
+        updated = mock_deps["concept_repo"].update.call_args[0][0]  # type: ignore[union-attr]
+        # No incoming importance → standard +0.02
+        assert updated.importance == pytest.approx(0.62, abs=0.005)
 
 
 class TestDecayWorkingMemory:
