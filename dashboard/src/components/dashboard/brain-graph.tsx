@@ -97,6 +97,17 @@ export function BrainGraph({ data, width, height, onNodeClick, highlightedNodeId
         ctx.fill();
       }
 
+      // Importance glow ring (visible for importance >= 0.75)
+      if (node.importance >= 0.75 && !isDimmed) {
+        const glowRadius = radius + 2 / globalScale;
+        ctx.beginPath();
+        ctx.arc(x, y, glowRadius, 0, 2 * Math.PI);
+        ctx.globalAlpha = Math.min(0.35, (node.importance - 0.5) * 0.7);
+        ctx.fillStyle = GRAPH_COLORS.brandGlow;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+
       // Node circle
       ctx.beginPath();
       ctx.arc(x, y, radius, 0, 2 * Math.PI);
@@ -104,11 +115,17 @@ export function BrainGraph({ data, width, height, onNodeClick, highlightedNodeId
       ctx.globalAlpha = isDimmed ? 0.12 : (0.3 + node.confidence * 0.7);
       ctx.fill();
 
-      // Border
+      // Border — dashed for low confidence (< 0.4)
       ctx.strokeStyle = color;
       ctx.lineWidth = isHighlighted ? 2 : (isHovered ? 2 : 1);
+      if (node.confidence < 0.4 && !isDimmed) {
+        ctx.setLineDash([2 / globalScale, 2 / globalScale]);
+      } else {
+        ctx.setLineDash([]);
+      }
       ctx.globalAlpha = isDimmed ? 0.2 : 1;
       ctx.stroke();
+      ctx.setLineDash([]); // Reset after border
 
       // Label (visible when zoomed in, hovered, or highlighted)
       if (globalScale > 1.5 || isHovered || isHighlighted) {
@@ -173,6 +190,9 @@ export function BrainGraph({ data, width, height, onNodeClick, highlightedNodeId
       linkWidth={linkWidth}
       linkLabel={(link: BrainLink) => `${link.relation_type.replace("_", " ")} (${link.weight.toFixed(2)})`}
       linkDirectionalParticles={0}
+      nodeLabel={(node: BrainNode) =>
+        `${node.name}\n📊 importance: ${node.importance.toFixed(2)} | confidence: ${node.confidence.toFixed(2)}\n🏷️ ${node.category} | 👁️ ${node.access_count} views`
+      }
       onNodeHover={(node: BrainNode | null) => setHoveredNode(node?.id ?? null)}
       onNodeClick={(node: BrainNode) => onNodeClick?.(node)}
       cooldownTicks={100}
