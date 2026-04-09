@@ -64,7 +64,8 @@ function debouncedCall(key: string, fn: () => void, ms = DEBOUNCE_MS): void {
 
 // ── API refresh functions (via centralized api.get) ──
 
-async function refreshStatus(): Promise<void> {
+/** Force an immediate status poll. Useful for onboarding responsiveness. */
+export async function refreshStatus(): Promise<void> {
   try {
     const data = await api.get<SystemStatus>("/api/status");
     const store = useDashboardStore.getState();
@@ -83,7 +84,8 @@ async function refreshStatus(): Promise<void> {
   }
 }
 
-async function refreshHealth(): Promise<void> {
+/** Force an immediate health poll. Useful for onboarding responsiveness. */
+export async function refreshHealth(): Promise<void> {
   try {
     const data = await api.get<HealthResponse>("/api/health");
     useDashboardStore.getState().setHealthChecks(data.checks);
