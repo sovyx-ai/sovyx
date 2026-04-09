@@ -68,6 +68,9 @@ CREATE TABLE relations (
 CREATE INDEX idx_relations_source ON relations(source_id);
 CREATE INDEX idx_relations_target ON relations(target_id);
 CREATE INDEX idx_relations_weight ON relations(weight DESC);
+-- Covering indices for weighted neighbor queries (spreading activation, consolidation)
+CREATE INDEX IF NOT EXISTS idx_relations_source_weight ON relations(source_id, weight DESC);
+CREATE INDEX IF NOT EXISTS idx_relations_target_weight ON relations(target_id, weight DESC);
 
 -- FTS5 for text search
 CREATE VIRTUAL TABLE concepts_fts USING fts5(
@@ -209,6 +212,22 @@ _MIGRATION_003 = Migration(
 )
 
 
+_MIGRATION_004_SQL = """\
+-- Covering indices for weighted neighbor queries.
+-- Speeds up spreading activation and degree centrality computation
+-- by allowing index-only scans on (source/target, weight) pairs.
+CREATE INDEX IF NOT EXISTS idx_relations_source_weight ON relations(source_id, weight DESC);
+CREATE INDEX IF NOT EXISTS idx_relations_target_weight ON relations(target_id, weight DESC);
+"""
+
+_MIGRATION_004 = Migration(
+    version=4,
+    description="covering indices for weighted relation queries",
+    sql_up=_MIGRATION_004_SQL,
+    checksum=Migration.compute_checksum(_MIGRATION_004_SQL),
+)
+
+
 def get_brain_migrations(*, has_sqlite_vec: bool = True) -> list[Migration]:
     """Return brain database migrations.
 
@@ -233,4 +252,5 @@ def get_brain_migrations(*, has_sqlite_vec: bool = True) -> list[Migration]:
     if has_sqlite_vec:
         migrations.append(_MIGRATION_002)
     migrations.append(_MIGRATION_003)
+    migrations.append(_MIGRATION_004)
     return migrations
