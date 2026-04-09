@@ -23,7 +23,7 @@ import { ChatThread } from "@/components/dashboard/chat-thread";
 import { StatusDot } from "@/components/dashboard/status-dot";
 import type { Conversation, ConversationsResponse, Message } from "@/types/api";
 import { EmptyState } from "@/components/empty-state";
-import { ConversationsEmptyAnimation, ConversationSelectAnimation } from "@/components/empty-state-animations";
+import { ConversationSelectAnimation } from "@/components/empty-state-animations";
 import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 50;
@@ -179,7 +179,6 @@ export default function ConversationsPage() {
             ) : filtered.length === 0 && !loading ? (
               <EmptyState
                 icon={<MessageSquareIcon className="size-8" />}
-                animation={<ConversationsEmptyAnimation />}
                 title={t("list.empty")}
                 description={t("list.emptyHint")}
                 className="py-12"
