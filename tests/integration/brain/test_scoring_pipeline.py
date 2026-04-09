@@ -27,7 +27,6 @@ from unittest.mock import AsyncMock  # noqa: E402
 
 import pytest  # noqa: E402
 
-from sovyx.brain.consolidation import ConsolidationCycle  # noqa: E402
 from sovyx.brain.embedding import EmbeddingEngine  # noqa: E402
 from sovyx.brain.learning import EbbinghausDecay, HebbianLearning  # noqa: E402
 from sovyx.brain.models import ConceptCategory  # noqa: E402
@@ -92,7 +91,7 @@ class TestScoringPipelineIntegration:
 
     async def test_learn_with_explicit_importance(self, brain: BrainService) -> None:
         """Learning with explicit importance preserves the score."""
-        cid = await brain.learn_concept(
+        await brain.learn_concept(
             MIND,
             "birthday",
             "User birthday is March 8th",

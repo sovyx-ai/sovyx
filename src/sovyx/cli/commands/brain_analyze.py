@@ -126,7 +126,7 @@ async def _analyze_scores_async(
             "SELECT importance, confidence FROM concepts WHERE mind_id = ?",
             (mind_id,),
         )
-        rows = await cursor.fetchall()
+        rows = list(await cursor.fetchall())
 
     if not rows:
         console.print(f"[yellow]No concepts found for mind '{mind_id}'[/yellow]")

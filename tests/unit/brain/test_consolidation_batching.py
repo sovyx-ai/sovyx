@@ -7,10 +7,9 @@ sovyx.engine.events ↔ sovyx.observability.alerts.
 from __future__ import annotations
 
 import sys
-import time
 import types
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 

@@ -201,7 +201,8 @@ class TestSourceConfidence:
     def test_all_sources_in_range(self) -> None:
         from sovyx.cognitive.reflect import get_source_confidence
 
-        for source in ("llm_explicit", "llm_inferred", "regex_fallback", "system", "corroboration"):
+        sources = ("llm_explicit", "llm_inferred", "regex_fallback", "system", "corroboration")
+        for source in sources:
             conf = get_source_confidence(source)
             assert 0.0 <= conf <= 1.0, f"{source} confidence={conf}"
 
