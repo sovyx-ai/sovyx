@@ -35,6 +35,7 @@ if TYPE_CHECKING:
         EpisodeId,
         MindId,
     )
+    from sovyx.llm.router import LLMRouter
 
 logger = get_logger(__name__)
 
@@ -58,6 +59,8 @@ class BrainService:
         retrieval: HybridRetrieval,
         working_memory: WorkingMemory,
         event_bus: EventBus,
+        llm_router: LLMRouter | None = None,
+        fast_model: str = "",
     ) -> None:
         self._concepts = concept_repo
         self._episodes = episode_repo
@@ -67,6 +70,8 @@ class BrainService:
         self._hebbian = hebbian
         self._decay = decay
         self._retrieval = retrieval
+        self._llm_router = llm_router
+        self._fast_model = fast_model
         self._memory = working_memory
         self._events = event_bus
         self._mind_id: MindId | None = None
@@ -204,44 +209,49 @@ class BrainService:
             if concept.name.lower() == name.lower() and concept.category == category:
                 # Concept exists — reinforce, don't duplicate
 
-                # Update content if new is longer (more information)
-                content_grew = len(content) > len(concept.content)
-
-                # Contradiction detection: if content changed significantly
-                # and isn't just an extension, it may contradict existing data.
-                # Heuristic: new content is shorter or similar length but
-                # differs substantially from existing.
-                is_contradiction = (
-                    content
-                    and concept.content
-                    and not content_grew
-                    and len(content) > 10  # noqa: PLR2004
-                    and content.lower() != concept.content.lower()
-                    and not content.lower().startswith(concept.content.lower()[:20])
+                # Semantic relationship detection via LLM (or heuristic fallback)
+                from sovyx.brain.contradiction import (  # noqa: PLC0415
+                    ContentRelation,
+                    detect_contradiction,
                 )
 
-                if content_grew:
-                    concept.content = content
+                relation = await detect_contradiction(
+                    old_content=concept.content,
+                    new_content=content,
+                    llm_router=self._llm_router,
+                    fast_model=self._fast_model,
+                )
 
-                if is_contradiction:
-                    # Contradiction: reduce confidence of existing concept
-                    # New info overwrites content too (more recent = likely correct)
-                    concept.content = content
-                    from sovyx.brain.scoring import ConfidenceScorer
+                # Apply cascade based on classification
+                if relation == ContentRelation.CONTRADICTS:
+                    # Contradiction: reduce confidence, override content
+                    from sovyx.brain.scoring import ConfidenceScorer  # noqa: PLC0415
 
+                    old_conf = concept.confidence
                     scorer = ConfidenceScorer()
                     concept.confidence = scorer.score_contradiction(concept.confidence)
+                    concept.content = content  # Recency wins
                     concept.metadata["last_contradiction"] = True
                     logger.info(
                         "concept_contradiction_detected",
                         concept_id=str(concept.id),
-                        old_confidence=concept.confidence,
+                        old_confidence=old_conf,
+                        new_confidence=concept.confidence,
+                        relation="CONTRADICTS",
                     )
-                else:
-                    # Confidence evolution: diminishing returns corroboration.
-                    # Each mention increases confidence but with decreasing magnitude,
-                    # approaching 1.0 asymptotically. Prevents flat +0.1 from
-                    # making all repeated concepts equally confident.
+
+                elif relation == ContentRelation.EXTENDS:
+                    # Extension: update content + corroboration boost
+                    concept.content = content
+                    corr_raw = concept.metadata.get("corroboration_count", 0)
+                    corr = int(corr_raw) if isinstance(corr_raw, (int, float, str)) else 0
+                    corr += 1
+                    concept.metadata["corroboration_count"] = corr
+                    confidence_boost = 0.08 * (1.0 - concept.confidence)
+                    concept.confidence = min(1.0, concept.confidence + confidence_boost + 0.03)
+
+                elif relation == ContentRelation.SAME:
+                    # Corroboration: same info repeated → confidence boost
                     corr_raw = concept.metadata.get("corroboration_count", 0)
                     corr = int(corr_raw) if isinstance(corr_raw, (int, float, str)) else 0
                     corr += 1
@@ -249,9 +259,13 @@ class BrainService:
                     confidence_boost = 0.08 * (1.0 - concept.confidence)
                     concept.confidence = min(1.0, concept.confidence + confidence_boost)
 
-                    # Small bump if content grew (richer evidence)
-                    if content_grew:
-                        concept.confidence = min(1.0, concept.confidence + 0.03)
+                else:
+                    # UNRELATED: shouldn't happen on same-name dedup, log and skip
+                    logger.warning(
+                        "dedup_unrelated_content",
+                        concept_id=str(concept.id),
+                        relation="UNRELATED",
+                    )
 
                 # Importance reinforcement: factor in the incoming importance
                 # signal if it's higher than current. Weighted reinforcement
