@@ -233,6 +233,48 @@ class TestQueryLogs:
         result = query_logs(f, search="deployment")
         assert len(result) == 1
 
+    def test_after_returns_newer_entries(self, log_file: Path) -> None:
+        """after= returns only entries with timestamp > cursor."""
+        result = query_logs(log_file, after="2026-04-04T10:00:02")
+        assert len(result) == 2
+        events = {e["event"] for e in result}
+        assert events == {"db_error", "concept_created"}
+
+    def test_after_no_match(self, log_file: Path) -> None:
+        """after= beyond all entries returns empty."""
+        result = query_logs(log_file, after="2099-01-01T00:00:00")
+        assert result == []
+
+    def test_after_none_returns_all(self, log_file: Path) -> None:
+        """after=None is a no-op (returns all entries)."""
+        result = query_logs(log_file, after=None, limit=100)
+        assert len(result) == 5
+
+    def test_after_with_level_filter(self, log_file: Path) -> None:
+        """after= combined with level filter."""
+        result = query_logs(log_file, after="2026-04-04T10:00:01", level="info")
+        assert len(result) == 2
+        events = {e["event"] for e in result}
+        assert events == {"llm_call", "concept_created"}
+
+    def test_after_uses_timestamp_field(self, tmp_path: Path) -> None:
+        """after= works with 'timestamp' field (not just 'ts')."""
+        f = tmp_path / "ts_field.log"
+        entries = [
+            json.dumps({"event": "old", "level": "info", "timestamp": "2026-04-04T10:00:00"}),
+            json.dumps({"event": "new", "level": "info", "timestamp": "2026-04-04T10:00:05"}),
+        ]
+        f.write_text("\n".join(entries) + "\n")
+        result = query_logs(f, after="2026-04-04T10:00:02")
+        assert len(result) == 1
+        assert result[0]["event"] == "new"
+
+    def test_after_exact_timestamp_excluded(self, log_file: Path) -> None:
+        """Entry with timestamp == after is excluded (strictly after)."""
+        result = query_logs(log_file, after="2026-04-04T10:00:03")
+        assert len(result) == 1
+        assert result[0]["event"] == "concept_created"
+
     def test_search_with_list_nested_value(self, tmp_path: Path) -> None:
         """Search finds text inside nested list values."""
         f = tmp_path / "list_nested.log"
