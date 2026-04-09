@@ -209,6 +209,24 @@ _SOURCE_CONFIDENCE: dict[str, tuple[float, float]] = {
 # Default confidence for unknown source types
 _DEFAULT_SOURCE_CONFIDENCE = (0.40, 0.60)
 
+# ── Explicit importance signal detection ───────────────────────────────
+# Regex patterns to detect when user explicitly asks to remember info.
+# Supports English and Portuguese phrases. Message-level detection
+# applies to ALL concepts extracted from that message.
+
+_EXPLICIT_PATTERNS: list[re.Pattern[str]] = [
+    # English
+    re.compile(r"\b(?:remember\s+this|don'?t\s+forget|keep\s+in\s+mind)\b", re.I),
+    re.compile(r"\b(?:this\s+is\s+(?:very\s+)?important|critical|crucial)\b", re.I),
+    re.compile(r"\b(?:note\s+(?:this|that)|make\s+(?:a\s+)?note)\b", re.I),
+    re.compile(r"\b(?:never\s+forget|always\s+remember)\b", re.I),
+    # Portuguese
+    re.compile(r"\b(?:lembra\s+(?:disso|isso)|não\s+esquece)\b", re.I),
+    re.compile(r"\b(?:anota\s+(?:isso|aí)|guarda\s+(?:isso|essa\s+info))\b", re.I),
+    re.compile(r"\b(?:(?:isso\s+é\s+)?importante|presta\s+atenção)\b", re.I),
+    re.compile(r"\b(?:memoriza|nunca\s+esquece|grava\s+(?:isso|aí))\b", re.I),
+]
+
 # ── Sentiment heuristics for regex fallback ────────────────────────────
 # Maps pattern groups to default sentiment when LLM is unavailable.
 
@@ -403,6 +421,24 @@ def get_source_confidence(source: str) -> float:
     return (low + high) / 2
 
 
+def detect_explicit_importance(message: str) -> bool:
+    """Detect if user explicitly asks to remember information.
+
+    Checks for phrases like "remember this", "don't forget",
+    "lembra disso", etc. in both English and Portuguese.
+
+    When True, ALL concepts from this message get their importance
+    floor raised to 0.85 and confidence floor raised to 0.75.
+
+    Args:
+        message: User message text.
+
+    Returns:
+        True if explicit importance signal detected.
+    """
+    return any(p.search(message) for p in _EXPLICIT_PATTERNS)
+
+
 def compute_episode_importance(
     message: str,
     num_concepts: int,
@@ -485,6 +521,11 @@ class ReflectPhase:
             extracted = self._extract_with_regex(perception.content)
             extraction_source = "regex_fallback"
 
+        # Detect message-level explicit importance signal.
+        # Overrides per-concept explicit flag: if the user said "remember this"
+        # in the message, ALL concepts from it are treated as explicit.
+        message_explicit = detect_explicit_importance(perception.content)
+
         # Learn extracted concepts with multi-signal importance + confidence.
         # LLM path: combine LLM assessment with category baseline.
         # Regex path: use category importance + source confidence only.
@@ -497,6 +538,9 @@ class ReflectPhase:
                 category = ConceptCategory(resolved)
                 category_importance = get_importance(resolved)
 
+                # Explicit signal: per-concept OR message-level
+                is_explicit = ec.explicit or message_explicit
+
                 if extraction_source == "llm_explicit":
                     # Combine LLM assessment with category baseline
                     # LLM has primary weight (0.40) + category (0.25) +
@@ -505,9 +549,9 @@ class ReflectPhase:
                         0.40 * ec.importance
                         + 0.25 * category_importance
                         + 0.10 * abs(ec.sentiment)
-                        + 0.25 * (1.0 if ec.explicit else 0.0)
+                        + 0.25 * (1.0 if is_explicit else 0.0)
                     )
-                    if ec.explicit:
+                    if is_explicit:
                         combined_importance = max(combined_importance, 0.85)
 
                     # Combine LLM confidence with source quality
@@ -519,10 +563,17 @@ class ReflectPhase:
                         + 0.15 * (1.0 if ec.source_quality == "explicit" else 0.3)
                         + 0.10 * min(1.0, len(ec.content) / 100)
                     )
+                    # Explicit signal boosts confidence floor too
+                    if is_explicit:
+                        combined_confidence = max(combined_confidence, 0.75)
                 else:
                     # Regex fallback: category importance + source confidence
                     combined_importance = category_importance
                     combined_confidence = get_source_confidence("regex_fallback")
+                    # Message-level explicit applies to regex path too
+                    if is_explicit:
+                        combined_importance = max(combined_importance, 0.85)
+                        combined_confidence = max(combined_confidence, 0.75)
 
                 # Clamp to valid range
                 combined_importance = max(0.05, min(1.0, combined_importance))
