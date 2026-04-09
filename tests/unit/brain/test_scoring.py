@@ -652,3 +652,144 @@ class TestNormalizerProperties:
             # Only check strict ordering if originals were strictly ordered
             if val_a_orig < val_b_orig:
                 assert result_dict[id_a] <= result_dict[id_b]
+
+
+class TestStabilityProperties:
+    """End-to-end stability properties for dynamic scoring (TASK-17).
+
+    Validates that the scoring system is well-behaved under arbitrary inputs:
+    - Bounded: all outputs in [floor, 1.0]
+    - Idempotent: double-recalculation ≈ single
+    - Monotonic: more signals → higher scores
+    - Convergent: repeated application doesn't diverge
+    """
+
+    @given(
+        current=st.floats(0.05, 1.0),
+        access_count=st.integers(0, 1000),
+        degree=st.integers(0, 100),
+        avg_weight=st.floats(0.0, 1.0),
+        max_degree=st.integers(1, 100),
+        emotional=st.floats(-1.0, 1.0),
+        days=st.floats(0.0, 365.0),
+        max_access=st.integers(1, 1000),
+    )
+    @settings(max_examples=200)
+    def test_recalculate_always_bounded(
+        self,
+        current: float,
+        access_count: int,
+        degree: int,
+        avg_weight: float,
+        max_degree: int,
+        emotional: float,
+        days: float,
+        max_access: int,
+    ) -> None:
+        """Recalculation output always in [0.05, 1.0]."""
+        scorer = ImportanceScorer()
+        result = scorer.recalculate(
+            current_importance=current,
+            access_count=access_count,
+            degree=min(degree, max_degree),
+            avg_weight=avg_weight,
+            max_degree=max_degree,
+            emotional_valence=emotional,
+            days_since_access=days,
+            max_access=max_access,
+        )
+        assert 0.05 <= result <= 1.0
+
+    @given(
+        current=st.floats(0.05, 1.0),
+        access_count=st.integers(0, 100),
+        degree=st.integers(0, 20),
+    )
+    @settings(max_examples=100)
+    def test_recalculate_near_idempotent(
+        self,
+        current: float,
+        access_count: int,
+        degree: int,
+    ) -> None:
+        """Double recalculation converges (2nd pass ≈ 1st pass within 0.10)."""
+        scorer = ImportanceScorer()
+        kwargs = dict(
+            access_count=access_count,
+            degree=degree,
+            avg_weight=0.5,
+            max_degree=max(20, degree),
+            emotional_valence=0.0,
+            days_since_access=1.0,
+            max_access=max(100, access_count),
+        )
+        first = scorer.recalculate(current_importance=current, **kwargs)
+        second = scorer.recalculate(current_importance=first, **kwargs)
+        # Velocity damping means each pass moves ≤ 0.10
+        assert abs(second - first) <= 0.11
+
+    @given(
+        low_access=st.integers(0, 10),
+        high_access=st.integers(50, 200),
+    )
+    @settings(max_examples=50)
+    def test_higher_access_higher_importance(
+        self,
+        low_access: int,
+        high_access: int,
+    ) -> None:
+        """More access → higher (or equal) importance, all else equal."""
+        scorer = ImportanceScorer()
+        kwargs = dict(
+            current_importance=0.5,
+            degree=5,
+            avg_weight=0.5,
+            max_degree=20,
+            emotional_valence=0.0,
+            days_since_access=1.0,
+        )
+        low = scorer.recalculate(access_count=low_access, max_access=high_access, **kwargs)
+        high = scorer.recalculate(access_count=high_access, max_access=high_access, **kwargs)
+        assert high >= low
+
+    @given(
+        confidence=st.floats(0.10, 1.0),
+        n_cycles=st.integers(1, 20),
+    )
+    @settings(max_examples=50)
+    def test_staleness_monotonically_decreasing(
+        self,
+        confidence: float,
+        n_cycles: int,
+    ) -> None:
+        """Repeated staleness decay always decreases (or stays at floor)."""
+        scorer = ConfidenceScorer()
+        current = confidence
+        for _ in range(n_cycles):
+            next_val = scorer.score_staleness_decay(current, days_since_access=90.0)
+            assert next_val <= current + 0.001  # Allow tiny float rounding
+            assert next_val >= 0.05
+            current = next_val
+
+    @given(
+        importance=st.floats(0.05, 1.0),
+        boost_count=st.integers(1, 10),
+    )
+    @settings(max_examples=50)
+    def test_access_boost_diminishing(
+        self,
+        importance: float,
+        boost_count: int,
+    ) -> None:
+        """Each access boost is smaller than the previous."""
+        scorer = ImportanceScorer()
+        current = importance
+        deltas: list[float] = []
+        for i in range(boost_count):
+            boosted = scorer.score_access_boost(current, access_count=i + 1)
+            delta = boosted - current
+            deltas.append(delta)
+            current = boosted
+        # Deltas should be non-increasing (diminishing returns)
+        for i in range(len(deltas) - 1):
+            assert deltas[i + 1] <= deltas[i] + 0.001
