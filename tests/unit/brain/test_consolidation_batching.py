@@ -1,39 +1,15 @@
-"""Tests for consolidation batching, timeout, and drift detection.
-
-Uses lazy imports to avoid circular import chain:
-sovyx.engine.events ↔ sovyx.observability.alerts.
-"""
+"""Tests for consolidation batching, timeout, and drift detection."""
 
 from __future__ import annotations
 
-import sys
-import types
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
 
-# Break the circular import chain before any sovyx imports.
-# sovyx.observability.__init__ tries to import from .alerts which
-# imports sovyx.engine.events → circular. We stub the alerts module.
-_ALERTS_KEY = "sovyx.observability.alerts"
-if _ALERTS_KEY not in sys.modules:
-    _stub = types.ModuleType(_ALERTS_KEY)
-    # Provide the names that sovyx.observability.__init__ imports
-    for _name in (
-        "Alert",
-        "AlertFired",
-        "AlertManager",
-        "AlertRule",
-        "AlertSeverity",
-        "create_default_alert_manager",
-    ):
-        setattr(_stub, _name, type(_name, (), {}))
-    sys.modules[_ALERTS_KEY] = _stub
-
-from sovyx.brain.consolidation import ConsolidationCycle  # noqa: E402
-from sovyx.brain.models import Concept, ConceptCategory  # noqa: E402
-from sovyx.engine.types import ConceptId, MindId  # noqa: E402
+from sovyx.brain.consolidation import ConsolidationCycle
+from sovyx.brain.models import Concept, ConceptCategory
+from sovyx.engine.types import ConceptId, MindId
 
 MIND = MindId("test-mind")
 

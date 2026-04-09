@@ -9,40 +9,22 @@ Uses in-memory SQLite database with full brain subsystem wiring.
 
 from __future__ import annotations
 
-import sys
-import types
+from unittest.mock import AsyncMock
 
-# Break circular import before any sovyx imports
-_ALERTS_KEY = "sovyx.observability.alerts"
-if _ALERTS_KEY not in sys.modules:
-    _stub = types.ModuleType(_ALERTS_KEY)
-    for _name in (
-        "Alert",
-        "AlertFired",
-        "AlertManager",
-        "AlertRule",
-        "AlertSeverity",
-        "create_default_alert_manager",
-    ):
-        setattr(_stub, _name, type(_name, (), {}))
-    sys.modules[_ALERTS_KEY] = _stub
+import pytest
 
-from unittest.mock import AsyncMock  # noqa: E402
-
-import pytest  # noqa: E402
-
-from sovyx.brain.embedding import EmbeddingEngine  # noqa: E402
-from sovyx.brain.learning import EbbinghausDecay, HebbianLearning  # noqa: E402
-from sovyx.brain.models import ConceptCategory  # noqa: E402
-from sovyx.brain.retrieval import HybridRetrieval  # noqa: E402
-from sovyx.brain.scoring import (  # noqa: E402
+from sovyx.brain.embedding import EmbeddingEngine
+from sovyx.brain.learning import EbbinghausDecay, HebbianLearning
+from sovyx.brain.models import ConceptCategory
+from sovyx.brain.retrieval import HybridRetrieval
+from sovyx.brain.scoring import (
     ConfidenceScorer,
     ImportanceScorer,
     ScoreNormalizer,
 )
-from sovyx.brain.service import BrainService  # noqa: E402
-from sovyx.brain.spreading import SpreadingActivation  # noqa: E402
-from sovyx.brain.working_memory import WorkingMemory  # noqa: E402
+from sovyx.brain.service import BrainService
+from sovyx.brain.spreading import SpreadingActivation
+from sovyx.brain.working_memory import WorkingMemory
 from sovyx.engine.types import MindId  # noqa: E402
 
 MIND = MindId("test-integration")
