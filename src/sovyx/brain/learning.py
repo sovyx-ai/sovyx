@@ -13,6 +13,7 @@ from sovyx.observability.logging import get_logger
 if TYPE_CHECKING:
     from sovyx.brain.concept_repo import ConceptRepository
     from sovyx.brain.relation_repo import RelationRepository
+    from sovyx.brain.scoring import ImportanceScorer
     from sovyx.engine.types import ConceptId, MindId
 
 logger = get_logger(__name__)
@@ -45,10 +46,12 @@ class HebbianLearning:
         relation_repo: RelationRepository,
         learning_rate: float = 0.1,
         concept_repo: ConceptRepository | None = None,
+        importance_scorer: ImportanceScorer | None = None,
     ) -> None:
         self._relations = relation_repo
         self._learning_rate = learning_rate
         self._concepts = concept_repo
+        self._scorer = importance_scorer
 
     async def strengthen(
         self,
@@ -186,11 +189,29 @@ class HebbianLearning:
         await self._relations.update_weight(relation.id, new_weight)
         await self._relations.increment_co_occurrence(id_a, id_b)
 
-        # Importance reinforcement: highly co-activated pairs get
-        # a small importance boost (counters Ebbinghaus decay)
+        # Importance reinforcement: highly co-activated pairs get a small
+        # importance boost (counters Ebbinghaus decay).
+        # When ImportanceScorer is available, uses diminishing returns
+        # based on current importance + access count.
         if co_activation > self._CO_ACTIVATION_THRESHOLD and self._concepts is not None:
-            await self._concepts.boost_importance(id_a, self._IMPORTANCE_BOOST)
-            await self._concepts.boost_importance(id_b, self._IMPORTANCE_BOOST)
+            if self._scorer:
+                # Scorer-based: diminishing returns, respects soft ceiling
+                for cid in (id_a, id_b):
+                    concept = await self._concepts.get(cid)
+                    if concept is not None:
+                        new_imp = self._scorer.score_access_boost(
+                            concept.importance, concept.access_count,
+                        )
+                        boost = new_imp - concept.importance
+                        # Dampen boost above 0.90 (soft ceiling consistency)
+                        if concept.importance > 0.90:
+                            boost *= 0.2
+                        if boost > 0.001:
+                            await self._concepts.boost_importance(cid, boost)
+            else:
+                # Fallback: flat boost (backwards compat)
+                await self._concepts.boost_importance(id_a, self._IMPORTANCE_BOOST)
+                await self._concepts.boost_importance(id_b, self._IMPORTANCE_BOOST)
 
         return 1
 

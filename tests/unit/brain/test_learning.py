@@ -163,6 +163,99 @@ class TestHebbianLearning:
         assert len(relations) >= 1
 
 
+class TestHebbianImportanceBoost:
+    """Hebbian importance boost with scorer integration (TASK-14)."""
+
+    async def test_scorer_based_boost_diminishing(
+        self,
+        relation_repo: RelationRepository,
+        concept_repo: ConceptRepository,
+    ) -> None:
+        """With scorer, importance boost has diminishing returns."""
+        from sovyx.brain.scoring import ImportanceScorer
+
+        ids = await _seed_concepts(concept_repo, "A", "B")
+        scorer = ImportanceScorer()
+        hebbian = HebbianLearning(
+            relation_repo, concept_repo=concept_repo, importance_scorer=scorer,
+        )
+
+        # Set high co-activation to trigger boost
+        activations = {ids[0]: 0.9, ids[1]: 0.9}
+        await hebbian.strengthen(ids, activations)
+
+        # Check that importance was boosted
+        a = await concept_repo.get(ids[0])
+        assert a is not None
+        assert a.importance > 0.5  # Default was 0.5
+
+    async def test_scorer_boost_above_090_damped(
+        self,
+        relation_repo: RelationRepository,
+        concept_repo: ConceptRepository,
+    ) -> None:
+        """Above 0.90, boost is 80% damped."""
+        from sovyx.brain.scoring import ImportanceScorer
+
+        ids = await _seed_concepts(concept_repo, "High", "High2")
+        # Set concepts to high importance
+        for cid in ids:
+            c = await concept_repo.get(cid)
+            assert c is not None
+            c.importance = 0.95
+            await concept_repo.update(c)
+
+        scorer = ImportanceScorer()
+        hebbian = HebbianLearning(
+            relation_repo, concept_repo=concept_repo, importance_scorer=scorer,
+        )
+        activations = {ids[0]: 0.9, ids[1]: 0.9}
+        await hebbian.strengthen(ids, activations)
+
+        c = await concept_repo.get(ids[0])
+        assert c is not None
+        # Boost is heavily damped: should be barely above 0.95
+        assert c.importance < 0.96
+
+    async def test_fallback_flat_boost_without_scorer(
+        self,
+        relation_repo: RelationRepository,
+        concept_repo: ConceptRepository,
+    ) -> None:
+        """Without scorer, falls back to flat +0.02 boost."""
+        ids = await _seed_concepts(concept_repo, "C", "D")
+        hebbian = HebbianLearning(
+            relation_repo, concept_repo=concept_repo,
+        )  # No scorer
+        activations = {ids[0]: 0.9, ids[1]: 0.9}
+        await hebbian.strengthen(ids, activations)
+
+        c = await concept_repo.get(ids[0])
+        assert c is not None
+        assert c.importance == pytest.approx(0.52, abs=0.01)  # 0.5 + 0.02
+
+    async def test_no_boost_below_threshold(
+        self,
+        relation_repo: RelationRepository,
+        concept_repo: ConceptRepository,
+    ) -> None:
+        """Low co-activation → no importance boost."""
+        from sovyx.brain.scoring import ImportanceScorer
+
+        ids = await _seed_concepts(concept_repo, "E", "F")
+        scorer = ImportanceScorer()
+        hebbian = HebbianLearning(
+            relation_repo, concept_repo=concept_repo, importance_scorer=scorer,
+        )
+        # Low co-activation (below 0.7 threshold)
+        activations = {ids[0]: 0.3, ids[1]: 0.3}
+        await hebbian.strengthen(ids, activations)
+
+        c = await concept_repo.get(ids[0])
+        assert c is not None
+        assert c.importance == pytest.approx(0.5, abs=0.01)  # No boost
+
+
 class TestEbbinghausDecay:
     """Ebbinghaus forgetting curve."""
 
