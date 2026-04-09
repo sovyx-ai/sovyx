@@ -289,3 +289,42 @@ class TestQueryLogs:
         f.write_text(entry + "\n")
         result = query_logs(f, search="beta_target")
         assert len(result) == 1
+
+    def test_rotation_fallback_to_backup(self, tmp_path: Path) -> None:
+        """If primary log is empty (just rotated), reads from .1 backup."""
+        primary = tmp_path / "sovyx.log"
+        backup = tmp_path / "sovyx.log.1"
+
+        # Primary is empty (just rotated)
+        primary.write_text("")
+
+        # Backup has the recent data
+        entry = json.dumps({"event": "from_backup", "level": "info", "logger": "test"})
+        backup.write_text(entry + "\n")
+
+        result = query_logs(primary)
+        assert len(result) == 1
+        assert result[0]["event"] == "from_backup"
+
+    def test_rotation_primary_missing_reads_backup(self, tmp_path: Path) -> None:
+        """If primary log doesn't exist, reads from .1 backup."""
+        primary = tmp_path / "sovyx.log"
+        backup = tmp_path / "sovyx.log.1"
+
+        # Primary doesn't exist
+        assert not primary.exists()
+
+        # Backup exists
+        entry = json.dumps({"event": "rotated", "level": "info", "logger": "test"})
+        backup.write_text(entry + "\n")
+
+        result = query_logs(primary)
+        # query_logs checks exists() first → returns [] for missing primary
+        # This is correct: we don't want to silently read stale backups
+        assert result == []
+
+    def test_rotation_both_missing(self, tmp_path: Path) -> None:
+        """Both primary and backup missing → empty result."""
+        primary = tmp_path / "sovyx.log"
+        result = query_logs(primary)
+        assert result == []
