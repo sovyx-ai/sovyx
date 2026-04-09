@@ -211,6 +211,86 @@ class TestSourceConfidence:
         assert system_conf >= llm_conf
 
 
+class TestNoveltyDetection:
+    """Novelty-based importance modulation (TASK-04)."""
+
+    async def test_new_concept_high_novelty(self, mock_brain: AsyncMock) -> None:
+        """Completely new concept → novelty = 1.0."""
+        mock_brain.search = AsyncMock(return_value=[])
+        phase = ReflectPhase(mock_brain)
+        novelty = await phase._compute_novelty_batch(["quantum physics"], MIND)
+        assert novelty["quantum physics"] == pytest.approx(1.0)
+
+    async def test_exact_match_low_novelty(self, mock_brain: AsyncMock) -> None:
+        """Exact name match → novelty ≈ 0.05."""
+        from sovyx.brain.models import Concept
+        from sovyx.engine.types import ConceptId
+
+        existing = Concept(
+            id=ConceptId("c1"), mind_id=MIND, name="quantum physics",
+        )
+        mock_brain.search = AsyncMock(return_value=[(existing, 0.9)])
+        phase = ReflectPhase(mock_brain)
+        novelty = await phase._compute_novelty_batch(["quantum physics"], MIND)
+        assert novelty["quantum physics"] == pytest.approx(0.05)
+
+    async def test_partial_match_medium_novelty(self, mock_brain: AsyncMock) -> None:
+        """Similar but not exact match → moderate novelty."""
+        from sovyx.brain.models import Concept
+        from sovyx.engine.types import ConceptId
+
+        similar = Concept(
+            id=ConceptId("c1"), mind_id=MIND, name="quantum computing",
+        )
+        mock_brain.search = AsyncMock(return_value=[(similar, 0.6)])
+        phase = ReflectPhase(mock_brain)
+        novelty = await phase._compute_novelty_batch(["quantum physics"], MIND)
+        score = novelty["quantum physics"]
+        assert 0.05 < score < 0.9  # noqa: PLR2004
+
+    async def test_novelty_error_defaults_moderate(self, mock_brain: AsyncMock) -> None:
+        """On error, novelty defaults to 0.5."""
+        mock_brain.search = AsyncMock(side_effect=RuntimeError("db error"))
+        phase = ReflectPhase(mock_brain)
+        novelty = await phase._compute_novelty_batch(["test"], MIND)
+        assert novelty["test"] == pytest.approx(0.5)
+
+    async def test_novelty_affects_llm_importance(self, mock_brain: AsyncMock) -> None:
+        """High novelty boosts LLM-path importance."""
+        # New concept → novelty = 1.0
+        mock_brain.search = AsyncMock(return_value=[])
+
+        router = _mock_llm_response([{
+            "name": "wormholes", "content": "Space tunnels",
+            "category": "fact", "sentiment": 0.0,
+            "importance": 0.7, "confidence": 0.8,
+            "explicit": False, "source_quality": "explicit",
+        }])
+
+        phase = ReflectPhase(mock_brain, router, "fast")
+        await phase.process(_perception("Tell me about wormholes"), _response(), MIND, CONV)
+        kw = mock_brain.learn_concept.call_args.kwargs
+        # 0.35*0.7 + 0.15*0.50 + 0.10*0 + 0.15*1.0 + 0.25*0 = 0.245+0.075+0.15 = 0.47
+        assert kw["importance"] > 0.40  # noqa: PLR2004
+
+    async def test_novelty_affects_regex_importance(self, mock_brain: AsyncMock) -> None:
+        """Known concept via regex → lower importance from low novelty."""
+        from sovyx.brain.models import Concept
+        from sovyx.engine.types import ConceptId
+
+        existing = Concept(
+            id=ConceptId("c1"), mind_id=MIND, name="Guipe",
+        )
+        # Exact match → novelty = 0.05
+        mock_brain.search = AsyncMock(return_value=[(existing, 0.9)])
+
+        phase = ReflectPhase(mock_brain)
+        await phase.process(_perception("My name is Guipe"), _response(), MIND, CONV)
+        kw = mock_brain.learn_concept.call_args.kwargs
+        # 0.60*0.80 + 0.40*0.05 = 0.50
+        assert kw["importance"] == pytest.approx(0.50, abs=0.02)
+
+
 class TestExplicitImportanceDetection:
     """Message-level explicit importance signal detection."""
 
@@ -467,12 +547,14 @@ class TestRegexExtraction:
         assert kw["category"] == ConceptCategory.RELATIONSHIP
 
     async def test_regex_passes_category_importance(self, mock_brain: AsyncMock) -> None:
-        """Regex extraction passes category-based importance to learn_concept."""
+        """Regex extraction passes category × novelty importance to learn_concept."""
+        # Mock search returns empty → novelty = 1.0
+        mock_brain.search = AsyncMock(return_value=[])
         phase = ReflectPhase(mock_brain)
         await phase.process(_perception("My name is Guipe"), _response(), MIND, CONV)
         kw = mock_brain.learn_concept.call_args.kwargs
-        # Entity category → importance = 0.80
-        assert kw["importance"] == pytest.approx(0.80, abs=0.01)
+        # Entity category=0.80 → 0.60*0.80 + 0.40*1.0 = 0.88
+        assert kw["importance"] == pytest.approx(0.88, abs=0.01)
 
     async def test_regex_passes_source_confidence(self, mock_brain: AsyncMock) -> None:
         """Regex extraction passes regex_fallback confidence to learn_concept."""
