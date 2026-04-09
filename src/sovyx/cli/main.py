@@ -10,6 +10,7 @@ from rich.console import Console
 from rich.table import Table
 
 from sovyx import __version__
+from sovyx.cli.commands.brain_analyze import analyze_app
 from sovyx.cli.commands.dashboard import dashboard_app
 from sovyx.cli.commands.logs import logs_app
 from sovyx.cli.rpc_client import DaemonClient
@@ -23,6 +24,7 @@ app = typer.Typer(
 )
 brain_app = typer.Typer(name="brain", help="Brain memory commands")
 mind_app = typer.Typer(name="mind", help="Mind management commands")
+brain_app.add_typer(analyze_app)
 app.add_typer(brain_app)
 app.add_typer(mind_app)
 app.add_typer(logs_app)
