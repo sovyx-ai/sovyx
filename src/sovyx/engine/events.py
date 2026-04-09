@@ -183,6 +183,27 @@ class EpisodeEncoded(Event):
 
 
 @dataclasses.dataclass(frozen=True)
+class ConceptContradicted(Event):
+    """Emitted when incoming content contradicts an existing concept.
+
+    Carries enough context for downstream consumers (dashboards, alerts)
+    to surface contradiction events to the user.
+    """
+
+    concept_id: str = ""
+    old_content: str = ""
+    new_content: str = ""
+    old_confidence: float = 0.5
+    new_confidence: float = 0.5
+    relation: str = "CONTRADICTS"
+
+    @property
+    def category(self) -> EventCategory:
+        """Event category."""
+        return EventCategory.BRAIN
+
+
+@dataclasses.dataclass(frozen=True)
 class ConsolidationCompleted(Event):
     """Emitted when a memory consolidation cycle completes."""
 
