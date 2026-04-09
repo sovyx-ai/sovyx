@@ -152,21 +152,39 @@ _CATEGORY_MAP: dict[str, str] = {
 }
 
 # ── Importance by category ─────────────────────────────────────────────
-# Initial importance assigned at concept creation.
+# Initial importance assigned at concept creation based on category.
 # Higher = more likely to survive Ebbinghaus decay.
+# These values are used as the category baseline signal in the
+# multi-signal importance formula.
 
 _IMPORTANCE: dict[str, float] = {
-    "entity": 0.8,
-    "fact": 0.6,
-    "preference": 0.7,
-    "skill": 0.7,
-    "belief": 0.6,
-    "event": 0.7,
-    "relationship": 0.8,
+    "entity": 0.80,       # People, places, orgs — identity-critical
+    "relationship": 0.80,  # Social connections — rare, meaningful
+    "preference": 0.70,    # Personal taste — defines personality
+    "skill": 0.70,         # Capabilities — shapes responses
+    "event": 0.70,         # Time-bound — contextual anchors
+    "fact": 0.60,          # Verifiable info — common but useful
+    "belief": 0.60,        # Opinions — shapes worldview
 }
 
 # Default importance for unknown categories
 _DEFAULT_IMPORTANCE = 0.5
+
+# ── Source confidence mapping ──────────────────────────────────────────
+# Confidence assigned based on extraction quality.
+# Key = source type, Value = (floor, ceiling). Midpoint is used.
+# Higher confidence = more epistemic certainty about the information.
+
+_SOURCE_CONFIDENCE: dict[str, tuple[float, float]] = {
+    "llm_explicit": (0.75, 0.95),    # LLM extracted from clear user statement
+    "llm_inferred": (0.45, 0.70),    # LLM inferred (not directly stated)
+    "regex_fallback": (0.30, 0.55),  # Regex pattern match (less reliable)
+    "system": (0.90, 1.00),          # System-generated (identity, etc.)
+    "corroboration": (0.80, 1.00),   # Multiple sources agree
+}
+
+# Default confidence for unknown source types
+_DEFAULT_SOURCE_CONFIDENCE = (0.40, 0.60)
 
 # ── Sentiment heuristics for regex fallback ────────────────────────────
 # Maps pattern groups to default sentiment when LLM is unavailable.
@@ -346,6 +364,22 @@ def get_importance(category: str) -> float:
     return _IMPORTANCE.get(category, _DEFAULT_IMPORTANCE)
 
 
+def get_source_confidence(source: str) -> float:
+    """Return midpoint confidence for extraction source quality.
+
+    Maps the extraction method to an epistemic certainty score.
+    LLM explicit extraction → high confidence; regex fallback → lower.
+
+    Args:
+        source: Source type key (e.g. ``"llm_explicit"``, ``"regex_fallback"``).
+
+    Returns:
+        Confidence midpoint in [0.0, 1.0].
+    """
+    low, high = _SOURCE_CONFIDENCE.get(source, _DEFAULT_SOURCE_CONFIDENCE)
+    return (low + high) / 2
+
+
 def compute_episode_importance(
     message: str,
     num_concepts: int,
@@ -416,28 +450,37 @@ class ReflectPhase:
 
         # Extract concepts — LLM first, regex fallback
         extracted: list[ExtractedConcept] = []
+        extraction_source: str = "regex_fallback"
 
         if self._router:
             llm_extracted = await self._extract_with_llm(perception.content)
             if llm_extracted is not None:
                 extracted = llm_extracted
+                extraction_source = "llm_explicit"
 
         if not extracted:
             extracted = self._extract_with_regex(perception.content)
+            extraction_source = "regex_fallback"
 
-        # Learn extracted concepts
+        # Learn extracted concepts with category-based importance
+        # and source-quality-based confidence
         concept_ids: list[ConceptId] = []
         sentiments: list[float] = []
+        source_confidence = get_source_confidence(extraction_source)
+
         for ec in extracted:
             try:
                 resolved = resolve_category(ec.category)
                 category = ConceptCategory(resolved)
+                category_importance = get_importance(resolved)
                 cid = await self._brain.learn_concept(
                     mind_id=mind_id,
                     name=ec.name,
                     content=ec.content,
                     category=category,
                     source="conversation",
+                    importance=category_importance,
+                    confidence=source_confidence,
                     emotional_valence=ec.sentiment,
                 )
                 concept_ids.append(cid)
