@@ -92,6 +92,8 @@ def mock_brain() -> AsyncMock:
     brain.learn_concept = AsyncMock(return_value=ConceptId("c1"))
     brain.encode_episode = AsyncMock()
     brain.strengthen_connection = AsyncMock()
+    # Default novelty: moderate (0.50) — override in specific tests
+    brain.compute_novelty = AsyncMock(return_value=0.50)
     return brain
 
 
@@ -212,53 +214,55 @@ class TestSourceConfidence:
 
 
 class TestNoveltyDetection:
-    """Novelty-based importance modulation (TASK-04)."""
+    """Novelty-based importance modulation (TASK-04 + refinement TASK-01).
 
-    async def test_new_concept_high_novelty(self, mock_brain: AsyncMock) -> None:
-        """Completely new concept → novelty = 1.0."""
-        mock_brain.search = AsyncMock(return_value=[])
+    Tests use brain.compute_novelty() which encapsulates the 3-tier
+    strategy: embedding cosine → FTS5 → cold start.
+    """
+
+    async def test_high_novelty_new_concept(self, mock_brain: AsyncMock) -> None:
+        """New concept via compute_novelty → high novelty."""
+        mock_brain.compute_novelty = AsyncMock(return_value=0.95)
         phase = ReflectPhase(mock_brain)
-        novelty = await phase._compute_novelty_batch(["quantum physics"], MIND)
-        assert novelty["quantum physics"] == pytest.approx(1.0)
+        from sovyx.cognitive.reflect import ExtractedConcept
 
-    async def test_exact_match_low_novelty(self, mock_brain: AsyncMock) -> None:
-        """Exact name match → novelty ≈ 0.05."""
-        from sovyx.brain.models import Concept
-        from sovyx.engine.types import ConceptId
+        ec = ExtractedConcept(name="quantum physics", content="QM basics", category="fact")
+        novelty = await phase._compute_novelty_batch([ec], MIND)
+        assert novelty["quantum physics"] == pytest.approx(0.95, abs=0.01)
 
-        existing = Concept(
-            id=ConceptId("c1"), mind_id=MIND, name="quantum physics",
-        )
-        mock_brain.search = AsyncMock(return_value=[(existing, 0.9)])
+    async def test_low_novelty_known_concept(self, mock_brain: AsyncMock) -> None:
+        """Known concept → low novelty."""
+        mock_brain.compute_novelty = AsyncMock(return_value=0.05)
         phase = ReflectPhase(mock_brain)
-        novelty = await phase._compute_novelty_batch(["quantum physics"], MIND)
+        from sovyx.cognitive.reflect import ExtractedConcept
+
+        ec = ExtractedConcept(name="quantum physics", content="QM basics", category="fact")
+        novelty = await phase._compute_novelty_batch([ec], MIND)
         assert novelty["quantum physics"] == pytest.approx(0.05)
 
-    async def test_partial_match_medium_novelty(self, mock_brain: AsyncMock) -> None:
-        """Similar but not exact match → moderate novelty."""
-        from sovyx.brain.models import Concept
-        from sovyx.engine.types import ConceptId
-
-        similar = Concept(
-            id=ConceptId("c1"), mind_id=MIND, name="quantum computing",
-        )
-        mock_brain.search = AsyncMock(return_value=[(similar, 0.6)])
+    async def test_cold_start_novelty(self, mock_brain: AsyncMock) -> None:
+        """Cold start (few concepts in category) → 0.70."""
+        mock_brain.compute_novelty = AsyncMock(return_value=0.70)
         phase = ReflectPhase(mock_brain)
-        novelty = await phase._compute_novelty_batch(["quantum physics"], MIND)
-        score = novelty["quantum physics"]
-        assert 0.05 < score < 0.9  # noqa: PLR2004
+        from sovyx.cognitive.reflect import ExtractedConcept
+
+        ec = ExtractedConcept(name="new topic", content="something", category="fact")
+        novelty = await phase._compute_novelty_batch([ec], MIND)
+        assert novelty["new topic"] == pytest.approx(0.70)
 
     async def test_novelty_error_defaults_moderate(self, mock_brain: AsyncMock) -> None:
         """On error, novelty defaults to 0.5."""
-        mock_brain.search = AsyncMock(side_effect=RuntimeError("db error"))
+        mock_brain.compute_novelty = AsyncMock(side_effect=RuntimeError("db error"))
         phase = ReflectPhase(mock_brain)
-        novelty = await phase._compute_novelty_batch(["test"], MIND)
+        from sovyx.cognitive.reflect import ExtractedConcept
+
+        ec = ExtractedConcept(name="test", content="test", category="fact")
+        novelty = await phase._compute_novelty_batch([ec], MIND)
         assert novelty["test"] == pytest.approx(0.5)
 
     async def test_novelty_affects_llm_importance(self, mock_brain: AsyncMock) -> None:
         """High novelty boosts LLM-path importance."""
-        # New concept → novelty = 1.0
-        mock_brain.search = AsyncMock(return_value=[])
+        mock_brain.compute_novelty = AsyncMock(return_value=0.95)
 
         router = _mock_llm_response([{
             "name": "wormholes", "content": "Space tunnels",
@@ -270,19 +274,12 @@ class TestNoveltyDetection:
         phase = ReflectPhase(mock_brain, router, "fast")
         await phase.process(_perception("Tell me about wormholes"), _response(), MIND, CONV)
         kw = mock_brain.learn_concept.call_args.kwargs
-        # 0.35*0.7 + 0.15*0.50 + 0.10*0 + 0.15*1.0 + 0.25*0 = 0.245+0.075+0.15 = 0.47
+        # 0.35*0.7 + 0.15*0.50 + 0.10*0 + 0.15*0.95 + 0.25*0 ≈ 0.46
         assert kw["importance"] > 0.40  # noqa: PLR2004
 
     async def test_novelty_affects_regex_importance(self, mock_brain: AsyncMock) -> None:
         """Known concept via regex → lower importance from low novelty."""
-        from sovyx.brain.models import Concept
-        from sovyx.engine.types import ConceptId
-
-        existing = Concept(
-            id=ConceptId("c1"), mind_id=MIND, name="Guipe",
-        )
-        # Exact match → novelty = 0.05
-        mock_brain.search = AsyncMock(return_value=[(existing, 0.9)])
+        mock_brain.compute_novelty = AsyncMock(return_value=0.05)
 
         phase = ReflectPhase(mock_brain)
         await phase.process(_perception("My name is Guipe"), _response(), MIND, CONV)
@@ -548,13 +545,13 @@ class TestRegexExtraction:
 
     async def test_regex_passes_category_importance(self, mock_brain: AsyncMock) -> None:
         """Regex extraction passes category × novelty importance to learn_concept."""
-        # Mock search returns empty → novelty = 1.0
-        mock_brain.search = AsyncMock(return_value=[])
+        # compute_novelty returns high novelty (new concept)
+        mock_brain.compute_novelty = AsyncMock(return_value=0.95)
         phase = ReflectPhase(mock_brain)
         await phase.process(_perception("My name is Guipe"), _response(), MIND, CONV)
         kw = mock_brain.learn_concept.call_args.kwargs
-        # Entity category=0.80 → 0.60*0.80 + 0.40*1.0 = 0.88
-        assert kw["importance"] == pytest.approx(0.88, abs=0.01)
+        # Entity category=0.80 → 0.60*0.80 + 0.40*0.95 = 0.86
+        assert kw["importance"] == pytest.approx(0.86, abs=0.02)
 
     async def test_regex_passes_source_confidence(self, mock_brain: AsyncMock) -> None:
         """Regex extraction passes regex_fallback confidence to learn_concept."""

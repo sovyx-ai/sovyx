@@ -337,6 +337,64 @@ class EmbeddingEngine:
 
         return [row.tolist() for row in normalized]
 
+    # ── Category Centroid Cache ───────────────────────────────────────
+
+    async def compute_category_centroid(
+        self,
+        embeddings: list[list[float]],
+    ) -> list[float]:
+        """Compute the mean centroid of a set of embeddings.
+
+        Used to represent the "center of mass" of a concept category.
+        The centroid is L2-normalized for consistent cosine similarity
+        comparisons.
+
+        This is a pure computation (no model inference), so it's fast
+        and can be called frequently.
+
+        Args:
+            embeddings: List of L2-normalized embedding vectors.
+                Must all have the same dimensionality (384).
+
+        Returns:
+            L2-normalized centroid vector.
+
+        Raises:
+            ValueError: If embeddings list is empty.
+        """
+        if not embeddings:
+            msg = "Cannot compute centroid of empty embedding list"
+            raise ValueError(msg)
+
+        arr = np.array(embeddings, dtype=np.float32)
+        mean = arr.mean(axis=0)
+        norm = float(np.linalg.norm(mean))
+        if norm < 1e-9:
+            # Degenerate case: all embeddings cancel out
+            result: list[float] = mean.tolist()
+            return result
+        normalized: list[float] = (mean / norm).tolist()
+        return normalized
+
+    @staticmethod
+    def cosine_similarity(a: list[float], b: list[float]) -> float:
+        """Compute cosine similarity between two L2-normalized vectors.
+
+        Since both vectors are L2-normalized (from encode/centroid),
+        cosine similarity equals their dot product. This avoids redundant
+        norm computation.
+
+        Args:
+            a: First L2-normalized embedding vector.
+            b: Second L2-normalized embedding vector.
+
+        Returns:
+            Cosine similarity in [-1.0, 1.0]. Typically [0.0, 1.0] for
+            text embeddings.
+        """
+        dot = sum(x * y for x, y in zip(a, b, strict=False))
+        return max(-1.0, min(1.0, dot))
+
     @property
     def dimensions(self) -> int:
         """Embedding dimensionality (384 for E5-small-v2)."""

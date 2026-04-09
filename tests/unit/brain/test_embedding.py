@@ -386,6 +386,68 @@ class TestDownloadAndLoad:
         assert engine._tokenizer is mock_tok
 
 
+class TestCategoryCentroid:
+    """Category centroid computation (refinement TASK-01)."""
+
+    async def test_centroid_of_identical_vectors(self) -> None:
+        """Centroid of identical vectors = same vector."""
+        engine = EmbeddingEngine()
+        v = [1.0] + [0.0] * (MODEL_DIMENSIONS - 1)
+        centroid = await engine.compute_category_centroid([v, v, v])
+        assert len(centroid) == MODEL_DIMENSIONS
+        # Should be normalized version of [1, 0, 0, ...]
+        assert centroid[0] == pytest.approx(1.0, abs=0.001)
+
+    async def test_centroid_of_opposite_vectors(self) -> None:
+        """Centroid of opposite vectors → near-zero (degenerate)."""
+        engine = EmbeddingEngine()
+        v1 = [1.0] + [0.0] * (MODEL_DIMENSIONS - 1)
+        v2 = [-1.0] + [0.0] * (MODEL_DIMENSIONS - 1)
+        centroid = await engine.compute_category_centroid([v1, v2])
+        # Mean is [0, 0, ...] — degenerate case, returns raw mean
+        assert len(centroid) == MODEL_DIMENSIONS
+
+    async def test_centroid_empty_raises(self) -> None:
+        """Empty list → ValueError."""
+        engine = EmbeddingEngine()
+        with pytest.raises(ValueError, match="empty"):
+            await engine.compute_category_centroid([])
+
+    async def test_centroid_is_l2_normalized(self) -> None:
+        """Centroid output is L2-normalized."""
+        engine = EmbeddingEngine()
+        v1 = [0.6] + [0.8] + [0.0] * (MODEL_DIMENSIONS - 2)
+        v2 = [0.8] + [0.6] + [0.0] * (MODEL_DIMENSIONS - 2)
+        centroid = await engine.compute_category_centroid([v1, v2])
+        norm = math.sqrt(sum(x * x for x in centroid))
+        assert abs(norm - 1.0) < 0.01
+
+
+class TestCosineSimilarity:
+    """Cosine similarity utility (refinement TASK-01)."""
+
+    def test_identical_vectors(self) -> None:
+        v = [0.5] * 10
+        assert EmbeddingEngine.cosine_similarity(v, v) == pytest.approx(1.0, abs=0.01)
+
+    def test_orthogonal_vectors(self) -> None:
+        v1 = [1.0, 0.0]
+        v2 = [0.0, 1.0]
+        assert EmbeddingEngine.cosine_similarity(v1, v2) == pytest.approx(0.0, abs=0.01)
+
+    def test_opposite_vectors(self) -> None:
+        v1 = [1.0, 0.0]
+        v2 = [-1.0, 0.0]
+        assert EmbeddingEngine.cosine_similarity(v1, v2) == pytest.approx(-1.0, abs=0.01)
+
+    def test_clamped_to_valid_range(self) -> None:
+        """Result always in [-1.0, 1.0]."""
+        v1 = [100.0] * 10  # Not normalized
+        v2 = [100.0] * 10
+        result = EmbeddingEngine.cosine_similarity(v1, v2)
+        assert -1.0 <= result <= 1.0
+
+
 @pytest.mark.skipif(not _HAS_MODEL, reason="ONNX model not available")
 class TestEmbeddingEngineIntegration:
     """Integration tests with real ONNX model."""

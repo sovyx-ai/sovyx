@@ -533,9 +533,8 @@ class ReflectPhase:
         sentiments: list[float] = []
 
         # Pre-compute novelty for all concepts in batch
-        novelty_map = await self._compute_novelty_batch(
-            [ec.name for ec in extracted], mind_id
-        )
+        # Uses embedding cosine distance → FTS5 fallback → cold start
+        novelty_map = await self._compute_novelty_batch(extracted, mind_id)
 
         for ec in extracted:
             try:
@@ -664,49 +663,34 @@ class ReflectPhase:
 
     async def _compute_novelty_batch(
         self,
-        names: list[str],
+        extracted: list[ExtractedConcept],
         mind_id: MindId,
     ) -> dict[str, float]:
-        """Compute novelty score for each concept name.
+        """Compute novelty score for each extracted concept.
 
-        Uses BrainService.search() to check semantic overlap with existing
-        knowledge. High match score → low novelty. No match → high novelty.
-
-        Novelty scale:
-        - 1.0: completely new topic (no similar concepts found)
-        - 0.5: somewhat related to existing knowledge
-        - 0.0: exact duplicate (name match with high score)
+        Delegates to BrainService.compute_novelty() which uses a 3-tier
+        strategy: embedding cosine distance → FTS5 fallback → cold start.
 
         Args:
-            names: List of concept names to check.
-            mind_id: Mind to search against.
+            extracted: List of extracted concepts (name + category needed).
+            mind_id: Mind to compare against.
 
         Returns:
-            Dict mapping concept name → novelty score [0.0, 1.0].
+            Dict mapping concept name → novelty score [0.05, 1.0].
         """
         result: dict[str, float] = {}
-        for name in names:
+        for ec in extracted:
             try:
-                matches = await self._brain.search(name, mind_id, limit=3)
-                if not matches:
-                    result[name] = 1.0
-                    continue
-
-                # Best match score indicates how "known" this concept is
-                best_concept, best_score = matches[0]
-
-                # Exact name match = very low novelty
-                if best_concept.name.lower() == name.lower():
-                    result[name] = 0.05
-                    continue
-
-                # Convert search score to novelty (inverse relationship)
-                # High search score = low novelty
-                novelty = max(0.05, 1.0 - min(1.0, best_score * 1.5))
-                result[name] = novelty
+                resolved = resolve_category(ec.category)
+                novelty = await self._brain.compute_novelty(
+                    text=f"{ec.name}: {ec.content}" if ec.content else ec.name,
+                    category=resolved,
+                    mind_id=mind_id,
+                )
+                result[ec.name] = novelty
             except Exception:
-                logger.debug("novelty_check_failed", name=name)
-                result[name] = 0.5  # Default: moderate novelty on error
+                logger.debug("novelty_check_failed", name=ec.name)
+                result[ec.name] = 0.5
         return result
 
     async def _extract_with_llm(self, message: str) -> list[ExtractedConcept] | None:
