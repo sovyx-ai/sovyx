@@ -88,7 +88,12 @@ class TestQueryLogs:
 
     def test_malformed_lines_skipped(self, tmp_path: Path) -> None:
         f = tmp_path / "bad.log"
-        f.write_text('not json\n{"event": "good", "level": "info", "logger": "test"}\n{broken\n')
+        f.write_text(
+            "not json\n"
+            '{"event": "good", "level": "info", "logger": "test",'
+            ' "timestamp": "2026-04-04T10:00:00"}\n'
+            "{broken\n"
+        )
         result = query_logs(f)
         assert len(result) == 1
         assert result[0]["event"] == "good"
@@ -96,7 +101,14 @@ class TestQueryLogs:
     def test_search_in_full_entry(self, tmp_path: Path) -> None:
         """Search matches keys/values beyond event field."""
         f = tmp_path / "meta.log"
-        content = json.dumps({"event": "call", "level": "info", "model": "gpt-4o"})
+        content = json.dumps(
+            {
+                "event": "call",
+                "level": "info",
+                "model": "gpt-4o",
+                "timestamp": "2026-01-01T00:00:00",
+            }
+        )
         f.write_text(content + "\n")
         result = query_logs(f, search="gpt-4o")
         assert len(result) == 1
@@ -110,6 +122,7 @@ class TestQueryLogs:
                 "level": "info",
                 "logger": "test",
                 "details": {"inner_key": "secret_needle_here"},
+                "timestamp": "2026-01-01T00:00:00",
             }
         )
         f.write_text(entry + "\n")
@@ -126,6 +139,7 @@ class TestQueryLogs:
                 "level": "info",
                 "logger": "test",
                 "details": {"inner_key": "nothing_useful"},
+                "timestamp": "2026-01-01T00:00:00",
             }
         )
         f.write_text(entry + "\n")
@@ -146,6 +160,7 @@ class TestQueryLogs:
                         "logger": "sovyx.test",
                         "ts": "2026-04-04T10:00:00",
                         "pad": "x" * 50,
+                        "timestamp": f"2026-04-04T10:{i // 60:02d}:{i % 60:02d}",
                     }
                 )
             )
@@ -170,6 +185,7 @@ class TestQueryLogs:
                         "event": f"line_{i:03d}",
                         "level": "info",
                         "logger": "test",
+                        "timestamp": f"2026-01-01T00:{i // 60:02d}:{i % 60:02d}",
                     }
                 )
             )
@@ -197,7 +213,10 @@ class TestQueryLogs:
     ) -> None:
         """When _read_and_filter raises, query_logs catches and returns []."""
         f = tmp_path / "ok.log"
-        f.write_text(json.dumps({"event": "test", "level": "info"}) + "\n")
+        f.write_text(
+            json.dumps({"event": "test", "level": "info", "timestamp": "2026-01-01T00:00:00"})
+            + "\n"
+        )
 
         from sovyx.dashboard import logs as logs_mod
 
@@ -212,7 +231,14 @@ class TestQueryLogs:
     def test_filter_uses_severity_fallback(self, tmp_path: Path) -> None:
         """Level filter checks 'severity' field when 'level' is absent."""
         f = tmp_path / "severity.log"
-        entry = json.dumps({"event": "alt", "severity": "WARNING", "logger": "test"})
+        entry = json.dumps(
+            {
+                "event": "alt",
+                "severity": "WARNING",
+                "logger": "test",
+                "timestamp": "2026-01-01T00:00:00",
+            }
+        )
         f.write_text(entry + "\n")
         result = query_logs(f, level="WARNING")
         assert len(result) == 1
@@ -220,7 +246,14 @@ class TestQueryLogs:
     def test_filter_uses_module_fallback(self, tmp_path: Path) -> None:
         """Module filter checks 'module' field when 'logger' is absent."""
         f = tmp_path / "modfield.log"
-        entry = json.dumps({"event": "x", "level": "info", "module": "sovyx.alt"})
+        entry = json.dumps(
+            {
+                "event": "x",
+                "level": "info",
+                "module": "sovyx.alt",
+                "timestamp": "2026-01-01T00:00:00",
+            }
+        )
         f.write_text(entry + "\n")
         result = query_logs(f, module="sovyx.alt")
         assert len(result) == 1
@@ -228,7 +261,14 @@ class TestQueryLogs:
     def test_search_in_event_message_field(self, tmp_path: Path) -> None:
         """Search matches the 'message' field fallback."""
         f = tmp_path / "msg.log"
-        entry = json.dumps({"message": "deployment_ready", "level": "info", "logger": "t"})
+        entry = json.dumps(
+            {
+                "message": "deployment_ready",
+                "level": "info",
+                "logger": "t",
+                "timestamp": "2026-01-01T00:00:00",
+            }
+        )
         f.write_text(entry + "\n")
         result = query_logs(f, search="deployment")
         assert len(result) == 1
@@ -284,6 +324,7 @@ class TestQueryLogs:
                 "level": "info",
                 "logger": "test",
                 "items": ["alpha", "beta_target", "gamma"],
+                "timestamp": "2026-01-01T00:00:00",
             }
         )
         f.write_text(entry + "\n")
@@ -299,7 +340,14 @@ class TestQueryLogs:
         primary.write_text("")
 
         # Backup has the recent data
-        entry = json.dumps({"event": "from_backup", "level": "info", "logger": "test"})
+        entry = json.dumps(
+            {
+                "event": "from_backup",
+                "level": "info",
+                "logger": "test",
+                "timestamp": "2026-01-01T00:00:00",
+            }
+        )
         backup.write_text(entry + "\n")
 
         result = query_logs(primary)
@@ -315,7 +363,14 @@ class TestQueryLogs:
         assert not primary.exists()
 
         # Backup exists
-        entry = json.dumps({"event": "rotated", "level": "info", "logger": "test"})
+        entry = json.dumps(
+            {
+                "event": "rotated",
+                "level": "info",
+                "logger": "test",
+                "timestamp": "2026-01-01T00:00:00",
+            }
+        )
         backup.write_text(entry + "\n")
 
         result = query_logs(primary)
@@ -328,3 +383,95 @@ class TestQueryLogs:
         primary = tmp_path / "sovyx.log"
         result = query_logs(primary)
         assert result == []
+
+    # ── Schema normalization tests ──
+
+    def test_normalize_severity_to_level(self, tmp_path: Path) -> None:
+        """'severity' field is normalized to 'level'."""
+        f = tmp_path / "norm.log"
+        entry = json.dumps(
+            {"event": "test", "severity": "warning", "timestamp": "2026-01-01T00:00:00"}
+        )
+        f.write_text(entry + "\n")
+        result = query_logs(f)
+        assert result[0]["level"] == "WARNING"
+        assert "severity" not in result[0]
+
+    def test_normalize_message_to_event(self, tmp_path: Path) -> None:
+        """'message' field is normalized to 'event'."""
+        f = tmp_path / "norm.log"
+        entry = json.dumps(
+            {"message": "hello", "level": "info", "timestamp": "2026-01-01T00:00:00"}
+        )
+        f.write_text(entry + "\n")
+        result = query_logs(f)
+        assert result[0]["event"] == "hello"
+
+    def test_normalize_ts_to_timestamp(self, tmp_path: Path) -> None:
+        """'ts' field is normalized to 'timestamp'."""
+        f = tmp_path / "norm.log"
+        entry = json.dumps({"event": "test", "level": "info", "ts": "2026-01-01T00:00:00"})
+        f.write_text(entry + "\n")
+        result = query_logs(f)
+        assert result[0]["timestamp"] == "2026-01-01T00:00:00"
+        assert "ts" not in result[0]
+
+    def test_normalize_module_to_logger(self, tmp_path: Path) -> None:
+        """'module' field is normalized to 'logger'."""
+        f = tmp_path / "norm.log"
+        entry = json.dumps(
+            {
+                "event": "test",
+                "level": "info",
+                "module": "sovyx.alt",
+                "timestamp": "2026-01-01T00:00:00",
+            }
+        )
+        f.write_text(entry + "\n")
+        result = query_logs(f)
+        assert result[0]["logger"] == "sovyx.alt"
+
+    def test_discard_entry_without_timestamp(self, tmp_path: Path) -> None:
+        """Entry missing both 'timestamp' and 'ts' is discarded."""
+        f = tmp_path / "norm.log"
+        entry = json.dumps(
+            {"event": "orphan", "level": "info"}
+        )
+        f.write_text(entry + "\n")
+        result = query_logs(f)
+        assert result == []
+
+    def test_discard_entry_without_event(self, tmp_path: Path) -> None:
+        """Entry missing both 'event' and 'message' is discarded."""
+        f = tmp_path / "norm.log"
+        entry = json.dumps({"level": "info", "timestamp": "2026-01-01T00:00:00"})
+        f.write_text(entry + "\n")
+        result = query_logs(f)
+        assert result == []
+
+    def test_normal_entry_unchanged(self, tmp_path: Path) -> None:
+        """Standard entry with all 4 fields passes through unchanged."""
+        f = tmp_path / "norm.log"
+        entry = json.dumps(
+            {
+                "event": "test",
+                "level": "INFO",
+                "logger": "sovyx.engine",
+                "timestamp": "2026-01-01T00:00:00",
+                "extra": "preserved",
+            }
+        )
+        f.write_text(entry + "\n")
+        result = query_logs(f)
+        assert result[0]["event"] == "test"
+        assert result[0]["level"] == "INFO"
+        assert result[0]["logger"] == "sovyx.engine"
+        assert result[0]["extra"] == "preserved"
+
+    def test_level_defaults_to_info(self, tmp_path: Path) -> None:
+        """Missing level and severity → defaults to INFO."""
+        f = tmp_path / "norm.log"
+        entry = json.dumps({"event": "test", "timestamp": "2026-01-01T00:00:00"})
+        f.write_text(entry + "\n")
+        result = query_logs(f)
+        assert result[0]["level"] == "INFO"
