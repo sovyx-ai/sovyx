@@ -1622,6 +1622,41 @@ class TestEpisodeImportance:
         assert imp >= 0.7
 
 
+    def test_high_concept_importance_raises_episode(self) -> None:
+        """Concepts with high importance → episode importance rises."""
+        base = compute_episode_importance("test message", 2, 0.0)
+        boosted = compute_episode_importance(
+            "test message", 2, 0.0,
+            concept_importances=[0.95, 0.90],
+        )
+        assert boosted > base
+
+    def test_low_concept_importance_lowers_episode(self) -> None:
+        """Concepts with low importance → episode stays low."""
+        imp = compute_episode_importance(
+            "test message", 2, 0.0,
+            concept_importances=[0.1, 0.1],
+        )
+        assert imp < 0.5  # noqa: PLR2004
+
+    def test_concept_importance_bounded(self) -> None:
+        """With concept importances, still in [0.1, 1.0]."""
+        low = compute_episode_importance(
+            "", 0, 0.0, concept_importances=[0.0],
+        )
+        high = compute_episode_importance(
+            "x" * 1000, 10, 1.0, concept_importances=[1.0] * 10,
+        )
+        assert low >= 0.1
+        assert high <= 1.0
+
+    def test_empty_concept_importances_fallback(self) -> None:
+        """Empty list → falls back to original formula."""
+        with_empty = compute_episode_importance("hi", 1, 0.0, concept_importances=[])
+        without = compute_episode_importance("hi", 1, 0.0)
+        assert with_empty == pytest.approx(without, abs=0.01)
+
+
 class TestConceptsMentioned:
     """concepts_mentioned wiring from reflect to episode."""
 
@@ -1658,12 +1693,14 @@ class TestConceptsMentioned:
                 "content": "loves Rust",
                 "category": "skill",
                 "sentiment": 0.8,
+                "importance": 0.9,
             },
             {
                 "name": "Memory Safety",
                 "content": "cares about memory",
                 "category": "belief",
                 "sentiment": 0.6,
+                "importance": 0.85,
             },
         ]
         router = _mock_llm_response(concepts)
