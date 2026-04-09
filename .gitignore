@@ -67,5 +67,5 @@ site/
 
 # Context privado (specs, patterns, decisões — NUNCA vai pro GitHub)
 .context/
-CLAUDE.md
+# CLAUDE.md — kept in repo for Claude Code + Cursor
 .cursorrules
