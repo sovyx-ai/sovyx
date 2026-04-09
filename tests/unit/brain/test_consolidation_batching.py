@@ -21,8 +21,12 @@ if _ALERTS_KEY not in sys.modules:
     _stub = types.ModuleType(_ALERTS_KEY)
     # Provide the names that sovyx.observability.__init__ imports
     for _name in (
-        "Alert", "AlertFired", "AlertManager", "AlertRule",
-        "AlertSeverity", "create_default_alert_manager",
+        "Alert",
+        "AlertFired",
+        "AlertManager",
+        "AlertRule",
+        "AlertSeverity",
+        "create_default_alert_manager",
     ):
         setattr(_stub, _name, type(_name, (), {}))
     sys.modules[_ALERTS_KEY] = _stub
@@ -91,14 +95,10 @@ def consolidation_deps() -> dict[str, AsyncMock]:
 class TestScoreRecalculationBatching:
     """Batched score recalculation with timeout."""
 
-    async def test_batching_flushes_at_500(
-        self, consolidation_deps: dict[str, AsyncMock]
-    ) -> None:
+    async def test_batching_flushes_at_500(self, consolidation_deps: dict[str, AsyncMock]) -> None:
         """750 concepts → 2 batches (500 + 250)."""
         concepts = [_concept(f"c{i}", i) for i in range(750)]
-        consolidation_deps["concept_repo"].get_by_mind = AsyncMock(
-            return_value=concepts
-        )
+        consolidation_deps["concept_repo"].get_by_mind = AsyncMock(return_value=concepts)
 
         cycle = ConsolidationCycle(**consolidation_deps)  # type: ignore[arg-type]
         updated = await cycle._recalculate_scores(MIND)
@@ -114,9 +114,7 @@ class TestScoreRecalculationBatching:
     ) -> None:
         """100 concepts → single batch."""
         concepts = [_concept(f"c{i}", i) for i in range(100)]
-        consolidation_deps["concept_repo"].get_by_mind = AsyncMock(
-            return_value=concepts
-        )
+        consolidation_deps["concept_repo"].get_by_mind = AsyncMock(return_value=concepts)
 
         cycle = ConsolidationCycle(**consolidation_deps)  # type: ignore[arg-type]
         updated = await cycle._recalculate_scores(MIND)
@@ -130,9 +128,7 @@ class TestScoreRecalculationBatching:
     ) -> None:
         """Timeout fires → partial processing."""
         concepts = [_concept(f"c{i}", i) for i in range(1000)]
-        consolidation_deps["concept_repo"].get_by_mind = AsyncMock(
-            return_value=concepts
-        )
+        consolidation_deps["concept_repo"].get_by_mind = AsyncMock(return_value=concepts)
 
         cycle = ConsolidationCycle(**consolidation_deps)  # type: ignore[arg-type]
         # Force immediate timeout
@@ -143,19 +139,13 @@ class TestScoreRecalculationBatching:
         # Should have processed fewer than 1000 (timeout stops early)
         assert updated < 1000  # noqa: PLR2004
 
-    async def test_no_changes_no_writes(
-        self, consolidation_deps: dict[str, AsyncMock]
-    ) -> None:
+    async def test_no_changes_no_writes(self, consolidation_deps: dict[str, AsyncMock]) -> None:
         """If scores don't change, no DB writes."""
         concepts = [_concept(f"c{i}", i) for i in range(10)]
         # Scorer returns same values as existing
         consolidation_deps["importance_scorer"].recalculate = lambda **kw: 0.5
-        consolidation_deps["confidence_scorer"].score_staleness_decay = (
-            lambda **kw: 0.5
-        )
-        consolidation_deps["concept_repo"].get_by_mind = AsyncMock(
-            return_value=concepts
-        )
+        consolidation_deps["confidence_scorer"].score_staleness_decay = lambda **kw: 0.5
+        consolidation_deps["concept_repo"].get_by_mind = AsyncMock(return_value=concepts)
 
         cycle = ConsolidationCycle(**consolidation_deps)  # type: ignore[arg-type]
         updated = await cycle._recalculate_scores(MIND)
@@ -178,9 +168,7 @@ class TestNormalizationBatching:
         for c in concepts:
             c.importance = 0.50 + (0.001 * (hash(c.name) % 10))
 
-        consolidation_deps["concept_repo"].get_by_mind = AsyncMock(
-            return_value=concepts
-        )
+        consolidation_deps["concept_repo"].get_by_mind = AsyncMock(return_value=concepts)
 
         cycle = ConsolidationCycle(**consolidation_deps)  # type: ignore[arg-type]
         cycle._normalizer = ScoreNormalizer()
@@ -188,9 +176,7 @@ class TestNormalizationBatching:
         normalized = await cycle._normalize_scores(MIND)
 
         if normalized > 0:
-            calls = consolidation_deps[
-                "concept_repo"
-            ].batch_update_scores.call_args_list
+            calls = consolidation_deps["concept_repo"].batch_update_scores.call_args_list
             if normalized > 500:  # noqa: PLR2004
                 assert len(calls) >= 2  # noqa: PLR2004
 
@@ -231,6 +217,7 @@ class TestShannonEntropy:
     def test_entropy_nonnegative(self) -> None:
         """Entropy is always >= 0."""
         import random
+
         rng = random.Random(42)
         for _ in range(10):
             values = [rng.random() for _ in range(50)]
@@ -247,9 +234,7 @@ class TestScoreDrift:
         concepts = [_concept(f"c{i}", i) for i in range(100)]
         for i, c in enumerate(concepts):
             c.importance = i / 100  # Perfect spread
-        consolidation_deps["concept_repo"].get_by_mind = AsyncMock(
-            return_value=concepts
-        )
+        consolidation_deps["concept_repo"].get_by_mind = AsyncMock(return_value=concepts)
 
         cycle = ConsolidationCycle(**consolidation_deps)  # type: ignore[arg-type]
         # Should not raise or log warnings
@@ -262,23 +247,17 @@ class TestScoreDrift:
         concepts = [_concept(f"c{i}", i) for i in range(100)]
         for c in concepts:
             c.importance = 0.5  # All identical
-        consolidation_deps["concept_repo"].get_by_mind = AsyncMock(
-            return_value=concepts
-        )
+        consolidation_deps["concept_repo"].get_by_mind = AsyncMock(return_value=concepts)
 
         cycle = ConsolidationCycle(**consolidation_deps)  # type: ignore[arg-type]
         # Should run without error; warning is logged (not raised)
         await cycle._check_score_drift(MindId("test"))
         # Entropy of all-same = 0.0 < 1.0 (critical threshold)
 
-    async def test_few_concepts_skipped(
-        self, consolidation_deps: dict[str, AsyncMock]
-    ) -> None:
+    async def test_few_concepts_skipped(self, consolidation_deps: dict[str, AsyncMock]) -> None:
         """< 5 concepts → skip drift check."""
         concepts = [_concept(f"c{i}", i) for i in range(3)]
-        consolidation_deps["concept_repo"].get_by_mind = AsyncMock(
-            return_value=concepts
-        )
+        consolidation_deps["concept_repo"].get_by_mind = AsyncMock(return_value=concepts)
 
         cycle = ConsolidationCycle(**consolidation_deps)  # type: ignore[arg-type]
         await cycle._check_score_drift(MindId("test"))

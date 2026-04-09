@@ -200,7 +200,8 @@ class HebbianLearning:
                     concept = await self._concepts.get(cid)
                     if concept is not None:
                         new_imp = self._scorer.score_access_boost(
-                            concept.importance, concept.access_count,
+                            concept.importance,
+                            concept.access_count,
                         )
                         boost = new_imp - concept.importance
                         # Dampen boost above 0.90 (soft ceiling consistency)

@@ -62,8 +62,7 @@ class WorkingMemory:
                 weakest = min(
                     self._activations,
                     key=lambda k: (
-                        self._activations.get(k, 0.0) * 0.6
-                        + self._importance.get(k, 0.5) * 0.4
+                        self._activations.get(k, 0.0) * 0.6 + self._importance.get(k, 0.5) * 0.4
                     ),
                 )
                 del self._activations[weakest]

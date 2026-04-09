@@ -17,8 +17,12 @@ _ALERTS_KEY = "sovyx.observability.alerts"
 if _ALERTS_KEY not in sys.modules:
     _stub = types.ModuleType(_ALERTS_KEY)
     for _name in (
-        "Alert", "AlertFired", "AlertManager", "AlertRule",
-        "AlertSeverity", "create_default_alert_manager",
+        "Alert",
+        "AlertFired",
+        "AlertManager",
+        "AlertRule",
+        "AlertSeverity",
+        "create_default_alert_manager",
     ):
         setattr(_stub, _name, type(_name, (), {}))
     sys.modules[_ALERTS_KEY] = _stub

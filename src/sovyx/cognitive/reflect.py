@@ -37,10 +37,10 @@ class ExtractedConcept:
     name: str
     content: str
     category: str
-    sentiment: float = 0.0       # -1.0 (negative) to 1.0 (positive)
-    importance: float = 0.5      # LLM-assessed importance (0.0-1.0)
-    confidence: float = 0.7      # LLM-assessed confidence (0.0-1.0)
-    explicit: bool = False       # User explicitly asked to remember
+    sentiment: float = 0.0  # -1.0 (negative) to 1.0 (positive)
+    importance: float = 0.5  # LLM-assessed importance (0.0-1.0)
+    confidence: float = 0.7  # LLM-assessed confidence (0.0-1.0)
+    explicit: bool = False  # User explicitly asked to remember
     source_quality: str = "explicit"  # "explicit" or "inferred"
 
 
@@ -181,13 +181,13 @@ _CATEGORY_MAP: dict[str, str] = {
 # multi-signal importance formula.
 
 _IMPORTANCE: dict[str, float] = {
-    "entity": 0.80,       # People, places, orgs — identity-critical
+    "entity": 0.80,  # People, places, orgs — identity-critical
     "relationship": 0.80,  # Social connections — rare, meaningful
-    "preference": 0.70,    # Personal taste — defines personality
-    "skill": 0.70,         # Capabilities — shapes responses
-    "event": 0.70,         # Time-bound — contextual anchors
-    "fact": 0.60,          # Verifiable info — common but useful
-    "belief": 0.60,        # Opinions — shapes worldview
+    "preference": 0.70,  # Personal taste — defines personality
+    "skill": 0.70,  # Capabilities — shapes responses
+    "event": 0.70,  # Time-bound — contextual anchors
+    "fact": 0.60,  # Verifiable info — common but useful
+    "belief": 0.60,  # Opinions — shapes worldview
 }
 
 # Default importance for unknown categories
@@ -199,11 +199,11 @@ _DEFAULT_IMPORTANCE = 0.5
 # Higher confidence = more epistemic certainty about the information.
 
 _SOURCE_CONFIDENCE: dict[str, tuple[float, float]] = {
-    "llm_explicit": (0.75, 0.95),    # LLM extracted from clear user statement
-    "llm_inferred": (0.45, 0.70),    # LLM inferred (not directly stated)
+    "llm_explicit": (0.75, 0.95),  # LLM extracted from clear user statement
+    "llm_inferred": (0.45, 0.70),  # LLM inferred (not directly stated)
     "regex_fallback": (0.30, 0.55),  # Regex pattern match (less reliable)
-    "system": (0.90, 1.00),          # System-generated (identity, etc.)
-    "corroboration": (0.80, 1.00),   # Multiple sources agree
+    "system": (0.90, 1.00),  # System-generated (identity, etc.)
+    "corroboration": (0.80, 1.00),  # Multiple sources agree
 }
 
 # Default confidence for unknown source types

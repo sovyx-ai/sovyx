@@ -265,12 +265,20 @@ class TestNoveltyDetection:
         """High novelty boosts LLM-path importance."""
         mock_brain.compute_novelty = AsyncMock(return_value=0.95)
 
-        router = _mock_llm_response([{
-            "name": "wormholes", "content": "Space tunnels",
-            "category": "fact", "sentiment": 0.0,
-            "importance": 0.7, "confidence": 0.8,
-            "explicit": False, "source_quality": "explicit",
-        }])
+        router = _mock_llm_response(
+            [
+                {
+                    "name": "wormholes",
+                    "content": "Space tunnels",
+                    "category": "fact",
+                    "sentiment": 0.0,
+                    "importance": 0.7,
+                    "confidence": 0.8,
+                    "explicit": False,
+                    "source_quality": "explicit",
+                }
+            ]
+        )
 
         phase = ReflectPhase(mock_brain, router, "fast")
         await phase.process(_perception("Tell me about wormholes"), _response(), MIND, CONV)
@@ -1622,12 +1630,13 @@ class TestEpisodeImportance:
         imp = compute_episode_importance(msg, 4, 0.8)
         assert imp >= 0.7
 
-
     def test_high_concept_importance_raises_episode(self) -> None:
         """Concepts with high importance → episode importance rises."""
         base = compute_episode_importance("test message", 2, 0.0)
         boosted = compute_episode_importance(
-            "test message", 2, 0.0,
+            "test message",
+            2,
+            0.0,
             concept_importances=[0.95, 0.90],
         )
         assert boosted > base
@@ -1635,7 +1644,9 @@ class TestEpisodeImportance:
     def test_low_concept_importance_lowers_episode(self) -> None:
         """Concepts with low importance → episode stays low."""
         imp = compute_episode_importance(
-            "test message", 2, 0.0,
+            "test message",
+            2,
+            0.0,
             concept_importances=[0.1, 0.1],
         )
         assert imp < 0.5  # noqa: PLR2004
@@ -1643,10 +1654,16 @@ class TestEpisodeImportance:
     def test_concept_importance_bounded(self) -> None:
         """With concept importances, still in [0.1, 1.0]."""
         low = compute_episode_importance(
-            "", 0, 0.0, concept_importances=[0.0],
+            "",
+            0,
+            0.0,
+            concept_importances=[0.0],
         )
         high = compute_episode_importance(
-            "x" * 1000, 10, 1.0, concept_importances=[1.0] * 10,
+            "x" * 1000,
+            10,
+            1.0,
+            concept_importances=[1.0] * 10,
         )
         assert low >= 0.1
         assert high <= 1.0

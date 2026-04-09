@@ -177,7 +177,9 @@ class TestHebbianImportanceBoost:
         ids = await _seed_concepts(concept_repo, "A", "B")
         scorer = ImportanceScorer()
         hebbian = HebbianLearning(
-            relation_repo, concept_repo=concept_repo, importance_scorer=scorer,
+            relation_repo,
+            concept_repo=concept_repo,
+            importance_scorer=scorer,
         )
 
         # Set high co-activation to trigger boost
@@ -207,7 +209,9 @@ class TestHebbianImportanceBoost:
 
         scorer = ImportanceScorer()
         hebbian = HebbianLearning(
-            relation_repo, concept_repo=concept_repo, importance_scorer=scorer,
+            relation_repo,
+            concept_repo=concept_repo,
+            importance_scorer=scorer,
         )
         activations = {ids[0]: 0.9, ids[1]: 0.9}
         await hebbian.strengthen(ids, activations)
@@ -225,7 +229,8 @@ class TestHebbianImportanceBoost:
         """Without scorer, falls back to flat +0.02 boost."""
         ids = await _seed_concepts(concept_repo, "C", "D")
         hebbian = HebbianLearning(
-            relation_repo, concept_repo=concept_repo,
+            relation_repo,
+            concept_repo=concept_repo,
         )  # No scorer
         activations = {ids[0]: 0.9, ids[1]: 0.9}
         await hebbian.strengthen(ids, activations)
@@ -245,7 +250,9 @@ class TestHebbianImportanceBoost:
         ids = await _seed_concepts(concept_repo, "E", "F")
         scorer = ImportanceScorer()
         hebbian = HebbianLearning(
-            relation_repo, concept_repo=concept_repo, importance_scorer=scorer,
+            relation_repo,
+            concept_repo=concept_repo,
+            importance_scorer=scorer,
         )
         # Low co-activation (below 0.7 threshold)
         activations = {ids[0]: 0.3, ids[1]: 0.3}

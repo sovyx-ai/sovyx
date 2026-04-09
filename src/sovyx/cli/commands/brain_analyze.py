@@ -139,12 +139,17 @@ async def _analyze_scores_async(
     conf_stats = _analyze_scores(confidences, "confidence")
 
     if output_json:
-        console.print(json.dumps({
-            "mind_id": mind_id,
-            "concepts": len(rows),
-            "importance": imp_stats,
-            "confidence": conf_stats,
-        }, indent=2))
+        console.print(
+            json.dumps(
+                {
+                    "mind_id": mind_id,
+                    "concepts": len(rows),
+                    "importance": imp_stats,
+                    "confidence": conf_stats,
+                },
+                indent=2,
+            )
+        )
         return
 
     # Rich table output

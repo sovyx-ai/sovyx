@@ -141,7 +141,10 @@ async def detect_contradiction(
     if llm_router is not None:
         try:
             return await _detect_via_llm(
-                old_content, new_content, llm_router, fast_model,
+                old_content,
+                new_content,
+                llm_router,
+                fast_model,
             )
         except Exception:
             logger.debug(

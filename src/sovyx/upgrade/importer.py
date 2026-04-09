@@ -462,9 +462,15 @@ class MindImporter:
             Number of concepts re-scored.
         """
         category_scores: dict[str, float] = {
-            "entity": 0.80, "preference": 0.70, "skill": 0.65,
-            "belief": 0.75, "relationship": 0.85, "goal": 0.80,
-            "fact": 0.50, "emotion": 0.60, "memory": 0.70,
+            "entity": 0.80,
+            "preference": 0.70,
+            "skill": 0.65,
+            "belief": 0.75,
+            "relationship": 0.85,
+            "goal": 0.80,
+            "fact": 0.50,
+            "emotion": 0.60,
+            "memory": 0.70,
         }
 
         async with self._pool.write() as conn:

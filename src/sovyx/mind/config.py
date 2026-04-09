@@ -133,13 +133,17 @@ class ScoringConfig(BaseModel):
     def validate_weight_sums(self) -> ScoringConfig:
         """Ensure importance and confidence weights each sum to 1.0."""
         imp_sum = (
-            self.importance_category + self.importance_llm
-            + self.importance_emotional + self.importance_novelty
+            self.importance_category
+            + self.importance_llm
+            + self.importance_emotional
+            + self.importance_novelty
             + self.importance_explicit
         )
         conf_sum = (
-            self.confidence_source + self.confidence_llm
-            + self.confidence_explicitness + self.confidence_richness
+            self.confidence_source
+            + self.confidence_llm
+            + self.confidence_explicitness
+            + self.confidence_richness
         )
         if abs(imp_sum - 1.0) > 0.01:
             msg = f"Importance weights must sum to 1.0, got {imp_sum:.3f}"
