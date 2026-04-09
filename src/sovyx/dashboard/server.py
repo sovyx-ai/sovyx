@@ -925,9 +925,7 @@ class DashboardServer:
 
                 async def _llm_status() -> list[tuple[str, bool]]:
                     return [
-                        (p.name, p.is_available)
-                        for p in router._providers
-                        if p.name != "ollama"
+                        (p.name, p.is_available) for p in router._providers if p.name != "ollama"
                     ]
 
                 llm_status_fn = _llm_status
@@ -997,7 +995,7 @@ class DashboardServer:
                 guard = await self._registry.resolve(CostGuard)
                 daily_budget = guard._daily_budget
         except Exception:  # noqa: BLE001
-            pass
+            logger.debug("health_cost_budget_wire_failed")
 
         registry.register(CostBudgetCheck(get_spend_fn=cost_spend_fn, daily_budget=daily_budget))
 

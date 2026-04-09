@@ -7,7 +7,6 @@ returns the expected checks.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
@@ -15,10 +14,8 @@ import pytest
 
 from sovyx.observability.health import (
     CheckStatus,
-    HealthRegistry,
     LLMReachableCheck,
 )
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -46,7 +43,7 @@ def _make_registry(services: dict[type, Any] | None = None) -> MagicMock:
     def _is_registered(cls: type) -> bool:
         return cls in services
 
-    async def _resolve(cls: type) -> Any:
+    async def _resolve(cls: type) -> Any:  # noqa: ANN401
         return services[cls]
 
     registry.is_registered = _is_registered
@@ -181,7 +178,7 @@ class TestLLMProviderDetection:
 
 def _make_llm_callback(
     providers: list[MagicMock],
-) -> Any:
+) -> Any:  # noqa: ANN401
     """Create an async callback matching LLMReachableCheck interface."""
 
     async def _fn() -> list[tuple[str, bool]]:
@@ -199,7 +196,14 @@ class TestHealthDeduplication:
     def test_no_duplicate_check_names(self) -> None:
         """Offline (4) + online (6) should produce 10 unique names."""
         offline_names = {"Disk Space", "RAM", "CPU", "Embedding Model"}
-        online_names = {"Database", "Brain Index", "LLM Providers", "Channels", "Consolidation", "Cost Budget"}
+        online_names = {
+            "Database",
+            "Brain Index",
+            "LLM Providers",
+            "Channels",
+            "Consolidation",
+            "Cost Budget",
+        }
 
         # No overlap between the two tiers
         overlap = offline_names & online_names
