@@ -141,7 +141,7 @@ def _validate_config(config: PiperConfig) -> None:
 # Sentence splitting
 # ---------------------------------------------------------------------------
 
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])[ \t]+")
 
 
 def _split_sentences(text: str) -> list[str]:
