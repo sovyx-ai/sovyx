@@ -344,6 +344,38 @@ class RelationRepository:
 
         return transferred
 
+    async def get_degree_centrality(
+        self,
+        mind_id: MindId,
+    ) -> dict[str, tuple[int, float]]:
+        """Return (degree, avg_weight) per concept for importance scoring.
+
+        Counts bidirectional relations (both source and target) and
+        computes average weight per concept. Only includes concepts
+        belonging to the given mind.
+
+        Args:
+            mind_id: Mind to compute centrality for.
+
+        Returns:
+            Dict mapping concept_id → (degree, avg_weight).
+        """
+        async with self._pool.read() as conn:
+            cursor = await conn.execute(
+                """SELECT concept_id, COUNT(*) as degree, AVG(weight) as avg_w
+                FROM (
+                    SELECT source_id as concept_id, weight FROM relations
+                    WHERE source_id IN (SELECT id FROM concepts WHERE mind_id = ?)
+                    UNION ALL
+                    SELECT target_id as concept_id, weight FROM relations
+                    WHERE target_id IN (SELECT id FROM concepts WHERE mind_id = ?)
+                )
+                GROUP BY concept_id""",
+                (str(mind_id), str(mind_id)),
+            )
+            rows = await cursor.fetchall()
+        return {str(r[0]): (int(r[1]), float(r[2])) for r in rows}
+
     @staticmethod
     def _row_to_relation(row: object) -> Relation:
         """Convert a database row to a Relation model."""

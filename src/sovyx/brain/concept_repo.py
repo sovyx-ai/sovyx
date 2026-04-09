@@ -353,6 +353,33 @@ class ConceptRepository:
 
         return False
 
+    async def batch_update_scores(
+        self,
+        updates: list[tuple[ConceptId, float, float]],
+    ) -> int:
+        """Batch update importance + confidence for multiple concepts.
+
+        Used by consolidation to apply recalculated scores efficiently
+        in a single transaction.
+
+        Args:
+            updates: List of (concept_id, new_importance, new_confidence).
+
+        Returns:
+            Number of concepts updated.
+        """
+        if not updates:
+            return 0
+        async with self._pool.write() as conn:
+            await conn.executemany(
+                """UPDATE concepts
+                SET importance = ?, confidence = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?""",
+                [(imp, conf, str(cid)) for cid, imp, conf in updates],
+            )
+            await conn.commit()
+        return len(updates)
+
     async def count(self, mind_id: MindId) -> int:
         """Count concepts for a mind."""
         async with self._pool.read() as conn:
