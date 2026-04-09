@@ -116,7 +116,11 @@ class SpreadingActivation:
         self,
         concept_ids: list[ConceptId],
     ) -> list[tuple[ConceptId, float]]:
-        """Simplified version: all seeds with activation=1.0.
+        """Activate seeds with importance-weighted initial activation.
+
+        Seed activation = 0.5 + 0.5 * importance (from working memory).
+        Ensures minimum 0.5 activation even for low-importance concepts,
+        while important concepts get up to 1.0.
 
         Args:
             concept_ids: Concepts to activate as seeds.
@@ -124,5 +128,9 @@ class SpreadingActivation:
         Returns:
             All activated concepts sorted by activation DESC.
         """
-        seeds = [(cid, 1.0) for cid in concept_ids]
+        seeds: list[tuple[ConceptId, float]] = []
+        for cid in concept_ids:
+            importance = self._memory.get_importance(cid)
+            activation = 0.5 + 0.5 * importance
+            seeds.append((cid, activation))
         return await self.activate(seeds)

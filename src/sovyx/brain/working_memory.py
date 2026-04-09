@@ -81,6 +81,17 @@ class WorkingMemory:
         """
         return self._activations.get(str(concept_id), 0.0)
 
+    def get_importance(self, concept_id: ConceptId) -> float:
+        """Return stored importance for a concept (0.5 if unknown).
+
+        Args:
+            concept_id: The concept to check.
+
+        Returns:
+            Importance value in [0.0, 1.0].
+        """
+        return self._importance.get(str(concept_id), 0.5)
+
     def get_active_concepts(self, min_activation: float = 0.1) -> list[tuple[ConceptId, float]]:
         """Return active concepts ordered by activation DESC.
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
 
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -212,6 +213,56 @@ class TestActivateFromText:
         ids = {str(r[0]) for r in result}
         assert "c1" in ids
         assert "c2" in ids
+
+
+class TestImportanceWeightedSpreading:
+    """Importance-weighted seed activation (TASK-11)."""
+
+    async def test_high_importance_gets_stronger_activation(self) -> None:
+        """High-importance concept gets activation closer to 1.0."""
+        repo = _mock_relation_repo({"c1": [("c2", 0.8)]})
+        wm = WorkingMemory()
+        wm.activate(ConceptId("c1"), 0.5, importance=0.9)
+
+        sa = SpreadingActivation(repo, wm, max_iterations=1)
+        result = await sa.activate_from_text([ConceptId("c1")])
+        result_map = {str(r[0]): r[1] for r in result}
+        # Seed activation = 0.5 + 0.5 * 0.9 = 0.95
+        assert result_map["c1"] >= 0.90  # noqa: PLR2004
+
+    async def test_low_importance_gets_weaker_activation(self) -> None:
+        """Low-importance concept still gets minimum 0.5 activation."""
+        repo = _mock_relation_repo({"c1": [("c2", 0.8)]})
+        wm = WorkingMemory()
+        wm.activate(ConceptId("c1"), 0.5, importance=0.1)
+
+        sa = SpreadingActivation(repo, wm, max_iterations=1)
+        result = await sa.activate_from_text([ConceptId("c1")])
+        result_map = {str(r[0]): r[1] for r in result}
+        # Seed activation = 0.5 + 0.5 * 0.1 = 0.55
+        assert result_map["c1"] == pytest.approx(0.55, abs=0.05)
+
+    async def test_unknown_importance_defaults_half(self) -> None:
+        """Concept not in working memory → importance=0.5 → activation=0.75."""
+        repo = _mock_relation_repo({})
+        wm = WorkingMemory()
+        sa = SpreadingActivation(repo, wm, max_iterations=1)
+
+        result = await sa.activate_from_text([ConceptId("unknown")])
+        result_map = {str(r[0]): r[1] for r in result}
+        # 0.5 + 0.5 * 0.5 = 0.75
+        assert result_map["unknown"] == pytest.approx(0.75, abs=0.05)
+
+    async def test_get_importance_returns_stored(self) -> None:
+        """WorkingMemory.get_importance returns stored value."""
+        wm = WorkingMemory()
+        wm.activate(ConceptId("c1"), 0.5, importance=0.85)
+        assert wm.get_importance(ConceptId("c1")) == pytest.approx(0.85)
+
+    async def test_get_importance_unknown_defaults(self) -> None:
+        """Unknown concept returns 0.5 importance."""
+        wm = WorkingMemory()
+        assert wm.get_importance(ConceptId("unknown")) == pytest.approx(0.5)
 
 
 class TestWorkingMemoryIntegration:
