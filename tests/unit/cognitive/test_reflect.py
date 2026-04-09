@@ -377,37 +377,120 @@ class TestRegexExtraction:
 class TestLLMExtraction:
     """LLM-based concept extraction with mocked router."""
 
-    async def test_llm_passes_category_importance(self, mock_brain: AsyncMock) -> None:
-        """LLM extraction passes category-based importance to learn_concept."""
+    async def test_llm_combines_importance_signals(self, mock_brain: AsyncMock) -> None:
+        """LLM extraction combines LLM assessment + category baseline."""
         concepts = [
-            {"name": "John", "content": "User name", "category": "entity", "sentiment": 0.0},
+            {
+                "name": "John",
+                "content": "User name is John",
+                "category": "entity",
+                "sentiment": 0.0,
+                "importance": 0.9,
+                "confidence": 0.95,
+                "source_quality": "explicit",
+            },
         ]
         router = _mock_llm_response(concepts)
         phase = ReflectPhase(mock_brain, llm_router=router)
         await phase.process(_perception("test"), _response(), MIND, CONV)
         kw = mock_brain.learn_concept.call_args.kwargs
-        # Entity → 0.80
-        assert kw["importance"] == pytest.approx(0.80, abs=0.01)
+        # Combined: 0.40*0.9 + 0.25*0.80 + 0.10*0 + 0.25*0 = 0.56
+        assert kw["importance"] > 0.5
+        assert kw["importance"] < 0.7
 
-    async def test_llm_passes_llm_explicit_confidence(self, mock_brain: AsyncMock) -> None:
-        """LLM extraction passes llm_explicit confidence to learn_concept."""
+    async def test_llm_combines_confidence_signals(self, mock_brain: AsyncMock) -> None:
+        """LLM extraction combines LLM confidence + source quality."""
         concepts = [
-            {"name": "Test", "content": "test", "category": "fact", "sentiment": 0.0},
+            {
+                "name": "Test",
+                "content": "test content for length",
+                "category": "fact",
+                "sentiment": 0.0,
+                "confidence": 0.9,
+                "source_quality": "explicit",
+            },
         ]
         router = _mock_llm_response(concepts)
         phase = ReflectPhase(mock_brain, llm_router=router)
         await phase.process(_perception("test"), _response(), MIND, CONV)
         kw = mock_brain.learn_concept.call_args.kwargs
-        # llm_explicit → midpoint of (0.75, 0.95) = 0.85
-        assert kw["confidence"] == pytest.approx(0.85, abs=0.01)
+        # High LLM confidence + explicit source → high combined
+        assert kw["confidence"] > 0.7
+
+    async def test_llm_explicit_signal_raises_importance_floor(
+        self, mock_brain: AsyncMock
+    ) -> None:
+        """explicit=true from LLM → importance floor at 0.85."""
+        concepts = [
+            {
+                "name": "Remember",
+                "content": "important thing",
+                "category": "fact",
+                "sentiment": 0.0,
+                "importance": 0.3,
+                "explicit": True,
+            },
+        ]
+        router = _mock_llm_response(concepts)
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(_perception("test"), _response(), MIND, CONV)
+        kw = mock_brain.learn_concept.call_args.kwargs
+        assert kw["importance"] >= 0.85
+
+    async def test_llm_inferred_source_lower_confidence(self, mock_brain: AsyncMock) -> None:
+        """inferred source_quality → lower confidence than explicit."""
+        explicit_concepts = [
+            {
+                "name": "Stated",
+                "content": "stated fact",
+                "category": "fact",
+                "confidence": 0.8,
+                "source_quality": "explicit",
+            },
+        ]
+        inferred_concepts = [
+            {
+                "name": "Inferred",
+                "content": "inferred fact",
+                "category": "fact",
+                "confidence": 0.8,
+                "source_quality": "inferred",
+            },
+        ]
+        router1 = _mock_llm_response(explicit_concepts)
+        phase1 = ReflectPhase(mock_brain, llm_router=router1)
+        await phase1.process(_perception("test1"), _response(), MIND, CONV)
+        kw1 = mock_brain.learn_concept.call_args.kwargs
+        explicit_conf = kw1["confidence"]
+
+        mock_brain.learn_concept.reset_mock()
+        router2 = _mock_llm_response(inferred_concepts)
+        phase2 = ReflectPhase(mock_brain, llm_router=router2)
+        await phase2.process(_perception("test2"), _response(), MIND, CONV)
+        kw2 = mock_brain.learn_concept.call_args.kwargs
+        inferred_conf = kw2["confidence"]
+
+        assert explicit_conf > inferred_conf
 
     async def test_llm_different_categories_different_importance(
         self, mock_brain: AsyncMock
     ) -> None:
-        """Different categories produce different importance values."""
+        """Different categories produce different importance values (same LLM score)."""
         concepts = [
-            {"name": "Person", "content": "a person", "category": "entity", "sentiment": 0.0},
-            {"name": "Fact", "content": "a fact", "category": "fact", "sentiment": 0.0},
+            {
+                "name": "Person",
+                "content": "a person",
+                "category": "entity",
+                "sentiment": 0.0,
+                "importance": 0.5,
+            },
+            {
+                "name": "Fact",
+                "content": "a fact",
+                "category": "fact",
+                "sentiment": 0.0,
+                "importance": 0.5,
+            },
         ]
         router = _mock_llm_response(concepts)
         mock_brain.learn_concept = AsyncMock(side_effect=[ConceptId("c1"), ConceptId("c2")])
@@ -417,7 +500,7 @@ class TestLLMExtraction:
         calls = mock_brain.learn_concept.call_args_list
         entity_imp = calls[0].kwargs["importance"]
         fact_imp = calls[1].kwargs["importance"]
-        # Entity (0.80) > Fact (0.60)
+        # Entity category base (0.80) > Fact category base (0.60)
         assert entity_imp > fact_imp
 
     async def test_llm_returns_all_categories(self, mock_brain: AsyncMock) -> None:
@@ -513,6 +596,95 @@ class TestLLMExtraction:
         await phase.process(_perception("test"), _response(), MIND, CONV)
         kw = mock_brain.learn_concept.call_args.kwargs
         assert kw["emotional_valence"] == pytest.approx(1.0, abs=0.01)
+
+    async def test_llm_missing_importance_defaults(self, mock_brain: AsyncMock) -> None:
+        """Missing importance field → default 0.5."""
+        concepts = [{"name": "Test", "content": "test", "category": "fact"}]
+        router = _mock_llm_response(concepts)
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(_perception("test"), _response(), MIND, CONV)
+        kw = mock_brain.learn_concept.call_args.kwargs
+        # Default LLM importance 0.5, fact category 0.60:
+        # combined = 0.40*0.5 + 0.25*0.60 + ... = reasonable value
+        assert 0.2 < kw["importance"] < 0.6
+
+    async def test_llm_missing_confidence_defaults(self, mock_brain: AsyncMock) -> None:
+        """Missing confidence field → default 0.7."""
+        concepts = [{"name": "Test", "content": "test content here", "category": "fact"}]
+        router = _mock_llm_response(concepts)
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(_perception("test"), _response(), MIND, CONV)
+        kw = mock_brain.learn_concept.call_args.kwargs
+        assert 0.5 < kw["confidence"] < 0.9
+
+    async def test_llm_invalid_importance_clamped(self, mock_brain: AsyncMock) -> None:
+        """Out-of-range importance → clamped to [0, 1]."""
+        concepts = [
+            {"name": "Test", "content": "test", "category": "fact", "importance": 5.0},
+        ]
+        router = _mock_llm_response(concepts)
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(_perception("test"), _response(), MIND, CONV)
+        kw = mock_brain.learn_concept.call_args.kwargs
+        assert kw["importance"] <= 1.0
+
+    async def test_llm_invalid_confidence_clamped(self, mock_brain: AsyncMock) -> None:
+        """Non-numeric confidence → default 0.7."""
+        concepts = [
+            {
+                "name": "Test",
+                "content": "test",
+                "category": "fact",
+                "confidence": "not a number",
+            },
+        ]
+        router = _mock_llm_response(concepts)
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(_perception("test"), _response(), MIND, CONV)
+        kw = mock_brain.learn_concept.call_args.kwargs
+        assert 0.4 < kw["confidence"] < 0.9  # Uses default 0.7
+
+    async def test_llm_invalid_source_quality_defaults_explicit(
+        self, mock_brain: AsyncMock
+    ) -> None:
+        """Invalid source_quality → defaults to 'explicit'."""
+        concepts = [
+            {
+                "name": "Test",
+                "content": "test",
+                "category": "fact",
+                "source_quality": "INVALID",
+            },
+        ]
+        router = _mock_llm_response(concepts)
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        result = await phase._extract_with_llm("test")  # noqa: SLF001
+        assert result is not None
+        assert result[0].source_quality == "explicit"
+
+    async def test_llm_extracted_concept_has_all_fields(self, mock_brain: AsyncMock) -> None:
+        """Full extraction with all new fields."""
+        concepts = [
+            {
+                "name": "Core Info",
+                "content": "very important fact",
+                "category": "entity",
+                "sentiment": 0.5,
+                "importance": 0.9,
+                "confidence": 0.95,
+                "explicit": True,
+                "source_quality": "explicit",
+            },
+        ]
+        router = _mock_llm_response(concepts)
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        result = await phase._extract_with_llm("test")  # noqa: SLF001
+        assert result is not None
+        ec = result[0]
+        assert ec.importance == pytest.approx(0.9)
+        assert ec.confidence == pytest.approx(0.95)
+        assert ec.explicit is True
+        assert ec.source_quality == "explicit"
 
     async def test_llm_missing_sentiment_defaults_zero(self, mock_brain: AsyncMock) -> None:
         """Missing sentiment field defaults to 0.0."""

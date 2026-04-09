@@ -28,12 +28,20 @@ logger = get_logger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class ExtractedConcept:
-    """A concept extracted from user input (LLM or regex)."""
+    """A concept extracted from user input (LLM or regex).
+
+    Extended in TASK-02 with importance, confidence, explicit, and
+    source_quality fields for multi-signal scoring.
+    """
 
     name: str
     content: str
     category: str
-    sentiment: float = 0.0  # -1.0 (negative) to 1.0 (positive)
+    sentiment: float = 0.0       # -1.0 (negative) to 1.0 (positive)
+    importance: float = 0.5      # LLM-assessed importance (0.0-1.0)
+    confidence: float = 0.7      # LLM-assessed confidence (0.0-1.0)
+    explicit: bool = False       # User explicitly asked to remember
+    source_quality: str = "explicit"  # "explicit" or "inferred"
 
 
 # ── LLM extraction prompt ──────────────────────────────────────────────
@@ -46,8 +54,12 @@ _EXTRACTION_PROMPT = (
     '- "name": short label (2-5 words)\n'
     '- "content": one-sentence description of what was learned\n'
     '- "category": one of the categories below\n'
-    '- "sentiment": float from -1.0 to 1.0 '
-    "(emotional tone of this concept)\n"
+    '- "sentiment": float -1.0 to 1.0 (emotional tone)\n'
+    '- "importance": float 0.0-1.0 (how critical to remember?)\n'
+    '- "confidence": float 0.0-1.0 (how certain is this info?)\n'
+    '- "explicit": boolean (did user ask to remember this?)\n'
+    '- "source_quality": "explicit" if directly stated, '
+    '"inferred" if deduced\n'
     "\n"
     "Categories (pick the MOST specific one):\n"
     '- "entity": person, org, place, or named thing '
@@ -65,12 +77,23 @@ _EXTRACTION_PROMPT = (
     '- "relationship": connection between entities '
     '(e.g. "manages a team of 5", "reports to CTO")\n'
     "\n"
+    "Importance guide:\n"
+    "- 0.1-0.3: trivial/passing mention (oh btw, it's raining)\n"
+    "- 0.4-0.6: useful fact worth noting (I use Python daily)\n"
+    "- 0.7-0.8: significant personal info (I'm building a startup)\n"
+    "- 0.9-1.0: core identity/critical (my name is X, I have Y)\n"
+    '- If user says "remember/note/important/don\'t forget": 0.9+\n'
+    "\n"
+    "Confidence guide:\n"
+    "- 0.1-0.3: very uncertain, ambiguous, might be sarcasm\n"
+    "- 0.4-0.6: inferred/implied, not directly stated\n"
+    "- 0.7-0.8: clearly stated but could change\n"
+    "- 0.9-1.0: definitively stated, identity, strong assertion\n"
+    "\n"
     "Sentiment guide:\n"
     "- Positive (0.3 to 1.0): love, enjoy, excited, great\n"
     "- Neutral (~0.0): factual statements, introductions\n"
     "- Negative (-1.0 to -0.3): hate, frustrate, terrible\n"
-    '- Example: "loves PostgreSQL" → 0.8, '
-    '"hates ORMs" → -0.7, "uses Docker" → 0.0\n'
     "\n"
     "Rules:\n"
     "- Extract ALL meaningful information\n"
@@ -462,25 +485,57 @@ class ReflectPhase:
             extracted = self._extract_with_regex(perception.content)
             extraction_source = "regex_fallback"
 
-        # Learn extracted concepts with category-based importance
-        # and source-quality-based confidence
+        # Learn extracted concepts with multi-signal importance + confidence.
+        # LLM path: combine LLM assessment with category baseline.
+        # Regex path: use category importance + source confidence only.
         concept_ids: list[ConceptId] = []
         sentiments: list[float] = []
-        source_confidence = get_source_confidence(extraction_source)
 
         for ec in extracted:
             try:
                 resolved = resolve_category(ec.category)
                 category = ConceptCategory(resolved)
                 category_importance = get_importance(resolved)
+
+                if extraction_source == "llm_explicit":
+                    # Combine LLM assessment with category baseline
+                    # LLM has primary weight (0.40) + category (0.25) +
+                    # emotion (0.10) + explicit (0.25)
+                    combined_importance = (
+                        0.40 * ec.importance
+                        + 0.25 * category_importance
+                        + 0.10 * abs(ec.sentiment)
+                        + 0.25 * (1.0 if ec.explicit else 0.0)
+                    )
+                    if ec.explicit:
+                        combined_importance = max(combined_importance, 0.85)
+
+                    # Combine LLM confidence with source quality
+                    source_tag = f"llm_{ec.source_quality}"
+                    source_conf = get_source_confidence(source_tag)
+                    combined_confidence = (
+                        0.40 * ec.confidence
+                        + 0.35 * source_conf
+                        + 0.15 * (1.0 if ec.source_quality == "explicit" else 0.3)
+                        + 0.10 * min(1.0, len(ec.content) / 100)
+                    )
+                else:
+                    # Regex fallback: category importance + source confidence
+                    combined_importance = category_importance
+                    combined_confidence = get_source_confidence("regex_fallback")
+
+                # Clamp to valid range
+                combined_importance = max(0.05, min(1.0, combined_importance))
+                combined_confidence = max(0.05, min(1.0, combined_confidence))
+
                 cid = await self._brain.learn_concept(
                     mind_id=mind_id,
                     name=ec.name,
                     content=ec.content,
                     category=category,
                     source="conversation",
-                    importance=category_importance,
-                    confidence=source_confidence,
+                    importance=combined_importance,
+                    confidence=combined_confidence,
                     emotional_valence=ec.sentiment,
                 )
                 concept_ids.append(cid)
@@ -579,12 +634,34 @@ class ReflectPhase:
                 name = str(item.get("name", "")).strip()
                 content = str(item.get("content", "")).strip()
                 category = str(item.get("category", "fact")).strip().lower()
+
                 # Parse sentiment — default 0.0 if missing or invalid
                 raw_sentiment = item.get("sentiment", 0.0)
                 try:
                     sentiment = clamp_sentiment(float(raw_sentiment))
                 except (TypeError, ValueError):
                     sentiment = 0.0
+
+                # Parse importance — LLM-assessed, default 0.5
+                raw_importance = item.get("importance", 0.5)
+                try:
+                    llm_importance = max(0.0, min(1.0, float(raw_importance)))
+                except (TypeError, ValueError):
+                    llm_importance = 0.5
+
+                # Parse confidence — LLM-assessed, default 0.7
+                raw_confidence = item.get("confidence", 0.7)
+                try:
+                    llm_confidence = max(0.0, min(1.0, float(raw_confidence)))
+                except (TypeError, ValueError):
+                    llm_confidence = 0.7
+
+                # Parse explicit — user asked to remember
+                llm_explicit = bool(item.get("explicit", False))
+
+                # Parse source_quality — explicit vs. inferred
+                raw_sq = str(item.get("source_quality", "explicit")).strip().lower()
+                source_quality = raw_sq if raw_sq in ("explicit", "inferred") else "explicit"
 
                 if name and content and len(name) > 1:
                     result.append(
@@ -593,6 +670,10 @@ class ReflectPhase:
                             content=content,
                             category=category,
                             sentiment=sentiment,
+                            importance=llm_importance,
+                            confidence=llm_confidence,
+                            explicit=llm_explicit,
+                            source_quality=source_quality,
                         )
                     )
 
