@@ -313,6 +313,8 @@ class BrainService:
                 concept_id=str(concept_id),
                 title=name,
                 source=source,
+                importance=concept.importance,
+                confidence=concept.confidence,
             )
         )
 

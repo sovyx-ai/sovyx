@@ -224,6 +224,18 @@ class TestLearnConcept:
         assert isinstance(event, ConceptCreated)
         assert event.title == "Python"
 
+    async def test_learn_event_includes_scores(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        """ConceptCreated event carries importance + confidence (TASK-15)."""
+        await brain.learn_concept(
+            MIND, "Python", "A language", importance=0.8, confidence=0.7,
+        )
+        event = mock_deps["event_bus"].emit.call_args[0][0]  # type: ignore[union-attr]
+        assert isinstance(event, ConceptCreated)
+        assert event.importance == pytest.approx(0.8, abs=0.01)
+        assert event.confidence == pytest.approx(0.7, abs=0.01)
+
     async def test_learn_activates_working_memory(
         self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
     ) -> None:

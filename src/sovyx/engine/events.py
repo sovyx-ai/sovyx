@@ -159,6 +159,8 @@ class ConceptCreated(Event):
     concept_id: str = ""
     title: str = ""
     source: str = ""
+    importance: float = 0.5
+    confidence: float = 0.5
 
     @property
     def category(self) -> EventCategory:
