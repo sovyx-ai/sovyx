@@ -13,11 +13,18 @@ from sovyx.engine.types import ConceptId, ConversationId, EpisodeId, MindId
 MIND = MindId("aria")
 
 
-def _concept(name: str, cid: str = "") -> Concept:
+def _concept(
+    name: str,
+    cid: str = "",
+    importance: float = 0.5,
+    confidence: float = 0.5,
+) -> Concept:
     return Concept(
         id=ConceptId(cid or name),
         mind_id=MIND,
         name=name,
+        importance=importance,
+        confidence=confidence,
     )
 
 
@@ -120,17 +127,104 @@ class TestRRFFusion:
         assert len(results) == 3  # noqa: PLR2004
 
     def test_rrf_score_formula(self) -> None:
-        """Verify RRF formula: score = Σ 1/(k + rank + 1)."""
+        """Verify RRF formula: score = Σ 1/(k + rank + 1) * quality_boost."""
         retrieval = HybridRetrieval(AsyncMock(), AsyncMock(), AsyncMock(), k_constant=60)
-        c1 = _concept("test", "c1")
+        c1 = _concept("test", "c1", importance=0.5, confidence=0.5)
 
         # c1 is rank 0 in both lists
         fts = [(c1, -1.0)]
         vec = [(c1, 0.1)]
 
         results = retrieval._rrf_fusion(fts, vec, limit=1)
-        expected_score = 1.0 / 61 + 1.0 / 61  # rank 0 in both
-        assert abs(results[0][1] - expected_score) < 0.0001
+        base_rrf = 1.0 / 61 + 1.0 / 61  # rank 0 in both
+        quality = 0.60 * 0.5 + 0.40 * 0.5  # 0.5
+        expected = base_rrf * (1.0 + quality * 0.4)
+        assert abs(results[0][1] - expected) < 0.0001
+
+
+class TestQualityBoost:
+    """Importance + confidence quality boost in retrieval."""
+
+    def test_high_quality_ranks_higher_in_rrf(self) -> None:
+        """High importance+confidence concept beats equal-ranked low-quality."""
+        retrieval = HybridRetrieval(AsyncMock(), AsyncMock(), AsyncMock(), k_constant=60)
+        high = _concept("important", "c1", importance=0.9, confidence=0.9)
+        low = _concept("trivial", "c2", importance=0.1, confidence=0.1)
+
+        # Both at same rank position in FTS and VEC
+        fts = [(high, -1.0), (low, -2.0)]
+        vec = [(low, 0.1), (high, 0.5)]
+
+        results = retrieval._rrf_fusion(fts, vec, limit=2)
+        # high quality should rank first (quality boost overcomes any rank difference)
+        scores = {str(c.id): s for c, s in results}
+        assert scores["c1"] > scores["c2"]
+
+    def test_quality_boost_bounded_at_40_percent(self) -> None:
+        """Max quality boost is 40% (quality=1.0 → 1.4x multiplier)."""
+        retrieval = HybridRetrieval(AsyncMock(), AsyncMock(), AsyncMock(), k_constant=60)
+        max_q = _concept("max", "c1", importance=1.0, confidence=1.0)
+
+        fts = [(max_q, -1.0)]
+        vec = [(max_q, 0.1)]
+
+        results = retrieval._rrf_fusion(fts, vec, limit=1)
+        base_rrf = 1.0 / 61 + 1.0 / 61
+        max_boosted = base_rrf * 1.4  # quality=1.0 → 40% boost
+        assert results[0][1] == pytest.approx(max_boosted, abs=0.0001)
+
+    def test_low_quality_minimal_boost(self) -> None:
+        """Low importance+confidence → minimal boost."""
+        retrieval = HybridRetrieval(AsyncMock(), AsyncMock(), AsyncMock(), k_constant=60)
+        low = _concept("low", "c1", importance=0.0, confidence=0.0)
+
+        fts = [(low, -1.0)]
+        vec = [(low, 0.1)]
+
+        results = retrieval._rrf_fusion(fts, vec, limit=1)
+        base_rrf = 1.0 / 61 + 1.0 / 61
+        # quality=0 → no boost (1.0x multiplier)
+        assert results[0][1] == pytest.approx(base_rrf, abs=0.0001)
+
+    async def test_fts_fallback_also_boosted(
+        self, retrieval: HybridRetrieval, mock_concept_repo: AsyncMock
+    ) -> None:
+        """FTS-only fallback also applies quality boost."""
+        high = _concept("important", "c1", importance=0.9, confidence=0.9)
+        low = _concept("trivial", "c2", importance=0.1, confidence=0.1)
+        # low has better FTS rank (position 0) but lower quality
+        mock_concept_repo.search_by_text = AsyncMock(return_value=[(low, -1.0), (high, -2.0)])
+
+        results = await retrieval.search_concepts("test", MIND)
+        # After quality boost, high-quality concept should rank higher
+        # despite being at worse FTS position
+        assert results[0][0].id == ConceptId("c1")
+
+    def test_relevance_still_primary(self) -> None:
+        """Quality boost doesn't override large relevance differences."""
+        retrieval = HybridRetrieval(AsyncMock(), AsyncMock(), AsyncMock(), k_constant=60)
+        # high_quality at rank 5, low_quality at rank 0
+        high = _concept("distant", "c1", importance=1.0, confidence=1.0)
+        low = _concept("exact match", "c2", importance=0.1, confidence=0.1)
+
+        # Build results where c2 appears in both lists at top, c1 only in one at bottom
+        fts = [
+            (low, -1.0),
+            (_concept("filler1", "f1"), -2.0),
+            (_concept("filler2", "f2"), -3.0),
+            (_concept("filler3", "f3"), -4.0),
+            (_concept("filler4", "f4"), -5.0),
+            (high, -6.0),
+        ]
+        vec = [
+            (low, 0.1),
+            (_concept("filler5", "f5"), 0.2),
+        ]
+
+        results = retrieval._rrf_fusion(fts, vec, limit=10)
+        # low is in BOTH lists at rank 0 → much higher base RRF
+        # Even with max quality boost, high can't overcome that
+        assert results[0][0].id == ConceptId("c2")
 
 
 class TestHybridWithVec:
