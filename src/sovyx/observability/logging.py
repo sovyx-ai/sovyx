@@ -235,7 +235,7 @@ def setup_logging(config: LoggingConfig) -> None:
         SecretMasker(),
     ]
 
-    if config.format == "json":
+    if config.console_format == "json":
         renderer: structlog.types.Processor = structlog.processors.JSONRenderer()
     else:
         renderer = structlog.dev.ConsoleRenderer()

@@ -40,7 +40,7 @@ def _clean_context() -> None:
 @pytest.fixture()
 def _json_logging() -> None:
     """Set up JSON logging for tests that need real output."""
-    setup_logging(LoggingConfig(level="DEBUG", format="json", log_file=None))
+    setup_logging(LoggingConfig(level="DEBUG", console_format="json", log_file=None))
 
 
 # ── SecretMasker ────────────────────────────────────────────────────────────
@@ -274,7 +274,7 @@ class TestSetupLogging:
     """Logging setup with JSON and console modes."""
 
     def test_setup_json_mode(self) -> None:
-        config = LoggingConfig(level="DEBUG", format="json", log_file=None)
+        config = LoggingConfig(level="DEBUG", console_format="json", log_file=None)
         setup_logging(config)
 
         root = logging.getLogger()
@@ -282,7 +282,7 @@ class TestSetupLogging:
         assert len(root.handlers) == 1
 
     def test_setup_text_mode(self) -> None:
-        config = LoggingConfig(level="INFO", format="text", log_file=None)
+        config = LoggingConfig(level="INFO", console_format="text", log_file=None)
         setup_logging(config)
 
         root = logging.getLogger()
@@ -290,7 +290,7 @@ class TestSetupLogging:
 
     def test_json_output_contains_required_fields(self) -> None:
         """JSON logs contain required structlog processors."""
-        config = LoggingConfig(level="DEBUG", format="json", log_file=None)
+        config = LoggingConfig(level="DEBUG", console_format="json", log_file=None)
         setup_logging(config)
 
         cfg = structlog.get_config()
@@ -306,7 +306,7 @@ class TestSetupLogging:
 
     def test_processor_chain_includes_merge_contextvars(self) -> None:
         """merge_contextvars is first in the processor chain."""
-        setup_logging(LoggingConfig(level="DEBUG", format="json", log_file=None))
+        setup_logging(LoggingConfig(level="DEBUG", console_format="json", log_file=None))
         cfg = structlog.get_config()
         processors = cfg["processors"]
         # First processor should be merge_contextvars
@@ -314,7 +314,7 @@ class TestSetupLogging:
 
     def test_processor_chain_includes_secret_masker(self) -> None:
         """SecretMasker is in the processor chain."""
-        setup_logging(LoggingConfig(level="DEBUG", format="json", log_file=None))
+        setup_logging(LoggingConfig(level="DEBUG", console_format="json", log_file=None))
         cfg = structlog.get_config()
         processors = cfg["processors"]
         masker_found = any(isinstance(p, SecretMasker) for p in processors)
@@ -329,7 +329,7 @@ class TestJSONOutput:
 
     @pytest.fixture(autouse=True)
     def _setup_json(self) -> None:
-        setup_logging(LoggingConfig(level="DEBUG", format="json", log_file=None))
+        setup_logging(LoggingConfig(level="DEBUG", console_format="json", log_file=None))
 
     def _capture_log(
         self,
@@ -444,7 +444,7 @@ class TestFileHandler:
 
     def test_creates_log_file(self, tmp_path: Path) -> None:
         log_file = tmp_path / "logs" / "test.log"
-        config = LoggingConfig(level="DEBUG", format="json", log_file=log_file)
+        config = LoggingConfig(level="DEBUG", console_format="json", log_file=log_file)
         setup_logging(config)
 
         # Directory should be created
@@ -475,7 +475,7 @@ class TestFileHandler:
 
     def test_file_handler_is_rotating(self, tmp_path: Path) -> None:
         log_file = tmp_path / "test.log"
-        config = LoggingConfig(level="DEBUG", format="json", log_file=log_file)
+        config = LoggingConfig(level="DEBUG", console_format="json", log_file=log_file)
         setup_logging(config)
 
         root = logging.getLogger()
@@ -488,7 +488,7 @@ class TestFileHandler:
 
     def test_repeated_setup_closes_old_handlers(self, tmp_path: Path) -> None:
         log_file = tmp_path / "test.log"
-        config = LoggingConfig(level="DEBUG", format="json", log_file=log_file)
+        config = LoggingConfig(level="DEBUG", console_format="json", log_file=log_file)
 
         # Call setup_logging twice
         setup_logging(config)
@@ -505,7 +505,7 @@ class TestFileHandler:
         assert len(file_handlers) == 1
 
     def test_no_file_handler_when_none(self) -> None:
-        config = LoggingConfig(level="INFO", format="json", log_file=None)
+        config = LoggingConfig(level="INFO", console_format="json", log_file=None)
         setup_logging(config)
 
         root = logging.getLogger()

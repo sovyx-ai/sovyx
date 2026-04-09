@@ -26,7 +26,7 @@ def get_settings(config: EngineConfig) -> dict[str, Any]:
     """Build settings response from EngineConfig."""
     return {
         "log_level": config.log.level,
-        "log_format": config.log.format,
+        "log_format": config.log.console_format,
         "log_file": str(config.log.log_file) if config.log.log_file else None,
         "data_dir": str(config.data_dir),
         "telemetry_enabled": config.telemetry.enabled,
