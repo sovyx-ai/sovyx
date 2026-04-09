@@ -18,10 +18,25 @@ from sovyx.engine.errors import ConfigNotFoundError, ConfigValidationError
 
 
 class LoggingConfig(BaseModel):
-    """Structured logging configuration."""
+    """Structured logging configuration.
+
+    Console and file outputs use **independent** formats:
+
+    - **console_format** controls ``StreamHandler`` output:
+      ``"text"`` (default) for colored human-readable logs,
+      ``"json"`` for machine-parseable output (CI/systemd).
+
+    - **File handler** always writes JSON (for dashboard log viewer
+      and ``sovyx logs --json``).  This is by design — the file is a
+      machine interface, not a human one.
+
+    Backward compatibility:
+        Legacy ``format`` key in system.yaml is silently migrated
+        to ``console_format`` with a deprecation warning.
+    """
 
     level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
-    format: Literal["json", "text"] = "json"
+    console_format: Literal["json", "text"] = "text"
     log_file: Path | None = Field(
         default_factory=lambda: Path.home() / ".sovyx" / "logs" / "sovyx.log",
     )
@@ -174,6 +189,9 @@ def load_engine_config(
                 context={"path": str(config_path)},
             ) from exc
 
+    # Backward compatibility: migrate legacy "format" → "console_format"
+    _migrate_legacy_log_format(yaml_data)
+
     if overrides:
         yaml_data = _deep_merge(yaml_data, overrides)
 
@@ -184,6 +202,42 @@ def load_engine_config(
             f"Configuration validation failed: {exc}",
             context={"fields": str(yaml_data.keys())},
         ) from exc
+
+
+def _migrate_legacy_log_format(data: dict[str, Any]) -> None:
+    """Migrate legacy ``log.format`` to ``log.console_format``.
+
+    Mutates *data* in place.  Emits a deprecation warning (via stdlib
+    ``warnings``) so users see it once and know to update their YAML.
+
+    The ``format`` field was renamed to ``console_format`` in v0.5.24
+    to clarify that it only controls console output (the file handler
+    always writes JSON).
+
+    This migration is idempotent: if both ``format`` and
+    ``console_format`` exist, ``console_format`` wins and ``format``
+    is silently dropped.
+    """
+    import warnings
+
+    log_section = data.get("log")
+    if not isinstance(log_section, dict):
+        return
+
+    if "format" not in log_section:
+        return
+
+    legacy_value = log_section.pop("format")
+
+    if "console_format" not in log_section:
+        log_section["console_format"] = legacy_value
+        warnings.warn(
+            "Configuration key 'log.format' is deprecated since v0.5.24. "
+            "Use 'log.console_format' instead. "
+            f"Migrated automatically: console_format={legacy_value!r}",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
 
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:

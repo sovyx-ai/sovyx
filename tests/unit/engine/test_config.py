@@ -20,6 +20,7 @@ from sovyx.engine.config import (
     SocketConfig,
     TelemetryConfig,
     _deep_merge,
+    _migrate_legacy_log_format,
     load_engine_config,
 )
 from sovyx.engine.errors import ConfigNotFoundError, ConfigValidationError
@@ -32,7 +33,7 @@ class TestDefaults:
         config = EngineConfig()
         assert config.data_dir == Path.home() / ".sovyx"
         assert config.log.level == "INFO"
-        assert config.log.format == "json"
+        assert config.log.console_format == "text"
         assert config.database.wal_mode is True
         assert config.database.read_pool_size == 3
         assert config.hardware.tier == "auto"
@@ -44,7 +45,7 @@ class TestDefaults:
     def test_logging_config_defaults(self) -> None:
         config = LoggingConfig()
         assert config.level == "INFO"
-        assert config.format == "json"
+        assert config.console_format == "text"
 
     def test_database_config_defaults(self) -> None:
         config = DatabaseConfig()
@@ -124,7 +125,7 @@ class TestLoadEngineConfig:
         yaml_file.write_text("log:\n  level: DEBUG\n  format: text\n")
         config = load_engine_config(config_path=yaml_file)
         assert config.log.level == "DEBUG"
-        assert config.log.format == "text"
+        assert config.log.console_format == "text"
 
     def test_yaml_overrides_defaults(self, tmp_path: Path) -> None:
         yaml_file = tmp_path / "system.yaml"
@@ -203,10 +204,10 @@ class TestDeepMerge:
         assert result == {"a": 2}
 
     def test_nested_merge(self) -> None:
-        base = {"log": {"level": "INFO", "format": "json"}}
+        base = {"log": {"level": "INFO", "console_format": "json"}}
         override = {"log": {"level": "DEBUG"}}
         result = _deep_merge(base, override)
-        assert result == {"log": {"level": "DEBUG", "format": "json"}}
+        assert result == {"log": {"level": "DEBUG", "console_format": "json"}}
 
     def test_original_not_mutated(self) -> None:
         base = {"a": {"b": 1}}
@@ -232,9 +233,9 @@ class TestPropertyBased:
     )
     @settings(max_examples=20)
     def test_any_valid_logging_config(self, level: str, fmt: str) -> None:
-        config = LoggingConfig(level=level, format=fmt)  # type: ignore[arg-type]
+        config = LoggingConfig(level=level, console_format=fmt)  # type: ignore[arg-type]
         assert config.level == level
-        assert config.format == fmt
+        assert config.console_format == fmt
 
     @given(
         tier=st.sampled_from(["auto", "pi", "n100", "gpu"]),
@@ -251,3 +252,72 @@ class TestPropertyBased:
     def test_any_valid_port(self, port: int) -> None:
         config = APIConfig(port=port)
         assert config.port == port
+
+
+class TestLegacyLogFormatMigration:
+    """Backward compatibility: log.format → log.console_format."""
+
+    def test_format_migrated_to_console_format(self) -> None:
+        """Legacy 'format' key is renamed to 'console_format'."""
+        data: dict[str, object] = {"log": {"level": "INFO", "format": "text"}}
+        _migrate_legacy_log_format(data)
+        log_section = data["log"]
+        assert isinstance(log_section, dict)
+        assert "format" not in log_section
+        assert log_section["console_format"] == "text"
+
+    def test_console_format_takes_precedence(self) -> None:
+        """If both exist, console_format wins; format is dropped."""
+        data: dict[str, object] = {"log": {"format": "json", "console_format": "text"}}
+        _migrate_legacy_log_format(data)
+        log_section = data["log"]
+        assert isinstance(log_section, dict)
+        assert "format" not in log_section
+        assert log_section["console_format"] == "text"
+
+    def test_no_log_section_is_noop(self) -> None:
+        """Missing 'log' section → nothing happens."""
+        data: dict[str, object] = {"api": {"port": 9999}}
+        _migrate_legacy_log_format(data)
+        assert "log" not in data
+
+    def test_no_format_key_is_noop(self) -> None:
+        """Log section without 'format' → nothing happens."""
+        data: dict[str, object] = {"log": {"level": "DEBUG"}}
+        _migrate_legacy_log_format(data)
+        log_section = data["log"]
+        assert isinstance(log_section, dict)
+        assert "console_format" not in log_section
+
+    def test_deprecation_warning_emitted(self) -> None:
+        """Migration emits a DeprecationWarning."""
+        import warnings
+
+        data: dict[str, object] = {"log": {"format": "json"}}
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            _migrate_legacy_log_format(data)
+        deprecations = [w for w in caught if issubclass(w.category, DeprecationWarning)]
+        assert len(deprecations) == 1
+        assert "console_format" in str(deprecations[0].message)
+
+    def test_yaml_with_legacy_format_loads_correctly(self, tmp_path: Path) -> None:
+        """Full integration: YAML with 'format' loads as 'console_format'."""
+        yaml_file = tmp_path / "system.yaml"
+        yaml_file.write_text("log:\n  level: DEBUG\n  format: text\n")
+        config = load_engine_config(config_path=yaml_file)
+        assert config.log.level == "DEBUG"
+        assert config.log.console_format == "text"
+
+    def test_yaml_with_console_format_works_natively(self, tmp_path: Path) -> None:
+        """New-style YAML with 'console_format' works directly."""
+        yaml_file = tmp_path / "system.yaml"
+        yaml_file.write_text("log:\n  level: INFO\n  console_format: json\n")
+        config = load_engine_config(config_path=yaml_file)
+        assert config.log.console_format == "json"
+
+    def test_non_dict_log_section_is_noop(self) -> None:
+        """If log section is not a dict, skip migration."""
+        data: dict[str, object] = {"log": "invalid"}
+        _migrate_legacy_log_format(data)
+        assert data["log"] == "invalid"

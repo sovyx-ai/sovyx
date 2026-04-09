@@ -15,7 +15,7 @@ def _mock_config() -> MagicMock:
     """Create a mock EngineConfig."""
     config = MagicMock()
     config.log.level = "INFO"
-    config.log.format = "json"
+    config.log.console_format = "json"
     config.log.log_file = Path("/tmp/sovyx.log")  # noqa: S108
     config.data_dir = Path.home() / ".sovyx"
     config.telemetry.enabled = False
