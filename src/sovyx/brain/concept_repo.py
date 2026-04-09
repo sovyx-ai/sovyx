@@ -422,6 +422,26 @@ class ConceptRepository:
             row = await cursor.fetchone()
             return int(row[0]) if row else 0
 
+    async def get_categories(
+        self,
+        mind_id: MindId,
+    ) -> list[str]:
+        """Get distinct category values for a mind.
+
+        Args:
+            mind_id: Mind to query.
+
+        Returns:
+            List of distinct category strings.
+        """
+        async with self._pool.read() as conn:
+            cursor = await conn.execute(
+                "SELECT DISTINCT category FROM concepts WHERE mind_id = ?",
+                (str(mind_id),),
+            )
+            rows = await cursor.fetchall()
+            return [row[0] for row in rows if row[0]]
+
     async def batch_update_scores(
         self,
         updates: list[tuple[ConceptId, float, float]],

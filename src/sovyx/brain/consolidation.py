@@ -96,6 +96,15 @@ class ConsolidationCycle:
                 normalized=normalized,
             )
 
+        # Step 1.7: Refresh category centroid cache
+        centroids_cached = await self._refresh_centroids(mind_id)
+        if centroids_cached > 0:
+            logger.info(
+                "consolidation_centroids_refreshed",
+                mind_id=str(mind_id),
+                cached=centroids_cached,
+            )
+
         # Step 2: Merge similar concepts
         merged_count = await self._merge_similar(mind_id)
         logger.info(
@@ -256,6 +265,24 @@ class ConsolidationCycle:
             await self._concepts.batch_update_scores(updates)
 
         return len(updates)
+
+    async def _refresh_centroids(self, mind_id: MindId) -> int:
+        """Refresh category centroid cache on BrainService.
+
+        Called after score recalculation so that novelty detection
+        uses up-to-date cluster centers. No-op if brain service
+        doesn't support centroid caching.
+
+        Returns:
+            Number of categories cached.
+        """
+        try:
+            return await self._brain.refresh_centroid_cache(mind_id)
+        except AttributeError:
+            return 0
+        except Exception:
+            logger.debug("centroid_cache_refresh_error", exc_info=True)
+            return 0
 
     async def _merge_similar(self, mind_id: MindId) -> int:
         """Merge similar concepts found by FTS5 + name similarity.

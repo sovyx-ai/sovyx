@@ -585,6 +585,103 @@ class TestComputeNovelty:
         assert result == pytest.approx(0.70)
 
 
+class TestCentroidCache:
+    """Centroid cache lifecycle (refinement TASK-02)."""
+
+    async def test_cache_hit_skips_db(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        """Pre-cached centroid → no get_embeddings_by_category call."""
+        mock_deps["concept_repo"].count_by_category = AsyncMock(return_value=50)  # type: ignore[union-attr]
+        mock_deps["embedding_engine"].has_embeddings = True
+        mock_deps["embedding_engine"].encode = AsyncMock(return_value=[0.5] * 384)
+
+        # Pre-populate cache
+        brain._centroid_cache[(str(MIND), "fact")] = [0.5] * 384
+
+        await brain.compute_novelty("test", "fact", MIND)
+        # Should NOT call get_embeddings_by_category (cache hit)
+        mock_deps["concept_repo"].get_embeddings_by_category.assert_not_called()  # type: ignore[union-attr]
+
+    async def test_cache_miss_populates_cache(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        """Cache miss → compute + cache for next call."""
+        mock_deps["concept_repo"].count_by_category = AsyncMock(return_value=50)  # type: ignore[union-attr]
+        mock_deps["concept_repo"].get_embeddings_by_category = AsyncMock(  # type: ignore[union-attr]
+            return_value=[[0.5] * 384]
+        )
+        mock_deps["embedding_engine"].has_embeddings = True
+        mock_deps["embedding_engine"].encode = AsyncMock(return_value=[0.5] * 384)
+        mock_deps["embedding_engine"].compute_category_centroid = AsyncMock(return_value=[0.5] * 384)
+
+        assert (str(MIND), "fact") not in brain._centroid_cache
+        await brain.compute_novelty("test", "fact", MIND)
+        assert (str(MIND), "fact") in brain._centroid_cache
+
+    async def test_refresh_populates_all_categories(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        """refresh_centroid_cache fills cache for all eligible categories."""
+        mock_deps["concept_repo"].get_categories = AsyncMock(  # type: ignore[union-attr]
+            return_value=["fact", "entity", "preference"]
+        )
+        mock_deps["concept_repo"].count_by_category = AsyncMock(return_value=50)  # type: ignore[union-attr]
+        mock_deps["concept_repo"].get_embeddings_by_category = AsyncMock(  # type: ignore[union-attr]
+            return_value=[[0.5] * 384]
+        )
+        mock_deps["embedding_engine"].has_embeddings = True
+        mock_deps["embedding_engine"].compute_category_centroid = AsyncMock(return_value=[0.5] * 384)
+
+        cached = await brain.refresh_centroid_cache(MIND)
+        assert cached == 3  # noqa: PLR2004
+        assert len(brain._centroid_cache) == 3  # noqa: PLR2004
+
+    async def test_refresh_skips_cold_start_categories(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        """Categories with < 10 concepts skipped."""
+        mock_deps["concept_repo"].get_categories = AsyncMock(  # type: ignore[union-attr]
+            return_value=["fact", "entity"]
+        )
+        # fact: 50 (eligible), entity: 5 (cold start)
+        mock_deps["concept_repo"].count_by_category = AsyncMock(  # type: ignore[union-attr]
+            side_effect=[50, 5]
+        )
+        mock_deps["concept_repo"].get_embeddings_by_category = AsyncMock(  # type: ignore[union-attr]
+            return_value=[[0.5] * 384]
+        )
+        mock_deps["embedding_engine"].has_embeddings = True
+        mock_deps["embedding_engine"].compute_category_centroid = AsyncMock(return_value=[0.5] * 384)
+
+        cached = await brain.refresh_centroid_cache(MIND)
+        assert cached == 1
+
+    async def test_invalidate_all(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        brain._centroid_cache[("mind1", "fact")] = [0.1]
+        brain._centroid_cache[("mind2", "fact")] = [0.2]
+        brain.invalidate_centroid_cache()
+        assert len(brain._centroid_cache) == 0
+
+    async def test_invalidate_specific_mind(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        brain._centroid_cache[(str(MIND), "fact")] = [0.1]
+        brain._centroid_cache[("other", "fact")] = [0.2]
+        brain.invalidate_centroid_cache(MIND)
+        assert (str(MIND), "fact") not in brain._centroid_cache
+        assert ("other", "fact") in brain._centroid_cache
+
+    async def test_no_embeddings_returns_zero(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        mock_deps["embedding_engine"].has_embeddings = False
+        cached = await brain.refresh_centroid_cache(MIND)
+        assert cached == 0
+
+
 class TestDecayWorkingMemory:
     """decay_working_memory() — delegates to working memory."""
 
