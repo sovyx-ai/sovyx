@@ -72,6 +72,9 @@ class BrainService:
         self._retrieval = retrieval
         self._llm_router = llm_router
         self._fast_model = fast_model
+        # Category centroid cache: (mind_id, category) → L2-normalized centroid vector
+        # Populated by refresh_centroid_cache(), invalidated on consolidation
+        self._centroid_cache: dict[tuple[str, str], list[float]] = {}
         self._memory = working_memory
         self._events = event_bus
         self._mind_id: MindId | None = None
@@ -555,18 +558,22 @@ class BrainService:
         # Encode the new concept
         new_embedding = await self._embedding.encode(text, is_query=True)
 
-        # Get category embeddings for centroid
-        category_embeddings = await self._concepts.get_embeddings_by_category(
-            mind_id, category, limit=500,
-        )
+        # Try centroid cache first (populated by consolidation)
+        cache_key = (str(mind_id), category)
+        centroid = self._centroid_cache.get(cache_key)
 
-        if not category_embeddings:
-            return self._COLD_START_NOVELTY
+        if centroid is None:
+            # Cache miss: compute from scratch, cache the result
+            category_embeddings = await self._concepts.get_embeddings_by_category(
+                mind_id, category, limit=500,
+            )
+            if not category_embeddings:
+                return self._COLD_START_NOVELTY
 
-        # Compute centroid
-        centroid = await self._embedding.compute_category_centroid(
-            category_embeddings,
-        )
+            centroid = await self._embedding.compute_category_centroid(
+                category_embeddings,
+            )
+            self._centroid_cache[cache_key] = centroid
 
         # Cosine similarity (both vectors are L2-normalized)
         similarity = EmbeddingEngine.cosine_similarity(new_embedding, centroid)
@@ -609,3 +616,69 @@ class BrainService:
         # Convert search score to novelty (inverse relationship)
         novelty = max(0.05, 1.0 - min(1.0, best_score * 1.5))
         return novelty
+
+    # ── Centroid Cache ──────────────────────────────────────────────
+
+    async def refresh_centroid_cache(self, mind_id: MindId) -> int:
+        """Pre-compute and cache category centroids from current embeddings.
+
+        Called by consolidation after score recalculation. Replaces stale
+        centroids so that subsequent ``compute_novelty`` calls use fresh
+        cluster centers without per-call DB round-trips.
+
+        Args:
+            mind_id: Mind to refresh centroids for.
+
+        Returns:
+            Number of categories cached.
+        """
+        if not self._embedding.has_embeddings:
+            return 0
+
+        categories = await self._concepts.get_categories(mind_id)
+        cached = 0
+
+        for cat in categories:
+            try:
+                count = await self._concepts.count_by_category(mind_id, cat)
+                if count < self._COLD_START_THRESHOLD:
+                    continue
+
+                embeddings = await self._concepts.get_embeddings_by_category(
+                    mind_id, cat, limit=500,
+                )
+                if not embeddings:
+                    continue
+
+                centroid = await self._embedding.compute_category_centroid(embeddings)
+                self._centroid_cache[(str(mind_id), cat)] = centroid
+                cached += 1
+            except Exception:
+                logger.debug(
+                    "centroid_cache_refresh_failed",
+                    category=cat,
+                    exc_info=True,
+                )
+
+        logger.info(
+            "centroid_cache_refreshed",
+            mind_id=str(mind_id),
+            categories_cached=cached,
+            total_categories=len(categories),
+        )
+        return cached
+
+    def invalidate_centroid_cache(self, mind_id: MindId | None = None) -> None:
+        """Clear centroid cache (all or for specific mind).
+
+        Args:
+            mind_id: If given, clear only entries for this mind.
+                     If None, clear all entries.
+        """
+        if mind_id is None:
+            self._centroid_cache.clear()
+        else:
+            mind_str = str(mind_id)
+            keys_to_remove = [k for k in self._centroid_cache if k[0] == mind_str]
+            for k in keys_to_remove:
+                del self._centroid_cache[k]
