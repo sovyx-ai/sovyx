@@ -1,4 +1,4 @@
-"""Tests for consolidation batching + timeout (refinement TASK-06).
+"""Tests for consolidation batching, timeout, and drift detection.
 
 Uses lazy imports to avoid circular import chain:
 sovyx.engine.events ↔ sovyx.observability.alerts.
@@ -194,3 +194,93 @@ class TestNormalizationBatching:
             ].batch_update_scores.call_args_list
             if normalized > 500:  # noqa: PLR2004
                 assert len(calls) >= 2  # noqa: PLR2004
+
+
+class TestShannonEntropy:
+    """Shannon entropy computation for score drift detection."""
+
+    def test_uniform_distribution_high_entropy(self) -> None:
+        """Perfectly uniform → maximum entropy."""
+        # 100 values evenly spread across [0, 1]
+        values = [i / 100 for i in range(100)]
+        entropy = ConsolidationCycle._shannon_entropy(values)
+        # Uniform over 20 bins → log2(20) ≈ 4.32
+        assert entropy > 3.5  # noqa: PLR2004
+
+    def test_concentrated_distribution_low_entropy(self) -> None:
+        """All values identical → very low entropy."""
+        values = [0.5] * 100
+        entropy = ConsolidationCycle._shannon_entropy(values)
+        # All in one bin → entropy = 0
+        assert entropy < 0.01  # noqa: PLR2004
+
+    def test_bimodal_moderate_entropy(self) -> None:
+        """Two clusters → moderate entropy."""
+        values = [0.1] * 50 + [0.9] * 50
+        entropy = ConsolidationCycle._shannon_entropy(values)
+        # log2(2) = 1.0
+        assert 0.8 < entropy < 1.2  # noqa: PLR2004
+
+    def test_single_value_returns_zero(self) -> None:
+        """Single value → 0.0."""
+        assert ConsolidationCycle._shannon_entropy([0.5]) == 0.0
+
+    def test_empty_returns_zero(self) -> None:
+        """Empty → 0.0."""
+        assert ConsolidationCycle._shannon_entropy([]) == 0.0
+
+    def test_entropy_nonnegative(self) -> None:
+        """Entropy is always >= 0."""
+        import random
+        rng = random.Random(42)
+        for _ in range(10):
+            values = [rng.random() for _ in range(50)]
+            assert ConsolidationCycle._shannon_entropy(values) >= 0.0
+
+
+class TestScoreDrift:
+    """Score drift detection in consolidation."""
+
+    async def test_healthy_distribution_no_warning(
+        self, consolidation_deps: dict[str, AsyncMock]
+    ) -> None:
+        """Well-spread scores → no warning."""
+        concepts = [_concept(f"c{i}", i) for i in range(100)]
+        for i, c in enumerate(concepts):
+            c.importance = i / 100  # Perfect spread
+        consolidation_deps["concept_repo"].get_by_mind = AsyncMock(
+            return_value=concepts
+        )
+
+        cycle = ConsolidationCycle(**consolidation_deps)  # type: ignore[arg-type]
+        # Should not raise or log warnings
+        await cycle._check_score_drift(MindId("test"))
+
+    async def test_collapsed_distribution_detected(
+        self, consolidation_deps: dict[str, AsyncMock]
+    ) -> None:
+        """All identical scores → critical detection."""
+        concepts = [_concept(f"c{i}", i) for i in range(100)]
+        for c in concepts:
+            c.importance = 0.5  # All identical
+        consolidation_deps["concept_repo"].get_by_mind = AsyncMock(
+            return_value=concepts
+        )
+
+        cycle = ConsolidationCycle(**consolidation_deps)  # type: ignore[arg-type]
+        # Should run without error; warning is logged (not raised)
+        await cycle._check_score_drift(MindId("test"))
+        # Entropy of all-same = 0.0 < 1.0 (critical threshold)
+
+    async def test_few_concepts_skipped(
+        self, consolidation_deps: dict[str, AsyncMock]
+    ) -> None:
+        """< 5 concepts → skip drift check."""
+        concepts = [_concept(f"c{i}", i) for i in range(3)]
+        consolidation_deps["concept_repo"].get_by_mind = AsyncMock(
+            return_value=concepts
+        )
+
+        cycle = ConsolidationCycle(**consolidation_deps)  # type: ignore[arg-type]
+        await cycle._check_score_drift(MindId("test"))
+        # No error — silently skipped

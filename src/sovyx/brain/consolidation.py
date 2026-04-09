@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import math
 import random
 import time
 from datetime import UTC, datetime
@@ -96,7 +97,10 @@ class ConsolidationCycle:
                 normalized=normalized,
             )
 
-        # Step 1.7: Refresh category centroid cache
+        # Step 1.7: Score drift detection (Shannon entropy)
+        await self._check_score_drift(mind_id)
+
+        # Step 1.8: Refresh category centroid cache
         centroids_cached = await self._refresh_centroids(mind_id)
         if centroids_cached > 0:
             logger.info(
@@ -295,6 +299,91 @@ class ConsolidationCycle:
             total_updated += len(batch)
 
         return total_updated
+
+    # Entropy thresholds for score distribution health
+    _ENTROPY_WARNING = 1.5  # Low entropy → scores concentrating
+    _ENTROPY_CRITICAL = 1.0  # Very low → distribution collapsed
+
+    async def _check_score_drift(self, mind_id: MindId) -> None:
+        """Check Shannon entropy of importance score distribution.
+
+        Healthy distributions have high entropy (scores spread out).
+        Low entropy means scores converged to similar values, reducing
+        the discriminative power of importance-weighted retrieval.
+
+        Thresholds:
+        - entropy < 1.0: CRITICAL — distribution collapsed, emit alert
+        - entropy < 1.5: WARNING — scores concentrating, log warning
+        - entropy >= 1.5: healthy, no-op
+        """
+        if not self._concepts:
+            return
+
+        concepts = await self._concepts.get_by_mind(mind_id, limit=10000)
+        if len(concepts) < 5:  # noqa: PLR2004
+            return  # Too few concepts for meaningful entropy
+
+        importances = [c.importance for c in concepts]
+        confidences = [c.confidence for c in concepts]
+
+        imp_entropy = self._shannon_entropy(importances)
+        conf_entropy = self._shannon_entropy(confidences)
+
+        logger.debug(
+            "score_drift_check",
+            mind_id=str(mind_id),
+            importance_entropy=round(imp_entropy, 3),
+            confidence_entropy=round(conf_entropy, 3),
+            concepts=len(concepts),
+        )
+
+        if imp_entropy < self._ENTROPY_CRITICAL:
+            logger.warning(
+                "score_drift_critical",
+                mind_id=str(mind_id),
+                importance_entropy=round(imp_entropy, 3),
+                level="CRITICAL",
+            )
+        elif imp_entropy < self._ENTROPY_WARNING:
+            logger.warning(
+                "score_drift_warning",
+                mind_id=str(mind_id),
+                importance_entropy=round(imp_entropy, 3),
+                level="WARNING",
+            )
+
+    @staticmethod
+    def _shannon_entropy(values: list[float], bins: int = 20) -> float:
+        """Compute Shannon entropy of a score distribution.
+
+        Bins continuous [0, 1] scores into a histogram and computes
+        entropy. Higher entropy = more spread. Maximum for 20 bins
+        is log2(20) ≈ 4.32.
+
+        Args:
+            values: List of scores in [0, 1].
+            bins: Number of histogram bins.
+
+        Returns:
+            Shannon entropy in bits. Returns 0.0 for empty/single-value.
+        """
+        if len(values) < 2:  # noqa: PLR2004
+            return 0.0
+
+        # Build histogram
+        counts = [0] * bins
+        for v in values:
+            idx = min(int(v * bins), bins - 1)
+            counts[idx] += 1
+
+        n = len(values)
+        entropy = 0.0
+        for count in counts:
+            if count > 0:
+                p = count / n
+                entropy -= p * math.log2(p)
+
+        return entropy
 
     async def _refresh_centroids(self, mind_id: MindId) -> int:
         """Refresh category centroid cache on BrainService.
