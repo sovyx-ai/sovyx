@@ -69,6 +69,32 @@ export function LogsEmptyAnimation({ className }: { className?: string }) {
   );
 }
 
+/** Conversation select prompt: Static chat icon with subtle arrow hint */
+export function ConversationSelectAnimation({ className }: { className?: string }) {
+  return (
+    <div
+      className={cn("empty-anim-select", className)}
+      aria-hidden="true"
+    >
+      <svg viewBox="0 0 120 80" className="empty-anim-select__svg">
+        {/* Chat bubble outline */}
+        <rect
+          x="25" y="15" width="70" height="40" rx="8"
+          className="empty-anim-select__bubble"
+        />
+        <polygon
+          points="45,55 55,55 42,67"
+          className="empty-anim-select__tail"
+        />
+        {/* Subtle horizontal lines inside bubble (message placeholder) */}
+        <line x1="38" y1="30" x2="82" y2="30" className="empty-anim-select__line" />
+        <line x1="38" y1="38" x2="72" y2="38" className="empty-anim-select__line" />
+        <line x1="38" y1="46" x2="62" y2="46" className="empty-anim-select__line" />
+      </svg>
+    </div>
+  );
+}
+
 /** Chart empty: Flat-line pulse that "wakes up" */
 export function ChartEmptyAnimation({ className }: { className?: string }) {
   return (
