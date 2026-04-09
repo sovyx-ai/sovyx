@@ -68,6 +68,25 @@ class TestAdaptation:
         assert many.memory_concepts > few.memory_concepts
 
 
+    def test_high_confidence_more_concepts(self, manager: TokenBudgetManager) -> None:
+        """High mean confidence → more budget for concepts."""
+        low_conf = manager.allocate(5, 10, mean_confidence=0.2)
+        high_conf = manager.allocate(5, 10, mean_confidence=0.9)
+        assert high_conf.memory_concepts > low_conf.memory_concepts
+
+    def test_low_confidence_more_conversation(self, manager: TokenBudgetManager) -> None:
+        """Low mean confidence → more budget for conversation."""
+        low_conf = manager.allocate(5, 10, mean_confidence=0.2)
+        high_conf = manager.allocate(5, 10, mean_confidence=0.9)
+        assert low_conf.conversation > high_conf.conversation
+
+    def test_neutral_confidence_no_change(self, manager: TokenBudgetManager) -> None:
+        """Neutral confidence (0.5) → no adjustment."""
+        neutral = manager.allocate(5, 10, mean_confidence=0.5)
+        default = manager.allocate(5, 10)  # default is 0.5
+        assert neutral.memory_concepts == default.memory_concepts
+
+
 class TestMinimums:
     """Minimum allocations enforced."""
 
