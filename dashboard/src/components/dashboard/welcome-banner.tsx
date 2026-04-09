@@ -117,8 +117,8 @@ function WelcomeStep({ step, state, icon, title, description, action }: StepProp
           </p>
         </div>
 
-        {/* Action — only visible when active */}
-        {isActive && action && <div className="pt-1">{action}</div>}
+        {/* Action — visible when pending or active, hidden when done */}
+        {!isDone && action && <div className="pt-1">{action}</div>}
       </div>
     </div>
   );

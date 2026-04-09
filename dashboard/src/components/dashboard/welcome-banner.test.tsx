@@ -74,10 +74,10 @@ describe("pending state", () => {
     expect(screen.getByTestId("welcome-step-1")).toHaveAttribute("data-state", "pending");
   });
 
-  it("button is NOT visible when pending", () => {
+  it("action button IS visible when pending (not just active)", () => {
     renderBanner({ step1: "pending", step2: "pending" });
-    // Settings button only shows for active step
-    expect(screen.queryByText("Go to Settings")).not.toBeInTheDocument();
+    // Buttons visible in pending and active, hidden only in done
+    expect(screen.getByText("Go to Settings")).toBeInTheDocument();
   });
 
   it("description is visible when pending", () => {
@@ -134,8 +134,14 @@ describe("done state", () => {
 
   it("action button NOT visible when done", () => {
     renderBanner({ step1: "done", step2: "active", completedCount: 1 });
-    // Step 1's "Go to Settings" should not show
+    // Step 1 is done — "Go to Settings" should be hidden
     expect(screen.queryByText("Go to Settings")).not.toBeInTheDocument();
+  });
+
+  it("action button still visible for step 2 even in pending state", () => {
+    renderBanner({ step1: "pending", step2: "pending", step3: "pending", completedCount: 0 });
+    // Open Chat button should be visible even when step2 is pending
+    expect(screen.getByText("Open Chat")).toBeInTheDocument();
   });
 });
 
@@ -232,11 +238,10 @@ describe("full progression", () => {
 describe("edge cases", () => {
   it("step 3 has no action button even when active", () => {
     renderBanner({ step1: "done", step2: "done", step3: "active", completedCount: 2 });
-    // Step 3 has no action (watch your mind grow — passive step)
-    // Only buttons should be dismiss + step2's done state (no chat button since step2 is done)
-    const links = screen.queryAllByRole("link");
-    // No action links from steps since step1 and step2 are done, step3 has no action
-    expect(links).toHaveLength(0);
+    // Step 3 has no action defined (watch your mind grow — passive step)
+    // Step 1 and 2 are done so their buttons are hidden
+    expect(screen.queryByText("Go to Settings")).not.toBeInTheDocument();
+    expect(screen.queryByText("Open Chat")).not.toBeInTheDocument();
   });
 
   it("all data-testids preserved for test stability", () => {
