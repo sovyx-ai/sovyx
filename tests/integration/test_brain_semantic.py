@@ -290,6 +290,7 @@ class TestBrainSemanticPipeline:
         brain.learn_concept = AsyncMock(side_effect=mock_learn_concept)
         brain.strengthen_connection = AsyncMock(side_effect=mock_strengthen)
         brain.encode_episode = AsyncMock(side_effect=mock_encode_episode)
+        brain.compute_novelty = AsyncMock(return_value=0.50)  # Default moderate novelty
 
         # Build LLM router mock — returns extraction, relation, summary
         # for each message in sequence

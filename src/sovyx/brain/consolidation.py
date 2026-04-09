@@ -396,8 +396,9 @@ class ConsolidationCycle:
             Number of categories cached.
         """
         try:
-            return await self._brain.refresh_centroid_cache(mind_id)
-        except AttributeError:
+            result = await self._brain.refresh_centroid_cache(mind_id)
+            return int(result) if isinstance(result, (int, float)) else 0
+        except (AttributeError, TypeError):
             return 0
         except Exception:
             logger.debug("centroid_cache_refresh_error", exc_info=True)
