@@ -76,10 +76,15 @@ class HybridRetrieval:
 
         if not vec_results:
             # FTS5-only fallback: convert FTS rank to RRF-like score
-            return [
-                (concept, 1.0 / (self._k + rank_pos + 1))
-                for rank_pos, (concept, _) in enumerate(fts_results)
-            ][:limit]
+            # Apply quality boost from importance + confidence
+            fts_only: list[tuple[Concept, float]] = []
+            for rank_pos, (concept, _) in enumerate(fts_results):
+                base = 1.0 / (self._k + rank_pos + 1)
+                quality = 0.60 * concept.importance + 0.40 * concept.confidence
+                boosted = base * (1.0 + quality * 0.4)  # Up to 40% boost
+                fts_only.append((concept, boosted))
+            fts_only.sort(key=lambda x: x[1], reverse=True)
+            return fts_only[:limit]
 
         return self._rrf_fusion(fts_results, vec_results, limit)
 
@@ -176,7 +181,15 @@ class HybridRetrieval:
             scores[cid] = scores.get(cid, 0.0) + 1.0 / (self._k + rank_pos + 1)
             concept_map[cid] = concept
 
-        # Sort by RRF score DESC
+        # Apply quality boost from importance + confidence.
+        # Important + confident concepts get up to 40% score boost,
+        # but relevance (text match) remains primary ranking signal.
+        for cid in scores:
+            concept = concept_map[cid]
+            quality = 0.60 * concept.importance + 0.40 * concept.confidence
+            scores[cid] *= 1.0 + quality * 0.4
+
+        # Sort by boosted RRF score DESC
         sorted_ids = sorted(scores, key=lambda k: scores.get(k, 0.0), reverse=True)
 
         return [(concept_map[cid], scores[cid]) for cid in sorted_ids[:limit]]

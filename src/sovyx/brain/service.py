@@ -123,11 +123,12 @@ class BrainService:
             # Build activation map
             spread_map = {str(cid): act for cid, act in spread}
 
-            # Re-score with spreading activation
+            # Re-score with spreading activation + quality factor
             rescored: list[tuple[Concept, float]] = []
             for concept, rrf_score in results:
                 spread_score = spread_map.get(str(concept.id), 0.0)
-                combined = rrf_score + spread_score * 0.1
+                quality = 0.60 * concept.importance + 0.40 * concept.confidence
+                combined = rrf_score + spread_score * 0.1 + quality * 0.05
                 rescored.append((concept, combined))
 
             rescored.sort(key=lambda x: x[1], reverse=True)
