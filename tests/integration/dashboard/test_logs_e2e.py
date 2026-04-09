@@ -104,8 +104,7 @@ class TestLogsPipeline:
         # the file handler formatter is JSONRenderer
         root = logging.getLogger()
         file_handlers = [
-            h for h in root.handlers
-            if isinstance(h, logging.handlers.RotatingFileHandler)
+            h for h in root.handlers if isinstance(h, logging.handlers.RotatingFileHandler)
         ]
         assert len(file_handlers) == 1
         # File formatter renders JSON
@@ -113,7 +112,8 @@ class TestLogsPipeline:
         assert file_fmt is not None
 
         stream_handlers = [
-            h for h in root.handlers
+            h
+            for h in root.handlers
             if isinstance(h, logging.StreamHandler)
             and not isinstance(h, logging.handlers.RotatingFileHandler)
         ]
@@ -203,13 +203,13 @@ class TestLogsPipeline:
 
         root = logging.getLogger()
         stream_count = sum(
-            1 for h in root.handlers
+            1
+            for h in root.handlers
             if isinstance(h, logging.StreamHandler)
             and not isinstance(h, logging.handlers.RotatingFileHandler)
         )
         file_count = sum(
-            1 for h in root.handlers
-            if isinstance(h, logging.handlers.RotatingFileHandler)
+            1 for h in root.handlers if isinstance(h, logging.handlers.RotatingFileHandler)
         )
         assert stream_count == 1, f"Expected 1 StreamHandler, got {stream_count}"
         assert file_count == 1, f"Expected 1 FileHandler, got {file_count}"

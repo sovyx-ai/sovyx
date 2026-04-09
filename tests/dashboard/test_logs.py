@@ -434,9 +434,7 @@ class TestQueryLogs:
     def test_discard_entry_without_timestamp(self, tmp_path: Path) -> None:
         """Entry missing both 'timestamp' and 'ts' is discarded."""
         f = tmp_path / "norm.log"
-        entry = json.dumps(
-            {"event": "orphan", "level": "info"}
-        )
+        entry = json.dumps({"event": "orphan", "level": "info"})
         f.write_text(entry + "\n")
         result = query_logs(f)
         assert result == []

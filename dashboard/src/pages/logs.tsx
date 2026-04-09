@@ -39,7 +39,7 @@ export default function LogsPage() {
   const parentRef = useRef<HTMLDivElement>(null);
   const prevLogCountRef = useRef(0);
   const lastTimestampRef = useRef<string | null>(null);
-  const pollTimerRef = useRef<ReturnType<typeof setInterval>>();
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
 
   // Fetch initial logs with AbortController (POLISH-01)
   const fetchLogs = useCallback(async (signal?: AbortSignal) => {
