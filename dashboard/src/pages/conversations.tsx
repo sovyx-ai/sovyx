@@ -23,7 +23,7 @@ import { ChatThread } from "@/components/dashboard/chat-thread";
 import { StatusDot } from "@/components/dashboard/status-dot";
 import type { Conversation, ConversationsResponse, Message } from "@/types/api";
 import { EmptyState } from "@/components/empty-state";
-import { ConversationsEmptyAnimation } from "@/components/empty-state-animations";
+import { ConversationsEmptyAnimation, ConversationSelectAnimation } from "@/components/empty-state-animations";
 import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 50;
@@ -279,7 +279,7 @@ export default function ConversationsPage() {
           <div className="flex h-full items-center justify-center">
             <EmptyState
               icon={<MessageSquareIcon className="size-10" />}
-              animation={<ConversationsEmptyAnimation />}
+              animation={<ConversationSelectAnimation />}
               title={t("detail.selectTitle")}
               description={t("detail.selectHint")}
             />
