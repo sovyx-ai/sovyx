@@ -303,6 +303,13 @@ def _setup_logging_locked(config: LoggingConfig) -> None:
         file_handler.setFormatter(json_formatter)
         root_logger.addHandler(file_handler)
 
+    # ── Suppress noisy third-party loggers ──
+    # httpx/httpcore emit INFO-level "HTTP Request: GET ..." lines that
+    # bypass structlog formatting and pollute console output.
+    # urllib3 and hpack (HTTP/2) are similarly noisy.
+    for noisy_logger in ("httpx", "httpcore", "urllib3", "hpack"):
+        logging.getLogger(noisy_logger).setLevel(logging.WARNING)
+
     _setup_done = True
 
 

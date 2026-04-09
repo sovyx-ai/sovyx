@@ -320,6 +320,20 @@ class TestSetupLogging:
         masker_found = any(isinstance(p, SecretMasker) for p in processors)
         assert masker_found
 
+    @pytest.mark.parametrize("logger_name", ["httpx", "httpcore", "urllib3", "hpack"])
+    def test_noisy_loggers_suppressed(self, logger_name: str) -> None:
+        """Third-party HTTP loggers are set to WARNING after setup."""
+        setup_logging(LoggingConfig(log_file=None))
+        assert logging.getLogger(logger_name).level == logging.WARNING
+
+    def test_noisy_loggers_warning_still_passes(self) -> None:
+        """WARNING+ from suppressed loggers still reaches handlers."""
+        setup_logging(LoggingConfig(level="DEBUG", console_format="json", log_file=None))
+        httpx_logger = logging.getLogger("httpx")
+        assert httpx_logger.isEnabledFor(logging.WARNING)
+        assert httpx_logger.isEnabledFor(logging.ERROR)
+        assert not httpx_logger.isEnabledFor(logging.INFO)
+
 
 # ── JSON Output Integration ─────────────────────────────────────────────────
 
