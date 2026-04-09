@@ -49,7 +49,8 @@ def _resolve_default_log_file() -> Path:
         if config.log.log_file is not None:
             return config.log.log_file
     except Exception:  # noqa: BLE001
-        pass
+        # Config unavailable (pre-init, corrupted YAML, etc.) — use default
+        return Path.home() / ".sovyx" / "logs" / "sovyx.log"
     return Path.home() / ".sovyx" / "logs" / "sovyx.log"
 
 
