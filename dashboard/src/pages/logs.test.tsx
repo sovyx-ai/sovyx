@@ -64,4 +64,16 @@ describe("LogsPage", () => {
     expect(screen.getByText("DEBUG")).toBeInTheDocument();
     expect(screen.getByText("ERROR")).toBeInTheDocument();
   });
+
+  it("initial fetch sends limit param", async () => {
+    mockApi.get.mockResolvedValueOnce({ entries: [] });
+    render(<LogsPage />);
+    await waitFor(() => {
+      expect(mockApi.get).toHaveBeenCalledTimes(1);
+      const url = mockApi.get.mock.calls[0]?.[0] as string;
+      expect(url).toContain("limit=500");
+      // Initial fetch should NOT have 'after' param
+      expect(url).not.toContain("after=");
+    });
+  });
 });

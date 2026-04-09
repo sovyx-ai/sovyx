@@ -24,18 +24,22 @@ def query_logs(
     level: str | None = None,
     module: str | None = None,
     search: str | None = None,
+    after: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     """Query structured JSON log file with filters.
 
     Reads from the end of file (most recent first).
-    Returns up to `limit` matching entries.
+    Returns up to ``limit`` matching entries.
 
     Args:
         log_file: Path to JSON log file. Returns [] if None or missing.
         level: Filter by log level (DEBUG, INFO, WARNING, ERROR).
         module: Filter by logger name (prefix match).
         search: Full-text search in event/message field.
+        after: ISO-8601 timestamp — only return entries **after** this time.
+            Used for incremental polling (dashboard fetches new logs since
+            the last known timestamp).
         limit: Maximum entries to return.
 
     Returns:
@@ -50,6 +54,7 @@ def query_logs(
             level=level,
             module=module,
             search=search,
+            after=after,
             limit=limit,
         )
     except Exception:  # noqa: BLE001
@@ -63,6 +68,7 @@ def _read_and_filter(
     level: str | None,
     module: str | None,
     search: str | None,
+    after: str | None,
     limit: int,
 ) -> list[dict[str, Any]]:
     """Read log file lines and apply filters."""
@@ -77,6 +83,14 @@ def _read_and_filter(
         entry = _parse_line(line)
         if entry is None:
             continue
+
+        # Incremental filter: skip entries at or before the cursor.
+        # Uses string comparison on ISO-8601 timestamps (lexicographic
+        # ordering matches chronological ordering for ISO format).
+        if after is not None:
+            entry_ts = entry.get("timestamp", entry.get("ts", ""))
+            if isinstance(entry_ts, str) and entry_ts <= after:
+                continue
 
         if not _matches_filters(entry, level=level, module=module, search=search):
             continue

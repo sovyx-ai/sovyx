@@ -38,6 +38,8 @@ export default function LogsPage() {
 
   const parentRef = useRef<HTMLDivElement>(null);
   const prevLogCountRef = useRef(0);
+  const lastTimestampRef = useRef<string | null>(null);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval>>();
 
   // Fetch initial logs with AbortController (POLISH-01)
   const fetchLogs = useCallback(async (signal?: AbortSignal) => {
@@ -49,6 +51,10 @@ export default function LogsPage() {
       if (search) params.set("search", search);
       const data = await api.get<{ entries: LogEntry[] }>(`/api/logs?${params}`, { signal });
       setLogs(data.entries);
+      // Track latest timestamp for incremental polling
+      if (data.entries.length > 0) {
+        lastTimestampRef.current = data.entries[0]?.timestamp ?? null;
+      }
     } catch (err) {
       if (isAbortError(err)) return;
       setError(t("error.loadFailed"));
@@ -57,11 +63,46 @@ export default function LogsPage() {
     }
   }, [levelFilter, search, setLogs]);
 
+  // Full fetch on filter/search change
   useEffect(() => {
     const controller = new AbortController();
+    lastTimestampRef.current = null;
     void fetchLogs(controller.signal);
     return () => controller.abort();
   }, [fetchLogs]);
+
+  // Incremental polling every 5s (only when tab is visible)
+  const addLog = useDashboardStore((s) => s.addLog);
+
+  useEffect(() => {
+    const poll = async () => {
+      if (document.visibilityState !== "visible") return;
+      if (!lastTimestampRef.current) return;
+
+      try {
+        const params = new URLSearchParams({
+          limit: "100",
+          after: lastTimestampRef.current,
+        });
+        if (levelFilter !== "ALL") params.set("level", levelFilter);
+        if (search) params.set("search", search);
+        const data = await api.get<{ entries: LogEntry[] }>(`/api/logs?${params}`);
+        if (data.entries.length > 0) {
+          // Entries come most-recent-first; append in chronological order
+          const chronological = [...data.entries].reverse();
+          for (const entry of chronological) {
+            addLog(entry);
+          }
+          lastTimestampRef.current = data.entries[0]?.timestamp ?? lastTimestampRef.current;
+        }
+      } catch {
+        // Silently ignore poll errors — next poll will retry
+      }
+    };
+
+    pollTimerRef.current = setInterval(() => void poll(), 5_000);
+    return () => clearInterval(pollTimerRef.current);
+  }, [levelFilter, search, addLog]);
 
   // Filtered logs
   const filtered = useMemo(() => {

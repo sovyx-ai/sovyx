@@ -429,9 +429,14 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
         level: str | None = None,
         module: str | None = None,
         search: str | None = None,
+        after: str | None = None,
         limit: int = Query(default=100, ge=0, le=1000),
     ) -> JSONResponse:
-        """Query structured JSON logs with filters."""
+        """Query structured JSON logs with filters.
+
+        Use ``after`` (ISO-8601 timestamp) for incremental polling:
+        only entries newer than the given timestamp are returned.
+        """
         from sovyx.dashboard.logs import query_logs
 
         log_file = getattr(app.state, "log_file", None)
@@ -440,6 +445,7 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
             level=level,
             module=module,
             search=search,
+            after=after,
             limit=limit,
         )
         return JSONResponse({"entries": entries})
