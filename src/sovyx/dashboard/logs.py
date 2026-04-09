@@ -105,27 +105,56 @@ def _tail_lines(path: Path, max_lines: int = 1000) -> list[str]:
 
     For files up to 1MB, reads the whole file (fast enough).
     For larger files, seeks to the last ~1MB and reads from there.
+
+    Rotation resilience:
+        ``RotatingFileHandler`` may rotate the file (rename to ``.1``)
+        between our ``stat()`` and ``open()`` calls.  If the primary
+        file vanishes or is empty (just rotated), we retry once after
+        a short sleep and then fall back to the ``.1`` backup.
+    """
+    lines = _try_read_file(path, max_lines)
+    if lines is not None:
+        return lines
+
+    # Primary file missing or empty — might be mid-rotation.
+    # Brief pause then retry (rotation is fast, typically < 50ms).
+    import time
+
+    time.sleep(0.1)
+    lines = _try_read_file(path, max_lines)
+    if lines is not None:
+        return lines
+
+    # Still empty/missing — try the .1 backup (most recent rotated file).
+    backup = path.parent / f"{path.name}.1"
+    lines = _try_read_file(backup, max_lines)
+    return lines if lines is not None else []
+
+
+def _try_read_file(path: Path, max_lines: int) -> list[str] | None:
+    """Attempt to read tail lines from a single file.
+
+    Returns:
+        List of lines if successful, None if file is missing/empty/unreadable.
     """
     try:
         file_size = path.stat().st_size
         if file_size == 0:
-            return []
+            return None
 
-        # For small files, just read all
         max_read = 1024 * 1024  # 1MB
         with path.open("rb") as f:
             if file_size > max_read:
-                f.seek(-max_read, 2)  # Seek from end
-                # Skip partial first line
-                f.readline()
+                f.seek(-max_read, 2)
+                f.readline()  # Skip partial first line
             data = f.read()
 
         lines = data.decode("utf-8", errors="replace").splitlines()
         if len(lines) > max_lines:
             lines = lines[-max_lines:]
-        return lines
+        return lines if lines else None
     except OSError:
-        return []
+        return None
 
 
 def _parse_line(line: str) -> dict[str, Any] | None:
