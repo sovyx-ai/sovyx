@@ -183,7 +183,7 @@ class TestFormatConceptsBlock:
 
         # Trivial has higher search score but lower importance
         concepts = [
-            (trivial, 0.9),   # High search relevance
+            (trivial, 0.9),  # High search relevance
             (important, 0.3),  # Low search relevance
         ]
         # Tight budget: only 1 concept fits besides header
@@ -191,10 +191,7 @@ class TestFormatConceptsBlock:
         # Important concept should be included (weighted score wins)
         assert "Alice" in result
 
-
-    def test_context_inclusion_count_increments(
-        self, formatter: ContextFormatter
-    ) -> None:
+    def test_context_inclusion_count_increments(self, formatter: ContextFormatter) -> None:
         """Concepts included in context get context_inclusion_count bumped."""
         c1 = _concept("coffee", "Loves coffee", ConceptCategory.PREFERENCE)
         c1.metadata = {}

@@ -134,13 +134,15 @@ class TestScoreRecalculation:
         mock_concepts.batch_update_scores = AsyncMock(return_value=3)
 
         mock_relations = AsyncMock()
-        mock_relations.get_degree_centrality = AsyncMock(return_value={
-            "c0": (5, 0.7),
-            "c1": (3, 0.5),
-            "c2": (1, 0.3),
-            "c3": (0, 0.0),
-            "c4": (0, 0.0),
-        })
+        mock_relations.get_degree_centrality = AsyncMock(
+            return_value={
+                "c0": (5, 0.7),
+                "c1": (3, 0.5),
+                "c2": (1, 0.3),
+                "c3": (0, 0.0),
+                "c4": (0, 0.0),
+            }
+        )
 
         cycle_with_scorers = ConsolidationCycle(
             brain_service=mock_brain,
@@ -192,9 +194,11 @@ class TestScoreRecalculation:
         mock_concepts.batch_update_scores = AsyncMock(return_value=0)
 
         mock_relations = AsyncMock()
-        mock_relations.get_degree_centrality = AsyncMock(return_value={
-            "stable": (5, 0.6),
-        })
+        mock_relations.get_degree_centrality = AsyncMock(
+            return_value={
+                "stable": (5, 0.6),
+            }
+        )
 
         cycle_with_scorers = ConsolidationCycle(
             brain_service=mock_brain,
@@ -281,10 +285,12 @@ class TestScoreRecalculation:
         mock_concepts.batch_update_scores = AsyncMock(return_value=2)
 
         mock_relations = AsyncMock()
-        mock_relations.get_degree_centrality = AsyncMock(return_value={
-            "connected": (15, 0.8),  # Hub: many connections
-            "isolated": (0, 0.0),    # Leaf: no connections
-        })
+        mock_relations.get_degree_centrality = AsyncMock(
+            return_value={
+                "connected": (15, 0.8),  # Hub: many connections
+                "isolated": (0, 0.0),  # Leaf: no connections
+            }
+        )
 
         cycle_s = ConsolidationCycle(
             brain_service=mock_brain,
@@ -326,8 +332,13 @@ class TestScoreNormalization:
 
         # All concepts at ~0.5 importance (narrow spread of 0.02)
         concepts = [
-            Concept(id=ConceptId(f"c{i}"), mind_id=mind_id, name=f"c{i}",
-                    importance=0.50 + i * 0.005, confidence=0.5)
+            Concept(
+                id=ConceptId(f"c{i}"),
+                mind_id=mind_id,
+                name=f"c{i}",
+                importance=0.50 + i * 0.005,
+                confidence=0.5,
+            )
             for i in range(5)
         ]
 
@@ -336,7 +347,9 @@ class TestScoreNormalization:
         mock_concepts.batch_update_scores = AsyncMock(return_value=5)
 
         cycle_n = ConsolidationCycle(
-            mock_brain, mock_decay, event_bus,
+            mock_brain,
+            mock_decay,
+            event_bus,
             concept_repo=mock_concepts,
             importance_scorer=ImportanceScorer(),
             confidence_scorer=ConfidenceScorer(),
@@ -362,12 +375,15 @@ class TestScoreNormalization:
         from sovyx.engine.types import ConceptId
 
         concepts = [
-            Concept(id=ConceptId("c0"), mind_id=mind_id, name="c0",
-                    importance=0.2, confidence=0.5),
-            Concept(id=ConceptId("c1"), mind_id=mind_id, name="c1",
-                    importance=0.5, confidence=0.5),
-            Concept(id=ConceptId("c2"), mind_id=mind_id, name="c2",
-                    importance=0.8, confidence=0.5),
+            Concept(
+                id=ConceptId("c0"), mind_id=mind_id, name="c0", importance=0.2, confidence=0.5
+            ),
+            Concept(
+                id=ConceptId("c1"), mind_id=mind_id, name="c1", importance=0.5, confidence=0.5
+            ),
+            Concept(
+                id=ConceptId("c2"), mind_id=mind_id, name="c2", importance=0.8, confidence=0.5
+            ),
         ]
 
         mock_concepts = AsyncMock()
@@ -375,7 +391,9 @@ class TestScoreNormalization:
         mock_concepts.batch_update_scores = AsyncMock()
 
         cycle_n = ConsolidationCycle(
-            mock_brain, mock_decay, event_bus,
+            mock_brain,
+            mock_decay,
+            event_bus,
             concept_repo=mock_concepts,
             importance_scorer=ImportanceScorer(),
             confidence_scorer=ConfidenceScorer(),

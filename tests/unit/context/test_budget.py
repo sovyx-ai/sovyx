@@ -67,7 +67,6 @@ class TestAdaptation:
         many = manager.allocate(5, 30)
         assert many.memory_concepts > few.memory_concepts
 
-
     def test_high_confidence_more_concepts(self, manager: TokenBudgetManager) -> None:
         """High mean confidence → more budget for concepts."""
         low_conf = manager.allocate(5, 10, mean_confidence=0.2)

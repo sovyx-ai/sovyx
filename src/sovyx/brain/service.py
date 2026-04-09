@@ -250,13 +250,15 @@ class BrainService:
                     )
 
                     # Emit event for downstream consumers (dashboard, alerts)
-                    await self._events.emit(ConceptContradicted(
-                        concept_id=str(concept.id),
-                        old_content=concept.content,
-                        new_content=content,
-                        old_confidence=old_conf,
-                        new_confidence=concept.confidence,
-                    ))
+                    await self._events.emit(
+                        ConceptContradicted(
+                            concept_id=str(concept.id),
+                            old_content=concept.content,
+                            new_content=content,
+                            old_confidence=old_conf,
+                            new_confidence=concept.confidence,
+                        )
+                    )
 
                 elif relation == ContentRelation.EXTENDS:
                     # Extension: update content + corroboration boost
@@ -311,7 +313,9 @@ class BrainService:
                 # Re-activate in working memory with actual importance
                 # (not flat 0.5) so concept visibility reflects true importance.
                 self._memory.activate(
-                    concept.id, concept.importance, importance=concept.importance,
+                    concept.id,
+                    concept.importance,
+                    importance=concept.importance,
                 )
                 return concept.id
 
@@ -540,7 +544,9 @@ class BrainService:
         if self._embedding.has_embeddings:
             try:
                 return await self._compute_novelty_embedding(
-                    text, category, mind_id,
+                    text,
+                    category,
+                    mind_id,
                 )
             except Exception:
                 logger.debug("embedding_novelty_failed_falling_back_to_fts5")
@@ -580,7 +586,9 @@ class BrainService:
         if centroid is None:
             # Cache miss: compute from scratch, cache the result
             category_embeddings = await self._concepts.get_embeddings_by_category(
-                mind_id, category, limit=500,
+                mind_id,
+                category,
+                limit=500,
             )
             if not category_embeddings:
                 return self._COLD_START_NOVELTY
@@ -660,7 +668,9 @@ class BrainService:
                     continue
 
                 embeddings = await self._concepts.get_embeddings_by_category(
-                    mind_id, cat, limit=500,
+                    mind_id,
+                    cat,
+                    limit=500,
                 )
                 if not embeddings:
                     continue

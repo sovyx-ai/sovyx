@@ -516,9 +516,7 @@ class TestImportanceProperties:
         explicit: bool,
     ) -> None:
         scorer = ImportanceScorer()
-        result = scorer.score_initial(
-            category_base, llm_importance, emotional, novelty, explicit
-        )
+        result = scorer.score_initial(category_base, llm_importance, emotional, novelty, explicit)
         assert 0.05 <= result <= 1.0
 
     @given(

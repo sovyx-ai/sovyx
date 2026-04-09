@@ -266,9 +266,7 @@ class TestProperties:
         new=st.text(min_size=0, max_size=300),
     )
     @settings(max_examples=100)
-    def test_heuristic_always_returns_valid_relation(
-        self, old: str, new: str
-    ) -> None:
+    def test_heuristic_always_returns_valid_relation(self, old: str, new: str) -> None:
         """Heuristic never crashes, always returns valid ContentRelation."""
         result = _detect_contradiction_heuristic(old, new)
         assert isinstance(result, ContentRelation)
@@ -285,9 +283,7 @@ class TestProperties:
         new=st.text(min_size=1, max_size=100),
     )
     @settings(max_examples=50)
-    async def test_detect_contradiction_never_crashes(
-        self, old: str, new: str
-    ) -> None:
+    async def test_detect_contradiction_never_crashes(self, old: str, new: str) -> None:
         """Full detect_contradiction never raises (graceful fallback)."""
         result = await detect_contradiction(old, new)
         assert isinstance(result, ContentRelation)

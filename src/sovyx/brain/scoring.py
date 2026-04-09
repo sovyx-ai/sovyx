@@ -79,10 +79,7 @@ class ConfidenceWeights:
 
     def __post_init__(self) -> None:
         total = (
-            self.source_quality
-            + self.llm_assessment
-            + self.explicitness
-            + self.content_richness
+            self.source_quality + self.llm_assessment + self.explicitness + self.content_richness
         )
         if abs(total - 1.0) > 0.001:
             msg = f"ConfidenceWeights must sum to 1.0, got {total:.4f}"
@@ -108,13 +105,7 @@ class EvolutionWeights:
     emotional: float = 0.10
 
     def __post_init__(self) -> None:
-        total = (
-            self.momentum
-            + self.access
-            + self.connectivity
-            + self.recency
-            + self.emotional
-        )
+        total = self.momentum + self.access + self.connectivity + self.recency + self.emotional
         if abs(total - 1.0) > 0.001:
             msg = f"EvolutionWeights must sum to 1.0, got {total:.4f}"
             raise ValueError(msg)

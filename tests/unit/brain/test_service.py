@@ -179,7 +179,6 @@ class TestSearch:
         assert len(results) == 1
         await asyncio.sleep(0.05)
 
-
     async def test_retrieval_hit_count_increments(
         self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
     ) -> None:
@@ -262,7 +261,11 @@ class TestLearnConcept:
     ) -> None:
         """ConceptCreated event carries importance + confidence (TASK-15)."""
         await brain.learn_concept(
-            MIND, "Python", "A language", importance=0.8, confidence=0.7,
+            MIND,
+            "Python",
+            "A language",
+            importance=0.8,
+            confidence=0.7,
         )
         event = mock_deps["event_bus"].emit.call_args[0][0]  # type: ignore[union-attr]
         assert isinstance(event, ConceptCreated)
@@ -362,7 +365,6 @@ class TestLearnConcept:
         new_activation = wm.get_activation(ConceptId("existing-id"))
         assert new_activation > decayed_activation  # re-activated above decay level
         assert new_activation >= 0.7  # at least the concept's importance
-
 
     # ── TASK-01: importance + confidence params ──
 
@@ -481,7 +483,9 @@ class TestContradictionDetection:
 
         # New content contradicts (different value, not an extension)
         await brain.learn_concept(
-            MIND, "favorite_color", "Favorite color is red",
+            MIND,
+            "favorite_color",
+            "Favorite color is red",
             category=ConceptCategory.PREFERENCE,
         )
 
@@ -494,7 +498,8 @@ class TestContradictionDetection:
         # Verify ConceptContradicted event emitted
         emit_calls = mock_deps["event_bus"].emit.call_args_list  # type: ignore[union-attr]
         contradiction_events = [
-            c for c in emit_calls
+            c
+            for c in emit_calls
             if hasattr(c.args[0], "concept_id")
             and c.args[0].__class__.__name__ == "ConceptContradicted"
         ]
@@ -517,7 +522,9 @@ class TestContradictionDetection:
 
         # Longer content → extension, not contradiction
         await brain.learn_concept(
-            MIND, "name", "Name is Alice and she lives in NY",
+            MIND,
+            "name",
+            "Name is Alice and she lives in NY",
             category=ConceptCategory.ENTITY,
         )
 
@@ -539,7 +546,9 @@ class TestContradictionDetection:
         )
 
         await brain.learn_concept(
-            MIND, "hobby", "Likes running",
+            MIND,
+            "hobby",
+            "Likes running",
             category=ConceptCategory.PREFERENCE,
         )
 

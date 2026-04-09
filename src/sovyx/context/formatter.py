@@ -184,8 +184,7 @@ class ContextFormatter:
         (Liu et al. 2023).
         """
         weighted = [
-            (concept, 0.65 * score + 0.35 * concept.importance)
-            for concept, score in items
+            (concept, 0.65 * score + 0.35 * concept.importance) for concept, score in items
         ]
         sorted_items = sorted(weighted, key=lambda x: x[1], reverse=True)
         high = sorted_items[::2]

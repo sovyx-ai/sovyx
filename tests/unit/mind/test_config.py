@@ -177,13 +177,17 @@ class TestScoringConfig:
     def test_defaults_valid(self) -> None:
         s = ScoringConfig()
         imp_sum = (
-            s.importance_category + s.importance_llm
-            + s.importance_emotional + s.importance_novelty
+            s.importance_category
+            + s.importance_llm
+            + s.importance_emotional
+            + s.importance_novelty
             + s.importance_explicit
         )
         conf_sum = (
-            s.confidence_source + s.confidence_llm
-            + s.confidence_explicitness + s.confidence_richness
+            s.confidence_source
+            + s.confidence_llm
+            + s.confidence_explicitness
+            + s.confidence_richness
         )
         assert abs(imp_sum - 1.0) < 0.001
         assert abs(conf_sum - 1.0) < 0.001
