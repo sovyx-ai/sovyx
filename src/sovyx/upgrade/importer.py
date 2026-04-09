@@ -157,12 +157,20 @@ class MindImporter:
         if convos_dir.is_dir():
             info.episodes_imported = await self._import_episodes_from_dir(convos_dir, mind_id)
 
+        # Post-import re-scoring: recalculate importance/confidence
+        # using the full scoring pipeline (centrality, recency, etc.)
+        # instead of leaving all concepts at default 0.5.
+        rescored = await self._rescore_imported(mind_id)
+        if rescored > 0:
+            info.warnings.append(f"Re-scored {rescored} concepts from default 0.5")
+
         logger.info(
             "smf_import_complete",
             mind_id=mind_id,
             concepts=info.concepts_imported,
             episodes=info.episodes_imported,
             relations=info.relations_imported,
+            rescored=rescored,
         )
 
         return info
@@ -434,6 +442,69 @@ class MindImporter:
                 ),
             )
             await conn.commit()
+
+    # ── Post-import re-scoring ────────────────────────────────
+
+    async def _rescore_imported(self, mind_id: str) -> int:
+        """Re-score imported concepts from flat 0.5 defaults.
+
+        Uses category-based importance and content richness as lightweight
+        signals. Does NOT require BrainService — operates directly on SQL.
+
+        Category importance baseline:
+        - entity: 0.80, preference: 0.70, skill: 0.65, belief: 0.75,
+        - relationship: 0.85, goal: 0.80, fact: 0.50, emotion: 0.60,
+        - memory: 0.70
+
+        Content richness signal: len(content) / 200 clamped to [0, 0.15]
+
+        Returns:
+            Number of concepts re-scored.
+        """
+        category_scores: dict[str, float] = {
+            "entity": 0.80, "preference": 0.70, "skill": 0.65,
+            "belief": 0.75, "relationship": 0.85, "goal": 0.80,
+            "fact": 0.50, "emotion": 0.60, "memory": 0.70,
+        }
+
+        async with self._pool.write() as conn:
+            cursor = await conn.execute(
+                "SELECT id, category, content, importance FROM concepts "
+                "WHERE mind_id = ? AND importance = 0.5",
+                (mind_id,),
+            )
+            rows = list(await cursor.fetchall())
+            if not rows:
+                return 0
+
+            updated = 0
+            for row in rows:
+                cid, category, content, current_imp = row
+                cat_lower = (category or "fact").lower()
+                base = category_scores.get(cat_lower, 0.50)
+
+                # Content richness: longer content = slightly more important
+                richness = min(0.15, len(content or "") / 200)
+
+                new_importance = min(1.0, max(0.05, base + richness))
+
+                # Only update if changed from default
+                if abs(new_importance - current_imp) > 0.01:
+                    await conn.execute(
+                        "UPDATE concepts SET importance = ? WHERE id = ?",
+                        (round(new_importance, 3), cid),
+                    )
+                    updated += 1
+
+            await conn.commit()
+
+        logger.info(
+            "post_import_rescore",
+            mind_id=mind_id,
+            rescored=updated,
+            total=len(rows),
+        )
+        return updated
 
     # ── File parsers ────────────────────────────────────────────
 
