@@ -37,9 +37,7 @@ class LoggingConfig(BaseModel):
 
     level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
     console_format: Literal["json", "text"] = "text"
-    log_file: Path | None = Field(
-        default_factory=lambda: Path.home() / ".sovyx" / "logs" / "sovyx.log",
-    )
+    log_file: Path | None = None
 
 
 class DatabaseConfig(BaseModel):
@@ -146,6 +144,22 @@ class EngineConfig(BaseSettings):
     relay: RelayConfig = Field(default_factory=RelayConfig)
     api: APIConfig = Field(default_factory=APIConfig)
     socket: SocketConfig = Field(default_factory=SocketConfig)
+
+    @model_validator(mode="after")
+    def resolve_log_file(self) -> EngineConfig:
+        """Resolve log_file relative to data_dir when not explicitly set.
+
+        Default: ``<data_dir>/logs/sovyx.log``.  This ensures that
+        ``SOVYX_DATA_DIR=/data/sovyx`` puts logs at
+        ``/data/sovyx/logs/sovyx.log`` instead of the hardcoded
+        ``~/.sovyx/logs/sovyx.log``.
+
+        If ``log_file`` is explicitly set (YAML, env, or override),
+        the explicit value is preserved unchanged.
+        """
+        if self.log.log_file is None:
+            self.log.log_file = self.data_dir / "logs" / "sovyx.log"
+        return self
 
 
 def load_engine_config(
