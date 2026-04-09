@@ -77,7 +77,7 @@ class BrainService:
         self._mind_id = mind_id
         recent = await self._concepts.get_recent(mind_id, limit=50)
         for concept in recent:
-            self._memory.activate(concept.id, concept.importance)
+            self._memory.activate(concept.id, concept.importance, importance=concept.importance)
         logger.info(
             "brain_started",
             mind_id=str(mind_id),
@@ -249,7 +249,9 @@ class BrainService:
                 await self._concepts.record_access(concept.id)
                 # Re-activate in working memory with actual importance
                 # (not flat 0.5) so concept visibility reflects true importance.
-                self._memory.activate(concept.id, concept.importance)
+                self._memory.activate(
+                    concept.id, concept.importance, importance=concept.importance,
+                )
                 return concept.id
 
         # New concept — use provided importance/confidence or defaults
@@ -271,7 +273,7 @@ class BrainService:
         concept_id = await self._concepts.create(concept)
 
         # Activate in working memory with actual importance
-        self._memory.activate(concept_id, concept.importance)
+        self._memory.activate(concept_id, concept.importance, importance=concept.importance)
 
         # Record metrics
         get_metrics().concepts_created.add(1, {"source": source})
