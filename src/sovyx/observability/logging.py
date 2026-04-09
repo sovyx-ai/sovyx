@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import logging.handlers
 import sys
+import threading
 import uuid
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
@@ -189,19 +190,26 @@ class SecretMasker:
 
 # ── Setup ───────────────────────────────────────────────────────────────────
 
+_setup_lock = threading.Lock()
 _setup_done = False
 
 
 def setup_logging(config: LoggingConfig) -> None:
     """Configure structlog for the entire application.
 
+    This function is **idempotent and thread-safe**.  Multiple calls
+    (tests, hot-reload, daemon reconfiguration) will cleanly tear down
+    the previous configuration before applying the new one.  A
+    ``threading.Lock`` serializes concurrent calls.
+
     Args:
-        config: Logging configuration (level, format).
+        config: Logging configuration (level, console_format, log_file).
 
     Effects:
         - Configures structlog globally with shared processors.
         - Sets stdlib logging level.
-        - JSON output for production, colored console for development.
+        - Installs a ``StreamHandler`` (console) with the chosen renderer.
+        - Optionally installs a ``RotatingFileHandler`` (always JSON).
 
     Processor chain (in order):
         1. ``merge_contextvars`` — inject request-scoped context
@@ -210,22 +218,36 @@ def setup_logging(config: LoggingConfig) -> None:
         4. ``TimeStamper`` — ISO-8601 timestamp
         5. ``StackInfoRenderer`` — optional stack trace
         6. ``SecretMasker`` — redact sensitive values
-        7. Renderer (JSON or console)
+        7. Renderer (JSON or console, per handler)
+
+    Idempotency guarantee:
+        After each call, the root logger has exactly **1 StreamHandler**
+        and **0 or 1 RotatingFileHandler** (depending on ``log_file``).
+        No handler accumulation, no file descriptor leaks.
     """
+    with _setup_lock:
+        _setup_logging_locked(config)
+
+
+def _setup_logging_locked(config: LoggingConfig) -> None:
+    """Inner setup — called under ``_setup_lock``. Not part of public API."""
     global _setup_done  # noqa: PLW0603
 
-    # Guard: close existing file handlers before reconfiguring.
-    # Prevents file descriptor leaks on repeated setup_logging() calls
-    # (common in tests, hot-reload, or daemon reconfiguration).
     root_logger = logging.getLogger()
-    for handler in root_logger.handlers:
+
+    # ── Teardown: close file handlers, clear all handlers ──
+    # Close RotatingFileHandlers explicitly to release file descriptors.
+    # Then clear the handler list entirely to prevent accumulation.
+    for handler in list(root_logger.handlers):
         if isinstance(handler, logging.handlers.RotatingFileHandler):
             handler.close()
+    root_logger.handlers.clear()
 
     # Reset structlog cache so new config takes effect on all loggers.
     if _setup_done:
         structlog.reset_defaults()
 
+    # ── Shared processor chain ──
     shared_processors: list[structlog.types.Processor] = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_log_level,
@@ -235,10 +257,11 @@ def setup_logging(config: LoggingConfig) -> None:
         SecretMasker(),
     ]
 
+    # ── Console renderer ──
     if config.console_format == "json":
-        renderer: structlog.types.Processor = structlog.processors.JSONRenderer()
+        console_renderer: structlog.types.Processor = structlog.processors.JSONRenderer()
     else:
-        renderer = structlog.dev.ConsoleRenderer()
+        console_renderer = structlog.dev.ConsoleRenderer()
 
     structlog.configure(
         processors=[
@@ -250,23 +273,19 @@ def setup_logging(config: LoggingConfig) -> None:
         cache_logger_on_first_use=True,
     )
 
-    # Configure stdlib logging to use structlog formatter
-    formatter = structlog.stdlib.ProcessorFormatter(
+    # ── Console handler (StreamHandler → stderr) ──
+    console_formatter = structlog.stdlib.ProcessorFormatter(
         processors=[
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
-            renderer,
+            console_renderer,
         ],
     )
-
-    handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(formatter)
-
-    root_logger = logging.getLogger()
-    root_logger.handlers.clear()
-    root_logger.addHandler(handler)
+    console_handler = logging.StreamHandler(sys.stderr)
+    console_handler.setFormatter(console_formatter)
+    root_logger.addHandler(console_handler)
     root_logger.setLevel(getattr(logging, config.level))
 
-    # Optional file handler (always JSON for machine parsing)
+    # ── File handler (RotatingFileHandler → always JSON) ──
     if config.log_file is not None:
         config.log_file.parent.mkdir(parents=True, exist_ok=True)
         json_formatter = structlog.stdlib.ProcessorFormatter(

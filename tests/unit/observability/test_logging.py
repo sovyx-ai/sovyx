@@ -513,3 +513,68 @@ class TestFileHandler:
             h for h in root.handlers if isinstance(h, logging.handlers.RotatingFileHandler)
         ]
         assert len(file_handlers) == 0
+
+    def test_file_then_no_file_removes_handler(self, tmp_path: Path) -> None:
+        """Reconfigure from file → no file: file handler is removed."""
+        log_file = tmp_path / "test.log"
+
+        # First call: with file
+        setup_logging(LoggingConfig(level="DEBUG", console_format="json", log_file=log_file))
+        root = logging.getLogger()
+        assert len(root.handlers) == 2  # console + file
+
+        # Second call: without file
+        setup_logging(LoggingConfig(level="DEBUG", console_format="json", log_file=None))
+        assert len(root.handlers) == 1  # console only
+        file_handlers = [
+            h for h in root.handlers if isinstance(h, logging.handlers.RotatingFileHandler)
+        ]
+        assert len(file_handlers) == 0
+
+    def test_triple_call_no_accumulation(self, tmp_path: Path) -> None:
+        """Three successive calls → still exactly 2 handlers."""
+        log_file = tmp_path / "test.log"
+        config = LoggingConfig(level="INFO", console_format="json", log_file=log_file)
+
+        setup_logging(config)
+        setup_logging(config)
+        setup_logging(config)
+
+        root = logging.getLogger()
+        assert len(root.handlers) == 2  # 1 console + 1 file
+
+    def test_thread_safety(self, tmp_path: Path) -> None:
+        """Concurrent setup_logging calls don't corrupt handler list."""
+        import threading
+
+        log_file = tmp_path / "test.log"
+        config = LoggingConfig(level="INFO", console_format="json", log_file=log_file)
+        errors: list[Exception] = []
+
+        def call_setup() -> None:
+            try:
+                setup_logging(config)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [threading.Thread(target=call_setup) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
+
+        assert len(errors) == 0, f"Errors in threads: {errors}"
+
+        # After all threads complete, handler count must be stable
+        root = logging.getLogger()
+        stream_handlers = [
+            h
+            for h in root.handlers
+            if isinstance(h, logging.StreamHandler)
+            and not isinstance(h, logging.handlers.RotatingFileHandler)
+        ]
+        file_handlers = [
+            h for h in root.handlers if isinstance(h, logging.handlers.RotatingFileHandler)
+        ]
+        assert len(stream_handlers) == 1
+        assert len(file_handlers) == 1
