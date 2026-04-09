@@ -180,6 +180,39 @@ class TestSearch:
         await asyncio.sleep(0.05)
 
 
+    async def test_retrieval_hit_count_increments(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        """Returned concepts get retrieval_hit_count bumped."""
+        c1 = _concept("test", "c1")
+        c1.metadata = {"retrieval_hit_count": 5}
+        mock_deps["retrieval"].search_concepts = AsyncMock(  # type: ignore[union-attr]
+            return_value=[(c1, 0.5)]
+        )
+        mock_deps["spreading"].activate = AsyncMock(  # type: ignore[union-attr]
+            return_value=[(ConceptId("c1"), 0.5)]
+        )
+
+        results = await brain.search("test", MIND)
+        assert results[0][0].metadata["retrieval_hit_count"] == 6  # noqa: PLR2004
+
+    async def test_retrieval_hit_count_starts_at_zero(
+        self, brain: BrainService, mock_deps: dict[str, AsyncMock | WorkingMemory]
+    ) -> None:
+        """First retrieval → count becomes 1."""
+        c1 = _concept("test", "c1")
+        c1.metadata = {}
+        mock_deps["retrieval"].search_concepts = AsyncMock(  # type: ignore[union-attr]
+            return_value=[(c1, 0.5)]
+        )
+        mock_deps["spreading"].activate = AsyncMock(  # type: ignore[union-attr]
+            return_value=[(ConceptId("c1"), 0.5)]
+        )
+
+        results = await brain.search("test", MIND)
+        assert results[0][0].metadata["retrieval_hit_count"] == 1
+
+
 class TestRecall:
     """recall() — concepts + episodes."""
 

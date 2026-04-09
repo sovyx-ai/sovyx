@@ -145,6 +145,12 @@ class BrainService:
         # Fire-and-forget access tracking (v12 audit fix)
         self._track_access([c.id for c, _ in results])
 
+        # Feedback loop: track retrieval hit counts in metadata
+        for concept, _ in results:
+            hit_raw = concept.metadata.get("retrieval_hit_count", 0)
+            hit = int(hit_raw) if isinstance(hit_raw, (int, float, str)) else 0
+            concept.metadata["retrieval_hit_count"] = hit + 1
+
         return results
 
     async def recall(

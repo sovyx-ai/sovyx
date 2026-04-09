@@ -117,6 +117,11 @@ class ContextFormatter:
             lines.append(line)
             used += line_tokens
 
+            # Feedback loop: track context inclusion in metadata
+            inc_raw = item.metadata.get("context_inclusion_count", 0)
+            inc = int(inc_raw) if isinstance(inc_raw, (int, float, str)) else 0
+            item.metadata["context_inclusion_count"] = inc + 1
+
         if len(lines) <= 1:
             return ""
         return "\n".join(lines)
