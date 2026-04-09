@@ -532,6 +532,11 @@ class ReflectPhase:
         concept_ids: list[ConceptId] = []
         sentiments: list[float] = []
 
+        # Pre-compute novelty for all concepts in batch
+        novelty_map = await self._compute_novelty_batch(
+            [ec.name for ec in extracted], mind_id
+        )
+
         for ec in extracted:
             try:
                 resolved = resolve_category(ec.category)
@@ -541,14 +546,18 @@ class ReflectPhase:
                 # Explicit signal: per-concept OR message-level
                 is_explicit = ec.explicit or message_explicit
 
+                # Novelty: 1.0 = completely new, 0.0 = exact duplicate
+                novelty = novelty_map.get(ec.name, 0.5)
+
                 if extraction_source == "llm_explicit":
                     # Combine LLM assessment with category baseline
-                    # LLM has primary weight (0.40) + category (0.25) +
-                    # emotion (0.10) + explicit (0.25)
+                    # LLM (0.35) + category (0.15) + emotion (0.10) +
+                    # novelty (0.15) + explicit (0.25)
                     combined_importance = (
-                        0.40 * ec.importance
-                        + 0.25 * category_importance
+                        0.35 * ec.importance
+                        + 0.15 * category_importance
                         + 0.10 * abs(ec.sentiment)
+                        + 0.15 * novelty
                         + 0.25 * (1.0 if is_explicit else 0.0)
                     )
                     if is_explicit:
@@ -567,8 +576,8 @@ class ReflectPhase:
                     if is_explicit:
                         combined_confidence = max(combined_confidence, 0.75)
                 else:
-                    # Regex fallback: category importance + source confidence
-                    combined_importance = category_importance
+                    # Regex fallback: category (0.60) + novelty (0.40) + source confidence
+                    combined_importance = 0.60 * category_importance + 0.40 * novelty
                     combined_confidence = get_source_confidence("regex_fallback")
                     # Message-level explicit applies to regex path too
                     if is_explicit:
@@ -652,6 +661,53 @@ class ReflectPhase:
             episode_valence=round(episode_valence, 2),
             episode_arousal=round(episode_arousal, 2),
         )
+
+    async def _compute_novelty_batch(
+        self,
+        names: list[str],
+        mind_id: MindId,
+    ) -> dict[str, float]:
+        """Compute novelty score for each concept name.
+
+        Uses BrainService.search() to check semantic overlap with existing
+        knowledge. High match score → low novelty. No match → high novelty.
+
+        Novelty scale:
+        - 1.0: completely new topic (no similar concepts found)
+        - 0.5: somewhat related to existing knowledge
+        - 0.0: exact duplicate (name match with high score)
+
+        Args:
+            names: List of concept names to check.
+            mind_id: Mind to search against.
+
+        Returns:
+            Dict mapping concept name → novelty score [0.0, 1.0].
+        """
+        result: dict[str, float] = {}
+        for name in names:
+            try:
+                matches = await self._brain.search(name, mind_id, limit=3)
+                if not matches:
+                    result[name] = 1.0
+                    continue
+
+                # Best match score indicates how "known" this concept is
+                best_concept, best_score = matches[0]
+
+                # Exact name match = very low novelty
+                if best_concept.name.lower() == name.lower():
+                    result[name] = 0.05
+                    continue
+
+                # Convert search score to novelty (inverse relationship)
+                # High search score = low novelty
+                novelty = max(0.05, 1.0 - min(1.0, best_score * 1.5))
+                result[name] = novelty
+            except Exception:
+                logger.debug("novelty_check_failed", name=name)
+                result[name] = 0.5  # Default: moderate novelty on error
+        return result
 
     async def _extract_with_llm(self, message: str) -> list[ExtractedConcept] | None:
         """Extract concepts using LLM. Returns None on failure."""
