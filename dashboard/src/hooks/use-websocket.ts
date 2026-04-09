@@ -28,7 +28,7 @@ import type {
   WsEvent,
   SystemStatus,
   HealthResponse,
-  LogEntry,
+
   BrainGraph,
   ConversationsResponse,
   ConversationDetailResponse,
@@ -133,16 +133,10 @@ async function refreshConversationList(): Promise<void> {
   }
 }
 
-/** Push a WS event as a log entry to the store. */
-function pushEventAsLog(event: WsEvent): void {
-  const entry: LogEntry = {
-    timestamp: event.timestamp,
-    level: "INFO",
-    logger: "sovyx.dashboard.events",
-    event: `[${event.type}] ${event.data ? JSON.stringify(event.data) : ""}`.slice(0, 500),
-  };
-  useDashboardStore.getState().addLog(entry);
-}
+// NOTE: pushEventAsLog was removed in v0.5.24 (logs-hardening TASK-08).
+// WS events belong in the activity feed (recentEvents), not the logs store.
+// The logs store is now fed exclusively by the /api/logs polling endpoint,
+// which reads the actual daemon log file (structured JSON).
 
 // ── Debounced wrappers (each target gets its own timer) ──
 
@@ -190,9 +184,9 @@ export function useWebSocket(): void {
       try {
         const event = JSON.parse(raw.data as string) as WsEvent;
 
-        // All events go to activity feed + logs (immediate, no debounce)
+        // All events go to activity feed (immediate, no debounce).
+        // Logs are fetched separately via /api/logs polling.
         addEvent(event);
-        pushEventAsLog(event);
 
         // Targeted refreshes — DEBOUNCED to prevent API bursts
         switch (event.type) {
