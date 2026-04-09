@@ -29,6 +29,7 @@ from sovyx.cognitive.reflect import (
     _estimate_sentiment,
     clamp_sentiment,
     compute_episode_importance,
+    detect_explicit_importance,
     get_importance,
     resolve_category,
 )
@@ -208,6 +209,122 @@ class TestSourceConfidence:
         system_conf = get_source_confidence("system")
         llm_conf = get_source_confidence("llm_explicit")
         assert system_conf >= llm_conf
+
+
+class TestExplicitImportanceDetection:
+    """Message-level explicit importance signal detection."""
+
+    # English patterns
+    def test_remember_this(self) -> None:
+        assert detect_explicit_importance("Please remember this fact") is True
+
+    def test_dont_forget(self) -> None:
+        assert detect_explicit_importance("Don't forget about the meeting") is True
+
+    def test_keep_in_mind(self) -> None:
+        assert detect_explicit_importance("Keep in mind that I'm allergic") is True
+
+    def test_this_is_important(self) -> None:
+        assert detect_explicit_importance("This is important information") is True
+
+    def test_this_is_very_important(self) -> None:
+        assert detect_explicit_importance("This is very important") is True
+
+    def test_note_this(self) -> None:
+        assert detect_explicit_importance("Note this: my address changed") is True
+
+    def test_never_forget(self) -> None:
+        assert detect_explicit_importance("Never forget my birthday") is True
+
+    # Portuguese patterns
+    def test_lembra_disso(self) -> None:
+        assert detect_explicit_importance("Lembra disso pra mim") is True
+
+    def test_nao_esquece(self) -> None:
+        assert detect_explicit_importance("Não esquece esse detalhe") is True
+
+    def test_anota_isso(self) -> None:
+        assert detect_explicit_importance("Anota isso aí") is True
+
+    def test_importante_pt(self) -> None:
+        assert detect_explicit_importance("Isso é importante") is True
+
+    def test_memoriza(self) -> None:
+        assert detect_explicit_importance("Memoriza esse número") is True
+
+    def test_grava_isso(self) -> None:
+        assert detect_explicit_importance("Grava isso aí") is True
+
+    # Negative cases
+    def test_normal_message_no_signal(self) -> None:
+        assert detect_explicit_importance("I work at Google") is False
+
+    def test_question_no_signal(self) -> None:
+        assert detect_explicit_importance("What time is it?") is False
+
+    def test_greeting_no_signal(self) -> None:
+        assert detect_explicit_importance("Hi, how are you?") is False
+
+    def test_empty_string(self) -> None:
+        assert detect_explicit_importance("") is False
+
+    # Integration: message-level overrides concept-level
+    async def test_message_explicit_overrides_concept(self, mock_brain: AsyncMock) -> None:
+        """Message-level 'remember this' boosts ALL concepts."""
+        concepts = [
+            {
+                "name": "Coffee",
+                "content": "likes coffee",
+                "category": "preference",
+                "importance": 0.3,
+                "explicit": False,
+            },
+        ]
+        router = _mock_llm_response(concepts)
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(
+            _perception("Remember this: I like coffee"),
+            _response(),
+            MIND,
+            CONV,
+        )
+        kw = mock_brain.learn_concept.call_args.kwargs
+        # Message-level explicit → importance floor 0.85
+        assert kw["importance"] >= 0.85
+
+    async def test_message_explicit_boosts_confidence(self, mock_brain: AsyncMock) -> None:
+        """Message-level explicit also boosts confidence floor to 0.75."""
+        concepts = [
+            {
+                "name": "Allergy",
+                "content": "allergic to peanuts",
+                "category": "fact",
+                "confidence": 0.5,
+            },
+        ]
+        router = _mock_llm_response(concepts)
+        phase = ReflectPhase(mock_brain, llm_router=router)
+        await phase.process(
+            _perception("This is important: I'm allergic to peanuts"),
+            _response(),
+            MIND,
+            CONV,
+        )
+        kw = mock_brain.learn_concept.call_args.kwargs
+        assert kw["confidence"] >= 0.75
+
+    async def test_regex_path_explicit_boost(self, mock_brain: AsyncMock) -> None:
+        """Explicit signal works on regex path too."""
+        phase = ReflectPhase(mock_brain)
+        await phase.process(
+            _perception("Remember this: my name is Alex"),
+            _response(),
+            MIND,
+            CONV,
+        )
+        kw = mock_brain.learn_concept.call_args.kwargs
+        assert kw["importance"] >= 0.85
+        assert kw["confidence"] >= 0.75
 
 
 class TestSentiment:
