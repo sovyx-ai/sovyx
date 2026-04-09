@@ -116,11 +116,17 @@ class ContextAssembler:
         brain_results = await self._brain.recall(current_message, mind_id)
         concepts, episodes = brain_results
 
+        # Compute mean confidence for adaptive budget allocation
+        mean_conf = 0.5
+        if concepts:
+            mean_conf = sum(c.confidence for c, _ in concepts) / len(concepts)
+
         budget = self._budget.allocate(
             conversation_length=len(conversation_history),
             brain_result_count=len(concepts),
             complexity=complexity,
             context_window=context_window,
+            mean_confidence=mean_conf,
         )
 
         # 2. System prompt (NEVER cut)

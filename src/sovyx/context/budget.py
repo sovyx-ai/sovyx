@@ -58,6 +58,7 @@ class TokenBudgetManager:
         brain_result_count: int,
         complexity: float = 0.5,
         context_window: int = 128_000,
+        mean_confidence: float = 0.5,
     ) -> TokenBudget:
         """Calculate adaptive budget.
 
@@ -66,6 +67,10 @@ class TokenBudgetManager:
             brain_result_count: Number of brain search results.
             complexity: Query complexity [0, 1].
             context_window: Model context window size.
+            mean_confidence: Mean confidence of brain search results [0, 1].
+                High confidence → more budget for concepts (reliable knowledge).
+                Low confidence → less budget for concepts (uncertain knowledge
+                wastes context).
 
         Returns:
             TokenBudget with allocations per slot.
@@ -106,6 +111,18 @@ class TokenBudgetManager:
         if brain_result_count > 20:  # noqa: PLR2004
             p_concepts += 0.05
             p_conversation -= 0.05
+
+        # Adapt: confidence-weighted budget (TASK-14)
+        # High confidence (>0.7): +5% concepts, -5% conversation
+        #   (reliable knowledge deserves more context space)
+        # Low confidence (<0.3): -5% concepts, +5% conversation
+        #   (uncertain knowledge wastes context — prefer conversation)
+        if mean_confidence > 0.7:  # noqa: PLR2004
+            p_concepts += 0.05
+            p_conversation -= 0.05
+        elif mean_confidence < 0.3:  # noqa: PLR2004
+            p_concepts -= 0.05
+            p_conversation += 0.05
 
         # Calculate raw allocations
         raw_system = max(MIN_SYSTEM_PROMPT, int(context_window * p_system))
