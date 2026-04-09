@@ -31,9 +31,27 @@ console = Console()
 
 logs_app = typer.Typer(name="logs", help="Query and filter structured logs")
 
+
 # Default log file location
-_DEFAULT_LOG_DIR = Path.home() / ".sovyx" / "logs"
-_DEFAULT_LOG_FILE = _DEFAULT_LOG_DIR / "sovyx.log"
+def _resolve_default_log_file() -> Path:
+    """Resolve the default log file path from EngineConfig.
+
+    Uses EngineConfig (which respects SOVYX_DATA_DIR and system.yaml)
+    so the CLI always reads from the same file the daemon writes to.
+
+    Falls back to ``~/.sovyx/logs/sovyx.log`` if config loading fails
+    (e.g., before ``sovyx init`` has been run).
+    """
+    try:
+        from sovyx.engine.config import EngineConfig
+
+        config = EngineConfig()
+        if config.log.log_file is not None:
+            return config.log.log_file
+    except Exception:  # noqa: BLE001
+        pass
+    return Path.home() / ".sovyx" / "logs" / "sovyx.log"
+
 
 # ── Duration parser ─────────────────────────────────────────────────────────
 
@@ -305,7 +323,7 @@ def logs(
         sovyx logs --json                    # raw JSON
         sovyx logs -l warning -f mind_id=nyx --since 30m
     """
-    target = log_file or _DEFAULT_LOG_FILE
+    target = log_file or _resolve_default_log_file()
 
     # Parse filters
     filters = _parse_filters(filter_args) if filter_args else {}

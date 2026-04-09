@@ -17,6 +17,7 @@ from sovyx.cli.commands.logs import (
     _parse_duration,
     _parse_filters,
     _read_log_lines,
+    _resolve_default_log_file,
     logs_app,
 )
 
@@ -653,3 +654,30 @@ class TestFollowLog:
 
         # Thread is daemon, will die with test. Just check it started.
         assert thread.is_alive() or len(output) > 0
+
+
+class TestResolveDefaultLogFile:
+    """_resolve_default_log_file reads from EngineConfig."""
+
+    def test_default_path(self) -> None:
+        """Without env vars, resolves to ~/.sovyx/logs/sovyx.log."""
+        result = _resolve_default_log_file()
+        assert result == Path.home() / ".sovyx" / "logs" / "sovyx.log"
+
+    def test_respects_data_dir_env(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """SOVYX_DATA_DIR env var propagates to resolved log file path."""
+        monkeypatch.setenv("SOVYX_DATA_DIR", str(tmp_path / "custom"))
+        result = _resolve_default_log_file()
+        assert result == tmp_path / "custom" / "logs" / "sovyx.log"
+
+    def test_fallback_on_config_error(self) -> None:
+        """If EngineConfig fails to load, falls back to default path."""
+        from unittest.mock import patch
+
+        with patch(
+            "sovyx.engine.config.EngineConfig.__init__",
+            side_effect=RuntimeError("broken"),
+        ):
+            result = _resolve_default_log_file()
+        # Should still return a valid path (fallback)
+        assert result == Path.home() / ".sovyx" / "logs" / "sovyx.log"

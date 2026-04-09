@@ -321,3 +321,52 @@ class TestLegacyLogFormatMigration:
         data: dict[str, object] = {"log": "invalid"}
         _migrate_legacy_log_format(data)
         assert data["log"] == "invalid"
+
+
+class TestLogFileResolution:
+    """log_file is resolved relative to data_dir by EngineConfig."""
+
+    def test_default_resolves_to_data_dir(self) -> None:
+        """log_file=None in LoggingConfig → resolved by EngineConfig."""
+        config = EngineConfig()
+        expected = Path.home() / ".sovyx" / "logs" / "sovyx.log"
+        assert config.log.log_file == expected
+
+    def test_custom_data_dir_propagates(self, tmp_path: Path) -> None:
+        """Custom data_dir → log_file under that directory."""
+        config = EngineConfig(data_dir=tmp_path / "custom")
+        assert config.log.log_file == tmp_path / "custom" / "logs" / "sovyx.log"
+
+    def test_explicit_log_file_preserved(self, tmp_path: Path) -> None:
+        """Explicit log_file in LoggingConfig is not overwritten."""
+        explicit = tmp_path / "my" / "custom.log"
+        config = EngineConfig(
+            log=LoggingConfig(log_file=explicit),
+        )
+        assert config.log.log_file == explicit
+
+    def test_logging_config_standalone_default_none(self) -> None:
+        """LoggingConfig alone defaults to None (no auto-resolve)."""
+        config = LoggingConfig()
+        assert config.log_file is None
+
+    def test_env_var_data_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """SOVYX_DATA_DIR env var propagates to log_file."""
+        monkeypatch.setenv("SOVYX_DATA_DIR", str(tmp_path / "env"))
+        config = EngineConfig()
+        assert config.log.log_file == tmp_path / "env" / "logs" / "sovyx.log"
+
+    def test_yaml_with_custom_data_dir(self, tmp_path: Path) -> None:
+        """YAML data_dir → log_file resolved under it."""
+        yaml_file = tmp_path / "system.yaml"
+        yaml_file.write_text(f"data_dir: {tmp_path / 'yaml-data'}\n")
+        config = load_engine_config(config_path=yaml_file)
+        assert config.log.log_file == tmp_path / "yaml-data" / "logs" / "sovyx.log"
+
+    def test_yaml_explicit_log_file_not_overridden(self, tmp_path: Path) -> None:
+        """YAML with explicit log_file keeps it."""
+        explicit = tmp_path / "explicit.log"
+        yaml_file = tmp_path / "system.yaml"
+        yaml_file.write_text(f"log:\n  log_file: {explicit}\n")
+        config = load_engine_config(config_path=yaml_file)
+        assert config.log.log_file == explicit
