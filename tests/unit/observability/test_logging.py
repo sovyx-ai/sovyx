@@ -40,7 +40,7 @@ def _clean_context() -> None:
 @pytest.fixture()
 def _json_logging() -> None:
     """Set up JSON logging for tests that need real output."""
-    setup_logging(LoggingConfig(level="DEBUG", format="json"))
+    setup_logging(LoggingConfig(level="DEBUG", format="json", log_file=None))
 
 
 # ── SecretMasker ────────────────────────────────────────────────────────────
@@ -274,7 +274,7 @@ class TestSetupLogging:
     """Logging setup with JSON and console modes."""
 
     def test_setup_json_mode(self) -> None:
-        config = LoggingConfig(level="DEBUG", format="json")
+        config = LoggingConfig(level="DEBUG", format="json", log_file=None)
         setup_logging(config)
 
         root = logging.getLogger()
@@ -282,7 +282,7 @@ class TestSetupLogging:
         assert len(root.handlers) == 1
 
     def test_setup_text_mode(self) -> None:
-        config = LoggingConfig(level="INFO", format="text")
+        config = LoggingConfig(level="INFO", format="text", log_file=None)
         setup_logging(config)
 
         root = logging.getLogger()
@@ -290,7 +290,7 @@ class TestSetupLogging:
 
     def test_json_output_contains_required_fields(self) -> None:
         """JSON logs contain required structlog processors."""
-        config = LoggingConfig(level="DEBUG", format="json")
+        config = LoggingConfig(level="DEBUG", format="json", log_file=None)
         setup_logging(config)
 
         cfg = structlog.get_config()
@@ -306,7 +306,7 @@ class TestSetupLogging:
 
     def test_processor_chain_includes_merge_contextvars(self) -> None:
         """merge_contextvars is first in the processor chain."""
-        setup_logging(LoggingConfig(level="DEBUG", format="json"))
+        setup_logging(LoggingConfig(level="DEBUG", format="json", log_file=None))
         cfg = structlog.get_config()
         processors = cfg["processors"]
         # First processor should be merge_contextvars
@@ -314,7 +314,7 @@ class TestSetupLogging:
 
     def test_processor_chain_includes_secret_masker(self) -> None:
         """SecretMasker is in the processor chain."""
-        setup_logging(LoggingConfig(level="DEBUG", format="json"))
+        setup_logging(LoggingConfig(level="DEBUG", format="json", log_file=None))
         cfg = structlog.get_config()
         processors = cfg["processors"]
         masker_found = any(isinstance(p, SecretMasker) for p in processors)
@@ -329,7 +329,7 @@ class TestJSONOutput:
 
     @pytest.fixture(autouse=True)
     def _setup_json(self) -> None:
-        setup_logging(LoggingConfig(level="DEBUG", format="json"))
+        setup_logging(LoggingConfig(level="DEBUG", format="json", log_file=None))
 
     def _capture_log(
         self,
@@ -412,12 +412,12 @@ class TestGetLogger:
     """Logger factory."""
 
     def test_returns_bound_logger(self) -> None:
-        setup_logging(LoggingConfig())
+        setup_logging(LoggingConfig(log_file=None))
         logger = get_logger("sovyx.brain")
         assert logger is not None
 
     def test_logger_has_standard_methods(self) -> None:
-        setup_logging(LoggingConfig())
+        setup_logging(LoggingConfig(log_file=None))
         logger = get_logger("sovyx.test")
         assert hasattr(logger, "info")
         assert hasattr(logger, "debug")
