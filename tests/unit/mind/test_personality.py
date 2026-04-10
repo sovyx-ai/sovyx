@@ -83,7 +83,8 @@ class TestGenerateSystemPrompt:
         cfg = _config(safety=SafetyConfig(child_safe_mode=True))
         engine = PersonalityEngine(cfg)
         prompt = engine.generate_system_prompt()
-        assert "Child-safe" in prompt
+        assert "CHILD SAFETY MODE" in prompt
+        assert "children under 10" in prompt
 
     def test_safety_financial(self) -> None:
         cfg = _config(safety=SafetyConfig(financial_confirmation=True))
