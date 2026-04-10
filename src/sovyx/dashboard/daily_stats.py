@@ -97,7 +97,7 @@ class DailyStatsRecorder:
                 messages=messages,
                 llm_calls=llm_calls,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.warning("daily_stats_snapshot_failed", date=date, exc_info=True)
 
     async def get_history(
@@ -128,7 +128,7 @@ class DailyStatsRecorder:
                     (mind_id, days),
                 )
                 rows = list(await cursor.fetchall())
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.warning("daily_stats_get_history_failed", exc_info=True)
             return []
 
@@ -172,7 +172,7 @@ class DailyStatsRecorder:
                     (mind_id,),
                 )
                 row = await cursor.fetchone()
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.warning("daily_stats_get_totals_failed", exc_info=True)
             return _empty_totals()
 
@@ -217,7 +217,7 @@ class DailyStatsRecorder:
                     (mind_id, prefix),
                 )
                 row = await cursor.fetchone()
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.warning("daily_stats_get_month_failed", exc_info=True)
             return _empty_month()
 

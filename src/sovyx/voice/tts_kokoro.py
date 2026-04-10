@@ -178,7 +178,7 @@ class KokoroTTS(TTSEngine):
             FileNotFoundError: If model or voice files are missing.
             RuntimeError: If kokoro-onnx fails to initialize.
         """
-        from kokoro_onnx import Kokoro  # type: ignore[import-not-found]
+        from kokoro_onnx import Kokoro
 
         # Resolve model path (prefer q8 if configured)
         model_path = self._resolve_model_path()

@@ -242,7 +242,7 @@ class WakeWordDetector:
         config: WakeWordConfig | None = None,
         verifier: VerifierFn | None = None,
     ) -> None:
-        import onnxruntime as ort  # type: ignore[import-untyped]
+        import onnxruntime as ort
 
         self._config = config or WakeWordConfig()
         _validate_config(self._config)

@@ -183,7 +183,7 @@ class DashboardCounters:
                     (_COUNTERS_STATE_KEY, state),
                 )
                 await conn.commit()
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.warning("counters_persist_failed", exc_info=True)
             # Re-mark dirty so next call retries
             self._dirty = True
@@ -242,7 +242,7 @@ class DashboardCounters:
                         saved_date=saved_date,
                         today=today,
                     )
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.warning("counters_restore_failed", exc_info=True)
 
 

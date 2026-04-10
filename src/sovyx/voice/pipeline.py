@@ -280,7 +280,7 @@ async def _play_audio(chunk: AudioChunk) -> None:
         chunk: The audio chunk to play.
     """
     try:
-        import sounddevice as sd  # type: ignore[import-not-found]
+        import sounddevice as sd
 
         sd.play(chunk.audio, chunk.sample_rate)
         sd.wait()

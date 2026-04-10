@@ -767,8 +767,8 @@ class SovyxWyomingServer:
     async def _register_zeroconf(self) -> None:
         """Register Sovyx as a Wyoming service via mDNS."""
         try:
-            from zeroconf import ServiceInfo  # type: ignore[import-not-found]
-            from zeroconf.asyncio import AsyncZeroconf  # type: ignore[import-not-found]
+            from zeroconf import ServiceInfo
+            from zeroconf.asyncio import AsyncZeroconf
         except ImportError:
             logger.warning("wyoming_zeroconf_unavailable", reason="zeroconf not installed")
             return

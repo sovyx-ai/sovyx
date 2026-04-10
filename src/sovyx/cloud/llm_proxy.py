@@ -468,7 +468,7 @@ class LiteLLMBackend(LLMProviderBackend):
             Response dict with choices, usage, model.
         """
         try:
-            import litellm  # type: ignore[import-not-found]  # noqa: PLC0415
+            import litellm  # noqa: PLC0415
         except ImportError as exc:
             msg = "litellm is required for LLMProxyService. Install with: pip install litellm"
             raise ProxyError(msg) from exc

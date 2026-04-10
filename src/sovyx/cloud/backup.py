@@ -166,7 +166,7 @@ class Boto3R2Client:
     """
 
     def __init__(self, config: BackupConfig) -> None:
-        import boto3  # type: ignore[import-not-found]  # lazy — optional dep
+        import boto3  # lazy — optional dep
 
         self._bucket = config.r2_bucket
         self._client = boto3.client(

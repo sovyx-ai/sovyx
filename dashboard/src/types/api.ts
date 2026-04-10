@@ -286,8 +286,6 @@ export interface ChatMessage {
   mind_id?: string;
 }
 
-// ── Channels ──
-
 // ── Settings ──
 
 /**

@@ -222,7 +222,7 @@ class PiperTTS(TTSEngine):
             FileNotFoundError: If model or config files are missing.
             RuntimeError: If ONNX session creation fails.
         """
-        import onnxruntime as ort  # type: ignore[import-untyped]
+        import onnxruntime as ort
 
         model_path = self._model_dir / f"{self._config.voice}.onnx"
         config_path = self._model_dir / f"{self._config.voice}.onnx.json"
@@ -286,7 +286,7 @@ class PiperTTS(TTSEngine):
             msg = "PiperTTS not initialized — call initialize() first"
             raise RuntimeError(msg)
 
-        from piper_phonemize import phonemize_espeak  # type: ignore[import-not-found]
+        from piper_phonemize import phonemize_espeak
 
         espeak_voice: str = self._voice_config["espeak"]["voice"]
         result: list[list[str]] = phonemize_espeak(text, espeak_voice)

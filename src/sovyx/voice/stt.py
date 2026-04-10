@@ -222,7 +222,7 @@ class MoonshineSTT(STTEngine):
             msg = "Cannot initialize a closed STT engine"
             raise RuntimeError(msg)
 
-        from moonshine_voice import (  # type: ignore[import-not-found]
+        from moonshine_voice import (
             Transcriber,
             get_model_for_language,
         )
