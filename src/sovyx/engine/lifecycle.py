@@ -222,7 +222,7 @@ class LifecycleManager:
         banner = (
             "\n"
             "╔══════════════════════════════════════════════╗\n"
-            "║           🔮 Sovyx — Mind Engine             ║\n"
+            "║              Sovyx — Mind Engine             ║\n"
             "╠══════════════════════════════════════════════╣\n"
             f"║  Dashboard:  {url:<32} ║\n"
             f"║  Token:      {token_display:<32} ║\n"
