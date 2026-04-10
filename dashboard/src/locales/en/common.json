@@ -85,65 +85,6 @@
     "clearLogs": "Clear Logs",
     "refreshData": "Refresh Data"
   },
-  "comingSoon": {
-    "title": "Coming in {{version}}",
-    "description": "This feature is under development."
-  },
-  "placeholders": {
-    "voice": {
-      "title": "Voice Pipeline",
-      "description": "Talk to your Mind with natural voice. Wake word detection, local STT/TTS, emotional voice modulation.",
-      "features": [
-        "Pipeline status",
-        "STT/TTS model selector",
-        "Wake word config",
-        "Latency gauge",
-        "Voice test"
-      ]
-    },
-    "emotions": {
-      "title": "Emotional Intelligence",
-      "description": "Your Mind feels. PAD emotional model with 16 distinct emotions, mood timeline, trigger history.",
-      "features": [
-        "Current mood indicator",
-        "PAD dimension gauges",
-        "Emotion timeline",
-        "Trigger history"
-      ]
-    },
-    "productivity": {
-      "title": "Daily Productivity",
-      "description": "Morning briefings, task management, habit tracking, and daily journal — all managed by your Mind.",
-      "features": [
-        "Morning briefing",
-        "Task manager",
-        "Habit tracker",
-        "Daily journal",
-        "Calendar sync"
-      ]
-    },
-    "plugins": {
-      "title": "Plugin Marketplace",
-      "description": "Extend your Mind with community plugins. Weather, finance, smart home, and hundreds more.",
-      "features": [
-        "Search & browse",
-        "Install/update",
-        "Per-plugin config",
-        "Plugin analytics",
-        "Sandbox status"
-      ]
-    },
-    "home": {
-      "title": "Home Integration",
-      "description": "Control your smart home through your Mind. Home Assistant integration, routines, presence detection.",
-      "features": [
-        "HA entity list",
-        "Quick actions",
-        "Automation status",
-        "Camera snapshots"
-      ]
-    }
-  },
   "sidebar": {
     "collapse": "Toggle Sidebar",
     "health": "Health",
