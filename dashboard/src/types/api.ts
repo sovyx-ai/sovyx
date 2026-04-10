@@ -270,6 +270,45 @@ export interface CostHistoryEntry {
   cumulative: number;
 }
 
+// ── Usage Stats ──
+
+/** Single day's usage stats — from GET /api/stats/history */
+export interface DailyStats {
+  date: string;
+  cost: number;
+  messages: number;
+  llm_calls: number;
+  tokens: number;
+  conversations?: number;
+  cost_by_provider?: Record<string, number>;
+  cost_by_model?: Record<string, number>;
+  is_live?: boolean;
+}
+
+/** All-time aggregated totals */
+export interface StatsTotals {
+  cost: number;
+  messages: number;
+  llm_calls: number;
+  tokens: number;
+  days_active: number;
+}
+
+/** Monthly aggregated totals */
+export interface StatsMonth {
+  cost: number;
+  messages: number;
+  llm_calls: number;
+  tokens: number;
+}
+
+/** GET /api/stats/history response */
+export interface StatsHistoryResponse {
+  days: DailyStats[];
+  totals: StatsTotals;
+  current_month: StatsMonth;
+}
+
 // ── Chat ──
 
 /** POST /api/chat request body */
