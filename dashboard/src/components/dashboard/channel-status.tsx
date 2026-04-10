@@ -120,6 +120,7 @@ function TelegramSetup({ onDone }: { onDone: () => void }) {
         <div className="flex gap-2">
           <input
             type="password"
+            aria-label={t("channelSetup.tokenLabel", "Bot token")}
             value={token}
             onChange={(e) => {
               setToken(e.target.value);

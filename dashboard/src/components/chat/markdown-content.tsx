@@ -127,7 +127,7 @@ export const MarkdownContent = memo(function MarkdownContent({
           img: ({ src, alt }) => (
             <img
               src={src}
-              alt={alt ?? ""}
+              alt={alt || "Image shared in conversation"}
               className="max-h-64 max-w-full rounded-lg border border-zinc-800"
               loading="lazy"
               referrerPolicy="no-referrer"

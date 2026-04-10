@@ -122,7 +122,8 @@
     "signalConfigure": "Configure phone number and API URL in mind.yaml, then restart Sovyx.",
     "done": "Done",
     "connectedTo": "Connected to @{{username}}",
-    "restartToActivate": "Restart Sovyx to activate the channel."
+    "restartToActivate": "Restart Sovyx to activate the channel.",
+    "tokenLabel": "Bot token"
   },
   "channels": {
     "title": "Channels",
