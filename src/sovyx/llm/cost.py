@@ -14,10 +14,12 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
+    from sovyx.dashboard.daily_stats import DailyStatsRecorder
     from sovyx.persistence.pool import DatabasePool
 
 logger = get_logger(__name__)
@@ -26,6 +28,16 @@ _STATE_KEY = "cost_guard_state"
 
 # Maximum entries in the cost log ring buffer (24h at ~5min interval ≈ 288).
 _MAX_COST_LOG = 288
+
+
+def _as_int(val: object) -> int:
+    """Coerce an object to int (safe for values from dict[str, object])."""
+    return int(val) if isinstance(val, (int, float, str)) else 0
+
+
+def _as_float(val: object) -> float:
+    """Coerce an object to float (safe for values from dict[str, object])."""
+    return float(val) if isinstance(val, (int, float, str)) else 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,14 +78,21 @@ class CostGuard:
         daily_budget: float,
         per_conversation_budget: float,
         system_pool: DatabasePool | None = None,
+        *,
+        timezone: str = "UTC",
+        stats_recorder: DailyStatsRecorder | None = None,
     ) -> None:
         self._daily_budget = daily_budget
         self._per_conversation_budget = per_conversation_budget
         self._system_pool = system_pool
+        self._tz = ZoneInfo(timezone)
+        self._stats_recorder = stats_recorder
         self._daily_spend: float = 0.0
         self._conversation_spend: dict[str, float] = {}
-        self._last_reset: date = datetime.now(tz=UTC).date()
+        self._last_reset: date = datetime.now(tz=self._tz).date()
         self._dirty = False
+        # Buffered snapshot of the previous day, awaiting async flush
+        self._pending_day_snapshot: dict[str, object] | None = None
 
         # Per-provider/mind/model breakdowns (reset daily with _maybe_reset)
         self._provider_spend: dict[str, float] = defaultdict(float)
@@ -150,8 +169,27 @@ class CostGuard:
                     providers=len(self._provider_spend),
                     minds=len(self._mind_spend),
                 )
-            else:
-                logger.debug("cost_guard_state_stale_starting_fresh", saved_date=saved_date)
+            elif saved_date:
+                # Stale data from a previous day — snapshot before discarding
+                # so DailyStatsRecorder captures the last active day.
+                if self._stats_recorder:
+                    await self._stats_recorder.snapshot_day(
+                        date=saved_date,
+                        cost_usd=state.get("daily_spend", 0.0),
+                        tokens=int(state.get("total_tokens", 0)),
+                        cost_by_provider=state.get("provider_spend", {}),
+                        cost_by_model=state.get("model_spend", {}),
+                    )
+                    logger.info(
+                        "cost_guard_stale_snapshotted",
+                        saved_date=saved_date,
+                        cost=round(state.get("daily_spend", 0.0), 4),
+                    )
+                else:
+                    logger.debug(
+                        "cost_guard_state_stale_no_recorder",
+                        saved_date=saved_date,
+                    )
         except Exception:
             logger.warning("cost_guard_restore_failed", exc_info=True)
 
@@ -160,7 +198,15 @@ class CostGuard:
 
         Called after each record() if pool is available.
         Skipped if nothing changed since last persist.
+
+        Also flushes pending day snapshot to DailyStatsRecorder when
+        a day boundary was crossed, merging CostGuard cost data with
+        DashboardCounters message/call data.
         """
+        # Flush pending day snapshot FIRST (before normal persist)
+        if self._pending_day_snapshot and self._stats_recorder:
+            await self._flush_day_snapshot()
+
         if self._system_pool is None or not self._dirty:
             return
 
@@ -205,9 +251,21 @@ class CostGuard:
             pass  # Non-critical — counters are best-effort
 
     def _maybe_reset(self) -> None:
-        """Reset daily spend if new day."""
-        today = datetime.now(tz=UTC).date()
+        """Reset daily spend if new day (user timezone).
+
+        Buffers previous day's cost data for async snapshot by
+        :meth:`persist` → :class:`DailyStatsRecorder`.
+        """
+        today = datetime.now(tz=self._tz).date()
         if today > self._last_reset:
+            # Buffer previous day's data before zeroing
+            self._pending_day_snapshot = {
+                "date": str(self._last_reset),
+                "cost_usd": self._daily_spend,
+                "tokens": self._total_tokens,
+                "cost_by_provider": dict(self._provider_spend),
+                "cost_by_model": dict(self._model_spend),
+            }
             self._daily_spend = 0.0
             self._conversation_spend.clear()
             self._provider_spend.clear()
@@ -219,6 +277,61 @@ class CostGuard:
             self._cost_log.clear()
             self._last_reset = today
             self._dirty = True
+
+    async def _flush_day_snapshot(self) -> None:
+        """Merge CostGuard + DashboardCounters data and snapshot to daily_stats.
+
+        Forces DashboardCounters._maybe_reset() first so both systems have
+        processed the day boundary before consuming pending data. This solves
+        the race condition where CostGuard resets before DashboardCounters.
+        """
+        snap = self._pending_day_snapshot
+        if not snap or not self._stats_recorder:
+            return
+
+        self._pending_day_snapshot = None
+
+        # Force DashboardCounters to detect day change and buffer its data
+        try:
+            from sovyx.dashboard.status import get_counters
+
+            counters = get_counters()
+            with counters._lock:
+                counters._maybe_reset()
+            counters_snap = counters.consume_pending_day_snapshot() or {}
+        except Exception:  # noqa: BLE001
+            counters_snap = {}
+
+        try:
+            # Extract typed values from snapshot dicts (dict[str, object])
+            provider_raw = snap.get("cost_by_provider")
+            model_raw = snap.get("cost_by_model")
+            by_provider: dict[str, float] = (
+                {str(k): float(v) for k, v in provider_raw.items()}
+                if isinstance(provider_raw, dict)
+                else {}
+            )
+            by_model: dict[str, float] = (
+                {str(k): float(v) for k, v in model_raw.items()}
+                if isinstance(model_raw, dict)
+                else {}
+            )
+            snap_date = str(snap.get("date", ""))
+            snap_cost = _as_float(snap.get("cost_usd", 0.0))
+            snap_tokens = _as_int(snap.get("tokens", 0))
+            snap_msgs = _as_int(counters_snap.get("messages", 0))
+            snap_calls = _as_int(counters_snap.get("llm_calls", 0))
+            await self._stats_recorder.snapshot_day(
+                date=snap_date,
+                cost_usd=snap_cost,
+                tokens=snap_tokens,
+                cost_by_provider=by_provider,
+                cost_by_model=by_model,
+                messages=snap_msgs,
+                llm_calls=snap_calls,
+            )
+        except Exception:
+            logger.warning("daily_snapshot_flush_failed", exc_info=True)
 
     def can_afford(
         self,

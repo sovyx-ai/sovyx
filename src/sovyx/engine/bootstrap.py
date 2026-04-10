@@ -304,10 +304,18 @@ async def bootstrap(
                 providers=[p.name for p in providers if p.is_available],
             )
 
+            # DailyStatsRecorder for historical usage tracking
+            from sovyx.dashboard.daily_stats import DailyStatsRecorder
+
+            stats_recorder = DailyStatsRecorder(db_manager.get_system_pool())
+            registry.register_instance(DailyStatsRecorder, stats_recorder)
+
             cost_guard = CostGuard(
                 daily_budget=mind_config.llm.budget_daily_usd,
                 per_conversation_budget=mind_config.llm.budget_per_conversation_usd,
                 system_pool=db_manager.get_system_pool(),
+                timezone=mind_config.timezone,
+                stats_recorder=stats_recorder,
             )
             await cost_guard.restore()
             registry.register_instance(CostGuard, cost_guard)
