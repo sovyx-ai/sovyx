@@ -114,8 +114,8 @@ describe("StatCardSkeleton", () => {
     const skel = skelContainer.firstChild as HTMLElement;
     const card = cardContainer.firstChild as HTMLElement;
     // Both use same radius and padding tokens
-    expect(skel.className).toContain("p-4");
-    expect(card.className).toContain("p-4");
+    expect(skel.className).toContain("p-3");
+    expect(card.className).toContain("p-3");
     expect(skel.className).toContain("svx-radius-lg");
     expect(card.className).toContain("svx-radius-lg");
   });
