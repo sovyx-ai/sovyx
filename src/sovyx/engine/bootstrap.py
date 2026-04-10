@@ -347,7 +347,14 @@ async def bootstrap(
                 llm_router=router,
                 mind_config=mind_config,
             )
-            act = ActPhase(tool_executor=ToolExecutor(), llm_router=router)
+            from sovyx.cognitive.output_guard import OutputGuard
+
+            output_guard = OutputGuard(safety_config=mind_config.safety)
+            act = ActPhase(
+                tool_executor=ToolExecutor(),
+                llm_router=router,
+                output_guard=output_guard,
+            )
             reflect = ReflectPhase(
                 brain_service=brain_service,
                 llm_router=router,
