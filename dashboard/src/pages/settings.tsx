@@ -15,7 +15,6 @@ import {
   Loader2Icon,
   UserIcon,
   ShieldIcon,
-  DownloadIcon,
   BrainIcon,
   SparklesIcon,
   AlertTriangleIcon,
@@ -26,6 +25,7 @@ import { Label } from "@/components/ui/label";
 import { useDashboardStore } from "@/stores/dashboard";
 import { api, isAbortError } from "@/lib/api";
 import { toast } from "sonner";
+import { ExportImportSection } from "@/components/settings/export-import";
 import type {
   Settings,
   MindConfigResponse,
@@ -543,8 +543,8 @@ export default function SettingsPage() {
         </section>
       )}
 
-      {/* ── Export / Import (functional UI in TASK-201) ── */}
-      <PlaceholderSection icon={DownloadIcon} title={t("tabs.exportImport")} versionLabel={t("common:comingSoon.title", { version: "v0.6" })} />
+      {/* ── Export / Import ── */}
+      <ExportImportSection />
     </div>
   );
 }
@@ -647,28 +647,4 @@ function ReadOnlyField({ label, value, mono }: { label: string; value: string; m
   );
 }
 
-// ── Placeholder section card ──
 
-function PlaceholderSection({
-  icon: Icon,
-  title,
-  versionLabel,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  title: string;
-  versionLabel: string;
-}) {
-  return (
-    <div className="rounded-[var(--svx-radius-lg)] border border-dashed border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-4">
-      <div className="flex items-center gap-2">
-        <Icon className="size-4 text-[var(--svx-color-text-disabled)]" />
-        <span className="text-sm font-medium text-[var(--svx-color-text-secondary)]">
-          {title}
-        </span>
-      </div>
-      <p className="mt-2 text-xs text-[var(--svx-color-text-disabled)]">
-        {versionLabel}
-      </p>
-    </div>
-  );
-}

@@ -138,13 +138,16 @@ describe("SettingsPage", () => {
     expect(screen.queryByText("Webhooks")).not.toBeInTheDocument();
   });
 
-  it("retains Export / Import placeholder for future implementation", async () => {
+  it("renders functional Export / Import section with action buttons", async () => {
     mockApi.get.mockResolvedValueOnce(mockSettings);
     render(<SettingsPage />);
     await waitFor(() => {
       expect(screen.getByText("INFO")).toBeInTheDocument();
     });
+    // Functional section renders with export/import buttons (via i18n keys)
     expect(screen.getByText("Export / Import")).toBeInTheDocument();
+    expect(screen.getByText("Export Mind")).toBeInTheDocument();
+    expect(screen.getByText("Import Mind")).toBeInTheDocument();
   });
 
   // ── Log level controls ──
