@@ -14,80 +14,6 @@ if TYPE_CHECKING:
     from sovyx.engine.types import MindId
 
 
-class TestChannelEnvLoading:
-    """Tests for channel.env loading in bootstrap."""
-
-    def test_loads_sovyx_prefixed_vars(self, tmp_path: Path) -> None:
-        """channel.env with SOVYX_ prefix vars are loaded."""
-        env_file = tmp_path / "channel.env"
-        env_file.write_text("SOVYX_TELEGRAM_TOKEN=test123\n")
-
-        # Simulate bootstrap logic
-        for line in env_file.read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, _, v = line.partition("=")
-                k, v = k.strip(), v.strip()
-                if k and v and k.startswith("SOVYX_") and k not in os.environ:
-                    os.environ[k] = v
-
-        assert os.environ.get("SOVYX_TELEGRAM_TOKEN") == "test123"
-        # Cleanup
-        del os.environ["SOVYX_TELEGRAM_TOKEN"]
-
-    def test_ignores_non_sovyx_prefix(self, tmp_path: Path) -> None:
-        """Vars without SOVYX_ prefix are ignored."""
-        env_file = tmp_path / "channel.env"
-        env_file.write_text("PATH=/evil\nHOME=/evil\nSOVYX_TEST_OK=yes\n")
-
-        loaded: dict[str, str] = {}
-        for line in env_file.read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, _, v = line.partition("=")
-                k, v = k.strip(), v.strip()
-                if k and v and k.startswith("SOVYX_"):
-                    loaded[k] = v
-
-        assert "PATH" not in loaded
-        assert "HOME" not in loaded
-        assert loaded["SOVYX_TEST_OK"] == "yes"
-
-    def test_does_not_overwrite_existing_env(self, tmp_path: Path) -> None:
-        """Existing env vars are not overwritten."""
-        env_file = tmp_path / "channel.env"
-        env_file.write_text("SOVYX_EXISTING=new_value\n")
-
-        os.environ["SOVYX_EXISTING"] = "original"
-
-        for line in env_file.read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, _, v = line.partition("=")
-                k, v = k.strip(), v.strip()
-                if k and v and k.startswith("SOVYX_") and k not in os.environ:
-                    os.environ[k] = v
-
-        assert os.environ["SOVYX_EXISTING"] == "original"
-        del os.environ["SOVYX_EXISTING"]
-
-    def test_skips_comments_and_empty_lines(self, tmp_path: Path) -> None:
-        """Comments and empty lines are ignored."""
-        env_file = tmp_path / "channel.env"
-        env_file.write_text("# This is a comment\n\n  \nSOVYX_VALID=yes\n")
-
-        loaded: dict[str, str] = {}
-        for line in env_file.read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, _, v = line.partition("=")
-                k, v = k.strip(), v.strip()
-                if k and v and k.startswith("SOVYX_"):
-                    loaded[k] = v
-
-        assert len(loaded) == 1
-        assert loaded["SOVYX_VALID"] == "yes"
-
 from sovyx.bridge.manager import BridgeManager
 from sovyx.engine.bootstrap import (
     MindManager,
@@ -783,3 +709,76 @@ class TestBootstrapOllamaAutoDetect:
 
         db = await registry.resolve(DatabaseManager)
         await db.stop()
+
+
+class TestChannelEnvLoading:
+    """Tests for channel.env loading in bootstrap."""
+
+    def test_loads_sovyx_prefixed_vars(self, tmp_path: Path) -> None:
+        """channel.env with SOVYX_ prefix vars are loaded."""
+        env_file = tmp_path / "channel.env"
+        env_file.write_text("SOVYX_TELEGRAM_TOKEN=test123\n")
+
+        for line in env_file.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                k, v = k.strip(), v.strip()
+                if k and v and k.startswith("SOVYX_") and k not in os.environ:
+                    os.environ[k] = v
+
+        assert os.environ.get("SOVYX_TELEGRAM_TOKEN") == "test123"
+        del os.environ["SOVYX_TELEGRAM_TOKEN"]
+
+    def test_ignores_non_sovyx_prefix(self, tmp_path: Path) -> None:
+        """Vars without SOVYX_ prefix are ignored."""
+        env_file = tmp_path / "channel.env"
+        env_file.write_text("PATH=/evil\nHOME=/evil\nSOVYX_TEST_OK=yes\n")
+
+        loaded: dict[str, str] = {}
+        for line in env_file.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                k, v = k.strip(), v.strip()
+                if k and v and k.startswith("SOVYX_"):
+                    loaded[k] = v
+
+        assert "PATH" not in loaded
+        assert "HOME" not in loaded
+        assert loaded["SOVYX_TEST_OK"] == "yes"
+
+    def test_does_not_overwrite_existing_env(self, tmp_path: Path) -> None:
+        """Existing env vars are not overwritten."""
+        env_file = tmp_path / "channel.env"
+        env_file.write_text("SOVYX_EXISTING=new_value\n")
+
+        os.environ["SOVYX_EXISTING"] = "original"
+
+        for line in env_file.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                k, v = k.strip(), v.strip()
+                if k and v and k.startswith("SOVYX_") and k not in os.environ:
+                    os.environ[k] = v
+
+        assert os.environ["SOVYX_EXISTING"] == "original"
+        del os.environ["SOVYX_EXISTING"]
+
+    def test_skips_comments_and_empty_lines(self, tmp_path: Path) -> None:
+        """Comments and empty lines are ignored."""
+        env_file = tmp_path / "channel.env"
+        env_file.write_text("# This is a comment\n\n  \nSOVYX_VALID=yes\n")
+
+        loaded: dict[str, str] = {}
+        for line in env_file.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                k, v = k.strip(), v.strip()
+                if k and v and k.startswith("SOVYX_"):
+                    loaded[k] = v
+
+        assert len(loaded) == 1
+        assert loaded["SOVYX_VALID"] == "yes"
