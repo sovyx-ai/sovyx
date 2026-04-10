@@ -195,6 +195,15 @@ class CostGuard:
         except Exception:
             logger.warning("cost_guard_persist_failed", exc_info=True)
 
+        # Piggyback: persist DashboardCounters alongside CostGuard
+        # so message/call counts survive restarts without extra I/O cycles.
+        try:
+            from sovyx.dashboard.status import get_counters
+
+            await get_counters().persist()
+        except Exception:  # noqa: BLE001
+            pass  # Non-critical — counters are best-effort
+
     def _maybe_reset(self) -> None:
         """Reset daily spend if new day."""
         today = datetime.now(tz=UTC).date()

@@ -6,6 +6,7 @@ Uses the ServiceRegistry to resolve services lazily.
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -15,8 +16,11 @@ from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
     from sovyx.engine.registry import ServiceRegistry
+    from sovyx.persistence.pool import DatabasePool
 
 logger = get_logger(__name__)
+
+_COUNTERS_STATE_KEY = "dashboard_counters_state"
 
 
 @dataclass
@@ -65,6 +69,10 @@ class DashboardCounters:
     Uses a threading.Lock to make the check-then-reset in _maybe_reset atomic.
     Day boundary is determined by the user's configured timezone (default UTC).
     Call :func:`configure_timezone` during bootstrap to set it.
+
+    Persistence (optional): mirrors CostGuard's pattern — writes state to
+    ``engine_state`` so counters survive daemon restarts. Call :meth:`restore`
+    once at startup and :meth:`persist` after each batch of updates.
     """
 
     def __init__(self, timezone: str = "UTC") -> None:
@@ -77,6 +85,11 @@ class DashboardCounters:
         self.tokens: int = 0
         self.messages_received: int = 0
         self._day_key: str = ""
+        self._dirty: bool = False
+        self._system_pool: DatabasePool | None = None
+        # Buffered snapshot of the previous day's data, awaiting async flush
+        # to DailyStatsRecorder. Set by _maybe_reset, consumed by persist().
+        self._pending_day_snapshot: dict[str, object] | None = None
 
     def record_llm_call(self, cost: float, tokens: int) -> None:
         """Record an LLM call."""
@@ -85,12 +98,14 @@ class DashboardCounters:
             self.llm_calls += 1
             self.llm_cost += cost
             self.tokens += tokens
+            self._dirty = True
 
     def record_message(self) -> None:
         """Record a message (inbound user message OR outbound AI response)."""
         with self._lock:
             self._maybe_reset()
             self.messages_received += 1
+            self._dirty = True
 
     def snapshot(self) -> tuple[int, float, int, int]:
         """Atomic read of (llm_calls, llm_cost, tokens, messages_received)."""
@@ -98,15 +113,137 @@ class DashboardCounters:
             self._maybe_reset()
             return self.llm_calls, self.llm_cost, self.tokens, self.messages_received
 
+    def consume_pending_day_snapshot(self) -> dict[str, object] | None:
+        """Return and clear the buffered previous-day snapshot.
+
+        Called by CostGuard.persist() to merge counter data into the
+        daily_stats row alongside cost data. Thread-safe.
+
+        Returns:
+            Dict with ``messages``, ``llm_calls``, ``tokens``, ``llm_cost``,
+            and ``date`` keys, or ``None`` if no day boundary crossed yet.
+        """
+        with self._lock:
+            snap = self._pending_day_snapshot
+            self._pending_day_snapshot = None
+            return snap
+
     def _maybe_reset(self) -> None:
-        """Reset counters at day boundary in user timezone. Must be called under lock."""
+        """Reset counters at day boundary in user timezone.
+
+        Must be called under lock. Buffers the previous day's data for
+        async snapshot by :meth:`persist` / DailyStatsRecorder.
+        """
         today = _now_date_str(self._tz)
         if self._day_key != today:
+            # Buffer the previous day's data (only if we had a previous day)
+            if self._day_key:
+                self._pending_day_snapshot = {
+                    "date": self._day_key,
+                    "messages": self.messages_received,
+                    "llm_calls": self.llm_calls,
+                    "tokens": self.tokens,
+                    "llm_cost": self.llm_cost,
+                }
             self.llm_calls = 0
             self.llm_cost = 0.0
             self.tokens = 0
             self.messages_received = 0
             self._day_key = today
+            self._dirty = True
+
+    async def persist(self) -> None:
+        """Persist current counters to ``engine_state``.
+
+        Skipped if nothing changed since last persist or no pool configured.
+        Mirrors CostGuard's persistence pattern.
+        """
+        if self._system_pool is None or not self._dirty:
+            return
+
+        with self._lock:
+            state = json.dumps(
+                {
+                    "date": self._day_key,
+                    "llm_calls": self.llm_calls,
+                    "llm_cost": round(self.llm_cost, 8),
+                    "tokens": self.tokens,
+                    "messages_received": self.messages_received,
+                }
+            )
+            self._dirty = False
+
+        try:
+            async with self._system_pool.write() as conn:
+                await conn.execute(
+                    """INSERT INTO engine_state (key, value, updated_at)
+                       VALUES (?, ?, CURRENT_TIMESTAMP)
+                       ON CONFLICT(key) DO UPDATE SET
+                       value = excluded.value, updated_at = excluded.updated_at""",
+                    (_COUNTERS_STATE_KEY, state),
+                )
+                await conn.commit()
+        except Exception:
+            logger.warning("counters_persist_failed", exc_info=True)
+            # Re-mark dirty so next call retries
+            self._dirty = True
+
+    async def restore(self) -> None:
+        """Restore counters from ``engine_state`` (call once at startup).
+
+        If the saved state is from a previous day (daemon was offline),
+        the stale data is buffered in ``_pending_day_snapshot`` for the
+        DailyStatsRecorder to snapshot before being discarded.
+        """
+        if self._system_pool is None:
+            return
+
+        try:
+            async with self._system_pool.read() as conn:
+                cursor = await conn.execute(
+                    "SELECT value FROM engine_state WHERE key = ?",
+                    (_COUNTERS_STATE_KEY,),
+                )
+                row = await cursor.fetchone()
+
+            if row is None:
+                return
+
+            state = json.loads(row[0])
+            saved_date = state.get("date", "")
+            today = _now_date_str(self._tz)
+
+            with self._lock:
+                if saved_date == today:
+                    # Same day — restore counters
+                    self.llm_calls = int(state.get("llm_calls", 0))
+                    self.llm_cost = float(state.get("llm_cost", 0.0))
+                    self.tokens = int(state.get("tokens", 0))
+                    self.messages_received = int(state.get("messages_received", 0))
+                    self._day_key = today
+                    logger.info(
+                        "counters_restored",
+                        date=today,
+                        messages=self.messages_received,
+                        llm_calls=self.llm_calls,
+                    )
+                elif saved_date:
+                    # Stale — buffer for DailyStatsRecorder snapshot, start fresh
+                    self._pending_day_snapshot = {
+                        "date": saved_date,
+                        "messages": int(state.get("messages_received", 0)),
+                        "llm_calls": int(state.get("llm_calls", 0)),
+                        "tokens": int(state.get("tokens", 0)),
+                        "llm_cost": float(state.get("llm_cost", 0.0)),
+                    }
+                    self._day_key = today
+                    logger.info(
+                        "counters_stale_buffered_for_snapshot",
+                        saved_date=saved_date,
+                        today=today,
+                    )
+        except Exception:
+            logger.warning("counters_restore_failed", exc_info=True)
 
 
 def _now_date_str(tz: ZoneInfo) -> str:
@@ -125,17 +262,25 @@ def get_counters() -> DashboardCounters:
     return _counters
 
 
-def configure_timezone(timezone: str) -> None:
-    """Set the timezone for daily counter reset.
+def configure_timezone(
+    timezone: str,
+    system_pool: DatabasePool | None = None,
+) -> None:
+    """Set the timezone and optional persistence pool for daily counters.
 
-    Call during bootstrap after loading MindConfig.
-    Falls back to UTC if the timezone string is invalid.
+    Call during bootstrap after loading MindConfig. When *system_pool* is
+    provided, counters will persist to ``engine_state`` and survive restarts.
+
+    Args:
+        timezone: IANA timezone string (e.g. ``"America/Sao_Paulo"``).
+        system_pool: Optional SQLite pool for persist/restore.
     """
     try:
         _counters._tz = ZoneInfo(timezone)
     except (KeyError, Exception):  # noqa: BLE001
         logger.warning("invalid_counter_timezone", timezone=timezone)
         _counters._tz = ZoneInfo("UTC")
+    _counters._system_pool = system_pool
 
 
 class StatusCollector:
