@@ -2,13 +2,13 @@
  * AppSidebar — Main navigation sidebar.
  *
  * Uses shadcn Sidebar component with built-in mobile Sheet drawer.
- * 3 nav groups: Core (6 pages), Upcoming (5 placeholder pages), System (about).
+ * 2 nav groups: Core (6 pages), System (about).
+ * Header: Mind display (name + connection status, static — no switcher).
  * Footer: connection dot + uptime + version.
- * Mind switcher: placeholder for multi-mind (v0.5).
  *
  * FINAL-08: Full i18n — zero hardcoded English strings.
  *
- * Ref: Architecture §4, DASH-26/27/28
+ * Ref: Architecture §4, DASH-27/28
  */
 
 import { useLocation, Link } from "react-router";
@@ -22,12 +22,6 @@ import {
   ScrollTextIcon,
   SettingsIcon,
   InfoIcon,
-  MicIcon,
-  HeartIcon,
-  ListTodoIcon,
-  PuzzleIcon,
-  HomeIcon,
-  ChevronsUpDownIcon,
   ActivityIcon,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -62,13 +56,6 @@ const CORE_NAV: NavItem[] = [
   { titleKey: "nav.settings", icon: SettingsIcon, path: "/settings" },
 ];
 
-const UPCOMING_NAV: NavItem[] = [
-  { titleKey: "nav.voice", icon: MicIcon, path: "/voice" },
-  { titleKey: "nav.emotions", icon: HeartIcon, path: "/emotions" },
-  { titleKey: "nav.productivity", icon: ListTodoIcon, path: "/productivity" },
-  { titleKey: "nav.plugins", icon: PuzzleIcon, path: "/plugins" },
-  { titleKey: "nav.home", icon: HomeIcon, path: "/home" },
-];
 
 export function AppSidebar() {
   const { t } = useTranslation("common");
@@ -92,26 +79,26 @@ export function AppSidebar() {
 
   return (
     <Sidebar collapsible="icon" aria-label="Main navigation">
-      {/* ── Mind Switcher (DASH-26 placeholder) ── */}
+      {/* ── Mind display (static — name + connection status) ── */}
       <SidebarHeader>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton size="lg" render={<Link to="/" />}>
-              <div className="flex aspect-square size-8 items-center justify-center rounded-[var(--svx-radius-md)] bg-[var(--svx-color-brand-primary)] text-[var(--svx-color-text-inverse)]">
-                <ActivityIcon className="size-4" />
-              </div>
-              <div className="grid flex-1 text-left text-sm leading-tight">
-                <span className="truncate font-semibold text-[var(--svx-color-text-primary)]">
-                  {status?.mind_name ?? "Sovyx"}
-                </span>
-                <span className="truncate text-xs text-[var(--svx-color-text-tertiary)]">
-                  {connectionLabel}
-                </span>
-              </div>
-              <ChevronsUpDownIcon className="ml-auto size-4 text-[var(--svx-color-text-disabled)]" />
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
+        <div className="px-2 py-2">
+          <Link
+            to="/"
+            className="flex items-center gap-3 rounded-[var(--svx-radius-md)] px-2 py-1.5 hover:bg-[var(--svx-color-surface-hover)] transition-colors"
+          >
+            <div className="flex aspect-square size-8 items-center justify-center rounded-[var(--svx-radius-md)] bg-[var(--svx-color-brand-primary)] text-[var(--svx-color-text-inverse)]">
+              <ActivityIcon className="size-4" />
+            </div>
+            <div className="grid flex-1 text-left text-sm leading-tight">
+              <span className="truncate font-semibold text-[var(--svx-color-text-primary)]">
+                {status?.mind_name ?? "Sovyx"}
+              </span>
+              <span className="truncate text-xs text-[var(--svx-color-text-tertiary)]">
+                {connectionLabel}
+              </span>
+            </div>
+          </Link>
+        </div>
       </SidebarHeader>
 
       <SidebarContent>
@@ -136,26 +123,7 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {/* ── Upcoming Features ── */}
-        <SidebarGroup>
-          <SidebarGroupLabel>{t("sidebar.upcoming")}</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {UPCOMING_NAV.map((item) => (
-                <SidebarMenuItem key={item.path}>
-                  <SidebarMenuButton
-                    render={<Link to={item.path} />}
-                    isActive={location.pathname === item.path}
-                    tooltip={t(item.titleKey)}
-                  >
-                    <item.icon />
-                    <span>{t(item.titleKey)}</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+
       </SidebarContent>
 
       {/* ── Footer (DASH-28) ── */}
