@@ -64,7 +64,7 @@ async def export_mind(registry: ServiceRegistry, mind_id: str) -> Path:
             engine = await registry.resolve(PersonalityEngine)
             if hasattr(engine.config, "to_dict"):
                 mind_config = engine.config.to_dict()
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001  # nosec B110
         pass
 
     info = await exporter.export_archive(
