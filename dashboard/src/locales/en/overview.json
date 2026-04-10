@@ -107,5 +107,15 @@
     "openChat": "Open Chat",
     "dismiss": "Close",
     "conversations": "conversations"
+  },
+  "channelSetup": {
+    "getToken": "Get a bot token from",
+    "pasteToken": "Paste your token below",
+    "connect": "Connect",
+    "connecting": "Connecting...",
+    "connected": "Connected",
+    "failed": "Connection failed",
+    "signalRequires": "Signal requires a separate Docker container running",
+    "signalConfigure": "Configure phone number and API URL in mind.yaml, then restart Sovyx."
   }
 }

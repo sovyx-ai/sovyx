@@ -98,7 +98,7 @@ function TelegramSetup({ onDone }: { onDone: () => void }) {
       {/* Step 1: Get token */}
       <div className="flex items-center gap-1.5 text-xs text-[var(--svx-color-text-secondary)]">
         <span className="font-medium">1.</span>
-        <span>Get a bot token from</span>
+        <span>{t("channelSetup.getToken")}</span>
         <a
           href="https://t.me/BotFather"
           target="_blank"
@@ -114,7 +114,7 @@ function TelegramSetup({ onDone }: { onDone: () => void }) {
       <div className="space-y-1.5">
         <div className="flex items-center gap-1.5 text-xs text-[var(--svx-color-text-secondary)]">
           <span className="font-medium">2.</span>
-          <span>Paste your token below</span>
+          <span>{t("channelSetup.pasteToken")}</span>
         </div>
         <div className="flex gap-2">
           <input
@@ -174,9 +174,10 @@ function TelegramSetup({ onDone }: { onDone: () => void }) {
 // ── Signal setup (still guide-based — needs external Docker) ──
 
 function SignalSetup() {
+  const { t } = useTranslation("overview");
   return (
     <div className="space-y-2 text-xs text-[var(--svx-color-text-secondary)]">
-      <p>Signal requires a separate Docker container running{" "}
+      <p>{t("channelSetup.signalRequires")}{" "}
         <a
           href="https://github.com/bbernhard/signal-cli-rest-api"
           target="_blank"
@@ -188,7 +189,7 @@ function SignalSetup() {
         </a>.
       </p>
       <p className="text-[11px] text-[var(--svx-color-text-tertiary)]">
-        Configure phone number and API URL in mind.yaml, then restart Sovyx.
+        {t("channelSetup.signalConfigure")}
       </p>
     </div>
   );
