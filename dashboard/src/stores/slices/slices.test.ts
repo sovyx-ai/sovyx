@@ -168,7 +168,7 @@ describe("brain slice", () => {
     });
     const graph = useDashboardStore.getState().brainGraph!;
     expect(graph.nodes).toHaveLength(1);
-    expect(graph.nodes[0].id).toBe("b");
+    expect(graph.nodes[0]!.id).toBe("b");
     expect(graph.links).toHaveLength(1);
   });
 
@@ -180,7 +180,7 @@ describe("brain slice", () => {
         links: [],
       };
       useDashboardStore.getState().setBrainGraph(graph);
-      expect(useDashboardStore.getState().brainGraph!.nodes[0].category).toBe(cat);
+      expect(useDashboardStore.getState().brainGraph!.nodes[0]!.category).toBe(cat);
     }
   });
 });
@@ -242,7 +242,7 @@ describe("connection slice", () => {
     const expectedConnected = [false, true, false];
 
     for (let i = 0; i < transitions.length; i++) {
-      store.setConnectionState(transitions[i]);
+      store.setConnectionState(transitions[i]!);
       expect(useDashboardStore.getState().connected).toBe(expectedConnected[i]);
       expect(useDashboardStore.getState().connectionState).toBe(transitions[i]);
     }
@@ -300,7 +300,7 @@ describe("conversations slice", () => {
     s.setConversations([{ id: "a", participant: "p1", channel: "t", message_count: 1, last_message_at: "", status: "active" }]);
     s.setConversations([{ id: "b", participant: "p2", channel: "t", message_count: 2, last_message_at: "", status: "closed" }]);
     expect(useDashboardStore.getState().conversations).toHaveLength(1);
-    expect(useDashboardStore.getState().conversations[0].id).toBe("b");
+    expect(useDashboardStore.getState().conversations[0]!.id).toBe("b");
   });
 
   it("setActiveConversationId sets and clears", () => {
@@ -334,8 +334,8 @@ describe("conversations slice", () => {
     ];
     useDashboardStore.getState().setConversations(convs);
     const state = useDashboardStore.getState();
-    expect(state.conversations[0].status).toBe("active");
-    expect(state.conversations[1].status).toBe("closed");
+    expect(state.conversations[0]!.status).toBe("active");
+    expect(state.conversations[1]!.status).toBe("closed");
   });
 
   it("conversation without participant_name", () => {
@@ -348,7 +348,7 @@ describe("conversations slice", () => {
       status: "active",
     };
     useDashboardStore.getState().setConversations([conv]);
-    expect(useDashboardStore.getState().conversations[0].participant_name).toBeUndefined();
+    expect(useDashboardStore.getState().conversations[0]!.participant_name).toBeUndefined();
   });
 });
 
@@ -406,7 +406,7 @@ describe("logs slice", () => {
     const logs = useDashboardStore.getState().logs;
     expect(logs.length).toBeLessThanOrEqual(5000);
     expect(logs.length).toBeGreaterThan(4400); // trimmed ~500 from front, added 1
-    expect(logs[logs.length - 1].event).toBe("overflow");
+    expect(logs[logs.length - 1]!.event).toBe("overflow");
   });
 
   it("addEvent stores recent events", () => {
@@ -434,8 +434,8 @@ describe("logs slice", () => {
     const events = useDashboardStore.getState().recentEvents;
     expect(events).toHaveLength(50);
     // First 5 should be dropped, latest should be last
-    expect(events[events.length - 1].correlation_id).toBe("id-54");
-    expect(events[0].correlation_id).toBe("id-5");
+    expect(events[events.length - 1]!.correlation_id).toBe("id-54");
+    expect(events[0]!.correlation_id).toBe("id-5");
   });
 
   it("addEvent accumulates cost from ThinkCompleted", () => {
@@ -447,7 +447,7 @@ describe("logs slice", () => {
       data: { cost_usd: 0.05, tokens_in: 100, tokens_out: 50, model: "gpt-4", latency_ms: 200 },
     });
     expect(useDashboardStore.getState().costData).toHaveLength(1);
-    expect(useDashboardStore.getState().costData[0].value).toBe(0.05);
+    expect(useDashboardStore.getState().costData[0]!.value).toBe(0.05);
   });
 
   it("addEvent accumulates cost cumulatively", () => {
@@ -466,8 +466,8 @@ describe("logs slice", () => {
     });
     const costData = useDashboardStore.getState().costData;
     expect(costData).toHaveLength(2);
-    expect(costData[0].value).toBe(0.05);
-    expect(costData[1].value).toBe(0.15);
+    expect(costData[0]!.value).toBe(0.05);
+    expect(costData[1]!.value).toBe(0.15);
   });
 
   it("addEvent ignores cost_usd=0 in ThinkCompleted", () => {
@@ -538,7 +538,7 @@ describe("logs slice", () => {
       importance: 0.9,
     };
     useDashboardStore.getState().addLog(entry);
-    const stored = useDashboardStore.getState().logs[0];
+    const stored = useDashboardStore.getState().logs[0]!;
     expect(stored["concept_id"]).toBe("abc");
     expect(stored["importance"]).toBe(0.9);
   });
@@ -746,7 +746,7 @@ describe("status slice", () => {
     s.setHealthChecks([{ name: "b", status: "red", message: "fail" }]);
     const checks = useDashboardStore.getState().healthChecks;
     expect(checks).toHaveLength(1);
-    expect(checks[0].name).toBe("b");
+    expect(checks[0]!.name).toBe("b");
   });
 
   it("setHealthChecks with empty list", () => {
@@ -761,7 +761,7 @@ describe("status slice", () => {
       { name: "memory", status: "green", message: "OK" },
     ];
     useDashboardStore.getState().setHealthChecks(checks);
-    expect(useDashboardStore.getState().healthChecks[0].latency_ms).toBeUndefined();
+    expect(useDashboardStore.getState().healthChecks[0]!.latency_ms).toBeUndefined();
   });
 
   it("all health statuses are handled", () => {
@@ -770,7 +770,7 @@ describe("status slice", () => {
       useDashboardStore.getState().setHealthChecks([
         { name: "test", status, message: `Status: ${status}` },
       ]);
-      expect(useDashboardStore.getState().healthChecks[0].status).toBe(status);
+      expect(useDashboardStore.getState().healthChecks[0]!.status).toBe(status);
     }
   });
 });

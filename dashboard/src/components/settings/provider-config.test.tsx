@@ -26,7 +26,7 @@ vi.mock("sonner", () => ({
 
 import { api } from "@/lib/api";
 
-const mockApi = api as {
+const mockApi = api as unknown as {
   get: ReturnType<typeof vi.fn>;
   put: ReturnType<typeof vi.fn>;
 };
@@ -89,8 +89,8 @@ describe("ProviderConfig", () => {
     // Models in dropdown
     const options = select.querySelectorAll("option:not([disabled])");
     expect(options).toHaveLength(2);
-    expect(options[0].textContent).toBe("llama3.1:latest");
-    expect(options[1].textContent).toBe("mistral:7b");
+    expect(options[0]!.textContent).toBe("llama3.1:latest");
+    expect(options[1]!.textContent).toBe("mistral:7b");
   });
 
   it("shows offline state when Ollama not reachable", async () => {

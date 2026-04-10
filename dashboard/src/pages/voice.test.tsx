@@ -4,7 +4,7 @@
  * Tests: render, loading state, error state, populated data, model matrix.
  */
 
-import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@/test/test-utils";
 import VoicePage from "./voice";
 

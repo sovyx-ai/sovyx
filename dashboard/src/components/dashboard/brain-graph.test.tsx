@@ -10,8 +10,8 @@
  * The visual encoding rules are extracted and tested as pure functions.
  */
 
-import { describe, it, expect, vi } from "vitest";
-import type { BrainNode, BrainLink } from "@/types/api";
+import { describe, it, expect } from "vitest";
+import type { BrainNode } from "@/types/api";
 
 // ── Pure function extraction for testability ──────────────────────
 
