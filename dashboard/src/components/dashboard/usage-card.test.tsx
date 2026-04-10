@@ -38,7 +38,7 @@ describe("UsageCard", () => {
       statsMonth: null,
       statsLoading: false,
       statsError: null,
-      fetchStatsHistory: vi.fn(),
+      fetchStatsHistory: vi.fn().mockResolvedValue(undefined),
     });
   });
 
@@ -135,7 +135,7 @@ describe("UsageCard", () => {
   });
 
   it("calls fetchStatsHistory on mount", () => {
-    const fetchFn = vi.fn();
+    const fetchFn = vi.fn().mockResolvedValue(undefined);
     useDashboardStore.setState({ fetchStatsHistory: fetchFn });
     render(<UsageCard />);
     expect(fetchFn).toHaveBeenCalledWith(30);
