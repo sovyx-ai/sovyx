@@ -1,0 +1,133 @@
+/**
+ * Sovyx highlight.js theme — dark mode, brand-aligned.
+ *
+ * Based on GitHub Dark with adjustments for Sovyx design system.
+ * Purple (#d2a8ff) for functions/titles aligns with brand purple (#8B5CF6).
+ * Background is transparent — the CodeBlock container provides bg-zinc-900.
+ *
+ * Coverage: keywords, strings, comments, functions, numbers, types, builtins,
+ * literals, params, attributes, variables, selectors, templates, diffs.
+ */
+
+/* ── Base ─────────────────────────────────────────────────────────────── */
+
+.hljs {
+  color: #e6edf3;
+  background: transparent;
+}
+
+/* ── Language constructs ──────────────────────────────────────────────── */
+
+.hljs-keyword,
+.hljs-type {
+  color: #ff7b72;
+}
+
+.hljs-string,
+.hljs-meta .hljs-string {
+  color: #a5d6ff;
+}
+
+.hljs-comment,
+.hljs-doctag {
+  color: #8b949e;
+  font-style: italic;
+}
+
+.hljs-function,
+.hljs-title,
+.hljs-title.function_ {
+  color: #d2a8ff;
+}
+
+.hljs-number,
+.hljs-literal {
+  color: #79c0ff;
+}
+
+.hljs-built_in {
+  color: #ffa657;
+}
+
+.hljs-params {
+  color: #e6edf3;
+}
+
+.hljs-attr,
+.hljs-attribute {
+  color: #79c0ff;
+}
+
+.hljs-variable,
+.hljs-template-variable {
+  color: #ffa657;
+}
+
+/* ── CSS / HTML selectors ─────────────────────────────────────────────── */
+
+.hljs-selector-class,
+.hljs-selector-tag,
+.hljs-selector-id {
+  color: #7ee787;
+}
+
+.hljs-tag {
+  color: #7ee787;
+}
+
+.hljs-name {
+  color: #7ee787;
+}
+
+.hljs-template-tag {
+  color: #7ee787;
+}
+
+/* ── Diff ─────────────────────────────────────────────────────────────── */
+
+.hljs-addition {
+  color: #aff5b4;
+  background: rgba(46, 160, 67, 0.15);
+}
+
+.hljs-deletion {
+  color: #ffdcd7;
+  background: rgba(248, 81, 73, 0.15);
+}
+
+/* ── Misc ─────────────────────────────────────────────────────────────── */
+
+.hljs-symbol,
+.hljs-bullet {
+  color: #ffa657;
+}
+
+.hljs-link {
+  color: #a5d6ff;
+  text-decoration: underline;
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: 700;
+}
+
+.hljs-meta {
+  color: #79c0ff;
+}
+
+.hljs-regexp {
+  color: #7ee787;
+}
+
+.hljs-section {
+  color: #d2a8ff;
+  font-weight: 700;
+}
+
+.hljs-subst {
+  color: #e6edf3;
+}

@@ -1,4 +1,5 @@
 import type { Message } from "@/types/api";
+import { MarkdownContent } from "@/components/chat";
 import { LetterAvatar, MindAvatar } from "./letter-avatar";
 import { formatTimeShort } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -42,7 +43,11 @@ export function ChatBubble({ message, participantName }: ChatBubbleProps) {
               : "rounded-tr-sm bg-[var(--svx-color-brand-subtle)] text-[var(--svx-color-text-primary)]",
           )}
         >
-          <p className="whitespace-pre-wrap break-words">{message.content}</p>
+          {isUser ? (
+            <p className="whitespace-pre-wrap break-words">{message.content}</p>
+          ) : (
+            <MarkdownContent content={message.content} />
+          )}
         </div>
         <span className="block text-[10px] text-[var(--svx-color-text-secondary)] px-1">
           {formatTimeShort(message.timestamp)}

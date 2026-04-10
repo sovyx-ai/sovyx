@@ -1,6 +1,9 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+@plugin "@tailwindcss/typography";
+@import "./styles/hljs-sovyx.css";
+@import "./styles/prose-chat.css";
 
 /*
  * Sovyx Design System v2 — Dark Minimal + Glassmorphism Cirúrgico

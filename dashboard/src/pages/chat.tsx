@@ -27,6 +27,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useDashboardStore } from "@/stores/dashboard";
 import { api, isAbortError } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { MarkdownContent } from "@/components/chat";
 import { EmptyState } from "@/components/empty-state";
 import { formatTimeShort } from "@/lib/format";
 import { LetterAvatar, MindAvatar } from "@/components/dashboard/letter-avatar";
@@ -235,9 +236,11 @@ export default function ChatPage() {
                           : "rounded-tl-sm bg-[var(--svx-color-bg-elevated)] text-[var(--svx-color-text-primary)]",
                       )}
                     >
-                      <p className="whitespace-pre-wrap break-words">
-                        {msg.content}
-                      </p>
+                      {msg.role === "user" ? (
+                        <p className="whitespace-pre-wrap break-words">{msg.content}</p>
+                      ) : (
+                        <MarkdownContent content={msg.content} />
+                      )}
                     </div>
                     <span className="block px-1 text-[10px] text-[var(--svx-color-text-secondary)]">
                       {formatTimeShort(msg.timestamp)}
