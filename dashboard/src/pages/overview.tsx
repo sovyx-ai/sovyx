@@ -91,7 +91,7 @@ export default function OverviewPage() {
   const showAliveNow = (showAliveCard && !transitioning) || false;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div>
         <h1 className="text-2xl font-bold">{t("title")}</h1>
         <p className="text-sm text-[var(--svx-color-text-secondary)]">
@@ -190,11 +190,11 @@ export default function OverviewPage() {
         )}
       </div>
 
-      {/* Usage This Month — full width between stat cards and health grid */}
-      {status && <UsageCard />}
-
-      {/* Health Grid */}
-      <HealthGrid checks={healthChecks} />
+      {/* Usage + Health — side by side for compact layout */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        {status && <UsageCard />}
+        <HealthGrid checks={healthChecks} />
+      </div>
 
       {/* Cost Chart */}
       <MetricChart

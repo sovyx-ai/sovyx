@@ -116,7 +116,7 @@ export function UsageCard({ className }: { className?: string }) {
     <div
       className={cn(
         "rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)]",
-        "bg-[var(--svx-color-bg-surface)] p-4 transition-colors",
+        "bg-[var(--svx-color-bg-surface)] p-3 transition-colors",
         "hover:border-[var(--svx-color-border-strong)]",
         className,
       )}
