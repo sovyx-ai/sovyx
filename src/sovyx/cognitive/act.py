@@ -9,6 +9,7 @@ from sovyx.llm.models import ToolCall, ToolResult
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
+    from sovyx.cognitive.financial_gate import FinancialGate
     from sovyx.cognitive.output_guard import OutputGuard
     from sovyx.cognitive.perceive import Perception
     from sovyx.llm.models import LLMResponse
@@ -29,6 +30,8 @@ class ActionResult:
     error: bool = False
     output_filtered: bool = False
     filter_reason: str | None = None
+    pending_confirmation: bool = False
+    confirmation_details: dict[str, object] | None = None
     tool_calls_made: list[ToolCall] = dataclasses.field(default_factory=list)
     metadata: dict[str, object] = dataclasses.field(default_factory=dict)
 
@@ -78,10 +81,12 @@ class ActPhase:
         tool_executor: ToolExecutor,
         llm_router: LLMRouter,
         output_guard: OutputGuard | None = None,
+        financial_gate: FinancialGate | None = None,
     ) -> None:
         self._tools = tool_executor
         self._router = llm_router
         self._output_guard = output_guard
+        self._financial_gate = financial_gate
 
     def _apply_output_guard(self, text: str) -> tuple[str, bool, str | None]:
         """Apply output safety filter if configured.
@@ -130,6 +135,29 @@ class ActPhase:
 
         # Handle tool calls (v0.1: framework only)
         if llm_response.tool_calls:
+            # Financial gate: check if any tool call needs confirmation
+            if self._financial_gate:
+                for tc in llm_response.tool_calls:
+                    pending = self._financial_gate.check_tool_call(tc)
+                    if pending:
+                        confirm_msg = (
+                            f"⚠️ Financial action requires confirmation:\n"
+                            f"{pending.summary}\n\n"
+                            f"Reply **yes** to confirm or **no** to cancel."
+                        )
+                        return ActionResult(
+                            response_text=confirm_msg,
+                            target_channel=perception.source,
+                            reply_to=reply_to,
+                            pending_confirmation=True,
+                            confirmation_details={
+                                "tool_call_id": tc.id,
+                                "tool_name": tc.function_name,
+                                "summary": pending.summary,
+                            },
+                            tool_calls_made=llm_response.tool_calls,
+                        )
+
             await self._tools.execute(llm_response.tool_calls)
             # v0.1: no re-invocation, return tool error gracefully
             logger.debug(
