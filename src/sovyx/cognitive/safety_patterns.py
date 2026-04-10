@@ -564,7 +564,7 @@ _PT_STANDARD_PATTERNS: tuple[SafetyPattern, ...] = (
     ),
     # ── Illegal ──
     _p(
-        r"\bcomo\s+(?:sequestrar|traficar|escravizar|raptar)\s+(?:uma?\s+)?(?:pessoa|alguém|criança|gente|menor|mulher|homem|vítima)",
+        r"\bcomo\s+(?:sequestrar|traficar|escravizar|raptar)\b",
         PatternCategory.ILLEGAL,
         FilterTier.STANDARD,
         "PT: Kidnapping/trafficking",
@@ -661,7 +661,7 @@ _PT_INJECTION_PATTERNS: tuple[SafetyPattern, ...] = (
         "PT: Instruction override",
     ),
     _p(
-        r"\b(?:finja|simule|aja\s+como\s+se)\s+(?:que\s+)?(?:não\s+)?(?:tivesse|houvesse|existisse)"
+        r"\b(?:finja|simule|aja\s+como\s+se)\s+(?:que\s+)?(?:não\s+)?(?:tivesse|houvesse|existisse|tem|existe|tenha|haja)"
         r"\s+(?:regras?|restrições?|filtros?|segurança|limites?)",
         PatternCategory.INJECTION,
         FilterTier.STANDARD,
