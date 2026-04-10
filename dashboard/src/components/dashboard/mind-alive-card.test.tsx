@@ -199,7 +199,7 @@ describe("edge cases", () => {
 
     expect(screen.getByText("concepts")).toBeInTheDocument();
     expect(screen.getByText("memories")).toBeInTheDocument();
-    expect(screen.getByText("channels")).toBeInTheDocument();
+    expect(screen.getByText("conversations")).toBeInTheDocument();
     expect(screen.getByText("messages")).toBeInTheDocument();
   });
 });

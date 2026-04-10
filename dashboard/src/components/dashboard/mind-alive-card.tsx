@@ -99,7 +99,7 @@ export function MindAliveCard({ animate = false, onDismiss }: MindAliveCardProps
         />
         <Metric
           value={formatNumber(status.active_conversations)}
-          label={t("alive.channels", { defaultValue: "channels" })}
+          label={t("alive.conversations", { defaultValue: "conversations" })}
         />
         <Metric
           value={formatNumber(status.messages_today)}

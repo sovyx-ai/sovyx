@@ -31,14 +31,24 @@ Set at least one provider:
 
 ```bash
 # Anthropic (recommended)
-export SOVYX_ANTHROPIC_API_KEY="sk-ant-..."
+export ANTHROPIC_API_KEY="sk-ant-..."
 
 # OpenAI
-export SOVYX_OPENAI_API_KEY="sk-..."
+export OPENAI_API_KEY="sk-..."
 
-# Ollama (free, local — no key needed)
-# Just install and run: https://ollama.ai
+# Google
+export GOOGLE_API_KEY="AIza..."
 ```
+
+### Local LLM (Ollama) — free, no API key
+
+```bash
+curl -fsSL https://ollama.ai/install.sh | sh
+ollama pull llama3.1
+```
+
+Sovyx auto-detects Ollama on startup and configures it as your provider.
+You can change the model in **Dashboard → Settings → Providers**.
 
 ## Start
 

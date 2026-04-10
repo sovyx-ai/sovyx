@@ -27,5 +27,33 @@
     "relayLabel": "Relay",
     "enabled": "Enabled",
     "disabled": "Disabled"
+  },
+  "providers": {
+    "title": "LLM Providers",
+    "description": "Configure which AI provider powers your mind.",
+    "cloudProviders": "Cloud Providers",
+    "localProvider": "Local Provider",
+    "configured": "configured",
+    "notConfigured": "not configured",
+    "running": "running",
+    "notRunning": "not running",
+    "models": "models",
+    "selectModel": "Model",
+    "chooseModel": "Choose a model...",
+    "active": "Active",
+    "noneSelected": "none selected",
+    "refresh": "Refresh",
+    "save": "Save Changes",
+    "saved": "Provider updated successfully.",
+    "saveFailed": "Failed to update provider.",
+    "loadFailed": "Failed to load providers.",
+    "retry": "Retry",
+    "ollamaInstructions": "Install Ollama from ollama.com, then run: ollama serve",
+    "noProviderTitle": "No provider configured",
+    "cloudSetup": "Cloud (requires API key):",
+    "cloudInstructions": "Set one as environment variable and restart:",
+    "localSetup": "Local (free):",
+    "ollamaStep1": "Install Ollama from ollama.com",
+    "ollamaStep3": "Click \"Refresh\" below"
   }
 }

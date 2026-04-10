@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -29,15 +30,31 @@ _DEFAULT_CONTEXT = 8_192
 
 _MAX_RETRIES = 3
 
+# Standard env var used by the official Ollama CLI and libraries.
+_OLLAMA_HOST_ENV = "OLLAMA_HOST"
+_DEFAULT_BASE_URL = "http://localhost:11434"
+
 
 class OllamaProvider:
-    """Ollama local LLM provider using httpx."""
+    """Ollama local LLM provider using httpx.
+
+    Resolves base URL in this order:
+    1. Explicit ``base_url`` constructor arg
+    2. ``OLLAMA_HOST`` env var (same as official Ollama CLI)
+    3. ``http://localhost:11434`` default
+
+    After construction, call :meth:`ping` to verify reachability.
+    ``is_available`` returns ``False`` until a successful ping.
+    """
 
     def __init__(
         self,
-        base_url: str = "http://localhost:11434",
+        base_url: str | None = None,
     ) -> None:
+        if base_url is None:
+            base_url = os.environ.get(_OLLAMA_HOST_ENV, _DEFAULT_BASE_URL)
         self._base_url = base_url.rstrip("/")
+        self._verified: bool = False
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=30.0),
         )
@@ -48,9 +65,18 @@ class OllamaProvider:
         return "ollama"
 
     @property
+    def base_url(self) -> str:
+        """Resolved Ollama base URL."""
+        return self._base_url
+
+    @property
     def is_available(self) -> bool:
-        """Always True — availability checked at runtime."""
-        return True
+        """True only after a successful :meth:`ping`.
+
+        Before ping, returns False — prevents the router from sending
+        requests to an Ollama instance that may not exist.
+        """
+        return self._verified
 
     def supports_model(self, model: str) -> bool:
         """Ollama serves local models only.
@@ -68,9 +94,75 @@ class OllamaProvider:
             return _CONTEXT_WINDOWS.get(model, _DEFAULT_CONTEXT)
         return _DEFAULT_CONTEXT
 
+    # ── Discovery ────────────────────────────────────────────
+
+    async def ping(self, timeout: float = 2.0) -> bool:
+        """Check if Ollama is reachable and set the ``_verified`` flag.
+
+        Uses ``GET /api/tags`` because it's lightweight and confirms
+        the Ollama server is fully operational (not just listening).
+
+        Args:
+            timeout: Seconds to wait before giving up.
+
+        Returns:
+            True if Ollama responded with HTTP 200.
+        """
+        try:
+            resp = await self._client.get(
+                f"{self._base_url}/api/tags",
+                timeout=timeout,
+            )
+            self._verified = resp.status_code == 200  # noqa: PLR2004
+            if self._verified:
+                logger.debug("ollama_ping_ok", base_url=self._base_url)
+            else:
+                logger.debug(
+                    "ollama_ping_unexpected_status",
+                    base_url=self._base_url,
+                    status=resp.status_code,
+                )
+            return self._verified
+        except Exception:
+            self._verified = False
+            logger.debug("ollama_ping_failed", base_url=self._base_url)
+            return False
+
+    async def list_models(self, timeout: float = 5.0) -> list[str]:
+        """Return names of locally installed Ollama models.
+
+        Calls ``GET /api/tags`` and extracts the ``name`` field from
+        each model entry.  Names include the tag suffix returned by
+        Ollama (e.g. ``"llama3.1:latest"``).
+
+        Args:
+            timeout: Seconds to wait before giving up.
+
+        Returns:
+            Sorted list of model name strings, empty on any error.
+        """
+        try:
+            resp = await self._client.get(
+                f"{self._base_url}/api/tags",
+                timeout=timeout,
+            )
+            if resp.status_code != 200:  # noqa: PLR2004
+                return []
+            data = resp.json()
+            models = sorted(m["name"] for m in data.get("models", []) if "name" in m)
+            logger.debug("ollama_models_listed", count=len(models), models=models[:5])
+            return models
+        except Exception:
+            logger.debug("ollama_list_models_failed", base_url=self._base_url)
+            return []
+
+    # ── Lifecycle ────────────────────────────────────────────
+
     async def close(self) -> None:
         """Close httpx client."""
         await self._client.aclose()
+
+    # ── Generation ───────────────────────────────────────────
 
     async def generate(
         self,

@@ -14,7 +14,12 @@ if TYPE_CHECKING:
     from sovyx.engine.types import MindId
 
 from sovyx.bridge.manager import BridgeManager
-from sovyx.engine.bootstrap import MindManager, bootstrap
+from sovyx.engine.bootstrap import (
+    MindManager,
+    _persist_ollama_config,
+    _select_best_ollama_model,
+    bootstrap,
+)
 from sovyx.engine.config import DatabaseConfig, EngineConfig
 from sovyx.engine.registry import ServiceRegistry
 from sovyx.llm.router import LLMRouter
@@ -404,3 +409,302 @@ class TestBootstrapCoverageGaps:
             pytest.raises(RuntimeError, match="main failure"),
         ):
             await bootstrap(config, [mind])
+
+
+# ── Ollama auto-detection helpers ──
+
+
+class TestSelectBestOllamaModel:
+    """Unit tests for _select_best_ollama_model."""
+
+    def test_prefers_llama31(self) -> None:
+        models = ["mistral:latest", "llama3.1:latest", "phi3:mini"]
+        assert _select_best_ollama_model(models) == "llama3.1:latest"
+
+    def test_prefers_llama3_over_mistral(self) -> None:
+        models = ["mistral:7b", "llama3:latest"]
+        assert _select_best_ollama_model(models) == "llama3:latest"
+
+    def test_falls_back_to_first(self) -> None:
+        models = ["custom-model:v2", "another:latest"]
+        assert _select_best_ollama_model(models) == "custom-model:v2"
+
+    def test_strips_tags_for_matching(self) -> None:
+        models = ["llama3.1:8b-q4_0"]
+        assert _select_best_ollama_model(models) == "llama3.1:8b-q4_0"
+
+    def test_single_model(self) -> None:
+        models = ["tinyllama:latest"]
+        assert _select_best_ollama_model(models) == "tinyllama:latest"
+
+    def test_codellama_in_priority(self) -> None:
+        models = ["codellama:7b", "some-unknown:latest"]
+        assert _select_best_ollama_model(models) == "codellama:7b"
+
+    def test_first_occurrence_wins_for_same_base(self) -> None:
+        """If multiple tags for same base, first in list is returned."""
+        models = ["llama3.1:70b", "llama3.1:8b"]
+        assert _select_best_ollama_model(models) == "llama3.1:70b"
+
+
+class TestPersistOllamaConfig:
+    """Unit tests for _persist_ollama_config."""
+
+    def test_creates_new_file(self, tmp_path: Path) -> None:
+        import yaml
+
+        mind = MindConfig(name="Test")
+        mind.llm.default_provider = "ollama"
+        mind.llm.default_model = "llama3.1:latest"
+        yaml_path = tmp_path / "aria" / "mind.yaml"
+
+        _persist_ollama_config(mind, yaml_path)
+
+        assert yaml_path.exists()
+        with open(yaml_path) as f:
+            data = yaml.safe_load(f)
+        assert data["llm"]["default_provider"] == "ollama"
+        assert data["llm"]["default_model"] == "llama3.1:latest"
+
+    def test_preserves_existing_sections(self, tmp_path: Path) -> None:
+        """Existing YAML sections (personality, etc.) are not clobbered."""
+        import yaml
+
+        yaml_path = tmp_path / "mind.yaml"
+        yaml_path.write_text(yaml.safe_dump({"name": "MyMind", "timezone": "America/Sao_Paulo"}))
+
+        mind = MindConfig(name="Test")
+        mind.llm.default_provider = "ollama"
+        mind.llm.default_model = "mistral:latest"
+
+        _persist_ollama_config(mind, yaml_path)
+
+        with open(yaml_path) as f:
+            data = yaml.safe_load(f)
+        assert data["name"] == "MyMind"
+        assert data["timezone"] == "America/Sao_Paulo"
+        assert data["llm"]["default_provider"] == "ollama"
+
+    def test_overwrites_existing_llm_section(self, tmp_path: Path) -> None:
+        import yaml
+
+        yaml_path = tmp_path / "mind.yaml"
+        yaml_path.write_text(yaml.safe_dump({"llm": {"default_provider": "openai"}}))
+
+        mind = MindConfig(name="Test")
+        mind.llm.default_provider = "ollama"
+        mind.llm.default_model = "llama3.1:latest"
+
+        _persist_ollama_config(mind, yaml_path)
+
+        with open(yaml_path) as f:
+            data = yaml.safe_load(f)
+        assert data["llm"]["default_provider"] == "ollama"
+
+    def test_handles_corrupted_yaml(self, tmp_path: Path) -> None:
+        """Corrupted YAML file is overwritten cleanly."""
+        yaml_path = tmp_path / "mind.yaml"
+        yaml_path.write_text("{{not valid yaml")
+
+        mind = MindConfig(name="Test")
+        mind.llm.default_provider = "ollama"
+        mind.llm.default_model = "llama3.1:latest"
+
+        # Should not raise
+        _persist_ollama_config(mind, yaml_path)
+
+    def test_persist_includes_fast_model(self, tmp_path: Path) -> None:
+        import yaml
+
+        mind = MindConfig(name="Test")
+        mind.llm.default_provider = "ollama"
+        mind.llm.default_model = "llama3.1:latest"
+        mind.llm.fast_model = "llama3.1:latest"
+        yaml_path = tmp_path / "mind.yaml"
+
+        _persist_ollama_config(mind, yaml_path)
+
+        with open(yaml_path) as f:
+            data = yaml.safe_load(f)
+        assert data["llm"]["fast_model"] == "llama3.1:latest"
+
+
+class TestBootstrapOllamaAutoDetect:
+    """Integration tests for Ollama auto-detection in bootstrap.
+
+    ping() must use side_effect (not return_value) because the real method
+    sets ``self._verified = True`` which ``is_available`` reads.  A plain
+    AsyncMock replaces the method body entirely, so ``_verified`` stays False.
+    """
+
+    @staticmethod
+    async def _fake_ping_ok(self: object, timeout: float = 2.0) -> bool:  # noqa: ARG004
+        self._verified = True  # type: ignore[attr-defined]
+        return True
+
+    @staticmethod
+    async def _fake_ping_fail(self: object, timeout: float = 2.0) -> bool:  # noqa: ARG004
+        self._verified = False  # type: ignore[attr-defined]
+        return False
+
+    @staticmethod
+    def _remove_cloud_keys() -> None:
+        for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"):
+            os.environ.pop(key, None)
+
+    @pytest.mark.asyncio(loop_scope="function")
+    @pytest.mark.timeout(15)
+    async def test_auto_detect_ollama_no_cloud_keys(self, tmp_path: Path) -> None:
+        """When no cloud keys, bootstrap auto-detects Ollama."""
+        from unittest.mock import AsyncMock
+
+        from sovyx.llm.providers.ollama import OllamaProvider
+
+        config = EngineConfig(database=DatabaseConfig(data_dir=tmp_path))
+        mind = MindConfig(name="Test")
+
+        with (
+            patch.object(OllamaProvider, "ping", self._fake_ping_ok),
+            patch.object(
+                OllamaProvider,
+                "list_models",
+                new_callable=AsyncMock,
+                return_value=["llama3.1:latest", "mistral:7b"],
+            ),
+        ):
+            self._remove_cloud_keys()
+            registry = await bootstrap(config, [mind])
+
+        assert mind.llm.default_provider == "ollama"
+        assert mind.llm.default_model == "llama3.1:latest"
+        assert mind.llm.fast_model == "llama3.1:latest"
+
+        db = await registry.resolve(DatabaseManager)
+        await db.stop()
+
+    @pytest.mark.asyncio(loop_scope="function")
+    @pytest.mark.timeout(15)
+    async def test_no_auto_detect_with_cloud_keys(self, tmp_path: Path) -> None:
+        """Cloud keys present → no Ollama auto-detection."""
+        from sovyx.llm.providers.ollama import OllamaProvider
+
+        config = EngineConfig(database=DatabaseConfig(data_dir=tmp_path))
+        mind = MindConfig(name="Test")
+        mind.llm.default_provider = "openai"
+        mind.llm.default_model = "gpt-4o"
+
+        with (
+            patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False),
+            patch.object(OllamaProvider, "ping", self._fake_ping_ok),
+        ):
+            registry = await bootstrap(config, [mind])
+
+        assert mind.llm.default_provider == "openai"
+        assert mind.llm.default_model == "gpt-4o"
+
+        db = await registry.resolve(DatabaseManager)
+        await db.stop()
+
+    @pytest.mark.asyncio(loop_scope="function")
+    @pytest.mark.timeout(15)
+    async def test_ollama_not_reachable(self, tmp_path: Path) -> None:
+        """Ollama not running → warning logged, no crash."""
+        from sovyx.llm.providers.ollama import OllamaProvider
+
+        config = EngineConfig(database=DatabaseConfig(data_dir=tmp_path))
+        mind = MindConfig(name="Test")
+
+        with patch.object(OllamaProvider, "ping", self._fake_ping_fail):
+            self._remove_cloud_keys()
+            registry = await bootstrap(config, [mind])
+
+        assert mind.llm.default_model == ""
+
+        db = await registry.resolve(DatabaseManager)
+        await db.stop()
+
+    @pytest.mark.asyncio(loop_scope="function")
+    @pytest.mark.timeout(15)
+    async def test_ollama_running_no_models(self, tmp_path: Path) -> None:
+        """Ollama reachable but no models → warning, no crash."""
+        from unittest.mock import AsyncMock
+
+        from sovyx.llm.providers.ollama import OllamaProvider
+
+        config = EngineConfig(database=DatabaseConfig(data_dir=tmp_path))
+        mind = MindConfig(name="Test")
+
+        with (
+            patch.object(OllamaProvider, "ping", self._fake_ping_ok),
+            patch.object(
+                OllamaProvider,
+                "list_models",
+                new_callable=AsyncMock,
+                return_value=[],
+            ),
+        ):
+            self._remove_cloud_keys()
+            registry = await bootstrap(config, [mind])
+
+        assert mind.llm.default_model == ""
+
+        db = await registry.resolve(DatabaseManager)
+        await db.stop()
+
+    @pytest.mark.asyncio(loop_scope="function")
+    @pytest.mark.timeout(15)
+    async def test_fast_model_fallback(self, tmp_path: Path) -> None:
+        """fast_model is set to default_model when empty."""
+        from sovyx.llm.providers.ollama import OllamaProvider
+
+        config = EngineConfig(database=DatabaseConfig(data_dir=tmp_path))
+        mind = MindConfig(name="Test")
+        mind.llm.fast_model = ""
+        mind.llm.default_model = "gpt-4o-mini"
+
+        with (
+            patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}, clear=False),
+            patch.object(OllamaProvider, "ping", self._fake_ping_fail),
+        ):
+            registry = await bootstrap(config, [mind])
+
+        assert mind.llm.fast_model == "gpt-4o-mini"
+
+        db = await registry.resolve(DatabaseManager)
+        await db.stop()
+
+    @pytest.mark.asyncio(loop_scope="function")
+    @pytest.mark.timeout(15)
+    async def test_persist_auto_detected_config(self, tmp_path: Path) -> None:
+        """Auto-detected config is persisted to mind.yaml."""
+        from unittest.mock import AsyncMock
+
+        from sovyx.llm.providers.ollama import OllamaProvider
+
+        config = EngineConfig(database=DatabaseConfig(data_dir=tmp_path))
+        mind = MindConfig(name="Test")
+
+        with (
+            patch.object(OllamaProvider, "ping", self._fake_ping_ok),
+            patch.object(
+                OllamaProvider,
+                "list_models",
+                new_callable=AsyncMock,
+                return_value=["mistral:latest"],
+            ),
+        ):
+            self._remove_cloud_keys()
+            registry = await bootstrap(config, [mind])
+
+        # Check persisted YAML
+        import yaml
+
+        yaml_path = tmp_path / "test" / "mind.yaml"
+        assert yaml_path.exists()
+        with open(yaml_path) as f:
+            data = yaml.safe_load(f)
+        assert data["llm"]["default_provider"] == "ollama"
+        assert data["llm"]["default_model"] == "mistral:latest"
+
+        db = await registry.resolve(DatabaseManager)
+        await db.stop()

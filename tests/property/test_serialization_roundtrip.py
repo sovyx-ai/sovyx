@@ -234,6 +234,9 @@ def status_snapshot_strategy(draw: st.DrawFn) -> StatusSnapshot:
         tokens_today=draw(_pos_int),
         messages_today=draw(_pos_int),
         cost_history=draw(st.just([])),
+        timezone=draw(st.sampled_from(["UTC", "America/Sao_Paulo", "Asia/Tokyo"])),
+        today_date=draw(st.from_regex(r"20[0-9]{2}-[01][0-9]-[0-3][0-9]", fullmatch=True)),
+        has_lifetime_activity=draw(st.booleans()),
     )
 
 
@@ -256,6 +259,9 @@ class TestStatusSnapshotRoundtrip:
             "tokens_today",
             "messages_today",
             "cost_history",
+            "timezone",
+            "today_date",
+            "has_lifetime_activity",
         }
 
     @given(snap=status_snapshot_strategy())
