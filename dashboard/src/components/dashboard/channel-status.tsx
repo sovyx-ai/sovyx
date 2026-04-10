@@ -62,11 +62,11 @@ function TelegramSetup({ onDone }: { onDone: () => void }) {
         setBotUsername(res.bot_username ?? "");
         setState("success");
       } else {
-        setError(res.error ?? "Invalid token");
+        setError(res.error ?? t("channelSetup.invalidToken"));
         setState("error");
       }
     } catch {
-      setError("Could not connect — check your network");
+      setError(t("channelSetup.networkError"));
       setState("error");
     }
   }, [token]);
@@ -77,18 +77,18 @@ function TelegramSetup({ onDone }: { onDone: () => void }) {
         <div className="flex items-center gap-2 text-emerald-400">
           <CheckCircle2Icon className="size-4" />
           <span className="text-xs font-medium">
-            Connected to @{botUsername}
+            {t("channelSetup.connectedTo", { username: botUsername })}
           </span>
         </div>
         <p className="text-[11px] text-[var(--svx-color-text-tertiary)]">
-          Restart Sovyx to activate the channel.
+          {t("channelSetup.restartToActivate")}
         </p>
         <button
           type="button"
           onClick={onDone}
           className="text-[11px] text-[var(--svx-color-brand-primary)] hover:underline"
         >
-          Done
+          {t("channelSetup.done")}
         </button>
       </div>
     );
@@ -155,7 +155,7 @@ function TelegramSetup({ onDone }: { onDone: () => void }) {
             {state === "validating" ? (
               <Loader2Icon className="size-3.5 animate-spin" />
             ) : (
-              "Connect"
+              t("channelSetup.connect")
             )}
           </button>
         </div>
@@ -228,7 +228,7 @@ export function ChannelStatusCard() {
     return (
       <div className="rounded-xl border border-[var(--svx-color-border-subtle)] bg-[var(--svx-color-bg-elevated)] p-4">
         <h3 className="text-sm font-semibold text-[var(--svx-color-text-primary)]">
-          {t("channels.title", { defaultValue: "Channels" })}
+          {t("channels.title")}
         </h3>
         <div className="mt-3 space-y-2">
           {[1, 2, 3].map((i) => (
@@ -247,7 +247,7 @@ export function ChannelStatusCard() {
       data-testid="channel-status-card"
     >
       <h3 className="text-sm font-semibold text-[var(--svx-color-text-primary)]">
-        {t("channels.title", { defaultValue: "Channels" })}
+        {t("channels.title")}
       </h3>
       <div className="mt-3 space-y-1">
         {channels.map((ch) => {
@@ -282,12 +282,12 @@ export function ChannelStatusCard() {
                   {ch.connected ? (
                     <>
                       <WifiIcon className="size-3" />
-                      {t("channels.connected", { defaultValue: "Connected" })}
+                      {t("channels.connected")}
                     </>
                   ) : (
                     <>
                       <WifiOffIcon className="size-3" />
-                      {t("channels.setup", { defaultValue: "Set up" })}
+                      {t("channels.setup")}
                       {SetupComponent && (
                         isExpanded
                           ? <ChevronUpIcon className="size-3" />

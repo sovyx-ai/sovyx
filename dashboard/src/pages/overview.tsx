@@ -99,7 +99,7 @@ export default function OverviewPage() {
             ? t("subtitle")
             : isFresh
               ? t("subtitleFresh")
-              : t("subtitleProgress", { defaultValue: "Almost there — finish setting up your Mind." })}
+              : t("subtitleProgress")}
         </p>
       </div>
 

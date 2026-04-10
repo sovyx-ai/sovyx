@@ -49,7 +49,7 @@ function WelcomeStep({ step, state, icon, title, description, action }: StepProp
       data-state={state}
       aria-label={
         isDone
-          ? `${t(`welcome.step${step}Title`, { defaultValue: title })} — ${t("welcome.stepDone", { defaultValue: "Done" })}`
+          ? `${t(`welcome.step${step}Title`)} — ${t("welcome.stepDone")}`
           : undefined
       }
       aria-current={isActive ? "step" : undefined}
@@ -79,11 +79,11 @@ function WelcomeStep({ step, state, icon, title, description, action }: StepProp
                   : "text-[var(--svx-color-text-secondary)]"
             }`}
           >
-            Step {step}
+            {t("welcome.stepLabel", { step })}
           </span>
           {isDone && (
             <Badge variant="outline" className="border-[var(--svx-color-success)]/30 text-[var(--svx-color-success)] text-[10px] px-1.5 py-0">
-              {t("welcome.stepDone", { defaultValue: "Done" })}
+              {t("welcome.stepDone")}
             </Badge>
           )}
         </div>
@@ -148,7 +148,6 @@ function ProgressBar({ completed, total }: ProgressBarProps) {
           aria-label={t("welcome.progress", {
             completed,
             total,
-            defaultValue: `${completed} of ${total}`,
           })}
         >
           <div
@@ -160,11 +159,10 @@ function ProgressBar({ completed, total }: ProgressBarProps) {
         </div>
         <span className="ml-3 shrink-0 text-xs text-[var(--svx-color-text-secondary)]">
           {allDone
-            ? t("welcome.progressDone", { defaultValue: "All done ✓" })
+            ? t("welcome.progressDone")
             : t("welcome.progress", {
                 completed,
                 total,
-                defaultValue: `${completed} of ${total}`,
               })}
         </span>
       </div>
@@ -200,7 +198,7 @@ export function WelcomeBanner({
       <button
         onClick={onDismiss}
         className="absolute right-4 top-4 rounded-lg p-1 text-[var(--svx-color-text-secondary)] transition-colors duration-[var(--svx-duration-fast)] hover:bg-[var(--svx-color-bg-elevated)] hover:text-[var(--svx-color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--svx-color-brand-primary)]/50"
-        aria-label={t("welcome.dismissLabel", { defaultValue: "Dismiss setup guide" })}
+        aria-label={t("welcome.dismissLabel")}
         data-testid="welcome-dismiss"
       >
         <XIcon className="size-4" />
@@ -209,13 +207,10 @@ export function WelcomeBanner({
       {/* Header */}
       <div className="mb-4 pr-8">
         <h2 className="text-xl font-bold text-[var(--svx-color-text-primary)]">
-          {t("welcome.title", { defaultValue: "Welcome to Sovyx" })}
+          {t("welcome.title")}
         </h2>
         <p className="mt-1 text-sm text-[var(--svx-color-text-secondary)]">
-          {t("welcome.subtitle", {
-            defaultValue:
-              "Your mind engine is ready. Follow these steps to get started.",
-          })}
+          {t("welcome.subtitle")}
         </p>
       </div>
 
@@ -230,17 +225,12 @@ export function WelcomeBanner({
           step={1}
           state={step1}
           icon={<KeyIcon className="size-5" />}
-          title={t("welcome.step1Title", {
-            defaultValue: "Configure your LLM key",
-          })}
-          description={t("welcome.step1Desc", {
-            defaultValue:
-              "Add your OpenAI, Anthropic, or other LLM API key in Settings.",
-          })}
+          title={t("welcome.step1Title")}
+          description={t("welcome.step1Desc")}
           action={
             <Link to="/settings">
               <Button variant="outline" size="sm" className="gap-1.5 text-xs">
-                {t("welcome.goSettings", { defaultValue: "Go to Settings" })}
+                {t("welcome.goSettings")}
                 <ArrowRightIcon className="size-3" />
               </Button>
             </Link>
@@ -251,20 +241,15 @@ export function WelcomeBanner({
           step={2}
           state={step2}
           icon={<MessageCircleIcon className="size-5" />}
-          title={t("welcome.step2Title", {
-            defaultValue: "Send your first message",
-          })}
-          description={t("welcome.step2Desc", {
-            defaultValue:
-              "Open Chat and start a conversation with your mind. It learns from every interaction.",
-          })}
+          title={t("welcome.step2Title")}
+          description={t("welcome.step2Desc")}
           action={
             <Link to="/chat">
               <Button
                 size="sm"
                 className="gap-1.5 text-xs bg-[var(--svx-color-brand-primary)] text-[var(--svx-color-text-inverse)] hover:bg-[var(--svx-color-brand-hover)]"
               >
-                {t("welcome.goChat", { defaultValue: "Open Chat" })}
+                {t("welcome.goChat")}
                 <ArrowRightIcon className="size-3" />
               </Button>
             </Link>
@@ -275,13 +260,8 @@ export function WelcomeBanner({
           step={3}
           state={step3}
           icon={<SparklesIcon className="size-5" />}
-          title={t("welcome.step3Title", {
-            defaultValue: "Watch your mind grow",
-          })}
-          description={t("welcome.step3Desc", {
-            defaultValue:
-              "As you chat, your mind builds concepts, forms memories, and develops its personality.",
-          })}
+          title={t("welcome.step3Title")}
+          description={t("welcome.step3Desc")}
         />
       </div>
     </div>

@@ -281,7 +281,7 @@ export default function ChatPage() {
             onClick={() => setError(null)}
             className="ml-auto text-xs"
           >
-            {t("common:action.dismiss", { defaultValue: "Dismiss" })}
+            {t("common:actions.dismiss")}
           </Button>
         </div>
       )}
