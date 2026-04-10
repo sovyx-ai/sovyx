@@ -8,10 +8,6 @@ import {
   Settings,
   Mic,
   Info,
-  Heart,
-  ListTodo,
-  Puzzle,
-  Home,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -28,10 +24,6 @@ const ROUTE_MAP: Record<string, RouteInfo> = {
   "/settings": { labelKey: "nav.settings", icon: Settings },
   "/voice": { labelKey: "nav.voice", icon: Mic },
   "/about": { labelKey: "nav.about", icon: Info },
-  "/emotions": { labelKey: "nav.emotions", icon: Heart },
-  "/productivity": { labelKey: "nav.productivity", icon: ListTodo },
-  "/plugins": { labelKey: "nav.plugins", icon: Puzzle },
-  "/home": { labelKey: "nav.home", icon: Home },
 };
 
 /**

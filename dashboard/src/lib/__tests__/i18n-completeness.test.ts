@@ -7,7 +7,7 @@ import i18n from "@/lib/i18n";
 
 const EXPECTED_NAMESPACES = [
   "common", "overview", "conversations", "brain", "logs", "settings",
-  "voice", "emotions", "productivity", "plugins", "home", "about",
+  "voice", "about", "chat",
 ] as const;
 
 describe("i18n completeness", () => {
