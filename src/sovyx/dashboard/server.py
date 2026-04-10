@@ -236,6 +236,11 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
     # Security headers
     app.add_middleware(SecurityHeadersMiddleware)
 
+    # Rate limiting
+    from sovyx.dashboard.rate_limit import RateLimitMiddleware
+
+    app.add_middleware(RateLimitMiddleware)
+
     # Shared state
     ws_manager = ConnectionManager()
     app.state.ws_manager = ws_manager
