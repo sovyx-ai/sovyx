@@ -143,10 +143,14 @@ async def bootstrap(
         for mind_config in mind_configs:
             mind_id = MindId(mind_config.id)
 
-            # Configure daily counter timezone from mind config
-            from sovyx.dashboard.status import configure_timezone
+            # Configure daily counter timezone + persistence from mind config
+            from sovyx.dashboard.status import configure_timezone, get_counters
 
-            configure_timezone(mind_config.timezone)
+            configure_timezone(
+                mind_config.timezone,
+                system_pool=db_manager.get_system_pool(),
+            )
+            await get_counters().restore()
 
             # Initialize per-mind databases
             await db_manager.initialize_mind_databases(mind_id)

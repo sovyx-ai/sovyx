@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,6 +15,11 @@ from sovyx.dashboard.status import (
     StatusSnapshot,
     get_counters,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from sovyx.persistence.pool import DatabasePool
 
 
 class TestDashboardCounters:
@@ -329,6 +335,209 @@ class TestCostHistory:
         collector = StatusCollector(registry)
         snap = await collector.collect()
         assert snap.cost_history == []
+
+
+class TestCountersPersistence:
+    """DashboardCounters persist/restore — mirrors CostGuard pattern."""
+
+    @pytest.fixture
+    async def pool(self, tmp_path: Path) -> DatabasePool:
+        """Pool with engine_state table."""
+        from sovyx.persistence.migrations import MigrationRunner
+        from sovyx.persistence.pool import DatabasePool
+        from sovyx.persistence.schemas.system import get_system_migrations
+
+        p = DatabasePool(db_path=tmp_path / "system.db", read_pool_size=1)
+        await p.initialize()
+        runner = MigrationRunner(p)
+        await runner.initialize()
+        await runner.run_migrations(get_system_migrations())
+        yield p  # type: ignore[misc]
+        await p.close()
+
+    async def test_persist_writes_state(self, pool: DatabasePool) -> None:
+        c = DashboardCounters()
+        c._system_pool = pool
+        c.record_llm_call(cost=0.05, tokens=500)
+        c.record_message()
+        c.record_message()
+
+        await c.persist()
+
+        async with pool.read() as conn:
+            cursor = await conn.execute(
+                "SELECT value FROM engine_state WHERE key = ?",
+                ("dashboard_counters_state",),
+            )
+            row = await cursor.fetchone()
+        assert row is not None
+        import json
+
+        state = json.loads(row[0])
+        assert state["llm_calls"] == 1
+        assert state["messages_received"] == 2
+        assert state["tokens"] == 500
+        assert state["llm_cost"] == pytest.approx(0.05)
+
+    async def test_restore_same_day(self, pool: DatabasePool) -> None:
+        """Counters are restored when saved_date == today."""
+        c = DashboardCounters()
+        c._system_pool = pool
+        c.record_llm_call(cost=1.50, tokens=3000)
+        c.record_message()
+        c.record_message()
+        c.record_message()
+        await c.persist()
+
+        # Create a fresh instance and restore
+        c2 = DashboardCounters()
+        c2._system_pool = pool
+        await c2.restore()
+
+        assert c2.llm_calls == 1
+        assert c2.llm_cost == pytest.approx(1.50)
+        assert c2.tokens == 3000
+        assert c2.messages_received == 3
+
+    async def test_restore_stale_buffers_snapshot(self, pool: DatabasePool) -> None:
+        """Stale data (different day) is buffered for DailyStatsRecorder."""
+        import json
+
+        # Write state with yesterday's date
+        yesterday = "2020-01-01"
+        state = json.dumps(
+            {
+                "date": yesterday,
+                "llm_calls": 10,
+                "llm_cost": 2.50,
+                "tokens": 5000,
+                "messages_received": 20,
+            }
+        )
+        async with pool.write() as conn:
+            await conn.execute(
+                "INSERT INTO engine_state (key, value) VALUES (?, ?)",
+                ("dashboard_counters_state", state),
+            )
+            await conn.commit()
+
+        c = DashboardCounters()
+        c._system_pool = pool
+        await c.restore()
+
+        # Counters should be fresh (zeroed)
+        assert c.llm_calls == 0
+        assert c.messages_received == 0
+
+        # But stale data is buffered
+        snap = c.consume_pending_day_snapshot()
+        assert snap is not None
+        assert snap["date"] == yesterday
+        assert snap["messages"] == 20
+        assert snap["llm_calls"] == 10
+        assert snap["tokens"] == 5000
+
+    async def test_restore_no_pool(self) -> None:
+        """No pool → restore is a no-op."""
+        c = DashboardCounters()
+        await c.restore()  # Should not raise
+        assert c.llm_calls == 0
+
+    async def test_restore_no_state(self, pool: DatabasePool) -> None:
+        """No saved state → restore is a no-op."""
+        c = DashboardCounters()
+        c._system_pool = pool
+        await c.restore()
+        assert c.llm_calls == 0
+
+    async def test_dirty_flag_prevents_redundant_writes(self, pool: DatabasePool) -> None:
+        """persist() is a no-op when not dirty."""
+        c = DashboardCounters()
+        c._system_pool = pool
+        c.record_message()
+        await c.persist()
+        assert not c._dirty
+
+        # Second persist should be a no-op
+        await c.persist()  # Should not raise, should not write
+
+    async def test_persist_no_pool_is_noop(self) -> None:
+        """No pool → persist is a no-op."""
+        c = DashboardCounters()
+        c.record_message()
+        await c.persist()  # Should not raise
+
+    async def test_persist_retry_on_failure(self, pool: DatabasePool) -> None:
+        """Failed persist re-marks dirty for retry."""
+        c = DashboardCounters()
+        c._system_pool = pool
+        c.record_message()
+
+        # Close pool to cause write failure
+        await pool.close()
+        await c.persist()
+
+        # Should be re-marked as dirty
+        assert c._dirty
+
+    async def test_day_boundary_buffers_previous(self) -> None:
+        """Day boundary buffers previous day's data."""
+        c = DashboardCounters()
+        c._day_key = "2026-04-10"
+        c.llm_calls = 5
+        c.llm_cost = 1.0
+        c.tokens = 1000
+        c.messages_received = 10
+
+        with patch("sovyx.dashboard.status._now_date_str", return_value="2026-04-11"):
+            c.record_message()
+
+        snap = c.consume_pending_day_snapshot()
+        assert snap is not None
+        assert snap["date"] == "2026-04-10"
+        assert snap["messages"] == 10
+        assert snap["llm_calls"] == 5
+        assert snap["tokens"] == 1000
+
+        # Counters were reset: 0 + 1 = 1
+        assert c.messages_received == 1
+        assert c.llm_calls == 0
+
+    async def test_consume_pending_clears(self) -> None:
+        """consume_pending_day_snapshot returns None after first call."""
+        c = DashboardCounters()
+        c._day_key = "2026-04-10"
+        c.messages_received = 5
+
+        with patch("sovyx.dashboard.status._now_date_str", return_value="2026-04-11"):
+            c.record_message()
+
+        assert c.consume_pending_day_snapshot() is not None
+        assert c.consume_pending_day_snapshot() is None
+
+    async def test_restart_mid_day_preserves(self, pool: DatabasePool) -> None:
+        """Full cycle: record → persist → new instance → restore → check."""
+        c1 = DashboardCounters()
+        c1._system_pool = pool
+        for _ in range(5):
+            c1.record_llm_call(cost=0.10, tokens=200)
+        for _ in range(8):
+            c1.record_message()
+        await c1.persist()
+
+        # Simulate restart
+        c2 = DashboardCounters()
+        c2._system_pool = pool
+        await c2.restore()
+
+        assert c2.llm_calls == 5
+        assert c2.llm_cost == pytest.approx(0.50)
+        assert c2.tokens == 1000
+        assert c2.messages_received == 8
+
+        # Continue accumulating
+        c2.record_message()
+        assert c2.messages_received == 9
 
 
 class TestTimezoneCounters:
