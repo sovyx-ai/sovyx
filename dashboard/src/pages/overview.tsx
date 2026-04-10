@@ -201,18 +201,16 @@ export default function OverviewPage() {
         label={t("chart.costLabel")}
       />
 
-      {/* Channel Status + Cognitive Timeline + Live Feed */}
+      {/* Channel Status + Live Feed (left) | Cognitive Timeline (right) */}
       <div className="grid gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-1">
+        <div className="flex flex-col gap-4 lg:col-span-1">
           <ChannelStatusCard />
+          <ActivityFeed events={recentEvents} />
         </div>
         <div className="lg:col-span-2">
           <CognitiveTimeline />
         </div>
       </div>
-
-      {/* Live Feed */}
-      <ActivityFeed events={recentEvents} />
 
       {/* v1.0 Placeholders */}
       <div className="grid gap-4 md:grid-cols-3">
