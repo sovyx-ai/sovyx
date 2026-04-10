@@ -347,13 +347,16 @@ async def bootstrap(
                 llm_router=router,
                 mind_config=mind_config,
             )
+            from sovyx.cognitive.financial_gate import FinancialGate
             from sovyx.cognitive.output_guard import OutputGuard
 
             output_guard = OutputGuard(safety_config=mind_config.safety)
+            financial_gate = FinancialGate(safety_config=mind_config.safety)
             act = ActPhase(
                 tool_executor=ToolExecutor(),
                 llm_router=router,
                 output_guard=output_guard,
+                financial_gate=financial_gate,
             )
             reflect = ReflectPhase(
                 brain_service=brain_service,
