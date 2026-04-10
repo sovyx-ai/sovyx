@@ -248,7 +248,7 @@ class CostGuard:
 
             await get_counters().persist()
         except Exception:  # noqa: BLE001
-            pass  # Non-critical — counters are best-effort
+            logger.debug("counters_piggyback_persist_failed")  # non-critical
 
     def _maybe_reset(self) -> None:
         """Reset daily spend if new day (user timezone).
