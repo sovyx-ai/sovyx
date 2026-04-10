@@ -4,7 +4,6 @@
  */
 
 import { cn } from "@/lib/utils";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 
 /**
  * Avatar color palette — hex values for inline style={{ backgroundColor }}.
@@ -63,13 +62,23 @@ export function LetterAvatar({ name, size = 32, className }: LetterAvatarProps) 
   );
 }
 
-/** Mind avatar — brand initial on primary background. */
+/** Mind avatar — brand initial on primary background.
+ *
+ * Pure HTML implementation — no @base-ui/react dependency.
+ * Previous version pulled in Avatar primitive (325KB chunk).
+ */
 export function MindAvatar({ className }: { className?: string }) {
   return (
-    <Avatar className={cn("size-8", className)}>
-      <AvatarFallback className="bg-[var(--svx-color-brand-primary)] text-[var(--svx-color-text-inverse)] text-xs font-bold">
-        S
-      </AvatarFallback>
-    </Avatar>
+    <div
+      className={cn(
+        "flex size-8 shrink-0 items-center justify-center rounded-full",
+        "bg-[var(--svx-color-brand-primary)] text-xs font-bold text-[var(--svx-color-text-inverse)]",
+        className,
+      )}
+      role="img"
+      aria-label="Sovyx Mind"
+    >
+      S
+    </div>
   );
 }

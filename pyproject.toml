@@ -104,6 +104,20 @@ disallow_untyped_defs = true
 module = "telegramify_markdown.*"
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = [
+    "zeroconf.*",
+    "onnxruntime.*",
+    "piper_phonemize.*",
+    "moonshine_voice.*",
+    "sounddevice.*",
+    "litellm.*",
+    "boto3.*",
+    "kokoro_onnx.*",
+    "tokenizers.*",
+]
+ignore_missing_imports = true
+
 [tool.ruff]
 target-version = "py311"
 line-length = 99
