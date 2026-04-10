@@ -920,6 +920,9 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
                 status_code=500,
             )
 
+        # Count AI response as a message too (user expects total, not just inbound)
+        get_counters().record_message()
+
         # Broadcast chat event to WebSocket clients for real-time updates
         await ws_manager.broadcast(
             {
