@@ -14,12 +14,8 @@ import {
   SaveIcon,
   Loader2Icon,
   UserIcon,
-  RadioIcon,
-  KeyIcon,
-  PuzzleIcon,
   ShieldIcon,
   DownloadIcon,
-  WebhookIcon,
   BrainIcon,
   SparklesIcon,
   AlertTriangleIcon,
@@ -547,15 +543,8 @@ export default function SettingsPage() {
         </section>
       )}
 
-      {/* ── 8 Placeholder Sections (v1.0) ── */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <PlaceholderSection icon={RadioIcon} title={t("tabs.channels")} versionLabel={t("common:comingSoon.title", { version: "v1.0" })} />
-        <PlaceholderSection icon={KeyIcon} title={t("tabs.apiKeys")} versionLabel={t("common:comingSoon.title", { version: "v1.0" })} />
-
-        <PlaceholderSection icon={PuzzleIcon} title={t("tabs.plugins")} versionLabel={t("common:comingSoon.title", { version: "v1.0" })} />
-        <PlaceholderSection icon={DownloadIcon} title={t("tabs.exportImport")} versionLabel={t("common:comingSoon.title", { version: "v1.0" })} />
-        <PlaceholderSection icon={WebhookIcon} title={t("tabs.webhooks")} versionLabel={t("common:comingSoon.title", { version: "v1.0" })} />
-      </div>
+      {/* ── Export / Import (functional UI in TASK-201) ── */}
+      <PlaceholderSection icon={DownloadIcon} title={t("tabs.exportImport")} versionLabel={t("common:comingSoon.title", { version: "v0.6" })} />
     </div>
   );
 }
