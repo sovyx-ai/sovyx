@@ -45,6 +45,7 @@ class PatternCategory(Enum):
     HATE_SPEECH = "hate_speech"
     MANIPULATION = "manipulation"
     ILLEGAL = "illegal"
+    INJECTION = "injection"
 
 
 @unique
@@ -361,6 +362,120 @@ _STRICT_PATTERNS: tuple[SafetyPattern, ...] = (
     ),
 )
 
+# ── INJECTION patterns (all tiers — standard+) ────────────────────────
+# Prompt injection / jailbreak attempts. Always blocked when any filter
+# is active. Classified under PatternCategory.INJECTION for audit trail.
+
+_INJECTION_PATTERNS: tuple[SafetyPattern, ...] = (
+    # ── Classic jailbreak ──
+    _p(
+        r"\b(?:ignore|disregard|forget|override|bypass|skip|disable|turn\s+off)"
+        r"\s+(?:your\s+)?(?:previous\s+)?(?:instructions?|rules?|guidelines?|safety|guardrails?|filters?|restrictions?|system\s+prompt)",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "Instruction override attempt",
+    ),
+    _p(
+        r"\b(?:you\s+are\s+now|from\s+now\s+on\s+you\s+are|act\s+as|pretend\s+(?:to\s+be|you\s+are))\s+"
+        r"(?:DAN|an?\s+unrestricted|an?\s+unfiltered|an?\s+uncensored|a\s+jailbroken)",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "DAN/unrestricted AI jailbreak",
+    ),
+    _p(
+        r"\b(?:developer\s+mode|god\s+mode|admin\s+mode|sudo\s+mode|root\s+access|debug\s+mode)"
+        r"\s+(?:enabled?|activated?|on|unlocked)",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "Privilege escalation jailbreak",
+    ),
+    _p(
+        r"\bpretend\s+(?:you\s+)?(?:have\s+no|there\s+are\s+no|without\s+any)\s+"
+        r"(?:restrictions?|rules?|limits?|filters?|guidelines?|guardrails?|safety)",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "Pretend no restrictions",
+    ),
+    _p(
+        r"\b(?:act\s+as\s+if|imagine|suppose|hypothetically)\s+"
+        r"(?:safety\s+is\s+disabled|there\s+are\s+no\s+rules|you\s+have\s+no\s+(?:filters?|restrictions?))",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "Hypothetical safety bypass",
+    ),
+    # ── Role-play bypass ──
+    _p(
+        r"\b(?:roleplay|role[- ]play|simulate|emulate)\s+(?:as\s+)?(?:an?\s+)?"
+        r"(?:unrestricted|unfiltered|uncensored|evil|malicious|harmful)\s+(?:ai|assistant|bot|model)",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "Unrestricted roleplay bypass",
+    ),
+    _p(
+        r"\b(?:in\s+(?:this|a)\s+)?(?:fictional|hypothetical|imaginary|alternate)\s+"
+        r"(?:scenario|world|universe|reality)\s+(?:where\s+)?(?:there\s+are\s+)?(?:no\s+)?"
+        r"(?:rules?|restrictions?|safety|filters?|laws?)",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "Fictional scenario bypass",
+    ),
+    # ── Indirect injection ──
+    _p(
+        r"\b(?:the\s+(?:admin|administrator|developer|creator|owner|user\s+manual|system)"
+        r"\s+(?:says?|told\s+you|instructed|authorized|wants\s+you)\s+to)"
+        r"\s+(?:ignore|disable|override|bypass|remove|turn\s+off)",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "Authority impersonation injection",
+    ),
+    _p(
+        r"\b(?:new\s+(?:instructions?|rules?|system\s+prompt)|updated?\s+(?:instructions?|rules?|guidelines?))\s*[:=]",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "Instruction replacement attempt",
+    ),
+    _p(
+        r"\b(?:system|assistant|model)\s*(?:prompt|message)\s*[:=]\s*",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "System prompt injection",
+    ),
+    # ── Token manipulation ──
+    _p(
+        r"(?:</?\s*(?:system|instruction|prompt|rule|filter|safety)\s*/?>)",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "XML/tag injection attempt",
+    ),
+    _p(
+        r"(?:###\s*(?:system|instruction|new\s+rules?|override))",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "Markdown injection delimiter",
+    ),
+    # ── Multi-step / social engineering ──
+    _p(
+        r"\b(?:first|step\s+1|to\s+begin)\s*[,:]\s*(?:ignore|forget|disable|override)\s+"
+        r"(?:your|all|the|any)\s+(?:rules?|safety|filters?|instructions?)",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "Multi-step jailbreak",
+    ),
+    _p(
+        r"\b(?:for\s+(?:research|educational|academic|testing|security)\s+purposes?)"
+        r"\s*[,:]\s*(?:show|tell|explain|demonstrate|write)\s+(?:me\s+)?(?:how\s+to)",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "Research pretext bypass",
+    ),
+)
+
+# ── Compiled pattern sets ──────────────────────────────────────────────
+# Injection patterns are included in ALL active tiers (standard+)
+
+_STANDARD_WITH_INJECTION = _STANDARD_PATTERNS + _INJECTION_PATTERNS
+_STRICT_WITH_INJECTION = _STANDARD_PATTERNS + _STRICT_PATTERNS + _INJECTION_PATTERNS
+
 # ── CHILD_SAFE tier patterns ──────────────────────────────────────────
 # Superset of strict. Blocks content that is legal/educational for adults
 # but inappropriate for children under 10. Zero tolerance.
@@ -474,10 +589,10 @@ _CHILD_SAFE_PATTERNS: tuple[SafetyPattern, ...] = (
 
 # ── Compiled pattern sets ──────────────────────────────────────────────
 
-ALL_STANDARD_PATTERNS: tuple[SafetyPattern, ...] = _STANDARD_PATTERNS
-ALL_STRICT_PATTERNS: tuple[SafetyPattern, ...] = _STANDARD_PATTERNS + _STRICT_PATTERNS
+ALL_STANDARD_PATTERNS: tuple[SafetyPattern, ...] = _STANDARD_WITH_INJECTION
+ALL_STRICT_PATTERNS: tuple[SafetyPattern, ...] = _STRICT_WITH_INJECTION
 ALL_CHILD_SAFE_PATTERNS: tuple[SafetyPattern, ...] = (
-    _STANDARD_PATTERNS + _STRICT_PATTERNS + _CHILD_SAFE_PATTERNS
+    _STANDARD_PATTERNS + _STRICT_PATTERNS + _CHILD_SAFE_PATTERNS + _INJECTION_PATTERNS
 )
 
 
