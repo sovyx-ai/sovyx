@@ -18,6 +18,9 @@ import {
   BrainIcon,
   SparklesIcon,
   AlertTriangleIcon,
+  PlusIcon,
+  Trash2Icon,
+  InfoIcon,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -395,7 +398,11 @@ export default function SettingsPage() {
       )}
 
       {/* ── Safety (MUTABLE) ── */}
-      {mindConfig && (
+      {mindConfig && (() => {
+        const isChildSafe = editedConfig.safety?.child_safe_mode ?? mindConfig.safety.child_safe_mode;
+        const currentFilter = editedConfig.safety?.content_filter ?? mindConfig.safety.content_filter;
+        const guardrails = mindConfig.safety.guardrails ?? [];
+        return (
         <section className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-4">
           <div className="flex items-center gap-2">
             <ShieldIcon className="size-4 text-[var(--svx-color-brand-primary)]" />
@@ -407,48 +414,153 @@ export default function SettingsPage() {
             {t("safety.description")}
           </p>
 
+          {/* Child Safe Warning Banner */}
+          {isChildSafe && (
+            <div className="mt-3 flex items-start gap-2 rounded-[var(--svx-radius-md)] border border-amber-500/30 bg-amber-500/10 p-3">
+              <AlertTriangleIcon className="mt-0.5 size-4 shrink-0 text-amber-500" />
+              <p className="text-xs text-amber-200">
+                {t("safety.childSafeWarning")}
+              </p>
+            </div>
+          )}
+
           <div className="mt-4 space-y-4">
-            {/* Content Filter */}
+            {/* Content Filter with tooltips */}
             <div className="space-y-2">
-              <Label className="text-xs">{t("safety.contentFilter")}</Label>
+              <div className="flex items-center gap-1.5">
+                <Label className="text-xs">{t("safety.contentFilter")}</Label>
+                <div className="group relative">
+                  <InfoIcon className="size-3 text-[var(--svx-color-text-tertiary)] cursor-help" />
+                  <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden w-48 -translate-x-1/2 rounded-[var(--svx-radius-md)] bg-[var(--svx-color-bg-elevated)] p-2 text-xs text-[var(--svx-color-text-secondary)] shadow-lg group-hover:block">
+                    {t("safety.contentFilterDesc")}
+                  </div>
+                </div>
+              </div>
               <div className="flex rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-strong)]">
-                {CONTENT_FILTERS.map((filter) => {
-                  const currentFilter = editedConfig.safety?.content_filter ?? mindConfig.safety.content_filter;
-                  return (
+                {CONTENT_FILTERS.map((filter) => (
+                  <div key={filter} className="group relative flex-1">
                     <button
-                      key={filter}
                       type="button"
                       onClick={() => updateSafety("content_filter", filter)}
+                      disabled={isChildSafe}
                       className={cn(
-                        "flex-1 px-3 py-1.5 text-xs font-medium capitalize transition-colors",
+                        "w-full px-3 py-1.5 text-xs font-medium capitalize transition-colors",
                         currentFilter === filter
                           ? "bg-[var(--svx-color-brand-primary)] text-[var(--svx-color-text-inverse)]"
                           : "hover:bg-[var(--svx-color-bg-hover)] text-[var(--svx-color-text-secondary)]",
+                        isChildSafe && "opacity-50 cursor-not-allowed",
                       )}
                     >
                       {t(`safety.filters.${filter}`)}
                     </button>
-                  );
-                })}
+                    <div className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 hidden w-52 -translate-x-1/2 rounded-[var(--svx-radius-md)] bg-[var(--svx-color-bg-elevated)] p-2 text-xs text-[var(--svx-color-text-secondary)] shadow-lg group-hover:block">
+                      {isChildSafe ? t("safety.childSafeEnforced") : t(`safety.filterTooltips.${filter}`)}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
 
-            {/* Toggles */}
+            {/* Child Safe Mode */}
             <ToggleField
               label={t("safety.childSafeMode")}
               description={t("safety.childSafeModeDesc")}
-              checked={editedConfig.safety?.child_safe_mode ?? mindConfig.safety.child_safe_mode}
+              checked={isChildSafe}
               onChange={(v) => updateSafety("child_safe_mode", v)}
             />
+
+            {/* PII Protection */}
+            <ToggleField
+              label={t("safety.piiProtection")}
+              description={t("safety.piiProtectionDesc")}
+              checked={editedConfig.safety?.pii_protection ?? mindConfig.safety.pii_protection ?? true}
+              onChange={(v) => updateSafety("pii_protection", v)}
+              disabled={isChildSafe}
+            />
+            {isChildSafe && (
+              <p className="ml-8 -mt-3 text-[10px] text-amber-500/70">{t("safety.childSafeEnforced")}</p>
+            )}
+
+            {/* Financial Confirmation */}
             <ToggleField
               label={t("safety.financialConfirmation")}
               description={t("safety.financialConfirmationDesc")}
               checked={editedConfig.safety?.financial_confirmation ?? mindConfig.safety.financial_confirmation}
               onChange={(v) => updateSafety("financial_confirmation", v)}
+              disabled={isChildSafe}
             />
+            {isChildSafe && (
+              <p className="ml-8 -mt-3 text-[10px] text-amber-500/70">{t("safety.childSafeEnforced")}</p>
+            )}
+
+            {/* Custom Guardrails */}
+            <div className="space-y-2 border-t border-[var(--svx-color-border-default)] pt-4">
+              <Label className="text-xs">{t("safety.guardrails")}</Label>
+              <p className="text-[10px] text-[var(--svx-color-text-tertiary)]">
+                {t("safety.guardrailsDesc")}
+              </p>
+              <div className="space-y-1.5">
+                {guardrails.map((g: { id: string; rule: string; severity: string; builtin: boolean }) => (
+                  <div
+                    key={g.id}
+                    className="flex items-start gap-2 rounded-[var(--svx-radius-sm)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-base)] px-3 py-2"
+                  >
+                    <div className="flex-1">
+                      <p className="text-xs text-[var(--svx-color-text-primary)]">{g.rule}</p>
+                      <div className="mt-1 flex items-center gap-2">
+                        <span className={cn(
+                          "rounded-full px-1.5 py-0.5 text-[10px] font-medium",
+                          g.severity === "critical"
+                            ? "bg-red-500/10 text-red-400"
+                            : "bg-amber-500/10 text-amber-400",
+                        )}>
+                          {g.severity === "critical" ? t("safety.guardrailCritical") : t("safety.guardrailWarning")}
+                        </span>
+                        {g.builtin && (
+                          <span className="rounded-full bg-[var(--svx-color-brand-primary)]/10 px-1.5 py-0.5 text-[10px] font-medium text-[var(--svx-color-brand-primary)]">
+                            {t("safety.guardrailBuiltin")}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    {!g.builtin && (
+                      <button
+                        type="button"
+                        className="mt-0.5 text-[var(--svx-color-text-tertiary)] hover:text-red-400 transition-colors"
+                        onClick={() => {
+                          const custom = guardrails.filter((r: { id: string; builtin: boolean }) => !r.builtin && r.id !== g.id);
+                          updateSafety("guardrails", custom.map((r: { id: string; rule: string; severity: string }) => ({ id: r.id, rule: r.rule, severity: r.severity })));
+                        }}
+                      >
+                        <Trash2Icon className="size-3.5" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-2 h-7 text-xs"
+                onClick={() => {
+                  const rule = prompt(t("safety.guardrailPlaceholder"));
+                  if (rule?.trim()) {
+                    const custom = guardrails
+                      .filter((r: { builtin: boolean }) => !r.builtin)
+                      .map((r: { id: string; rule: string; severity: string }) => ({ id: r.id, rule: r.rule, severity: r.severity }));
+                    custom.push({ id: `custom-${Date.now()}`, rule: rule.trim(), severity: "critical" });
+                    updateSafety("guardrails", custom);
+                  }
+                }}
+              >
+                <PlusIcon className="mr-1 size-3" />
+                {t("safety.guardrailAdd")}
+              </Button>
+            </div>
           </div>
         </section>
-      )}
+        );
+      })()}
 
       {/* ── General: Log Level (MUTABLE) ── */}
       <section className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-4">
@@ -601,14 +713,16 @@ function ToggleField({
   description,
   checked,
   onChange,
+  disabled,
 }: {
   label: string;
   description: string;
   checked: boolean;
   onChange: (v: boolean) => void;
+  disabled?: boolean;
 }) {
   return (
-    <div className="flex items-center justify-between">
+    <div className={cn("flex items-center justify-between", disabled && "opacity-50")}>
       <div>
         <Label className="text-xs">{label}</Label>
         <p className="text-[10px] text-[var(--svx-color-text-disabled)]">{description}</p>
@@ -617,9 +731,11 @@ function ToggleField({
         type="button"
         role="switch"
         aria-checked={checked}
-        onClick={() => onChange(!checked)}
+        disabled={disabled}
+        onClick={() => !disabled && onChange(!checked)}
         className={cn(
-          "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors",
+          "relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors",
+          disabled ? "cursor-not-allowed" : "cursor-pointer",
           checked ? "bg-[var(--svx-color-brand-primary)]" : "bg-[var(--svx-color-border-strong)]",
         )}
       >

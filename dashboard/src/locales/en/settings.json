@@ -123,16 +123,36 @@
   },
   "safety": {
     "title": "Safety Guardrails",
-    "description": "Content filtering and safety settings.",
+    "description": "Content filtering, PII protection, and custom rules.",
     "contentFilter": "Content Filter",
+    "contentFilterDesc": "Controls which input and output patterns are blocked.",
     "childSafeMode": "Child Safe Mode",
-    "childSafeModeDesc": "All content must be appropriate for children",
+    "childSafeModeDesc": "All content must be appropriate for children under 10",
+    "childSafeWarning": "Child Safe Mode active. Content filter, PII protection, and financial confirmation are enforced automatically.",
+    "childSafeEnforced": "Enforced by Child Safe Mode",
     "financialConfirmation": "Financial Confirmation",
-    "financialConfirmationDesc": "Require explicit confirmation for financial actions",
+    "financialConfirmationDesc": "Require explicit confirmation before executing financial actions (payments, transfers, trades)",
+    "piiProtection": "PII Protection",
+    "piiProtectionDesc": "Automatically redacts personal data (emails, phones, CPFs, API keys) from AI responses",
+    "guardrails": "Custom Rules",
+    "guardrailsDesc": "Absolute rules injected into the system prompt. Built-in rules cannot be removed.",
+    "guardrailBuiltin": "Built-in",
+    "guardrailCustom": "Custom",
+    "guardrailAdd": "Add Rule",
+    "guardrailPlaceholder": "Enter a guardrail rule...",
+    "guardrailSeverity": "Severity",
+    "guardrailCritical": "Critical",
+    "guardrailWarning": "Warning",
+    "patternCount": "{{count}} patterns active",
     "filters": {
       "none": "None",
       "standard": "Standard",
       "strict": "Strict"
+    },
+    "filterTooltips": {
+      "none": "No content filtering. All messages pass through unfiltered.",
+      "standard": "Blocks harmful content: violence, weapons, self-harm, hacking, illegal activities.",
+      "strict": "Blocks harmful + adult content, substances, gambling, hate speech, manipulation."
     }
   },
   "llmBrain": {
