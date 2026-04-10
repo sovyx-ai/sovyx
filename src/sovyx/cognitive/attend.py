@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from sovyx.cognitive.safety_audit import FilterAction, FilterDirection, get_audit_trail
+from sovyx.cognitive.safety_escalation import get_escalation_tracker
 from sovyx.cognitive.safety_patterns import check_content
 from sovyx.observability.logging import get_logger
 from sovyx.observability.metrics import get_metrics
@@ -43,6 +44,16 @@ class AttendPhase:
         Returns:
             True if perception passes filters, False if filtered.
         """
+        # Escalation check: reject if source is rate-limited
+        tracker = get_escalation_tracker()
+        if tracker.is_rate_limited(perception.source):
+            logger.warning(
+                "perception_rate_limited",
+                perception_id=perception.id,
+                source=perception.source,
+            )
+            return False
+
         # Safety check via tiered regex patterns (with latency measurement)
         m = get_metrics()
         with m.measure_latency(m.safety_filter_latency, {"direction": "input"}):
@@ -61,6 +72,7 @@ class AttendPhase:
                 action=FilterAction.BLOCKED,
                 match=result,
             )
+            tracker.record_block(perception.source)
             return False
 
         # Priority check (v0.1: accept all priorities)

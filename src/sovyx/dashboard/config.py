@@ -262,6 +262,28 @@ def _apply_safety(
             changes["safety.pii_protection"] = f"{old_pii} → {val}"
             safety_changes["pii_protection"] = f"{old_pii} → {val}"
 
+    # ── Coherence enforcement: child_safe forces strict + pii + financial ──
+    if s.child_safe_mode:
+        coherence: dict[str, str] = {}
+        if s.content_filter != "strict":
+            old_cf = s.content_filter
+            s.content_filter = cast("Any", "strict")
+            key = "safety.content_filter"
+            changes[key] = f"{old_cf} → strict (enforced by child-safe)"
+            coherence["content_filter"] = f"{old_cf} → strict"
+        if not s.pii_protection:
+            s.pii_protection = True
+            key = "safety.pii_protection"
+            changes[key] = "False → True (enforced by child-safe)"
+            coherence["pii_protection"] = "False → True"
+        if not s.financial_confirmation:
+            s.financial_confirmation = True
+            key = "safety.financial_confirmation"
+            changes[key] = "False → True (enforced by child-safe)"
+            coherence["financial_confirmation"] = "False → True"
+        if coherence:
+            _log.info("safety_coherence_enforced", **coherence)
+
     if safety_changes:
         _log.info("safety_config_changed", **safety_changes)
 
