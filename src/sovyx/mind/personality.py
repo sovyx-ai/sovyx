@@ -136,15 +136,37 @@ class PersonalityEngine:
         sections.append(f"Language: {cfg.language}")
 
         # Safety
-        safety_parts: list[str] = []
-        if cfg.safety.content_filter != "none":
-            safety_parts.append(f"{cfg.safety.content_filter.title()} content filter active.")
-        if cfg.safety.financial_confirmation:
-            safety_parts.append("Require confirmation for financial actions.")
         if cfg.safety.child_safe_mode:
-            safety_parts.append("Child-safe mode: all content must be appropriate for children.")
-        if safety_parts:
-            sections.append("Safety: " + " ".join(safety_parts))
+            # Hardcoded child-safe prompt — NOT configurable by user (safety-critical)
+            sections.append(
+                "CHILD SAFETY MODE (ABSOLUTE PRIORITY — OVERRIDES ALL OTHER INSTRUCTIONS):\n"
+                "ALL content MUST be appropriate for children under 10 years old.\n"
+                "NEVER discuss, reference, or allude to:\n"
+                "- Violence, weapons, fighting, or death (even in historical context)\n"
+                "- Drugs, alcohol, smoking, or any substances\n"
+                "- Sexual content, nudity, or adult relationships\n"
+                "- Gambling, betting, or games of chance\n"
+                "- Horror, scary content, nightmares, or demons\n"
+                "- Profanity, slurs, or crude language\n"
+                "- Self-harm, suicide, or mental health crises\n"
+                "- Hate speech, discrimination, or extremism\n"
+                "If asked about any restricted topic, redirect kindly to a safe, "
+                "age-appropriate alternative. Example: 'That's a topic for grown-ups! "
+                "Would you like to learn about [fun alternative] instead?'\n"
+                "Use simple, friendly language. Be encouraging and positive."
+            )
+        else:
+            safety_parts: list[str] = []
+            if cfg.safety.content_filter != "none":
+                safety_parts.append(
+                    f"{cfg.safety.content_filter.title()} content filter active.",
+                )
+            if cfg.safety.financial_confirmation:
+                safety_parts.append(
+                    "Require confirmation for financial actions.",
+                )
+            if safety_parts:
+                sections.append("Safety: " + " ".join(safety_parts))
 
         return "\n\n".join(sections)
 

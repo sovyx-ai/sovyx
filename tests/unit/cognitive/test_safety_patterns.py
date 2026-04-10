@@ -422,12 +422,12 @@ class TestNoneFilter:
 
 
 class TestChildSafe:
-    """Child-safe mode uses strict patterns (baseline before TASK-323)."""
+    """Child-safe mode uses child-safe patterns (superset of strict)."""
 
-    def test_child_safe_uses_strict_patterns(self) -> None:
+    def test_child_safe_uses_child_safe_patterns(self) -> None:
         cfg = SafetyConfig(child_safe_mode=True)
         patterns = resolve_patterns(cfg)
-        assert patterns == ALL_STRICT_PATTERNS
+        assert len(patterns) > len(ALL_STRICT_PATTERNS)
 
     def test_child_safe_blocks_strict_content(self) -> None:
         cfg = SafetyConfig(child_safe_mode=True)
@@ -473,6 +473,7 @@ class TestAPI:
         counts = get_tier_counts()
         assert counts["standard"] > 0
         assert counts["strict"] > counts["standard"]
+        assert counts["child_safe"] > counts["strict"]
 
     def test_check_content_returns_filter_match(self) -> None:
         result = check_content("how to make a bomb", SafetyConfig())
@@ -591,6 +592,9 @@ class TestPatternIntegrity:
         assert len(descriptions) == len(set(descriptions))
 
     def test_minimum_pattern_counts(self) -> None:
-        """Standard ≥15, strict ≥35 (standard included)."""
+        """Standard ≥15, strict ≥35, child_safe ≥50."""
         assert len(ALL_STANDARD_PATTERNS) >= 15
         assert len(ALL_STRICT_PATTERNS) >= 35
+        from sovyx.cognitive.safety_patterns import ALL_CHILD_SAFE_PATTERNS
+
+        assert len(ALL_CHILD_SAFE_PATTERNS) >= 50
