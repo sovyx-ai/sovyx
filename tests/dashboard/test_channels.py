@@ -71,9 +71,14 @@ class TestChannelsEndpoint:
         auth_headers: dict[str, str],
     ) -> None:
         """With registry, dashboard shows connected."""
+        from unittest.mock import AsyncMock
+
         app = create_app()
         mock_registry = MagicMock()
-        mock_registry.is_registered.return_value = False
+        # BridgeManager with no adapters
+        mock_bridge = MagicMock()
+        mock_bridge._adapters = {}
+        mock_registry.resolve = AsyncMock(return_value=mock_bridge)
         app.state.registry = mock_registry
         client = TestClient(app)
 
@@ -89,16 +94,16 @@ class TestChannelsEndpoint:
         token: str,
         auth_headers: dict[str, str],
     ) -> None:
-        """Telegram shows connected when TelegramChannel is registered."""
-        from sovyx.bridge.channels.telegram import TelegramChannel
+        """Telegram shows connected when channel is in BridgeManager."""
+        from unittest.mock import AsyncMock
+
+        from sovyx.engine.types import ChannelType
 
         app = create_app()
         mock_registry = MagicMock()
-
-        def _is_registered(cls: type) -> bool:
-            return cls is TelegramChannel
-
-        mock_registry.is_registered.side_effect = _is_registered
+        mock_bridge = MagicMock()
+        mock_bridge._adapters = {ChannelType.TELEGRAM: MagicMock()}
+        mock_registry.resolve = AsyncMock(return_value=mock_bridge)
         app.state.registry = mock_registry
         client = TestClient(app)
 
@@ -114,9 +119,13 @@ class TestChannelsEndpoint:
         auth_headers: dict[str, str],
     ) -> None:
         """Each channel has name, type, and connected fields."""
+        from unittest.mock import AsyncMock
+
         app = create_app()
         mock_registry = MagicMock()
-        mock_registry.is_registered.return_value = False
+        mock_bridge = MagicMock()
+        mock_bridge._adapters = {}
+        mock_registry.resolve = AsyncMock(return_value=mock_bridge)
         app.state.registry = mock_registry
         client = TestClient(app)
 
@@ -133,9 +142,13 @@ class TestChannelsEndpoint:
         auth_headers: dict[str, str],
     ) -> None:
         """No duplicate channel types."""
+        from unittest.mock import AsyncMock
+
         app = create_app()
         mock_registry = MagicMock()
-        mock_registry.is_registered.return_value = False
+        mock_bridge = MagicMock()
+        mock_bridge._adapters = {}
+        mock_registry.resolve = AsyncMock(return_value=mock_bridge)
         app.state.registry = mock_registry
         client = TestClient(app)
 

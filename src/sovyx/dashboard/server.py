@@ -11,6 +11,7 @@ Integrated into Engine lifecycle via start()/stop().
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import secrets
 from datetime import UTC, datetime
 from pathlib import Path
@@ -884,62 +885,32 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
         ]
 
         if registry is not None:
-            # Check registered channel adapters
-            try:
-                from sovyx.bridge.channels.telegram import TelegramChannel
+            # Check BridgeManager for actually registered channel adapters
+            from sovyx.bridge.manager import BridgeManager
+            from sovyx.engine.types import ChannelType
 
-                if registry.is_registered(TelegramChannel):
-                    channel_list.append(
-                        {
-                            "name": "Telegram",
-                            "type": "telegram",
-                            "connected": True,
-                        }
-                    )
-                else:
-                    channel_list.append(
-                        {
-                            "name": "Telegram",
-                            "type": "telegram",
-                            "connected": False,
-                        }
-                    )
-            except ImportError:
-                channel_list.append(
-                    {
-                        "name": "Telegram",
-                        "type": "telegram",
-                        "connected": False,
-                    }
-                )
+            bridge: BridgeManager | None = None
+            with contextlib.suppress(Exception):
+                bridge = await registry.resolve(BridgeManager)
 
-            try:
-                from sovyx.bridge.channels.signal import SignalChannel
+            active_types: set[str] = set()
+            if bridge is not None:
+                active_types = {ct.value for ct in bridge._adapters}
 
-                if registry.is_registered(SignalChannel):
-                    channel_list.append(
-                        {
-                            "name": "Signal",
-                            "type": "signal",
-                            "connected": True,
-                        }
-                    )
-                else:
-                    channel_list.append(
-                        {
-                            "name": "Signal",
-                            "type": "signal",
-                            "connected": False,
-                        }
-                    )
-            except ImportError:
-                channel_list.append(
-                    {
-                        "name": "Signal",
-                        "type": "signal",
-                        "connected": False,
-                    }
-                )
+            channel_list.append(
+                {
+                    "name": "Telegram",
+                    "type": "telegram",
+                    "connected": ChannelType.TELEGRAM.value in active_types,
+                }
+            )
+            channel_list.append(
+                {
+                    "name": "Signal",
+                    "type": "signal",
+                    "connected": ChannelType.SIGNAL.value in active_types,
+                }
+            )
         else:
             channel_list.extend(
                 [
