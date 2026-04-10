@@ -45,6 +45,33 @@ _MIGRATION_001 = Migration(
     checksum=Migration.compute_checksum(_MIGRATION_001_SQL),
 )
 
+_MIGRATION_002_SQL = """\
+-- Daily usage statistics for historical tracking.
+-- One row per day per mind. Populated at day boundary by CostGuard
+-- and DashboardCounters. Survives daemon restarts (unlike in-memory
+-- counters). Queried by GET /api/stats/history.
+CREATE TABLE IF NOT EXISTS daily_stats (
+    date             TEXT    NOT NULL,
+    mind_id          TEXT    NOT NULL DEFAULT 'aria',
+    messages         INTEGER NOT NULL DEFAULT 0,
+    llm_calls        INTEGER NOT NULL DEFAULT 0,
+    tokens           INTEGER NOT NULL DEFAULT 0,
+    cost_usd         REAL    NOT NULL DEFAULT 0.0,
+    cost_by_provider TEXT    NOT NULL DEFAULT '{}',
+    cost_by_model    TEXT    NOT NULL DEFAULT '{}',
+    conversations    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (date, mind_id)
+);
+CREATE INDEX IF NOT EXISTS idx_daily_stats_date ON daily_stats(date);
+"""
+
+_MIGRATION_002 = Migration(
+    version=2,
+    description="daily usage stats for historical tracking",
+    sql_up=_MIGRATION_002_SQL,
+    checksum=Migration.compute_checksum(_MIGRATION_002_SQL),
+)
+
 
 def get_system_migrations() -> list[Migration]:
     """Return system database migrations.
@@ -52,4 +79,4 @@ def get_system_migrations() -> list[Migration]:
     Returns:
         List of migrations for system.db.
     """
-    return [_MIGRATION_001]
+    return [_MIGRATION_001, _MIGRATION_002]
