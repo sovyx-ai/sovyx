@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from sovyx.cognitive.financial_gate import FinancialGate
     from sovyx.cognitive.output_guard import OutputGuard
     from sovyx.cognitive.perceive import Perception
+    from sovyx.cognitive.pii_guard import PIIGuard
     from sovyx.llm.models import LLMResponse
     from sovyx.llm.router import LLMRouter
 
@@ -82,11 +83,24 @@ class ActPhase:
         llm_router: LLMRouter,
         output_guard: OutputGuard | None = None,
         financial_gate: FinancialGate | None = None,
+        pii_guard: PIIGuard | None = None,
     ) -> None:
         self._tools = tool_executor
         self._router = llm_router
         self._output_guard = output_guard
         self._financial_gate = financial_gate
+        self._pii_guard = pii_guard
+
+    def _apply_pii_guard(self, text: str) -> str:
+        """Apply PII redaction if configured.
+
+        Returns:
+            Text with PII redacted (or unchanged if disabled).
+        """
+        if self._pii_guard is None:
+            return text
+        result = self._pii_guard.check(text)
+        return result.text
 
     def _apply_output_guard(self, text: str) -> tuple[str, bool, str | None]:
         """Apply output safety filter if configured.
@@ -167,10 +181,11 @@ class ActPhase:
             fallback = "I tried to use a tool but none are available yet."
             response_text = llm_response.content or fallback
 
-            # Apply output guard even to tool-call responses
+            # Apply output guard + PII guard to tool-call responses
             text, was_filtered, reason = self._apply_output_guard(
                 response_text,
             )
+            text = self._apply_pii_guard(text)
 
             return ActionResult(
                 response_text=text,
@@ -181,10 +196,11 @@ class ActPhase:
                 filter_reason=reason,
             )
 
-        # Apply output guard to LLM response
+        # Apply output guard + PII guard to LLM response
         text, was_filtered, reason = self._apply_output_guard(
             llm_response.content,
         )
+        text = self._apply_pii_guard(text)
 
         return ActionResult(
             response_text=text,
