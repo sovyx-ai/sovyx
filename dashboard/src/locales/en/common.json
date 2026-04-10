@@ -38,7 +38,9 @@
     "export": "Export",
     "copy": "Copy",
     "awaken": "Awaken",
-    "configure": "Configure"
+    "configure": "Configure",
+    "clear": "Clear",
+    "dismiss": "Dismiss"
   },
   "time": {
     "justNow": "just now",
