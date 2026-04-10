@@ -290,7 +290,7 @@ export function ChannelStatusCard() {
                   ) : (
                     <>
                       <WifiOffIcon className="size-3" />
-                      {t("channels.setup")}
+                      {t("channels.setUp")}
                       {SetupComponent && (
                         isExpanded
                           ? <ChevronUpIcon className="size-3" />
