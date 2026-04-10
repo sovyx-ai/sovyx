@@ -119,7 +119,7 @@ describe("disconnected channels", () => {
     render(<ChannelStatusCard />);
 
     await waitFor(() => {
-      const setups = screen.getAllByText("channels.setup");
+      const setups = screen.getAllByText("Set up");
       expect(setups).toHaveLength(2);
     });
   });
@@ -130,7 +130,7 @@ describe("disconnected channels", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Connected")).toBeInTheDocument();
-      expect(screen.getByText("channels.setup")).toBeInTheDocument();
+      expect(screen.getByText("Set up")).toBeInTheDocument();
     });
   });
 });
