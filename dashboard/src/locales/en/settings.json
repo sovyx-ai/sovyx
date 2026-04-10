@@ -3,13 +3,8 @@
   "tabs": {
     "general": "General",
     "mind": "Mind",
-    "channels": "Channels",
-    "apiKeys": "API Keys",
     "providers": "LLM Providers",
-    "plugins": "Plugins",
-    "privacy": "Privacy",
-    "exportImport": "Export / Import",
-    "webhooks": "Webhooks"
+    "exportImport": "Export / Import"
   },
   "general": {
     "logLevel": "Log Level",
