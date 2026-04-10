@@ -9,6 +9,7 @@ from sovyx.llm.models import ToolCall, ToolResult
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
+    from sovyx.cognitive.output_guard import OutputGuard
     from sovyx.cognitive.perceive import Perception
     from sovyx.llm.models import LLMResponse
     from sovyx.llm.router import LLMRouter
@@ -26,6 +27,8 @@ class ActionResult:
     filtered: bool = False
     degraded: bool = False
     error: bool = False
+    output_filtered: bool = False
+    filter_reason: str | None = None
     tool_calls_made: list[ToolCall] = dataclasses.field(default_factory=list)
     metadata: dict[str, object] = dataclasses.field(default_factory=dict)
 
@@ -67,16 +70,41 @@ class ActPhase:
     """Format response and prepare for channel delivery.
 
     If LLM returns tool_calls: ToolExecutor.execute() → re-invoke LLM.
-    If LLM returns text: format as ActionResult.
+    If LLM returns text: apply OutputGuard → format as ActionResult.
     """
 
     def __init__(
         self,
         tool_executor: ToolExecutor,
         llm_router: LLMRouter,
+        output_guard: OutputGuard | None = None,
     ) -> None:
         self._tools = tool_executor
         self._router = llm_router
+        self._output_guard = output_guard
+
+    def _apply_output_guard(self, text: str) -> tuple[str, bool, str | None]:
+        """Apply output safety filter if configured.
+
+        Returns:
+            (filtered_text, was_filtered, filter_reason)
+        """
+        if self._output_guard is None:
+            return text, False, None
+
+        result = self._output_guard.check(text)
+        if not result.filtered:
+            return text, False, None
+
+        reason = None
+        if result.match and result.match.category:
+            reason = (
+                f"{result.action}:{result.match.category.value}"
+            )
+        else:
+            reason = result.action
+
+        return result.text, True, reason
 
     async def process(
         self,
@@ -87,6 +115,7 @@ class ActPhase:
         """Format LLM response into ActionResult.
 
         If tool_calls present: execute tools, re-invoke LLM (v0.5+).
+        Otherwise: apply output guard → format as ActionResult.
         """
         reply_to = str(perception.metadata.get("reply_to", "")) or None
 
@@ -108,15 +137,31 @@ class ActPhase:
                 calls=len(llm_response.tool_calls),
             )
             fallback = "I tried to use a tool but none are available yet."
+            response_text = llm_response.content or fallback
+
+            # Apply output guard even to tool-call responses
+            text, was_filtered, reason = self._apply_output_guard(
+                response_text,
+            )
+
             return ActionResult(
-                response_text=llm_response.content or fallback,
+                response_text=text,
                 target_channel=perception.source,
                 reply_to=reply_to,
                 tool_calls_made=llm_response.tool_calls,
+                output_filtered=was_filtered,
+                filter_reason=reason,
             )
 
+        # Apply output guard to LLM response
+        text, was_filtered, reason = self._apply_output_guard(
+            llm_response.content,
+        )
+
         return ActionResult(
-            response_text=llm_response.content,
+            response_text=text,
             target_channel=perception.source,
             reply_to=reply_to,
+            output_filtered=was_filtered,
+            filter_reason=reason,
         )

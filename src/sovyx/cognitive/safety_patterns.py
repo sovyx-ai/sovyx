@@ -257,7 +257,7 @@ _STRICT_PATTERNS: tuple[SafetyPattern, ...] = (
         "Explicit sexual content request",
     ),
     _p(
-        r"\bwrite\s+(?:me\s+)?(?:an?\s+)?(?:erotic|sexual|porn|nsfw|smut)\s+(?:story|fiction|scene|fantasy)",
+        r"\bwrite\s+(?:(?:me|you|us)\s+)?(?:an?\s+)?(?:erotic|sexual|porn|nsfw|smut)\s+(?:story|fiction|scene|fantasy)",
         PatternCategory.SEXUAL,
         FilterTier.STRICT,
         "Erotic fiction generation",
