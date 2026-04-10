@@ -619,6 +619,143 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
 
         return JSONResponse({"ok": True, "changes": changes})
 
+    # ── Export / Import ──
+
+    @app.get("/api/export", dependencies=[Depends(verify_token)])
+    async def export_mind_endpoint(
+        request: Request,
+    ) -> Response:
+        """Export the active mind as a .sovyx-mind ZIP archive download.
+
+        Returns a streaming ZIP file attachment.
+        """
+        registry = getattr(app.state, "registry", None)
+        if registry is None:
+            return JSONResponse(
+                {"error": "Engine not running"},
+                status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        from sovyx.dashboard._shared import get_active_mind_id
+        from sovyx.dashboard.export_import import export_mind
+
+        mind_id = await get_active_mind_id(registry)
+        try:
+            archive_path = await export_mind(registry, mind_id)
+        except RuntimeError as exc:
+            return JSONResponse(
+                {"error": str(exc)},
+                status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        except Exception:
+            logger.exception("export_mind_failed")
+            return JSONResponse(
+                {"error": "Export failed"},
+                status_code=500,
+            )
+
+        return FileResponse(
+            path=str(archive_path),
+            media_type="application/zip",
+            filename=f"{mind_id}.sovyx-mind",
+            headers={"Content-Disposition": f'attachment; filename="{mind_id}.sovyx-mind"'},
+        )
+
+    @app.post("/api/import", dependencies=[Depends(verify_token)])
+    async def import_mind_endpoint(request: Request) -> JSONResponse:
+        """Import a mind from an uploaded .sovyx-mind ZIP archive.
+
+        Expects multipart/form-data with a ``file`` field containing
+        the archive.  Optional query param ``overwrite=true`` to replace
+        an existing mind.
+        """
+        import shutil
+        import tempfile
+
+        registry = getattr(app.state, "registry", None)
+        if registry is None:
+            return JSONResponse(
+                {"error": "Engine not running"},
+                status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        # Parse overwrite flag from query string
+        overwrite = request.query_params.get("overwrite", "").lower() in (
+            "true",
+            "1",
+            "yes",
+        )
+
+        # Read uploaded file
+
+        content_type = request.headers.get("content-type", "")
+        if "multipart/form-data" not in content_type:
+            return JSONResponse(
+                {"error": "Expected multipart/form-data with a 'file' field"},
+                status_code=422,
+            )
+
+
+        form = await request.form()
+        upload = form.get("file")
+        if upload is None or not hasattr(upload, "read"):
+            return JSONResponse(
+                {"error": "Missing 'file' in form data"},
+                status_code=422,
+            )
+
+        # Write upload to a temp file
+        tmp_dir = Path(tempfile.mkdtemp(prefix="sovyx-import-"))
+        tmp_path = tmp_dir / "upload.sovyx-mind"
+        try:
+            data = await upload.read()
+            tmp_path.write_bytes(data)
+
+            from sovyx.dashboard.export_import import import_mind
+
+            result = await import_mind(registry, tmp_path, overwrite=overwrite)
+            return JSONResponse({"ok": True, **result})
+        except Exception as exc:
+            logger.exception("import_mind_failed")
+            return JSONResponse(
+                {"ok": False, "error": str(exc)},
+                status_code=500,
+            )
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    # ── Voice Status ──
+
+    @app.get("/api/voice/status", dependencies=[Depends(verify_token)])
+    async def get_voice_status_endpoint() -> JSONResponse:
+        """Voice pipeline status — running state, models, hardware tier."""
+        registry = getattr(app.state, "registry", None)
+        if registry is None:
+            return JSONResponse(
+                {"error": "Engine not running"},
+                status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        from sovyx.dashboard.voice_status import get_voice_status
+
+        status = await get_voice_status(registry)
+        return JSONResponse(status)
+
+    @app.get("/api/voice/models", dependencies=[Depends(verify_token)])
+    async def get_voice_models_endpoint() -> JSONResponse:
+        """Available voice models by hardware tier, with detected/active info."""
+        registry = getattr(app.state, "registry", None)
+        if registry is None:
+            return JSONResponse(
+                {"error": "Engine not running"},
+                status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        from sovyx.dashboard.voice_status import get_voice_models
+
+        models = await get_voice_models(registry)
+        return JSONResponse(models)
+
     # ── Mind Config (personality, OCEAN, safety) ──
 
     @app.get("/api/config", dependencies=[Depends(verify_token)])

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -11,7 +11,6 @@ from sovyx.dashboard.voice_status import (
     get_voice_models,
     get_voice_status,
 )
-
 
 # ── Fixtures ──
 
@@ -239,7 +238,7 @@ class TestGetVoiceModels:
         """Each tier entry has stt_primary, tts_primary, etc."""
         models = await get_voice_models(mock_registry)
 
-        for tier_name, tier_data in models["available_tiers"].items():
+        for _tier_name, tier_data in models["available_tiers"].items():
             assert "stt_primary" in tier_data
             assert "tts_primary" in tier_data
             assert "vad" in tier_data
