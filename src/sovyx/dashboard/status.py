@@ -87,7 +87,7 @@ class DashboardCounters:
             self.tokens += tokens
 
     def record_message(self) -> None:
-        """Record an inbound message."""
+        """Record a message (inbound user message OR outbound AI response)."""
         with self._lock:
             self._maybe_reset()
             self.messages_received += 1
