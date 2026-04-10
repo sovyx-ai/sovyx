@@ -96,7 +96,9 @@ class TestGenerateSystemPrompt:
         cfg = _config(safety=SafetyConfig(content_filter="none", financial_confirmation=False))
         engine = PersonalityEngine(cfg)
         prompt = engine.generate_system_prompt()
-        assert "filter" not in prompt.lower() or "none" in prompt.lower()
+        # "Safety:" section should not appear (filter=none, financial=off)
+        # Anti-injection block is always present (contains "filters" in text)
+        assert "Safety:" not in prompt
 
 
 class TestDifferentConfigs:
