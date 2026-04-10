@@ -156,7 +156,7 @@ class SileroVAD:
         config: VADConfig | None = None,
     ) -> None:
         import numpy as np  # noqa: F811
-        import onnxruntime as ort  # type: ignore[import-untyped]
+        import onnxruntime as ort
 
         self._config = config or VADConfig()
         _validate_config(self._config)

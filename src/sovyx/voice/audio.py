@@ -261,7 +261,7 @@ class AudioCapture:
             RuntimeError: If ``sounddevice`` is unavailable or the device
                 cannot be opened.
         """
-        import sounddevice as sd  # type: ignore[import-not-found]
+        import sounddevice as sd
 
         self._loop = asyncio.get_running_loop()
         self._stream = sd.InputStream(

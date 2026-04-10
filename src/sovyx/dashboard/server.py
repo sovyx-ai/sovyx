@@ -335,7 +335,7 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
         try:
             recorder: DailyStatsRecorder = await registry.resolve(DailyStatsRecorder)
             history = await recorder.get_history(days=days)
-        except Exception:
+        except Exception:  # noqa: BLE001
             history = []
 
         # Live data for today (not yet snapshotted)
@@ -346,7 +346,7 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
             cost_guard: CostGuard = await registry.resolve(CostGuard)
             breakdown = cost_guard.get_breakdown("day")
             live_cost = breakdown.total_cost
-        except Exception:
+        except Exception:  # noqa: BLE001
             live_cost = _cost_counter  # fallback to counter's cost
 
         today_str = _now_date_str(counters._tz)
@@ -368,7 +368,7 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
         # Totals (historical + live)
         try:
             totals = await recorder.get_totals()
-        except Exception:
+        except Exception:  # noqa: BLE001
             totals = _empty_stats_totals()
         totals["cost"] = round(totals["cost"] + live_cost, 6)
         totals["messages"] += msgs
@@ -383,12 +383,12 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
 
         try:
             now = dt_cls.now(tz=counters._tz)
-        except Exception:
+        except Exception:  # noqa: BLE001
             now = dt_cls.now(tz=ZoneInfo("UTC"))
 
         try:
             month = await recorder.get_month_totals(now.year, now.month)
-        except Exception:
+        except Exception:  # noqa: BLE001
             month = _empty_stats_month()
         month["cost"] = round(month["cost"] + live_cost, 6)
         month["messages"] += msgs

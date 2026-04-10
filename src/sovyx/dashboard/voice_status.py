@@ -74,7 +74,7 @@ async def get_voice_status(registry: ServiceRegistry) -> dict[str, Any]:
         from sovyx.voice.stt import STTEngine
 
         if registry.is_registered(STTEngine):
-            stt = await registry.resolve(STTEngine)
+            stt = await registry.resolve(STTEngine)  # type: ignore[type-abstract]
             status["stt"]["engine"] = type(stt).__name__
             if hasattr(stt, "config"):
                 cfg = stt.config
@@ -89,7 +89,7 @@ async def get_voice_status(registry: ServiceRegistry) -> dict[str, Any]:
         from sovyx.voice.tts_piper import TTSEngine
 
         if registry.is_registered(TTSEngine):
-            tts = await registry.resolve(TTSEngine)
+            tts = await registry.resolve(TTSEngine)  # type: ignore[type-abstract]
             status["tts"]["engine"] = type(tts).__name__
             if hasattr(tts, "config"):
                 cfg = tts.config
