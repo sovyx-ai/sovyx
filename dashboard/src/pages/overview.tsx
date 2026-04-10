@@ -208,7 +208,7 @@ export default function OverviewPage() {
           <ActivityFeed events={recentEvents} />
         </div>
         <div className="lg:col-span-2">
-          <CognitiveTimeline />
+          <CognitiveTimeline className="h-full" />
         </div>
       </div>
 
