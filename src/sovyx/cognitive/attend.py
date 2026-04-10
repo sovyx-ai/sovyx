@@ -1,12 +1,14 @@
 """Sovyx AttendPhase — filter perceptions by priority and safety.
 
 Second phase: decides if a perception should be processed or filtered.
+Uses tiered regex patterns from ``safety_patterns`` module.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from sovyx.cognitive.safety_patterns import check_content
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
@@ -15,41 +17,11 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-# Blocked content patterns (basic v0.1 safety filter)
-_BLOCKED_PATTERNS_STANDARD: frozenset[str] = frozenset(
-    {
-        "how to make a bomb",
-        "how to hack",
-        "how to kill",
-        "self-harm instructions",
-    }
-)
-
-_BLOCKED_PATTERNS_CHILD_SAFE: frozenset[str] = frozenset(
-    {
-        "violence",
-        "weapons",
-        "drugs",
-        "gambling",
-        "adult content",
-        *_BLOCKED_PATTERNS_STANDARD,
-    }
-)
-
-
-def _resolve_blocked(safety: SafetyConfig) -> frozenset[str]:
-    """Resolve the blocked pattern set from current safety config state."""
-    if safety.child_safe_mode:
-        return _BLOCKED_PATTERNS_CHILD_SAFE
-    if safety.content_filter != "none":
-        return _BLOCKED_PATTERNS_STANDARD
-    return frozenset()
-
 
 class AttendPhase:
     """Filter perceptions by priority and safety.
 
-    - SafetyCheck: content passes safety filter (re-evaluated per call)
+    - SafetyCheck: content passes tiered regex filter (re-evaluated per call)
     - PriorityCheck: priority sufficient to process
 
     The safety config is read dynamically on each ``process()`` call so
@@ -69,19 +41,17 @@ class AttendPhase:
         Returns:
             True if perception passes filters, False if filtered.
         """
-        # Resolve blocked patterns dynamically from current safety state
-        blocked = _resolve_blocked(self._safety)
-
-        # Safety check
-        lower = perception.content.lower()
-        for pattern in blocked:
-            if pattern in lower:
-                logger.warning(
-                    "perception_filtered_safety",
-                    perception_id=perception.id,
-                    reason="blocked_content",
-                )
-                return False
+        # Safety check via tiered regex patterns
+        result = check_content(perception.content, self._safety)
+        if result.matched:
+            logger.warning(
+                "perception_filtered_safety",
+                perception_id=perception.id,
+                reason="blocked_content",
+                category=result.category.value if result.category else "unknown",
+                tier=result.tier.value if result.tier else "unknown",
+            )
+            return False
 
         # Priority check (v0.1: accept all priorities)
         if perception.priority < 0:
