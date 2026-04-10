@@ -728,6 +728,34 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
+    # ── Safety Stats ──
+
+    @app.get("/api/safety/stats", dependencies=[Depends(verify_token)])
+    async def get_safety_stats() -> JSONResponse:
+        """Safety audit trail stats — blocks by category, direction, recent events."""
+        from sovyx.cognitive.safety_audit import get_audit_trail
+        from sovyx.cognitive.safety_patterns import get_pattern_count, get_tier_counts
+
+        audit = get_audit_trail()
+        stats = audit.get_stats()
+
+        mind_config = getattr(app.state, "mind_config", None)
+        active_patterns = 0
+        if mind_config:
+            active_patterns = get_pattern_count(mind_config.safety)
+
+        return JSONResponse({
+            "ok": True,
+            "total_blocks_24h": stats.total_blocks_24h,
+            "total_blocks_7d": stats.total_blocks_7d,
+            "total_blocks_30d": stats.total_blocks_30d,
+            "blocks_by_category": stats.blocks_by_category,
+            "blocks_by_direction": stats.blocks_by_direction,
+            "recent_events": stats.recent_events,
+            "active_patterns": active_patterns,
+            "tier_counts": get_tier_counts(),
+        })
+
     # ── Voice Status ──
 
     @app.get("/api/voice/status", dependencies=[Depends(verify_token)])

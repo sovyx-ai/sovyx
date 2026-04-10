@@ -16,12 +16,14 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from sovyx.cognitive.safety_audit import FilterAction, FilterDirection, get_audit_trail
 from sovyx.cognitive.safety_patterns import (
     FilterMatch,
     check_content,
     resolve_patterns,
 )
 from sovyx.observability.logging import get_logger
+from sovyx.observability.metrics import get_metrics
 
 if TYPE_CHECKING:
     from sovyx.mind.config import SafetyConfig
@@ -86,8 +88,11 @@ class OutputGuard:
         if not patterns:
             return _pass_result(response_text)
 
-        # Check for matches
-        match = check_content(response_text, self._safety)
+        # Check for matches (with latency measurement)
+        m = get_metrics()
+        with m.measure_latency(m.safety_filter_latency, {"direction": "output"}):
+            match = check_content(response_text, self._safety)
+
         if not match.matched:
             return _pass_result(response_text)
 
@@ -113,6 +118,11 @@ class OutputGuard:
             category=category,
             tier=match.tier.value if match.tier else "unknown",
             original_length=len(original),
+        )
+        get_audit_trail().record(
+            direction=FilterDirection.OUTPUT,
+            action=FilterAction.REPLACED,
+            match=match,
         )
         return OutputFilterResult(
             text=_SAFE_REPLACEMENT,
@@ -152,6 +162,11 @@ class OutputGuard:
             category=category,
             tier=match.tier.value if match.tier else "unknown",
             redacted_chars=len(text) - len(redacted),
+        )
+        get_audit_trail().record(
+            direction=FilterDirection.OUTPUT,
+            action=FilterAction.REDACTED,
+            match=match,
         )
         return OutputFilterResult(
             text=redacted,

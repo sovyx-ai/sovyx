@@ -8,8 +8,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from sovyx.cognitive.safety_audit import FilterAction, FilterDirection, get_audit_trail
 from sovyx.cognitive.safety_patterns import check_content
 from sovyx.observability.logging import get_logger
+from sovyx.observability.metrics import get_metrics
 
 if TYPE_CHECKING:
     from sovyx.cognitive.perceive import Perception
@@ -41,8 +43,11 @@ class AttendPhase:
         Returns:
             True if perception passes filters, False if filtered.
         """
-        # Safety check via tiered regex patterns
-        result = check_content(perception.content, self._safety)
+        # Safety check via tiered regex patterns (with latency measurement)
+        m = get_metrics()
+        with m.measure_latency(m.safety_filter_latency, {"direction": "input"}):
+            result = check_content(perception.content, self._safety)
+
         if result.matched:
             logger.warning(
                 "perception_filtered_safety",
@@ -50,6 +55,11 @@ class AttendPhase:
                 reason="blocked_content",
                 category=result.category.value if result.category else "unknown",
                 tier=result.tier.value if result.tier else "unknown",
+            )
+            get_audit_trail().record(
+                direction=FilterDirection.INPUT,
+                action=FilterAction.BLOCKED,
+                match=result,
             )
             return False
 
