@@ -256,6 +256,7 @@ class BridgeManager:
                     reply_to=message.channel_message_id,
                 )
                 await self._send_response(error_out)
+                get_counters().record_message()  # count crash-path error response
             except Exception:
                 logger.warning("error_response_also_failed", exc_info=True)
 
