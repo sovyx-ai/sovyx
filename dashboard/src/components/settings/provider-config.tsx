@@ -81,15 +81,16 @@ export function ProviderConfig() {
   const [selectedProvider, setSelectedProvider] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
 
-  const fetchProviders = useCallback(async () => {
+  const fetchProviders = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await api.get<ProvidersResponse>("/api/providers");
+      const res = await api.get<ProvidersResponse>("/api/providers", { signal });
       setData(res);
       setSelectedProvider(res.active.provider);
       setSelectedModel(res.active.model);
-    } catch {
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
       setError(t("providers.loadFailed", "Failed to load providers"));
     } finally {
       setLoading(false);
@@ -97,7 +98,9 @@ export function ProviderConfig() {
   }, [t]);
 
   useEffect(() => {
-    void fetchProviders();
+    const controller = new AbortController();
+    void fetchProviders(controller.signal);
+    return () => controller.abort();
   }, [fetchProviders]);
 
   const cloudProviders = useMemo(
