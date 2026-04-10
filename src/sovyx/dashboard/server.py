@@ -977,10 +977,13 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
 
         # Validate via Telegram API
         try:
-            async with aiohttp.ClientSession() as session, session.get(
-                f"https://api.telegram.org/bot{token}/getMe",
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as resp:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(
+                    f"https://api.telegram.org/bot{token}/getMe",
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp,
+            ):
                 data = await resp.json()
                 if not data.get("ok"):
                     return JSONResponse(
@@ -999,11 +1002,7 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
 
         # Persist token to channel.env in data_dir
         engine_config = getattr(app.state, "engine_config", None)
-        data_dir = (
-            engine_config.data_dir
-            if engine_config is not None
-            else Path.home() / ".sovyx"
-        )
+        data_dir = engine_config.data_dir if engine_config is not None else Path.home() / ".sovyx"
         env_path = data_dir / "channel.env"
         try:
             # Read existing env vars (preserve non-telegram ones)
