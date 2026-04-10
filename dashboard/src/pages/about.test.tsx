@@ -23,13 +23,15 @@ describe("AboutPage", () => {
     expect(screen.getByText("System")).toBeInTheDocument();
   });
 
-  it("renders links section with GitHub and Docs", () => {
+  it("renders links section with GitHub, Website and PyPI", () => {
     render(<AboutPage />);
     expect(screen.getByText("Links")).toBeInTheDocument();
     const github = screen.getByText("GitHub");
     expect(github.closest("a")).toHaveAttribute("href", "https://github.com/sovyx-ai/sovyx");
-    const docs = screen.getByText("Documentation");
-    expect(docs.closest("a")).toHaveAttribute("href", "https://docs.sovyx.ai");
+    const website = screen.getByText("Website");
+    expect(website.closest("a")).toHaveAttribute("href", "https://sovyx.ai");
+    const pypi = screen.getByText("PyPI");
+    expect(pypi.closest("a")).toHaveAttribute("href", "https://pypi.org/project/sovyx/");
   });
 
   it("renders footer tagline", () => {
