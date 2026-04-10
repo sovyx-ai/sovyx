@@ -144,5 +144,20 @@
     "brainMaxConcepts": "Brain Max Concepts",
     "consolidation": "Consolidation",
     "consolidationValue": "Every {{hours}}h"
+  },
+  "exportImport": {
+    "title": "Export / Import",
+    "description": "Download or restore your mind data. Your data, your sovereignty.",
+    "exportButton": "Export Mind",
+    "importButton": "Import Mind",
+    "exportSuccess": "Mind exported successfully.",
+    "exportFailed": "Export failed: {{error}}",
+    "importSuccess": "Imported {{concepts}} concepts and {{episodes}} episodes.",
+    "importFailed": "Import failed: {{error}}",
+    "invalidFile": "Please select a .sovyx-mind file.",
+    "confirmTitle": "Import Mind Data",
+    "confirmDescription": "This will import data from \"{{filename}}\". Existing mind data may be affected. This action cannot be undone.",
+    "confirmImport": "Import",
+    "gdprNote": "GDPR Art. 20 compliant — your data in a portable, machine-readable format."
   }
 }
