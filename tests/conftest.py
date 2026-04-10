@@ -31,6 +31,22 @@ settings.register_profile(
 settings.load_profile("sovyx")
 
 
+@pytest.fixture(autouse=True)
+def _clear_rate_limiter() -> None:
+    """Reset module-level rate limiter between tests.
+
+    The RateLimitMiddleware uses module-level ``_buckets`` shared across
+    all TestClient instances.  Without clearing, cumulative requests
+    across tests hit the limit and return 429 unexpectedly.
+    """
+    try:
+        from sovyx.dashboard.rate_limit import _buckets
+
+        _buckets.clear()
+    except ImportError:
+        pass
+
+
 @pytest.fixture
 def data_dir(tmp_path: Path) -> Path:
     """Temporary data directory for test isolation."""

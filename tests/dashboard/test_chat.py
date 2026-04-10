@@ -52,11 +52,6 @@ def token(tmp_path: Path) -> str:
 @pytest.fixture()
 def client(token: str) -> TestClient:
     """TestClient with auth token available."""
-    # Clear module-level rate limiter state so tests don't hit 429
-    from sovyx.dashboard.rate_limit import _buckets
-
-    _buckets.clear()
-
     app = create_app()
     return TestClient(app)
 
