@@ -279,9 +279,11 @@ class LifecycleManager:
 
     async def _start_services(self) -> None:
         """Start services that have start() methods."""
+        from sovyx.brain.consolidation import ConsolidationScheduler
         from sovyx.bridge.manager import BridgeManager
         from sovyx.cognitive.gate import CogLoopGate
         from sovyx.cognitive.loop import CognitiveLoop
+        from sovyx.engine.bootstrap import MindManager
 
         # Start cognitive loop
         if self._registry.is_registered(CognitiveLoop):
@@ -292,6 +294,13 @@ class LifecycleManager:
         if self._registry.is_registered(CogLoopGate):
             gate = await self._registry.resolve(CogLoopGate)
             await gate.start()
+
+        # Start consolidation scheduler (memory decay/prune/strengthen)
+        if self._registry.is_registered(ConsolidationScheduler):
+            scheduler = await self._registry.resolve(ConsolidationScheduler)
+            mind_mgr = await self._registry.resolve(MindManager)
+            mind_id = mind_mgr._active[0] if mind_mgr._active else "default"
+            await scheduler.start(mind_id)
 
         # Start bridge (channels connect last)
         if self._registry.is_registered(BridgeManager):
