@@ -22,8 +22,11 @@ function fillGaps(days: DailyStats[]): DailyStats[] {
   if (days.length < 2) return days;
 
   const filled: DailyStats[] = [];
-  const start = new Date(days[0].date);
-  const end = new Date(days[days.length - 1].date);
+  const first = days[0];
+  const last = days[days.length - 1];
+  if (!first || !last) return days;
+  const start = new Date(first.date);
+  const end = new Date(last.date);
   const lookup = new Map(days.map((d) => [d.date, d]));
 
   for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
