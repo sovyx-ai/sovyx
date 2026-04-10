@@ -1,13 +1,14 @@
 /**
- * Channel status card — shows connected channels + setup guide for disconnected ones.
+ * Channel status card — connected channels + inline setup for disconnected ones.
  *
  * Connected: shows channel name + "Connected" badge.
- * Disconnected: expandable setup guide with step-by-step instructions.
+ * Disconnected Telegram: paste token → validate → done.
+ * Disconnected Signal: brief setup guide (requires external Docker).
  *
  * DASH-09: Channel status indicator for overview page.
  */
 
-import { useEffect, useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import {
   WifiIcon,
@@ -15,8 +16,9 @@ import {
   ChevronDownIcon,
   ChevronUpIcon,
   ExternalLinkIcon,
-  CopyIcon,
-  CheckIcon,
+  Loader2Icon,
+  CheckCircle2Icon,
+  AlertCircleIcon,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -27,120 +29,177 @@ interface ChannelInfo {
   connected: boolean;
 }
 
-/** Inline code with copy button. */
-function CopyCode({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
+interface TelegramSetupResult {
+  ok: boolean;
+  bot_username?: string;
+  bot_name?: string;
+  requires_restart?: boolean;
+  error?: string;
+}
 
-  const handleCopy = async () => {
+// ── Telegram inline setup ──
+
+function TelegramSetup({ onDone }: { onDone: () => void }) {
+  const [token, setToken] = useState("");
+  const [state, setState] = useState<"input" | "validating" | "success" | "error">("input");
+  const [error, setError] = useState("");
+  const [botUsername, setBotUsername] = useState("");
+
+  const handleConnect = useCallback(async () => {
+    const trimmed = token.trim();
+    if (!trimmed) return;
+
+    setState("validating");
+    setError("");
+
     try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      const res = await api.post<TelegramSetupResult>("/api/channels/telegram/setup", {
+        token: trimmed,
+      });
+
+      if (res.ok) {
+        setBotUsername(res.bot_username ?? "");
+        setState("success");
+      } else {
+        setError(res.error ?? "Invalid token");
+        setState("error");
+      }
     } catch {
-      // Clipboard API not available
+      setError("Could not connect — check your network");
+      setState("error");
     }
-  };
+  }, [token]);
+
+  if (state === "success") {
+    return (
+      <div className="space-y-2">
+        <div className="flex items-center gap-2 text-emerald-400">
+          <CheckCircle2Icon className="size-4" />
+          <span className="text-xs font-medium">
+            Connected to @{botUsername}
+          </span>
+        </div>
+        <p className="text-[11px] text-[var(--svx-color-text-tertiary)]">
+          Restart Sovyx to activate the channel.
+        </p>
+        <button
+          type="button"
+          onClick={onDone}
+          className="text-[11px] text-[var(--svx-color-brand-primary)] hover:underline"
+        >
+          Done
+        </button>
+      </div>
+    );
+  }
 
   return (
-    <span className="inline-flex items-center gap-1">
-      <code className="rounded bg-[var(--svx-color-bg-elevated)] px-1.5 py-0.5 text-[11px] text-[var(--svx-color-text-secondary)]">
-        {text}
-      </code>
-      <button
-        type="button"
-        onClick={() => void handleCopy()}
-        className="text-[var(--svx-color-text-disabled)] hover:text-[var(--svx-color-text-secondary)] transition-colors"
-        aria-label={`Copy ${text}`}
-      >
-        {copied ? (
-          <CheckIcon className="size-3 text-emerald-400" />
-        ) : (
-          <CopyIcon className="size-3" />
+    <div className="space-y-3">
+      {/* Step 1: Get token */}
+      <div className="flex items-center gap-1.5 text-xs text-[var(--svx-color-text-secondary)]">
+        <span className="font-medium">1.</span>
+        <span>Get a bot token from</span>
+        <a
+          href="https://t.me/BotFather"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-0.5 font-medium text-[var(--svx-color-brand-primary)] hover:underline"
+        >
+          @BotFather
+          <ExternalLinkIcon className="size-2.5" />
+        </a>
+      </div>
+
+      {/* Step 2: Paste token */}
+      <div className="space-y-1.5">
+        <div className="flex items-center gap-1.5 text-xs text-[var(--svx-color-text-secondary)]">
+          <span className="font-medium">2.</span>
+          <span>Paste your token below</span>
+        </div>
+        <div className="flex gap-2">
+          <input
+            type="password"
+            value={token}
+            onChange={(e) => {
+              setToken(e.target.value);
+              if (state === "error") setState("input");
+            }}
+            placeholder="123456:ABC-DEF..."
+            className={cn(
+              "h-8 flex-1 rounded-md border bg-[var(--svx-color-bg-elevated)] px-2.5 text-xs",
+              "text-[var(--svx-color-text-primary)] placeholder:text-[var(--svx-color-text-disabled)]",
+              "focus:outline-none focus:ring-1 focus:ring-[var(--svx-color-brand-primary)]",
+              state === "error"
+                ? "border-[var(--svx-color-error)]"
+                : "border-[var(--svx-color-border-default)]",
+            )}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void handleConnect();
+            }}
+            disabled={state === "validating"}
+            autoComplete="off"
+            data-testid="telegram-token-input"
+          />
+          <button
+            type="button"
+            onClick={() => void handleConnect()}
+            disabled={!token.trim() || state === "validating"}
+            className={cn(
+              "h-8 rounded-md px-3 text-xs font-medium transition-colors",
+              "bg-[var(--svx-color-brand-primary)] text-[var(--svx-color-text-inverse)]",
+              "hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed",
+            )}
+            data-testid="telegram-connect-btn"
+          >
+            {state === "validating" ? (
+              <Loader2Icon className="size-3.5 animate-spin" />
+            ) : (
+              "Connect"
+            )}
+          </button>
+        </div>
+
+        {/* Error message */}
+        {state === "error" && (
+          <div className="flex items-center gap-1.5 text-[11px] text-[var(--svx-color-error)]">
+            <AlertCircleIcon className="size-3" />
+            {error}
+          </div>
         )}
-      </button>
-    </span>
+      </div>
+    </div>
   );
 }
 
-/** Setup guide content per channel type. */
-function TelegramSetupGuide() {
+// ── Signal setup (still guide-based — needs external Docker) ──
+
+function SignalSetup() {
   return (
-    <div className="mt-2 space-y-2 text-xs text-[var(--svx-color-text-secondary)]">
-      <p className="font-medium text-[var(--svx-color-text-primary)]">Connect Telegram</p>
-      <ol className="list-inside list-decimal space-y-1.5 pl-1">
-        <li>
-          Open{" "}
-          <a
-            href="https://t.me/BotFather"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-0.5 text-[var(--svx-color-brand-primary)] hover:underline"
-          >
-            @BotFather
-            <ExternalLinkIcon className="size-2.5" />
-          </a>{" "}
-          on Telegram
-        </li>
-        <li>
-          Send <CopyCode text="/newbot" /> and follow the prompts
-        </li>
-        <li>
-          Copy the bot token and set the env var:
-          <div className="mt-1">
-            <CopyCode text="SOVYX_TELEGRAM_TOKEN=your_token_here" />
-          </div>
-        </li>
-        <li>
-          Restart Sovyx: <CopyCode text="sovyx restart" />
-        </li>
-      </ol>
-      <p className="text-[10px] text-[var(--svx-color-text-disabled)]">
-        Tip: add allowed_users in mind.yaml to restrict who can talk to your Mind.
+    <div className="space-y-2 text-xs text-[var(--svx-color-text-secondary)]">
+      <p>Signal requires a separate Docker container running{" "}
+        <a
+          href="https://github.com/bbernhard/signal-cli-rest-api"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-0.5 font-medium text-[var(--svx-color-brand-primary)] hover:underline"
+        >
+          signal-cli-rest-api
+          <ExternalLinkIcon className="size-2.5" />
+        </a>.
+      </p>
+      <p className="text-[11px] text-[var(--svx-color-text-tertiary)]">
+        Configure phone number and API URL in mind.yaml, then restart Sovyx.
       </p>
     </div>
   );
 }
 
-function SignalSetupGuide() {
-  return (
-    <div className="mt-2 space-y-2 text-xs text-[var(--svx-color-text-secondary)]">
-      <p className="font-medium text-[var(--svx-color-text-primary)]">Connect Signal</p>
-      <ol className="list-inside list-decimal space-y-1.5 pl-1">
-        <li>
-          Run the{" "}
-          <a
-            href="https://github.com/bbernhard/signal-cli-rest-api"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-0.5 text-[var(--svx-color-brand-primary)] hover:underline"
-          >
-            signal-cli-rest-api
-            <ExternalLinkIcon className="size-2.5" />
-          </a>{" "}
-          Docker container
-        </li>
-        <li>Register or link a phone number in signal-cli</li>
-        <li>
-          Configure in <CopyCode text="mind.yaml" />:
-          <div className="mt-1 rounded bg-[var(--svx-color-bg-elevated)] p-2 text-[11px] leading-relaxed">
-            <div>channels:</div>
-            <div className="pl-3">signal:</div>
-            <div className="pl-6">phone: &quot;+1234567890&quot;</div>
-            <div className="pl-6">api_url: &quot;http://localhost:8080&quot;</div>
-          </div>
-        </li>
-        <li>
-          Restart Sovyx: <CopyCode text="sovyx restart" />
-        </li>
-      </ol>
-    </div>
-  );
-}
-
-const SETUP_GUIDES: Record<string, React.FC> = {
-  telegram: TelegramSetupGuide,
-  signal: SignalSetupGuide,
+const SETUP_COMPONENTS: Record<string, React.FC<{ onDone: () => void }>> = {
+  telegram: TelegramSetup,
+  signal: SignalSetup,
 };
+
+// ── Main card ──
 
 export function ChannelStatusCard() {
   const { t } = useTranslation("overview");
@@ -148,27 +207,20 @@ export function ChannelStatusCard() {
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function fetchChannels() {
-      try {
-        const resp = await api.get<{ channels: ChannelInfo[] }>("/api/channels");
-        if (!cancelled) {
-          setChannels(resp.channels);
-        }
-      } catch {
-        // Silently fail — card just shows loading/empty
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
+  const fetchChannels = useCallback(async () => {
+    try {
+      const resp = await api.get<{ channels: ChannelInfo[] }>("/api/channels");
+      setChannels(resp.channels);
+    } catch {
+      // Silently fail
+    } finally {
+      setLoading(false);
     }
-
-    void fetchChannels();
-    return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    void fetchChannels();
+  }, [fetchChannels]);
 
   if (loading) {
     return (
@@ -185,9 +237,7 @@ export function ChannelStatusCard() {
     );
   }
 
-  const toggle = (type: string) => {
-    setExpanded((prev) => (prev === type ? null : type));
-  };
+  const toggle = (type: string) => setExpanded((prev) => (prev === type ? null : type));
 
   return (
     <div
@@ -199,7 +249,7 @@ export function ChannelStatusCard() {
       </h3>
       <div className="mt-3 space-y-1">
         {channels.map((ch) => {
-          const GuideComponent = !ch.connected ? SETUP_GUIDES[ch.type] : undefined;
+          const SetupComponent = !ch.connected ? SETUP_COMPONENTS[ch.type] : undefined;
           const isExpanded = expanded === ch.type;
 
           return (
@@ -208,27 +258,23 @@ export function ChannelStatusCard() {
               <div
                 className={cn(
                   "flex items-center justify-between rounded-md px-2 py-1.5 text-sm",
-                  !ch.connected && GuideComponent && "cursor-pointer hover:bg-[var(--svx-color-bg-hover)]",
+                  !ch.connected && SetupComponent && "cursor-pointer hover:bg-[var(--svx-color-bg-hover)]",
                 )}
-                role={!ch.connected && GuideComponent ? "button" : undefined}
-                tabIndex={!ch.connected && GuideComponent ? 0 : undefined}
-                onClick={() => !ch.connected && GuideComponent && toggle(ch.type)}
+                role={!ch.connected && SetupComponent ? "button" : undefined}
+                tabIndex={!ch.connected && SetupComponent ? 0 : undefined}
+                onClick={() => !ch.connected && SetupComponent && toggle(ch.type)}
                 onKeyDown={(e) => {
-                  if (!ch.connected && GuideComponent && (e.key === "Enter" || e.key === " ")) {
+                  if (!ch.connected && SetupComponent && (e.key === "Enter" || e.key === " ")) {
                     e.preventDefault();
                     toggle(ch.type);
                   }
                 }}
               >
-                <span className="text-[var(--svx-color-text-secondary)]">
-                  {ch.name}
-                </span>
+                <span className="text-[var(--svx-color-text-secondary)]">{ch.name}</span>
                 <span
                   className={cn(
                     "flex items-center gap-1.5 text-xs font-medium",
-                    ch.connected
-                      ? "text-emerald-400"
-                      : "text-[var(--svx-color-text-disabled)]",
+                    ch.connected ? "text-emerald-400" : "text-[var(--svx-color-text-disabled)]",
                   )}
                 >
                   {ch.connected ? (
@@ -239,8 +285,8 @@ export function ChannelStatusCard() {
                   ) : (
                     <>
                       <WifiOffIcon className="size-3" />
-                      {t("channels.setupGuide", { defaultValue: "Setup guide" })}
-                      {GuideComponent && (
+                      {t("channels.setup", { defaultValue: "Set up" })}
+                      {SetupComponent && (
                         isExpanded
                           ? <ChevronUpIcon className="size-3" />
                           : <ChevronDownIcon className="size-3" />
@@ -250,10 +296,13 @@ export function ChannelStatusCard() {
                 </span>
               </div>
 
-              {/* Expandable setup guide */}
-              {!ch.connected && GuideComponent && isExpanded && (
+              {/* Expandable setup area */}
+              {!ch.connected && SetupComponent && isExpanded && (
                 <div className="mx-2 mb-2 rounded-md border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-3">
-                  <GuideComponent />
+                  <SetupComponent onDone={() => {
+                    setExpanded(null);
+                    void fetchChannels();
+                  }} />
                 </div>
               )}
             </div>
