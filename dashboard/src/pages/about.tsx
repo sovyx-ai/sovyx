@@ -18,7 +18,8 @@ export default function AboutPage() {
 
   const links = [
     { label: t("github"), url: "https://github.com/sovyx-ai/sovyx", icon: CodeIcon },
-    { label: t("documentation"), url: "https://docs.sovyx.ai", icon: ExternalLinkIcon },
+    { label: t("website"), url: "https://sovyx.ai", icon: ExternalLinkIcon },
+    { label: t("pypi"), url: "https://pypi.org/project/sovyx/", icon: ExternalLinkIcon },
   ] as const;
 
   return (
