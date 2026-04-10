@@ -129,7 +129,25 @@ class MetricsRegistry:
             unit="1",
         )
 
+        self.safety_blocks = meter.create_counter(
+            name="sovyx.safety.blocks",
+            description="Total safety filter blocks (label: direction, tier, category)",
+            unit="1",
+        )
+
+        self.safety_pii_redacted = meter.create_counter(
+            name="sovyx.safety.pii.redacted",
+            description="Total PII redactions in output (label: type)",
+            unit="1",
+        )
+
         # ── Histograms ─────────────────────────────────────────────
+        self.safety_filter_latency = meter.create_histogram(
+            name="sovyx.safety.filter.latency",
+            description="Safety filter latency per direction (label: direction)",
+            unit="ms",
+        )
+
         self.llm_response_latency = meter.create_histogram(
             name="sovyx.llm.latency",
             description="LLM call latency",
