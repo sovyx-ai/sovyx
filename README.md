@@ -86,8 +86,12 @@ channels:
 ### Set API Keys
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
+# Cloud provider (pick one)
+export ANTHROPIC_API_KEY=sk-ant-...    # or OPENAI_API_KEY, GOOGLE_API_KEY
 export SOVYX_TELEGRAM_TOKEN=123456:ABC...  # from @BotFather (optional)
+
+# Or use Ollama (free, auto-detected):
+# curl -fsSL https://ollama.ai/install.sh | sh && ollama pull llama3.1
 ```
 
 ### Start
@@ -139,7 +143,7 @@ See [docs/architecture.md](docs/architecture.md) for the detailed data flow.
 - Python 3.11+
 - SQLite 3.35+ (with FTS5)
 - 512MB RAM minimum (Raspberry Pi 5 compatible)
-- LLM API key (Anthropic, OpenAI, or Google) or local Ollama
+- LLM API key (Anthropic, OpenAI, or Google) **or** local Ollama (auto-detected)
 
 ---
 

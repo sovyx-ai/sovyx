@@ -30,6 +30,7 @@ _MUTABLE_SECTIONS = frozenset(
         "name",
         "language",
         "timezone",
+        "llm",
     }
 )
 

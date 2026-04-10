@@ -16,7 +16,6 @@ import {
   UserIcon,
   RadioIcon,
   KeyIcon,
-  CpuIcon,
   PuzzleIcon,
   ShieldIcon,
   DownloadIcon,
@@ -40,6 +39,7 @@ import type {
   ContentFilter,
 } from "@/types/api";
 import { cn } from "@/lib/utils";
+import { ProviderConfig } from "@/components/settings/provider-config";
 
 type LogLevel = Settings["log_level"];
 const LOG_LEVELS: LogLevel[] = ["DEBUG", "INFO", "WARNING", "ERROR"];
@@ -469,20 +469,20 @@ export default function SettingsPage() {
         </div>
       </section>
 
-      {/* ── LLM + Brain Info (READ-ONLY, from /api/config) ── */}
+      {/* ── LLM Provider Config (interactive) ── */}
+      <ProviderConfig />
+
+      {/* ── LLM Parameters + Brain Info (READ-ONLY, from /api/config) ── */}
       {mindConfig && (
         <section className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-4">
           <h2 className="text-sm font-medium text-[var(--svx-color-text-primary)]">
-            LLM & Brain
+            LLM Parameters & Brain
           </h2>
           <p className="mt-1 text-xs text-[var(--svx-color-text-tertiary)]">
-            Language model and memory system configuration (read-only).
+            Model parameters and memory system configuration (read-only).
           </p>
 
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
-            <ReadOnlyField label="Provider" value={mindConfig.llm.default_provider} />
-            <ReadOnlyField label="Model" value={mindConfig.llm.default_model} mono />
-            <ReadOnlyField label="Fast Model" value={mindConfig.llm.fast_model} mono />
             <ReadOnlyField label="Temperature" value={String(mindConfig.llm.temperature)} />
             <ReadOnlyField label="Daily Budget" value={`$${mindConfig.llm.budget_daily_usd.toFixed(2)}`} />
             <ReadOnlyField label="Per-Conv Budget" value={`$${mindConfig.llm.budget_per_conversation_usd.toFixed(2)}`} />
@@ -519,7 +519,7 @@ export default function SettingsPage() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <PlaceholderSection icon={RadioIcon} title={t("tabs.channels")} versionLabel={t("common:comingSoon.title", { version: "v1.0" })} />
         <PlaceholderSection icon={KeyIcon} title={t("tabs.apiKeys")} versionLabel={t("common:comingSoon.title", { version: "v1.0" })} />
-        <PlaceholderSection icon={CpuIcon} title={t("tabs.providers")} versionLabel={t("common:comingSoon.title", { version: "v1.0" })} />
+
         <PlaceholderSection icon={PuzzleIcon} title={t("tabs.plugins")} versionLabel={t("common:comingSoon.title", { version: "v1.0" })} />
         <PlaceholderSection icon={DownloadIcon} title={t("tabs.exportImport")} versionLabel={t("common:comingSoon.title", { version: "v1.0" })} />
         <PlaceholderSection icon={WebhookIcon} title={t("tabs.webhooks")} versionLabel={t("common:comingSoon.title", { version: "v1.0" })} />

@@ -628,4 +628,36 @@ describe("edge cases", () => {
     expect(result.current.step3).toBe("done");
     expect(result.current.allDone).toBe(true);
   });
+
+  // ── Ollama as primary provider scenarios ──
+
+  it("step1 done when Ollama is primary and health check green", () => {
+    // When Ollama is the only provider, the health check name is "llm providers"
+    // which is in LLM_CHECK_NAMES — should trigger step1 done
+    useDashboardStore.setState({
+      status: makeStatus(),
+      healthChecks: [{ name: "LLM Providers", status: "green", message: "ollama: reachable" }],
+    });
+    const { result } = renderHook(() => useOnboardingProgress());
+    expect(result.current.step1).toBe("done");
+  });
+
+  it("step1 pending when Ollama is primary but unreachable", () => {
+    useDashboardStore.setState({
+      status: makeStatus(),
+      healthChecks: [{ name: "LLM Providers", status: "red", message: "ollama: not reachable" }],
+    });
+    const { result } = renderHook(() => useOnboardingProgress());
+    expect(result.current.step1).toBe("pending");
+  });
+
+  it("step1 done via llm_calls_today when Ollama health is red (layer 2 backup)", () => {
+    // Ollama might report red momentarily but user has already made calls
+    useDashboardStore.setState({
+      status: makeStatus({ llm_calls_today: 3 }),
+      healthChecks: [{ name: "LLM Providers", status: "red", message: "ollama: not reachable" }],
+    });
+    const { result } = renderHook(() => useOnboardingProgress());
+    expect(result.current.step1).toBe("done");
+  });
 });

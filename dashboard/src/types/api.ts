@@ -38,6 +38,9 @@ export interface SystemStatus {
   tokens_today: number;
   messages_today: number;
   cost_history?: CostHistoryEntry[];
+  timezone?: string;
+  today_date?: string;
+  has_lifetime_activity?: boolean;
 }
 
 // ── Conversations ──

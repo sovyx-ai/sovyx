@@ -329,3 +329,150 @@ class TestCostHistory:
         collector = StatusCollector(registry)
         snap = await collector.collect()
         assert snap.cost_history == []
+
+
+class TestTimezoneCounters:
+    """Daily counter reset respects user timezone."""
+
+    def test_utc_default_backwards_compatible(self) -> None:
+        """Default timezone is UTC."""
+        from zoneinfo import ZoneInfo
+
+        c = DashboardCounters()
+        assert c._tz == ZoneInfo("UTC")
+
+    def test_custom_timezone(self) -> None:
+        """Can create counters with custom timezone."""
+        from zoneinfo import ZoneInfo
+
+        c = DashboardCounters(timezone="America/Sao_Paulo")
+        assert c._tz == ZoneInfo("America/Sao_Paulo")
+
+    def test_sao_paulo_same_day_keeps_counters(self) -> None:
+        """When _now_date_str returns same day, counters are not reset."""
+        from unittest.mock import patch
+
+        c = DashboardCounters(timezone="America/Sao_Paulo")
+        c._day_key = "2026-04-10"
+        c.llm_calls = 42
+
+        with patch("sovyx.dashboard.status._now_date_str", return_value="2026-04-10"):
+            c.record_llm_call(cost=0.01, tokens=10)
+
+        # Should NOT reset — same day in São Paulo
+        assert c.llm_calls == 43  # 42 + 1
+
+    def test_sao_paulo_new_day_resets_counters(self) -> None:
+        """When _now_date_str returns next day, counters reset."""
+        from unittest.mock import patch
+
+        c = DashboardCounters(timezone="America/Sao_Paulo")
+        c._day_key = "2026-04-10"
+        c.llm_calls = 42
+
+        with patch("sovyx.dashboard.status._now_date_str", return_value="2026-04-11"):
+            c.record_llm_call(cost=0.01, tokens=10)
+
+        # Should reset: 0 + 1 = 1
+        assert c.llm_calls == 1
+
+    def test_configure_timezone_updates_singleton(self) -> None:
+        """configure_timezone updates the global singleton."""
+        from zoneinfo import ZoneInfo
+
+        from sovyx.dashboard.status import configure_timezone, get_counters
+
+        original_tz = get_counters()._tz
+        try:
+            configure_timezone("Asia/Tokyo")
+            assert get_counters()._tz == ZoneInfo("Asia/Tokyo")
+        finally:
+            # Restore
+            get_counters()._tz = original_tz
+
+    def test_configure_timezone_invalid_falls_back_to_utc(self) -> None:
+        """Invalid timezone string falls back to UTC."""
+        from zoneinfo import ZoneInfo
+
+        from sovyx.dashboard.status import configure_timezone, get_counters
+
+        original_tz = get_counters()._tz
+        try:
+            configure_timezone("Not/A/Timezone")
+            assert get_counters()._tz == ZoneInfo("UTC")
+        finally:
+            get_counters()._tz = original_tz
+
+
+class TestStatusSnapshotContextFields:
+    """StatusSnapshot timezone/today_date/has_lifetime_activity fields."""
+
+    def test_to_dict_includes_context_fields(self) -> None:
+        snap = StatusSnapshot(
+            version="0.5.27",
+            uptime_seconds=100.0,
+            mind_name="aria",
+            active_conversations=0,
+            memory_concepts=5,
+            memory_episodes=3,
+            llm_cost_today=0.5,
+            llm_calls_today=10,
+            tokens_today=5000,
+            messages_today=2,
+            timezone="America/Sao_Paulo",
+            today_date="2026-04-10",
+            has_lifetime_activity=True,
+        )
+        d = snap.to_dict()
+        assert d["timezone"] == "America/Sao_Paulo"
+        assert d["today_date"] == "2026-04-10"
+        assert d["has_lifetime_activity"] is True
+
+    def test_has_lifetime_false_on_fresh(self) -> None:
+        snap = StatusSnapshot(
+            version="0.5.27",
+            uptime_seconds=10.0,
+            mind_name="aria",
+            active_conversations=0,
+            memory_concepts=0,
+            memory_episodes=0,
+            llm_cost_today=0.0,
+            llm_calls_today=0,
+            tokens_today=0,
+            messages_today=0,
+            has_lifetime_activity=False,
+        )
+        assert snap.has_lifetime_activity is False
+
+    def test_has_lifetime_true_with_concepts(self) -> None:
+        snap = StatusSnapshot(
+            version="0.5.27",
+            uptime_seconds=10.0,
+            mind_name="aria",
+            active_conversations=0,
+            memory_concepts=3,
+            memory_episodes=0,
+            llm_cost_today=0.0,
+            llm_calls_today=0,
+            tokens_today=0,
+            messages_today=0,
+            has_lifetime_activity=True,
+        )
+        assert snap.has_lifetime_activity is True
+
+    def test_defaults(self) -> None:
+        snap = StatusSnapshot(
+            version="0.5.27",
+            uptime_seconds=0.0,
+            mind_name="x",
+            active_conversations=0,
+            memory_concepts=0,
+            memory_episodes=0,
+            llm_cost_today=0.0,
+            llm_calls_today=0,
+            tokens_today=0,
+            messages_today=0,
+        )
+        assert snap.timezone == "UTC"
+        assert snap.today_date == ""
+        assert snap.has_lifetime_activity is False

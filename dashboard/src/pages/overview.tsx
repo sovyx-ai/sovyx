@@ -11,11 +11,21 @@ import { ChannelStatusCard } from "@/components/dashboard/channel-status";
 import { useOnboardingProgress } from "@/hooks/use-onboarding";
 
 /**
- * Format a stat value for fresh-engine state.
- * Shows contextual text instead of dead "0" when the engine has no data yet.
+ * Smart stat value display.
+ *
+ * - value > 0 → formatted value
+ * - value === 0 + has lifetime activity → "0" (day reset, not "never used")
+ * - value === 0 + no lifetime activity → neverUsedLabel ("—" / setup hint)
  */
-function freshValue(value: number, formatter: (n: number) => string, freshLabel: string): string {
-  return value === 0 ? freshLabel : formatter(value);
+function smartValue(
+  value: number,
+  formatter: (n: number) => string,
+  neverUsedLabel: string,
+  hasLifetimeActivity: boolean,
+): string {
+  if (value > 0) return formatter(value);
+  if (hasLifetimeActivity) return formatter(0);
+  return neverUsedLabel;
 }
 
 export default function OverviewPage() {
@@ -143,7 +153,7 @@ export default function OverviewPage() {
             {/* Messages */}
             <StatCard
               title={t("cards.messages")}
-              value={freshValue(status.messages_today, formatNumber, t("cards.messagesFresh"))}
+              value={smartValue(status.messages_today, formatNumber, t("cards.messagesFresh"), status.has_lifetime_activity ?? false)}
               subtitle={
                 status.active_conversations > 0
                   ? t("cards.activeCount", { count: formatNumber(status.active_conversations) })
@@ -155,7 +165,7 @@ export default function OverviewPage() {
             {/* Brain */}
             <StatCard
               title={t("cards.brainConcepts")}
-              value={freshValue(status.memory_concepts, formatNumber, t("cards.brainFresh"))}
+              value={smartValue(status.memory_concepts, formatNumber, t("cards.brainFresh"), status.has_lifetime_activity ?? false)}
               subtitle={
                 status.memory_concepts > 0
                   ? t("cards.episodeCount", { count: status.memory_episodes })
@@ -167,7 +177,7 @@ export default function OverviewPage() {
             {/* LLM Cost */}
             <StatCard
               title={t("cards.llmCost")}
-              value={freshValue(status.llm_cost_today, formatCost, t("cards.costFresh"))}
+              value={smartValue(status.llm_cost_today, formatCost, t("cards.costFresh"), status.has_lifetime_activity ?? false)}
               subtitle={
                 status.llm_calls_today > 0
                   ? t("cards.costSubtitle", { calls: formatNumber(status.llm_calls_today), tokens: formatNumber(status.tokens_today) })

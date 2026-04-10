@@ -103,11 +103,11 @@
     "title": "Your mind is alive.",
     "concepts": "concepts",
     "memories": "memories",
-    "channels": "channels",
     "messages": "messages",
     "activeFor": "Active for {{duration}}",
     "exploreBrain": "Explore Brain",
     "openChat": "Open Chat",
-    "dismiss": "Close"
+    "dismiss": "Close",
+    "conversations": "conversations"
   }
 }

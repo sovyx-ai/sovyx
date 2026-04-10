@@ -120,22 +120,63 @@ class TestLLMProviderDetection:
         assert "not configured" in result.message
 
     @pytest.mark.asyncio
-    async def test_ollama_excluded_from_callback(self) -> None:
-        """Verify Ollama exclusion logic (as implemented in DashboardServer).
-
-        When only Ollama is registered, the filtered callback should return
-        an empty list → RED (not a false-positive GREEN).
-        """
+    async def test_ollama_primary_reachable_green(self) -> None:
+        """Ollama as sole provider + reachable → GREEN (real ping)."""
         ollama = _make_provider("ollama")
-        # Simulate the DashboardServer callback that filters Ollama
         providers = [ollama]
 
         async def _llm_status() -> list[tuple[str, bool]]:
-            return [(p.name, p.is_available) for p in providers if p.name != "ollama"]
+            cloud = [p for p in providers if p.name != "ollama"]
+            if cloud:
+                return [(p.name, p.is_available) for p in cloud]
+            # No cloud — include Ollama (simulated ping OK)
+            o = next((p for p in providers if p.name == "ollama"), None)
+            if o is not None:
+                return [("ollama", True)]  # ping succeeded
+            return []
 
         check = LLMReachableCheck(provider_status_fn=_llm_status)
         result = await check.check()
-        assert result.status == CheckStatus.RED, "Ollama alone should NOT make check green"
+        assert result.status == CheckStatus.GREEN
+        assert "ollama" in result.message
+
+    @pytest.mark.asyncio
+    async def test_ollama_primary_unreachable_red(self) -> None:
+        """Ollama as sole provider + unreachable → RED."""
+        ollama = _make_provider("ollama")
+        providers = [ollama]
+
+        async def _llm_status() -> list[tuple[str, bool]]:
+            cloud = [p for p in providers if p.name != "ollama"]
+            if cloud:
+                return [(p.name, p.is_available) for p in cloud]
+            o = next((p for p in providers if p.name == "ollama"), None)
+            if o is not None:
+                return [("ollama", False)]  # ping failed
+            return []
+
+        check = LLMReachableCheck(provider_status_fn=_llm_status)
+        result = await check.check()
+        assert result.status == CheckStatus.RED
+
+    @pytest.mark.asyncio
+    async def test_ollama_excluded_when_cloud_present(self) -> None:
+        """When cloud providers exist, Ollama is excluded from check."""
+        ollama = _make_provider("ollama")
+        openai = _make_provider("openai", available=False)
+        providers = [ollama, openai]
+
+        async def _llm_status() -> list[tuple[str, bool]]:
+            cloud = [p for p in providers if p.name != "ollama"]
+            if cloud:
+                return [(p.name, p.is_available) for p in cloud]
+            return [("ollama", True)]
+
+        check = LLMReachableCheck(provider_status_fn=_llm_status)
+        result = await check.check()
+        # OpenAI is unavailable, Ollama excluded → RED
+        assert result.status == CheckStatus.RED
+        assert "ollama" not in result.message
 
     @pytest.mark.asyncio
     async def test_ollama_plus_openai_green(self) -> None:

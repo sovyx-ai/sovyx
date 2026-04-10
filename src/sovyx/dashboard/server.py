@@ -566,6 +566,197 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
 
         return JSONResponse({"ok": True, "changes": changes})
 
+    # ── Providers (LLM provider status + models) ──
+
+    @app.get("/api/providers", dependencies=[Depends(verify_token)])
+    async def get_providers() -> JSONResponse:
+        """LLM provider status, availability, and available models.
+
+        Returns all registered providers with their configuration state,
+        plus the currently active provider/model from MindConfig.
+        Cloud providers report ``configured`` based on API key presence.
+        Ollama reports ``reachable`` via a live ping and lists installed models.
+        """
+        from sovyx.llm.providers.ollama import OllamaProvider
+
+        registry = getattr(app.state, "registry", None)
+        mind_config = getattr(app.state, "mind_config", None)
+
+        if registry is None:
+            return JSONResponse(
+                {"error": "Engine not running"},
+                status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        providers_out: list[dict[str, object]] = []
+
+        try:
+            from sovyx.llm.router import LLMRouter
+
+            if registry.is_registered(LLMRouter):
+                router = await registry.resolve(LLMRouter)
+
+                for p in router._providers:
+                    entry: dict[str, object] = {
+                        "name": p.name,
+                        "configured": p.is_available,
+                        "available": p.is_available,
+                    }
+                    if isinstance(p, OllamaProvider):
+                        reachable = await p.ping()
+                        models = await p.list_models() if reachable else []
+                        entry.update(
+                            {
+                                "configured": True,  # always registered
+                                "available": reachable,
+                                "reachable": reachable,
+                                "models": models,
+                                "base_url": p.base_url,
+                            }
+                        )
+                    providers_out.append(entry)
+        except Exception:  # noqa: BLE001
+            logger.debug("providers_list_failed")
+
+        active: dict[str, str] = {"provider": "", "model": "", "fast_model": ""}
+        if mind_config is not None:
+            active = {
+                "provider": mind_config.llm.default_provider,
+                "model": mind_config.llm.default_model,
+                "fast_model": mind_config.llm.fast_model,
+            }
+
+        return JSONResponse({"providers": providers_out, "active": active})
+
+    @app.put("/api/providers", dependencies=[Depends(verify_token)])
+    async def update_provider(request: Request) -> JSONResponse:
+        """Change active LLM provider and model at runtime.
+
+        Updates ``MindConfig.llm`` in-place (no restart needed — ThinkPhase
+        reads config per-call) and persists to ``mind.yaml``.
+
+        Request body::
+
+            {"provider": "ollama", "model": "llama3.1:latest"}
+        """
+        try:
+            body = await request.json()
+        except (ValueError, UnicodeDecodeError):
+            return JSONResponse(
+                {"ok": False, "error": "Invalid JSON body"},
+                status_code=422,
+            )
+
+        if not isinstance(body, dict):
+            return JSONResponse(
+                {"ok": False, "error": "Expected JSON object"},
+                status_code=422,
+            )
+
+        new_provider = body.get("provider", "")
+        new_model = body.get("model", "")
+        if not new_provider or not new_model:
+            return JSONResponse(
+                {"ok": False, "error": "Both 'provider' and 'model' are required"},
+                status_code=422,
+            )
+
+        mind_config = getattr(app.state, "mind_config", None)
+        if mind_config is None:
+            return JSONResponse(
+                {"ok": False, "error": "No mind configuration loaded"},
+                status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        registry = getattr(app.state, "registry", None)
+        if registry is None:
+            return JSONResponse(
+                {"ok": False, "error": "Engine not running"},
+                status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        # Validate provider exists and is available
+        try:
+            from sovyx.llm.providers.ollama import OllamaProvider
+            from sovyx.llm.router import LLMRouter
+
+            if not registry.is_registered(LLMRouter):
+                return JSONResponse(
+                    {"ok": False, "error": "LLM router not available"},
+                    status_code=HTTP_503_SERVICE_UNAVAILABLE,
+                )
+
+            router = await registry.resolve(LLMRouter)
+            target = next((p for p in router._providers if p.name == new_provider), None)
+
+            if target is None:
+                return JSONResponse(
+                    {"ok": False, "error": f"Unknown provider: {new_provider}"},
+                    status_code=422,
+                )
+
+            # Validate availability: cloud checks is_available, Ollama pings
+            if isinstance(target, OllamaProvider):
+                reachable = await target.ping()
+                if not reachable:
+                    return JSONResponse(
+                        {
+                            "ok": False,
+                            "error": f"Ollama not reachable at {target.base_url}",
+                        },
+                        status_code=422,
+                    )
+            elif not target.is_available:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": f"Provider '{new_provider}' is not configured (missing API key?)",
+                    },
+                    status_code=422,
+                )
+        except Exception:
+            logger.warning("provider_switch_validation_failed", exc_info=True)
+            return JSONResponse(
+                {"ok": False, "error": "Provider validation failed"},
+                status_code=500,
+            )
+
+        # Apply runtime update (immediate — no restart needed)
+        old_provider = mind_config.llm.default_provider
+        old_model = mind_config.llm.default_model
+        mind_config.llm.default_provider = new_provider
+        mind_config.llm.default_model = new_model
+
+        changes = {
+            "provider": f"{old_provider} → {new_provider}",
+            "model": f"{old_model} → {new_model}",
+        }
+
+        # Persist to mind.yaml
+        mind_yaml_path = getattr(app.state, "mind_yaml_path", None)
+        if mind_yaml_path is not None:
+            from sovyx.dashboard.config import _persist_to_yaml
+
+            _persist_to_yaml(mind_config, mind_yaml_path)
+            logger.info(
+                "provider_switch_persisted",
+                provider=new_provider,
+                model=new_model,
+            )
+
+        # Broadcast change to WebSocket clients
+        await ws_manager.broadcast({"type": "config_updated", "changes": changes})
+
+        logger.info(
+            "provider_switched",
+            old_provider=old_provider,
+            new_provider=new_provider,
+            old_model=old_model,
+            new_model=new_model,
+        )
+
+        return JSONResponse({"ok": True, "changes": changes})
+
     # ── Channels (active channel status) ──
 
     @app.get("/api/channels", dependencies=[Depends(verify_token)])
@@ -915,7 +1106,10 @@ class DashboardServer:
 
         registry.register(BrainIndexedCheck(is_loaded_fn=brain_loaded_fn))
 
-        # ── 3. LLM Providers: exclude Ollama to prevent false positive ──
+        # ── 3. LLM Providers: smart Ollama inclusion ──
+        # Cloud providers present → exclude Ollama (avoids false positive from
+        #   always-verified local installs that aren't the primary provider).
+        # No cloud providers → include Ollama with a real ping (it's primary).
         llm_status_fn = None
         try:
             from sovyx.llm.router import LLMRouter
@@ -924,9 +1118,22 @@ class DashboardServer:
                 router = await self._registry.resolve(LLMRouter)
 
                 async def _llm_status() -> list[tuple[str, bool]]:
-                    return [
-                        (p.name, p.is_available) for p in router._providers if p.name != "ollama"
-                    ]
+                    cloud = [p for p in router._providers if p.name != "ollama"]
+                    if cloud:
+                        # Cloud providers configured — report only those
+                        return [(p.name, p.is_available) for p in cloud]
+                    # No cloud — Ollama is the primary provider.
+                    # Use real ping for accurate status.
+                    from sovyx.llm.providers.ollama import OllamaProvider
+
+                    ollama = next(
+                        (p for p in router._providers if isinstance(p, OllamaProvider)),
+                        None,
+                    )
+                    if ollama is not None:
+                        reachable = await ollama.ping()
+                        return [("ollama", reachable)]
+                    return []
 
                 llm_status_fn = _llm_status
         except Exception:  # noqa: BLE001
@@ -1077,6 +1284,20 @@ class DashboardServer:
                     self._app.state.mind_config = personality.config
             except Exception:  # noqa: BLE001
                 logger.debug("mind_config_wire_failed")
+
+            # Wire mind.yaml path for LLM config persistence (PUT /api/providers)
+            try:
+                from sovyx.engine.config import EngineConfig
+
+                if self._registry.is_registered(EngineConfig):
+                    eng_cfg = await self._registry.resolve(EngineConfig)
+                    # v0.5: single mind "aria" — resolve path from data_dir
+                    yaml_path = eng_cfg.database.data_dir / "aria" / "mind.yaml"
+                    if yaml_path.exists():
+                        self._app.state.mind_yaml_path = yaml_path
+                        logger.debug("mind_yaml_path_wired", path=str(yaml_path))
+            except Exception:  # noqa: BLE001
+                logger.debug("mind_yaml_path_wire_failed")
 
         # Wire log file path for log queries.
         # Resolve from registry first (same config the bootstrap used),

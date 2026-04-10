@@ -44,7 +44,12 @@ def _categorize_error(exc: Exception) -> str:
     if isinstance(exc, CostLimitExceededError):
         return "I've reached my conversation budget limit. Please try again later."
     if isinstance(exc, ProviderUnavailableError):
-        return "I'm having trouble connecting to my AI provider. Please try again in a moment."
+        return (
+            "No AI provider is available right now. "
+            "Please check the LLM Providers section in Settings — "
+            "you can configure a cloud API key (Anthropic, OpenAI, Google) "
+            "or start a local Ollama server (ollama serve)."
+        )
     # Default: internal error — don't leak details
     return "I encountered an unexpected error. Please try again."
 

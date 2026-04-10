@@ -233,13 +233,142 @@ class TestOllamaProvider:
     def test_name(self) -> None:
         assert OllamaProvider().name == "ollama"
 
-    def test_always_available(self) -> None:
-        assert OllamaProvider().is_available is True
+    def test_not_available_before_ping(self) -> None:
+        """is_available defaults False — must call ping() first."""
+        assert OllamaProvider().is_available is False
+
+    def test_base_url_default(self) -> None:
+        p = OllamaProvider()
+        assert p.base_url == "http://localhost:11434"
+
+    def test_base_url_explicit(self) -> None:
+        p = OllamaProvider(base_url="http://gpu-box:11434/")
+        assert p.base_url == "http://gpu-box:11434"  # trailing slash stripped
+
+    def test_base_url_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """OLLAMA_HOST env var is respected (same as official Ollama CLI)."""
+        monkeypatch.setenv("OLLAMA_HOST", "http://remote:9999")
+        p = OllamaProvider()
+        assert p.base_url == "http://remote:9999"
+
+    def test_base_url_env_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Falls back to localhost when OLLAMA_HOST is not set."""
+        monkeypatch.delenv("OLLAMA_HOST", raising=False)
+        p = OllamaProvider()
+        assert p.base_url == "http://localhost:11434"
+
+    def test_explicit_url_overrides_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Explicit base_url takes priority over OLLAMA_HOST."""
+        monkeypatch.setenv("OLLAMA_HOST", "http://remote:9999")
+        p = OllamaProvider(base_url="http://explicit:7777")
+        assert p.base_url == "http://explicit:7777"
+
+    async def test_ping_success(self) -> None:
+        p = OllamaProvider()
+        mock_resp = httpx.Response(200, json={"models": []})
+        p._client.get = AsyncMock(return_value=mock_resp)  # type: ignore[method-assign]
+        assert await p.ping() is True
+        assert p.is_available is True
+        await p.close()
+
+    async def test_ping_failure_connection(self) -> None:
+        p = OllamaProvider()
+        p._client.get = AsyncMock(side_effect=httpx.ConnectError("refused"))  # type: ignore[method-assign]
+        assert await p.ping() is False
+        assert p.is_available is False
+        await p.close()
+
+    async def test_ping_failure_timeout(self) -> None:
+        p = OllamaProvider()
+        p._client.get = AsyncMock(side_effect=httpx.TimeoutException("slow"))  # type: ignore[method-assign]
+        assert await p.ping() is False
+        assert p.is_available is False
+        await p.close()
+
+    async def test_ping_unexpected_status(self) -> None:
+        """Non-200 response sets _verified to False."""
+        p = OllamaProvider()
+        mock_resp = httpx.Response(500, text="error")
+        p._client.get = AsyncMock(return_value=mock_resp)  # type: ignore[method-assign]
+        assert await p.ping() is False
+        assert p.is_available is False
+        await p.close()
+
+    async def test_ping_sets_verified_flag(self) -> None:
+        """Verified flag transitions: False → True → False on error."""
+        p = OllamaProvider()
+        assert p._verified is False
+
+        ok_resp = httpx.Response(200, json={"models": []})
+        p._client.get = AsyncMock(return_value=ok_resp)  # type: ignore[method-assign]
+        await p.ping()
+        assert p._verified is True
+
+        p._client.get = AsyncMock(side_effect=httpx.ConnectError("down"))  # type: ignore[method-assign]
+        await p.ping()
+        assert p._verified is False
+        await p.close()
+
+    async def test_list_models_success(self) -> None:
+        p = OllamaProvider()
+        mock_resp = httpx.Response(
+            200,
+            json={
+                "models": [
+                    {"name": "llama3.1:latest", "size": 4_000_000_000},
+                    {"name": "mistral:latest", "size": 3_500_000_000},
+                    {"name": "codellama:7b", "size": 3_800_000_000},
+                ],
+            },
+        )
+        p._client.get = AsyncMock(return_value=mock_resp)  # type: ignore[method-assign]
+        models = await p.list_models()
+        assert models == ["codellama:7b", "llama3.1:latest", "mistral:latest"]  # sorted
+        await p.close()
+
+    async def test_list_models_empty(self) -> None:
+        p = OllamaProvider()
+        mock_resp = httpx.Response(200, json={"models": []})
+        p._client.get = AsyncMock(return_value=mock_resp)  # type: ignore[method-assign]
+        assert await p.list_models() == []
+        await p.close()
+
+    async def test_list_models_error(self) -> None:
+        p = OllamaProvider()
+        p._client.get = AsyncMock(side_effect=httpx.ConnectError("refused"))  # type: ignore[method-assign]
+        assert await p.list_models() == []
+        await p.close()
+
+    async def test_list_models_bad_status(self) -> None:
+        p = OllamaProvider()
+        mock_resp = httpx.Response(500, text="error")
+        p._client.get = AsyncMock(return_value=mock_resp)  # type: ignore[method-assign]
+        assert await p.list_models() == []
+        await p.close()
+
+    async def test_list_models_malformed_json(self) -> None:
+        """Handles models without 'name' field gracefully."""
+        p = OllamaProvider()
+        mock_resp = httpx.Response(
+            200,
+            json={"models": [{"size": 100}, {"name": "ok:latest"}]},
+        )
+        p._client.get = AsyncMock(return_value=mock_resp)  # type: ignore[method-assign]
+        assert await p.list_models() == ["ok:latest"]
+        await p.close()
 
     def test_supports_any_model(self) -> None:
         p = OllamaProvider()
         assert p.supports_model("llama3.2:1b") is True
         assert p.supports_model("anything") is True
+
+    def test_rejects_cloud_models(self) -> None:
+        p = OllamaProvider()
+        assert p.supports_model("claude-3-opus") is False
+        assert p.supports_model("gpt-4o") is False
+        assert p.supports_model("gemini-pro") is False
+        assert p.supports_model("o1-preview") is False
+        assert p.supports_model("o3-mini") is False
 
     def test_context_window(self) -> None:
         p = OllamaProvider()

@@ -9,6 +9,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo
 
 from sovyx.observability.logging import get_logger
 
@@ -33,6 +34,9 @@ class StatusSnapshot:
     tokens_today: int
     messages_today: int
     cost_history: list[dict[str, object]] = field(default_factory=list)
+    timezone: str = "UTC"
+    today_date: str = ""
+    has_lifetime_activity: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to JSON-compatible dict."""
@@ -48,6 +52,9 @@ class StatusSnapshot:
             "tokens_today": self.tokens_today,
             "messages_today": self.messages_today,
             "cost_history": self.cost_history,
+            "timezone": self.timezone,
+            "today_date": self.today_date,
+            "has_lifetime_activity": self.has_lifetime_activity,
         }
 
 
@@ -56,12 +63,15 @@ class DashboardCounters:
 
     These mirror the OTel metrics but are queryable (OTel counters are write-only).
     Uses a threading.Lock to make the check-then-reset in _maybe_reset atomic.
+    Day boundary is determined by the user's configured timezone (default UTC).
+    Call :func:`configure_timezone` during bootstrap to set it.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, timezone: str = "UTC") -> None:
         import threading
 
         self._lock = threading.Lock()
+        self._tz = ZoneInfo(timezone)
         self.llm_calls: int = 0
         self.llm_cost: float = 0.0
         self.tokens: int = 0
@@ -89,14 +99,21 @@ class DashboardCounters:
             return self.llm_calls, self.llm_cost, self.tokens, self.messages_received
 
     def _maybe_reset(self) -> None:
-        """Reset counters at UTC day boundary. Must be called under lock."""
-        today = time.strftime("%Y-%m-%d", time.gmtime())
+        """Reset counters at day boundary in user timezone. Must be called under lock."""
+        today = _now_date_str(self._tz)
         if self._day_key != today:
             self.llm_calls = 0
             self.llm_cost = 0.0
             self.tokens = 0
             self.messages_received = 0
             self._day_key = today
+
+
+def _now_date_str(tz: ZoneInfo) -> str:
+    """Current date as YYYY-MM-DD in the given timezone."""
+    from datetime import datetime
+
+    return datetime.now(tz=tz).strftime("%Y-%m-%d")
 
 
 # Module-level singleton — import and use from anywhere
@@ -106,6 +123,19 @@ _counters = DashboardCounters()
 def get_counters() -> DashboardCounters:
     """Get the global dashboard counters."""
     return _counters
+
+
+def configure_timezone(timezone: str) -> None:
+    """Set the timezone for daily counter reset.
+
+    Call during bootstrap after loading MindConfig.
+    Falls back to UTC if the timezone string is invalid.
+    """
+    try:
+        _counters._tz = ZoneInfo(timezone)
+    except (KeyError, Exception):  # noqa: BLE001
+        logger.warning("invalid_counter_timezone", timezone=timezone)
+        _counters._tz = ZoneInfo("UTC")
 
 
 class StatusCollector:
@@ -127,10 +157,19 @@ class StatusCollector:
         mind_id_str = await self._get_active_mind_id()
         concepts, episodes = await self._get_memory_stats(mind_id_str)
 
-        calls, cost, tokens, msgs = get_counters().snapshot()
+        counters = get_counters()
+        calls, cost, tokens, msgs = counters.snapshot()
 
         # Display "sovyx" for the default/fallback mind, real name otherwise
         mind_name = "sovyx" if mind_id_str == "default" else mind_id_str
+
+        # Timezone context for frontend
+        tz_name = str(counters._tz)
+        today = _now_date_str(counters._tz)
+
+        # Lifetime activity: engine has EVER been used (not just today)
+        cost_history = await self._get_cost_history()
+        has_lifetime = concepts > 0 or episodes > 0 or len(cost_history) > 0
 
         return StatusSnapshot(
             version=__version__,
@@ -143,7 +182,10 @@ class StatusCollector:
             llm_calls_today=calls,
             tokens_today=tokens,
             messages_today=msgs,
-            cost_history=await self._get_cost_history(),
+            cost_history=cost_history,
+            timezone=tz_name,
+            today_date=today,
+            has_lifetime_activity=has_lifetime,
         )
 
     async def _get_memory_stats(self, mind_id_str: str) -> tuple[int, int]:

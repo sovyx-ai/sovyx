@@ -11,6 +11,7 @@ from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from pathlib import Path
 
     from sovyx.mind.config import MindConfig
 
@@ -142,6 +143,11 @@ async def bootstrap(
         for mind_config in mind_configs:
             mind_id = MindId(mind_config.id)
 
+            # Configure daily counter timezone from mind config
+            from sovyx.dashboard.status import configure_timezone
+
+            configure_timezone(mind_config.timezone)
+
             # Initialize per-mind databases
             await db_manager.initialize_mind_databases(mind_id)
             brain_pool = db_manager.get_brain_pool(mind_id)
@@ -186,6 +192,7 @@ async def bootstrap(
             registry.register_instance(BrainService, brain_service)
             registry.register_instance(ConceptRepository, concept_repo)
             registry.register_instance(RelationRepository, relation_repo)
+            registry.register_instance(EpisodeRepository, episode_repo)
 
             # Consolidation scheduler
             consolidation_cycle = ConsolidationCycle(
@@ -242,16 +249,49 @@ async def bootstrap(
                 providers.append(GoogleProvider(api_key=google_key))
                 logger.info("llm_provider_registered", provider="google")
 
-            providers.append(OllamaProvider())
+            ollama_provider = OllamaProvider()
+            providers.append(ollama_provider)
 
-            # Validate: at least one cloud provider or explicit Ollama setup
+            # Always ping Ollama to set _verified flag correctly.
+            # Health checks and Settings page need accurate availability.
+            await ollama_provider.ping()
+
+            # Auto-detect Ollama when no cloud providers are configured
             cloud_providers = [p for p in providers if p.name != "ollama"]
             if not cloud_providers:
-                logger.warning(
-                    "no_api_keys_detected",
-                    hint="Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY. "
-                    "Falling back to Ollama (requires local model).",
-                )
+                if ollama_provider.is_available:
+                    models = await ollama_provider.list_models()
+                    if models:
+                        selected = _select_best_ollama_model(models)
+                        mind_config.llm.default_provider = "ollama"
+                        mind_config.llm.default_model = selected
+                        logger.info(
+                            "ollama_auto_detected",
+                            models=models,
+                            selected=selected,
+                            hint="Using local Ollama. No cloud API key needed.",
+                        )
+                        # Persist so next restart reads config directly
+                        _persist_ollama_config(
+                            mind_config,
+                            engine_config.database.data_dir / mind_config.id / "mind.yaml",
+                        )
+                    else:
+                        logger.warning(
+                            "ollama_no_models",
+                            hint="Ollama is running but has no models. Run: ollama pull llama3.1",
+                        )
+                else:
+                    logger.warning(
+                        "no_llm_provider_detected",
+                        hint="Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY. "
+                        "Or install Ollama: https://ollama.ai",
+                    )
+
+            # fast_model fallback: ThinkPhase uses fast_model for low-complexity
+            # queries. If empty, those calls silently fail (model="").
+            if not mind_config.llm.fast_model and mind_config.llm.default_model:
+                mind_config.llm.fast_model = mind_config.llm.default_model
 
             logger.info(
                 "llm_router_config",
@@ -365,3 +405,88 @@ async def bootstrap(
                     exc_info=True,
                 )
         raise
+
+
+# ── Ollama auto-detection helpers ────────────────────────────
+
+
+# Priority order: newer/larger models first.
+_PREFERRED_OLLAMA_MODELS: list[str] = [
+    "llama3.1",
+    "llama3",
+    "llama3.2",
+    "mistral",
+    "gemma2",
+    "qwen2.5",
+    "phi3",
+    "codellama",
+    "deepseek-coder",
+]
+
+
+def _select_best_ollama_model(models: list[str]) -> str:
+    """Pick the best available Ollama model by preference order.
+
+    Strips tag suffixes (e.g. ``"llama3.1:latest"`` → ``"llama3.1"``)
+    for matching, then returns the original name with tag.
+
+    Args:
+        models: Non-empty list of model names from ``OllamaProvider.list_models()``.
+
+    Returns:
+        Best model name (with original tag), or first model as fallback.
+    """
+    # Build lookup: base_name → full_name (first occurrence wins)
+    base_to_full: dict[str, str] = {}
+    for m in models:
+        base = m.split(":")[0]
+        if base not in base_to_full:
+            base_to_full[base] = m
+
+    for preferred in _PREFERRED_OLLAMA_MODELS:
+        if preferred in base_to_full:
+            return base_to_full[preferred]
+
+    return models[0]
+
+
+def _persist_ollama_config(mind_config: MindConfig, mind_yaml_path: Path) -> None:
+    """Persist auto-detected Ollama config to mind.yaml.
+
+    Creates the file if it doesn't exist. Merges with existing YAML
+    to preserve user-edited fields in other sections.
+
+    Args:
+        mind_config: The MindConfig with updated LLM fields.
+        mind_yaml_path: Path to mind.yaml.
+    """
+    import yaml
+
+    existing: dict[str, object] = {}
+    if mind_yaml_path.exists():
+        try:
+            with open(mind_yaml_path) as f:
+                loaded = yaml.safe_load(f)
+            if isinstance(loaded, dict):
+                existing = loaded
+        except Exception:
+            logger.debug("mind_yaml_read_failed", path=str(mind_yaml_path))
+
+    # Update only the LLM section — don't clobber other config
+    existing["llm"] = {
+        "default_provider": mind_config.llm.default_provider,
+        "default_model": mind_config.llm.default_model,
+        "fast_model": mind_config.llm.fast_model,
+        "temperature": mind_config.llm.temperature,
+        "streaming": mind_config.llm.streaming,
+        "budget_daily_usd": mind_config.llm.budget_daily_usd,
+        "budget_per_conversation_usd": mind_config.llm.budget_per_conversation_usd,
+    }
+
+    try:
+        mind_yaml_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(mind_yaml_path, "w") as f:
+            yaml.safe_dump(existing, f, default_flow_style=False, sort_keys=False)
+        logger.info("ollama_config_persisted", path=str(mind_yaml_path))
+    except Exception:
+        logger.warning("ollama_config_persist_failed", path=str(mind_yaml_path))
