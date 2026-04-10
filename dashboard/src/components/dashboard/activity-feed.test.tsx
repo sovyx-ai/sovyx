@@ -69,24 +69,25 @@ describe("basic rendering", () => {
 describe("empty state", () => {
   it("shows empty message when no events", () => {
     render(<ActivityFeed events={[]} />);
-    expect(screen.getByText("Waiting for events…")).toBeInTheDocument();
+    expect(screen.getByText("Listening for events…")).toBeInTheDocument();
   });
 
   it("shows hint text in empty state", () => {
     render(<ActivityFeed events={[]} />);
-    expect(screen.getByText(/Events will appear here/)).toBeInTheDocument();
+    expect(screen.getByText(/Events appear here in real time/)).toBeInTheDocument();
   });
 });
 
 // ════════════════════════════════════════════════════════
-// EVENT TYPES
+// EVENT TYPES (i18n labels from overview.events.*)
 // ════════════════════════════════════════════════════════
 describe("event types", () => {
   it("renders PerceptionReceived event", () => {
     render(
       <ActivityFeed events={[makeEvent("PerceptionReceived", { source: "telegram", person_id: "user1" })]} />,
     );
-    expect(screen.getByText("Perception Received")).toBeInTheDocument();
+    expect(screen.getByText("Perception")).toBeInTheDocument();
+    expect(screen.getByText(/from telegram/)).toBeInTheDocument();
   });
 
   it("renders ThinkCompleted event with model info", () => {
@@ -95,7 +96,7 @@ describe("event types", () => {
         events={[makeEvent("ThinkCompleted", { model: "claude-3.5", tokens_in: 100, tokens_out: 50, cost_usd: 0.001 })]}
       />,
     );
-    expect(screen.getByText("Think Completed")).toBeInTheDocument();
+    expect(screen.getByText("Think")).toBeInTheDocument();
     expect(screen.getByText(/claude-3\.5/)).toBeInTheDocument();
   });
 
@@ -103,15 +104,16 @@ describe("event types", () => {
     render(
       <ActivityFeed events={[makeEvent("ResponseSent", { channel: "telegram", latency_ms: "42" })]} />,
     );
-    expect(screen.getByText("Response Sent")).toBeInTheDocument();
+    expect(screen.getByText("Response")).toBeInTheDocument();
+    expect(screen.getByText(/via telegram/)).toBeInTheDocument();
   });
 
   it("renders ConceptCreated event", () => {
     render(
       <ActivityFeed events={[makeEvent("ConceptCreated", { title: "New Concept" })]} />,
     );
-    expect(screen.getByText("Concept Created")).toBeInTheDocument();
-    expect(screen.getByText(/New Concept/)).toBeInTheDocument();
+    expect(screen.getByText("Concept")).toBeInTheDocument();
+    expect(screen.getByText(/Created.*New Concept/)).toBeInTheDocument();
   });
 
   it("renders EngineStarted event", () => {
@@ -123,14 +125,23 @@ describe("event types", () => {
     render(
       <ActivityFeed events={[makeEvent("ChannelConnected", { channel_type: "telegram" })]} />,
     );
-    expect(screen.getByText("Channel Connected")).toBeInTheDocument();
+    // Event label is "Channel", summary is "telegram connected"
+    expect(screen.getByText(/telegram connected/)).toBeInTheDocument();
   });
 
   it("renders ChannelDisconnected event", () => {
     render(
       <ActivityFeed events={[makeEvent("ChannelDisconnected", { channel_type: "signal", reason: "timeout" })]} />,
     );
-    expect(screen.getByText("Channel Disconnected")).toBeInTheDocument();
+    expect(screen.getByText(/signal disconnected.*timeout/)).toBeInTheDocument();
+  });
+
+  it("renders EpisodeEncoded event", () => {
+    render(
+      <ActivityFeed events={[makeEvent("EpisodeEncoded", { importance: 0.85 })]} />,
+    );
+    expect(screen.getByText("Episode")).toBeInTheDocument();
+    expect(screen.getByText(/importance.*0\.85/)).toBeInTheDocument();
   });
 });
 
@@ -141,15 +152,15 @@ describe("multiple events", () => {
   it("renders events in reverse order (newest first)", () => {
     const events = [
       { ...makeEvent("EngineStarted"), timestamp: "2026-04-10T10:00:00Z" },
-      { ...makeEvent("ConceptCreated", { title: "Concept A" }), timestamp: "2026-04-10T10:01:00Z" },
-      { ...makeEvent("ResponseSent", { channel: "telegram", latency_ms: "10" }), timestamp: "2026-04-10T10:02:00Z" },
+      { ...makeEvent("ConceptCreated", { title: "A" }), timestamp: "2026-04-10T10:01:00Z" },
+      { ...makeEvent("ResponseSent", { channel: "tg", latency_ms: "10" }), timestamp: "2026-04-10T10:02:00Z" },
     ];
     render(<ActivityFeed events={events} />);
 
     const articles = screen.getAllByRole("article");
     expect(articles).toHaveLength(3);
-    // Newest first (reversed)
-    expect(articles[0]).toHaveAttribute("aria-label", expect.stringContaining("Response Sent"));
+    // Newest first — "Response" event at 10:02
+    expect(articles[0]).toHaveAttribute("aria-label", expect.stringContaining("Response"));
   });
 
   it("renders correct count of events", () => {
@@ -191,14 +202,17 @@ describe("accessibility", () => {
 // CONNECTION BADGE
 // ════════════════════════════════════════════════════════
 describe("connection badge", () => {
-  it("switches between LIVE and Disconnected", () => {
+  it("shows LIVE when connected", () => {
     mockConnected = true;
-    const { rerender } = render(<ActivityFeed events={[]} />);
+    render(<ActivityFeed events={[]} />);
     expect(screen.getByText("LIVE")).toBeInTheDocument();
+    expect(screen.queryByText("Disconnected")).not.toBeInTheDocument();
+  });
 
+  it("shows Disconnected when not connected", () => {
     mockConnected = false;
-    rerender(<ActivityFeed events={[]} />);
-    // After rerender with disconnected state
+    render(<ActivityFeed events={[]} />);
     expect(screen.getByText("Disconnected")).toBeInTheDocument();
+    expect(screen.queryByText("LIVE")).not.toBeInTheDocument();
   });
 });
