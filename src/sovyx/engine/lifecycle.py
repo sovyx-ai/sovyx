@@ -284,6 +284,7 @@ class LifecycleManager:
         from sovyx.cognitive.gate import CogLoopGate
         from sovyx.cognitive.loop import CognitiveLoop
         from sovyx.engine.bootstrap import MindManager
+        from sovyx.engine.types import MindId as MindIdType
 
         # Start cognitive loop
         if self._registry.is_registered(CognitiveLoop):
@@ -299,7 +300,7 @@ class LifecycleManager:
         if self._registry.is_registered(ConsolidationScheduler):
             scheduler = await self._registry.resolve(ConsolidationScheduler)
             mind_mgr = await self._registry.resolve(MindManager)
-            mind_id = mind_mgr._active[0] if mind_mgr._active else "default"
+            mind_id = MindIdType(mind_mgr._active[0] if mind_mgr._active else "default")
             await scheduler.start(mind_id)
 
         # Start bridge (channels connect last)
