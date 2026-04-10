@@ -6,7 +6,7 @@ const MAX_LOGS = 5_000;
 const MAX_EVENTS = 50;
 const MAX_COST_POINTS = 288; // 24h at 5min intervals
 
-export interface CostDataPoint {
+interface CostDataPoint {
   time: number; // Unix ms
   value: number; // cumulative cost USD
 }

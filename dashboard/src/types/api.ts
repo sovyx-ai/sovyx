@@ -192,48 +192,6 @@ export interface WsEvent<T = Record<string, unknown>> {
   data: T;
 }
 
-/** Typed payloads for specific events */
-export interface ThinkCompletedData {
-  tokens_in: number;
-  tokens_out: number;
-  model: string;
-  cost_usd: number;
-  latency_ms: number;
-}
-
-export interface ConceptCreatedData {
-  concept_id: string;
-  title: string;
-  source: string;
-}
-
-export interface PerceptionReceivedData {
-  source: string;
-  person_id: string;
-}
-
-export interface ResponseSentData {
-  channel: string;
-  latency_ms: number;
-}
-
-export interface ServiceHealthChangedData {
-  service: string;
-  status: string;
-}
-
-export interface ConsolidationCompletedData {
-  merged: number;
-  pruned: number;
-  strengthened: number;
-  duration_s: number;
-}
-
-export interface ChannelEventData {
-  channel_type: string;
-  reason?: string; // only in ChannelDisconnected
-}
-
 // ── Activity Timeline ──
 
 /** Entry types from /api/activity/timeline */
@@ -311,13 +269,6 @@ export interface StatsHistoryResponse {
 
 // ── Chat ──
 
-/** POST /api/chat request body */
-export interface ChatRequest {
-  message: string;
-  user_name?: string;
-  conversation_id?: string | null;
-}
-
 /** POST /api/chat response */
 export interface ChatResponse {
   response: string;
@@ -337,13 +288,6 @@ export interface ChatMessage {
 
 // ── Channels ──
 
-/** Channel status from GET /api/channels */
-export interface ChannelStatus {
-  name: string;
-  type: string;
-  connected: boolean;
-}
-
 // ── Settings ──
 
 /**
@@ -362,16 +306,6 @@ export interface Settings {
   api_host: string;
   api_port: number;
   relay_enabled: boolean;
-}
-
-/** PUT /api/settings request — only mutable fields */
-export interface SettingsUpdate {
-  log_level?: "DEBUG" | "INFO" | "WARNING" | "ERROR";
-}
-
-/** PUT /api/settings response */
-export interface SettingsUpdateResponse {
-  changes: Record<string, string>; // "field": "old → new"
 }
 
 // ── Mind Config ──

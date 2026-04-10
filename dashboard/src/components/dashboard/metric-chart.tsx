@@ -26,7 +26,7 @@ import { ChartEmptyAnimation } from "@/components/empty-state-animations";
 import { formatChartTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-export interface DataPoint {
+interface DataPoint {
   time: number; // Unix ms timestamp
   value: number;
 }

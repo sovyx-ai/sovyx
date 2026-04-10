@@ -31,7 +31,7 @@ const MIND_GROWING_THRESHOLD = 5;
  */
 const LLM_CHECK_NAMES = ["llm providers", "llm_provider"];
 
-export interface OnboardingProgress {
+interface OnboardingProgress {
   /** Completion state for each step. */
   step1: StepState;
   step2: StepState;

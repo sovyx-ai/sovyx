@@ -277,7 +277,7 @@ function TimelineSkeleton() {
 
 // ── Main component ──
 
-export interface CognitiveTimelineProps {
+interface CognitiveTimelineProps {
   className?: string;
 }
 
