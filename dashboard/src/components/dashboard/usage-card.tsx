@@ -100,7 +100,11 @@ export function UsageCard({ className }: { className?: string }) {
   const fetchStatsHistory = useDashboardStore((s) => s.fetchStatsHistory);
 
   useEffect(() => {
-    void fetchStatsHistory(30);
+    let cancelled = false;
+    void fetchStatsHistory(30).catch(() => {
+      if (!cancelled) { /* already handled in store */ }
+    });
+    return () => { cancelled = true; };
   }, [fetchStatsHistory]);
 
   const hasHistory = statsHistory.length > 0;

@@ -290,7 +290,11 @@ export function CognitiveTimeline({ className }: CognitiveTimelineProps) {
 
   // Fetch on mount and when WS reconnects
   useEffect(() => {
-    void fetchTimeline();
+    let cancelled = false;
+    void fetchTimeline().catch(() => {
+      if (!cancelled) { /* handled in store */ }
+    });
+    return () => { cancelled = true; };
   }, [fetchTimeline, connected]);
 
   const groups = groupEntries(entries);

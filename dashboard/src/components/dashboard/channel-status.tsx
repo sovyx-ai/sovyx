@@ -210,19 +210,21 @@ export function ChannelStatusCard() {
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
 
-  const fetchChannels = useCallback(async () => {
+  const fetchChannels = useCallback(async (signal?: AbortSignal) => {
     try {
-      const resp = await api.get<{ channels: ChannelInfo[] }>("/api/channels");
+      const resp = await api.get<{ channels: ChannelInfo[] }>("/api/channels", { signal });
       setChannels(resp.channels);
-    } catch {
-      // Silently fail
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    void fetchChannels();
+    const controller = new AbortController();
+    void fetchChannels(controller.signal);
+    return () => controller.abort();
   }, [fetchChannels]);
 
   if (loading) {
