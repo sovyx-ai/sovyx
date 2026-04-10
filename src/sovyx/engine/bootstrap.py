@@ -115,7 +115,7 @@ async def bootstrap(
                 if _line and not _line.startswith("#") and "=" in _line:
                     _k, _, _v = _line.partition("=")
                     _k, _v = _k.strip(), _v.strip()
-                    if _k and _v and _k not in os.environ:
+                    if _k and _v and _k.startswith("SOVYX_") and _k not in os.environ:
                         os.environ[_k] = _v
 
         # 0. EngineConfig + logging setup
