@@ -228,6 +228,7 @@ class BridgeManager:
                         reply_to=message.channel_message_id,
                     )
                     await self._send_response(outbound)
+                    get_counters().record_message()  # count fallback response
                     return
 
                 if result.filtered:
