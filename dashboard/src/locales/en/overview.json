@@ -99,6 +99,12 @@
     "goSettings": "Go to Settings",
     "goChat": "Open Chat"
   },
+  "usage": {
+    "title": "Usage This Month",
+    "total": "Total: {{cost}} across {{days}} days",
+    "noHistory": "No usage history yet",
+    "messages": "messages"
+  },
   "alive": {
     "title": "Your mind is alive.",
     "concepts": "concepts",
