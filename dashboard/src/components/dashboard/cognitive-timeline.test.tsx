@@ -95,13 +95,13 @@ describe("empty state", () => {
   it("shows empty message when no entries", () => {
     setStore([]);
     render(<CognitiveTimeline />);
-    expect(screen.getByText("No activity yet")).toBeInTheDocument();
+    expect(screen.getByText("No cognitive activity yet")).toBeInTheDocument();
   });
 
   it("shows hint text in empty state", () => {
     setStore([]);
     render(<CognitiveTimeline />);
-    expect(screen.getByText(/Start a conversation/)).toBeInTheDocument();
+    expect(screen.getByText(/Start a conversation to see/)).toBeInTheDocument();
   });
 });
 
@@ -156,7 +156,8 @@ describe("entries display", () => {
       }),
     ]);
     render(<CognitiveTimeline />);
-    expect(screen.getByText(/0\.85/)).toBeInTheDocument();
+    // importance is formatted to 1 decimal: 0.85 → "0.8"
+    expect(screen.getByText(/importance.*0\.8/)).toBeInTheDocument();
   });
 
   it("renders consolidation entry", () => {
@@ -285,7 +286,7 @@ describe("model and cost display", () => {
       }),
     ]);
     render(<CognitiveTimeline />);
-    expect(screen.getByText(/claude-3\.5-sonnet/)).toBeInTheDocument();
-    expect(screen.getByText(/\$0\.0015/)).toBeInTheDocument();
+    // Model and cost are in the same span: "claude-3.5-sonnet · $0.0015"
+    expect(screen.getByText(/claude-3\.5-sonnet.*\$0\.0015/)).toBeInTheDocument();
   });
 });

@@ -129,5 +129,10 @@
     "title": "Channels",
     "connected": "Connected",
     "setUp": "Set up"
+  },
+  "connectionError": {
+    "title": "Unable to connect",
+    "subtitle": "The dashboard cannot reach the Sovyx engine. Make sure it is running.",
+    "retry": "Retry connection"
   }
 }

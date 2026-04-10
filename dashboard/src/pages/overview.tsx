@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { DollarSignIcon, BrainIcon, MessageSquareIcon, ActivityIcon } from "lucide-react";
+import { DollarSignIcon, BrainIcon, MessageSquareIcon, ActivityIcon, WifiOffIcon, RefreshCwIcon } from "lucide-react";
 import { useDashboardStore } from "@/stores/dashboard";
 import { StatCard, StatCardSkeleton, HealthGrid, ActivityFeed, MetricChart, CognitiveTimeline } from "@/components/dashboard";
 import { UsageCard } from "@/components/dashboard/usage-card";
@@ -48,6 +48,17 @@ export default function OverviewPage() {
   const [transitioning, setTransitioning] = useState(false);
   const [showExiting, setShowExiting] = useState(false);
   const [animateAlive, setAnimateAlive] = useState(false);
+
+  // ── Connection timeout: show error state if no data after 10s ──
+  const [timedOut, setTimedOut] = useState(false);
+  useEffect(() => {
+    if (status || connected) {
+      setTimedOut(false);
+      return;
+    }
+    const timer = setTimeout(() => setTimedOut(true), 10_000);
+    return () => clearTimeout(timer);
+  }, [status, connected]);
 
   useEffect(() => {
     // Only trigger transition if allDone CHANGED to true (not on mount)
@@ -124,6 +135,27 @@ export default function OverviewPage() {
             animate={animateAlive}
             onDismiss={() => setDismissed(true)}
           />
+        </div>
+      )}
+
+      {/* Connection error — shown after 10s timeout with no data */}
+      {timedOut && !status && (
+        <div className="flex flex-col items-center justify-center gap-3 rounded-[var(--svx-radius-lg)] border border-dashed border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-8 text-center">
+          <WifiOffIcon className="size-8 text-[var(--svx-color-text-disabled)]" />
+          <h3 className="text-sm font-medium text-[var(--svx-color-text-primary)]">
+            {t("connectionError.title")}
+          </h3>
+          <p className="max-w-sm text-xs text-[var(--svx-color-text-secondary)]">
+            {t("connectionError.subtitle")}
+          </p>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="mt-1 inline-flex items-center gap-1.5 rounded-md bg-[var(--svx-color-brand-primary)] px-3 py-1.5 text-xs font-medium text-[var(--svx-color-text-inverse)] transition-opacity hover:opacity-90"
+          >
+            <RefreshCwIcon className="size-3" />
+            {t("connectionError.retry")}
+          </button>
         </div>
       )}
 
