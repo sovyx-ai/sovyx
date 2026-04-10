@@ -756,6 +756,35 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
             "tier_counts": get_tier_counts(),
         })
 
+    @app.get("/api/safety/status", dependencies=[Depends(verify_token)])
+    async def get_safety_status() -> JSONResponse:
+        """Runtime safety status — what is ACTIVE right now."""
+        from sovyx.cognitive.safety_patterns import (
+            get_pattern_count,
+            get_tier_counts,
+            resolve_patterns,
+        )
+
+        mind_config = getattr(app.state, "mind_config", None)
+        if mind_config is None:
+            return JSONResponse(
+                {"error": "No mind configuration loaded"},
+                status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        safety = mind_config.safety
+        patterns = resolve_patterns(safety)
+
+        return JSONResponse({
+            "ok": True,
+            "content_filter": safety.content_filter,
+            "child_safe_mode": safety.child_safe_mode,
+            "financial_confirmation": safety.financial_confirmation,
+            "active_patterns": len(patterns),
+            "tier_counts": get_tier_counts(),
+            "total_patterns": get_pattern_count(safety),
+        })
+
     # ── Voice Status ──
 
     @app.get("/api/voice/status", dependencies=[Depends(verify_token)])
@@ -841,6 +870,18 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
                     "data": {"changes": changes},
                 }
             )
+
+            # Safety-specific event for targeted UI updates
+            safety_changes = {
+                k: v for k, v in changes.items() if k.startswith("safety.")
+            }
+            if safety_changes:
+                await ws_manager.broadcast(
+                    {
+                        "type": "SafetyConfigUpdated",
+                        "data": {"changes": safety_changes},
+                    }
+                )
 
         return JSONResponse({"ok": True, "changes": changes})
 

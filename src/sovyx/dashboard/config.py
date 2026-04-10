@@ -219,8 +219,15 @@ def _apply_safety(
     updates: dict[str, Any],
     changes: dict[str, str],
 ) -> None:
-    """Apply safety configuration updates."""
+    """Apply safety configuration updates.
+
+    Tracks old→new for each changed field and emits a structured log.
+    """
+    from sovyx.observability.logging import get_logger
+
+    _log = get_logger(__name__)
     s = mind_config.safety
+    safety_changes: dict[str, str] = {}
 
     if "child_safe_mode" in updates:
         val = bool(updates["child_safe_mode"])
@@ -228,6 +235,7 @@ def _apply_safety(
             old = s.child_safe_mode
             s.child_safe_mode = val
             changes["safety.child_safe_mode"] = f"{old} → {val}"
+            safety_changes["child_safe_mode"] = f"{old} → {val}"
 
     if "financial_confirmation" in updates:
         val = bool(updates["financial_confirmation"])
@@ -235,6 +243,7 @@ def _apply_safety(
             old = s.financial_confirmation
             s.financial_confirmation = val
             changes["safety.financial_confirmation"] = f"{old} → {val}"
+            safety_changes["financial_confirmation"] = f"{old} → {val}"
 
     if "content_filter" in updates:
         valid_filters = ("none", "standard", "strict")
@@ -243,6 +252,10 @@ def _apply_safety(
             old_cf = s.content_filter
             s.content_filter = cast("Any", cf)
             changes["safety.content_filter"] = f"{old_cf} → {cf}"
+            safety_changes["content_filter"] = f"{old_cf} → {cf}"
+
+    if safety_changes:
+        _log.info("safety_config_changed", **safety_changes)
 
 
 def _persist_to_yaml(mind_config: MindConfig, mind_yaml_path: Path) -> None:
