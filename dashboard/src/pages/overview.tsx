@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { DollarSignIcon, BrainIcon, MessageSquareIcon, ActivityIcon, MicIcon, HeartIcon, ListTodoIcon } from "lucide-react";
 import { useDashboardStore } from "@/stores/dashboard";
 import { StatCard, StatCardSkeleton, HealthGrid, ActivityFeed, MetricChart, CognitiveTimeline } from "@/components/dashboard";
+import { UsageCard } from "@/components/dashboard/usage-card";
 import { formatUptime, formatCost, formatNumber } from "@/lib/format";
 import { ComingSoon } from "@/components/coming-soon";
 import { WelcomeBanner } from "@/components/dashboard/welcome-banner";
@@ -188,6 +189,9 @@ export default function OverviewPage() {
           </>
         )}
       </div>
+
+      {/* Usage This Month — full width between stat cards and health grid */}
+      {status && <UsageCard />}
 
       {/* Health Grid */}
       <HealthGrid checks={healthChecks} />
