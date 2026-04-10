@@ -1,13 +1,16 @@
 /**
- * Voice Pipeline — Real-time status dashboard for voice components.
+ * Voice Pipeline page — real-time status of the voice subsystem.
  *
- * Fetches from:
- * - GET /api/voice/status  → pipeline state, STT/TTS/VAD/WakeWord/Wyoming
- * - GET /api/voice/models  → model matrix per hardware tier
+ * Fetches /api/voice/status and /api/voice/models to display:
+ * - Pipeline state (running/stopped, latency)
+ * - STT engine + model
+ * - TTS engine + model
+ * - VAD enabled/disabled
+ * - Wake word config
+ * - Wyoming protocol status
+ * - Hardware tier + model matrix
  *
- * Read-only display. No mutations.
- *
- * Ref: TASK-204 (Dashboard Credibility Sweep)
+ * Ref: TASK-204 (Credibility Sweep)
  */
 
 import { useEffect, useState, useCallback } from "react";
@@ -15,347 +18,109 @@ import { useTranslation } from "react-i18next";
 import {
   MicIcon,
   Volume2Icon,
-  BrainIcon,
   RadioIcon,
+  WifiIcon,
   CpuIcon,
+  AudioWaveformIcon,
   Loader2Icon,
   AlertTriangleIcon,
-  CircleIcon,
-  AudioWaveformIcon,
-  WifiIcon,
+  RefreshCwIcon,
 } from "lucide-react";
 import { api, isAbortError } from "@/lib/api";
 
-// ── Types ──
+/* ── Types ── */
+
+interface PipelineStatus {
+  running: boolean;
+  state: string;
+  latency_ms: number | null;
+}
+
+interface STTStatus {
+  engine: string | null;
+  model: string | null;
+  state: string | null;
+}
+
+interface TTSStatus {
+  engine: string | null;
+  model: string | null;
+  initialized: boolean;
+}
+
+interface WakeWordStatus {
+  enabled: boolean;
+  phrase: string | null;
+}
+
+interface VADStatus {
+  enabled: boolean;
+}
+
+interface WyomingStatus {
+  connected: boolean;
+  endpoint: string | null;
+}
+
+interface HardwareStatus {
+  tier: string | null;
+  ram_mb: number | null;
+}
 
 interface VoiceStatus {
-  pipeline: {
-    running: boolean;
-    state: string;
-    latency_ms: number | null;
-  };
-  stt: {
-    engine: string | null;
-    model: string | null;
-    state: string | null;
-  };
-  tts: {
-    engine: string | null;
-    model: string | null;
-    initialized: boolean;
-  };
-  wake_word: {
-    enabled: boolean;
-    phrase: string | null;
-  };
-  vad: {
-    enabled: boolean;
-  };
-  wyoming: {
-    connected: boolean;
-    endpoint: string | null;
-  };
-  hardware: {
-    tier: string | null;
-    ram_mb: number | null;
-  };
+  pipeline: PipelineStatus;
+  stt: STTStatus;
+  tts: TTSStatus;
+  wake_word: WakeWordStatus;
+  vad: VADStatus;
+  wyoming: WyomingStatus;
+  hardware: HardwareStatus;
+}
+
+interface ModelSelection {
+  stt_primary: string;
+  stt_streaming: string;
+  tts_primary: string;
+  tts_quality: string;
+  wake: string;
+  vad: string;
 }
 
 interface VoiceModels {
   detected_tier: string | null;
-  active: Record<string, string> | null;
-  available_tiers: Record<string, Record<string, string>>;
+  active: ModelSelection | null;
+  available_tiers: Record<string, ModelSelection>;
 }
 
-// ── Page ──
+/* ── Status dot ── */
 
-export default function VoicePage() {
-  const { t } = useTranslation("voice");
-  const [status, setStatus] = useState<VoiceStatus | null>(null);
-  const [models, setModels] = useState<VoiceModels | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchData = useCallback(
-    async (signal?: AbortSignal) => {
-      setLoading(true);
-      setError(null);
-      try {
-        const [s, m] = await Promise.all([
-          api.get<VoiceStatus>("/api/voice/status", { signal }),
-          api.get<VoiceModels>("/api/voice/models", { signal }),
-        ]);
-        setStatus(s);
-        setModels(m);
-      } catch (err) {
-        if (isAbortError(err)) return;
-        setError(t("error"));
-      } finally {
-        setLoading(false);
-      }
-    },
-    [t],
-  );
-
-  useEffect(() => {
-    const ctrl = new AbortController();
-    void fetchData(ctrl.signal);
-    return () => ctrl.abort();
-  }, [fetchData]);
-
-  // Loading
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-20 text-[var(--svx-color-text-disabled)]">
-        <Loader2Icon className="mr-2 size-5 animate-spin" />
-        <span className="text-sm">{t("loading")}</span>
-      </div>
-    );
-  }
-
-  // Error
-  if (error || !status) {
-    return (
-      <div className="flex flex-col items-center justify-center gap-3 py-20 text-[var(--svx-color-status-warning)]">
-        <AlertTriangleIcon className="size-6" />
-        <span className="text-sm">{error ?? t("error")}</span>
-        <button
-          type="button"
-          onClick={() => void fetchData()}
-          className="text-xs underline hover:no-underline"
-        >
-          {t("retry")}
-        </button>
-      </div>
-    );
-  }
-
+function StatusDot({ active }: { active: boolean }) {
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-[var(--svx-color-text-primary)]">
-          {t("title")}
-        </h1>
-        <p className="text-sm text-[var(--svx-color-text-secondary)]">
-          {t("subtitle")}
-        </p>
-      </div>
+    <span
+      data-testid={active ? "status-active" : "status-inactive"}
+      className={`inline-block size-2.5 rounded-full ${
+        active
+          ? "bg-[var(--svx-color-status-green)] shadow-[0_0_6px_var(--svx-color-status-green)]"
+          : "bg-[var(--svx-color-text-tertiary)]"
+      }`}
+    />
+  );
+}
 
-      {/* Status Grid */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {/* Pipeline */}
-        <StatusCard
-          icon={<MicIcon className="size-4" />}
-          title={t("sections.pipeline")}
-        >
-          <StatusRow label={t("pipeline.state")}>
-            <StatusDot active={status.pipeline.running} />
-            <span>
-              {status.pipeline.running ? t("pipeline.running") : t("pipeline.stopped")}
-            </span>
-          </StatusRow>
-          {status.pipeline.state !== "not_configured" && (
-            <StatusRow label={t("pipeline.latency")}>
-              {status.pipeline.latency_ms != null
-                ? t("pipeline.latencyMs", { ms: status.pipeline.latency_ms })
-                : t("pipeline.noLatency")}
-            </StatusRow>
-          )}
-        </StatusCard>
+/* ── Info row ── */
 
-        {/* STT */}
-        <StatusCard
-          icon={<AudioWaveformIcon className="size-4" />}
-          title={t("sections.stt")}
-        >
-          {status.stt.engine ? (
-            <>
-              <StatusRow label={t("stt.engine")}>{status.stt.engine}</StatusRow>
-              <StatusRow label={t("stt.model")}>{status.stt.model ?? "—"}</StatusRow>
-              {status.stt.state && (
-                <StatusRow label={t("stt.state")}>
-                  <StatusDot active={status.stt.state === "ready"} />
-                  <span className="capitalize">{status.stt.state}</span>
-                </StatusRow>
-              )}
-            </>
-          ) : (
-            <p className="text-xs text-[var(--svx-color-text-disabled)]">{t("stt.none")}</p>
-          )}
-        </StatusCard>
-
-        {/* TTS */}
-        <StatusCard
-          icon={<Volume2Icon className="size-4" />}
-          title={t("sections.tts")}
-        >
-          {status.tts.engine ? (
-            <>
-              <StatusRow label={t("tts.engine")}>{status.tts.engine}</StatusRow>
-              <StatusRow label={t("tts.model")}>
-                {status.tts.model ? status.tts.model.split("/").pop() : "—"}
-              </StatusRow>
-              <StatusRow label={t("tts.initialized")}>
-                <StatusDot active={status.tts.initialized} />
-                <span>{status.tts.initialized ? t("tts.yes") : t("tts.no")}</span>
-              </StatusRow>
-            </>
-          ) : (
-            <p className="text-xs text-[var(--svx-color-text-disabled)]">{t("tts.none")}</p>
-          )}
-        </StatusCard>
-
-        {/* VAD */}
-        <StatusCard
-          icon={<RadioIcon className="size-4" />}
-          title={t("sections.vad")}
-        >
-          <StatusRow label="">
-            <StatusDot active={status.vad.enabled} />
-            <span>{status.vad.enabled ? t("vad.enabled") : t("vad.disabled")}</span>
-          </StatusRow>
-        </StatusCard>
-
-        {/* Wake Word */}
-        <StatusCard
-          icon={<BrainIcon className="size-4" />}
-          title={t("sections.wakeWord")}
-        >
-          <StatusRow label="">
-            <StatusDot active={status.wake_word.enabled} />
-            <span>
-              {status.wake_word.enabled ? t("wakeWord.enabled") : t("wakeWord.disabled")}
-            </span>
-          </StatusRow>
-          {status.wake_word.phrase && (
-            <StatusRow label={t("wakeWord.phrase")}>
-              <code className="rounded bg-[var(--svx-color-bg-subtle)] px-1.5 py-0.5 text-xs">
-                {status.wake_word.phrase}
-              </code>
-            </StatusRow>
-          )}
-        </StatusCard>
-
-        {/* Wyoming */}
-        <StatusCard
-          icon={<WifiIcon className="size-4" />}
-          title={t("sections.wyoming")}
-        >
-          <StatusRow label="">
-            <StatusDot active={status.wyoming.connected} />
-            <span>
-              {status.wyoming.connected
-                ? t("wyoming.connected")
-                : t("wyoming.disconnected")}
-            </span>
-          </StatusRow>
-          {status.wyoming.endpoint && (
-            <StatusRow label={t("wyoming.endpoint")}>
-              <code className="rounded bg-[var(--svx-color-bg-subtle)] px-1.5 py-0.5 text-xs">
-                {status.wyoming.endpoint}
-              </code>
-            </StatusRow>
-          )}
-        </StatusCard>
-      </div>
-
-      {/* Hardware */}
-      <section className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-4">
-        <div className="flex items-center gap-2">
-          <CpuIcon className="size-4 text-[var(--svx-color-brand-primary)]" />
-          <h2 className="text-sm font-medium text-[var(--svx-color-text-primary)]">
-            {t("sections.hardware")}
-          </h2>
-        </div>
-        <div className="mt-3 flex flex-wrap gap-6 text-xs text-[var(--svx-color-text-secondary)]">
-          <div>
-            <span className="text-[var(--svx-color-text-tertiary)]">{t("hardware.tier")}: </span>
-            <span className="font-medium">{status.hardware.tier ?? t("hardware.unknown")}</span>
-          </div>
-          {status.hardware.ram_mb != null && (
-            <div>
-              <span className="text-[var(--svx-color-text-tertiary)]">{t("hardware.ram")}: </span>
-              <span className="font-medium">
-                {t("hardware.ramMb", { mb: status.hardware.ram_mb })}
-              </span>
-            </div>
-          )}
-        </div>
-      </section>
-
-      {/* Model Matrix */}
-      {models && Object.keys(models.available_tiers).length > 0 && (
-        <section className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-4">
-          <h2 className="text-sm font-medium text-[var(--svx-color-text-primary)]">
-            {t("models.title")}
-          </h2>
-          <p className="mt-1 text-xs text-[var(--svx-color-text-tertiary)]">
-            {t("models.subtitle")}
-            {models.detected_tier && (
-              <span className="ml-2 rounded bg-[var(--svx-color-brand-primary)]/10 px-1.5 py-0.5 text-[10px] font-medium text-[var(--svx-color-brand-primary)]">
-                {t("models.activeTier")}: {models.detected_tier}
-              </span>
-            )}
-          </p>
-
-          <div className="mt-3 overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b border-[var(--svx-color-border-subtle)]">
-                  <th className="py-2 pr-4 text-left font-medium text-[var(--svx-color-text-tertiary)]">
-                    Tier
-                  </th>
-                  <th className="py-2 pr-4 text-left font-medium text-[var(--svx-color-text-tertiary)]">
-                    {t("models.sttPrimary")}
-                  </th>
-                  <th className="py-2 pr-4 text-left font-medium text-[var(--svx-color-text-tertiary)]">
-                    {t("models.ttsPrimary")}
-                  </th>
-                  <th className="py-2 pr-4 text-left font-medium text-[var(--svx-color-text-tertiary)]">
-                    {t("models.wake")}
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {Object.entries(models.available_tiers).map(([tier, sel]) => (
-                  <tr
-                    key={tier}
-                    className={`border-b border-[var(--svx-color-border-subtle)] ${
-                      tier === models.detected_tier
-                        ? "bg-[var(--svx-color-brand-primary)]/5"
-                        : ""
-                    }`}
-                  >
-                    <td className="py-2 pr-4 font-medium text-[var(--svx-color-text-secondary)]">
-                      {tier}
-                      {tier === models.detected_tier && (
-                        <span className="ml-1 text-[var(--svx-color-brand-primary)]">●</span>
-                      )}
-                    </td>
-                    <td className="py-2 pr-4 font-mono text-[var(--svx-color-text-tertiary)]">
-                      {sel.stt_primary}
-                    </td>
-                    <td className="py-2 pr-4 font-mono text-[var(--svx-color-text-tertiary)]">
-                      {sel.tts_primary}
-                    </td>
-                    <td className="py-2 pr-4 font-mono text-[var(--svx-color-text-tertiary)]">
-                      {sel.wake}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      )}
+function InfoRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="flex items-center justify-between py-1.5">
+      <span className="text-sm text-[var(--svx-color-text-secondary)]">{label}</span>
+      <span className={`text-sm font-medium ${mono ? "font-mono" : ""}`}>{value}</span>
     </div>
   );
 }
 
-// ── Sub-components ──
+/* ── Section card ── */
 
-function StatusCard({
+function Section({
   icon,
   title,
   children,
@@ -365,43 +130,294 @@ function StatusCard({
   children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-4">
-      <div className="flex items-center gap-2">
-        <span className="text-[var(--svx-color-brand-primary)]">{icon}</span>
-        <h3 className="text-sm font-medium text-[var(--svx-color-text-primary)]">{title}</h3>
+    <div className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border)] bg-[var(--svx-color-surface-primary)] p-4">
+      <div className="mb-3 flex items-center gap-2">
+        <span className="text-[var(--svx-color-accent)]">{icon}</span>
+        <h3 className="text-sm font-semibold uppercase tracking-wider text-[var(--svx-color-text-secondary)]">
+          {title}
+        </h3>
       </div>
-      <div className="mt-3 space-y-2">{children}</div>
+      <div className="divide-y divide-[var(--svx-color-border)]">{children}</div>
     </div>
   );
 }
 
-function StatusRow({
-  label,
-  children,
+/* ── Model matrix table ── */
+
+function ModelMatrix({
+  models,
+  t,
 }: {
-  label: string;
-  children: React.ReactNode;
+  models: VoiceModels;
+  t: (key: string, opts?: Record<string, unknown>) => string;
 }) {
+  const tiers = Object.keys(models.available_tiers);
+  if (tiers.length === 0) return null;
+
+  const fields: { key: keyof ModelSelection; label: string }[] = [
+    { key: "stt_primary", label: t("models.sttPrimary") },
+    { key: "stt_streaming", label: t("models.sttStreaming") },
+    { key: "tts_primary", label: t("models.ttsPrimary") },
+    { key: "tts_quality", label: t("models.ttsQuality") },
+    { key: "wake", label: t("models.wake") },
+    { key: "vad", label: t("models.vad") },
+  ];
+
   return (
-    <div className="flex items-center justify-between text-xs">
-      {label && (
-        <span className="text-[var(--svx-color-text-tertiary)]">{label}</span>
-      )}
-      <span className="flex items-center gap-1.5 font-medium text-[var(--svx-color-text-secondary)]">
-        {children}
-      </span>
+    <div className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border)] bg-[var(--svx-color-surface-primary)] p-4">
+      <h3 className="mb-1 text-sm font-semibold uppercase tracking-wider text-[var(--svx-color-text-secondary)]">
+        {t("models.title")}
+      </h3>
+      <p className="mb-3 text-xs text-[var(--svx-color-text-tertiary)]">{t("models.subtitle")}</p>
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-sm">
+          <thead>
+            <tr className="border-b border-[var(--svx-color-border)]">
+              <th className="pb-2 pr-4 font-medium text-[var(--svx-color-text-secondary)]" />
+              {tiers.map((tier) => (
+                <th
+                  key={tier}
+                  className={`pb-2 pr-4 font-medium ${
+                    tier === models.detected_tier
+                      ? "text-[var(--svx-color-accent)]"
+                      : "text-[var(--svx-color-text-secondary)]"
+                  }`}
+                >
+                  {tier}
+                  {tier === models.detected_tier && (
+                    <span className="ml-1 text-xs">✦</span>
+                  )}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {fields.map(({ key, label }) => (
+              <tr key={key} className="border-b border-[var(--svx-color-border)] last:border-0">
+                <td className="py-1.5 pr-4 text-[var(--svx-color-text-secondary)]">{label}</td>
+                {tiers.map((tier) => (
+                  <td key={tier} className="py-1.5 pr-4 font-mono text-xs">
+                    {models.available_tiers[tier]?.[key] ?? "—"}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
 
-function StatusDot({ active }: { active: boolean }) {
+/* ── Main page ── */
+
+export default function VoicePage() {
+  const { t } = useTranslation("voice");
+  const [status, setStatus] = useState<VoiceStatus | null>(null);
+  const [models, setModels] = useState<VoiceModels | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchData = useCallback(async (signal?: AbortSignal) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [s, m] = await Promise.all([
+        api.get<VoiceStatus>("/api/voice/status", { signal }),
+        api.get<VoiceModels>("/api/voice/models", { signal }),
+      ]);
+      setStatus(s);
+      setModels(m);
+    } catch (err) {
+      if (!isAbortError(err)) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetchData(controller.signal);
+    return () => controller.abort();
+  }, [fetchData]);
+
+  /* ── Loading state ── */
+  if (loading && !status) {
+    return (
+      <div className="flex min-h-[300px] items-center justify-center gap-2 text-[var(--svx-color-text-secondary)]">
+        <Loader2Icon className="size-5 animate-spin" />
+        <span>{t("loading")}</span>
+      </div>
+    );
+  }
+
+  /* ── Error state ── */
+  if (error && !status) {
+    return (
+      <div className="flex min-h-[300px] flex-col items-center justify-center gap-3 text-[var(--svx-color-text-secondary)]">
+        <AlertTriangleIcon className="size-8 text-[var(--svx-color-status-amber)]" />
+        <p>{t("error")}</p>
+        <button
+          onClick={() => void fetchData()}
+          className="rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border)] px-3 py-1.5 text-sm hover:bg-[var(--svx-color-surface-hover)]"
+        >
+          {t("retry")}
+        </button>
+      </div>
+    );
+  }
+
+  if (!status) return null;
+
+  const isConfigured = status.pipeline.state !== "not_configured";
+
   return (
-    <CircleIcon
-      className={`size-2 fill-current ${
-        active
-          ? "text-[var(--svx-color-status-success)]"
-          : "text-[var(--svx-color-text-disabled)]"
-      }`}
-    />
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">{t("title")}</h1>
+          <p className="text-sm text-[var(--svx-color-text-secondary)]">{t("subtitle")}</p>
+        </div>
+        <button
+          onClick={() => void fetchData()}
+          disabled={loading}
+          className="rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border)] p-2 text-[var(--svx-color-text-secondary)] hover:bg-[var(--svx-color-surface-hover)] disabled:opacity-50"
+          aria-label={t("retry")}
+        >
+          <RefreshCwIcon className={`size-4 ${loading ? "animate-spin" : ""}`} />
+        </button>
+      </div>
+
+      {/* Not configured banner */}
+      {!isConfigured && (
+        <div className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border)] bg-[var(--svx-color-surface-secondary)] p-4 text-sm text-[var(--svx-color-text-secondary)]">
+          {t("notConfigured")}
+        </div>
+      )}
+
+      {/* Status grid */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {/* Pipeline */}
+        <Section
+          icon={<AudioWaveformIcon className="size-4" />}
+          title={t("sections.pipeline")}
+        >
+          <div className="flex items-center justify-between py-1.5">
+            <span className="text-sm text-[var(--svx-color-text-secondary)]">{t("pipeline.state")}</span>
+            <span className="flex items-center gap-2 text-sm font-medium">
+              <StatusDot active={status.pipeline.running} />
+              {status.pipeline.running ? t("pipeline.running") : t("pipeline.stopped")}
+            </span>
+          </div>
+          <InfoRow
+            label={t("pipeline.latency")}
+            value={
+              status.pipeline.latency_ms != null
+                ? t("pipeline.latencyMs", { ms: status.pipeline.latency_ms })
+                : t("pipeline.noLatency")
+            }
+            mono
+          />
+        </Section>
+
+        {/* STT */}
+        <Section icon={<MicIcon className="size-4" />} title={t("sections.stt")}>
+          {status.stt.engine ? (
+            <>
+              <InfoRow label={t("stt.engine")} value={status.stt.engine} />
+              <InfoRow
+                label={t("stt.model")}
+                value={status.stt.model ?? "—"}
+                mono
+              />
+              {status.stt.state && (
+                <InfoRow label={t("stt.state")} value={status.stt.state} />
+              )}
+            </>
+          ) : (
+            <p className="py-2 text-sm text-[var(--svx-color-text-tertiary)]">{t("stt.none")}</p>
+          )}
+        </Section>
+
+        {/* TTS */}
+        <Section icon={<Volume2Icon className="size-4" />} title={t("sections.tts")}>
+          {status.tts.engine ? (
+            <>
+              <InfoRow label={t("tts.engine")} value={status.tts.engine} />
+              <InfoRow
+                label={t("tts.model")}
+                value={status.tts.model ?? "—"}
+                mono
+              />
+              <InfoRow
+                label={t("tts.initialized")}
+                value={status.tts.initialized ? t("tts.yes") : t("tts.no")}
+              />
+            </>
+          ) : (
+            <p className="py-2 text-sm text-[var(--svx-color-text-tertiary)]">{t("tts.none")}</p>
+          )}
+        </Section>
+
+        {/* VAD */}
+        <Section icon={<RadioIcon className="size-4" />} title={t("sections.vad")}>
+          <div className="flex items-center justify-between py-1.5">
+            <span className="text-sm text-[var(--svx-color-text-secondary)]">{t("pipeline.state")}</span>
+            <span className="flex items-center gap-2 text-sm font-medium">
+              <StatusDot active={status.vad.enabled} />
+              {status.vad.enabled ? t("vad.enabled") : t("vad.disabled")}
+            </span>
+          </div>
+        </Section>
+
+        {/* Wake Word */}
+        <Section icon={<MicIcon className="size-4" />} title={t("sections.wakeWord")}>
+          <div className="flex items-center justify-between py-1.5">
+            <span className="text-sm text-[var(--svx-color-text-secondary)]">{t("pipeline.state")}</span>
+            <span className="flex items-center gap-2 text-sm font-medium">
+              <StatusDot active={status.wake_word.enabled} />
+              {status.wake_word.enabled ? t("wakeWord.enabled") : t("wakeWord.disabled")}
+            </span>
+          </div>
+          {status.wake_word.phrase && (
+            <InfoRow label={t("wakeWord.phrase")} value={status.wake_word.phrase} mono />
+          )}
+        </Section>
+
+        {/* Wyoming */}
+        <Section icon={<WifiIcon className="size-4" />} title={t("sections.wyoming")}>
+          <div className="flex items-center justify-between py-1.5">
+            <span className="text-sm text-[var(--svx-color-text-secondary)]">{t("pipeline.state")}</span>
+            <span className="flex items-center gap-2 text-sm font-medium">
+              <StatusDot active={status.wyoming.connected} />
+              {status.wyoming.connected ? t("wyoming.connected") : t("wyoming.disconnected")}
+            </span>
+          </div>
+          {status.wyoming.endpoint && (
+            <InfoRow label={t("wyoming.endpoint")} value={status.wyoming.endpoint} mono />
+          )}
+        </Section>
+      </div>
+
+      {/* Hardware tier */}
+      {status.hardware.tier && (
+        <Section icon={<CpuIcon className="size-4" />} title={t("sections.hardware")}>
+          <InfoRow label={t("hardware.tier")} value={status.hardware.tier} />
+          {status.hardware.ram_mb != null && (
+            <InfoRow
+              label={t("hardware.ram")}
+              value={t("hardware.ramMb", { mb: status.hardware.ram_mb })}
+              mono
+            />
+          )}
+        </Section>
+      )}
+
+      {/* Model matrix */}
+      {models && <ModelMatrix models={models} t={t} />}
+    </div>
   );
 }

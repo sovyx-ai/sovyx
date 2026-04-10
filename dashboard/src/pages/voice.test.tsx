@@ -72,7 +72,7 @@ function setupMockSuccess() {
 
 describe("VoicePage", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    mockGet.mockReset();
   });
 
   it("shows loading state initially", () => {
