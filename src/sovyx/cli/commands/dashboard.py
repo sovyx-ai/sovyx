@@ -42,7 +42,7 @@ def dashboard_info(
     url = f"http://{host}:{port}"
 
     console.print()
-    console.print("[bold]🔮 Sovyx Dashboard[/bold]")
+    console.print("[bold]Sovyx Dashboard[/bold]")
     console.print()
     console.print(f"  URL:   [link={url}]{url}[/link]")
 
