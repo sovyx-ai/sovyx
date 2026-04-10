@@ -37,22 +37,28 @@ _BLOCKED_PATTERNS_CHILD_SAFE: frozenset[str] = frozenset(
 )
 
 
+def _resolve_blocked(safety: SafetyConfig) -> frozenset[str]:
+    """Resolve the blocked pattern set from current safety config state."""
+    if safety.child_safe_mode:
+        return _BLOCKED_PATTERNS_CHILD_SAFE
+    if safety.content_filter != "none":
+        return _BLOCKED_PATTERNS_STANDARD
+    return frozenset()
+
+
 class AttendPhase:
     """Filter perceptions by priority and safety.
 
-    - SafetyCheck: content passes safety filter
+    - SafetyCheck: content passes safety filter (re-evaluated per call)
     - PriorityCheck: priority sufficient to process
+
+    The safety config is read dynamically on each ``process()`` call so
+    that runtime changes via the dashboard take effect immediately
+    without restarting the engine.
     """
 
     def __init__(self, safety_config: SafetyConfig) -> None:
         self._safety = safety_config
-        self._blocked = (
-            _BLOCKED_PATTERNS_CHILD_SAFE
-            if safety_config.child_safe_mode
-            else _BLOCKED_PATTERNS_STANDARD
-            if safety_config.content_filter != "none"
-            else frozenset()
-        )
 
     async def process(self, perception: Perception) -> bool:
         """Check if perception should be processed.
@@ -63,9 +69,12 @@ class AttendPhase:
         Returns:
             True if perception passes filters, False if filtered.
         """
+        # Resolve blocked patterns dynamically from current safety state
+        blocked = _resolve_blocked(self._safety)
+
         # Safety check
         lower = perception.content.lower()
-        for pattern in self._blocked:
+        for pattern in blocked:
             if pattern in lower:
                 logger.warning(
                     "perception_filtered_safety",
