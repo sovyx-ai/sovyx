@@ -229,6 +229,18 @@ export default function SettingsPage() {
     return mindConfig?.personality?.[field as keyof typeof mindConfig.personality] ?? 0;
   };
 
+  /** Derive the effective tone: only highlight a preset button when current sliders match it. */
+  const getEffectiveTone = (): ToneType | null => {
+    // If user explicitly picked a tone in this edit session, check it still matches
+    const storedTone = (editedConfig.personality?.tone ?? mindConfig?.personality?.tone ?? "warm") as ToneType;
+    const preset = TONE_PRESETS[storedTone];
+    const matches = PERSONALITY_TRAIT_KEYS.every((key) => {
+      const current = getPersonalityValue(key) as number;
+      return Math.abs(current - preset[key]) < 0.01;
+    });
+    return matches ? storedTone : null;
+  };
+
   const getOceanValue = (field: string): number => {
     const edited = editedConfig.ocean?.[field as keyof typeof editedConfig.ocean];
     if (edited !== undefined) return edited as number;
@@ -327,7 +339,7 @@ export default function SettingsPage() {
                   onClick={() => applyTonePreset(tone)}
                   className={cn(
                     "flex-1 px-3 py-1.5 text-xs font-medium capitalize transition-colors",
-                    (getPersonalityValue("tone") as string) === tone
+                    getEffectiveTone() === tone
                       ? "bg-[var(--svx-color-brand-primary)] text-[var(--svx-color-text-inverse)]"
                       : "hover:bg-[var(--svx-color-bg-hover)] text-[var(--svx-color-text-secondary)]",
                   )}
