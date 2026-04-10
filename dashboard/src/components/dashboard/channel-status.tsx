@@ -40,6 +40,7 @@ interface TelegramSetupResult {
 // ── Telegram inline setup ──
 
 function TelegramSetup({ onDone }: { onDone: () => void }) {
+  const { t } = useTranslation("overview");
   const [token, setToken] = useState("");
   const [state, setState] = useState<"input" | "validating" | "success" | "error">("input");
   const [error, setError] = useState("");
