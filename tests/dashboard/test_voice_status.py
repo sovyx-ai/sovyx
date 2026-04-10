@@ -46,9 +46,7 @@ class TestGetVoiceStatus:
         assert status["hardware"]["tier"] is None
 
     @pytest.mark.asyncio()
-    async def test_pipeline_running_detected(
-        self, mock_registry: MagicMock
-    ) -> None:
+    async def test_pipeline_running_detected(self, mock_registry: MagicMock) -> None:
         """Pipeline state is correctly read when registered."""
         from sovyx.voice.pipeline import VoicePipeline, VoicePipelineState
 
@@ -146,9 +144,7 @@ class TestGetVoiceStatus:
         assert status["wake_word"]["phrase"] == "hey sovyx"
 
     @pytest.mark.asyncio()
-    async def test_hardware_tier_detected(
-        self, mock_registry: MagicMock
-    ) -> None:
+    async def test_hardware_tier_detected(self, mock_registry: MagicMock) -> None:
         """Hardware tier is read from VoiceModelAutoSelector."""
         from sovyx.voice.auto_select import (
             HardwareProfile,
@@ -195,9 +191,7 @@ class TestGetVoiceStatus:
         assert status["pipeline"]["running"] is False
 
     @pytest.mark.asyncio()
-    async def test_returns_all_expected_sections(
-        self, mock_registry: MagicMock
-    ) -> None:
+    async def test_returns_all_expected_sections(self, mock_registry: MagicMock) -> None:
         """Status dict contains all required top-level keys."""
         status = await get_voice_status(mock_registry)
         expected_keys = {
@@ -219,9 +213,7 @@ class TestGetVoiceModels:
     """Tests for get_voice_models()."""
 
     @pytest.mark.asyncio()
-    async def test_returns_available_tiers(
-        self, mock_registry: MagicMock
-    ) -> None:
+    async def test_returns_available_tiers(self, mock_registry: MagicMock) -> None:
         """All hardware tiers are listed under available_tiers."""
         from sovyx.voice.auto_select import HardwareTier
 
@@ -232,9 +224,7 @@ class TestGetVoiceModels:
             assert tier.name in models["available_tiers"]
 
     @pytest.mark.asyncio()
-    async def test_tier_contains_model_fields(
-        self, mock_registry: MagicMock
-    ) -> None:
+    async def test_tier_contains_model_fields(self, mock_registry: MagicMock) -> None:
         """Each tier entry has stt_primary, tts_primary, etc."""
         models = await get_voice_models(mock_registry)
 
@@ -245,18 +235,14 @@ class TestGetVoiceModels:
             assert "wake" in tier_data
 
     @pytest.mark.asyncio()
-    async def test_detected_tier_is_none_when_no_selector(
-        self, mock_registry: MagicMock
-    ) -> None:
+    async def test_detected_tier_is_none_when_no_selector(self, mock_registry: MagicMock) -> None:
         """detected_tier is None when VoiceModelAutoSelector not registered."""
         models = await get_voice_models(mock_registry)
         assert models["detected_tier"] is None
         assert models["active"] is None
 
     @pytest.mark.asyncio()
-    async def test_detected_tier_with_selector(
-        self, mock_registry: MagicMock
-    ) -> None:
+    async def test_detected_tier_with_selector(self, mock_registry: MagicMock) -> None:
         """detected_tier comes from the auto-selector when registered."""
         from sovyx.voice.auto_select import (
             HardwareProfile,

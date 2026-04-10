@@ -56,18 +56,14 @@ class TestExportMind:
     """Tests for export_mind()."""
 
     @pytest.mark.asyncio()
-    async def test_export_raises_if_no_db_manager(
-        self, mock_registry: MagicMock
-    ) -> None:
+    async def test_export_raises_if_no_db_manager(self, mock_registry: MagicMock) -> None:
         """RuntimeError when DatabaseManager not registered."""
         mock_registry.is_registered.return_value = False
         with pytest.raises(RuntimeError, match="Database manager not available"):
             await export_mind(mock_registry, "test-mind")
 
     @pytest.mark.asyncio()
-    async def test_export_calls_exporter(
-        self, mock_registry: MagicMock, tmp_path: Path
-    ) -> None:
+    async def test_export_calls_exporter(self, mock_registry: MagicMock, tmp_path: Path) -> None:
         """Exporter is called with correct params and returns a path."""
         from sovyx.upgrade.exporter import ExportInfo, ExportManifest
 
@@ -229,9 +225,7 @@ class TestImportMind:
 
         with patch(
             "sovyx.upgrade.importer.MindImporter",
-            return_value=MagicMock(
-                import_archive=AsyncMock(return_value=fake_info)
-            ),
+            return_value=MagicMock(import_archive=AsyncMock(return_value=fake_info)),
         ):
             result = await import_mind(mock_registry, sample_archive)
 
