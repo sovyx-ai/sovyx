@@ -254,6 +254,14 @@ def _apply_safety(
             changes["safety.content_filter"] = f"{old_cf} → {cf}"
             safety_changes["content_filter"] = f"{old_cf} → {cf}"
 
+    if "pii_protection" in updates:
+        val = bool(updates["pii_protection"])
+        if val != s.pii_protection:
+            old_pii = s.pii_protection
+            s.pii_protection = val
+            changes["safety.pii_protection"] = f"{old_pii} → {val}"
+            safety_changes["pii_protection"] = f"{old_pii} → {val}"
+
     if safety_changes:
         _log.info("safety_config_changed", **safety_changes)
 

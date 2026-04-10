@@ -200,6 +200,7 @@ class SafetyConfig(BaseModel):
     child_safe_mode: bool = False
     financial_confirmation: bool = True
     content_filter: Literal["none", "standard", "strict"] = "standard"
+    pii_protection: bool = True
 
 
 class MindConfig(BaseModel):
