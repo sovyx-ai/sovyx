@@ -11,6 +11,7 @@ import contextlib
 from typing import TYPE_CHECKING
 
 from aiogram import Bot, Dispatcher, Router
+from aiogram.types import MessageEntity
 
 from sovyx.bridge.protocol import InboundMessage
 from sovyx.engine.errors import ChannelConnectionError
@@ -40,10 +41,8 @@ class TelegramChannel:
             raise ChannelConnectionError(msg)
         self._token = token.strip()
         self._bridge = bridge_manager
-        # Plain text: no parse_mode. LLM output contains arbitrary
-        # markdown characters that MarkdownV2 rejects.  Plain text is
-        # functional; formatted output deferred to v0.2 via
-        # telegramify-markdown.  See sovyx-imm-d1-telegram §3.
+        # Formatted output via telegramify-markdown (MessageEntity, not parse_mode).
+        # See _format_message() for markdown → entity conversion.
         self._bot = Bot(token=self._token)
         self._router = Router()
         self._dp = Dispatcher()
@@ -105,8 +104,16 @@ class TelegramChannel:
         message: str,
         reply_to: str | None = None,
     ) -> str:
-        """Send message via Bot API. Returns platform message ID."""
-        kwargs: dict[str, object] = {"text": message}
+        """Send message via Bot API with markdown formatting.
+
+        Uses telegramify-markdown to convert standard markdown to
+        Telegram MessageEntity objects.  Falls back to plain text
+        if conversion fails.
+        """
+        text, entities = self._format_message(message)
+        kwargs: dict[str, object] = {"text": text}
+        if entities:
+            kwargs["entities"] = entities
         if reply_to:
             kwargs["reply_to_message_id"] = int(reply_to)
         try:
@@ -122,6 +129,31 @@ class TelegramChannel:
                 error=str(e),
             )
             raise
+
+    @staticmethod
+    def _format_message(text: str) -> tuple[str, list[MessageEntity]]:
+        """Convert markdown to Telegram entities. Falls back to plain text."""
+        try:
+            from telegramify_markdown import convert
+
+            raw_text, raw_entities = convert(text)
+            # Convert telegramify entities to aiogram MessageEntity
+            entities: list[MessageEntity] = []
+            for ent in raw_entities:
+                kwargs: dict[str, object] = {
+                    "type": ent.type,
+                    "offset": ent.offset,
+                    "length": ent.length,
+                }
+                if ent.url:
+                    kwargs["url"] = ent.url
+                if ent.language:
+                    kwargs["language"] = ent.language
+                entities.append(MessageEntity(**kwargs))  # type: ignore[arg-type]
+            return raw_text, entities
+        except Exception:  # noqa: BLE001
+            logger.debug("telegram_markdown_fallback", exc_info=True)
+            return text, []
 
     async def edit(self, message_id: str, new_text: str) -> None:
         """Stub — not supported in v0.1."""

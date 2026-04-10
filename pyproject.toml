@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sovyx"
-version = "0.5.34"
+version = "0.5.35"
 description = "Sovereign Minds Engine — Persistent AI companion with real memory"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
@@ -33,6 +33,7 @@ dependencies = [
     "tokenizers>=0.15",
     "tiktoken>=0.7",
     "aiogram>=3.4",
+    "telegramify-markdown>=1.0",
     "typer>=0.12",
     "rich>=13.7",
     "structlog>=24.1",
