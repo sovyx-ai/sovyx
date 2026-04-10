@@ -1,11 +1,70 @@
 {
   "title": "Voice Pipeline",
-  "description": "Talk to your Mind with natural voice. Wake word detection, local STT/TTS, emotional voice modulation.",
-  "features": {
-    "pipelineStatus": "Pipeline status monitor",
-    "sttTtsSelector": "STT/TTS model selector",
-    "wakeWord": "Wake word configuration",
-    "latencyGauge": "Latency gauge",
-    "voiceTest": "Voice test playground"
+  "subtitle": "Real-time voice interaction status and configuration.",
+  "loading": "Loading voice status…",
+  "error": "Failed to load voice status",
+  "retry": "Retry",
+  "notConfigured": "Voice pipeline is not configured. Enable it in your Sovyx config to see status here.",
+  "sections": {
+    "pipeline": "Pipeline",
+    "stt": "Speech-to-Text",
+    "tts": "Text-to-Speech",
+    "vad": "Voice Activity Detection",
+    "wakeWord": "Wake Word",
+    "wyoming": "Wyoming Protocol",
+    "hardware": "Hardware"
+  },
+  "pipeline": {
+    "state": "State",
+    "running": "Running",
+    "stopped": "Stopped",
+    "latency": "Latency",
+    "latencyMs": "{{ms}}ms",
+    "noLatency": "—"
+  },
+  "stt": {
+    "engine": "Engine",
+    "model": "Model",
+    "state": "State",
+    "none": "No STT engine configured"
+  },
+  "tts": {
+    "engine": "Engine",
+    "model": "Model",
+    "initialized": "Initialized",
+    "yes": "Yes",
+    "no": "No",
+    "none": "No TTS engine configured"
+  },
+  "vad": {
+    "enabled": "Enabled",
+    "disabled": "Disabled"
+  },
+  "wakeWord": {
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "phrase": "Phrase"
+  },
+  "wyoming": {
+    "connected": "Connected",
+    "disconnected": "Disconnected",
+    "endpoint": "Endpoint"
+  },
+  "hardware": {
+    "tier": "Detected Tier",
+    "ram": "RAM",
+    "ramMb": "{{mb}} MB",
+    "unknown": "Unknown"
+  },
+  "models": {
+    "title": "Model Matrix",
+    "subtitle": "Available models per hardware tier.",
+    "activeTier": "Active Tier",
+    "sttPrimary": "STT Primary",
+    "sttStreaming": "STT Streaming",
+    "ttsPrimary": "TTS Primary",
+    "ttsQuality": "TTS Quality",
+    "wake": "Wake Word",
+    "vad": "VAD"
   }
 }
