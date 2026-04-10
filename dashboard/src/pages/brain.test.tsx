@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, fireEvent, act } from "@/test/test-utils";
+import { render, screen, waitFor, fireEvent } from "@/test/test-utils";
 import { useDashboardStore } from "@/stores/dashboard";
 import BrainPage from "./brain";
 

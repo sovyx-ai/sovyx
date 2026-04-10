@@ -4,7 +4,7 @@
  * VAL-19: Covers token validation, auth state management,
  * and error handling (server unreachable).
  */
-import { renderHook, waitFor, act } from "@testing-library/react";
+import { renderHook, waitFor } from "@testing-library/react";
 import { useAuth } from "./use-auth";
 import { useDashboardStore } from "@/stores/dashboard";
 
@@ -120,7 +120,7 @@ describe("useAuth", () => {
       expect(fetchSpy).toHaveBeenCalled();
     });
 
-    const [, options] = fetchSpy.mock.calls[0];
+    const [, options] = fetchSpy.mock.calls[0]!;
     const headers = options?.headers as Record<string, string>;
     expect(headers.Authorization).toBe("Bearer my-secret-token");
   });

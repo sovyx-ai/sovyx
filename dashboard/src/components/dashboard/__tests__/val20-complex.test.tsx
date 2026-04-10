@@ -352,7 +352,7 @@ import { MetricChart } from "../metric-chart";
 describe("MetricChart", () => {
   it("renders with data", () => {
     const { container } = render(
-      <MetricChart title="Test" data={[{ label: "Mon", value: 10 }, { label: "Tue", value: 20 }]} />,
+      <MetricChart title="Test" data={[{ time: 1000, value: 10 }, { time: 2000, value: 20 }]} />,
     );
     expect(container).toBeTruthy();
   });

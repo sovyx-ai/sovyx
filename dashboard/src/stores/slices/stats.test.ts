@@ -11,7 +11,7 @@ function createSlice(): StatsSlice {
   const slice = createStatsSlice(
     set as Parameters<typeof createStatsSlice>[0],
     get as Parameters<typeof createStatsSlice>[1],
-    { setState: set, getState: get, subscribe: vi.fn(), getInitialState: get } as Parameters<typeof createStatsSlice>[2],
+    { setState: set, getState: get, subscribe: vi.fn(), getInitialState: get } as unknown as Parameters<typeof createStatsSlice>[2],
   );
   // Merge initial state
   state = { ...slice };

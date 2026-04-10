@@ -128,7 +128,7 @@ describe("Markdown Integration", () => {
     });
 
     // textContent should be the raw code, not include language label
-    const copied = writeTextMock.mock.calls[0][0] as string;
+    const copied = writeTextMock.mock.calls[0]![0] as string;
     expect(copied).toContain("const answer = 42;");
   });
 
@@ -161,8 +161,8 @@ describe("Markdown Integration", () => {
     expect(copyButtons.length).toBe(2);
 
     const langLabels = screen.getAllByTestId("code-lang");
-    expect(langLabels[0].textContent).toBe("python");
-    expect(langLabels[1].textContent).toBe("bash");
+    expect(langLabels[0]!.textContent).toBe("python");
+    expect(langLabels[1]!.textContent).toBe("bash");
   });
 
   it("nested formatting renders correctly", async () => {

@@ -4,7 +4,7 @@
  * VAL-19: Covers WS connection, reconnect with backoff,
  * event dispatch to store, debounced refreshes, and cleanup.
  */
-import { renderHook, act, waitFor } from "@testing-library/react";
+import { renderHook, act } from "@testing-library/react";
 import { useWebSocket } from "./use-websocket";
 import { useDashboardStore } from "@/stores/dashboard";
 
@@ -99,14 +99,14 @@ describe("useWebSocket", () => {
     renderHook(() => useWebSocket());
 
     expect(MockWebSocket.instances).toHaveLength(1);
-    expect(MockWebSocket.instances[0].url).toContain("token=test-token");
+    expect(MockWebSocket.instances[0]!.url).toContain("token=test-token");
   });
 
   it("sets connected=true on WS open", () => {
     mockFetchSuccess();
     renderHook(() => useWebSocket());
 
-    const ws = MockWebSocket.instances[0];
+    const ws = MockWebSocket.instances[0]!;
     act(() => ws.simulateOpen());
 
     expect(useDashboardStore.getState().connected).toBe(true);
@@ -116,7 +116,7 @@ describe("useWebSocket", () => {
     const fetchSpy = mockFetchSuccess();
     renderHook(() => useWebSocket());
 
-    const ws = MockWebSocket.instances[0];
+    const ws = MockWebSocket.instances[0]!;
     act(() => ws.simulateOpen());
 
     // Should have called /api/status and /api/health
@@ -129,7 +129,7 @@ describe("useWebSocket", () => {
     mockFetchSuccess();
     renderHook(() => useWebSocket());
 
-    const ws = MockWebSocket.instances[0];
+    const ws = MockWebSocket.instances[0]!;
     act(() => ws.simulateOpen());
 
     const event = JSON.stringify({
@@ -142,14 +142,14 @@ describe("useWebSocket", () => {
 
     const state = useDashboardStore.getState();
     expect(state.recentEvents.length).toBeGreaterThan(0);
-    expect(state.recentEvents[0].type).toBe("EngineStarted");
+    expect(state.recentEvents[0]!.type).toBe("EngineStarted");
   });
 
   it("WS events go to activity feed, NOT to logs store", () => {
     mockFetchSuccess();
     renderHook(() => useWebSocket());
 
-    const ws = MockWebSocket.instances[0];
+    const ws = MockWebSocket.instances[0]!;
     act(() => ws.simulateOpen());
 
     act(() =>
@@ -175,7 +175,7 @@ describe("useWebSocket", () => {
     mockFetchSuccess();
     renderHook(() => useWebSocket());
 
-    const ws = MockWebSocket.instances[0];
+    const ws = MockWebSocket.instances[0]!;
     act(() => ws.simulateOpen());
 
     const eventsBefore = useDashboardStore.getState().recentEvents.length;
@@ -189,7 +189,7 @@ describe("useWebSocket", () => {
     mockFetchSuccess();
     renderHook(() => useWebSocket());
 
-    const ws = MockWebSocket.instances[0];
+    const ws = MockWebSocket.instances[0]!;
     act(() => ws.simulateOpen());
 
     const eventsBefore = useDashboardStore.getState().recentEvents.length;
@@ -203,7 +203,7 @@ describe("useWebSocket", () => {
     mockFetchSuccess();
     renderHook(() => useWebSocket());
 
-    const ws = MockWebSocket.instances[0];
+    const ws = MockWebSocket.instances[0]!;
     act(() => ws.simulateOpen());
     act(() => ws.simulateClose());
 
@@ -221,13 +221,13 @@ describe("useWebSocket", () => {
     renderHook(() => useWebSocket());
 
     // First connection + close
-    const ws1 = MockWebSocket.instances[0];
+    const ws1 = MockWebSocket.instances[0]!;
     act(() => ws1.simulateOpen());
     act(() => ws1.simulateClose());
 
     // First reconnect after 1000ms
     act(() => vi.advanceTimersByTime(1100));
-    const ws2 = MockWebSocket.instances[MockWebSocket.instances.length - 1];
+    const ws2 = MockWebSocket.instances[MockWebSocket.instances.length - 1]!;
     act(() => ws2.simulateClose());
 
     // Second reconnect should wait 2000ms
@@ -247,13 +247,13 @@ describe("useWebSocket", () => {
     renderHook(() => useWebSocket());
 
     // First connection fails
-    const ws1 = MockWebSocket.instances[0];
+    const ws1 = MockWebSocket.instances[0]!;
     act(() => ws1.simulateOpen());
     act(() => ws1.simulateClose());
 
     // Reconnect
     act(() => vi.advanceTimersByTime(1100));
-    const ws2 = MockWebSocket.instances[MockWebSocket.instances.length - 1];
+    const ws2 = MockWebSocket.instances[MockWebSocket.instances.length - 1]!;
     act(() => ws2.simulateOpen()); // Resets backoff
 
     act(() => ws2.simulateClose());
@@ -268,7 +268,7 @@ describe("useWebSocket", () => {
     mockFetchSuccess();
     renderHook(() => useWebSocket());
 
-    const ws = MockWebSocket.instances[0];
+    const ws = MockWebSocket.instances[0]!;
     const closeSpy = vi.spyOn(ws, "close");
     act(() => ws.simulateError());
 
@@ -279,7 +279,7 @@ describe("useWebSocket", () => {
     mockFetchSuccess();
     const { unmount } = renderHook(() => useWebSocket());
 
-    const ws = MockWebSocket.instances[0];
+    const ws = MockWebSocket.instances[0]!;
     act(() => ws.simulateOpen());
 
     unmount();
@@ -290,7 +290,7 @@ describe("useWebSocket", () => {
     mockFetchSuccess();
     const { unmount } = renderHook(() => useWebSocket());
 
-    const ws = MockWebSocket.instances[0];
+    const ws = MockWebSocket.instances[0]!;
     act(() => ws.simulateOpen());
 
     unmount();
@@ -322,7 +322,7 @@ describe("useWebSocket", () => {
       const fetchSpy = mockFetchSuccess();
       renderHook(() => useWebSocket());
 
-      const ws = MockWebSocket.instances[0];
+      const ws = MockWebSocket.instances[0]!;
       act(() => ws.simulateOpen());
       fetchSpy.mockClear();
 
@@ -339,7 +339,7 @@ describe("useWebSocket", () => {
       const fetchSpy = mockFetchSuccess();
       renderHook(() => useWebSocket());
 
-      const ws = MockWebSocket.instances[0];
+      const ws = MockWebSocket.instances[0]!;
       act(() => ws.simulateOpen());
       fetchSpy.mockClear();
 
@@ -355,7 +355,7 @@ describe("useWebSocket", () => {
       const fetchSpy = mockFetchSuccess();
       renderHook(() => useWebSocket());
 
-      const ws = MockWebSocket.instances[0];
+      const ws = MockWebSocket.instances[0]!;
       act(() => ws.simulateOpen());
       fetchSpy.mockClear();
 
@@ -372,7 +372,7 @@ describe("useWebSocket", () => {
       const fetchSpy = mockFetchSuccess();
       renderHook(() => useWebSocket());
 
-      const ws = MockWebSocket.instances[0];
+      const ws = MockWebSocket.instances[0]!;
       act(() => ws.simulateOpen());
       fetchSpy.mockClear();
 
@@ -390,7 +390,7 @@ describe("useWebSocket", () => {
       useDashboardStore.setState({ activeConversationId: "conv-1" });
 
       renderHook(() => useWebSocket());
-      const ws = MockWebSocket.instances[0];
+      const ws = MockWebSocket.instances[0]!;
       act(() => ws.simulateOpen());
       fetchSpy.mockClear();
 
@@ -406,7 +406,7 @@ describe("useWebSocket", () => {
       const fetchSpy = mockFetchSuccess();
       renderHook(() => useWebSocket());
 
-      const ws = MockWebSocket.instances[0];
+      const ws = MockWebSocket.instances[0]!;
       act(() => ws.simulateOpen());
       fetchSpy.mockClear();
 
@@ -421,7 +421,7 @@ describe("useWebSocket", () => {
       const fetchSpy = mockFetchSuccess();
       renderHook(() => useWebSocket());
 
-      const ws = MockWebSocket.instances[0];
+      const ws = MockWebSocket.instances[0]!;
       act(() => ws.simulateOpen());
       fetchSpy.mockClear();
 

@@ -3,7 +3,6 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
-import React from "react";
 
 beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();
@@ -53,11 +52,11 @@ describe("MindAvatar", () => {
 import { ChatBubble } from "../chat-bubble";
 describe("ChatBubble", () => {
   it("renders user message", () => {
-    render(<ChatBubble message={{ role: "user", content: "Hello", timestamp: "2026-04-07T00:00:00Z" }} participantName="Alice" />);
+    render(<ChatBubble message={{ id: "msg-user", role: "user", content: "Hello", timestamp: "2026-04-07T00:00:00Z" }} participantName="Alice" />);
     expect(screen.getByText("Hello")).toBeTruthy();
   });
   it("renders assistant message", () => {
-    render(<ChatBubble message={{ role: "assistant", content: "Hi!", timestamp: "2026-04-07T00:00:01Z" }} participantName="Alice" />);
+    render(<ChatBubble message={{ id: "msg-assistant", role: "assistant", content: "Hi!", timestamp: "2026-04-07T00:00:01Z" }} participantName="Alice" />);
     expect(screen.getByText("Hi!")).toBeTruthy();
   });
 });
@@ -66,8 +65,8 @@ import { ChatThread } from "../chat-thread";
 describe("ChatThread", () => {
   it("renders messages", () => {
     const msgs = [
-      { role: "user" as const, content: "msg1", timestamp: "2026-04-07T00:00:00Z" },
-      { role: "assistant" as const, content: "msg2", timestamp: "2026-04-07T00:00:01Z" },
+      { id: "m1", role: "user" as const, content: "msg1", timestamp: "2026-04-07T00:00:00Z" },
+      { id: "m2", role: "assistant" as const, content: "msg2", timestamp: "2026-04-07T00:00:01Z" },
     ];
     render(<ChatThread messages={msgs} participantName="Bob" />);
     expect(screen.getByText("msg1")).toBeTruthy();
