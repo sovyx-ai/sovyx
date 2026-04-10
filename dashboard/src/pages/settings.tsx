@@ -46,6 +46,24 @@ const LOG_LEVELS: LogLevel[] = ["DEBUG", "INFO", "WARNING", "ERROR"];
 const TONES: ToneType[] = ["warm", "neutral", "direct", "playful"];
 const CONTENT_FILTERS: ContentFilter[] = ["none", "standard", "strict"];
 
+// ── Tone presets — clicking a tone adjusts sliders for immediate feedback ──
+
+type TraitPreset = {
+  formality: number;
+  humor: number;
+  assertiveness: number;
+  curiosity: number;
+  empathy: number;
+  verbosity: number;
+};
+
+const TONE_PRESETS: Record<ToneType, TraitPreset> = {
+  warm: { formality: 0.3, humor: 0.5, assertiveness: 0.4, curiosity: 0.7, empathy: 0.9, verbosity: 0.6 },
+  neutral: { formality: 0.5, humor: 0.4, assertiveness: 0.6, curiosity: 0.7, empathy: 0.8, verbosity: 0.5 },
+  direct: { formality: 0.6, humor: 0.2, assertiveness: 0.85, curiosity: 0.5, empathy: 0.4, verbosity: 0.25 },
+  playful: { formality: 0.2, humor: 0.85, assertiveness: 0.5, curiosity: 0.9, empathy: 0.7, verbosity: 0.65 },
+};
+
 // ── Personality trait metadata ──
 
 const PERSONALITY_TRAITS = [
@@ -179,6 +197,20 @@ export default function SettingsPage() {
     }));
   };
 
+  /** Apply tone preset — sets tone + adjusts all trait sliders. */
+  const applyTonePreset = (tone: ToneType) => {
+    const preset = TONE_PRESETS[tone];
+    setEditedConfig((prev) => ({
+      ...prev,
+      personality: {
+        ...mindConfig?.personality,
+        ...prev.personality,
+        tone,
+        ...preset,
+      },
+    }));
+  };
+
   const updateOcean = (field: string, value: number) => {
     setEditedConfig((prev) => ({
       ...prev,
@@ -303,7 +335,7 @@ export default function SettingsPage() {
                 <button
                   key={tone}
                   type="button"
-                  onClick={() => updatePersonality("tone", tone)}
+                  onClick={() => applyTonePreset(tone)}
                   className={cn(
                     "flex-1 px-3 py-1.5 text-xs font-medium capitalize transition-colors",
                     (getPersonalityValue("tone") as string) === tone
