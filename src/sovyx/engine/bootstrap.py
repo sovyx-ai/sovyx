@@ -107,6 +107,17 @@ async def bootstrap(
     _closables: list[object] = []  # cleanup on failure (reverse order)
 
     try:
+        # 0. Load channel.env (tokens saved via dashboard setup flow)
+        _channel_env = engine_config.data_dir / "channel.env"
+        if _channel_env.exists():
+            for _line in _channel_env.read_text(encoding="utf-8").splitlines():
+                _line = _line.strip()  # noqa: PLW2901
+                if _line and not _line.startswith("#") and "=" in _line:
+                    _k, _, _v = _line.partition("=")
+                    _k, _v = _k.strip(), _v.strip()
+                    if _k and _v and _k not in os.environ:
+                        os.environ[_k] = _v
+
         # 0. EngineConfig + logging setup
         registry.register_instance(EngineConfig, engine_config)
 
