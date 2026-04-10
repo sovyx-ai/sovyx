@@ -178,8 +178,10 @@ describe("SettingsPage", () => {
       .mockResolvedValueOnce(mockMindConfig);
     render(<SettingsPage />);
     await waitFor(() => {
+      // Tones rendered via i18n; some labels may appear in multiple contexts
+      // (e.g. "Direct" as tone AND "Playful" as trait high label)
       for (const tone of ["warm", "neutral", "direct", "playful"]) {
-        expect(screen.getByText(tone)).toBeInTheDocument();
+        expect(screen.getAllByText(new RegExp(tone, "i")).length).toBeGreaterThanOrEqual(1);
       }
     });
   });
