@@ -700,7 +700,6 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
                 status_code=422,
             )
 
-
         form = await request.form()
         upload = form.get("file")
         if upload is None or not hasattr(upload, "read"):
