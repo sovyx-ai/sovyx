@@ -50,5 +50,99 @@
     "localSetup": "Local (free):",
     "ollamaStep1": "Install Ollama from ollama.com",
     "ollamaStep3": "Click \"Refresh\" below"
+  },
+  "mind": {
+    "identity": "Mind Identity",
+    "name": "Name",
+    "language": "Language",
+    "timezone": "Timezone",
+    "loadingConfig": "Loading mind configuration...",
+    "noMindLoaded": "No Mind Loaded",
+    "noMindDescription": "Personality and OCEAN configuration will appear when a mind is active."
+  },
+  "personality": {
+    "title": "Personality",
+    "description": "Conversational style and behavior traits. Changes apply immediately to new conversations.",
+    "tone": "Tone",
+    "savePersonality": "Save Personality",
+    "traits": {
+      "formality": "Formality",
+      "humor": "Humor",
+      "assertiveness": "Assertiveness",
+      "curiosity": "Curiosity",
+      "empathy": "Empathy",
+      "verbosity": "Verbosity"
+    },
+    "traitLow": {
+      "formality": "Casual",
+      "humor": "Serious",
+      "assertiveness": "Deferential",
+      "curiosity": "Focused",
+      "empathy": "Analytical",
+      "verbosity": "Brief"
+    },
+    "traitHigh": {
+      "formality": "Formal",
+      "humor": "Playful",
+      "assertiveness": "Assertive",
+      "curiosity": "Curious",
+      "empathy": "Empathetic",
+      "verbosity": "Detailed"
+    },
+    "tones": {
+      "warm": "Warm",
+      "neutral": "Neutral",
+      "direct": "Direct",
+      "playful": "Playful"
+    }
+  },
+  "ocean": {
+    "title": "OCEAN — Big Five Personality",
+    "description": "Core personality model that shapes how the mind thinks and communicates.",
+    "traits": {
+      "openness": "Openness",
+      "conscientiousness": "Conscientiousness",
+      "extraversion": "Extraversion",
+      "agreeableness": "Agreeableness",
+      "neuroticism": "Neuroticism"
+    },
+    "traitLow": {
+      "openness": "Practical",
+      "conscientiousness": "Flexible",
+      "extraversion": "Reflective",
+      "agreeableness": "Challenging",
+      "neuroticism": "Calm"
+    },
+    "traitHigh": {
+      "openness": "Creative",
+      "conscientiousness": "Organized",
+      "extraversion": "Energetic",
+      "agreeableness": "Harmonious",
+      "neuroticism": "Sensitive"
+    }
+  },
+  "safety": {
+    "title": "Safety Guardrails",
+    "description": "Content filtering and safety settings.",
+    "contentFilter": "Content Filter",
+    "childSafeMode": "Child Safe Mode",
+    "childSafeModeDesc": "All content must be appropriate for children",
+    "financialConfirmation": "Financial Confirmation",
+    "financialConfirmationDesc": "Require explicit confirmation for financial actions",
+    "filters": {
+      "none": "None",
+      "standard": "Standard",
+      "strict": "Strict"
+    }
+  },
+  "llmBrain": {
+    "title": "LLM Parameters & Brain",
+    "description": "Model parameters and memory system configuration (read-only).",
+    "temperature": "Temperature",
+    "dailyBudget": "Daily Budget",
+    "perConvBudget": "Per-Conv Budget",
+    "brainMaxConcepts": "Brain Max Concepts",
+    "consolidation": "Consolidation",
+    "consolidationValue": "Every {{hours}}h"
   }
 }
