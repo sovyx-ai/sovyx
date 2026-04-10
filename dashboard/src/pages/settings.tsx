@@ -430,14 +430,14 @@ export default function SettingsPage() {
 
             {/* Toggles */}
             <ToggleField
-              label="Child Safe Mode"
-              description="All content must be appropriate for children"
+              label={t("safety.childSafeMode")}
+              description={t("safety.childSafeModeDesc")}
               checked={editedConfig.safety?.child_safe_mode ?? mindConfig.safety.child_safe_mode}
               onChange={(v) => updateSafety("child_safe_mode", v)}
             />
             <ToggleField
-              label="Financial Confirmation"
-              description="Require explicit confirmation for financial actions"
+              label={t("safety.financialConfirmation")}
+              description={t("safety.financialConfirmationDesc")}
               checked={editedConfig.safety?.financial_confirmation ?? mindConfig.safety.financial_confirmation}
               onChange={(v) => updateSafety("financial_confirmation", v)}
             />
