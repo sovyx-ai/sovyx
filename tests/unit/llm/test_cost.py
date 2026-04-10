@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 import pytest
 
 from sovyx.llm.cost import CostBreakdown, CostGuard
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class TestCanAfford:
@@ -533,3 +537,234 @@ class TestCostHistory:
         await g.record(0.005, "claude-sonnet-4-20250514", "c1", provider="anthropic", tokens=500)
         entry = g.get_cost_history()[0]
         assert set(entry.keys()) == {"time", "cost", "model", "cumulative"}
+
+
+class TestCostGuardTimezone:
+    """CostGuard timezone-aware day boundary."""
+
+    async def test_uses_custom_timezone(self) -> None:
+        """Day boundary uses user timezone, not UTC."""
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0, timezone="America/Sao_Paulo")
+        from zoneinfo import ZoneInfo
+
+        assert g._tz == ZoneInfo("America/Sao_Paulo")
+
+    async def test_default_utc(self) -> None:
+        """Default timezone is UTC."""
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        from zoneinfo import ZoneInfo
+
+        assert g._tz == ZoneInfo("UTC")
+
+
+class TestCostGuardDaySnapshot:
+    """Day boundary snapshot buffering + flush."""
+
+    async def test_maybe_reset_buffers_snapshot(self) -> None:
+        """_maybe_reset stores previous day's data."""
+        from datetime import date as datemod
+        from unittest.mock import patch
+
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        # Record some data
+        await g.record(0.50, "gpt-4o", "c1", provider="openai", tokens=1000)
+        await g.record(0.25, "gpt-4o-mini", "c1", provider="openai", tokens=500)
+
+        assert g._pending_day_snapshot is None
+
+        # Force day change
+        tomorrow = datemod(2099, 1, 2)
+        with patch("sovyx.llm.cost.datetime") as mock_dt:
+            mock_dt.now.return_value = type("DT", (), {"date": lambda self: tomorrow})()
+            mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+            g._maybe_reset()
+
+        snap = g._pending_day_snapshot
+        assert snap is not None
+        assert snap["cost_usd"] == pytest.approx(0.75)
+        assert snap["tokens"] == 1500
+        assert snap["cost_by_provider"]["openai"] == pytest.approx(0.75)
+        assert "gpt-4o" in snap["cost_by_model"]
+
+    async def test_no_snapshot_on_first_reset(self) -> None:
+        """First _maybe_reset (init) should NOT buffer a snapshot."""
+        g = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        g._maybe_reset()
+        assert g._pending_day_snapshot is None
+
+    async def test_persist_flushes_combined_snapshot(self, tmp_path: Path) -> None:
+        """persist() merges CostGuard + DashboardCounters into daily_stats."""
+        from sovyx.dashboard.daily_stats import DailyStatsRecorder
+        from sovyx.persistence.migrations import MigrationRunner
+        from sovyx.persistence.pool import DatabasePool
+        from sovyx.persistence.schemas.system import get_system_migrations
+
+        pool = DatabasePool(db_path=tmp_path / "system.db", read_pool_size=1)
+        await pool.initialize()
+        runner = MigrationRunner(pool)
+        await runner.initialize()
+        await runner.run_migrations(get_system_migrations())
+
+        recorder = DailyStatsRecorder(pool)
+        g = CostGuard(
+            daily_budget=10.0,
+            per_conversation_budget=2.0,
+            system_pool=pool,
+            stats_recorder=recorder,
+        )
+
+        # Simulate: had data yesterday, now day changed
+        g._pending_day_snapshot = {
+            "date": "2026-04-09",
+            "cost_usd": 1.50,
+            "tokens": 3000,
+            "cost_by_provider": {"openai": 1.0, "anthropic": 0.5},
+            "cost_by_model": {"gpt-4o": 1.0, "gpt-4o-mini": 0.5},
+        }
+
+        # Also simulate DashboardCounters having pending data
+        from sovyx.dashboard.status import get_counters
+
+        counters = get_counters()
+        original_pending = counters._pending_day_snapshot
+        counters._pending_day_snapshot = {
+            "date": "2026-04-09",
+            "messages": 20,
+            "llm_calls": 8,
+            "tokens": 3000,
+            "llm_cost": 1.50,
+        }
+
+        g._dirty = True
+        await g.persist()
+
+        # Verify daily_stats row was created with merged data
+        async with pool.read() as conn:
+            cursor = await conn.execute(
+                "SELECT messages, llm_calls, cost_usd FROM daily_stats WHERE date = '2026-04-09'"
+            )
+            row = await cursor.fetchone()
+
+        assert row is not None
+        assert row[0] == 20  # messages from DashboardCounters
+        assert row[1] == 8  # llm_calls from DashboardCounters
+        assert row[2] == pytest.approx(1.50)  # cost from CostGuard
+
+        # Cleanup
+        counters._pending_day_snapshot = original_pending
+        await pool.close()
+
+    async def test_restore_snapshots_stale_data(self, tmp_path: Path) -> None:
+        """Stale data in engine_state is snapshotted to daily_stats on restore."""
+        from sovyx.dashboard.daily_stats import DailyStatsRecorder
+        from sovyx.persistence.migrations import MigrationRunner
+        from sovyx.persistence.pool import DatabasePool
+        from sovyx.persistence.schemas.system import get_system_migrations
+
+        pool = DatabasePool(db_path=tmp_path / "system.db", read_pool_size=1)
+        await pool.initialize()
+        runner = MigrationRunner(pool)
+        await runner.initialize()
+        await runner.run_migrations(get_system_migrations())
+
+        # Write stale state (yesterday)
+        import json
+
+        state = json.dumps(
+            {
+                "date": "2020-01-01",
+                "daily_spend": 2.50,
+                "total_tokens": 5000,
+                "provider_spend": {"openai": 2.50},
+                "model_spend": {"gpt-4o": 2.50},
+                "conversation_spend": {},
+                "mind_spend": {},
+                "provider_tokens": {},
+                "mind_tokens": {},
+                "cost_log": [],
+            }
+        )
+        async with pool.write() as conn:
+            await conn.execute(
+                "INSERT INTO engine_state (key, value) VALUES (?, ?)",
+                ("cost_guard_state", state),
+            )
+            await conn.commit()
+
+        recorder = DailyStatsRecorder(pool)
+        g = CostGuard(
+            daily_budget=10.0,
+            per_conversation_budget=2.0,
+            system_pool=pool,
+            stats_recorder=recorder,
+        )
+        await g.restore()
+
+        # Stale data should be snapshotted to daily_stats
+        async with pool.read() as conn:
+            cursor = await conn.execute(
+                "SELECT cost_usd, tokens FROM daily_stats WHERE date = '2020-01-01'"
+            )
+            row = await cursor.fetchone()
+
+        assert row is not None
+        assert row[0] == pytest.approx(2.50)
+        assert row[1] == 5000
+
+        # CostGuard should be fresh (today)
+        assert g._daily_spend == 0.0
+
+        await pool.close()
+
+    async def test_restore_no_recorder_skips_snapshot(self, tmp_path: Path) -> None:
+        """Without stats_recorder, stale data is silently discarded."""
+        from sovyx.persistence.migrations import MigrationRunner
+        from sovyx.persistence.pool import DatabasePool
+        from sovyx.persistence.schemas.system import get_system_migrations
+
+        pool = DatabasePool(db_path=tmp_path / "system.db", read_pool_size=1)
+        await pool.initialize()
+        runner = MigrationRunner(pool)
+        await runner.initialize()
+        await runner.run_migrations(get_system_migrations())
+
+        import json
+
+        state = json.dumps(
+            {
+                "date": "2020-01-01",
+                "daily_spend": 2.50,
+                "total_tokens": 5000,
+                "conversation_spend": {},
+                "provider_spend": {},
+                "mind_spend": {},
+                "model_spend": {},
+                "provider_tokens": {},
+                "mind_tokens": {},
+                "cost_log": [],
+            }
+        )
+        async with pool.write() as conn:
+            await conn.execute(
+                "INSERT INTO engine_state (key, value) VALUES (?, ?)",
+                ("cost_guard_state", state),
+            )
+            await conn.commit()
+
+        # No stats_recorder
+        g = CostGuard(
+            daily_budget=10.0,
+            per_conversation_budget=2.0,
+            system_pool=pool,
+        )
+        await g.restore()  # Should not raise
+        assert g._daily_spend == 0.0
+
+        # No row in daily_stats
+        async with pool.read() as conn:
+            cursor = await conn.execute("SELECT COUNT(*) FROM daily_stats")
+            row = await cursor.fetchone()
+        assert row is not None
+        assert row[0] == 0
+
+        await pool.close()
