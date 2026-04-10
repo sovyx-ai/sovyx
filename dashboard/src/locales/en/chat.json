@@ -13,5 +13,11 @@
     "loadFailed": "Something went wrong. Please try again."
   },
   "newChat": "New Chat",
-  "you": "You"
+  "you": "You",
+  "codeBlock": {
+    "copy": "Copy",
+    "copied": "Copied",
+    "code": "code",
+    "copyAria": "Copy code"
+  }
 }
