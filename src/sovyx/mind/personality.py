@@ -168,6 +168,16 @@ class PersonalityEngine:
             if safety_parts:
                 sections.append("Safety: " + " ".join(safety_parts))
 
+        # Custom guardrails (SPE-002)
+        if cfg.safety.guardrails:
+            rules: list[str] = []
+            for g in cfg.safety.guardrails:
+                prefix = "[CRITICAL]" if g.severity == "critical" else "[WARNING]"
+                rules.append(f"- {prefix} {g.rule}")
+            sections.append(
+                "ABSOLUTE RULES (never violate):\n" + "\n".join(rules),
+            )
+
         # Anti-injection hardening (always present, safety-critical, not configurable)
         sections.append(
             "INSTRUCTION INTEGRITY (NON-NEGOTIABLE):\n"
