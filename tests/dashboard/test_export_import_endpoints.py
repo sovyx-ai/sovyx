@@ -222,15 +222,11 @@ class TestVoiceStatusEndpoint:
         resp = client.get("/api/voice/status")
         assert resp.status_code == 401
 
-    def test_503_without_registry(
-        self, client: TestClient, auth_headers: dict[str, str]
-    ) -> None:
+    def test_503_without_registry(self, client: TestClient, auth_headers: dict[str, str]) -> None:
         resp = client.get("/api/voice/status", headers=auth_headers)
         assert resp.status_code == 503
 
-    def test_returns_status(
-        self, client: TestClient, auth_headers: dict[str, str]
-    ) -> None:
+    def test_returns_status(self, client: TestClient, auth_headers: dict[str, str]) -> None:
         """200 with voice status when registry is available."""
         client.app.state.registry = MagicMock()
 
@@ -261,15 +257,11 @@ class TestVoiceModelsEndpoint:
         resp = client.get("/api/voice/models")
         assert resp.status_code == 401
 
-    def test_503_without_registry(
-        self, client: TestClient, auth_headers: dict[str, str]
-    ) -> None:
+    def test_503_without_registry(self, client: TestClient, auth_headers: dict[str, str]) -> None:
         resp = client.get("/api/voice/models", headers=auth_headers)
         assert resp.status_code == 503
 
-    def test_returns_models(
-        self, client: TestClient, auth_headers: dict[str, str]
-    ) -> None:
+    def test_returns_models(self, client: TestClient, auth_headers: dict[str, str]) -> None:
         """200 with voice models when registry is available."""
         client.app.state.registry = MagicMock()
 
