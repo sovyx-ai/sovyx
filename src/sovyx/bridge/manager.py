@@ -235,6 +235,7 @@ class BridgeManager:
 
                 # Record assistant turn + send response
                 await self._tracker.add_turn(conv_id, "assistant", result.response_text)
+                get_counters().record_message()  # count AI response too
                 outbound = OutboundMessage(
                     channel_type=message.channel_type,
                     target=message.chat_id,
