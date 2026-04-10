@@ -142,3 +142,183 @@ class TestChannelsEndpoint:
         resp = client.get("/api/channels", headers=auth_headers)
         types = [c["type"] for c in resp.json()["channels"]]
         assert len(types) == len(set(types))
+
+
+class TestTelegramSetupEndpoint:
+    """Tests for POST /api/channels/telegram/setup."""
+
+    def test_requires_auth(self, token: str) -> None:
+        """Unauthenticated request returns 401."""
+        app = create_app()
+        client = TestClient(app)
+        resp = client.post("/api/channels/telegram/setup", json={"token": "x"})
+        assert resp.status_code == 401
+
+    def test_empty_token_returns_422(
+        self,
+        token: str,
+        auth_headers: dict[str, str],
+    ) -> None:
+        """Empty or missing token returns 422."""
+        app = create_app()
+        client = TestClient(app)
+
+        resp = client.post(
+            "/api/channels/telegram/setup",
+            json={"token": ""},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 422
+        assert resp.json()["ok"] is False
+
+    def test_missing_token_field_returns_422(
+        self,
+        token: str,
+        auth_headers: dict[str, str],
+    ) -> None:
+        """Missing token field returns 422."""
+        app = create_app()
+        client = TestClient(app)
+
+        resp = client.post(
+            "/api/channels/telegram/setup",
+            json={},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 422
+
+    def test_invalid_json_returns_422(
+        self,
+        token: str,
+        auth_headers: dict[str, str],
+    ) -> None:
+        """Non-JSON body returns 422."""
+        app = create_app()
+        client = TestClient(app)
+
+        resp = client.post(
+            "/api/channels/telegram/setup",
+            content=b"not json",
+            headers={**auth_headers, "Content-Type": "application/json"},
+        )
+        assert resp.status_code == 422
+
+    def test_invalid_token_returns_400(
+        self,
+        token: str,
+        auth_headers: dict[str, str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Invalid Telegram token returns 400 with error message."""
+        import aiohttp
+
+        async def _mock_getme(*_args: object, **_kwargs: object) -> None:  # noqa: ARG001
+            """Simulate Telegram API rejecting the token."""
+
+        # Patch aiohttp to return invalid token response
+        class FakeResp:
+            status = 401
+
+            async def json(self) -> dict[str, object]:
+                return {"ok": False, "description": "Unauthorized"}
+
+            async def __aenter__(self) -> FakeResp:
+                return self
+
+            async def __aexit__(self, *_: object) -> None:
+                pass
+
+        class FakeSession:
+            def get(self, *_args: object, **_kwargs: object) -> FakeResp:
+                return FakeResp()
+
+            async def __aenter__(self) -> FakeSession:
+                return self
+
+            async def __aexit__(self, *_: object) -> None:
+                pass
+
+        monkeypatch.setattr(aiohttp, "ClientSession", lambda: FakeSession())
+
+        app = create_app()
+        client = TestClient(app)
+
+        resp = client.post(
+            "/api/channels/telegram/setup",
+            json={"token": "invalid:token"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 400
+        data = resp.json()
+        assert data["ok"] is False
+        assert "Unauthorized" in data["error"]
+
+    def test_valid_token_saves_and_returns_bot_info(
+        self,
+        token: str,
+        auth_headers: dict[str, str],
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Valid token: validates, saves to channel.env, returns bot info."""
+        import aiohttp
+
+        class FakeResp:
+            status = 200
+
+            async def json(self) -> dict[str, object]:
+                return {
+                    "ok": True,
+                    "result": {
+                        "id": 123,
+                        "is_bot": True,
+                        "first_name": "TestBot",
+                        "username": "test_sovyx_bot",
+                    },
+                }
+
+            async def __aenter__(self) -> FakeResp:
+                return self
+
+            async def __aexit__(self, *_: object) -> None:
+                pass
+
+        class FakeSession:
+            def get(self, *_args: object, **_kwargs: object) -> FakeResp:
+                return FakeResp()
+
+            async def __aenter__(self) -> FakeSession:
+                return self
+
+            async def __aexit__(self, *_: object) -> None:
+                pass
+
+        monkeypatch.setattr(aiohttp, "ClientSession", lambda: FakeSession())
+
+        # Mock engine_config with tmp_path as data_dir
+        mock_config = MagicMock()
+        mock_config.data_dir = tmp_path
+
+        app = create_app()
+        app.state.engine_config = mock_config
+        client = TestClient(app)
+
+        resp = client.post(
+            "/api/channels/telegram/setup",
+            json={"token": "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["bot_username"] == "test_sovyx_bot"
+        assert data["bot_name"] == "TestBot"
+        assert data["requires_restart"] is True
+
+        # Verify token saved to channel.env
+        env_path = tmp_path / "channel.env"
+        assert env_path.exists()
+        content = env_path.read_text()
+        assert "SOVYX_TELEGRAM_TOKEN=123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11" in content
+        # Verify file permissions (owner-only)
+        assert oct(env_path.stat().st_mode)[-3:] == "600"
