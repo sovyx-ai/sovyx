@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { DollarSignIcon, BrainIcon, MessageSquareIcon, ActivityIcon, MicIcon, HeartIcon, ListTodoIcon } from "lucide-react";
+import { DollarSignIcon, BrainIcon, MessageSquareIcon, ActivityIcon } from "lucide-react";
 import { useDashboardStore } from "@/stores/dashboard";
 import { StatCard, StatCardSkeleton, HealthGrid, ActivityFeed, MetricChart, CognitiveTimeline } from "@/components/dashboard";
 import { UsageCard } from "@/components/dashboard/usage-card";
 import { formatUptime, formatCost, formatNumber } from "@/lib/format";
-import { ComingSoon } from "@/components/coming-soon";
+
 import { WelcomeBanner } from "@/components/dashboard/welcome-banner";
 import { MindAliveCard } from "@/components/dashboard/mind-alive-card";
 import { ChannelStatusCard } from "@/components/dashboard/channel-status";
@@ -216,24 +216,7 @@ export default function OverviewPage() {
         </div>
       </div>
 
-      {/* v1.0 Placeholders */}
-      <div className="grid gap-4 md:grid-cols-3">
-        <ComingSoon
-          title={t("placeholders.voice")}
-          description={t("placeholders.voiceDesc")}
-          icon={<MicIcon className="size-10" />}
-        />
-        <ComingSoon
-          title={t("placeholders.emotional")}
-          description={t("placeholders.emotionalDesc")}
-          icon={<HeartIcon className="size-10" />}
-        />
-        <ComingSoon
-          title={t("placeholders.tasks")}
-          description={t("placeholders.tasksDesc")}
-          icon={<ListTodoIcon className="size-10" />}
-        />
-      </div>
+
     </div>
   );
 }

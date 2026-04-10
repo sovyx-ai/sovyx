@@ -62,14 +62,6 @@
     "empty": "Listening for events…",
     "emptyHint": "Events appear here in real time as your Mind thinks."
   },
-  "placeholders": {
-    "voice": "Voice Pipeline",
-    "voiceDesc": "Real-time voice interaction with your Mind.",
-    "emotional": "Emotional Timeline",
-    "emotionalDesc": "Mood and emotional state tracking over time.",
-    "tasks": "Tasks & Habits",
-    "tasksDesc": "Task tracking, reminders, and productivity insights."
-  },
   "timeline": {
     "title": "Cognitive Timeline",
     "empty": "No cognitive activity yet",
