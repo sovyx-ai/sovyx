@@ -62,21 +62,14 @@ const TONE_PRESETS: Record<ToneType, TraitPreset> = {
 
 // ── Personality trait metadata ──
 
-const PERSONALITY_TRAITS = [
-  { key: "formality", label: "Formality", lowLabel: "Casual", highLabel: "Formal" },
-  { key: "humor", label: "Humor", lowLabel: "Serious", highLabel: "Playful" },
-  { key: "assertiveness", label: "Assertiveness", lowLabel: "Deferential", highLabel: "Assertive" },
-  { key: "curiosity", label: "Curiosity", lowLabel: "Focused", highLabel: "Curious" },
-  { key: "empathy", label: "Empathy", lowLabel: "Analytical", highLabel: "Empathetic" },
-  { key: "verbosity", label: "Verbosity", lowLabel: "Brief", highLabel: "Detailed" },
+/** Personality trait keys — labels resolved via i18n at render time. */
+const PERSONALITY_TRAIT_KEYS = [
+  "formality", "humor", "assertiveness", "curiosity", "empathy", "verbosity",
 ] as const;
 
-const OCEAN_TRAITS = [
-  { key: "openness", label: "Openness", lowLabel: "Practical", highLabel: "Creative" },
-  { key: "conscientiousness", label: "Conscientiousness", lowLabel: "Flexible", highLabel: "Organized" },
-  { key: "extraversion", label: "Extraversion", lowLabel: "Reflective", highLabel: "Energetic" },
-  { key: "agreeableness", label: "Agreeableness", lowLabel: "Challenging", highLabel: "Harmonious" },
-  { key: "neuroticism", label: "Neuroticism", lowLabel: "Calm", highLabel: "Sensitive" },
+/** OCEAN trait keys — labels resolved via i18n at render time. */
+const OCEAN_TRAIT_KEYS = [
+  "openness", "conscientiousness", "extraversion", "agreeableness", "neuroticism",
 ] as const;
 
 export default function SettingsPage() {
@@ -275,7 +268,7 @@ export default function SettingsPage() {
               ) : (
                 <SparklesIcon className="size-4" />
               )}
-              Save Personality
+              {t("personality.savePersonality")}
             </Button>
           )}
           <Button
@@ -299,13 +292,13 @@ export default function SettingsPage() {
           <div className="flex items-center gap-2">
             <UserIcon className="size-4 text-[var(--svx-color-brand-primary)]" />
             <h2 className="text-sm font-medium text-[var(--svx-color-text-primary)]">
-              Mind Identity
+              {t("mind.identity")}
             </h2>
           </div>
           <div className="mt-4 grid gap-4 sm:grid-cols-3">
-            <ReadOnlyField label="Name" value={mindConfig.name} />
-            <ReadOnlyField label="Language" value={mindConfig.language} />
-            <ReadOnlyField label="Timezone" value={mindConfig.timezone} />
+            <ReadOnlyField label={t("mind.name")} value={mindConfig.name} />
+            <ReadOnlyField label={t("mind.language")} value={mindConfig.language} />
+            <ReadOnlyField label={t("mind.timezone")} value={mindConfig.timezone} />
           </div>
         </section>
       )}
@@ -316,16 +309,16 @@ export default function SettingsPage() {
           <div className="flex items-center gap-2">
             <SparklesIcon className="size-4 text-[var(--svx-color-brand-primary)]" />
             <h2 className="text-sm font-medium text-[var(--svx-color-text-primary)]">
-              Personality
+              {t("personality.title")}
             </h2>
           </div>
           <p className="mt-1 text-xs text-[var(--svx-color-text-tertiary)]">
-            Conversational style and behavior traits. Changes apply immediately to new conversations.
+            {t("personality.description")}
           </p>
 
           {/* Tone selector */}
           <div className="mt-4 space-y-2">
-            <Label className="text-xs">Tone</Label>
+            <Label className="text-xs">{t("personality.tone")}</Label>
             <div className="flex rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-strong)]">
               {TONES.map((tone) => (
                 <button
@@ -339,7 +332,7 @@ export default function SettingsPage() {
                       : "hover:bg-[var(--svx-color-bg-hover)] text-[var(--svx-color-text-secondary)]",
                   )}
                 >
-                  {tone}
+                  {t(`personality.tones.${tone}`)}
                 </button>
               ))}
             </div>
@@ -347,12 +340,12 @@ export default function SettingsPage() {
 
           {/* Float trait sliders */}
           <div className="mt-4 space-y-4">
-            {PERSONALITY_TRAITS.map(({ key, label, lowLabel, highLabel }) => (
+            {PERSONALITY_TRAIT_KEYS.map((key) => (
               <TraitSlider
                 key={key}
-                label={label}
-                lowLabel={lowLabel}
-                highLabel={highLabel}
+                label={t(`personality.traits.${key}`)}
+                lowLabel={t(`personality.traitLow.${key}`)}
+                highLabel={t(`personality.traitHigh.${key}`)}
                 value={getPersonalityValue(key) as number}
                 onChange={(v) => updatePersonality(key, v)}
               />
@@ -367,20 +360,20 @@ export default function SettingsPage() {
           <div className="flex items-center gap-2">
             <BrainIcon className="size-4 text-[var(--svx-color-brand-primary)]" />
             <h2 className="text-sm font-medium text-[var(--svx-color-text-primary)]">
-              OCEAN — Big Five Personality
+              {t("ocean.title")}
             </h2>
           </div>
           <p className="mt-1 text-xs text-[var(--svx-color-text-tertiary)]">
-            Core personality model that shapes how the mind thinks and communicates.
+            {t("ocean.description")}
           </p>
 
           <div className="mt-4 space-y-4">
-            {OCEAN_TRAITS.map(({ key, label, lowLabel, highLabel }) => (
+            {OCEAN_TRAIT_KEYS.map((key) => (
               <TraitSlider
                 key={key}
-                label={label}
-                lowLabel={lowLabel}
-                highLabel={highLabel}
+                label={t(`ocean.traits.${key}`)}
+                lowLabel={t(`ocean.traitLow.${key}`)}
+                highLabel={t(`ocean.traitHigh.${key}`)}
                 value={getOceanValue(key)}
                 onChange={(v) => updateOcean(key, v)}
               />
@@ -395,17 +388,17 @@ export default function SettingsPage() {
           <div className="flex items-center gap-2">
             <ShieldIcon className="size-4 text-[var(--svx-color-brand-primary)]" />
             <h2 className="text-sm font-medium text-[var(--svx-color-text-primary)]">
-              Safety Guardrails
+              {t("safety.title")}
             </h2>
           </div>
           <p className="mt-1 text-xs text-[var(--svx-color-text-tertiary)]">
-            Content filtering and safety settings.
+            {t("safety.description")}
           </p>
 
           <div className="mt-4 space-y-4">
             {/* Content Filter */}
             <div className="space-y-2">
-              <Label className="text-xs">Content Filter</Label>
+              <Label className="text-xs">{t("safety.contentFilter")}</Label>
               <div className="flex rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-strong)]">
                 {CONTENT_FILTERS.map((filter) => {
                   const currentFilter = editedConfig.safety?.content_filter ?? mindConfig.safety.content_filter;
@@ -421,7 +414,7 @@ export default function SettingsPage() {
                           : "hover:bg-[var(--svx-color-bg-hover)] text-[var(--svx-color-text-secondary)]",
                       )}
                     >
-                      {filter}
+                      {t(`safety.filters.${filter}`)}
                     </button>
                   );
                 })}
@@ -504,18 +497,18 @@ export default function SettingsPage() {
       {mindConfig && (
         <section className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-4">
           <h2 className="text-sm font-medium text-[var(--svx-color-text-primary)]">
-            LLM Parameters & Brain
+            {t("llmBrain.title")}
           </h2>
           <p className="mt-1 text-xs text-[var(--svx-color-text-tertiary)]">
-            Model parameters and memory system configuration (read-only).
+            {t("llmBrain.description")}
           </p>
 
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
-            <ReadOnlyField label="Temperature" value={String(mindConfig.llm.temperature)} />
-            <ReadOnlyField label="Daily Budget" value={`$${mindConfig.llm.budget_daily_usd.toFixed(2)}`} />
-            <ReadOnlyField label="Per-Conv Budget" value={`$${mindConfig.llm.budget_per_conversation_usd.toFixed(2)}`} />
-            <ReadOnlyField label="Brain Max Concepts" value={String(mindConfig.brain.max_concepts)} />
-            <ReadOnlyField label="Consolidation" value={`Every ${mindConfig.brain.consolidation_interval_hours}h`} />
+            <ReadOnlyField label={t("llmBrain.temperature")} value={String(mindConfig.llm.temperature)} />
+            <ReadOnlyField label={t("llmBrain.dailyBudget")} value={`$${mindConfig.llm.budget_daily_usd.toFixed(2)}`} />
+            <ReadOnlyField label={t("llmBrain.perConvBudget")} value={`$${mindConfig.llm.budget_per_conversation_usd.toFixed(2)}`} />
+            <ReadOnlyField label={t("llmBrain.brainMaxConcepts")} value={String(mindConfig.brain.max_concepts)} />
+            <ReadOnlyField label={t("llmBrain.consolidation")} value={t("llmBrain.consolidationValue", { hours: mindConfig.brain.consolidation_interval_hours })} />
           </div>
         </section>
       )}
@@ -525,7 +518,7 @@ export default function SettingsPage() {
         <section className="rounded-[var(--svx-radius-lg)] border border-dashed border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-6">
           <div className="flex items-center justify-center gap-2 text-[var(--svx-color-text-disabled)]">
             <Loader2Icon className="size-4 animate-spin" />
-            <span className="text-sm">Loading mind configuration...</span>
+            <span className="text-sm">{t("mind.loadingConfig")}</span>
           </div>
         </section>
       )}
@@ -535,10 +528,10 @@ export default function SettingsPage() {
         <section className="rounded-[var(--svx-radius-lg)] border border-dashed border-[var(--svx-color-status-warning)]/30 bg-[var(--svx-color-bg-surface)] p-4">
           <div className="flex items-center gap-2 text-[var(--svx-color-status-warning)]">
             <AlertTriangleIcon className="size-4" />
-            <span className="text-sm font-medium">No Mind Loaded</span>
+            <span className="text-sm font-medium">{t("mind.noMindLoaded")}</span>
           </div>
           <p className="mt-2 text-xs text-[var(--svx-color-text-tertiary)]">
-            Personality and OCEAN configuration will appear when a mind is active.
+            {t("mind.noMindDescription")}
           </p>
         </section>
       )}
