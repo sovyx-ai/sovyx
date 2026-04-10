@@ -79,7 +79,18 @@ function ChartContainer({
   )
 }
 
+/**
+ * Injects CSS custom properties for chart theme colors via a <style> tag.
+ *
+ * SECURITY: Uses dangerouslySetInnerHTML but is safe because:
+ * - `id` is sanitized to alphanumeric + hyphens only (no injection vector)
+ * - `config` values are developer-defined ChartConfig objects, not user input
+ * - Color values are validated CSS custom property values from the design system
+ */
 const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
+  // Defensive sanitization — strip anything that could break out of CSS context
+  const safeId = id.replace(/[^a-zA-Z0-9-_]/g, "")
+
   const colorConfig = Object.entries(config).filter(
     ([, config]) => config.theme ?? config.color
   )
@@ -94,7 +105,7 @@ const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
         __html: Object.entries(THEMES)
           .map(
             ([theme, prefix]) => `
-${prefix} [data-chart=${id}] {
+${prefix} [data-chart=${safeId}] {
 ${colorConfig
   .map(([key, itemConfig]) => {
     const color =
