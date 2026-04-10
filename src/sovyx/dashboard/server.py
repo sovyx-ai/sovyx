@@ -193,6 +193,16 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 # ── App Factory ──
 
 
+def _empty_stats_totals() -> dict[str, object]:
+    """Default empty totals for /api/stats/history."""
+    return {"cost": 0.0, "messages": 0, "llm_calls": 0, "tokens": 0, "days_active": 0}
+
+
+def _empty_stats_month() -> dict[str, object]:
+    """Default empty month totals for /api/stats/history."""
+    return {"cost": 0.0, "messages": 0, "llm_calls": 0, "tokens": 0}
+
+
 def create_app(config: APIConfig | None = None) -> FastAPI:
     """Create and configure the FastAPI application.
 
@@ -287,6 +297,104 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
                 "cost_history": [],
             }
         )
+
+    @app.get("/api/stats/history", dependencies=[Depends(verify_token)])
+    async def stats_history(request: Request) -> JSONResponse:
+        """Usage history — last N days with live data for today.
+
+        Query params:
+            days: Number of days to return (1-365, default 30).
+
+        Returns daily cost, messages, LLM calls, tokens; plus totals
+        and current-month aggregates. Today's entry uses live in-memory
+        counters (not yet snapshotted to daily_stats).
+        """
+        from sovyx.dashboard.daily_stats import DailyStatsRecorder
+        from sovyx.dashboard.status import _now_date_str, get_counters
+        from sovyx.llm.cost import CostGuard
+
+        # Parse and cap days
+        try:
+            days = int(request.query_params.get("days", "30"))
+        except (ValueError, TypeError):
+            days = 30
+        days = max(1, min(days, 365))
+
+        registry = getattr(app.state, "registry", None)
+        if registry is None:
+            return JSONResponse(
+                {
+                    "days": [],
+                    "totals": _empty_stats_totals(),
+                    "current_month": _empty_stats_month(),
+                }
+            )
+
+        # Historical data from daily_stats
+        try:
+            recorder: DailyStatsRecorder = await registry.resolve(DailyStatsRecorder)
+            history = await recorder.get_history(days=days)
+        except Exception:
+            history = []
+
+        # Live data for today (not yet snapshotted)
+        counters = get_counters()
+        calls, _cost_counter, tokens, msgs = counters.snapshot()
+
+        try:
+            cost_guard: CostGuard = await registry.resolve(CostGuard)
+            breakdown = cost_guard.get_breakdown("day")
+            live_cost = breakdown.total_cost
+        except Exception:
+            live_cost = _cost_counter  # fallback to counter's cost
+
+        today_str = _now_date_str(counters._tz)
+        today_entry = {
+            "date": today_str,
+            "cost": round(live_cost, 6),
+            "messages": msgs,
+            "llm_calls": calls,
+            "tokens": tokens,
+            "is_live": True,
+        }
+
+        # Replace existing today entry or append
+        if history and history[-1]["date"] == today_str:
+            history[-1] = today_entry
+        else:
+            history.append(today_entry)
+
+        # Totals (historical + live)
+        try:
+            totals = await recorder.get_totals()
+        except Exception:
+            totals = _empty_stats_totals()
+        totals["cost"] = round(totals["cost"] + live_cost, 6)
+        totals["messages"] += msgs
+        totals["llm_calls"] += calls
+        totals["tokens"] += tokens
+        if msgs > 0 or calls > 0:
+            totals["days_active"] += 1  # today counts as active
+
+        # Current month (historical + live)
+        from datetime import datetime as dt_cls
+        from zoneinfo import ZoneInfo
+
+        try:
+            now = dt_cls.now(tz=counters._tz)
+        except Exception:
+            now = dt_cls.now(tz=ZoneInfo("UTC"))
+
+        try:
+            month = await recorder.get_month_totals(now.year, now.month)
+        except Exception:
+            month = _empty_stats_month()
+        month["cost"] = round(month["cost"] + live_cost, 6)
+        month["messages"] += msgs
+        month["llm_calls"] += calls
+        month["tokens"] += tokens
+
+        return JSONResponse({"days": history, "totals": totals, "current_month": month})
 
     @app.get("/api/health", dependencies=[Depends(verify_token)])
     async def get_health() -> JSONResponse:
