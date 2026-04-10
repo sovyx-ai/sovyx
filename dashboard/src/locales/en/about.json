@@ -15,8 +15,9 @@
   "llmCallsToday": "LLM Calls Today",
   "links": "Links",
   "github": "GitHub",
-  "documentation": "Documentation",
   "builtWith": "Built with",
   "builtBy": "by Sovyx AI",
-  "sovereignty": "Your mind, your data, your sovereignty."
+  "sovereignty": "Your mind, your data, your sovereignty.",
+  "website": "Website",
+  "pypi": "PyPI"
 }
