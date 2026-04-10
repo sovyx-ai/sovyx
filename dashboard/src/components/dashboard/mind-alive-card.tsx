@@ -73,7 +73,7 @@ export function MindAliveCard({ animate = false, onDismiss }: MindAliveCardProps
       <button
         onClick={onDismiss}
         className="absolute right-4 top-4 rounded-lg p-1 text-[var(--svx-color-text-secondary)] transition-colors duration-[var(--svx-duration-fast)] hover:bg-[var(--svx-color-bg-elevated)] hover:text-[var(--svx-color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--svx-color-brand-primary)]/50"
-        aria-label={t("alive.dismiss", { defaultValue: "Close" })}
+        aria-label={t("alive.dismiss")}
         data-testid="alive-dismiss"
       >
         <XIcon className="size-4" />
@@ -83,7 +83,7 @@ export function MindAliveCard({ animate = false, onDismiss }: MindAliveCardProps
       <div className="mb-5 flex items-center gap-3">
         <BrainIcon className="size-6 text-[var(--svx-color-brand-primary)]" />
         <h2 className="text-lg font-bold text-[var(--svx-color-text-primary)]">
-          {t("alive.title", { defaultValue: "Your mind is alive." })}
+          {t("alive.title")}
         </h2>
       </div>
 
@@ -91,19 +91,19 @@ export function MindAliveCard({ animate = false, onDismiss }: MindAliveCardProps
       <div className="mb-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
         <Metric
           value={formatNumber(status.memory_concepts)}
-          label={t("alive.concepts", { defaultValue: "concepts" })}
+          label={t("alive.concepts")}
         />
         <Metric
           value={formatNumber(status.memory_episodes)}
-          label={t("alive.memories", { defaultValue: "memories" })}
+          label={t("alive.memories")}
         />
         <Metric
           value={formatNumber(status.active_conversations)}
-          label={t("alive.conversations", { defaultValue: "conversations" })}
+          label={t("alive.conversations")}
         />
         <Metric
           value={formatNumber(status.messages_today)}
-          label={t("alive.messages", { defaultValue: "messages" })}
+          label={t("alive.messages")}
         />
       </div>
 
@@ -111,7 +111,6 @@ export function MindAliveCard({ animate = false, onDismiss }: MindAliveCardProps
       <p className="mb-4 text-xs text-[var(--svx-color-text-secondary)]">
         {t("alive.activeFor", {
           duration: formatUptime(status.uptime_seconds),
-          defaultValue: `Active for ${formatUptime(status.uptime_seconds)}`,
         })}
       </p>
 
@@ -119,7 +118,7 @@ export function MindAliveCard({ animate = false, onDismiss }: MindAliveCardProps
       <div className="flex flex-wrap items-center gap-3">
         <Link to="/brain">
           <Button variant="outline" size="sm" className="gap-1.5 text-xs">
-            {t("alive.exploreBrain", { defaultValue: "Explore Brain" })}
+            {t("alive.exploreBrain")}
             <BrainIcon className="size-3" />
           </Button>
         </Link>
@@ -128,7 +127,7 @@ export function MindAliveCard({ animate = false, onDismiss }: MindAliveCardProps
             size="sm"
             className="gap-1.5 text-xs bg-[var(--svx-color-brand-primary)] text-[var(--svx-color-text-inverse)] hover:bg-[var(--svx-color-brand-hover)]"
           >
-            {t("alive.openChat", { defaultValue: "Open Chat" })}
+            {t("alive.openChat")}
           </Button>
         </Link>
       </div>

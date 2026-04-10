@@ -89,7 +89,8 @@
     "step3Title": "Watch your mind grow",
     "step3Desc": "As you chat, your mind builds concepts, forms memories, and develops its personality.",
     "goSettings": "Go to Settings",
-    "goChat": "Open Chat"
+    "goChat": "Open Chat",
+    "stepLabel": "Step {{step}}"
   },
   "usage": {
     "title": "Usage This Month",
@@ -115,7 +116,17 @@
     "connecting": "Connecting...",
     "connected": "Connected",
     "failed": "Connection failed",
+    "invalidToken": "Invalid token",
+    "networkError": "Could not connect — check your network",
     "signalRequires": "Signal requires a separate Docker container running",
-    "signalConfigure": "Configure phone number and API URL in mind.yaml, then restart Sovyx."
+    "signalConfigure": "Configure phone number and API URL in mind.yaml, then restart Sovyx.",
+    "done": "Done",
+    "connectedTo": "Connected to @{{username}}",
+    "restartToActivate": "Restart Sovyx to activate the channel."
+  },
+  "channels": {
+    "title": "Channels",
+    "connected": "Connected",
+    "setUp": "Set up"
   }
 }

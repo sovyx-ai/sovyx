@@ -204,7 +204,7 @@ export default function BrainPage() {
             <button
               onClick={clearSearch}
               className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-[var(--svx-color-text-secondary)] hover:text-[var(--svx-color-text-primary)]"
-              aria-label={t("common:clear", { defaultValue: "Clear" })}
+              aria-label={t("common:actions.clear")}
               type="button"
             >
               <XIcon className="size-3.5" />
