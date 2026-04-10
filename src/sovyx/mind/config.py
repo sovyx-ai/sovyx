@@ -194,6 +194,47 @@ class ChannelsConfig(BaseModel):
     discord: DiscordChannelConfig = Field(default_factory=DiscordChannelConfig)
 
 
+class Guardrail(BaseModel):
+    """Custom safety guardrail rule (SPE-002).
+
+    Attributes:
+        id: Unique identifier (auto-generated or user-provided).
+        rule: The guardrail rule text injected into system prompt.
+        severity: How violations are treated — critical or warning.
+        builtin: Whether this is a default guardrail (non-deletable).
+    """
+
+    id: str
+    rule: str
+    severity: Literal["critical", "warning"] = "critical"
+    builtin: bool = False
+
+
+# ── Default guardrails (SPE-002: honesty, privacy, safety) ─────────────
+DEFAULT_GUARDRAILS: tuple[Guardrail, ...] = (
+    Guardrail(
+        id="honesty",
+        rule="Always be truthful. Never fabricate facts, citations, or data."
+        " If uncertain, say so.",
+        severity="critical",
+        builtin=True,
+    ),
+    Guardrail(
+        id="privacy",
+        rule="Never reveal, store, or transmit personal data"
+        " unless explicitly authorized by the user.",
+        severity="critical",
+        builtin=True,
+    ),
+    Guardrail(
+        id="safety",
+        rule="Never provide instructions for harm, violence, illegal activities, or self-harm.",
+        severity="critical",
+        builtin=True,
+    ),
+)
+
+
 class SafetyConfig(BaseModel):
     """Safety guardrails configuration."""
 
@@ -201,6 +242,9 @@ class SafetyConfig(BaseModel):
     financial_confirmation: bool = True
     content_filter: Literal["none", "standard", "strict"] = "standard"
     pii_protection: bool = True
+    guardrails: list[Guardrail] = Field(
+        default_factory=lambda: list(DEFAULT_GUARDRAILS),
+    )
 
 
 class MindConfig(BaseModel):

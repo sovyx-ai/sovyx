@@ -80,6 +80,16 @@ def get_config(mind_config: MindConfig) -> dict[str, Any]:
             "child_safe_mode": s.child_safe_mode,
             "financial_confirmation": s.financial_confirmation,
             "content_filter": s.content_filter,
+            "pii_protection": s.pii_protection,
+            "guardrails": [
+                {
+                    "id": g.id,
+                    "rule": g.rule,
+                    "severity": g.severity,
+                    "builtin": g.builtin,
+                }
+                for g in s.guardrails
+            ],
         },
         "brain": {
             "consolidation_interval_hours": b.consolidation_interval_hours,
@@ -253,6 +263,32 @@ def _apply_safety(
             s.content_filter = cast("Any", cf)
             changes["safety.content_filter"] = f"{old_cf} → {cf}"
             safety_changes["content_filter"] = f"{old_cf} → {cf}"
+
+    if "guardrails" in updates:
+        from sovyx.mind.config import DEFAULT_GUARDRAILS, Guardrail
+
+        raw = updates["guardrails"]
+        if isinstance(raw, list):
+            # Preserve builtins, replace custom
+            builtin_ids = {g.id for g in DEFAULT_GUARDRAILS}
+            builtins = [g for g in s.guardrails if g.id in builtin_ids]
+            custom: list[Guardrail] = []
+            for item in raw:
+                if isinstance(item, dict) and "rule" in item:
+                    gid = str(item.get("id", f"custom-{len(custom)}"))
+                    if gid in builtin_ids:
+                        continue  # Can't override builtins
+                    custom.append(Guardrail(
+                        id=gid,
+                        rule=str(item["rule"]),
+                        severity=str(item.get("severity", "critical")),  # type: ignore[arg-type]
+                        builtin=False,
+                    ))
+            s.guardrails = builtins + custom
+            changes["safety.guardrails"] = (
+                f"{len(builtins)} builtin + {len(custom)} custom"
+            )
+            safety_changes["guardrails"] = changes["safety.guardrails"]
 
     if "pii_protection" in updates:
         val = bool(updates["pii_protection"])
