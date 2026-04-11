@@ -81,6 +81,23 @@ PII_PATTERNS: tuple[PIIPattern, ...] = (
         r"\b\d{3}\.\d{3}\.\d{3}-\d{2}\b",
         "cpf",
     ),
+    # Brazilian CNPJ (XX.XXX.XXX/XXXX-XX)
+    _pii(
+        r"\b\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}\b",
+        "cnpj",
+    ),
+    # Brazilian RG — common formats:
+    #   XX.XXX.XXX-X (SP), XX.XXX.XXX (other states),
+    #   MG-XX.XXX.XXX, SSP/SP 12.345.678-9
+    _pii(
+        r"\b(?:[A-Z]{2}[-/]?)?\d{2}\.?\d{3}\.?\d{3}[-.]?\d{1}\b",
+        "rg",
+    ),
+    # Brazilian CNH (11 digits, often with spaces)
+    _pii(
+        r"\b\d{4}\s?\d{4}\s?\d{3}\b",
+        "cnh",
+    ),
     # US SSN (XXX-XX-XXXX)
     _pii(
         r"\b\d{3}-\d{2}-\d{4}\b",

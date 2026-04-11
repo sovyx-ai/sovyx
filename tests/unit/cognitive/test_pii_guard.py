@@ -245,7 +245,7 @@ class TestPatternCount:
     """Minimum pattern coverage."""
 
     def test_minimum_patterns(self) -> None:
-        assert len(PII_PATTERNS) >= 7  # email, phone*2, cpf, ssn, api_key, cc, ip
+        assert len(PII_PATTERNS) >= 11  # email, phone*2, cpf, cnpj, rg, cnh, ssn, api_key, cc, ip
 
     def test_all_patterns_compiled(self) -> None:
         for p in PII_PATTERNS:
@@ -253,3 +253,67 @@ class TestPatternCount:
             assert p.regex is not None
             assert p.pii_type
             assert "[REDACTED-" in p.replacement
+
+
+# ── Brazilian Document Tests (TASK-364) ─────────────────────────────────
+
+
+class TestBrazilianCNPJ:
+    """CNPJ detection — XX.XXX.XXX/XXXX-XX."""
+
+    def test_standard_format(self) -> None:
+        result = _guard().check("CNPJ: 12.345.678/0001-95")
+        assert result.redacted
+        assert "cnpj" in result.types_found
+        assert "[REDACTED-CNPJ]" in result.text
+
+    def test_zeros(self) -> None:
+        result = _guard().check("00.000.000/0001-91")
+        assert result.redacted
+        assert "cnpj" in result.types_found
+
+    def test_in_sentence(self) -> None:
+        result = _guard().check("A empresa com CNPJ 11.222.333/0001-81 está ativa")
+        assert result.redacted
+        assert "11.222.333/0001-81" not in result.text
+
+
+class TestBrazilianRG:
+    """RG detection — various state formats."""
+
+    def test_sp_format(self) -> None:
+        result = _guard().check("RG: 12.345.678-9")
+        assert result.redacted
+        assert "rg" in result.types_found
+
+    def test_with_state_prefix(self) -> None:
+        result = _guard().check("RG: SP-12.345.678-9")
+        assert result.redacted
+        assert "rg" in result.types_found
+
+    def test_no_dots(self) -> None:
+        result = _guard().check("RG: MG-12345678-9")
+        assert result.redacted
+
+    def test_in_sentence(self) -> None:
+        result = _guard().check("Documento RG 12.345.678-9 do titular")
+        assert result.redacted
+
+
+class TestBrazilianCNH:
+    """CNH detection — 11 digits."""
+
+    def test_with_spaces(self) -> None:
+        result = _guard().check("CNH: 1234 5678 901")
+        assert result.redacted
+        assert "cnh" in result.types_found
+        assert "[REDACTED-CNH]" in result.text
+
+    def test_without_spaces(self) -> None:
+        result = _guard().check("CNH: 12345678901")
+        assert result.redacted
+        assert "cnh" in result.types_found
+
+    def test_in_sentence(self) -> None:
+        result = _guard().check("Habilitação número 9876 5432 109")
+        assert result.redacted
