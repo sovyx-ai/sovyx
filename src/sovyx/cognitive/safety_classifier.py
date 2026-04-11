@@ -17,6 +17,13 @@ The classifier uses:
 - max_tokens=20 (response is just "SAFE" or "UNSAFE|category")
 - Timeout 2s with circuit breaker
 
+Batch mode:
+    batch_classify_content() classifies multiple texts concurrently with:
+    - Deduplication: identical texts → single LLM call
+    - Concurrency limiter: max 5 parallel LLM calls (configurable)
+    - Cache-first: cached results skip LLM entirely
+    - Fail-open per item: one failure doesn't block others
+
 Cost: ~$0.0001 per classification at gpt-4o-mini rates.
 At 10k messages/day = ~$1/day.
 """
@@ -25,7 +32,9 @@ from __future__ import annotations
 
 import asyncio
 import enum
+import hashlib
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -106,6 +115,107 @@ class SafetyVerdict:
 SAFE_VERDICT = SafetyVerdict(safe=True, method="pass")
 
 
+# ── Classification Cache ────────────────────────────────────────────────
+# LRU cache with TTL. Key = hash of first 200 chars (deterministic for
+# same input). Bounded to prevent memory growth.
+
+_CACHE_TTL_SEC = 300.0  # 5 minutes
+_CACHE_MAX_SIZE = 1024
+
+
+@dataclass(slots=True)
+class _CacheEntry:
+    """Cached classification result with expiry."""
+
+    verdict: SafetyVerdict
+    expires_at: float
+
+
+class ClassificationCache:
+    """Thread-safe LRU cache for safety classifications.
+
+    Key: SHA-256 of first 200 chars of input text.
+    Value: SafetyVerdict with TTL.
+    Max size: bounded with LRU eviction.
+
+    GIL-protected (single-threaded asyncio) — no explicit locking needed.
+    """
+
+    def __init__(
+        self,
+        *,
+        max_size: int = _CACHE_MAX_SIZE,
+        ttl_sec: float = _CACHE_TTL_SEC,
+    ) -> None:
+        self._cache: OrderedDict[str, _CacheEntry] = OrderedDict()
+        self._max_size = max_size
+        self._ttl_sec = ttl_sec
+        self._hits = 0
+        self._misses = 0
+
+    @staticmethod
+    def _key(text: str) -> str:
+        """Generate cache key from text prefix."""
+        return hashlib.sha256(text[:200].encode()).hexdigest()[:16]
+
+    def get(self, text: str) -> SafetyVerdict | None:
+        """Look up cached verdict. Returns None on miss or expired."""
+        key = self._key(text)
+        entry = self._cache.get(key)
+        if entry is None:
+            self._misses += 1
+            return None
+        if time.monotonic() > entry.expires_at:
+            # Expired — remove and miss
+            del self._cache[key]
+            self._misses += 1
+            return None
+        # Hit — move to end (most recently used)
+        self._cache.move_to_end(key)
+        self._hits += 1
+        return entry.verdict
+
+    def put(self, text: str, verdict: SafetyVerdict) -> None:
+        """Store verdict in cache. Evicts LRU if at capacity."""
+        key = self._key(text)
+        self._cache[key] = _CacheEntry(
+            verdict=verdict,
+            expires_at=time.monotonic() + self._ttl_sec,
+        )
+        self._cache.move_to_end(key)
+        # Evict oldest if over capacity
+        while len(self._cache) > self._max_size:
+            self._cache.popitem(last=False)
+
+    @property
+    def hit_rate(self) -> float:
+        """Cache hit rate (0.0-1.0). Returns 0.0 if no lookups."""
+        total = self._hits + self._misses
+        if total == 0:
+            return 0.0
+        return self._hits / total
+
+    @property
+    def size(self) -> int:
+        """Current number of cached entries."""
+        return len(self._cache)
+
+    def clear(self) -> None:
+        """Clear all cached entries (for testing)."""
+        self._cache.clear()
+        self._hits = 0
+        self._misses = 0
+
+
+# Module-level singleton cache
+_classification_cache = ClassificationCache()
+
+
+def get_classification_cache() -> ClassificationCache:
+    """Get the global classification cache instance."""
+    return _classification_cache
+
+
 def _parse_llm_response(raw: str) -> SafetyVerdict:
     """Parse the classifier's raw response into a SafetyVerdict.
 
@@ -183,6 +293,32 @@ async def classify_content(
     start = time.monotonic()
     m = get_metrics()
 
+    # ── Cache lookup ──
+    cache = get_classification_cache()
+    cached = cache.get(text)
+    if cached is not None:
+        elapsed_ms = int((time.monotonic() - start) * 1000)
+        m.safety_llm_classifications.add(
+            1,
+            {
+                "result": "safe" if cached.safe else "unsafe",
+                "method": "cache",
+                "category": (cached.category.value if cached.category else "none"),
+            },
+        )
+        logger.debug(
+            "safety_classified_cached",
+            safe=cached.safe,
+            latency_ms=elapsed_ms,
+        )
+        return SafetyVerdict(
+            safe=cached.safe,
+            category=cached.category,
+            confidence=cached.confidence,
+            method="cache",
+            latency_ms=elapsed_ms,
+        )
+
     model = _select_model(llm_router)
 
     messages = [
@@ -232,6 +368,9 @@ async def classify_content(
             model=model or "default",
         )
 
+        # ── Cache store ���─
+        cache.put(text, verdict)
+
         return verdict
 
     except TimeoutError:
@@ -275,3 +414,197 @@ async def classify_content(
             method="error",
             latency_ms=elapsed_ms,
         )
+
+
+# ── Batch Classification ───────────────────────────────────────────────
+# Classifies multiple texts concurrently with deduplication and
+# bounded parallelism. Ideal for pre-screening tool outputs or
+# multi-turn conversation history.
+
+# Default max concurrent LLM calls during batch classification
+_BATCH_MAX_CONCURRENT = 5
+
+
+@dataclass(frozen=True, slots=True)
+class BatchClassificationResult:
+    """Result of batch classification.
+
+    Attributes:
+        verdicts: List of SafetyVerdict in same order as input texts.
+        total_ms: Total wall-clock time for the batch in milliseconds.
+        cache_hits: Number of results served from cache.
+        llm_calls: Number of actual LLM calls made (after dedup + cache).
+    """
+
+    verdicts: list[SafetyVerdict]
+    total_ms: int
+    cache_hits: int
+    llm_calls: int
+
+
+async def batch_classify_content(
+    texts: list[str],
+    llm_router: LLMRouter,
+    *,
+    timeout: float = _CLASSIFY_TIMEOUT_SEC,
+    max_concurrent: int = _BATCH_MAX_CONCURRENT,
+) -> BatchClassificationResult:
+    """Classify multiple texts concurrently with deduplication and caching.
+
+    Strategy:
+    1. Check cache for all texts → serve hits immediately.
+    2. Deduplicate remaining texts (same text → single LLM call).
+    3. Classify unique uncached texts concurrently (bounded semaphore).
+    4. Reassemble results in original order.
+
+    Args:
+        texts: List of texts to classify.
+        llm_router: LLM router for model access.
+        timeout: Per-item timeout in seconds.
+        max_concurrent: Maximum concurrent LLM calls.
+
+    Returns:
+        BatchClassificationResult with verdicts in same order as input.
+    """
+    if not texts:
+        return BatchClassificationResult(
+            verdicts=[],
+            total_ms=0,
+            cache_hits=0,
+            llm_calls=0,
+        )
+
+    start = time.monotonic()
+    cache = get_classification_cache()
+    m = get_metrics()
+
+    # Phase 1: Cache lookup for all texts
+    results: list[SafetyVerdict | None] = [None] * len(texts)
+    uncached_indices: dict[str, list[int]] = {}  # text → [indices]
+    cache_hits = 0
+
+    for i, text in enumerate(texts):
+        cached = cache.get(text)
+        if cached is not None:
+            results[i] = SafetyVerdict(
+                safe=cached.safe,
+                category=cached.category,
+                confidence=cached.confidence,
+                method="cache",
+                latency_ms=0,
+            )
+            cache_hits += 1
+        else:
+            # Group by text for deduplication
+            if text not in uncached_indices:
+                uncached_indices[text] = []
+            uncached_indices[text].append(i)
+
+    # Phase 2: Classify unique uncached texts concurrently
+    semaphore = asyncio.Semaphore(max_concurrent)
+    llm_calls = 0
+
+    async def _classify_one(text: str) -> SafetyVerdict:
+        async with semaphore:
+            return await classify_content(text, llm_router, timeout=timeout)
+
+    if uncached_indices:
+        unique_texts = list(uncached_indices.keys())
+        tasks = [_classify_one(t) for t in unique_texts]
+        verdicts = await asyncio.gather(*tasks, return_exceptions=True)
+
+        llm_calls = len(unique_texts)
+
+        # Phase 3: Reassemble — map verdicts back to original indices
+        for text, verdict in zip(unique_texts, verdicts):
+            if isinstance(verdict, BaseException):
+                # Shouldn't happen (classify_content catches all), but be safe
+                logger.warning(
+                    "batch_classify_unexpected_error",
+                    text_prefix=text[:50],
+                    error=str(verdict),
+                )
+                safe_fallback = SafetyVerdict(
+                    safe=True,
+                    method="error",
+                    latency_ms=0,
+                )
+                for idx in uncached_indices[text]:
+                    results[idx] = safe_fallback
+            else:
+                for idx in uncached_indices[text]:
+                    results[idx] = verdict
+
+    elapsed_ms = int((time.monotonic() - start) * 1000)
+
+    # Record batch metrics
+    m.safety_llm_classifications.add(
+        len(texts),
+        {
+            "result": "batch",
+            "method": "batch",
+            "category": "none",
+        },
+    )
+
+    logger.info(
+        "batch_classify_complete",
+        total_items=len(texts),
+        cache_hits=cache_hits,
+        llm_calls=llm_calls,
+        unique_texts=len(uncached_indices),
+        total_ms=elapsed_ms,
+    )
+
+    # Type assertion: all results should be populated
+    final_verdicts: list[SafetyVerdict] = []
+    for v in results:
+        assert v is not None, "Bug: result slot was not populated"
+        final_verdicts.append(v)
+
+    return BatchClassificationResult(
+        verdicts=final_verdicts,
+        total_ms=elapsed_ms,
+        cache_hits=cache_hits,
+        llm_calls=llm_calls,
+    )
+
+
+# ── Cache Statistics ────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True, slots=True)
+class CacheStats:
+    """Snapshot of cache statistics.
+
+    Attributes:
+        size: Current number of entries.
+        max_size: Maximum capacity.
+        hit_rate: Hit rate (0.0-1.0).
+        hits: Total cache hits.
+        misses: Total cache misses.
+        ttl_sec: TTL for entries in seconds.
+    """
+
+    size: int
+    max_size: int
+    hit_rate: float
+    hits: int
+    misses: int
+    ttl_sec: float
+
+
+def get_cache_stats() -> CacheStats:
+    """Get a snapshot of the classification cache statistics.
+
+    Useful for dashboard display and monitoring.
+    """
+    cache = get_classification_cache()
+    return CacheStats(
+        size=cache.size,
+        max_size=cache._max_size,
+        hit_rate=cache.hit_rate,
+        hits=cache._hits,
+        misses=cache._misses,
+        ttl_sec=cache._ttl_sec,
+    )
