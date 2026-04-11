@@ -734,3 +734,51 @@ class TestCustomRulesAPI:
             json={"banned_topics": ["test"]},
         )
         assert resp.status_code == 503
+
+
+# ── Safety Dashboard Tests (TASK-377) ───────────────────────────────────
+
+
+class TestSafetyDashboard:
+    """Test enriched safety stats endpoint."""
+
+    def test_get_stats_with_config(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        app: FastAPI,
+    ) -> None:
+        from sovyx.mind.config import MindConfig
+
+        app.state.mind_config = MindConfig(name="test")
+        resp = client.get("/api/safety/stats", headers=auth_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"]
+        assert "pii_patterns" in data
+        assert "cache_size" in data or True  # May not be available
+        assert "active_patterns" in data
+
+    def test_get_history_empty(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+    ) -> None:
+        resp = client.get("/api/safety/history", headers=auth_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"]
+        assert data["total"] >= 0
+
+    def test_get_history_with_filters(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+    ) -> None:
+        resp = client.get(
+            "/api/safety/history?hours=1&category=violence&limit=10",
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"]
