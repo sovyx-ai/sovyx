@@ -177,20 +177,20 @@ function EmptyNoMatch({ onClear }: { onClear: () => void }) {
 // ── Error State ──
 
 function ErrorState({ onRetry }: { onRetry: () => void }) {
-  const { t } = useTranslation("common");
+  const { t } = useTranslation(["plugins", "common"]);
 
   return (
     <div className="flex flex-col items-center justify-center py-16 text-center">
       <AlertTriangleIcon className="mb-3 size-10 text-[var(--svx-color-error)]" />
       <p className="text-sm text-[var(--svx-color-text-secondary)]">
-        {t("errors.generic")}
+        {t("common:errors.generic")}
       </p>
       <button
         type="button"
         onClick={onRetry}
         className="mt-3 rounded-[var(--svx-radius-md)] bg-[var(--svx-color-brand-primary)] px-4 py-1.5 text-xs font-medium text-white hover:opacity-90"
       >
-        {t("actions.retry")}
+        {t("common:actions.retry")}
       </button>
     </div>
   );
