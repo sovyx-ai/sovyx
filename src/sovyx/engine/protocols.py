@@ -162,12 +162,40 @@ class ChannelAdapter(Protocol):
         """Stop the channel gracefully."""
         ...
 
-    async def send(self, target: str, message: str, reply_to: str | None = None) -> str:
-        """Send a message. Returns platform message ID."""
+    async def send(
+        self,
+        target: str,
+        message: str,
+        reply_to: str | None = None,
+        buttons: list[list[object]] | None = None,
+    ) -> str:
+        """Send a message. Returns platform message ID.
+
+        Args:
+            target: Chat ID (where to send).
+            message: Message text.
+            reply_to: Platform message ID to reply to.
+            buttons: Optional inline buttons (list of rows of InlineButton).
+                Channels that don't support inline buttons should convert
+                them to numbered text options or ignore them.
+        """
         ...
 
-    async def edit(self, message_id: str, new_text: str) -> None:
-        """Edit a previously sent message."""
+    async def edit(
+        self,
+        message_id: str,
+        new_text: str,
+        buttons: list[list[object]] | None = None,
+        target: str | None = None,
+    ) -> None:
+        """Edit a previously sent message.
+
+        Args:
+            message_id: Platform message ID to edit.
+            new_text: New message text.
+            buttons: New inline buttons (None = remove buttons).
+            target: Chat ID (required by some platforms like Telegram).
+        """
         ...
 
     async def delete(self, message_id: str) -> None:

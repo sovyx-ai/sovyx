@@ -11,7 +11,11 @@ import contextlib
 from typing import TYPE_CHECKING
 
 from aiogram import Bot, Dispatcher, Router
-from aiogram.types import MessageEntity
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    MessageEntity,
+)
 
 from sovyx.bridge.protocol import InboundMessage
 from sovyx.engine.errors import ChannelConnectionError
@@ -61,7 +65,7 @@ class TelegramChannel:
     @property
     def capabilities(self) -> set[str]:
         """Supported capabilities."""
-        return {"send"}
+        return {"send", "inline_buttons", "edit"}
 
     @property
     def format_capabilities(self) -> dict[str, object]:
@@ -103,12 +107,19 @@ class TelegramChannel:
         target: str,
         message: str,
         reply_to: str | None = None,
+        buttons: list[list[object]] | None = None,
     ) -> str:
         """Send message via Bot API with markdown formatting.
 
         Uses telegramify-markdown to convert standard markdown to
         Telegram MessageEntity objects.  Falls back to plain text
         if conversion fails.
+
+        Args:
+            target: Telegram chat ID.
+            message: Message text (markdown supported).
+            reply_to: Message ID to reply to.
+            buttons: Optional inline buttons (list of rows of InlineButton).
         """
         text, entities = self._format_message(message)
         kwargs: dict[str, object] = {"text": text}
@@ -116,6 +127,8 @@ class TelegramChannel:
             kwargs["entities"] = entities
         if reply_to:
             kwargs["reply_to_message_id"] = int(reply_to)
+        if buttons:
+            kwargs["reply_markup"] = self._build_inline_keyboard(buttons)
         try:
             result = await self._bot.send_message(
                 chat_id=int(target),
@@ -155,10 +168,67 @@ class TelegramChannel:
             logger.debug("telegram_markdown_fallback", exc_info=True)
             return text, []
 
-    async def edit(self, message_id: str, new_text: str) -> None:
-        """Stub — not supported in v0.1."""
-        msg = "edit not supported in v0.1"
-        raise NotImplementedError(msg)
+    async def edit(
+        self,
+        message_id: str,
+        new_text: str,
+        buttons: list[list[object]] | None = None,
+        target: str | None = None,
+    ) -> None:
+        """Edit a previously sent message.
+
+        Args:
+            message_id: Telegram message ID to edit.
+            new_text: New text content.
+            buttons: New inline keyboard (None = remove keyboard).
+            target: Telegram chat ID (required for editMessageText).
+        """
+        if not target:
+            logger.warning("telegram_edit_no_target", message_id=message_id)
+            return
+        text, entities = self._format_message(new_text)
+        kwargs: dict[str, object] = {
+            "chat_id": int(target),
+            "message_id": int(message_id),
+            "text": text,
+        }
+        if entities:
+            kwargs["entities"] = entities
+        if buttons is not None:
+            kwargs["reply_markup"] = self._build_inline_keyboard(buttons)
+        try:
+            await self._bot.edit_message_text(**kwargs)  # type: ignore[arg-type]
+        except Exception as e:
+            logger.error(
+                "telegram_edit_failed",
+                message_id=message_id,
+                error=str(e),
+            )
+
+    @staticmethod
+    def _build_inline_keyboard(
+        buttons: list[list[object]],
+    ) -> InlineKeyboardMarkup:
+        """Convert generic InlineButton rows to Telegram InlineKeyboardMarkup.
+
+        Args:
+            buttons: Rows of InlineButton (or any object with text + callback_data).
+
+        Returns:
+            aiogram InlineKeyboardMarkup.
+        """
+        rows: list[list[InlineKeyboardButton]] = []
+        for row in buttons:
+            tg_row: list[InlineKeyboardButton] = []
+            for btn in row:
+                tg_row.append(
+                    InlineKeyboardButton(
+                        text=getattr(btn, "text", str(btn)),
+                        callback_data=getattr(btn, "callback_data", ""),
+                    )
+                )
+            rows.append(tg_row)
+        return InlineKeyboardMarkup(inline_keyboard=rows)
 
     async def delete(self, message_id: str) -> None:
         """Stub — not supported in v0.1."""

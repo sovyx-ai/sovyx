@@ -161,6 +161,7 @@ class SignalChannel:
         target: str,
         message: str,
         reply_to: str | None = None,
+        buttons: list[list[object]] | None = None,
     ) -> str:
         """Send a text message to a Signal recipient.
 
@@ -168,6 +169,9 @@ class SignalChannel:
             target: Recipient phone number or group ID.
             message: Plain text message body.
             reply_to: Not supported by Signal API in v0.5 (ignored).
+            buttons: Inline buttons — Signal doesn't support native buttons,
+                so they are converted to numbered text options appended to
+                the message body.
 
         Returns:
             A synthetic message ID (Signal REST API does not return one).
@@ -175,6 +179,9 @@ class SignalChannel:
         Raises:
             ChannelConnectionError: If the send request fails.
         """
+        # Convert buttons to numbered text (Signal has no inline buttons)
+        if buttons:
+            message = self._append_button_text(message, buttons)
 
         payload: dict[str, Any] = {
             "message": message,
@@ -225,7 +232,36 @@ class SignalChannel:
             ) as _:
                 pass
 
-    async def edit(self, message_id: str, new_text: str) -> None:
+    @staticmethod
+    def _append_button_text(message: str, buttons: list[list[object]]) -> str:
+        """Convert inline buttons to numbered text options.
+
+        Example output:
+            [original message]
+
+            1️⃣ Approve
+            2️⃣ Deny
+        """
+        number_emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣"]
+        lines: list[str] = []
+        idx = 0
+        for row in buttons:
+            for btn in row:
+                emoji = number_emojis[idx] if idx < len(number_emojis) else f"{idx + 1}."
+                text = getattr(btn, "text", str(btn))
+                lines.append(f"{emoji} {text}")
+                idx += 1
+        if lines:
+            return f"{message}\n\n" + "\n".join(lines)
+        return message
+
+    async def edit(
+        self,
+        message_id: str,
+        new_text: str,
+        buttons: list[list[object]] | None = None,
+        target: str | None = None,
+    ) -> None:
         """Not supported by Signal."""
         msg = "edit not supported for Signal"
         raise NotImplementedError(msg)

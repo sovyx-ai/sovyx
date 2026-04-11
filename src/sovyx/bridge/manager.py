@@ -260,26 +260,36 @@ class BridgeManager:
             except Exception:
                 logger.warning("error_response_also_failed", exc_info=True)
 
-    async def _send_response(self, outbound: OutboundMessage) -> None:
-        """Find correct adapter and send."""
+    async def _send_response(self, outbound: OutboundMessage) -> str | None:
+        """Find correct adapter and send. Returns message ID or None."""
         adapter = self._get_adapter(outbound.channel_type)
         if adapter is None:
             logger.error(
                 "no_adapter_for_channel",
                 channel=outbound.channel_type.value,
             )
-            return
+            return None
         try:
-            await adapter.send(
+            if outbound.edit_message_id:
+                await adapter.edit(
+                    outbound.edit_message_id,
+                    outbound.text,
+                    buttons=outbound.buttons,
+                    target=outbound.target,
+                )
+                return outbound.edit_message_id
+            return await adapter.send(
                 outbound.target,
                 outbound.text,
                 reply_to=outbound.reply_to,
+                buttons=outbound.buttons,
             )
         except Exception:
             logger.exception(
                 "send_response_failed",
                 channel=outbound.channel_type.value,
             )
+            return None
 
     def _get_adapter(self, channel_type: ChannelType) -> ChannelAdapter | None:
         """Get adapter by channel type."""
