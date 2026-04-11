@@ -91,6 +91,13 @@ export default function SettingsPage() {
   const [configLoading, setConfigLoading] = useState(true);
   const [configSaving, setConfigSaving] = useState(false);
 
+  // Safety status (financial confirmation details)
+  const [safetyStatus, setSafetyStatus] = useState<{
+    confirmation_method: string;
+    confirmation_channels: { channel: string; inline_buttons: boolean; method: string }[];
+    classification_fallback: string;
+  } | null>(null);
+
   // Dirty checks
   const settingsDirty = settings != null && selectedLevel !== settings.log_level;
   const configDirty = Object.keys(editedConfig).length > 0;
@@ -128,12 +135,27 @@ export default function SettingsPage() {
     }
   }, []);
 
+  // ── Fetch safety status ──
+  const fetchSafetyStatus = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const data = await api.get<{
+        confirmation_method: string;
+        confirmation_channels: { channel: string; inline_buttons: boolean; method: string }[];
+        classification_fallback: string;
+      }>("/api/safety/status", { signal });
+      setSafetyStatus(data);
+    } catch {
+      // Non-critical — safety status is informational only
+    }
+  }, []);
+
   useEffect(() => {
     const controller = new AbortController();
     void fetchSettings(controller.signal);
     void fetchConfig(controller.signal);
+    void fetchSafetyStatus(controller.signal);
     return () => controller.abort();
-  }, [fetchSettings, fetchConfig]);
+  }, [fetchSettings, fetchConfig, fetchSafetyStatus]);
 
   // ── Save engine settings ──
   const handleSaveSettings = async () => {
@@ -491,6 +513,46 @@ export default function SettingsPage() {
             />
             {isChildSafe && (
               <p className="ml-8 -mt-3 text-[10px] text-amber-500/70">{t("safety.childSafeEnforced")}</p>
+            )}
+
+            {/* Financial Confirmation Details */}
+            {safetyStatus && safetyStatus.confirmation_method !== "disabled" && (
+              <div className="ml-8 -mt-2 space-y-1.5 rounded-[var(--svx-radius-sm)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-base)] px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-[var(--svx-color-text-tertiary)]">
+                    {t("safety.confirmationMethod")}:
+                  </span>
+                  <span className="text-[10px] font-medium text-[var(--svx-color-text-primary)]">
+                    {t(`safety.confirmationMethod${safetyStatus.confirmation_method === "inline_buttons" ? "InlineButtons" : "TextClassification"}`)}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-[var(--svx-color-text-tertiary)]">
+                    {t("safety.classificationFallback")}:
+                  </span>
+                  <span className="text-[10px] font-medium text-[var(--svx-color-text-primary)]">
+                    {t(`safety.classificationFallback${safetyStatus.classification_fallback === "llm" ? "Llm" : "Regex"}`)}
+                  </span>
+                </div>
+                {safetyStatus.confirmation_channels.length > 0 && (
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] text-[var(--svx-color-text-tertiary)]">
+                      {t("safety.confirmationChannels")}:
+                    </span>
+                    {safetyStatus.confirmation_channels.map((ch) => (
+                      <div key={ch.channel} className="ml-2 flex items-center gap-1.5">
+                        <span className={`inline-block h-1.5 w-1.5 rounded-full ${ch.inline_buttons ? "bg-emerald-500" : "bg-amber-500"}`} />
+                        <span className="text-[10px] text-[var(--svx-color-text-secondary)] capitalize">
+                          {ch.channel}
+                        </span>
+                        <span className="text-[10px] text-[var(--svx-color-text-tertiary)]">
+                          — {t(ch.inline_buttons ? "safety.channelSupportsButtons" : "safety.channelTextOnly")}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
 
             {/* Custom Guardrails */}
