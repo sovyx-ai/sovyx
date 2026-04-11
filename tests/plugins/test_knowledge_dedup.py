@@ -878,3 +878,171 @@ class TestPersonScopedMemory:
 
         data = json.loads(await plugin.search("test"))
         assert data["count"] == 2
+
+
+class TestStructuredOutput:
+    """TASK-479: Ensure all tools return consistent structured JSON."""
+
+    def _assert_base_schema(self, raw: str) -> dict[str, object]:
+        """Assert base schema: action, ok, message all present."""
+        data = json.loads(raw)
+        assert "action" in data, f"Missing 'action' in {data}"
+        assert "ok" in data, f"Missing 'ok' in {data}"
+        assert isinstance(data["ok"], bool), f"'ok' must be bool, got {type(data['ok'])}"
+        assert "message" in data, f"Missing 'message' in {data}"
+        assert isinstance(data["message"], str), f"'message' must be str"
+        return data
+
+    @pytest.mark.asyncio
+    async def test_remember_created_schema(self) -> None:
+        brain = _mock_brain()
+        brain.find_similar = AsyncMock(return_value=[])
+        plugin = KnowledgePlugin(brain=brain)
+        data = self._assert_base_schema(await plugin.remember("test fact"))
+        assert data["ok"] is True
+        assert data["action"] == "created"
+        assert "concept_id" in data
+        assert "name" in data
+        assert "category" in data
+
+    @pytest.mark.asyncio
+    async def test_remember_reinforced_schema(self) -> None:
+        existing = {"id": "c-1", "name": "known", "content": "x", "similarity": 0.95}
+        brain = _mock_brain(similar_results=[existing])
+        brain.classify_content = AsyncMock(return_value="SAME")
+        plugin = KnowledgePlugin(brain=brain)
+        data = self._assert_base_schema(await plugin.remember("same thing"))
+        assert data["ok"] is True
+        assert data["action"] == "reinforced"
+        assert "concept_id" in data
+        assert "similarity" in data
+        assert "importance" in data
+        assert "confidence" in data
+
+    @pytest.mark.asyncio
+    async def test_remember_contradiction_schema(self) -> None:
+        existing = {
+            "id": "c-1",
+            "name": "fact",
+            "content": "old",
+            "similarity": 0.92,
+            "confidence": 0.8,
+        }
+        brain = _mock_brain(similar_results=[existing])
+        brain.classify_content = AsyncMock(return_value="CONTRADICTS")
+        plugin = KnowledgePlugin(brain=brain)
+        data = self._assert_base_schema(await plugin.remember("new conflicting"))
+        assert data["ok"] is True
+        assert data["action"] == "updated"
+        assert data["resolution"] == "contradiction"
+        assert "confidence" in data
+
+    @pytest.mark.asyncio
+    async def test_remember_extended_schema(self) -> None:
+        existing = {
+            "id": "c-1",
+            "name": "base",
+            "content": "base info",
+            "similarity": 0.91,
+            "confidence": 0.6,
+        }
+        brain = _mock_brain(similar_results=[existing])
+        brain.classify_content = AsyncMock(return_value="EXTENDS")
+        plugin = KnowledgePlugin(brain=brain)
+        data = self._assert_base_schema(await plugin.remember("extra info"))
+        assert data["ok"] is True
+        assert data["action"] == "extended"
+        assert data["resolution"] == "extension"
+
+    @pytest.mark.asyncio
+    async def test_search_results_schema(self) -> None:
+        results = [
+            {
+                "id": "c-1",
+                "name": "fact",
+                "content": "info",
+                "category": "fact",
+                "importance": 0.7,
+                "confidence": 0.8,
+                "score": 0.9,
+            }
+        ]
+        brain = _mock_brain(search_results=results)
+        plugin = KnowledgePlugin(brain=brain)
+        data = self._assert_base_schema(await plugin.search("test"))
+        assert data["ok"] is True
+        assert data["action"] == "search"
+        assert "count" in data
+        assert isinstance(data["results"], list)
+        r = data["results"][0]
+        for key in ("id", "name", "content", "category", "importance", "confidence", "score"):
+            assert key in r, f"Missing '{key}' in result"
+
+    @pytest.mark.asyncio
+    async def test_search_empty_schema(self) -> None:
+        brain = _mock_brain(search_results=[])
+        plugin = KnowledgePlugin(brain=brain)
+        data = self._assert_base_schema(await plugin.search("nothing"))
+        assert data["ok"] is True
+        assert data["results"] == []
+
+    @pytest.mark.asyncio
+    async def test_forget_schema(self) -> None:
+        results = [{"id": "c-1", "name": "target", "content": "x"}]
+        brain = _mock_brain(search_results=results)
+        plugin = KnowledgePlugin(brain=brain)
+        data = self._assert_base_schema(await plugin.forget("target"))
+        assert data["ok"] is True
+        assert data["action"] == "forgotten"
+        assert "concept_id" in data
+
+    @pytest.mark.asyncio
+    async def test_forget_not_found_schema(self) -> None:
+        brain = _mock_brain(search_results=[])
+        plugin = KnowledgePlugin(brain=brain)
+        data = self._assert_base_schema(await plugin.forget("nothing"))
+        assert data["ok"] is True
+        assert data["action"] == "not_found"
+
+    @pytest.mark.asyncio
+    async def test_recall_schema(self) -> None:
+        results = [
+            {
+                "id": "c-1",
+                "name": "topic",
+                "content": "info",
+                "category": "fact",
+                "importance": 0.5,
+                "confidence": 0.5,
+            }
+        ]
+        brain = _mock_brain(search_results=results)
+        brain.search_episodes = AsyncMock(return_value=[])
+        plugin = KnowledgePlugin(brain=brain)
+        data = self._assert_base_schema(await plugin.recall_about("topic"))
+        assert data["ok"] is True
+        assert data["action"] == "recall"
+        assert "results" in data
+
+    @pytest.mark.asyncio
+    async def test_what_do_you_know_schema(self) -> None:
+        brain = _mock_brain(
+            stats={
+                "total_concepts": 10,
+                "categories": {"fact": 5, "preference": 3},
+                "total_relations": 20,
+                "total_episodes": 50,
+            }
+        )
+        plugin = KnowledgePlugin(brain=brain)
+        data = self._assert_base_schema(await plugin.what_do_you_know())
+        assert data["ok"] is True
+        assert data["action"] == "introspection"
+
+    @pytest.mark.asyncio
+    async def test_error_schema(self) -> None:
+        plugin = KnowledgePlugin()  # no brain
+        for tool_fn in [plugin.remember, plugin.search, plugin.forget]:
+            data = self._assert_base_schema(await tool_fn("test"))
+            assert data["ok"] is False
+            assert data["action"] == "error"
