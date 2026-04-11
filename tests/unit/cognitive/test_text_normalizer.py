@@ -7,6 +7,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    import pytest
+
 from sovyx.cognitive.text_normalizer import (
     _decode_base64_segments,
     _decode_hex_escapes,
