@@ -9,7 +9,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { PuzzleIcon, WrenchIcon, PowerIcon, AlertTriangleIcon } from "lucide-react";
+import { PuzzleIcon, WrenchIcon, PowerIcon, AlertTriangleIcon, PowerOffIcon } from "lucide-react";
 import { useDashboardStore } from "@/stores/dashboard";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { PluginCard } from "@/components/dashboard/plugin-card";
@@ -134,6 +134,27 @@ function SortSelect({
 
 // ── Empty States ──
 
+function EngineOffState() {
+  const { t } = useTranslation("plugins");
+
+  return (
+    <div className="flex flex-col items-center justify-center py-16 text-center animate-page-in">
+      <div className="mb-4 flex items-center justify-center">
+        <PowerOffIcon className="size-12 text-[var(--svx-color-text-disabled)]" />
+      </div>
+      <h3 className="text-lg font-semibold text-[var(--svx-color-text-primary)]">
+        {t("engineOff.title")}
+      </h3>
+      <p className="mt-1 text-sm text-[var(--svx-color-text-secondary)]">
+        {t("engineOff.subtitle")}
+      </p>
+      <code className="mt-4 rounded-[var(--svx-radius-md)] bg-[var(--svx-color-bg-elevated)] px-3 py-1.5 text-xs text-[var(--svx-color-text-secondary)]">
+        {t("engineOff.hint")}
+      </code>
+    </div>
+  );
+}
+
 function EmptyNoPlugins() {
   const { t } = useTranslation("plugins");
 
@@ -203,6 +224,7 @@ export default function PluginsPage() {
   const [selectedPlugin, setSelectedPlugin] = useState<string | null>(null);
 
   const plugins = useDashboardStore((s) => s.plugins);
+  const pluginsAvailable = useDashboardStore((s) => s.pluginsAvailable);
   const pluginsLoading = useDashboardStore((s) => s.pluginsLoading);
   const pluginsError = useDashboardStore((s) => s.pluginsError);
   const pluginCounts = useDashboardStore((s) => s.pluginCounts);
@@ -280,8 +302,13 @@ export default function PluginsPage() {
         <ErrorState onRetry={() => void fetchPlugins()} />
       )}
 
-      {/* Empty: No plugins installed */}
-      {!pluginsError && !hasPlugins && <EmptyNoPlugins />}
+      {/* Engine off: plugin system not available */}
+      {!pluginsError && !hasPlugins && !pluginsAvailable && !pluginsLoading && (
+        <EngineOffState />
+      )}
+
+      {/* Empty: No plugins installed (engine is on but no plugins) */}
+      {!pluginsError && !hasPlugins && pluginsAvailable && <EmptyNoPlugins />}
 
       {/* Plugin grid (only if we have plugins) */}
       {hasPlugins && (

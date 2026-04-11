@@ -28,6 +28,7 @@ export type PluginSort = "name" | "status" | "tools";
 export interface PluginsSlice {
   // ── State ──
   plugins: PluginInfo[];
+  pluginsAvailable: boolean;
   pluginDetail: PluginDetail | null;
   pluginsLoading: boolean;
   pluginDetailLoading: boolean;
@@ -69,6 +70,7 @@ export const createPluginsSlice: StateCreator<
 > = (set, get) => ({
   // ── Initial State ──
   plugins: [],
+  pluginsAvailable: false,
   pluginDetail: null,
   pluginsLoading: false,
   pluginDetailLoading: false,
@@ -91,6 +93,7 @@ export const createPluginsSlice: StateCreator<
       const data = await api.get<PluginsResponse>("/api/plugins");
       set({
         plugins: data.plugins,
+        pluginsAvailable: data.available,
         pluginsLoading: false,
         pluginCounts: {
           total: data.total,

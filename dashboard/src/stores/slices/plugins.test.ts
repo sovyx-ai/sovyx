@@ -94,6 +94,7 @@ const MOCK_DETAIL: PluginDetail = {
 function resetPluginState(): void {
   useDashboardStore.setState({
     plugins: [],
+    pluginsAvailable: false,
     pluginDetail: null,
     pluginsLoading: false,
     pluginDetailLoading: false,
@@ -113,9 +114,10 @@ beforeEach(() => {
 // ── Initial state ──
 
 describe("plugins slice — initial state", () => {
-  it("starts with empty plugins", () => {
+  it("starts with empty plugins and unavailable", () => {
     const state = useDashboardStore.getState();
     expect(state.plugins).toEqual([]);
+    expect(state.pluginsAvailable).toBe(false);
     expect(state.pluginDetail).toBeNull();
     expect(state.pluginsLoading).toBe(false);
     expect(state.pluginsError).toBeNull();
@@ -181,6 +183,32 @@ describe("plugins slice — fetchPlugins", () => {
     expect(state.pluginCounts.total).toBe(2);
     expect(state.pluginCounts.active).toBe(1);
     expect(state.pluginCounts.totalTools).toBe(3);
+  });
+
+  it("sets pluginsAvailable from response", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({
+        available: true, plugins: [], total: 0,
+        active: 0, disabled: 0, error: 0, total_tools: 0,
+      }),
+    } as Response);
+
+    await useDashboardStore.getState().fetchPlugins();
+    expect(useDashboardStore.getState().pluginsAvailable).toBe(true);
+  });
+
+  it("sets pluginsAvailable false when engine is off", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({
+        available: false, plugins: [], total: 0,
+        active: 0, disabled: 0, error: 0, total_tools: 0,
+      }),
+    } as Response);
+
+    await useDashboardStore.getState().fetchPlugins();
+    expect(useDashboardStore.getState().pluginsAvailable).toBe(false);
   });
 
   it("sets error on failure", async () => {
