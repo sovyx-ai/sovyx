@@ -58,10 +58,19 @@ class TestToolExecutor:
         results = await executor.execute([])
         assert results == []
 
-    def test_register_tool(self) -> None:
+    def test_has_tools_false_without_manager(self) -> None:
         executor = ToolExecutor()
-        executor.register_tool("test", lambda: None)
-        assert "test" in executor._tools
+        assert executor.has_tools is False
+
+    def test_has_tools_true_with_manager(self) -> None:
+        mgr = MagicMock()
+        mgr.plugin_count = 2
+        executor = ToolExecutor(plugin_manager=mgr)
+        assert executor.has_tools is True
+
+    def test_max_depth_default(self) -> None:
+        executor = ToolExecutor()
+        assert executor.max_depth == 3
 
 
 class TestActPhase:
@@ -480,3 +489,273 @@ class TestActPhaseBatchConfirmation:
         assert result.buttons[0][0].text == "✅ Approve All"
         assert result.confirmation_details is not None
         assert result.confirmation_details["count"] == 3
+
+
+# ── ToolExecutor with PluginManager (TASK-438) ─────────────────────
+
+
+class TestToolExecutorWithPluginManager:
+    """Tests for ToolExecutor dispatching to PluginManager."""
+
+    async def test_dispatch_to_plugin_manager(self) -> None:
+        """Tool calls dispatched to PluginManager.execute()."""
+        from sovyx.llm.models import ToolResult
+
+        mock_mgr = AsyncMock()
+        mock_mgr.plugin_count = 1
+        mock_mgr.execute = AsyncMock(
+            return_value=ToolResult(
+                call_id="",
+                name="weather.get_weather",
+                output="Sunny in Berlin",
+                success=True,
+            ),
+        )
+
+        executor = ToolExecutor(plugin_manager=mock_mgr)
+        calls = [
+            ToolCall(id="tc1", function_name="weather.get_weather", arguments={"city": "Berlin"}),
+        ]
+        results = await executor.execute(calls)
+
+        assert len(results) == 1
+        assert results[0].success is True
+        assert results[0].output == "Sunny in Berlin"
+        assert results[0].call_id == "tc1"
+        mock_mgr.execute.assert_called_once_with("weather.get_weather", {"city": "Berlin"})
+
+    async def test_plugin_manager_error_caught(self) -> None:
+        """PluginManager exceptions are caught and returned as error results."""
+        mock_mgr = AsyncMock()
+        mock_mgr.plugin_count = 1
+        mock_mgr.execute = AsyncMock(side_effect=RuntimeError("plugin crashed"))
+
+        executor = ToolExecutor(plugin_manager=mock_mgr)
+        calls = [ToolCall(id="tc1", function_name="bad.tool", arguments={})]
+        results = await executor.execute(calls)
+
+        assert len(results) == 1
+        assert results[0].success is False
+        assert "plugin crashed" in results[0].output
+
+    async def test_multiple_calls(self) -> None:
+        """Multiple tool calls dispatched independently."""
+        from sovyx.llm.models import ToolResult
+
+        call_count = 0
+
+        async def mock_execute(name: str, args: dict) -> ToolResult:
+            nonlocal call_count
+            call_count += 1
+            return ToolResult(call_id="", name=name, output=f"ok-{call_count}", success=True)
+
+        mock_mgr = AsyncMock()
+        mock_mgr.plugin_count = 2
+        mock_mgr.execute = mock_execute
+
+        executor = ToolExecutor(plugin_manager=mock_mgr)
+        calls = [
+            ToolCall(id="tc1", function_name="a.x", arguments={}),
+            ToolCall(id="tc2", function_name="b.y", arguments={}),
+        ]
+        results = await executor.execute(calls)
+        assert len(results) == 2
+        assert results[0].output == "ok-1"
+        assert results[1].output == "ok-2"
+
+
+# ── ReAct Loop (TASK-438) ──────────────────────────────────────────
+
+
+class TestReActLoop:
+    """Tests for ActPhase ReAct loop integration."""
+
+    async def test_single_iteration(self) -> None:
+        """Tool call → execute → re-invoke LLM → final text."""
+        mock_router = AsyncMock()
+        # Re-invocation returns text (no more tool_calls)
+        mock_router.generate = AsyncMock(
+            return_value=_response("The weather is sunny!", finish_reason="stop"),
+        )
+
+        mock_mgr = AsyncMock()
+        mock_mgr.plugin_count = 1
+        mock_mgr.get_tool_definitions = MagicMock(return_value=[])
+        mock_mgr.execute = AsyncMock(
+            return_value=MagicMock(name="weather.get", output="Sunny 25°C", success=True),
+        )
+
+        executor = ToolExecutor(plugin_manager=mock_mgr)
+        act = ActPhase(tool_executor=executor, llm_router=mock_router)
+
+        initial_response = _response(
+            content="Let me check.",
+            finish_reason="tool_use",
+            tool_calls=[
+                ToolCall(id="tc1", function_name="weather.get", arguments={"city": "SP"}),
+            ],
+        )
+
+        result = await act.process(
+            initial_response,
+            [{"role": "user", "content": "weather in SP"}],
+            _perception("weather in SP"),
+        )
+
+        assert result.response_text == "The weather is sunny!"
+        assert len(result.tool_calls_made) == 1
+        assert result.tool_calls_made[0].function_name == "weather.get"
+
+    async def test_max_depth_respected(self) -> None:
+        """ReAct loop stops after max_depth iterations."""
+        # LLM always returns tool_calls (infinite loop scenario)
+        mock_router = AsyncMock()
+        mock_router.generate = AsyncMock(
+            return_value=_response(
+                content="",
+                finish_reason="tool_use",
+                tool_calls=[
+                    ToolCall(id="tc", function_name="a.b", arguments={}),
+                ],
+            ),
+        )
+
+        mock_mgr = AsyncMock()
+        mock_mgr.plugin_count = 1
+        mock_mgr.get_tool_definitions = MagicMock(return_value=[])
+        mock_mgr.execute = AsyncMock(
+            return_value=MagicMock(name="a.b", output="ok", success=True),
+        )
+
+        executor = ToolExecutor(max_depth=2, plugin_manager=mock_mgr)
+        act = ActPhase(tool_executor=executor, llm_router=mock_router)
+
+        initial_response = _response(
+            content="",
+            finish_reason="tool_use",
+            tool_calls=[ToolCall(id="tc0", function_name="a.b", arguments={})],
+        )
+
+        result = await act.process(
+            initial_response,
+            [{"role": "user", "content": "hi"}],
+            _perception("hi"),
+        )
+
+        # Should have been called max_depth times for re-invocations
+        assert mock_router.generate.call_count == 2
+        # 1 initial + 1 from first re-invoke (second re-invoke's calls not executed)
+        assert len(result.tool_calls_made) == 2
+
+    async def test_reinvoke_failure_fallback(self) -> None:
+        """LLM re-invocation failure returns tool results summary."""
+        mock_router = AsyncMock()
+        mock_router.generate = AsyncMock(side_effect=RuntimeError("LLM down"))
+
+        mock_mgr = AsyncMock()
+        mock_mgr.plugin_count = 1
+        mock_mgr.get_tool_definitions = MagicMock(return_value=[])
+        mock_mgr.execute = AsyncMock(
+            return_value=MagicMock(name="a.b", output="result-data", success=True),
+        )
+
+        executor = ToolExecutor(plugin_manager=mock_mgr)
+        act = ActPhase(tool_executor=executor, llm_router=mock_router)
+
+        initial_response = _response(
+            content="",
+            finish_reason="tool_use",
+            tool_calls=[ToolCall(id="tc1", function_name="a.b", arguments={})],
+        )
+
+        result = await act.process(
+            initial_response,
+            [{"role": "user", "content": "hi"}],
+            _perception("hi"),
+        )
+
+        assert result.degraded is True
+        assert "result-data" in result.response_text
+
+    async def test_financial_gate_in_react(self) -> None:
+        """Financial gate blocks tool execution in ReAct loop."""
+        from sovyx.cognitive.financial_gate import FinancialGate, PendingConfirmation
+
+        mock_router = AsyncMock()
+        mock_mgr = AsyncMock()
+        mock_mgr.plugin_count = 1
+
+        gate = FinancialGate(SafetyConfig(financial_confirmation=True))
+        executor = ToolExecutor(plugin_manager=mock_mgr)
+        act = ActPhase(
+            tool_executor=executor,
+            llm_router=mock_router,
+            financial_gate=gate,
+        )
+
+        initial_response = _response(
+            content="",
+            finish_reason="tool_use",
+            tool_calls=[
+                ToolCall(
+                    id="tc1",
+                    function_name="wallet.send_money",
+                    arguments={"amount": 100, "to": "addr"},
+                ),
+            ],
+        )
+
+        result = await act.process(
+            initial_response,
+            [{"role": "user", "content": "send money"}],
+            _perception("send money"),
+        )
+
+        # Financial gate should trigger confirmation
+        assert result.pending_confirmation is True
+
+    async def test_no_plugin_manager_graceful(self) -> None:
+        """Without PluginManager, tool calls return errors and LLM re-invoked."""
+        mock_router = AsyncMock()
+        mock_router.generate = AsyncMock(
+            return_value=_response("Sorry, I can't do that."),
+        )
+
+        executor = ToolExecutor()  # No plugin_manager
+        act = ActPhase(tool_executor=executor, llm_router=mock_router)
+
+        initial_response = _response(
+            content="",
+            finish_reason="tool_use",
+            tool_calls=[ToolCall(id="tc1", function_name="x.y", arguments={})],
+        )
+
+        result = await act.process(
+            initial_response,
+            [{"role": "user", "content": "hi"}],
+            _perception("hi"),
+        )
+
+        # Should still work — re-invoked LLM with error results
+        assert "Sorry" in result.response_text
+
+
+class TestSummarizeToolResults:
+    """Tests for _summarize_tool_results."""
+
+    def test_empty(self) -> None:
+        from sovyx.llm.models import ToolResult
+
+        result = ActPhase._summarize_tool_results([])
+        assert "no results" in result.lower()
+
+    def test_mixed_results(self) -> None:
+        from sovyx.llm.models import ToolResult
+
+        results = [
+            ToolResult(call_id="1", name="a", output="ok", success=True),
+            ToolResult(call_id="2", name="b", output="fail", success=False),
+        ]
+        summary = ActPhase._summarize_tool_results(results)
+        assert "✓ a: ok" in summary
+        assert "✗ b: fail" in summary

@@ -1,4 +1,12 @@
-"""Sovyx ActPhase — format response + tool execution framework."""
+"""Sovyx ActPhase — format response + tool execution (ReAct loop).
+
+When the LLM returns tool_calls, ToolExecutor dispatches to PluginManager,
+injects results back, and re-invokes the LLM (max iterations configurable).
+Financial gate integration preserved — financial tool calls require user
+confirmation before execution.
+
+Spec: SPE-003 §4 (ReAct pattern), SPE-008 §6 (PluginManager dispatch)
+"""
 
 from __future__ import annotations
 
@@ -15,6 +23,7 @@ if TYPE_CHECKING:
     from sovyx.cognitive.pii_guard import PIIGuard
     from sovyx.llm.models import LLMResponse
     from sovyx.llm.router import LLMRouter
+    from sovyx.plugins.manager import PluginManager
 
 logger = get_logger(__name__)
 
@@ -41,33 +50,79 @@ class ActionResult:
 class ToolExecutor:
     """Tool execution framework (ReAct pattern, SPE-003 §4).
 
-    v0.1: No-op executor (no plugins available).
-    Framework exists so v0.5+ doesn't need to rewrite ActPhase.
+    Dispatches tool calls to PluginManager.execute(). When no
+    PluginManager is configured, returns "no tools available" for
+    each call (graceful degradation).
     """
 
-    def __init__(self, max_depth: int = 3) -> None:
+    def __init__(
+        self,
+        max_depth: int = 3,
+        plugin_manager: PluginManager | None = None,
+    ) -> None:
         self._max_depth = max_depth
-        self._tools: dict[str, object] = {}
+        self._plugin_manager = plugin_manager
 
-    def register_tool(self, name: str, handler: object) -> None:
-        """Register a tool handler for future use."""
-        self._tools[name] = handler
+    @property
+    def max_depth(self) -> int:
+        """Maximum ReAct loop iterations."""
+        return self._max_depth
+
+    @property
+    def has_tools(self) -> bool:
+        """True if a PluginManager is configured with loaded plugins."""
+        if self._plugin_manager is None:
+            return False
+        return self._plugin_manager.plugin_count > 0
 
     async def execute(self, tool_calls: list[ToolCall]) -> list[ToolResult]:
-        """Execute tool calls.
+        """Execute tool calls via PluginManager.
 
-        v0.1: returns 'no tools available' for each call.
+        Each call is dispatched independently. If PluginManager is not
+        configured, returns "no tools available" for each call.
         """
         results: list[ToolResult] = []
         for call in tool_calls:
-            results.append(
-                ToolResult(
-                    call_id=call.id,
-                    name=call.function_name,
-                    output="Error: no tools available in v0.1",
-                    success=False,
+            if self._plugin_manager is None:
+                results.append(
+                    ToolResult(
+                        call_id=call.id,
+                        name=call.function_name,
+                        output="Error: no tools available",
+                        success=False,
+                    )
                 )
-            )
+                continue
+
+            try:
+                result = await self._plugin_manager.execute(
+                    call.function_name,
+                    dict(call.arguments),
+                )
+                # Copy call_id from the LLM's tool call into the result
+                results.append(
+                    ToolResult(
+                        call_id=call.id,
+                        name=result.name,
+                        output=result.output,
+                        success=result.success,
+                    )
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.error(
+                    "tool_execution_error",
+                    tool=call.function_name,
+                    call_id=call.id,
+                    error=str(e),
+                )
+                results.append(
+                    ToolResult(
+                        call_id=call.id,
+                        name=call.function_name,
+                        output=f"Error: {e}",
+                        success=False,
+                    )
+                )
         return results
 
 
@@ -232,40 +287,13 @@ class ActPhase:
                 degraded=True,
             )
 
-        # Handle tool calls (v0.1: framework only)
+        # Handle tool calls (ReAct loop)
         if llm_response.tool_calls:
-            # Financial gate: check if any tool call needs confirmation
-            if self._financial_gate:
-                result = self._build_financial_confirmation(
-                    llm_response.tool_calls,
-                    perception.source,
-                    reply_to,
-                )
-                if result is not None:
-                    return result
-
-            await self._tools.execute(llm_response.tool_calls)
-            # v0.1: no re-invocation, return tool error gracefully
-            logger.debug(
-                "tool_calls_no_op",
-                calls=len(llm_response.tool_calls),
-            )
-            fallback = "I tried to use a tool but none are available yet."
-            response_text = llm_response.content or fallback
-
-            # Apply output guard + PII guard to tool-call responses
-            text, was_filtered, reason = await self._apply_output_guard(
-                response_text,
-            )
-            text = self._apply_pii_guard(text)
-
-            return ActionResult(
-                response_text=text,
-                target_channel=perception.source,
-                reply_to=reply_to,
-                tool_calls_made=llm_response.tool_calls,
-                output_filtered=was_filtered,
-                filter_reason=reason,
+            return await self._react_loop(
+                llm_response,
+                assembled_messages,
+                perception,
+                reply_to,
             )
 
         # Apply output guard + PII guard to LLM response
@@ -281,3 +309,136 @@ class ActPhase:
             output_filtered=was_filtered,
             filter_reason=reason,
         )
+
+    async def _react_loop(
+        self,
+        llm_response: LLMResponse,
+        assembled_messages: list[dict[str, str]],
+        perception: Perception,
+        reply_to: str | None,
+    ) -> ActionResult:
+        """Execute the ReAct loop: tool_calls → execute → re-invoke LLM.
+
+        Max iterations controlled by ToolExecutor.max_depth (default 3).
+        Financial gate checked on every iteration.
+
+        Args:
+            llm_response: Initial LLM response with tool_calls.
+            assembled_messages: Messages used for the initial LLM call.
+            perception: Original perception for context.
+            reply_to: Reply-to message ID.
+
+        Returns:
+            ActionResult with final response text.
+        """
+        current_response = llm_response
+        all_tool_calls: list[ToolCall] = []
+        messages = list(assembled_messages)
+
+        for iteration in range(self._tools.max_depth):
+            tool_calls = current_response.tool_calls
+            if not tool_calls:
+                break
+
+            # Financial gate: check before execution
+            if self._financial_gate:
+                confirmation = self._build_financial_confirmation(
+                    tool_calls,
+                    perception.source,
+                    reply_to,
+                )
+                if confirmation is not None:
+                    confirmation.tool_calls_made = all_tool_calls + tool_calls
+                    return confirmation
+
+            # Execute tool calls
+            results = await self._tools.execute(tool_calls)
+            all_tool_calls.extend(tool_calls)
+
+            logger.info(
+                "react_iteration",
+                iteration=iteration + 1,
+                tool_calls=len(tool_calls),
+                successes=sum(1 for r in results if r.success),
+                failures=sum(1 for r in results if not r.success),
+            )
+
+            # Build messages for re-invocation:
+            # 1. Add assistant message with tool_calls
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": current_response.content or "",
+                }
+            )
+
+            # 2. Add tool results as messages
+            for result in results:
+                messages.append(
+                    {
+                        "role": "tool",
+                        "content": (
+                            f"[{result.name}] {'✓' if result.success else '✗'}: {result.output}"
+                        ),
+                    }
+                )
+
+            # 3. Get tools for re-invocation
+            tools = self._get_tools_for_reinvocation()
+
+            # 4. Re-invoke LLM with tool results
+            try:
+                current_response = await self._router.generate(
+                    messages=messages,
+                    tools=tools,
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.error("react_reinvoke_failed", error=str(e))
+                # Fall back to last known content or tool results summary
+                fallback = self._summarize_tool_results(results)
+                text = self._apply_pii_guard(fallback)
+                return ActionResult(
+                    response_text=text,
+                    target_channel=perception.source,
+                    reply_to=reply_to,
+                    tool_calls_made=all_tool_calls,
+                    degraded=True,
+                )
+
+        # Final response (after loop ends or no more tool_calls)
+        response_text = current_response.content or ""
+        text, was_filtered, reason = await self._apply_output_guard(response_text)
+        text = self._apply_pii_guard(text)
+
+        return ActionResult(
+            response_text=text,
+            target_channel=perception.source,
+            reply_to=reply_to,
+            tool_calls_made=all_tool_calls,
+            output_filtered=was_filtered,
+            filter_reason=reason,
+        )
+
+    def _get_tools_for_reinvocation(self) -> list[dict[str, object]] | None:
+        """Get tool definitions for LLM re-invocation.
+
+        Returns None if no PluginManager is available.
+        """
+        if not self._tools.has_tools or self._tools._plugin_manager is None:
+            return None
+        from sovyx.llm.router import LLMRouter
+
+        return LLMRouter.tool_definitions_to_dicts(
+            self._tools._plugin_manager.get_tool_definitions(),
+        )
+
+    @staticmethod
+    def _summarize_tool_results(results: list[ToolResult]) -> str:
+        """Summarize tool results for fallback display."""
+        if not results:
+            return "Tool execution completed but no results available."
+        lines: list[str] = []
+        for r in results:
+            status = "✓" if r.success else "✗"
+            lines.append(f"{status} {r.name}: {r.output}")
+        return "\n".join(lines)
