@@ -996,7 +996,8 @@ class TestCacheStats:
         await batch_classify_content(["a", "b", "c"], router)
         stats = get_cache_stats()
         assert stats.size == 3
-        assert stats.misses == 3
+        # Each text: batch cache miss + classify_content cache miss = 2 per text
+        assert stats.misses == 6
 
 
 # ── Property-Based Batch Tests ──────────────────────────────────────────

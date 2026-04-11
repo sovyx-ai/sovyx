@@ -655,20 +655,20 @@ _PT_STRICT_PATTERNS: tuple[SafetyPattern, ...] = (
 _PT_INJECTION_PATTERNS: tuple[SafetyPattern, ...] = (
     _p(
         r"\b(?:ignore|esqueça|desconsidere|desative|pule|desabilite)"
-        r"\s+(?:(?:suas?|seus|as|os)\s+)?(?:instruções?|regras?|diretrizes?|segurança|filtros?|restrições?)",
+        r"\s+(?:(?:suas?|seus|as|os)\s+)?(?:instruções?|regras?|diretrizes?|segurança|filtros?|restrições?|prompt\s+do\s+sistema)",
         PatternCategory.INJECTION,
         FilterTier.STANDARD,
         "PT: Instruction override",
     ),
     _p(
-        r"\b(?:finja|simule|aja\s+como\s+se)\s+(?:que\s+)?(?:não\s+)?(?:tivesse|houvesse|existisse|tem|existe|tenha|haja)"
+        r"\b(?:finja|simule|aja\s+como\s+se)\s+(?:que\s+)?(?:não\s+)?(?:tivesse|houvesse|existisse|tem|existe|tenha|haja|há|havia)"
         r"\s+(?:regras?|restrições?|filtros?|segurança|limites?)",
         PatternCategory.INJECTION,
         FilterTier.STANDARD,
         "PT: Pretend no restrictions",
     ),
     _p(
-        r"\b(?:modo\s+(?:desenvolvedor|admin|root|deus|sudo))\s+(?:ativado|ligado|on)",
+        r"\b(?:modo\s+(?:desenvolvedor|admin|root|deus|sudo|depuração))\s+(?:ativado|ligado|on|desbloqueado)",
         PatternCategory.INJECTION,
         FilterTier.STANDARD,
         "PT: Privilege escalation",
@@ -680,10 +680,70 @@ _PT_INJECTION_PATTERNS: tuple[SafetyPattern, ...] = (
         "PT: Instruction replacement",
     ),
     _p(
-        r"\b(?:agora\s+você\s+é|de\s+agora\s+em\s+diante\s+você\s+é)\s+(?:uma?\s+)?(?:ia|assistente)\s+(?:sem\s+(?:restrições?|filtros?|regras?)|irrestrit[ao])",
+        r"\b(?:(?:agora\s+)?você\s+(?:agora\s+)?é|de\s+agora\s+em\s+diante\s+você\s+é)\s+(?:uma?\s+)?(?:ia|assistente)\s+(?:sem\s+(?:restrições?|filtros?|regras?|censura)|irrestrit[ao]|desbloguead[ao])",
         PatternCategory.INJECTION,
         FilterTier.STANDARD,
         "PT: Unrestricted AI jailbreak",
+    ),
+    # ── Role-play bypass ──
+    _p(
+        r"\b(?:interprete|faça\s+(?:o\s+)?papel|simule|emule)\s+(?:de\s+)?(?:uma?\s+)?"
+        r"(?:ia|assistente|bot)\s+(?:irrestrit[ao]|sem\s+filtros?|sem\s+censura|malicio[sz][ao])",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "PT: Unrestricted roleplay bypass",
+    ),
+    _p(
+        r"\b(?:(?:num|em\s+um)\s+)?(?:cenário|mundo|universo|realidade)\s+(?:fictíci[ao]|hipotétic[ao]|imaginári[ao])"
+        r"\s+(?:onde\s+)?(?:não\s+(?:existem?|há|tem))\s+(?:regras?|restrições?|filtros?|leis?|segurança)",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "PT: Fictional scenario bypass",
+    ),
+    # ── Indirect injection ──
+    _p(
+        r"\b(?:o\s+(?:admin|administrador|desenvolvedor|criador|dono|sistema)"
+        r"\s+(?:disse|mandou|instruiu|autorizou|quer\s+que\s+você))\s+"
+        r"(?:ignore|desative|desabilite|pule|remova)",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "PT: Authority impersonation injection",
+    ),
+    _p(
+        r"\b(?:prompt\s+(?:do\s+)?sistema|mensagem\s+(?:do\s+)?sistema)\s*[:=]\s*",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "PT: System prompt injection",
+    ),
+    # ── Token manipulation ──
+    _p(
+        r"(?:</?\s*(?:sistema|instrução|prompt|regra|filtro|segurança)\s*/?>)",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "PT: XML/tag injection attempt",
+    ),
+    # ── Multi-step / social engineering ──
+    _p(
+        r"\b(?:primeiro|passo\s+1|para\s+começar)\s*[,:]\s*(?:ignore|esqueça|desative|desabilite)"
+        r"\s+(?:suas?|todas?\s+as|as|os)\s+(?:regras?|segurança|filtros?|instruções?)",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "PT: Multi-step jailbreak",
+    ),
+    _p(
+        r"\b(?:para\s+(?:fins?|propósitos?)\s+(?:de\s+)?(?:pesquisa|educação|acadêmicos?|teste|segurança))"
+        r"\s*[,:]\s*(?:mostre|diga|explique|demonstre|escreva)\s+(?:me\s+)?(?:como)",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "PT: Research pretext bypass",
+    ),
+    # ── Hypothetical bypass ──
+    _p(
+        r"\b(?:imagine|suponha|hipoteticamente)\s+(?:que\s+)?(?:a\s+segurança\s+(?:está|estivesse)\s+desativada|"
+        r"não\s+(?:existem?|há|houvesse)\s+(?:regras?|filtros?|restrições?))",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "PT: Hypothetical safety bypass",
     ),
 )
 
@@ -776,24 +836,100 @@ _ES_STRICT_PATTERNS: tuple[SafetyPattern, ...] = (
 
 _ES_INJECTION_PATTERNS: tuple[SafetyPattern, ...] = (
     _p(
-        r"\b(?:ignora|olvida|desactiva|salta|anula)"
-        r"\s+(?:tus\s+)?(?:instrucciones|reglas|directrices|seguridad|filtros|restricciones)",
+        r"\b(?:ignora|olvida|desactiva|salta|anula|desabilita)"
+        r"\s+(?:tus\s+)?(?:instrucciones|reglas|directrices|seguridad|filtros|restricciones|prompt\s+del?\s+sistema)",
         PatternCategory.INJECTION,
         FilterTier.STANDARD,
         "ES: Instruction override",
     ),
     _p(
-        r"\b(?:finge|simula|actúa\s+como\s+si)\s+(?:que\s+)?(?:no\s+)?(?:tuvieras|hubiera)"
+        r"\b(?:finge|simula|actúa\s+como\s+si)\s+(?:que\s+)?(?:no\s+)?(?:tuvieras|hubiera|existieran?|hay|había|tiene[sn]?)"
         r"\s+(?:reglas|restricciones|filtros|seguridad|límites)",
         PatternCategory.INJECTION,
         FilterTier.STANDARD,
         "ES: Pretend no restrictions",
     ),
     _p(
-        r"\b(?:modo\s+(?:desarrollador|admin|dios|root))\s+(?:activado|encendido)",
+        r"\b(?:modo\s+(?:desarrollador|admin|dios|root|depuración|sudo))\s+(?:activado|encendido|desbloqueado)",
         PatternCategory.INJECTION,
         FilterTier.STANDARD,
         "ES: Privilege escalation",
+    ),
+    # ── DAN/unrestricted jailbreak ──
+    _p(
+        r"\b(?:ahora\s+eres|de\s+ahora\s+en\s+adelante\s+eres)\s+(?:una?\s+)?(?:ia|asistente)\s+"
+        r"(?:sin\s+(?:restricciones|filtros|reglas|censura)|irrestricta)",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "ES: Unrestricted AI jailbreak",
+    ),
+    # ── Role-play bypass ──
+    _p(
+        r"\b(?:interpreta|haz\s+(?:el\s+)?papel|simula|emula)\s+(?:de\s+)?(?:una?\s+)?"
+        r"(?:ia|asistente|bot)\s+(?:sin\s+restricciones|sin\s+filtros|sin\s+censura|malicio[sz][ao]?)",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "ES: Unrestricted roleplay bypass",
+    ),
+    # ── Fictional scenario bypass ──
+    _p(
+        r"\b(?:(?:en\s+un)\s+)?(?:escenario|mundo|universo|realidad)\s+(?:fictici[ao]|hipotétic[ao]|imaginari[ao])"
+        r"\s+(?:donde\s+)?(?:no\s+(?:existen?|hay|hubiera))\s+(?:reglas|restricciones|filtros|leyes|seguridad)",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "ES: Fictional scenario bypass",
+    ),
+    # ── Indirect injection ──
+    _p(
+        r"\b(?:el\s+(?:admin|administrador|desarrollador|creador|dueño|sistema)"
+        r"\s+(?:dice|dijo|instruyó|autorizó|quiere\s+que))\s+"
+        r"(?:ignores|desactives|desabilites|saltes|elimines)",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "ES: Authority impersonation injection",
+    ),
+    _p(
+        r"\b(?:nuevas?\s+(?:instrucciones|reglas)|instrucciones\s+actualizada?s)\s*[:=]",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "ES: Instruction replacement",
+    ),
+    _p(
+        r"\b(?:prompt\s+del?\s+sistema|mensaje\s+del?\s+sistema)\s*[:=]\s*",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "ES: System prompt injection",
+    ),
+    # ── Token manipulation ──
+    _p(
+        r"(?:</?\s*(?:sistema|instrucción|prompt|regla|filtro|seguridad)\s*/?>)",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "ES: XML/tag injection attempt",
+    ),
+    # ── Multi-step ──
+    _p(
+        r"\b(?:primero|paso\s+1|para\s+empezar)\s*[,:]\s*(?:ignora|olvida|desactiva)"
+        r"\s+(?:tus|todas?\s+las|las|los)\s+(?:reglas|seguridad|filtros|instrucciones)",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "ES: Multi-step jailbreak",
+    ),
+    # ── Research pretext ──
+    _p(
+        r"\b(?:para\s+(?:fines?|propósitos?)\s+(?:de\s+)?(?:investigación|educación|académicos?|prueba|seguridad))"
+        r"\s*[,:]\s*(?:muestra|dime|explica|demuestra|escribe)\s+(?:me\s+)?(?:cómo)",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "ES: Research pretext bypass",
+    ),
+    # ── Hypothetical bypass ──
+    _p(
+        r"\b(?:imagina|supón|hipotéticamente)\s+(?:que\s+)?(?:la\s+seguridad\s+(?:está|estuviera)\s+desactivada|"
+        r"no\s+(?:existen?|hay|hubiera)\s+(?:reglas|filtros|restricciones))",
+        PatternCategory.INJECTION,
+        FilterTier.STANDARD,
+        "ES: Hypothetical safety bypass",
     ),
 )
 
