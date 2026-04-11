@@ -186,8 +186,11 @@ class ActPhase:
         result = self._pii_guard.check(text)
         return result.text
 
-    def _apply_output_guard(self, text: str) -> tuple[str, bool, str | None]:
+    async def _apply_output_guard(self, text: str) -> tuple[str, bool, str | None]:
         """Apply output safety filter if configured.
+
+        Uses async cascade (regex→LLM) when available,
+        falls back to sync regex-only.
 
         Returns:
             (filtered_text, was_filtered, filter_reason)
@@ -195,7 +198,7 @@ class ActPhase:
         if self._output_guard is None:
             return text, False, None
 
-        result = self._output_guard.check(text)
+        result = await self._output_guard.check_async(text)
         if not result.filtered:
             return text, False, None
 
@@ -251,7 +254,7 @@ class ActPhase:
             response_text = llm_response.content or fallback
 
             # Apply output guard + PII guard to tool-call responses
-            text, was_filtered, reason = self._apply_output_guard(
+            text, was_filtered, reason = await self._apply_output_guard(
                 response_text,
             )
             text = self._apply_pii_guard(text)
@@ -266,7 +269,7 @@ class ActPhase:
             )
 
         # Apply output guard + PII guard to LLM response
-        text, was_filtered, reason = self._apply_output_guard(
+        text, was_filtered, reason = await self._apply_output_guard(
             llm_response.content,
         )
         text = self._apply_pii_guard(text)
