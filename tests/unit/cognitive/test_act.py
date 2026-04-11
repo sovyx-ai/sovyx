@@ -763,7 +763,8 @@ class TestReActLoop:
         assert len(tool_calls_field) == 1
         assert tool_calls_field[0]["id"] == "tc1"
         assert tool_calls_field[0]["type"] == "function"
-        assert tool_calls_field[0]["function"]["name"] == "calc.add"
+        # Name must be sanitized for OpenAI (dots → --)
+        assert tool_calls_field[0]["function"]["name"] == "calc--add"
         # Arguments must be JSON string (OpenAI format)
         assert isinstance(tool_calls_field[0]["function"]["arguments"], str)
 
