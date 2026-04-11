@@ -89,5 +89,10 @@
     "cliHint": "sovyx plugin install <name>",
     "noMatch": "No plugins match your search",
     "clearFilter": "Clear filter"
+  },
+  "engineOff": {
+    "title": "Engine not running",
+    "subtitle": "Start the Sovyx engine to manage plugins",
+    "hint": "sovyx start"
   }
 }
