@@ -928,6 +928,199 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
         models = await get_voice_models(registry)
         return JSONResponse(models)
 
+    # ── Plugin Management ──
+
+    @app.get("/api/plugins", dependencies=[Depends(verify_token)])
+    async def list_plugins() -> JSONResponse:
+        """List all plugins with status, health, and metadata."""
+        from sovyx.dashboard.plugins import get_plugins_status
+        from sovyx.plugins.manager import PluginManager
+
+        plugin_manager: PluginManager | None = None
+        registry = getattr(app.state, "registry", None)
+        if registry is not None:
+            with contextlib.suppress(Exception):
+                plugin_manager = await registry.resolve(PluginManager)
+
+        return JSONResponse(get_plugins_status(plugin_manager))
+
+    @app.get("/api/plugins/tools", dependencies=[Depends(verify_token)])
+    async def list_plugin_tools() -> JSONResponse:
+        """Flat list of all tools across active plugins."""
+        from sovyx.dashboard.plugins import get_tools_list
+        from sovyx.plugins.manager import PluginManager
+
+        plugin_manager: PluginManager | None = None
+        registry = getattr(app.state, "registry", None)
+        if registry is not None:
+            with contextlib.suppress(Exception):
+                plugin_manager = await registry.resolve(PluginManager)
+
+        return JSONResponse({"tools": get_tools_list(plugin_manager)})
+
+    @app.get(
+        "/api/plugins/{plugin_name}",
+        dependencies=[Depends(verify_token)],
+    )
+    async def get_plugin_detail_route(plugin_name: str) -> JSONResponse:
+        """Detailed info for a specific plugin."""
+        from sovyx.dashboard.plugins import get_plugin_detail
+        from sovyx.plugins.manager import PluginManager
+
+        plugin_manager: PluginManager | None = None
+        registry = getattr(app.state, "registry", None)
+        if registry is not None:
+            with contextlib.suppress(Exception):
+                plugin_manager = await registry.resolve(PluginManager)
+
+        detail = get_plugin_detail(plugin_manager, plugin_name)
+        if detail is None:
+            raise HTTPException(status_code=404, detail="Plugin not found")
+        return JSONResponse(detail)
+
+    @app.post(
+        "/api/plugins/{plugin_name}/enable",
+        dependencies=[Depends(verify_token)],
+    )
+    async def enable_plugin_route(plugin_name: str) -> JSONResponse:
+        """Re-enable a disabled plugin."""
+        from sovyx.plugins.manager import PluginError, PluginManager
+
+        registry = getattr(app.state, "registry", None)
+        if registry is None:
+            return JSONResponse(
+                {"ok": False, "error": "Engine not running"},
+                status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        try:
+            plugin_manager: PluginManager = await registry.resolve(
+                PluginManager,
+            )
+        except Exception:  # noqa: BLE001
+            return JSONResponse(
+                {"ok": False, "error": "Plugin system not available"},
+                status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        try:
+            plugin_manager.re_enable_plugin(plugin_name)
+        except PluginError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        await ws_manager.broadcast(
+            {
+                "type": "PluginStateChanged",
+                "data": {
+                    "plugin_name": plugin_name,
+                    "from_state": "disabled",
+                    "to_state": "active",
+                },
+            }
+        )
+
+        return JSONResponse({"ok": True, "plugin": plugin_name, "status": "active"})
+
+    @app.post(
+        "/api/plugins/{plugin_name}/disable",
+        dependencies=[Depends(verify_token)],
+    )
+    async def disable_plugin_route(plugin_name: str) -> JSONResponse:
+        """Disable a loaded plugin (stops tools from being used)."""
+        from sovyx.plugins.manager import PluginError, PluginManager
+
+        registry = getattr(app.state, "registry", None)
+        if registry is None:
+            return JSONResponse(
+                {"ok": False, "error": "Engine not running"},
+                status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        try:
+            plugin_manager: PluginManager = await registry.resolve(
+                PluginManager,
+            )
+        except Exception:  # noqa: BLE001
+            return JSONResponse(
+                {"ok": False, "error": "Plugin system not available"},
+                status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        try:
+            plugin_manager.disable_plugin(plugin_name)
+        except PluginError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        await ws_manager.broadcast(
+            {
+                "type": "PluginStateChanged",
+                "data": {
+                    "plugin_name": plugin_name,
+                    "from_state": "active",
+                    "to_state": "disabled",
+                },
+            }
+        )
+
+        return JSONResponse(
+            {"ok": True, "plugin": plugin_name, "status": "disabled"},
+        )
+
+    @app.post(
+        "/api/plugins/{plugin_name}/reload",
+        dependencies=[Depends(verify_token)],
+    )
+    async def reload_plugin_route(plugin_name: str) -> JSONResponse:
+        """Reload a plugin (teardown + setup)."""
+        from sovyx.plugins.manager import PluginError, PluginManager
+
+        registry = getattr(app.state, "registry", None)
+        if registry is None:
+            return JSONResponse(
+                {"ok": False, "error": "Engine not running"},
+                status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        try:
+            plugin_manager: PluginManager = await registry.resolve(
+                PluginManager,
+            )
+        except Exception:  # noqa: BLE001
+            return JSONResponse(
+                {"ok": False, "error": "Plugin system not available"},
+                status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        try:
+            await plugin_manager.reload(plugin_name)
+        except PluginError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "plugin_reload_failed",
+                plugin=plugin_name,
+                error=str(exc),
+            )
+            return JSONResponse(
+                {"ok": False, "error": f"Reload failed: {exc}"},
+                status_code=500,
+            )
+
+        await ws_manager.broadcast(
+            {
+                "type": "PluginStateChanged",
+                "data": {
+                    "plugin_name": plugin_name,
+                    "from_state": "reloading",
+                    "to_state": "active",
+                },
+            }
+        )
+
+        return JSONResponse(
+            {"ok": True, "plugin": plugin_name, "status": "reloaded"},
+        )
+
     @app.get("/api/safety/history", dependencies=[Depends(verify_token)])
     async def get_safety_history(
         hours: int = 24,
