@@ -158,7 +158,7 @@ def check_banned_topics(
                 matched=True,
                 rule_name=f"banned_topic:{topic}",
                 action="block",
-                message=f"I'm not able to discuss {topic}.",
+                message=f"I'm not able to discuss {topic}.",  # Default; i18n via safety_i18n
             )
 
     return NO_RULE_MATCH

@@ -126,6 +126,9 @@ line-length = 99
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "ANN", "B", "A", "SIM", "TCH"]
 
+[tool.ruff.lint.per-file-ignores]
+"src/sovyx/cognitive/safety_i18n.py" = ["E501"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
