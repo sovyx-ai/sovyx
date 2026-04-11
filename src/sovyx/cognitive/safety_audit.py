@@ -39,6 +39,7 @@ class FilterAction(Enum):
     BLOCKED = "blocked"
     REDACTED = "redacted"
     REPLACED = "replaced"
+    SHADOW_LOGGED = "shadow_logged"
 
 
 @dataclass(frozen=True, slots=True)

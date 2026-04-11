@@ -6,9 +6,14 @@ Covers: init, append, flush, query, count, filtering, edge cases.
 from __future__ import annotations
 
 import time
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from sovyx.cognitive.audit_store import AuditQueryResult, AuditStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    import pytest
 from sovyx.cognitive.safety_audit import SafetyEvent
 
 

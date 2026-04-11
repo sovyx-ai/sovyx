@@ -19,12 +19,13 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from sovyx.cognitive.safety_audit import SafetyEvent
 
 logger = get_logger(__name__)

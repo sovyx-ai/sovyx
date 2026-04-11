@@ -251,6 +251,27 @@ class CustomRule(BaseModel):
     message: str = ""
 
 
+class ShadowPattern(BaseModel):
+    """A safety pattern to evaluate in shadow/dry-run mode.
+
+    Shadow patterns are logged but never block content, allowing
+    operators to validate new rules before promoting to production.
+
+    Attributes:
+        name: Human-readable rule name (for logs and dashboard).
+        pattern: Regex pattern to match (case-insensitive).
+        category: Safety category (for audit trail grouping).
+        tier: Intended target tier when promoted.
+        description: Why this pattern exists / what it catches.
+    """
+
+    name: str
+    pattern: str
+    category: str = "unknown"
+    tier: Literal["standard", "strict", "child_safe"] = "standard"
+    description: str = ""
+
+
 class SafetyConfig(BaseModel):
     """Safety guardrails configuration."""
 
@@ -263,6 +284,8 @@ class SafetyConfig(BaseModel):
     )
     custom_rules: list[CustomRule] = Field(default_factory=list)
     banned_topics: list[str] = Field(default_factory=list)
+    shadow_mode: bool = False
+    shadow_patterns: list[ShadowPattern] = Field(default_factory=list)
 
 
 class MindConfig(BaseModel):

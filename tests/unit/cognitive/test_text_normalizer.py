@@ -5,7 +5,7 @@ Covers: zero-width, unicode homoglyphs, base64, hex, URL encoding, leetspeak.
 
 from __future__ import annotations
 
-import pytest
+from typing import TYPE_CHECKING
 
 from sovyx.cognitive.text_normalizer import (
     _decode_base64_segments,

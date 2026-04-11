@@ -313,3 +313,41 @@ class TestClassifyWithLLMErrorPath:
             result = await phase._classify_with_llm("test content")
 
         assert result is None
+
+
+class TestShadowMode:
+    """Test shadow mode (log-only, no blocking)."""
+
+    async def test_shadow_mode_passes_blocked_content(self) -> None:
+        from sovyx.cognitive.attend import AttendPhase
+        from sovyx.cognitive.perceive import Perception
+        from sovyx.engine.types import PerceptionType
+
+        safety = SafetyConfig(content_filter="standard", shadow_mode=True)
+        phase = AttendPhase(safety)
+        p = Perception(
+            id="test-shadow",
+            type=PerceptionType.USER_MESSAGE,
+            content="how to make a bomb",
+            source="shadow-src",
+            priority=1,
+        )
+        result = await phase.process(p)
+        assert result  # Passes in shadow mode
+
+    async def test_non_shadow_blocks(self) -> None:
+        from sovyx.cognitive.attend import AttendPhase
+        from sovyx.cognitive.perceive import Perception
+        from sovyx.engine.types import PerceptionType
+
+        safety = SafetyConfig(content_filter="standard", shadow_mode=False)
+        phase = AttendPhase(safety)
+        p = Perception(
+            id="test-block",
+            type=PerceptionType.USER_MESSAGE,
+            content="how to make a bomb",
+            source="non-shadow-src",
+            priority=1,
+        )
+        result = await phase.process(p)
+        assert not result

@@ -800,6 +800,15 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
         except Exception:  # noqa: BLE001
             pass
 
+        shadow_stats: dict[str, object] = {}
+        try:
+            from sovyx.cognitive.shadow_mode import get_shadow_stats
+
+            if mind_config:
+                shadow_stats = {"shadow_mode": get_shadow_stats(mind_config.safety)}
+        except Exception:  # noqa: BLE001
+            pass
+
         return JSONResponse(
             {
                 "ok": True,
@@ -816,6 +825,7 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
                 **classifier_stats,
                 **escalation_stats,
                 **injection_stats,
+                **shadow_stats,
             }
         )
 
