@@ -52,7 +52,7 @@ class SourceState:
     last_block: float
 
     def __init__(self) -> None:
-        self.timestamps = deque()
+        self.timestamps: deque[float] = deque(maxlen=1000)
         self.level = EscalationLevel.NONE
         self.last_block = 0.0
 
