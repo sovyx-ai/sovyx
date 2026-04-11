@@ -31,6 +31,13 @@ import {
   SheetTitle,
   SheetDescription,
 } from "@/components/ui/sheet";
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  DialogDescription,
+  DialogClose,
+} from "@/components/ui/dialog";
 import { PermissionBadge, PluginToolBadge, PricingBadge } from "./plugin-badges";
 import { PermissionDialog } from "./permission-dialog";
 import type { PluginDetail as PluginDetailType, PluginToolDetail } from "@/types/api";
@@ -189,27 +196,20 @@ export function PluginDetailPanel({
 
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [permDialogOpen, setPermDialogOpen] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<"disable" | "reload" | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
     if (pluginName && open) {
       void fetchPluginDetail(pluginName);
+      setActionError(null);
     }
   }, [pluginName, open, fetchPluginDetail]);
 
-  const handleAction = async (
-    action: "enable" | "disable" | "reload",
-  ) => {
+  const executeAction = async (action: "enable" | "disable" | "reload") => {
     if (!pluginName) return;
-
-    // Confirmation for destructive actions
-    if (action === "disable") {
-      if (!window.confirm(t("actions.disableConfirm"))) return;
-    }
-    if (action === "reload") {
-      if (!window.confirm(t("actions.reloadConfirm"))) return;
-    }
-
     setActionLoading(action);
+    setActionError(null);
     try {
       let success = false;
       if (action === "enable") success = await enablePlugin(pluginName);
@@ -217,16 +217,35 @@ export function PluginDetailPanel({
       else success = await reloadPlugin(pluginName);
 
       if (success) {
-        toast.success(t(`actions.${action === "enable" ? "enabled" : action === "disable" ? "disabled" : "reloaded"}`));
+        const key = action === "enable" ? "enabled" : action === "disable" ? "disabled" : "reloaded";
+        toast.success(t(`actions.${key}`));
       } else {
-        toast.error(t(`actions.${action}Failed`));
+        const msg = t(`actions.${action}Failed`);
+        toast.error(msg);
+        setActionError(msg);
       }
-      // Refresh detail after action
       void fetchPluginDetail(pluginName);
     } catch {
-      toast.error(t(`actions.${action}Failed`));
+      const msg = t(`actions.${action}Failed`);
+      toast.error(msg);
+      setActionError(msg);
     } finally {
       setActionLoading(null);
+    }
+  };
+
+  const handleAction = (action: "enable" | "disable" | "reload") => {
+    if (action === "disable" || action === "reload") {
+      setConfirmAction(action);
+    } else {
+      void executeAction(action);
+    }
+  };
+
+  const onConfirm = () => {
+    if (confirmAction) {
+      void executeAction(confirmAction);
+      setConfirmAction(null);
     }
   };
 
@@ -298,7 +317,7 @@ export function PluginDetailPanel({
                   {detail.status === "disabled" ? (
                     <button
                       type="button"
-                      onClick={() => void handleAction("enable")}
+                      onClick={() => handleAction("enable")}
                       disabled={actionLoading !== null}
                       className="rounded-[var(--svx-radius-md)] bg-[var(--svx-color-success)] px-3 py-1 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
                     >
@@ -311,7 +330,7 @@ export function PluginDetailPanel({
                   ) : (
                     <button
                       type="button"
-                      onClick={() => void handleAction("disable")}
+                      onClick={() => handleAction("disable")}
                       disabled={actionLoading !== null}
                       className="rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] px-3 py-1 text-xs text-[var(--svx-color-text-secondary)] hover:bg-[var(--svx-color-bg-elevated)] disabled:opacity-50"
                     >
@@ -324,7 +343,7 @@ export function PluginDetailPanel({
                   )}
                   <button
                     type="button"
-                    onClick={() => void handleAction("reload")}
+                    onClick={() => handleAction("reload")}
                     disabled={actionLoading !== null}
                     title={t("actions.reload")}
                     className="rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] px-2 py-1 text-xs text-[var(--svx-color-text-secondary)] hover:bg-[var(--svx-color-bg-elevated)] disabled:opacity-50"
@@ -350,6 +369,13 @@ export function PluginDetailPanel({
                   <ExternalLinkIcon className="size-3" />
                   {t("detail.homepage")}
                 </a>
+              )}
+
+              {/* Inline action error */}
+              {actionError && (
+                <div className="rounded-[var(--svx-radius-md)] bg-[var(--svx-color-error)]/10 px-3 py-2 text-xs text-[var(--svx-color-error)]">
+                  {actionError}
+                </div>
               )}
 
               {/* Description */}
@@ -555,6 +581,37 @@ export function PluginDetailPanel({
           </div>
         )}
       </SheetContent>
+
+      {/* Confirmation dialog */}
+      {confirmAction && (
+        <Dialog open={true} onOpenChange={() => setConfirmAction(null)}>
+          <DialogContent className="sm:max-w-sm">
+            <DialogTitle>
+              {t(`actions.${confirmAction}ConfirmTitle`)}
+            </DialogTitle>
+            <DialogDescription>
+              {t(`actions.${confirmAction}ConfirmDesc`)}
+            </DialogDescription>
+            <div className="flex justify-end gap-2 pt-2">
+              <DialogClose className="rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] px-4 py-1.5 text-xs text-[var(--svx-color-text-secondary)] hover:bg-[var(--svx-color-bg-elevated)]">
+                {t("actions.close")}
+              </DialogClose>
+              <button
+                type="button"
+                onClick={onConfirm}
+                className={cn(
+                  "rounded-[var(--svx-radius-md)] px-4 py-1.5 text-xs font-medium text-white hover:opacity-90",
+                  confirmAction === "disable"
+                    ? "bg-[var(--svx-color-warning)]"
+                    : "bg-[var(--svx-color-brand-primary)]",
+                )}
+              >
+                {t("actions.confirm")}
+              </button>
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
 
       {/* Permission audit dialog */}
       {detail && (
