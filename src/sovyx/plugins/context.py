@@ -245,6 +245,7 @@ class BrainAccess:
         importance: float | None = None,
         confidence: float | None = None,
         emotional_valence: float = 0.0,
+        metadata: dict[str, object] | None = None,
     ) -> str:
         """Create a new concept in the Mind's memory.
 
@@ -296,6 +297,7 @@ class BrainAccess:
             importance=importance,
             confidence=confidence,
             emotional_valence=emotional_valence,
+            metadata=metadata or {},
         )
 
         logger.info(

@@ -325,6 +325,8 @@ class BrainService:
         effective_importance = max(0.0, min(1.0, importance)) if importance is not None else 0.5
         effective_confidence = max(0.0, min(1.0, confidence)) if confidence is not None else 0.5
 
+        raw_meta = kwargs.get("metadata", {})
+        extra_meta: dict[str, object] = raw_meta if isinstance(raw_meta, dict) else {}
         concept = Concept(
             mind_id=mind_id,
             name=name,
@@ -334,6 +336,7 @@ class BrainService:
             importance=effective_importance,
             confidence=effective_confidence,
             emotional_valence=max(-1.0, min(1.0, emotional_valence)),
+            metadata=extra_meta,
         )
         concept_id = await self._concepts.create(concept)
 

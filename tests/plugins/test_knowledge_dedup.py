@@ -750,3 +750,131 @@ class TestEpisodeAwareRecall:
         data = json.loads(await plugin.recall_about("nothing"))
         assert data["results"] == []
         assert data["episodes"] == []
+
+
+class TestPersonScopedMemory:
+    """TASK-477: Person-scoped memory in remember/search."""
+
+    @pytest.mark.asyncio
+    async def test_remember_with_person_sets_metadata(self) -> None:
+        brain = _mock_brain()
+        brain.find_similar = AsyncMock(return_value=[])
+        plugin = KnowledgePlugin(brain=brain)
+
+        result = json.loads(await plugin.remember("prefers dark mode", about_person="Guipe"))
+        assert result["action"] == "created"
+        assert result["about_person"] == "Guipe"
+
+        # Verify learn was called with metadata containing person
+        call_kwargs = brain.learn.call_args.kwargs
+        assert call_kwargs["metadata"]["person"] == "Guipe"
+        # Auto-category to "person" when about_person is set
+        assert call_kwargs["category"] == "person"
+
+    @pytest.mark.asyncio
+    async def test_remember_person_keeps_explicit_category(self) -> None:
+        brain = _mock_brain()
+        brain.find_similar = AsyncMock(return_value=[])
+        plugin = KnowledgePlugin(brain=brain)
+
+        result = json.loads(
+            await plugin.remember("likes Python", about_person="Guipe", category="preference")
+        )
+        assert result["action"] == "created"
+        call_kwargs = brain.learn.call_args.kwargs
+        assert call_kwargs["category"] == "preference"
+
+    @pytest.mark.asyncio
+    async def test_search_person_filters(self) -> None:
+        results = [
+            {
+                "id": "c-1",
+                "name": "Guipe pref",
+                "content": "Guipe likes dark mode",
+                "category": "person",
+                "importance": 0.7,
+                "confidence": 0.8,
+                "metadata": {"person": "Guipe"},
+            },
+            {
+                "id": "c-2",
+                "name": "general pref",
+                "content": "dark mode is popular",
+                "category": "fact",
+                "importance": 0.5,
+                "confidence": 0.5,
+                "metadata": {},
+            },
+        ]
+        brain = _mock_brain(search_results=results)
+        plugin = KnowledgePlugin(brain=brain)
+
+        data = json.loads(await plugin.search("dark mode", about_person="Guipe"))
+        assert data["count"] == 1
+        assert data["results"][0]["name"] == "Guipe pref"
+
+    @pytest.mark.asyncio
+    async def test_search_person_matches_content(self) -> None:
+        """Person name in content should also match."""
+        results = [
+            {
+                "id": "c-1",
+                "name": "preference",
+                "content": "Guipe prefers dark mode",
+                "category": "fact",
+                "importance": 0.5,
+                "confidence": 0.5,
+            },
+        ]
+        brain = _mock_brain(search_results=results)
+        plugin = KnowledgePlugin(brain=brain)
+
+        data = json.loads(await plugin.search("preferences", about_person="Guipe"))
+        assert data["count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_search_person_no_match(self) -> None:
+        results = [
+            {
+                "id": "c-1",
+                "name": "general fact",
+                "content": "Python is great",
+                "category": "fact",
+                "importance": 0.5,
+                "confidence": 0.5,
+            },
+        ]
+        brain = _mock_brain(search_results=results)
+        plugin = KnowledgePlugin(brain=brain)
+
+        data = json.loads(await plugin.search("Python", about_person="Natasha"))
+        assert data["results"] == []
+        assert "Natasha" in data["message"]
+
+    @pytest.mark.asyncio
+    async def test_search_no_person_returns_all(self) -> None:
+        results = [
+            {
+                "id": "c-1",
+                "name": "a",
+                "content": "x",
+                "category": "fact",
+                "importance": 0.5,
+                "confidence": 0.5,
+                "score": 0.9,
+            },
+            {
+                "id": "c-2",
+                "name": "b",
+                "content": "y",
+                "category": "fact",
+                "importance": 0.5,
+                "confidence": 0.5,
+                "score": 0.8,
+            },
+        ]
+        brain = _mock_brain(search_results=results)
+        plugin = KnowledgePlugin(brain=brain)
+
+        data = json.loads(await plugin.search("test"))
+        assert data["count"] == 2
