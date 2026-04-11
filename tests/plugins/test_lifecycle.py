@@ -204,3 +204,70 @@ class TestEventEmission:
         mock_bus = MagicMock()
         tracker = PluginStateTracker("test", event_bus=mock_bus)
         tracker.transition(PluginState.LOADING)  # No error
+
+
+# ── Event Dataclass Tests (TASK-435) ───────────────────────────────
+
+
+class TestPluginEventDataclasses:
+    """Tests for PluginLoaded and PluginUnloaded events."""
+
+    def test_plugin_loaded_fields(self) -> None:
+        from sovyx.plugins.events import PluginLoaded
+        from sovyx.engine.events import EventCategory
+
+        evt = PluginLoaded(plugin_name="weather", plugin_version="1.0.0", tools_count=3)
+        assert evt.plugin_name == "weather"
+        assert evt.plugin_version == "1.0.0"
+        assert evt.tools_count == 3
+        assert evt.category == EventCategory.PLUGIN
+        assert evt.event_id  # auto-generated
+
+    def test_plugin_loaded_defaults(self) -> None:
+        from sovyx.plugins.events import PluginLoaded
+
+        evt = PluginLoaded()
+        assert evt.plugin_name == ""
+        assert evt.plugin_version == ""
+        assert evt.tools_count == 0
+
+    def test_plugin_unloaded_fields(self) -> None:
+        from sovyx.plugins.events import PluginUnloaded
+        from sovyx.engine.events import EventCategory
+
+        evt = PluginUnloaded(plugin_name="timer", reason="shutdown")
+        assert evt.plugin_name == "timer"
+        assert evt.reason == "shutdown"
+        assert evt.category == EventCategory.PLUGIN
+
+    def test_plugin_unloaded_defaults(self) -> None:
+        from sovyx.plugins.events import PluginUnloaded
+
+        evt = PluginUnloaded()
+        assert evt.plugin_name == ""
+        assert evt.reason == ""
+
+    def test_plugin_auto_disabled_fields(self) -> None:
+        from sovyx.plugins.events import PluginAutoDisabled
+        from sovyx.engine.events import EventCategory
+
+        evt = PluginAutoDisabled(plugin_name="bad", consecutive_failures=5, last_error="boom")
+        assert evt.plugin_name == "bad"
+        assert evt.consecutive_failures == 5
+        assert evt.last_error == "boom"
+        assert evt.category == EventCategory.PLUGIN
+
+    def test_all_events_are_frozen(self) -> None:
+        """All plugin events are immutable."""
+        from sovyx.plugins.events import (
+            PluginAutoDisabled,
+            PluginLoaded,
+            PluginStateChanged,
+            PluginToolExecuted,
+            PluginUnloaded,
+        )
+
+        for cls in [PluginLoaded, PluginUnloaded, PluginToolExecuted, PluginAutoDisabled, PluginStateChanged]:
+            evt = cls()
+            with pytest.raises(AttributeError):
+                evt.plugin_name = "mutated"  # type: ignore[misc]

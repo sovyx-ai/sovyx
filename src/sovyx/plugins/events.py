@@ -1,7 +1,8 @@
 """Sovyx Plugin Events — events emitted by the plugin system.
 
 These events are emitted on the engine EventBus during plugin
-lifecycle transitions.
+lifecycle transitions and tool executions. Dashboard subscribes
+for real-time plugin monitoring.
 
 Spec: SPE-008 §10 (Plugin Lifecycle)
 """
@@ -21,6 +22,39 @@ class PluginStateChanged(Event):
     from_state: str = ""
     to_state: str = ""
     error_message: str = ""
+
+    @property
+    def category(self) -> EventCategory:
+        """Plugin events category."""
+        return EventCategory.PLUGIN
+
+
+@dataclasses.dataclass(frozen=True)
+class PluginLoaded(Event):
+    """Emitted when a plugin is successfully loaded and ready.
+
+    Dashboard uses this for real-time plugin status updates.
+    """
+
+    plugin_name: str = ""
+    plugin_version: str = ""
+    tools_count: int = 0
+
+    @property
+    def category(self) -> EventCategory:
+        """Plugin events category."""
+        return EventCategory.PLUGIN
+
+
+@dataclasses.dataclass(frozen=True)
+class PluginUnloaded(Event):
+    """Emitted when a plugin is unloaded.
+
+    Dashboard uses this for real-time plugin status updates.
+    """
+
+    plugin_name: str = ""
+    reason: str = ""
 
     @property
     def category(self) -> EventCategory:

@@ -936,6 +936,46 @@ class TestEventEmission:
         assert "tool broke" in emitted[0].last_error
 
     @pytest.mark.anyio()
+    async def test_plugin_loaded_event(self, tmp_path: Path) -> None:
+        """PluginLoaded emitted when plugin is loaded."""
+        mock_bus = AsyncMock()
+        mgr = PluginManager(event_bus=mock_bus, data_dir=tmp_path)
+        await mgr.load_single(FakeWeatherPlugin())
+
+        from sovyx.plugins.events import PluginLoaded
+
+        emitted = [
+            call.args[0]
+            for call in mock_bus.emit.call_args_list
+            if isinstance(call.args[0], PluginLoaded)
+        ]
+        assert len(emitted) == 1
+        assert emitted[0].plugin_name == "weather"
+        assert emitted[0].plugin_version == "1.0.0"
+        assert emitted[0].tools_count == 1
+
+    @pytest.mark.anyio()
+    async def test_plugin_unloaded_event(self, tmp_path: Path) -> None:
+        """PluginUnloaded emitted when plugin is unloaded."""
+        mock_bus = AsyncMock()
+        mgr = PluginManager(event_bus=mock_bus, data_dir=tmp_path)
+        await mgr.load_single(FakeWeatherPlugin())
+        mock_bus.emit.reset_mock()
+
+        await mgr.unload("weather")
+
+        from sovyx.plugins.events import PluginUnloaded
+
+        emitted = [
+            call.args[0]
+            for call in mock_bus.emit.call_args_list
+            if isinstance(call.args[0], PluginUnloaded)
+        ]
+        assert len(emitted) == 1
+        assert emitted[0].plugin_name == "weather"
+        assert emitted[0].reason == "explicit"
+
+    @pytest.mark.anyio()
     async def test_no_event_without_bus(self, tmp_path: Path) -> None:
         """No crash when event_bus is None."""
         mgr = PluginManager(data_dir=tmp_path)

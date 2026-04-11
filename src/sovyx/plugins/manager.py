@@ -338,6 +338,7 @@ class PluginManager:
         self._health[name] = _PluginHealth()
 
         logger.info("plugin_loaded", name=name, tools=len(tools))
+        self._emit_plugin_loaded(name, plugin.version, len(tools))
 
     def _discover_entry_points(self) -> list[type[ISovyxPlugin]]:
         """Discover plugins from pip-installed entry_points."""
@@ -559,6 +560,54 @@ class PluginManager:
         except Exception:  # noqa: BLE001  # nosec B110
             pass  # Event emission must never crash
 
+    def _emit_plugin_loaded(
+        self,
+        plugin_name: str,
+        version: str,
+        tools_count: int,
+    ) -> None:
+        """Emit PluginLoaded event."""
+        if not self._event_bus:
+            return
+        try:
+            from sovyx.plugins.events import PluginLoaded
+
+            event = PluginLoaded(
+                plugin_name=plugin_name,
+                plugin_version=version,
+                tools_count=tools_count,
+            )
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._event_bus.emit(event))
+            except RuntimeError:
+                pass  # No event loop
+        except Exception:  # noqa: BLE001  # nosec B110
+            pass  # Event emission must never crash
+
+    def _emit_plugin_unloaded(
+        self,
+        plugin_name: str,
+        reason: str,
+    ) -> None:
+        """Emit PluginUnloaded event."""
+        if not self._event_bus:
+            return
+        try:
+            from sovyx.plugins.events import PluginUnloaded
+
+            event = PluginUnloaded(
+                plugin_name=plugin_name,
+                reason=reason,
+            )
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._event_bus.emit(event))
+            except RuntimeError:
+                pass  # No event loop
+        except Exception:  # noqa: BLE001  # nosec B110
+            pass  # Event emission must never crash
+
     def _emit_auto_disabled(
         self,
         plugin_name: str,
@@ -695,6 +744,7 @@ class PluginManager:
         del self._plugins[name]
         self._health.pop(name, None)
         logger.info("plugin_unloaded", name=name)
+        self._emit_plugin_unloaded(name, reason="explicit")
 
     async def shutdown(self) -> None:
         """Shutdown all plugins in reverse load order."""
