@@ -49,7 +49,11 @@
     "noEvents": "No events declared",
     "noDependencies": "No dependencies",
     "emits": "Emits",
-    "subscribes": "Subscribes"
+    "subscribes": "Subscribes",
+    "requiresConfirmation": "Requires confirmation",
+    "optional": "optional",
+    "notFound": "Plugin not found",
+    "viewAudit": "View detailed audit"
   },
   "health": {
     "failures": "Consecutive Failures",
@@ -68,13 +72,28 @@
     "reloaded": "Plugin reloaded",
     "enableFailed": "Failed to enable plugin",
     "disableFailed": "Failed to disable plugin",
-    "reloadFailed": "Failed to reload plugin"
+    "reloadFailed": "Failed to reload plugin",
+    "close": "Close"
   },
   "permission": {
     "risk": {
       "low": "Low Risk",
       "medium": "Medium Risk",
       "high": "High Risk"
+    },
+    "count_one": "{{count}} permission",
+    "count_other": "{{count}} permissions",
+    "highCount": "({{count}} high-risk)",
+    "mediumCount": "({{count}} medium-risk)",
+    "reviewInstall": "Review the permissions this plugin requires before installing.",
+    "reviewAudit": "Permissions granted to this plugin.",
+    "allowedDomains": "Allowed domains:",
+    "approveInstall": "Approve & Install",
+    "highRiskWarning": {
+      "network:internet": "This plugin can make HTTP requests to external servers. Check allowed_domains in the manifest.",
+      "brain:write": "This plugin can create, modify, or delete concepts in your Mind's memory.",
+      "brain:delete": "This plugin can permanently delete memories and learned concepts.",
+      "config:write": "This plugin can modify your Mind's configuration and personality settings."
     }
   },
   "pricing": {

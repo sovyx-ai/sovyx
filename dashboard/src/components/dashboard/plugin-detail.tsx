@@ -81,6 +81,7 @@ function Section({
 // ── Tool Item (expandable schema) ──
 
 function ToolItem({ tool }: { tool: PluginToolDetail }) {
+  const { t } = useTranslation("plugins");
   const [expanded, setExpanded] = useState(false);
   const hasParams =
     tool.parameters && Object.keys(tool.parameters).length > 0;
@@ -101,7 +102,7 @@ function ToolItem({ tool }: { tool: PluginToolDetail }) {
         {tool.requires_confirmation && (
           <span
             className="text-[9px] text-[var(--svx-color-warning)]"
-            title="Requires confirmation"
+            title={t("detail.requiresConfirmation")}
           >
             ⚠️
           </span>
@@ -399,7 +400,7 @@ export function PluginDetailPanel({
                     onClick={() => setPermDialogOpen(true)}
                     className="text-[10px] font-medium text-[var(--svx-color-brand-primary)] hover:underline"
                   >
-                    View detailed audit →
+                    {t("detail.viewAudit")} →
                   </button>
                 </div>
               ) : (
@@ -521,7 +522,7 @@ export function PluginDetailPanel({
                       >
                         <span className="font-medium italic">{d.name}</span>
                         <span className="text-[10px]">{d.version}</span>
-                        <span className="text-[9px]">(optional)</span>
+                        <span className="text-[9px]">({t("detail.optional")})</span>
                       </div>
                     ))}
                   </div>
@@ -549,7 +550,7 @@ export function PluginDetailPanel({
         ) : (
           <div className="flex h-full items-center justify-center">
             <p className="text-sm text-[var(--svx-color-text-tertiary)]">
-              Plugin not found
+              {t("detail.notFound")}
             </p>
           </div>
         )}

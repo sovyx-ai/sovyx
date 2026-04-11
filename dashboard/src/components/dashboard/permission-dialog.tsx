@@ -56,12 +56,12 @@ function RiskSummary({
         <ShieldIcon className="size-4 shrink-0" />
       )}
       <span>
-        {permissions.length} permission{permissions.length !== 1 ? "s" : ""}
+        {t("permission.count", { count: permissions.length })}
         {highCount > 0 && (
-          <span className="font-semibold"> ({highCount} {t("permission.risk.high").toLowerCase()})</span>
+          <span className="font-semibold"> {t("permission.highCount", { count: highCount })}</span>
         )}
         {mediumCount > 0 && !highCount && (
-          <span className="font-semibold"> ({mediumCount} {t("permission.risk.medium").toLowerCase()})</span>
+          <span className="font-semibold"> {t("permission.mediumCount", { count: mediumCount })}</span>
         )}
       </span>
     </div>
@@ -88,13 +88,13 @@ const RISK_STYLES: Record<PermissionRisk, { dot: string; bg: string; border: str
   },
 };
 
-/** Known high-risk permissions that deserve extra explanation */
-const HIGH_RISK_DETAILS: Record<string, string> = {
-  "network:internet": "This plugin can make HTTP requests to external servers. Check allowed_domains in the manifest.",
-  "brain:write": "This plugin can create, modify, or delete concepts in your Mind's memory.",
-  "brain:delete": "This plugin can permanently delete memories and learned concepts.",
-  "config:write": "This plugin can modify your Mind's configuration and personality settings.",
-};
+/** Known high-risk permissions that have extra i18n explanations */
+const HIGH_RISK_KEYS: string[] = [
+  "network:internet",
+  "brain:write",
+  "brain:delete",
+  "config:write",
+];
 
 function PermissionRow({
   permission,
@@ -105,7 +105,10 @@ function PermissionRow({
 }) {
   const { t } = useTranslation("plugins");
   const styles = RISK_STYLES[permission.risk] ?? RISK_STYLES.medium;
-  const extraDetail = HIGH_RISK_DETAILS[permission.permission];
+  const hasExtra = HIGH_RISK_KEYS.includes(permission.permission);
+  const extraDetail = hasExtra
+    ? t(`permission.highRiskWarning.${permission.permission}`, "")
+    : "";
 
   return (
     <div
@@ -145,7 +148,7 @@ function PermissionRow({
           <div className="mt-2 ml-4 flex items-start gap-1.5">
             <GlobeIcon className="mt-0.5 size-3 shrink-0 text-[var(--svx-color-text-tertiary)]" />
             <div className="text-[10px] text-[var(--svx-color-text-secondary)]">
-              <span className="font-medium">Allowed domains:</span>{" "}
+              <span className="font-medium">{t("permission.allowedDomains")}</span>{" "}
               {allowedDomains.join(", ")}
             </div>
           </div>
@@ -199,8 +202,8 @@ export function PermissionDialog({
         </DialogTitle>
         <DialogDescription className="text-xs text-[var(--svx-color-text-secondary)]">
           {mode === "install"
-            ? "Review the permissions this plugin requires before installing."
-            : "Permissions granted to this plugin."}
+            ? t("permission.reviewInstall")
+            : t("permission.reviewAudit")}
         </DialogDescription>
 
         {/* Risk summary */}
@@ -232,7 +235,7 @@ export function PermissionDialog({
         {/* Actions */}
         <div className="flex justify-end gap-2 pt-2">
           <DialogClose className="rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] px-4 py-1.5 text-xs text-[var(--svx-color-text-secondary)] hover:bg-[var(--svx-color-bg-elevated)]">
-            {mode === "install" ? t("actions.disable") : t("actions.disable").replace("Disable", "Close")}
+            {t("actions.close")}
           </DialogClose>
           {mode === "install" && onApprove && (
             <button
@@ -243,7 +246,7 @@ export function PermissionDialog({
               }}
               className="rounded-[var(--svx-radius-md)] bg-[var(--svx-color-brand-primary)] px-4 py-1.5 text-xs font-medium text-white hover:opacity-90"
             >
-              Approve &amp; Install
+              {t("permission.approveInstall")}
             </button>
           )}
         </div>
