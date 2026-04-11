@@ -114,6 +114,14 @@ class OutputGuard:
             match = check_content(response_text, self._safety)
 
         if not match.matched:
+            # Shadow mode evaluation (log-only, never blocks)
+            from sovyx.cognitive.shadow_mode import evaluate_shadow
+
+            evaluate_shadow(
+                response_text,
+                self._safety,
+                FilterDirection.OUTPUT,
+            )
             return _pass_result(response_text)
 
         return self._act_on_match(response_text, match)
@@ -167,6 +175,15 @@ class OutputGuard:
                     latency_ms=verdict.latency_ms,
                 )
                 return self._act_on_match(response_text, llm_match)
+
+        # ── 3. Shadow mode evaluation (log-only, never blocks) ──
+        from sovyx.cognitive.shadow_mode import evaluate_shadow
+
+        evaluate_shadow(
+            response_text,
+            self._safety,
+            FilterDirection.OUTPUT,
+        )
 
         return _pass_result(response_text)
 

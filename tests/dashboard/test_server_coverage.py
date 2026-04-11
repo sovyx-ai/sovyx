@@ -756,7 +756,7 @@ class TestSafetyDashboard:
         data = resp.json()
         assert data["ok"]
         assert "pii_patterns" in data
-        assert "cache_size" in data or True  # May not be available
+        # cache_size may not be available depending on classifier state
         assert "active_patterns" in data
 
     def test_get_history_empty(

@@ -62,6 +62,13 @@ class AttendPhase:
         self._safety = safety_config
         self._llm_router = llm_router
 
+    def _should_block(self, reason: str) -> bool:
+        """Check if content should be blocked or allowed (shadow mode)."""
+        if self._safety.shadow_mode:
+            logger.info("shadow_mode_would_block", reason=reason)
+            return False
+        return True
+
     async def process(self, perception: Perception) -> bool:
         """Check if perception should be processed.
 
@@ -90,26 +97,33 @@ class AttendPhase:
         m = get_metrics()
 
         # ── 0a. Multi-turn injection check ──
-        from sovyx.cognitive.injection_tracker import get_injection_tracker
+        if self._safety.content_filter != "none":
+            from sovyx.cognitive.injection_tracker import (
+                InjectionVerdict,
+                get_injection_tracker,
+            )
 
-        mt_verdict = get_injection_tracker().record_turn(
-            conversation_id=perception.source,
-            text=perception.content,
-        )
-        if mt_verdict.suspicious:
-            logger.warning(
-                "perception_filtered_multi_turn_injection",
-                perception_id=perception.id,
-                score=mt_verdict.score,
-                reason=mt_verdict.reason,
+            mt_analysis = get_injection_tracker().analyze(
+                perception.source,
+                perception.content,
             )
-            m.safety_blocks.add(1, {"reason": "multi_turn_injection"})
-            get_audit_trail().record(
-                direction=FilterDirection.INPUT,
-                action=FilterAction.BLOCKED,
-                match=FilterMatch(matched=True),
-            )
-            return False
+            if mt_analysis.verdict in (
+                InjectionVerdict.SUSPICIOUS,
+                InjectionVerdict.ESCALATE,
+            ):
+                logger.warning(
+                    "perception_filtered_multi_turn_injection",
+                    perception_id=perception.id,
+                    score=mt_analysis.cumulative_score,
+                )
+                m.safety_blocks.add(1, {"reason": "multi_turn_injection"})
+                get_audit_trail().record(
+                    direction=FilterDirection.INPUT,
+                    action=FilterAction.BLOCKED,
+                    match=FilterMatch(matched=True),
+                )
+                if self._should_block("multi_turn"):
+                    return False
 
         # ── 0b. Custom rules + banned topics ──
         from sovyx.cognitive.custom_rules import check_banned_topics, check_custom_rules
@@ -127,7 +141,8 @@ class AttendPhase:
                 action=FilterAction.BLOCKED,
                 match=FilterMatch(matched=True),
             )
-            return False
+            if self._should_block("custom_rule"):
+                return False
 
         topic_match = check_banned_topics(perception.content, self._safety)
         if topic_match.matched:
@@ -142,7 +157,8 @@ class AttendPhase:
                 action=FilterAction.BLOCKED,
                 match=FilterMatch(matched=True),
             )
-            return False
+            if self._should_block("banned_topic"):
+                return False
 
         # ── 1. Regex fast-path ──
         with m.measure_latency(m.safety_filter_latency, {"direction": "input"}):
@@ -163,7 +179,8 @@ class AttendPhase:
                 match=regex_result,
             )
             tracker.record_block(perception.source)
-            return False
+            if self._should_block("regex"):
+                return False
 
         # ── 1b. Multi-turn injection context tracking ──
         if self._safety.content_filter != "none":
@@ -174,7 +191,8 @@ class AttendPhase:
 
             conv_id = perception.metadata.get("conversation_id", perception.source)
             injection_analysis = get_injection_tracker().analyze(
-                str(conv_id), perception.content,
+                str(conv_id),
+                perception.content,
             )
             if injection_analysis.verdict == InjectionVerdict.ESCALATE:
                 logger.warning(
@@ -198,7 +216,8 @@ class AttendPhase:
                     ),
                 )
                 tracker.record_block(perception.source)
-                return False
+                if self._should_block("multi_turn"):
+                    return False
 
         # ── 2. LLM classifier (if available and filter active) ──
         if self._llm_router is not None and self._safety.content_filter != "none":
@@ -226,7 +245,8 @@ class AttendPhase:
                     match=llm_match,
                 )
                 tracker.record_block(perception.source)
-                return False
+                if self._should_block("llm"):
+                    return False
 
         # ── 3. Priority check ──
         if perception.priority < 0:
@@ -236,6 +256,15 @@ class AttendPhase:
                 priority=perception.priority,
             )
             return False
+
+        # ── 4. Shadow mode evaluation (log-only, never blocks) ──
+        from sovyx.cognitive.shadow_mode import evaluate_shadow
+
+        evaluate_shadow(
+            perception.content,
+            self._safety,
+            FilterDirection.INPUT,
+        )
 
         logger.debug(
             "perception_accepted",
