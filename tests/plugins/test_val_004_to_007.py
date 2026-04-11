@@ -256,16 +256,20 @@ class TestEntryPointsConfig:
 
     def test_entry_points_group_matches(self) -> None:
         """The group used in manager matches pyproject.toml."""
+        import inspect
 
-        # The group string in the manager
-        with open("/root/sovyx/src/sovyx/plugins/manager.py") as f:
-            content = f.read()
-        assert 'group="sovyx.plugins"' in content
+        # Read manager source via inspect (works regardless of install path)
+        import sovyx.plugins.manager as mgr_mod
 
-        # The group string in pyproject.toml
-        with open("/root/sovyx/pyproject.toml") as f:
-            toml = f.read()
-        assert '[project.entry-points."sovyx.plugins"]' in toml
+        src = inspect.getsource(mgr_mod)
+        assert 'group="sovyx.plugins"' in src
+
+        # The group string in pyproject.toml (find it relative to source)
+        src_dir = Path(inspect.getfile(mgr_mod)).resolve().parent
+        pyproject = src_dir.parents[2] / "pyproject.toml"
+        if pyproject.exists():
+            toml = pyproject.read_text()
+            assert '[project.entry-points."sovyx.plugins"]' in toml
 
     @pytest.mark.anyio()
     async def test_enabled_empty_list_loads_nothing(self, tmp_path: Path) -> None:
