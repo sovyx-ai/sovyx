@@ -307,3 +307,46 @@ Run all diagnostic checks and return the report.
   ]
 }
 ```
+
+### Plugins
+
+#### `GET /api/plugins`
+
+List all installed plugins with enriched metadata.
+
+**Response:**
+```json
+[
+  {
+    "name": "weather",
+    "version": "1.0.0",
+    "description": "Weather forecasts via Open-Meteo.",
+    "enabled": true,
+    "status": "active",
+    "tools": [
+      {"name": "get_weather", "description": "Get current weather for a city."}
+    ],
+    "permissions": ["network:internet"],
+    "category": "utilities",
+    "author": "Sovyx",
+    "icon_url": null,
+    "pricing": "free"
+  }
+]
+```
+
+#### `GET /api/plugins/{name}`
+
+Get detailed information about a specific plugin.
+
+#### `POST /api/plugins/{name}/enable`
+
+Enable a plugin. Requires prior permission approval.
+
+#### `POST /api/plugins/{name}/disable`
+
+Disable a plugin. Running tool calls are allowed to complete.
+
+#### `DELETE /api/plugins/{name}`
+
+Remove a plugin. Requires confirmation.

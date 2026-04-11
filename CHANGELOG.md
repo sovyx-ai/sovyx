@@ -5,6 +5,48 @@ All notable changes to Sovyx will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] — 2026-04-11
+
+### Added — Plugin Dashboard & Management UI
+
+- **Plugins Page** (`/plugins`): Full-featured plugin management page with grid layout,
+  search, filters by status/category, and real-time stats (total, active, disabled, tools).
+- **PluginCard Component**: Hero card with glass morphism, status badges, tool/permission
+  indicators, category labels, and pricing display.
+- **Plugin Detail Panel**: Slide-over Sheet with complete plugin information — description,
+  version, author, permissions breakdown, available tools, and configuration.
+- **Plugin Badge System**: Reusable badge components for tools count, permission levels,
+  category tags, and pricing tiers.
+- **Plugin Actions**: Enable/disable/remove with confirmation dialogs, toast notifications,
+  kebab overflow menu, and double-click guard for destructive actions.
+- **Permission Approval Dialog**: Security-first UX — users explicitly review and approve
+  each permission a plugin requests before activation.
+- **Plugin REST API** (`/api/plugins`): Backend endpoints for listing plugins with enriched
+  data (status, tools, permissions, marketplace metadata).
+- **Zustand Plugin Slice**: Frontend state management with optimistic updates, WebSocket
+  event handling for real-time sync.
+- **Plugin Animations**: Smooth mount/unmount transitions, skeleton loading states,
+  responsive grid that adapts to viewport.
+- **Engine State Awareness**: Dashboard distinguishes "plugin engine off" from "no plugins
+  installed" — each with appropriate empty state and CTA.
+
+### Added — Testing & Quality
+
+- **25 Contract Tests**: Every field in backend response validated against frontend
+  TypeScript types — bidirectional contract coverage.
+- **12 E2E Integration Tests**: Real PluginManager through FastAPI endpoints — no mocks,
+  full pipeline validation.
+- **20 Vitest Plugin Tests**: Full zustand slice coverage — actions, selectors, edge cases.
+- **689 dashboard backend tests** total (36 plugin + 25 contract + 12 E2E + 616 existing).
+- **672 dashboard frontend tests** total (22 plugin + 650 existing).
+
+### Fixed
+
+- **Hardcoded strings**: 15 hardcoded English strings migrated to i18n system (107 keys
+  total, zero hardcoded strings remaining in plugin components).
+- **Dialog UX**: Replaced `window.confirm` with proper Dialog components, added Escape key
+  handling on kebab menus, inline error display, and double-click prevention.
+
 ## [0.7.1] — 2026-04-11
 
 ### Fixed — Plugin SDK Deep Validation

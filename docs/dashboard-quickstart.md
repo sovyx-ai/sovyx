@@ -118,6 +118,21 @@ Check that port 7777 is not in use: `lsof -i :7777`
 **LLM not responding?**
 Run `sovyx doctor` to check API key and connectivity.
 
+## Plugins
+
+The dashboard includes a **Plugins** page for managing installed plugins:
+
+1. Click **Plugins** in the sidebar
+2. Browse installed plugins in a grid view
+3. Use search and filters to find plugins by name, status, or category
+4. Click a plugin card for details — permissions, tools, configuration
+5. Enable/disable plugins with confirmation dialogs
+6. New plugins require explicit permission approval before activation
+
+Plugin management is also available via CLI: `sovyx plugin list`, `sovyx plugin enable <name>`, etc.
+
+See the [Plugin Developer Guide](plugin-developer-guide.md) for building your own plugins.
+
 ---
 
-*Sovyx v0.5 — Sovereign Minds Engine*
+*Sovyx v0.8 — Sovereign Minds Engine*

@@ -97,7 +97,7 @@ version: 1.0.0
 description: What my plugin does.
 author: Your Name
 license: MIT
-min_sovyx_version: 0.6.0
+min_sovyx_version: 0.7.0
 
 permissions:
   - network:internet    # HTTP access to the internet

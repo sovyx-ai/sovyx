@@ -12,8 +12,9 @@ Sovyx is a self-hosted AI companion engine that builds genuine, persistent memor
 - **Adaptive Context** — Lost-in-Middle ordering, adaptive token budgets, 6-slot context assembly
 - **Multi-Provider LLM** — Anthropic Claude, OpenAI GPT, Google Gemini, local Ollama — with automatic failover
 - **Cost Control** — Daily and per-conversation budgets with persistent tracking
-- **Dashboard** — Real-time web UI for brain visualization, logs, and settings
-- **Voice Pipeline** — Wake word, STT, TTS with hardware-adaptive model selection (v0.5)
+- **Dashboard** — Real-time web UI for brain visualization, plugin management, logs, and settings
+- **Plugin System** — SDK, CLI, built-in plugins, ReAct loop, hot-reload, dashboard management
+- **Voice Pipeline** — Wake word, STT, TTS with hardware-adaptive model selection
 - **Telegram & Signal** — Multi-channel bridge with per-channel identity resolution
 - **Self-Hosted** — Your data stays on your hardware. Always.
 
