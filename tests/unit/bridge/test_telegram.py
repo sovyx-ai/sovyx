@@ -159,10 +159,11 @@ class TestOnMessage:
 class TestStubs:
     """v0.5+ stubs raise NotImplementedError."""
 
-    async def test_edit_raises(self) -> None:
+    async def test_edit_no_target_logs_warning(self) -> None:
+        """edit() without target logs warning and returns gracefully."""
         ch = TelegramChannel(VALID_TOKEN, _mock_bridge())
-        with pytest.raises(NotImplementedError, match="v0.1"):
-            await ch.edit("1", "new")
+        # No target → logs warning, does NOT raise
+        await ch.edit("1", "new")
 
     async def test_delete_raises(self) -> None:
         ch = TelegramChannel(VALID_TOKEN, _mock_bridge())
