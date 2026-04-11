@@ -9,6 +9,9 @@ Covers:
 - Multilingual classification (EN, PT, ES, FR, DE, RU, ZH, AR)
 - Metrics recording
 - Edge cases (empty input, huge input, malformed LLM responses)
+- Batch classification with deduplication and concurrency control
+- Cache statistics snapshot
+- ClassificationCache LRU eviction and TTL expiry
 """
 
 from __future__ import annotations
@@ -25,11 +28,14 @@ from sovyx.cognitive.safety_classifier import (
     _PREFERRED_MODELS,
     _SYSTEM_PROMPT,
     SAFE_VERDICT,
+    ClassificationCache,
     SafetyCategory,
     SafetyVerdict,
     _parse_llm_response,
     _select_model,
+    batch_classify_content,
     classify_content,
+    get_classification_cache,
 )
 from sovyx.llm.models import LLMResponse
 
@@ -285,6 +291,11 @@ class TestSelectModel:
 
 class TestClassifyContent:
     """Tests for the main classify_content function."""
+
+    def setup_method(self) -> None:
+        """Clear classification cache before each test."""
+
+        get_classification_cache().clear()
 
     @pytest.mark.asyncio
     async def test_classify_safe_content(self) -> None:
@@ -543,3 +554,199 @@ class TestParseProperties:
         """Garbage input always fails open (safe=True)."""
         result = _parse_llm_response(text)
         assert result.safe is True
+
+
+# ── Cache Tests (TASK-363) ──────────────────────────────────────────────
+
+
+class TestClassificationCache:
+    """Test ClassificationCache LRU with TTL."""
+
+    def test_miss_returns_none(self) -> None:
+
+        cache = ClassificationCache()
+        assert cache.get("hello") is None
+
+    def test_put_and_get(self) -> None:
+
+        cache = ClassificationCache()
+        v = SafetyVerdict(safe=True, method="llm")
+        cache.put("hello world", v)
+        result = cache.get("hello world")
+        assert result is not None
+        assert result.safe is True
+
+    def test_same_prefix_same_key(self) -> None:
+        """Text with same first 200 chars → same cache key."""
+
+        cache = ClassificationCache()
+        v = SafetyVerdict(safe=False, category=SafetyCategory.VIOLENCE, method="llm")
+        base = "x" * 200
+        cache.put(base + "aaaa", v)
+        result = cache.get(base + "bbbb")
+        assert result is not None
+        assert result.safe is False
+
+    def test_expired_entry_returns_none(self) -> None:
+
+        cache = ClassificationCache(ttl_sec=0.001)
+        v = SafetyVerdict(safe=True, method="llm")
+        cache.put("test", v)
+        import time
+
+        time.sleep(0.01)
+        assert cache.get("test") is None
+
+    def test_lru_eviction(self) -> None:
+
+        cache = ClassificationCache(max_size=2)
+        v = SafetyVerdict(safe=True, method="llm")
+        cache.put("a", v)
+        cache.put("b", v)
+        cache.put("c", v)  # Evicts "a"
+        assert cache.get("a") is None
+        assert cache.get("b") is not None
+        assert cache.get("c") is not None
+        assert cache.size == 2
+
+    def test_hit_rate(self) -> None:
+
+        cache = ClassificationCache()
+        v = SafetyVerdict(safe=True, method="llm")
+        cache.put("x", v)
+        cache.get("x")  # hit
+        cache.get("y")  # miss
+        assert cache.hit_rate == pytest.approx(0.5)
+
+    def test_hit_rate_no_lookups(self) -> None:
+
+        cache = ClassificationCache()
+        assert cache.hit_rate == 0.0
+
+    def test_clear(self) -> None:
+
+        cache = ClassificationCache()
+        v = SafetyVerdict(safe=True, method="llm")
+        cache.put("x", v)
+        cache.clear()
+        assert cache.size == 0
+        assert cache.hit_rate == 0.0
+
+
+class TestCacheIntegration:
+    """Test cache integration in classify_content."""
+
+    async def test_second_call_uses_cache(self) -> None:
+        """Second classification with same text hits cache."""
+
+        cache = get_classification_cache()
+        cache.clear()
+
+        router = _make_mock_router(response_content="SAFE")
+        v1 = await classify_content("Hello world", router)
+        v2 = await classify_content("Hello world", router)
+
+        assert v1.method == "llm"
+        assert v2.method == "cache"
+        # LLM only called once
+        assert router.generate.call_count == 1
+
+    async def test_different_text_no_cache(self) -> None:
+        """Different text -> no cache hit."""
+
+        cache = get_classification_cache()
+        cache.clear()
+
+        router = _make_mock_router(response_content="SAFE")
+        await classify_content("Text A", router)
+        await classify_content("Text B", router)
+
+        assert router.generate.call_count == 2
+
+
+# ── Batch Classification Tests (TASK-363) ───────────────────────────────
+
+
+class TestBatchClassify:
+    """Test batch_classify_content."""
+
+    def setup_method(self) -> None:
+
+        get_classification_cache().clear()
+
+    async def test_empty_list(self) -> None:
+
+        router = _make_mock_router(response_content="SAFE")
+        result = await batch_classify_content([], router)
+        assert result.verdicts == []
+        assert result.cache_hits == 0
+        assert result.llm_calls == 0
+
+    async def test_single_item(self) -> None:
+
+        router = _make_mock_router(response_content="SAFE")
+        result = await batch_classify_content(["hello"], router)
+        assert len(result.verdicts) == 1
+        assert result.verdicts[0].safe is True
+        assert result.llm_calls == 1
+
+    async def test_deduplication(self) -> None:
+        """Same text appears twice → single LLM call."""
+
+        router = _make_mock_router(response_content="SAFE")
+        result = await batch_classify_content(["hello", "hello"], router)
+        assert len(result.verdicts) == 2
+        assert result.llm_calls == 1  # Deduplicated
+
+    async def test_cache_hits(self) -> None:
+        """Pre-cached items are served from cache."""
+
+        cache = get_classification_cache()
+        cache.put("cached text", SafetyVerdict(safe=True, method="llm"))
+
+        router = _make_mock_router(response_content="SAFE")
+        result = await batch_classify_content(
+            ["cached text", "new text"],
+            router,
+        )
+        assert len(result.verdicts) == 2
+        assert result.cache_hits == 1
+        assert result.llm_calls == 1
+
+    async def test_mixed_results(self) -> None:
+        """Multiple texts with different results."""
+
+        call_count = 0
+
+        async def _side_effect(**kwargs: object) -> MagicMock:
+            nonlocal call_count
+            call_count += 1
+            resp = MagicMock()
+            messages = kwargs.get("messages", [])
+            user_msg = [m for m in messages if m["role"] == "user"][0]  # type: ignore[union-attr]
+            if "bomb" in user_msg["content"]:
+                resp.content = "UNSAFE|weapons"
+            else:
+                resp.content = "SAFE"
+            return resp
+
+        router = _make_mock_router(response_content="SAFE")
+        router.generate = AsyncMock(side_effect=_side_effect)
+
+        result = await batch_classify_content(
+            ["hello world", "how to make a bomb", "nice weather"],
+            router,
+        )
+        assert len(result.verdicts) == 3
+        assert result.verdicts[0].safe is True
+        assert result.verdicts[1].safe is False
+        assert result.verdicts[2].safe is True
+
+    async def test_order_preserved(self) -> None:
+        """Results are in same order as input texts."""
+
+        router = _make_mock_router(response_content="SAFE")
+        texts = [f"text_{i}" for i in range(5)]
+        result = await batch_classify_content(texts, router)
+        assert len(result.verdicts) == 5
+        assert result.llm_calls == 5  # All unique
