@@ -71,6 +71,17 @@ PII_PATTERNS: tuple[PIIPattern, ...] = (
         r"[-_][a-zA-Z0-9]{20,}\b",
         "api_key",
     ),
+    # ── Financial identifiers (before credit card to avoid overlap) ──
+    # IBAN (2 letters + 2 check digits + up to 30 alphanumeric)
+    _pii(
+        r"\b[A-Z]{2}\d{2}\s?[A-Z0-9]{4}[\s]?(?:[A-Z0-9]{4}[\s]?){1,7}[A-Z0-9]{1,4}\b",
+        "iban",
+    ),
+    # SWIFT/BIC code (keyword-anchored to avoid false positives on common words)
+    _pii(
+        r"(?i)(?:swift|bic|swift\s*code|bic\s*code)[\s:]*[A-Z]{4}[A-Z]{2}[A-Z0-9]{2}(?:[A-Z0-9]{3})?(?=\s|$)",
+        "swift",
+    ),
     # Credit card numbers (13-19 digits with optional separators)
     _pii(
         r"\b(?:\d{4}[-\s]?){3,4}\d{1,4}\b",
