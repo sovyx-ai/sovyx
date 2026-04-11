@@ -26,6 +26,66 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+# Track pending financial confirmations per conversation_id.
+# Simple dict — acceptable for v0.6 (single-process, bounded by timeout).
+_chat_pending_confirmations: dict[str, bool] = {}
+
+
+async def _handle_chat_financial_callback(
+    *,
+    registry: ServiceRegistry,
+    callback_data: str,
+    conversation_id: str,
+    mind_id: str,
+) -> dict[str, Any]:
+    """Resolve a financial confirmation callback from dashboard chat.
+
+    Called when the chat message starts with ``fin_`` — this means the
+    frontend sent a button callback_data instead of a user message.
+    """
+    is_confirm = callback_data.startswith(("fin_confirm:", "fin_confirm_all:"))
+    is_cancel = callback_data.startswith(("fin_cancel:", "fin_cancel_all:"))
+
+    if is_confirm:
+        response_text = "✅ Financial action approved."
+    elif is_cancel:
+        response_text = "❌ Financial action cancelled."
+    else:
+        response_text = "⚠️ Unknown financial action."
+
+    # Resolve in FinancialGate if available
+    try:
+        from sovyx.cognitive.financial_gate import FinancialGate
+
+        fin_gate = await registry.resolve(FinancialGate)
+        if is_confirm:
+            pending = fin_gate.state.get_pending()
+            if pending:
+                fin_gate.state.confirm(pending.tool_call.id)
+        elif is_cancel:
+            fin_gate.state.cancel_all()
+    except Exception:  # noqa: BLE001
+        logger.debug("chat_financial_gate_not_available")
+
+    # Clear pending state
+    _chat_pending_confirmations.pop(conversation_id, None)
+
+    logger.info(
+        "dashboard_chat_financial_callback",
+        callback=callback_data,
+        action="confirm" if is_confirm else "cancel",
+    )
+
+    now = datetime.now(UTC)
+    return {
+        "response": response_text,
+        "conversation_id": conversation_id,
+        "mind_id": mind_id,
+        "timestamp": now.isoformat(),
+        "financial_resolved": True,
+    }
+
+
 # Fixed channel user ID for dashboard users — all dashboard sessions
 # share the same person identity.  This simplifies v0.5 (single-user)
 # while being extensible: v1.0 can add per-session user IDs.
@@ -131,6 +191,17 @@ async def handle_chat_message(
         person_name=user_name,
     )
 
+    # ── Financial callback shortcut ──
+    # If the message is a callback_data from a button press, resolve it
+    # without hitting the cognitive loop.
+    if stripped.startswith("fin_"):
+        return await _handle_chat_financial_callback(
+            registry=registry,
+            callback_data=stripped,
+            conversation_id=str(conv_id),
+            mind_id=str(mind_id),
+        )
+
     # ── Submit to cognitive loop ──
     try:
         result = await gate.submit(request, timeout=timeout)
@@ -142,9 +213,26 @@ async def handle_chat_message(
     await conversation_tracker.add_turn(conv_id, "user", stripped)
 
     response_text = ""
+    buttons_payload: list[dict[str, str]] | None = None
+
     if result is not None and not result.filtered:
         response_text = result.response_text
-        if response_text:
+
+        # ── Financial confirmation pending → include buttons ──
+        if result.pending_confirmation and result.buttons:
+            buttons_payload = []
+            for row in result.buttons:
+                for btn in row:
+                    buttons_payload.append(
+                        {
+                            "text": getattr(btn, "text", str(btn)),
+                            "callback_data": getattr(btn, "callback_data", ""),
+                        }
+                    )
+            # Track pending for this conversation
+            _chat_pending_confirmations[str(conv_id)] = True
+
+        if response_text and not result.pending_confirmation:
             await conversation_tracker.add_turn(
                 conv_id,
                 "assistant",
@@ -162,9 +250,14 @@ async def handle_chat_message(
 
     now = datetime.now(UTC)
 
-    return {
+    resp: dict[str, Any] = {
         "response": response_text,
         "conversation_id": str(conv_id),
         "mind_id": str(mind_id),
         "timestamp": now.isoformat(),
     }
+    if buttons_payload:
+        resp["buttons"] = buttons_payload
+    if result is not None and result.pending_confirmation:
+        resp["pending_confirmation"] = True
+    return resp
