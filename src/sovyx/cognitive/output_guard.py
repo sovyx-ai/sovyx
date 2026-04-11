@@ -40,7 +40,7 @@ logger = get_logger(__name__)
 
 # Safe replacement message (professional, non-alarming)
 _SAFE_REPLACEMENT = (
-    "I'm not able to provide that information. "
+    "I'm not able to provide that information. "  # Default EN; use safety_i18n for localized
     "Let me know if there's something else I can help with."
 )
 
