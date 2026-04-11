@@ -187,14 +187,15 @@ class SafetyEscalationTracker:
         self._sources.clear()
 
 
-# ── Module-level singleton ─────────────────────────────────────────────
-
-_tracker: SafetyEscalationTracker | None = None
+# ── Tracker accessor (delegates to SafetyContainer) ────────────────────
 
 
 def get_escalation_tracker() -> SafetyEscalationTracker:
-    """Get the global SafetyEscalationTracker instance."""
-    global _tracker  # noqa: PLW0603
-    if _tracker is None:
-        _tracker = SafetyEscalationTracker()
-    return _tracker
+    """Get the SafetyEscalationTracker from the global container.
+
+    Returns:
+        The SafetyEscalationTracker instance managed by SafetyContainer.
+    """
+    from sovyx.cognitive.safety_container import get_safety_container
+
+    return get_safety_container().escalation_tracker

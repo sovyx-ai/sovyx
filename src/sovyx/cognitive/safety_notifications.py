@@ -138,20 +138,31 @@ class SafetyNotifier:
         self._alert_count = 0
 
 
-# ── Module singleton ────────────────────────────────────────────────────
-_notifier: SafetyNotifier | None = None
+# ── Notifier accessor (delegates to SafetyContainer) ───────────────────
 
 
 def get_notifier() -> SafetyNotifier:
-    """Get or create the global SafetyNotifier."""
-    global _notifier  # noqa: PLW0603
-    if _notifier is None:
-        _notifier = SafetyNotifier()
-    return _notifier
+    """Get the SafetyNotifier from the global container.
+
+    Returns:
+        The SafetyNotifier instance managed by SafetyContainer.
+    """
+    from sovyx.cognitive.safety_container import get_safety_container
+
+    return get_safety_container().notifier
 
 
 def setup_notifier(sink: NotificationSink | None = None) -> SafetyNotifier:
-    """Initialize the global notifier with a specific sink."""
-    global _notifier  # noqa: PLW0603
-    _notifier = SafetyNotifier(sink=sink)
-    return _notifier
+    """Initialize a new SafetyNotifier in the global container.
+
+    Args:
+        sink: Notification delivery sink (default: log).
+
+    Returns:
+        The newly created SafetyNotifier.
+    """
+    from sovyx.cognitive.safety_container import get_safety_container
+
+    container = get_safety_container()
+    container.notifier = SafetyNotifier(sink=sink)
+    return container.notifier

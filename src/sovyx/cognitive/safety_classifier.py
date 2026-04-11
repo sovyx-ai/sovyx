@@ -143,16 +143,18 @@ class ClassificationBudget:
         self._hourly_cap = cap
 
 
-# Module singleton
-_budget: ClassificationBudget | None = None
+# ── Budget accessor (delegates to SafetyContainer) ─────────────────────
 
 
 def get_classification_budget() -> ClassificationBudget:
-    """Get or create the global classification budget."""
-    global _budget  # noqa: PLW0603
-    if _budget is None:
-        _budget = ClassificationBudget()
-    return _budget
+    """Get the ClassificationBudget from the global container.
+
+    Returns:
+        The ClassificationBudget instance managed by SafetyContainer.
+    """
+    from sovyx.cognitive.safety_container import get_safety_container
+
+    return get_safety_container().classification_budget
 
 
 class SafetyCategory(enum.Enum):
@@ -287,13 +289,18 @@ class ClassificationCache:
         self._misses = 0
 
 
-# Module-level singleton cache
-_classification_cache = ClassificationCache()
+# ── Cache accessor (delegates to SafetyContainer) ──────────────────────
 
 
 def get_classification_cache() -> ClassificationCache:
-    """Get the global classification cache instance."""
-    return _classification_cache
+    """Get the ClassificationCache from the global container.
+
+    Returns:
+        The ClassificationCache instance managed by SafetyContainer.
+    """
+    from sovyx.cognitive.safety_container import get_safety_container
+
+    return get_safety_container().classification_cache
 
 
 def _parse_llm_response(raw: str) -> SafetyVerdict:

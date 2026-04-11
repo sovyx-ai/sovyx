@@ -205,21 +205,31 @@ class SafetyAuditTrail:
         self._events.clear()
 
 
-# ── Module-level singleton ─────────────────────────────────────────────
-
-_audit_trail: SafetyAuditTrail | None = None
+# ── Module-level accessor (delegates to SafetyContainer) ───────────────
 
 
 def get_audit_trail() -> SafetyAuditTrail:
-    """Get the global SafetyAuditTrail instance."""
-    global _audit_trail  # noqa: PLW0603
-    if _audit_trail is None:
-        _audit_trail = SafetyAuditTrail()
-    return _audit_trail
+    """Get the SafetyAuditTrail from the global container.
+
+    Returns:
+        The SafetyAuditTrail instance managed by SafetyContainer.
+    """
+    from sovyx.cognitive.safety_container import get_safety_container
+
+    return get_safety_container().audit_trail
 
 
 def setup_audit_trail(max_events: int = 10000) -> SafetyAuditTrail:
-    """Initialize the global SafetyAuditTrail."""
-    global _audit_trail  # noqa: PLW0603
-    _audit_trail = SafetyAuditTrail(max_events=max_events)
-    return _audit_trail
+    """Initialize a new SafetyAuditTrail in the global container.
+
+    Args:
+        max_events: Maximum events to keep in memory.
+
+    Returns:
+        The newly created SafetyAuditTrail.
+    """
+    from sovyx.cognitive.safety_container import get_safety_container
+
+    container = get_safety_container()
+    container.audit_trail = SafetyAuditTrail(max_events=max_events)
+    return container.audit_trail
