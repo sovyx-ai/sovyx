@@ -68,21 +68,29 @@ def _sanitize_tool_name(name: str) -> str:
     """Sanitize tool name for LLM providers.
 
     OpenAI requires ``^[a-zA-Z0-9_-]+$`` (no dots).
-    We use dots internally for namespacing (plugin.tool) but
-    convert to double-underscores for the LLM API to avoid
-    ambiguity on reverse mapping.
+    Sovyx uses exactly ONE dot for namespacing: ``plugin.tool``.
+    We replace that single dot with ``--`` (double hyphen).
 
-    ``calculator.calculate`` → ``calculator__calculate``
+    Hyphens ARE allowed in OpenAI tool names. Plugin names
+    validated by manifest use ``[a-z][a-z0-9-]*`` so single
+    hyphens are common, but ``--`` never appears in valid names
+    (manifest blocks consecutive hyphens).
+
+    ``calculator.calculate`` → ``calculator--calculate``
+    ``my-plugin.do_thing``   → ``my-plugin--do_thing``
     """
-    return name.replace(".", "__")
+    return name.replace(".", "--", 1)
 
 
 def _unsanitize_tool_name(name: str) -> str:
     """Reverse tool name sanitization.
 
-    ``calculator__calculate`` → ``calculator.calculate``
+    Replaces the first ``--`` back to ``.`` for internal dispatch.
+
+    ``calculator--calculate`` → ``calculator.calculate``
+    ``my-plugin--do_thing``   → ``my-plugin.do_thing``
     """
-    return name.replace("__", ".")
+    return name.replace("--", ".", 1)
 
 
 def format_tools_openai(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:

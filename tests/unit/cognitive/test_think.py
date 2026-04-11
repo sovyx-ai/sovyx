@@ -142,6 +142,7 @@ class TestThinkPhaseWithPlugins:
 
     async def test_tools_passed_to_generate(self) -> None:
         from unittest.mock import MagicMock
+
         from sovyx.plugins.sdk import ToolDefinition
 
         assembler = _mock_assembler()

@@ -51,7 +51,7 @@ class TestFormatToolsOpenAI:
         result = format_tools_openai(SAMPLE_TOOLS)
         assert len(result) == 2
         assert result[0]["type"] == "function"
-        assert result[0]["function"]["name"] == "weather__get_weather"
+        assert result[0]["function"]["name"] == "weather--get_weather"
         assert result[0]["function"]["description"] == "Get weather for a city"
         assert result[0]["function"]["parameters"]["required"] == ["city"]
 
@@ -69,7 +69,7 @@ class TestFormatToolsAnthropic:
     def test_basic(self) -> None:
         result = format_tools_anthropic(SAMPLE_TOOLS)
         assert len(result) == 2
-        assert result[0]["name"] == "weather__get_weather"
+        assert result[0]["name"] == "weather--get_weather"
         assert result[0]["description"] == "Get weather for a city"
         assert result[0]["input_schema"]["type"] == "object"
         # No "type": "function" wrapper
@@ -87,7 +87,7 @@ class TestFormatToolsGoogle:
         assert len(result) == 1  # Wrapped in single object
         declarations = result[0]["functionDeclarations"]
         assert len(declarations) == 2
-        assert declarations[0]["name"] == "weather__get_weather"
+        assert declarations[0]["name"] == "weather--get_weather"
 
     def test_empty(self) -> None:
         result = format_tools_google([])
