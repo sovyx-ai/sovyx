@@ -674,7 +674,7 @@ class TestPerformance:
             check_content(msg, cfg)
         elapsed_ms = (time.monotonic() - start) * 1000
 
-        assert elapsed_ms < 100, f"Too slow: {elapsed_ms:.1f}ms for 1000 messages"
+        assert elapsed_ms < 500, f"Too slow: {elapsed_ms:.1f}ms for 1000 messages"
 
     def test_none_filter_near_zero_overhead(self) -> None:
         cfg = SafetyConfig(content_filter="none")

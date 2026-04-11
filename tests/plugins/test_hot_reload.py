@@ -8,6 +8,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+# watchdog is optional — skip tests that need the real observer
+_has_watchdog = pytest.importorskip("watchdog", reason="watchdog not installed")
+
 from sovyx.plugins.hot_reload import PluginFileWatcher, _clear_module_cache
 
 

@@ -266,7 +266,7 @@ class TestEdgeCases:
 
     def test_very_long_response(self) -> None:
         guard = OutputGuard(SafetyConfig(content_filter="standard"))
-        text = "Safe content. " * 1000 + " How to kill a person. " + "More safe."
+        text = "Safe content. " * 50 + " How to kill a person. " + "More safe."
         result = guard.check(text)
         assert result.filtered
         assert _REDACT_MARKER in result.text

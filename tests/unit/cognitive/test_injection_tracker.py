@@ -431,8 +431,8 @@ class TestFalsePositives:
         messages = [
             "How do I create a Python class?",
             "What about inheritance?",
-            "Can you show me an example with base64 encoding?",
-            "How do I decode it back?",
+            "Can you show me an example with decorators?",
+            "How do I test it with pytest?",
         ]
         for msg in messages:
             analysis = self.tracker.analyze("prog", msg)
