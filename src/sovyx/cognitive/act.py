@@ -11,7 +11,8 @@ Spec: SPE-003 §4 (ReAct pattern), SPE-008 §6 (PluginManager dispatch)
 from __future__ import annotations
 
 import dataclasses
-from typing import TYPE_CHECKING
+import json
+from typing import TYPE_CHECKING, Any
 
 from sovyx.llm.models import ToolCall, ToolResult
 from sovyx.observability.logging import get_logger
@@ -333,7 +334,7 @@ class ActPhase:
         """
         current_response = llm_response
         all_tool_calls: list[ToolCall] = []
-        messages = list(assembled_messages)
+        messages: list[dict[str, Any]] = list(assembled_messages)
 
         for iteration in range(self._tools.max_depth):
             tool_calls = current_response.tool_calls
@@ -364,19 +365,32 @@ class ActPhase:
             )
 
             # Build messages for re-invocation:
-            # 1. Add assistant message with tool_calls
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": current_response.content or "",
-                }
-            )
+            # 1. Add assistant message WITH tool_calls (required by OpenAI)
+            assistant_msg: dict[str, object] = {
+                "role": "assistant",
+                "content": current_response.content or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.function_name,
+                            "arguments": json.dumps(tc.arguments)
+                            if isinstance(tc.arguments, dict)
+                            else str(tc.arguments),
+                        },
+                    }
+                    for tc in tool_calls
+                ],
+            }
+            messages.append(assistant_msg)
 
-            # 2. Add tool results as messages
+            # 2. Add tool results with tool_call_id (required by OpenAI)
             for result in results:
                 messages.append(
                     {
                         "role": "tool",
+                        "tool_call_id": result.call_id,
                         "content": (
                             f"[{result.name}] {'✓' if result.success else '✗'}: {result.output}"
                         ),
