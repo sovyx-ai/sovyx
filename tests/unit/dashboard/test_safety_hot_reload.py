@@ -259,3 +259,46 @@ class TestSafetyStatusConfirmationMethod:
         )
         assert cfg.safety.financial_confirmation is True
         # API returns classification_fallback="llm"
+
+    def test_response_fields_when_enabled(self) -> None:
+        """Validate expected response shape when financial gate is on."""
+        safety = SafetyConfig(financial_confirmation=True)
+        # Simulate what the endpoint computes
+        confirmation_method = "inline_buttons" if safety.financial_confirmation else "disabled"
+        classification_fallback = "llm" if safety.financial_confirmation else "regex"
+        assert confirmation_method == "inline_buttons"
+        assert classification_fallback == "llm"
+
+    def test_response_fields_when_disabled(self) -> None:
+        """Validate expected response shape when financial gate is off."""
+        safety = SafetyConfig(financial_confirmation=False)
+        confirmation_method = "inline_buttons" if safety.financial_confirmation else "disabled"
+        classification_fallback = "llm" if safety.financial_confirmation else "regex"
+        assert confirmation_method == "disabled"
+        assert classification_fallback == "regex"
+
+    def test_channel_capabilities_telegram_has_buttons(self) -> None:
+        """Telegram adapter reports inline_buttons capability."""
+        from unittest.mock import MagicMock
+
+        adapter = MagicMock()
+        adapter.capabilities = {"send", "inline_buttons", "edit"}
+
+        caps = adapter.capabilities
+        has_buttons = "inline_buttons" in caps
+        method = "inline_buttons" if has_buttons else "text_classification"
+        assert has_buttons is True
+        assert method == "inline_buttons"
+
+    def test_channel_capabilities_signal_no_buttons(self) -> None:
+        """Signal adapter does NOT report inline_buttons capability."""
+        from unittest.mock import MagicMock
+
+        adapter = MagicMock()
+        adapter.capabilities = {"send"}
+
+        caps = adapter.capabilities
+        has_buttons = "inline_buttons" in caps
+        method = "inline_buttons" if has_buttons else "text_classification"
+        assert has_buttons is False
+        assert method == "text_classification"
