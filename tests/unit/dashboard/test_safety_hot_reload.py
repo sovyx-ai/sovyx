@@ -93,23 +93,32 @@ class TestApplySafetyChanges:
 class TestStructuredLog:
     """Structured log emitted on safety config change."""
 
-    def test_log_emitted_on_change(self, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_log_emitted_on_change(self) -> None:
+        from unittest.mock import MagicMock, patch
+
         cfg = MindConfig(name="Aria", safety=SafetyConfig(content_filter="none"))
         changes: dict[str, str] = {}
-        _apply_safety(cfg, {"content_filter": "standard"}, changes)
-        # structlog may emit to stdout or stderr depending on configuration
-        captured = capsys.readouterr()
-        combined = captured.out + captured.err
-        assert "safety_config_changed" in combined
-        assert "content_filter" in combined
+        mock_logger = MagicMock()
+        # _apply_safety imports get_logger locally — patch at source module
+        with patch("sovyx.observability.logging.get_logger", return_value=mock_logger):
+            _apply_safety(cfg, {"content_filter": "standard"}, changes)
+        # Verify structured log was emitted with correct event
+        mock_logger.info.assert_any_call(
+            "safety_config_changed",
+            content_filter="none → standard",
+        )
 
-    def test_no_log_when_no_change(self, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_no_log_when_no_change(self) -> None:
+        from unittest.mock import MagicMock, patch
+
         cfg = MindConfig(name="Aria", safety=SafetyConfig(content_filter="standard"))
         changes: dict[str, str] = {}
-        _apply_safety(cfg, {"content_filter": "standard"}, changes)
-        captured = capsys.readouterr()
-        combined = captured.out + captured.err
-        assert "safety_config_changed" not in combined
+        mock_logger = MagicMock()
+        with patch("sovyx.observability.logging.get_logger", return_value=mock_logger):
+            _apply_safety(cfg, {"content_filter": "standard"}, changes)
+        # safety_config_changed should NOT be logged when nothing changed
+        for call in mock_logger.info.call_args_list:
+            assert call[0][0] != "safety_config_changed"
 
 
 class TestDynamicPatternResolution:
