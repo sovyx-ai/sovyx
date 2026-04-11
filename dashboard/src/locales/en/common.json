@@ -11,7 +11,8 @@
     "settings": "Settings",
     "about": "About",
     "chat": "Chat",
-    "voice": "Voice"
+    "voice": "Voice",
+    "plugins": "Plugins"
   },
   "status": {
     "online": "Online",

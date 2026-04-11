@@ -29,7 +29,7 @@ function loadBundle(ns: string): Record<string, unknown> {
 
 const NAMESPACES = [
   "common", "overview", "conversations", "brain", "logs",
-  "settings", "voice", "about", "chat",
+  "settings", "voice", "about", "chat", "plugins",
 ] as const;
 
 const bundles: Record<string, Record<string, unknown>> = {};

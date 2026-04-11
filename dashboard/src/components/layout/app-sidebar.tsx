@@ -23,6 +23,7 @@ import {
   SettingsIcon,
   InfoIcon,
   ActivityIcon,
+  PuzzleIcon,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -54,6 +55,7 @@ const CORE_NAV: NavItem[] = [
   { titleKey: "nav.brain", icon: BrainIcon, path: "/brain" },
   { titleKey: "nav.logs", icon: ScrollTextIcon, path: "/logs" },
   { titleKey: "nav.settings", icon: SettingsIcon, path: "/settings" },
+  { titleKey: "nav.plugins", icon: PuzzleIcon, path: "/plugins" },
 ];
 
 
