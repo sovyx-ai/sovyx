@@ -787,7 +787,7 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
             from sovyx.cognitive.injection_tracker import get_injection_tracker
 
             injection_stats = {
-                "tracked_conversations": get_injection_tracker().tracked_conversations,
+                "tracked_conversations": len(get_injection_tracker()._conversations),
             }
         except Exception:  # noqa: BLE001
             pass
