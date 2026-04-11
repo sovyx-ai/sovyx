@@ -93,9 +93,26 @@ PII_PATTERNS: tuple[PIIPattern, ...] = (
         r"\b(?:[A-Z]{2}[-/]?)?\d{2}\.?\d{3}\.?\d{3}[-.]?\d{1}\b",
         "rg",
     ),
-    # Brazilian CNH (11 digits, often with spaces)
+    # ── Keyword-anchored patterns (MUST come before generic digit patterns) ──
+    # Polish PESEL (11 digits, keyword to avoid CNH conflict)
     _pii(
-        r"\b\d{4}\s?\d{4}\s?\d{3}\b",
+        r"(?i)\bpesel\b[\s:]*\d{11}\b",
+        "pesel",
+    ),
+    # UK NHS Number (keyword + 10 digits)
+    _pii(
+        r"(?i)\bnhs\b[\s:#]*\d{3}\s?\d{3}\s?\d{4}\b",
+        "nhs",
+    ),
+    # Canadian SIN (keyword + XXX-XXX-XXX)
+    _pii(
+        r"(?i)\bsin\b[\s:#]*\d{3}[-\s]\d{3}[-\s]\d{3}\b",
+        "sin",
+    ),
+    # ── Format-specific document patterns ──
+    # Brazilian CNH (XXXX XXXX XXX — requires spaces)
+    _pii(
+        r"\b\d{4}\s\d{4}\s\d{3}\b",
         "cnh",
     ),
     # US SSN (XXX-XX-XXXX)
@@ -103,6 +120,22 @@ PII_PATTERNS: tuple[PIIPattern, ...] = (
         r"\b\d{3}-\d{2}-\d{4}\b",
         "ssn",
     ),
+    # Spanish/Portuguese NIF/NIE (letter + 7-8 digits + letter)
+    _pii(
+        r"\b[A-Z]?\d{7,8}[-]?[A-Z]\b",
+        "nif",
+    ),
+    # Argentine DNI (XX.XXX.XXX — requires dots)
+    _pii(
+        r"\b\d{2}\.\d{3}\.\d{3}\b",
+        "dni",
+    ),
+    # Indian Aadhaar (XXXX XXXX XXXX — 12 digits with spaces)
+    _pii(
+        r"\b\d{4}\s\d{4}\s\d{4}\b",
+        "aadhaar",
+    ),
+    # ── Contact info ──
     # Email addresses
     _pii(
         r"\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}\b",
