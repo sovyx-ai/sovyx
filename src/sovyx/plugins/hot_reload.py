@@ -78,7 +78,7 @@ class PluginFileWatcher:
 
         watcher_ref = self
 
-        class _Handler(FileSystemEventHandler):
+        class _Handler(FileSystemEventHandler):  # type: ignore[misc]
             def on_modified(self, event: object) -> None:
                 watcher_ref._handle_fs_event(event)
 
