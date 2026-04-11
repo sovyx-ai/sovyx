@@ -24,10 +24,13 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from sovyx.cognitive.safety_classifier import (
+    _BATCH_MAX_CONCURRENT,
     _CLASSIFY_TIMEOUT_SEC,
     _PREFERRED_MODELS,
     _SYSTEM_PROMPT,
     SAFE_VERDICT,
+    BatchClassificationResult,
+    CacheStats,
     ClassificationCache,
     SafetyCategory,
     SafetyVerdict,
@@ -35,6 +38,7 @@ from sovyx.cognitive.safety_classifier import (
     _select_model,
     batch_classify_content,
     classify_content,
+    get_cache_stats,
     get_classification_cache,
 )
 from sovyx.llm.models import LLMResponse
@@ -671,36 +675,57 @@ class TestBatchClassify:
     """Test batch_classify_content."""
 
     def setup_method(self) -> None:
-
         get_classification_cache().clear()
 
+    @pytest.mark.asyncio
     async def test_empty_list(self) -> None:
-
+        """Empty input returns empty result with zero stats."""
         router = _make_mock_router(response_content="SAFE")
         result = await batch_classify_content([], router)
         assert result.verdicts == []
+        assert result.total_ms == 0
         assert result.cache_hits == 0
         assert result.llm_calls == 0
 
+    @pytest.mark.asyncio
     async def test_single_item(self) -> None:
-
+        """Single item batch works like classify_content."""
         router = _make_mock_router(response_content="SAFE")
         result = await batch_classify_content(["hello"], router)
         assert len(result.verdicts) == 1
         assert result.verdicts[0].safe is True
         assert result.llm_calls == 1
 
+    @pytest.mark.asyncio
     async def test_deduplication(self) -> None:
         """Same text appears twice → single LLM call."""
-
         router = _make_mock_router(response_content="SAFE")
         result = await batch_classify_content(["hello", "hello"], router)
         assert len(result.verdicts) == 2
         assert result.llm_calls == 1  # Deduplicated
+        assert router.generate.call_count == 1
 
+    @pytest.mark.asyncio
+    async def test_triple_deduplication(self) -> None:
+        """Same text appears three times → single LLM call, three verdicts."""
+        router = _make_mock_router(response_content="SAFE")
+        result = await batch_classify_content(["same", "same", "same"], router)
+        assert len(result.verdicts) == 3
+        assert all(v.safe for v in result.verdicts)
+        assert result.llm_calls == 1
+
+    @pytest.mark.asyncio
+    async def test_partial_deduplication(self) -> None:
+        """Mix of unique and duplicate texts deduplicates correctly."""
+        router = _make_mock_router(response_content="SAFE")
+        texts = ["a", "b", "a", "c", "b"]
+        result = await batch_classify_content(texts, router)
+        assert len(result.verdicts) == 5
+        assert result.llm_calls == 3  # 3 unique
+
+    @pytest.mark.asyncio
     async def test_cache_hits(self) -> None:
         """Pre-cached items are served from cache."""
-
         cache = get_classification_cache()
         cache.put("cached text", SafetyVerdict(safe=True, method="llm"))
 
@@ -712,23 +737,33 @@ class TestBatchClassify:
         assert len(result.verdicts) == 2
         assert result.cache_hits == 1
         assert result.llm_calls == 1
+        assert result.verdicts[0].method == "cache"
 
+    @pytest.mark.asyncio
+    async def test_all_cached(self) -> None:
+        """All texts cached → zero LLM calls."""
+        cache = get_classification_cache()
+        cache.put("a", SafetyVerdict(safe=True, method="llm"))
+        cache.put("b", SafetyVerdict(safe=False, category=SafetyCategory.VIOLENCE, method="llm"))
+
+        router = _make_mock_router(response_content="SAFE")
+        result = await batch_classify_content(["a", "b"], router)
+        assert result.cache_hits == 2
+        assert result.llm_calls == 0
+        assert router.generate.call_count == 0
+        assert result.verdicts[0].safe is True
+        assert result.verdicts[1].safe is False
+
+    @pytest.mark.asyncio
     async def test_mixed_results(self) -> None:
-        """Multiple texts with different results."""
+        """Multiple texts with different safety results."""
 
-        call_count = 0
-
-        async def _side_effect(**kwargs: object) -> MagicMock:
-            nonlocal call_count
-            call_count += 1
-            resp = MagicMock()
+        async def _side_effect(**kwargs: object) -> LLMResponse:
             messages = kwargs.get("messages", [])
             user_msg = [m for m in messages if m["role"] == "user"][0]  # type: ignore[union-attr]
             if "bomb" in user_msg["content"]:
-                resp.content = "UNSAFE|weapons"
-            else:
-                resp.content = "SAFE"
-            return resp
+                return _make_llm_response("UNSAFE|weapons")
+            return _make_llm_response("SAFE")
 
         router = _make_mock_router(response_content="SAFE")
         router.generate = AsyncMock(side_effect=_side_effect)
@@ -740,13 +775,255 @@ class TestBatchClassify:
         assert len(result.verdicts) == 3
         assert result.verdicts[0].safe is True
         assert result.verdicts[1].safe is False
+        assert result.verdicts[1].category == SafetyCategory.WEAPONS
         assert result.verdicts[2].safe is True
 
+    @pytest.mark.asyncio
     async def test_order_preserved(self) -> None:
         """Results are in same order as input texts."""
-
         router = _make_mock_router(response_content="SAFE")
         texts = [f"text_{i}" for i in range(5)]
         result = await batch_classify_content(texts, router)
         assert len(result.verdicts) == 5
         assert result.llm_calls == 5  # All unique
+
+    @pytest.mark.asyncio
+    async def test_concurrency_bounded(self) -> None:
+        """No more than max_concurrent LLM calls run simultaneously."""
+        max_seen = 0
+        current = 0
+        lock = asyncio.Lock()
+
+        async def tracked_generate(**kwargs: object) -> LLMResponse:
+            nonlocal max_seen, current
+            async with lock:
+                current += 1
+                if current > max_seen:
+                    max_seen = current
+            await asyncio.sleep(0.01)
+            async with lock:
+                current -= 1
+            return _make_llm_response("SAFE")
+
+        router = _make_mock_router()
+        router.generate = AsyncMock(side_effect=tracked_generate)
+
+        texts = [f"text-{i}" for i in range(10)]
+        result = await batch_classify_content(texts, router, max_concurrent=3)
+
+        assert max_seen <= 3
+        assert len(result.verdicts) == 10
+
+    @pytest.mark.asyncio
+    async def test_timeout_per_item_fails_open(self) -> None:
+        """Items that timeout still return SAFE (fail-open)."""
+        call_count = 0
+
+        async def mixed_generate(**kwargs: object) -> LLMResponse:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                await asyncio.sleep(10)  # Will timeout
+            return _make_llm_response("SAFE")
+
+        router = _make_mock_router()
+        router.generate = AsyncMock(side_effect=mixed_generate)
+
+        texts = ["fast-1", "slow-timeout", "fast-2"]
+        result = await batch_classify_content(texts, router, timeout=0.05)
+
+        assert len(result.verdicts) == 3
+        assert all(v.safe for v in result.verdicts)
+
+    @pytest.mark.asyncio
+    async def test_batch_populates_cache(self) -> None:
+        """Batch results are cached for subsequent single lookups."""
+        router = _make_mock_router(response_content="SAFE")
+        await batch_classify_content(["new-batch-text"], router)
+
+        cached = get_classification_cache().get("new-batch-text")
+        assert cached is not None
+        assert cached.safe is True
+
+    @pytest.mark.asyncio
+    async def test_batch_result_dataclass(self) -> None:
+        """BatchClassificationResult has correct types and non-negative values."""
+        router = _make_mock_router(response_content="SAFE")
+        result = await batch_classify_content(["test"], router)
+
+        assert isinstance(result, BatchClassificationResult)
+        assert isinstance(result.verdicts, list)
+        assert isinstance(result.total_ms, int)
+        assert isinstance(result.cache_hits, int)
+        assert isinstance(result.llm_calls, int)
+        assert result.total_ms >= 0
+
+    @pytest.mark.asyncio
+    async def test_default_max_concurrent(self) -> None:
+        """Default max_concurrent matches module constant."""
+        assert _BATCH_MAX_CONCURRENT == 5
+
+
+# ── ClassificationCache Extended Tests ──────────────────────────────────
+
+
+class TestClassificationCacheExtended:
+    """Extended unit tests for ClassificationCache edge cases."""
+
+    def test_lru_eviction(self) -> None:
+        """Oldest entries are evicted when cache reaches max_size."""
+        cache = ClassificationCache(max_size=3, ttl_sec=300.0)
+        for i in range(5):
+            cache.put(f"text-{i}", SafetyVerdict(safe=True, method="llm"))
+
+        assert cache.size == 3
+        # Oldest (text-0, text-1) should be evicted
+        assert cache.get("text-0") is None
+        assert cache.get("text-1") is None
+        assert cache.get("text-2") is not None
+
+    def test_ttl_expiry(self) -> None:
+        """Entries expire after TTL seconds."""
+        cache = ClassificationCache(max_size=10, ttl_sec=0.0)
+        cache.put("text", SafetyVerdict(safe=True, method="llm"))
+        # TTL=0 → immediately expired
+        assert cache.get("text") is None
+
+    def test_hit_rate_calculation(self) -> None:
+        """Hit rate is correctly computed from hits and misses."""
+        cache = ClassificationCache(max_size=10, ttl_sec=300.0)
+        cache.put("exists", SafetyVerdict(safe=True, method="llm"))
+        cache.get("exists")  # hit
+        cache.get("exists")  # hit
+        cache.get("missing")  # miss
+        assert cache.hit_rate == pytest.approx(2 / 3)
+
+    def test_hit_rate_zero_on_empty(self) -> None:
+        """Hit rate is 0.0 when no lookups have been made."""
+        cache = ClassificationCache(max_size=10, ttl_sec=300.0)
+        assert cache.hit_rate == 0.0
+
+    def test_clear_resets_everything(self) -> None:
+        """Clear resets entries and counters."""
+        cache = ClassificationCache(max_size=10, ttl_sec=300.0)
+        cache.put("text", SafetyVerdict(safe=True, method="llm"))
+        cache.get("text")
+        cache.get("miss")
+        cache.clear()
+        assert cache.size == 0
+        assert cache.hit_rate == 0.0
+        assert cache._hits == 0
+        assert cache._misses == 0
+
+    def test_put_overwrites_existing(self) -> None:
+        """Putting same key overwrites the previous entry."""
+        cache = ClassificationCache(max_size=10, ttl_sec=300.0)
+        v1 = SafetyVerdict(safe=True, method="llm")
+        v2 = SafetyVerdict(safe=False, category=SafetyCategory.VIOLENCE, method="llm")
+        cache.put("text", v1)
+        cache.put("text", v2)
+        result = cache.get("text")
+        assert result is not None
+        assert result.safe is False
+        assert cache.size == 1
+
+    def test_move_to_end_on_hit(self) -> None:
+        """Accessed entries are moved to end (most recently used)."""
+        cache = ClassificationCache(max_size=2, ttl_sec=300.0)
+        cache.put("old", SafetyVerdict(safe=True, method="llm"))
+        cache.put("new", SafetyVerdict(safe=True, method="llm"))
+        # Access "old" to make it most recently used
+        cache.get("old")
+        # Adding a third entry should evict "new" (least recently used)
+        cache.put("newest", SafetyVerdict(safe=True, method="llm"))
+        assert cache.get("old") is not None
+        assert cache.get("newest") is not None
+
+    def test_key_hashing_prefix(self) -> None:
+        """Cache key is based on first 200 chars only."""
+        cache = ClassificationCache(max_size=10, ttl_sec=300.0)
+        base = "a" * 200
+        text1 = base + "XXXXX"
+        text2 = base + "YYYYY"
+        cache.put(text1, SafetyVerdict(safe=True, method="llm"))
+        # text2 shares same 200-char prefix → same cache key
+        result = cache.get(text2)
+        assert result is not None
+
+
+# ── Cache Statistics Tests ──────────────────────────────────────────────
+
+
+class TestCacheStats:
+    """Tests for get_cache_stats."""
+
+    def setup_method(self) -> None:
+        get_classification_cache().clear()
+
+    def test_stats_on_empty_cache(self) -> None:
+        """Stats reflect empty cache state."""
+        stats = get_cache_stats()
+        assert isinstance(stats, CacheStats)
+        assert stats.size == 0
+        assert stats.hits == 0
+        assert stats.misses == 0
+        assert stats.hit_rate == 0.0
+        assert stats.max_size > 0
+        assert stats.ttl_sec > 0
+
+    def test_stats_after_operations(self) -> None:
+        """Stats reflect cache operations."""
+        cache = get_classification_cache()
+        cache.put("text", SafetyVerdict(safe=True, method="llm"))
+        cache.get("text")  # hit
+        cache.get("miss")  # miss
+        stats = get_cache_stats()
+        assert stats.size == 1
+        assert stats.hits == 1
+        assert stats.misses == 1
+        assert stats.hit_rate == pytest.approx(0.5)
+
+    def test_stats_is_frozen(self) -> None:
+        """CacheStats is immutable."""
+        stats = get_cache_stats()
+        with pytest.raises(AttributeError):
+            stats.size = 999  # type: ignore[misc]
+
+    @pytest.mark.asyncio
+    async def test_stats_after_batch(self) -> None:
+        """Stats update after batch classification."""
+        router = _make_mock_router(response_content="SAFE")
+        await batch_classify_content(["a", "b", "c"], router)
+        stats = get_cache_stats()
+        assert stats.size == 3
+        assert stats.misses == 3
+
+
+# ── Property-Based Batch Tests ──────────────────────────────────────────
+
+
+class TestBatchProperties:
+    """Hypothesis-based tests for batch classification."""
+
+    def setup_method(self) -> None:
+        get_classification_cache().clear()
+
+    @given(st.lists(st.text(min_size=1, max_size=100), min_size=1, max_size=20))
+    @settings(max_examples=20)
+    @pytest.mark.asyncio
+    async def test_batch_length_matches_input(self, texts: list[str]) -> None:
+        """Output length always matches input length."""
+        get_classification_cache().clear()
+        router = _make_mock_router(response_content="SAFE")
+        result = await batch_classify_content(texts, router)
+        assert len(result.verdicts) == len(texts)
+
+    @given(st.lists(st.text(min_size=1, max_size=100), min_size=1, max_size=10))
+    @settings(max_examples=15)
+    @pytest.mark.asyncio
+    async def test_batch_llm_calls_leq_unique(self, texts: list[str]) -> None:
+        """LLM calls never exceed unique text count."""
+        get_classification_cache().clear()
+        router = _make_mock_router(response_content="SAFE")
+        result = await batch_classify_content(texts, router)
+        assert result.llm_calls <= len(set(texts))

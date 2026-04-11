@@ -516,7 +516,7 @@ async def batch_classify_content(
         llm_calls = len(unique_texts)
 
         # Phase 3: Reassemble — map verdicts back to original indices
-        for text, verdict in zip(unique_texts, verdicts):
+        for text, verdict in zip(unique_texts, verdicts, strict=True):
             if isinstance(verdict, BaseException):
                 # Shouldn't happen (classify_content catches all), but be safe
                 logger.warning(
