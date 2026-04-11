@@ -405,6 +405,170 @@ class BrainAccess:
         )
         return True
 
+    async def create_relation(
+        self,
+        source_id: str,
+        target_id: str,
+        relation_type: str = "related_to",
+    ) -> str:
+        """Create or retrieve a relation between two concepts.
+
+        The relation is canonicalized (order doesn't matter): calling
+        create_relation(A, B) and create_relation(B, A) yields the
+        same relation row.
+
+        Valid relation types: related_to, part_of, causes, contradicts,
+        example_of, temporal, emotional.
+
+        Args:
+            source_id: One concept ID.
+            target_id: Other concept ID.
+            relation_type: Relation type string. Default "related_to".
+
+        Returns:
+            Relation ID string.
+
+        Raises:
+            PermissionDeniedError: brain:write not granted.
+            ValueError: Invalid relation type.
+        """
+        from sovyx.engine.types import ConceptId, RelationType
+
+        self._enforcer.check("brain:write")
+        if not self._write:
+            raise PermissionDeniedError(self._plugin, "brain:write")
+
+        try:
+            rel_type = RelationType(relation_type)
+        except ValueError:
+            valid = [r.value for r in RelationType]
+            msg = f"Invalid relation_type '{relation_type}'. Valid: {valid}"
+            raise ValueError(msg) from None
+
+        relation = await self._brain._relations.get_or_create(
+            source_id=ConceptId(source_id),
+            target_id=ConceptId(target_id),
+            relation_type=rel_type,
+        )
+
+        logger.info(
+            "brain_access_create_relation",
+            plugin=self._plugin,
+            source=source_id,
+            target=target_id,
+            relation_type=relation_type,
+            relation_id=str(relation.id),
+        )
+        return str(relation.id)
+
+    async def boost_importance(
+        self,
+        concept_id: str,
+        delta: float = 0.05,
+    ) -> bool:
+        """Boost a concept's importance score.
+
+        The delta is added to the current importance, capped at 1.0.
+        Useful for reinforcement: repeated mentions should increase
+        a concept's importance rather than create duplicates.
+
+        Args:
+            concept_id: Concept to boost.
+            delta: Amount to add [0.0, 0.5]. Default 0.05.
+                   Clamped to prevent importance inflation.
+
+        Returns:
+            True if concept found and boosted, False if not found.
+
+        Raises:
+            PermissionDeniedError: brain:write not granted.
+        """
+        from sovyx.engine.types import ConceptId
+
+        self._enforcer.check("brain:write")
+        if not self._write:
+            raise PermissionDeniedError(self._plugin, "brain:write")
+
+        cid = ConceptId(concept_id)
+        concept = await self._brain.get_concept(cid)
+        if concept is None:
+            return False
+
+        clamped_delta = max(0.0, min(0.5, delta))
+        await self._brain._concepts.boost_importance(cid, clamped_delta)
+
+        logger.debug(
+            "brain_access_boost",
+            plugin=self._plugin,
+            concept_id=concept_id,
+            delta=clamped_delta,
+        )
+        return True
+
+    async def get_stats(self) -> dict[str, object]:
+        """Get brain statistics for the current Mind.
+
+        Provides a high-level overview: concept count, category breakdown,
+        relation count, episode count. This is the Mind's self-awareness
+        data — answers "how much do I know?" and "what categories?"
+
+        Permission: brain:read (read-only introspection).
+
+        Returns:
+            Dict with total_concepts, categories (dict of name→count),
+            total_relations, total_episodes.
+
+        Raises:
+            PermissionDeniedError: brain:read not granted.
+        """
+        from sovyx.engine.types import MindId
+
+        self._enforcer.check("brain:read")
+        mind_id = MindId(self._mind_id)
+
+        # Category breakdown
+        categories_raw = await self._brain._concepts.get_categories(mind_id)
+        category_counts: dict[str, int] = {}
+        total = 0
+        for cat in categories_raw:
+            count = await self._brain._concepts.count_by_category(mind_id, cat)
+            category_counts[cat] = count
+            total += count
+
+        # Relation count — get all concepts and count their relations
+        # Use a lightweight query approach
+        try:
+            async with self._brain._relations._pool.read() as conn:
+                cursor = await conn.execute(
+                    "SELECT COUNT(*) FROM relations WHERE source_id IN "
+                    "(SELECT id FROM concepts WHERE mind_id = ?)",
+                    (str(mind_id),),
+                )
+                row = await cursor.fetchone()
+                relation_count = int(row[0]) if row else 0
+        except Exception:  # noqa: BLE001
+            relation_count = 0
+
+        # Episode count
+        try:
+            async with self._brain._episodes._pool.read() as conn:
+                cursor = await conn.execute(
+                    "SELECT COUNT(*) FROM episodes WHERE mind_id = ?",
+                    (str(mind_id),),
+                )
+                row = await cursor.fetchone()
+                episode_count = int(row[0]) if row else 0
+        except Exception:  # noqa: BLE001
+            episode_count = 0
+
+        return {
+            "total_concepts": total,
+            "categories": category_counts,
+            "total_relations": relation_count,
+            "total_episodes": episode_count,
+            "mind_id": self._mind_id,
+        }
+
     # ── Internal Helpers ──
 
     @staticmethod
