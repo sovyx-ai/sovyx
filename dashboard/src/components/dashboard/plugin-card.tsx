@@ -123,17 +123,26 @@ function QuickActions({
   const disablePlugin = useDashboardStore((s) => s.disablePlugin);
   const reloadPlugin = useDashboardStore((s) => s.reloadPlugin);
 
-  // Close on click outside
+  // Close on click outside + Escape
   useEffect(() => {
     if (!open) return;
-    const handler = (e: MouseEvent) => {
+    const handleClick = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         setOpen(false);
       }
     };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("keydown", handleKey);
+    };
   }, [open]);
+
+  const [actionLoading, setActionLoading] = useState(false);
 
   const handleAction = async (action: "enable" | "disable" | "reload" | "details") => {
     setOpen(false);
@@ -141,18 +150,22 @@ function QuickActions({
       onViewDetails();
       return;
     }
-    if (action === "disable" && !window.confirm(t("actions.disableConfirm"))) return;
-    if (action === "reload" && !window.confirm(t("actions.reloadConfirm"))) return;
+    if (actionLoading) return; // Double-click guard
+    setActionLoading(true);
+    try {
+      let success = false;
+      if (action === "enable") success = await enablePlugin(plugin.name);
+      else if (action === "disable") success = await disablePlugin(plugin.name);
+      else success = await reloadPlugin(plugin.name);
 
-    let success = false;
-    if (action === "enable") success = await enablePlugin(plugin.name);
-    else if (action === "disable") success = await disablePlugin(plugin.name);
-    else success = await reloadPlugin(plugin.name);
-
-    if (success) {
-      toast.success(t(`actions.${action === "enable" ? "enabled" : action === "disable" ? "disabled" : "reloaded"}`));
-    } else {
-      toast.error(t(`actions.${action}Failed`));
+      const key = action === "enable" ? "enabled" : action === "disable" ? "disabled" : "reloaded";
+      if (success) {
+        toast.success(t(`actions.${key}`));
+      } else {
+        toast.error(t(`actions.${action}Failed`));
+      }
+    } finally {
+      setActionLoading(false);
     }
   };
 
