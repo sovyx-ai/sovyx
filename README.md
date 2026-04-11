@@ -158,6 +158,34 @@ sovyx doctor          # Run health checks
 sovyx token           # Show dashboard auth token
 ```
 
+## Plugins
+
+Extend your Mind with plugins — custom tools the LLM can call during conversation.
+
+```python
+from sovyx.plugins import ISovyxPlugin, tool
+
+class WeatherPlugin(ISovyxPlugin):
+    name = "weather"
+    version = "1.0.0"
+    description = "Get weather data."
+
+    @tool(description="Get current weather for a city.")
+    async def get_weather(self, city: str) -> str:
+        ...
+```
+
+**Built-in plugins:** Calculator, Weather (Open-Meteo), Knowledge (brain interface).
+
+```bash
+sovyx plugin list              # List installed plugins
+sovyx plugin install ./my-plugin   # Install from local dir
+sovyx plugin create my-plugin  # Scaffold a new plugin
+sovyx plugin validate .        # Run quality gates
+```
+
+See the [Plugin Developer Guide](docs/plugin-developer-guide.md) for full documentation.
+
 ---
 
 ## Development
@@ -184,7 +212,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development guide.
 | v0.1 | Released | Core engine, brain, Telegram, CLI |
 | v0.5 | Released | Voice pipeline, dashboard, Signal, cloud backup, zero-downtime upgrades |
 | v0.5.1 | Released | Dashboard chat, security hardening, attack testing, CI/CD pipeline |
-| v1.0 | Planned | Multi-tenant, JWT auth, plugin system, emotional engine, REST API |
+| v0.6 | Released | Financial Gate v2, multilingual safety guardrails |
+| v0.7 | Released | Plugin SDK, CLI, built-in plugins, ReAct loop, hot-reload |
+| v1.0 | Planned | Multi-tenant, JWT auth, emotional engine, REST API |
 | v1.1 | Planned | Multi-language voice, barge-in, conversation branching |
 | v2.0 | Planned | Multi-agent platform, federated memory |
 
