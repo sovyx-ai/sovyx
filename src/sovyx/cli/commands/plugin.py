@@ -538,7 +538,7 @@ def _scaffold_plugin(name: str, target: Path) -> None:
         f'description = "{name} plugin for Sovyx"\n'
         'requires-python = ">=3.11"\n'
         'dependencies = ["sovyx>=0.6.0"]\n\n'
-        "[project.entry-points.sovyx_plugins]\n"
+        '[project.entry-points."sovyx.plugins"]\n'
         f'{name} = "{module_name}:{class_name}"\n',
         encoding="utf-8",
     )
