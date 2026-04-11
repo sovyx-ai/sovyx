@@ -479,13 +479,18 @@ class KnowledgePlugin(ISovyxPlugin):
         ),
     )
     async def recall_about(self, topic: str) -> str:
-        """Deep recall about a topic — concepts + graph neighbors.
+        """Deep recall — concepts + graph neighbors + episodic context.
+
+        Three enrichment layers:
+        1. Semantic search for matching concepts
+        2. Graph neighbors for top-3 results (what's connected)
+        3. Episode search for temporal context (when was this discussed)
 
         Args:
             topic: Topic to recall about.
 
         Returns:
-            JSON with concepts, related concepts, and summary.
+            JSON with concepts (enriched), episodes, and summary.
         """
         if self._brain is None:
             return json.dumps({"action": "error", "message": "brain access not configured"})
@@ -499,14 +504,15 @@ class KnowledgePlugin(ISovyxPlugin):
                         "action": "recall",
                         "topic": topic,
                         "results": [],
+                        "episodes": [],
                         "message": f"I don't have any memories about: {topic}",
                     }
                 )
 
-            # Enrich top results with graph neighbors
+            # Layer 1+2: Concepts + graph neighbors
             concepts: list[dict[str, object]] = []
             for r in results:
-                concept_data = {
+                concept_data: dict[str, object] = {
                     "id": str(r.get("id", "")),
                     "name": str(r.get("name", "")),
                     "content": _truncate(str(r.get("content", "")), 400),
@@ -515,7 +521,7 @@ class KnowledgePlugin(ISovyxPlugin):
                     "confidence": round(_float(r.get("confidence", 0)), 3),
                 }
 
-                # Get graph neighbors for top-3 results
+                # Graph neighbors for top-3
                 if len(concepts) < 3:
                     cid = str(r.get("id", ""))
                     if cid:
@@ -527,14 +533,34 @@ class KnowledgePlugin(ISovyxPlugin):
 
                 concepts.append(concept_data)
 
-            return json.dumps(
-                {
-                    "action": "recall",
-                    "topic": topic,
-                    "count": len(concepts),
-                    "results": concepts,
-                }
-            )
+            # Layer 3: Episodic context — when was this topic discussed?
+            episodes: list[dict[str, object]] = []
+            try:
+                raw_episodes = await self._brain.search_episodes(topic, limit=5)
+                for ep in raw_episodes:
+                    episodes.append(
+                        {
+                            "summary": _truncate(str(ep.get("summary", "")), 200),
+                            "timestamp": str(ep.get("timestamp", "")),
+                            "channel": str(ep.get("channel", "")),
+                            "turn_count": ep.get("turn_count", 0),
+                        }
+                    )
+            except Exception:  # noqa: BLE001
+                pass  # episode search failure is non-fatal
+
+            result_data: dict[str, object] = {
+                "action": "recall",
+                "topic": topic,
+                "count": len(concepts),
+                "results": concepts,
+            }
+
+            if episodes:
+                result_data["episodes"] = episodes
+                result_data["episode_count"] = len(episodes)
+
+            return json.dumps(result_data)
 
         except Exception as e:  # noqa: BLE001
             return json.dumps({"action": "error", "message": f"Error recalling: {e}"})

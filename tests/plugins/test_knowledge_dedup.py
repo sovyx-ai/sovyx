@@ -628,3 +628,125 @@ class TestAutoRelation:
 
         result = json.loads(await plugin.remember("test"))
         assert result["action"] == "created"  # still created despite relation failure
+
+
+class TestEpisodeAwareRecall:
+    """TASK-476: Episode-aware recall in recall_about()."""
+
+    @pytest.mark.asyncio
+    async def test_recall_includes_episodes(self) -> None:
+        results = [
+            {
+                "id": "c-1",
+                "name": "Python",
+                "content": "language",
+                "category": "fact",
+                "importance": 0.7,
+                "confidence": 0.8,
+            }
+        ]
+        brain = _mock_brain(search_results=results)
+        brain.search_episodes = AsyncMock(
+            return_value=[
+                {
+                    "summary": "We discussed Python decorators",
+                    "timestamp": "2026-04-10T15:00:00",
+                    "channel": "telegram",
+                    "turn_count": 12,
+                },
+                {
+                    "summary": "Python async patterns",
+                    "timestamp": "2026-04-09T10:00:00",
+                    "channel": "telegram",
+                    "turn_count": 8,
+                },
+            ]
+        )
+        plugin = KnowledgePlugin(brain=brain)
+
+        data = json.loads(await plugin.recall_about("Python"))
+        assert data["action"] == "recall"
+        assert data["count"] == 1
+        assert "episodes" in data
+        assert len(data["episodes"]) == 2
+        assert data["episode_count"] == 2
+        assert "decorators" in data["episodes"][0]["summary"]
+        assert data["episodes"][0]["channel"] == "telegram"
+
+    @pytest.mark.asyncio
+    async def test_recall_no_episodes(self) -> None:
+        results = [
+            {
+                "id": "c-1",
+                "name": "obscure",
+                "content": "x",
+                "category": "fact",
+                "importance": 0.5,
+                "confidence": 0.5,
+            }
+        ]
+        brain = _mock_brain(search_results=results)
+        brain.search_episodes = AsyncMock(return_value=[])
+        plugin = KnowledgePlugin(brain=brain)
+
+        data = json.loads(await plugin.recall_about("obscure topic"))
+        assert data["action"] == "recall"
+        assert "episodes" not in data  # empty episodes not included
+
+    @pytest.mark.asyncio
+    async def test_recall_episode_failure_non_fatal(self) -> None:
+        results = [
+            {
+                "id": "c-1",
+                "name": "topic",
+                "content": "x",
+                "category": "fact",
+                "importance": 0.5,
+                "confidence": 0.5,
+            }
+        ]
+        brain = _mock_brain(search_results=results)
+        brain.search_episodes = AsyncMock(side_effect=Exception("retrieval down"))
+        plugin = KnowledgePlugin(brain=brain)
+
+        data = json.loads(await plugin.recall_about("topic"))
+        assert data["action"] == "recall"
+        assert data["count"] == 1
+        assert "episodes" not in data  # failed silently
+
+    @pytest.mark.asyncio
+    async def test_recall_truncates_long_summaries(self) -> None:
+        results = [
+            {
+                "id": "c-1",
+                "name": "x",
+                "content": "x",
+                "category": "fact",
+                "importance": 0.5,
+                "confidence": 0.5,
+            }
+        ]
+        brain = _mock_brain(search_results=results)
+        brain.search_episodes = AsyncMock(
+            return_value=[
+                {
+                    "summary": "A" * 500,
+                    "timestamp": "2026-01-01",
+                    "channel": "cli",
+                    "turn_count": 5,
+                },
+            ]
+        )
+        plugin = KnowledgePlugin(brain=brain)
+
+        data = json.loads(await plugin.recall_about("x"))
+        assert len(data["episodes"][0]["summary"]) <= 203  # 200 + "..."
+
+    @pytest.mark.asyncio
+    async def test_recall_empty_no_results(self) -> None:
+        brain = _mock_brain(search_results=[])
+        plugin = KnowledgePlugin(brain=brain)
+
+        data = json.loads(await plugin.recall_about("nothing"))
+        assert data["results"] == []
+        assert data["episodes"] == []
