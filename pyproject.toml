@@ -141,7 +141,7 @@ select = ["E", "F", "W", "I", "N", "UP", "ANN", "B", "A", "SIM", "TCH"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/sovyx/cognitive/safety_i18n.py" = ["E501"]
-"tests/**/*.py" = ["ANN001", "ANN201", "ANN202", "ANN204", "ANN205", "ANN401", "E501", "N806", "N817", "B017", "TC003", "SIM114", "E402", "UP007", "UP045", "F841"]
+"tests/**/*.py" = ["ANN001", "ANN002", "ANN003", "ANN201", "ANN202", "ANN204", "ANN205", "ANN401", "E501", "N806", "N817", "B017", "TC003", "SIM114", "E402", "UP007", "UP045", "F841"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

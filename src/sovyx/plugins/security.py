@@ -17,7 +17,7 @@ import contextlib
 import dataclasses
 import sys
 import typing
-from importlib.abc import Loader, MetaPathFinder
+from importlib.abc import MetaPathFinder
 
 from sovyx.observability.logging import get_logger
 
@@ -252,7 +252,7 @@ class PluginSecurityScanner:
 # ── ImportGuard (Runtime Hook) ──────────────────────────────────────
 
 
-class ImportGuard(MetaPathFinder, Loader):
+class ImportGuard(MetaPathFinder):
     """Runtime import hook blocking unauthorized imports during plugin execution.
 
     Installed on sys.meta_path when a plugin's code is executing.
@@ -297,15 +297,19 @@ class ImportGuard(MetaPathFinder, Loader):
         self._installed = False
         self._denial_count = 0
 
-    def find_module(
+    def find_spec(
         self,
         fullname: str,
         path: Sequence[str] | None = None,
-    ) -> Loader | None:
-        """MetaPathFinder hook — intercept import requests.
+        target: object = None,
+    ) -> None:
+        """PEP 451 MetaPathFinder hook — intercept import requests.
 
-        Returns self to block the import (find_module returning a loader
-        that raises ImportError), or None to allow.
+        Raises ImportError directly for blocked modules.
+        Returns None to allow normal import.
+
+        This is the MODERN API (Python 3.4+). ``find_module`` is
+        deprecated and ignored in Python 3.12+.
         """
         root = fullname.split(".")[0]
 
@@ -317,17 +321,13 @@ class ImportGuard(MetaPathFinder, Loader):
                 module=fullname,
                 count=self._denial_count,
             )
-            return self  # We become the "loader" → load_module raises
+            msg = (
+                f"Plugin '{self._plugin}' attempted to import blocked module "
+                f"'{fullname}'. Use PluginContext methods instead."
+            )
+            raise ImportError(msg)
 
         return None  # Allow normal import
-
-    def load_module(self, fullname: str) -> typing.NoReturn:
-        """Called when we blocked an import — raise ImportError."""
-        msg = (
-            f"Plugin '{self._plugin}' attempted to import blocked module "
-            f"'{fullname}'. Use PluginContext methods instead."
-        )
-        raise ImportError(msg)
 
     def install(self) -> None:
         """Install on sys.meta_path (prepend for priority)."""

@@ -102,6 +102,15 @@ class PluginManifest(BaseModel):
     # Config schema for plugin settings
     config_schema: dict[str, object] = Field(default_factory=dict)
 
+    # Marketplace metadata (optional — for future marketplace)
+    category: str = ""  # e.g., "productivity", "finance", "weather"
+    tags: list[str] = Field(default_factory=list)
+    icon_url: str = ""
+    screenshots: list[str] = Field(default_factory=list)
+    pricing: str = "free"  # "free", "paid", "freemium"
+    price_usd: float | None = None
+    trial_days: int = 0
+
     model_config = {"populate_by_name": True}
 
     @field_validator("permissions")

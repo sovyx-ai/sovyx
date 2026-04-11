@@ -635,16 +635,19 @@ class PluginManager:
     # ── Query ───────────────────────────────────────────────────────
 
     def get_tool_definitions(self) -> list[ToolDefinition]:
-        """Get all tool definitions across loaded plugins.
+        """Get all tool definitions across loaded, ACTIVE plugins.
 
-        Used by Context Assembly (SPE-006) to build the tool list
-        sent to the LLM.
+        Excludes tools from auto-disabled plugins. Used by
+        Context Assembly (SPE-006) to build the tool list sent to the LLM.
 
         Returns:
-            All tools from all loaded plugins.
+            Tools from all active (non-disabled) plugins.
         """
         tools: list[ToolDefinition] = []
-        for loaded in self._plugins.values():
+        for name, loaded in self._plugins.items():
+            health = self._health.get(name)
+            if health and health.disabled:
+                continue
             tools.extend(loaded.tools)
         return tools
 

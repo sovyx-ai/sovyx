@@ -318,37 +318,40 @@ class TestImportGuard:
             assert guard.is_installed is True
         assert guard.is_installed is False
 
-    def test_find_module_blocks(self) -> None:
+    def test_find_spec_blocks(self) -> None:
         guard = ImportGuard("test")
-        result = guard.find_module("os")
-        assert result is guard  # Returns self to block
+        with pytest.raises(ImportError, match="blocked"):
+            guard.find_spec("os")
 
-    def test_find_module_allows(self) -> None:
+    def test_find_spec_allows(self) -> None:
         guard = ImportGuard("test")
-        result = guard.find_module("json")
+        result = guard.find_spec("json")
         assert result is None  # Allows
 
-    def test_find_module_allows_os_path(self) -> None:
+    def test_find_spec_allows_os_path(self) -> None:
         guard = ImportGuard("test")
-        result = guard.find_module("os.path")
+        result = guard.find_spec("os.path")
         assert result is None  # In ALLOWED_IMPORTS
 
-    def test_load_module_raises(self) -> None:
+    def test_find_spec_raises_on_blocked(self) -> None:
         guard = ImportGuard("test")
         with pytest.raises(ImportError, match="blocked module"):
-            guard.load_module("os")
+            guard.find_spec("os")
 
     def test_denial_count(self) -> None:
         guard = ImportGuard("test")
-        guard.find_module("os")
-        guard.find_module("subprocess")
-        guard.find_module("json")  # allowed, no count
+        with pytest.raises(ImportError):
+            guard.find_spec("os")
+        with pytest.raises(ImportError):
+            guard.find_spec("subprocess")
+        guard.find_spec("json")  # allowed, no count
         assert guard.denial_count == 2
 
     def test_custom_blocked_set(self) -> None:
         guard = ImportGuard("test", blocked=frozenset({"custom_dangerous"}))
-        assert guard.find_module("custom_dangerous") is guard
-        assert guard.find_module("os") is None  # Not in custom set
+        with pytest.raises(ImportError):
+            guard.find_spec("custom_dangerous")
+        assert guard.find_spec("os") is None  # Not in custom set
 
     def test_custom_allowed_set(self) -> None:
         guard = ImportGuard(
@@ -356,8 +359,9 @@ class TestImportGuard:
             blocked=frozenset({"mymod"}),
             allowed=frozenset({"mymod.safe"}),
         )
-        assert guard.find_module("mymod") is guard  # blocked
-        assert guard.find_module("mymod.safe") is None  # explicitly allowed
+        with pytest.raises(ImportError):
+            guard.find_spec("mymod")  # blocked
+        assert guard.find_spec("mymod.safe") is None  # explicitly allowed
 
 
 import sys

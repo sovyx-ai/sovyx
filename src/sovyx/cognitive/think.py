@@ -83,7 +83,7 @@ class ThinkPhase:
                 from sovyx.llm.router import LLMRouter as _LLMRouter
 
                 defs = self._plugin_manager.get_tool_definitions()
-                tools = _LLMRouter.tool_definitions_to_dicts(defs)
+                tools = _LLMRouter.tool_definitions_to_dicts(defs) or None
 
             # 5. LLM generate
             response = await self._router.generate(
