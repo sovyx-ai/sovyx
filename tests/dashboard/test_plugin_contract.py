@@ -414,9 +414,7 @@ class TestEdgeCases:
         mgr, _ = _make_loaded_plugin(name="weather")
         # Override get_plugin to return None for unknown names
         real_loaded = mgr.get_plugin.return_value
-        mgr.get_plugin.side_effect = (
-            lambda n: real_loaded if n == "weather" else None
-        )
+        mgr.get_plugin.side_effect = lambda n: real_loaded if n == "weather" else None
         assert get_plugin_detail(mgr, "nonexistent") is None
 
     def test_tools_list_excludes_disabled(self) -> None:
