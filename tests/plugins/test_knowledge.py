@@ -1,7 +1,12 @@
-"""Tests for Sovyx Knowledge Plugin (TASK-445)."""
+"""Tests for Sovyx Knowledge Plugin (TASK-445, updated for v2.0).
+
+Basic plugin interface tests + backward compatibility checks.
+Comprehensive dedup/JSON tests are in test_knowledge_dedup.py.
+"""
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock
 
 import pytest
@@ -16,7 +21,20 @@ def _mock_brain(
     """Create a mock BrainAccess."""
     brain = AsyncMock()
     brain.search = AsyncMock(return_value=search_results or [])
+    brain.find_similar = AsyncMock(return_value=[])
     brain.learn = AsyncMock(return_value=learn_id)
+    brain.forget = AsyncMock(return_value=True)
+    brain.update = AsyncMock(return_value=True)
+    brain.boost_importance = AsyncMock(return_value=True)
+    brain.get_related = AsyncMock(return_value=[])
+    brain.get_stats = AsyncMock(
+        return_value={
+            "total_concepts": 0,
+            "categories": {},
+            "total_relations": 0,
+            "total_episodes": 0,
+        }
+    )
     return brain
 
 
@@ -27,7 +45,7 @@ class TestKnowledgePlugin:
         assert KnowledgePlugin().name == "knowledge"
 
     def test_version(self) -> None:
-        assert KnowledgePlugin().version == "1.0.0"
+        assert KnowledgePlugin().version == "2.0.0"
 
     def test_description(self) -> None:
         assert "knowledge" in KnowledgePlugin().description.lower()
@@ -36,216 +54,227 @@ class TestKnowledgePlugin:
 class TestRemember:
     """Tests for remember tool."""
 
-    @pytest.mark.anyio()
+    @pytest.mark.anyio
     async def test_remember_basic(self) -> None:
         brain = _mock_brain()
         p = KnowledgePlugin(brain=brain)
-        result = await p.remember("I prefer dark mode", name="dark-mode-pref")
-        assert "Remembered" in result
-        assert "concept-123" in result
+        raw = await p.remember("I prefer dark mode", name="dark-mode-pref")
+        data = json.loads(raw)
+        assert data["action"] == "created"
+        assert data["concept_id"] == "concept-123"
         brain.learn.assert_called_once()
 
-    @pytest.mark.anyio()
+    @pytest.mark.anyio
     async def test_remember_auto_name(self) -> None:
         brain = _mock_brain()
         p = KnowledgePlugin(brain=brain)
-        result = await p.remember("Short info")
-        assert "Remembered" in result
-        # Name auto-generated from content
-        call_kwargs = brain.learn.call_args
-        assert call_kwargs[1]["name"] == "Short info"
+        raw = await p.remember("Short info")
+        data = json.loads(raw)
+        assert data["action"] == "created"
+        call_kwargs = brain.learn.call_args.kwargs
+        assert call_kwargs["name"] == "Short info"
 
-    @pytest.mark.anyio()
+    @pytest.mark.anyio
     async def test_remember_long_auto_name(self) -> None:
         brain = _mock_brain()
         p = KnowledgePlugin(brain=brain)
         long_text = "A" * 100
         await p.remember(long_text)
-        call_kwargs = brain.learn.call_args
-        assert call_kwargs[1]["name"].endswith("...")
-        assert len(call_kwargs[1]["name"]) <= 54  # 50 + "..."
+        call_kwargs = brain.learn.call_args.kwargs
+        assert call_kwargs["name"].endswith("...")
+        assert len(call_kwargs["name"]) <= 54  # 50 + "..."
 
-    @pytest.mark.anyio()
+    @pytest.mark.anyio
     async def test_remember_no_brain(self) -> None:
         p = KnowledgePlugin()
-        result = await p.remember("test")
-        assert "Error" in result
+        raw = await p.remember("test")
+        data = json.loads(raw)
+        assert data["action"] == "error"
 
-    @pytest.mark.anyio()
+    @pytest.mark.anyio
     async def test_remember_error(self) -> None:
         brain = _mock_brain()
-        brain.learn = AsyncMock(side_effect=RuntimeError("db error"))
+        brain.find_similar = AsyncMock(side_effect=RuntimeError("db error"))
         p = KnowledgePlugin(brain=brain)
-        result = await p.remember("test")
-        assert "Error" in result
+        raw = await p.remember("test")
+        data = json.loads(raw)
+        assert data["action"] == "error"
+        assert "db error" in data["message"]
 
 
 class TestSearch:
     """Tests for search tool."""
 
-    @pytest.mark.anyio()
+    @pytest.mark.anyio
     async def test_search_found(self) -> None:
         results = [
-            {"name": "dark-mode", "content": "User prefers dark mode"},
-            {"name": "lang", "content": "User speaks Portuguese"},
+            {
+                "id": "c1",
+                "name": "dark-mode",
+                "content": "User prefers dark mode",
+                "category": "preference",
+                "importance": 0.5,
+                "confidence": 0.5,
+                "score": 0.9,
+            },
+            {
+                "id": "c2",
+                "name": "lang",
+                "content": "User speaks Portuguese",
+                "category": "fact",
+                "importance": 0.5,
+                "confidence": 0.5,
+                "score": 0.8,
+            },
         ]
         brain = _mock_brain(search_results=results)
         p = KnowledgePlugin(brain=brain)
-        result = await p.search("preferences")
-        assert "2 memory" in result
-        assert "dark-mode" in result
+        raw = await p.search("preferences")
+        data = json.loads(raw)
+        assert data["count"] == 2
+        assert data["results"][0]["name"] == "dark-mode"
 
-    @pytest.mark.anyio()
+    @pytest.mark.anyio
     async def test_search_empty(self) -> None:
         brain = _mock_brain(search_results=[])
         p = KnowledgePlugin(brain=brain)
-        result = await p.search("nonexistent")
-        assert "No memories" in result
+        raw = await p.search("nonexistent")
+        data = json.loads(raw)
+        assert data["results"] == []
 
-    @pytest.mark.anyio()
+    @pytest.mark.anyio
     async def test_search_truncates_content(self) -> None:
-        results = [{"name": "long", "content": "X" * 300}]
+        results = [
+            {
+                "id": "c1",
+                "name": "long",
+                "content": "X" * 500,
+                "category": "fact",
+                "importance": 0.5,
+                "confidence": 0.5,
+                "score": 0.5,
+            }
+        ]
         brain = _mock_brain(search_results=results)
         p = KnowledgePlugin(brain=brain)
-        result = await p.search("long")
-        assert "..." in result
+        raw = await p.search("long")
+        data = json.loads(raw)
+        assert data["results"][0]["content"].endswith("...")
+        assert len(data["results"][0]["content"]) <= 304  # 300 + "..."
 
-    @pytest.mark.anyio()
+    @pytest.mark.anyio
     async def test_search_no_brain(self) -> None:
         p = KnowledgePlugin()
-        result = await p.search("test")
-        assert "Error" in result
+        raw = await p.search("test")
+        data = json.loads(raw)
+        assert data["action"] == "error"
 
-    @pytest.mark.anyio()
+    @pytest.mark.anyio
     async def test_search_error(self) -> None:
         brain = _mock_brain()
-        brain.search = AsyncMock(side_effect=RuntimeError("db"))
+        brain.search = AsyncMock(side_effect=RuntimeError("fail"))
         p = KnowledgePlugin(brain=brain)
-        result = await p.search("test")
-        assert "Error" in result
+        raw = await p.search("test")
+        data = json.loads(raw)
+        assert data["action"] == "error"
 
-    @pytest.mark.anyio()
+    @pytest.mark.anyio
     async def test_search_limit_clamped(self) -> None:
         brain = _mock_brain()
         p = KnowledgePlugin(brain=brain)
-        await p.search("test", limit=99)
-        # Should be clamped to max_results (10)
-        call_kwargs = brain.search.call_args
-        assert call_kwargs[1]["limit"] == 10
+        await p.search("test", limit=100)
+        brain.search.assert_called_once_with("test", limit=10)
+
+    @pytest.mark.anyio
+    async def test_search_limit_min(self) -> None:
+        brain = _mock_brain()
+        p = KnowledgePlugin(brain=brain)
+        await p.search("test", limit=0)
+        brain.search.assert_called_once_with("test", limit=1)
 
 
 class TestForget:
     """Tests for forget tool."""
 
-    @pytest.mark.anyio()
-    async def test_forget_found(self) -> None:
-        results = [{"name": "old-info", "content": "stale data"}]
+    @pytest.mark.anyio
+    async def test_forget_deletes(self) -> None:
+        results = [{"id": "c-1", "name": "target"}]
         brain = _mock_brain(search_results=results)
         p = KnowledgePlugin(brain=brain)
-        result = await p.forget("old info")
-        assert "old-info" in result
-        assert "review" in result.lower()
+        raw = await p.forget("target")
+        data = json.loads(raw)
+        assert data["action"] == "forgotten"
+        brain.forget.assert_called_once_with("c-1")
 
-    @pytest.mark.anyio()
+    @pytest.mark.anyio
     async def test_forget_not_found(self) -> None:
         brain = _mock_brain(search_results=[])
         p = KnowledgePlugin(brain=brain)
-        result = await p.forget("ghost")
-        assert "Nothing found" in result
+        raw = await p.forget("nonexistent")
+        data = json.loads(raw)
+        assert data["action"] == "not_found"
 
-    @pytest.mark.anyio()
+    @pytest.mark.anyio
     async def test_forget_no_brain(self) -> None:
         p = KnowledgePlugin()
-        result = await p.forget("test")
-        assert "Error" in result
-
-    @pytest.mark.anyio()
-    async def test_forget_error(self) -> None:
-        brain = _mock_brain()
-        brain.search = AsyncMock(side_effect=RuntimeError("db"))
-        p = KnowledgePlugin(brain=brain)
-        result = await p.forget("test")
-        assert "Error" in result
+        raw = await p.forget("test")
+        data = json.loads(raw)
+        assert data["action"] == "error"
 
 
 class TestRecallAbout:
     """Tests for recall_about tool."""
 
-    @pytest.mark.anyio()
+    @pytest.mark.anyio
     async def test_recall_found(self) -> None:
         results = [
-            {"name": "crypto-bg", "content": "Investor since 2017", "category": "fact"},
+            {
+                "id": "c-1",
+                "name": "Python",
+                "content": "language",
+                "category": "fact",
+                "importance": 0.7,
+                "confidence": 0.8,
+                "score": 0.9,
+            },
         ]
         brain = _mock_brain(search_results=results)
         p = KnowledgePlugin(brain=brain)
-        result = await p.recall_about("crypto")
-        assert "crypto" in result
-        assert "2017" in result
-        assert "[fact]" in result
+        raw = await p.recall_about("Python")
+        data = json.loads(raw)
+        assert data["count"] == 1
+        assert data["results"][0]["name"] == "Python"
 
-    @pytest.mark.anyio()
+    @pytest.mark.anyio
     async def test_recall_empty(self) -> None:
         brain = _mock_brain(search_results=[])
         p = KnowledgePlugin(brain=brain)
-        result = await p.recall_about("unknown")
-        assert "don't have" in result
+        raw = await p.recall_about("nothing")
+        data = json.loads(raw)
+        assert data["results"] == []
 
-    @pytest.mark.anyio()
-    async def test_recall_truncates(self) -> None:
-        results = [{"name": "big", "content": "Y" * 500, "category": ""}]
-        brain = _mock_brain(search_results=results)
-        p = KnowledgePlugin(brain=brain)
-        result = await p.recall_about("big")
-        assert "..." in result
-
-    @pytest.mark.anyio()
+    @pytest.mark.anyio
     async def test_recall_no_brain(self) -> None:
         p = KnowledgePlugin()
-        result = await p.recall_about("test")
-        assert "Error" in result
-
-    @pytest.mark.anyio()
-    async def test_recall_error(self) -> None:
-        brain = _mock_brain()
-        brain.search = AsyncMock(side_effect=RuntimeError("db"))
-        p = KnowledgePlugin(brain=brain)
-        result = await p.recall_about("test")
-        assert "Error" in result
+        raw = await p.recall_about("test")
+        data = json.loads(raw)
+        assert data["action"] == "error"
 
 
 class TestWhatDoYouKnow:
     """Tests for what_do_you_know tool."""
 
-    @pytest.mark.anyio()
-    async def test_has_memories(self) -> None:
-        results = [
-            {"name": "fact-1", "category": "fact"},
-            {"name": "pref-1", "category": "preference"},
-        ]
-        brain = _mock_brain(search_results=results)
+    @pytest.mark.anyio
+    async def test_empty_brain(self) -> None:
+        brain = _mock_brain()
         p = KnowledgePlugin(brain=brain)
-        result = await p.what_do_you_know()
-        assert "2 relevant" in result
-        assert "fact-1" in result
-        assert "[preference]" in result
+        raw = await p.what_do_you_know()
+        data = json.loads(raw)
+        assert data["total_concepts"] == 0
 
-    @pytest.mark.anyio()
-    async def test_empty_memory(self) -> None:
-        brain = _mock_brain(search_results=[])
-        p = KnowledgePlugin(brain=brain)
-        result = await p.what_do_you_know()
-        assert "empty" in result.lower()
-
-    @pytest.mark.anyio()
+    @pytest.mark.anyio
     async def test_no_brain(self) -> None:
         p = KnowledgePlugin()
-        result = await p.what_do_you_know()
-        assert "Error" in result
-
-    @pytest.mark.anyio()
-    async def test_error(self) -> None:
-        brain = _mock_brain()
-        brain.search = AsyncMock(side_effect=RuntimeError("db"))
-        p = KnowledgePlugin(brain=brain)
-        result = await p.what_do_you_know()
-        assert "Error" in result
+        raw = await p.what_do_you_know()
+        data = json.loads(raw)
+        assert data["action"] == "error"
