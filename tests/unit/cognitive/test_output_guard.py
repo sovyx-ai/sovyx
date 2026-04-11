@@ -256,11 +256,7 @@ class TestEdgeCases:
 
     def test_multiple_harmful_segments_all_redacted(self) -> None:
         guard = OutputGuard(SafetyConfig(content_filter="standard"))
-        text = (
-            "First, how to make a bomb. "
-            "Second, how to hack a bank. "
-            "Third, enjoy your day."
-        )
+        text = "First, how to make a bomb. Second, how to hack a bank. Third, enjoy your day."
         result = guard.check(text)
         assert result.filtered
         assert "bomb" not in result.text.lower()

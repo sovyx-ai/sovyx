@@ -47,7 +47,8 @@ class TestCoherenceChildSafe:
         _apply_safety(cfg, {"child_safe_mode": True}, changes)
         assert cfg.safety.content_filter == "strict"
         assert "enforced by child-safe" in changes.get(
-            "safety.content_filter", "",
+            "safety.content_filter",
+            "",
         )
 
     def test_forces_pii_protection(self) -> None:
@@ -62,7 +63,8 @@ class TestCoherenceChildSafe:
         _apply_safety(cfg, {"child_safe_mode": True}, changes)
         assert cfg.safety.pii_protection is True
         assert "enforced by child-safe" in changes.get(
-            "safety.pii_protection", "",
+            "safety.pii_protection",
+            "",
         )
 
     def test_forces_financial_confirmation(self) -> None:
@@ -84,10 +86,14 @@ class TestCoherenceChildSafe:
             safety=SafetyConfig(child_safe_mode=False, content_filter="standard"),
         )
         changes: dict[str, str] = {}
-        _apply_safety(cfg, {
-            "child_safe_mode": True,
-            "content_filter": "none",
-        }, changes)
+        _apply_safety(
+            cfg,
+            {
+                "child_safe_mode": True,
+                "content_filter": "none",
+            },
+            changes,
+        )
         # Coherence should override none→strict
         assert cfg.safety.content_filter == "strict"
 

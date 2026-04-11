@@ -96,7 +96,9 @@ class TestPrivacy:
     def test_event_has_no_content_field(self) -> None:
         trail = SafetyAuditTrail()
         event = trail.record(
-            FilterDirection.INPUT, FilterAction.BLOCKED, _make_match(),
+            FilterDirection.INPUT,
+            FilterAction.BLOCKED,
+            _make_match(),
         )
         # SafetyEvent should NOT have any field containing the original text
         fields = {f for f in event.__slots__}
@@ -130,15 +132,18 @@ class TestStats:
     def test_blocks_by_category(self) -> None:
         trail = SafetyAuditTrail()
         trail.record(
-            FilterDirection.INPUT, FilterAction.BLOCKED,
+            FilterDirection.INPUT,
+            FilterAction.BLOCKED,
             _make_match(PatternCategory.VIOLENCE),
         )
         trail.record(
-            FilterDirection.INPUT, FilterAction.BLOCKED,
+            FilterDirection.INPUT,
+            FilterAction.BLOCKED,
             _make_match(PatternCategory.VIOLENCE),
         )
         trail.record(
-            FilterDirection.INPUT, FilterAction.BLOCKED,
+            FilterDirection.INPUT,
+            FilterAction.BLOCKED,
             _make_match(PatternCategory.HACKING),
         )
         stats = trail.get_stats()
@@ -164,12 +169,14 @@ class TestStats:
     def test_recent_events_most_recent_first(self) -> None:
         trail = SafetyAuditTrail()
         trail.record(
-            FilterDirection.INPUT, FilterAction.BLOCKED,
+            FilterDirection.INPUT,
+            FilterAction.BLOCKED,
             _make_match(description="first"),
         )
         time.sleep(0.01)
         trail.record(
-            FilterDirection.INPUT, FilterAction.BLOCKED,
+            FilterDirection.INPUT,
+            FilterAction.BLOCKED,
             _make_match(description="second"),
         )
         stats = trail.get_stats()
@@ -193,7 +200,8 @@ class TestMaxEvents:
         trail = SafetyAuditTrail(max_events=5)
         for i in range(10):
             trail.record(
-                FilterDirection.INPUT, FilterAction.BLOCKED,
+                FilterDirection.INPUT,
+                FilterAction.BLOCKED,
                 _make_match(description=f"event-{i}"),
             )
         assert trail.event_count == 5

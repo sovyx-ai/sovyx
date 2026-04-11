@@ -163,7 +163,8 @@ class PIIGuard:
             matches = pattern.regex.findall(result_text)
             if matches:
                 result_text = pattern.regex.sub(
-                    pattern.replacement, result_text,
+                    pattern.replacement,
+                    result_text,
                 )
                 count += len(matches)
                 types.add(pattern.pii_type)

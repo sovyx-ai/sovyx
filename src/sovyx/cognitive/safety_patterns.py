@@ -922,17 +922,12 @@ _ALL_STANDARD_BASE = (
 
 # All multilingual strict patterns (superset of standard)
 _ALL_STRICT_BASE = (
-    _ALL_STANDARD_BASE
-    + _STRICT_PATTERNS
-    + _PT_STRICT_PATTERNS
-    + _ES_STRICT_PATTERNS
+    _ALL_STANDARD_BASE + _STRICT_PATTERNS + _PT_STRICT_PATTERNS + _ES_STRICT_PATTERNS
 )
 
 ALL_STANDARD_PATTERNS: tuple[SafetyPattern, ...] = _ALL_STANDARD_BASE
 ALL_STRICT_PATTERNS: tuple[SafetyPattern, ...] = _ALL_STRICT_BASE
-ALL_CHILD_SAFE_PATTERNS: tuple[SafetyPattern, ...] = (
-    _ALL_STRICT_BASE + _CHILD_SAFE_PATTERNS
-)
+ALL_CHILD_SAFE_PATTERNS: tuple[SafetyPattern, ...] = _ALL_STRICT_BASE + _CHILD_SAFE_PATTERNS
 
 
 @dataclass(frozen=True, slots=True)
