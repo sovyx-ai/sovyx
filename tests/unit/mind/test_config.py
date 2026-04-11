@@ -22,10 +22,14 @@ from sovyx.mind.config import (
     MindConfig,
     OceanConfig,
     PersonalityConfig,
+    PluginConfigEntry,
+    PluginsConfig,
     SafetyConfig,
     ScoringConfig,
+    _check_json_schema_type,
     create_default_mind_config,
     load_mind_config,
+    validate_plugin_config,
 )
 
 
@@ -361,3 +365,287 @@ class TestPropertyBased:
             neuroticism=val,
         )
         assert o.openness == val
+
+
+# ── PluginsConfig (TASK-434) ────────────────────────────────────────
+
+
+class TestPluginConfigEntry:
+    """Tests for PluginConfigEntry model."""
+
+    def test_defaults(self) -> None:
+        entry = PluginConfigEntry()
+        assert entry.enabled is True
+        assert entry.config == {}
+        assert entry.permissions == []
+
+    def test_custom_values(self) -> None:
+        entry = PluginConfigEntry(
+            enabled=False,
+            config={"api_key": "abc123", "timeout": 30},
+            permissions=["network:internet", "brain:read"],
+        )
+        assert entry.enabled is False
+        assert entry.config["api_key"] == "abc123"
+        assert len(entry.permissions) == 2
+
+
+class TestPluginsConfig:
+    """Tests for PluginsConfig model."""
+
+    def test_defaults(self) -> None:
+        p = PluginsConfig()
+        assert p.enabled == []
+        assert p.disabled == []
+        assert p.plugins_config == {}
+        assert p.tool_timeout_s == 30.0
+
+    def test_effective_enabled_none_when_empty(self) -> None:
+        """No enabled list → None (all plugins loaded)."""
+        p = PluginsConfig()
+        assert p.get_effective_enabled() is None
+
+    def test_effective_enabled_whitelist(self) -> None:
+        """Enabled list acts as whitelist."""
+        p = PluginsConfig(enabled=["weather", "timer"])
+        result = p.get_effective_enabled()
+        assert result == {"weather", "timer"}
+
+    def test_effective_enabled_minus_disabled(self) -> None:
+        """Disabled overrides enabled."""
+        p = PluginsConfig(enabled=["weather", "timer"], disabled=["timer"])
+        result = p.get_effective_enabled()
+        assert result == {"weather"}
+
+    def test_effective_enabled_minus_per_plugin_disabled(self) -> None:
+        """Per-plugin enabled=False overrides global enabled list."""
+        p = PluginsConfig(
+            enabled=["weather", "timer"],
+            plugins_config={"timer": PluginConfigEntry(enabled=False)},
+        )
+        result = p.get_effective_enabled()
+        assert result == {"weather"}
+
+    def test_effective_disabled_combined(self) -> None:
+        """Disabled combines global + per-plugin."""
+        p = PluginsConfig(
+            disabled={"weather"},
+            plugins_config={"timer": PluginConfigEntry(enabled=False)},
+        )
+        result = p.get_effective_disabled()
+        assert result == {"weather", "timer"}
+
+    def test_get_plugin_config(self) -> None:
+        p = PluginsConfig(
+            plugins_config={
+                "weather": PluginConfigEntry(config={"api_key": "test"}),
+            },
+        )
+        assert p.get_plugin_config("weather") == {"api_key": "test"}
+
+    def test_get_plugin_config_missing(self) -> None:
+        p = PluginsConfig()
+        assert p.get_plugin_config("unknown") == {}
+
+    def test_get_all_plugin_configs(self) -> None:
+        p = PluginsConfig(
+            plugins_config={
+                "weather": PluginConfigEntry(config={"key": "w"}),
+                "timer": PluginConfigEntry(config={"key": "t"}),
+                "empty": PluginConfigEntry(),
+            },
+        )
+        result = p.get_all_plugin_configs()
+        assert "weather" in result
+        assert "timer" in result
+        assert "empty" not in result  # Empty config excluded
+
+    def test_get_granted_permissions(self) -> None:
+        p = PluginsConfig(
+            plugins_config={
+                "weather": PluginConfigEntry(permissions=["network:internet"]),
+            },
+        )
+        assert p.get_granted_permissions("weather") == {"network:internet"}
+
+    def test_get_granted_permissions_empty(self) -> None:
+        p = PluginsConfig()
+        assert p.get_granted_permissions("unknown") == set()
+
+    def test_get_all_granted_permissions(self) -> None:
+        p = PluginsConfig(
+            plugins_config={
+                "weather": PluginConfigEntry(permissions=["network:internet"]),
+                "timer": PluginConfigEntry(),  # No perms
+            },
+        )
+        result = p.get_all_granted_permissions()
+        assert "weather" in result
+        assert "timer" not in result
+
+    def test_tool_timeout_range(self) -> None:
+        """Tool timeout must be in [1, 300]."""
+        with pytest.raises(ValidationError):
+            PluginsConfig(tool_timeout_s=0.5)
+        with pytest.raises(ValidationError):
+            PluginsConfig(tool_timeout_s=301)
+
+
+class TestMindConfigPlugins:
+    """Tests for plugins section in MindConfig."""
+
+    def test_default_has_plugins(self) -> None:
+        """MindConfig includes plugins section by default."""
+        config = MindConfig(name="test")
+        assert config.plugins is not None
+        assert config.plugins.tool_timeout_s == 30.0
+
+    def test_yaml_roundtrip(self, tmp_path: Path) -> None:
+        """Plugins config survives YAML save/load."""
+        yaml_content = """
+name: test-mind
+plugins:
+  disabled:
+    - dangerous-plugin
+  plugins_config:
+    weather:
+      config:
+        api_key: abc123
+      permissions:
+        - "network:internet"
+    timer:
+      enabled: false
+"""
+        path = tmp_path / "mind.yaml"
+        path.write_text(yaml_content)
+        config = load_mind_config(path)
+        assert "dangerous-plugin" in config.plugins.disabled
+        assert config.plugins.get_plugin_config("weather") == {"api_key": "abc123"}
+        assert config.plugins.get_granted_permissions("weather") == {"network:internet"}
+        assert not config.plugins.plugins_config["timer"].enabled
+
+    def test_empty_plugins_section(self, tmp_path: Path) -> None:
+        """Empty plugins section uses defaults."""
+        yaml_content = "name: test\nplugins: {}\n"
+        path = tmp_path / "mind.yaml"
+        path.write_text(yaml_content)
+        config = load_mind_config(path)
+        assert config.plugins.enabled == []
+        assert config.plugins.disabled == []
+
+
+# ── validate_plugin_config (TASK-434) ───────────────────────────────
+
+
+class TestValidatePluginConfig:
+    """Tests for validate_plugin_config utility."""
+
+    def test_valid_config(self) -> None:
+        schema = {
+            "required": ["api_key"],
+            "properties": {
+                "api_key": {"type": "string"},
+                "timeout": {"type": "integer"},
+            },
+        }
+        errors = validate_plugin_config({"api_key": "abc", "timeout": 30}, schema)
+        assert errors == []
+
+    def test_missing_required(self) -> None:
+        schema = {"required": ["api_key"]}
+        errors = validate_plugin_config({}, schema)
+        assert len(errors) == 1
+        assert "api_key" in errors[0]
+
+    def test_wrong_type(self) -> None:
+        schema = {"properties": {"timeout": {"type": "integer"}}}
+        errors = validate_plugin_config({"timeout": "not-int"}, schema)
+        assert len(errors) == 1
+        assert "timeout" in errors[0]
+
+    def test_bool_not_integer(self) -> None:
+        """JSON Schema: boolean is NOT integer."""
+        schema = {"properties": {"count": {"type": "integer"}}}
+        errors = validate_plugin_config({"count": True}, schema)
+        assert len(errors) == 1
+
+    def test_bool_not_number(self) -> None:
+        schema = {"properties": {"rate": {"type": "number"}}}
+        errors = validate_plugin_config({"rate": False}, schema)
+        assert len(errors) == 1
+
+    def test_number_accepts_int(self) -> None:
+        schema = {"properties": {"rate": {"type": "number"}}}
+        errors = validate_plugin_config({"rate": 42}, schema)
+        assert errors == []
+
+    def test_number_accepts_float(self) -> None:
+        schema = {"properties": {"rate": {"type": "number"}}}
+        errors = validate_plugin_config({"rate": 3.14}, schema)
+        assert errors == []
+
+    def test_unknown_type_accepted(self) -> None:
+        """Unknown type string → no error."""
+        schema = {"properties": {"x": {"type": "custom"}}}
+        errors = validate_plugin_config({"x": "anything"}, schema)
+        assert errors == []
+
+    def test_empty_schema(self) -> None:
+        errors = validate_plugin_config({"a": 1, "b": "c"}, {})
+        assert errors == []
+
+    def test_extra_fields_ignored(self) -> None:
+        """Fields not in schema properties are not validated."""
+        schema = {"properties": {"a": {"type": "string"}}}
+        errors = validate_plugin_config({"a": "ok", "b": 123}, schema)
+        assert errors == []
+
+    def test_all_types(self) -> None:
+        schema = {
+            "properties": {
+                "s": {"type": "string"},
+                "i": {"type": "integer"},
+                "n": {"type": "number"},
+                "b": {"type": "boolean"},
+                "a": {"type": "array"},
+                "o": {"type": "object"},
+            },
+        }
+        config = {"s": "hi", "i": 1, "n": 2.5, "b": True, "a": [1, 2], "o": {"k": "v"}}
+        errors = validate_plugin_config(config, schema)
+        assert errors == []
+
+    def test_multiple_errors(self) -> None:
+        schema = {
+            "required": ["a", "b"],
+            "properties": {"c": {"type": "integer"}},
+        }
+        errors = validate_plugin_config({"c": "nope"}, schema)
+        assert len(errors) == 3  # 2 missing + 1 wrong type
+
+
+class TestCheckJsonSchemaType:
+    """Tests for _check_json_schema_type helper."""
+
+    def test_string(self) -> None:
+        assert _check_json_schema_type("hello", "string") is True
+        assert _check_json_schema_type(123, "string") is False
+
+    def test_integer(self) -> None:
+        assert _check_json_schema_type(42, "integer") is True
+        assert _check_json_schema_type(True, "integer") is False  # bool ≠ int
+
+    def test_boolean(self) -> None:
+        assert _check_json_schema_type(True, "boolean") is True
+        assert _check_json_schema_type(1, "boolean") is False
+
+    def test_array(self) -> None:
+        assert _check_json_schema_type([1, 2], "array") is True
+        assert _check_json_schema_type("nope", "array") is False
+
+    def test_object(self) -> None:
+        assert _check_json_schema_type({"k": "v"}, "object") is True
+        assert _check_json_schema_type([1], "object") is False
+
+    def test_unknown_type(self) -> None:
+        assert _check_json_schema_type("anything", "custom") is True
