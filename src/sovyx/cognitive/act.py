@@ -9,6 +9,7 @@ from sovyx.llm.models import ToolCall, ToolResult
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
+    from sovyx.bridge.protocol import InlineButton
     from sovyx.cognitive.financial_gate import FinancialGate
     from sovyx.cognitive.output_guard import OutputGuard
     from sovyx.cognitive.perceive import Perception
@@ -33,6 +34,7 @@ class ActionResult:
     filter_reason: str | None = None
     pending_confirmation: bool = False
     confirmation_details: dict[str, object] | None = None
+    buttons: list[list[InlineButton]] | None = None
     tool_calls_made: list[ToolCall] = dataclasses.field(default_factory=list)
     metadata: dict[str, object] = dataclasses.field(default_factory=dict)
 
@@ -90,6 +92,89 @@ class ActPhase:
         self._output_guard = output_guard
         self._financial_gate = financial_gate
         self._pii_guard = pii_guard
+
+    def _build_financial_confirmation(
+        self,
+        tool_calls: list[ToolCall],
+        source: str,
+        reply_to: str | None,
+    ) -> ActionResult | None:
+        """Check tool calls against the financial gate.
+
+        Returns ActionResult with inline buttons if any tool call is
+        financial, or None if all calls can proceed.
+        """
+        from sovyx.bridge.protocol import InlineButton  # noqa: TC001
+        from sovyx.cognitive.financial_gate import PendingConfirmation  # noqa: TC001
+
+        assert self._financial_gate is not None  # noqa: S101
+
+        pending_list: list[tuple[ToolCall, PendingConfirmation]] = []
+        for tc in tool_calls:
+            pending = self._financial_gate.check_tool_call(tc)
+            if pending:
+                pending_list.append((tc, pending))
+
+        if not pending_list:
+            return None
+
+        # Build confirmation message
+        if len(pending_list) == 1:
+            tc, pending = pending_list[0]
+            confirm_msg = f"⚠️ Financial action requires confirmation:\n{pending.summary}"
+            buttons: list[list[InlineButton]] = [
+                [
+                    InlineButton(
+                        text="✅ Approve",
+                        callback_data=f"fin_confirm:{tc.id}",
+                    ),
+                    InlineButton(
+                        text="❌ Deny",
+                        callback_data=f"fin_cancel:{tc.id}",
+                    ),
+                ]
+            ]
+            details: dict[str, object] = {
+                "tool_call_id": tc.id,
+                "tool_name": tc.function_name,
+                "summary": pending.summary,
+            }
+        else:
+            # Multiple financial tool calls — batch confirmation
+            lines = ["⚠️ Multiple financial actions require confirmation:"]
+            for i, (_tc, pending) in enumerate(pending_list, 1):
+                lines.append(f"{i}. {pending.summary}")
+            confirm_msg = "\n".join(lines)
+            # Use first tool call ID as group anchor
+            group_id = pending_list[0][0].id
+            buttons = [
+                [
+                    InlineButton(
+                        text="✅ Approve All",
+                        callback_data=f"fin_confirm_all:{group_id}",
+                    ),
+                    InlineButton(
+                        text="❌ Deny All",
+                        callback_data=f"fin_cancel_all:{group_id}",
+                    ),
+                ]
+            ]
+            details = {
+                "tool_call_ids": [tc.id for tc, _ in pending_list],
+                "tool_names": [tc.function_name for tc, _ in pending_list],
+                "summaries": [p.summary for _, p in pending_list],
+                "count": len(pending_list),
+            }
+
+        return ActionResult(
+            response_text=confirm_msg,
+            target_channel=source,
+            reply_to=reply_to,
+            pending_confirmation=True,
+            confirmation_details=details,
+            buttons=buttons,
+            tool_calls_made=tool_calls,
+        )
 
     def _apply_pii_guard(self, text: str) -> str:
         """Apply PII redaction if configured.
@@ -149,26 +234,13 @@ class ActPhase:
         if llm_response.tool_calls:
             # Financial gate: check if any tool call needs confirmation
             if self._financial_gate:
-                for tc in llm_response.tool_calls:
-                    pending = self._financial_gate.check_tool_call(tc)
-                    if pending:
-                        confirm_msg = (
-                            f"⚠️ Financial action requires confirmation:\n"
-                            f"{pending.summary}\n\n"
-                            f"Reply **yes** to confirm or **no** to cancel."
-                        )
-                        return ActionResult(
-                            response_text=confirm_msg,
-                            target_channel=perception.source,
-                            reply_to=reply_to,
-                            pending_confirmation=True,
-                            confirmation_details={
-                                "tool_call_id": tc.id,
-                                "tool_name": tc.function_name,
-                                "summary": pending.summary,
-                            },
-                            tool_calls_made=llm_response.tool_calls,
-                        )
+                result = self._build_financial_confirmation(
+                    llm_response.tool_calls,
+                    perception.source,
+                    reply_to,
+                )
+                if result is not None:
+                    return result
 
             await self._tools.execute(llm_response.tool_calls)
             # v0.1: no re-invocation, return tool error gracefully

@@ -4,10 +4,15 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock
 
+import pytest
+
+from sovyx.bridge.protocol import InlineButton
 from sovyx.cognitive.act import ActionResult, ActPhase, ToolExecutor
+from sovyx.cognitive.financial_gate import FinancialGate
 from sovyx.cognitive.perceive import Perception
 from sovyx.engine.types import PerceptionType
 from sovyx.llm.models import LLMResponse, ToolCall
+from sovyx.mind.config import SafetyConfig
 
 
 def _perception(content: str = "Hello") -> Perception:
