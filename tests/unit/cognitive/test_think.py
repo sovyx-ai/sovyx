@@ -135,3 +135,82 @@ class TestModelSelection:
         await phase.process(_perception(complexity=0.1), MIND, [])
         call_kwargs = router.generate.call_args.kwargs
         assert call_kwargs["model"] == "claude-3-5-haiku-20241022"
+
+
+class TestThinkPhaseWithPlugins:
+    """ThinkPhase passes tools= when PluginManager has plugins."""
+
+    async def test_tools_passed_to_generate(self) -> None:
+        from unittest.mock import MagicMock
+        from sovyx.plugins.sdk import ToolDefinition
+
+        assembler = _mock_assembler()
+        router = _mock_router()
+        config = MindConfig(name="Aria")
+
+        # Mock PluginManager with tools
+        pm = MagicMock()
+        pm.plugin_count = 1
+        pm.get_tool_definitions.return_value = [
+            ToolDefinition(
+                name="calculator.calculate",
+                description="Calculate a math expression",
+                parameters={"type": "object", "properties": {"expression": {"type": "string"}}},
+            ),
+        ]
+
+        think = ThinkPhase(
+            context_assembler=assembler,
+            llm_router=router,
+            mind_config=config,
+            plugin_manager=pm,
+        )
+
+        response, _msgs = await think.process(
+            _perception(), MIND, [{"role": "user", "content": "Hello"}]
+        )
+
+        # Verify tools= was passed to generate
+        call_kwargs = router.generate.call_args[1]
+        assert "tools" in call_kwargs
+        assert call_kwargs["tools"] is not None
+        assert len(call_kwargs["tools"]) == 1
+        assert call_kwargs["tools"][0]["name"] == "calculator.calculate"
+
+    async def test_no_tools_without_plugin_manager(self) -> None:
+        assembler = _mock_assembler()
+        router = _mock_router()
+        config = MindConfig(name="Aria")
+
+        think = ThinkPhase(
+            context_assembler=assembler,
+            llm_router=router,
+            mind_config=config,
+        )
+
+        await think.process(_perception(), MIND, [{"role": "user", "content": "Hello"}])
+
+        call_kwargs = router.generate.call_args[1]
+        assert call_kwargs.get("tools") is None
+
+    async def test_no_tools_with_empty_plugin_manager(self) -> None:
+        from unittest.mock import MagicMock
+
+        pm = MagicMock()
+        pm.plugin_count = 0  # No plugins loaded
+
+        assembler = _mock_assembler()
+        router = _mock_router()
+        config = MindConfig(name="Aria")
+
+        think = ThinkPhase(
+            context_assembler=assembler,
+            llm_router=router,
+            mind_config=config,
+            plugin_manager=pm,
+        )
+
+        await think.process(_perception(), MIND, [{"role": "user", "content": "Hello"}])
+
+        call_kwargs = router.generate.call_args[1]
+        assert call_kwargs.get("tools") is None

@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from sovyx.engine.types import MindId
     from sovyx.llm.router import LLMRouter
     from sovyx.mind.config import MindConfig
+    from sovyx.plugins.manager import PluginManager
 
 logger = get_logger(__name__)
 
@@ -33,11 +34,13 @@ class ThinkPhase:
         context_assembler: ContextAssembler,
         llm_router: LLMRouter,
         mind_config: MindConfig,
+        plugin_manager: PluginManager | None = None,
         degradation_message: str = "I'm having trouble thinking clearly right now.",
     ) -> None:
         self._assembler = context_assembler
         self._router = llm_router
         self._mind_config = mind_config
+        self._plugin_manager = plugin_manager
         self._degradation_message = degradation_message
 
     async def process(
@@ -74,11 +77,20 @@ class ThinkPhase:
                 context_window=context_window,
             )
 
-            # 4. LLM generate
+            # 4. Build tool definitions for LLM
+            tools: list[dict[str, object]] | None = None
+            if self._plugin_manager and self._plugin_manager.plugin_count > 0:
+                from sovyx.llm.router import LLMRouter as _LLMRouter
+
+                defs = self._plugin_manager.get_tool_definitions()
+                tools = _LLMRouter.tool_definitions_to_dicts(defs)
+
+            # 5. LLM generate
             response = await self._router.generate(
                 messages=ctx.messages,
                 model=model,
                 temperature=self._mind_config.llm.temperature,
+                tools=tools,
             )
 
             logger.debug(
