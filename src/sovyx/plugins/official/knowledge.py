@@ -5,9 +5,16 @@ Deduplication, conflict-aware storage, semantic search, episodic recall.
 
 Permissions required: brain:read, brain:write
 
-Ref: SPE-008 Appendix A.6
-TASK-470/471: BrainAccess expansion
-TASK-472: Semantic deduplication engine
+Response Schema (all tools):
+    Every tool returns a JSON object with at minimum:
+    - action: str — what happened (e.g. "created", "reinforced", "search")
+    - ok: bool — true if successful
+    - message: str — human-readable summary
+
+    Error responses always have:
+    - action: "error"
+    - ok: false
+    - message: str — error description
 """
 
 from __future__ import annotations
@@ -102,7 +109,7 @@ class KnowledgePlugin(ISovyxPlugin):
             JSON with action (created|reinforced|updated|extended), details.
         """
         if self._brain is None:
-            return json.dumps({"action": "error", "message": "brain access not configured"})
+            return _err("brain access not configured")
 
         if not name:
             name = _auto_name(what)
@@ -141,6 +148,7 @@ class KnowledgePlugin(ISovyxPlugin):
                     return json.dumps(
                         {
                             "action": "updated",
+                            "ok": True,
                             "resolution": "contradiction",
                             "concept_id": existing_id,
                             "name": existing_name,
@@ -170,6 +178,7 @@ class KnowledgePlugin(ISovyxPlugin):
                     return json.dumps(
                         {
                             "action": "extended",
+                            "ok": True,
                             "resolution": "extension",
                             "concept_id": existing_id,
                             "name": existing_name,
@@ -215,6 +224,7 @@ class KnowledgePlugin(ISovyxPlugin):
                         return json.dumps(
                             {
                                 "action": "reinforced",
+                                "ok": True,
                                 "concept_id": existing_id,
                                 "name": existing_name,
                                 "similarity": round(similarity, 3),
@@ -254,6 +264,7 @@ class KnowledgePlugin(ISovyxPlugin):
 
             result: dict[str, object] = {
                 "action": "created",
+                "ok": True,
                 "concept_id": concept_id,
                 "name": name,
                 "category": category,
@@ -270,7 +281,7 @@ class KnowledgePlugin(ISovyxPlugin):
             return json.dumps(result)
 
         except Exception as e:  # noqa: BLE001
-            return json.dumps({"action": "error", "message": f"Error remembering: {e}"})
+            return _err(f"Error remembering: {e}")
 
     # ── auto-relation (internal) ──
 
@@ -364,7 +375,7 @@ class KnowledgePlugin(ISovyxPlugin):
             JSON with results array.
         """
         if self._brain is None:
-            return json.dumps({"action": "error", "message": "brain access not configured"})
+            return _err("brain access not configured")
 
         # Over-fetch when filtering by person (post-filter)
         fetch_limit = max(1, min(self._max_results, limit))
@@ -374,7 +385,7 @@ class KnowledgePlugin(ISovyxPlugin):
         try:
             results = await self._brain.search(query, limit=fetch_limit)
         except Exception as e:  # noqa: BLE001
-            return json.dumps({"action": "error", "message": f"Error searching: {e}"})
+            return _err(f"Error searching: {e}")
 
         # Post-filter by person if specified
         if about_person:
@@ -385,6 +396,7 @@ class KnowledgePlugin(ISovyxPlugin):
             return json.dumps(
                 {
                     "action": "search",
+                    "ok": True,
                     "query": query,
                     "about_person": about_person or None,
                     "results": [],
@@ -396,9 +408,11 @@ class KnowledgePlugin(ISovyxPlugin):
         return json.dumps(
             {
                 "action": "search",
+                "ok": True,
                 "query": query,
                 "about_person": about_person or None,
                 "count": len(results),
+                "message": f"Found {len(results)} result(s) for: {query}",
                 "results": [
                     {
                         "id": str(r.get("id", "")),
@@ -437,7 +451,7 @@ class KnowledgePlugin(ISovyxPlugin):
             JSON with action and details of what was deleted.
         """
         if self._brain is None:
-            return json.dumps({"action": "error", "message": "brain access not configured"})
+            return _err("brain access not configured")
 
         try:
             if forget_all:
@@ -446,6 +460,7 @@ class KnowledgePlugin(ISovyxPlugin):
                     return json.dumps(
                         {
                             "action": "not_found",
+                            "ok": True,
                             "query": query,
                             "message": f"Nothing found matching: {query}",
                         }
@@ -455,6 +470,7 @@ class KnowledgePlugin(ISovyxPlugin):
                 return json.dumps(
                     {
                         "action": "forgotten_all",
+                        "ok": True,
                         "query": query,
                         "count": success_count,
                         "deleted": deleted_list,
@@ -472,6 +488,7 @@ class KnowledgePlugin(ISovyxPlugin):
                 return json.dumps(
                     {
                         "action": "not_found",
+                        "ok": True,
                         "query": query,
                         "message": f"Nothing found matching: {query}",
                     }
@@ -487,6 +504,7 @@ class KnowledgePlugin(ISovyxPlugin):
                 return json.dumps(
                     {
                         "action": "forgotten",
+                        "ok": True,
                         "concept_id": concept_id,
                         "name": concept_name,
                         "message": f"Forgotten: '{concept_name}'",
@@ -496,13 +514,14 @@ class KnowledgePlugin(ISovyxPlugin):
             return json.dumps(
                 {
                     "action": "not_found",
+                    "ok": True,
                     "concept_id": concept_id,
                     "message": f"Concept '{concept_name}' not found for deletion.",
                 }
             )
 
         except Exception as e:  # noqa: BLE001
-            return json.dumps({"action": "error", "message": f"Error: {e}"})
+            return _err(f"Error: {e}")
 
     # ── recall_about ──
 
@@ -526,7 +545,7 @@ class KnowledgePlugin(ISovyxPlugin):
             JSON with concepts (enriched), episodes, and summary.
         """
         if self._brain is None:
-            return json.dumps({"action": "error", "message": "brain access not configured"})
+            return _err("brain access not configured")
 
         try:
             results = await self._brain.search(topic, limit=self._max_results)
@@ -535,6 +554,7 @@ class KnowledgePlugin(ISovyxPlugin):
                 return json.dumps(
                     {
                         "action": "recall",
+                        "ok": True,
                         "topic": topic,
                         "results": [],
                         "episodes": [],
@@ -582,10 +602,13 @@ class KnowledgePlugin(ISovyxPlugin):
             except Exception:  # noqa: BLE001
                 pass  # episode search failure is non-fatal
 
+            ep_msg = f" ({len(episodes)} episode(s))" if episodes else ""
             result_data: dict[str, object] = {
                 "action": "recall",
+                "ok": True,
                 "topic": topic,
                 "count": len(concepts),
+                "message": f"Found {len(concepts)} concept(s) about '{topic}'{ep_msg}",
                 "results": concepts,
             }
 
@@ -596,7 +619,7 @@ class KnowledgePlugin(ISovyxPlugin):
             return json.dumps(result_data)
 
         except Exception as e:  # noqa: BLE001
-            return json.dumps({"action": "error", "message": f"Error recalling: {e}"})
+            return _err(f"Error recalling: {e}")
 
     # ── what_do_you_know ──
 
@@ -607,7 +630,7 @@ class KnowledgePlugin(ISovyxPlugin):
         Returns category breakdown, total counts, and top concepts.
         """
         if self._brain is None:
-            return json.dumps({"action": "error", "message": "brain access not configured"})
+            return _err("brain access not configured")
 
         try:
             stats = await self._brain.get_stats()
@@ -617,6 +640,7 @@ class KnowledgePlugin(ISovyxPlugin):
                 return json.dumps(
                     {
                         "action": "introspection",
+                        "ok": True,
                         "total_concepts": 0,
                         "message": "My memory is empty — I haven't learned anything yet.",
                     }
@@ -625,6 +649,7 @@ class KnowledgePlugin(ISovyxPlugin):
             return json.dumps(
                 {
                     "action": "introspection",
+                    "ok": True,
                     "total_concepts": total,
                     "categories": stats.get("categories", {}),
                     "total_relations": stats.get("total_relations", 0),
@@ -639,7 +664,7 @@ class KnowledgePlugin(ISovyxPlugin):
             )
 
         except Exception as e:  # noqa: BLE001
-            return json.dumps({"action": "error", "message": f"Error: {e}"})
+            return _err(f"Error: {e}")
 
 
 # ── Helpers ──
@@ -663,6 +688,18 @@ class _RelationInfo(typing.NamedTuple):
     target_id: str
     target_name: str
     similarity: float
+
+
+def _ok(action: str, message: str, **extra: object) -> str:
+    """Build a successful JSON response."""
+    data: dict[str, object] = {"action": action, "ok": True, "message": message}
+    data.update(extra)
+    return json.dumps(data)
+
+
+def _err(message: str) -> str:
+    """Build an error JSON response."""
+    return json.dumps({"action": "error", "ok": False, "message": message})
 
 
 def _match_person(result: dict[str, object], person_lower: str) -> bool:
