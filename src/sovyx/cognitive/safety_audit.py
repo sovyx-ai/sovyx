@@ -118,6 +118,14 @@ class SafetyAuditTrail:
         )
         self._events.append(event)
 
+        # Persist to SQLite (if store available)
+        try:
+            from sovyx.cognitive.audit_store import get_audit_store
+
+            get_audit_store().append(event)
+        except Exception:  # noqa: BLE001
+            pass  # Store failure doesn't block safety pipeline
+
         # Structured log (no content — privacy)
         logger.info(
             "safety_filter_event",

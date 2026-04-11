@@ -165,6 +165,41 @@ class AttendPhase:
             tracker.record_block(perception.source)
             return False
 
+        # ── 1b. Multi-turn injection context tracking ──
+        if self._safety.content_filter != "none":
+            from sovyx.cognitive.injection_tracker import (
+                InjectionVerdict,
+                get_injection_tracker,
+            )
+
+            conv_id = perception.metadata.get("conversation_id", perception.source)
+            injection_analysis = get_injection_tracker().analyze(
+                str(conv_id), perception.content,
+            )
+            if injection_analysis.verdict == InjectionVerdict.ESCALATE:
+                logger.warning(
+                    "perception_filtered_safety",
+                    perception_id=perception.id,
+                    reason="blocked_content",
+                    method="multi_turn_injection",
+                    cumulative_score=injection_analysis.cumulative_score,
+                    consecutive=injection_analysis.consecutive_suspicious,
+                    signals=injection_analysis.signals,
+                )
+                m.safety_blocks.add(1, {"reason": "multi_turn_injection"})
+                get_audit_trail().record(
+                    direction=FilterDirection.INPUT,
+                    action=FilterAction.BLOCKED,
+                    match=FilterMatch(
+                        matched=True,
+                        pattern=None,
+                        category=PatternCategory.INJECTION,
+                        tier=None,
+                    ),
+                )
+                tracker.record_block(perception.source)
+                return False
+
         # ── 2. LLM classifier (if available and filter active) ──
         if self._llm_router is not None and self._safety.content_filter != "none":
             verdict = await self._classify_with_llm(perception.content)
