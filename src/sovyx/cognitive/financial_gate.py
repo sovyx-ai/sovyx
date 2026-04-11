@@ -312,8 +312,15 @@ class FinancialGate:
     ) -> tuple[str, PendingConfirmation | None]:
         """Handle user response via regex (synchronous, PT+EN only).
 
-        Prefer ``handle_user_response_async`` for language-agnostic
-        classification via LLM.
+        .. deprecated:: 0.6.0
+            Use ``handle_user_response_async`` for language-agnostic
+            classification via LLM. This method is retained as a
+            synchronous fallback for contexts where async is unavailable.
+
+        Classification cascade (v0.6):
+            1. **Inline buttons** (primary) — callback_data, zero ambiguity
+            2. **LLM intent** (``handle_user_response_async``) — any language
+            3. **Regex** (this method) — PT+EN only, offline fallback
 
         Returns:
             ("confirmed", confirmation) if user approved.
