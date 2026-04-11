@@ -110,6 +110,10 @@ warn_unused_configs = true
 disallow_untyped_defs = true
 
 [[tool.mypy.overrides]]
+module = "sovyx.plugins.hot_reload"
+warn_unused_ignores = false
+
+[[tool.mypy.overrides]]
 module = "telegramify_markdown.*"
 ignore_missing_imports = true
 
