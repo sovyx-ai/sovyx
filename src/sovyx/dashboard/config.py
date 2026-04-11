@@ -278,16 +278,16 @@ def _apply_safety(
                     gid = str(item.get("id", f"custom-{len(custom)}"))
                     if gid in builtin_ids:
                         continue  # Can't override builtins
-                    custom.append(Guardrail(
-                        id=gid,
-                        rule=str(item["rule"]),
-                        severity=str(item.get("severity", "critical")),  # type: ignore[arg-type]
-                        builtin=False,
-                    ))
+                    custom.append(
+                        Guardrail(
+                            id=gid,
+                            rule=str(item["rule"]),
+                            severity=str(item.get("severity", "critical")),  # type: ignore[arg-type]
+                            builtin=False,
+                        )
+                    )
             s.guardrails = builtins + custom
-            changes["safety.guardrails"] = (
-                f"{len(builtins)} builtin + {len(custom)} custom"
-            )
+            changes["safety.guardrails"] = f"{len(builtins)} builtin + {len(custom)} custom"
             safety_changes["guardrails"] = changes["safety.guardrails"]
 
     if "pii_protection" in updates:

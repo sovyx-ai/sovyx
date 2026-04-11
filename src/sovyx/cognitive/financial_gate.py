@@ -67,26 +67,28 @@ _READONLY_PREFIXES: tuple[re.Pattern[str], ...] = (
 # ── Financial argument keys ───────────────────────────────────────────
 # Presence of ≥2 of these keys in arguments signals financial intent.
 
-_FINANCIAL_ARG_KEYS: frozenset[str] = frozenset({
-    "amount",
-    "price",
-    "cost",
-    "total",
-    "balance",
-    "quantity",
-    "units",
-    "shares",
-    "value",
-    "fee",
-    "tip",
-    "currency",
-    "token",
-    "wallet",
-    "account",
-    "recipient",
-    "destination",
-    "payment_method",
-})
+_FINANCIAL_ARG_KEYS: frozenset[str] = frozenset(
+    {
+        "amount",
+        "price",
+        "cost",
+        "total",
+        "balance",
+        "quantity",
+        "units",
+        "shares",
+        "value",
+        "fee",
+        "tip",
+        "currency",
+        "token",
+        "wallet",
+        "account",
+        "recipient",
+        "destination",
+        "payment_method",
+    }
+)
 
 # Minimum number of financial arg keys to trigger (avoids false positives)
 _MIN_FINANCIAL_ARGS = 2
@@ -133,9 +135,7 @@ class FinancialGateState:
     def get_pending(self) -> PendingConfirmation | None:
         """Get the most recent non-expired pending confirmation."""
         # Clean expired
-        expired_keys = [
-            k for k, v in self.pending.items() if v.expired
-        ]
+        expired_keys = [k for k, v in self.pending.items() if v.expired]
         for k in expired_keys:
             logger.info(
                 "financial_confirmation_expired",

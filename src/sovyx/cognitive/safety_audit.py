@@ -164,12 +164,8 @@ class SafetyAuditTrail:
             if age <= 30 * day:
                 stats.total_blocks_30d += 1
 
-            category_counts[event.category] = (
-                category_counts.get(event.category, 0) + 1
-            )
-            direction_counts[event.direction] = (
-                direction_counts.get(event.direction, 0) + 1
-            )
+            category_counts[event.category] = category_counts.get(event.category, 0) + 1
+            direction_counts[event.direction] = direction_counts.get(event.direction, 0) + 1
 
         stats.blocks_by_category = category_counts
         stats.blocks_by_direction = direction_counts

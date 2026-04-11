@@ -744,17 +744,19 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
         if mind_config:
             active_patterns = get_pattern_count(mind_config.safety)
 
-        return JSONResponse({
-            "ok": True,
-            "total_blocks_24h": stats.total_blocks_24h,
-            "total_blocks_7d": stats.total_blocks_7d,
-            "total_blocks_30d": stats.total_blocks_30d,
-            "blocks_by_category": stats.blocks_by_category,
-            "blocks_by_direction": stats.blocks_by_direction,
-            "recent_events": stats.recent_events,
-            "active_patterns": active_patterns,
-            "tier_counts": get_tier_counts(),
-        })
+        return JSONResponse(
+            {
+                "ok": True,
+                "total_blocks_24h": stats.total_blocks_24h,
+                "total_blocks_7d": stats.total_blocks_7d,
+                "total_blocks_30d": stats.total_blocks_30d,
+                "blocks_by_category": stats.blocks_by_category,
+                "blocks_by_direction": stats.blocks_by_direction,
+                "recent_events": stats.recent_events,
+                "active_patterns": active_patterns,
+                "tier_counts": get_tier_counts(),
+            }
+        )
 
     @app.get("/api/safety/status", dependencies=[Depends(verify_token)])
     async def get_safety_status() -> JSONResponse:
@@ -775,15 +777,17 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
         safety = mind_config.safety
         patterns = resolve_patterns(safety)
 
-        return JSONResponse({
-            "ok": True,
-            "content_filter": safety.content_filter,
-            "child_safe_mode": safety.child_safe_mode,
-            "financial_confirmation": safety.financial_confirmation,
-            "active_patterns": len(patterns),
-            "tier_counts": get_tier_counts(),
-            "total_patterns": get_pattern_count(safety),
-        })
+        return JSONResponse(
+            {
+                "ok": True,
+                "content_filter": safety.content_filter,
+                "child_safe_mode": safety.child_safe_mode,
+                "financial_confirmation": safety.financial_confirmation,
+                "active_patterns": len(patterns),
+                "tier_counts": get_tier_counts(),
+                "total_patterns": get_pattern_count(safety),
+            }
+        )
 
     # ── Voice Status ──
 
@@ -872,9 +876,7 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
             )
 
             # Safety-specific event for targeted UI updates
-            safety_changes = {
-                k: v for k, v in changes.items() if k.startswith("safety.")
-            }
+            safety_changes = {k: v for k, v in changes.items() if k.startswith("safety.")}
             if safety_changes:
                 await ws_manager.broadcast(
                     {

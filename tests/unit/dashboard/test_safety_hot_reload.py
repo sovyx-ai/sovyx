@@ -66,17 +66,24 @@ class TestApplySafetyChanges:
         assert changes == {}
 
     def test_multiple_changes_at_once(self) -> None:
-        cfg = MindConfig(name="Aria", safety=SafetyConfig(
-            content_filter="none",
-            child_safe_mode=False,
-            financial_confirmation=False,
-        ))
+        cfg = MindConfig(
+            name="Aria",
+            safety=SafetyConfig(
+                content_filter="none",
+                child_safe_mode=False,
+                financial_confirmation=False,
+            ),
+        )
         changes: dict[str, str] = {}
-        _apply_safety(cfg, {
-            "content_filter": "strict",
-            "child_safe_mode": True,
-            "financial_confirmation": True,
-        }, changes)
+        _apply_safety(
+            cfg,
+            {
+                "content_filter": "strict",
+                "child_safe_mode": True,
+                "financial_confirmation": True,
+            },
+            changes,
+        )
         assert cfg.safety.content_filter == "strict"
         assert cfg.safety.child_safe_mode is True
         assert cfg.safety.financial_confirmation is True
@@ -90,17 +97,19 @@ class TestStructuredLog:
         cfg = MindConfig(name="Aria", safety=SafetyConfig(content_filter="none"))
         changes: dict[str, str] = {}
         _apply_safety(cfg, {"content_filter": "standard"}, changes)
-        # structlog emits to stdout — verify the structured log exists
-        out = capsys.readouterr().out
-        assert "safety_config_changed" in out
-        assert "content_filter" in out
+        # structlog may emit to stdout or stderr depending on configuration
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "safety_config_changed" in combined
+        assert "content_filter" in combined
 
     def test_no_log_when_no_change(self, capsys: pytest.CaptureFixture[str]) -> None:
         cfg = MindConfig(name="Aria", safety=SafetyConfig(content_filter="standard"))
         changes: dict[str, str] = {}
         _apply_safety(cfg, {"content_filter": "standard"}, changes)
-        out = capsys.readouterr().out
-        assert "safety_config_changed" not in out
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "safety_config_changed" not in combined
 
 
 class TestDynamicPatternResolution:

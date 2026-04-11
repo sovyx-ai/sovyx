@@ -117,9 +117,7 @@ class ActPhase:
 
         reason = None
         if result.match and result.match.category:
-            reason = (
-                f"{result.action}:{result.match.category.value}"
-            )
+            reason = f"{result.action}:{result.match.category.value}"
         else:
             reason = result.action
 

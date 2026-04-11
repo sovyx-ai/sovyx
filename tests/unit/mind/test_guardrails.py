@@ -65,15 +65,18 @@ class TestSystemPromptIntegration:
         assert "personal data" in prompt.lower()
 
     def test_custom_guardrail_in_prompt(self) -> None:
-        cfg = _config(safety=SafetyConfig(
-            guardrails=list(DEFAULT_GUARDRAILS) + [
-                Guardrail(
-                    id="no-medical",
-                    rule="Never provide medical diagnoses.",
-                    severity="warning",
-                ),
-            ],
-        ))
+        cfg = _config(
+            safety=SafetyConfig(
+                guardrails=list(DEFAULT_GUARDRAILS)
+                + [
+                    Guardrail(
+                        id="no-medical",
+                        rule="Never provide medical diagnoses.",
+                        severity="warning",
+                    ),
+                ],
+            )
+        )
         engine = PersonalityEngine(cfg)
         prompt = engine.generate_system_prompt()
         assert "medical diagnoses" in prompt.lower()
@@ -92,11 +95,19 @@ class TestGuardrailCRUD:
     def test_add_custom_guardrail(self) -> None:
         cfg = _config()
         changes: dict[str, str] = {}
-        _apply_safety(cfg, {
-            "guardrails": [
-                {"id": "no-legal", "rule": "Never provide legal advice.", "severity": "warning"},
-            ],
-        }, changes)
+        _apply_safety(
+            cfg,
+            {
+                "guardrails": [
+                    {
+                        "id": "no-legal",
+                        "rule": "Never provide legal advice.",
+                        "severity": "warning",
+                    },
+                ],
+            },
+            changes,
+        )
         assert len(cfg.safety.guardrails) == 4  # 3 builtins + 1 custom
         ids = {g.id for g in cfg.safety.guardrails}
         assert "no-legal" in ids
@@ -104,38 +115,53 @@ class TestGuardrailCRUD:
     def test_builtins_preserved(self) -> None:
         cfg = _config()
         changes: dict[str, str] = {}
-        _apply_safety(cfg, {
-            "guardrails": [
-                {"id": "custom1", "rule": "Be concise."},
-            ],
-        }, changes)
+        _apply_safety(
+            cfg,
+            {
+                "guardrails": [
+                    {"id": "custom1", "rule": "Be concise."},
+                ],
+            },
+            changes,
+        )
         builtin_ids = {g.id for g in cfg.safety.guardrails if g.builtin}
         assert builtin_ids == {"honesty", "privacy", "safety"}
 
     def test_cannot_override_builtin(self) -> None:
         cfg = _config()
         changes: dict[str, str] = {}
-        _apply_safety(cfg, {
-            "guardrails": [
-                {"id": "honesty", "rule": "Override attempt"},
-            ],
-        }, changes)
+        _apply_safety(
+            cfg,
+            {
+                "guardrails": [
+                    {"id": "honesty", "rule": "Override attempt"},
+                ],
+            },
+            changes,
+        )
         honesty = next(g for g in cfg.safety.guardrails if g.id == "honesty")
         assert honesty.builtin is True
         assert "Override" not in honesty.rule
 
     def test_replace_custom_guardrails(self) -> None:
-        cfg = _config(safety=SafetyConfig(
-            guardrails=list(DEFAULT_GUARDRAILS) + [
-                Guardrail(id="old-custom", rule="Old rule"),
-            ],
-        ))
+        cfg = _config(
+            safety=SafetyConfig(
+                guardrails=list(DEFAULT_GUARDRAILS)
+                + [
+                    Guardrail(id="old-custom", rule="Old rule"),
+                ],
+            )
+        )
         changes: dict[str, str] = {}
-        _apply_safety(cfg, {
-            "guardrails": [
-                {"id": "new-custom", "rule": "New rule"},
-            ],
-        }, changes)
+        _apply_safety(
+            cfg,
+            {
+                "guardrails": [
+                    {"id": "new-custom", "rule": "New rule"},
+                ],
+            },
+            changes,
+        )
         ids = {g.id for g in cfg.safety.guardrails}
         assert "new-custom" in ids
         assert "old-custom" not in ids  # Replaced
@@ -149,12 +175,16 @@ class TestGuardrailCRUD:
     def test_changes_dict_updated(self) -> None:
         cfg = _config()
         changes: dict[str, str] = {}
-        _apply_safety(cfg, {
-            "guardrails": [
-                {"id": "c1", "rule": "Rule 1"},
-                {"id": "c2", "rule": "Rule 2"},
-            ],
-        }, changes)
+        _apply_safety(
+            cfg,
+            {
+                "guardrails": [
+                    {"id": "c1", "rule": "Rule 1"},
+                    {"id": "c2", "rule": "Rule 2"},
+                ],
+            },
+            changes,
+        )
         assert "safety.guardrails" in changes
         assert "2 custom" in changes["safety.guardrails"]
 
@@ -173,11 +203,14 @@ class TestConfigOutput:
         assert all("builtin" in g for g in guardrails)
 
     def test_custom_guardrail_in_config(self) -> None:
-        cfg = _config(safety=SafetyConfig(
-            guardrails=list(DEFAULT_GUARDRAILS) + [
-                Guardrail(id="custom", rule="My rule", severity="warning"),
-            ],
-        ))
+        cfg = _config(
+            safety=SafetyConfig(
+                guardrails=list(DEFAULT_GUARDRAILS)
+                + [
+                    Guardrail(id="custom", rule="My rule", severity="warning"),
+                ],
+            )
+        )
         output = get_config(cfg)
         guardrails = output["safety"]["guardrails"]
         assert len(guardrails) == 4

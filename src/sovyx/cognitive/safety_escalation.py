@@ -117,32 +117,28 @@ class SafetyEscalationTracker:
                     self._on_alert(source_id, count)
         elif count >= RATE_LIMIT_THRESHOLD:
             # Check within 5-min window
-            recent = sum(
-                1 for t in state.timestamps if t > now - RATE_LIMIT_WINDOW_SEC
-            )
+            recent = sum(1 for t in state.timestamps if t > now - RATE_LIMIT_WINDOW_SEC)
             if recent >= RATE_LIMIT_THRESHOLD and state.level not in (
                 EscalationLevel.RATE_LIMITED,
                 EscalationLevel.ALERTED,
             ):
-                    state.level = EscalationLevel.RATE_LIMITED
-                    logger.warning(
-                        "safety_escalation_rate_limited",
-                        source=source_id,
-                        blocks=recent,
-                        window_sec=RATE_LIMIT_WINDOW_SEC,
-                    )
+                state.level = EscalationLevel.RATE_LIMITED
+                logger.warning(
+                    "safety_escalation_rate_limited",
+                    source=source_id,
+                    blocks=recent,
+                    window_sec=RATE_LIMIT_WINDOW_SEC,
+                )
         elif count >= WARN_THRESHOLD:
-            recent = sum(
-                1 for t in state.timestamps if t > now - WARN_WINDOW_SEC
-            )
+            recent = sum(1 for t in state.timestamps if t > now - WARN_WINDOW_SEC)
             if recent >= WARN_THRESHOLD and state.level == EscalationLevel.NONE:
-                    state.level = EscalationLevel.WARNING
-                    logger.warning(
-                        "safety_escalation_warning",
-                        source=source_id,
-                        blocks=recent,
-                        window_sec=WARN_WINDOW_SEC,
-                    )
+                state.level = EscalationLevel.WARNING
+                logger.warning(
+                    "safety_escalation_warning",
+                    source=source_id,
+                    blocks=recent,
+                    window_sec=WARN_WINDOW_SEC,
+                )
 
         return state.level
 

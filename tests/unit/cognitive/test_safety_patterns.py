@@ -578,9 +578,7 @@ class TestAPI:
         assert get_pattern_count(SafetyConfig(content_filter="standard")) == len(
             ALL_STANDARD_PATTERNS
         )
-        assert get_pattern_count(SafetyConfig(content_filter="strict")) == len(
-            ALL_STRICT_PATTERNS
-        )
+        assert get_pattern_count(SafetyConfig(content_filter="strict")) == len(ALL_STRICT_PATTERNS)
 
     def test_get_tier_counts(self) -> None:
         counts = get_tier_counts()

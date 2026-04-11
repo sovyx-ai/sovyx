@@ -33,15 +33,27 @@ class TestI18NKeys:
         safety = data["safety"]
 
         required_keys = [
-            "title", "description", "contentFilter", "contentFilterDesc",
-            "childSafeMode", "childSafeModeDesc", "childSafeWarning",
+            "title",
+            "description",
+            "contentFilter",
+            "contentFilterDesc",
+            "childSafeMode",
+            "childSafeModeDesc",
+            "childSafeWarning",
             "childSafeEnforced",
-            "financialConfirmation", "financialConfirmationDesc",
-            "piiProtection", "piiProtectionDesc",
-            "guardrails", "guardrailsDesc",
-            "guardrailBuiltin", "guardrailCustom",
-            "guardrailAdd", "guardrailPlaceholder",
-            "guardrailSeverity", "guardrailCritical", "guardrailWarning",
+            "financialConfirmation",
+            "financialConfirmationDesc",
+            "piiProtection",
+            "piiProtectionDesc",
+            "guardrails",
+            "guardrailsDesc",
+            "guardrailBuiltin",
+            "guardrailCustom",
+            "guardrailAdd",
+            "guardrailPlaceholder",
+            "guardrailSeverity",
+            "guardrailCritical",
+            "guardrailWarning",
             "patternCount",
         ]
         for key in required_keys:
@@ -71,11 +83,14 @@ class TestConfigOutput:
         assert len(output["safety"]["guardrails"]) == 3
 
     def test_guardrail_fields(self) -> None:
-        cfg = _config(safety=SafetyConfig(
-            guardrails=list(DEFAULT_GUARDRAILS) + [
-                Guardrail(id="custom", rule="My rule", severity="warning"),
-            ],
-        ))
+        cfg = _config(
+            safety=SafetyConfig(
+                guardrails=list(DEFAULT_GUARDRAILS)
+                + [
+                    Guardrail(id="custom", rule="My rule", severity="warning"),
+                ],
+            )
+        )
         output = get_config(cfg)
         guardrails = output["safety"]["guardrails"]
         custom = [g for g in guardrails if g["id"] == "custom"]

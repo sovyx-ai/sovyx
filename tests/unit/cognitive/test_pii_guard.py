@@ -192,10 +192,7 @@ class TestMultiplePIITypes:
 
     def test_multiple_types(self) -> None:
         guard = _guard()
-        text = (
-            "Contact john@example.com or call 555-123-4567. "
-            "CPF: 123.456.789-01"
-        )
+        text = "Contact john@example.com or call 555-123-4567. CPF: 123.456.789-01"
         result = guard.check(text)
         assert result.redacted
         assert result.redaction_count >= 3
