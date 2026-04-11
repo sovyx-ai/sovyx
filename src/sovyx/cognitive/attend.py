@@ -89,6 +89,28 @@ class AttendPhase:
 
         m = get_metrics()
 
+        # ── 0. Multi-turn injection check ──
+        from sovyx.cognitive.injection_tracker import get_injection_tracker
+
+        mt_verdict = get_injection_tracker().record_turn(
+            conversation_id=perception.source,
+            text=perception.content,
+        )
+        if mt_verdict.suspicious:
+            logger.warning(
+                "perception_filtered_multi_turn_injection",
+                perception_id=perception.id,
+                score=mt_verdict.score,
+                reason=mt_verdict.reason,
+            )
+            m.safety_blocks.add(1, {"reason": "multi_turn_injection"})
+            get_audit_trail().record(
+                direction=FilterDirection.INPUT,
+                action=FilterAction.BLOCKED,
+                match=FilterMatch(matched=True),
+            )
+            return False
+
         # ── 1. Regex fast-path ──
         with m.measure_latency(m.safety_filter_latency, {"direction": "input"}):
             regex_result = check_content(perception.content, self._safety)
