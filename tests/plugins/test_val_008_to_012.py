@@ -80,7 +80,7 @@ class TestPluginIsolation:
 
     @pytest.mark.anyio()
     async def test_separate_data_dirs(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
 
         class PluginA(ISovyxPlugin):
             @property
@@ -121,7 +121,7 @@ class TestPluginIsolation:
 
     @pytest.mark.anyio()
     async def test_separate_loggers(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(CalculatorPlugin())
 
         loaded = mgr.get_plugin("calculator")
@@ -158,7 +158,7 @@ class TestChaos:
                     await asyncio.sleep(0.001)
                 return "done"  # unreachable
 
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(LoopPlugin())
         result = await mgr.execute("looper.loop", {}, timeout=0.1)
         assert result.success is False
@@ -183,7 +183,7 @@ class TestChaos:
             async def calc(self) -> str:
                 return 42  # type: ignore[return-value]
 
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(BadReturn())
         result = await mgr.execute("bad-return.calc", {})
         # str(42) = "42" — handled gracefully
@@ -192,7 +192,7 @@ class TestChaos:
 
     @pytest.mark.anyio()
     async def test_100_concurrent_calls(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(CalculatorPlugin())
 
         async def calc(i: int) -> str:
@@ -234,7 +234,7 @@ class TestDashboardConsistency:
                 msg = "boom"
                 raise RuntimeError(msg)
 
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(CalculatorPlugin())
         await mgr.load_single(FailPlugin())
 
@@ -278,7 +278,7 @@ class TestDashboardConsistency:
                 msg = "boom"
                 raise RuntimeError(msg)
 
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(FailPlugin2())
 
         for _ in range(5):

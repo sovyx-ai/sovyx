@@ -36,7 +36,7 @@ class TestDisabledExcluded:
 
     @pytest.mark.anyio()
     async def test_disabled_tools_excluded(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(CalculatorPlugin())
         await mgr.load_single(_FailPlugin())
 
@@ -59,7 +59,7 @@ class TestDisabledExcluded:
 
     @pytest.mark.anyio()
     async def test_re_enabled_tools_reappear(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(_FailPlugin())
 
         for _ in range(5):
@@ -77,7 +77,7 @@ class TestDisabledExcluded:
 
     @pytest.mark.anyio()
     async def test_tool_count_updates_correctly(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(CalculatorPlugin())
         await mgr.load_single(_FailPlugin())
 

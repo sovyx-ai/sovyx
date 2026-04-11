@@ -187,27 +187,27 @@ class TestPluginLoading:
 
     @pytest.mark.anyio()
     async def test_load_single(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(FakeWeatherPlugin())
         assert mgr.is_plugin_loaded("weather")
         assert mgr.plugin_count == 1
 
     @pytest.mark.anyio()
     async def test_load_creates_data_dir(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(FakeWeatherPlugin())
         assert (tmp_path / "weather").is_dir()
 
     @pytest.mark.anyio()
     async def test_load_duplicate_rejected(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(FakeWeatherPlugin())
         with pytest.raises(PluginError, match="already loaded"):
             await mgr.load_single(FakeWeatherPlugin())
 
     @pytest.mark.anyio()
     async def test_load_all_registered(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         mgr.register_class(FakeWeatherPlugin)
         mgr.register_class(FakeTimerPlugin)
         loaded = await mgr.load_all()
@@ -216,7 +216,7 @@ class TestPluginLoading:
 
     @pytest.mark.anyio()
     async def test_disabled_plugin_skipped(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path, disabled={"weather"})
+        mgr = PluginManager(data_dir=tmp_path, disabled={"weather"}, discover_entry_points=False)
         mgr.register_class(FakeWeatherPlugin)
         mgr.register_class(FakeTimerPlugin)
         loaded = await mgr.load_all()
@@ -225,7 +225,7 @@ class TestPluginLoading:
 
     @pytest.mark.anyio()
     async def test_enabled_filter(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path, enabled={"timer"})
+        mgr = PluginManager(data_dir=tmp_path, enabled={"timer"}, discover_entry_points=False)
         mgr.register_class(FakeWeatherPlugin)
         mgr.register_class(FakeTimerPlugin)
         loaded = await mgr.load_all()
@@ -234,7 +234,7 @@ class TestPluginLoading:
 
     @pytest.mark.anyio()
     async def test_failed_setup_not_loaded(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         mgr.register_class(FailSetupPlugin)
         loaded = await mgr.load_all()
         assert loaded == []
@@ -249,7 +249,7 @@ class TestToolExecution:
 
     @pytest.mark.anyio()
     async def test_execute_success(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(FakeWeatherPlugin())
         result = await mgr.execute("weather.get_weather", {"city": "Berlin"})
         assert result.success is True
@@ -257,26 +257,26 @@ class TestToolExecution:
 
     @pytest.mark.anyio()
     async def test_execute_plugin_not_found(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         with pytest.raises(PluginError, match="not found"):
             await mgr.execute("nonexistent.tool", {})
 
     @pytest.mark.anyio()
     async def test_execute_tool_not_found(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(FakeWeatherPlugin())
         with pytest.raises(PluginError, match="not found"):
             await mgr.execute("weather.nonexistent", {})
 
     @pytest.mark.anyio()
     async def test_execute_invalid_format(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         with pytest.raises(PluginError, match="Invalid tool name"):
             await mgr.execute("no-dot-name", {})
 
     @pytest.mark.anyio()
     async def test_execute_timeout(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(SlowPlugin())
         result = await mgr.execute("slow.slow_op", {}, timeout=0.01)
         assert result.success is False
@@ -284,7 +284,7 @@ class TestToolExecution:
 
     @pytest.mark.anyio()
     async def test_execute_error_caught(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(ErrorToolPlugin())
         result = await mgr.execute("error-tool.broken", {})
         assert result.success is False
@@ -299,7 +299,7 @@ class TestToolDefinitions:
 
     @pytest.mark.anyio()
     async def test_get_tools(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(FakeWeatherPlugin())
         await mgr.load_single(FakeTimerPlugin())
         tools = mgr.get_tool_definitions()
@@ -309,7 +309,7 @@ class TestToolDefinitions:
 
     @pytest.mark.anyio()
     async def test_tool_namespace(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(FakeWeatherPlugin())
         tools = mgr.get_tool_definitions()
         assert all(t.name.startswith("weather.") for t in tools)
@@ -323,28 +323,28 @@ class TestLifecycle:
 
     @pytest.mark.anyio()
     async def test_unload(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(FakeWeatherPlugin())
         await mgr.unload("weather")
         assert not mgr.is_plugin_loaded("weather")
 
     @pytest.mark.anyio()
     async def test_unload_not_found(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         with pytest.raises(PluginError, match="not found"):
             await mgr.unload("ghost")
 
     @pytest.mark.anyio()
     async def test_unload_teardown_error(self, tmp_path: Path) -> None:
         """Teardown error doesn't prevent unloading."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(FailTeardownPlugin())
         await mgr.unload("fail-teardown")
         assert not mgr.is_plugin_loaded("fail-teardown")
 
     @pytest.mark.anyio()
     async def test_shutdown(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(FakeWeatherPlugin())
         await mgr.load_single(FakeTimerPlugin())
         await mgr.shutdown()
@@ -352,7 +352,7 @@ class TestLifecycle:
 
     @pytest.mark.anyio()
     async def test_reload(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(FakeWeatherPlugin())
         await mgr.reload("weather")
         assert mgr.is_plugin_loaded("weather")
@@ -361,7 +361,7 @@ class TestLifecycle:
 
     @pytest.mark.anyio()
     async def test_reload_not_found(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         with pytest.raises(PluginError, match="not found"):
             await mgr.reload("ghost")
 
@@ -374,13 +374,13 @@ class TestProperties:
 
     @pytest.mark.anyio()
     async def test_loaded_plugins(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(FakeWeatherPlugin())
         assert mgr.loaded_plugins == ["weather"]
 
     @pytest.mark.anyio()
     async def test_get_plugin(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(FakeWeatherPlugin())
         loaded = mgr.get_plugin("weather")
         assert loaded is not None
@@ -388,7 +388,7 @@ class TestProperties:
 
     @pytest.mark.anyio()
     async def test_get_plugin_not_found(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         assert mgr.get_plugin("ghost") is None
 
 
@@ -419,7 +419,7 @@ class TestEdgeCases:
             def description(self) -> str:
                 return "Bad."
 
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         mgr.register_class(BadPlugin)
         loaded = await mgr.load_all()
         assert loaded == []
@@ -432,6 +432,7 @@ class TestEdgeCases:
             brain=mock_brain,
             data_dir=tmp_path,
             granted_permissions={"weather": {"brain:read", "brain:write"}},
+            discover_entry_points=False,
         )
         await mgr.load_single(FakeWeatherPlugin())
         loaded = mgr.get_plugin("weather")
@@ -446,6 +447,7 @@ class TestEdgeCases:
             event_bus=mock_bus,
             data_dir=tmp_path,
             granted_permissions={"weather": {"event:subscribe", "event:emit"}},
+            discover_entry_points=False,
         )
         await mgr.load_single(FakeWeatherPlugin())
         loaded = mgr.get_plugin("weather")
@@ -458,6 +460,7 @@ class TestEdgeCases:
         mgr = PluginManager(
             data_dir=tmp_path,
             plugin_config={"weather": {"api_key": "test123"}},
+            discover_entry_points=False,
         )
         await mgr.load_single(FakeWeatherPlugin())
         loaded = mgr.get_plugin("weather")
@@ -467,7 +470,7 @@ class TestEdgeCases:
     @pytest.mark.anyio()
     async def test_execute_no_handler(self, tmp_path: Path) -> None:
         """Tool with None handler raises PluginError."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(FakeWeatherPlugin())
         # Manually set handler to None
         loaded = mgr.get_plugin("weather")
@@ -481,7 +484,7 @@ class TestEdgeCases:
     @pytest.mark.anyio()
     async def test_shutdown_with_teardown_error(self, tmp_path: Path) -> None:
         """Shutdown proceeds even if individual teardown fails."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(FailTeardownPlugin())
         await mgr.load_single(FakeWeatherPlugin())
         await mgr.shutdown()
@@ -495,6 +498,7 @@ class TestEdgeCases:
             event_bus=mock_bus,
             data_dir=tmp_path,
             granted_permissions={"weather": {"event:subscribe", "event:emit"}},
+            discover_entry_points=False,
         )
         await mgr.load_single(FakeWeatherPlugin())
         await mgr.reload("weather")
@@ -503,7 +507,7 @@ class TestEdgeCases:
     @pytest.mark.anyio()
     async def test_default_data_dir(self) -> None:
         """Without data_dir, uses ~/.sovyx/plugins/."""
-        mgr = PluginManager()
+        mgr = PluginManager(discover_entry_points=False)
         await mgr.load_single(FakeWeatherPlugin())
         assert mgr.is_plugin_loaded("weather")
         # Cleanup
@@ -521,7 +525,7 @@ class TestEdgeCases:
 
         with patch("sovyx.plugins.manager.entry_points", return_value=[mock_ep], create=True):
             # Need to patch inside the method
-            mgr = PluginManager(data_dir=tmp_path)
+            mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
             # Manually test discovery
             with patch("importlib.metadata.entry_points", return_value=[mock_ep]):
                 plugins = mgr._discover_entry_points()
@@ -539,7 +543,7 @@ class TestEdgeCases:
         mock_ep.load.side_effect = ImportError("missing")
 
         with patch("importlib.metadata.entry_points", return_value=[mock_ep]):
-            mgr = PluginManager(data_dir=tmp_path)
+            mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
             plugins = mgr._discover_entry_points()
         assert plugins == []
 
@@ -549,7 +553,7 @@ class TestEdgeCases:
         from unittest.mock import patch
 
         with patch("importlib.metadata.entry_points", side_effect=Exception("boom")):
-            mgr = PluginManager(data_dir=tmp_path)
+            mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
             plugins = mgr._discover_entry_points()
         assert plugins == []
 
@@ -561,6 +565,7 @@ class TestEdgeCases:
             event_bus=mock_bus,
             data_dir=tmp_path,
             granted_permissions={"weather": {"event:subscribe"}},
+            discover_entry_points=False,
         )
         await mgr.load_single(FakeWeatherPlugin())
         await mgr.unload("weather")
@@ -589,7 +594,7 @@ class TestEdgeCases:
 
                 raise PDE("perm-test", "nope")
 
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(PermPlugin())
         result = await mgr.execute("perm-test.denied_op", {})
         assert result.success is False
@@ -605,7 +610,7 @@ class TestErrorBoundary:
     @pytest.mark.anyio()
     async def test_failure_count_increments(self, tmp_path: Path) -> None:
         """Each failed execution increments consecutive failure count."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(ErrorToolPlugin())
 
         await mgr.execute("error-tool.broken", {})
@@ -619,7 +624,7 @@ class TestErrorBoundary:
     @pytest.mark.anyio()
     async def test_success_resets_failure_count(self, tmp_path: Path) -> None:
         """Successful execution resets consecutive failure count to 0."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
 
         class FlipPlugin(ISovyxPlugin):
             call_count: int = 0
@@ -645,7 +650,7 @@ class TestErrorBoundary:
                 return "ok"
 
         FlipPlugin.call_count = 0
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(FlipPlugin())
 
         # 3 failures
@@ -663,7 +668,7 @@ class TestErrorBoundary:
     @pytest.mark.anyio()
     async def test_auto_disable_after_threshold(self, tmp_path: Path) -> None:
         """Plugin auto-disabled after 5 consecutive failures."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(ErrorToolPlugin())
 
         for _ in range(5):
@@ -677,7 +682,7 @@ class TestErrorBoundary:
     @pytest.mark.anyio()
     async def test_disabled_plugin_raises(self, tmp_path: Path) -> None:
         """Executing tool on disabled plugin raises PluginDisabledError."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(ErrorToolPlugin())
 
         for _ in range(5):
@@ -689,7 +694,7 @@ class TestErrorBoundary:
     @pytest.mark.anyio()
     async def test_re_enable_plugin(self, tmp_path: Path) -> None:
         """Re-enabling a disabled plugin resets health and allows execution."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(ErrorToolPlugin())
 
         for _ in range(5):
@@ -705,14 +710,14 @@ class TestErrorBoundary:
     @pytest.mark.anyio()
     async def test_re_enable_not_found(self, tmp_path: Path) -> None:
         """Re-enabling nonexistent plugin raises PluginError."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         with pytest.raises(PluginError, match="not found"):
             mgr.re_enable_plugin("ghost")
 
     @pytest.mark.anyio()
     async def test_timeout_counts_as_failure(self, tmp_path: Path) -> None:
         """Timeout counts toward consecutive failure count."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(SlowPlugin())
 
         await mgr.execute("slow.slow_op", {}, timeout=0.01)
@@ -742,7 +747,7 @@ class TestErrorBoundary:
 
                 raise PDE("perm-fail", "nope")
 
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(PermFailPlugin())
         await mgr.execute("perm-fail.denied", {})
         health = mgr.get_plugin_health("perm-fail")
@@ -751,7 +756,7 @@ class TestErrorBoundary:
     @pytest.mark.anyio()
     async def test_not_disabled_before_threshold(self, tmp_path: Path) -> None:
         """Plugin NOT disabled after fewer than threshold failures."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(ErrorToolPlugin())
 
         for _ in range(4):
@@ -762,7 +767,7 @@ class TestErrorBoundary:
     @pytest.mark.anyio()
     async def test_health_unknown_plugin(self, tmp_path: Path) -> None:
         """get_plugin_health returns defaults for unknown plugin."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         health = mgr.get_plugin_health("unknown")
         assert health["consecutive_failures"] == 0
         assert health["disabled"] is False
@@ -770,13 +775,13 @@ class TestErrorBoundary:
     @pytest.mark.anyio()
     async def test_is_disabled_unknown_plugin(self, tmp_path: Path) -> None:
         """is_plugin_disabled returns False for unknown plugin."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         assert mgr.is_plugin_disabled("unknown") is False
 
     @pytest.mark.anyio()
     async def test_unload_cleans_health(self, tmp_path: Path) -> None:
         """Unloading a plugin removes its health tracking."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(ErrorToolPlugin())
         await mgr.execute("error-tool.broken", {})
         assert mgr.get_plugin_health("error-tool")["consecutive_failures"] == 1
@@ -788,7 +793,7 @@ class TestErrorBoundary:
     @pytest.mark.anyio()
     async def test_last_error_tracked(self, tmp_path: Path) -> None:
         """Last error message is stored in health."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(ErrorToolPlugin())
         await mgr.execute("error-tool.broken", {})
         health = mgr.get_plugin_health("error-tool")
@@ -804,7 +809,7 @@ class TestResourceMonitoring:
     @pytest.mark.anyio()
     async def test_active_tasks_zero_after_execution(self, tmp_path: Path) -> None:
         """Active tasks returns to 0 after execution completes."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(FakeWeatherPlugin())
         await mgr.execute("weather.get_weather", {"city": "Berlin"})
         health = mgr.get_plugin_health("weather")
@@ -813,7 +818,7 @@ class TestResourceMonitoring:
     @pytest.mark.anyio()
     async def test_active_tasks_zero_after_failure(self, tmp_path: Path) -> None:
         """Active tasks returns to 0 even after failure."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(ErrorToolPlugin())
         await mgr.execute("error-tool.broken", {})
         health = mgr.get_plugin_health("error-tool")
@@ -822,7 +827,7 @@ class TestResourceMonitoring:
     @pytest.mark.anyio()
     async def test_active_tasks_zero_after_timeout(self, tmp_path: Path) -> None:
         """Active tasks returns to 0 after timeout."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(SlowPlugin())
         await mgr.execute("slow.slow_op", {}, timeout=0.01)
         health = mgr.get_plugin_health("slow")
@@ -856,7 +861,7 @@ class TestResourceMonitoring:
                     observed_active.append(h["active_tasks"])
                 return "observed"
 
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         ObservablePlugin.mgr_ref = mgr
         await mgr.load_single(ObservablePlugin())
         await mgr.execute("observable.observe", {})
@@ -875,7 +880,7 @@ class TestEventEmission:
     async def test_tool_executed_event_on_success(self, tmp_path: Path) -> None:
         """PluginToolExecuted emitted on successful execution."""
         mock_bus = AsyncMock()
-        mgr = PluginManager(event_bus=mock_bus, data_dir=tmp_path)
+        mgr = PluginManager(event_bus=mock_bus, data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(FakeWeatherPlugin())
         await mgr.execute("weather.get_weather", {"city": "NYC"})
 
@@ -898,7 +903,7 @@ class TestEventEmission:
     async def test_tool_executed_event_on_failure(self, tmp_path: Path) -> None:
         """PluginToolExecuted emitted with success=False on error."""
         mock_bus = AsyncMock()
-        mgr = PluginManager(event_bus=mock_bus, data_dir=tmp_path)
+        mgr = PluginManager(event_bus=mock_bus, data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(ErrorToolPlugin())
         await mgr.execute("error-tool.broken", {})
 
@@ -917,7 +922,7 @@ class TestEventEmission:
     async def test_auto_disabled_event(self, tmp_path: Path) -> None:
         """PluginAutoDisabled emitted when plugin reaches failure threshold."""
         mock_bus = AsyncMock()
-        mgr = PluginManager(event_bus=mock_bus, data_dir=tmp_path)
+        mgr = PluginManager(event_bus=mock_bus, data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(ErrorToolPlugin())
 
         for _ in range(5):
@@ -939,7 +944,7 @@ class TestEventEmission:
     async def test_plugin_loaded_event(self, tmp_path: Path) -> None:
         """PluginLoaded emitted when plugin is loaded."""
         mock_bus = AsyncMock()
-        mgr = PluginManager(event_bus=mock_bus, data_dir=tmp_path)
+        mgr = PluginManager(event_bus=mock_bus, data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(FakeWeatherPlugin())
 
         from sovyx.plugins.events import PluginLoaded
@@ -958,7 +963,7 @@ class TestEventEmission:
     async def test_plugin_unloaded_event(self, tmp_path: Path) -> None:
         """PluginUnloaded emitted when plugin is unloaded."""
         mock_bus = AsyncMock()
-        mgr = PluginManager(event_bus=mock_bus, data_dir=tmp_path)
+        mgr = PluginManager(event_bus=mock_bus, data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(FakeWeatherPlugin())
         mock_bus.emit.reset_mock()
 
@@ -978,7 +983,7 @@ class TestEventEmission:
     @pytest.mark.anyio()
     async def test_no_event_without_bus(self, tmp_path: Path) -> None:
         """No crash when event_bus is None."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(FakeWeatherPlugin())
         # Should not crash
         await mgr.execute("weather.get_weather", {"city": "X"})
@@ -987,7 +992,7 @@ class TestEventEmission:
     async def test_tool_executed_event_on_timeout(self, tmp_path: Path) -> None:
         """PluginToolExecuted emitted on timeout."""
         mock_bus = AsyncMock()
-        mgr = PluginManager(event_bus=mock_bus, data_dir=tmp_path)
+        mgr = PluginManager(event_bus=mock_bus, data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(SlowPlugin())
         await mgr.execute("slow.slow_op", {}, timeout=0.01)
 
