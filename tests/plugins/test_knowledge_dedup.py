@@ -488,11 +488,13 @@ class TestForgetCascade:
     @pytest.mark.asyncio
     async def test_forget_all_deletes_multiple(self) -> None:
         brain = _mock_brain()
-        brain.forget_all = AsyncMock(return_value=[
-            {"id": "c-1", "name": "fact A", "deleted": True},
-            {"id": "c-2", "name": "fact B", "deleted": True},
-            {"id": "c-3", "name": "fact C", "deleted": False},
-        ])
+        brain.forget_all = AsyncMock(
+            return_value=[
+                {"id": "c-1", "name": "fact A", "deleted": True},
+                {"id": "c-2", "name": "fact B", "deleted": True},
+                {"id": "c-3", "name": "fact C", "deleted": False},
+            ]
+        )
         plugin = KnowledgePlugin(brain=brain)
 
         data = json.loads(await plugin.forget("old facts", forget_all=True))
@@ -517,3 +519,112 @@ class TestForgetCascade:
 
         data = json.loads(await plugin.forget("nonexistent"))
         assert data["action"] == "not_found"
+
+
+class TestAutoRelation:
+    """TASK-475: Auto-relation creation on remember()."""
+
+    @pytest.mark.asyncio
+    async def test_creates_relations_for_related_concepts(self) -> None:
+        brain = _mock_brain()
+        # find_similar returns: first call for dedup (empty), second for auto-relate
+        call_count = 0
+
+        async def find_similar_side_effect(content, threshold=0.88, limit=5):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return []  # dedup check — no duplicates
+            # auto-relate check — return related concepts
+            return [
+                {"id": "c-related-1", "name": "Python basics", "similarity": 0.75},
+                {"id": "c-related-2", "name": "coding tips", "similarity": 0.70},
+            ]
+
+        brain.find_similar = AsyncMock(side_effect=find_similar_side_effect)
+        brain.create_relation = AsyncMock(return_value="rel-1")
+        plugin = KnowledgePlugin(brain=brain)
+
+        result = json.loads(await plugin.remember("Python functions and decorators"))
+        assert result["action"] == "created"
+        assert "relations" in result
+        assert len(result["relations"]) == 2
+        assert result["relations"][0]["target_name"] == "Python basics"
+        assert brain.create_relation.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_skips_self_and_dedup_range(self) -> None:
+        brain = _mock_brain()
+        call_count = 0
+
+        async def find_similar_side_effect(content, threshold=0.88, limit=5):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return []
+            return [
+                {"id": "c-new", "name": "self", "similarity": 0.99},  # self — skip
+                {"id": "c-dup", "name": "too similar", "similarity": 0.92},  # dedup range — skip
+                {"id": "c-good", "name": "related", "similarity": 0.72},  # good
+            ]
+
+        brain.find_similar = AsyncMock(side_effect=find_similar_side_effect)
+        brain.learn = AsyncMock(return_value="c-new")
+        brain.create_relation = AsyncMock(return_value="rel-1")
+        plugin = KnowledgePlugin(brain=brain)
+
+        result = json.loads(await plugin.remember("test concept"))
+        assert result["action"] == "created"
+        # Only 1 relation (skipped self + dedup range)
+        assert len(result.get("relations", [])) == 1
+        assert result["relations"][0]["target_name"] == "related"
+
+    @pytest.mark.asyncio
+    async def test_max_3_relations(self) -> None:
+        brain = _mock_brain()
+        call_count = 0
+
+        async def find_similar_side_effect(content, threshold=0.88, limit=5):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return []
+            return [
+                {"id": f"c-{i}", "name": f"concept {i}", "similarity": 0.80 - i * 0.02}
+                for i in range(10)
+            ]
+
+        brain.find_similar = AsyncMock(side_effect=find_similar_side_effect)
+        brain.create_relation = AsyncMock(return_value="rel-x")
+        plugin = KnowledgePlugin(brain=brain)
+
+        result = json.loads(await plugin.remember("test"))
+        assert len(result.get("relations", [])) <= 3
+
+    @pytest.mark.asyncio
+    async def test_no_relations_when_nothing_similar(self) -> None:
+        brain = _mock_brain()
+        brain.find_similar = AsyncMock(return_value=[])
+        plugin = KnowledgePlugin(brain=brain)
+
+        result = json.loads(await plugin.remember("totally unique concept"))
+        assert result["action"] == "created"
+        assert "relations" not in result
+
+    @pytest.mark.asyncio
+    async def test_auto_relate_failure_non_fatal(self) -> None:
+        brain = _mock_brain()
+        call_count = 0
+
+        async def find_similar_side_effect(content, threshold=0.88, limit=5):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return []
+            raise Exception("vector search down")
+
+        brain.find_similar = AsyncMock(side_effect=find_similar_side_effect)
+        plugin = KnowledgePlugin(brain=brain)
+
+        result = json.loads(await plugin.remember("test"))
+        assert result["action"] == "created"  # still created despite relation failure

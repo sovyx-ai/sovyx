@@ -239,18 +239,93 @@ class KnowledgePlugin(ISovyxPlugin):
                 category=category,
             )
 
-            return json.dumps(
-                {
-                    "action": "created",
-                    "concept_id": concept_id,
-                    "name": name,
-                    "category": category,
-                    "message": f"Remembered: '{name}'",
-                }
-            )
+            # Phase 3: Auto-relation — link to related existing concepts
+            relations_created = await self._auto_relate(concept_id, what)
+
+            result: dict[str, object] = {
+                "action": "created",
+                "concept_id": concept_id,
+                "name": name,
+                "category": category,
+                "message": f"Remembered: '{name}'",
+            }
+            if relations_created:
+                result["relations"] = relations_created
+                result["message"] = (
+                    f"Remembered: '{name}' (linked to {len(relations_created)} related concept(s))"
+                )
+
+            return json.dumps(result)
 
         except Exception as e:  # noqa: BLE001
             return json.dumps({"action": "error", "message": f"Error remembering: {e}"})
+
+    # ── auto-relation (internal) ──
+
+    async def _auto_relate(
+        self,
+        concept_id: str,
+        content: str,
+    ) -> list[dict[str, object]]:
+        """Link a new concept to related existing concepts.
+
+        Finds existing concepts with moderate similarity (0.65–0.87)
+        — similar enough to be related but not duplicates — and creates
+        RELATED_TO relations.
+
+        Args:
+            concept_id: Newly created concept ID.
+            content: Content text for similarity search.
+
+        Returns:
+            List of relation dicts with target_id, target_name, similarity.
+        """
+        if self._brain is None:
+            return []
+
+        try:
+            # Find related (not duplicate) concepts
+            similar = await self._brain.find_similar(
+                content,
+                threshold=_AUTO_RELATE_THRESHOLD,
+                limit=_AUTO_RELATE_MAX + 5,  # over-fetch, filter dedup range
+            )
+
+            relations: list[dict[str, object]] = []
+            for candidate in similar:
+                cid = str(candidate.get("id", ""))
+                sim = _float(candidate.get("similarity", 0))
+
+                # Skip self
+                if cid == concept_id:
+                    continue
+                # Skip dedup range (those would have been caught by dedup)
+                if sim >= self._dedup_threshold:
+                    continue
+                if len(relations) >= _AUTO_RELATE_MAX:
+                    break
+
+                # Create relation
+                try:
+                    await self._brain.create_relation(
+                        concept_id,
+                        cid,
+                        "related_to",
+                    )
+                    relations.append(
+                        {
+                            "target_id": cid,
+                            "target_name": str(candidate.get("name", "")),
+                            "similarity": round(sim, 3),
+                        }
+                    )
+                except Exception:  # noqa: BLE001
+                    continue  # relation creation failure is non-fatal
+
+            return relations
+
+        except Exception:  # noqa: BLE001
+            return []  # auto-relation failure is non-fatal
 
     # ── search ──
 
@@ -517,6 +592,18 @@ def _float(val: object, default: float = 0.0) -> float:
         return float(val)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return default
+
+
+_AUTO_RELATE_THRESHOLD = 0.65  # lower than dedup — "related" not "same"
+_AUTO_RELATE_MAX = 3
+
+
+class _RelationInfo(typing.NamedTuple):
+    """Lightweight relation info for auto-relation results."""
+
+    target_id: str
+    target_name: str
+    similarity: float
 
 
 def _auto_name(content: str) -> str:
