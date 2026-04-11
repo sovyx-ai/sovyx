@@ -15,6 +15,7 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from sovyx.llm.models import ToolCall, ToolResult
+from sovyx.llm.providers._shared import _sanitize_tool_name
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
@@ -374,7 +375,7 @@ class ActPhase:
                         "id": tc.id,
                         "type": "function",
                         "function": {
-                            "name": tc.function_name,
+                            "name": _sanitize_tool_name(tc.function_name),
                             "arguments": json.dumps(tc.arguments)
                             if isinstance(tc.arguments, dict)
                             else str(tc.arguments),
