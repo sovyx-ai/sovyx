@@ -461,6 +461,43 @@ class BrainAccess:
         )
         return str(relation.id)
 
+    async def classify_content(
+        self,
+        old_content: str,
+        new_content: str,
+    ) -> str:
+        """Classify the semantic relationship between two content strings.
+
+        Uses the Brain's contradiction detection engine (LLM-assisted with
+        heuristic fallback) to classify as:
+        - SAME: Semantically equivalent (paraphrase, synonym)
+        - EXTENDS: New adds info without contradicting
+        - CONTRADICTS: New conflicts with existing
+        - UNRELATED: Different topics
+
+        Permission: brain:read (analysis only, no mutation).
+
+        Args:
+            old_content: Existing concept content.
+            new_content: Incoming content.
+
+        Returns:
+            Classification string: "SAME", "EXTENDS", "CONTRADICTS", "UNRELATED".
+
+        Raises:
+            PermissionDeniedError: brain:read not granted.
+        """
+        from sovyx.brain.contradiction import detect_contradiction
+
+        self._enforcer.check("brain:read")
+        relation = await detect_contradiction(
+            old_content=old_content,
+            new_content=new_content,
+            llm_router=self._brain._llm_router,
+            fast_model=self._brain._fast_model,
+        )
+        return relation.value
+
     async def reinforce(
         self,
         concept_id: str,

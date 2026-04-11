@@ -726,3 +726,33 @@ class TestReinforce:
 
         await ba.reinforce("c-001")
         assert concept.last_accessed is not None
+
+
+# ── classify_content() ──
+
+
+class TestClassifyContent:
+    @pytest.mark.asyncio
+    async def test_classify_returns_relation(self) -> None:
+        ba, brain = _make_brain_access()
+        brain._llm_router = None
+        brain._fast_model = ""
+
+        # With no LLM, falls back to heuristic
+        result = await ba.classify_content("birthday is March 15", "birthday is March 15")
+        assert result == "SAME"
+
+    @pytest.mark.asyncio
+    async def test_classify_different_content(self) -> None:
+        ba, brain = _make_brain_access()
+        brain._llm_router = None
+        brain._fast_model = ""
+
+        result = await ba.classify_content("birthday is March 15", "birthday is March 20")
+        assert result in ("SAME", "EXTENDS", "CONTRADICTS", "UNRELATED")
+
+    @pytest.mark.asyncio
+    async def test_classify_permission_denied(self) -> None:
+        ba, _ = _make_brain_access(permissions=set())
+        with pytest.raises(PermissionDeniedError):
+            await ba.classify_content("a", "b")

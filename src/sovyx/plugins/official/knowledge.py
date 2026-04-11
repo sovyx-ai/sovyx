@@ -115,52 +115,121 @@ class KnowledgePlugin(ISovyxPlugin):
             )
 
             if similar:
-                # Found near-duplicate — full reinforcement cycle
+                # Found near-duplicate — classify relationship before acting
                 best = similar[0]
                 existing_id = str(best.get("id", ""))
                 existing_name = str(best.get("name", "?"))
+                existing_content = str(best.get("content", ""))
                 similarity = _float(best.get("similarity", 0))
 
-                # Full reinforcement: importance + confidence + access + metadata
-                rr = await self._brain.reinforce(
-                    existing_id,
-                    importance_delta=_REINFORCEMENT_IMPORTANCE_DELTA,
-                    confidence_delta=_REINFORCEMENT_CONFIDENCE_DELTA,
+                # Classify: SAME, EXTENDS, CONTRADICTS, UNRELATED
+                relation = await self._brain.classify_content(
+                    existing_content,
+                    what,
                 )
 
-                if rr is not None:
-                    imp = rr.get("importance", {})
-                    conf = rr.get("confidence", {})
-                    old_imp = _float(imp.get("old", 0.5) if isinstance(imp, dict) else 0.5)
-                    new_imp = _float(imp.get("new", 0.5) if isinstance(imp, dict) else 0.5)
-                    old_conf = _float(conf.get("old", 0.5) if isinstance(conf, dict) else 0.5)
-                    new_conf = _float(conf.get("new", 0.5) if isinstance(conf, dict) else 0.5)
-                    rc = int(_float(rr.get("reinforcement_count", 1)))
-                    established = bool(rr.get("established", False))
-
-                    msg = (
-                        f"I already knew something similar: '{existing_name}' "
-                        f"(similarity: {similarity:.0%}). Reinforced — "
-                        f"confidence {old_conf:.0%} → {new_conf:.0%}, "
-                        f"importance {old_imp:.0%} → {new_imp:.0%}."
+                if relation == "CONTRADICTS":
+                    # Contradiction: update content (recency wins), reduce confidence
+                    old_conf = _float(best.get("confidence", 0.5))
+                    new_conf = max(0.1, old_conf * 0.7)  # 30% confidence penalty
+                    await self._brain.update(
+                        existing_id,
+                        content=what,
+                        confidence=new_conf,
                     )
-                    if established:
-                        msg += " This is now an established memory."
-
                     return json.dumps(
                         {
-                            "action": "reinforced",
+                            "action": "updated",
+                            "resolution": "contradiction",
                             "concept_id": existing_id,
                             "name": existing_name,
-                            "similarity": round(similarity, 3),
-                            "importance": {"old": round(old_imp, 3), "new": round(new_imp, 3)},
+                            "old_content": _truncate(existing_content, 200),
+                            "new_content": _truncate(what, 200),
                             "confidence": {"old": round(old_conf, 3), "new": round(new_conf, 3)},
-                            "reinforcement_count": rc,
-                            "established": established,
-                            "message": msg,
+                            "message": (
+                                f"Updated '{existing_name}' — detected contradiction. "
+                                f"New info replaces old. Confidence reduced "
+                                f"{old_conf:.0%} → {new_conf:.0%} (needs reconfirmation)."
+                            ),
                         }
                     )
-                # Concept disappeared between find_similar and reinforce — fall through
+
+                if relation == "EXTENDS":
+                    # Extension: append new info, boost confidence
+                    merged = f"{existing_content}\n{what}"
+                    if len(merged) > 10_000:
+                        merged = merged[:10_000]
+                    old_conf = _float(best.get("confidence", 0.5))
+                    new_conf = min(1.0, old_conf + 0.08)
+                    await self._brain.update(
+                        existing_id,
+                        content=merged,
+                        confidence=new_conf,
+                    )
+                    return json.dumps(
+                        {
+                            "action": "extended",
+                            "resolution": "extension",
+                            "concept_id": existing_id,
+                            "name": existing_name,
+                            "confidence": {"old": round(old_conf, 3), "new": round(new_conf, 3)},
+                            "message": (
+                                f"Extended '{existing_name}' with new details. "
+                                f"Confidence {old_conf:.0%} → {new_conf:.0%}."
+                            ),
+                        }
+                    )
+
+                if relation == "UNRELATED":
+                    # High embedding similarity but semantically unrelated
+                    # → create as new concept (false positive dedup)
+                    pass  # fall through to create
+                else:
+                    # SAME: full reinforcement cycle
+                    rr = await self._brain.reinforce(
+                        existing_id,
+                        importance_delta=_REINFORCEMENT_IMPORTANCE_DELTA,
+                        confidence_delta=_REINFORCEMENT_CONFIDENCE_DELTA,
+                    )
+
+                    if rr is not None:
+                        imp = rr.get("importance", {})
+                        conf = rr.get("confidence", {})
+                        old_imp = _float(imp.get("old", 0.5) if isinstance(imp, dict) else 0.5)
+                        new_imp = _float(imp.get("new", 0.5) if isinstance(imp, dict) else 0.5)
+                        old_conf = _float(conf.get("old", 0.5) if isinstance(conf, dict) else 0.5)
+                        new_conf = _float(conf.get("new", 0.5) if isinstance(conf, dict) else 0.5)
+                        rc = int(_float(rr.get("reinforcement_count", 1)))
+                        established = bool(rr.get("established", False))
+
+                        msg = (
+                            f"I already knew this: '{existing_name}' "
+                            f"(similarity: {similarity:.0%}). Reinforced — "
+                            f"confidence {old_conf:.0%} → {new_conf:.0%}, "
+                            f"importance {old_imp:.0%} → {new_imp:.0%}."
+                        )
+                        if established:
+                            msg += " This is now an established memory."
+
+                        return json.dumps(
+                            {
+                                "action": "reinforced",
+                                "concept_id": existing_id,
+                                "name": existing_name,
+                                "similarity": round(similarity, 3),
+                                "importance": {
+                                    "old": round(old_imp, 3),
+                                    "new": round(new_imp, 3),
+                                },
+                                "confidence": {
+                                    "old": round(old_conf, 3),
+                                    "new": round(new_conf, 3),
+                                },
+                                "reinforcement_count": rc,
+                                "established": established,
+                                "message": msg,
+                            }
+                        )
 
             # Phase 2: No semantic duplicate — create via BrainService
             # (BrainService handles name-based dedup + contradiction detection)
