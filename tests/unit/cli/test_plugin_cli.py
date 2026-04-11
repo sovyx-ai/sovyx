@@ -590,3 +590,80 @@ class TestPermissionPrompt:
         ):
             result = runner.invoke(plugin_app, ["disable", "weather"])
         assert "already" in result.output.lower()
+
+
+# ── Plugin Create / Scaffold (TASK-440) ─────────────────────────────
+
+
+class TestPluginCreate:
+    """Tests for 'sovyx plugin create'."""
+
+    def test_create_basic(self, tmp_path: Path) -> None:
+        """Create generates all scaffold files."""
+        result = runner.invoke(plugin_app, ["create", "my-plugin", "-o", str(tmp_path)])
+        assert result.exit_code == 0
+        assert "created" in result.output.lower()
+
+        plugin_dir = tmp_path / "my-plugin"
+        assert (plugin_dir / "__init__.py").exists()
+        assert (plugin_dir / "plugin.py").exists()
+        assert (plugin_dir / "plugin.yaml").exists()
+        assert (plugin_dir / "tests" / "__init__.py").exists()
+        assert (plugin_dir / "tests" / "test_my_plugin.py").exists()
+        assert (plugin_dir / "README.md").exists()
+        assert (plugin_dir / "pyproject.toml").exists()
+
+    def test_create_plugin_py_content(self, tmp_path: Path) -> None:
+        """plugin.py has ISovyxPlugin subclass with @tool."""
+        runner.invoke(plugin_app, ["create", "weather", "-o", str(tmp_path)])
+        content = (tmp_path / "weather" / "plugin.py").read_text()
+        assert "ISovyxPlugin" in content
+        assert "@tool" in content
+        assert "class WeatherPlugin" in content
+        assert 'return "weather"' in content
+
+    def test_create_manifest_content(self, tmp_path: Path) -> None:
+        """plugin.yaml has correct name and version."""
+        runner.invoke(plugin_app, ["create", "timer", "-o", str(tmp_path)])
+        import yaml
+        data = yaml.safe_load((tmp_path / "timer" / "plugin.yaml").read_text())
+        assert data["name"] == "timer"
+        assert data["version"] == "0.1.0"
+
+    def test_create_pyproject_entry_point(self, tmp_path: Path) -> None:
+        """pyproject.toml has entry_points for auto-discovery."""
+        runner.invoke(plugin_app, ["create", "my-tool", "-o", str(tmp_path)])
+        content = (tmp_path / "my-tool" / "pyproject.toml").read_text()
+        assert "sovyx_plugins" in content
+        assert "my-tool" in content
+        assert "MyToolPlugin" in content
+
+    def test_create_hyphenated_name(self, tmp_path: Path) -> None:
+        """Hyphenated name converts to proper class/module names."""
+        runner.invoke(plugin_app, ["create", "my-cool-plugin", "-o", str(tmp_path)])
+        content = (tmp_path / "my-cool-plugin" / "plugin.py").read_text()
+        assert "MyCoolPluginPlugin" in content
+        # Module name uses underscores
+        init = (tmp_path / "my-cool-plugin" / "__init__.py").read_text()
+        assert "my_cool_plugin" in init
+
+    def test_create_invalid_name(self, tmp_path: Path) -> None:
+        """Invalid name (uppercase) rejected."""
+        result = runner.invoke(plugin_app, ["create", "BadName", "-o", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "lowercase" in result.output.lower()
+
+    def test_create_exists(self, tmp_path: Path) -> None:
+        """Creating in existing directory fails."""
+        (tmp_path / "existing").mkdir()
+        result = runner.invoke(plugin_app, ["create", "existing", "-o", str(tmp_path)])
+        assert result.exit_code == 1
+        assert "already" in result.output.lower()
+
+    def test_create_test_file(self, tmp_path: Path) -> None:
+        """Generated test file has proper test class."""
+        runner.invoke(plugin_app, ["create", "foo", "-o", str(tmp_path)])
+        content = (tmp_path / "foo" / "tests" / "test_foo.py").read_text()
+        assert "TestFooPlugin" in content
+        assert "@pytest.mark.anyio" in content
+        assert "await plugin.hello" in content
