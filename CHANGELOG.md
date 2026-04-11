@@ -5,6 +5,20 @@ All notable changes to Sovyx will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] — 2026-04-11
+
+### Fixed
+
+- **ReAct loop**: Tool re-invocation now includes `tool_calls` on assistant message and
+  `tool_call_id` on tool results — fixes OpenAI 400 error that caused raw fallback
+  output (`✓ calculator.calculate: 2`) instead of natural LLM responses.
+- **Plugin detail panel**: Complete UX redesign — proper spacing, sections in cards,
+  labeled action buttons, smooth collapse animations, visual hierarchy.
+- **Plugin card**: Larger badges, readable text (10px→11px), health warnings in styled
+  cards, breathing room (p-4→p-5).
+- **Cognitive timeline**: Scrollbar no longer overlaps right-aligned timestamps (pr-3).
+- **Metric chart**: YAxis width increased (40→52) so cost labels aren't clipped.
+
 ## [0.8.0] — 2026-04-11
 
 ### Added — Plugin Dashboard & Management UI
