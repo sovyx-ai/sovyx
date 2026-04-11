@@ -115,6 +115,16 @@ class SafetyEscalationTracker:
                 )
                 if callable(self._on_alert):
                     self._on_alert(source_id, count)
+                try:
+                    from sovyx.cognitive.safety_notifications import get_notifier
+
+                    get_notifier().notify_escalation(
+                        source_id,
+                        count,
+                        "alerted",
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
         elif count >= RATE_LIMIT_THRESHOLD:
             # Check within 5-min window
             recent = sum(1 for t in state.timestamps if t > now - RATE_LIMIT_WINDOW_SEC)
@@ -129,6 +139,16 @@ class SafetyEscalationTracker:
                     blocks=recent,
                     window_sec=RATE_LIMIT_WINDOW_SEC,
                 )
+                try:
+                    from sovyx.cognitive.safety_notifications import get_notifier
+
+                    get_notifier().notify_escalation(
+                        source_id,
+                        recent,
+                        "rate_limited",
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
         elif count >= WARN_THRESHOLD:
             recent = sum(1 for t in state.timestamps if t > now - WARN_WINDOW_SEC)
             if recent >= WARN_THRESHOLD and state.level == EscalationLevel.NONE:
