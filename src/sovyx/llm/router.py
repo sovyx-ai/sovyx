@@ -414,7 +414,7 @@ class LLMRouter:
 
     @staticmethod
     def tool_definitions_to_dicts(
-        tool_definitions: list[object],
+        tool_definitions: Sequence[object],
     ) -> list[dict[str, object]]:
         """Convert ToolDefinition objects to generic dicts for generate().
 
