@@ -7,12 +7,13 @@
  * TASK-455
  */
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { PuzzleIcon, WrenchIcon, PowerIcon, AlertTriangleIcon } from "lucide-react";
 import { useDashboardStore } from "@/stores/dashboard";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { PluginCard } from "@/components/dashboard/plugin-card";
+import { PluginDetailPanel } from "@/components/dashboard/plugin-detail";
 import { PluginsSkeleton } from "@/components/skeletons";
 import type { PluginInfo } from "@/types/api";
 import type { PluginFilter, PluginSort } from "@/stores/slices/plugins";
@@ -199,6 +200,7 @@ function ErrorState({ onRetry }: { onRetry: () => void }) {
 
 export default function PluginsPage() {
   const { t } = useTranslation("plugins");
+  const [selectedPlugin, setSelectedPlugin] = useState<string | null>(null);
 
   const plugins = useDashboardStore((s) => s.plugins);
   const pluginsLoading = useDashboardStore((s) => s.pluginsLoading);
@@ -308,6 +310,7 @@ export default function PluginsPage() {
                   key={plugin.name}
                   plugin={plugin}
                   delay={i * 50}
+                  onClick={() => setSelectedPlugin(plugin.name)}
                 />
               ))}
             </div>
@@ -321,6 +324,13 @@ export default function PluginsPage() {
           )}
         </>
       )}
+
+      {/* Detail Panel */}
+      <PluginDetailPanel
+        pluginName={selectedPlugin}
+        open={selectedPlugin !== null}
+        onClose={() => setSelectedPlugin(null)}
+      />
     </div>
   );
 }
