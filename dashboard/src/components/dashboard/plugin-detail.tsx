@@ -32,6 +32,7 @@ import {
   SheetDescription,
 } from "@/components/ui/sheet";
 import { PermissionBadge, PluginToolBadge, PricingBadge } from "./plugin-badges";
+import { PermissionDialog } from "./permission-dialog";
 import type { PluginDetail as PluginDetailType, PluginToolDetail } from "@/types/api";
 
 // ── Collapsible Section ──
@@ -186,6 +187,7 @@ export function PluginDetailPanel({
   const reloadPlugin = useDashboardStore((s) => s.reloadPlugin);
 
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [permDialogOpen, setPermDialogOpen] = useState(false);
 
   useEffect(() => {
     if (pluginName && open) {
@@ -381,15 +383,24 @@ export function PluginDetailPanel({
               count={detail.permissions.length}
             >
               {detail.permissions.length > 0 ? (
-                <div className="flex flex-wrap gap-1.5">
-                  {detail.permissions.map((p) => (
-                    <PermissionBadge
-                      key={p.permission}
-                      permission={p.permission}
-                      risk={p.risk}
-                      description={p.description}
-                    />
-                  ))}
+                <div className="space-y-2">
+                  <div className="flex flex-wrap gap-1.5">
+                    {detail.permissions.map((p) => (
+                      <PermissionBadge
+                        key={p.permission}
+                        permission={p.permission}
+                        risk={p.risk}
+                        description={p.description}
+                      />
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setPermDialogOpen(true)}
+                    className="text-[10px] font-medium text-[var(--svx-color-brand-primary)] hover:underline"
+                  >
+                    View detailed audit →
+                  </button>
                 </div>
               ) : (
                 <p className="text-xs text-[var(--svx-color-text-tertiary)]">
@@ -543,6 +554,20 @@ export function PluginDetailPanel({
           </div>
         )}
       </SheetContent>
+
+      {/* Permission audit dialog */}
+      {detail && (
+        <PermissionDialog
+          open={permDialogOpen}
+          onClose={() => setPermDialogOpen(false)}
+          pluginName={detail.name}
+          permissions={detail.permissions}
+          allowedDomains={
+            manifest?.network?.allowed_domains
+          }
+          mode="audit"
+        />
+      )}
     </Sheet>
   );
 }
