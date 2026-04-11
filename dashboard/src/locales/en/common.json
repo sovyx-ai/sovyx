@@ -10,7 +10,8 @@
     "logs": "Logs",
     "settings": "Settings",
     "about": "About",
-    "chat": "Chat"
+    "chat": "Chat",
+    "voice": "Voice"
   },
   "status": {
     "online": "Online",
