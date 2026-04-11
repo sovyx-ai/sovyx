@@ -9,6 +9,7 @@
 
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
 import {
   PowerIcon,
   RefreshCwIcon,
@@ -196,13 +197,31 @@ export function PluginDetailPanel({
     action: "enable" | "disable" | "reload",
   ) => {
     if (!pluginName) return;
+
+    // Confirmation for destructive actions
+    if (action === "disable") {
+      if (!window.confirm(t("actions.disableConfirm"))) return;
+    }
+    if (action === "reload") {
+      if (!window.confirm(t("actions.reloadConfirm"))) return;
+    }
+
     setActionLoading(action);
     try {
-      if (action === "enable") await enablePlugin(pluginName);
-      else if (action === "disable") await disablePlugin(pluginName);
-      else await reloadPlugin(pluginName);
+      let success = false;
+      if (action === "enable") success = await enablePlugin(pluginName);
+      else if (action === "disable") success = await disablePlugin(pluginName);
+      else success = await reloadPlugin(pluginName);
+
+      if (success) {
+        toast.success(t(`actions.${action === "enable" ? "enabled" : action === "disable" ? "disabled" : "reloaded"}`));
+      } else {
+        toast.error(t(`actions.${action}Failed`));
+      }
       // Refresh detail after action
       void fetchPluginDetail(pluginName);
+    } catch {
+      toast.error(t(`actions.${action}Failed`));
     } finally {
       setActionLoading(null);
     }

@@ -7,8 +7,12 @@
  * TASK-454
  */
 
+import { useState, useRef, useEffect } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
+import { MoreVerticalIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useDashboardStore } from "@/stores/dashboard";
 import type { PluginInfo, PermissionRisk } from "@/types/api";
 
 // ── Letter Avatar ──
@@ -103,6 +107,107 @@ const CATEGORY_ICONS: Record<string, string> = {
   communication: "📡",
 };
 
+// ── Kebab Menu ──
+
+function QuickActions({
+  plugin,
+  onViewDetails,
+}: {
+  plugin: PluginInfo;
+  onViewDetails: () => void;
+}) {
+  const { t } = useTranslation("plugins");
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const enablePlugin = useDashboardStore((s) => s.enablePlugin);
+  const disablePlugin = useDashboardStore((s) => s.disablePlugin);
+  const reloadPlugin = useDashboardStore((s) => s.reloadPlugin);
+
+  // Close on click outside
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const handleAction = async (action: "enable" | "disable" | "reload" | "details") => {
+    setOpen(false);
+    if (action === "details") {
+      onViewDetails();
+      return;
+    }
+    if (action === "disable" && !window.confirm(t("actions.disableConfirm"))) return;
+    if (action === "reload" && !window.confirm(t("actions.reloadConfirm"))) return;
+
+    let success = false;
+    if (action === "enable") success = await enablePlugin(plugin.name);
+    else if (action === "disable") success = await disablePlugin(plugin.name);
+    else success = await reloadPlugin(plugin.name);
+
+    if (success) {
+      toast.success(t(`actions.${action === "enable" ? "enabled" : action === "disable" ? "disabled" : "reloaded"}`));
+    } else {
+      toast.error(t(`actions.${action}Failed`));
+    }
+  };
+
+  return (
+    <div className="relative" ref={menuRef}>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen(!open);
+        }}
+        className="rounded-[var(--svx-radius-sm)] p-1 text-[var(--svx-color-text-tertiary)] hover:bg-[var(--svx-color-bg-elevated)] hover:text-[var(--svx-color-text-secondary)] opacity-0 group-hover:opacity-100 transition-opacity"
+        aria-label="Plugin actions"
+      >
+        <MoreVerticalIcon className="size-3.5" />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-50 mt-1 min-w-[140px] rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] py-1 shadow-lg">
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); void handleAction("details"); }}
+            className="flex w-full items-center px-3 py-1.5 text-xs text-[var(--svx-color-text-secondary)] hover:bg-[var(--svx-color-bg-elevated)]"
+          >
+            {t("card.viewDetails")}
+          </button>
+          {plugin.status === "disabled" ? (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); void handleAction("enable"); }}
+              className="flex w-full items-center px-3 py-1.5 text-xs text-[var(--svx-color-success)] hover:bg-[var(--svx-color-bg-elevated)]"
+            >
+              {t("actions.enable")}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); void handleAction("disable"); }}
+              className="flex w-full items-center px-3 py-1.5 text-xs text-[var(--svx-color-warning)] hover:bg-[var(--svx-color-bg-elevated)]"
+            >
+              {t("actions.disable")}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); void handleAction("reload"); }}
+            className="flex w-full items-center px-3 py-1.5 text-xs text-[var(--svx-color-text-secondary)] hover:bg-[var(--svx-color-bg-elevated)]"
+          >
+            {t("actions.reload")}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Card Component ──
 
 interface PluginCardProps {
@@ -180,7 +285,13 @@ export function PluginCard({
           </p>
         </div>
 
-        <PluginStatusDot status={plugin.status} />
+        <div className="flex items-center gap-1 shrink-0">
+          <PluginStatusDot status={plugin.status} />
+          <QuickActions
+            plugin={plugin}
+            onViewDetails={() => onClick?.()}
+          />
+        </div>
       </div>
 
       {/* Footer: Badges */}
