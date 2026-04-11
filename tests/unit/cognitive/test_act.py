@@ -714,6 +714,64 @@ class TestReActLoop:
         # Financial gate should trigger confirmation
         assert result.pending_confirmation is True
 
+    async def test_reinvoke_messages_format(self) -> None:
+        """Re-invocation messages include tool_calls on assistant and tool_call_id on results.
+
+        Regression test: OpenAI rejects tool messages without matching tool_calls
+        in the preceding assistant message (400 error).
+        """
+        captured_messages: list[dict[str, object]] = []
+        mock_router = AsyncMock()
+
+        async def capture_generate(messages: object, **_kwargs: object) -> LLMResponse:
+            assert isinstance(messages, list)
+            captured_messages.extend(messages)
+            return _response("Done!", finish_reason="stop")
+
+        mock_router.generate = AsyncMock(side_effect=capture_generate)
+
+        mock_mgr = AsyncMock()
+        mock_mgr.plugin_count = 1
+        mock_mgr.get_tool_definitions = MagicMock(return_value=[])
+        mock_mgr.execute = AsyncMock(
+            return_value=MagicMock(name="calc.add", output="42", success=True, call_id="tc1"),
+        )
+
+        executor = ToolExecutor(plugin_manager=mock_mgr)
+        act = ActPhase(tool_executor=executor, llm_router=mock_router)
+
+        initial_response = _response(
+            content="Let me calculate.",
+            finish_reason="tool_use",
+            tool_calls=[
+                ToolCall(id="tc1", function_name="calc.add", arguments={"a": 1, "b": 2}),
+            ],
+        )
+
+        await act.process(
+            initial_response,
+            [{"role": "user", "content": "what is 1+2"}],
+            _perception("what is 1+2"),
+        )
+
+        # Find assistant message with tool_calls
+        assistant_msgs = [m for m in captured_messages if m.get("role") == "assistant"]
+        assert len(assistant_msgs) == 1
+        assert "tool_calls" in assistant_msgs[0], "Assistant message must include tool_calls"
+        tool_calls_field = assistant_msgs[0]["tool_calls"]
+        assert isinstance(tool_calls_field, list)
+        assert len(tool_calls_field) == 1
+        assert tool_calls_field[0]["id"] == "tc1"
+        assert tool_calls_field[0]["type"] == "function"
+        assert tool_calls_field[0]["function"]["name"] == "calc.add"
+        # Arguments must be JSON string (OpenAI format)
+        assert isinstance(tool_calls_field[0]["function"]["arguments"], str)
+
+        # Find tool result message
+        tool_msgs = [m for m in captured_messages if m.get("role") == "tool"]
+        assert len(tool_msgs) == 1
+        assert tool_msgs[0].get("tool_call_id") == "tc1", "Tool result must have tool_call_id"
+
     async def test_no_plugin_manager_graceful(self) -> None:
         """Without PluginManager, tool calls return errors and LLM re-invoked."""
         mock_router = AsyncMock()
