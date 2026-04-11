@@ -353,6 +353,7 @@ async def bootstrap(
 
             output_guard = OutputGuard(safety_config=mind_config.safety)
             financial_gate = FinancialGate(safety_config=mind_config.safety)
+            registry.register_instance(FinancialGate, financial_gate)
             pii_guard = PIIGuard(safety=mind_config.safety)
             act = ActPhase(
                 tool_executor=ToolExecutor(),
@@ -401,12 +402,24 @@ async def bootstrap(
             msg = "No minds configured — cannot create BridgeManager"
             raise ValueError(msg)
 
+        # Resolve FinancialGate if registered (v0.6 — button confirmations)
+        _fin_gate = None
+        try:
+            from sovyx.cognitive.financial_gate import (  # noqa: TC001
+                FinancialGate as FinancialGateType,
+            )
+
+            _fin_gate = registry.get_instance(FinancialGateType)
+        except Exception:  # noqa: BLE001
+            pass
+
         bridge = BridgeManager(
             event_bus=event_bus,
             cog_loop_gate=gate,
             person_resolver=person_resolver,
             conversation_tracker=conversation_tracker,
             mind_id=first_mind_id,
+            financial_gate=_fin_gate,
         )
         registry.register_instance(BridgeManager, bridge)
 

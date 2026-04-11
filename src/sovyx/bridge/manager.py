@@ -2,11 +2,21 @@
 
 Pipeline: InboundMessage → PersonResolver → ConversationTracker →
           Perception → CogLoopGate → ActionResult → OutboundMessage → Channel
+
+Financial confirmation flow:
+    When ActPhase returns ``pending_confirmation=True``, BridgeManager:
+    1. Sends the confirmation message WITH inline buttons
+    2. Records the pending state (message_id, chat_id, channel)
+    3. On next inbound with matching callback_data (``fin_confirm:*`` / ``fin_cancel:*``):
+       a. Resolves the confirmation via FinancialGate
+       b. Edits the original message to show result (removes buttons)
+       c. Does NOT submit to cognitive loop
 """
 
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Generic, Protocol, TypeVar
 
@@ -19,6 +29,7 @@ from sovyx.observability.logging import get_logger
 from sovyx.observability.metrics import get_metrics
 
 if TYPE_CHECKING:
+    from sovyx.cognitive.financial_gate import FinancialGate
     from sovyx.cognitive.gate import CogLoopGate
     from sovyx.engine.events import EventBus
     from sovyx.engine.protocols import ChannelAdapter
@@ -90,6 +101,21 @@ class ConversationTracker(Protocol):
     ) -> None: ...
 
 
+@dataclasses.dataclass(slots=True)
+class _PendingConfirmationCtx:
+    """Tracks a financial confirmation awaiting user response.
+
+    Stored per chat_id so that callback queries from the same chat
+    can be matched without hitting the cognitive loop.
+    """
+
+    message_id: str  # Sent message with buttons
+    chat_id: str
+    channel_type: ChannelType
+    tool_call_ids: list[str]
+    is_batch: bool = False
+
+
 class BridgeManager:
     """Manage communication channels and route messages.
 
@@ -98,6 +124,11 @@ class BridgeManager:
     2. Lock per conversation (serialize same-user messages)
     3. Inside lock: reload history, build request, submit, record turns
     4. Send response via channel adapter
+
+    Financial confirmation:
+    - Tracks pending confirmations per chat_id
+    - Intercepts callback_data starting with ``fin_`` before cognitive loop
+    - Edits original button message with confirmation result
     """
 
     def __init__(
@@ -107,14 +138,17 @@ class BridgeManager:
         person_resolver: PersonResolver,
         conversation_tracker: ConversationTracker,
         mind_id: MindId,
+        financial_gate: FinancialGate | None = None,
     ) -> None:
         self._events = event_bus
         self._gate = cog_loop_gate
         self._resolver = person_resolver
         self._tracker = conversation_tracker
         self._mind_id = mind_id
+        self._financial_gate = financial_gate
         self._adapters: dict[ChannelType, ChannelAdapter] = {}
         self._conv_locks: _LRULockDict[ConversationId] = _LRULockDict(maxsize=500)
+        self._pending_confirmations: dict[str, _PendingConfirmationCtx] = {}
 
     @property
     def mind_id(self) -> MindId:
@@ -149,6 +183,12 @@ class BridgeManager:
 
         NEVER raises — all errors handled internally.
         """
+        # ── Financial callback interception (before cognitive loop) ──
+        callback = message.callback_data
+        if callback and callback.startswith("fin_"):
+            await self._handle_financial_callback(message)
+            return
+
         get_metrics().messages_received.add(
             1,
             {"channel": message.channel_type.value},
@@ -234,6 +274,32 @@ class BridgeManager:
                 if result.filtered:
                     return
 
+                # ── Financial confirmation pending → send with buttons ──
+                if result.pending_confirmation:
+                    outbound = OutboundMessage(
+                        channel_type=message.channel_type,
+                        target=message.chat_id,
+                        text=result.response_text,
+                        reply_to=message.channel_message_id,
+                        buttons=result.buttons,
+                    )
+                    sent_id = await self._send_response(outbound)
+                    if sent_id and result.confirmation_details:
+                        # Track pending so callback can resolve it
+                        details = result.confirmation_details
+                        tc_ids = details.get("tool_call_ids") or (
+                            [str(details["tool_call_id"])] if "tool_call_id" in details else []
+                        )
+                        self._pending_confirmations[message.chat_id] = _PendingConfirmationCtx(
+                            message_id=sent_id,
+                            chat_id=message.chat_id,
+                            channel_type=message.channel_type,
+                            tool_call_ids=list(tc_ids),  # type: ignore[arg-type]
+                            is_batch="count" in details,
+                        )
+                    get_counters().record_message()
+                    return
+
                 # Record assistant turn + send response
                 await self._tracker.add_turn(conv_id, "assistant", result.response_text)
                 get_counters().record_message()  # count AI response too
@@ -259,6 +325,65 @@ class BridgeManager:
                 get_counters().record_message()  # count crash-path error response
             except Exception:
                 logger.warning("error_response_also_failed", exc_info=True)
+
+    async def _handle_financial_callback(self, message: InboundMessage) -> None:
+        """Handle a financial confirmation/cancellation callback.
+
+        Resolves the pending confirmation, edits the original message
+        to remove buttons and show the result, and does NOT submit
+        to the cognitive loop.
+        """
+        callback = message.callback_data
+        if not callback:
+            return
+
+        chat_id = message.chat_id
+        ctx = self._pending_confirmations.pop(chat_id, None)
+
+        # Determine action
+        is_confirm = callback.startswith(("fin_confirm:", "fin_confirm_all:"))
+        is_cancel = callback.startswith(("fin_cancel:", "fin_cancel_all:"))
+
+        if not is_confirm and not is_cancel:
+            logger.warning("financial_callback_unknown", callback=callback)
+            return
+
+        # Resolve in FinancialGate state
+        if self._financial_gate:
+            if is_confirm:
+                # Confirm all pending tool calls
+                pending = self._financial_gate.state.get_pending()
+                if pending:
+                    self._financial_gate.state.confirm(pending.tool_call.id)
+            elif is_cancel:
+                self._financial_gate.state.cancel_all()
+
+        # Build response text
+        if is_confirm:
+            response_text = "✅ Financial action approved."
+            logger.info("financial_callback_approved", chat_id=chat_id)
+        else:
+            response_text = "❌ Financial action cancelled."
+            logger.info("financial_callback_cancelled", chat_id=chat_id)
+
+        # Edit original message to remove buttons + show result
+        if ctx:
+            edit_outbound = OutboundMessage(
+                channel_type=message.channel_type,
+                target=chat_id,
+                text=response_text,
+                edit_message_id=ctx.message_id,
+                buttons=None,  # Remove buttons
+            )
+            await self._send_response(edit_outbound)
+        else:
+            # No context found — send as new message
+            outbound = OutboundMessage(
+                channel_type=message.channel_type,
+                target=chat_id,
+                text=response_text,
+            )
+            await self._send_response(outbound)
 
     async def _send_response(self, outbound: OutboundMessage) -> str | None:
         """Find correct adapter and send. Returns message ID or None."""
