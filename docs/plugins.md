@@ -1,140 +1,125 @@
 # Plugins
 
-!!! note "v1.0 Feature"
-    The full plugin system ships in Sovyx v1.0. The framework and extension points exist in v0.5.
-
-Sovyx supports plugins to extend the cognitive loop with custom tools, actions, and integrations.
+Sovyx supports a full plugin system to extend Minds with custom tools the LLM can call
+during conversation. Plugins run in a sandboxed environment with explicit permissions.
 
 ## Architecture
 
-Plugins hook into the **Act** phase of the cognitive loop (Perceive → Attend → Think → **Act** → Reflect). When the LLM generates a tool call, the plugin framework routes it to the appropriate handler.
+Plugins hook into the **Act** phase of the cognitive loop (Perceive → Attend → Think → **Act** → Reflect). When the LLM generates a tool call, the PluginManager dispatches it to the appropriate handler via a ReAct loop (max 3 iterations).
 
 ```
-LLM Response → Tool Call Detected → Plugin Router → Handler → Result → LLM
+LLM Response → tool_call → PluginManager → Plugin.method() → ToolResult → LLM
 ```
-
-The plugin system uses a ReAct (Reasoning + Acting) pattern with a configurable maximum depth to prevent infinite tool loops.
 
 ## Plugin Interface
 
-Plugins implement the tool handler protocol:
+Plugins implement `ISovyxPlugin` and decorate tools with `@tool`:
 
 ```python
-from sovyx.engine.protocols import BrainReader
+from sovyx.plugins.sdk import ISovyxPlugin, tool
 
-class MyPlugin:
-    """Example plugin that searches the web."""
+class WeatherPlugin(ISovyxPlugin):
+    @property
+    def name(self) -> str:
+        return "weather"
 
-    name = "web_search"
-    description = "Search the web for current information"
+    @property
+    def version(self) -> str:
+        return "1.0.0"
 
-    async def execute(
-        self,
-        parameters: dict,
-        brain: BrainReader,
-    ) -> str:
-        """Execute the tool and return a text result."""
-        query = parameters["query"]
-        # ... perform search ...
-        return f"Results for: {query}"
+    @property
+    def description(self) -> str:
+        return "Weather forecasts via Open-Meteo."
+
+    @tool(description="Get current weather for a city.")
+    async def get_weather(self, city: str) -> str:
+        # Your logic here
+        return f"Weather in {city}: 22°C, sunny"
 ```
 
-## Registration
+## Configuration
 
-Register plugins in `mind.yaml`:
+Configure plugins in `mind.yaml`:
 
 ```yaml
 plugins:
-  enabled:
-    - web_search
-    - calculator
-    - home_assistant
+  disabled:
+    - dangerous-plugin
 
-  web_search:
-    api_key_env: SEARCH_API_KEY
-    max_results: 5
-
-  home_assistant:
-    url: http://homeassistant.local:8123
-    token_env: HASS_TOKEN
+  plugins_config:
+    weather:
+      enabled: true
+      config:
+        default_units: celsius
+      permissions:
+        - network:internet
 ```
 
-Or programmatically:
+## Permissions
 
-```python
-from sovyx.cognitive.act import ToolExecutor
+Plugins run in a capability-based sandbox. They must declare what they need:
 
-executor = ToolExecutor(max_depth=3)
-executor.register_tool("web_search", MyPlugin())
+| Permission | Description |
+|-----------|-------------|
+| `network:internet` | HTTP requests to allowed domains |
+| `brain:read` | Read from Mind's memory |
+| `brain:write` | Write to Mind's memory |
+| `fs:read` | Read files in plugin data dir |
+| `fs:write` | Write files in plugin data dir |
+| `events:emit` | Emit events on the EventBus |
+| `events:subscribe` | Subscribe to events |
+
+Undeclared permissions are denied at runtime with `PermissionDeniedError`.
+
+## Built-in Plugins
+
+| Plugin | Tools | Description |
+|--------|-------|-------------|
+| `calculator` | `calculate` | Safe math via AST (no eval) |
+| `weather` | `get_weather`, `get_forecast`, `will_it_rain` | Open-Meteo (free, no API key) |
+| `knowledge` | `remember`, `search`, `forget`, `recall_about`, `what_do_you_know` | Brain interface |
+
+## Dashboard Management
+
+The **Plugins** page in the dashboard (`/plugins`) provides a full management UI:
+
+- **Grid view** with search, status filters, and category filters
+- **Plugin detail panel** — permissions, tools, metadata, configuration
+- **Enable/disable/remove** with confirmation dialogs
+- **Permission approval** — security-first flow for activating plugins
+- **Real-time sync** via WebSocket events
+
+## Safety
+
+### Error Boundary
+- Plugin crashes never crash the engine
+- `asyncio.wait_for` enforces timeouts (default 30s)
+- All exceptions caught and returned as error results
+
+### Auto-Disable
+- 5 consecutive failures → plugin auto-disabled
+- `PluginAutoDisabled` event emitted
+- Re-enable via CLI (`sovyx plugin enable <name>`) or dashboard
+
+### Security Scanner
+- AST scanner flags `eval()`, `exec()`, `__import__`, `subprocess`
+- Runtime `ImportGuard` restricts imports (PEP 451)
+- Network requests limited to declared domains
+
+## CLI
+
+```bash
+sovyx plugin list              # List installed plugins
+sovyx plugin info <name>       # Detailed plugin info
+sovyx plugin install <source>  # Install (local/pip/git)
+sovyx plugin create <name>     # Scaffold new plugin
+sovyx plugin validate <dir>    # Run quality gates
+sovyx plugin enable <name>     # Enable a plugin
+sovyx plugin disable <name>    # Disable a plugin
+sovyx plugin remove <name>     # Remove a plugin
 ```
 
-## Built-in Plugins (Planned)
+## Further Reading
 
-| Plugin | Version | Description |
-|--------|---------|-------------|
-| `calculator` | v1.0 | Mathematical expressions |
-| `web_search` | v1.0 | Web search via Brave/Google |
-| `home_assistant` | v1.0 | Smart home control |
-| `calendar` | v1.0 | Google/CalDAV calendar access |
-| `notes` | v1.0 | Persistent note-taking |
-| `finance` | v1.2 | Portfolio tracking, market data |
-
-## Brain Access
-
-Plugins receive a read-only brain interface (`BrainReader`) for context-aware behavior:
-
-```python
-async def execute(self, parameters: dict, brain: BrainReader) -> str:
-    # Search the mind's memory
-    results = await brain.search("user preferences", mind_id=self.mind_id)
-
-    # Get related concepts
-    related = await brain.get_related(concept_id="c_42", limit=5)
-
-    # Full recall (concepts + episodes)
-    concepts, episodes = await brain.recall("meeting notes", mind_id=self.mind_id)
-```
-
-Available `BrainReader` methods:
-
-| Method | Description |
-|--------|-------------|
-| `search(query, mind_id, limit)` | Semantic concept search |
-| `get_concept(concept_id)` | Get concept by ID |
-| `recall(query, mind_id)` | Full recall (concepts + episodes) |
-| `get_related(concept_id, limit)` | Get related concepts |
-
-## Error Handling
-
-Plugin errors are isolated — a crashing plugin doesn't take down the engine:
-
-| Exception | Behavior |
-|-----------|----------|
-| `PluginError` | Logged, error result returned to LLM |
-| `PluginLoadError` | Plugin skipped at startup, warning logged |
-| `PluginCrashError` | Plugin disabled after 3 consecutive failures |
-
-## Creating a Plugin Package
-
-Plugins can be distributed as Python packages:
-
-```
-sovyx-plugin-weather/
-├── pyproject.toml
-├── src/
-│   └── sovyx_plugin_weather/
-│       ├── __init__.py
-│       └── plugin.py
-```
-
-```toml
-# pyproject.toml
-[project]
-name = "sovyx-plugin-weather"
-dependencies = ["sovyx>=0.5"]
-
-[project.entry-points."sovyx.plugins"]
-weather = "sovyx_plugin_weather.plugin:WeatherPlugin"
-```
-
-Sovyx discovers plugins via entry points at startup.
+- [Plugin Developer Guide](plugin-developer-guide.md) — full SDK reference, testing harness, distribution
+- [API Reference](api.md) — REST endpoints including `/api/plugins`

@@ -16,8 +16,9 @@ Your data stays on your hardware. Always.
 - Multi-provider LLM — Claude, GPT, Gemini, Ollama — automatic failover and complexity routing
 - Cost control — daily and per-conversation budgets with persistent tracking
 
-**Dashboard** (v0.5)
+**Dashboard** (v0.8)
 - Real-time web UI — brain visualization, conversations, logs, settings, live chat
+- Plugin management — grid view, search, filters, enable/disable, permission approval
 - Single command — `sovyx start` opens the dashboard at `http://localhost:7777`
 
 **Voice** (v0.5)
@@ -214,6 +215,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full development guide.
 | v0.5.1 | Released | Dashboard chat, security hardening, attack testing, CI/CD pipeline |
 | v0.6 | Released | Financial Gate v2, multilingual safety guardrails |
 | v0.7 | Released | Plugin SDK, CLI, built-in plugins, ReAct loop, hot-reload |
+| v0.8 | Released | Plugin dashboard, management UI, contract tests, i18n |
 | v1.0 | Planned | Multi-tenant, JWT auth, emotional engine, REST API |
 | v1.1 | Planned | Multi-language voice, barge-in, conversation branching |
 | v2.0 | Planned | Multi-agent platform, federated memory |
