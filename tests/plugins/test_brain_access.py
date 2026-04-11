@@ -427,3 +427,207 @@ class TestConceptToDict:
         assert d["source"] == "plugin:knowledge"
         assert d["score"] == 0.95
         assert d["category"] == "fact"
+
+
+# ── create_relation() ──
+
+
+class TestCreateRelation:
+    @pytest.mark.asyncio
+    async def test_create_relation_success(self) -> None:
+        ba, brain = _make_brain_access()
+        rel = MagicMock()
+        rel.id = "rel-001"
+        brain._relations = AsyncMock()
+        brain._relations.get_or_create = AsyncMock(return_value=rel)
+
+        result = await ba.create_relation("c-001", "c-002", "related_to")
+        assert result == "rel-001"
+        brain._relations.get_or_create.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_create_relation_invalid_type(self) -> None:
+        ba, brain = _make_brain_access()
+        brain._relations = AsyncMock()
+
+        with pytest.raises(ValueError, match="Invalid relation_type"):
+            await ba.create_relation("c-001", "c-002", "nonsense")
+
+    @pytest.mark.asyncio
+    async def test_create_relation_all_valid_types(self) -> None:
+        ba, brain = _make_brain_access()
+        rel = MagicMock()
+        rel.id = "rel-x"
+        brain._relations = AsyncMock()
+        brain._relations.get_or_create = AsyncMock(return_value=rel)
+
+        valid = [
+            "related_to",
+            "part_of",
+            "causes",
+            "contradicts",
+            "example_of",
+            "temporal",
+            "emotional",
+        ]
+        for rt in valid:
+            result = await ba.create_relation("c-001", "c-002", rt)
+            assert result == "rel-x"
+
+    @pytest.mark.asyncio
+    async def test_create_relation_permission_denied(self) -> None:
+        ba, _ = _make_brain_access(permissions={"brain:read"})
+        with pytest.raises(PermissionDeniedError):
+            await ba.create_relation("c-001", "c-002")
+
+    @pytest.mark.asyncio
+    async def test_create_relation_write_flag_false(self) -> None:
+        ba, _ = _make_brain_access(write=False)
+        with pytest.raises(PermissionDeniedError):
+            await ba.create_relation("c-001", "c-002")
+
+
+# ── boost_importance() ──
+
+
+class TestBoostImportance:
+    @pytest.mark.asyncio
+    async def test_boost_success(self) -> None:
+        ba, brain = _make_brain_access()
+        concept = _make_concept(importance=0.5)
+        brain.get_concept = AsyncMock(return_value=concept)
+        brain._concepts.boost_importance = AsyncMock()
+
+        result = await ba.boost_importance("c-001", delta=0.1)
+        assert result is True
+        brain._concepts.boost_importance.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_boost_clamps_delta(self) -> None:
+        ba, brain = _make_brain_access()
+        concept = _make_concept()
+        brain.get_concept = AsyncMock(return_value=concept)
+        brain._concepts.boost_importance = AsyncMock()
+
+        # Delta > 0.5 should be clamped
+        await ba.boost_importance("c-001", delta=2.0)
+        call_args = brain._concepts.boost_importance.call_args
+        assert call_args.args[1] == 0.5  # clamped
+
+        # Negative delta clamped to 0
+        await ba.boost_importance("c-001", delta=-1.0)
+        call_args = brain._concepts.boost_importance.call_args
+        assert call_args.args[1] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_boost_not_found(self) -> None:
+        ba, brain = _make_brain_access()
+        brain.get_concept = AsyncMock(return_value=None)
+
+        result = await ba.boost_importance("nonexistent")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_boost_permission_denied(self) -> None:
+        ba, _ = _make_brain_access(permissions={"brain:read"})
+        with pytest.raises(PermissionDeniedError):
+            await ba.boost_importance("c-001")
+
+    @pytest.mark.asyncio
+    async def test_boost_default_delta(self) -> None:
+        ba, brain = _make_brain_access()
+        concept = _make_concept()
+        brain.get_concept = AsyncMock(return_value=concept)
+        brain._concepts.boost_importance = AsyncMock()
+
+        await ba.boost_importance("c-001")  # default delta=0.05
+        call_args = brain._concepts.boost_importance.call_args
+        assert call_args.args[1] == 0.05
+
+
+# ── get_stats() ──
+
+
+class TestGetStats:
+    @pytest.mark.asyncio
+    async def test_get_stats_returns_complete_data(self) -> None:
+        ba, brain = _make_brain_access()
+
+        # Mock concept repo
+        brain._concepts.get_categories = AsyncMock(return_value=["fact", "preference"])
+        brain._concepts.count_by_category = AsyncMock(side_effect=[10, 5])
+
+        # Mock relation count
+        mock_conn = AsyncMock()
+        mock_cursor = AsyncMock()
+        mock_cursor.fetchone = AsyncMock(return_value=(42,))
+        mock_conn.execute = AsyncMock(return_value=mock_cursor)
+        mock_conn.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_conn.__aexit__ = AsyncMock(return_value=None)
+        brain._relations = MagicMock()
+        brain._relations._pool = MagicMock()
+        brain._relations._pool.read = MagicMock(return_value=mock_conn)
+
+        # Mock episode count
+        mock_conn2 = AsyncMock()
+        mock_cursor2 = AsyncMock()
+        mock_cursor2.fetchone = AsyncMock(return_value=(7,))
+        mock_conn2.execute = AsyncMock(return_value=mock_cursor2)
+        mock_conn2.__aenter__ = AsyncMock(return_value=mock_conn2)
+        mock_conn2.__aexit__ = AsyncMock(return_value=None)
+        brain._episodes = MagicMock()
+        brain._episodes._pool = MagicMock()
+        brain._episodes._pool.read = MagicMock(return_value=mock_conn2)
+
+        stats = await ba.get_stats()
+
+        assert stats["total_concepts"] == 15
+        assert stats["categories"] == {"fact": 10, "preference": 5}
+        assert stats["total_relations"] == 42
+        assert stats["total_episodes"] == 7
+        assert stats["mind_id"] == "test-mind"
+
+    @pytest.mark.asyncio
+    async def test_get_stats_empty_brain(self) -> None:
+        ba, brain = _make_brain_access()
+
+        brain._concepts.get_categories = AsyncMock(return_value=[])
+
+        # Relations fail gracefully
+        brain._relations = MagicMock()
+        brain._relations._pool = MagicMock()
+        brain._relations._pool.read = MagicMock(side_effect=Exception("no table"))
+
+        # Episodes fail gracefully
+        brain._episodes = MagicMock()
+        brain._episodes._pool = MagicMock()
+        brain._episodes._pool.read = MagicMock(side_effect=Exception("no table"))
+
+        stats = await ba.get_stats()
+
+        assert stats["total_concepts"] == 0
+        assert stats["categories"] == {}
+        assert stats["total_relations"] == 0
+        assert stats["total_episodes"] == 0
+
+    @pytest.mark.asyncio
+    async def test_get_stats_permission_denied(self) -> None:
+        ba, _ = _make_brain_access(permissions=set())
+        with pytest.raises(PermissionDeniedError):
+            await ba.get_stats()
+
+    @pytest.mark.asyncio
+    async def test_get_stats_only_needs_read(self) -> None:
+        """get_stats only requires brain:read, not brain:write."""
+        ba, brain = _make_brain_access(permissions={"brain:read"}, write=False)
+
+        brain._concepts.get_categories = AsyncMock(return_value=[])
+        brain._relations = MagicMock()
+        brain._relations._pool = MagicMock()
+        brain._relations._pool.read = MagicMock(side_effect=Exception("x"))
+        brain._episodes = MagicMock()
+        brain._episodes._pool = MagicMock()
+        brain._episodes._pool.read = MagicMock(side_effect=Exception("x"))
+
+        stats = await ba.get_stats()
+        assert stats["total_concepts"] == 0  # works without brain:write
