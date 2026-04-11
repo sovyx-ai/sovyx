@@ -249,9 +249,21 @@ class PIIFilterResult:
 
 
 _NER_PROMPT = (
-    "Extract ALL personally identifiable information (PII) from the text below. "
-    "Return ONLY a comma-separated list of PII types found, or NONE if clean.\n"
-    "Types: email, phone, name, address, id_number, financial, medical, date_of_birth\n"
+    "Analyze this text for personally identifiable information (PII). "
+    "Return ONLY a comma-separated list of detected PII types, or NONE.\n\n"
+    "Types to detect:\n"
+    "- name: full names of real people (not fictional/historical)\n"
+    "- address: street addresses, postal codes, house numbers\n"
+    "- phone: phone numbers in any format or country\n"
+    "- email: email addresses\n"
+    "- id_number: government IDs (passport, SSN, CPF, DNI, etc.)\n"
+    "- financial: bank accounts, credit cards, IBAN, SWIFT\n"
+    "- medical: medical record numbers, health conditions with identifying info\n"
+    "- date_of_birth: specific birth dates tied to a person\n"
+    "- biometric: fingerprint IDs, face recognition data\n"
+    "- credential: passwords, tokens, API keys\n\n"
+    "IMPORTANT: Generic mentions are NOT PII. 'John went to the store' = name. "
+    "'A person went to the store' = NONE. Only flag specific, identifying info.\n\n"
     "Text: {text}"
 )
 
@@ -432,6 +444,8 @@ class PIIGuard:
                 "FINANCIAL",
                 "MEDICAL",
                 "DATE_OF_BIRTH",
+                "BIOMETRIC",
+                "CREDENTIAL",
             }
             found = set()
             for part in content.split(","):

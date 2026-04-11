@@ -540,3 +540,212 @@ class TestLLMNERFallback:
         result = await guard.check_async("Some text here")
 
         assert not result.redacted
+
+    async def test_pii_off_skips_llm(self) -> None:
+        """When pii_protection=False, LLM is never called."""
+        router = MagicMock()
+        router.generate = AsyncMock()
+        guard = PIIGuard(safety=SafetyConfig(pii_protection=False), llm_router=router)
+        result = await guard.check_async("John Smith lives at 42 Oak Ave")
+        assert not result.redacted
+        router.generate.assert_not_called()
+
+    async def test_llm_timeout_fails_open(self) -> None:
+        """LLM timeout → falls back to regex result (no PII)."""
+        import asyncio
+
+        router = MagicMock(spec=[])
+
+        async def slow_generate(*a: object, **kw: object) -> None:
+            await asyncio.sleep(10)
+
+        router.generate = slow_generate
+        guard = PIIGuard(safety=SafetyConfig(pii_protection=True), llm_router=router)
+
+        with patch("sovyx.cognitive.pii_guard.isinstance", return_value=True):
+            result = await guard.check_async("Clean text no PII")
+
+        assert not result.redacted
+
+    async def test_llm_invalid_response_ignored(self) -> None:
+        """LLM returns garbage → treated as no PII."""
+        router = MagicMock(spec=[])
+        resp = MagicMock()
+        resp.content = "BANANA APPLE ORANGE"
+        router.generate = AsyncMock(return_value=resp)
+        guard = PIIGuard(safety=SafetyConfig(pii_protection=True), llm_router=router)
+
+        result = await guard.check_async("Some regular text")
+
+        assert not result.redacted
+
+    async def test_llm_empty_response(self) -> None:
+        """LLM returns empty string → treated as no PII."""
+        router = MagicMock(spec=[])
+        resp = MagicMock()
+        resp.content = ""
+        router.generate = AsyncMock(return_value=resp)
+        guard = PIIGuard(safety=SafetyConfig(pii_protection=True), llm_router=router)
+
+        with patch("sovyx.cognitive.pii_guard.isinstance", return_value=True):
+            result = await guard.check_async("Some text here")
+
+        assert not result.redacted
+
+
+# ── International Phone Tests (TASK-367) ────────────────────────────────
+
+
+class TestInternationalPhones:
+    """International phone number formats must be redacted."""
+
+    @pytest.mark.parametrize(
+        ("phone", "desc"),
+        [
+            # German
+            ("+49 30 12345678", "Germany Berlin landline"),
+            ("+49 151 12345678", "Germany mobile"),
+            ("030 12345678", "Germany local Berlin"),
+            # French
+            ("+33 1 23 45 67 89", "France landline"),
+            ("+33 6 12 34 56 78", "France mobile"),
+            ("01 23 45 67 89", "France local landline"),
+            ("06 12 34 56 78", "France local mobile"),
+            # Japanese
+            ("+81 3-1234-5678", "Japan Tokyo landline"),
+            ("+81 90-1234-5678", "Japan mobile"),
+            ("03-1234-5678", "Japan local Tokyo"),
+            # Indian
+            ("+91 98765 43210", "India mobile"),
+            ("98765 43210", "India local mobile"),
+            # Mexican
+            ("+52 55 1234 5678", "Mexico City"),
+            ("55 1234 5678", "Mexico local"),
+            # Australian
+            ("+61 2 1234 5678", "Australia Sydney"),
+            ("02 1234 5678", "Australia local"),
+            ("+61 4 1234 5678", "Australia mobile"),
+            # Chinese
+            ("+86 138 1234 5678", "China mobile"),
+            ("139 1234 5678", "China local mobile"),
+            # South Korean
+            ("+82 10-1234-5678", "South Korea mobile"),
+            ("010-1234-5678", "South Korea local"),
+            # Italian
+            ("+39 345 123 4567", "Italy mobile"),
+            ("345 123 4567", "Italy local mobile"),
+            # Spanish
+            ("+34 612 345 678", "Spain mobile"),
+            ("612 345 678", "Spain local mobile"),
+        ],
+    )
+    def test_international_phone_redacted(self, phone: str, desc: str) -> None:
+        guard = _guard()
+        result = guard.check(f"Call me at {phone}")
+        assert result.redacted, f"Failed to detect {desc}: {phone}"
+        assert "phone" in result.types_found, f"Type mismatch for {desc}: {phone}"
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "The year is 2024",
+            "Room 301 on floor 3",
+            "I have 12 apples",
+            "Score: 100 to 95",
+        ],
+    )
+    def test_short_numbers_not_phones(self, text: str) -> None:
+        """Short numeric sequences should not match phone patterns."""
+        guard = _guard()
+        result = guard.check(text)
+        if result.redacted:
+            assert "phone" not in result.types_found
+
+
+# ── LLM NER Name/Address Tests (TASK-368) ───────────────────────────────
+
+
+class TestLLMNERNameAddress:
+    """LLM NER for names and addresses that regex cannot catch."""
+
+    async def test_name_detected(self) -> None:
+        """LLM detects personal names."""
+        resp = MagicMock()
+        resp.content = "name"
+        router = MagicMock()
+        router.generate = AsyncMock(return_value=resp)
+
+        guard = PIIGuard(safety=SafetyConfig(pii_protection=True), llm_router=router)
+        result = await guard.check_async("My name is Maria Silva")
+
+        assert result.redacted
+        assert "name" in result.types_found
+
+    async def test_address_detected(self) -> None:
+        """LLM detects physical addresses."""
+        resp = MagicMock()
+        resp.content = "address"
+        router = MagicMock()
+        router.generate = AsyncMock(return_value=resp)
+
+        guard = PIIGuard(safety=SafetyConfig(pii_protection=True), llm_router=router)
+        result = await guard.check_async("Lives at Rua Augusta 1200, São Paulo")
+
+        assert result.redacted
+        assert "address" in result.types_found
+
+    async def test_multiple_types(self) -> None:
+        """LLM detects multiple PII types."""
+        resp = MagicMock()
+        resp.content = "name, address, date_of_birth"
+        router = MagicMock()
+        router.generate = AsyncMock(return_value=resp)
+
+        guard = PIIGuard(safety=SafetyConfig(pii_protection=True), llm_router=router)
+        result = await guard.check_async("John Doe, born 1990-01-15, 123 Main St")
+
+        assert result.redacted
+        assert "name" in result.types_found
+        assert "address" in result.types_found
+        assert "date_of_birth" in result.types_found
+
+    async def test_biometric_detected(self) -> None:
+        """LLM detects biometric data."""
+        resp = MagicMock()
+        resp.content = "biometric"
+        router = MagicMock()
+        router.generate = AsyncMock(return_value=resp)
+
+        guard = PIIGuard(safety=SafetyConfig(pii_protection=True), llm_router=router)
+        result = await guard.check_async("Fingerprint ID: FP-2024-ABC123")
+
+        assert result.redacted
+        assert "biometric" in result.types_found
+
+    async def test_generic_text_no_pii(self) -> None:
+        """Generic text without specific PII returns clean."""
+        resp = MagicMock()
+        resp.content = "NONE"
+        router = MagicMock()
+        router.generate = AsyncMock(return_value=resp)
+
+        guard = PIIGuard(safety=SafetyConfig(pii_protection=True), llm_router=router)
+        result = await guard.check_async("A person walked down the street")
+
+        assert not result.redacted
+
+    async def test_no_redaction_only_detection(self) -> None:
+        """LLM-detected PII is flagged but text is NOT modified."""
+        resp = MagicMock()
+        resp.content = "name"
+        router = MagicMock()
+        router.generate = AsyncMock(return_value=resp)
+
+        guard = PIIGuard(safety=SafetyConfig(pii_protection=True), llm_router=router)
+        original = "Contact Maria Silva for details"
+        result = await guard.check_async(original)
+
+        # Text preserved (no regex pattern to redact with)
+        assert result.text == original
+        assert result.redacted  # But flagged
+        assert result.redaction_count == 0  # No actual redactions
