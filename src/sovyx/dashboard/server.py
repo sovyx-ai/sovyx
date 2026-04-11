@@ -744,6 +744,62 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
         if mind_config:
             active_patterns = get_pattern_count(mind_config.safety)
 
+        # Enriched stats from SQLite + classifier cache + escalation
+        sqlite_stats: dict[str, object] = {}
+        try:
+            from sovyx.cognitive.audit_store import get_audit_store
+
+            store = get_audit_store()
+            sqlite_stats = {
+                "persistent_blocks_24h": store.count(hours=24),
+                "persistent_blocks_7d": store.count(hours=168),
+                "persistent_blocks_30d": store.count(hours=720),
+            }
+        except Exception:  # noqa: BLE001
+            pass
+
+        classifier_stats: dict[str, object] = {}
+        try:
+            from sovyx.cognitive.safety_classifier import get_classification_cache
+
+            cache = get_classification_cache()
+            classifier_stats = {
+                "cache_size": cache.size,
+                "cache_hit_rate": round(cache.hit_rate, 3),
+            }
+        except Exception:  # noqa: BLE001
+            pass
+
+        escalation_stats: dict[str, object] = {}
+        try:
+            from sovyx.cognitive.safety_escalation import get_escalation_tracker
+            from sovyx.cognitive.safety_notifications import get_notifier
+
+            escalation_stats = {
+                "tracked_sources": get_escalation_tracker()._sources.__len__(),
+                "alerts_sent": get_notifier().alert_count,
+            }
+        except Exception:  # noqa: BLE001
+            pass
+
+        injection_stats: dict[str, object] = {}
+        try:
+            from sovyx.cognitive.injection_tracker import get_injection_tracker
+
+            injection_stats = {
+                "tracked_conversations": get_injection_tracker().tracked_conversations,
+            }
+        except Exception:  # noqa: BLE001
+            pass
+
+        pii_patterns = 0
+        try:
+            from sovyx.cognitive.pii_guard import PII_PATTERNS
+
+            pii_patterns = len(PII_PATTERNS)
+        except Exception:  # noqa: BLE001
+            pass
+
         return JSONResponse(
             {
                 "ok": True,
@@ -754,7 +810,12 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
                 "blocks_by_direction": stats.blocks_by_direction,
                 "recent_events": stats.recent_events,
                 "active_patterns": active_patterns,
+                "pii_patterns": pii_patterns,
                 "tier_counts": get_tier_counts(),
+                **sqlite_stats,
+                **classifier_stats,
+                **escalation_stats,
+                **injection_stats,
             }
         )
 
@@ -856,6 +917,37 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
 
         models = await get_voice_models(registry)
         return JSONResponse(models)
+
+    @app.get("/api/safety/history", dependencies=[Depends(verify_token)])
+    async def get_safety_history(
+        hours: int = 24,
+        category: str | None = None,
+        direction: str | None = None,
+        limit: int = 50,
+    ) -> JSONResponse:
+        """Query historical safety events from SQLite."""
+        try:
+            from sovyx.cognitive.audit_store import get_audit_store
+
+            store = get_audit_store()
+            result = store.query(
+                hours=min(hours, 8760),  # Max 1 year
+                category=category,
+                direction=direction,
+                limit=min(limit, 500),
+            )
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "total": result.total,
+                    "events": result.events,
+                }
+            )
+        except Exception as e:  # noqa: BLE001
+            return JSONResponse(
+                {"ok": False, "error": str(e)},
+                status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
     # ── Custom Rules API ──
 
