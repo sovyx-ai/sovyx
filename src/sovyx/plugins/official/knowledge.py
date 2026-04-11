@@ -308,23 +308,56 @@ class KnowledgePlugin(ISovyxPlugin):
 
     # ── forget ──
 
-    @tool(description="Forget a piece of information (remove from memory).")
-    async def forget(self, query: str) -> str:
+    @tool(
+        description=(
+            "Forget a piece of information. "
+            "Use forget_all=true to remove everything matching the query."
+        ),
+    )
+    async def forget(self, query: str, forget_all: bool = False) -> str:
         """Remove matching information from memory.
 
-        Searches for the best match, then deletes it via BrainAccess.forget()
-        which cascades (removes relations and embeddings too).
+        Single mode (default): finds best match, deletes it with full cascade
+        (relations, embeddings, working memory, emits ConceptForgotten event).
+        Bulk mode (forget_all=true): deletes ALL matches (up to 20).
 
         Args:
             query: What to forget.
+            forget_all: If true, delete all matches.
 
         Returns:
-            JSON with action (forgotten|not_found), details.
+            JSON with action and details of what was deleted.
         """
         if self._brain is None:
             return json.dumps({"action": "error", "message": "brain access not configured"})
 
         try:
+            if forget_all:
+                deleted_list = await self._brain.forget_all(query, limit=20)
+                if not deleted_list:
+                    return json.dumps(
+                        {
+                            "action": "not_found",
+                            "query": query,
+                            "message": f"Nothing found matching: {query}",
+                        }
+                    )
+                success_count = sum(1 for d in deleted_list if d.get("deleted"))
+                names = [str(d.get("name", "?")) for d in deleted_list if d.get("deleted")]
+                return json.dumps(
+                    {
+                        "action": "forgotten_all",
+                        "query": query,
+                        "count": success_count,
+                        "deleted": deleted_list,
+                        "message": (
+                            f"Forgotten {success_count} memory(ies) about '{query}': "
+                            + ", ".join(names)
+                        ),
+                    }
+                )
+
+            # Single delete — best match
             results = await self._brain.search(query, limit=1)
 
             if not results:

@@ -470,3 +470,50 @@ class TestConflictResolution:
         result = json.loads(await plugin.remember("test"))
         assert result["action"] == "error"
         assert "LLM down" in result["message"]
+
+
+class TestForgetCascade:
+    """TASK-474: Real forget with cascade + multi-delete."""
+
+    @pytest.mark.asyncio
+    async def test_forget_single_deletes(self) -> None:
+        results = [{"id": "c-1", "name": "target", "content": "x"}]
+        brain = _mock_brain(search_results=results)
+        plugin = KnowledgePlugin(brain=brain)
+
+        data = json.loads(await plugin.forget("target"))
+        assert data["action"] == "forgotten"
+        brain.forget.assert_called_once_with("c-1")
+
+    @pytest.mark.asyncio
+    async def test_forget_all_deletes_multiple(self) -> None:
+        brain = _mock_brain()
+        brain.forget_all = AsyncMock(return_value=[
+            {"id": "c-1", "name": "fact A", "deleted": True},
+            {"id": "c-2", "name": "fact B", "deleted": True},
+            {"id": "c-3", "name": "fact C", "deleted": False},
+        ])
+        plugin = KnowledgePlugin(brain=brain)
+
+        data = json.loads(await plugin.forget("old facts", forget_all=True))
+        assert data["action"] == "forgotten_all"
+        assert data["count"] == 2
+        assert "fact A" in data["message"]
+        assert "fact B" in data["message"]
+
+    @pytest.mark.asyncio
+    async def test_forget_all_empty(self) -> None:
+        brain = _mock_brain()
+        brain.forget_all = AsyncMock(return_value=[])
+        plugin = KnowledgePlugin(brain=brain)
+
+        data = json.loads(await plugin.forget("nothing", forget_all=True))
+        assert data["action"] == "not_found"
+
+    @pytest.mark.asyncio
+    async def test_forget_single_not_found(self) -> None:
+        brain = _mock_brain(search_results=[])
+        plugin = KnowledgePlugin(brain=brain)
+
+        data = json.loads(await plugin.forget("nonexistent"))
+        assert data["action"] == "not_found"

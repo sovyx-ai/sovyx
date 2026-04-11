@@ -204,6 +204,25 @@ class ConceptContradicted(Event):
 
 
 @dataclasses.dataclass(frozen=True)
+class ConceptForgotten(Event):
+    """Emitted when a concept is deleted from the brain.
+
+    Carries concept metadata for audit trail and downstream consumers
+    (dashboard notifications, analytics).
+    """
+
+    concept_id: str = ""
+    concept_name: str = ""
+    source: str = ""  # who requested deletion (e.g. "plugin:knowledge")
+    cascade_relations: int = 0  # number of relations also deleted
+
+    @property
+    def category(self) -> EventCategory:
+        """Event category."""
+        return EventCategory.BRAIN
+
+
+@dataclasses.dataclass(frozen=True)
 class ConsolidationCompleted(Event):
     """Emitted when a memory consolidation cycle completes."""
 
