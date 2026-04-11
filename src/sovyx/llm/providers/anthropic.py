@@ -9,8 +9,13 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from sovyx.engine.errors import LLMError, ProviderUnavailableError
-from sovyx.llm.models import LLMResponse
-from sovyx.llm.providers._shared import retry_delay, safe_parse_json
+from sovyx.llm.models import LLMResponse, ToolCall
+from sovyx.llm.providers._shared import (
+    format_tools_anthropic,
+    parse_tool_calls_anthropic,
+    retry_delay,
+    safe_parse_json,
+)
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
@@ -69,6 +74,7 @@ class AnthropicProvider:
         model: str = "claude-sonnet-4-20250514",
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        tools: list[dict[str, Any]] | None = None,
     ) -> LLMResponse:
         """Generate response from Claude.
 
@@ -77,6 +83,7 @@ class AnthropicProvider:
             model: Claude model name.
             temperature: Sampling temperature.
             max_tokens: Max response tokens.
+            tools: Optional tool definitions for function calling.
 
         Returns:
             LLMResponse with content and metadata.
@@ -106,6 +113,8 @@ class AnthropicProvider:
         }
         if system_msg:
             payload["system"] = system_msg
+        if tools:
+            payload["tools"] = format_tools_anthropic(tools)
 
         headers = {
             "x-api-key": self._api_key,
@@ -133,12 +142,30 @@ class AnthropicProvider:
                 data = safe_parse_json(resp, "Anthropic")
                 latency = int((time.monotonic() - start) * 1000)
 
+                content_blocks = data.get("content", [])
                 content = ""
-                for block in data.get("content", []):
+                for block in content_blocks:
                     if block.get("type") == "text":
                         content += block.get("text", "")
 
-                if not content.strip():
+                # Parse tool calls
+                parsed_tc = parse_tool_calls_anthropic(content_blocks)
+                tool_calls_out: list[ToolCall] | None = None
+                if parsed_tc:
+                    tool_calls_out = [
+                        ToolCall(
+                            id=tc["id"],
+                            function_name=tc["function_name"],
+                            arguments=tc["arguments"],
+                        )
+                        for tc in parsed_tc
+                    ]
+
+                stop_reason = data.get("stop_reason", "stop")
+                # Map Anthropic stop reasons to normalized values
+                finish_reason = "tool_use" if stop_reason == "tool_use" else stop_reason
+
+                if not content.strip() and not tool_calls_out:
                     error_msg = f"Anthropic returned empty content (model={model})"
                     raise LLMError(error_msg)
 
@@ -156,6 +183,7 @@ class AnthropicProvider:
                     tokens_out=tokens_out,
                     latency_ms=latency,
                     cost_usd=round(cost, 6),
+                    tool_calls=len(parsed_tc),
                 )
 
                 return LLMResponse(
@@ -165,8 +193,9 @@ class AnthropicProvider:
                     tokens_out=tokens_out,
                     latency_ms=latency,
                     cost_usd=cost,
-                    finish_reason=data.get("stop_reason", "stop"),
+                    finish_reason=finish_reason,
                     provider="anthropic",
+                    tool_calls=tool_calls_out,
                 )
 
             except httpx.TimeoutException as e:

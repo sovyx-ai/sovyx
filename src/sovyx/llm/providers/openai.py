@@ -9,8 +9,13 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from sovyx.engine.errors import LLMError, ProviderUnavailableError
-from sovyx.llm.models import LLMResponse
-from sovyx.llm.providers._shared import retry_delay, safe_parse_json
+from sovyx.llm.models import LLMResponse, ToolCall
+from sovyx.llm.providers._shared import (
+    format_tools_openai,
+    parse_tool_calls_openai,
+    retry_delay,
+    safe_parse_json,
+)
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
@@ -77,6 +82,7 @@ class OpenAIProvider:
         model: str = "gpt-4o",
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        tools: list[dict[str, Any]] | None = None,
     ) -> LLMResponse:
         """Generate response from OpenAI."""
         if not self.is_available:
@@ -89,6 +95,8 @@ class OpenAIProvider:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        if tools:
+            payload["tools"] = format_tools_openai(tools)
 
         headers = {
             "Authorization": f"Bearer {self._api_key}",
@@ -116,10 +124,25 @@ class OpenAIProvider:
                 latency = int((time.monotonic() - start) * 1000)
 
                 choice = data.get("choices", [{}])[0]
-                content = choice.get("message", {}).get("content", "")
+                message = choice.get("message", {})
+                content = message.get("content", "") or ""
                 finish_reason = choice.get("finish_reason", "stop")
 
-                if not content.strip():
+                # Parse tool calls
+                tool_calls_out: list[ToolCall] | None = None
+                raw_tc = message.get("tool_calls")
+                if raw_tc:
+                    parsed_tc = parse_tool_calls_openai(raw_tc)
+                    tool_calls_out = [
+                        ToolCall(
+                            id=tc["id"],
+                            function_name=tc["function_name"],
+                            arguments=tc["arguments"],
+                        )
+                        for tc in parsed_tc
+                    ]
+
+                if not content.strip() and not tool_calls_out:
                     error_msg = f"OpenAI returned empty content (model={model})"
                     raise LLMError(error_msg)
 
@@ -137,6 +160,7 @@ class OpenAIProvider:
                     tokens_out=tokens_out,
                     latency_ms=latency,
                     cost_usd=round(cost, 6),
+                    tool_calls=len(tool_calls_out) if tool_calls_out else 0,
                 )
 
                 return LLMResponse(
@@ -148,6 +172,7 @@ class OpenAIProvider:
                     cost_usd=cost,
                     finish_reason=finish_reason,
                     provider="openai",
+                    tool_calls=tool_calls_out,
                 )
 
             except httpx.TimeoutException as e:

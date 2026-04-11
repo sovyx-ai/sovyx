@@ -15,8 +15,13 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from sovyx.engine.errors import LLMError, ProviderUnavailableError
-from sovyx.llm.models import LLMResponse
-from sovyx.llm.providers._shared import retry_delay, safe_parse_json
+from sovyx.llm.models import LLMResponse, ToolCall
+from sovyx.llm.providers._shared import (
+    format_tools_google,
+    parse_tool_calls_google,
+    retry_delay,
+    safe_parse_json,
+)
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
@@ -86,6 +91,7 @@ class GoogleProvider:
         model: str = "gemini-2.0-flash",
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        tools: list[dict[str, Any]] | None = None,
     ) -> LLMResponse:
         """Generate response from Gemini.
 
@@ -120,6 +126,8 @@ class GoogleProvider:
             payload["systemInstruction"] = {
                 "parts": [{"text": system_instruction}],
             }
+        if tools:
+            payload["tools"] = format_tools_google(tools)
 
         url = f"{_API_BASE}/{model}:generateContent?key={self._api_key}"
 
@@ -145,7 +153,24 @@ class GoogleProvider:
                 latency = int((time.monotonic() - start) * 1000)
 
                 content = self._extract_content(data)
-                if not content.strip():
+
+                # Parse tool calls from function call parts
+                tool_calls_out: list[ToolCall] | None = None
+                candidates = data.get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    parsed_tc = parse_tool_calls_google(parts)
+                    if parsed_tc:
+                        tool_calls_out = [
+                            ToolCall(
+                                id=tc["id"],
+                                function_name=tc["function_name"],
+                                arguments=tc["arguments"],
+                            )
+                            for tc in parsed_tc
+                        ]
+
+                if not content.strip() and not tool_calls_out:
                     error_msg = f"Google returned empty content (model={model})"
                     raise LLMError(error_msg)
 
@@ -158,7 +183,6 @@ class GoogleProvider:
                 cost = (tokens_in * pricing[0] + tokens_out * pricing[1]) / 1_000_000
 
                 # Extract finish reason
-                candidates = data.get("candidates", [])
                 finish_reason = "stop"
                 if candidates:
                     raw_reason = candidates[0].get("finishReason", "STOP")
@@ -171,6 +195,7 @@ class GoogleProvider:
                     tokens_out=tokens_out,
                     latency_ms=latency,
                     cost_usd=round(cost, 6),
+                    tool_calls=len(tool_calls_out) if tool_calls_out else 0,
                 )
 
                 return LLMResponse(
@@ -182,6 +207,7 @@ class GoogleProvider:
                     cost_usd=cost,
                     finish_reason=finish_reason,
                     provider="google",
+                    tool_calls=tool_calls_out,
                 )
 
             except httpx.TimeoutException as exc:

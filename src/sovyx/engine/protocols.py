@@ -126,6 +126,7 @@ class LLMProvider(Protocol):
         model: str,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        tools: list[dict[str, object]] | None = None,
     ) -> object:
         """Generate a response from the LLM."""
         ...
