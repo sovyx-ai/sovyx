@@ -176,13 +176,82 @@ _CANCEL_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 
 def is_confirmation(text: str) -> bool:
-    """Check if user message is a confirmation response."""
+    """Check if user message is a confirmation response (regex — PT+EN only)."""
     return any(p.match(text) for p in _CONFIRM_PATTERNS)
 
 
 def is_cancellation(text: str) -> bool:
-    """Check if user message is a cancellation response."""
+    """Check if user message is a cancellation response (regex — PT+EN only)."""
     return any(p.match(text) for p in _CANCEL_PATTERNS)
+
+
+# ── LLM Intent Classification (language-agnostic) ────────────────────
+
+_CLASSIFY_PROMPT = (
+    "The user was asked to confirm or deny a financial action. "
+    "They replied with the message below. "
+    "Classify their intent as exactly one word: CONFIRM, CANCEL, or UNCLEAR.\n\n"
+    'User reply: "{text}"\n\n'
+    "Classification:"
+)
+
+
+async def classify_intent_llm(
+    text: str,
+    llm_router: object,
+) -> str:
+    """Classify user intent via LLM (language-agnostic).
+
+    Args:
+        text: User reply text.
+        llm_router: LLMRouter instance (typed as object to avoid circular import).
+
+    Returns:
+        ``"confirmed"``, ``"cancelled"``, or ``"unclear"``.
+    """
+    prompt = _CLASSIFY_PROMPT.format(text=text.strip()[:200])
+    messages = [{"role": "user", "content": prompt}]
+
+    try:
+        response = await llm_router.generate(  # type: ignore[union-attr]
+            messages=messages,
+            temperature=0.0,
+            max_tokens=10,
+        )
+        raw = response.content.strip().upper()
+        if "CONFIRM" in raw:
+            logger.debug("financial_intent_llm", result="confirmed", text=text[:50])
+            return "confirmed"
+        if "CANCEL" in raw:
+            logger.debug("financial_intent_llm", result="cancelled", text=text[:50])
+            return "cancelled"
+        logger.debug("financial_intent_llm", result="unclear", raw=raw, text=text[:50])
+        return "unclear"
+    except Exception:
+        logger.warning("financial_intent_llm_failed", exc_info=True)
+        return "unclear"
+
+
+def classify_intent(text: str) -> str:
+    """Classify user intent via regex (synchronous fallback).
+
+    Returns ``"confirmed"``, ``"cancelled"``, or ``"unclear"``.
+    Used as fallback when LLM is unavailable.
+    """
+    if is_confirmation(text):
+        return "confirmed"
+    if is_cancellation(text):
+        return "cancelled"
+    return "unclear"
+
+
+_CLASSIFY_PROMPT = (
+    "You are a binary classifier. The user was asked to confirm or cancel "
+    "a financial action. They replied with the message below. "
+    "Classify their intent as exactly one word: CONFIRM, CANCEL, or UNCLEAR.\n\n"
+    'User reply: "{text}"\n\n'
+    "Classification:"
+)
 
 
 class FinancialGate:
@@ -190,6 +259,10 @@ class FinancialGate:
 
     Reads SafetyConfig dynamically — when ``financial_confirmation``
     is False, all methods are no-ops with zero overhead.
+
+    Classification cascade (for non-button channels):
+    1. **LLM intent classification** — works in any language.
+    2. **Regex fallback** — PT+EN only, used when LLM unavailable.
     """
 
     def __init__(self, safety_config: SafetyConfig) -> None:
@@ -237,22 +310,73 @@ class FinancialGate:
         self,
         text: str,
     ) -> tuple[str, PendingConfirmation | None]:
-        """Handle user response to a pending confirmation.
+        """Handle user response via regex (synchronous, PT+EN only).
 
-        Args:
-            text: User message text.
+        Prefer ``handle_user_response_async`` for language-agnostic
+        classification via LLM.
 
         Returns:
             ("confirmed", confirmation) if user approved.
             ("cancelled", confirmation) if user denied.
-            ("expired", None) if no pending or expired.
+            ("none", None) if unclear or no pending.
+        """
+        pending = self._state.get_pending()
+        if pending is None:
+            return "none", None
+
+        intent = classify_intent(text)
+        return self._resolve_intent(intent, pending)
+
+    async def handle_user_response_async(
+        self,
+        text: str,
+        llm_router: object | None = None,
+    ) -> tuple[str, PendingConfirmation | None]:
+        """Handle user response with LLM classification fallback.
+
+        Classification cascade:
+        1. Regex (instant, PT+EN) — if match, done
+        2. LLM classify (any language) — if router available
+        3. "unclear" — ask user to try again
+
+        Args:
+            text: User message text.
+            llm_router: Optional LLMRouter for language-agnostic classification.
+
+        Returns:
+            ("confirmed", confirmation) if user approved.
+            ("cancelled", confirmation) if user denied.
+            ("unclear", pending) if intent not clear.
             ("none", None) if no pending confirmation.
         """
         pending = self._state.get_pending()
         if pending is None:
             return "none", None
 
-        if is_confirmation(text):
+        # 1. Try regex first (instant, zero cost)
+        intent = classify_intent(text)
+        if intent != "unclear":
+            logger.debug("financial_classify_method", method="regex", intent=intent)
+            return self._resolve_intent(intent, pending)
+
+        # 2. Try LLM classification (any language)
+        if llm_router is not None:
+            intent = await classify_intent_llm(text, llm_router)
+            if intent != "unclear":
+                logger.debug("financial_classify_method", method="llm", intent=intent)
+                return self._resolve_intent(intent, pending)
+
+        # 3. Unclear — don't consume the pending
+        logger.debug("financial_classify_method", method="none", intent="unclear")
+        return "unclear", pending
+
+    def _resolve_intent(
+        self,
+        intent: str,
+        pending: PendingConfirmation,
+    ) -> tuple[str, PendingConfirmation | None]:
+        """Apply a classified intent to the pending confirmation."""
+        if intent == "confirmed":
             confirmed = self._state.confirm(pending.tool_call.id)
             logger.info(
                 "financial_confirmation_approved",
@@ -261,7 +385,7 @@ class FinancialGate:
             )
             return "confirmed", confirmed
 
-        if is_cancellation(text):
+        if intent == "cancelled":
             self._state.confirm(pending.tool_call.id)  # remove it
             logger.info(
                 "financial_confirmation_cancelled",
@@ -270,7 +394,6 @@ class FinancialGate:
             )
             return "cancelled", pending
 
-        # Not a clear confirm/cancel — don't consume the pending
         return "none", None
 
     def has_pending(self) -> bool:
