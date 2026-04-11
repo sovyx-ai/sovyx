@@ -17,6 +17,8 @@ Covers:
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 from sovyx.cognitive.pii_guard import PII_PATTERNS, PIIGuard, PIIPattern
@@ -440,3 +442,101 @@ class TestSWIFT:
             result = _guard().check(f"The word {word} is normal")
             swift_match = "swift" in result.types_found
             assert not swift_match, f"False positive on {word}"
+
+
+# ── International Phone Tests (TASK-367) ────────────────────────────────
+
+
+class TestInternationalPhone:
+    """International phone number detection."""
+
+    def test_uk_mobile(self) -> None:
+        result = _guard().check("Call me at +44 7911 123456")
+        assert result.redacted
+        assert "phone" in result.types_found
+
+    def test_german_phone(self) -> None:
+        result = _guard().check("Telefon: +49 30 12345678")
+        assert result.redacted
+
+    def test_indian_phone(self) -> None:
+        result = _guard().check("Phone: +91 98765 43210")
+        assert result.redacted
+
+    def test_japanese_phone(self) -> None:
+        result = _guard().check("電話: +81 3-1234-5678")
+        assert result.redacted
+
+    def test_uk_local_format(self) -> None:
+        result = _guard().check("Ring 020 7946 0958")
+        assert result.redacted
+
+    def test_australian_phone(self) -> None:
+        result = _guard().check("+61 2 1234 5678")
+        assert result.redacted
+
+
+# ── LLM NER Fallback Tests (TASK-367) ───────────────────────────────────
+
+
+class TestLLMNERFallback:
+    """LLM NER fallback for PII not caught by regex."""
+
+    async def test_no_llm_returns_regex_result(self) -> None:
+        """Without LLM router, async returns same as sync."""
+        guard = PIIGuard(safety=SafetyConfig(pii_protection=True))
+        result = await guard.check_async("No PII here")
+        assert not result.redacted
+
+    async def test_regex_hit_skips_llm(self) -> None:
+        """If regex catches PII, LLM is not called."""
+
+        router = MagicMock()
+        router.generate = AsyncMock()
+        guard = PIIGuard(safety=SafetyConfig(pii_protection=True), llm_router=router)
+        result = await guard.check_async("Email: test@example.com")
+        assert result.redacted
+        router.generate.assert_not_called()
+
+    async def test_llm_detects_pii_regex_missed(self) -> None:
+        """LLM NER finds PII that regex couldn't match."""
+
+        router = MagicMock(spec=[])
+        resp = MagicMock()
+        resp.content = "NAME, ADDRESS"
+        router.generate = AsyncMock(return_value=resp)
+
+        guard = PIIGuard(safety=SafetyConfig(pii_protection=True), llm_router=router)
+
+        # Patch isinstance to accept our mock as LLMRouter
+        with patch("sovyx.cognitive.pii_guard.isinstance", return_value=True):
+            result = await guard.check_async("My name is John at 123 Main St")
+
+        assert result.redacted
+        assert "name" in result.types_found or "address" in result.types_found
+
+    async def test_llm_returns_none_clean(self) -> None:
+        """LLM says NONE → no PII detected."""
+
+        router = MagicMock()
+        resp = MagicMock()
+        resp.content = "NONE"
+        router.generate = AsyncMock(return_value=resp)
+
+        guard = PIIGuard(safety=SafetyConfig(pii_protection=True), llm_router=router)
+
+        result = await guard.check_async("The weather is nice today")
+
+        assert not result.redacted
+
+    async def test_llm_error_fails_open(self) -> None:
+        """LLM error → falls back to regex result (no PII)."""
+
+        router = MagicMock()
+        router.generate = AsyncMock(side_effect=RuntimeError("down"))
+
+        guard = PIIGuard(safety=SafetyConfig(pii_protection=True), llm_router=router)
+
+        result = await guard.check_async("Some text here")
+
+        assert not result.redacted
