@@ -1124,7 +1124,10 @@ def check_content(text: str, safety: SafetyConfig) -> FilterMatch:
     if not patterns:
         return NO_MATCH
 
-    lower = text.lower()
+    from sovyx.cognitive.text_normalizer import normalize_text
+
+    normalized = normalize_text(text)
+    lower = normalized.lower()
     for p in patterns:
         if p.regex.search(lower):
             return FilterMatch(
