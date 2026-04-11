@@ -1028,3 +1028,83 @@ class TestBatchProperties:
         router = _make_mock_router(response_content="SAFE")
         result = await batch_classify_content(texts, router)
         assert result.llm_calls <= len(set(texts))
+
+
+# ── Budget Tests (TASK-381) ─────────────────────────────────────────────
+
+
+class TestClassificationBudget:
+    """Test cost control and budget cap."""
+
+    def test_unlimited_always_allows(self) -> None:
+        from sovyx.cognitive.safety_classifier import ClassificationBudget
+
+        budget = ClassificationBudget(hourly_cap=0)
+        assert budget.can_classify()
+        for _ in range(100):
+            budget.record_call()
+        assert budget.can_classify()  # Still allowed
+
+    def test_capped_blocks_after_limit(self) -> None:
+        from sovyx.cognitive.safety_classifier import ClassificationBudget
+
+        budget = ClassificationBudget(hourly_cap=5)
+        for _ in range(5):
+            assert budget.can_classify()
+            budget.record_call()
+        assert not budget.can_classify()
+
+    def test_total_calls(self) -> None:
+        from sovyx.cognitive.safety_classifier import ClassificationBudget
+
+        budget = ClassificationBudget()
+        budget.record_call()
+        budget.record_call()
+        assert budget.total_calls == 2
+
+    def test_estimated_cost(self) -> None:
+        from sovyx.cognitive.safety_classifier import ClassificationBudget
+
+        budget = ClassificationBudget()
+        for _ in range(10):
+            budget.record_call()
+        assert budget.estimated_cost_usd == 0.001
+
+    def test_set_cap(self) -> None:
+        from sovyx.cognitive.safety_classifier import ClassificationBudget
+
+        budget = ClassificationBudget(hourly_cap=0)
+        budget.set_cap(10)
+        assert budget.hourly_cap == 10
+
+    def test_calls_this_hour(self) -> None:
+        from sovyx.cognitive.safety_classifier import ClassificationBudget
+
+        budget = ClassificationBudget()
+        budget.record_call()
+        assert budget.calls_this_hour == 1
+
+
+class TestBudgetIntegration:
+    """Test budget integration with classify_content."""
+
+    def setup_method(self) -> None:
+        from sovyx.cognitive.safety_classifier import get_classification_cache
+
+        get_classification_cache().clear()
+
+    async def test_budget_exceeded_returns_safe(self) -> None:
+        import sovyx.cognitive.safety_classifier as mod
+        from sovyx.cognitive.safety_classifier import ClassificationBudget
+
+        old = mod._budget
+        mod._budget = ClassificationBudget(hourly_cap=0)
+        mod._budget.set_cap(1)
+        mod._budget.record_call()  # Exhaust budget
+
+        router = _make_mock_router(response_content="UNSAFE|violence")
+        verdict = await classify_content("dangerous text", router)
+        assert verdict.safe  # Falls back to safe (budget exceeded)
+        router.generate.assert_not_called()
+
+        mod._budget = old
