@@ -36,7 +36,7 @@ class TestCallIdPropagation:
 
     @pytest.mark.anyio()
     async def test_call_id_preserved(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(CalculatorPlugin())
         executor = ToolExecutor(plugin_manager=mgr)
 
@@ -55,7 +55,7 @@ class TestCallIdPropagation:
     @pytest.mark.anyio()
     async def test_call_id_on_error(self, tmp_path: Path) -> None:
         """Even on error, call_id must be preserved."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         executor = ToolExecutor(plugin_manager=mgr)
 
         calls = [
@@ -68,7 +68,7 @@ class TestCallIdPropagation:
 
     @pytest.mark.anyio()
     async def test_multiple_calls_ids_preserved(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(CalculatorPlugin())
         executor = ToolExecutor(plugin_manager=mgr)
 
@@ -94,7 +94,7 @@ class TestToolResultFormat:
     @pytest.mark.anyio()
     async def test_react_injects_tool_message(self, tmp_path: Path) -> None:
         """ReAct loop injects tool result as 'tool' role message."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(CalculatorPlugin())
         executor = ToolExecutor(plugin_manager=mgr)
 
@@ -135,7 +135,7 @@ class TestToolResultFormat:
     @pytest.mark.anyio()
     async def test_error_result_in_tool_message(self, tmp_path: Path) -> None:
         """Plugin errors are included in tool message (not swallowed)."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(CalculatorPlugin())
         executor = ToolExecutor(plugin_manager=mgr)
 
@@ -197,7 +197,7 @@ class TestNoStackTraceLeaks:
                 # This would normally produce a long traceback
                 raise ValueError("secret_internal_detail: /root/.sovyx/config.yaml")
 
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(LeakyPlugin())
 
         result = await mgr.execute("leaky.leak", {})
@@ -213,7 +213,7 @@ class TestReActDepthRespected:
 
     @pytest.mark.anyio()
     async def test_max_depth_3(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(CalculatorPlugin())
         executor = ToolExecutor(plugin_manager=mgr, max_depth=3)
 

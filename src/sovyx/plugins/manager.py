@@ -148,6 +148,7 @@ class PluginManager:
         disabled: set[str] | None = None,
         plugin_config: dict[str, dict[str, object]] | None = None,
         granted_permissions: dict[str, set[str]] | None = None,
+        discover_entry_points: bool = True,
     ) -> None:
         """Initialize PluginManager.
 
@@ -159,6 +160,7 @@ class PluginManager:
             disabled: Plugins to skip even if discovered.
             plugin_config: Per-plugin config dicts.
             granted_permissions: Per-plugin granted permission strings.
+            discover_entry_points: If False, skip entry_points discovery in load_all().
         """
         self._brain = brain
         self._event_bus = event_bus
@@ -167,6 +169,7 @@ class PluginManager:
         self._disabled = disabled or set()
         self._plugin_config = plugin_config or {}
         self._granted_perms = granted_permissions or {}
+        self._discover_eps = discover_entry_points
         self._plugins: dict[str, LoadedPlugin] = {}
         self._registered: list[type[ISovyxPlugin]] = []
         self._scanner = PluginSecurityScanner()
@@ -196,7 +199,8 @@ class PluginManager:
         """
         # Discover plugin classes
         classes = list(self._registered)
-        classes.extend(self._discover_entry_points())
+        if self._discover_eps:
+            classes.extend(self._discover_entry_points())
 
         # Instantiate to get names and deps
         instances: dict[str, ISovyxPlugin] = {}

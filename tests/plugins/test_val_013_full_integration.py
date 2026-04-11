@@ -49,7 +49,7 @@ class TestCalculatorConversation:
 
     @pytest.mark.anyio()
     async def test_calculator_flow(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(CalculatorPlugin())
         executor = ToolExecutor(plugin_manager=mgr)
 
@@ -87,7 +87,7 @@ class TestToolChaining:
 
     @pytest.mark.anyio()
     async def test_two_tool_calls_in_sequence(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(CalculatorPlugin())
         executor = ToolExecutor(plugin_manager=mgr)
 
@@ -161,7 +161,7 @@ class TestDisabledPluginNoTools:
                 msg = "boom"
                 raise RuntimeError(msg)
 
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(FailPlugin())
 
         # Verify tools exist
@@ -220,7 +220,7 @@ class TestThinkPassesToolsToLLM:
 
     @pytest.mark.anyio()
     async def test_tools_in_generate_call(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(CalculatorPlugin())
 
         assembler = AsyncMock()

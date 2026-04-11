@@ -154,7 +154,7 @@ class TestPermissionBoundary:
     @pytest.mark.anyio()
     async def test_permission_denied_separate_from_failure_counter(self, tmp_path: Path) -> None:
         """PermissionDeniedError does NOT count toward 5-failure auto-disable."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
 
         class PermPlugin(ISovyxPlugin):
             @property
@@ -192,7 +192,7 @@ class TestLifecycleStress:
 
     @pytest.mark.anyio()
     async def test_load_unload_reload_10x(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         for _ in range(10):
             await mgr.load_single(CalculatorPlugin())
             assert mgr.plugin_count == 1
@@ -220,20 +220,20 @@ class TestLifecycleStress:
                 msg = "setup failed"
                 raise RuntimeError(msg)
 
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         with pytest.raises(RuntimeError, match="setup failed"):
             await mgr.load_single(FailSetup())
         assert mgr.plugin_count == 0
 
     @pytest.mark.anyio()
     async def test_shutdown_with_zero_plugins(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.shutdown()  # No crash
         assert mgr.plugin_count == 0
 
     @pytest.mark.anyio()
     async def test_concurrent_execute(self, tmp_path: Path) -> None:
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(CalculatorPlugin())
 
         async def calc(expr: str) -> str:
@@ -272,6 +272,7 @@ class TestEntryPointsConfig:
         mgr = PluginManager(
             data_dir=tmp_path,
             enabled=set(),  # Empty = nothing
+            discover_entry_points=False,
         )
         mgr.register_class(CalculatorPlugin)
         loaded = await mgr.load_all()
@@ -282,6 +283,7 @@ class TestEntryPointsConfig:
         mgr = PluginManager(
             data_dir=tmp_path,
             enabled=None,  # None = all
+            discover_entry_points=False,
         )
         mgr.register_class(CalculatorPlugin)
         loaded = await mgr.load_all()
@@ -293,6 +295,7 @@ class TestEntryPointsConfig:
         mgr = PluginManager(
             data_dir=tmp_path,
             disabled={"calculator"},
+            discover_entry_points=False,
         )
         mgr.register_class(CalculatorPlugin)
         loaded = await mgr.load_all()
@@ -305,6 +308,7 @@ class TestEntryPointsConfig:
             data_dir=tmp_path,
             enabled={"calculator"},
             disabled={"calculator"},
+            discover_entry_points=False,
         )
         mgr.register_class(CalculatorPlugin)
         loaded = await mgr.load_all()

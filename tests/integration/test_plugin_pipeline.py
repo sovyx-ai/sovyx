@@ -56,7 +56,7 @@ class TestPluginToToolDefinition:
     @pytest.mark.anyio()
     async def test_calculator_definitions(self, tmp_path: Path) -> None:
         """Calculator plugin produces valid tool definitions."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(CalculatorPlugin())
 
         defs = mgr.get_tool_definitions()
@@ -67,7 +67,7 @@ class TestPluginToToolDefinition:
     @pytest.mark.anyio()
     async def test_definitions_to_dicts(self, tmp_path: Path) -> None:
         """ToolDefinition → dict conversion for LLM."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(CalculatorPlugin())
 
         defs = mgr.get_tool_definitions()
@@ -84,7 +84,7 @@ class TestToolCallToExecution:
     @pytest.mark.anyio()
     async def test_calculator_execution(self, tmp_path: Path) -> None:
         """Calculator tool call is dispatched and returns correct result."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(CalculatorPlugin())
 
         executor = ToolExecutor(plugin_manager=mgr)
@@ -105,7 +105,7 @@ class TestToolCallToExecution:
     @pytest.mark.anyio()
     async def test_multiple_tool_calls(self, tmp_path: Path) -> None:
         """Multiple tool calls executed independently."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(CalculatorPlugin())
 
         executor = ToolExecutor(plugin_manager=mgr)
@@ -131,7 +131,7 @@ class TestFullReActLoop:
     async def test_calculator_react(self, tmp_path: Path) -> None:
         """Full ReAct: LLM asks for calculation → plugin executes → LLM responds."""
         # Setup real PluginManager
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(CalculatorPlugin())
 
         executor = ToolExecutor(plugin_manager=mgr)
@@ -181,7 +181,7 @@ class TestErrorBoundaryIntegration:
     @pytest.mark.anyio()
     async def test_invalid_expression_handled(self, tmp_path: Path) -> None:
         """Invalid expression returns error result, not crash."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(CalculatorPlugin())
 
         executor = ToolExecutor(plugin_manager=mgr)
@@ -201,7 +201,7 @@ class TestErrorBoundaryIntegration:
     @pytest.mark.anyio()
     async def test_nonexistent_plugin_handled(self, tmp_path: Path) -> None:
         """Tool call to nonexistent plugin returns error, not crash."""
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         executor = ToolExecutor(plugin_manager=mgr)
 
         calls = [
@@ -241,7 +241,7 @@ class TestAutoDisableIntegration:
                 msg = "intentional failure"
                 raise RuntimeError(msg)
 
-        mgr = PluginManager(data_dir=tmp_path)
+        mgr = PluginManager(data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(AlwaysFailPlugin())
 
         # 5 failures
