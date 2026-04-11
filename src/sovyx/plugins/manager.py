@@ -710,6 +710,28 @@ class PluginManager:
             health.last_error = ""
             logger.info("plugin_re_enabled", plugin=name)
 
+    def disable_plugin(self, name: str) -> None:
+        """Manually disable a loaded plugin.
+
+        Sets the disabled flag without incrementing failure count.
+        Tools from disabled plugins are excluded from LLM context.
+
+        Args:
+            name: Plugin name.
+
+        Raises:
+            PluginError: Plugin not found.
+        """
+        if name not in self._plugins:
+            msg = f"Plugin not found: {name}"
+            raise PluginError(msg)
+        health = self._health.get(name)
+        if health is None:
+            self._health[name] = _PluginHealth()
+            health = self._health[name]
+        health.disabled = True
+        logger.info("plugin_disabled", plugin=name)
+
     @property
     def loaded_plugins(self) -> list[str]:
         """Names of all loaded plugins."""

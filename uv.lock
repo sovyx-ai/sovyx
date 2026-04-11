@@ -2851,7 +2851,7 @@ wheels = [
 
 [[package]]
 name = "sovyx"
-version = "0.6.0"
+version = "0.7.1"
 source = { editable = "." }
 dependencies = [
     { name = "aiogram" },
@@ -2896,6 +2896,9 @@ dev = [
     { name = "ruff" },
     { name = "types-psutil" },
     { name = "types-pyyaml" },
+]
+plugins = [
+    { name = "watchdog" },
 ]
 
 [package.dev-dependencies]
@@ -2944,8 +2947,9 @@ requires-dist = [
     { name = "types-psutil", marker = "extra == 'dev'", specifier = ">=5.9" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
+    { name = "watchdog", marker = "extra == 'plugins'", specifier = ">=4.0" },
 ]
-provides-extras = ["cloud", "dev"]
+provides-extras = ["plugins", "cloud", "dev"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "sovyx", extras = ["dev"] }]
