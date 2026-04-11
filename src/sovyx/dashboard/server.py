@@ -777,12 +777,48 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
         safety = mind_config.safety
         patterns = resolve_patterns(safety)
 
+        # ── Financial confirmation details ──
+        confirmation_channels: list[dict[str, object]] = []
+        confirmation_method = "disabled"
+        classification_fallback = "regex"
+
+        if safety.financial_confirmation:
+            confirmation_method = "inline_buttons"
+            classification_fallback = "llm"
+
+            # Discover channel capabilities from BridgeManager
+            registry = getattr(app.state, "registry", None)
+            if registry is not None:
+                from sovyx.bridge.manager import BridgeManager
+
+                bridge: BridgeManager | None = None
+                with contextlib.suppress(Exception):
+                    bridge = await registry.resolve(BridgeManager)
+
+                if bridge is not None:
+                    for ct, adapter in bridge._adapters.items():
+                        caps = adapter.capabilities
+                        confirmation_channels.append(
+                            {
+                                "channel": ct.value,
+                                "inline_buttons": "inline_buttons" in caps,
+                                "method": (
+                                    "inline_buttons"
+                                    if "inline_buttons" in caps
+                                    else "text_classification"
+                                ),
+                            }
+                        )
+
         return JSONResponse(
             {
                 "ok": True,
                 "content_filter": safety.content_filter,
                 "child_safe_mode": safety.child_safe_mode,
                 "financial_confirmation": safety.financial_confirmation,
+                "confirmation_method": confirmation_method,
+                "confirmation_channels": confirmation_channels,
+                "classification_fallback": classification_fallback,
                 "active_patterns": len(patterns),
                 "tier_counts": get_tier_counts(),
                 "total_patterns": get_pattern_count(safety),
