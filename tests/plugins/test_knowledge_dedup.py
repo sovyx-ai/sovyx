@@ -331,3 +331,142 @@ class TestRecallAbout:
         data = json.loads(await plugin.recall_about("Python"))
         assert data["count"] == 1
         assert data["results"][0]["related"] == ["machine learning", "data science"]
+
+
+class TestConflictResolution:
+    """TASK-473: Contradiction detection + resolution in remember()."""
+
+    @pytest.mark.asyncio
+    async def test_contradiction_updates_content(self) -> None:
+        existing = {
+            "id": "c-bday",
+            "name": "birthday",
+            "content": "birthday is March 15",
+            "similarity": 0.92,
+            "confidence": 0.8,
+        }
+        brain = _mock_brain(similar_results=[existing])
+        brain.classify_content = AsyncMock(return_value="CONTRADICTS")
+        plugin = KnowledgePlugin(brain=brain)
+
+        result = json.loads(await plugin.remember("birthday is March 20"))
+        assert result["action"] == "updated"
+        assert result["resolution"] == "contradiction"
+        assert result["concept_id"] == "c-bday"
+        # Confidence reduced (penalty)
+        assert result["confidence"]["new"] < result["confidence"]["old"]
+        assert "contradiction" in result["message"].lower()
+
+        brain.update.assert_called_once()
+        call_kwargs = brain.update.call_args.kwargs
+        assert call_kwargs["content"] == "birthday is March 20"
+        assert call_kwargs["confidence"] < 0.8  # penalized
+
+    @pytest.mark.asyncio
+    async def test_contradiction_confidence_penalty(self) -> None:
+        existing = {
+            "id": "c-x",
+            "name": "x",
+            "content": "old",
+            "similarity": 0.9,
+            "confidence": 0.5,
+        }
+        brain = _mock_brain(similar_results=[existing])
+        brain.classify_content = AsyncMock(return_value="CONTRADICTS")
+        plugin = KnowledgePlugin(brain=brain)
+
+        result = json.loads(await plugin.remember("new conflicting"))
+        # 0.5 * 0.7 = 0.35
+        assert abs(result["confidence"]["new"] - 0.35) < 0.01
+
+    @pytest.mark.asyncio
+    async def test_contradiction_confidence_floor(self) -> None:
+        """Confidence shouldn't drop below 0.1."""
+        existing = {
+            "id": "c-x",
+            "name": "x",
+            "content": "old",
+            "similarity": 0.9,
+            "confidence": 0.1,
+        }
+        brain = _mock_brain(similar_results=[existing])
+        brain.classify_content = AsyncMock(return_value="CONTRADICTS")
+        plugin = KnowledgePlugin(brain=brain)
+
+        result = json.loads(await plugin.remember("conflicting"))
+        assert result["confidence"]["new"] >= 0.1
+
+    @pytest.mark.asyncio
+    async def test_extends_merges_content(self) -> None:
+        existing = {
+            "id": "c-py",
+            "name": "Python",
+            "content": "Python is a programming language",
+            "similarity": 0.91,
+            "confidence": 0.6,
+        }
+        brain = _mock_brain(similar_results=[existing])
+        brain.classify_content = AsyncMock(return_value="EXTENDS")
+        plugin = KnowledgePlugin(brain=brain)
+
+        result = json.loads(await plugin.remember("Python was created by Guido van Rossum"))
+        assert result["action"] == "extended"
+        assert result["resolution"] == "extension"
+        # Confidence boosted
+        assert result["confidence"]["new"] > result["confidence"]["old"]
+
+        call_kwargs = brain.update.call_args.kwargs
+        assert "programming language" in call_kwargs["content"]
+        assert "Guido van Rossum" in call_kwargs["content"]
+
+    @pytest.mark.asyncio
+    async def test_extends_confidence_boost(self) -> None:
+        existing = {
+            "id": "c-x",
+            "name": "x",
+            "content": "base",
+            "similarity": 0.9,
+            "confidence": 0.6,
+        }
+        brain = _mock_brain(similar_results=[existing])
+        brain.classify_content = AsyncMock(return_value="EXTENDS")
+        plugin = KnowledgePlugin(brain=brain)
+
+        result = json.loads(await plugin.remember("extension"))
+        assert abs(result["confidence"]["new"] - 0.68) < 0.01  # 0.6 + 0.08
+
+    @pytest.mark.asyncio
+    async def test_unrelated_creates_new(self) -> None:
+        """High embedding similarity but semantically unrelated → create new."""
+        existing = {"id": "c-false", "name": "false positive", "content": "x", "similarity": 0.9}
+        brain = _mock_brain(similar_results=[existing])
+        brain.classify_content = AsyncMock(return_value="UNRELATED")
+        plugin = KnowledgePlugin(brain=brain)
+
+        result = json.loads(await plugin.remember("totally different concept"))
+        assert result["action"] == "created"
+        brain.learn.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_same_reinforces(self) -> None:
+        """SAME classification → standard reinforcement."""
+        existing = {"id": "c-same", "name": "known fact", "content": "x", "similarity": 0.95}
+        brain = _mock_brain(similar_results=[existing])
+        brain.classify_content = AsyncMock(return_value="SAME")
+        plugin = KnowledgePlugin(brain=brain)
+
+        result = json.loads(await plugin.remember("same thing rephrased"))
+        assert result["action"] == "reinforced"
+        brain.reinforce.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_classify_failure_falls_back_to_create(self) -> None:
+        """If classify_content raises, fall through to create."""
+        existing = {"id": "c-err", "name": "err", "content": "x", "similarity": 0.9}
+        brain = _mock_brain(similar_results=[existing])
+        brain.classify_content = AsyncMock(side_effect=Exception("LLM down"))
+        plugin = KnowledgePlugin(brain=brain)
+
+        result = json.loads(await plugin.remember("test"))
+        assert result["action"] == "error"
+        assert "LLM down" in result["message"]
