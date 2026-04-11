@@ -81,24 +81,25 @@ class KnowledgePlugin(ISovyxPlugin):
         what: str,
         name: str = "",
         category: str = "fact",
+        about_person: str = "",
     ) -> str:
         """Store information in long-term memory with semantic deduplication.
 
         Before creating a new concept, checks if semantically similar content
-        already exists (cosine similarity >= threshold). If found:
-        - Boosts importance and confidence of the existing concept
-        - Returns reinforcement info instead of creating a duplicate
+        already exists (cosine similarity >= threshold). If found, classifies
+        the relationship (SAME/EXTENDS/CONTRADICTS/UNRELATED) and acts.
 
-        If no near-duplicate exists, creates a new concept via BrainService
-        (which also handles name-based dedup with contradiction detection).
+        Use about_person to scope a memory to a specific person, e.g.:
+        remember("prefers dark mode", about_person="Guipe")
 
         Args:
             what: The information to remember.
             name: Short name/title (auto-generated if empty).
             category: Category (fact, preference, event, person).
+            about_person: Person this memory is about (optional).
 
         Returns:
-            JSON with action (created|reinforced), concept_id, name, details.
+            JSON with action (created|reinforced|updated|extended), details.
         """
         if self._brain is None:
             return json.dumps({"action": "error", "message": "brain access not configured"})
@@ -233,10 +234,19 @@ class KnowledgePlugin(ISovyxPlugin):
 
             # Phase 2: No semantic duplicate — create via BrainService
             # (BrainService handles name-based dedup + contradiction detection)
+            # Build metadata
+            meta: dict[str, object] = {}
+            if about_person:
+                meta["person"] = about_person
+                # If no explicit category, auto-set to "person"
+                if category == "fact":
+                    category = "person"
+
             concept_id = await self._brain.learn(
                 name=name,
                 content=what,
                 category=category,
+                metadata=meta if meta else None,
             )
 
             # Phase 3: Auto-relation — link to related existing concepts
@@ -249,6 +259,8 @@ class KnowledgePlugin(ISovyxPlugin):
                 "category": category,
                 "message": f"Remembered: '{name}'",
             }
+            if about_person:
+                result["about_person"] = about_person
             if relations_created:
                 result["relations"] = relations_created
                 result["message"] = (
@@ -329,35 +341,55 @@ class KnowledgePlugin(ISovyxPlugin):
 
     # ── search ──
 
-    @tool(description="Search memory for information matching a query.")
-    async def search(self, query: str, limit: int = 5) -> str:
+    @tool(
+        description=(
+            "Search memory for information matching a query. "
+            "Use about_person to filter memories about a specific person."
+        ),
+    )
+    async def search(
+        self,
+        query: str,
+        limit: int = 5,
+        about_person: str = "",
+    ) -> str:
         """Search long-term memory via hybrid retrieval (semantic + keyword).
 
         Args:
             query: What to search for.
             limit: Max results (1–10).
+            about_person: Filter results to this person only.
 
         Returns:
-            JSON with results array (name, content, category, importance,
-            confidence, score).
+            JSON with results array.
         """
         if self._brain is None:
             return json.dumps({"action": "error", "message": "brain access not configured"})
 
-        limit = max(1, min(self._max_results, limit))
+        # Over-fetch when filtering by person (post-filter)
+        fetch_limit = max(1, min(self._max_results, limit))
+        if about_person:
+            fetch_limit = min(50, fetch_limit * 5)
 
         try:
-            results = await self._brain.search(query, limit=limit)
+            results = await self._brain.search(query, limit=fetch_limit)
         except Exception as e:  # noqa: BLE001
             return json.dumps({"action": "error", "message": f"Error searching: {e}"})
+
+        # Post-filter by person if specified
+        if about_person:
+            person_lower = about_person.lower()
+            results = [r for r in results if _match_person(r, person_lower)][:limit]
 
         if not results:
             return json.dumps(
                 {
                     "action": "search",
                     "query": query,
+                    "about_person": about_person or None,
                     "results": [],
-                    "message": f"No memories found for: {query}",
+                    "message": f"No memories found for: {query}"
+                    + (f" (about {about_person})" if about_person else ""),
                 }
             )
 
@@ -365,6 +397,7 @@ class KnowledgePlugin(ISovyxPlugin):
             {
                 "action": "search",
                 "query": query,
+                "about_person": about_person or None,
                 "count": len(results),
                 "results": [
                     {
@@ -630,6 +663,24 @@ class _RelationInfo(typing.NamedTuple):
     target_id: str
     target_name: str
     similarity: float
+
+
+def _match_person(result: dict[str, object], person_lower: str) -> bool:
+    """Check if a search result is about a specific person.
+
+    Checks metadata.person, content text, and name for person mention.
+    """
+    # Check metadata.person field (set by about_person param)
+    meta = result.get("metadata")
+    if isinstance(meta, dict):
+        meta_person = str(meta.get("person", "")).lower()
+        if meta_person and person_lower in meta_person:
+            return True
+
+    # Check content and name for person mention
+    content = str(result.get("content", "")).lower()
+    name = str(result.get("name", "")).lower()
+    return person_lower in content or person_lower in name
 
 
 def _auto_name(content: str) -> str:
