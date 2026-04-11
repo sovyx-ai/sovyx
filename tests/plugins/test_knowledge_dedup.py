@@ -29,6 +29,16 @@ def _mock_brain(
     brain.forget = AsyncMock(return_value=True)
     brain.update = AsyncMock(return_value=True)
     brain.boost_importance = AsyncMock(return_value=True)
+    brain.reinforce = AsyncMock(
+        return_value={
+            "concept_id": "c-existing",
+            "importance": {"old": 0.5, "new": 0.55},
+            "confidence": {"old": 0.5, "new": 0.6},
+            "reinforcement_count": 1,
+            "established": False,
+            "access_count": 2,
+        }
+    )
     brain.get_related = AsyncMock(return_value=[])
     brain.get_stats = AsyncMock(
         return_value=stats
@@ -68,6 +78,16 @@ class TestRememberDedup:
             "importance": 0.6,
         }
         brain = _mock_brain(similar_results=[existing])
+        brain.reinforce = AsyncMock(
+            return_value={
+                "concept_id": "c-existing",
+                "importance": {"old": 0.6, "new": 0.65},
+                "confidence": {"old": 0.5, "new": 0.6},
+                "reinforcement_count": 1,
+                "established": False,
+                "access_count": 3,
+            }
+        )
         plugin = KnowledgePlugin(brain=brain)
 
         result = json.loads(await plugin.remember("I like dark mode"))
@@ -75,25 +95,39 @@ class TestRememberDedup:
         assert result["concept_id"] == "c-existing"
         assert result["similarity"] == 0.95
         assert result["confidence"]["old"] == 0.5
-        assert result["confidence"]["new"] == 0.6  # 0.5 + 0.10
+        assert result["confidence"]["new"] == 0.6
+        assert result["importance"]["old"] == 0.6
+        assert result["importance"]["new"] == 0.65
+        assert result["reinforcement_count"] == 1
+        assert result["established"] is False
 
-        brain.boost_importance.assert_called_once_with("c-existing", delta=0.05)
-        brain.update.assert_called_once_with("c-existing", confidence=0.6)
-        brain.learn.assert_not_called()  # Did NOT create new
+        brain.reinforce.assert_called_once_with(
+            "c-existing",
+            importance_delta=0.05,
+            confidence_delta=0.10,
+        )
+        brain.learn.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_confidence_capped_at_1(self) -> None:
-        existing = {
-            "id": "c-high",
-            "name": "well known fact",
-            "confidence": 0.95,
-            "similarity": 0.92,
-        }
+    async def test_established_after_5_reinforcements(self) -> None:
+        existing = {"id": "c-est", "name": "well known", "similarity": 0.92}
         brain = _mock_brain(similar_results=[existing])
+        brain.reinforce = AsyncMock(
+            return_value={
+                "concept_id": "c-est",
+                "importance": {"old": 0.75, "new": 0.8},
+                "confidence": {"old": 0.9, "new": 1.0},
+                "reinforcement_count": 5,
+                "established": True,
+                "access_count": 10,
+            }
+        )
         plugin = KnowledgePlugin(brain=brain)
 
         result = json.loads(await plugin.remember("same thing again"))
-        assert result["confidence"]["new"] == 1.0  # 0.95 + 0.10 = 1.05 → capped at 1.0
+        assert result["established"] is True
+        assert result["reinforcement_count"] == 5
+        assert "established memory" in result["message"]
 
     @pytest.mark.asyncio
     async def test_threshold_edge_just_below(self) -> None:

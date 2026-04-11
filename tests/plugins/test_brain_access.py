@@ -631,3 +631,98 @@ class TestGetStats:
 
         stats = await ba.get_stats()
         assert stats["total_concepts"] == 0  # works without brain:write
+
+
+# ── reinforce() ──
+
+
+class TestReinforce:
+    @pytest.mark.asyncio
+    async def test_reinforce_full_cycle(self) -> None:
+        ba, brain = _make_brain_access()
+        concept = _make_concept(importance=0.5, confidence=0.5, access_count=2)
+        concept.metadata = {"reinforcement_count": 0}
+        concept.last_accessed = None
+        brain.get_concept = AsyncMock(return_value=concept)
+        brain._concepts.update = AsyncMock()
+
+        result = await ba.reinforce("c-001", importance_delta=0.05, confidence_delta=0.10)
+        assert result is not None
+        assert result["importance"]["old"] == 0.5
+        assert result["importance"]["new"] == 0.55
+        assert result["confidence"]["old"] == 0.5
+        assert result["confidence"]["new"] == 0.6
+        assert result["reinforcement_count"] == 1
+        assert result["established"] is False
+        assert result["access_count"] == 3
+        brain._concepts.update.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_reinforce_becomes_established(self) -> None:
+        ba, brain = _make_brain_access()
+        concept = _make_concept(importance=0.7, confidence=0.8)
+        concept.metadata = {"reinforcement_count": 4}  # one more → established
+        concept.last_accessed = None
+        brain.get_concept = AsyncMock(return_value=concept)
+        brain._concepts.update = AsyncMock()
+
+        result = await ba.reinforce("c-001")
+        assert result is not None
+        assert result["reinforcement_count"] == 5
+        assert result["established"] is True
+        # Importance bumped to at least 0.8 for established
+        assert result["importance"]["new"] >= 0.8
+
+    @pytest.mark.asyncio
+    async def test_reinforce_not_found(self) -> None:
+        ba, brain = _make_brain_access()
+        brain.get_concept = AsyncMock(return_value=None)
+
+        result = await ba.reinforce("nonexistent")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_reinforce_clamps_deltas(self) -> None:
+        ba, brain = _make_brain_access()
+        concept = _make_concept(importance=0.9, confidence=0.9)
+        concept.metadata = {}
+        concept.last_accessed = None
+        brain.get_concept = AsyncMock(return_value=concept)
+        brain._concepts.update = AsyncMock()
+
+        result = await ba.reinforce("c-001", importance_delta=2.0, confidence_delta=2.0)
+        assert result is not None
+        # Capped at 1.0
+        assert result["importance"]["new"] <= 1.0
+        assert result["confidence"]["new"] <= 1.0
+
+    @pytest.mark.asyncio
+    async def test_reinforce_permission_denied(self) -> None:
+        ba, _ = _make_brain_access(permissions={"brain:read"})
+        with pytest.raises(PermissionDeniedError):
+            await ba.reinforce("c-001")
+
+    @pytest.mark.asyncio
+    async def test_reinforce_increments_metadata(self) -> None:
+        ba, brain = _make_brain_access()
+        concept = _make_concept()
+        concept.metadata = {"reinforcement_count": 3, "other": "data"}
+        concept.last_accessed = None
+        brain.get_concept = AsyncMock(return_value=concept)
+        brain._concepts.update = AsyncMock()
+
+        await ba.reinforce("c-001")
+        assert concept.metadata["reinforcement_count"] == 4
+        assert concept.metadata["other"] == "data"  # preserved
+
+    @pytest.mark.asyncio
+    async def test_reinforce_updates_last_accessed(self) -> None:
+        ba, brain = _make_brain_access()
+        concept = _make_concept()
+        concept.metadata = {}
+        concept.last_accessed = None
+        brain.get_concept = AsyncMock(return_value=concept)
+        brain._concepts.update = AsyncMock()
+
+        await ba.reinforce("c-001")
+        assert concept.last_accessed is not None

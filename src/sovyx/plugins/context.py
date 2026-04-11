@@ -461,6 +461,95 @@ class BrainAccess:
         )
         return str(relation.id)
 
+    async def reinforce(
+        self,
+        concept_id: str,
+        *,
+        importance_delta: float = 0.05,
+        confidence_delta: float = 0.10,
+    ) -> dict[str, object] | None:
+        """Reinforce a concept — boost importance, confidence, access, metadata.
+
+        Full reinforcement cycle:
+        1. Boost importance by delta (capped at 1.0)
+        2. Boost confidence by delta (capped at 1.0)
+        3. Increment access_count + update last_accessed
+        4. Track reinforcement_count in metadata
+        5. Mark as 'established' if reinforcement_count >= 5
+
+        Args:
+            concept_id: Concept to reinforce.
+            importance_delta: Importance boost [0.0, 0.5]. Default 0.05.
+            confidence_delta: Confidence boost [0.0, 0.5]. Default 0.10.
+
+        Returns:
+            Dict with old/new scores + reinforcement_count + established flag.
+            None if concept not found.
+
+        Raises:
+            PermissionDeniedError: brain:write not granted.
+        """
+        from datetime import UTC, datetime
+
+        from sovyx.engine.types import ConceptId
+
+        self._enforcer.check("brain:write")
+        if not self._write:
+            raise PermissionDeniedError(self._plugin, "brain:write")
+
+        cid = ConceptId(concept_id)
+        concept = await self._brain.get_concept(cid)
+        if concept is None:
+            return None
+
+        # Snapshot old values
+        old_importance = concept.importance
+        old_confidence = concept.confidence
+
+        # 1. Boost importance (clamped)
+        imp_delta = max(0.0, min(0.5, importance_delta))
+        concept.importance = min(1.0, concept.importance + imp_delta)
+
+        # 2. Boost confidence (clamped)
+        conf_delta = max(0.0, min(0.5, confidence_delta))
+        concept.confidence = min(1.0, concept.confidence + conf_delta)
+
+        # 3. Access tracking
+        concept.access_count += 1
+        concept.last_accessed = datetime.now(UTC)
+
+        # 4. Reinforcement count in metadata
+        rc_raw = concept.metadata.get("reinforcement_count", 0)
+        reinforcement_count = (int(rc_raw) if isinstance(rc_raw, (int, float)) else 0) + 1
+        concept.metadata["reinforcement_count"] = reinforcement_count
+
+        # 5. Established flag (>= 5 reinforcements)
+        established = reinforcement_count >= 5
+        if established and not concept.metadata.get("established"):
+            concept.metadata["established"] = True
+            # Ensure importance reflects established status
+            concept.importance = max(concept.importance, 0.8)
+
+        # Persist
+        await self._brain._concepts.update(concept)
+
+        logger.info(
+            "brain_access_reinforce",
+            plugin=self._plugin,
+            concept_id=concept_id,
+            reinforcement_count=reinforcement_count,
+            established=established,
+        )
+
+        return {
+            "concept_id": concept_id,
+            "importance": {"old": old_importance, "new": concept.importance},
+            "confidence": {"old": old_confidence, "new": concept.confidence},
+            "reinforcement_count": reinforcement_count,
+            "established": established,
+            "access_count": concept.access_count,
+        }
+
     async def boost_importance(
         self,
         concept_id: str,

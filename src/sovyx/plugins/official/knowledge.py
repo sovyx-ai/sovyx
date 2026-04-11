@@ -115,39 +115,52 @@ class KnowledgePlugin(ISovyxPlugin):
             )
 
             if similar:
-                # Found near-duplicate — reinforce instead of creating
+                # Found near-duplicate — full reinforcement cycle
                 best = similar[0]
                 existing_id = str(best.get("id", ""))
                 existing_name = str(best.get("name", "?"))
                 similarity = _float(best.get("similarity", 0))
 
-                # Boost importance + confidence
-                await self._brain.boost_importance(
+                # Full reinforcement: importance + confidence + access + metadata
+                rr = await self._brain.reinforce(
                     existing_id,
-                    delta=_REINFORCEMENT_IMPORTANCE_DELTA,
-                )
-                # Update confidence via update()
-                old_conf = _float(best.get("confidence", 0.5))
-                new_conf = min(1.0, old_conf + _REINFORCEMENT_CONFIDENCE_DELTA)
-                await self._brain.update(
-                    existing_id,
-                    confidence=new_conf,
+                    importance_delta=_REINFORCEMENT_IMPORTANCE_DELTA,
+                    confidence_delta=_REINFORCEMENT_CONFIDENCE_DELTA,
                 )
 
-                return json.dumps(
-                    {
-                        "action": "reinforced",
-                        "concept_id": existing_id,
-                        "name": existing_name,
-                        "similarity": round(similarity, 3),
-                        "confidence": {"old": round(old_conf, 3), "new": round(new_conf, 3)},
-                        "message": (
-                            f"I already knew something similar: '{existing_name}' "
-                            f"(similarity: {similarity:.0%}). Reinforced — "
-                            f"confidence {old_conf:.0%} → {new_conf:.0%}."
-                        ),
-                    }
-                )
+                if rr is not None:
+                    imp = rr.get("importance", {})
+                    conf = rr.get("confidence", {})
+                    old_imp = _float(imp.get("old", 0.5) if isinstance(imp, dict) else 0.5)
+                    new_imp = _float(imp.get("new", 0.5) if isinstance(imp, dict) else 0.5)
+                    old_conf = _float(conf.get("old", 0.5) if isinstance(conf, dict) else 0.5)
+                    new_conf = _float(conf.get("new", 0.5) if isinstance(conf, dict) else 0.5)
+                    rc = int(_float(rr.get("reinforcement_count", 1)))
+                    established = bool(rr.get("established", False))
+
+                    msg = (
+                        f"I already knew something similar: '{existing_name}' "
+                        f"(similarity: {similarity:.0%}). Reinforced — "
+                        f"confidence {old_conf:.0%} → {new_conf:.0%}, "
+                        f"importance {old_imp:.0%} → {new_imp:.0%}."
+                    )
+                    if established:
+                        msg += " This is now an established memory."
+
+                    return json.dumps(
+                        {
+                            "action": "reinforced",
+                            "concept_id": existing_id,
+                            "name": existing_name,
+                            "similarity": round(similarity, 3),
+                            "importance": {"old": round(old_imp, 3), "new": round(new_imp, 3)},
+                            "confidence": {"old": round(old_conf, 3), "new": round(new_conf, 3)},
+                            "reinforcement_count": rc,
+                            "established": established,
+                            "message": msg,
+                        }
+                    )
+                # Concept disappeared between find_similar and reinforce — fall through
 
             # Phase 2: No semantic duplicate — create via BrainService
             # (BrainService handles name-based dedup + contradiction detection)
