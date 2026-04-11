@@ -360,7 +360,7 @@ async def bootstrap(
             )
             financial_gate = FinancialGate(safety_config=mind_config.safety)
             registry.register_instance(FinancialGate, financial_gate)
-            pii_guard = PIIGuard(safety=mind_config.safety)
+            pii_guard = PIIGuard(safety=mind_config.safety, llm_router=router)
             act = ActPhase(
                 tool_executor=ToolExecutor(),
                 llm_router=router,
