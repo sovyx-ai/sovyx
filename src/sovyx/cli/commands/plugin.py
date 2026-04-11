@@ -267,6 +267,150 @@ def plugin_remove(
     console.print(f"[green]✓ Plugin '{name}' removed.[/green]")
 
 
+# ── Create / Scaffold ───────────────────────────────────────────────
+
+
+@plugin_app.command("create")
+def plugin_create(
+    name: Annotated[str, typer.Argument(help="Plugin name (lowercase, hyphens ok)")],
+    output_dir: Annotated[
+        Path,
+        typer.Option("--output", "-o", help="Output directory (default: current)"),
+    ] = Path("."),
+) -> None:
+    """Scaffold a new plugin from template."""
+    import re
+
+    if not re.match(r"^[a-z][a-z0-9\-]*$", name):
+        console.print("[red]Name must be lowercase, start with letter, hyphens ok.[/red]")
+        raise typer.Exit(code=1)
+
+    plugin_dir = output_dir / name
+    if plugin_dir.exists():
+        console.print(f"[red]Directory '{plugin_dir}' already exists.[/red]")
+        raise typer.Exit(code=1)
+
+    _scaffold_plugin(name, plugin_dir)
+    console.print(f"[green]✓ Plugin '{name}' created at {plugin_dir}[/green]")
+    console.print("\nNext steps:")
+    console.print(f"  1. cd {plugin_dir}")
+    console.print("  2. Edit plugin.py — add your @tool methods")
+    console.print("  3. Edit plugin.yaml — declare permissions")
+    console.print(f"  4. sovyx plugin install {plugin_dir}")
+
+
+def _scaffold_plugin(name: str, target: Path) -> None:
+    """Generate plugin scaffold files."""
+    # Convert name to Python module name
+    module_name = name.replace("-", "_")
+    class_name = "".join(w.capitalize() for w in name.split("-")) + "Plugin"
+
+    target.mkdir(parents=True)
+
+    # __init__.py
+    (target / "__init__.py").write_text(
+        f'"""Sovyx plugin: {name}."""\n\n'
+        f"from {module_name}.plugin import {class_name}\n\n"
+        f'__all__ = ["{class_name}"]\n',
+        encoding="utf-8",
+    )
+
+    # plugin.py
+    (target / "plugin.py").write_text(
+        f'"""Sovyx Plugin — {name}."""\n\n'
+        "from __future__ import annotations\n\n"
+        "from sovyx.plugins.sdk import ISovyxPlugin, tool\n\n\n"
+        f"class {class_name}(ISovyxPlugin):\n"
+        f'    """A Sovyx plugin for {name}."""\n\n'
+        "    @property\n"
+        "    def name(self) -> str:\n"
+        f'        return "{name}"\n\n'
+        "    @property\n"
+        "    def version(self) -> str:\n"
+        '        return "0.1.0"\n\n'
+        "    @property\n"
+        "    def description(self) -> str:\n"
+        f'        return "{name} plugin for Sovyx."\n\n'
+        '    @tool(description="Example tool — replace with your logic")\n'
+        '    async def hello(self, who: str = "world") -> str:\n'
+        '        """Say hello."""\n'
+        '        return f"Hello, {who}!"\n',
+        encoding="utf-8",
+    )
+
+    # plugin.yaml
+    (target / "plugin.yaml").write_text(
+        f"name: {name}\n"
+        "version: 0.1.0\n"
+        f"description: {name} plugin for Sovyx.\n"
+        'author: ""\n'
+        "license: MIT\n"
+        'homepage: ""\n'
+        "min_sovyx_version: 0.6.0\n"
+        "\npermissions: []\n"
+        "\nnetwork:\n"
+        "  allowed_domains: []\n"
+        "\ntools:\n"
+        "  - name: hello\n"
+        "    description: Example tool\n",
+        encoding="utf-8",
+    )
+
+    # tests/
+    tests_dir = target / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "__init__.py").write_text("", encoding="utf-8")
+    (tests_dir / f"test_{module_name}.py").write_text(
+        f'"""Tests for {name} plugin."""\n\n'
+        "import pytest\n\n"
+        f"from {module_name}.plugin import {class_name}\n\n\n"
+        f"class Test{class_name}:\n"
+        f'    """Tests for {class_name}."""\n\n'
+        "    @pytest.mark.anyio()\n"
+        "    async def test_hello(self) -> None:\n"
+        f"        plugin = {class_name}()\n"
+        '        result = await plugin.hello(who="Sovyx")\n'
+        '        assert "Sovyx" in result\n\n'
+        "    def test_name(self) -> None:\n"
+        f"        plugin = {class_name}()\n"
+        f'        assert plugin.name == "{name}"\n\n'
+        "    def test_version(self) -> None:\n"
+        f"        plugin = {class_name}()\n"
+        '        assert plugin.version == "0.1.0"\n',
+        encoding="utf-8",
+    )
+
+    # README.md
+    (target / "README.md").write_text(
+        f"# {name}\n\n"
+        f"A Sovyx plugin for {name}.\n\n"
+        "## Installation\n\n"
+        "```bash\n"
+        f"sovyx plugin install ./{name}\n"
+        "```\n\n"
+        "## Usage\n\n"
+        "The plugin provides the following tools:\n\n"
+        "- `hello` — Example tool\n",
+        encoding="utf-8",
+    )
+
+    # pyproject.toml
+    (target / "pyproject.toml").write_text(
+        "[build-system]\n"
+        'requires = ["setuptools>=68.0"]\n'
+        'build-backend = "setuptools.build_meta"\n\n'
+        "[project]\n"
+        f'name = "sovyx-plugin-{name}"\n'
+        'version = "0.1.0"\n'
+        f'description = "{name} plugin for Sovyx"\n'
+        'requires-python = ">=3.11"\n'
+        'dependencies = ["sovyx>=0.6.0"]\n\n'
+        "[project.entry-points.sovyx_plugins]\n"
+        f'{name} = "{module_name}:{class_name}"\n',
+        encoding="utf-8",
+    )
+
+
 # ── Helpers ─────────────────────────────────────────────────────────
 
 
