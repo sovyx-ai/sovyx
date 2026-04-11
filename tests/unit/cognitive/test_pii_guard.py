@@ -392,3 +392,51 @@ class TestPolishPESEL:
         result = _guard().check("pesel 92030567890")
         assert result.redacted
         assert "pesel" in result.types_found
+
+
+# ── Financial Identifiers Tests (TASK-366) ──────────────────────────────
+
+
+class TestIBAN:
+    """IBAN — international bank account numbers."""
+
+    def test_german_iban_spaced(self) -> None:
+        result = _guard().check("IBAN: DE89 3704 0044 0532 0130 00")
+        assert result.redacted
+        assert "iban" in result.types_found
+        assert "[REDACTED-IBAN]" in result.text
+
+    def test_uk_iban_no_spaces(self) -> None:
+        result = _guard().check("IBAN: GB29NWBK60161331926819")
+        assert result.redacted
+        assert "iban" in result.types_found
+
+    def test_in_sentence(self) -> None:
+        result = _guard().check("Transfer to DE89 3704 0044 0532 0130 00 please")
+        assert result.redacted
+        assert "DE89" not in result.text
+
+
+class TestSWIFT:
+    """SWIFT/BIC — keyword-anchored."""
+
+    def test_swift_8_chars(self) -> None:
+        result = _guard().check("SWIFT: DEUTDEFF")
+        assert result.redacted
+        assert "swift" in result.types_found
+
+    def test_bic_keyword(self) -> None:
+        result = _guard().check("BIC: BNPAFRPP")
+        assert result.redacted
+        assert "swift" in result.types_found
+
+    def test_swift_11_chars(self) -> None:
+        result = _guard().check("swift code DEUTDEFF500")
+        assert result.redacted
+
+    def test_no_false_positive_common_words(self) -> None:
+        """Common English words should NOT trigger SWIFT."""
+        for word in ["TOGETHER", "POWERFUL", "OVERVIEW", "SECURITY"]:
+            result = _guard().check(f"The word {word} is normal")
+            swift_match = "swift" in result.types_found
+            assert not swift_match, f"False positive on {word}"
