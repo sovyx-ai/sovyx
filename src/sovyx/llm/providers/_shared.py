@@ -64,6 +64,130 @@ def safe_parse_json(resp: httpx.Response, provider: str) -> dict[str, Any]:
     return result
 
 
+def format_tools_openai(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert Sovyx tool definitions to OpenAI function-calling format.
+
+    Input: list of ``{"name": str, "description": str, "parameters": dict}``
+    Output: list of ``{"type": "function", "function": {...}}``
+
+    Also used by Ollama (same format).
+    """
+    formatted: list[dict[str, Any]] = []
+    for tool in tools:
+        formatted.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.get("name", ""),
+                    "description": tool.get("description", ""),
+                    "parameters": tool.get("parameters", {}),
+                },
+            }
+        )
+    return formatted
+
+
+def format_tools_anthropic(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert Sovyx tool definitions to Anthropic tool format.
+
+    Input: list of ``{"name": str, "description": str, "parameters": dict}``
+    Output: list of ``{"name": str, "description": str, "input_schema": dict}``
+    """
+    formatted: list[dict[str, Any]] = []
+    for tool in tools:
+        formatted.append(
+            {
+                "name": tool.get("name", ""),
+                "description": tool.get("description", ""),
+                "input_schema": tool.get("parameters", {}),
+            }
+        )
+    return formatted
+
+
+def format_tools_google(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert Sovyx tool definitions to Google Gemini format.
+
+    Input: list of ``{"name": str, "description": str, "parameters": dict}``
+    Output: ``[{"functionDeclarations": [...]}]``
+    """
+    declarations: list[dict[str, Any]] = []
+    for tool in tools:
+        declarations.append(
+            {
+                "name": tool.get("name", ""),
+                "description": tool.get("description", ""),
+                "parameters": tool.get("parameters", {}),
+            }
+        )
+    return [{"functionDeclarations": declarations}]
+
+
+def parse_tool_calls_openai(tool_calls_data: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Parse OpenAI tool_calls into Sovyx format.
+
+    Input: ``[{"id": str, "function": {"name": str, "arguments": str}}]``
+    Output: ``[{"id": str, "function_name": str, "arguments": dict}]``
+
+    Also used by Ollama.
+    """
+    results: list[dict[str, Any]] = []
+    for tc in tool_calls_data:
+        func = tc.get("function", {})
+        args_str = func.get("arguments", "{}")
+        try:
+            arguments = json.loads(args_str) if isinstance(args_str, str) else args_str
+        except json.JSONDecodeError:
+            arguments = {}
+        results.append(
+            {
+                "id": tc.get("id", ""),
+                "function_name": func.get("name", ""),
+                "arguments": arguments if isinstance(arguments, dict) else {},
+            }
+        )
+    return results
+
+
+def parse_tool_calls_anthropic(content_blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Parse Anthropic tool_use blocks into Sovyx format.
+
+    Input: content blocks with ``{"type": "tool_use", "id": str, "name": str, "input": dict}``
+    Output: ``[{"id": str, "function_name": str, "arguments": dict}]``
+    """
+    results: list[dict[str, Any]] = []
+    for block in content_blocks:
+        if block.get("type") == "tool_use":
+            results.append(
+                {
+                    "id": block.get("id", ""),
+                    "function_name": block.get("name", ""),
+                    "arguments": block.get("input", {}),
+                }
+            )
+    return results
+
+
+def parse_tool_calls_google(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Parse Google Gemini functionCall parts into Sovyx format.
+
+    Input: parts with ``{"functionCall": {"name": str, "args": dict}}``
+    Output: ``[{"id": str, "function_name": str, "arguments": dict}]``
+    """
+    results: list[dict[str, Any]] = []
+    for i, part in enumerate(parts):
+        fc = part.get("functionCall")
+        if fc:
+            results.append(
+                {
+                    "id": f"gemini-{i}",
+                    "function_name": fc.get("name", ""),
+                    "arguments": fc.get("args", {}),
+                }
+            )
+    return results
+
+
 def retry_delay(attempt: int, resp: httpx.Response | None = None) -> float:
     """Calculate retry delay using Full Jitter (AWS best practice).
 

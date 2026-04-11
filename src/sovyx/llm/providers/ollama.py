@@ -10,8 +10,13 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from sovyx.engine.errors import LLMError, ProviderUnavailableError
-from sovyx.llm.models import LLMResponse
-from sovyx.llm.providers._shared import retry_delay, safe_parse_json
+from sovyx.llm.models import LLMResponse, ToolCall
+from sovyx.llm.providers._shared import (
+    format_tools_openai,
+    parse_tool_calls_openai,
+    retry_delay,
+    safe_parse_json,
+)
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
@@ -170,6 +175,7 @@ class OllamaProvider:
         model: str = "llama3.2:1b",
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        tools: list[dict[str, Any]] | None = None,
     ) -> LLMResponse:
         """Generate response from Ollama."""
         url = f"{self._base_url}/api/chat"
@@ -183,6 +189,8 @@ class OllamaProvider:
                 "num_predict": max_tokens,
             },
         }
+        if tools:
+            payload["tools"] = format_tools_openai(tools)
 
         start = time.monotonic()
         last_error: Exception | None = None
@@ -205,9 +213,23 @@ class OllamaProvider:
                 latency = int((time.monotonic() - start) * 1000)
 
                 message = data.get("message", {})
-                content = message.get("content", "")
+                content = message.get("content", "") or ""
 
-                if not content.strip():
+                # Parse tool calls
+                tool_calls_out: list[ToolCall] | None = None
+                raw_tc = message.get("tool_calls")
+                if raw_tc:
+                    parsed_tc = parse_tool_calls_openai(raw_tc)
+                    tool_calls_out = [
+                        ToolCall(
+                            id=tc["id"],
+                            function_name=tc["function_name"],
+                            arguments=tc["arguments"],
+                        )
+                        for tc in parsed_tc
+                    ]
+
+                if not content.strip() and not tool_calls_out:
                     error_msg = f"Ollama returned empty content (model={model})"
                     raise LLMError(error_msg)
 
@@ -220,6 +242,7 @@ class OllamaProvider:
                     tokens_in=tokens_in,
                     tokens_out=tokens_out,
                     latency_ms=latency,
+                    tool_calls=len(tool_calls_out) if tool_calls_out else 0,
                 )
 
                 return LLMResponse(
@@ -229,8 +252,9 @@ class OllamaProvider:
                     tokens_out=tokens_out,
                     latency_ms=latency,
                     cost_usd=0.0,  # local — free
-                    finish_reason="stop",
+                    finish_reason="tool_calls" if tool_calls_out else "stop",
                     provider="ollama",
+                    tool_calls=tool_calls_out,
                 )
 
             except httpx.TimeoutException as e:
