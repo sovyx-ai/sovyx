@@ -96,7 +96,7 @@ export function MetricChart({
             <YAxis
               tickLine={false}
               axisLine={false}
-              width={40}
+              width={52}
               tickFormatter={(v: number) => `${v}${unit}`}
             />
             <ChartTooltip
