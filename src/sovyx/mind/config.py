@@ -288,6 +288,88 @@ class SafetyConfig(BaseModel):
     shadow_patterns: list[ShadowPattern] = Field(default_factory=list)
 
 
+class PluginConfigEntry(BaseModel):
+    """Per-plugin configuration from mind.yaml.
+
+    Attributes:
+        enabled: Whether the plugin is enabled (default True).
+        config: Plugin-specific settings (validated against plugin's config_schema).
+        permissions: Explicitly granted permissions (overrides plugin defaults).
+    """
+
+    enabled: bool = True
+    config: dict[str, object] = Field(default_factory=dict)
+    permissions: list[str] = Field(default_factory=list)
+
+
+class PluginsConfig(BaseModel):
+    """Plugin system configuration section of mind.yaml.
+
+    Supports two modes of control:
+    1. **Global**: enabled/disabled sets control which plugins load.
+    2. **Per-plugin**: plugins_config entries for fine-grained control.
+
+    Attributes:
+        enabled: If set, only these plugins are loaded (whitelist).
+        disabled: Plugins to skip even if discovered (blacklist).
+        plugins_config: Per-plugin configuration entries.
+        tool_timeout_s: Default tool execution timeout in seconds.
+    """
+
+    enabled: list[str] = Field(default_factory=list)
+    disabled: list[str] = Field(default_factory=list)
+    plugins_config: dict[str, PluginConfigEntry] = Field(default_factory=dict)
+    tool_timeout_s: float = Field(default=30.0, ge=1.0, le=300.0)
+
+    def get_effective_enabled(self) -> set[str] | None:
+        """Get the effective enabled set (None means all).
+
+        Combines global enabled list with per-plugin enabled=false.
+        """
+        disabled_in_config = {
+            name for name, entry in self.plugins_config.items() if not entry.enabled
+        }
+        all_disabled = set(self.disabled) | disabled_in_config
+
+        if self.enabled:
+            return set(self.enabled) - all_disabled
+        return None
+
+    def get_effective_disabled(self) -> set[str]:
+        """Get the effective disabled set.
+
+        Combines global disabled list with per-plugin enabled=false.
+        """
+        disabled_in_config = {
+            name for name, entry in self.plugins_config.items() if not entry.enabled
+        }
+        return set(self.disabled) | disabled_in_config
+
+    def get_plugin_config(self, plugin_name: str) -> dict[str, object]:
+        """Get config dict for a specific plugin."""
+        entry = self.plugins_config.get(plugin_name)
+        return dict(entry.config) if entry else {}
+
+    def get_all_plugin_configs(self) -> dict[str, dict[str, object]]:
+        """Get all plugin configs as a flat dict."""
+        return {
+            name: dict(entry.config) for name, entry in self.plugins_config.items() if entry.config
+        }
+
+    def get_granted_permissions(self, plugin_name: str) -> set[str]:
+        """Get explicitly granted permissions for a plugin."""
+        entry = self.plugins_config.get(plugin_name)
+        return set(entry.permissions) if entry and entry.permissions else set()
+
+    def get_all_granted_permissions(self) -> dict[str, set[str]]:
+        """Get all per-plugin granted permissions."""
+        return {
+            name: set(entry.permissions)
+            for name, entry in self.plugins_config.items()
+            if entry.permissions
+        }
+
+
 class MindConfig(BaseModel):
     """Complete Mind configuration. Loaded from mind.yaml.
 
@@ -305,6 +387,7 @@ class MindConfig(BaseModel):
     brain: BrainConfig = Field(default_factory=BrainConfig)
     channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
     safety: SafetyConfig = Field(default_factory=SafetyConfig)
+    plugins: PluginsConfig = Field(default_factory=PluginsConfig)
 
     @model_validator(mode="after")
     def set_default_id(self) -> MindConfig:
@@ -402,3 +485,69 @@ def create_default_mind_config(name: str, data_dir: Path) -> Path:
         name=name,
     )
     return path
+
+
+def validate_plugin_config(
+    config: dict[str, object],
+    schema: dict[str, object],
+) -> list[str]:
+    """Validate plugin config against a JSON Schema-like config_schema.
+
+    Performs basic type checking and required field validation.
+    Supports types: string, integer, number, boolean, array, object.
+
+    Args:
+        config: Plugin config dict from mind.yaml.
+        schema: Plugin's config_schema from manifest or ISovyxPlugin.
+
+    Returns:
+        List of validation error strings (empty if valid).
+    """
+    errors: list[str] = []
+
+    # Check required fields
+    required = schema.get("required", [])
+    if isinstance(required, list):
+        for field in required:
+            if isinstance(field, str) and field not in config:
+                errors.append(f"Missing required field: {field}")
+
+    # Check properties types
+    properties = schema.get("properties", {})
+    if isinstance(properties, dict):
+        for key, prop in properties.items():
+            if key not in config:
+                continue
+            if not isinstance(prop, dict):
+                continue
+            expected_type = prop.get("type")
+            if expected_type is None:
+                continue
+            value = config[key]
+            if not _check_json_schema_type(value, str(expected_type)):
+                errors.append(
+                    f"Field '{key}': expected type '{expected_type}', got {type(value).__name__}"
+                )
+
+    return errors
+
+
+def _check_json_schema_type(value: object, expected: str) -> bool:
+    """Check if a value matches a JSON Schema type string."""
+    type_map: dict[str, tuple[type, ...]] = {
+        "string": (str,),
+        "integer": (int,),
+        "number": (int, float),
+        "boolean": (bool,),
+        "array": (list,),
+        "object": (dict,),
+    }
+    allowed = type_map.get(expected)
+    if allowed is None:
+        return True  # Unknown type, accept
+    # bool is subclass of int, but JSON Schema treats them as distinct
+    if expected == "integer" and isinstance(value, bool):
+        return False
+    if expected == "number" and isinstance(value, bool):
+        return False
+    return isinstance(value, allowed)
