@@ -13,6 +13,7 @@ from sovyx import __version__
 from sovyx.cli.commands.brain_analyze import analyze_app
 from sovyx.cli.commands.dashboard import dashboard_app
 from sovyx.cli.commands.logs import logs_app
+from sovyx.cli.commands.plugin import plugin_app
 from sovyx.cli.rpc_client import DaemonClient
 from sovyx.dashboard.server import TOKEN_FILE
 
@@ -29,6 +30,7 @@ app.add_typer(brain_app)
 app.add_typer(mind_app)
 app.add_typer(logs_app)
 app.add_typer(dashboard_app, name="dashboard")
+app.add_typer(plugin_app, name="plugin")
 
 
 def _get_client() -> DaemonClient:
