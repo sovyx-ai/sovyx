@@ -225,6 +225,7 @@ class LLMRouter:
         temperature: float = 0.7,
         max_tokens: int = 4096,
         conversation_id: str = "",
+        tools: list[dict[str, object]] | None = None,
     ) -> LLMResponse:
         """Generate response via most available provider.
 
@@ -234,6 +235,8 @@ class LLMRouter:
             temperature: Sampling temperature.
             max_tokens: Max response tokens.
             conversation_id: For per-conversation cost tracking.
+            tools: Optional tool definitions for function calling.
+                Each dict has name, description, parameters keys.
 
         Returns:
             LLMResponse from first successful provider.
@@ -322,6 +325,7 @@ class LLMRouter:
                             model=use_model,
                             temperature=temperature,
                             max_tokens=max_tokens,
+                            tools=tools,
                         )
 
                     response = (
@@ -407,6 +411,32 @@ class LLMRouter:
             f"All providers failed: {'; '.join(errors)}" if errors else "No available providers"
         )
         raise ProviderUnavailableError(error_msg)
+
+    @staticmethod
+    def tool_definitions_to_dicts(
+        tool_definitions: list[object],
+    ) -> list[dict[str, object]]:
+        """Convert ToolDefinition objects to generic dicts for generate().
+
+        Each ToolDefinition is expected to have name, description,
+        and parameters attributes (the PluginSDK ToolDefinition contract).
+
+        Args:
+            tool_definitions: List of ToolDefinition-like objects.
+
+        Returns:
+            List of dicts with name, description, parameters keys.
+        """
+        result: list[dict[str, object]] = []
+        for td in tool_definitions:
+            result.append(
+                {
+                    "name": getattr(td, "name", ""),
+                    "description": getattr(td, "description", ""),
+                    "parameters": getattr(td, "parameters", {}),
+                }
+            )
+        return result
 
     @staticmethod
     def _get_equivalent_models(model: str) -> list[str]:
