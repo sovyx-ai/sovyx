@@ -345,10 +345,30 @@ async def bootstrap(
                 safety_config=mind_config.safety,
                 llm_router=router,
             )
+            # ── Plugin System ───────────────────────────────────
+            from sovyx.plugins.manager import PluginManager
+
+            plugins_cfg = mind_config.plugins
+            plugin_manager = PluginManager(
+                brain=brain_service,
+                event_bus=event_bus,
+                data_dir=engine_config.data_dir / "plugins",
+                enabled=plugins_cfg.get_effective_enabled() or None,
+                disabled=plugins_cfg.get_effective_disabled(),
+                plugin_config=plugins_cfg.get_all_plugin_configs(),
+                granted_permissions=plugins_cfg.get_all_granted_permissions(),
+            )
+            loaded = await plugin_manager.load_all()
+            if loaded:
+                logger.info("plugins_loaded", count=len(loaded), names=loaded)
+            registry.register_instance(PluginManager, plugin_manager)
+            _closables.append(plugin_manager)  # teardown on failure
+
             think = ThinkPhase(
                 context_assembler=assembler,
                 llm_router=router,
                 mind_config=mind_config,
+                plugin_manager=plugin_manager,
             )
             from sovyx.cognitive.financial_gate import FinancialGate
             from sovyx.cognitive.output_guard import OutputGuard
@@ -361,8 +381,9 @@ async def bootstrap(
             financial_gate = FinancialGate(safety_config=mind_config.safety)
             registry.register_instance(FinancialGate, financial_gate)
             pii_guard = PIIGuard(safety=mind_config.safety, llm_router=router)
+
             act = ActPhase(
-                tool_executor=ToolExecutor(),
+                tool_executor=ToolExecutor(plugin_manager=plugin_manager),
                 llm_router=router,
                 output_guard=output_guard,
                 financial_gate=financial_gate,
@@ -451,8 +472,11 @@ async def bootstrap(
             try:
                 stop_fn = getattr(resource, "stop", None)
                 close_fn = getattr(resource, "close", None)
+                shutdown_fn = getattr(resource, "shutdown", None)
                 if stop_fn is not None:
                     await stop_fn()
+                elif shutdown_fn is not None:
+                    await shutdown_fn()
                 elif close_fn is not None:
                     await close_fn()
             except Exception:
