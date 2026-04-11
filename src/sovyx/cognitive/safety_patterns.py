@@ -1124,9 +1124,13 @@ def check_content(text: str, safety: SafetyConfig) -> FilterMatch:
     if not patterns:
         return NO_MATCH
 
+    # Truncate to prevent DoS via oversized input (regex on 1MB+ = CPU hang)
+    max_safety_input = 10_000
+    truncated = text[:max_safety_input] if len(text) > max_safety_input else text
+
     from sovyx.cognitive.text_normalizer import normalize_text
 
-    normalized = normalize_text(text)
+    normalized = normalize_text(truncated)
     lower = normalized.lower()
     for p in patterns:
         if p.regex.search(lower):

@@ -1010,7 +1010,18 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
 
         if "custom_rules" in body:
             try:
-                safety.custom_rules = [CustomRule(**r) for r in body["custom_rules"]]
+                import re as _re
+
+                rules = [CustomRule(**r) for r in body["custom_rules"]]
+                # Validate regex patterns compile
+                for rule in rules:
+                    _re.compile(rule.pattern)
+                safety.custom_rules = rules
+            except (_re.error, TypeError, ValueError) as e:
+                return JSONResponse(
+                    {"ok": False, "error": f"Invalid rules: {e}"},
+                    status_code=422,
+                )
             except Exception as e:  # noqa: BLE001
                 return JSONResponse(
                     {"ok": False, "error": f"Invalid rules: {e}"},

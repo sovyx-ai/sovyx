@@ -415,6 +415,12 @@ class PIIGuard:
         try:
             import asyncio
 
+            from sovyx.cognitive.safety_classifier import get_classification_budget
+
+            budget = get_classification_budget()
+            if not budget.can_classify():
+                return set()  # Budget exhausted — skip NER
+
             router = self._llm_router
             assert router is not None  # Caller checked
             response = await asyncio.wait_for(
@@ -430,6 +436,7 @@ class PIIGuard:
                 ),
                 timeout=_NER_TIMEOUT_SEC,
             )
+            budget.record_call()
             content = response.content.strip().upper()
             if content == "NONE" or not content:
                 return set()
