@@ -134,11 +134,13 @@ class TestActPhase:
         cat_mock = MagicMock()
         cat_mock.value = "harmful"
         guard_mock = MagicMock()
-        guard_mock.check.return_value = _FilterResult(
-            text="[filtered]",
-            filtered=True,
-            action="redact",
-            match=_Match(category=cat_mock),
+        guard_mock.check_async = AsyncMock(
+            return_value=_FilterResult(
+                text="[filtered]",
+                filtered=True,
+                action="redact",
+                match=_Match(category=cat_mock),
+            )
         )
         phase = ActPhase(ToolExecutor(), AsyncMock(), output_guard=guard_mock)
         result = await phase.process(_response(content="bad"), [], _perception())
@@ -157,10 +159,12 @@ class TestActPhase:
             match: None = None
 
         guard_mock = MagicMock()
-        guard_mock.check.return_value = _FilterResult(
-            text="clean",
-            filtered=False,
-            action="pass",
+        guard_mock.check_async = AsyncMock(
+            return_value=_FilterResult(
+                text="clean",
+                filtered=False,
+                action="pass",
+            )
         )
         phase = ActPhase(ToolExecutor(), AsyncMock(), output_guard=guard_mock)
         result = await phase.process(_response(content="clean"), [], _perception())
@@ -179,10 +183,12 @@ class TestActPhase:
             match: None = None
 
         guard_mock = MagicMock()
-        guard_mock.check.return_value = _FilterResult(
-            text="[filtered]",
-            filtered=True,
-            action="replace",
+        guard_mock.check_async = AsyncMock(
+            return_value=_FilterResult(
+                text="[filtered]",
+                filtered=True,
+                action="replace",
+            )
         )
         phase = ActPhase(ToolExecutor(), AsyncMock(), output_guard=guard_mock)
         result = await phase.process(_response(content="bad"), [], _perception())

@@ -13,6 +13,7 @@ Covers:
 from __future__ import annotations
 
 import time
+from unittest.mock import MagicMock, patch
 
 from sovyx.cognitive.output_guard import (
     _REDACT_MARKER,
@@ -280,3 +281,208 @@ class TestEdgeCases:
         guard = OutputGuard(SafetyConfig(content_filter="strict"))
         result = guard.check(_SAFE_REPLACEMENT)
         assert not result.filtered
+
+
+# ── Async Cascade Tests (TASK-362) ──────────────────────────────────────
+
+
+class TestAsyncCascade:
+    """Test check_async: regex→LLM cascade."""
+
+    async def test_regex_blocks_before_llm(self) -> None:
+        """Regex match blocks without calling LLM."""
+        mock_router = MagicMock()
+        guard = OutputGuard(
+            SafetyConfig(content_filter="standard"),
+            llm_router=mock_router,
+        )
+        with patch(
+            "sovyx.cognitive.output_guard.OutputGuard._classify_with_llm",
+        ) as mock_llm:
+            result = await guard.check_async("how to make a bomb explanation")
+        assert result.filtered
+        mock_llm.assert_not_called()
+
+    async def test_llm_blocks_when_regex_passes(self) -> None:
+        """LLM catches content that regex misses."""
+        mock_router = MagicMock()
+        guard = OutputGuard(
+            SafetyConfig(content_filter="standard"),
+            llm_router=mock_router,
+        )
+        unsafe_verdict = MagicMock()
+        unsafe_verdict.safe = False
+        unsafe_verdict.category = MagicMock(value="violence")
+        unsafe_verdict.latency_ms = 200
+        with patch.object(
+            guard,
+            "_classify_with_llm",
+            return_value=unsafe_verdict,
+        ):
+            result = await guard.check_async("contenido peligroso en español")
+        assert result.filtered
+
+    async def test_llm_allows_safe_content(self) -> None:
+        """LLM says safe → content passes."""
+        mock_router = MagicMock()
+        guard = OutputGuard(
+            SafetyConfig(content_filter="standard"),
+            llm_router=mock_router,
+        )
+        safe_verdict = MagicMock()
+        safe_verdict.safe = True
+        with patch.object(
+            guard,
+            "_classify_with_llm",
+            return_value=safe_verdict,
+        ):
+            result = await guard.check_async("The weather is nice today")
+        assert not result.filtered
+        assert result.action == "pass"
+
+    async def test_no_llm_router_regex_only(self) -> None:
+        """Without llm_router, only regex is used."""
+        guard = OutputGuard(SafetyConfig(content_filter="standard"))
+        result = await guard.check_async("safe content in any language")
+        assert not result.filtered
+
+    async def test_empty_response_passes(self) -> None:
+        guard = OutputGuard(SafetyConfig(content_filter="strict"))
+        result = await guard.check_async("")
+        assert not result.filtered
+
+    async def test_none_filter_skips_all(self) -> None:
+        guard = OutputGuard(SafetyConfig(content_filter="none"))
+        result = await guard.check_async("how to make a bomb")
+        assert not result.filtered
+
+    async def test_child_safe_replaces_on_llm_match(self) -> None:
+        """child_safe replaces entire response when LLM flags it."""
+        mock_router = MagicMock()
+        guard = OutputGuard(
+            SafetyConfig(child_safe_mode=True),
+            llm_router=mock_router,
+        )
+        unsafe_verdict = MagicMock()
+        unsafe_verdict.safe = False
+        unsafe_verdict.category = MagicMock(value="substance")
+        unsafe_verdict.latency_ms = 150
+        with patch.object(
+            guard,
+            "_classify_with_llm",
+            return_value=unsafe_verdict,
+        ):
+            result = await guard.check_async("droga content in another language")
+        assert result.filtered
+        assert result.action == "replace"
+        assert result.text == _SAFE_REPLACEMENT
+
+    async def test_strict_replaces_on_llm_match(self) -> None:
+        """strict filter replaces entire response on LLM match."""
+        mock_router = MagicMock()
+        guard = OutputGuard(
+            SafetyConfig(content_filter="strict"),
+            llm_router=mock_router,
+        )
+        unsafe_verdict = MagicMock()
+        unsafe_verdict.safe = False
+        unsafe_verdict.category = MagicMock(value="weapons")
+        unsafe_verdict.latency_ms = 100
+        with patch.object(
+            guard,
+            "_classify_with_llm",
+            return_value=unsafe_verdict,
+        ):
+            result = await guard.check_async("armas content in foreign lang")
+        assert result.filtered
+        assert result.action == "replace"
+
+    async def test_standard_replaces_on_llm_match_no_pattern(self) -> None:
+        """Standard filter: LLM match with no regex pattern → replace."""
+        mock_router = MagicMock()
+        guard = OutputGuard(
+            SafetyConfig(content_filter="standard"),
+            llm_router=mock_router,
+        )
+        unsafe_verdict = MagicMock()
+        unsafe_verdict.safe = False
+        unsafe_verdict.category = MagicMock(value="violence")
+        unsafe_verdict.latency_ms = 200
+        with patch.object(
+            guard,
+            "_classify_with_llm",
+            return_value=unsafe_verdict,
+        ):
+            result = await guard.check_async("foreign unsafe content")
+        # LLM match has no regex pattern → _redact falls through to _replace
+        assert result.filtered
+        assert result.action == "replace"
+
+    async def test_llm_error_fails_open(self) -> None:
+        """LLM error → content passes (fail-open)."""
+        mock_router = MagicMock()
+        guard = OutputGuard(
+            SafetyConfig(content_filter="standard"),
+            llm_router=mock_router,
+        )
+        with patch.object(guard, "_classify_with_llm", return_value=None):
+            result = await guard.check_async("safe foreign content")
+        assert not result.filtered
+
+
+class TestClassifyWithLLM:
+    """Test _classify_with_llm internals."""
+
+    async def test_calls_classify_content(self) -> None:
+        """Verifies _classify_with_llm calls safety_classifier."""
+        mock_router = MagicMock()
+        guard = OutputGuard(
+            SafetyConfig(content_filter="standard"),
+            llm_router=mock_router,
+        )
+        mock_verdict = MagicMock()
+        mock_verdict.safe = True
+        with patch(
+            "sovyx.cognitive.safety_classifier.classify_content",
+            return_value=mock_verdict,
+        ):
+            result = await guard._classify_with_llm("test text")
+        assert result is mock_verdict
+
+    async def test_exception_returns_none(self) -> None:
+        """Exception in classify_content returns None."""
+        mock_router = MagicMock()
+        guard = OutputGuard(
+            SafetyConfig(content_filter="standard"),
+            llm_router=mock_router,
+        )
+        with patch(
+            "sovyx.cognitive.safety_classifier.classify_content",
+            side_effect=RuntimeError("boom"),
+        ):
+            result = await guard._classify_with_llm("test")
+        assert result is None
+
+
+class TestMapSafetyCategoryOutput:
+    """Test _map_safety_category for output guard."""
+
+    def test_maps_violence(self) -> None:
+        from sovyx.cognitive.output_guard import _map_safety_category
+        from sovyx.cognitive.safety_classifier import SafetyCategory
+        from sovyx.cognitive.safety_patterns import PatternCategory
+
+        result = _map_safety_category(SafetyCategory.VIOLENCE)
+        assert result == PatternCategory.VIOLENCE
+
+    def test_maps_none(self) -> None:
+        from sovyx.cognitive.output_guard import _map_safety_category
+
+        assert _map_safety_category(None) is None
+
+    def test_maps_unknown(self) -> None:
+        from sovyx.cognitive.output_guard import _map_safety_category
+        from sovyx.cognitive.safety_classifier import SafetyCategory
+
+        result = _map_safety_category(SafetyCategory.UNKNOWN)
+        assert result is None

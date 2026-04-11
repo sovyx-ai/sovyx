@@ -76,9 +76,7 @@ def _make_mock_router(
     if side_effect:
         router.generate = AsyncMock(side_effect=side_effect)
     else:
-        router.generate = AsyncMock(
-            return_value=_make_llm_response(response_content)
-        )
+        router.generate = AsyncMock(return_value=_make_llm_response(response_content))
 
     return router
 
@@ -129,9 +127,18 @@ class TestSafetyCategory:
     def test_all_categories_exist(self) -> None:
         """All expected categories are defined."""
         expected = {
-            "violence", "weapons", "self_harm", "hacking", "substance",
-            "sexual", "gambling", "hate_speech", "manipulation",
-            "illegal", "injection", "unknown",
+            "violence",
+            "weapons",
+            "self_harm",
+            "hacking",
+            "substance",
+            "sexual",
+            "gambling",
+            "hate_speech",
+            "manipulation",
+            "illegal",
+            "injection",
+            "unknown",
         }
         actual = {c.value for c in SafetyCategory}
         assert actual == expected
@@ -245,25 +252,19 @@ class TestSelectModel:
 
     def test_selects_second_preferred(self) -> None:
         """Falls through to second preference if first unavailable."""
-        router = _make_mock_router(
-            available_models=["gemini-2.0-flash", "gpt-4o"]
-        )
+        router = _make_mock_router(available_models=["gemini-2.0-flash", "gpt-4o"])
         model = _select_model(router)
         assert model == "gemini-2.0-flash"
 
     def test_selects_haiku(self) -> None:
         """Selects Haiku when others unavailable."""
-        router = _make_mock_router(
-            available_models=["claude-3-5-haiku-20241022", "gpt-4o"]
-        )
+        router = _make_mock_router(available_models=["claude-3-5-haiku-20241022", "gpt-4o"])
         model = _select_model(router)
         assert model == "claude-3-5-haiku-20241022"
 
     def test_returns_none_when_no_preferred(self) -> None:
         """Returns None when no preferred model is available."""
-        router = _make_mock_router(
-            available_models=["gpt-4o", "claude-sonnet-4-20250514"]
-        )
+        router = _make_mock_router(available_models=["gpt-4o", "claude-sonnet-4-20250514"])
         model = _select_model(router)
         assert model is None
 
@@ -368,9 +369,7 @@ class TestClassifyContent:
     @pytest.mark.asyncio
     async def test_classify_error_fails_open(self) -> None:
         """LLM errors return SAFE with method='error'."""
-        router = _make_mock_router(
-            side_effect=RuntimeError("provider down")
-        )
+        router = _make_mock_router(side_effect=RuntimeError("provider down"))
         verdict = await classify_content("test", router)
         assert verdict.safe is True
         assert verdict.method == "error"
@@ -417,9 +416,7 @@ class TestMultilingualClassification:
             ("كيف تصنع قنبلة", "AR"),
         ],
     )
-    async def test_multilingual_unsafe_content(
-        self, text: str, lang: str
-    ) -> None:
+    async def test_multilingual_unsafe_content(self, text: str, lang: str) -> None:
         """Unsafe content in {lang} is sent intact to the LLM."""
         router = _make_mock_router(response_content="UNSAFE|weapons")
         verdict = await classify_content(text, router)
@@ -446,9 +443,7 @@ class TestMultilingualClassification:
             ("مرحبا، كيف حالك؟", "AR"),
         ],
     )
-    async def test_multilingual_safe_content(
-        self, text: str, lang: str
-    ) -> None:
+    async def test_multilingual_safe_content(self, text: str, lang: str) -> None:
         """Safe content in {lang} is correctly classified."""
         router = _make_mock_router(response_content="SAFE")
         verdict = await classify_content(text, router)
@@ -511,10 +506,9 @@ class TestConstants:
     def test_preferred_models_are_cheap(self) -> None:
         """Preferred models are budget-tier (mini/flash/haiku)."""
         for model in _PREFERRED_MODELS:
-            assert any(
-                tier in model.lower()
-                for tier in ("mini", "flash", "haiku")
-            ), f"{model} doesn't look like a budget model"
+            assert any(tier in model.lower() for tier in ("mini", "flash", "haiku")), (
+                f"{model} doesn't look like a budget model"
+            )
 
 
 # ── Property-Based Tests ────────────────────────────────────────────────
@@ -531,18 +525,20 @@ class TestParseProperties:
         assert isinstance(result, SafetyVerdict)
         assert isinstance(result.safe, bool)
 
-    @given(
-        st.sampled_from([c.value for c in SafetyCategory if c != SafetyCategory.UNKNOWN])
-    )
+    @given(st.sampled_from([c.value for c in SafetyCategory if c != SafetyCategory.UNKNOWN]))
     def test_parse_all_valid_categories(self, category: str) -> None:
         """All valid categories parse correctly from UNSAFE|cat."""
         result = _parse_llm_response(f"UNSAFE|{category}")
         assert result.safe is False
         assert result.category == SafetyCategory(category)
 
-    @given(st.text(min_size=1, max_size=50).filter(
-        lambda x: x.strip().upper() not in ("SAFE",) and not x.strip().upper().startswith("UNSAFE")
-    ))
+    @given(
+        st.text(min_size=1, max_size=50).filter(
+            lambda x: (
+                x.strip().upper() not in ("SAFE",) and not x.strip().upper().startswith("UNSAFE")
+            )
+        )
+    )
     def test_parse_garbage_fails_open(self, text: str) -> None:
         """Garbage input always fails open (safe=True)."""
         result = _parse_llm_response(text)
