@@ -341,7 +341,10 @@ async def bootstrap(
             # Cognitive phases
             state_machine = CognitiveStateMachine()
             perceive = PerceivePhase()
-            attend = AttendPhase(safety_config=mind_config.safety)
+            attend = AttendPhase(
+                safety_config=mind_config.safety,
+                llm_router=router,
+            )
             think = ThinkPhase(
                 context_assembler=assembler,
                 llm_router=router,
