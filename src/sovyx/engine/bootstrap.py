@@ -354,7 +354,10 @@ async def bootstrap(
             from sovyx.cognitive.output_guard import OutputGuard
             from sovyx.cognitive.pii_guard import PIIGuard
 
-            output_guard = OutputGuard(safety_config=mind_config.safety)
+            output_guard = OutputGuard(
+                safety_config=mind_config.safety,
+                llm_router=router,
+            )
             financial_gate = FinancialGate(safety_config=mind_config.safety)
             registry.register_instance(FinancialGate, financial_gate)
             pii_guard = PIIGuard(safety=mind_config.safety)
