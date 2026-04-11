@@ -425,3 +425,140 @@ class TestSelectModel:
         available = ["some-custom-model"]
         model = select_model_for_complexity(ComplexityLevel.SIMPLE, available)
         assert model == "some-custom-model"
+
+
+# ── Tools Pass-Through (TASK-437) ───────────────────────────────────
+
+
+class TestToolsPassThrough:
+    """Tests for tools parameter in LLMRouter.generate()."""
+
+    @pytest.mark.anyio()
+    async def test_tools_passed_to_provider(self) -> None:
+        """Tools dict is forwarded to provider.generate()."""
+        provider = _mock_provider()
+        cg = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        bus = AsyncMock()
+        bus.emit = AsyncMock()
+        router = LLMRouter([provider], cg, bus)
+
+        tools = [
+            {"name": "weather.get", "description": "Get weather", "parameters": {}},
+        ]
+        await router.generate(
+            [{"role": "user", "content": "hi"}],
+            model="test-model",
+            tools=tools,
+        )
+
+        # Verify tools were passed to provider
+        call_kwargs = provider.generate.call_args
+        assert call_kwargs[1].get("tools") == tools
+
+    @pytest.mark.anyio()
+    async def test_no_tools_passes_none(self) -> None:
+        """Without tools, None is passed to provider."""
+        provider = _mock_provider()
+        cg = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        bus = AsyncMock()
+        bus.emit = AsyncMock()
+        router = LLMRouter([provider], cg, bus)
+
+        await router.generate(
+            [{"role": "user", "content": "hi"}],
+            model="test-model",
+        )
+
+        call_kwargs = provider.generate.call_args
+        assert call_kwargs[1].get("tools") is None
+
+    @pytest.mark.anyio()
+    async def test_tool_calls_in_response(self) -> None:
+        """LLMResponse with tool_calls is returned intact."""
+        from sovyx.llm.models import ToolCall
+
+        provider = _mock_provider(
+            response=LLMResponse(
+                content="",
+                model="test-model",
+                tokens_in=10,
+                tokens_out=5,
+                latency_ms=100,
+                cost_usd=0.001,
+                finish_reason="tool_use",
+                provider="test",
+                tool_calls=[
+                    ToolCall(id="c1", function_name="weather.get", arguments={"city": "X"})
+                ],
+            ),
+        )
+        cg = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        bus = AsyncMock()
+        bus.emit = AsyncMock()
+        router = LLMRouter([provider], cg, bus)
+
+        result = await router.generate(
+            [{"role": "user", "content": "hi"}],
+            model="test-model",
+            tools=[{"name": "weather.get", "description": "Get", "parameters": {}}],
+        )
+
+        assert result.tool_calls is not None
+        assert len(result.tool_calls) == 1
+        assert result.tool_calls[0].function_name == "weather.get"
+
+
+class TestToolDefinitionsToDicts:
+    """Tests for LLMRouter.tool_definitions_to_dicts()."""
+
+    def test_basic_conversion(self) -> None:
+        """ToolDefinition-like objects converted to dicts."""
+
+        class FakeToolDef:
+            def __init__(self, name: str, description: str, parameters: dict) -> None:
+                self.name = name
+                self.description = description
+                self.parameters = parameters
+
+        tools = [
+            FakeToolDef("weather.get", "Get weather", {"type": "object"}),
+            FakeToolDef("timer.set", "Set timer", {}),
+        ]
+        result = LLMRouter.tool_definitions_to_dicts(tools)
+        assert len(result) == 2
+        assert result[0]["name"] == "weather.get"
+        assert result[0]["parameters"] == {"type": "object"}
+
+    def test_empty(self) -> None:
+        assert LLMRouter.tool_definitions_to_dicts([]) == []
+
+    def test_missing_attributes(self) -> None:
+        """Objects missing attributes get empty defaults."""
+
+        class Bare:
+            pass
+
+        result = LLMRouter.tool_definitions_to_dicts([Bare()])
+        assert result[0]["name"] == ""
+        assert result[0]["description"] == ""
+        assert result[0]["parameters"] == {}
+
+
+class TestContextWindowEquivalent:
+    """Test context window lookup via equivalent models."""
+
+    def test_equivalent_model_context_window(self) -> None:
+        """Context window falls back to equivalent model's provider."""
+        # Provider supports gpt-4o but NOT claude-sonnet
+        provider = _mock_provider(name="openai")
+        provider.supports_model = lambda m: m.startswith("gpt-")
+        provider.get_context_window = lambda m=None: 128_000
+
+        cg = CostGuard(daily_budget=10.0, per_conversation_budget=2.0)
+        bus = AsyncMock()
+        bus.emit = AsyncMock()
+        router = LLMRouter([provider], cg, bus)
+
+        # claude-sonnet → equivalent gpt-4o → OpenAI provider
+        result = router.get_context_window("claude-sonnet-4-20250514")
+        assert result == 128_000
