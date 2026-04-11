@@ -5,6 +5,68 @@ All notable changes to Sovyx will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-04-11
+
+### Added — Plugin SDK
+
+- **Plugin SDK** (`sovyx.plugins.sdk`): `ISovyxPlugin` base class, `@tool` decorator,
+  `ToolDefinition` schema — everything needed to build plugins for Sovyx Minds.
+- **Plugin Manager** (`sovyx.plugins.manager`): Load, unload, execute, and lifecycle
+  management with error boundary (5 consecutive failures → auto-disable).
+- **Permission System** (`sovyx.plugins.permissions`): Capability-based (`network:internet`,
+  `brain:read`, `fs:write`, etc.) with `PermissionEnforcer` + `PermissionDeniedError`.
+- **Sandbox** (`sovyx.plugins.sandbox_http`, `sandbox_fs`): Domain-whitelisted HTTP and
+  scoped filesystem access for plugins.
+- **Security Scanner** (`sovyx.plugins.security`): AST scanner blocks `eval`, `exec`,
+  `subprocess`, `__import__`; runtime `ImportGuard` on `sys.meta_path`.
+- **Plugin Events** (`sovyx.plugins.events`): Frozen dataclass events — `PluginLoaded`,
+  `PluginUnloaded`, `PluginAutoDisabled`, `PluginToolExecuted`, `PluginStateChanged`.
+- **Plugin Config** (`sovyx.mind.config`): Whitelist/blacklist model in `mind.yaml` with
+  `PluginsConfig`, `PluginConfigEntry`, and JSON Schema validation.
+- **LLM Tool Integration**: `tools=` parameter on all 4 providers (Anthropic, OpenAI,
+  Google, Ollama) with provider-specific formatting (`input_schema`, `functionDeclarations`,
+  `{"type":"function",...}`).
+- **LLMRouter.generate()** passes tools from `PluginManager.get_tool_definitions()` +
+  `tool_definitions_to_dicts()` static helper.
+- **ReAct Loop** in `ActPhase`: LLM → tool_call → PluginManager.execute() → result injected
+  → LLM re-invoked (max 3 iterations). Financial gate preserved across iterations.
+- **Plugin CLI** (`sovyx plugin`): `list`, `info`, `install` (local/pip/git), `enable`,
+  `disable`, `remove`, `create` (scaffold), `validate` (quality gates).
+- **Hot Reload** (`sovyx.plugins.hot_reload`): `watchdog`-based file watcher for dev mode —
+  teardown → reimport → setup on file change.
+- **Built-in Plugins**: Calculator (safe AST math), Weather (Open-Meteo, 3 tools),
+  Knowledge (brain interface, 5 tools).
+- **Testing Harness** (`sovyx.plugins.testing`): `MockPluginContext`, `MockBrainAccess`,
+  `MockEventBus`, `MockHttpClient`, `MockFsAccess` for plugin developers.
+- **Dashboard Plugin Endpoints** (`sovyx.dashboard.plugins`): `get_plugins_status()`,
+  `get_plugin_detail()`, `get_tools_list()`.
+- **Plugin Developer Guide** (`docs/plugin-developer-guide.md`): Complete documentation
+  covering architecture, SDK, permissions, testing, CLI, distribution.
+- **Integration Tests**: Full pipeline — perception → LLM → tool_call → plugin → response.
+- **504 new plugin tests**, 97.61% coverage across all plugin modules.
+- **`[project.entry-points.sovyx_plugins]`** for built-in plugin discovery.
+
+### Changed
+- `ActPhase` refactored: `ToolExecutor` now dispatches to `PluginManager` instead of
+  internal tool registry.
+- `LLMResponse.tool_calls` and `ToolCall` model fully integrated across all providers.
+
+## [0.6.0] — 2026-04-10
+
+### Added
+- Financial Gate v2: Language-agnostic with inline buttons + LLM fallback.
+
+## [0.5.40] — 2026-04-10
+
+### Fixed
+- `__version__` derived from `importlib.metadata` instead of hardcoded.
+
+## [0.5.38] — 2026-04-09
+
+### Added
+- Safety Guardrails: Enterprise multilingual safety system.
+- Enterprise Audit: 13-task compliance suite.
+
 ## [0.5.14] — 2026-04-08
 
 ### Added — Brain Semantic Enrichment

@@ -8,3 +8,24 @@ The Plugin SDK provides:
 
 See SPE-008 for the full specification.
 """
+
+from sovyx.plugins.context import BrainAccess, EventBusAccess, PluginContext
+from sovyx.plugins.manager import PluginDisabledError, PluginError, PluginManager
+from sovyx.plugins.permissions import Permission, PermissionDeniedError
+from sovyx.plugins.sdk import ISovyxPlugin, ToolDefinition, tool
+from sovyx.plugins.testing import MockPluginContext
+
+__all__ = [
+    "BrainAccess",
+    "EventBusAccess",
+    "ISovyxPlugin",
+    "MockPluginContext",
+    "Permission",
+    "PermissionDeniedError",
+    "PluginContext",
+    "PluginDisabledError",
+    "PluginError",
+    "PluginManager",
+    "ToolDefinition",
+    "tool",
+]

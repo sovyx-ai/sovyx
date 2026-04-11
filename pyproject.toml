@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sovyx"
-version = "0.6.0"
+version = "0.7.0"
 description = "Sovereign Minds Engine — Persistent AI companion with real memory"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
@@ -50,6 +50,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+plugins = [
+    "watchdog>=4.0",
+]
 cloud = [
     "boto3>=1.34",
     "litellm>=1.40",
@@ -76,6 +79,11 @@ docs = [
 
 [project.scripts]
 sovyx = "sovyx.cli.main:app"
+
+[project.entry-points.sovyx_plugins]
+calculator = "sovyx.plugins.official.calculator:CalculatorPlugin"
+weather = "sovyx.plugins.official.weather:WeatherPlugin"
+knowledge = "sovyx.plugins.official.knowledge:KnowledgePlugin"
 
 [project.urls]
 Homepage = "https://sovyx.ai"
