@@ -17,7 +17,7 @@ Covers:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -508,9 +508,7 @@ class TestLLMNERFallback:
 
         guard = PIIGuard(safety=SafetyConfig(pii_protection=True), llm_router=router)
 
-        # Patch isinstance to accept our mock as LLMRouter
-        with patch("sovyx.cognitive.pii_guard.isinstance", return_value=True):
-            result = await guard.check_async("My name is John at 123 Main St")
+        result = await guard.check_async("My name is John at 123 Main St")
 
         assert result.redacted
         assert "name" in result.types_found or "address" in result.types_found
@@ -562,8 +560,7 @@ class TestLLMNERFallback:
         router.generate = slow_generate
         guard = PIIGuard(safety=SafetyConfig(pii_protection=True), llm_router=router)
 
-        with patch("sovyx.cognitive.pii_guard.isinstance", return_value=True):
-            result = await guard.check_async("Clean text no PII")
+        result = await guard.check_async("Clean text no PII")
 
         assert not result.redacted
 
@@ -587,8 +584,7 @@ class TestLLMNERFallback:
         router.generate = AsyncMock(return_value=resp)
         guard = PIIGuard(safety=SafetyConfig(pii_protection=True), llm_router=router)
 
-        with patch("sovyx.cognitive.pii_guard.isinstance", return_value=True):
-            result = await guard.check_async("Some text here")
+        result = await guard.check_async("Some text here")
 
         assert not result.redacted
 
