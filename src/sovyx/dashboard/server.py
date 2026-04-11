@@ -857,6 +857,83 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
         models = await get_voice_models(registry)
         return JSONResponse(models)
 
+    # ── Custom Rules API ──
+
+    @app.get("/api/safety/rules", dependencies=[Depends(verify_token)])
+    async def get_custom_rules() -> JSONResponse:
+        """Get current custom rules and banned topics."""
+        mind_config = getattr(app.state, "mind_config", None)
+        if mind_config is None:
+            return JSONResponse(
+                {"error": "No mind configuration loaded"},
+                status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        safety = mind_config.safety
+        return JSONResponse(
+            {
+                "custom_rules": [
+                    {
+                        "name": r.name,
+                        "pattern": r.pattern,
+                        "action": r.action,
+                        "message": r.message,
+                    }
+                    for r in safety.custom_rules
+                ],
+                "banned_topics": list(safety.banned_topics),
+            }
+        )
+
+    @app.put("/api/safety/rules", dependencies=[Depends(verify_token)])
+    async def update_custom_rules(request: Request) -> JSONResponse:
+        """Update custom rules and/or banned topics."""
+        from sovyx.mind.config import CustomRule
+
+        try:
+            body = await request.json()
+        except (ValueError, UnicodeDecodeError):
+            return JSONResponse(
+                {"ok": False, "error": "Invalid JSON body"},
+                status_code=422,
+            )
+
+        mind_config = getattr(app.state, "mind_config", None)
+        if mind_config is None:
+            return JSONResponse(
+                {"ok": False, "error": "No mind configuration loaded"},
+                status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        safety = mind_config.safety
+
+        if "custom_rules" in body:
+            try:
+                safety.custom_rules = [CustomRule(**r) for r in body["custom_rules"]]
+            except Exception as e:  # noqa: BLE001
+                return JSONResponse(
+                    {"ok": False, "error": f"Invalid rules: {e}"},
+                    status_code=422,
+                )
+
+        if "banned_topics" in body:
+            safety.banned_topics = list(body["banned_topics"])
+
+        # Broadcast update
+        await ws_manager.broadcast(
+            {
+                "type": "SafetyConfigUpdated",
+                "data": {"changes": {"safety.custom_rules": True}},
+            }
+        )
+
+        return JSONResponse(
+            {
+                "ok": True,
+                "rules_count": len(safety.custom_rules),
+                "topics_count": len(safety.banned_topics),
+            }
+        )
+
     # ── Mind Config (personality, OCEAN, safety) ──
 
     @app.get("/api/config", dependencies=[Depends(verify_token)])
