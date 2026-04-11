@@ -1,7 +1,17 @@
 """Sovyx AttendPhase — filter perceptions by priority and safety.
 
 Second phase: decides if a perception should be processed or filtered.
-Uses tiered regex patterns from ``safety_patterns`` module.
+
+Safety cascade (v0.7):
+    1. **Regex fast-path** — compiled patterns for EN/PT (<1ms).
+       If matched → block immediately (zero latency).
+    2. **LLM classifier** — any language (~200-400ms).
+       Only runs if regex didn't match AND content_filter != "none".
+       If UNSAFE → block with LLM-provided category.
+    3. If both pass → perception accepted.
+
+The LLM classifier is optional — if no ``llm_router`` is provided,
+only regex patterns are used (backward compatible).
 """
 
 from __future__ import annotations
@@ -10,12 +20,18 @@ from typing import TYPE_CHECKING
 
 from sovyx.cognitive.safety_audit import FilterAction, FilterDirection, get_audit_trail
 from sovyx.cognitive.safety_escalation import get_escalation_tracker
-from sovyx.cognitive.safety_patterns import check_content
+from sovyx.cognitive.safety_patterns import (
+    FilterMatch,
+    PatternCategory,
+    check_content,
+)
 from sovyx.observability.logging import get_logger
 from sovyx.observability.metrics import get_metrics
 
 if TYPE_CHECKING:
     from sovyx.cognitive.perceive import Perception
+    from sovyx.cognitive.safety_classifier import SafetyCategory, SafetyVerdict
+    from sovyx.llm.router import LLMRouter
     from sovyx.mind.config import SafetyConfig
 
 logger = get_logger(__name__)
@@ -24,27 +40,44 @@ logger = get_logger(__name__)
 class AttendPhase:
     """Filter perceptions by priority and safety.
 
-    - SafetyCheck: content passes tiered regex filter (re-evaluated per call)
-    - PriorityCheck: priority sufficient to process
+    Safety cascade:
+        1. Regex fast-path (EN/PT, <1ms)
+        2. LLM classifier (any language, ~200-400ms, optional)
 
     The safety config is read dynamically on each ``process()`` call so
     that runtime changes via the dashboard take effect immediately
     without restarting the engine.
+
+    Args:
+        safety_config: SafetyConfig reference (read dynamically per call).
+        llm_router: Optional LLM router for language-agnostic classification.
+            When None, only regex patterns are used.
     """
 
-    def __init__(self, safety_config: SafetyConfig) -> None:
+    def __init__(
+        self,
+        safety_config: SafetyConfig,
+        llm_router: LLMRouter | None = None,
+    ) -> None:
         self._safety = safety_config
+        self._llm_router = llm_router
 
     async def process(self, perception: Perception) -> bool:
         """Check if perception should be processed.
+
+        Cascade:
+            1. Rate-limit check (escalation tracker)
+            2. Regex fast-path (compiled patterns)
+            3. LLM classifier (if regex passed and llm_router available)
+            4. Priority check
 
         Args:
             perception: Enriched perception from PerceivePhase.
 
         Returns:
-            True if perception passes filters, False if filtered.
+            True if perception passes all filters, False if blocked.
         """
-        # Escalation check: reject if source is rate-limited
+        # ── 0. Escalation check ──
         tracker = get_escalation_tracker()
         if tracker.is_rate_limited(perception.source):
             logger.warning(
@@ -54,28 +87,58 @@ class AttendPhase:
             )
             return False
 
-        # Safety check via tiered regex patterns (with latency measurement)
         m = get_metrics()
-        with m.measure_latency(m.safety_filter_latency, {"direction": "input"}):
-            result = check_content(perception.content, self._safety)
 
-        if result.matched:
+        # ── 1. Regex fast-path ──
+        with m.measure_latency(m.safety_filter_latency, {"direction": "input"}):
+            regex_result = check_content(perception.content, self._safety)
+
+        if regex_result.matched:
             logger.warning(
                 "perception_filtered_safety",
                 perception_id=perception.id,
                 reason="blocked_content",
-                category=result.category.value if result.category else "unknown",
-                tier=result.tier.value if result.tier else "unknown",
+                method="regex",
+                category=(regex_result.category.value if regex_result.category else "unknown"),
+                tier=(regex_result.tier.value if regex_result.tier else "unknown"),
             )
             get_audit_trail().record(
                 direction=FilterDirection.INPUT,
                 action=FilterAction.BLOCKED,
-                match=result,
+                match=regex_result,
             )
             tracker.record_block(perception.source)
             return False
 
-        # Priority check (v0.1: accept all priorities)
+        # ── 2. LLM classifier (if available and filter active) ──
+        if self._llm_router is not None and self._safety.content_filter != "none":
+            verdict = await self._classify_with_llm(perception.content)
+            if verdict is not None and not verdict.safe:
+                # Map LLM category to PatternCategory for audit trail
+                llm_category = _map_safety_category(verdict.category)
+                llm_match = FilterMatch(
+                    matched=True,
+                    pattern=None,
+                    category=llm_category,
+                    tier=None,
+                )
+                logger.warning(
+                    "perception_filtered_safety",
+                    perception_id=perception.id,
+                    reason="blocked_content",
+                    method="llm",
+                    category=(llm_category.value if llm_category else "unknown"),
+                    latency_ms=verdict.latency_ms,
+                )
+                get_audit_trail().record(
+                    direction=FilterDirection.INPUT,
+                    action=FilterAction.BLOCKED,
+                    match=llm_match,
+                )
+                tracker.record_block(perception.source)
+                return False
+
+        # ── 3. Priority check ──
         if perception.priority < 0:
             logger.debug(
                 "perception_filtered_priority",
@@ -89,3 +152,40 @@ class AttendPhase:
             perception_id=perception.id,
         )
         return True
+
+    async def _classify_with_llm(
+        self,
+        content: str,
+    ) -> SafetyVerdict | None:
+        """Classify content using LLM safety classifier.
+
+        Returns SafetyVerdict or None if classification fails/unavailable.
+        Never raises — all errors handled internally.
+        """
+        try:
+            from sovyx.cognitive.safety_classifier import classify_content
+
+            assert self._llm_router is not None  # Caller already checked
+            return await classify_content(content, self._llm_router)
+        except Exception:  # noqa: BLE001
+            logger.debug(
+                "attend_llm_classifier_error",
+                exc_info=True,
+            )
+            return None
+
+
+def _map_safety_category(
+    category: SafetyCategory | None,
+) -> PatternCategory | None:
+    """Map SafetyCategory (from classifier) to PatternCategory (for audit).
+
+    Both enums have the same values so we map by value string.
+    Returns None if mapping fails.
+    """
+    if category is None:
+        return None
+    try:
+        return PatternCategory(category.value)
+    except (ValueError, AttributeError):
+        return None
