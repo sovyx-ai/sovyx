@@ -76,6 +76,7 @@ class InjectionAnalysis:
 # They catch hints/setup that alone don't trigger a block but in
 # combination reveal jailbreak intent.
 
+
 @dataclass(frozen=True, slots=True)
 class SuspicionSignal:
     """A pattern that contributes to suspicion score."""
@@ -361,10 +362,7 @@ class InjectionContextTracker:
         # Determine verdict
         verdict = InjectionVerdict.SAFE
 
-        if (
-            cumulative >= self._escalation_threshold
-            or consecutive >= self._consecutive_threshold
-        ):
+        if cumulative >= self._escalation_threshold or consecutive >= self._consecutive_threshold:
             verdict = InjectionVerdict.ESCALATE
             logger.warning(
                 "injection_multi_turn_escalate",

@@ -15,7 +15,6 @@ from sovyx.plugins.security import (
     SecurityFinding,
 )
 
-
 # ── SecurityFinding ─────────────────────────────────────────────────
 
 

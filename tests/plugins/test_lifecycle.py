@@ -15,7 +15,6 @@ from sovyx.plugins.lifecycle import (
     PluginStateTracker,
 )
 
-
 # ── PluginState ─────────────────────────────────────────────────────
 
 
@@ -182,7 +181,7 @@ class TestEventEmission:
     @pytest.mark.anyio()
     async def test_emit_with_bus(self) -> None:
         """Events emitted on transitions when bus provided."""
-        from unittest.mock import MagicMock, AsyncMock
+        from unittest.mock import AsyncMock, MagicMock
 
         mock_bus = MagicMock()
         mock_bus.emit = AsyncMock()
@@ -213,8 +212,8 @@ class TestPluginEventDataclasses:
     """Tests for PluginLoaded and PluginUnloaded events."""
 
     def test_plugin_loaded_fields(self) -> None:
-        from sovyx.plugins.events import PluginLoaded
         from sovyx.engine.events import EventCategory
+        from sovyx.plugins.events import PluginLoaded
 
         evt = PluginLoaded(plugin_name="weather", plugin_version="1.0.0", tools_count=3)
         assert evt.plugin_name == "weather"
@@ -232,8 +231,8 @@ class TestPluginEventDataclasses:
         assert evt.tools_count == 0
 
     def test_plugin_unloaded_fields(self) -> None:
-        from sovyx.plugins.events import PluginUnloaded
         from sovyx.engine.events import EventCategory
+        from sovyx.plugins.events import PluginUnloaded
 
         evt = PluginUnloaded(plugin_name="timer", reason="shutdown")
         assert evt.plugin_name == "timer"
@@ -248,8 +247,8 @@ class TestPluginEventDataclasses:
         assert evt.reason == ""
 
     def test_plugin_auto_disabled_fields(self) -> None:
-        from sovyx.plugins.events import PluginAutoDisabled
         from sovyx.engine.events import EventCategory
+        from sovyx.plugins.events import PluginAutoDisabled
 
         evt = PluginAutoDisabled(plugin_name="bad", consecutive_failures=5, last_error="boom")
         assert evt.plugin_name == "bad"
@@ -267,7 +266,13 @@ class TestPluginEventDataclasses:
             PluginUnloaded,
         )
 
-        for cls in [PluginLoaded, PluginUnloaded, PluginToolExecuted, PluginAutoDisabled, PluginStateChanged]:
+        for cls in [
+            PluginLoaded,
+            PluginUnloaded,
+            PluginToolExecuted,
+            PluginAutoDisabled,
+            PluginStateChanged,
+        ]:
             evt = cls()
             with pytest.raises(AttributeError):
                 evt.plugin_name = "mutated"  # type: ignore[misc]

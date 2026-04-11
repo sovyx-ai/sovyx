@@ -11,13 +11,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from sovyx.cognitive.act import ActPhase, ActionResult, ToolExecutor
-from sovyx.llm.models import LLMResponse, ToolCall, ToolResult
+from sovyx.cognitive.act import ActPhase, ToolExecutor
+from sovyx.llm.models import LLMResponse, ToolCall
 from sovyx.llm.router import LLMRouter
 from sovyx.plugins.manager import PluginManager
 from sovyx.plugins.official.calculator import CalculatorPlugin
-from sovyx.plugins.testing import MockBrainAccess, MockPluginContext
-
+from sovyx.plugins.testing import MockBrainAccess
 
 # ── Helpers ─────────────────────────────────────────────────────────
 
@@ -90,7 +89,11 @@ class TestToolCallToExecution:
 
         executor = ToolExecutor(plugin_manager=mgr)
         calls = [
-            ToolCall(id="tc1", function_name="calculator.calculate", arguments={"expression": "2 + 3 * 4"}),
+            ToolCall(
+                id="tc1",
+                function_name="calculator.calculate",
+                arguments={"expression": "2 + 3 * 4"},
+            ),
         ]
         results = await executor.execute(calls)
 
@@ -107,8 +110,12 @@ class TestToolCallToExecution:
 
         executor = ToolExecutor(plugin_manager=mgr)
         calls = [
-            ToolCall(id="tc1", function_name="calculator.calculate", arguments={"expression": "10 / 3"}),
-            ToolCall(id="tc2", function_name="calculator.calculate", arguments={"expression": "2 ** 10"}),
+            ToolCall(
+                id="tc1", function_name="calculator.calculate", arguments={"expression": "10 / 3"}
+            ),
+            ToolCall(
+                id="tc2", function_name="calculator.calculate", arguments={"expression": "2 ** 10"}
+            ),
         ]
         results = await executor.execute(calls)
 
@@ -213,7 +220,8 @@ class TestAutoDisableIntegration:
     @pytest.mark.anyio()
     async def test_auto_disable_after_failures(self, tmp_path: Path) -> None:
         """Plugin auto-disabled after 5 consecutive failures."""
-        from sovyx.plugins.sdk import ISovyxPlugin, tool as tool_dec
+        from sovyx.plugins.sdk import ISovyxPlugin
+        from sovyx.plugins.sdk import tool as tool_dec
 
         class AlwaysFailPlugin(ISovyxPlugin):
             @property
@@ -263,9 +271,11 @@ class TestMockContextIntegration:
         from sovyx.plugins.official.knowledge import KnowledgePlugin
 
         brain = MockBrainAccess()
-        brain.seed([
-            {"name": "dark-mode", "content": "User prefers dark mode"},
-        ])
+        brain.seed(
+            [
+                {"name": "dark-mode", "content": "User prefers dark mode"},
+            ]
+        )
 
         plugin = KnowledgePlugin(brain=brain)
 

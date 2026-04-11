@@ -13,11 +13,10 @@ import pytest
 from sovyx.plugins.permissions import PermissionDeniedError
 from sovyx.plugins.sandbox_http import (
     SandboxedHttpClient,
-    _RateLimiter,
     _is_local_ip,
+    _RateLimiter,
     _resolve_hostname,
 )
-
 
 # ── Local IP Detection ──────────────────────────────────────────────
 
@@ -110,6 +109,7 @@ class TestRateLimiter:
         limiter = _RateLimiter(max_calls=1, window_s=0.01)
         limiter.acquire()
         import time
+
         time.sleep(0.02)
         # Window expired, should work again
         limiter.acquire()
@@ -185,7 +185,9 @@ class TestHttpRequests:
         client = SandboxedHttpClient("test", ["httpbin.org"])
 
         mock_response = httpx.Response(200, text='{"ok": true}')
-        with patch.object(client._client, "request", new_callable=AsyncMock, return_value=mock_response):
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock, return_value=mock_response
+        ):
             resp = await client.get("https://httpbin.org/get")
             assert resp.status_code == 200
 
@@ -197,7 +199,9 @@ class TestHttpRequests:
         client = SandboxedHttpClient("test", ["api.example.com"])
 
         mock_response = httpx.Response(201, text="created")
-        with patch.object(client._client, "request", new_callable=AsyncMock, return_value=mock_response):
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock, return_value=mock_response
+        ):
             resp = await client.post("https://api.example.com/data", json={"key": "val"})
             assert resp.status_code == 201
 
@@ -209,7 +213,9 @@ class TestHttpRequests:
         client = SandboxedHttpClient("test", ["api.example.com"], rate_limit=2)
 
         mock_response = httpx.Response(200)
-        with patch.object(client._client, "request", new_callable=AsyncMock, return_value=mock_response):
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock, return_value=mock_response
+        ):
             await client.get("https://api.example.com/1")
             await client.get("https://api.example.com/2")
             with pytest.raises(PermissionDeniedError, match="Rate limit"):
@@ -223,7 +229,9 @@ class TestHttpRequests:
         client = SandboxedHttpClient("test", ["api.example.com"], max_response_bytes=100)
 
         mock_response = httpx.Response(200, headers={"content-length": "999999"}, text="big")
-        with patch.object(client._client, "request", new_callable=AsyncMock, return_value=mock_response):
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock, return_value=mock_response
+        ):
             resp = await client.get("https://api.example.com/big")
             assert resp.status_code == 200  # Not blocked, just warned
 
@@ -242,7 +250,9 @@ class TestHttpRequests:
         assert client.remaining_requests == 5
 
         mock_response = httpx.Response(200)
-        with patch.object(client._client, "request", new_callable=AsyncMock, return_value=mock_response):
+        with patch.object(
+            client._client, "request", new_callable=AsyncMock, return_value=mock_response
+        ):
             await client.get("https://api.example.com/1")
         assert client.remaining_requests == 4
 

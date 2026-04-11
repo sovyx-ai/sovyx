@@ -133,10 +133,9 @@ def _get_compiled(safety: SafetyConfig) -> list[CompiledShadowPattern]:
     global _cached_patterns, _cached_config_hash  # noqa: PLW0603
 
     # Hash based on pattern list content
-    config_hash = hash(tuple(
-        (p.name, p.pattern, p.category, p.tier)
-        for p in safety.shadow_patterns
-    ))
+    config_hash = hash(
+        tuple((p.name, p.pattern, p.category, p.tier) for p in safety.shadow_patterns)
+    )
 
     if _cached_patterns is not None and _cached_config_hash == config_hash:
         return _cached_patterns

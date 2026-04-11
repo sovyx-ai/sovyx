@@ -679,7 +679,7 @@ class TestReActLoop:
 
     async def test_financial_gate_in_react(self) -> None:
         """Financial gate blocks tool execution in ReAct loop."""
-        from sovyx.cognitive.financial_gate import FinancialGate, PendingConfirmation
+        from sovyx.cognitive.financial_gate import FinancialGate
 
         mock_router = AsyncMock()
         mock_mgr = AsyncMock()
@@ -744,7 +744,6 @@ class TestSummarizeToolResults:
     """Tests for _summarize_tool_results."""
 
     def test_empty(self) -> None:
-        from sovyx.llm.models import ToolResult
 
         result = ActPhase._summarize_tool_results([])
         assert "no results" in result.lower()

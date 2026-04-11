@@ -9,7 +9,6 @@ from typing import Any
 
 import pytest
 
-from sovyx.llm.models import ToolCall
 from sovyx.llm.providers._shared import (
     format_tools_anthropic,
     format_tools_google,
@@ -180,9 +179,7 @@ class TestParseToolCallsGoogle:
     """Tests for Google Gemini functionCall parsing."""
 
     def test_single_call(self) -> None:
-        parts = [
-            {"functionCall": {"name": "weather.get_weather", "args": {"city": "Paris"}}}
-        ]
+        parts = [{"functionCall": {"name": "weather.get_weather", "args": {"city": "Paris"}}}]
         result = parse_tool_calls_google(parts)
         assert len(result) == 1
         assert result[0]["id"] == "gemini-0"
@@ -215,9 +212,9 @@ class TestAnthropicToolCalling:
     @pytest.mark.anyio()
     async def test_tool_use_response(self) -> None:
         """Simulate Anthropic returning tool_use blocks."""
-        import httpx
         from unittest.mock import AsyncMock, patch
-        import json
+
+        import httpx
 
         from sovyx.llm.providers.anthropic import AnthropicProvider
 
@@ -259,8 +256,9 @@ class TestAnthropicToolCalling:
     @pytest.mark.anyio()
     async def test_tools_in_payload(self) -> None:
         """Verify tools are formatted and sent in the API payload."""
-        import httpx
         from unittest.mock import AsyncMock, patch
+
+        import httpx
 
         from sovyx.llm.providers.anthropic import AnthropicProvider
 
@@ -291,8 +289,9 @@ class TestAnthropicToolCalling:
     @pytest.mark.anyio()
     async def test_no_tools_no_payload_key(self) -> None:
         """Without tools, no tools key in payload."""
-        import httpx
         from unittest.mock import AsyncMock, patch
+
+        import httpx
 
         from sovyx.llm.providers.anthropic import AnthropicProvider
 
@@ -324,8 +323,9 @@ class TestOpenAIToolCalling:
 
     @pytest.mark.anyio()
     async def test_tool_calls_response(self) -> None:
-        import httpx
         from unittest.mock import AsyncMock, patch
+
+        import httpx
 
         from sovyx.llm.providers.openai import OpenAIProvider
 
@@ -372,8 +372,9 @@ class TestOpenAIToolCalling:
 
     @pytest.mark.anyio()
     async def test_tools_in_payload(self) -> None:
-        import httpx
         from unittest.mock import AsyncMock, patch
+
+        import httpx
 
         from sovyx.llm.providers.openai import OpenAIProvider
 
@@ -411,8 +412,9 @@ class TestGoogleToolCalling:
 
     @pytest.mark.anyio()
     async def test_function_call_response(self) -> None:
-        import httpx
         from unittest.mock import AsyncMock, patch
+
+        import httpx
 
         from sovyx.llm.providers.google import GoogleProvider
 
@@ -455,8 +457,9 @@ class TestGoogleToolCalling:
 
     @pytest.mark.anyio()
     async def test_tools_in_payload(self) -> None:
-        import httpx
         from unittest.mock import AsyncMock, patch
+
+        import httpx
 
         from sovyx.llm.providers.google import GoogleProvider
 
@@ -493,8 +496,9 @@ class TestOllamaToolCalling:
 
     @pytest.mark.anyio()
     async def test_tool_calls_response(self) -> None:
-        import httpx
         from unittest.mock import AsyncMock, patch
+
+        import httpx
 
         from sovyx.llm.providers.ollama import OllamaProvider
 

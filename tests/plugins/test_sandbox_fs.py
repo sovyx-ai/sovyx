@@ -5,14 +5,12 @@ Coverage target: ≥95% on plugins/sandbox_fs.py
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
 
 from sovyx.plugins.permissions import PermissionDeniedError, PermissionEnforcer
-from sovyx.plugins.sandbox_fs import SandboxedFsAccess, _MAX_FILE_BYTES
-
+from sovyx.plugins.sandbox_fs import _MAX_FILE_BYTES, SandboxedFsAccess
 
 # ── Fixtures ────────────────────────────────────────────────────────
 
@@ -64,9 +62,7 @@ class TestPathSafety:
         with pytest.raises(PermissionDeniedError, match="Absolute"):
             fs_rw._safe_path("/etc/passwd")
 
-    def test_symlink_escape_blocked(
-        self, tmp_path: Path, enforcer_rw: PermissionEnforcer
-    ) -> None:
+    def test_symlink_escape_blocked(self, tmp_path: Path, enforcer_rw: PermissionEnforcer) -> None:
         """Symlink pointing outside data_dir is blocked."""
         data_dir = tmp_path / "plugin_data"
         data_dir.mkdir()
@@ -133,9 +129,7 @@ class TestWrite:
         assert (tmp_path / "data.bin").read_bytes() == b"\xff\xfe"
 
     @pytest.mark.anyio()
-    async def test_write_creates_subdirs(
-        self, fs_rw: SandboxedFsAccess, tmp_path: Path
-    ) -> None:
+    async def test_write_creates_subdirs(self, fs_rw: SandboxedFsAccess, tmp_path: Path) -> None:
         await fs_rw.write("sub/dir/file.txt", "nested")
         assert (tmp_path / "sub" / "dir" / "file.txt").read_text() == "nested"
 
@@ -155,9 +149,7 @@ class TestWrite:
         self, tmp_path: Path, enforcer_rw: PermissionEnforcer
     ) -> None:
         """Total storage budget enforced."""
-        fs = SandboxedFsAccess(
-            "test", tmp_path, enforcer_rw, max_total_bytes=100
-        )
+        fs = SandboxedFsAccess("test", tmp_path, enforcer_rw, max_total_bytes=100)
         await fs.write("a.txt", "x" * 60)
         with pytest.raises(PermissionDeniedError, match="budget"):
             await fs.write("b.txt", "x" * 60)  # 60 + 60 > 100
@@ -231,9 +223,7 @@ class TestExistsAndList:
             await fs_rw.list_dir("nope")
 
     @pytest.mark.anyio()
-    async def test_list_file_not_dir(
-        self, fs_rw: SandboxedFsAccess, tmp_path: Path
-    ) -> None:
+    async def test_list_file_not_dir(self, fs_rw: SandboxedFsAccess, tmp_path: Path) -> None:
         (tmp_path / "file.txt").write_text("x")
         with pytest.raises(FileNotFoundError, match="Not a directory"):
             await fs_rw.list_dir("file.txt")
