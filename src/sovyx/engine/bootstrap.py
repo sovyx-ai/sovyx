@@ -409,9 +409,11 @@ async def bootstrap(
                 FinancialGate as FinancialGateType,
             )
 
-            _fin_gate = registry.get_instance(FinancialGateType)
+            inst = registry._instances.get(FinancialGateType)
+            if isinstance(inst, FinancialGateType):
+                _fin_gate = inst
         except Exception:  # noqa: BLE001
-            pass
+            logger.debug("financial_gate_not_available_for_bridge")
 
         bridge = BridgeManager(
             event_bus=event_bus,

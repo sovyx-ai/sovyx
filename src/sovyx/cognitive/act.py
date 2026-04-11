@@ -9,7 +9,6 @@ from sovyx.llm.models import ToolCall, ToolResult
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
-    from sovyx.bridge.protocol import InlineButton
     from sovyx.cognitive.financial_gate import FinancialGate
     from sovyx.cognitive.output_guard import OutputGuard
     from sovyx.cognitive.perceive import Perception
@@ -34,7 +33,7 @@ class ActionResult:
     filter_reason: str | None = None
     pending_confirmation: bool = False
     confirmation_details: dict[str, object] | None = None
-    buttons: list[list[InlineButton]] | None = None
+    buttons: list[list[object]] | None = None
     tool_calls_made: list[ToolCall] = dataclasses.field(default_factory=list)
     metadata: dict[str, object] = dataclasses.field(default_factory=dict)
 
@@ -122,7 +121,7 @@ class ActPhase:
         if len(pending_list) == 1:
             tc, pending = pending_list[0]
             confirm_msg = f"⚠️ Financial action requires confirmation:\n{pending.summary}"
-            buttons: list[list[InlineButton]] = [
+            buttons: list[list[object]] = [
                 [
                     InlineButton(
                         text="✅ Approve",

@@ -287,14 +287,18 @@ class BridgeManager:
                     if sent_id and result.confirmation_details:
                         # Track pending so callback can resolve it
                         details = result.confirmation_details
-                        tc_ids = details.get("tool_call_ids") or (
-                            [str(details["tool_call_id"])] if "tool_call_id" in details else []
-                        )
+                        raw_ids = details.get("tool_call_ids")
+                        if isinstance(raw_ids, list):
+                            tc_ids = [str(i) for i in raw_ids]
+                        elif "tool_call_id" in details:
+                            tc_ids = [str(details["tool_call_id"])]
+                        else:
+                            tc_ids = []
                         self._pending_confirmations[message.chat_id] = _PendingConfirmationCtx(
                             message_id=sent_id,
                             chat_id=message.chat_id,
                             channel_type=message.channel_type,
-                            tool_call_ids=list(tc_ids),  # type: ignore[arg-type]
+                            tool_call_ids=tc_ids,
                             is_batch="count" in details,
                         )
                     get_counters().record_message()

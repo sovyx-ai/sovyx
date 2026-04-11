@@ -225,10 +225,12 @@ class TestActionResultButtons:
         assert result.buttons is None
 
     def test_buttons_with_inline_buttons(self) -> None:
-        btns = [[
-            InlineButton(text="✅ Approve", callback_data="fin_confirm:tc1"),
-            InlineButton(text="❌ Deny", callback_data="fin_cancel:tc1"),
-        ]]
+        btns = [
+            [
+                InlineButton(text="✅ Approve", callback_data="fin_confirm:tc1"),
+                InlineButton(text="❌ Deny", callback_data="fin_cancel:tc1"),
+            ]
+        ]
         result = ActionResult(
             response_text="Confirm?",
             target_channel="telegram",
@@ -271,9 +273,7 @@ class TestActPhaseFinancialButtons:
         gate = _financial_gate()
         phase = ActPhase(ToolExecutor(), AsyncMock(), financial_gate=gate)
         tc = _financial_tool_call()
-        result = await phase.process(
-            _response(tool_calls=[tc]), [], _perception()
-        )
+        result = await phase.process(_response(tool_calls=[tc]), [], _perception())
 
         assert result.pending_confirmation is True
         assert result.buttons is not None
@@ -291,9 +291,7 @@ class TestActPhaseFinancialButtons:
         gate = _financial_gate()
         phase = ActPhase(ToolExecutor(), AsyncMock(), financial_gate=gate)
         tc = _financial_tool_call(tool_id="tc_abc123")
-        result = await phase.process(
-            _response(tool_calls=[tc]), [], _perception()
-        )
+        result = await phase.process(_response(tool_calls=[tc]), [], _perception())
 
         assert result.buttons is not None
         assert result.buttons[0][0].callback_data == "fin_confirm:tc_abc123"
@@ -303,9 +301,7 @@ class TestActPhaseFinancialButtons:
         gate = _financial_gate()
         phase = ActPhase(ToolExecutor(), AsyncMock(), financial_gate=gate)
         tc = _financial_tool_call(tool_id="tc_x", name="buy_crypto")
-        result = await phase.process(
-            _response(tool_calls=[tc]), [], _perception()
-        )
+        result = await phase.process(_response(tool_calls=[tc]), [], _perception())
 
         assert result.confirmation_details is not None
         assert result.confirmation_details["tool_call_id"] == "tc_x"
@@ -316,9 +312,7 @@ class TestActPhaseFinancialButtons:
         gate = _financial_gate()
         phase = ActPhase(ToolExecutor(), AsyncMock(), financial_gate=gate)
         tc = _financial_tool_call()
-        result = await phase.process(
-            _response(tool_calls=[tc]), [], _perception()
-        )
+        result = await phase.process(_response(tool_calls=[tc]), [], _perception())
 
         assert "⚠️" in result.response_text
         assert "confirmation" in result.response_text.lower()
@@ -327,9 +321,7 @@ class TestActPhaseFinancialButtons:
         gate = _financial_gate()
         phase = ActPhase(ToolExecutor(), AsyncMock(), financial_gate=gate)
         tc = _financial_tool_call()
-        result = await phase.process(
-            _response(tool_calls=[tc]), [], _perception()
-        )
+        result = await phase.process(_response(tool_calls=[tc]), [], _perception())
 
         assert len(result.tool_calls_made) == 1
         assert result.tool_calls_made[0].id == tc.id
@@ -339,9 +331,7 @@ class TestActPhaseFinancialButtons:
         gate = _financial_gate()
         phase = ActPhase(ToolExecutor(), AsyncMock(), financial_gate=gate)
         tc = _readonly_tool_call()
-        result = await phase.process(
-            _response(tool_calls=[tc]), [], _perception()
-        )
+        result = await phase.process(_response(tool_calls=[tc]), [], _perception())
 
         assert result.pending_confirmation is False
         assert result.buttons is None
@@ -351,9 +341,7 @@ class TestActPhaseFinancialButtons:
         gate = _financial_gate(enabled=False)
         phase = ActPhase(ToolExecutor(), AsyncMock(), financial_gate=gate)
         tc = _financial_tool_call()
-        result = await phase.process(
-            _response(tool_calls=[tc]), [], _perception()
-        )
+        result = await phase.process(_response(tool_calls=[tc]), [], _perception())
 
         assert result.pending_confirmation is False
         assert result.buttons is None
@@ -362,9 +350,7 @@ class TestActPhaseFinancialButtons:
         """When no financial_gate configured, no buttons generated."""
         phase = ActPhase(ToolExecutor(), AsyncMock())
         tc = _financial_tool_call()
-        result = await phase.process(
-            _response(tool_calls=[tc]), [], _perception()
-        )
+        result = await phase.process(_response(tool_calls=[tc]), [], _perception())
 
         assert result.pending_confirmation is False
         assert result.buttons is None
@@ -373,9 +359,7 @@ class TestActPhaseFinancialButtons:
         gate = _financial_gate()
         phase = ActPhase(ToolExecutor(), AsyncMock(), financial_gate=gate)
         tc = _financial_tool_call()
-        result = await phase.process(
-            _response(tool_calls=[tc]), [], _perception()
-        )
+        result = await phase.process(_response(tool_calls=[tc]), [], _perception())
 
         assert result.reply_to == "msg123"
 
@@ -383,9 +367,7 @@ class TestActPhaseFinancialButtons:
         gate = _financial_gate()
         phase = ActPhase(ToolExecutor(), AsyncMock(), financial_gate=gate)
         tc = _financial_tool_call()
-        result = await phase.process(
-            _response(tool_calls=[tc]), [], _perception()
-        )
+        result = await phase.process(_response(tool_calls=[tc]), [], _perception())
 
         assert result.target_channel == "telegram"
 
@@ -402,9 +384,7 @@ class TestActPhaseBatchConfirmation:
             name="transfer_funds",
             args={"amount": "500", "recipient": "alice"},
         )
-        result = await phase.process(
-            _response(tool_calls=[tc1, tc2]), [], _perception()
-        )
+        result = await phase.process(_response(tool_calls=[tc1, tc2]), [], _perception())
 
         assert result.pending_confirmation is True
         assert result.buttons is not None
@@ -419,9 +399,7 @@ class TestActPhaseBatchConfirmation:
         phase = ActPhase(ToolExecutor(), AsyncMock(), financial_gate=gate)
         tc1 = _financial_tool_call(tool_id="tc_first")
         tc2 = _financial_tool_call(tool_id="tc_second", name="sell_crypto")
-        result = await phase.process(
-            _response(tool_calls=[tc1, tc2]), [], _perception()
-        )
+        result = await phase.process(_response(tool_calls=[tc1, tc2]), [], _perception())
 
         assert result.buttons is not None
         # Group anchor is the first tool call ID
@@ -433,9 +411,7 @@ class TestActPhaseBatchConfirmation:
         phase = ActPhase(ToolExecutor(), AsyncMock(), financial_gate=gate)
         tc1 = _financial_tool_call(tool_id="tc1", name="buy_crypto")
         tc2 = _financial_tool_call(tool_id="tc2", name="sell_crypto")
-        result = await phase.process(
-            _response(tool_calls=[tc1, tc2]), [], _perception()
-        )
+        result = await phase.process(_response(tool_calls=[tc1, tc2]), [], _perception())
 
         assert result.confirmation_details is not None
         assert result.confirmation_details["tool_call_ids"] == ["tc1", "tc2"]
@@ -451,9 +427,7 @@ class TestActPhaseBatchConfirmation:
         phase = ActPhase(ToolExecutor(), AsyncMock(), financial_gate=gate)
         tc1 = _financial_tool_call(tool_id="tc1", name="buy_crypto")
         tc2 = _financial_tool_call(tool_id="tc2", name="sell_crypto")
-        result = await phase.process(
-            _response(tool_calls=[tc1, tc2]), [], _perception()
-        )
+        result = await phase.process(_response(tool_calls=[tc1, tc2]), [], _perception())
 
         assert "Multiple" in result.response_text or "multiple" in result.response_text
         assert "1." in result.response_text
@@ -465,9 +439,7 @@ class TestActPhaseBatchConfirmation:
         phase = ActPhase(ToolExecutor(), AsyncMock(), financial_gate=gate)
         tc_fin = _financial_tool_call(tool_id="tc_fin")
         tc_ro = _readonly_tool_call(tool_id="tc_ro")
-        result = await phase.process(
-            _response(tool_calls=[tc_fin, tc_ro]), [], _perception()
-        )
+        result = await phase.process(_response(tool_calls=[tc_fin, tc_ro]), [], _perception())
 
         # The financial one triggers the gate
         assert result.pending_confirmation is True
@@ -495,9 +467,7 @@ class TestActPhaseBatchConfirmation:
                 args={"amount": "200", "recipient": "bob"},
             ),
         ]
-        result = await phase.process(
-            _response(tool_calls=calls), [], _perception()
-        )
+        result = await phase.process(_response(tool_calls=calls), [], _perception())
 
         assert result.pending_confirmation is True
         assert result.buttons is not None

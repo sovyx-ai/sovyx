@@ -213,7 +213,7 @@ async def classify_intent_llm(
     messages = [{"role": "user", "content": prompt}]
 
     try:
-        response = await llm_router.generate(  # type: ignore[union-attr]
+        response = await llm_router.generate(  # type: ignore[attr-defined]
             messages=messages,
             temperature=0.0,
             max_tokens=10,
