@@ -26,10 +26,12 @@ class TestMockBrainAccess:
     @pytest.mark.anyio()
     async def test_search_seeded(self) -> None:
         brain = MockBrainAccess()
-        brain.seed([
-            {"name": "pref", "content": "dark mode"},
-            {"name": "fact", "content": "born in 1990"},
-        ])
+        brain.seed(
+            [
+                {"name": "pref", "content": "dark mode"},
+                {"name": "fact", "content": "born in 1990"},
+            ]
+        )
         results = await brain.search("dark")
         assert len(results) == 1
         assert results[0]["name"] == "pref"
@@ -232,9 +234,11 @@ class TestMockPluginContext:
     async def test_end_to_end(self) -> None:
         """Simulate a plugin using the mock context."""
         ctx = MockPluginContext("knowledge")
-        ctx.brain.seed([
-            {"name": "user-pref", "content": "dark mode preferred"},
-        ])
+        ctx.brain.seed(
+            [
+                {"name": "user-pref", "content": "dark mode preferred"},
+            ]
+        )
 
         # Simulate plugin searching brain
         results = await ctx.brain.search("dark mode")

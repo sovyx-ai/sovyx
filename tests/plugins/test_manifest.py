@@ -16,7 +16,6 @@ from sovyx.plugins.manifest import (
 )
 from sovyx.plugins.permissions import Permission
 
-
 # ── Valid Manifests ─────────────────────────────────────────────────
 
 
@@ -51,9 +50,7 @@ class TestPluginManifest:
             depends=[{"name": "core", "version": ">=1.0.0"}],
             optional_depends=[{"name": "calendar", "version": ">=1.0.0"}],
             events={
-                "emits": [
-                    {"name": "weather_updated", "description": "Weather data refreshed"}
-                ],
+                "emits": [{"name": "weather_updated", "description": "Weather data refreshed"}],
                 "subscribes": ["plugin.timer.completed"],
             },
             tools=[
@@ -180,9 +177,7 @@ class TestLoadManifest:
     def test_load_valid_yaml(self, tmp_path: Path) -> None:
         """Load a valid plugin.yaml."""
         manifest_file = tmp_path / "plugin.yaml"
-        manifest_file.write_text(
-            'name: weather\nversion: "1.0.0"\ndescription: "Get weather."'
-        )
+        manifest_file.write_text('name: weather\nversion: "1.0.0"\ndescription: "Get weather."')
         m = load_manifest(tmp_path)
         assert m.name == "weather"
         assert m.version == "1.0.0"

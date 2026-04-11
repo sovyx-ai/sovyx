@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import MagicMock
-
-import pytest
 
 from sovyx.dashboard.plugins import get_plugin_detail, get_plugins_status, get_tools_list
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 import yaml
 from typer.testing import CliRunner
 
@@ -32,9 +31,7 @@ def _create_plugin_dir(base: Path, name: str, **kwargs: object) -> Path:
         "description": kwargs.get("description", f"Test plugin {name}"),
         **{k: v for k, v in kwargs.items() if k not in ("version", "description")},
     }
-    (plugin_dir / "plugin.yaml").write_text(
-        yaml.dump(manifest), encoding="utf-8"
-    )
+    (plugin_dir / "plugin.yaml").write_text(yaml.dump(manifest), encoding="utf-8")
     return plugin_dir
 
 
@@ -113,11 +110,13 @@ class TestGetPluginStatus:
     def test_disabled_in_config(self, tmp_path: Path) -> None:
         mind_yaml = tmp_path / "mind.yaml"
         mind_yaml.write_text(
-            yaml.dump({
-                "plugins": {
-                    "plugins_config": {"weather": {"enabled": False}},
-                },
-            }),
+            yaml.dump(
+                {
+                    "plugins": {
+                        "plugins_config": {"weather": {"enabled": False}},
+                    },
+                }
+            ),
             encoding="utf-8",
         )
         with patch(
@@ -327,9 +326,7 @@ class TestPluginEnableDisable:
 
     def test_enable(self, tmp_path: Path) -> None:
         mind_yaml = tmp_path / "mind.yaml"
-        mind_yaml.write_text(
-            yaml.dump({"name": "test", "plugins": {"disabled": ["weather"]}})
-        )
+        mind_yaml.write_text(yaml.dump({"name": "test", "plugins": {"disabled": ["weather"]}}))
 
         with patch(
             "sovyx.cli.commands.plugin._mind_yaml_path",
@@ -460,18 +457,14 @@ class TestEdgeCases:
         """Install via git URL (mocked)."""
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = type("R", (), {"returncode": 0, "stderr": ""})()
-            result = runner.invoke(
-                plugin_app, ["install", "git+https://github.com/x/y.git"]
-            )
+            result = runner.invoke(plugin_app, ["install", "git+https://github.com/x/y.git"])
         assert result.exit_code == 0
 
     def test_install_git_failure(self, tmp_path: Path) -> None:
         """Install via git failure."""
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = type("R", (), {"returncode": 1, "stderr": "clone failed"})()
-            result = runner.invoke(
-                plugin_app, ["install", "git+https://github.com/x/y.git"]
-            )
+            result = runner.invoke(plugin_app, ["install", "git+https://github.com/x/y.git"])
         assert result.exit_code == 1
 
     def test_get_status_invalid_yaml(self, tmp_path: Path) -> None:
@@ -542,30 +535,22 @@ class TestPermissionPrompt:
     def test_install_with_perms_approved(self, tmp_path: Path) -> None:
         """User approves permissions."""
         source = tmp_path / "src"
-        _create_plugin_dir(
-            source.parent, "src", permissions=["network:internet"]
-        )
+        _create_plugin_dir(source.parent, "src", permissions=["network:internet"])
         plugins_dir = tmp_path / "plugins"
         plugins_dir.mkdir()
 
         with patch("sovyx.cli.commands.plugin._plugins_dir", return_value=plugins_dir):
-            result = runner.invoke(
-                plugin_app, ["install", str(source)], input="y\n"
-            )
+            result = runner.invoke(plugin_app, ["install", str(source)], input="y\n")
         assert result.exit_code == 0
         assert "installed" in result.output.lower()
 
     def test_install_with_perms_denied(self, tmp_path: Path) -> None:
         """User denies permissions."""
         source = tmp_path / "src"
-        _create_plugin_dir(
-            source.parent, "src", permissions=["brain:write"]
-        )
+        _create_plugin_dir(source.parent, "src", permissions=["brain:write"])
 
         with patch("sovyx.cli.commands.plugin._plugins_dir", return_value=tmp_path):
-            result = runner.invoke(
-                plugin_app, ["install", str(source)], input="n\n"
-            )
+            result = runner.invoke(plugin_app, ["install", str(source)], input="n\n")
         assert result.exit_code == 0
         assert "cancelled" in result.output.lower()
 
@@ -573,21 +558,15 @@ class TestPermissionPrompt:
         """Enable already-enabled shows 'already enabled'."""
         mind_yaml = tmp_path / "mind.yaml"
         mind_yaml.write_text(yaml.dump({"name": "t", "plugins": {"disabled": []}}))
-        with patch(
-            "sovyx.cli.commands.plugin._mind_yaml_path", return_value=mind_yaml
-        ):
+        with patch("sovyx.cli.commands.plugin._mind_yaml_path", return_value=mind_yaml):
             result = runner.invoke(plugin_app, ["enable", "weather"])
         assert "already" in result.output.lower()
 
     def test_disable_already_disabled_cli(self, tmp_path: Path) -> None:
         """Disable already-disabled shows 'already disabled'."""
         mind_yaml = tmp_path / "mind.yaml"
-        mind_yaml.write_text(
-            yaml.dump({"name": "t", "plugins": {"disabled": ["weather"]}})
-        )
-        with patch(
-            "sovyx.cli.commands.plugin._mind_yaml_path", return_value=mind_yaml
-        ):
+        mind_yaml.write_text(yaml.dump({"name": "t", "plugins": {"disabled": ["weather"]}}))
+        with patch("sovyx.cli.commands.plugin._mind_yaml_path", return_value=mind_yaml):
             result = runner.invoke(plugin_app, ["disable", "weather"])
         assert "already" in result.output.lower()
 
@@ -626,6 +605,7 @@ class TestPluginCreate:
         """plugin.yaml has correct name and version."""
         runner.invoke(plugin_app, ["create", "timer", "-o", str(tmp_path)])
         import yaml
+
         data = yaml.safe_load((tmp_path / "timer" / "plugin.yaml").read_text())
         assert data["name"] == "timer"
         assert data["version"] == "0.1.0"
@@ -675,7 +655,6 @@ from sovyx.cli.commands.plugin import (
     _check_syntax,
     _discover_tests,
     _validate_manifest,
-    _validate_security,
 )
 
 
@@ -719,7 +698,11 @@ class TestPluginValidate:
 
         result = runner.invoke(plugin_app, ["validate", str(plugin_dir)])
         # Should have security finding
-        assert "eval" in result.output.lower() or "FAILED" in result.output or "PASSED" in result.output
+        assert (
+            "eval" in result.output.lower()
+            or "FAILED" in result.output
+            or "PASSED" in result.output
+        )
 
     def test_validate_no_tests_warning(self, tmp_path: Path) -> None:
         """No tests gives warning."""
@@ -762,9 +745,7 @@ class TestPluginValidate:
 
     def test_validate_manifest_valid(self, tmp_path: Path) -> None:
         """Valid manifest returns summary string."""
-        (tmp_path / "plugin.yaml").write_text(
-            "name: test\nversion: 1.0.0\ndescription: Test\n"
-        )
+        (tmp_path / "plugin.yaml").write_text("name: test\nversion: 1.0.0\ndescription: Test\n")
         result = _validate_manifest(tmp_path)
         assert result is not None
         assert "test" in result

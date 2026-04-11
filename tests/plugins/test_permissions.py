@@ -19,7 +19,6 @@ from sovyx.plugins.permissions import (
     get_risk_emoji,
 )
 
-
 # ── Permission Enum ─────────────────────────────────────────────────
 
 

@@ -207,14 +207,17 @@ class TestEdgeCases:
     def test_unsupported_unary(self) -> None:
         """Unsupported unary op raises ValueError."""
         import ast
+
         node = ast.UnaryOp(op=ast.Invert(), operand=ast.Constant(value=5))
         with pytest.raises(ValueError, match="unsupported unary"):
             from sovyx.plugins.official.calculator import _eval_node
+
             _eval_node(node)
 
     def test_unsupported_binary(self) -> None:
         """Unsupported binary op raises ValueError."""
         import ast
+
         node = ast.BinOp(
             left=ast.Constant(value=1),
             op=ast.BitAnd(),
@@ -222,6 +225,7 @@ class TestEdgeCases:
         )
         with pytest.raises(ValueError, match="unsupported operator"):
             from sovyx.plugins.official.calculator import _eval_node
+
             _eval_node(node)
 
     @pytest.mark.anyio()

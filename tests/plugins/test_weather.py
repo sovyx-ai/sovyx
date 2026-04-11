@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from sovyx.plugins.official.weather import (
-    WeatherPlugin,
     _RAIN_CODES,
     _WMO_CODES,
+    WeatherPlugin,
     _fetch_weather,
     _geocode,
 )
@@ -273,7 +273,6 @@ class TestGeocode:
 
     @pytest.mark.anyio()
     async def test_success(self) -> None:
-        import httpx
 
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -340,9 +339,7 @@ class TestGeocode:
         """City without country field."""
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.json.return_value = {
-            "results": [{"name": "X", "latitude": 0, "longitude": 0}]
-        }
+        mock_resp.json.return_value = {"results": [{"name": "X", "latitude": 0, "longitude": 0}]}
 
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()

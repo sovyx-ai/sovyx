@@ -7,21 +7,19 @@ from __future__ import annotations
 
 import enum
 from typing import Literal, Optional
-from unittest.mock import AsyncMock
 
 import pytest
 
 from sovyx.plugins.sdk import (
+    _TOOL_ATTR,
     ISovyxPlugin,
     ToolDefinition,
-    _TOOL_ATTR,
     _build_tool_definition,
     _extract_param_doc,
     _generate_schema_from_hints,
     _hint_to_json_schema,
     tool,
 )
-
 
 # ── Fixtures ────────────────────────────────────────────────────────
 
@@ -565,7 +563,7 @@ class TestPluginIntegration:
     def test_generate_schema_handles_bad_hints(self) -> None:
         """Schema generation handles functions with unparseable hints."""
 
-        def func(self, x: "NonExistentType") -> str:  # type: ignore[name-defined]  # noqa: F821
+        def func(self, x: NonExistentType) -> str:  # type: ignore[name-defined]  # noqa: F821
             return ""
 
         # Should not crash — falls back

@@ -7,23 +7,21 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from sovyx.plugins.context import (
+    _MAX_CONCEPT_CONTENT,
+    _MAX_SEARCH_RESULTS,
     BrainAccess,
     EventBusAccess,
     PluginContext,
-    _MAX_CONCEPT_CONTENT,
-    _MAX_SEARCH_RESULTS,
 )
 from sovyx.plugins.permissions import (
     PermissionDeniedError,
     PermissionEnforcer,
 )
-
 
 # ── Fixtures ────────────────────────────────────────────────────────
 
@@ -243,9 +241,7 @@ class TestEventBusAccess:
         self, mock_event_bus: MagicMock, enforcer_all: PermissionEnforcer
     ) -> None:
         """Subscribe registers handler and tracks it."""
-        access = EventBusAccess(
-            mock_event_bus, enforcer_all, plugin_name="test"
-        )
+        access = EventBusAccess(mock_event_bus, enforcer_all, plugin_name="test")
         handler = AsyncMock()
         # Use a mock event type
         event_type = type("TestEvent", (), {})
@@ -257,9 +253,7 @@ class TestEventBusAccess:
         self, mock_event_bus: MagicMock, enforcer_none: PermissionEnforcer
     ) -> None:
         """Subscribe raises without event:subscribe."""
-        access = EventBusAccess(
-            mock_event_bus, enforcer_none, plugin_name="test"
-        )
+        access = EventBusAccess(mock_event_bus, enforcer_none, plugin_name="test")
         with pytest.raises(PermissionDeniedError):
             access.subscribe(type("E", (), {}), AsyncMock())  # type: ignore[arg-type]
 
@@ -268,9 +262,7 @@ class TestEventBusAccess:
         self, mock_event_bus: MagicMock, enforcer_all: PermissionEnforcer
     ) -> None:
         """Emit forwards event to bus."""
-        access = EventBusAccess(
-            mock_event_bus, enforcer_all, plugin_name="test"
-        )
+        access = EventBusAccess(mock_event_bus, enforcer_all, plugin_name="test")
         event = MagicMock()
         await access.emit(event)
         mock_event_bus.emit.assert_called_once_with(event)
@@ -280,9 +272,7 @@ class TestEventBusAccess:
         self, mock_event_bus: MagicMock, enforcer_none: PermissionEnforcer
     ) -> None:
         """Emit raises without event:emit."""
-        access = EventBusAccess(
-            mock_event_bus, enforcer_none, plugin_name="test"
-        )
+        access = EventBusAccess(mock_event_bus, enforcer_none, plugin_name="test")
         with pytest.raises(PermissionDeniedError):
             await access.emit(MagicMock())
 
@@ -290,9 +280,7 @@ class TestEventBusAccess:
         self, mock_event_bus: MagicMock, enforcer_all: PermissionEnforcer
     ) -> None:
         """Cleanup removes all subscriptions."""
-        access = EventBusAccess(
-            mock_event_bus, enforcer_all, plugin_name="test"
-        )
+        access = EventBusAccess(mock_event_bus, enforcer_all, plugin_name="test")
         handler1 = AsyncMock()
         handler2 = AsyncMock()
         evt1 = type("E1", (), {})
@@ -309,9 +297,7 @@ class TestEventBusAccess:
         self, mock_event_bus: MagicMock, enforcer_all: PermissionEnforcer
     ) -> None:
         """Cleanup can be called multiple times safely."""
-        access = EventBusAccess(
-            mock_event_bus, enforcer_all, plugin_name="test"
-        )
+        access = EventBusAccess(mock_event_bus, enforcer_all, plugin_name="test")
         access.cleanup()
         access.cleanup()
         assert access.subscription_count == 0

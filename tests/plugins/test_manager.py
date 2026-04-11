@@ -7,23 +7,19 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from sovyx.plugins.manager import (
-    LoadedPlugin,
     PluginDisabledError,
     PluginError,
     PluginManager,
     _PluginHealth,
     _topological_sort,
 )
-from sovyx.plugins.manifest import PluginManifest
 from sovyx.plugins.permissions import Permission
-from sovyx.plugins.sdk import ISovyxPlugin, ToolDefinition, tool
-
+from sovyx.plugins.sdk import ISovyxPlugin, tool
 
 # ── Test Plugins ────────────────────────────────────────────────────
 
@@ -157,12 +153,14 @@ class TestTopologicalSort:
         assert result.index("a") < result.index("b") < result.index("c")
 
     def test_diamond(self) -> None:
-        result = _topological_sort({
-            "d": ["b", "c"],
-            "b": ["a"],
-            "c": ["a"],
-            "a": [],
-        })
+        result = _topological_sort(
+            {
+                "d": ["b", "c"],
+                "b": ["a"],
+                "c": ["a"],
+                "a": [],
+            }
+        )
         assert result.index("a") < result.index("b")
         assert result.index("a") < result.index("c")
         assert result.index("b") < result.index("d")
@@ -475,6 +473,7 @@ class TestEdgeCases:
         loaded = mgr.get_plugin("weather")
         assert loaded is not None
         import dataclasses as dc
+
         loaded.tools = [dc.replace(loaded.tools[0], handler=None)]
         with pytest.raises(PluginError, match="no handler"):
             await mgr.execute("weather.get_weather", {"city": "X"})
@@ -513,7 +512,8 @@ class TestEdgeCases:
     @pytest.mark.anyio()
     async def test_entry_points_discovery(self, tmp_path: Path) -> None:
         """Entry points discovery finds plugins."""
-        from unittest.mock import patch, MagicMock as MM
+        from unittest.mock import MagicMock as MM
+        from unittest.mock import patch
 
         mock_ep = MM()
         mock_ep.name = "weather"
@@ -531,7 +531,8 @@ class TestEdgeCases:
     @pytest.mark.anyio()
     async def test_entry_points_failure(self, tmp_path: Path) -> None:
         """Failed entry point load is skipped."""
-        from unittest.mock import patch, MagicMock as MM
+        from unittest.mock import MagicMock as MM
+        from unittest.mock import patch
 
         mock_ep = MM()
         mock_ep.name = "broken"
@@ -568,7 +569,6 @@ class TestEdgeCases:
     @pytest.mark.anyio()
     async def test_permission_denied_in_execute(self, tmp_path: Path) -> None:
         """PermissionDeniedError in tool returns error result."""
-        from sovyx.plugins.permissions import Permission as Perm
 
         class PermPlugin(ISovyxPlugin):
             @property
@@ -586,6 +586,7 @@ class TestEdgeCases:
             @tool(description="Raise perm error")
             async def denied_op(self) -> str:
                 from sovyx.plugins.permissions import PermissionDeniedError as PDE
+
                 raise PDE("perm-test", "nope")
 
         mgr = PluginManager(data_dir=tmp_path)
@@ -830,7 +831,6 @@ class TestResourceMonitoring:
     @pytest.mark.anyio()
     async def test_active_tasks_during_execution(self, tmp_path: Path) -> None:
         """Active tasks incremented during execution."""
-        import asyncio
 
         observed_active: list[int] = []
 
