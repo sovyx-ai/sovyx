@@ -663,3 +663,33 @@
 ::-webkit-scrollbar-thumb:hover {
   background: var(--svx-color-text-tertiary);
 }
+
+/* ── Plugin card animations (TASK-462) ── */
+
+@keyframes plugin-status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.plugin-status-active {
+  transition: all var(--svx-duration-normal) var(--svx-ease-out);
+}
+
+.plugin-status-disabled {
+  transition: all var(--svx-duration-normal) var(--svx-ease-out);
+  filter: grayscale(0.3);
+}
+
+.plugin-status-error {
+  transition: all var(--svx-duration-normal) var(--svx-ease-out);
+}
+
+@keyframes puzzle-float {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  25% { transform: translateY(-4px) rotate(-3deg); }
+  75% { transform: translateY(2px) rotate(2deg); }
+}
+
+.animate-puzzle-float {
+  animation: puzzle-float 3s ease-in-out infinite;
+}

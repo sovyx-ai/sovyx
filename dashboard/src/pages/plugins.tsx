@@ -140,7 +140,7 @@ function EmptyNoPlugins() {
   return (
     <div className="flex flex-col items-center justify-center py-16 text-center animate-page-in">
       <div className="mb-4 flex items-center justify-center">
-        <PuzzleIcon className="size-12 text-[var(--svx-color-text-disabled)] animate-pulse" />
+        <PuzzleIcon className="size-12 text-[var(--svx-color-brand-primary)]/40 animate-puzzle-float" />
       </div>
       <h3 className="text-lg font-semibold text-[var(--svx-color-text-primary)]">
         {t("empty.title")}
