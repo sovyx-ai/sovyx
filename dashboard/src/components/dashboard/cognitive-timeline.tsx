@@ -313,7 +313,7 @@ export function CognitiveTimeline({ className }: CognitiveTimelineProps) {
         {t("timeline.title")}
       </h2>
 
-      <ScrollArea className="h-72">
+      <ScrollArea className="h-72 pr-3">
         {isLoading ? (
           <TimelineSkeleton />
         ) : entries.length === 0 ? (
