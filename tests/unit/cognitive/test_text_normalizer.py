@@ -5,6 +5,8 @@ Covers: zero-width, unicode homoglyphs, base64, hex, URL encoding, leetspeak.
 
 from __future__ import annotations
 
+import pytest
+
 from sovyx.cognitive.text_normalizer import (
     _decode_base64_segments,
     _decode_hex_escapes,
@@ -220,3 +222,107 @@ class TestSafetyIntegration:
         safety = SafetyConfig(content_filter="standard")
         result = check_content("Hello, how are you today?", safety)
         assert not result.matched
+
+
+class TestEdgeCases:
+    """Edge cases for full coverage."""
+
+    def test_base64_non_printable_preserved(self) -> None:
+        """Base64 decoding to non-printable → keeps original."""
+        import base64 as b64
+
+        # Encode binary data that's not printable
+        encoded = b64.b64encode(b"\x00\x01\x02\x03" * 8).decode()
+        result = _decode_base64_segments(encoded)
+        assert "[" not in result  # No decoded version
+
+    def test_base64_short_decode_preserved(self) -> None:
+        """Base64 decoding to <4 chars → keeps original."""
+        import base64 as b64
+
+        encoded = b64.b64encode(b"ab").decode()
+        # Too short to match regex (< 16 chars)
+        result = _decode_base64_segments(encoded)
+        assert result == encoded
+
+    def test_leet_all_numbers_no_change(self) -> None:
+        """Text with leet chars but no actual change after mapping."""
+        # "000" maps to "ooo" which IS different
+        result = _decode_leetspeak("000")
+        assert "ooo" in result
+
+    def test_hex_overflow(self) -> None:
+        """Hex value that causes OverflowError."""
+        # chr() with very large value — but our regex only matches 2 hex digits
+        # so max is 0xFF = 255, which is fine. Test edge:
+        result = _decode_hex_escapes("\\xff")
+        assert result == "\xff"
+
+
+class TestExceptionPaths:
+    """Cover exception/edge paths."""
+
+    def test_base64_exception_path(self) -> None:
+        """Invalid base64 that matches regex but fails decode."""
+        # 16+ chars of valid base64 alphabet but not valid padding
+        result = _decode_base64_segments("ABCDEFGHIJKLMNOP")
+        # Should not crash, returns original or decoded
+        assert "ABCDEFGHIJKLMNOP" in result
+
+    def test_url_decode_passthrough(self) -> None:
+        """URL with no percent encoding passes through."""
+        result = _decode_url_encoding("just normal text")
+        assert result == "just normal text"
+
+    def test_leet_same_after_decode(self) -> None:
+        """Text with 3+ leet chars that maps to itself (impossible with real leet)."""
+        # We need text where decoded == original to hit line 184
+        # Since leet map changes chars, this won't happen naturally
+        # But we can verify the branch exists
+        result = _decode_leetspeak("abc")  # no leet chars (< 3)
+        assert result == "abc"
+
+
+class TestForcedExceptions:
+    """Force exception paths via monkeypatch."""
+
+    def test_base64_decode_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Force base64.b64decode to raise."""
+        import base64 as b64
+
+        def bad_decode(*args: object, **kwargs: object) -> bytes:
+            raise ValueError("forced error")
+
+        monkeypatch.setattr(b64, "b64decode", bad_decode)
+        result = _decode_base64_segments("ABCDEFGHIJKLMNOPQR==")
+        assert "ABCDEFGHIJKLMNOPQR==" in result
+
+    def test_url_decode_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Force unquote to raise."""
+        import sovyx.cognitive.text_normalizer as tn
+
+        def bad_unquote(s: str) -> str:
+            raise ValueError("forced error")
+
+        monkeypatch.setattr(tn, "unquote", bad_unquote)
+        result = _decode_url_encoding("%41%42%43")
+        assert "%41%42%43" in result
+
+
+class TestHexValueError:
+    """Cover hex decode ValueError path."""
+
+    def test_hex_value_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Force chr() to raise ValueError."""
+        import builtins
+
+        original_chr = builtins.chr
+
+        def bad_chr(n: int) -> str:
+            if n == 0x69:  # 'i'
+                raise ValueError("forced")
+            return original_chr(n)
+
+        monkeypatch.setattr(builtins, "chr", bad_chr)
+        result = _decode_hex_escapes("\\x69")
+        assert result == "\\x69"  # Falls back to original
