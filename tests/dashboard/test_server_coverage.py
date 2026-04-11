@@ -651,3 +651,86 @@ class TestCORS:
             },
         )
         assert resp.headers.get("access-control-allow-origin") == "https://mydomain.com"
+
+
+# ── Custom Rules API Tests (TASK-373) ───────────────────────────────────
+
+
+class TestCustomRulesAPI:
+    """Test /api/safety/rules endpoints."""
+
+    def test_get_rules_no_config(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+    ) -> None:
+        resp = client.get("/api/safety/rules", headers=auth_headers)
+        assert resp.status_code == 503
+
+    def test_get_rules_empty(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        app: FastAPI,
+    ) -> None:
+        from sovyx.mind.config import MindConfig
+
+        app.state.mind_config = MindConfig(name="test")
+        resp = client.get("/api/safety/rules", headers=auth_headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["custom_rules"] == []
+        assert data["banned_topics"] == []
+
+    def test_put_rules(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        app: FastAPI,
+    ) -> None:
+        from sovyx.mind.config import MindConfig
+
+        app.state.mind_config = MindConfig(name="test")
+        resp = client.put(
+            "/api/safety/rules",
+            headers=auth_headers,
+            json={
+                "custom_rules": [
+                    {"name": "test", "pattern": r"\btest\b", "action": "block"},
+                ],
+                "banned_topics": ["politics"],
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"]
+        assert data["rules_count"] == 1
+        assert data["topics_count"] == 1
+
+    def test_put_rules_invalid_json(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+        app: FastAPI,
+    ) -> None:
+        from sovyx.mind.config import MindConfig
+
+        app.state.mind_config = MindConfig(name="test")
+        resp = client.put(
+            "/api/safety/rules",
+            headers=auth_headers,
+            content=b"not json",
+        )
+        assert resp.status_code == 422
+
+    def test_put_rules_no_config(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+    ) -> None:
+        resp = client.put(
+            "/api/safety/rules",
+            headers=auth_headers,
+            json={"banned_topics": ["test"]},
+        )
+        assert resp.status_code == 503
