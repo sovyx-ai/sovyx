@@ -382,3 +382,188 @@ class TestGateState:
     def test_confirm_nonexistent_returns_none(self) -> None:
         state = FinancialGateState()
         assert state.confirm("nonexistent") is None
+
+
+# ── TASK-345: LLM Intent Classification ──
+
+
+class TestClassifyIntent:
+    """classify_intent (regex synchronous fallback)."""
+
+    def test_confirm_english(self) -> None:
+        from sovyx.cognitive.financial_gate import classify_intent
+
+        assert classify_intent("yes") == "confirmed"
+        assert classify_intent("Sure!") == "confirmed"
+        assert classify_intent("go ahead") == "confirmed"
+
+    def test_confirm_portuguese(self) -> None:
+        from sovyx.cognitive.financial_gate import classify_intent
+
+        assert classify_intent("sim") == "confirmed"
+        assert classify_intent("confirma") == "confirmed"
+        assert classify_intent("bora") == "confirmed"
+
+    def test_cancel_english(self) -> None:
+        from sovyx.cognitive.financial_gate import classify_intent
+
+        assert classify_intent("no") == "cancelled"
+        assert classify_intent("cancel") == "cancelled"
+        assert classify_intent("abort") == "cancelled"
+
+    def test_cancel_portuguese(self) -> None:
+        from sovyx.cognitive.financial_gate import classify_intent
+
+        assert classify_intent("não") == "cancelled"
+        assert classify_intent("cancela") == "cancelled"
+
+    def test_unclear(self) -> None:
+        from sovyx.cognitive.financial_gate import classify_intent
+
+        assert classify_intent("maybe") == "unclear"
+        assert classify_intent("oui") == "unclear"  # French not supported
+        assert classify_intent("ja") == "unclear"  # German not supported
+        assert classify_intent("はい") == "unclear"  # Japanese not supported
+
+
+class TestClassifyIntentLLM:
+    """classify_intent_llm (async, language-agnostic)."""
+
+    async def test_confirm_via_llm(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from sovyx.cognitive.financial_gate import classify_intent_llm
+
+        router = MagicMock()
+        response = MagicMock()
+        response.content = "CONFIRM"
+        router.generate = AsyncMock(return_value=response)
+
+        result = await classify_intent_llm("oui", router)
+        assert result == "confirmed"
+
+    async def test_cancel_via_llm(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from sovyx.cognitive.financial_gate import classify_intent_llm
+
+        router = MagicMock()
+        response = MagicMock()
+        response.content = "CANCEL"
+        router.generate = AsyncMock(return_value=response)
+
+        result = await classify_intent_llm("nein", router)
+        assert result == "cancelled"
+
+    async def test_unclear_via_llm(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from sovyx.cognitive.financial_gate import classify_intent_llm
+
+        router = MagicMock()
+        response = MagicMock()
+        response.content = "UNCLEAR"
+        router.generate = AsyncMock(return_value=response)
+
+        result = await classify_intent_llm("asdfgh", router)
+        assert result == "unclear"
+
+    async def test_llm_failure_returns_unclear(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from sovyx.cognitive.financial_gate import classify_intent_llm
+
+        router = MagicMock()
+        router.generate = AsyncMock(side_effect=RuntimeError("LLM down"))
+
+        result = await classify_intent_llm("yes", router)
+        assert result == "unclear"
+
+    async def test_temperature_zero(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from sovyx.cognitive.financial_gate import classify_intent_llm
+
+        router = MagicMock()
+        response = MagicMock()
+        response.content = "CONFIRM"
+        router.generate = AsyncMock(return_value=response)
+
+        await classify_intent_llm("si", router)
+        _, kwargs = router.generate.call_args
+        assert kwargs["temperature"] == 0.0
+        assert kwargs["max_tokens"] == 10
+
+
+class TestHandleUserResponseAsync:
+    """handle_user_response_async — cascading classification."""
+
+    def _make_gate(self) -> FinancialGate:
+        from sovyx.mind.config import SafetyConfig
+
+        safety = SafetyConfig(financial_confirmation=True)
+        gate = FinancialGate(safety_config=safety)
+        return gate
+
+    def _add_pending(self, gate: FinancialGate) -> None:
+        from sovyx.llm.models import ToolCall
+
+        tc = ToolCall(
+            id="tc_1",
+            function_name="send_payment",
+            arguments={"amount": "100", "currency": "USD"},
+        )
+        gate.check_tool_call(tc)
+
+    async def test_regex_match_skips_llm(self) -> None:
+        gate = self._make_gate()
+        self._add_pending(gate)
+
+        result, pending = await gate.handle_user_response_async("yes")
+        assert result == "confirmed"
+        assert pending is not None
+
+    async def test_llm_used_when_regex_unclear(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        gate = self._make_gate()
+        self._add_pending(gate)
+
+        router = MagicMock()
+        response = MagicMock()
+        response.content = "CONFIRM"
+        router.generate = AsyncMock(return_value=response)
+
+        result, pending = await gate.handle_user_response_async("oui", llm_router=router)
+        assert result == "confirmed"
+        router.generate.assert_called_once()
+
+    async def test_no_llm_and_regex_unclear(self) -> None:
+        gate = self._make_gate()
+        self._add_pending(gate)
+
+        result, pending = await gate.handle_user_response_async("oui")
+        assert result == "unclear"
+        assert pending is not None  # NOT consumed
+
+    async def test_no_pending_returns_none(self) -> None:
+        gate = self._make_gate()
+
+        result, pending = await gate.handle_user_response_async("yes")
+        assert result == "none"
+        assert pending is None
+
+    async def test_cancel_via_llm(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        gate = self._make_gate()
+        self._add_pending(gate)
+
+        router = MagicMock()
+        response = MagicMock()
+        response.content = "CANCEL"
+        router.generate = AsyncMock(return_value=response)
+
+        result, pending = await gate.handle_user_response_async("nein", llm_router=router)
+        assert result == "cancelled"
+        assert pending is not None
