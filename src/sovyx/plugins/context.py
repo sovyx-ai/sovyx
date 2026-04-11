@@ -10,6 +10,7 @@ TASK-470: Expanded BrainAccess with forget/update/find_similar/get_related/searc
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import typing
 
@@ -307,10 +308,12 @@ class BrainAccess:
         return str(concept_id)
 
     async def forget(self, concept_id: str) -> bool:
-        """Delete a concept and cascade-clean its relations.
+        """Delete a concept with full cascade cleanup.
 
-        The concept_repo.delete() cascades via FK (relations auto-deleted).
-        Embeddings are also cleaned up.
+        1. Count relations (for audit)
+        2. Delete concept (relations cascade via FK, embeddings cleaned)
+        3. Remove from working memory
+        4. Emit ConceptForgotten event
 
         Args:
             concept_id: ID of the concept to delete.
@@ -321,6 +324,7 @@ class BrainAccess:
         Raises:
             PermissionDeniedError: brain:write not granted.
         """
+        from sovyx.engine.events import ConceptForgotten
         from sovyx.engine.types import ConceptId
 
         self._enforcer.check("brain:write")
@@ -332,15 +336,88 @@ class BrainAccess:
         if concept is None:
             return False
 
+        # Count relations for audit trail
+        relation_count = 0
+        try:
+            relations = await self._brain._relations.get_relations_for(cid)
+            relation_count = len(relations)
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Delete (cascades relations + embeddings)
         await self._brain._concepts.delete(cid)
+
+        # Remove from working memory
+        try:
+            self._brain._memory._activations.pop(str(cid), None)
+            self._brain._memory._importance.pop(str(cid), None)
+        except (AttributeError, KeyError):
+            pass  # working memory may not have this concept
+
+        # Emit event (failure shouldn't block deletion)
+        with contextlib.suppress(Exception):
+            await self._brain._events.emit(
+                ConceptForgotten(
+                    concept_id=concept_id,
+                    concept_name=concept.name,
+                    source=f"plugin:{self._plugin}",
+                    cascade_relations=relation_count,
+                )
+            )
 
         logger.info(
             "brain_access_forget",
             plugin=self._plugin,
             concept_id=concept_id,
             concept_name=concept.name,
+            cascade_relations=relation_count,
         )
         return True
+
+    async def forget_all(self, query: str, *, limit: int = 10) -> list[dict[str, object]]:
+        """Delete all concepts matching a query.
+
+        Searches for matching concepts, then deletes each one with
+        full cascade (forget()). Use for "forget everything about X".
+
+        Args:
+            query: Search query to find concepts to delete.
+            limit: Max concepts to delete in one call (safety cap, max 20).
+
+        Returns:
+            List of dicts with id, name, deleted status for each concept.
+
+        Raises:
+            PermissionDeniedError: brain:write not granted.
+        """
+        from sovyx.engine.types import MindId
+
+        self._enforcer.check("brain:write")
+        if not self._write:
+            raise PermissionDeniedError(self._plugin, "brain:write")
+
+        capped = min(limit, 20)
+        results = await self._brain.search(
+            query=query,
+            mind_id=MindId(self._mind_id),
+            limit=capped,
+        )
+
+        deleted: list[dict[str, object]] = []
+        for concept, _score in results:
+            cid = str(concept.id)
+            name = concept.name
+            success = await self.forget(cid)
+            deleted.append({"id": cid, "name": name, "deleted": success})
+
+        logger.info(
+            "brain_access_forget_all",
+            plugin=self._plugin,
+            query=query,
+            count=len(deleted),
+            success=sum(1 for d in deleted if d["deleted"]),
+        )
+        return deleted
 
     async def update(
         self,

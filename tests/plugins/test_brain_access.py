@@ -756,3 +756,81 @@ class TestClassifyContent:
         ba, _ = _make_brain_access(permissions=set())
         with pytest.raises(PermissionDeniedError):
             await ba.classify_content("a", "b")
+
+
+# ── forget() cascade ──
+
+
+class TestForgetCascade:
+    @pytest.mark.asyncio
+    async def test_forget_emits_event(self) -> None:
+        ba, brain = _make_brain_access()
+        concept = _make_concept(name="deletable")
+        brain.get_concept = AsyncMock(return_value=concept)
+        brain._concepts.delete = AsyncMock()
+        brain._relations.get_relations_for = AsyncMock(return_value=[1, 2, 3])
+        brain._memory = MagicMock()
+        brain._memory._activations = {"c-001": 0.5}
+        brain._memory._importance = {"c-001": 0.5}
+        brain._events = AsyncMock()
+
+        result = await ba.forget("c-001")
+        assert result is True
+        brain._events.emit.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_forget_cleans_working_memory(self) -> None:
+        ba, brain = _make_brain_access()
+        concept = _make_concept()
+        brain.get_concept = AsyncMock(return_value=concept)
+        brain._concepts.delete = AsyncMock()
+        brain._relations.get_relations_for = AsyncMock(return_value=[])
+        activations = {"c-001": 0.8}
+        importance = {"c-001": 0.5}
+        brain._memory = MagicMock()
+        brain._memory._activations = activations
+        brain._memory._importance = importance
+        brain._events = AsyncMock()
+
+        await ba.forget("c-001")
+        assert "c-001" not in activations
+        assert "c-001" not in importance
+
+
+# ── forget_all() ──
+
+
+class TestForgetAll:
+    @pytest.mark.asyncio
+    async def test_forget_all_deletes_multiple(self) -> None:
+        ba, brain = _make_brain_access()
+        c1 = _make_concept(concept_id="c-1", name="fact1")
+        c2 = _make_concept(concept_id="c-2", name="fact2")
+        brain.search = AsyncMock(return_value=[(c1, 0.9), (c2, 0.8)])
+        brain.get_concept = AsyncMock(side_effect=[c1, c2])
+        brain._concepts.delete = AsyncMock()
+        brain._relations.get_relations_for = AsyncMock(return_value=[])
+        brain._memory = MagicMock()
+        brain._memory._activations = {}
+        brain._memory._importance = {}
+        brain._events = AsyncMock()
+
+        result = await ba.forget_all("facts")
+        assert len(result) == 2
+        assert result[0]["deleted"] is True
+        assert result[1]["deleted"] is True
+
+    @pytest.mark.asyncio
+    async def test_forget_all_caps_at_20(self) -> None:
+        ba, brain = _make_brain_access()
+        brain.search = AsyncMock(return_value=[])
+
+        await ba.forget_all("test", limit=100)
+        call_kwargs = brain.search.call_args.kwargs
+        assert call_kwargs["limit"] == 20
+
+    @pytest.mark.asyncio
+    async def test_forget_all_permission_denied(self) -> None:
+        ba, _ = _make_brain_access(permissions={"brain:read"})
+        with pytest.raises(PermissionDeniedError):
+            await ba.forget_all("test")
