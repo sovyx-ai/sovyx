@@ -15,6 +15,7 @@ import {
   BrainSkeleton,
   LogsSkeleton,
   SettingsSkeleton,
+  PluginsSkeleton,
 } from "@/components/skeletons";
 
 const OverviewPage = lazy(() => import("@/pages/overview"));
@@ -25,6 +26,7 @@ const SettingsPage = lazy(() => import("@/pages/settings"));
 const AboutPage = lazy(() => import("@/pages/about"));
 const VoicePage = lazy(() => import("@/pages/voice"));
 const ChatPage = lazy(() => import("@/pages/chat"));
+const PluginsPage = lazy(() => import("@/pages/plugins"));
 const NotFoundPage = lazy(() => import("@/pages/not-found"));
 
 function PageWrapper({
@@ -99,6 +101,14 @@ export const router = createBrowserRouter([
         element: (
           <PageWrapper fallback={<SettingsSkeleton />}>
             <SettingsPage />
+          </PageWrapper>
+        ),
+      },
+      {
+        path: "plugins",
+        element: (
+          <PageWrapper fallback={<PluginsSkeleton />}>
+            <PluginsPage />
           </PageWrapper>
         ),
       },

@@ -1,0 +1,93 @@
+{
+  "title": "Plugins",
+  "subtitle": "Extend your Mind with plugins",
+  "stats": {
+    "total": "Total Plugins",
+    "active": "Active",
+    "disabled": "Disabled",
+    "totalTools": "Total Tools"
+  },
+  "filter": {
+    "all": "All",
+    "active": "Active",
+    "disabled": "Disabled",
+    "error": "Error"
+  },
+  "sort": {
+    "name": "Name",
+    "status": "Status",
+    "tools": "Tools"
+  },
+  "search": {
+    "placeholder": "Search plugins..."
+  },
+  "card": {
+    "tools_one": "{{count}} tool",
+    "tools_other": "{{count}} tools",
+    "viewDetails": "View Details",
+    "noDescription": "No description available"
+  },
+  "status": {
+    "active": "Active",
+    "disabled": "Disabled",
+    "error": "Error"
+  },
+  "detail": {
+    "title": "Plugin Details",
+    "version": "Version",
+    "author": "Author",
+    "license": "License",
+    "homepage": "Homepage",
+    "tools": "Tools",
+    "permissions": "Permissions",
+    "health": "Health",
+    "manifest": "Manifest",
+    "events": "Events",
+    "dependencies": "Dependencies",
+    "noTools": "No tools registered",
+    "noPermissions": "No permissions required",
+    "noEvents": "No events declared",
+    "noDependencies": "No dependencies",
+    "emits": "Emits",
+    "subscribes": "Subscribes"
+  },
+  "health": {
+    "failures": "Consecutive Failures",
+    "lastError": "Last Error",
+    "activeTasks": "Active Tasks",
+    "autoDisableWarning": "At risk of auto-disable ({{count}}/{{max}} failures)"
+  },
+  "actions": {
+    "enable": "Enable",
+    "disable": "Disable",
+    "reload": "Reload",
+    "disableConfirm": "This will stop the plugin and its tools. Continue?",
+    "reloadConfirm": "This will restart the plugin. Continue?",
+    "enabled": "Plugin enabled",
+    "disabled": "Plugin disabled",
+    "reloaded": "Plugin reloaded",
+    "enableFailed": "Failed to enable plugin",
+    "disableFailed": "Failed to disable plugin",
+    "reloadFailed": "Failed to reload plugin"
+  },
+  "permission": {
+    "risk": {
+      "low": "Low Risk",
+      "medium": "Medium Risk",
+      "high": "High Risk"
+    }
+  },
+  "pricing": {
+    "free": "Free",
+    "paid": "Paid",
+    "freemium": "Freemium"
+  },
+  "empty": {
+    "title": "No plugins installed",
+    "subtitle": "Extend your Mind with plugins",
+    "cta": "Install via CLI",
+    "cliHint": "sovyx plugin install <name>",
+    "noMatch": "No plugins match your search",
+    "clearFilter": "Clear filter"
+  }
+}
