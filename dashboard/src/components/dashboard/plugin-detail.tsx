@@ -86,11 +86,11 @@ function Section({
   const [open, setOpen] = useState(defaultOpen);
 
   return (
-    <div className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)]">
+    <div className="rounded-[var(--svx-radius-lg)] bg-[var(--svx-color-bg-elevated)]/30">
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="flex w-full items-center gap-2.5 px-4 py-3.5 text-left transition-colors hover:bg-[var(--svx-color-bg-elevated)]/50 rounded-[var(--svx-radius-lg)]"
+        className="flex w-full items-center gap-2.5 px-4 py-3.5 text-left transition-colors hover:bg-[var(--svx-color-bg-elevated)]/60 rounded-[var(--svx-radius-lg)]"
       >
         <div className="flex size-7 items-center justify-center rounded-[var(--svx-radius-md)] bg-[var(--svx-color-bg-elevated)]">
           <Icon className="size-3.5 text-[var(--svx-color-text-secondary)]" />
@@ -342,7 +342,7 @@ export function PluginDetailPanel({
               </div>
 
               {/* Status + Actions Row */}
-              <div className="flex items-center gap-3 rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] px-4 py-3">
+              <div className="flex items-center gap-3 rounded-[var(--svx-radius-lg)] bg-[var(--svx-color-bg-elevated)]/40 px-4 py-3">
                 {/* Status */}
                 <div className={cn("flex items-center gap-2", statusCfg.color)}>
                   <span className={cn("size-2 rounded-full", statusCfg.dot)} />
@@ -376,7 +376,7 @@ export function PluginDetailPanel({
                       type="button"
                       onClick={() => handleAction("disable")}
                       disabled={actionLoading !== null}
-                      className="flex items-center gap-1.5 rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-elevated)] px-3.5 py-2 text-xs font-medium text-[var(--svx-color-text-secondary)] shadow-sm transition-all hover:border-[var(--svx-color-warning)]/40 hover:text-[var(--svx-color-warning)] disabled:opacity-50"
+                      className="flex items-center gap-1.5 rounded-[var(--svx-radius-md)] bg-[var(--svx-color-bg-elevated)] px-3.5 py-2 text-xs font-medium text-[var(--svx-color-text-secondary)] transition-all hover:text-[var(--svx-color-warning)] disabled:opacity-50"
                     >
                       {actionLoading === "disable" ? (
                         <RefreshCwIcon className="size-3.5 animate-spin" />
@@ -391,7 +391,7 @@ export function PluginDetailPanel({
                     onClick={() => handleAction("reload")}
                     disabled={actionLoading !== null}
                     title={t("actions.reload")}
-                    className="flex items-center justify-center rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-elevated)] p-2 text-[var(--svx-color-text-secondary)] shadow-sm transition-all hover:bg-[var(--svx-color-bg-surface)] disabled:opacity-50"
+                    className="flex items-center justify-center rounded-[var(--svx-radius-md)] bg-[var(--svx-color-bg-elevated)] p-2 text-[var(--svx-color-text-secondary)] transition-all hover:bg-[var(--svx-color-bg-surface)] disabled:opacity-50"
                   >
                     <RefreshCwIcon
                       className={cn(
