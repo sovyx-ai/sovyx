@@ -10,7 +10,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { MoreVerticalIcon } from "lucide-react";
+import { MoreVerticalIcon, AlertTriangleIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDashboardStore } from "@/stores/dashboard";
 import type { PluginInfo, PermissionRisk } from "@/types/api";
@@ -249,7 +249,7 @@ export function PluginCard({
       onClick={onClick}
       className={cn(
         // Base
-        "group relative w-full rounded-[var(--svx-radius-lg)] border p-4 text-left transition-all duration-200",
+        "group relative w-full rounded-[var(--svx-radius-lg)] border p-5 text-left transition-all duration-200",
         // Active: glass morphism
         isActive && [
           "border-[var(--svx-color-border-default)]",
@@ -272,15 +272,15 @@ export function PluginCard({
       aria-label={`${plugin.name} — ${t(`status.${plugin.status}`)}`}
     >
       {/* Header: Icon + Name + Status */}
-      <div className="flex items-start gap-3">
+      <div className="flex items-start gap-3.5">
         {plugin.icon_url ? (
           <img
             src={plugin.icon_url}
             alt=""
-            className="size-10 rounded-[var(--svx-radius-md)] object-cover"
+            className="size-11 rounded-[var(--svx-radius-lg)] object-cover shadow-sm"
           />
         ) : (
-          <LetterAvatar name={plugin.name} className="size-10" />
+          <LetterAvatar name={plugin.name} className="size-11 shadow-sm" />
         )}
 
         <div className="min-w-0 flex-1">
@@ -293,12 +293,12 @@ export function PluginCard({
             </span>
           </div>
 
-          <p className="mt-0.5 line-clamp-2 text-xs text-[var(--svx-color-text-secondary)]">
+          <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-[var(--svx-color-text-secondary)]">
             {plugin.description || t("card.noDescription")}
           </p>
         </div>
 
-        <div className="flex items-center gap-1 shrink-0">
+        <div className="flex items-center gap-1.5 shrink-0">
           <PluginStatusDot status={plugin.status} />
           <QuickActions
             plugin={plugin}
@@ -308,38 +308,38 @@ export function PluginCard({
       </div>
 
       {/* Footer: Badges */}
-      <div className="mt-3 flex flex-wrap items-center gap-1.5">
+      <div className="mt-4 flex flex-wrap items-center gap-2">
         {/* Tool count */}
-        <span className="inline-flex items-center rounded-full bg-[var(--svx-color-bg-elevated)] px-2 py-0.5 text-[10px] font-medium text-[var(--svx-color-text-secondary)]">
-          {t("card.tools", { count: plugin.tools_count })}
+        <span className="inline-flex items-center gap-1 rounded-full bg-[var(--svx-color-bg-elevated)] px-2.5 py-1 text-[11px] font-medium text-[var(--svx-color-text-secondary)]">
+          🔧 {t("card.tools", { count: plugin.tools_count })}
         </span>
 
         {/* Risk indicator */}
         {risk && (
           <span
             className={cn(
-              "inline-flex items-center gap-0.5 rounded-full bg-[var(--svx-color-bg-elevated)] px-2 py-0.5 text-[10px] font-medium",
+              "inline-flex items-center gap-1 rounded-full bg-[var(--svx-color-bg-elevated)] px-2.5 py-1 text-[11px] font-medium",
               RISK_COLORS[risk],
             )}
             title={t(`permission.risk.${risk}`)}
           >
-            {RISK_DOTS[risk]}
+            {RISK_DOTS[risk]} {t(`permission.risk.${risk}`)}
           </span>
         )}
 
         {/* Category */}
         {categoryIcon && (
-          <span className="inline-flex items-center gap-0.5 rounded-full bg-[var(--svx-color-bg-elevated)] px-2 py-0.5 text-[10px] font-medium text-[var(--svx-color-text-secondary)]">
+          <span className="inline-flex items-center gap-1 rounded-full bg-[var(--svx-color-bg-elevated)] px-2.5 py-1 text-[11px] font-medium text-[var(--svx-color-text-secondary)]">
             {categoryIcon}
             {plugin.category && (
-              <span className="ml-0.5">{plugin.category}</span>
+              <span>{plugin.category}</span>
             )}
           </span>
         )}
 
         {/* Pricing (only if not free) */}
         {plugin.pricing && plugin.pricing !== "free" && (
-          <span className="inline-flex items-center rounded-full bg-[var(--svx-color-warning)]/10 px-2 py-0.5 text-[10px] font-medium text-[var(--svx-color-warning)]">
+          <span className="inline-flex items-center rounded-full bg-[var(--svx-color-warning)]/10 px-2.5 py-1 text-[11px] font-medium text-[var(--svx-color-warning)]">
             {t(`pricing.${plugin.pricing}`)}
           </span>
         )}
@@ -347,8 +347,8 @@ export function PluginCard({
 
       {/* Health warning */}
       {plugin.health.consecutive_failures > 0 && (
-        <div className="mt-2 flex items-center gap-1 text-[10px] text-[var(--svx-color-warning)]">
-          <span>⚠️</span>
+        <div className="mt-3 flex items-center gap-1.5 rounded-[var(--svx-radius-md)] bg-[var(--svx-color-warning)]/10 px-3 py-2 text-xs text-[var(--svx-color-warning)]">
+          <AlertTriangleIcon className="size-3.5 shrink-0" />
           <span>
             {t("health.autoDisableWarning", {
               count: plugin.health.consecutive_failures,
@@ -357,13 +357,6 @@ export function PluginCard({
           </span>
         </div>
       )}
-
-      {/* Hover overlay */}
-      <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-[var(--svx-radius-lg)] bg-black/0 transition-colors group-hover:bg-black/5 dark:group-hover:bg-white/5">
-        <span className="text-xs font-medium text-[var(--svx-color-text-primary)] opacity-0 transition-opacity group-hover:opacity-100">
-          {t("card.viewDetails")}
-        </span>
-      </div>
     </button>
   );
 }
