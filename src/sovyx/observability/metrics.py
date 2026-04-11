@@ -141,6 +141,12 @@ class MetricsRegistry:
             unit="1",
         )
 
+        self.safety_llm_classifications = meter.create_counter(
+            name="sovyx.safety.llm.classifications",
+            description="Total LLM safety classifications (label: result, method, category)",
+            unit="1",
+        )
+
         # ── Histograms ─────────────────────────────────────────────
         self.safety_filter_latency = meter.create_histogram(
             name="sovyx.safety.filter.latency",
@@ -169,6 +175,12 @@ class MetricsRegistry:
         self.context_assembly_latency = meter.create_histogram(
             name="sovyx.context.assembly.latency",
             description="Context assembly latency",
+            unit="ms",
+        )
+
+        self.safety_llm_classify_latency = meter.create_histogram(
+            name="sovyx.safety.llm.classify.latency",
+            description="LLM safety classifier latency per call",
             unit="ms",
         )
 
