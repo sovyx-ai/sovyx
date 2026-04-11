@@ -5,6 +5,33 @@ All notable changes to Sovyx will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] — 2026-04-11
+
+### Fixed — Plugin SDK Deep Validation
+- **ImportGuard PEP 451** (CRITICAL): `ImportGuard` used deprecated `find_module` (PEP 302)
+  which Python 3.12+ ignores completely — runtime import guard did nothing. Replaced with
+  `find_spec` (PEP 451) that raises `ImportError` directly.
+- **Tool name sanitization**: Changed separator from `__` to `--` in LLM-facing tool names.
+  Old `__` broke roundtrip for plugin names containing underscores (e.g., `calc__v2.add`).
+  `--` is safe: manifests block consecutive hyphens, Python methods can't have hyphens.
+- **Disabled plugins in tools=**: `get_tool_definitions()` now filters out disabled plugins.
+  Previously LLM received tools for disabled plugins, causing execution errors.
+- **Empty enabled set bypass**: `set() or None` converted empty enabled (= load nothing)
+  to `None` (= load all). Fixed with explicit `is not None` check.
+- **ThinkPhase tools=[] vs None**: Empty tool list now converted to `None` so providers
+  don't receive an empty `tools` parameter.
+- **Entry points group mismatch**: pyproject.toml used `sovyx_plugins` (underscore) but
+  manager searched `sovyx.plugins` (dot). Aligned to `sovyx.plugins` everywhere.
+
+### Added
+- **Marketplace manifest fields**: `category`, `tags`, `icon_url`, `screenshots`, `pricing`,
+  `price_usd`, `trial_days` — backward compatible, all optional with sensible defaults.
+- **PluginManager wired into bootstrap**: `load_all()` on startup, tools passed to LLM via
+  `ThinkPhase`, cleanup on shutdown.
+- **72 new validation tests** (VAL-001 through VAL-014): sanitization fuzzing, contract
+  chain, security probing, chaos testing, dashboard consistency, full integration pipeline.
+- **1038 plugin-related tests** total, all passing.
+
 ## [0.7.0] — 2026-04-11
 
 ### Added — Plugin SDK
