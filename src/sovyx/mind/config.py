@@ -235,6 +235,22 @@ DEFAULT_GUARDRAILS: tuple[Guardrail, ...] = (
 )
 
 
+class CustomRule(BaseModel):
+    """Owner-defined safety rule.
+
+    Attributes:
+        name: Human-readable rule name.
+        pattern: Regex pattern to match (case-insensitive).
+        action: What to do on match: block or log.
+        message: Optional custom message shown when blocked.
+    """
+
+    name: str
+    pattern: str
+    action: Literal["block", "log"] = "block"
+    message: str = ""
+
+
 class SafetyConfig(BaseModel):
     """Safety guardrails configuration."""
 
@@ -245,6 +261,8 @@ class SafetyConfig(BaseModel):
     guardrails: list[Guardrail] = Field(
         default_factory=lambda: list(DEFAULT_GUARDRAILS),
     )
+    custom_rules: list[CustomRule] = Field(default_factory=list)
+    banned_topics: list[str] = Field(default_factory=list)
 
 
 class MindConfig(BaseModel):

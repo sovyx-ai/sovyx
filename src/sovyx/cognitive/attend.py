@@ -89,7 +89,7 @@ class AttendPhase:
 
         m = get_metrics()
 
-        # ── 0. Multi-turn injection check ──
+        # ── 0a. Multi-turn injection check ──
         from sovyx.cognitive.injection_tracker import get_injection_tracker
 
         mt_verdict = get_injection_tracker().record_turn(
@@ -104,6 +104,39 @@ class AttendPhase:
                 reason=mt_verdict.reason,
             )
             m.safety_blocks.add(1, {"reason": "multi_turn_injection"})
+            get_audit_trail().record(
+                direction=FilterDirection.INPUT,
+                action=FilterAction.BLOCKED,
+                match=FilterMatch(matched=True),
+            )
+            return False
+
+        # ── 0b. Custom rules + banned topics ──
+        from sovyx.cognitive.custom_rules import check_banned_topics, check_custom_rules
+
+        custom_match = check_custom_rules(perception.content, self._safety)
+        if custom_match.matched and custom_match.action == "block":
+            logger.warning(
+                "perception_filtered_custom_rule",
+                perception_id=perception.id,
+                rule=custom_match.rule_name,
+            )
+            m.safety_blocks.add(1, {"reason": "custom_rule"})
+            get_audit_trail().record(
+                direction=FilterDirection.INPUT,
+                action=FilterAction.BLOCKED,
+                match=FilterMatch(matched=True),
+            )
+            return False
+
+        topic_match = check_banned_topics(perception.content, self._safety)
+        if topic_match.matched:
+            logger.warning(
+                "perception_filtered_banned_topic",
+                perception_id=perception.id,
+                topic=topic_match.rule_name,
+            )
+            m.safety_blocks.add(1, {"reason": "banned_topic"})
             get_audit_trail().record(
                 direction=FilterDirection.INPUT,
                 action=FilterAction.BLOCKED,
