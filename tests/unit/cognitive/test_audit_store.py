@@ -175,14 +175,14 @@ class TestErrorPaths:
 class TestSingleton:
     """Test get_audit_store."""
 
-    def test_get_audit_store(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        import sovyx.cognitive.audit_store as mod
+    def test_get_audit_store(self, tmp_path: Path) -> None:
+        from sovyx.cognitive.safety_container import get_safety_container, reset_safety_container
 
-        monkeypatch.setattr(mod, "_store", None)
-        store = mod.get_audit_store(db_path=str(tmp_path / "singleton.db"))
+        reset_safety_container()
+        store = get_safety_container().audit_store
         assert isinstance(store, AuditStore)
         # Cleanup
-        monkeypatch.setattr(mod, "_store", None)
+        reset_safety_container()
 
     def test_count_error_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Force sqlite error in count."""

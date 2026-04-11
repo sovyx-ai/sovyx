@@ -1094,17 +1094,18 @@ class TestBudgetIntegration:
         get_classification_cache().clear()
 
     async def test_budget_exceeded_returns_safe(self) -> None:
-        import sovyx.cognitive.safety_classifier as mod
         from sovyx.cognitive.safety_classifier import ClassificationBudget
+        from sovyx.cognitive.safety_container import get_safety_container
 
-        old = mod._budget
-        mod._budget = ClassificationBudget(hourly_cap=0)
-        mod._budget.set_cap(1)
-        mod._budget.record_call()  # Exhaust budget
+        container = get_safety_container()
+        old = container.classification_budget
+        container.classification_budget = ClassificationBudget(hourly_cap=0)
+        container.classification_budget.set_cap(1)
+        container.classification_budget.record_call()  # Exhaust budget
 
         router = _make_mock_router(response_content="UNSAFE|violence")
         verdict = await classify_content("dangerous text", router)
         assert verdict.safe  # Falls back to safe (budget exceeded)
         router.generate.assert_not_called()
 
-        mod._budget = old
+        container.classification_budget = old

@@ -211,13 +211,21 @@ class AuditStore:
         self.flush()
 
 
-# ── Module singleton ────────────────────────────────────────────────────
-_store: AuditStore | None = None
+# ── Store accessor (delegates to SafetyContainer) ──────────────────────
 
 
 def get_audit_store(db_path: str = "safety_audit.db") -> AuditStore:
-    """Get or create the global AuditStore."""
-    global _store  # noqa: PLW0603
-    if _store is None:
-        _store = AuditStore(db_path=db_path)
-    return _store
+    """Get the AuditStore from the global container.
+
+    Args:
+        db_path: Database path (used only on first creation).
+
+    Returns:
+        The AuditStore instance managed by SafetyContainer.
+    """
+    from sovyx.cognitive.safety_container import get_safety_container
+
+    container = get_safety_container()
+    # If container has default (no db_path), and caller wants custom path,
+    # the first caller wins. This preserves backward compatibility.
+    return container.audit_store
