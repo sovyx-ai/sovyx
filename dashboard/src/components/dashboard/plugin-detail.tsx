@@ -1,10 +1,10 @@
 /**
  * Plugin detail panel — slide-over Sheet with full plugin info.
  *
- * Sections: header, tools, permissions, health, events, dependencies, manifest.
- * Actions: enable/disable toggle, reload button.
+ * Redesigned with proper spacing, visual hierarchy, and professional UX.
+ * Sections: header, description, tools, permissions, health, events, deps, manifest.
  *
- * TASK-457
+ * TASK-457 (redesign)
  */
 
 import { useEffect, useState } from "react";
@@ -21,6 +21,9 @@ import {
   FileTextIcon,
   LinkIcon,
   RadioIcon,
+  CheckCircle2Icon,
+  AlertTriangleIcon,
+  XCircleIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDashboardStore } from "@/stores/dashboard";
@@ -42,6 +45,29 @@ import { PermissionBadge, PluginToolBadge, PricingBadge } from "./plugin-badges"
 import { PermissionDialog } from "./permission-dialog";
 import type { PluginDetail as PluginDetailType, PluginToolDetail } from "@/types/api";
 
+// ── Status Config ──
+
+const STATUS_CONFIG = {
+  active: {
+    icon: CheckCircle2Icon,
+    color: "text-[var(--svx-color-success)]",
+    bg: "bg-[var(--svx-color-success)]/10",
+    dot: "bg-[var(--svx-color-success)]",
+  },
+  disabled: {
+    icon: PowerIcon,
+    color: "text-[var(--svx-color-text-disabled)]",
+    bg: "bg-[var(--svx-color-text-disabled)]/10",
+    dot: "bg-[var(--svx-color-text-disabled)]",
+  },
+  error: {
+    icon: XCircleIcon,
+    color: "text-[var(--svx-color-error)]",
+    bg: "bg-[var(--svx-color-error)]/10",
+    dot: "bg-[var(--svx-color-error)]",
+  },
+} as const;
+
 // ── Collapsible Section ──
 
 function Section({
@@ -60,32 +86,45 @@ function Section({
   const [open, setOpen] = useState(defaultOpen);
 
   return (
-    <div className="border-t border-[var(--svx-color-border-default)] pt-3">
+    <div className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)]">
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="flex w-full items-center gap-2 text-left text-xs font-semibold uppercase tracking-wider text-[var(--svx-color-text-secondary)] hover:text-[var(--svx-color-text-primary)] transition-colors"
+        className="flex w-full items-center gap-2.5 px-4 py-3.5 text-left transition-colors hover:bg-[var(--svx-color-bg-elevated)]/50 rounded-[var(--svx-radius-lg)]"
       >
-        <Icon className="size-3.5" />
-        <span>{title}</span>
+        <div className="flex size-7 items-center justify-center rounded-[var(--svx-radius-md)] bg-[var(--svx-color-bg-elevated)]">
+          <Icon className="size-3.5 text-[var(--svx-color-text-secondary)]" />
+        </div>
+        <span className="text-xs font-semibold uppercase tracking-wider text-[var(--svx-color-text-secondary)]">
+          {title}
+        </span>
         {count !== undefined && (
-          <span className="ml-1 text-[10px] font-normal text-[var(--svx-color-text-tertiary)]">
-            ({count})
+          <span className="rounded-full bg-[var(--svx-color-bg-elevated)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--svx-color-text-tertiary)]">
+            {count}
           </span>
         )}
         <ChevronDownIcon
           className={cn(
-            "ml-auto size-3.5 transition-transform",
+            "ml-auto size-4 text-[var(--svx-color-text-tertiary)] transition-transform duration-200",
             open && "rotate-180",
           )}
         />
       </button>
-      {open && <div className="mt-2">{children}</div>}
+      <div
+        className={cn(
+          "grid transition-all duration-200 ease-in-out",
+          open ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+        )}
+      >
+        <div className="overflow-hidden">
+          <div className="px-4 pb-4 pt-0.5">{children}</div>
+        </div>
+      </div>
     </div>
   );
 }
 
-// ── Tool Item (expandable schema) ──
+// ── Tool Item ──
 
 function ToolItem({ tool }: { tool: PluginToolDetail }) {
   const { t } = useTranslation("plugins");
@@ -94,42 +133,51 @@ function ToolItem({ tool }: { tool: PluginToolDetail }) {
     tool.parameters && Object.keys(tool.parameters).length > 0;
 
   return (
-    <div className="rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] p-2">
+    <div className="rounded-[var(--svx-radius-md)] bg-[var(--svx-color-bg-elevated)]/60 transition-colors hover:bg-[var(--svx-color-bg-elevated)]">
       <button
         type="button"
         onClick={() => hasParams && setExpanded(!expanded)}
         className={cn(
-          "flex w-full items-center gap-2 text-left",
+          "flex w-full items-center gap-3 p-3 text-left",
           hasParams && "cursor-pointer",
         )}
       >
-        <span className="text-xs font-medium text-[var(--svx-color-text-primary)]">
-          {tool.name}
-        </span>
-        {tool.requires_confirmation && (
-          <span
-            className="text-[9px] text-[var(--svx-color-warning)]"
-            title={t("detail.requiresConfirmation")}
-          >
-            ⚠️
-          </span>
-        )}
+        <div className="flex size-8 shrink-0 items-center justify-center rounded-[var(--svx-radius-md)] bg-[var(--svx-color-brand-primary)]/10">
+          <WrenchIcon className="size-3.5 text-[var(--svx-color-brand-primary)]" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-[var(--svx-color-text-primary)]">
+              {tool.name}
+            </span>
+            {tool.requires_confirmation && (
+              <span
+                className="text-xs text-[var(--svx-color-warning)]"
+                title={t("detail.requiresConfirmation")}
+              >
+                ⚠️
+              </span>
+            )}
+          </div>
+          <p className="mt-0.5 text-xs leading-relaxed text-[var(--svx-color-text-tertiary)]">
+            {tool.description}
+          </p>
+        </div>
         {hasParams && (
           <ChevronDownIcon
             className={cn(
-              "ml-auto size-3 text-[var(--svx-color-text-tertiary)] transition-transform",
+              "size-4 shrink-0 text-[var(--svx-color-text-tertiary)] transition-transform duration-200",
               expanded && "rotate-180",
             )}
           />
         )}
       </button>
-      <p className="mt-0.5 text-[10px] text-[var(--svx-color-text-tertiary)]">
-        {tool.description}
-      </p>
       {expanded && hasParams && (
-        <pre className="mt-2 max-h-32 overflow-auto rounded bg-[var(--svx-color-bg-elevated)] p-2 text-[10px] text-[var(--svx-color-text-secondary)]">
-          {JSON.stringify(tool.parameters, null, 2)}
-        </pre>
+        <div className="border-t border-[var(--svx-color-border-default)] px-3 pb-3 pt-2">
+          <pre className="max-h-40 overflow-auto rounded-[var(--svx-radius-md)] bg-[var(--svx-color-bg-base)] p-3 text-xs leading-relaxed text-[var(--svx-color-text-secondary)] font-mono">
+            {JSON.stringify(tool.parameters, null, 2)}
+          </pre>
+        </div>
       )}
     </div>
   );
@@ -155,16 +203,18 @@ function HealthBar({
         : "bg-[var(--svx-color-error)]";
 
   return (
-    <div className="space-y-1">
-      <div className="flex justify-between text-[10px] text-[var(--svx-color-text-secondary)]">
-        <span>{label}</span>
-        <span>
+    <div className="space-y-2">
+      <div className="flex justify-between text-xs">
+        <span className="font-medium text-[var(--svx-color-text-secondary)]">
+          {label}
+        </span>
+        <span className="tabular-nums text-[var(--svx-color-text-primary)]">
           {value}/{max}
         </span>
       </div>
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--svx-color-bg-elevated)]">
+      <div className="h-2 w-full overflow-hidden rounded-full bg-[var(--svx-color-bg-elevated)]">
         <div
-          className={cn("h-full rounded-full transition-all", color)}
+          className={cn("h-full rounded-full transition-all duration-500", color)}
           style={{ width: `${pct}%` }}
         />
       </div>
@@ -250,95 +300,90 @@ export function PluginDetailPanel({
   };
 
   const manifest = detail?.manifest && "name" in detail.manifest ? detail.manifest : null;
+  const statusCfg = detail ? STATUS_CONFIG[detail.status as keyof typeof STATUS_CONFIG] ?? STATUS_CONFIG.disabled : STATUS_CONFIG.disabled;
 
   return (
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
       <SheetContent
         side="right"
-        className="w-full overflow-y-auto sm:max-w-md"
+        className="w-full overflow-y-auto sm:max-w-md bg-[var(--svx-color-bg-base)]"
       >
         {loading && !detail ? (
           <div className="flex h-full items-center justify-center">
-            <RefreshCwIcon className="size-5 animate-spin text-[var(--svx-color-text-tertiary)]" />
+            <RefreshCwIcon className="size-6 animate-spin text-[var(--svx-color-text-tertiary)]" />
           </div>
         ) : detail ? (
-          <div className="flex flex-col gap-4 pb-8">
+          <div className="flex flex-col gap-6 pb-10">
             {/* ── Header ── */}
-            <SheetHeader className="space-y-3">
-              <div className="flex items-start gap-3">
+            <SheetHeader className="space-y-5">
+              {/* Identity */}
+              <div className="flex items-start gap-4">
                 <div
-                  className="flex size-12 items-center justify-center rounded-[var(--svx-radius-lg)] text-lg font-bold text-white"
+                  className="flex size-14 shrink-0 items-center justify-center rounded-2xl text-xl font-bold text-white shadow-lg"
                   style={{
                     background: `linear-gradient(135deg, hsl(${nameToHue(detail.name)}, 70%, 50%), hsl(${(nameToHue(detail.name) + 40) % 360}, 70%, 40%))`,
                   }}
                 >
                   {detail.name.charAt(0).toUpperCase()}
                 </div>
-                <div className="min-w-0 flex-1">
-                  <SheetTitle className="text-lg">
+                <div className="min-w-0 flex-1 pt-0.5">
+                  <SheetTitle className="text-xl font-bold">
                     {detail.name}
                   </SheetTitle>
-                  <SheetDescription className="mt-0.5">
+                  <SheetDescription className="mt-1 text-sm">
                     v{detail.version}
-                    {manifest?.author && ` · ${manifest.author}`}
+                    {manifest?.author && (
+                      <span className="text-[var(--svx-color-text-tertiary)]">
+                        {" "}· {manifest.author}
+                      </span>
+                    )}
                   </SheetDescription>
                 </div>
               </div>
 
-              {/* Status + Actions */}
-              <div className="flex items-center gap-2">
-                <span
-                  className={cn(
-                    "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium",
-                    detail.status === "active" &&
-                      "bg-[var(--svx-color-success)]/10 text-[var(--svx-color-success)]",
-                    detail.status === "disabled" &&
-                      "bg-[var(--svx-color-text-disabled)]/10 text-[var(--svx-color-text-disabled)]",
-                    detail.status === "error" &&
-                      "bg-[var(--svx-color-error)]/10 text-[var(--svx-color-error)]",
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "size-1.5 rounded-full",
-                      detail.status === "active" && "bg-[var(--svx-color-success)]",
-                      detail.status === "disabled" && "bg-[var(--svx-color-text-disabled)]",
-                      detail.status === "error" && "bg-[var(--svx-color-error)]",
-                    )}
-                  />
-                  {t(`status.${detail.status}`)}
-                </span>
+              {/* Status + Actions Row */}
+              <div className="flex items-center gap-3 rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] px-4 py-3">
+                {/* Status */}
+                <div className={cn("flex items-center gap-2", statusCfg.color)}>
+                  <span className={cn("size-2 rounded-full", statusCfg.dot)} />
+                  <span className="text-sm font-medium">
+                    {t(`status.${detail.status}`)}
+                  </span>
+                </div>
 
                 {manifest?.pricing && (
                   <PricingBadge pricing={manifest.pricing} />
                 )}
 
-                <div className="ml-auto flex gap-1">
+                {/* Actions — pushed right */}
+                <div className="ml-auto flex items-center gap-2">
                   {detail.status === "disabled" ? (
                     <button
                       type="button"
                       onClick={() => handleAction("enable")}
                       disabled={actionLoading !== null}
-                      className="rounded-[var(--svx-radius-md)] bg-[var(--svx-color-success)] px-3 py-1 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
+                      className="flex items-center gap-1.5 rounded-[var(--svx-radius-md)] bg-[var(--svx-color-success)] px-3.5 py-2 text-xs font-medium text-white shadow-sm transition-all hover:opacity-90 hover:shadow-md disabled:opacity-50"
                     >
                       {actionLoading === "enable" ? (
-                        <RefreshCwIcon className="size-3 animate-spin" />
+                        <RefreshCwIcon className="size-3.5 animate-spin" />
                       ) : (
-                        <PowerIcon className="size-3" />
+                        <PowerIcon className="size-3.5" />
                       )}
+                      <span>{t("actions.enable")}</span>
                     </button>
                   ) : (
                     <button
                       type="button"
                       onClick={() => handleAction("disable")}
                       disabled={actionLoading !== null}
-                      className="rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] px-3 py-1 text-xs text-[var(--svx-color-text-secondary)] hover:bg-[var(--svx-color-bg-elevated)] disabled:opacity-50"
+                      className="flex items-center gap-1.5 rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-elevated)] px-3.5 py-2 text-xs font-medium text-[var(--svx-color-text-secondary)] shadow-sm transition-all hover:border-[var(--svx-color-warning)]/40 hover:text-[var(--svx-color-warning)] disabled:opacity-50"
                     >
                       {actionLoading === "disable" ? (
-                        <RefreshCwIcon className="size-3 animate-spin" />
+                        <RefreshCwIcon className="size-3.5 animate-spin" />
                       ) : (
-                        <PowerIcon className="size-3" />
+                        <PowerIcon className="size-3.5" />
                       )}
+                      <span>{t("actions.disable")}</span>
                     </button>
                   )}
                   <button
@@ -346,11 +391,11 @@ export function PluginDetailPanel({
                     onClick={() => handleAction("reload")}
                     disabled={actionLoading !== null}
                     title={t("actions.reload")}
-                    className="rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] px-2 py-1 text-xs text-[var(--svx-color-text-secondary)] hover:bg-[var(--svx-color-bg-elevated)] disabled:opacity-50"
+                    className="flex items-center justify-center rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-elevated)] p-2 text-[var(--svx-color-text-secondary)] shadow-sm transition-all hover:bg-[var(--svx-color-bg-surface)] disabled:opacity-50"
                   >
                     <RefreshCwIcon
                       className={cn(
-                        "size-3",
+                        "size-3.5",
                         actionLoading === "reload" && "animate-spin",
                       )}
                     />
@@ -364,22 +409,23 @@ export function PluginDetailPanel({
                   href={manifest.homepage}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 text-xs text-[var(--svx-color-brand-primary)] hover:underline"
+                  className="inline-flex items-center gap-1.5 text-sm text-[var(--svx-color-brand-primary)] hover:underline"
                 >
-                  <ExternalLinkIcon className="size-3" />
+                  <ExternalLinkIcon className="size-3.5" />
                   {t("detail.homepage")}
                 </a>
               )}
 
-              {/* Inline action error */}
+              {/* Action error */}
               {actionError && (
-                <div className="rounded-[var(--svx-radius-md)] bg-[var(--svx-color-error)]/10 px-3 py-2 text-xs text-[var(--svx-color-error)]">
+                <div className="flex items-center gap-2 rounded-[var(--svx-radius-md)] bg-[var(--svx-color-error)]/10 px-4 py-3 text-sm text-[var(--svx-color-error)]">
+                  <AlertTriangleIcon className="size-4 shrink-0" />
                   {actionError}
                 </div>
               )}
 
               {/* Description */}
-              <p className="text-sm text-[var(--svx-color-text-secondary)]">
+              <p className="text-sm leading-relaxed text-[var(--svx-color-text-secondary)]">
                 {detail.description}
               </p>
             </SheetHeader>
@@ -391,13 +437,13 @@ export function PluginDetailPanel({
               count={detail.tools.length}
             >
               {detail.tools.length > 0 ? (
-                <div className="space-y-1.5">
+                <div className="space-y-2">
                   {detail.tools.map((tool) => (
                     <ToolItem key={tool.name} tool={tool} />
                   ))}
                 </div>
               ) : (
-                <p className="text-xs text-[var(--svx-color-text-tertiary)]">
+                <p className="py-2 text-sm text-[var(--svx-color-text-tertiary)]">
                   {t("detail.noTools")}
                 </p>
               )}
@@ -410,8 +456,8 @@ export function PluginDetailPanel({
               count={detail.permissions.length}
             >
               {detail.permissions.length > 0 ? (
-                <div className="space-y-2">
-                  <div className="flex flex-wrap gap-1.5">
+                <div className="space-y-3">
+                  <div className="flex flex-wrap gap-2">
                     {detail.permissions.map((p) => (
                       <PermissionBadge
                         key={p.permission}
@@ -424,40 +470,43 @@ export function PluginDetailPanel({
                   <button
                     type="button"
                     onClick={() => setPermDialogOpen(true)}
-                    className="text-[10px] font-medium text-[var(--svx-color-brand-primary)] hover:underline"
+                    className="text-xs font-medium text-[var(--svx-color-brand-primary)] hover:underline"
                   >
                     {t("detail.viewAudit")} →
                   </button>
                 </div>
               ) : (
-                <p className="text-xs text-[var(--svx-color-text-tertiary)]">
-                  {t("detail.noPermissions")}
-                </p>
+                <div className="flex items-center gap-2 py-2">
+                  <CheckCircle2Icon className="size-4 text-[var(--svx-color-success)]" />
+                  <p className="text-sm text-[var(--svx-color-text-tertiary)]">
+                    {t("detail.noPermissions")}
+                  </p>
+                </div>
               )}
             </Section>
 
             {/* ── Health ── */}
             <Section title={t("detail.health")} icon={HeartPulseIcon}>
-              <div className="space-y-3">
+              <div className="space-y-4">
                 <HealthBar
                   value={detail.health.consecutive_failures}
                   max={5}
                   label={t("health.failures")}
                 />
-                <div className="flex justify-between text-[10px]">
-                  <span className="text-[var(--svx-color-text-secondary)]">
+                <div className="flex items-center justify-between rounded-[var(--svx-radius-md)] bg-[var(--svx-color-bg-elevated)]/60 px-3 py-2.5">
+                  <span className="text-xs font-medium text-[var(--svx-color-text-secondary)]">
                     {t("health.activeTasks")}
                   </span>
-                  <span className="text-[var(--svx-color-text-primary)]">
+                  <span className="text-sm font-semibold tabular-nums text-[var(--svx-color-text-primary)]">
                     {detail.health.active_tasks}
                   </span>
                 </div>
                 {detail.health.last_error && (
-                  <div className="rounded-[var(--svx-radius-md)] bg-[var(--svx-color-error)]/5 p-2">
-                    <p className="text-[10px] font-medium text-[var(--svx-color-error)]">
+                  <div className="rounded-[var(--svx-radius-md)] border border-[var(--svx-color-error)]/20 bg-[var(--svx-color-error)]/5 p-3">
+                    <p className="text-xs font-medium text-[var(--svx-color-error)]">
                       {t("health.lastError")}
                     </p>
-                    <p className="mt-0.5 text-[10px] text-[var(--svx-color-text-secondary)]">
+                    <p className="mt-1 text-xs leading-relaxed text-[var(--svx-color-text-secondary)]">
                       {detail.health.last_error}
                     </p>
                   </div>
@@ -465,7 +514,7 @@ export function PluginDetailPanel({
               </div>
             </Section>
 
-            {/* ── Events (from manifest) ── */}
+            {/* ── Events ── */}
             {manifest && (
               <Section
                 title={t("detail.events")}
@@ -478,13 +527,13 @@ export function PluginDetailPanel({
               >
                 {(manifest.events?.emits?.length ?? 0) > 0 ||
                 (manifest.events?.subscribes?.length ?? 0) > 0 ? (
-                  <div className="space-y-2">
+                  <div className="space-y-4">
                     {manifest.events.emits.length > 0 && (
                       <div>
-                        <p className="text-[10px] font-medium text-[var(--svx-color-text-secondary)]">
+                        <p className="mb-2 text-xs font-semibold text-[var(--svx-color-text-secondary)]">
                           {t("detail.emits")}
                         </p>
-                        <div className="mt-1 flex flex-wrap gap-1">
+                        <div className="flex flex-wrap gap-2">
                           {manifest.events.emits.map((e) => (
                             <PluginToolBadge
                               key={e.name}
@@ -497,10 +546,10 @@ export function PluginDetailPanel({
                     )}
                     {manifest.events.subscribes.length > 0 && (
                       <div>
-                        <p className="text-[10px] font-medium text-[var(--svx-color-text-secondary)]">
+                        <p className="mb-2 text-xs font-semibold text-[var(--svx-color-text-secondary)]">
                           {t("detail.subscribes")}
                         </p>
-                        <div className="mt-1 flex flex-wrap gap-1">
+                        <div className="flex flex-wrap gap-2">
                           {manifest.events.subscribes.map((s) => (
                             <PluginToolBadge key={s} name={s} />
                           ))}
@@ -509,14 +558,14 @@ export function PluginDetailPanel({
                     )}
                   </div>
                 ) : (
-                  <p className="text-xs text-[var(--svx-color-text-tertiary)]">
+                  <p className="py-2 text-sm text-[var(--svx-color-text-tertiary)]">
                     {t("detail.noEvents")}
                   </p>
                 )}
               </Section>
             )}
 
-            {/* ── Dependencies (from manifest) ── */}
+            {/* ── Dependencies ── */}
             {manifest && (
               <Section
                 title={t("detail.dependencies")}
@@ -529,14 +578,16 @@ export function PluginDetailPanel({
               >
                 {(manifest.depends?.length ?? 0) > 0 ||
                 (manifest.optional_depends?.length ?? 0) > 0 ? (
-                  <div className="space-y-1">
+                  <div className="space-y-2">
                     {manifest.depends.map((d) => (
                       <div
                         key={d.name}
-                        className="flex items-center gap-2 text-xs text-[var(--svx-color-text-secondary)]"
+                        className="flex items-center gap-3 rounded-[var(--svx-radius-md)] bg-[var(--svx-color-bg-elevated)]/60 px-3 py-2"
                       >
-                        <span className="font-medium">{d.name}</span>
-                        <span className="text-[10px] text-[var(--svx-color-text-tertiary)]">
+                        <span className="text-sm font-medium text-[var(--svx-color-text-primary)]">
+                          {d.name}
+                        </span>
+                        <span className="text-xs text-[var(--svx-color-text-tertiary)]">
                           {d.version}
                         </span>
                       </div>
@@ -544,16 +595,22 @@ export function PluginDetailPanel({
                     {manifest.optional_depends.map((d) => (
                       <div
                         key={d.name}
-                        className="flex items-center gap-2 text-xs text-[var(--svx-color-text-tertiary)]"
+                        className="flex items-center gap-3 rounded-[var(--svx-radius-md)] bg-[var(--svx-color-bg-elevated)]/40 px-3 py-2"
                       >
-                        <span className="font-medium italic">{d.name}</span>
-                        <span className="text-[10px]">{d.version}</span>
-                        <span className="text-[9px]">({t("detail.optional")})</span>
+                        <span className="text-sm font-medium italic text-[var(--svx-color-text-secondary)]">
+                          {d.name}
+                        </span>
+                        <span className="text-xs text-[var(--svx-color-text-tertiary)]">
+                          {d.version}
+                        </span>
+                        <span className="ml-auto rounded-full bg-[var(--svx-color-bg-elevated)] px-2 py-0.5 text-[10px] text-[var(--svx-color-text-tertiary)]">
+                          {t("detail.optional")}
+                        </span>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <p className="text-xs text-[var(--svx-color-text-tertiary)]">
+                  <p className="py-2 text-sm text-[var(--svx-color-text-tertiary)]">
                     {t("detail.noDependencies")}
                   </p>
                 )}
@@ -567,7 +624,7 @@ export function PluginDetailPanel({
                 icon={FileTextIcon}
                 defaultOpen={false}
               >
-                <pre className="max-h-48 overflow-auto rounded-[var(--svx-radius-md)] bg-[var(--svx-color-bg-elevated)] p-3 text-[10px] leading-relaxed text-[var(--svx-color-text-secondary)]">
+                <pre className="max-h-56 overflow-auto rounded-[var(--svx-radius-lg)] bg-[var(--svx-color-bg-elevated)] p-4 text-xs leading-relaxed text-[var(--svx-color-text-secondary)] font-mono">
                   {JSON.stringify(manifest, null, 2)}
                 </pre>
               </Section>
@@ -592,15 +649,15 @@ export function PluginDetailPanel({
             <DialogDescription>
               {t(`actions.${confirmAction}ConfirmDesc`)}
             </DialogDescription>
-            <div className="flex justify-end gap-2 pt-2">
-              <DialogClose className="rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] px-4 py-1.5 text-xs text-[var(--svx-color-text-secondary)] hover:bg-[var(--svx-color-bg-elevated)]">
+            <div className="flex justify-end gap-2 pt-4">
+              <DialogClose className="rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] px-4 py-2 text-sm text-[var(--svx-color-text-secondary)] hover:bg-[var(--svx-color-bg-elevated)]">
                 {t("actions.close")}
               </DialogClose>
               <button
                 type="button"
                 onClick={onConfirm}
                 className={cn(
-                  "rounded-[var(--svx-radius-md)] px-4 py-1.5 text-xs font-medium text-white hover:opacity-90",
+                  "rounded-[var(--svx-radius-md)] px-4 py-2 text-sm font-medium text-white hover:opacity-90 shadow-sm",
                   confirmAction === "disable"
                     ? "bg-[var(--svx-color-warning)]"
                     : "bg-[var(--svx-color-brand-primary)]",
@@ -630,7 +687,7 @@ export function PluginDetailPanel({
   );
 }
 
-// ── Helper (duplicated from plugin-card to avoid cross-import) ──
+// ── Helper ──
 
 function nameToHue(name: string): number {
   let hash = 0;
