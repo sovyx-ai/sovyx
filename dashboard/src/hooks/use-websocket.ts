@@ -233,6 +233,14 @@ export function useWebSocket(): void {
           case "ChannelDisconnected":
             debouncedRefreshStatus();
             break;
+
+          case "PluginStateChanged":
+          case "PluginAutoDisabled":
+          case "PluginToolExecuted":
+            useDashboardStore
+              .getState()
+              .handlePluginEvent(event.type, event.data as import("@/types/api").PluginStateChangedEvent);
+            break;
         }
       } catch {
         // Ignore malformed messages

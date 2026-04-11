@@ -183,7 +183,10 @@ export type WsEventType =
   | "ConsolidationCompleted"
   | "ChannelConnected"
   | "ChannelDisconnected"
-  | "ChatMessage";
+  | "ChatMessage"
+  | "PluginStateChanged"
+  | "PluginToolExecuted"
+  | "PluginAutoDisabled";
 
 export interface WsEvent<T = Record<string, unknown>> {
   type: WsEventType;
@@ -388,4 +391,131 @@ export interface MindConfigUpdateResponse {
   ok: boolean;
   changes: Record<string, string>;
   error?: string;
+}
+
+// ── Plugins ──
+
+/** Permission risk level — from sovyx.plugins.permissions */
+export type PermissionRisk = "low" | "medium" | "high";
+
+/** Plugin status states */
+export type PluginStatus = "active" | "disabled" | "error";
+
+/** Permission info with risk and description */
+export interface PluginPermission {
+  permission: string;
+  risk: PermissionRisk;
+  description: string;
+}
+
+/** Plugin health — from PluginManager.get_plugin_health() */
+export interface PluginHealth {
+  consecutive_failures: number;
+  disabled: boolean;
+  last_error: string;
+  active_tasks: number;
+}
+
+/** Plugin tool in list view */
+export interface PluginToolSummary {
+  name: string;
+  description: string;
+}
+
+/** Plugin tool in detail view (includes schema) */
+export interface PluginToolDetail extends PluginToolSummary {
+  parameters: Record<string, unknown>;
+  requires_confirmation: boolean;
+  timeout_seconds: number;
+}
+
+/** Plugin info — from GET /api/plugins list */
+export interface PluginInfo {
+  name: string;
+  version: string;
+  description: string;
+  status: PluginStatus;
+  tools_count: number;
+  tools: PluginToolSummary[];
+  permissions: PluginPermission[];
+  health: PluginHealth;
+  category: string;
+  tags: string[];
+  icon_url: string;
+  pricing: string;
+}
+
+/** Plugin manifest — serialized from backend */
+export interface PluginManifestData {
+  name: string;
+  version: string;
+  description: string;
+  author: string;
+  license: string;
+  homepage: string;
+  min_sovyx_version: string;
+  permissions: string[];
+  network: { allowed_domains: string[] };
+  depends: Array<{ name: string; version: string }>;
+  optional_depends: Array<{ name: string; version: string }>;
+  events: {
+    emits: Array<{ name: string; description: string }>;
+    subscribes: string[];
+  };
+  tools: Array<{ name: string; description: string }>;
+  config_schema: Record<string, unknown>;
+  category: string;
+  tags: string[];
+  icon_url: string;
+  screenshots: string[];
+  pricing: string;
+  price_usd: number | null;
+  trial_days: number;
+}
+
+/** Plugin detail — from GET /api/plugins/:name */
+export interface PluginDetail {
+  name: string;
+  version: string;
+  description: string;
+  status: PluginStatus;
+  tools: PluginToolDetail[];
+  permissions: PluginPermission[];
+  health: PluginHealth;
+  manifest: PluginManifestData | Record<string, never>;
+}
+
+/** GET /api/plugins response */
+export interface PluginsResponse {
+  available: boolean;
+  plugins: PluginInfo[];
+  total: number;
+  active: number;
+  disabled: number;
+  error: number;
+  total_tools: number;
+}
+
+/** GET /api/plugins/tools response */
+export interface PluginToolsResponse {
+  tools: Array<{
+    plugin: string;
+    name: string;
+    description: string;
+  }>;
+}
+
+/** POST /api/plugins/:name/enable|disable|reload response */
+export interface PluginActionResponse {
+  ok: boolean;
+  plugin: string;
+  status: string;
+  error?: string;
+}
+
+/** WebSocket plugin events */
+export interface PluginStateChangedEvent {
+  plugin_name: string;
+  from_state: string;
+  to_state: string;
 }
