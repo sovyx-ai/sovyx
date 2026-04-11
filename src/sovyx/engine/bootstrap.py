@@ -353,7 +353,7 @@ async def bootstrap(
                 brain=brain_service,
                 event_bus=event_bus,
                 data_dir=engine_config.data_dir / "plugins",
-                enabled=plugins_cfg.get_effective_enabled() or None,
+                enabled=plugins_cfg.get_effective_enabled(),
                 disabled=plugins_cfg.get_effective_disabled(),
                 plugin_config=plugins_cfg.get_all_plugin_configs(),
                 granted_permissions=plugins_cfg.get_all_granted_permissions(),

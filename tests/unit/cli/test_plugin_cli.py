@@ -614,7 +614,7 @@ class TestPluginCreate:
         """pyproject.toml has entry_points for auto-discovery."""
         runner.invoke(plugin_app, ["create", "my-tool", "-o", str(tmp_path)])
         content = (tmp_path / "my-tool" / "pyproject.toml").read_text()
-        assert "sovyx_plugins" in content
+        assert "sovyx.plugins" in content
         assert "my-tool" in content
         assert "MyToolPlugin" in content
 

@@ -64,6 +64,27 @@ def safe_parse_json(resp: httpx.Response, provider: str) -> dict[str, Any]:
     return result
 
 
+def _sanitize_tool_name(name: str) -> str:
+    """Sanitize tool name for LLM providers.
+
+    OpenAI requires ``^[a-zA-Z0-9_-]+$`` (no dots).
+    We use dots internally for namespacing (plugin.tool) but
+    convert to double-underscores for the LLM API to avoid
+    ambiguity on reverse mapping.
+
+    ``calculator.calculate`` → ``calculator__calculate``
+    """
+    return name.replace(".", "__")
+
+
+def _unsanitize_tool_name(name: str) -> str:
+    """Reverse tool name sanitization.
+
+    ``calculator__calculate`` → ``calculator.calculate``
+    """
+    return name.replace("__", ".")
+
+
 def format_tools_openai(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Convert Sovyx tool definitions to OpenAI function-calling format.
 
@@ -78,7 +99,7 @@ def format_tools_openai(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
             {
                 "type": "function",
                 "function": {
-                    "name": tool.get("name", ""),
+                    "name": _sanitize_tool_name(tool.get("name", "")),
                     "description": tool.get("description", ""),
                     "parameters": tool.get("parameters", {}),
                 },
@@ -97,7 +118,7 @@ def format_tools_anthropic(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for tool in tools:
         formatted.append(
             {
-                "name": tool.get("name", ""),
+                "name": _sanitize_tool_name(tool.get("name", "")),
                 "description": tool.get("description", ""),
                 "input_schema": tool.get("parameters", {}),
             }
@@ -115,7 +136,7 @@ def format_tools_google(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for tool in tools:
         declarations.append(
             {
-                "name": tool.get("name", ""),
+                "name": _sanitize_tool_name(tool.get("name", "")),
                 "description": tool.get("description", ""),
                 "parameters": tool.get("parameters", {}),
             }
@@ -142,7 +163,7 @@ def parse_tool_calls_openai(tool_calls_data: list[dict[str, Any]]) -> list[dict[
         results.append(
             {
                 "id": tc.get("id", ""),
-                "function_name": func.get("name", ""),
+                "function_name": _unsanitize_tool_name(func.get("name", "")),
                 "arguments": arguments if isinstance(arguments, dict) else {},
             }
         )
@@ -161,7 +182,7 @@ def parse_tool_calls_anthropic(content_blocks: list[dict[str, Any]]) -> list[dic
             results.append(
                 {
                     "id": block.get("id", ""),
-                    "function_name": block.get("name", ""),
+                    "function_name": _unsanitize_tool_name(block.get("name", "")),
                     "arguments": block.get("input", {}),
                 }
             )
@@ -181,7 +202,7 @@ def parse_tool_calls_google(parts: list[dict[str, Any]]) -> list[dict[str, Any]]
             results.append(
                 {
                     "id": f"gemini-{i}",
-                    "function_name": fc.get("name", ""),
+                    "function_name": _unsanitize_tool_name(fc.get("name", "")),
                     "arguments": fc.get("args", {}),
                 }
             )

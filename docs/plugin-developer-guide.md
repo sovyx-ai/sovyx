@@ -262,7 +262,7 @@ Requires `pip install watchdog`.
 
 ```toml
 # pyproject.toml
-[project.entry-points.sovyx_plugins]
+[project.entry-points."sovyx.plugins"]
 my-plugin = "my_plugin:MyPlugin"
 ```
 

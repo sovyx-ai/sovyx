@@ -80,7 +80,7 @@ docs = [
 [project.scripts]
 sovyx = "sovyx.cli.main:app"
 
-[project.entry-points.sovyx_plugins]
+[project.entry-points."sovyx.plugins"]
 calculator = "sovyx.plugins.official.calculator:CalculatorPlugin"
 weather = "sovyx.plugins.official.weather:WeatherPlugin"
 knowledge = "sovyx.plugins.official.knowledge:KnowledgePlugin"
