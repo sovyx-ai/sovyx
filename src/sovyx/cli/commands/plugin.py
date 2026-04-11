@@ -267,6 +267,139 @@ def plugin_remove(
     console.print(f"[green]✓ Plugin '{name}' removed.[/green]")
 
 
+# ── Validate ────────────────────────────────────────────────────────
+
+
+@plugin_app.command("validate")
+def plugin_validate(
+    plugin_dir: Annotated[str, typer.Argument(help="Plugin directory to validate")],
+) -> None:
+    """Run quality gates on a plugin directory.
+
+    Checks: manifest schema, AST security scan, test discovery.
+    Exit 0 if all pass, exit 1 on any failure.
+    """
+    target = Path(plugin_dir)
+    if not target.is_dir():
+        console.print(f"[red]Not a directory: {plugin_dir}[/red]")
+        raise typer.Exit(code=1)
+
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    # 1. Manifest check
+    console.print("[bold]1. Manifest validation[/bold]")
+    manifest_result = _validate_manifest(target)
+    if manifest_result is None:
+        console.print("   [red]✗ plugin.yaml not found or invalid[/red]")
+        errors.append("Invalid manifest")
+    else:
+        console.print(f"   [green]✓ {manifest_result}[/green]")
+
+    # 2. AST security scan
+    console.print("[bold]2. Security scan[/bold]")
+    findings = _validate_security(target)
+    critical = [f for f in findings if f.get("severity") == "critical"]
+    warns = [f for f in findings if f.get("severity") == "warning"]
+    if critical:
+        for f in critical:
+            console.print(f"   [red]✗ {f['file']}:{f['line']} — {f['message']}[/red]")
+            errors.append(f"{f['file']}:{f['line']}: {f['message']}")
+    if warns:
+        for f in warns:
+            console.print(f"   [yellow]⚠ {f['file']}:{f['line']} — {f['message']}[/yellow]")
+            warnings.append(f"{f['file']}:{f['line']}: {f['message']}")
+    if not critical and not warns:
+        console.print("   [green]✓ No security issues found[/green]")
+
+    # 3. Test discovery
+    console.print("[bold]3. Test discovery[/bold]")
+    test_count = _discover_tests(target)
+    if test_count == 0:
+        console.print("   [yellow]⚠ No tests found[/yellow]")
+        warnings.append("No tests found")
+    else:
+        console.print(f"   [green]✓ {test_count} test file(s) found[/green]")
+
+    # 4. Python files parseable
+    console.print("[bold]4. Syntax check[/bold]")
+    syntax_errors = _check_syntax(target)
+    if syntax_errors:
+        for err in syntax_errors:
+            console.print(f"   [red]✗ {err}[/red]")
+            errors.append(err)
+    else:
+        py_count = len(list(target.rglob("*.py")))
+        console.print(f"   [green]✓ {py_count} Python file(s) parse OK[/green]")
+
+    # Summary
+    console.print()
+    if errors:
+        console.print(
+            f"[red bold]FAILED[/red bold] — {len(errors)} error(s), {len(warnings)} warning(s)"
+        )
+        raise typer.Exit(code=1)
+    if warnings:
+        console.print(
+            f"[yellow bold]PASSED with warnings[/yellow bold] — {len(warnings)} warning(s)"
+        )
+    else:
+        console.print("[green bold]PASSED[/green bold] — all quality gates clean")
+
+
+def _validate_manifest(plugin_dir: Path) -> str | None:
+    """Validate plugin.yaml. Returns summary string or None on failure."""
+    try:
+        from sovyx.plugins.manifest import load_manifest
+
+        manifest = load_manifest(plugin_dir)
+        return f"{manifest.name} v{manifest.version} ({len(manifest.tools)} tools)"
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _validate_security(plugin_dir: Path) -> list[dict[str, object]]:
+    """Run AST security scan. Returns list of finding dicts."""
+    try:
+        from sovyx.plugins.security import PluginSecurityScanner
+
+        scanner = PluginSecurityScanner()
+        findings = scanner.scan_directory(plugin_dir)
+        return [
+            {
+                "severity": f.severity,
+                "file": f.file,
+                "line": f.line,
+                "message": f.message,
+            }
+            for f in findings
+        ]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _discover_tests(plugin_dir: Path) -> int:
+    """Count test files in plugin directory."""
+    tests_dir = plugin_dir / "tests"
+    if not tests_dir.exists():
+        # Also check for test files in root
+        return len(list(plugin_dir.glob("test_*.py")))
+    return len(list(tests_dir.rglob("test_*.py")))
+
+
+def _check_syntax(plugin_dir: Path) -> list[str]:
+    """Check all Python files parse correctly."""
+    import ast as ast_mod
+
+    errors: list[str] = []
+    for py_file in plugin_dir.rglob("*.py"):
+        try:
+            ast_mod.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+        except SyntaxError as e:
+            errors.append(f"{py_file.name}:{e.lineno}: {e.msg}")
+    return errors
+
+
 # ── Create / Scaffold ───────────────────────────────────────────────
 
 

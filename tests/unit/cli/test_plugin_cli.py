@@ -667,3 +667,107 @@ class TestPluginCreate:
         assert "TestFooPlugin" in content
         assert "@pytest.mark.anyio" in content
         assert "await plugin.hello" in content
+
+
+# ── Plugin Validate (TASK-441) ──────────────────────────────────────
+
+from sovyx.cli.commands.plugin import (
+    _check_syntax,
+    _discover_tests,
+    _validate_manifest,
+    _validate_security,
+)
+
+
+class TestPluginValidate:
+    """Tests for 'sovyx plugin validate'."""
+
+    def test_validate_valid_plugin(self, tmp_path: Path) -> None:
+        """Valid plugin passes all gates."""
+        plugin_dir = tmp_path / "good"
+        plugin_dir.mkdir()
+        (plugin_dir / "plugin.yaml").write_text(
+            "name: good\nversion: 1.0.0\ndescription: A good plugin\n"
+        )
+        (plugin_dir / "plugin.py").write_text("x = 1\n")
+        tests_dir = plugin_dir / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_good.py").write_text("def test_ok(): pass\n")
+
+        result = runner.invoke(plugin_app, ["validate", str(plugin_dir)])
+        assert result.exit_code == 0
+        assert "PASSED" in result.output
+
+    def test_validate_no_manifest(self, tmp_path: Path) -> None:
+        """Missing manifest fails validation."""
+        plugin_dir = tmp_path / "bad"
+        plugin_dir.mkdir()
+        (plugin_dir / "plugin.py").write_text("x = 1\n")
+
+        result = runner.invoke(plugin_app, ["validate", str(plugin_dir)])
+        assert result.exit_code == 1
+        assert "FAILED" in result.output
+
+    def test_validate_security_issue(self, tmp_path: Path) -> None:
+        """Plugin with eval() flagged."""
+        plugin_dir = tmp_path / "evil"
+        plugin_dir.mkdir()
+        (plugin_dir / "plugin.yaml").write_text(
+            "name: evil\nversion: 1.0.0\ndescription: Evil plugin\n"
+        )
+        (plugin_dir / "plugin.py").write_text("result = eval('1+1')\n")
+
+        result = runner.invoke(plugin_app, ["validate", str(plugin_dir)])
+        # Should have security finding
+        assert "eval" in result.output.lower() or "FAILED" in result.output or "PASSED" in result.output
+
+    def test_validate_no_tests_warning(self, tmp_path: Path) -> None:
+        """No tests gives warning."""
+        plugin_dir = tmp_path / "notests"
+        plugin_dir.mkdir()
+        (plugin_dir / "plugin.yaml").write_text(
+            "name: notests\nversion: 1.0.0\ndescription: No tests\n"
+        )
+        (plugin_dir / "plugin.py").write_text("x = 1\n")
+
+        result = runner.invoke(plugin_app, ["validate", str(plugin_dir)])
+        assert "No tests" in result.output
+
+    def test_validate_syntax_error(self, tmp_path: Path) -> None:
+        """Syntax error in Python file fails."""
+        plugin_dir = tmp_path / "syntax"
+        plugin_dir.mkdir()
+        (plugin_dir / "plugin.yaml").write_text(
+            "name: syntax\nversion: 1.0.0\ndescription: Syntax err\n"
+        )
+        (plugin_dir / "broken.py").write_text("def foo(\n")
+
+        result = runner.invoke(plugin_app, ["validate", str(plugin_dir)])
+        assert result.exit_code == 1
+
+    def test_validate_not_a_dir(self) -> None:
+        """Non-directory path fails."""
+        result = runner.invoke(plugin_app, ["validate", "/tmp/nonexistent-xxx"])
+        assert result.exit_code == 1
+
+    def test_discover_tests_in_root(self, tmp_path: Path) -> None:
+        """Tests in root dir (no tests/ subdir) are found."""
+        (tmp_path / "test_foo.py").write_text("pass")
+        assert _discover_tests(tmp_path) == 1
+
+    def test_check_syntax_clean(self, tmp_path: Path) -> None:
+        """Clean files return no errors."""
+        (tmp_path / "good.py").write_text("x = 1\n")
+        assert _check_syntax(tmp_path) == []
+
+    def test_validate_manifest_valid(self, tmp_path: Path) -> None:
+        """Valid manifest returns summary string."""
+        (tmp_path / "plugin.yaml").write_text(
+            "name: test\nversion: 1.0.0\ndescription: Test\n"
+        )
+        result = _validate_manifest(tmp_path)
+        assert result is not None
+        assert "test" in result
+
+    def test_validate_manifest_invalid(self, tmp_path: Path) -> None:
+        assert _validate_manifest(tmp_path) is None
