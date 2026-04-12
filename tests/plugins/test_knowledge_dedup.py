@@ -1124,3 +1124,101 @@ class TestWhatDoYouKnowEnhanced:
         assert data["ok"] is True
         assert data["total_concepts"] == 10
         assert "top_concepts" not in data  # failed silently
+
+
+class TestErrorRecovery:
+    """TASK-482: Error recovery and graceful degradation."""
+
+    @pytest.mark.asyncio
+    async def test_remember_retries_on_timeout(self) -> None:
+        brain = _mock_brain()
+        brain.find_similar = AsyncMock(return_value=[])
+        call_count = 0
+
+        async def learn_side_effect(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise TimeoutError("DB timeout")
+            return "c-retry"
+
+        brain.learn = AsyncMock(side_effect=learn_side_effect)
+        plugin = KnowledgePlugin(brain=brain)
+
+        data = json.loads(await plugin.remember("test retry"))
+        assert data["ok"] is True
+        assert data["action"] == "created"
+        assert call_count == 2  # retried once
+
+    @pytest.mark.asyncio
+    async def test_remember_fails_after_max_retries(self) -> None:
+        brain = _mock_brain()
+        brain.find_similar = AsyncMock(return_value=[])
+        brain.learn = AsyncMock(side_effect=TimeoutError("persistent timeout"))
+        plugin = KnowledgePlugin(brain=brain)
+
+        data = json.loads(await plugin.remember("will fail"))
+        assert data["ok"] is False
+        assert data["action"] == "error"
+        assert "timeout" in data["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_search_returns_error_on_failure(self) -> None:
+        brain = _mock_brain()
+        brain.search = AsyncMock(side_effect=OSError("connection lost"))
+        plugin = KnowledgePlugin(brain=brain)
+
+        data = json.loads(await plugin.search("test"))
+        assert data["ok"] is False
+        assert data["action"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_recall_partial_failure_still_returns(self) -> None:
+        """If episodes fail but concepts succeed, still return concepts."""
+        results = [
+            {
+                "id": "c-1",
+                "name": "topic",
+                "content": "info",
+                "category": "fact",
+                "importance": 0.5,
+                "confidence": 0.5,
+            }
+        ]
+        brain = _mock_brain(search_results=results)
+        brain.search_episodes = AsyncMock(side_effect=Exception("episode DB down"))
+        brain.get_related = AsyncMock(side_effect=Exception("graph down"))
+        plugin = KnowledgePlugin(brain=brain)
+
+        data = json.loads(await plugin.recall_about("topic"))
+        assert data["ok"] is True
+        assert data["count"] == 1  # concepts still returned
+
+    @pytest.mark.asyncio
+    async def test_what_do_you_know_partial_failure(self) -> None:
+        """Stats succeed but top concepts fail — still returns stats."""
+        brain = _mock_brain(
+            stats={
+                "total_concepts": 10,
+                "categories": {"fact": 10},
+                "total_relations": 5,
+                "total_episodes": 20,
+            }
+        )
+        brain.get_top_concepts = AsyncMock(side_effect=Exception("query failed"))
+        plugin = KnowledgePlugin(brain=brain)
+
+        data = json.loads(await plugin.what_do_you_know())
+        assert data["ok"] is True
+        assert data["total_concepts"] == 10
+        assert "top_concepts" not in data
+
+    @pytest.mark.asyncio
+    async def test_forget_error_handling(self) -> None:
+        brain = _mock_brain()
+        brain.search = AsyncMock(side_effect=RuntimeError("unexpected"))
+        plugin = KnowledgePlugin(brain=brain)
+
+        data = json.loads(await plugin.forget("test"))
+        assert data["ok"] is False
+        assert data["action"] == "error"
