@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -368,3 +368,240 @@ class TestSearchBackendInterface:
 
 
 import asyncio  # noqa: E402 — needed for TestSearchTimeout
+
+# ── SearXNG Backend (TASK-497) ──
+from sovyx.plugins.official.web_intelligence import (
+    BraveBackend,
+    SearXNGBackend,
+    _create_backend,
+)
+
+
+class TestSearXNGBackend:
+    """Tests for SearXNG search backend."""
+
+    @pytest.mark.anyio()
+    async def test_search_text(self) -> None:
+        backend = SearXNGBackend("https://search.example.com")
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "results": [
+                {
+                    "title": "Python Docs",
+                    "url": "https://docs.python.org",
+                    "content": "Official Python documentation.",
+                },
+                {
+                    "title": "Real Python",
+                    "url": "https://realpython.com",
+                    "content": "Python tutorials.",
+                },
+            ],
+        }
+
+        with patch("httpx.AsyncClient") as MockClient:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_resp)
+            MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            results = await backend.search_text("python", 5)
+
+        assert len(results) == 2
+        assert results[0].title == "Python Docs"
+        assert results[0].source == "docs.python.org"
+
+    @pytest.mark.anyio()
+    async def test_search_news(self) -> None:
+        backend = SearXNGBackend("https://search.example.com")
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "results": [
+                {
+                    "title": "Breaking News",
+                    "url": "https://reuters.com/article",
+                    "content": "Something happened.",
+                    "publishedDate": "2026-04-12",
+                },
+            ],
+        }
+
+        with patch("httpx.AsyncClient") as MockClient:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_resp)
+            MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            results = await backend.search_news("news", 5)
+
+        assert len(results) == 1
+        assert results[0].result_type == "news"
+        assert results[0].date == "2026-04-12"
+
+    @pytest.mark.anyio()
+    async def test_api_error(self) -> None:
+        backend = SearXNGBackend("https://search.example.com")
+        mock_resp = MagicMock()
+        mock_resp.status_code = 500
+
+        with patch("httpx.AsyncClient") as MockClient:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_resp)
+            MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            results = await backend.search_text("test", 5)
+
+        assert results == []
+
+    @pytest.mark.anyio()
+    async def test_network_error(self) -> None:
+        backend = SearXNGBackend("https://search.example.com")
+
+        with patch("httpx.AsyncClient") as MockClient:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(side_effect=Exception("connection refused"))
+            MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            results = await backend.search_text("test", 5)
+
+        assert results == []
+
+    @pytest.mark.anyio()
+    async def test_max_results_respected(self) -> None:
+        backend = SearXNGBackend("https://search.example.com")
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "results": [
+                {"title": f"Result {i}", "url": f"https://example.com/{i}", "content": "..."}
+                for i in range(10)
+            ],
+        }
+
+        with patch("httpx.AsyncClient") as MockClient:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_resp)
+            MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            results = await backend.search_text("test", 3)
+
+        assert len(results) == 3
+
+
+# ── Brave Backend (TASK-497) ──
+
+
+class TestBraveBackend:
+    """Tests for Brave search backend."""
+
+    @pytest.mark.anyio()
+    async def test_search_text(self) -> None:
+        backend = BraveBackend("test-api-key")
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "web": {
+                "results": [
+                    {
+                        "title": "Example",
+                        "url": "https://example.com",
+                        "description": "An example site.",
+                    },
+                ],
+            },
+        }
+
+        with patch("httpx.AsyncClient") as MockClient:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_resp)
+            MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            results = await backend.search_text("test", 5)
+
+        assert len(results) == 1
+        assert results[0].title == "Example"
+        # Verify API key was sent
+        call_kwargs = mock_client.get.call_args
+        assert call_kwargs[1]["headers"]["X-Subscription-Token"] == "test-api-key"
+
+    @pytest.mark.anyio()
+    async def test_search_news(self) -> None:
+        backend = BraveBackend("test-key")
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "news": {
+                "results": [
+                    {
+                        "title": "Breaking",
+                        "url": "https://reuters.com/art",
+                        "description": "News.",
+                        "age": "2h ago",
+                    },
+                ],
+            },
+        }
+
+        with patch("httpx.AsyncClient") as MockClient:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_resp)
+            MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            results = await backend.search_news("news", 5)
+
+        assert len(results) == 1
+        assert results[0].result_type == "news"
+
+    @pytest.mark.anyio()
+    async def test_api_error(self) -> None:
+        backend = BraveBackend("key")
+        mock_resp = MagicMock()
+        mock_resp.status_code = 401
+
+        with patch("httpx.AsyncClient") as MockClient:
+            mock_client = AsyncMock()
+            mock_client.get = AsyncMock(return_value=mock_resp)
+            MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            results = await backend.search_text("test", 5)
+
+        assert results == []
+
+
+# ── Backend Factory (TASK-497) ──
+
+
+class TestCreateBackend:
+    """Tests for _create_backend factory."""
+
+    def test_default_duckduckgo(self) -> None:
+        backend = _create_backend("duckduckgo")
+        assert isinstance(backend, DuckDuckGoBackend)
+
+    def test_unknown_defaults_to_ddg(self) -> None:
+        backend = _create_backend("unknown")
+        assert isinstance(backend, DuckDuckGoBackend)
+
+    def test_searxng(self) -> None:
+        backend = _create_backend("searxng", searxng_url="https://search.example.com")
+        assert isinstance(backend, SearXNGBackend)
+
+    def test_searxng_no_url_raises(self) -> None:
+        with pytest.raises(ValueError, match="searxng_url"):
+            _create_backend("searxng")
+
+    def test_brave(self) -> None:
+        backend = _create_backend("brave", brave_api_key="test-key")
+        assert isinstance(backend, BraveBackend)
+
+    def test_brave_no_key_raises(self) -> None:
+        with pytest.raises(ValueError, match="brave_api_key"):
+            _create_backend("brave")

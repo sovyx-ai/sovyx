@@ -207,6 +207,183 @@ class DuckDuckGoBackend(SearchBackend):
         ]
 
 
+class SearXNGBackend(SearchBackend):
+    """SearXNG search via JSON API. Self-hosted or public instance."""
+
+    name = "searxng"
+
+    def __init__(self, instance_url: str) -> None:
+        self._url = instance_url.rstrip("/")
+
+    async def search_text(
+        self,
+        query: str,
+        max_results: int,
+    ) -> list[SearchResult]:
+        """Search SearXNG for text results."""
+        return await self._search(query, max_results, categories="general")
+
+    async def search_news(
+        self,
+        query: str,
+        max_results: int,
+    ) -> list[SearchResult]:
+        """Search SearXNG for news results."""
+        return await self._search(
+            query,
+            max_results,
+            categories="news",
+            result_type="news",
+        )
+
+    async def _search(
+        self,
+        query: str,
+        max_results: int,
+        *,
+        categories: str = "general",
+        result_type: str = "web",
+    ) -> list[SearchResult]:
+        import httpx  # noqa: PLC0415
+
+        params: dict[str, str | int] = {
+            "q": query,
+            "format": "json",
+            "categories": categories,
+            "pageno": 1,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=_SEARCH_TIMEOUT) as client:
+                resp = await client.get(
+                    f"{self._url}/search",
+                    params=params,
+                )
+                if resp.status_code != 200:  # noqa: PLR2004
+                    return []
+                data: dict[str, Any] = resp.json()
+                raw_results: list[dict[str, Any]] = data.get("results", [])
+                results: list[SearchResult] = []
+                for r in raw_results[:max_results]:
+                    results.append(
+                        SearchResult(
+                            title=str(r.get("title", "")),
+                            url=str(r.get("url", "")),
+                            snippet=str(r.get("content", "")),
+                            source=_extract_domain(str(r.get("url", ""))),
+                            date=str(r.get("publishedDate", "")),
+                            result_type=result_type,
+                        ),
+                    )
+                return results
+        except Exception:  # noqa: BLE001
+            return []
+
+
+class BraveBackend(SearchBackend):
+    """Brave Search via API. Requires API key."""
+
+    name = "brave"
+
+    _API_URL = "https://api.search.brave.com/res/v1"
+
+    def __init__(self, api_key: str) -> None:
+        self._api_key = api_key
+
+    async def search_text(
+        self,
+        query: str,
+        max_results: int,
+    ) -> list[SearchResult]:
+        """Search Brave for text results."""
+        return await self._search(query, max_results, endpoint="web/search")
+
+    async def search_news(
+        self,
+        query: str,
+        max_results: int,
+    ) -> list[SearchResult]:
+        """Search Brave for news results."""
+        return await self._search(
+            query,
+            max_results,
+            endpoint="news/search",
+            result_type="news",
+        )
+
+    async def _search(
+        self,
+        query: str,
+        max_results: int,
+        *,
+        endpoint: str = "web/search",
+        result_type: str = "web",
+    ) -> list[SearchResult]:
+        import httpx  # noqa: PLC0415
+
+        headers = {
+            "Accept": "application/json",
+            "Accept-Encoding": "gzip",
+            "X-Subscription-Token": self._api_key,
+        }
+        params: dict[str, str | int] = {
+            "q": query,
+            "count": min(max_results, 20),
+        }
+        try:
+            async with httpx.AsyncClient(timeout=_SEARCH_TIMEOUT) as client:
+                resp = await client.get(
+                    f"{self._API_URL}/{endpoint}",
+                    headers=headers,
+                    params=params,
+                )
+                if resp.status_code != 200:  # noqa: PLR2004
+                    return []
+                data: dict[str, Any] = resp.json()
+
+                # Brave web results are in data.web.results
+                # Brave news results are in data.news.results
+                if result_type == "news":
+                    raw: list[dict[str, Any]] = data.get("news", {}).get("results", [])
+                else:
+                    raw = data.get("web", {}).get("results", [])
+
+                results: list[SearchResult] = []
+                for r in raw[:max_results]:
+                    results.append(
+                        SearchResult(
+                            title=str(r.get("title", "")),
+                            url=str(r.get("url", "")),
+                            snippet=str(r.get("description", "")),
+                            source=_extract_domain(str(r.get("url", ""))),
+                            date=str(r.get("age", r.get("page_age", ""))),
+                            result_type=result_type,
+                        ),
+                    )
+                return results
+        except Exception:  # noqa: BLE001
+            return []
+
+
+def _create_backend(
+    backend_name: str,
+    *,
+    searxng_url: str = "",
+    brave_api_key: str = "",
+) -> SearchBackend:
+    """Factory: create search backend by name."""
+    if backend_name == "searxng":
+        if not searxng_url:
+            msg = "searxng_url required for SearXNG backend"
+            raise ValueError(msg)
+        return SearXNGBackend(searxng_url)
+    if backend_name == "brave":
+        if not brave_api_key:
+            msg = "brave_api_key required for Brave backend"
+            raise ValueError(msg)
+        return BraveBackend(brave_api_key)
+    return DuckDuckGoBackend()
+
+
 def _extract_domain(url: str) -> str:
     """Extract domain from URL for source attribution."""
     try:
