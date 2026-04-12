@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import json
 import sys
+import threading
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -32,13 +33,17 @@ from sovyx.plugins.permissions import PermissionEnforcer
 
 MIND_ID = "test-mind"
 
-# Skip on Python 3.11 — aiosqlite's background thread raises
-# RuntimeError('Event loop is closed') during interpreter shutdown,
-# causing exit code 1 even when all tests pass.
-pytestmark = pytest.mark.skipif(
-    sys.version_info < (3, 12),
-    reason="aiosqlite teardown crashes Python 3.11 interpreter",
-)
+# Suppress aiosqlite 'Event loop is closed' RuntimeError that occurs
+# in background threads during Python 3.11 interpreter shutdown.
+if sys.version_info < (3, 12):
+    _orig = threading.excepthook
+
+    def _suppress_loop_closed(args: threading.ExceptHookArgs) -> None:
+        if isinstance(args.exc_value, RuntimeError) and "Event loop" in str(args.exc_value):
+            return
+        _orig(args)
+
+    threading.excepthook = _suppress_loop_closed
 
 
 @pytest.fixture
