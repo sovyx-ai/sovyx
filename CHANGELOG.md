@@ -4,6 +4,24 @@ All notable changes to Sovyx will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
+## [Unreleased]
+
+### Added — Financial Math Plugin (Enterprise Showcase)
+
+- **9 financial tools** replacing basic calculator — `calculate`, `percentage`, `interest`, `tvm`, `amortization`, `portfolio`, `position_size`, `currency`
+- **Decimal-first engine** — all math via `Decimal(str(value))` with banker's rounding, no floating-point errors
+- **5 percentage modes** — of, change, markup, gross_margin, net_margin
+- **4 interest modes** — simple, compound, CAGR, Rule of 72
+- **6 time-value-of-money modes** — NPV, IRR (Newton-Raphson), PV, FV, annuity PV/FV
+- **3 amortization modes** — Price (French), SAC (Brazilian), side-by-side comparison
+- **6 portfolio analytics modes** — returns, Sharpe, Sortino, max drawdown, volatility, summary
+- **4 position sizing modes** — Kelly criterion, half-Kelly, fixed fractional, max risk
+- **3 currency modes** — format (9 currencies), convert, parse (US & BR number formats)
+- **Input validation hardening** — bounds checking, overflow protection, structured error messages
+- **228 tests** — 215 unit + 13 Hypothesis property-based invariant tests
+- **Backward compatibility** — `CalculatorPlugin` wrapper preserves name + output format
+- **Zero external dependencies** — no numpy, scipy, or pandas
+
 ## [0.9.0] — 2026-04-12
 
 ### Added — Knowledge Plugin v2.0 (Enterprise)
