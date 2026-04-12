@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -18,9 +18,9 @@ from sovyx.brain.concept_repo import ConceptRepository
 from sovyx.brain.episode_repo import EpisodeRepository
 from sovyx.brain.learning import HebbianLearning
 from sovyx.brain.relation_repo import RelationRepository
-from sovyx.brain.spreading import SpreadingActivation
 from sovyx.brain.retrieval import HybridRetrieval
 from sovyx.brain.service import BrainService
+from sovyx.brain.spreading import SpreadingActivation
 from sovyx.brain.working_memory import WorkingMemory
 from sovyx.engine.types import MindId
 from sovyx.persistence.pool import DatabasePool

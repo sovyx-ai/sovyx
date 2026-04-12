@@ -890,7 +890,7 @@ class TestStructuredOutput:
         assert "ok" in data, f"Missing 'ok' in {data}"
         assert isinstance(data["ok"], bool), f"'ok' must be bool, got {type(data['ok'])}"
         assert "message" in data, f"Missing 'message' in {data}"
-        assert isinstance(data["message"], str), f"'message' must be str"
+        assert isinstance(data["message"], str), "'message' must be str"
         return data
 
     @pytest.mark.asyncio
