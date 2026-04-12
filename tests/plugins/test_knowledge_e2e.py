@@ -8,7 +8,10 @@ Uses a real in-memory SQLite brain (no mocks).
 
 from __future__ import annotations
 
+import contextlib
 import json
+import sys
+import threading
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -29,6 +32,20 @@ from sovyx.plugins.official.knowledge import KnowledgePlugin
 from sovyx.plugins.permissions import PermissionEnforcer
 
 MIND_ID = "test-mind"
+
+
+def _suppress_event_loop_closed(args: threading.ExceptHookArgs) -> None:
+    """Suppress aiosqlite 'Event loop is closed' in background threads."""
+    if isinstance(args.exc_value, RuntimeError) and "Event loop is closed" in str(args.exc_value):
+        return
+    sys.__excepthook__(  # type: ignore[arg-type]
+        args.exc_type,
+        args.exc_value,
+        args.exc_traceback,
+    )
+
+
+threading.excepthook = _suppress_event_loop_closed
 
 
 @pytest.fixture
@@ -110,7 +127,11 @@ async def db_pool(tmp_path: Path):
         await conn.commit()
 
     yield pool
-    await pool.close()
+    # Close pool gracefully. Suppress all errors — on Python 3.11,
+    # aiosqlite's background thread can raise RuntimeError('Event loop
+    # is closed') during interpreter shutdown, causing exit code 1.
+    with contextlib.suppress(Exception):
+        await pool.close()
 
 
 @pytest.fixture
