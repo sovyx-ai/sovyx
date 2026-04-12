@@ -2007,3 +2007,137 @@ class TestSafetyIntegration:
         data = _parse(await p.search("x" * 600, mode="web"))
         assert data["ok"] is False
         assert "too long" in str(data["message"])
+
+
+# ── Config + i18n + Output Contract (TASK-507) ──
+
+
+class TestConfigSchema:
+    """Tests for config schema completeness."""
+
+    def test_schema_has_all_keys(self) -> None:
+        schema = WebIntelligencePlugin.config_schema
+        props = schema["properties"]
+        assert isinstance(props, dict)
+        expected = {
+            "backend",
+            "searxng_url",
+            "brave_api_key",
+            "default_max_results",
+            "fetch_max_chars",
+            "cache_enabled",
+            "cache_max_size",
+            "auto_learn",
+            "timeouts",
+        }
+        assert expected == set(props.keys())
+
+    def test_schema_has_descriptions(self) -> None:
+        schema = WebIntelligencePlugin.config_schema
+        props = schema["properties"]
+        assert isinstance(props, dict)
+        for key, spec in props.items():
+            assert isinstance(spec, dict)
+            assert "description" in spec, f"Missing description for {key}"
+
+    def test_backend_enum(self) -> None:
+        schema = WebIntelligencePlugin.config_schema
+        props = schema["properties"]
+        assert isinstance(props, dict)
+        backend = props["backend"]
+        assert isinstance(backend, dict)
+        assert backend["enum"] == ["duckduckgo", "searxng", "brave"]
+
+
+class TestOutputContract:
+    """All tools return {ok, action, result, message}."""
+
+    @pytest.mark.anyio()
+    async def test_search_contract(self) -> None:
+        p = WebIntelligencePlugin()
+        p._backend.search_text = _mock_ddgs_text(_SAMPLE_WEB_RESULTS)  # type: ignore[assignment]
+        data = _parse(await p.search("test", mode="web"))
+        assert "ok" in data
+        assert "action" in data
+        assert "result" in data
+        assert "message" in data
+
+    @pytest.mark.anyio()
+    async def test_fetch_contract(self) -> None:
+        p = WebIntelligencePlugin()
+        html = "<html><body><p>Test.</p></body></html>"
+        with patch(
+            "sovyx.plugins.official.web_intelligence._fetch_html",
+            new_callable=AsyncMock,
+            return_value=html,
+        ):
+            data = _parse(await p.fetch("https://example.com"))
+        assert "ok" in data
+        assert "action" in data
+        assert "result" in data
+        assert "message" in data
+
+    @pytest.mark.anyio()
+    async def test_research_contract(self) -> None:
+        p = WebIntelligencePlugin()
+        p._backend.search_text = _mock_ddgs_text(_SAMPLE_WEB_RESULTS)  # type: ignore[assignment]
+        p._backend.search_news = _mock_ddgs_news(_SAMPLE_NEWS_RESULTS)  # type: ignore[assignment]
+        with patch(
+            "sovyx.plugins.official.web_intelligence._fetch_html",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            data = _parse(await p.research("test"))
+        assert "ok" in data
+        assert "action" in data
+        assert "result" in data
+        assert "message" in data
+
+    @pytest.mark.anyio()
+    async def test_lookup_contract(self) -> None:
+        p = WebIntelligencePlugin()
+        p._backend.search_text = _mock_ddgs_text(_SAMPLE_WEB_RESULTS)  # type: ignore[assignment]
+        data = _parse(await p.lookup("what is Python"))
+        assert "ok" in data
+        assert "action" in data
+        assert "result" in data
+        assert "message" in data
+
+    @pytest.mark.anyio()
+    async def test_error_contract(self) -> None:
+        """Error responses also have ok + message."""
+        p = WebIntelligencePlugin()
+        data = _parse(await p.search("", mode="web"))
+        assert data["ok"] is False
+        assert "message" in data
+
+
+class TestMessageConstants:
+    """All error messages use _MSG_ constants."""
+
+    def test_constants_defined(self) -> None:
+        from sovyx.plugins.official import web_intelligence as wi
+
+        expected = [
+            "_MSG_EMPTY_QUERY",
+            "_MSG_QUERY_TOO_LONG",
+            "_MSG_NO_RESULTS",
+            "_MSG_SEARCH_FAILED",
+            "_MSG_FETCH_FAILED",
+            "_MSG_INVALID_URL",
+            "_MSG_BACKEND_UNAVAILABLE",
+            "_MSG_RATE_LIMIT_SEARCH",
+            "_MSG_RATE_LIMIT_FETCH",
+            "_MSG_RATE_LIMIT_RESEARCH",
+            "_MSG_SEARCH_TIMEOUT",
+            "_MSG_FETCH_TIMEOUT",
+            "_MSG_RESEARCH_TIMEOUT",
+            "_MSG_LOOKUP_TIMEOUT",
+            "_MSG_EMPTY_NAME",
+            "_MSG_EMPTY_CONTENT",
+            "_MSG_WEATHER_ERROR",
+            "_MSG_RATE_LIMIT",
+        ]
+        for name in expected:
+            assert hasattr(wi, name), f"Missing constant: {name}"
+            assert isinstance(getattr(wi, name), str)
