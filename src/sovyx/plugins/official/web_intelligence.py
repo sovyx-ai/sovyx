@@ -14,9 +14,12 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from sovyx.plugins.sdk import ISovyxPlugin, tool
+
+if TYPE_CHECKING:
+    from sovyx.plugins.context import BrainAccess
 
 # ── Constants ──
 
@@ -826,13 +829,17 @@ class WebIntelligencePlugin(ISovyxPlugin):
         },
     }
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        brain: BrainAccess | None = None,
+    ) -> None:
         super().__init__()
         self._backend: SearchBackend = DuckDuckGoBackend()
         self._rate_limiter = _RateLimiter(
             _RATE_LIMIT_SEARCHES,
             _RATE_LIMIT_WINDOW,
         )
+        self._brain = brain
 
     @property
     def name(self) -> str:
@@ -1179,6 +1186,156 @@ class WebIntelligencePlugin(ISovyxPlugin):
             return _extract_content(html, url)
         except Exception:  # noqa: BLE001
             return None
+
+    # ── Brain Integration Tool ──
+
+    _NO_BRAIN = "brain access not configured — plugin needs brain:write permission"
+
+    @tool(
+        description=(
+            "Save web research findings to the brain with source provenance. "
+            "Stores each fact as a concept with URL, author, date, and "
+            "credibility metadata. Use after research() to persist knowledge. "
+            "Example: learn_from_web(name='US Tariff Impact 2025', "
+            "content='Summary of findings...', url='https://reuters.com/article')"
+        ),
+    )
+    async def learn_from_web(
+        self,
+        name: str,
+        content: str,
+        *,
+        url: str = "",
+        author: str = "",
+        date: str = "",
+        category: str = "web_research",
+    ) -> str:
+        """Save a web finding to the brain with provenance.
+
+        Args:
+            name: Concept name/title.
+            content: Content to save (finding, summary, fact).
+            url: Source URL for provenance tracking.
+            author: Source author if known.
+            date: Publication date if known.
+            category: Brain category (default 'web_research').
+
+        Returns:
+            JSON with concept ID and provenance metadata.
+        """
+        if self._brain is None:
+            return _err(self._NO_BRAIN)
+
+        name = name.strip()
+        content = content.strip()
+        if not name:
+            return _err("name cannot be empty")
+        if not content:
+            return _err("content cannot be empty")
+
+        # Score credibility if URL provided
+        cred = score_credibility(url) if url else None
+        confidence = min(0.9, cred.score) if cred else 0.5
+
+        # Build provenance metadata
+        provenance: dict[str, object] = {
+            "source_type": "web",
+            "url": url,
+            "author": author,
+            "date": date,
+            "retrieved_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        if cred:
+            provenance["credibility"] = cred.to_dict()
+
+        try:
+            concept_id = await self._brain.learn(
+                name=name,
+                content=content,
+                category=category,
+                confidence=confidence,
+                importance=0.6,
+                metadata={"provenance": provenance},
+            )
+            return _ok(
+                "learn_from_web",
+                concept_id=concept_id,
+                name=name,
+                category=category,
+                confidence=confidence,
+                provenance=provenance,
+                result=f"Saved '{name}' to brain (confidence: {confidence:.0%})",
+                message=f"Learned '{name}' from {url or 'web'} — saved to brain",
+            )
+        except Exception as e:  # noqa: BLE001
+            return _err(f"failed to save to brain: {e}")
+
+    @tool(
+        description=(
+            "Recall what the brain knows about a topic from web research. "
+            "Searches brain for previously learned web findings. "
+            "Example: recall_web(query='US tariffs crypto impact')"
+        ),
+    )
+    async def recall_web(
+        self,
+        query: str,
+        *,
+        max_results: int = 5,
+    ) -> str:
+        """Search brain for previously learned web findings.
+
+        Args:
+            query: Search query.
+            max_results: Max results (1-20, default 5).
+
+        Returns:
+            JSON with matching brain concepts and their provenance.
+        """
+        if self._brain is None:
+            return _err(self._NO_BRAIN)
+
+        query = query.strip()
+        if not query:
+            return _err(_MSG_EMPTY_QUERY)
+        max_results = max(1, min(20, max_results))
+
+        try:
+            results = await self._brain.search(
+                query,
+                limit=max_results,
+            )
+            concepts: list[dict[str, object]] = []
+            for r in results:
+                concept: dict[str, object] = {
+                    "id": r.get("id", ""),
+                    "name": r.get("name", ""),
+                    "content": r.get("content", ""),
+                    "category": r.get("category", ""),
+                    "confidence": r.get("confidence", 0),
+                    "score": r.get("score", 0),
+                    "source": r.get("source", ""),
+                }
+                concepts.append(concept)
+
+            return _ok(
+                "recall_web",
+                query=query,
+                count=len(concepts),
+                concepts=concepts,
+                result=(
+                    f"Found {len(concepts)} brain memories for '{query}'"
+                    if concepts
+                    else f"No brain memories found for '{query}'"
+                ),
+                message=(
+                    f"Recalled {len(concepts)} web findings for '{query}'"
+                    if concepts
+                    else f"No prior web research found for '{query}'"
+                ),
+            )
+        except Exception as e:  # noqa: BLE001
+            return _err(f"brain recall failed: {e}")
 
 
 # ── URL Validation ──

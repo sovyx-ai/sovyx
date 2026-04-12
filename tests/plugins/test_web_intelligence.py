@@ -1361,3 +1361,173 @@ class TestResearchTool:
 
         assert data["ok"] is True
         assert not news_called
+
+
+# ── Brain Integration (TASK-502) ──
+
+
+class TestLearnFromWeb:
+    """Tests for learn_from_web tool."""
+
+    @pytest.mark.anyio()
+    async def test_learn_saves_to_brain(self) -> None:
+        mock_brain = AsyncMock()
+        mock_brain.learn = AsyncMock(return_value="concept-123")
+        p = WebIntelligencePlugin(brain=mock_brain)
+        data = _parse(
+            await p.learn_from_web(
+                name="US Tariffs 2025",
+                content="New tariff policy announced.",
+                url="https://reuters.com/article",
+                author="Reuters Staff",
+                date="2025-04-10",
+            )
+        )
+        assert data["ok"] is True
+        assert data["concept_id"] == "concept-123"
+        assert data["provenance"]["url"] == "https://reuters.com/article"
+        assert data["provenance"]["author"] == "Reuters Staff"
+        assert data["provenance"]["source_type"] == "web"
+        assert "retrieved_at" in data["provenance"]
+
+    @pytest.mark.anyio()
+    async def test_learn_credibility_sets_confidence(self) -> None:
+        """Tier1 source → higher confidence."""
+        mock_brain = AsyncMock()
+        mock_brain.learn = AsyncMock(return_value="c-1")
+        p = WebIntelligencePlugin(brain=mock_brain)
+        data = _parse(
+            await p.learn_from_web(
+                name="Test",
+                content="Content.",
+                url="https://reuters.com/a",
+            )
+        )
+        assert data["ok"] is True
+        assert data["confidence"] >= 0.8
+
+    @pytest.mark.anyio()
+    async def test_learn_low_credibility(self) -> None:
+        """Unknown source → lower confidence."""
+        mock_brain = AsyncMock()
+        mock_brain.learn = AsyncMock(return_value="c-2")
+        p = WebIntelligencePlugin(brain=mock_brain)
+        data = _parse(
+            await p.learn_from_web(
+                name="Test",
+                content="Content.",
+                url="https://random-blog.xyz/post",
+            )
+        )
+        assert data["ok"] is True
+        assert data["confidence"] <= 0.5
+
+    @pytest.mark.anyio()
+    async def test_learn_no_url(self) -> None:
+        """No URL → default confidence 0.5."""
+        mock_brain = AsyncMock()
+        mock_brain.learn = AsyncMock(return_value="c-3")
+        p = WebIntelligencePlugin(brain=mock_brain)
+        data = _parse(await p.learn_from_web(name="Test", content="Content."))
+        assert data["ok"] is True
+        assert data["confidence"] == 0.5
+
+    @pytest.mark.anyio()
+    async def test_learn_no_brain(self) -> None:
+        p = WebIntelligencePlugin()
+        data = _parse(await p.learn_from_web(name="Test", content="Content."))
+        assert data["ok"] is False
+        assert "brain" in str(data["message"]).lower()
+
+    @pytest.mark.anyio()
+    async def test_learn_empty_name(self) -> None:
+        mock_brain = AsyncMock()
+        p = WebIntelligencePlugin(brain=mock_brain)
+        data = _parse(await p.learn_from_web(name="", content="x"))
+        assert data["ok"] is False
+
+    @pytest.mark.anyio()
+    async def test_learn_empty_content(self) -> None:
+        mock_brain = AsyncMock()
+        p = WebIntelligencePlugin(brain=mock_brain)
+        data = _parse(await p.learn_from_web(name="x", content=""))
+        assert data["ok"] is False
+
+    @pytest.mark.anyio()
+    async def test_learn_brain_error(self) -> None:
+        mock_brain = AsyncMock()
+        mock_brain.learn = AsyncMock(side_effect=Exception("db error"))
+        p = WebIntelligencePlugin(brain=mock_brain)
+        data = _parse(await p.learn_from_web(name="Test", content="Content."))
+        assert data["ok"] is False
+
+    @pytest.mark.anyio()
+    async def test_provenance_has_credibility(self) -> None:
+        mock_brain = AsyncMock()
+        mock_brain.learn = AsyncMock(return_value="c-4")
+        p = WebIntelligencePlugin(brain=mock_brain)
+        data = _parse(
+            await p.learn_from_web(
+                name="Test",
+                content="Content.",
+                url="https://bbc.com/news/art",
+            )
+        )
+        assert "credibility" in data["provenance"]
+        assert data["provenance"]["credibility"]["tier"] == "tier2"
+
+
+class TestRecallWeb:
+    """Tests for recall_web tool."""
+
+    @pytest.mark.anyio()
+    async def test_recall_returns_concepts(self) -> None:
+        mock_brain = AsyncMock()
+        mock_brain.search = AsyncMock(
+            return_value=[
+                {
+                    "id": "c-1",
+                    "name": "Tariff Impact",
+                    "content": "Tariffs increased by 25%.",
+                    "category": "web_research",
+                    "confidence": 0.8,
+                    "score": 0.9,
+                    "source": "plugin:web-intelligence",
+                },
+            ],
+        )
+        p = WebIntelligencePlugin(brain=mock_brain)
+        data = _parse(await p.recall_web("tariffs"))
+        assert data["ok"] is True
+        assert data["count"] == 1
+        assert data["concepts"][0]["name"] == "Tariff Impact"
+
+    @pytest.mark.anyio()
+    async def test_recall_empty(self) -> None:
+        mock_brain = AsyncMock()
+        mock_brain.search = AsyncMock(return_value=[])
+        p = WebIntelligencePlugin(brain=mock_brain)
+        data = _parse(await p.recall_web("nonexistent"))
+        assert data["ok"] is True
+        assert data["count"] == 0
+
+    @pytest.mark.anyio()
+    async def test_recall_no_brain(self) -> None:
+        p = WebIntelligencePlugin()
+        data = _parse(await p.recall_web("test"))
+        assert data["ok"] is False
+
+    @pytest.mark.anyio()
+    async def test_recall_empty_query(self) -> None:
+        mock_brain = AsyncMock()
+        p = WebIntelligencePlugin(brain=mock_brain)
+        data = _parse(await p.recall_web(""))
+        assert data["ok"] is False
+
+    @pytest.mark.anyio()
+    async def test_recall_brain_error(self) -> None:
+        mock_brain = AsyncMock()
+        mock_brain.search = AsyncMock(side_effect=Exception("search failed"))
+        p = WebIntelligencePlugin(brain=mock_brain)
+        data = _parse(await p.recall_web("test"))
+        assert data["ok"] is False
