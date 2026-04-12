@@ -789,3 +789,143 @@ class TestFetchTool:
         assert "author" in data
         assert "language" in data
         assert "char_count" in data
+
+
+# ── Query Intent Classification (TASK-499) ──
+
+from sovyx.plugins.official.web_intelligence import QueryIntent, classify_query
+
+
+class TestClassifyQuery:
+    """Tests for query intent classification."""
+
+    def test_factual(self) -> None:
+        intent = classify_query("What is Python?")
+        assert intent.intent_type == "factual"
+        assert intent.search_mode == "web"
+
+    def test_temporal_today(self) -> None:
+        intent = classify_query("what happened today in the stock market")
+        assert intent.intent_type in ("temporal", "price")
+        assert intent.search_mode == "news"
+        assert intent.time_range == "day"
+        assert intent.confidence >= 0.7
+
+    def test_temporal_this_week(self) -> None:
+        intent = classify_query("latest news this week")
+        assert intent.search_mode == "news"
+        assert intent.time_range == "week"
+
+    def test_temporal_breaking(self) -> None:
+        intent = classify_query("breaking news bitcoin")
+        assert intent.intent_type in ("temporal", "price")
+        assert intent.search_mode == "news"
+
+    def test_price_bitcoin(self) -> None:
+        intent = classify_query("Bitcoin price")
+        assert intent.intent_type == "price"
+        assert intent.time_range != ""
+
+    def test_price_crypto(self) -> None:
+        intent = classify_query("ETH crypto price today")
+        assert intent.intent_type == "price"
+
+    def test_price_stock(self) -> None:
+        intent = classify_query("NASDAQ stock market")
+        assert intent.intent_type in ("price", "temporal")
+
+    def test_procedural_how_to(self) -> None:
+        intent = classify_query("how to install Docker on Ubuntu")
+        assert intent.intent_type == "procedural"
+        assert intent.search_mode == "web"
+
+    def test_procedural_tutorial(self) -> None:
+        intent = classify_query("Python tutorial for beginners")
+        assert intent.intent_type == "procedural"
+
+    def test_portuguese_hoje(self) -> None:
+        intent = classify_query("o que aconteceu hoje no Brasil")
+        assert intent.search_mode == "news"
+        assert intent.time_range == "day"
+
+    def test_portuguese_como(self) -> None:
+        intent = classify_query("como instalar Python no Windows")
+        assert intent.intent_type == "procedural"
+
+    def test_news_keyword(self) -> None:
+        intent = classify_query("Fed inflation report")
+        assert intent.intent_type in ("temporal", "price")
+        assert intent.search_mode == "news"
+
+    def test_confidence_range(self) -> None:
+        """Confidence always in [0, 1]."""
+        queries = [
+            "test",
+            "bitcoin price today",
+            "how to code",
+            "breaking news war",
+            "what is AI",
+            "agora",
+        ]
+        for q in queries:
+            intent = classify_query(q)
+            assert 0 <= intent.confidence <= 1, f"Bad confidence for '{q}'"
+
+
+class TestQueryIntentSchema:
+    """Tests for QueryIntent schema."""
+
+    def test_to_dict(self) -> None:
+        intent = QueryIntent(
+            intent_type="temporal",
+            search_mode="news",
+            time_range="day",
+            confidence=0.85,
+        )
+        d = intent.to_dict()
+        assert d["intent_type"] == "temporal"
+        assert d["search_mode"] == "news"
+        assert d["time_range"] == "day"
+        assert d["confidence"] == 0.85
+
+
+class TestAutoModeSearch:
+    """Tests for search with mode='auto'."""
+
+    @pytest.mark.anyio()
+    async def test_auto_routes_to_news(self) -> None:
+        """Auto mode routes 'today' queries to news."""
+        p = WebIntelligencePlugin()
+        p._backend.search_news = _mock_ddgs_news(_SAMPLE_NEWS_RESULTS)  # type: ignore[assignment]
+        data = _parse(await p.search("what happened today", mode="auto"))
+        assert data["ok"] is True
+        assert data["mode"] == "news"
+        assert "intent" in data
+        assert data["intent"]["intent_type"] == "temporal"
+
+    @pytest.mark.anyio()
+    async def test_auto_routes_to_web(self) -> None:
+        """Auto mode routes factual queries to web."""
+        p = WebIntelligencePlugin()
+        p._backend.search_text = _mock_ddgs_text(_SAMPLE_WEB_RESULTS)  # type: ignore[assignment]
+        data = _parse(await p.search("what is quantum computing", mode="auto"))
+        assert data["ok"] is True
+        assert data["mode"] == "web"
+
+    @pytest.mark.anyio()
+    async def test_auto_price_routes_to_news(self) -> None:
+        """Price queries route to news for freshness."""
+        p = WebIntelligencePlugin()
+        p._backend.search_news = _mock_ddgs_news(_SAMPLE_NEWS_RESULTS)  # type: ignore[assignment]
+        data = _parse(await p.search("bitcoin price", mode="auto"))
+        assert data["ok"] is True
+        assert data["intent"]["intent_type"] == "price"
+
+    @pytest.mark.anyio()
+    async def test_explicit_mode_no_intent(self) -> None:
+        """Explicit mode='web' skips intent classification."""
+        p = WebIntelligencePlugin()
+        p._backend.search_text = _mock_ddgs_text(_SAMPLE_WEB_RESULTS)  # type: ignore[assignment]
+        data = _parse(await p.search("bitcoin price today", mode="web"))
+        assert data["ok"] is True
+        assert "intent" not in data

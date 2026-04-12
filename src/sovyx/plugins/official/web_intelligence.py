@@ -40,6 +40,193 @@ _MSG_INVALID_URL = "invalid or disallowed URL"
 _MSG_BACKEND_UNAVAILABLE = "search backend unavailable"
 
 
+# ── Query Intent Classification ──
+
+
+class QueryIntent:
+    """Classified query intent for routing."""
+
+    __slots__ = ("intent_type", "search_mode", "time_range", "confidence")
+
+    def __init__(
+        self,
+        *,
+        intent_type: str,
+        search_mode: str,
+        time_range: str,
+        confidence: float,
+    ) -> None:
+        self.intent_type = intent_type  # factual, temporal, price, procedural
+        self.search_mode = search_mode  # web, news
+        self.time_range = time_range  # "", "day", "week", "month"
+        self.confidence = confidence  # 0.0-1.0
+
+    def to_dict(self) -> dict[str, object]:
+        """Serialize to dict."""
+        return {
+            "intent_type": self.intent_type,
+            "search_mode": self.search_mode,
+            "time_range": self.time_range,
+            "confidence": self.confidence,
+        }
+
+
+# Temporal keywords → (time_range, confidence_boost)
+_TEMPORAL_KEYWORDS: dict[str, tuple[str, float]] = {
+    "today": ("day", 0.9),
+    "yesterday": ("day", 0.8),
+    "tonight": ("day", 0.85),
+    "now": ("day", 0.7),
+    "right now": ("day", 0.8),
+    "this week": ("week", 0.85),
+    "this month": ("month", 0.8),
+    "latest": ("week", 0.75),
+    "recent": ("week", 0.7),
+    "just": ("day", 0.6),
+    "breaking": ("day", 0.9),
+    "current": ("day", 0.65),
+    "hoje": ("day", 0.9),
+    "ontem": ("day", 0.8),
+    "agora": ("day", 0.7),
+    "esta semana": ("week", 0.85),
+    "este mês": ("month", 0.8),
+    "último": ("week", 0.7),
+    "recente": ("week", 0.7),
+}
+
+# News-indicating keywords
+_NEWS_KEYWORDS = frozenset(
+    {
+        "news",
+        "notícia",
+        "notícias",
+        "happened",
+        "announced",
+        "released",
+        "launched",
+        "update",
+        "report",
+        "statement",
+        "press",
+        "election",
+        "crash",
+        "surge",
+        "rally",
+        "war",
+        "embargo",
+        "tariff",
+        "regulation",
+        "fed",
+        "inflation",
+    }
+)
+
+# Price/market keywords
+_PRICE_KEYWORDS = frozenset(
+    {
+        "price",
+        "preço",
+        "cotação",
+        "valor",
+        "cost",
+        "how much",
+        "quanto",
+        "worth",
+        "market cap",
+        "btc",
+        "eth",
+        "bitcoin",
+        "ethereum",
+        "crypto",
+        "stock",
+        "ação",
+        "ações",
+        "nasdaq",
+        "s&p",
+        "dollar",
+        "dólar",
+        "euro",
+        "real",
+        "usd",
+        "brl",
+    }
+)
+
+# Procedural keywords
+_PROCEDURAL_KEYWORDS = frozenset(
+    {
+        "how to",
+        "como",
+        "tutorial",
+        "guide",
+        "guia",
+        "step by step",
+        "passo a passo",
+        "recipe",
+        "receita",
+        "install",
+        "instalar",
+        "setup",
+        "configure",
+    }
+)
+
+
+def classify_query(query: str) -> QueryIntent:
+    """Classify query intent using keyword heuristics (no LLM call).
+
+    Fast, deterministic classification for routing decisions.
+    """
+    q = query.lower().strip()
+
+    # Check temporal keywords first
+    best_time_range = ""
+    best_confidence = 0.0
+    for keyword, (time_range, confidence) in _TEMPORAL_KEYWORDS.items():
+        if keyword in q and confidence > best_confidence:
+            best_time_range = time_range
+            best_confidence = confidence
+
+    # Check price/market
+    q_words = set(q.split())
+    price_hits = len(q_words & _PRICE_KEYWORDS)
+    if price_hits > 0:
+        return QueryIntent(
+            intent_type="price",
+            search_mode="news" if best_time_range else "web",
+            time_range=best_time_range or "day",
+            confidence=min(0.5 + price_hits * 0.2, 0.95),
+        )
+
+    # Check news
+    news_hits = len(q_words & _NEWS_KEYWORDS)
+    if news_hits > 0 or best_confidence >= 0.7:
+        return QueryIntent(
+            intent_type="temporal",
+            search_mode="news",
+            time_range=best_time_range or "day",
+            confidence=max(best_confidence, min(0.5 + news_hits * 0.2, 0.9)),
+        )
+
+    # Check procedural
+    for kw in _PROCEDURAL_KEYWORDS:
+        if kw in q:
+            return QueryIntent(
+                intent_type="procedural",
+                search_mode="web",
+                time_range="",
+                confidence=0.7,
+            )
+
+    # Default: factual web search
+    return QueryIntent(
+        intent_type="factual",
+        search_mode="web",
+        time_range=best_time_range,
+        confidence=0.5 if not best_time_range else best_confidence,
+    )
+
+
 # ── Helpers ──
 
 
@@ -449,28 +636,30 @@ class WebIntelligencePlugin(ISovyxPlugin):
     @tool(
         description=(
             "Search the web for information. Modes: "
+            "'auto' (smart routing based on query intent — default), "
             "'web' (general search), "
             "'news' (recent news articles). "
-            "Returns structured results with title, URL, snippet, and source. "
-            "Example: search(query='Bitcoin price today', mode='news')"
+            "Auto mode classifies intent (factual/temporal/price/procedural) "
+            "and routes to the best search type automatically. "
+            "Example: search(query='Bitcoin price today')"
         ),
     )
     async def search(
         self,
         query: str,
         *,
-        mode: str = "web",
+        mode: str = "auto",
         max_results: int = _MAX_RESULTS_DEFAULT,
     ) -> str:
         """Search the web.
 
         Args:
             query: Search query string.
-            mode: 'web' or 'news'.
+            mode: 'auto', 'web', or 'news'.
             max_results: Number of results (1-20, default 5).
 
         Returns:
-            JSON with search results.
+            JSON with search results and intent classification.
         """
         # Validate
         query = query.strip()
@@ -480,6 +669,12 @@ class WebIntelligencePlugin(ISovyxPlugin):
             return _err(_MSG_QUERY_TOO_LONG)
         max_results = max(1, min(_MAX_RESULTS_CAP, max_results))
         mode = mode.strip().lower()
+
+        # Intent classification
+        intent: QueryIntent | None = None
+        if mode == "auto":
+            intent = classify_query(query)
+            mode = intent.search_mode
 
         # Rate limit
         if not self._rate_limiter.check():
@@ -503,6 +698,10 @@ class WebIntelligencePlugin(ISovyxPlugin):
             if not results:
                 return _err(_MSG_NO_RESULTS)
 
+            extra: dict[str, object] = {}
+            if intent is not None:
+                extra["intent"] = intent.to_dict()
+
             return _ok(
                 "search",
                 mode=mode,
@@ -512,6 +711,7 @@ class WebIntelligencePlugin(ISovyxPlugin):
                 results=[r.to_dict() for r in results],
                 result=f"Found {len(results)} results for '{query}'",
                 message=f"Found {len(results)} results for '{query}'",
+                **extra,
             )
         except TimeoutError:
             return _err("search timed out")
