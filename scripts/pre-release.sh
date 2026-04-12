@@ -79,20 +79,46 @@ else
     fail "bandit"
 fi
 
-# ── Step 4: Tests with coverage (ignore smoke, threshold 94 — EXATAMENTE como CI) ──
-step "Tests — Python $(python3 --version 2>&1 | awk '{print $2}')"
-if uv run python -m pytest tests/ \
-    --ignore=tests/smoke \
-    --cov=sovyx \
-    --cov-report=term-missing \
-    --cov-fail-under=94 \
-    -q; then
-    pass "pytest + coverage ≥94%"
+# ── Step 4: Install extra test deps (EXATAMENTE como CI) ──
+step "Install extra test deps (ddgs, trafilatura)"
+if uv pip install "ddgs>=9.0" "trafilatura>=2.0" --quiet 2>/dev/null; then
+    pass "ddgs + trafilatura installed"
 else
-    fail "pytest or coverage"
+    fail "ddgs + trafilatura install"
 fi
 
-# ── Step 5: Dashboard (if changed) ──
+# ── Step 5: Tests with coverage on BOTH Pythons (EXATAMENTE como CI) ──
+for PYVER in 3.11 3.12; do
+    step "Tests — Python $PYVER"
+    
+    # Ensure Python version is available
+    if ! uv python install "$PYVER" --quiet 2>/dev/null; then
+        fail "Python $PYVER not available"
+        continue
+    fi
+    
+    # Sync deps for this Python version
+    if ! uv sync --dev --python "$PYVER" --quiet 2>/dev/null; then
+        fail "uv sync for Python $PYVER"
+        continue
+    fi
+    
+    # Install extras for this Python version
+    uv pip install --python "$PYVER" "ddgs>=9.0" "trafilatura>=2.0" --quiet 2>/dev/null
+    
+    if uv run --python "$PYVER" python -m pytest tests/ \
+        --ignore=tests/smoke \
+        --cov=sovyx \
+        --cov-report=term-missing \
+        --cov-fail-under=94 \
+        -q; then
+        pass "pytest Python $PYVER + coverage ≥94%"
+    else
+        fail "pytest Python $PYVER"
+    fi
+done
+
+# ── Step 6: Dashboard ──
 if [ -d "dashboard" ]; then
     step "Dashboard — TypeScript + tests + build"
     cd dashboard
