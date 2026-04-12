@@ -605,3 +605,187 @@ class TestCreateBackend:
     def test_brave_no_key_raises(self) -> None:
         with pytest.raises(ValueError, match="brave_api_key"):
             _create_backend("brave")
+
+
+# ── Fetch Tool + Content Extraction (TASK-498) ──
+
+from sovyx.plugins.official.web_intelligence import (
+    _extract_content,
+    _extract_fallback,
+    _validate_url,
+)
+
+_SAMPLE_HTML = """
+<html>
+<head><title>Test Article</title></head>
+<body>
+<article>
+<h1>Understanding Python</h1>
+<p>Python is a versatile programming language used in web development,
+data science, artificial intelligence, and many other fields.</p>
+<p>It was created by Guido van Rossum and first released in 1991.</p>
+</article>
+</body>
+</html>
+"""
+
+
+class TestValidateUrl:
+    """Tests for URL validation."""
+
+    def test_valid_https(self) -> None:
+        assert _validate_url("https://example.com/path") == ""
+
+    def test_valid_http(self) -> None:
+        assert _validate_url("http://example.com") == ""
+
+    def test_no_scheme(self) -> None:
+        assert _validate_url("example.com") != ""
+
+    def test_file_scheme(self) -> None:
+        result = _validate_url("file:///etc/passwd")
+        assert "disallowed" in result
+
+    def test_javascript_scheme(self) -> None:
+        result = _validate_url("javascript:alert(1)")
+        assert "disallowed" in result
+
+    def test_private_ip_127(self) -> None:
+        result = _validate_url("http://127.0.0.1/admin")
+        assert "private" in result
+
+    def test_private_ip_192(self) -> None:
+        result = _validate_url("http://192.168.1.1/")
+        assert "private" in result
+
+    def test_private_ip_10(self) -> None:
+        result = _validate_url("http://10.0.0.1/")
+        assert "private" in result
+
+    def test_localhost(self) -> None:
+        result = _validate_url("http://localhost:8080/")
+        assert "private" in result
+
+    def test_empty(self) -> None:
+        assert _validate_url("") != ""
+
+
+class TestExtractContent:
+    """Tests for content extraction."""
+
+    def test_trafilatura_extraction(self) -> None:
+        result = _extract_content(_SAMPLE_HTML, "https://example.com")
+        assert "Python" in result["text"]
+        assert result["title"] != "" or result["text"] != ""
+
+    def test_fallback_extraction(self) -> None:
+        result = _extract_fallback(_SAMPLE_HTML)
+        assert "Python" in result["text"]
+        assert result["title"] == "Test Article"
+
+    def test_fallback_strips_scripts(self) -> None:
+        html = "<html><body><script>alert('xss')</script><p>Clean text.</p></body></html>"
+        result = _extract_fallback(html)
+        assert "alert" not in result["text"]
+        assert "Clean text" in result["text"]
+
+    def test_fallback_strips_styles(self) -> None:
+        html = "<html><body><style>body{color:red}</style><p>Content here.</p></body></html>"
+        result = _extract_fallback(html)
+        assert "color" not in result["text"]
+        assert "Content" in result["text"]
+
+    def test_empty_html(self) -> None:
+        result = _extract_content("", "https://example.com")
+        assert result["text"] == "" or result["text"].strip() == ""
+
+
+class TestFetchTool:
+    """Tests for fetch tool."""
+
+    @pytest.mark.anyio()
+    async def test_basic_fetch(self) -> None:
+        p = WebIntelligencePlugin()
+        with patch(
+            "sovyx.plugins.official.web_intelligence._fetch_html",
+            new_callable=AsyncMock,
+            return_value=_SAMPLE_HTML,
+        ):
+            data = _parse(await p.fetch("https://example.com/article"))
+        assert data["ok"] is True
+        assert "Python" in str(data["text"])
+        assert data["truncated"] is False
+
+    @pytest.mark.anyio()
+    async def test_truncation(self) -> None:
+        p = WebIntelligencePlugin()
+        long_html = "<html><body><p>" + "x" * 5000 + "</p></body></html>"
+        with patch(
+            "sovyx.plugins.official.web_intelligence._fetch_html",
+            new_callable=AsyncMock,
+            return_value=long_html,
+        ):
+            data = _parse(await p.fetch("https://example.com", max_chars=100))
+        assert data["ok"] is True
+        assert data["truncated"] is True
+        assert len(str(data["text"])) <= 200  # 100 + "..."
+
+    @pytest.mark.anyio()
+    async def test_invalid_url(self) -> None:
+        p = WebIntelligencePlugin()
+        data = _parse(await p.fetch("not-a-url"))
+        assert data["ok"] is False
+
+    @pytest.mark.anyio()
+    async def test_private_ip_blocked(self) -> None:
+        p = WebIntelligencePlugin()
+        data = _parse(await p.fetch("http://192.168.1.1/admin"))
+        assert data["ok"] is False
+        assert "private" in str(data["message"])
+
+    @pytest.mark.anyio()
+    async def test_file_scheme_blocked(self) -> None:
+        p = WebIntelligencePlugin()
+        data = _parse(await p.fetch("file:///etc/passwd"))
+        assert data["ok"] is False
+
+    @pytest.mark.anyio()
+    async def test_fetch_failed(self) -> None:
+        p = WebIntelligencePlugin()
+        with patch(
+            "sovyx.plugins.official.web_intelligence._fetch_html",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            data = _parse(await p.fetch("https://example.com/404"))
+        assert data["ok"] is False
+
+    @pytest.mark.anyio()
+    async def test_fetch_timeout(self) -> None:
+        p = WebIntelligencePlugin()
+
+        async def slow_fetch(_url: str) -> str | None:
+            await asyncio.sleep(20)
+            return "<html></html>"
+
+        with patch(
+            "sovyx.plugins.official.web_intelligence._fetch_html",
+            side_effect=slow_fetch,
+        ):
+            data = _parse(await p.fetch("https://example.com"))
+        assert data["ok"] is False
+        assert "timed out" in str(data["message"])
+
+    @pytest.mark.anyio()
+    async def test_metadata_in_output(self) -> None:
+        p = WebIntelligencePlugin()
+        with patch(
+            "sovyx.plugins.official.web_intelligence._fetch_html",
+            new_callable=AsyncMock,
+            return_value=_SAMPLE_HTML,
+        ):
+            data = _parse(await p.fetch("https://example.com/article"))
+        assert "title" in data
+        assert "author" in data
+        assert "language" in data
+        assert "char_count" in data
