@@ -443,7 +443,7 @@ class KnowledgePlugin(ISovyxPlugin):
                             "similarity": round(sim, 3),
                         }
                     )
-                except Exception:  # noqa: BLE001
+                except Exception:  # noqa: BLE001  # nosec B112
                     continue  # relation creation failure is non-fatal
 
             return relations
