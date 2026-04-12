@@ -221,10 +221,12 @@ class TestRealResearch:
     @pytest.mark.anyio()
     async def test_research_topic(self) -> None:
         p = WebIntelligencePlugin()
-        data = _parse(await p.research(
-            "impact of artificial intelligence on healthcare",
-            max_sources=2,
-        ))
+        data = _parse(
+            await p.research(
+                "impact of artificial intelligence on healthcare",
+                max_sources=2,
+            )
+        )
         print(f"\n🔬 Research: ok={data['ok']}, sources={data.get('source_count', 0)}")
         assert data["ok"] is True, f"Failed: {data.get('message')}"
         assert data["source_count"] >= 1
@@ -233,8 +235,10 @@ class TestRealResearch:
         for s in data["sources"]:
             cred = s.get("credibility", {})
             content_len = len(str(s.get("content", "")))
-            print(f"   [{s['citation']}] {s['title'][:50]} "
-                  f"({cred.get('tier', '?')}, {content_len} chars)")
+            print(
+                f"   [{s['citation']}] {s['title'][:50]} "
+                f"({cred.get('tier', '?')}, {content_len} chars)"
+            )
 
         print(f"   Avg credibility: {data.get('avg_credibility', 'N/A')}")
         print(f"   Citations: {data['citations'][:2]}")
@@ -249,8 +253,8 @@ class TestSummary:
     @pytest.mark.anyio()
     async def test_plugin_info(self) -> None:
         p = WebIntelligencePlugin()
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"Plugin: {p.name} v{p.version}")
         print(f"Description: {p.description}")
         print(f"Cache stats: {p._cache.stats}")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
