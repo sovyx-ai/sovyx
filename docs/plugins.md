@@ -75,6 +75,7 @@ Undeclared permissions are denied at runtime with `PermissionDeniedError`.
 
 | Plugin | Tools | Description |
 |--------|-------|-------------|
+| `web-intelligence` | `search`, `fetch`, `research`, `lookup`, `learn_from_web`, `recall_web` | Web search, extraction, research with citations ([docs](./web-intelligence-plugin.md)) |
 | `financial-math` | `calculate`, `percentage`, `interest`, `tvm`, `amortization`, `portfolio`, `position_size`, `currency` | Enterprise financial calculations ([docs](./financial-math-plugin.md)) |
 | `calculator` | `calculate` | Backward-compatible wrapper for financial-math |
 | `weather` | `get_weather`, `get_forecast`, `will_it_rain` | Open-Meteo (free, no API key) |

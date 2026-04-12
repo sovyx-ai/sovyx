@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added — Web Intelligence Plugin
+
+- **6 tools** — `search`, `fetch`, `research`, `lookup`, `learn_from_web`, `recall_web`
+- **3 search backends** — DuckDuckGo (zero API key), SearXNG (self-hosted), Brave (API key)
+- **Auto intent classification** — factual, temporal, price, procedural routing
+- **Content extraction** — trafilatura with regex fallback, metadata (title, author, date)
+- **Research mode** — multi-step pipeline with numbered citations and credibility ranking
+- **Source credibility** — 3-tier domain reputation (academic/gov → news → social)
+- **Intelligent cache** — intent-adaptive TTL (price: 5min, factual: 1h, procedural: 24h)
+- **Brain integration** — save findings with provenance metadata (URL, author, credibility)
+- **Quick lookup** — definitions, prices, conversions, weather (Open-Meteo)
+- **Safety** — SSRF protection, query sanitization, per-tool rate limiting
+- **224 tests** — 200 unit + 24 Hypothesis property tests
+
 ### Added — Financial Math Plugin (Enterprise Showcase)
 
 - **9 financial tools** replacing basic calculator — `calculate`, `percentage`, `interest`, `tvm`, `amortization`, `portfolio`, `position_size`, `currency`
