@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1531,3 +1532,154 @@ class TestRecallWeb:
         p = WebIntelligencePlugin(brain=mock_brain)
         data = _parse(await p.recall_web("test"))
         assert data["ok"] is False
+
+
+# ── Intelligent Cache (TASK-503) ──
+
+from sovyx.plugins.official.web_intelligence import (
+    _CacheEntry,
+    _SearchCache,
+)
+
+
+class TestCacheEntry:
+    """Tests for _CacheEntry."""
+
+    def test_alive_within_ttl(self) -> None:
+        entry = _CacheEntry("value", 60, "factual")
+        assert entry.alive is True
+
+    def test_expired(self) -> None:
+        entry = _CacheEntry("value", 0, "factual")
+        # TTL=0 → already expired
+        time.sleep(0.01)
+        assert entry.alive is False
+
+    def test_hits_tracking(self) -> None:
+        entry = _CacheEntry("value", 60, "factual")
+        assert entry.hits == 0
+        entry.hits += 1
+        assert entry.hits == 1
+
+
+class TestSearchCache:
+    """Tests for _SearchCache."""
+
+    def test_put_and_get(self) -> None:
+        cache = _SearchCache()
+        cache.put("bitcoin price", "web", '{"ok":true}', "price")
+        result = cache.get("bitcoin price", "web")
+        assert result == '{"ok":true}'
+
+    def test_miss(self) -> None:
+        cache = _SearchCache()
+        assert cache.get("nonexistent", "web") is None
+
+    def test_case_insensitive(self) -> None:
+        cache = _SearchCache()
+        cache.put("Bitcoin Price", "web", "v1", "price")
+        assert cache.get("bitcoin price", "web") == "v1"
+
+    def test_mode_separation(self) -> None:
+        cache = _SearchCache()
+        cache.put("test", "web", "web-result", "factual")
+        cache.put("test", "news", "news-result", "temporal")
+        assert cache.get("test", "web") == "web-result"
+        assert cache.get("test", "news") == "news-result"
+
+    def test_expired_returns_none(self) -> None:
+        cache = _SearchCache()
+        cache.put("test", "web", "value", "factual")
+        # Manually expire
+        key = cache._make_key("test", "web")
+        cache._store[key].expires_at = 0
+        assert cache.get("test", "web") is None
+
+    def test_eviction_on_full(self) -> None:
+        cache = _SearchCache(max_entries=3)
+        cache.put("q1", "web", "v1", "factual")
+        cache.put("q2", "web", "v2", "factual")
+        cache.put("q3", "web", "v3", "factual")
+        # q1, q2, q3 all have 0 hits
+        # Adding q4 should evict one
+        cache.put("q4", "web", "v4", "factual")
+        assert len(cache._store) == 3
+
+    def test_eviction_preserves_popular(self) -> None:
+        cache = _SearchCache(max_entries=2)
+        cache.put("popular", "web", "v1", "factual")
+        cache.get("popular", "web")  # 1 hit
+        cache.get("popular", "web")  # 2 hits
+        cache.put("unpopular", "web", "v2", "factual")
+        # Adding third should evict unpopular (0 hits)
+        cache.put("new", "web", "v3", "factual")
+        assert cache.get("popular", "web") == "v1"
+
+    def test_clear(self) -> None:
+        cache = _SearchCache()
+        cache.put("q1", "web", "v1", "factual")
+        cache.clear()
+        assert cache.get("q1", "web") is None
+        assert cache.stats["entries"] == 0
+
+    def test_stats(self) -> None:
+        cache = _SearchCache()
+        cache.put("q1", "web", "v1", "factual")
+        cache.get("q1", "web")  # hit
+        cache.get("q2", "web")  # miss
+        stats = cache.stats
+        assert stats["hits"] == 1
+        assert stats["misses"] == 1
+        assert stats["entries"] == 1
+        assert stats["hit_rate_pct"] == 50
+
+    def test_ttl_by_intent(self) -> None:
+        """Different intents get different TTLs."""
+        cache = _SearchCache()
+        cache.put("q1", "web", "v1", "price")
+        cache.put("q2", "web", "v2", "procedural")
+        k1 = cache._make_key("q1", "web")
+        k2 = cache._make_key("q2", "web")
+        # Price TTL (300s) should be less than procedural (86400s)
+        ttl1 = cache._store[k1].expires_at - time.monotonic()
+        ttl2 = cache._store[k2].expires_at - time.monotonic()
+        assert ttl1 < ttl2
+
+
+class TestSearchCacheIntegration:
+    """Tests for cache integration in search tool."""
+
+    @pytest.mark.anyio()
+    async def test_second_call_cached(self) -> None:
+        p = WebIntelligencePlugin()
+        call_count = 0
+
+        original_search = p._backend.search_text
+
+        async def counting_search(q: str, n: int) -> list[SearchResult]:
+            nonlocal call_count
+            call_count += 1
+            return await original_search(q, n)
+
+        p._backend.search_text = _mock_ddgs_text(_SAMPLE_WEB_RESULTS)  # type: ignore[assignment]
+
+        # First call
+        data1 = _parse(await p.search("test query", mode="web"))
+        assert data1["ok"] is True
+
+        # Second call — should hit cache (no backend call)
+        p._backend.search_text = counting_search  # type: ignore[assignment]
+        data2 = _parse(await p.search("test query", mode="web"))
+        assert data2["ok"] is True
+        assert call_count == 0  # never called backend
+
+    @pytest.mark.anyio()
+    async def test_different_queries_not_cached(self) -> None:
+        p = WebIntelligencePlugin()
+        p._backend.search_text = _mock_ddgs_text(_SAMPLE_WEB_RESULTS)  # type: ignore[assignment]
+
+        await p.search("query one", mode="web")
+        # Clear the mock to track new calls
+        p._backend.search_text = _mock_ddgs_text(_SAMPLE_WEB_RESULTS)  # type: ignore[assignment]
+        data = _parse(await p.search("query two", mode="web"))
+        assert data["ok"] is True
