@@ -1681,3 +1681,215 @@ class TestPortfolioEdgeCases:
         p = FinancialMathPlugin()
         data = _parse(await p.portfolio(mode="sharpe", prices=[100]))
         assert data["ok"] is False
+
+
+# ── Position Sizing ──
+
+
+class TestKelly:
+    """Test position_size 'kelly' mode."""
+
+    @pytest.mark.anyio()
+    async def test_basic(self) -> None:
+        """60% WR, 2:1 RR → 40% Kelly fraction."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.position_size(
+                mode="kelly",
+                win_rate=60,
+                reward_risk_ratio=2.0,
+                bankroll=50000,
+            )
+        )
+        assert data["ok"] is True
+        assert data["kelly_fraction"] == "40%"
+        pos = Decimal(str(data["position_size"]))
+        assert pos == Decimal("20000")
+
+    @pytest.mark.anyio()
+    async def test_no_edge(self) -> None:
+        """50% WR, 1:1 RR → 0% Kelly (no edge)."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.position_size(
+                mode="kelly",
+                win_rate=50,
+                reward_risk_ratio=1.0,
+            )
+        )
+        assert data["result"] == "0"
+        assert "warnings" in data
+
+    @pytest.mark.anyio()
+    async def test_aggressive_warning(self) -> None:
+        """High Kelly → warning."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.position_size(
+                mode="kelly",
+                win_rate=70,
+                reward_risk_ratio=3.0,
+            )
+        )
+        assert "warnings" in data
+        assert "aggressive" in str(data["warnings"]).lower()
+
+    @pytest.mark.anyio()
+    async def test_without_bankroll(self) -> None:
+        """Returns fraction only without bankroll."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.position_size(
+                mode="kelly",
+                win_rate=60,
+                reward_risk_ratio=2.0,
+            )
+        )
+        assert data["ok"] is True
+        assert "position_size" not in data
+
+    @pytest.mark.anyio()
+    async def test_invalid_win_rate(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.position_size(
+                mode="kelly",
+                win_rate=0,
+                reward_risk_ratio=2.0,
+            )
+        )
+        assert data["ok"] is False
+
+    @pytest.mark.anyio()
+    async def test_100_percent_wr_rejected(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.position_size(
+                mode="kelly",
+                win_rate=100,
+                reward_risk_ratio=2.0,
+            )
+        )
+        assert data["ok"] is False
+
+
+class TestHalfKelly:
+    """Test position_size 'half_kelly' mode."""
+
+    @pytest.mark.anyio()
+    async def test_half_of_full(self) -> None:
+        """Half-Kelly should be exactly half of full Kelly."""
+        p = FinancialMathPlugin()
+        full = _parse(
+            await p.position_size(
+                mode="kelly",
+                win_rate=60,
+                reward_risk_ratio=2.0,
+                bankroll=50000,
+            )
+        )
+        half = _parse(
+            await p.position_size(
+                mode="half_kelly",
+                win_rate=60,
+                reward_risk_ratio=2.0,
+                bankroll=50000,
+            )
+        )
+        full_pos = Decimal(str(full["position_size"]))
+        half_pos = Decimal(str(half["position_size"]))
+        assert half_pos == full_pos / Decimal(2)
+
+
+class TestFixedFractional:
+    """Test position_size 'fixed_fractional' mode."""
+
+    @pytest.mark.anyio()
+    async def test_basic(self) -> None:
+        """Bankroll=50k, risk 2% → $1,000."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.position_size(
+                mode="fixed_fractional",
+                bankroll=50000,
+                risk_percent=2,
+            )
+        )
+        assert data["ok"] is True
+        assert data["result"] == "1000"
+
+    @pytest.mark.anyio()
+    async def test_decimal_percent(self) -> None:
+        """risk_percent=0.02 auto-detected as 2%."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.position_size(
+                mode="fixed_fractional",
+                bankroll=50000,
+                risk_percent=0.02,
+            )
+        )
+        assert data["result"] == "1000"
+
+
+class TestMaxRisk:
+    """Test position_size 'max_risk' mode."""
+
+    @pytest.mark.anyio()
+    async def test_basic(self) -> None:
+        """Entry=100, stop=95, risk=$1000 → 200 units."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.position_size(
+                mode="max_risk",
+                entry_price=100,
+                stop_price=95,
+                risk_amount=1000,
+            )
+        )
+        assert data["ok"] is True
+        assert data["result"] == "200"
+        assert data["risk_per_unit"] == "5"
+
+    @pytest.mark.anyio()
+    async def test_short_position(self) -> None:
+        """Entry=50, stop=55 (short) → risk per unit = 5."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.position_size(
+                mode="max_risk",
+                entry_price=50,
+                stop_price=55,
+                risk_amount=500,
+            )
+        )
+        assert data["result"] == "100"
+
+    @pytest.mark.anyio()
+    async def test_equal_prices_rejected(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.position_size(
+                mode="max_risk",
+                entry_price=100,
+                stop_price=100,
+                risk_amount=1000,
+            )
+        )
+        assert data["ok"] is False
+
+
+class TestPositionSizingEdgeCases:
+    """Edge cases for position_size tool."""
+
+    @pytest.mark.anyio()
+    async def test_unknown_mode(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.position_size(mode="invalid"))
+        assert data["ok"] is False
+
+    @pytest.mark.anyio()
+    async def test_missing_params(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.position_size(mode="kelly"))
+        assert data["ok"] is False
