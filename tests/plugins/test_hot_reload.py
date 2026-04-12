@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import sys
-import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,7 +11,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from sovyx.plugins.hot_reload import PluginFileWatcher, _clear_module_cache
-
 
 # ── Fixtures ──
 
@@ -92,13 +90,15 @@ def test_debounce_blocks_rapid_changes(manager: FakePluginManager, tmp_path: Pat
     watcher = PluginFileWatcher(manager, [tmp_path], debounce_s=10.0)
     manager.add("calculator")
 
-    with patch.object(watcher, "_resolve_plugin_name", return_value="calculator"):
-        with patch("asyncio.get_running_loop", side_effect=RuntimeError):
-            watcher._on_file_changed("/some/calculator.py")
-            # Second call within debounce window — should be skipped
-            watcher._on_file_changed("/some/calculator.py")
-            # _resolve_plugin_name only called once due to debounce
-            assert watcher._resolve_plugin_name.call_count == 1  # type: ignore[union-attr]
+    with (
+        patch.object(watcher, "_resolve_plugin_name", return_value="calculator"),
+        patch("asyncio.get_running_loop", side_effect=RuntimeError),
+    ):
+        watcher._on_file_changed("/some/calculator.py")
+        # Second call within debounce window — should be skipped
+        watcher._on_file_changed("/some/calculator.py")
+        # _resolve_plugin_name only called once due to debounce
+        assert watcher._resolve_plugin_name.call_count == 1  # type: ignore[union-attr]
 
 
 def test_debounce_allows_after_window(manager: FakePluginManager, tmp_path: Path) -> None:
@@ -114,9 +114,7 @@ def test_debounce_allows_after_window(manager: FakePluginManager, tmp_path: Path
 # ── _resolve_plugin_name ──
 
 
-def test_resolve_plugin_name_found(
-    watcher: PluginFileWatcher, manager: FakePluginManager
-) -> None:
+def test_resolve_plugin_name_found(watcher: PluginFileWatcher, manager: FakePluginManager) -> None:
     manager.add("calculator", module="sovyx.plugins.official.calculator")
     result = watcher._resolve_plugin_name("/path/to/sovyx/plugins/official/calculator.py")
     assert result == "calculator"
@@ -138,9 +136,7 @@ def test_resolve_returns_none_for_missing_plugin(
     assert result is None
 
 
-def test_resolve_skips_none_plugin(
-    watcher: PluginFileWatcher, manager: FakePluginManager
-) -> None:
+def test_resolve_skips_none_plugin(watcher: PluginFileWatcher, manager: FakePluginManager) -> None:
     manager._plugins["ghost"] = None  # type: ignore[assignment]
     result = watcher._resolve_plugin_name("/any/path.py")
     assert result is None
@@ -171,12 +167,14 @@ async def test_on_file_changed_with_event_loop(
 ) -> None:
     """_on_file_changed schedules reload task when event loop is running."""
     manager.add("calculator")
-    with patch.object(watcher, "_resolve_plugin_name", return_value="calculator"):
-        with patch.object(watcher, "_reload_plugin", new_callable=AsyncMock) as mock_reload:
-            watcher._on_file_changed("/calculator.py")
-            # Let the event loop process the created task
-            await asyncio.sleep(0.05)
-            mock_reload.assert_awaited_once_with("calculator")
+    with (
+        patch.object(watcher, "_resolve_plugin_name", return_value="calculator"),
+        patch.object(watcher, "_reload_plugin", new_callable=AsyncMock) as mock_reload,
+    ):
+        watcher._on_file_changed("/calculator.py")
+        # Let the event loop process the created task
+        await asyncio.sleep(0.05)
+        mock_reload.assert_awaited_once_with("calculator")
 
 
 # ── _reload_plugin ──
@@ -235,7 +233,9 @@ def test_start_without_watchdog(
     watcher: PluginFileWatcher,
 ) -> None:
     """start() gracefully handles missing watchdog."""
-    original_import = __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__  # type: ignore[union-attr]
+    original_import = (
+        __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__
+    )  # type: ignore[union-attr]
 
     def fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
         if "watchdog" in name:
