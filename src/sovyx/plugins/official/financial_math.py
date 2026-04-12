@@ -705,3 +705,259 @@ class FinancialMathPlugin(ISovyxPlugin):
                 f"money doubles in ~{_format_decimal(years_to_double)} years"
             ),
         )
+
+    # ── Time Value of Money ──
+
+    @tool(
+        description=(
+            "Time value of money calculations. Modes: "
+            "'npv' (net present value from cashflows), "
+            "'irr' (internal rate of return via Newton-Raphson), "
+            "'pv' (present value of a future amount), "
+            "'fv' (future value of a present amount), "
+            "'annuity_pv' (present value of periodic payments), "
+            "'annuity_fv' (future value of periodic payments). "
+            "Example: tvm(mode='npv', rate=12, cashflows=[-100000, 25000, 35000, 40000, 30000])"
+        ),
+    )
+    async def tvm(
+        self,
+        mode: str,
+        *,
+        rate: float | None = None,
+        cashflows: list[float] | None = None,
+        present_value: float | None = None,
+        future_value: float | None = None,
+        payment: float | None = None,
+        periods: float | None = None,
+    ) -> str:
+        """Time value of money with Decimal precision.
+
+        Args:
+            mode: 'npv', 'irr', 'pv', 'fv', 'annuity_pv', 'annuity_fv'.
+            rate: Discount/interest rate (auto-detect: >1 = %, ≤1 = decimal).
+            cashflows: List of cashflows for NPV/IRR (first is usually negative).
+            present_value: PV amount (for fv mode).
+            future_value: FV amount (for pv mode).
+            payment: Periodic payment (for annuity modes).
+            periods: Number of periods.
+
+        Returns:
+            JSON with result and breakdown.
+        """
+        mode = mode.strip().lower()
+
+        try:
+            if mode == "npv":
+                return self._tvm_npv(rate, cashflows)
+            if mode == "irr":
+                return self._tvm_irr(cashflows)
+            if mode == "pv":
+                return self._tvm_pv(future_value, rate, periods)
+            if mode == "fv":
+                return self._tvm_fv(present_value, rate, periods)
+            if mode == "annuity_pv":
+                return self._tvm_annuity_pv(payment, rate, periods)
+            if mode == "annuity_fv":
+                return self._tvm_annuity_fv(payment, rate, periods)
+        except _ValidationError as e:
+            return _err(str(e))
+        except (ZeroDivisionError, DecimalException, OverflowError) as e:
+            return _err(f"calculation error: {e}")
+
+        valid = "npv, irr, pv, fv, annuity_pv, annuity_fv"
+        return _err(f"unknown mode: '{mode}'. Valid: {valid}")
+
+    # ── TVM Internals ──
+
+    @staticmethod
+    def _tvm_npv(
+        rate: float | None, cashflows: list[float] | None,
+    ) -> str:
+        """NPV = Σ CF_t / (1+r)^t."""
+        _require(rate=rate, cashflows=cashflows)
+        assert cashflows is not None  # for mypy
+        if not cashflows:
+            msg = "cashflows cannot be empty"
+            raise _ValidationError(msg)
+        r = FinancialMathPlugin._normalize_rate(rate)
+        npv = _ZERO
+        for t, cf in enumerate(cashflows):
+            d_cf = _to_decimal(cf)
+            npv += d_cf / (Decimal(1) + r) ** t
+        return _ok(
+            "tvm",
+            mode="npv",
+            rate=_format_decimal(r * _HUNDRED) + "%",
+            periods=str(len(cashflows)),
+            npv=_format_decimal(npv),
+            result=_format_decimal(npv),
+            profitable=npv > _ZERO,
+            message=(
+                f"NPV at {_format_decimal(r * _HUNDRED)}% = "
+                f"{_format_decimal(npv)} "
+                f"({'profitable' if npv > _ZERO else 'not profitable'})"
+            ),
+        )
+
+    @staticmethod
+    def _tvm_irr(cashflows: list[float] | None) -> str:
+        """IRR via Newton-Raphson iteration."""
+        _require(cashflows=cashflows)
+        assert cashflows is not None
+        if len(cashflows) < 2:  # noqa: PLR2004
+            msg = "need at least 2 cashflows"
+            raise _ValidationError(msg)
+
+        d_cfs = [_to_decimal(cf) for cf in cashflows]
+
+        # Newton-Raphson: find r where NPV(r) = 0
+        r = Decimal("0.1")  # initial guess 10%
+        max_iter = 100
+        tolerance = Decimal("1E-10")
+
+        for _ in range(max_iter):
+            npv = _ZERO
+            dnpv = _ZERO  # derivative
+            for t, cf in enumerate(d_cfs):
+                denom = (Decimal(1) + r) ** t
+                if denom == _ZERO:
+                    break
+                npv += cf / denom
+                if t > 0:
+                    dnpv -= _to_decimal(t) * cf / (Decimal(1) + r) ** (t + 1)
+
+            if dnpv == _ZERO:
+                msg = "IRR calculation did not converge (zero derivative)"
+                raise _ValidationError(msg)
+
+            r_new = r - npv / dnpv
+            if abs(r_new - r) < tolerance:
+                irr_pct = r_new * _HUNDRED
+                return _ok(
+                    "tvm",
+                    mode="irr",
+                    irr_decimal=_format_decimal(r_new),
+                    irr_percent=_format_decimal(irr_pct),
+                    iterations=str(_ + 1),
+                    result=_format_decimal(irr_pct),
+                    message=f"IRR = {_format_decimal(irr_pct)}%",
+                )
+            r = r_new
+
+        msg = f"IRR did not converge after {max_iter} iterations"
+        raise _ValidationError(msg)
+
+    @staticmethod
+    def _tvm_pv(
+        future_value: float | None,
+        rate: float | None,
+        periods: float | None,
+    ) -> str:
+        """PV = FV / (1+r)^n."""
+        _require(future_value=future_value, rate=rate, periods=periods)
+        fv = _to_decimal(future_value)
+        r = FinancialMathPlugin._normalize_rate(rate)
+        n = _to_decimal(periods)
+        pv = fv / (Decimal(1) + r) ** n
+        return _ok(
+            "tvm",
+            mode="pv",
+            future_value=_format_decimal(fv),
+            rate=_format_decimal(r * _HUNDRED) + "%",
+            periods=_format_decimal(n),
+            present_value=_format_decimal(pv),
+            result=_format_decimal(pv),
+            message=(
+                f"FV={_format_decimal(fv)} at "
+                f"{_format_decimal(r * _HUNDRED)}% for "
+                f"{_format_decimal(n)} periods → PV={_format_decimal(pv)}"
+            ),
+        )
+
+    @staticmethod
+    def _tvm_fv(
+        present_value: float | None,
+        rate: float | None,
+        periods: float | None,
+    ) -> str:
+        """FV = PV * (1+r)^n."""
+        _require(present_value=present_value, rate=rate, periods=periods)
+        pv = _to_decimal(present_value)
+        r = FinancialMathPlugin._normalize_rate(rate)
+        n = _to_decimal(periods)
+        fv = pv * (Decimal(1) + r) ** n
+        return _ok(
+            "tvm",
+            mode="fv",
+            present_value=_format_decimal(pv),
+            rate=_format_decimal(r * _HUNDRED) + "%",
+            periods=_format_decimal(n),
+            future_value=_format_decimal(fv),
+            result=_format_decimal(fv),
+            message=(
+                f"PV={_format_decimal(pv)} at "
+                f"{_format_decimal(r * _HUNDRED)}% for "
+                f"{_format_decimal(n)} periods → FV={_format_decimal(fv)}"
+            ),
+        )
+
+    @staticmethod
+    def _tvm_annuity_pv(
+        payment: float | None,
+        rate: float | None,
+        periods: float | None,
+    ) -> str:
+        """Annuity PV = PMT * [1 - (1+r)^(-n)] / r."""
+        _require(payment=payment, rate=rate, periods=periods)
+        pmt = _to_decimal(payment)
+        r = FinancialMathPlugin._normalize_rate(rate)
+        n = _to_decimal(periods)
+        if r == _ZERO:  # noqa: SIM108
+            pv = pmt * n
+        else:
+            pv = pmt * (Decimal(1) - (Decimal(1) + r) ** (-n)) / r
+        return _ok(
+            "tvm",
+            mode="annuity_pv",
+            payment=_format_decimal(pmt),
+            rate=_format_decimal(r * _HUNDRED) + "%",
+            periods=_format_decimal(n),
+            present_value=_format_decimal(pv),
+            result=_format_decimal(pv),
+            message=(
+                f"PMT={_format_decimal(pmt)} at "
+                f"{_format_decimal(r * _HUNDRED)}% for "
+                f"{_format_decimal(n)} periods → PV={_format_decimal(pv)}"
+            ),
+        )
+
+    @staticmethod
+    def _tvm_annuity_fv(
+        payment: float | None,
+        rate: float | None,
+        periods: float | None,
+    ) -> str:
+        """Annuity FV = PMT * [(1+r)^n - 1] / r."""
+        _require(payment=payment, rate=rate, periods=periods)
+        pmt = _to_decimal(payment)
+        r = FinancialMathPlugin._normalize_rate(rate)
+        n = _to_decimal(periods)
+        if r == _ZERO:  # noqa: SIM108
+            fv = pmt * n
+        else:
+            fv = pmt * ((Decimal(1) + r) ** n - Decimal(1)) / r
+        return _ok(
+            "tvm",
+            mode="annuity_fv",
+            payment=_format_decimal(pmt),
+            rate=_format_decimal(r * _HUNDRED) + "%",
+            periods=_format_decimal(n),
+            future_value=_format_decimal(fv),
+            result=_format_decimal(fv),
+            message=(
+                f"PMT={_format_decimal(pmt)} at "
+                f"{_format_decimal(r * _HUNDRED)}% for "
+                f"{_format_decimal(n)} periods → FV={_format_decimal(fv)}"
+            ),
+        )

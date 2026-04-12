@@ -975,3 +975,260 @@ class TestInterestEdgeCases:
         p = FinancialMathPlugin()
         data = _parse(await p.interest(mode="simple", principal=1000, rate=-5, periods=1))
         assert data["ok"] is False
+
+
+# ── Time Value of Money ──
+
+
+class TestNPV:
+    """Test tvm 'npv' mode."""
+
+    @pytest.mark.anyio()
+    async def test_basic(self) -> None:
+        """Investment of $100k, returns: 25k, 35k, 40k, 30k at 12%."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.tvm(
+                mode="npv",
+                rate=12,
+                cashflows=[-100000, 25000, 35000, 40000, 30000],
+            )
+        )
+        assert data["ok"] is True
+        result = Decimal(str(data["result"]))
+        # NPV at 12% ≈ -2240 (slightly negative)
+        assert result > Decimal("-2500")
+        assert result < Decimal("-2000")
+        assert data["profitable"] is False
+
+    @pytest.mark.anyio()
+    async def test_unprofitable(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.tvm(
+                mode="npv",
+                rate=20,
+                cashflows=[-100000, 25000, 25000, 25000],
+            )
+        )
+        assert data["profitable"] is False
+
+    @pytest.mark.anyio()
+    async def test_zero_rate(self) -> None:
+        """At 0%, NPV = sum of cashflows."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.tvm(
+                mode="npv",
+                rate=0,
+                cashflows=[-100, 60, 60],
+            )
+        )
+        result = Decimal(str(data["result"]))
+        assert result == Decimal(20)
+
+    @pytest.mark.anyio()
+    async def test_empty_cashflows(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.tvm(mode="npv", rate=10, cashflows=[]))
+        assert data["ok"] is False
+
+
+class TestIRR:
+    """Test tvm 'irr' mode."""
+
+    @pytest.mark.anyio()
+    async def test_basic(self) -> None:
+        """Same cashflows as NPV test — IRR should be ~13.2%."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.tvm(
+                mode="irr",
+                cashflows=[-100000, 25000, 35000, 40000, 30000],
+            )
+        )
+        assert data["ok"] is True
+        result = Decimal(str(data["irr_percent"]))
+        # IRR ≈ 10.7%
+        assert result > Decimal("10")
+        assert result < Decimal("12")
+
+    @pytest.mark.anyio()
+    async def test_npv_at_irr_is_zero(self) -> None:
+        """NPV evaluated at IRR should be approximately zero."""
+        p = FinancialMathPlugin()
+        cfs = [-100000, 25000, 35000, 40000, 30000]
+        irr_data = _parse(await p.tvm(mode="irr", cashflows=cfs))
+        irr_rate = float(str(irr_data["irr_percent"]))
+
+        npv_data = _parse(await p.tvm(mode="npv", rate=irr_rate, cashflows=cfs))
+        npv = Decimal(str(npv_data["result"]))
+        assert abs(npv) < Decimal("1")  # ~zero
+
+    @pytest.mark.anyio()
+    async def test_simple_double(self) -> None:
+        """-100, +200 → IRR = 100%."""
+        p = FinancialMathPlugin()
+        data = _parse(await p.tvm(mode="irr", cashflows=[-100, 200]))
+        result = Decimal(str(data["irr_percent"]))
+        assert abs(result - Decimal(100)) < Decimal("0.01")
+
+    @pytest.mark.anyio()
+    async def test_too_few_cashflows(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.tvm(mode="irr", cashflows=[-100]))
+        assert data["ok"] is False
+
+
+class TestPV:
+    """Test tvm 'pv' mode."""
+
+    @pytest.mark.anyio()
+    async def test_basic(self) -> None:
+        """FV=10000, rate=10%, n=5 → PV≈6209.21."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.tvm(
+                mode="pv",
+                future_value=10000,
+                rate=10,
+                periods=5,
+            )
+        )
+        assert data["ok"] is True
+        result = Decimal(str(data["result"]))
+        assert result > Decimal("6209")
+        assert result < Decimal("6210")
+
+    @pytest.mark.anyio()
+    async def test_pv_fv_roundtrip(self) -> None:
+        """PV→FV→PV should return original value."""
+        p = FinancialMathPlugin()
+        pv_data = _parse(
+            await p.tvm(
+                mode="pv",
+                future_value=10000,
+                rate=8,
+                periods=3,
+            )
+        )
+        pv = float(str(pv_data["result"]))
+        fv_data = _parse(
+            await p.tvm(
+                mode="fv",
+                present_value=pv,
+                rate=8,
+                periods=3,
+            )
+        )
+        fv = Decimal(str(fv_data["result"]))
+        assert abs(fv - Decimal(10000)) < Decimal("1")
+
+
+class TestFV:
+    """Test tvm 'fv' mode."""
+
+    @pytest.mark.anyio()
+    async def test_basic(self) -> None:
+        """PV=1000, 10%, 10 periods."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.tvm(
+                mode="fv",
+                present_value=1000,
+                rate=10,
+                periods=10,
+            )
+        )
+        assert data["ok"] is True
+        result = Decimal(str(data["result"]))
+        # 1000 * 1.10^10 ≈ 2593.74
+        assert result > Decimal("2593")
+        assert result < Decimal("2594")
+
+
+class TestAnnuityPV:
+    """Test tvm 'annuity_pv' mode."""
+
+    @pytest.mark.anyio()
+    async def test_basic(self) -> None:
+        """PMT=1000, 1%/period, 12 periods → PV≈11255.08."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.tvm(
+                mode="annuity_pv",
+                payment=1000,
+                rate=0.01,
+                periods=12,
+            )
+        )
+        assert data["ok"] is True
+        result = Decimal(str(data["result"]))
+        assert result > Decimal("11255")
+        assert result < Decimal("11256")
+
+    @pytest.mark.anyio()
+    async def test_zero_rate(self) -> None:
+        """At 0%, annuity PV = PMT * n."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.tvm(
+                mode="annuity_pv",
+                payment=500,
+                rate=0,
+                periods=10,
+            )
+        )
+        assert data["result"] == "5000"
+
+
+class TestAnnuityFV:
+    """Test tvm 'annuity_fv' mode."""
+
+    @pytest.mark.anyio()
+    async def test_basic(self) -> None:
+        """PMT=1000, 1%/period, 12 periods."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.tvm(
+                mode="annuity_fv",
+                payment=1000,
+                rate=0.01,
+                periods=12,
+            )
+        )
+        assert data["ok"] is True
+        result = Decimal(str(data["result"]))
+        # ≈ 12682.50
+        assert result > Decimal("12682")
+        assert result < Decimal("12683")
+
+    @pytest.mark.anyio()
+    async def test_zero_rate(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.tvm(
+                mode="annuity_fv",
+                payment=500,
+                rate=0,
+                periods=10,
+            )
+        )
+        assert data["result"] == "5000"
+
+
+class TestTVMEdgeCases:
+    """Edge cases for TVM tool."""
+
+    @pytest.mark.anyio()
+    async def test_unknown_mode(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.tvm(mode="invalid"))
+        assert data["ok"] is False
+
+    @pytest.mark.anyio()
+    async def test_missing_params(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.tvm(mode="pv"))
+        assert data["ok"] is False
+        assert "missing" in str(data["message"])
