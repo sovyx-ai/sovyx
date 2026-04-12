@@ -20,7 +20,9 @@ Response Schema (all tools):
 from __future__ import annotations
 
 import json
+import time
 import typing
+from collections import deque
 from typing import ClassVar
 
 from sovyx.plugins.sdk import ISovyxPlugin, tool
@@ -30,6 +32,11 @@ if typing.TYPE_CHECKING:  # pragma: no cover
 
 _MAX_RETRIES = 2
 _RETRY_ERRORS = (OSError, TimeoutError)
+
+# Rate limiting: max operations per minute per tool
+_RATE_LIMIT_WRITE = 30  # remember, forget
+_RATE_LIMIT_READ = 60  # search, recall, introspection
+_RATE_WINDOW_SECONDS = 60.0
 
 # ── Defaults ──
 
@@ -155,6 +162,8 @@ class KnowledgePlugin(ISovyxPlugin):
         self._brain = brain
         self._dedup_threshold = max(0.5, min(0.99, dedup_threshold))
         self._max_results = max(1, min(50, max_results))
+        self._write_limiter = _RateLimiter(_RATE_LIMIT_WRITE)
+        self._read_limiter = _RateLimiter(_RATE_LIMIT_READ)
 
     @property
     def name(self) -> str:
@@ -198,6 +207,8 @@ class KnowledgePlugin(ISovyxPlugin):
         """
         if self._brain is None:
             return _err(_Msg.NO_BRAIN)
+        if not self._write_limiter.check():
+            return _err("Rate limit exceeded — too many write operations. Try again shortly.")
 
         if not name:
             name = _auto_name(what)
@@ -466,6 +477,8 @@ class KnowledgePlugin(ISovyxPlugin):
         """
         if self._brain is None:
             return _err(_Msg.NO_BRAIN)
+        if not self._read_limiter.check():
+            return _err("Rate limit exceeded — too many read operations. Try again shortly.")
 
         # Over-fetch when filtering by person (post-filter)
         fetch_limit = max(1, min(self._max_results, limit))
@@ -541,6 +554,8 @@ class KnowledgePlugin(ISovyxPlugin):
         """
         if self._brain is None:
             return _err(_Msg.NO_BRAIN)
+        if not self._write_limiter.check():
+            return _err("Rate limit exceeded — too many write operations. Try again shortly.")
 
         try:
             if forget_all:
@@ -632,6 +647,8 @@ class KnowledgePlugin(ISovyxPlugin):
         """
         if self._brain is None:
             return _err(_Msg.NO_BRAIN)
+        if not self._read_limiter.check():
+            return _err("Rate limit exceeded — too many read operations. Try again shortly.")
 
         try:
             results = await self._brain.search(topic, limit=self._max_results)
@@ -716,6 +733,8 @@ class KnowledgePlugin(ISovyxPlugin):
         """
         if self._brain is None:
             return _err(_Msg.NO_BRAIN)
+        if not self._read_limiter.check():
+            return _err("Rate limit exceeded — too many read operations. Try again shortly.")
 
         try:
             stats = await self._brain.get_stats()
@@ -799,6 +818,41 @@ class _RelationInfo(typing.NamedTuple):
 
 
 T = typing.TypeVar("T")
+
+
+class _RateLimiter:
+    """Sliding window rate limiter for brain operations.
+
+    Thread-safe via deque (GIL-protected). Tracks timestamps of
+    recent calls and rejects if over limit within window.
+    """
+
+    __slots__ = ("_limit", "_window", "_timestamps")
+
+    def __init__(self, limit: int, window: float = _RATE_WINDOW_SECONDS) -> None:
+        self._limit = limit
+        self._window = window
+        self._timestamps: deque[float] = deque()
+
+    def check(self) -> bool:
+        """Check if request is allowed. Returns True if under limit."""
+        now = time.monotonic()
+        cutoff = now - self._window
+        while self._timestamps and self._timestamps[0] < cutoff:
+            self._timestamps.popleft()
+        if len(self._timestamps) >= self._limit:
+            return False
+        self._timestamps.append(now)
+        return True
+
+    @property
+    def remaining(self) -> int:
+        """Number of requests remaining in current window."""
+        now = time.monotonic()
+        cutoff = now - self._window
+        while self._timestamps and self._timestamps[0] < cutoff:
+            self._timestamps.popleft()
+        return max(0, self._limit - len(self._timestamps))
 
 
 async def _retry(

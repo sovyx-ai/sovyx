@@ -1222,3 +1222,69 @@ class TestErrorRecovery:
         data = json.loads(await plugin.forget("test"))
         assert data["ok"] is False
         assert data["action"] == "error"
+
+
+class TestRateLimiting:
+    """TASK-483: Rate limiting for brain operations."""
+
+    @pytest.mark.asyncio
+    async def test_write_rate_limit(self) -> None:
+        brain = _mock_brain()
+        brain.find_similar = AsyncMock(return_value=[])
+        plugin = KnowledgePlugin(brain=brain)
+
+        # Exhaust write limit (30/min)
+        for i in range(30):
+            result = json.loads(await plugin.remember(f"fact {i}"))
+            assert result["ok"] is True
+
+        # 31st should be rate limited
+        result = json.loads(await plugin.remember("one too many"))
+        assert result["ok"] is False
+        assert "rate limit" in result["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_read_rate_limit(self) -> None:
+        brain = _mock_brain(search_results=[])
+        plugin = KnowledgePlugin(brain=brain)
+
+        # Exhaust read limit (60/min)
+        for i in range(60):
+            result = json.loads(await plugin.search(f"query {i}"))
+            assert result["ok"] is True
+
+        # 61st should be rate limited
+        result = json.loads(await plugin.search("one too many"))
+        assert result["ok"] is False
+        assert "rate limit" in result["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_write_and_read_independent(self) -> None:
+        brain = _mock_brain()
+        brain.find_similar = AsyncMock(return_value=[])
+        plugin = KnowledgePlugin(brain=brain)
+
+        # Use up writes
+        for i in range(30):
+            await plugin.remember(f"fact {i}")
+
+        # Reads should still work
+        brain.search = AsyncMock(return_value=[])
+        result = json.loads(await plugin.search("still works"))
+        assert result["ok"] is True
+
+    @pytest.mark.asyncio
+    async def test_forget_uses_write_limiter(self) -> None:
+        brain = _mock_brain(search_results=[{"id": "c-1", "name": "x", "content": "x"}])
+        plugin = KnowledgePlugin(brain=brain)
+
+        # Exhaust write limit
+        brain2 = _mock_brain()
+        brain2.find_similar = AsyncMock(return_value=[])
+        plugin2 = KnowledgePlugin(brain=brain2)
+        for i in range(30):
+            await plugin2.remember(f"fact {i}")
+
+        # Now forget should be limited on plugin2 (same limiter)
+        result = json.loads(await plugin2.forget("test"))
+        assert result["ok"] is False
