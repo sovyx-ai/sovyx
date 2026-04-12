@@ -12,7 +12,9 @@
     "about": "About",
     "chat": "Chat",
     "voice": "Voice",
-    "plugins": "Plugins"
+    "plugins": "Plugins",
+    "emotions": "Emotions",
+    "productivity": "Productivity"
   },
   "status": {
     "online": "Online",
@@ -99,5 +101,16 @@
     "skipToContent": "Skip to main content",
     "notifications": "Notifications",
     "cmdKLabel": "Press Command+K to open command palette"
+  },
+  "comingSoon": {
+    "badge": "Coming Soon"
+  },
+  "emotions": {
+    "title": "Emotions",
+    "description": "Track emotional patterns across your conversations. Valence and arousal history, amygdala alerts, mood correlations with decision quality, and behavioral insights — all from how your Mind processes emotional context."
+  },
+  "productivity": {
+    "title": "Productivity",
+    "description": "Understand your work patterns. Focus time tracking, task completion rhythms, decision fatigue detection, journaling impact analysis, and weekly trends — measured from your actual behavior, not self-reported estimates."
   }
 }

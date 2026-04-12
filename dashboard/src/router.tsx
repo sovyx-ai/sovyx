@@ -21,6 +21,8 @@ import {
 const OverviewPage = lazy(() => import("@/pages/overview"));
 const ConversationsPage = lazy(() => import("@/pages/conversations"));
 const BrainPage = lazy(() => import("@/pages/brain"));
+const EmotionsPage = lazy(() => import("@/pages/emotions"));
+const ProductivityPage = lazy(() => import("@/pages/productivity"));
 const LogsPage = lazy(() => import("@/pages/logs"));
 const SettingsPage = lazy(() => import("@/pages/settings"));
 const AboutPage = lazy(() => import("@/pages/about"));
@@ -85,6 +87,22 @@ export const router = createBrowserRouter([
         element: (
           <PageWrapper fallback={<BrainSkeleton />}>
             <BrainPage />
+          </PageWrapper>
+        ),
+      },
+      {
+        path: "emotions",
+        element: (
+          <PageWrapper>
+            <EmotionsPage />
+          </PageWrapper>
+        ),
+      },
+      {
+        path: "productivity",
+        element: (
+          <PageWrapper>
+            <ProductivityPage />
           </PageWrapper>
         ),
       },

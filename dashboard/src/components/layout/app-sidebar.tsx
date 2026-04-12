@@ -19,6 +19,9 @@ import {
   MessageSquareIcon,
   MessageCircleIcon,
   BrainIcon,
+  HeartIcon,
+  BarChart3Icon,
+  MicIcon,
   ScrollTextIcon,
   SettingsIcon,
   InfoIcon,
@@ -53,9 +56,12 @@ const CORE_NAV: NavItem[] = [
   { titleKey: "nav.chat", icon: MessageCircleIcon, path: "/chat" },
   { titleKey: "nav.conversations", icon: MessageSquareIcon, path: "/conversations" },
   { titleKey: "nav.brain", icon: BrainIcon, path: "/brain" },
+  { titleKey: "nav.emotions", icon: HeartIcon, path: "/emotions" },
+  { titleKey: "nav.productivity", icon: BarChart3Icon, path: "/productivity" },
+  { titleKey: "nav.voice", icon: MicIcon, path: "/voice" },
+  { titleKey: "nav.plugins", icon: PuzzleIcon, path: "/plugins" },
   { titleKey: "nav.logs", icon: ScrollTextIcon, path: "/logs" },
   { titleKey: "nav.settings", icon: SettingsIcon, path: "/settings" },
-  { titleKey: "nav.plugins", icon: PuzzleIcon, path: "/plugins" },
 ];
 
 
