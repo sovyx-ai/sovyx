@@ -42,6 +42,18 @@ _MSG_FETCH_FAILED = "failed to fetch URL"
 _MSG_INVALID_URL = "invalid or disallowed URL"
 _MSG_BACKEND_UNAVAILABLE = "search backend unavailable"
 
+# Control characters to strip from queries
+_CONTROL_CHARS = str.maketrans("", "", "".join(chr(c) for c in range(32) if c not in (10, 13)))
+
+
+def _sanitize_query(query: str) -> str:
+    """Sanitize query: strip control chars, normalize whitespace."""
+    # Remove control characters (except newline/cr)
+    query = query.translate(_CONTROL_CHARS)
+    # Collapse whitespace
+    query = " ".join(query.split())
+    return query.strip()
+
 
 # ── Source Credibility Scoring ──
 
@@ -952,6 +964,8 @@ class WebIntelligencePlugin(ISovyxPlugin):
         )
         self._brain = brain
         self._cache = _SearchCache()
+        self._fetch_limiter = _RateLimiter(20, _RATE_LIMIT_WINDOW)  # 20/min
+        self._research_limiter = _RateLimiter(5, _RATE_LIMIT_WINDOW)  # 5/min
 
     @property
     def name(self) -> str:
@@ -996,7 +1010,7 @@ class WebIntelligencePlugin(ISovyxPlugin):
             JSON with search results and intent classification.
         """
         # Validate
-        query = query.strip()
+        query = _sanitize_query(query)
         if not query:
             return _err(_MSG_EMPTY_QUERY)
         if len(query) > _MAX_QUERY_LEN:
@@ -1094,6 +1108,10 @@ class WebIntelligencePlugin(ISovyxPlugin):
         """
         url = url.strip()
 
+        # Rate limit
+        if not self._fetch_limiter.check():
+            return _err("fetch rate limit exceeded (20/min)")
+
         # Validate URL
         error = _validate_url(url)
         if error:
@@ -1174,12 +1192,15 @@ class WebIntelligencePlugin(ISovyxPlugin):
         Returns:
             JSON with sources, extracted content, citations, and credibility.
         """
-        query = query.strip()
+        query = _sanitize_query(query)
         if not query:
             return _err(_MSG_EMPTY_QUERY)
         if len(query) > _MAX_QUERY_LEN:
             return _err(_MSG_QUERY_TOO_LONG)
         max_sources = max(1, min(self._MAX_RESEARCH_SOURCES, max_sources))
+
+        if not self._research_limiter.check():
+            return _err("research rate limit exceeded (5/min)")
 
         try:
             return await asyncio.wait_for(
@@ -1419,7 +1440,7 @@ class WebIntelligencePlugin(ISovyxPlugin):
         if self._brain is None:
             return _err(self._NO_BRAIN)
 
-        query = query.strip()
+        query = _sanitize_query(query)
         if not query:
             return _err(_MSG_EMPTY_QUERY)
         max_results = max(1, min(20, max_results))
@@ -1491,7 +1512,7 @@ class WebIntelligencePlugin(ISovyxPlugin):
         Returns:
             JSON with answer, source, and type.
         """
-        query = query.strip()
+        query = _sanitize_query(query)
         if not query:
             return _err(_MSG_EMPTY_QUERY)
         if len(query) > _MAX_QUERY_LEN:

@@ -1912,3 +1912,98 @@ class TestWeatherMode:
         p._weather_lookup = failing_weather  # type: ignore[assignment]
         data = _parse(await p.lookup("Berlin", mode="weather"))
         assert data["ok"] is True
+
+
+# ── Safety & Input Validation (TASK-506) ──
+
+from sovyx.plugins.official.web_intelligence import _sanitize_query
+
+
+class TestSanitizeQuery:
+    """Tests for query sanitization."""
+
+    def test_strips_control_chars(self) -> None:
+        assert _sanitize_query("hello\x00world") == "helloworld"
+
+    def test_strips_tabs(self) -> None:
+        assert _sanitize_query("hello\tworld") == "helloworld"
+
+    def test_preserves_newlines_but_normalizes(self) -> None:
+        # Newlines become spaces in the collapse
+        result = _sanitize_query("hello\nworld")
+        assert result == "hello world"
+
+    def test_collapses_whitespace(self) -> None:
+        assert _sanitize_query("hello    world") == "hello world"
+
+    def test_strips_edges(self) -> None:
+        assert _sanitize_query("  hello  ") == "hello"
+
+    def test_unicode_preserved(self) -> None:
+        assert _sanitize_query("São Paulo") == "São Paulo"
+
+    def test_empty(self) -> None:
+        assert _sanitize_query("") == ""
+
+    def test_only_control_chars(self) -> None:
+        assert _sanitize_query("\x00\x01\x02") == ""
+
+
+class TestFetchRateLimit:
+    """Tests for fetch rate limiting."""
+
+    @pytest.mark.anyio()
+    async def test_fetch_rate_limited(self) -> None:
+        p = WebIntelligencePlugin()
+        # Exhaust fetch limiter
+        for _ in range(20):
+            p._fetch_limiter.check()
+        data = _parse(await p.fetch("https://example.com"))
+        assert data["ok"] is False
+        assert "rate limit" in str(data["message"])
+
+
+class TestResearchRateLimit:
+    """Tests for research rate limiting."""
+
+    @pytest.mark.anyio()
+    async def test_research_rate_limited(self) -> None:
+        p = WebIntelligencePlugin()
+        # Exhaust research limiter
+        for _ in range(5):
+            p._research_limiter.check()
+        data = _parse(await p.research("test query"))
+        assert data["ok"] is False
+        assert "rate limit" in str(data["message"])
+
+
+class TestSafetyIntegration:
+    """Integration tests for safety features."""
+
+    @pytest.mark.anyio()
+    async def test_search_control_chars_sanitized(self) -> None:
+        p = WebIntelligencePlugin()
+        p._backend.search_text = _mock_ddgs_text(_SAMPLE_WEB_RESULTS)  # type: ignore[assignment]
+        # Control chars should be stripped, not cause errors
+        data = _parse(await p.search("test\x00query", mode="web"))
+        assert data["ok"] is True
+
+    @pytest.mark.anyio()
+    async def test_fetch_private_ip_blocked(self) -> None:
+        p = WebIntelligencePlugin()
+        for ip in ["http://127.0.0.1", "http://10.0.0.1", "http://192.168.1.1"]:
+            data = _parse(await p.fetch(ip))
+            assert data["ok"] is False, f"Should block {ip}"
+
+    @pytest.mark.anyio()
+    async def test_fetch_file_scheme_blocked(self) -> None:
+        p = WebIntelligencePlugin()
+        data = _parse(await p.fetch("file:///etc/passwd"))
+        assert data["ok"] is False
+
+    @pytest.mark.anyio()
+    async def test_search_query_too_long(self) -> None:
+        p = WebIntelligencePlugin()
+        data = _parse(await p.search("x" * 600, mode="web"))
+        assert data["ok"] is False
+        assert "too long" in str(data["message"])
