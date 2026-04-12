@@ -28,6 +28,9 @@ from sovyx.plugins.sdk import ISovyxPlugin, tool
 if typing.TYPE_CHECKING:  # pragma: no cover
     from sovyx.plugins.context import BrainAccess
 
+_MAX_RETRIES = 2
+_RETRY_ERRORS = (OSError, TimeoutError)
+
 # ── Defaults ──
 
 _DEFAULT_DEDUP_THRESHOLD = 0.88
@@ -340,7 +343,8 @@ class KnowledgePlugin(ISovyxPlugin):
                 if category == "fact":
                     category = "person"
 
-            concept_id = await self._brain.learn(
+            concept_id = await _retry(
+                self._brain.learn,
                 name=name,
                 content=what,
                 category=category,
@@ -792,6 +796,31 @@ class _RelationInfo(typing.NamedTuple):
     target_id: str
     target_name: str
     similarity: float
+
+
+T = typing.TypeVar("T")
+
+
+async def _retry(
+    fn: typing.Callable[..., typing.Awaitable[T]],
+    *args: object,
+    retries: int = _MAX_RETRIES,
+    **kwargs: object,
+) -> T:
+    """Retry an async function on transient errors.
+
+    Retries on OSError/TimeoutError only. Other exceptions propagate
+    immediately. No delay between retries (brain ops are fast).
+    """
+    last_err: Exception | None = None
+    for attempt in range(retries + 1):
+        try:
+            return await fn(*args, **kwargs)
+        except _RETRY_ERRORS as e:
+            last_err = e
+            if attempt == retries:
+                raise
+    raise last_err  # type: ignore[misc]  # unreachable but makes mypy happy
 
 
 def _ok(action: str, message: str, **extra: object) -> str:
