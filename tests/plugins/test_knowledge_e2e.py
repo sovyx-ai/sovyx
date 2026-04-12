@@ -127,11 +127,15 @@ async def db_pool(tmp_path: Path):
         await conn.commit()
 
     yield pool
-    # Close pool gracefully. Suppress all errors — on Python 3.11,
-    # aiosqlite's background thread can raise RuntimeError('Event loop
-    # is closed') during interpreter shutdown, causing exit code 1.
+    # Close DB synchronously to prevent aiosqlite background thread from
+    # raising RuntimeError('Event loop is closed') during shutdown on 3.11.
     with contextlib.suppress(Exception):
-        await pool.close()
+        if pool._write_conn is not None:
+            await pool._write_conn.close()
+            pool._write_conn = None
+        for conn in pool._read_conns:
+            await conn.close()
+        pool._read_conns.clear()
 
 
 @pytest.fixture
