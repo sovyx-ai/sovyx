@@ -646,22 +646,45 @@ class KnowledgePlugin(ISovyxPlugin):
                     }
                 )
 
-            return json.dumps(
-                {
-                    "action": "introspection",
-                    "ok": True,
-                    "total_concepts": total,
-                    "categories": stats.get("categories", {}),
-                    "total_relations": stats.get("total_relations", 0),
-                    "total_episodes": stats.get("total_episodes", 0),
-                    "message": (
-                        f"I know {total} concept(s) across "
-                        f"{len(stats.get('categories', {}))} categories, "  # type: ignore[arg-type]
-                        f"with {stats.get('total_relations', 0)} connections "
-                        f"and {stats.get('total_episodes', 0)} conversation memories."
-                    ),
-                }
-            )
+            # Fetch top concepts by importance
+            top_concepts: list[dict[str, object]] = []
+            try:
+                raw_top = await self._brain.get_top_concepts(limit=5)
+                top_concepts = [
+                    {
+                        "name": str(c.get("name", "")),
+                        "category": str(c.get("category", "")),
+                        "importance": round(_float(c.get("importance", 0)), 3),
+                        "confidence": round(_float(c.get("confidence", 0)), 3),
+                        "access_count": c.get("access_count", 0),
+                    }
+                    for c in raw_top
+                ]
+            except Exception:  # noqa: BLE001
+                pass  # top concepts fetch failure is non-fatal
+
+            cats = stats.get("categories", {})
+            cat_count = len(cats) if isinstance(cats, dict) else 0
+
+            result: dict[str, object] = {
+                "action": "introspection",
+                "ok": True,
+                "total_concepts": total,
+                "categories": cats,
+                "total_relations": stats.get("total_relations", 0),
+                "total_episodes": stats.get("total_episodes", 0),
+                "message": (
+                    f"I know {total} concept(s) across "
+                    f"{cat_count} categories, "
+                    f"with {stats.get('total_relations', 0)} connections "
+                    f"and {stats.get('total_episodes', 0)} conversation memories."
+                ),
+            }
+
+            if top_concepts:
+                result["top_concepts"] = top_concepts
+
+            return json.dumps(result)
 
         except Exception as e:  # noqa: BLE001
             return _err(f"Error: {e}")

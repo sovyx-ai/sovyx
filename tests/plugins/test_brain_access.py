@@ -834,3 +834,37 @@ class TestForgetAll:
         ba, _ = _make_brain_access(permissions={"brain:read"})
         with pytest.raises(PermissionDeniedError):
             await ba.forget_all("test")
+
+
+# ── get_top_concepts() ──
+
+
+class TestGetTopConcepts:
+    @pytest.mark.asyncio
+    async def test_returns_concepts(self) -> None:
+        ba, brain = _make_brain_access()
+        # Mock the internal pool read
+        mock_conn = AsyncMock()
+        mock_cursor = AsyncMock()
+        mock_cursor.fetchall = AsyncMock(
+            return_value=[
+                ("c-1", "Python", "A language", "fact", 0.95, 0.9, 42),
+                ("c-2", "Dark mode", "UI preference", "preference", 0.88, 0.85, 12),
+            ]
+        )
+        mock_conn.execute = AsyncMock(return_value=mock_cursor)
+        mock_conn.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_conn.__aexit__ = AsyncMock(return_value=False)
+        brain._concepts._pool.read = MagicMock(return_value=mock_conn)
+
+        result = await ba.get_top_concepts(limit=5)
+        assert len(result) == 2
+        assert result[0]["name"] == "Python"
+        assert result[0]["importance"] == 0.95
+        assert result[0]["access_count"] == 42
+
+    @pytest.mark.asyncio
+    async def test_permission_denied(self) -> None:
+        ba, _ = _make_brain_access(permissions=set())
+        with pytest.raises(PermissionDeniedError):
+            await ba.get_top_concepts()
