@@ -282,3 +282,17 @@ sovyx plugin install git+https://github.com/you/sovyx-plugin-example.git
 ```bash
 sovyx plugin install ./my-plugin
 ```
+
+## Reference: Financial Math Plugin
+
+The **Financial Math Plugin** (`src/sovyx/plugins/official/financial_math.py`) is the best reference implementation for building enterprise-grade plugins. It demonstrates:
+
+- **Multi-mode tools** — single `@tool` with `mode` parameter instead of many small tools
+- **Decimal-first** — all math via `Decimal(str(value))`, banker's rounding
+- **Structured JSON output** — consistent `{ok, action, mode, result, message}` schema
+- **Input validation** — `_require()`, `_validate_value()`, bounds checking
+- **Safety limits** — max periods, max list size, overflow protection
+- **Zero dependencies** — Newton-Raphson for IRR, pure Decimal math
+- **228 tests** — unit + Hypothesis property-based invariant testing
+
+See [Financial Math Plugin docs](./financial-math-plugin.md) for full API reference.

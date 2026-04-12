@@ -75,7 +75,8 @@ Undeclared permissions are denied at runtime with `PermissionDeniedError`.
 
 | Plugin | Tools | Description |
 |--------|-------|-------------|
-| `calculator` | `calculate` | Safe math via AST (no eval) |
+| `financial-math` | `calculate`, `percentage`, `interest`, `tvm`, `amortization`, `portfolio`, `position_size`, `currency` | Enterprise financial calculations ([docs](./financial-math-plugin.md)) |
+| `calculator` | `calculate` | Backward-compatible wrapper for financial-math |
 | `weather` | `get_weather`, `get_forecast`, `will_it_rain` | Open-Meteo (free, no API key) |
 | `knowledge` | `remember`, `search`, `forget`, `recall_about`, `what_do_you_know` | Brain interface |
 
