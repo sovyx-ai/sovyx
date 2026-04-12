@@ -1232,3 +1232,190 @@ class TestTVMEdgeCases:
         data = _parse(await p.tvm(mode="pv"))
         assert data["ok"] is False
         assert "missing" in str(data["message"])
+
+
+# ── Amortization ──
+
+
+class TestAmortizationPrice:
+    """Test amortization 'price' mode."""
+
+    @pytest.mark.anyio()
+    async def test_basic(self) -> None:
+        """R$400k, 9.5%/year, 360 months."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.amortization(
+                mode="price",
+                principal=400000,
+                annual_rate=9.5,
+                months=360,
+            )
+        )
+        assert data["ok"] is True
+        assert data["mode"] == "price"
+        pmt = Decimal(str(data["fixed_payment"]))
+        # ~R$3,250/mo (equivalent monthly rate from 9.5% annual)
+        assert pmt > Decimal("3200")
+        assert pmt < Decimal("3300")
+        # Schedule has summary (first 3 + last 3)
+        assert len(data["schedule"]) == 6
+
+    @pytest.mark.anyio()
+    async def test_short_loan(self) -> None:
+        """Short loan returns full schedule."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.amortization(
+                mode="price",
+                principal=10000,
+                annual_rate=12,
+                months=4,
+            )
+        )
+        assert len(data["schedule"]) == 4
+
+    @pytest.mark.anyio()
+    async def test_total_exceeds_principal(self) -> None:
+        """Total paid must exceed principal (interest exists)."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.amortization(
+                mode="price",
+                principal=100000,
+                annual_rate=10,
+                months=120,
+            )
+        )
+        total = Decimal(str(data["total_paid"]))
+        assert total > Decimal("100000")
+
+
+class TestAmortizationSAC:
+    """Test amortization 'sac' mode."""
+
+    @pytest.mark.anyio()
+    async def test_basic(self) -> None:
+        """R$400k, 9.5%/year, 360 months."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.amortization(
+                mode="sac",
+                principal=400000,
+                annual_rate=9.5,
+                months=360,
+            )
+        )
+        assert data["ok"] is True
+        first = Decimal(str(data["first_payment"]))
+        last = Decimal(str(data["last_payment"]))
+        # SAC: first payment is higher, last is lower
+        assert first > last
+        # First ~R$4,148
+        assert first > Decimal("4100")
+        assert first < Decimal("4200")
+
+    @pytest.mark.anyio()
+    async def test_decreasing_payments(self) -> None:
+        """Each SAC payment should be ≤ previous."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.amortization(
+                mode="sac",
+                principal=10000,
+                annual_rate=12,
+                months=4,
+            )
+        )
+        schedule = data["schedule"]
+        for i in range(1, len(schedule)):
+            curr = Decimal(str(schedule[i]["payment"]))
+            prev = Decimal(str(schedule[i - 1]["payment"]))
+            assert curr <= prev
+
+
+class TestAmortizationCompare:
+    """Test amortization 'compare' mode."""
+
+    @pytest.mark.anyio()
+    async def test_sac_saves(self) -> None:
+        """SAC always costs less than Price in total."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.amortization(
+                mode="compare",
+                principal=400000,
+                annual_rate=9.5,
+                months=360,
+            )
+        )
+        assert data["ok"] is True
+        savings = Decimal(str(data["savings_with_sac"]))
+        assert savings > Decimal(0)
+        # Savings should be significant
+        assert savings > Decimal("100000")
+
+    @pytest.mark.anyio()
+    async def test_compare_has_both(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.amortization(
+                mode="compare",
+                principal=100000,
+                annual_rate=8,
+                months=60,
+            )
+        )
+        assert "price" in data
+        assert "sac" in data
+        assert "fixed_payment" in data["price"]
+        assert "first_payment" in data["sac"]
+
+
+class TestAmortizationEdgeCases:
+    """Edge cases for amortization tool."""
+
+    @pytest.mark.anyio()
+    async def test_unknown_mode(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.amortization(
+                mode="invalid",
+                principal=100000,
+                annual_rate=10,
+                months=12,
+            )
+        )
+        assert data["ok"] is False
+
+    @pytest.mark.anyio()
+    async def test_zero_principal(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.amortization(
+                mode="price",
+                principal=0,
+                annual_rate=10,
+                months=12,
+            )
+        )
+        assert data["ok"] is False
+
+    @pytest.mark.anyio()
+    async def test_zero_months(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.amortization(
+                mode="price",
+                principal=100000,
+                annual_rate=10,
+                months=0,
+            )
+        )
+        assert data["ok"] is False
+
+    @pytest.mark.anyio()
+    async def test_missing_params(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.amortization(mode="price"))
+        assert data["ok"] is False

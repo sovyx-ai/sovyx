@@ -772,7 +772,8 @@ class FinancialMathPlugin(ISovyxPlugin):
 
     @staticmethod
     def _tvm_npv(
-        rate: float | None, cashflows: list[float] | None,
+        rate: float | None,
+        cashflows: list[float] | None,
     ) -> str:
         """NPV = Σ CF_t / (1+r)^t."""
         _require(rate=rate, cashflows=cashflows)
@@ -959,5 +960,267 @@ class FinancialMathPlugin(ISovyxPlugin):
                 f"PMT={_format_decimal(pmt)} at "
                 f"{_format_decimal(r * _HUNDRED)}% for "
                 f"{_format_decimal(n)} periods → FV={_format_decimal(fv)}"
+            ),
+        )
+
+    # ── Amortization ──
+
+    @tool(
+        description=(
+            "Loan amortization calculations. Modes: "
+            "'price' (fixed payment — French system), "
+            "'sac' (fixed amortization — Brazilian system), "
+            "'compare' (side-by-side Price vs SAC). "
+            "Returns schedule summary (first 3 + last 3 payments for >6 months). "
+            "Example: amortization(mode='compare', principal=400000, annual_rate=9.5, months=360)"
+        ),
+    )
+    async def amortization(
+        self,
+        mode: str,
+        *,
+        principal: float | None = None,
+        annual_rate: float | None = None,
+        months: int | None = None,
+    ) -> str:
+        """Loan amortization with Decimal precision.
+
+        Args:
+            mode: 'price', 'sac', 'compare'.
+            principal: Loan amount.
+            annual_rate: Annual interest rate (auto-detect: >1 = %, ≤1 = decimal).
+            months: Total number of monthly payments.
+
+        Returns:
+            JSON with schedule, totals, and breakdown.
+        """
+        mode = mode.strip().lower()
+
+        try:
+            _require(principal=principal, annual_rate=annual_rate, months=months)
+            assert months is not None
+            p = _to_decimal(principal)
+            annual_r = self._normalize_rate(annual_rate)
+            n = int(months)
+            if p <= _ZERO:
+                msg = "principal must be positive"
+                raise _ValidationError(msg)
+            if n <= 0:
+                msg = "months must be positive"
+                raise _ValidationError(msg)
+            # Monthly rate from annual
+            monthly_r = (Decimal(1) + annual_r) ** (Decimal(1) / Decimal(12)) - Decimal(1)
+
+            if mode == "price":
+                return self._amort_price(p, monthly_r, n, annual_r)
+            if mode == "sac":
+                return self._amort_sac(p, monthly_r, n, annual_r)
+            if mode == "compare":
+                return self._amort_compare(p, monthly_r, n, annual_r)
+        except _ValidationError as e:
+            return _err(str(e))
+        except (ZeroDivisionError, DecimalException, OverflowError) as e:
+            return _err(f"calculation error: {e}")
+
+        return _err(f"unknown mode: '{mode}'. Valid: price, sac, compare")
+
+    # ── Amortization Internals ──
+
+    @staticmethod
+    def _price_payment(p: Decimal, r: Decimal, n: int) -> Decimal:
+        """Calculate fixed Price payment: PMT = P * r / (1 - (1+r)^-n)."""
+        if r == _ZERO:
+            return p / Decimal(n)
+        return p * r / (Decimal(1) - (Decimal(1) + r) ** (-n))
+
+    @staticmethod
+    def _build_price_schedule(
+        p: Decimal,
+        r: Decimal,
+        n: int,
+    ) -> list[dict[str, str]]:
+        """Build full Price amortization schedule."""
+        pmt = FinancialMathPlugin._price_payment(p, r, n)
+        balance = p
+        schedule: list[dict[str, str]] = []
+        for month in range(1, n + 1):
+            interest = balance * r
+            principal_paid = pmt - interest
+            balance -= principal_paid
+            if balance < _ZERO:
+                balance = _ZERO
+            schedule.append(
+                {
+                    "month": str(month),
+                    "payment": _format_decimal(pmt),
+                    "principal": _format_decimal(principal_paid),
+                    "interest": _format_decimal(interest),
+                    "balance": _format_decimal(balance),
+                }
+            )
+        return schedule
+
+    @staticmethod
+    def _build_sac_schedule(
+        p: Decimal,
+        r: Decimal,
+        n: int,
+    ) -> list[dict[str, str]]:
+        """Build full SAC amortization schedule."""
+        fixed_amort = p / Decimal(n)
+        balance = p
+        schedule: list[dict[str, str]] = []
+        for month in range(1, n + 1):
+            interest = balance * r
+            payment = fixed_amort + interest
+            balance -= fixed_amort
+            if balance < _ZERO:
+                balance = _ZERO
+            schedule.append(
+                {
+                    "month": str(month),
+                    "payment": _format_decimal(payment),
+                    "principal": _format_decimal(fixed_amort),
+                    "interest": _format_decimal(interest),
+                    "balance": _format_decimal(balance),
+                }
+            )
+        return schedule
+
+    @staticmethod
+    def _schedule_summary(
+        schedule: list[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        """Return first 3 + last 3 for long schedules, full for short."""
+        if len(schedule) <= 6:  # noqa: PLR2004
+            return schedule
+        return schedule[:3] + schedule[-3:]
+
+    @staticmethod
+    def _schedule_totals(
+        schedule: list[dict[str, str]],
+    ) -> tuple[Decimal, Decimal, Decimal]:
+        """Sum total paid, total interest, total principal from schedule."""
+        total_paid = _ZERO
+        total_interest = _ZERO
+        total_principal = _ZERO
+        for row in schedule:
+            total_paid += _to_decimal(row["payment"])
+            total_interest += _to_decimal(row["interest"])
+            total_principal += _to_decimal(row["principal"])
+        return total_paid, total_interest, total_principal
+
+    @staticmethod
+    def _amort_price(
+        p: Decimal,
+        r: Decimal,
+        n: int,
+        annual_r: Decimal,
+    ) -> str:
+        """Price system (French) — fixed payment."""
+        schedule = FinancialMathPlugin._build_price_schedule(p, r, n)
+        total_paid, total_interest, _ = FinancialMathPlugin._schedule_totals(
+            schedule,
+        )
+        pmt = FinancialMathPlugin._price_payment(p, r, n)
+
+        return _ok(
+            "amortization",
+            mode="price",
+            principal=_format_decimal(p),
+            annual_rate=_format_decimal(annual_r * _HUNDRED) + "%",
+            monthly_rate=_format_decimal(r * _HUNDRED) + "%",
+            months=str(n),
+            fixed_payment=_format_decimal(pmt),
+            total_paid=_format_decimal(total_paid),
+            total_interest=_format_decimal(total_interest),
+            schedule=FinancialMathPlugin._schedule_summary(schedule),
+            result=_format_decimal(pmt),
+            message=(
+                f"Price: {n} payments of {_format_decimal(pmt)} | "
+                f"Total: {_format_decimal(total_paid)} | "
+                f"Interest: {_format_decimal(total_interest)}"
+            ),
+        )
+
+    @staticmethod
+    def _amort_sac(
+        p: Decimal,
+        r: Decimal,
+        n: int,
+        annual_r: Decimal,
+    ) -> str:
+        """SAC system — fixed amortization."""
+        schedule = FinancialMathPlugin._build_sac_schedule(p, r, n)
+        total_paid, total_interest, _ = FinancialMathPlugin._schedule_totals(
+            schedule,
+        )
+        first_pmt = _to_decimal(schedule[0]["payment"])
+        last_pmt = _to_decimal(schedule[-1]["payment"])
+
+        return _ok(
+            "amortization",
+            mode="sac",
+            principal=_format_decimal(p),
+            annual_rate=_format_decimal(annual_r * _HUNDRED) + "%",
+            monthly_rate=_format_decimal(r * _HUNDRED) + "%",
+            months=str(n),
+            first_payment=_format_decimal(first_pmt),
+            last_payment=_format_decimal(last_pmt),
+            total_paid=_format_decimal(total_paid),
+            total_interest=_format_decimal(total_interest),
+            schedule=FinancialMathPlugin._schedule_summary(schedule),
+            result=_format_decimal(first_pmt),
+            message=(
+                f"SAC: first {_format_decimal(first_pmt)}, "
+                f"last {_format_decimal(last_pmt)} | "
+                f"Total: {_format_decimal(total_paid)} | "
+                f"Interest: {_format_decimal(total_interest)}"
+            ),
+        )
+
+    @staticmethod
+    def _amort_compare(
+        p: Decimal,
+        r: Decimal,
+        n: int,
+        annual_r: Decimal,
+    ) -> str:
+        """Side-by-side Price vs SAC comparison."""
+        price_sched = FinancialMathPlugin._build_price_schedule(p, r, n)
+        sac_sched = FinancialMathPlugin._build_sac_schedule(p, r, n)
+        price_total, price_interest, _ = FinancialMathPlugin._schedule_totals(price_sched)
+        sac_total, sac_interest, _ = FinancialMathPlugin._schedule_totals(sac_sched)
+        price_pmt = FinancialMathPlugin._price_payment(p, r, n)
+        sac_first = _to_decimal(sac_sched[0]["payment"])
+        sac_last = _to_decimal(sac_sched[-1]["payment"])
+        savings = price_total - sac_total
+
+        return _ok(
+            "amortization",
+            mode="compare",
+            principal=_format_decimal(p),
+            annual_rate=_format_decimal(annual_r * _HUNDRED) + "%",
+            months=str(n),
+            price={
+                "fixed_payment": _format_decimal(price_pmt),
+                "total_paid": _format_decimal(price_total),
+                "total_interest": _format_decimal(price_interest),
+            },
+            sac={
+                "first_payment": _format_decimal(sac_first),
+                "last_payment": _format_decimal(sac_last),
+                "total_paid": _format_decimal(sac_total),
+                "total_interest": _format_decimal(sac_interest),
+            },
+            savings_with_sac=_format_decimal(savings),
+            result=_format_decimal(savings),
+            message=(
+                f"Price: {_format_decimal(price_pmt)}/mo, "
+                f"total {_format_decimal(price_total)} | "
+                f"SAC: {_format_decimal(sac_first)}→"
+                f"{_format_decimal(sac_last)}/mo, "
+                f"total {_format_decimal(sac_total)} | "
+                f"SAC saves {_format_decimal(savings)}"
             ),
         )
