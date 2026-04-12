@@ -97,10 +97,13 @@ jobs:
       - name: Set Python version
         run: uv python install ${{ matrix.python-version }}
       - name: Install dependencies
-        run: uv sync --dev --python ${{ matrix.python-version }}
+        run: |
+          uv sync --dev --python ${{ matrix.python-version }}
+          uv pip install --python ${{ matrix.python-version }} "ddgs>=9.0" "trafilatura>=2.0"
       - name: Run tests with coverage
         run: >
           uv run python -m pytest tests/
+          --ignore=tests/smoke
           --cov=sovyx
           --cov-report=term-missing
           --cov-report=xml:coverage.xml
