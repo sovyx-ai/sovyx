@@ -63,7 +63,8 @@ class TestPluginToToolDefinition:
         assert len(defs) >= 2  # calculate + percentage + interest (inherited)
         names = [d.name for d in defs]
         assert "calculator.calculate" in names
-        assert "expression" in str(defs[0].parameters)
+        calc_def = next(d for d in defs if d.name == "calculator.calculate")
+        assert "expression" in str(calc_def.parameters)
 
     @pytest.mark.anyio()
     async def test_definitions_to_dicts(self, tmp_path: Path) -> None:
