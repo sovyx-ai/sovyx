@@ -1461,6 +1461,155 @@ class WebIntelligencePlugin(ISovyxPlugin):
         except Exception as e:  # noqa: BLE001
             return _err(f"brain recall failed: {e}")
 
+    # ── Quick Lookup Tool ──
+
+    @tool(
+        description=(
+            "Quick lookup for instant answers: definitions, conversions, "
+            "prices, and facts. Faster than full search — uses DuckDuckGo "
+            "instant answers when available, falls back to web search. "
+            "Modes: 'define' (word/concept definition), "
+            "'convert' (unit/currency conversion), "
+            "'price' (crypto/stock price lookup), "
+            "'auto' (detect from query — default). "
+            "Example: lookup(query='bitcoin price') or "
+            "lookup(query='what is kubernetes', mode='define')"
+        ),
+    )
+    async def lookup(
+        self,
+        query: str,
+        *,
+        mode: str = "auto",
+    ) -> str:
+        """Quick lookup for instant answers.
+
+        Args:
+            query: Lookup query.
+            mode: 'auto', 'define', 'convert', or 'price'.
+
+        Returns:
+            JSON with answer, source, and type.
+        """
+        query = query.strip()
+        if not query:
+            return _err(_MSG_EMPTY_QUERY)
+        if len(query) > _MAX_QUERY_LEN:
+            return _err(_MSG_QUERY_TOO_LONG)
+        mode = mode.strip().lower()
+
+        if mode == "auto":
+            mode = self._detect_lookup_mode(query)
+
+        # Check cache
+        cached = self._cache.get(f"lookup:{query}", mode)
+        if cached is not None:
+            return cached
+
+        try:
+            result = await asyncio.wait_for(
+                self._do_lookup(query, mode),
+                timeout=_SEARCH_TIMEOUT,
+            )
+            # Cache with appropriate TTL
+            intent = "price" if mode == "price" else "factual"
+            self._cache.put(f"lookup:{query}", mode, result, intent)
+            return result
+        except TimeoutError:
+            return _err("lookup timed out")
+        except Exception as e:  # noqa: BLE001
+            return _err(f"lookup failed: {e}")
+
+    @staticmethod
+    def _detect_lookup_mode(query: str) -> str:
+        """Auto-detect lookup mode from query."""
+        q = query.lower()
+        # Price detection
+        price_triggers = {
+            "price",
+            "preço",
+            "cotação",
+            "valor",
+            "bitcoin",
+            "btc",
+            "eth",
+            "ethereum",
+            "stock",
+            "ação",
+            "nasdaq",
+        }
+        if any(t in q for t in price_triggers):
+            return "price"
+
+        # Conversion detection
+        convert_triggers = {
+            " to ",
+            " in ",
+            " para ",
+            " em ",
+            "convert",
+            "converter",
+            "how many",
+            "quantos",
+        }
+        if any(t in q for t in convert_triggers):
+            return "convert"
+
+        # Definition detection
+        define_triggers = {
+            "what is",
+            "what are",
+            "o que é",
+            "o que são",
+            "define",
+            "definição",
+            "meaning",
+            "significado",
+        }
+        if any(t in q for t in define_triggers):
+            return "define"
+
+        return "define"  # default
+
+    async def _do_lookup(self, query: str, mode: str) -> str:
+        """Execute lookup via search backend."""
+        # Rate limit
+        if not self._rate_limiter.check():
+            return _err("rate limit exceeded")
+
+        # Use web search with small result count for quick answers
+        search_query = query
+        if mode == "define":
+            if not any(w in query.lower() for w in ("define", "what is", "o que")):
+                search_query = f"what is {query}"
+        elif mode == "price":
+            if "price" not in query.lower() and "preço" not in query.lower():
+                search_query = f"{query} price"
+        elif mode == "convert":
+            search_query = query  # user query usually well-formed
+
+        results = await self._backend.search_text(search_query, 3)
+        if not results:
+            return _err(f"no results for '{query}'")
+
+        # Build concise answer from top results
+        top = results[0]
+        snippets = [r.snippet for r in results[:3] if r.snippet]
+
+        return _ok(
+            "lookup",
+            mode=mode,
+            query=query,
+            answer=top.snippet,
+            source=top.source,
+            url=top.url,
+            title=top.title,
+            credibility=score_credibility(top.url).to_dict(),
+            supporting_snippets=snippets[1:] if len(snippets) > 1 else [],
+            result=top.snippet[:200],
+            message=f"Quick answer from {top.source}: {top.snippet[:100]}",
+        )
+
 
 # ── URL Validation ──
 

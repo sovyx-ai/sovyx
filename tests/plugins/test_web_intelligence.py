@@ -1683,3 +1683,117 @@ class TestSearchCacheIntegration:
         p._backend.search_text = _mock_ddgs_text(_SAMPLE_WEB_RESULTS)  # type: ignore[assignment]
         data = _parse(await p.search("query two", mode="web"))
         assert data["ok"] is True
+
+
+# ── Quick Lookup (TASK-504) ──
+
+
+class TestLookupModeDetection:
+    """Tests for auto mode detection."""
+
+    def test_price_bitcoin(self) -> None:
+        assert WebIntelligencePlugin._detect_lookup_mode("bitcoin price") == "price"
+
+    def test_price_eth(self) -> None:
+        assert WebIntelligencePlugin._detect_lookup_mode("eth value") == "price"
+
+    def test_price_stock(self) -> None:
+        assert WebIntelligencePlugin._detect_lookup_mode("NASDAQ stock") == "price"
+
+    def test_convert_to(self) -> None:
+        assert WebIntelligencePlugin._detect_lookup_mode("100 USD to BRL") == "convert"
+
+    def test_convert_para(self) -> None:
+        assert WebIntelligencePlugin._detect_lookup_mode("100 dólares para reais") == "convert"
+
+    def test_define_what_is(self) -> None:
+        assert WebIntelligencePlugin._detect_lookup_mode("what is kubernetes") == "define"
+
+    def test_define_o_que(self) -> None:
+        assert WebIntelligencePlugin._detect_lookup_mode("o que é blockchain") == "define"
+
+    def test_default_define(self) -> None:
+        assert WebIntelligencePlugin._detect_lookup_mode("Python programming") == "define"
+
+
+class TestLookupTool:
+    """Tests for lookup tool."""
+
+    @pytest.mark.anyio()
+    async def test_basic_lookup(self) -> None:
+        p = WebIntelligencePlugin()
+        p._backend.search_text = _mock_ddgs_text(_SAMPLE_WEB_RESULTS)  # type: ignore[assignment]
+        data = _parse(await p.lookup("what is Python"))
+        assert data["ok"] is True
+        assert data["action"] == "lookup"
+        assert data["mode"] == "define"
+        assert "answer" in data
+        assert "source" in data
+        assert "url" in data
+
+    @pytest.mark.anyio()
+    async def test_price_lookup(self) -> None:
+        p = WebIntelligencePlugin()
+        p._backend.search_text = _mock_ddgs_text(_SAMPLE_WEB_RESULTS)  # type: ignore[assignment]
+        data = _parse(await p.lookup("bitcoin price"))
+        assert data["ok"] is True
+        assert data["mode"] == "price"
+
+    @pytest.mark.anyio()
+    async def test_explicit_mode(self) -> None:
+        p = WebIntelligencePlugin()
+        p._backend.search_text = _mock_ddgs_text(_SAMPLE_WEB_RESULTS)  # type: ignore[assignment]
+        data = _parse(await p.lookup("Python", mode="define"))
+        assert data["ok"] is True
+        assert data["mode"] == "define"
+
+    @pytest.mark.anyio()
+    async def test_lookup_cached(self) -> None:
+        p = WebIntelligencePlugin()
+        p._backend.search_text = _mock_ddgs_text(_SAMPLE_WEB_RESULTS)  # type: ignore[assignment]
+        await p.lookup("test query")
+        # Second call — should hit cache
+        call_count = 0
+
+        async def counting(*_a: object, **_kw: object) -> list[SearchResult]:
+            nonlocal call_count
+            call_count += 1
+            return []
+
+        p._backend.search_text = counting  # type: ignore[assignment]
+        data = _parse(await p.lookup("test query"))
+        assert data["ok"] is True
+        assert call_count == 0
+
+    @pytest.mark.anyio()
+    async def test_lookup_no_results(self) -> None:
+        p = WebIntelligencePlugin()
+        p._backend.search_text = _mock_ddgs_text([])  # type: ignore[assignment]
+        data = _parse(await p.lookup("xyznonexistent"))
+        assert data["ok"] is False
+
+    @pytest.mark.anyio()
+    async def test_lookup_empty_query(self) -> None:
+        p = WebIntelligencePlugin()
+        data = _parse(await p.lookup(""))
+        assert data["ok"] is False
+
+    @pytest.mark.anyio()
+    async def test_credibility_in_lookup(self) -> None:
+        p = WebIntelligencePlugin()
+        p._backend.search_text = _mock_ddgs_text(_SAMPLE_WEB_RESULTS)  # type: ignore[assignment]
+        data = _parse(await p.lookup("test"))
+        assert "credibility" in data
+        assert "score" in data["credibility"]
+
+    @pytest.mark.anyio()
+    async def test_supporting_snippets(self) -> None:
+        p = WebIntelligencePlugin()
+        many_results = [
+            {"title": f"R{i}", "url": f"https://site{i}.com/p", "snippet": f"Snippet {i}"}
+            for i in range(3)
+        ]
+        p._backend.search_text = _mock_ddgs_text(many_results)  # type: ignore[assignment]
+        data = _parse(await p.lookup("test"))
+        assert data["ok"] is True
+        assert len(data["supporting_snippets"]) >= 1
