@@ -1012,6 +1012,174 @@ class WebIntelligencePlugin(ISovyxPlugin):
         except Exception as e:  # noqa: BLE001
             return _err(f"{_MSG_FETCH_FAILED}: {e}")
 
+    # ── Research Tool ──
+
+    _MAX_RESEARCH_SOURCES = 5
+    _MAX_EXTRACT_CHARS = 2000
+
+    @tool(
+        description=(
+            "Deep research on a topic: searches, fetches top sources, "
+            "extracts content, scores credibility, and returns organized "
+            "findings with numbered citations. Use for complex questions "
+            "that need multiple sources. "
+            "Example: research(query='impact of US tariffs on crypto market 2025')"
+        ),
+    )
+    async def research(
+        self,
+        query: str,
+        *,
+        max_sources: int = 3,
+        include_news: bool = True,
+    ) -> str:
+        """Multi-step research: search → fetch → organize with citations.
+
+        Args:
+            query: Research question or topic.
+            max_sources: Max sources to fetch (1-5, default 3).
+            include_news: Also search news (default True).
+
+        Returns:
+            JSON with sources, extracted content, citations, and credibility.
+        """
+        query = query.strip()
+        if not query:
+            return _err(_MSG_EMPTY_QUERY)
+        if len(query) > _MAX_QUERY_LEN:
+            return _err(_MSG_QUERY_TOO_LONG)
+        max_sources = max(1, min(self._MAX_RESEARCH_SOURCES, max_sources))
+
+        try:
+            return await asyncio.wait_for(
+                self._do_research(query, max_sources, include_news=include_news),
+                timeout=60.0,
+            )
+        except TimeoutError:
+            return _err("research timed out")
+        except Exception as e:  # noqa: BLE001
+            return _err(f"research failed: {e}")
+
+    async def _do_research(
+        self,
+        query: str,
+        max_sources: int,
+        *,
+        include_news: bool,
+    ) -> str:
+        """Execute research pipeline."""
+        # Step 1: Search (web + optionally news)
+        all_results: list[SearchResult] = []
+        seen_urls: set[str] = set()
+
+        # Web search
+        if self._rate_limiter.check():
+            try:
+                web_results = await asyncio.wait_for(
+                    self._backend.search_text(query, max_sources * 2),
+                    timeout=_SEARCH_TIMEOUT,
+                )
+                for r in web_results:
+                    if r.url not in seen_urls:
+                        seen_urls.add(r.url)
+                        all_results.append(r)
+            except Exception:  # noqa: BLE001
+                pass
+
+        # News search
+        if include_news and self._rate_limiter.check():
+            try:
+                news_results = await asyncio.wait_for(
+                    self._backend.search_news(query, max_sources),
+                    timeout=_SEARCH_TIMEOUT,
+                )
+                for r in news_results:
+                    if r.url not in seen_urls:
+                        seen_urls.add(r.url)
+                        all_results.append(r)
+            except Exception:  # noqa: BLE001
+                pass
+
+        if not all_results:
+            return _err(_MSG_NO_RESULTS)
+
+        # Step 2: Score and rank by credibility
+        scored = [(r, score_credibility(r.url)) for r in all_results]
+        scored.sort(key=lambda x: x[1].score, reverse=True)
+
+        # Step 3: Fetch top sources
+        top = scored[:max_sources]
+        sources: list[dict[str, object]] = []
+
+        for i, (result, cred) in enumerate(top, 1):
+            source: dict[str, object] = {
+                "citation": i,
+                "title": result.title,
+                "url": result.url,
+                "snippet": result.snippet,
+                "source": result.source,
+                "credibility": cred.to_dict(),
+            }
+
+            # Try to fetch full content
+            extracted = await self._safe_fetch_content(result.url)
+            if extracted:
+                text = extracted["text"]
+                if len(text) > self._MAX_EXTRACT_CHARS:
+                    text = text[: self._MAX_EXTRACT_CHARS] + "..."
+                source["content"] = text
+                source["author"] = extracted["author"]
+                source["date"] = extracted["date"]
+            else:
+                source["content"] = result.snippet
+                source["author"] = ""
+                source["date"] = result.date
+
+            sources.append(source)
+
+        # Step 4: Build citation map
+        citations = [f"[{s['citation']}] {s['title']} — {s['url']}" for s in sources]
+
+        if sources:
+            _total = sum(
+                float(str(s["credibility"]["score"]))  # type: ignore[index, misc]
+                for s in sources
+            )
+            avg_cred = _total / len(sources)
+        else:
+            avg_cred = 0.0
+
+        return _ok(
+            "research",
+            query=query,
+            source_count=len(sources),
+            sources=sources,
+            citations=citations,
+            avg_credibility=round(avg_cred, 2),
+            result=(
+                f"Researched '{query}': {len(sources)} sources, avg credibility {avg_cred:.0%}"
+            ),
+            message=(
+                f"Found {len(sources)} sources for '{query}' (avg credibility: {avg_cred:.0%})"
+            ),
+        )
+
+    async def _safe_fetch_content(self, url: str) -> dict[str, str] | None:
+        """Fetch and extract content, returning None on any failure."""
+        error = _validate_url(url)
+        if error:
+            return None
+        try:
+            html = await asyncio.wait_for(
+                _fetch_html(url),
+                timeout=_FETCH_TIMEOUT,
+            )
+            if html is None:
+                return None
+            return _extract_content(html, url)
+        except Exception:  # noqa: BLE001
+            return None
+
 
 # ── URL Validation ──
 

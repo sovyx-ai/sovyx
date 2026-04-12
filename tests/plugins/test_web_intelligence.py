@@ -1091,3 +1091,273 @@ class TestCredibilityInSearchResults:
         assert data["ok"] is True
         assert data["credibility"]["tier"] == "tier1"
         assert data["credibility"]["score"] >= 0.9
+
+
+# ── Research Tool (TASK-501) ──
+
+
+class TestResearchTool:
+    """Tests for research tool."""
+
+    @pytest.mark.anyio()
+    async def test_basic_research(self) -> None:
+        p = WebIntelligencePlugin()
+        p._backend.search_text = _mock_ddgs_text(_SAMPLE_WEB_RESULTS)  # type: ignore[assignment]
+        p._backend.search_news = _mock_ddgs_news(_SAMPLE_NEWS_RESULTS)  # type: ignore[assignment]
+
+        with patch(
+            "sovyx.plugins.official.web_intelligence._fetch_html",
+            new_callable=AsyncMock,
+            return_value="<html><body><p>Detailed content about the topic.</p></body></html>",
+        ):
+            data = _parse(await p.research("test topic"))
+
+        assert data["ok"] is True
+        assert data["action"] == "research"
+        assert data["source_count"] >= 1
+        assert len(data["sources"]) >= 1
+        assert len(data["citations"]) >= 1
+
+    @pytest.mark.anyio()
+    async def test_sources_have_citations(self) -> None:
+        p = WebIntelligencePlugin()
+        p._backend.search_text = _mock_ddgs_text(_SAMPLE_WEB_RESULTS)  # type: ignore[assignment]
+        p._backend.search_news = _mock_ddgs_news(_SAMPLE_NEWS_RESULTS)  # type: ignore[assignment]
+
+        with patch(
+            "sovyx.plugins.official.web_intelligence._fetch_html",
+            new_callable=AsyncMock,
+            return_value="<html><body><p>Content here.</p></body></html>",
+        ):
+            data = _parse(await p.research("test", max_sources=2))
+
+        for source in data["sources"]:
+            assert "citation" in source
+            assert "title" in source
+            assert "url" in source
+            assert "credibility" in source
+            assert "content" in source
+
+    @pytest.mark.anyio()
+    async def test_citations_format(self) -> None:
+        p = WebIntelligencePlugin()
+        p._backend.search_text = _mock_ddgs_text(_SAMPLE_WEB_RESULTS)  # type: ignore[assignment]
+        p._backend.search_news = _mock_ddgs_news([])  # type: ignore[assignment]
+
+        with patch(
+            "sovyx.plugins.official.web_intelligence._fetch_html",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            data = _parse(await p.research("test", max_sources=1))
+
+        assert data["ok"] is True
+        for cit in data["citations"]:
+            assert cit.startswith("[")
+            assert "—" in cit
+
+    @pytest.mark.anyio()
+    async def test_credibility_ranking(self) -> None:
+        """Higher credibility sources should come first."""
+        p = WebIntelligencePlugin()
+
+        mixed_results = [
+            SearchResult(
+                title="Reddit Post",
+                url="https://reddit.com/r/test",
+                snippet="...",
+                source="reddit.com",
+                date="",
+                result_type="web",
+            ),
+            SearchResult(
+                title="Reuters Article",
+                url="https://reuters.com/article",
+                snippet="...",
+                source="reuters.com",
+                date="",
+                result_type="web",
+            ),
+        ]
+        p._backend.search_text = AsyncMock(return_value=mixed_results)  # type: ignore[assignment]
+        p._backend.search_news = _mock_ddgs_news([])  # type: ignore[assignment]
+
+        with patch(
+            "sovyx.plugins.official.web_intelligence._fetch_html",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            data = _parse(await p.research("test", max_sources=2))
+
+        # Reuters (tier1) should be citation [1]
+        assert data["sources"][0]["url"] == "https://reuters.com/article"
+
+    @pytest.mark.anyio()
+    async def test_dedup_urls(self) -> None:
+        """Same URL in web and news should appear once."""
+        p = WebIntelligencePlugin()
+        same_results = [
+            SearchResult(
+                title="Same Article",
+                url="https://reuters.com/same",
+                snippet="...",
+                source="reuters.com",
+                date="",
+                result_type="web",
+            ),
+        ]
+        p._backend.search_text = AsyncMock(return_value=same_results)  # type: ignore[assignment]
+        p._backend.search_news = AsyncMock(return_value=same_results)  # type: ignore[assignment]
+
+        with patch(
+            "sovyx.plugins.official.web_intelligence._fetch_html",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            data = _parse(await p.research("test"))
+
+        urls = [s["url"] for s in data["sources"]]
+        assert len(urls) == len(set(urls))
+
+    @pytest.mark.anyio()
+    async def test_no_results(self) -> None:
+        p = WebIntelligencePlugin()
+        p._backend.search_text = _mock_ddgs_text([])  # type: ignore[assignment]
+        p._backend.search_news = _mock_ddgs_news([])  # type: ignore[assignment]
+        data = _parse(await p.research("obscure query"))
+        assert data["ok"] is False
+
+    @pytest.mark.anyio()
+    async def test_empty_query(self) -> None:
+        p = WebIntelligencePlugin()
+        data = _parse(await p.research(""))
+        assert data["ok"] is False
+
+    @pytest.mark.anyio()
+    async def test_max_sources_capped(self) -> None:
+        p = WebIntelligencePlugin()
+        many = [
+            SearchResult(
+                title=f"R{i}",
+                url=f"https://site{i}.com/p",
+                snippet="...",
+                source=f"site{i}.com",
+                date="",
+                result_type="web",
+            )
+            for i in range(10)
+        ]
+        p._backend.search_text = AsyncMock(return_value=many)  # type: ignore[assignment]
+        p._backend.search_news = _mock_ddgs_news([])  # type: ignore[assignment]
+
+        with patch(
+            "sovyx.plugins.official.web_intelligence._fetch_html",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            data = _parse(await p.research("test", max_sources=2))
+
+        assert len(data["sources"]) == 2
+
+    @pytest.mark.anyio()
+    async def test_fetch_failure_uses_snippet(self) -> None:
+        """When fetch fails, source content falls back to snippet."""
+        p = WebIntelligencePlugin()
+        results = [
+            SearchResult(
+                title="Test",
+                url="https://example.com/p",
+                snippet="The snippet text",
+                source="example.com",
+                date="2026-01-01",
+                result_type="web",
+            ),
+        ]
+        p._backend.search_text = AsyncMock(return_value=results)  # type: ignore[assignment]
+        p._backend.search_news = _mock_ddgs_news([])  # type: ignore[assignment]
+
+        with patch(
+            "sovyx.plugins.official.web_intelligence._fetch_html",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            data = _parse(await p.research("test", max_sources=1))
+
+        assert data["sources"][0]["content"] == "The snippet text"
+
+    @pytest.mark.anyio()
+    async def test_content_truncation(self) -> None:
+        p = WebIntelligencePlugin()
+        results = [
+            SearchResult(
+                title="Test",
+                url="https://example.com/p",
+                snippet="...",
+                source="example.com",
+                date="",
+                result_type="web",
+            ),
+        ]
+        p._backend.search_text = AsyncMock(return_value=results)  # type: ignore[assignment]
+        p._backend.search_news = _mock_ddgs_news([])  # type: ignore[assignment]
+
+        long_content = "x" * 5000
+        html = f"<html><body><p>{long_content}</p></body></html>"
+        with patch(
+            "sovyx.plugins.official.web_intelligence._fetch_html",
+            new_callable=AsyncMock,
+            return_value=html,
+        ):
+            data = _parse(await p.research("test", max_sources=1))
+
+        content = str(data["sources"][0]["content"])
+        assert len(content) <= 2100  # _MAX_EXTRACT_CHARS + "..."
+
+    @pytest.mark.anyio()
+    async def test_avg_credibility(self) -> None:
+        p = WebIntelligencePlugin()
+        results = [
+            SearchResult(
+                title="R1",
+                url="https://reuters.com/a",
+                snippet="...",
+                source="reuters.com",
+                date="",
+                result_type="web",
+            ),
+        ]
+        p._backend.search_text = AsyncMock(return_value=results)  # type: ignore[assignment]
+        p._backend.search_news = _mock_ddgs_news([])  # type: ignore[assignment]
+
+        with patch(
+            "sovyx.plugins.official.web_intelligence._fetch_html",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            data = _parse(await p.research("test", max_sources=1))
+
+        assert data["avg_credibility"] >= 0.8
+
+    @pytest.mark.anyio()
+    async def test_include_news_false(self) -> None:
+        """include_news=False skips news search."""
+        p = WebIntelligencePlugin()
+        p._backend.search_text = _mock_ddgs_text(_SAMPLE_WEB_RESULTS)  # type: ignore[assignment]
+        news_called = False
+
+        async def track_news(*_a: object, **_kw: object) -> list[SearchResult]:
+            nonlocal news_called
+            news_called = True
+            return []
+
+        p._backend.search_news = track_news  # type: ignore[assignment]
+
+        with patch(
+            "sovyx.plugins.official.web_intelligence._fetch_html",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            data = _parse(await p.research("test", include_news=False))
+
+        assert data["ok"] is True
+        assert not news_called
