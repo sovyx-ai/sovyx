@@ -81,7 +81,8 @@ docs = [
 sovyx = "sovyx.cli.main:app"
 
 [project.entry-points."sovyx.plugins"]
-calculator = "sovyx.plugins.official.calculator:CalculatorPlugin"
+financial-math = "sovyx.plugins.official.financial_math:FinancialMathPlugin"
+calculator = "sovyx.plugins.official.calculator:CalculatorPlugin"  # backward compat
 weather = "sovyx.plugins.official.weather:WeatherPlugin"
 knowledge = "sovyx.plugins.official.knowledge:KnowledgePlugin"
 
