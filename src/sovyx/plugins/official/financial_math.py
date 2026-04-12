@@ -1224,3 +1224,312 @@ class FinancialMathPlugin(ISovyxPlugin):
                 f"SAC saves {_format_decimal(savings)}"
             ),
         )
+
+    # ── Portfolio Analytics ──
+
+    @tool(
+        description=(
+            "Portfolio performance analytics. Modes: "
+            "'returns' (calculate returns from prices), "
+            "'sharpe' (Sharpe ratio — risk-adjusted return), "
+            "'sortino' (Sortino ratio — downside-only risk), "
+            "'max_drawdown' (worst peak-to-trough decline), "
+            "'volatility' (annualized standard deviation), "
+            "'summary' (all metrics at once). "
+            "Accepts returns as percentages or prices. "
+            "Example: portfolio(mode='summary', "
+            "returns=[3.2, 1.5, -0.8, 4.1, 2.7], risk_free_rate=1)"
+        ),
+    )
+    async def portfolio(
+        self,
+        mode: str,
+        *,
+        returns: list[float] | None = None,
+        prices: list[float] | None = None,
+        risk_free_rate: float = 0,
+        periods_per_year: int = 12,
+    ) -> str:
+        """Portfolio analytics with Decimal precision.
+
+        Args:
+            mode: 'returns', 'sharpe', 'sortino', 'max_drawdown',
+                  'volatility', 'summary'.
+            returns: List of period returns as percentages (e.g. [3.2, -0.8]).
+            prices: List of asset prices (alternative to returns).
+            risk_free_rate: Risk-free rate per period (default 0).
+            periods_per_year: Annualization factor (12=monthly, 252=daily).
+
+        Returns:
+            JSON with metrics and breakdown.
+        """
+        mode = mode.strip().lower()
+
+        try:
+            # Get returns — either directly or from prices
+            rets = self._get_returns(returns, prices)
+            # risk_free_rate is in same units as returns (percentage)
+            d_rf = _to_decimal(risk_free_rate) / _HUNDRED
+
+            if mode == "returns":
+                return self._portfolio_returns(returns, prices)
+            if mode == "sharpe":
+                return self._portfolio_sharpe(rets, d_rf, periods_per_year)
+            if mode == "sortino":
+                return self._portfolio_sortino(rets, d_rf, periods_per_year)
+            if mode == "max_drawdown":
+                return self._portfolio_drawdown(rets)
+            if mode == "volatility":
+                return self._portfolio_volatility(rets, periods_per_year)
+            if mode == "summary":
+                return self._portfolio_summary(
+                    rets,
+                    d_rf,
+                    periods_per_year,
+                )
+        except _ValidationError as e:
+            return _err(str(e))
+        except (ZeroDivisionError, DecimalException, OverflowError) as e:
+            return _err(f"calculation error: {e}")
+
+        valid = "returns, sharpe, sortino, max_drawdown, volatility, summary"
+        return _err(f"unknown mode: '{mode}'. Valid: {valid}")
+
+    # ── Portfolio Internals ──
+
+    @staticmethod
+    def _get_returns(
+        returns: list[float] | None,
+        prices: list[float] | None,
+    ) -> list[Decimal]:
+        """Get decimal returns from either returns or prices."""
+        if returns is not None and len(returns) > 0:
+            return [_to_decimal(r) / _HUNDRED for r in returns]
+        if prices is not None and len(prices) >= 2:  # noqa: PLR2004
+            d_prices = [_to_decimal(p) for p in prices]
+            return [
+                (d_prices[i] - d_prices[i - 1]) / d_prices[i - 1] for i in range(1, len(d_prices))
+            ]
+        msg = "provide 'returns' (list of %) or 'prices' (list of prices)"
+        raise _ValidationError(msg)
+
+    @staticmethod
+    def _mean(values: list[Decimal]) -> Decimal:
+        n = len(values)
+        if n == 0:
+            return _ZERO
+        return sum(values) / Decimal(n)
+
+    @staticmethod
+    def _std_dev(values: list[Decimal], mean: Decimal) -> Decimal:
+        n = len(values)
+        if n < 2:  # noqa: PLR2004
+            return _ZERO
+        variance = sum((v - mean) ** 2 for v in values) / Decimal(n - 1)
+        return variance.sqrt()
+
+    @staticmethod
+    def _downside_dev(
+        values: list[Decimal],
+        target: Decimal,
+    ) -> Decimal:
+        """Downside deviation — only negative deviations count."""
+        downs = [(v - target) ** 2 for v in values if v < target]
+        if not downs:
+            return _ZERO
+        return (sum(downs) / Decimal(len(downs))).sqrt()
+
+    @staticmethod
+    def _portfolio_returns(
+        returns: list[float] | None,
+        prices: list[float] | None,
+    ) -> str:
+        if prices is not None and len(prices) >= 2:  # noqa: PLR2004
+            d_prices = [_to_decimal(p) for p in prices]
+            rets = [
+                (d_prices[i] - d_prices[i - 1]) / d_prices[i - 1] * _HUNDRED
+                for i in range(1, len(d_prices))
+            ]
+            return _ok(
+                "portfolio",
+                mode="returns",
+                count=str(len(rets)),
+                returns=[_format_decimal(r) + "%" for r in rets],
+                result=[_format_decimal(r) for r in rets],
+                message=f"Calculated {len(rets)} returns from {len(d_prices)} prices",
+            )
+        if returns is not None:
+            return _ok(
+                "portfolio",
+                mode="returns",
+                count=str(len(returns)),
+                returns=[str(r) + "%" for r in returns],
+                result=[str(r) for r in returns],
+                message=f"Using {len(returns)} provided returns",
+            )
+        return _err("provide 'returns' or 'prices'")
+
+    @staticmethod
+    def _portfolio_sharpe(
+        rets: list[Decimal],
+        rf: Decimal,
+        ppy: int,
+    ) -> str:
+        """Sharpe = (mean_return - rf) / std_dev * sqrt(ppy)."""
+        mean_r = FinancialMathPlugin._mean(rets)
+        std = FinancialMathPlugin._std_dev(rets, mean_r)
+        if std == _ZERO:
+            return _ok(
+                "portfolio",
+                mode="sharpe",
+                sharpe="infinity",
+                result="infinity",
+                message="Sharpe: ∞ (zero volatility)",
+            )
+        sharpe = (mean_r - rf) / std * _to_decimal(ppy).sqrt()
+        return _ok(
+            "portfolio",
+            mode="sharpe",
+            mean_return=_format_decimal(mean_r * _HUNDRED) + "%",
+            std_dev=_format_decimal(std * _HUNDRED) + "%",
+            risk_free=_format_decimal(rf * _HUNDRED) + "%",
+            annualization_factor=str(ppy),
+            sharpe=_format_decimal(sharpe),
+            result=_format_decimal(sharpe),
+            message=f"Sharpe Ratio: {_format_decimal(sharpe)}",
+        )
+
+    @staticmethod
+    def _portfolio_sortino(
+        rets: list[Decimal],
+        rf: Decimal,
+        ppy: int,
+    ) -> str:
+        """Sortino = (mean_return - rf) / downside_dev * sqrt(ppy)."""
+        mean_r = FinancialMathPlugin._mean(rets)
+        dd = FinancialMathPlugin._downside_dev(rets, rf)
+        if dd == _ZERO:
+            return _ok(
+                "portfolio",
+                mode="sortino",
+                sortino="infinity",
+                result="infinity",
+                message="Sortino: ∞ (no downside)",
+            )
+        sortino = (mean_r - rf) / dd * _to_decimal(ppy).sqrt()
+        return _ok(
+            "portfolio",
+            mode="sortino",
+            mean_return=_format_decimal(mean_r * _HUNDRED) + "%",
+            downside_dev=_format_decimal(dd * _HUNDRED) + "%",
+            risk_free=_format_decimal(rf * _HUNDRED) + "%",
+            sortino=_format_decimal(sortino),
+            result=_format_decimal(sortino),
+            message=f"Sortino Ratio: {_format_decimal(sortino)}",
+        )
+
+    @staticmethod
+    def _portfolio_drawdown(rets: list[Decimal]) -> str:
+        """Max drawdown from returns."""
+        if not rets:
+            return _err("no returns provided")
+        cumulative = Decimal(1)
+        peak = Decimal(1)
+        max_dd = _ZERO
+        for r in rets:
+            cumulative *= Decimal(1) + r
+            if cumulative > peak:
+                peak = cumulative
+            dd = (peak - cumulative) / peak
+            if dd > max_dd:
+                max_dd = dd
+        return _ok(
+            "portfolio",
+            mode="max_drawdown",
+            max_drawdown_percent=_format_decimal(max_dd * _HUNDRED) + "%",
+            result=_format_decimal(max_dd * _HUNDRED),
+            message=f"Max Drawdown: {_format_decimal(max_dd * _HUNDRED)}%",
+        )
+
+    @staticmethod
+    def _portfolio_volatility(
+        rets: list[Decimal],
+        ppy: int,
+    ) -> str:
+        """Annualized volatility = std_dev * sqrt(periods_per_year)."""
+        mean_r = FinancialMathPlugin._mean(rets)
+        std = FinancialMathPlugin._std_dev(rets, mean_r)
+        ann_vol = std * _to_decimal(ppy).sqrt()
+        return _ok(
+            "portfolio",
+            mode="volatility",
+            period_volatility=_format_decimal(std * _HUNDRED) + "%",
+            annualized_volatility=_format_decimal(ann_vol * _HUNDRED) + "%",
+            periods_per_year=str(ppy),
+            result=_format_decimal(ann_vol * _HUNDRED),
+            message=(
+                f"Volatility: {_format_decimal(std * _HUNDRED)}%/period, "
+                f"{_format_decimal(ann_vol * _HUNDRED)}% annualized"
+            ),
+        )
+
+    @staticmethod
+    def _portfolio_summary(
+        rets: list[Decimal],
+        rf: Decimal,
+        ppy: int,
+    ) -> str:
+        """All portfolio metrics in one call."""
+        mean_r = FinancialMathPlugin._mean(rets)
+        std = FinancialMathPlugin._std_dev(rets, mean_r)
+        dd = FinancialMathPlugin._downside_dev(rets, rf)
+        ann_vol = std * _to_decimal(ppy).sqrt()
+
+        # Sharpe
+        sharpe = (
+            "infinity"
+            if std == _ZERO
+            else _format_decimal((mean_r - rf) / std * _to_decimal(ppy).sqrt())
+        )
+
+        # Sortino
+        sortino = (
+            "infinity"
+            if dd == _ZERO
+            else _format_decimal((mean_r - rf) / dd * _to_decimal(ppy).sqrt())
+        )
+
+        # Max drawdown
+        cumulative = Decimal(1)
+        peak = Decimal(1)
+        max_dd = _ZERO
+        for r in rets:
+            cumulative *= Decimal(1) + r
+            if cumulative > peak:
+                peak = cumulative
+            d = (peak - cumulative) / peak
+            if d > max_dd:
+                max_dd = d
+
+        # Total return
+        total_ret = cumulative - Decimal(1)
+
+        return _ok(
+            "portfolio",
+            mode="summary",
+            periods=str(len(rets)),
+            mean_return=_format_decimal(mean_r * _HUNDRED) + "%",
+            total_return=_format_decimal(total_ret * _HUNDRED) + "%",
+            volatility=_format_decimal(ann_vol * _HUNDRED) + "%",
+            sharpe=sharpe,
+            sortino=sortino,
+            max_drawdown=_format_decimal(max_dd * _HUNDRED) + "%",
+            result=sharpe,
+            message=(
+                f"Summary ({len(rets)} periods): "
+                f"Return {_format_decimal(mean_r * _HUNDRED)}%/period, "
+                f"Sharpe {sharpe}, Sortino {sortino}, "
+                f"Max DD {_format_decimal(max_dd * _HUNDRED)}%, "
+                f"Vol {_format_decimal(ann_vol * _HUNDRED)}%"
+            ),
+        )
