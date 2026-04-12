@@ -133,6 +133,8 @@ module = [
     "kokoro_onnx.*",
     "tokenizers.*",
     "watchdog.*",
+    "ddgs.*",
+    "trafilatura.*",
 ]
 ignore_missing_imports = true
 
