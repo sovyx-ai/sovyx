@@ -110,9 +110,9 @@ for PYVER in 3.11 3.12; do
         --ignore=tests/smoke \
         --cov=sovyx \
         --cov-report=term-missing \
-        --cov-fail-under=94 \
+        --cov-fail-under=95 \
         -q; then
-        pass "pytest Python $PYVER + coverage ≥94%"
+        pass "pytest Python $PYVER + coverage ≥95%"
     else
         fail "pytest Python $PYVER"
     fi

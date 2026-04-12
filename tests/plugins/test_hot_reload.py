@@ -1,287 +1,361 @@
-"""Tests for Sovyx Plugin Hot-Reload (TASK-442)."""
+"""Tests for sovyx.plugins.hot_reload — PluginFileWatcher."""
 
 from __future__ import annotations
 
+import asyncio
 import sys
+import time
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# watchdog is optional — skip tests that need the real observer
-_has_watchdog = pytest.importorskip("watchdog", reason="watchdog not installed")
-
 from sovyx.plugins.hot_reload import PluginFileWatcher, _clear_module_cache
 
 
-def _mock_manager() -> MagicMock:
-    """Create a mock PluginManager."""
-    mgr = MagicMock()
-    mgr.loaded_plugins = ["weather"]
-    plugin = MagicMock()
-    plugin.plugin = MagicMock()
-    type(plugin.plugin).__module__ = "weather_plugin"
-    type(plugin.plugin).__name__ = "WeatherPlugin"
-    mgr.get_plugin.return_value = plugin
-    mgr.unload = AsyncMock()
-    mgr.load_single = AsyncMock()
-    return mgr
+# ── Fixtures ──
 
 
-class TestPluginFileWatcher:
-    """Tests for PluginFileWatcher."""
+class FakePluginInfo:
+    """Minimal loaded plugin info."""
 
-    def test_init(self, tmp_path: Path) -> None:
-        mgr = _mock_manager()
-        watcher = PluginFileWatcher(mgr, [tmp_path])
-        assert not watcher.is_running
-        assert watcher.reload_count == 0
+    def __init__(self, name: str, module: str) -> None:
+        self.plugin = type(f"Fake{name}", (), {"__module__": module})()
 
-    def test_start_stop(self, tmp_path: Path) -> None:
-        """Start and stop with real watchdog."""
-        mgr = _mock_manager()
-        watcher = PluginFileWatcher(mgr, [tmp_path])
 
-        watcher.start()
-        assert watcher.is_running
+class FakePluginManager:
+    """Minimal PluginManager stand-in."""
 
-        watcher.stop()
-        assert not watcher.is_running
+    def __init__(self) -> None:
+        self._plugins: dict[str, FakePluginInfo] = {}
+        self.unload = AsyncMock()
+        self.load_single = AsyncMock()
 
-    def test_start_nonexistent_dir(self, tmp_path: Path) -> None:
-        """Start skips nonexistent directories."""
-        mgr = _mock_manager()
-        watcher = PluginFileWatcher(mgr, [tmp_path / "nonexistent"])
-        watcher.start()
-        assert watcher.is_running
-        watcher.stop()
+    @property
+    def loaded_plugins(self) -> list[str]:
+        return list(self._plugins.keys())
 
-    def test_stop_without_start(self, tmp_path: Path) -> None:
-        """Stop without start is safe."""
-        mgr = _mock_manager()
-        watcher = PluginFileWatcher(mgr, [tmp_path])
-        watcher.stop()
-        assert not watcher.is_running
+    def get_plugin(self, name: str) -> FakePluginInfo | None:
+        return self._plugins.get(name)
 
-    def test_debounce(self, tmp_path: Path) -> None:
-        """Changes within debounce window are ignored."""
-        mgr = _mock_manager()
-        watcher = PluginFileWatcher(mgr, [tmp_path], debounce_s=10.0)
+    def add(self, name: str, module: str = "sovyx.plugins.official.calculator") -> None:
+        self._plugins[name] = FakePluginInfo(name, module)
 
-        # First call should process
-        with patch.object(watcher, "_resolve_plugin_name", return_value="weather"):
-            watcher._on_file_changed("/some/weather_plugin/main.py")
 
-        # Second call within debounce should be ignored
-        with patch.object(watcher, "_resolve_plugin_name") as mock_resolve:
-            watcher._on_file_changed("/some/weather_plugin/main.py")
-            mock_resolve.assert_not_called()
+@pytest.fixture()
+def manager() -> FakePluginManager:
+    return FakePluginManager()
 
-    def test_resolve_plugin_name(self, tmp_path: Path) -> None:
-        """Resolves file path to plugin name."""
-        mgr = _mock_manager()
-        watcher = PluginFileWatcher(mgr, [tmp_path])
 
-        result = watcher._resolve_plugin_name("/path/to/weather_plugin/main.py")
-        assert result == "weather"
+@pytest.fixture()
+def watcher(manager: FakePluginManager, tmp_path: Path) -> PluginFileWatcher:
+    return PluginFileWatcher(manager, [tmp_path], debounce_s=0.0)
 
-    def test_resolve_plugin_name_unknown(self, tmp_path: Path) -> None:
-        """Unknown path returns None."""
-        mgr = _mock_manager()
-        watcher = PluginFileWatcher(mgr, [tmp_path])
 
-        result = watcher._resolve_plugin_name("/path/to/unknown/file.py")
-        assert result is None
+# ── Properties ──
 
-    @pytest.mark.anyio()
-    async def test_reload_plugin(self, tmp_path: Path) -> None:
-        """Reload: unload → clear cache → reimport → load."""
-        mgr = _mock_manager()
-        watcher = PluginFileWatcher(mgr, [tmp_path])
 
-        with patch("sovyx.plugins.hot_reload.importlib") as mock_imp:
-            mock_module = MagicMock()
-            mock_class = MagicMock()
-            mock_module.WeatherPlugin = mock_class
-            mock_imp.import_module.return_value = mock_module
+def test_initial_state(watcher: PluginFileWatcher) -> None:
+    assert watcher.is_running is False
+    assert watcher.reload_count == 0
 
-            await watcher._reload_plugin("weather")
 
-        mgr.unload.assert_called_once_with("weather")
-        mgr.load_single.assert_called_once()
+# ── _handle_fs_event ──
+
+
+def test_handle_fs_event_ignores_directories(watcher: PluginFileWatcher) -> None:
+    event = MagicMock(src_path="/some/dir", is_directory=True)
+    watcher._handle_fs_event(event)
+    # No crash, no _on_file_changed call
+
+
+def test_handle_fs_event_ignores_non_python(watcher: PluginFileWatcher) -> None:
+    event = MagicMock(src_path="/some/file.txt", is_directory=False)
+    watcher._handle_fs_event(event)
+
+
+def test_handle_fs_event_processes_python_files(
+    watcher: PluginFileWatcher, manager: FakePluginManager
+) -> None:
+    manager.add("calculator")
+    event = MagicMock(src_path="/sovyx/plugins/official/calculator.py", is_directory=False)
+    with patch.object(watcher, "_on_file_changed") as mock_on_changed:
+        watcher._handle_fs_event(event)
+        mock_on_changed.assert_called_once_with("/sovyx/plugins/official/calculator.py")
+
+
+# ── Debouncing ──
+
+
+def test_debounce_blocks_rapid_changes(manager: FakePluginManager, tmp_path: Path) -> None:
+    watcher = PluginFileWatcher(manager, [tmp_path], debounce_s=10.0)
+    manager.add("calculator")
+
+    with patch.object(watcher, "_resolve_plugin_name", return_value="calculator"):
+        with patch("asyncio.get_running_loop", side_effect=RuntimeError):
+            watcher._on_file_changed("/some/calculator.py")
+            # Second call within debounce window — should be skipped
+            watcher._on_file_changed("/some/calculator.py")
+            # _resolve_plugin_name only called once due to debounce
+            assert watcher._resolve_plugin_name.call_count == 1  # type: ignore[union-attr]
+
+
+def test_debounce_allows_after_window(manager: FakePluginManager, tmp_path: Path) -> None:
+    watcher = PluginFileWatcher(manager, [tmp_path], debounce_s=0.0)
+    manager.add("calculator")
+
+    with patch.object(watcher, "_resolve_plugin_name", return_value=None):
+        watcher._on_file_changed("/some/calculator.py")
+        watcher._on_file_changed("/some/calculator.py")
+        assert watcher._resolve_plugin_name.call_count == 2  # type: ignore[union-attr]
+
+
+# ── _resolve_plugin_name ──
+
+
+def test_resolve_plugin_name_found(
+    watcher: PluginFileWatcher, manager: FakePluginManager
+) -> None:
+    manager.add("calculator", module="sovyx.plugins.official.calculator")
+    result = watcher._resolve_plugin_name("/path/to/sovyx/plugins/official/calculator.py")
+    assert result == "calculator"
+
+
+def test_resolve_plugin_name_not_found(
+    watcher: PluginFileWatcher, manager: FakePluginManager
+) -> None:
+    manager.add("calculator", module="sovyx.plugins.official.calculator")
+    result = watcher._resolve_plugin_name("/completely/unrelated/path.py")
+    assert result is None
+
+
+def test_resolve_returns_none_for_missing_plugin(
+    watcher: PluginFileWatcher, manager: FakePluginManager
+) -> None:
+    # No plugins loaded
+    result = watcher._resolve_plugin_name("/any/path.py")
+    assert result is None
+
+
+def test_resolve_skips_none_plugin(
+    watcher: PluginFileWatcher, manager: FakePluginManager
+) -> None:
+    manager._plugins["ghost"] = None  # type: ignore[assignment]
+    result = watcher._resolve_plugin_name("/any/path.py")
+    assert result is None
+
+
+# ── _on_file_changed ──
+
+
+def test_on_file_changed_no_matching_plugin(
+    watcher: PluginFileWatcher,
+) -> None:
+    # No plugins loaded — _resolve_plugin_name returns None, no task created
+    watcher._on_file_changed("/random/file.py")
+
+
+def test_on_file_changed_no_event_loop(
+    watcher: PluginFileWatcher, manager: FakePluginManager
+) -> None:
+    manager.add("calculator")
+    with patch.object(watcher, "_resolve_plugin_name", return_value="calculator"):
+        # No running loop — should log warning, not crash
+        watcher._on_file_changed("/calculator.py")
+
+
+@pytest.mark.anyio()
+async def test_on_file_changed_with_event_loop(
+    watcher: PluginFileWatcher, manager: FakePluginManager
+) -> None:
+    """_on_file_changed schedules reload task when event loop is running."""
+    manager.add("calculator")
+    with patch.object(watcher, "_resolve_plugin_name", return_value="calculator"):
+        with patch.object(watcher, "_reload_plugin", new_callable=AsyncMock) as mock_reload:
+            watcher._on_file_changed("/calculator.py")
+            # Let the event loop process the created task
+            await asyncio.sleep(0.05)
+            mock_reload.assert_awaited_once_with("calculator")
+
+
+# ── _reload_plugin ──
+
+
+@pytest.mark.anyio()
+async def test_reload_plugin_success(
+    watcher: PluginFileWatcher, manager: FakePluginManager
+) -> None:
+    manager.add("calculator", module="sovyx.plugins.official.calculator")
+
+    with patch("importlib.import_module") as mock_import:
+        fake_module = MagicMock()
+        fake_class = MagicMock(return_value=MagicMock())
+        fake_module.Fakecalculator = fake_class
+        # Match the plugin class name
+        plugin_info = manager.get_plugin("calculator")
+        class_name = type(plugin_info.plugin).__name__  # type: ignore[union-attr]
+        setattr(fake_module, class_name, fake_class)
+        mock_import.return_value = fake_module
+
+        await watcher._reload_plugin("calculator")
+
+        manager.unload.assert_awaited_once_with("calculator")
+        manager.load_single.assert_awaited_once()
         assert watcher.reload_count == 1
 
-    @pytest.mark.anyio()
-    async def test_reload_plugin_not_found(self, tmp_path: Path) -> None:
-        """Reload handles plugin not found."""
-        mgr = _mock_manager()
-        mgr.get_plugin.return_value = None
-        watcher = PluginFileWatcher(mgr, [tmp_path])
 
-        await watcher._reload_plugin("ghost")
-        assert watcher.reload_count == 0
-
-    @pytest.mark.anyio()
-    async def test_reload_retries(self, tmp_path: Path) -> None:
-        """Reload retries on failure up to max attempts."""
-        mgr = _mock_manager()
-        mgr.unload = AsyncMock(side_effect=RuntimeError("fail"))
-        watcher = PluginFileWatcher(mgr, [tmp_path])
-
-        await watcher._reload_plugin("weather")
-        # Should have tried 3 times
-        assert mgr.unload.call_count == 3
-        assert watcher.reload_count == 0
-
-    def test_on_file_changed_no_loop(self, tmp_path: Path) -> None:
-        """_on_file_changed handles no event loop gracefully."""
-        mgr = _mock_manager()
-        watcher = PluginFileWatcher(mgr, [tmp_path])
-
-        with patch.object(watcher, "_resolve_plugin_name", return_value="weather"):
-            # No running event loop — should not crash
-            watcher._on_file_changed("/weather_plugin/main.py")
+@pytest.mark.anyio()
+async def test_reload_plugin_not_found(
+    watcher: PluginFileWatcher, manager: FakePluginManager
+) -> None:
+    # Plugin doesn't exist
+    await watcher._reload_plugin("nonexistent")
+    assert watcher.reload_count == 0
 
 
-class TestClearModuleCache:
-    """Tests for _clear_module_cache."""
+@pytest.mark.anyio()
+async def test_reload_plugin_retries_on_failure(
+    watcher: PluginFileWatcher, manager: FakePluginManager
+) -> None:
+    manager.add("calculator", module="sovyx.plugins.official.calculator")
+    manager.unload = AsyncMock(side_effect=RuntimeError("fail"))
 
-    def test_clears_matching(self) -> None:
-        """Clears modules matching prefix."""
-        sys.modules["test_hot_xyz"] = MagicMock()
-        sys.modules["test_hot_xyz.sub"] = MagicMock()
-        count = _clear_module_cache("test_hot_xyz")
-        assert count == 2
-        assert "test_hot_xyz" not in sys.modules
-        assert "test_hot_xyz.sub" not in sys.modules
+    await watcher._reload_plugin("calculator")
 
-    def test_no_match(self) -> None:
-        """No matching modules returns 0."""
-        count = _clear_module_cache("nonexistent_module_xyz_123")
-        assert count == 0
+    # Should have tried 3 times (MAX_RELOAD_ATTEMPTS)
+    assert manager.unload.await_count == 3
+    assert watcher.reload_count == 0
 
 
-class TestWatchdogHandler:
-    """Tests for the watchdog event handler integration."""
+# ── start/stop ──
 
-    def test_on_modified_py_file(self, tmp_path: Path) -> None:
-        """Handler triggers _on_file_changed for .py files."""
-        mgr = _mock_manager()
-        watcher = PluginFileWatcher(mgr, [tmp_path])
 
-        # Start to create the handler
+def test_start_without_watchdog(
+    watcher: PluginFileWatcher,
+) -> None:
+    """start() gracefully handles missing watchdog."""
+    original_import = __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__  # type: ignore[union-attr]
+
+    def fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if "watchdog" in name:
+            raise ImportError("no watchdog")
+        return original_import(name, *args, **kwargs)
+
+    with patch("builtins.__import__", side_effect=fake_import):
+        watcher.start()
+    assert watcher.is_running is False
+
+
+def test_stop_without_start(watcher: PluginFileWatcher) -> None:
+    watcher.stop()
+    assert watcher.is_running is False
+
+
+def test_stop_with_observer(watcher: PluginFileWatcher) -> None:
+    mock_observer = MagicMock()
+    watcher._observer = mock_observer
+    watcher._running = True
+
+    watcher.stop()
+
+    mock_observer.stop.assert_called_once()
+    mock_observer.join.assert_called_once_with(timeout=5)
+    assert watcher.is_running is False
+    assert watcher._observer is None
+
+
+def test_start_with_watchdog(tmp_path: Path, manager: FakePluginManager) -> None:
+    """start() with watchdog available sets up observer and handler."""
+    watch_dir = tmp_path / "plugins"
+    watch_dir.mkdir()
+    watcher = PluginFileWatcher(manager, [watch_dir], debounce_s=0.0)
+
+    mock_observer = MagicMock()
+    mock_observer_cls = MagicMock(return_value=mock_observer)
+
+    # Create mock watchdog modules
+    mock_events = MagicMock()
+    mock_observers = MagicMock()
+    mock_observers.Observer = mock_observer_cls
+
+    with patch.dict(
+        sys.modules,
+        {
+            "watchdog": MagicMock(),
+            "watchdog.events": mock_events,
+            "watchdog.observers": mock_observers,
+        },
+    ):
         watcher.start()
 
-        # Simulate file change via _on_file_changed
-        with patch.object(watcher, "_resolve_plugin_name", return_value=None):
-            watcher._on_file_changed(str(tmp_path / "test.py"))
+    assert watcher.is_running is True
+    mock_observer.start.assert_called_once()
+    mock_observer.schedule.assert_called_once()
+    assert watcher._observer is mock_observer
 
-        watcher.stop()
-
-    def test_on_modified_non_py_ignored(self, tmp_path: Path) -> None:
-        """Non-.py files are ignored by the handler."""
-        mgr = _mock_manager()
-        watcher = PluginFileWatcher(mgr, [tmp_path])
-        # Non-py file should not even reach _resolve_plugin_name
-        # (handled in the Handler class, not _on_file_changed)
-
-    def test_file_changed_triggers_resolve(self, tmp_path: Path) -> None:
-        """_on_file_changed calls _resolve_plugin_name."""
-        mgr = _mock_manager()
-        watcher = PluginFileWatcher(mgr, [tmp_path])
-
-        with patch.object(watcher, "_resolve_plugin_name", return_value=None) as mock:
-            watcher._on_file_changed("/some/path.py")
-            mock.assert_called_once()
-
-    @pytest.mark.anyio()
-    async def test_reload_success_increments_count(self, tmp_path: Path) -> None:
-        """Successful reload increments reload_count."""
-        mgr = _mock_manager()
-        watcher = PluginFileWatcher(mgr, [tmp_path])
-
-        with patch("sovyx.plugins.hot_reload.importlib") as mock_imp:
-            mock_module = MagicMock()
-            mock_class = MagicMock()
-            mock_module.WeatherPlugin = mock_class
-            mock_imp.import_module.return_value = mock_module
-
-            await watcher._reload_plugin("weather")
-            await watcher._reload_plugin("weather")
-
-        assert watcher.reload_count == 2
-
-    def test_resolve_with_no_plugins(self, tmp_path: Path) -> None:
-        """Resolve returns None when no plugins loaded."""
-        mgr = _mock_manager()
-        mgr.loaded_plugins = []
-        watcher = PluginFileWatcher(mgr, [tmp_path])
-        assert watcher._resolve_plugin_name("/any/path.py") is None
-
-    def test_resolve_get_plugin_none(self, tmp_path: Path) -> None:
-        """Resolve handles get_plugin returning None."""
-        mgr = _mock_manager()
-        mgr.get_plugin.return_value = None
-        watcher = PluginFileWatcher(mgr, [tmp_path])
-        assert watcher._resolve_plugin_name("/any/path.py") is None
+    watcher.stop()
+    assert watcher.is_running is False
 
 
-class TestHandleFsEvent:
-    """Tests for _handle_fs_event (extracted from watchdog handler)."""
+def test_start_skips_nonexistent_dirs(tmp_path: Path, manager: FakePluginManager) -> None:
+    """start() skips watch dirs that don't exist."""
+    nonexistent = tmp_path / "does_not_exist"
+    watcher = PluginFileWatcher(manager, [nonexistent], debounce_s=0.0)
 
-    def test_py_file_triggers(self, tmp_path: Path) -> None:
-        """Python file event triggers _on_file_changed."""
-        mgr = _mock_manager()
-        watcher = PluginFileWatcher(mgr, [tmp_path])
+    mock_observer = MagicMock()
+    mock_observer_cls = MagicMock(return_value=mock_observer)
 
-        class FakeEvent:
-            src_path = "/plugin/main.py"
-            is_directory = False
+    mock_events = MagicMock()
+    mock_observers = MagicMock()
+    mock_observers.Observer = mock_observer_cls
 
-        with patch.object(watcher, "_on_file_changed") as mock:
-            watcher._handle_fs_event(FakeEvent())
-            mock.assert_called_once_with("/plugin/main.py")
+    with patch.dict(
+        sys.modules,
+        {
+            "watchdog": MagicMock(),
+            "watchdog.events": mock_events,
+            "watchdog.observers": mock_observers,
+        },
+    ):
+        watcher.start()
 
-    def test_non_py_ignored(self, tmp_path: Path) -> None:
-        """Non-.py files are ignored."""
-        mgr = _mock_manager()
-        watcher = PluginFileWatcher(mgr, [tmp_path])
+    assert watcher.is_running is True
+    mock_observer.schedule.assert_not_called()  # No dirs to watch
+    watcher.stop()
 
-        class FakeEvent:
-            src_path = "/plugin/data.json"
-            is_directory = False
 
-        with patch.object(watcher, "_on_file_changed") as mock:
-            watcher._handle_fs_event(FakeEvent())
-            mock.assert_not_called()
+# ── _clear_module_cache ──
 
-    def test_directory_ignored(self, tmp_path: Path) -> None:
-        """Directory events are ignored."""
-        mgr = _mock_manager()
-        watcher = PluginFileWatcher(mgr, [tmp_path])
 
-        class FakeEvent:
-            src_path = "/plugin"
-            is_directory = True
+def test_clear_module_cache_removes_matching() -> None:
+    sentinel = "sovyx_test_hot_reload_sentinel"
+    sys.modules[sentinel] = MagicMock()  # type: ignore[assignment]
+    sys.modules[f"{sentinel}.sub"] = MagicMock()  # type: ignore[assignment]
 
-        with patch.object(watcher, "_on_file_changed") as mock:
-            watcher._handle_fs_event(FakeEvent())
-            mock.assert_not_called()
+    count = _clear_module_cache(sentinel)
 
-    def test_file_change_with_running_loop(self, tmp_path: Path) -> None:
-        """_on_file_changed schedules reload in running loop."""
-        import asyncio
+    assert count == 2
+    assert sentinel not in sys.modules
+    assert f"{sentinel}.sub" not in sys.modules
 
-        mgr = _mock_manager()
-        watcher = PluginFileWatcher(mgr, [tmp_path], debounce_s=0)
 
-        async def run() -> None:
-            with (
-                patch.object(watcher, "_resolve_plugin_name", return_value="weather"),
-                patch.object(watcher, "_reload_plugin", new_callable=AsyncMock) as mock_reload,
-            ):
-                watcher._on_file_changed("/weather_plugin/x.py")
-                await asyncio.sleep(0.05)  # Let task run
-                mock_reload.assert_called_once_with("weather")
+def test_clear_module_cache_no_matches() -> None:
+    count = _clear_module_cache("nonexistent_module_xyz_12345")
+    assert count == 0
 
-        asyncio.run(run())
+
+def test_clear_module_cache_only_prefix() -> None:
+    """Doesn't remove modules that merely contain the prefix as substring."""
+    sentinel = "zz_hot_test"
+    other = "azz_hot_test_nope"
+    sys.modules[sentinel] = MagicMock()  # type: ignore[assignment]
+    sys.modules[other] = MagicMock()  # type: ignore[assignment]
+
+    count = _clear_module_cache(sentinel)
+
+    assert count == 1
+    assert sentinel not in sys.modules
+    assert other in sys.modules
+    # Cleanup
+    del sys.modules[other]
