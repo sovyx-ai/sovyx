@@ -575,30 +575,9 @@ sovyx plugin remove <name>     Uninstall a plugin
 
 ## Official Plugins as Reference
 
-Study these in order of complexity:
+Three enterprise-grade official plugins, ordered by complexity:
 
-### 1. Calculator (minimal — 74 LOC, 1 tool)
-
-**File:** `src/sovyx/plugins/official/calculator.py`
-
-The simplest possible plugin. Safe math via AST parsing — no `eval()`. Read this first to understand the pattern.
-
-```python
-# Key pattern: AST-based expression evaluation
-node = ast.parse(expression, mode="eval").body
-result = self._eval_node(node)
-```
-
-### 2. Weather (starter — 239 LOC, 3 tools)
-
-**File:** `src/sovyx/plugins/official/weather.py`
-
-Demonstrates external API calls with network sandbox. Uses Open-Meteo (free, no key). Shows:
-- `config_schema` for user configuration
-- WMO weather code mapping
-- Geocoding + weather API composition
-
-### 3. Knowledge (core — 922 LOC, 5 tools)
+### 1. Knowledge (core — 922 LOC, 5 tools)
 
 **File:** `src/sovyx/plugins/official/knowledge.py`
 
@@ -609,7 +588,7 @@ The brain interface plugin. Shows:
 - Auto-relations between concepts
 - Confidence tracking
 
-### 4. Web Intelligence (advanced — 1,962 LOC, 6 tools)
+### 2. Web Intelligence (advanced — 1,962 LOC, 6 tools)
 
 **File:** `src/sovyx/plugins/official/web_intelligence.py`
 
@@ -619,7 +598,7 @@ Web search, news, page extraction. Shows:
 - Result ranking and filtering
 - Graceful degradation when services are unavailable
 
-### 5. Financial Math (enterprise — 2,019 LOC, 8 tools)
+### 3. Financial Math (enterprise — 2,019 LOC, 8 tools)
 
 **File:** `src/sovyx/plugins/official/financial_math.py`
 
