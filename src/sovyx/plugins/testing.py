@@ -79,6 +79,7 @@ class MockBrainAccess:
         content: str,
         *,
         category: str = "fact",
+        metadata: dict[str, object] | None = None,
     ) -> str:
         """Store a concept and return a mock ID."""
         concept_id = f"mock-{self._next_id}"
@@ -99,6 +100,107 @@ class MockBrainAccess:
             }
         )
         return concept_id
+
+    async def find_similar(
+        self,
+        content: str,
+        *,
+        threshold: float = 0.88,
+        limit: int = 5,
+    ) -> list[dict[str, object]]:
+        """Mock find_similar — returns empty (no semantic search in mock)."""
+        return []
+
+    async def classify_content(
+        self,
+        old_content: str,
+        new_content: str,
+    ) -> str:
+        """Mock classify — always returns UNRELATED."""
+        return "UNRELATED"
+
+    async def reinforce(
+        self,
+        concept_id: str,
+        *,
+        importance_delta: float = 0.05,
+        confidence_delta: float = 0.10,
+    ) -> dict[str, object] | None:
+        """Mock reinforce — returns None."""
+        return None
+
+    async def forget(self, concept_id: str) -> bool:
+        """Mock forget — removes from internal list."""
+        before = len(self._concepts)
+        self._concepts = [c for c in self._concepts if str(c.get("id", "")) != concept_id]
+        return len(self._concepts) < before
+
+    async def forget_all(
+        self,
+        query: str,
+        *,
+        limit: int = 10,
+    ) -> list[dict[str, object]]:
+        """Mock forget_all — returns empty."""
+        return []
+
+    async def create_relation(
+        self,
+        source_id: str,
+        target_id: str,
+        relation_type: str = "related_to",
+    ) -> str:
+        """Mock create_relation — returns mock ID."""
+        return f"rel-mock-{self._next_id}"
+
+    async def boost_importance(self, concept_id: str, delta: float) -> None:
+        """Mock boost_importance — no-op."""
+
+    async def get_related(
+        self,
+        concept_id: str,
+        *,
+        limit: int = 5,
+    ) -> list[dict[str, object]]:
+        """Mock get_related — returns empty."""
+        return []
+
+    async def search_episodes(
+        self,
+        query: str,
+        *,
+        limit: int = 5,
+    ) -> list[dict[str, object]]:
+        """Mock search_episodes — returns empty."""
+        return []
+
+    async def get_stats(self) -> dict[str, object]:
+        """Mock get_stats — returns counts from internal list."""
+        return {
+            "total_concepts": len(self._concepts),
+            "categories": {},
+            "total_relations": 0,
+            "total_episodes": 0,
+        }
+
+    async def get_top_concepts(
+        self,
+        limit: int = 10,
+        *,
+        category: str | None = None,
+    ) -> list[dict[str, object]]:
+        """Mock get_top_concepts — returns from internal list."""
+        return self._concepts[:limit]
+
+    async def update(
+        self,
+        concept_id: str,
+        *,
+        content: str | None = None,
+        confidence: float | None = None,
+    ) -> bool:
+        """Mock update — no-op."""
+        return True
 
     @property
     def learned_concepts(self) -> list[dict[str, str]]:
