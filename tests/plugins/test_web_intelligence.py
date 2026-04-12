@@ -929,3 +929,165 @@ class TestAutoModeSearch:
         data = _parse(await p.search("bitcoin price today", mode="web"))
         assert data["ok"] is True
         assert "intent" not in data
+
+
+# ── Source Credibility Scoring (TASK-500) ──
+
+from sovyx.plugins.official.web_intelligence import CredibilityScore, score_credibility
+
+
+class TestScoreCredibility:
+    """Tests for source credibility scoring."""
+
+    # Tier 1
+    def test_arxiv(self) -> None:
+        c = score_credibility("https://arxiv.org/abs/2301.1234")
+        assert c.tier == "tier1"
+        assert c.score >= 0.9
+
+    def test_reuters(self) -> None:
+        c = score_credibility("https://reuters.com/article/test")
+        assert c.tier == "tier1"
+        assert c.score >= 0.9
+
+    def test_gov_br(self) -> None:
+        c = score_credibility("https://gov.br/page")
+        assert c.tier == "tier1"
+
+    def test_who(self) -> None:
+        c = score_credibility("https://who.int/news")
+        assert c.tier == "tier1"
+
+    # Tier 2
+    def test_bbc(self) -> None:
+        c = score_credibility("https://bbc.com/news/article")
+        assert c.tier == "tier2"
+        assert 0.7 <= c.score <= 0.9
+
+    def test_bloomberg(self) -> None:
+        c = score_credibility("https://bloomberg.com/news/test")
+        assert c.tier == "tier2"
+
+    def test_stackoverflow(self) -> None:
+        c = score_credibility("https://stackoverflow.com/questions/123")
+        assert c.tier == "tier2"
+
+    def test_wikipedia(self) -> None:
+        c = score_credibility("https://wikipedia.org/wiki/Python")
+        assert c.tier == "tier2"
+
+    def test_folha(self) -> None:
+        c = score_credibility("https://folha.uol.com.br/article")
+        assert c.tier == "tier2"
+
+    # Tier 3
+    def test_reddit(self) -> None:
+        c = score_credibility("https://reddit.com/r/python")
+        assert c.tier == "tier3"
+        assert c.score <= 0.6
+
+    def test_medium(self) -> None:
+        c = score_credibility("https://medium.com/@user/article")
+        assert c.tier == "tier3"
+
+    def test_twitter(self) -> None:
+        c = score_credibility("https://twitter.com/user/status/123")
+        assert c.tier == "tier3"
+
+    # Subdomain match
+    def test_subdomain_tier1(self) -> None:
+        c = score_credibility("https://news.reuters.com/article")
+        assert c.tier == "tier1"
+        assert c.score >= 0.85
+
+    def test_subdomain_tier2(self) -> None:
+        c = score_credibility("https://tech.bloomberg.com/article")
+        assert c.tier == "tier2"
+
+    # TLD heuristics
+    def test_edu_tld(self) -> None:
+        c = score_credibility("https://mit.edu/research")
+        assert c.score >= 0.7
+        assert any("trusted TLD" in r for r in c.reasons)
+
+    def test_gov_tld(self) -> None:
+        c = score_credibility("https://example.gov/data")
+        assert c.score >= 0.7
+
+    def test_low_trust_tld(self) -> None:
+        c = score_credibility("https://sketchy.xyz/page")
+        assert c.score <= 0.4
+        assert any("low-trust" in r for r in c.reasons)
+
+    def test_biz_tld(self) -> None:
+        c = score_credibility("https://fake.biz/deal")
+        assert c.score <= 0.4
+
+    # Unknown
+    def test_unknown_domain(self) -> None:
+        c = score_credibility("https://random-blog-2026.com/post")
+        assert c.tier == "unknown"
+        assert 0.3 <= c.score <= 0.7
+
+    # HTTPS bonus
+    def test_https_bonus(self) -> None:
+        c_https = score_credibility("https://unknown-site.com/page")
+        c_http = score_credibility("http://unknown-site.com/page")
+        assert c_https.score >= c_http.score
+
+    # Schema
+    def test_to_dict(self) -> None:
+        c = CredibilityScore(
+            score=0.85,
+            tier="tier2",
+            domain="bbc.com",
+            reasons=["established publication"],
+        )
+        d = c.to_dict()
+        assert d["score"] == 0.85
+        assert d["tier"] == "tier2"
+        assert d["domain"] == "bbc.com"
+        assert isinstance(d["reasons"], list)
+
+    # Score bounds
+    def test_score_always_in_range(self) -> None:
+        urls = [
+            "https://arxiv.org/abs/123",
+            "https://reddit.com/r/test",
+            "https://random.xyz/page",
+            "http://unknown.com",
+            "https://mit.edu/cs",
+            "https://fake.click/ad",
+        ]
+        for url in urls:
+            c = score_credibility(url)
+            assert 0 <= c.score <= 1, f"Bad score for {url}: {c.score}"
+
+
+class TestCredibilityInSearchResults:
+    """Credibility scores appear in search and fetch results."""
+
+    @pytest.mark.anyio()
+    async def test_search_results_have_credibility(self) -> None:
+        p = WebIntelligencePlugin()
+        p._backend.search_text = _mock_ddgs_text(_SAMPLE_WEB_RESULTS)  # type: ignore[assignment]
+        data = _parse(await p.search("test query", mode="web"))
+        assert data["ok"] is True
+        for r in data["results"]:
+            assert "credibility" in r
+            assert "score" in r["credibility"]
+            assert "tier" in r["credibility"]
+
+    @pytest.mark.anyio()
+    async def test_fetch_has_credibility(self) -> None:
+        p = WebIntelligencePlugin()
+        html = "<html><body><p>Content here.</p></body></html>"
+        with patch(
+            "sovyx.plugins.official.web_intelligence._fetch_html",
+            new_callable=AsyncMock,
+            return_value=html,
+        ):
+            data = _parse(await p.fetch("https://reuters.com/article"))
+        assert data["ok"] is True
+        assert data["credibility"]["tier"] == "tier1"
+        assert data["credibility"]["score"] >= 0.9

@@ -40,6 +40,221 @@ _MSG_INVALID_URL = "invalid or disallowed URL"
 _MSG_BACKEND_UNAVAILABLE = "search backend unavailable"
 
 
+# ── Source Credibility Scoring ──
+
+# Tier 1: Highly trusted (academic, gov, major wire services)
+_TIER1_DOMAINS = frozenset(
+    {
+        # Academic / research
+        "arxiv.org",
+        "scholar.google.com",
+        "pubmed.ncbi.nlm.nih.gov",
+        "nature.com",
+        "science.org",
+        "ieee.org",
+        "acm.org",
+        "jstor.org",
+        "ssrn.com",
+        "researchgate.net",
+        # Government
+        "gov.br",
+        "gov.uk",
+        "usa.gov",
+        "europa.eu",
+        "who.int",
+        "worldbank.org",
+        "imf.org",
+        "un.org",
+        "bcb.gov.br",
+        "sec.gov",
+        "federalreserve.gov",
+        "bls.gov",
+        "census.gov",
+        # Major wire services
+        "reuters.com",
+        "apnews.com",
+        "afp.com",
+    }
+)
+
+# Tier 2: Established news / reference
+_TIER2_DOMAINS = frozenset(
+    {
+        # News
+        "bbc.com",
+        "bbc.co.uk",
+        "nytimes.com",
+        "washingtonpost.com",
+        "theguardian.com",
+        "economist.com",
+        "ft.com",
+        "bloomberg.com",
+        "wsj.com",
+        "cnn.com",
+        "aljazeera.com",
+        "dw.com",
+        # Tech
+        "techcrunch.com",
+        "arstechnica.com",
+        "wired.com",
+        "theverge.com",
+        "hackernews.com",
+        "github.com",
+        "stackoverflow.com",
+        # Reference
+        "wikipedia.org",
+        "britannica.com",
+        "investopedia.com",
+        # Brazil
+        "folha.uol.com.br",
+        "estadao.com.br",
+        "g1.globo.com",
+        "valor.globo.com",
+        "infomoney.com.br",
+        # Finance
+        "coindesk.com",
+        "coingecko.com",
+        "tradingview.com",
+        "yahoo.com",
+        "cnbc.com",
+        "marketwatch.com",
+    }
+)
+
+# Tier 3: Known but lower trust (blogs, social, user-generated)
+_TIER3_DOMAINS = frozenset(
+    {
+        "medium.com",
+        "substack.com",
+        "dev.to",
+        "reddit.com",
+        "quora.com",
+        "twitter.com",
+        "x.com",
+        "facebook.com",
+        "youtube.com",
+        "tiktok.com",
+        "instagram.com",
+        "linkedin.com",
+        "pinterest.com",
+        "tumblr.com",
+    }
+)
+
+# TLD credibility adjustments
+_TRUSTED_TLDS = frozenset({".edu", ".gov", ".gov.br", ".ac.uk", ".edu.br"})
+_LOW_TRUST_TLDS = frozenset({".xyz", ".info", ".biz", ".click", ".top"})
+
+
+class CredibilityScore:
+    """Source credibility assessment."""
+
+    __slots__ = ("score", "tier", "domain", "reasons")
+
+    def __init__(
+        self,
+        *,
+        score: float,
+        tier: str,
+        domain: str,
+        reasons: list[str],
+    ) -> None:
+        self.score = score  # 0.0-1.0
+        self.tier = tier  # "tier1", "tier2", "tier3", "unknown"
+        self.domain = domain
+        self.reasons = reasons
+
+    def to_dict(self) -> dict[str, object]:
+        """Serialize to dict."""
+        return {
+            "score": round(self.score, 2),
+            "tier": self.tier,
+            "domain": self.domain,
+            "reasons": self.reasons,
+        }
+
+
+def score_credibility(url: str) -> CredibilityScore:
+    """Score source credibility based on domain reputation.
+
+    Uses tiered domain lists + TLD heuristics.
+    Fast, deterministic, no external calls.
+    """
+    domain = _extract_domain(url).lower()
+    reasons: list[str] = []
+
+    # Check exact domain match
+    if domain in _TIER1_DOMAINS:
+        return CredibilityScore(
+            score=0.95,
+            tier="tier1",
+            domain=domain,
+            reasons=["known authoritative source"],
+        )
+    if domain in _TIER2_DOMAINS:
+        return CredibilityScore(
+            score=0.80,
+            tier="tier2",
+            domain=domain,
+            reasons=["established publication"],
+        )
+    if domain in _TIER3_DOMAINS:
+        return CredibilityScore(
+            score=0.50,
+            tier="tier3",
+            domain=domain,
+            reasons=["user-generated or social platform"],
+        )
+
+    # Check parent domain (e.g. "news.bbc.co.uk" → "bbc.co.uk")
+    parts = domain.split(".")
+    for i in range(1, len(parts)):
+        parent = ".".join(parts[i:])
+        if parent in _TIER1_DOMAINS:
+            return CredibilityScore(
+                score=0.90,
+                tier="tier1",
+                domain=domain,
+                reasons=[f"subdomain of {parent} (authoritative)"],
+            )
+        if parent in _TIER2_DOMAINS:
+            return CredibilityScore(
+                score=0.75,
+                tier="tier2",
+                domain=domain,
+                reasons=[f"subdomain of {parent} (established)"],
+            )
+
+    # TLD-based heuristics
+    score = 0.50
+    for tld in _TRUSTED_TLDS:
+        if domain.endswith(tld):
+            score = 0.80
+            reasons.append(f"trusted TLD ({tld})")
+            break
+
+    for tld in _LOW_TRUST_TLDS:
+        if domain.endswith(tld):
+            score = 0.30
+            reasons.append(f"low-trust TLD ({tld})")
+            break
+
+    # HTTPS bonus (implied by url scheme)
+    if url.startswith("https://"):
+        score = min(score + 0.05, 1.0)
+        reasons.append("HTTPS")
+
+    if not reasons:
+        reasons.append("unknown domain")
+
+    return CredibilityScore(
+        score=round(score, 2),
+        tier="unknown",
+        domain=domain,
+        reasons=reasons,
+    )
+
+
 # ── Query Intent Classification ──
 
 
@@ -708,7 +923,10 @@ class WebIntelligencePlugin(ISovyxPlugin):
                 query=query,
                 count=len(results),
                 backend=self._backend.name,
-                results=[r.to_dict() for r in results],
+                results=[
+                    {**r.to_dict(), "credibility": score_credibility(r.url).to_dict()}
+                    for r in results
+                ],
                 result=f"Found {len(results)} results for '{query}'",
                 message=f"Found {len(results)} results for '{query}'",
                 **extra,
@@ -770,6 +988,7 @@ class WebIntelligencePlugin(ISovyxPlugin):
                 text = text[:max_chars] + "..."
                 extracted["text"] = text
 
+            cred = score_credibility(url)
             return _ok(
                 "fetch",
                 url=url,
@@ -781,6 +1000,7 @@ class WebIntelligencePlugin(ISovyxPlugin):
                 text=text,
                 char_count=len(text),
                 truncated=truncated,
+                credibility=cred.to_dict(),
                 result=text[:200],
                 message=(
                     f"Fetched {len(text)} chars from {extracted['site'] or url}"
