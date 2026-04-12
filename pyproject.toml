@@ -86,8 +86,6 @@ sovyx = "sovyx.cli.main:app"
 
 [project.entry-points."sovyx.plugins"]
 financial-math = "sovyx.plugins.official.financial_math:FinancialMathPlugin"
-calculator = "sovyx.plugins.official.calculator:CalculatorPlugin"  # backward compat
-weather = "sovyx.plugins.official.weather:WeatherPlugin"  # backward compat
 web-intelligence = "sovyx.plugins.official.web_intelligence:WebIntelligencePlugin"
 knowledge = "sovyx.plugins.official.knowledge:KnowledgePlugin"
 
