@@ -685,3 +685,293 @@ class TestPercentageEdgeCases:
         p = FinancialMathPlugin()
         data = _parse(await p.percentage(mode="of", rate=0.01, value=1000000))
         assert data["result"] == "100"
+
+
+# ── Interest & Growth ──
+
+
+class TestSimpleInterest:
+    """Test interest 'simple' mode."""
+
+    @pytest.mark.anyio()
+    async def test_basic(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.interest(mode="simple", principal=10000, rate=5, periods=3))
+        assert data["ok"] is True
+        assert data["mode"] == "simple"
+        # 10000 * 0.05 * 3 = 1500 interest, 11500 total
+        assert data["interest"] == "1500"
+        assert data["total"] == "11500"
+        assert data["result"] == "11500"
+
+    @pytest.mark.anyio()
+    async def test_decimal_rate(self) -> None:
+        """Rate ≤1 treated as decimal: 0.05 = 5%."""
+        p = FinancialMathPlugin()
+        data = _parse(await p.interest(mode="simple", principal=10000, rate=0.05, periods=3))
+        assert data["total"] == "11500"
+
+    @pytest.mark.anyio()
+    async def test_fractional_periods(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.interest(mode="simple", principal=1000, rate=12, periods=0.5))
+        # 1000 * 0.12 * 0.5 = 60
+        assert data["interest"] == "60"
+
+    @pytest.mark.anyio()
+    async def test_missing_principal(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.interest(mode="simple", rate=5, periods=3))
+        assert data["ok"] is False
+        assert "principal" in str(data["message"])
+
+
+class TestCompoundInterest:
+    """Test interest 'compound' mode."""
+
+    @pytest.mark.anyio()
+    async def test_annual_compound(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.interest(
+                mode="compound",
+                principal=10000,
+                rate=13.75,
+                periods=1,
+            )
+        )
+        assert data["ok"] is True
+        # 10000 * (1 + 0.1375)^1 = 11375
+        assert data["total"] == "11375"
+
+    @pytest.mark.anyio()
+    async def test_monthly_compound(self) -> None:
+        """R$10k at 1.15%/month for 12 months."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.interest(
+                mode="compound",
+                principal=10000,
+                rate=0.0115,
+                periods=12,
+            )
+        )
+        assert data["ok"] is True
+        result = Decimal(str(data["total"]))
+        # 10000 * 1.0115^12 ≈ 11470.72
+        assert result > Decimal("11470")
+        assert result < Decimal("11471")
+
+    @pytest.mark.anyio()
+    async def test_quarterly_compounding(self) -> None:
+        """10% annual, compounded quarterly, 2 years."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.interest(
+                mode="compound",
+                principal=1000,
+                rate=10,
+                periods=2,
+                compounds_per_period=4,
+            )
+        )
+        assert data["ok"] is True
+        result = Decimal(str(data["total"]))
+        # 1000 * (1 + 0.10/4)^(4*2) = 1000 * 1.025^8 ≈ 1218.40
+        assert result > Decimal("1218")
+        assert result < Decimal("1219")
+
+    @pytest.mark.anyio()
+    async def test_zero_compounds_rejected(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.interest(
+                mode="compound",
+                principal=1000,
+                rate=5,
+                periods=1,
+                compounds_per_period=0,
+            )
+        )
+        assert data["ok"] is False
+
+    @pytest.mark.anyio()
+    async def test_message_has_breakdown(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.interest(
+                mode="compound",
+                principal=5000,
+                rate=8,
+                periods=3,
+            )
+        )
+        assert "interest" in str(data["message"]).lower()
+
+
+class TestCAGR:
+    """Test interest 'cagr' mode."""
+
+    @pytest.mark.anyio()
+    async def test_basic(self) -> None:
+        """$5k → $42k over 6 years."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.interest(
+                mode="cagr",
+                initial_value=5000,
+                final_value=42000,
+                years=6,
+            )
+        )
+        assert data["ok"] is True
+        result = Decimal(str(data["cagr_percent"]))
+        # (42000/5000)^(1/6) - 1 ≈ 0.4247 → 42.47%
+        assert result > Decimal("42")
+        assert result < Decimal("43")
+
+    @pytest.mark.anyio()
+    async def test_double(self) -> None:
+        """$100 → $200 over 1 year = 100% CAGR."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.interest(
+                mode="cagr",
+                initial_value=100,
+                final_value=200,
+                years=1,
+            )
+        )
+        assert data["result"] == "100"
+
+    @pytest.mark.anyio()
+    async def test_loss(self) -> None:
+        """$100 → $50 = negative CAGR."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.interest(
+                mode="cagr",
+                initial_value=100,
+                final_value=50,
+                years=2,
+            )
+        )
+        result = Decimal(str(data["result"]))
+        assert result < Decimal(0)
+
+    @pytest.mark.anyio()
+    async def test_zero_initial_rejected(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.interest(
+                mode="cagr",
+                initial_value=0,
+                final_value=100,
+                years=1,
+            )
+        )
+        assert data["ok"] is False
+
+    @pytest.mark.anyio()
+    async def test_zero_years_rejected(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.interest(
+                mode="cagr",
+                initial_value=100,
+                final_value=200,
+                years=0,
+            )
+        )
+        assert data["ok"] is False
+
+    @pytest.mark.anyio()
+    async def test_total_return_included(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.interest(
+                mode="cagr",
+                initial_value=1000,
+                final_value=1500,
+                years=3,
+            )
+        )
+        assert "total_return_percent" in data
+        assert data["total_return_percent"] == "50"
+
+
+class TestRuleOf72:
+    """Test interest 'rule_of_72' mode."""
+
+    @pytest.mark.anyio()
+    async def test_basic(self) -> None:
+        """At 8%/year, doubles in ~9 years."""
+        p = FinancialMathPlugin()
+        data = _parse(await p.interest(mode="rule_of_72", rate=8))
+        assert data["ok"] is True
+        assert data["result"] == "9"
+
+    @pytest.mark.anyio()
+    async def test_decimal_rate(self) -> None:
+        """0.08 auto-converts to 8%."""
+        p = FinancialMathPlugin()
+        data = _parse(await p.interest(mode="rule_of_72", rate=0.08))
+        assert data["result"] == "9"
+
+    @pytest.mark.anyio()
+    async def test_high_rate(self) -> None:
+        """At 24%, doubles in 3 years."""
+        p = FinancialMathPlugin()
+        data = _parse(await p.interest(mode="rule_of_72", rate=24))
+        assert data["result"] == "3"
+
+    @pytest.mark.anyio()
+    async def test_zero_rate_rejected(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.interest(mode="rule_of_72", rate=0))
+        assert data["ok"] is False
+
+    @pytest.mark.anyio()
+    async def test_negative_rate_rejected(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.interest(mode="rule_of_72", rate=-5))
+        assert data["ok"] is False
+
+
+class TestInterestEdgeCases:
+    """Edge cases for interest tool."""
+
+    @pytest.mark.anyio()
+    async def test_unknown_mode(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.interest(mode="invalid"))
+        assert data["ok"] is False
+        assert "unknown mode" in str(data["message"])
+
+    @pytest.mark.anyio()
+    async def test_compound_vs_simple(self) -> None:
+        """Compound must always be >= simple for same params."""
+        p = FinancialMathPlugin()
+        simple = _parse(
+            await p.interest(
+                mode="simple",
+                principal=10000,
+                rate=10,
+                periods=5,
+            )
+        )
+        compound = _parse(
+            await p.interest(
+                mode="compound",
+                principal=10000,
+                rate=10,
+                periods=5,
+            )
+        )
+        assert Decimal(str(compound["total"])) >= Decimal(str(simple["total"]))
+
+    @pytest.mark.anyio()
+    async def test_negative_rate_rejected(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.interest(mode="simple", principal=1000, rate=-5, periods=1))
+        assert data["ok"] is False
