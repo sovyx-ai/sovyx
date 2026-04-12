@@ -1288,3 +1288,110 @@ class TestRateLimiting:
         # Now forget should be limited on plugin2 (same limiter)
         result = json.loads(await plugin2.forget("test"))
         assert result["ok"] is False
+
+
+class TestRateLimiterRemaining:
+    """Cover _RateLimiter.remaining property."""
+
+    def test_remaining_starts_full(self) -> None:
+        from sovyx.plugins.official.knowledge import _RateLimiter
+
+        rl = _RateLimiter(10, 60.0)
+        assert rl.remaining == 10
+
+    def test_remaining_decreases(self) -> None:
+        from sovyx.plugins.official.knowledge import _RateLimiter
+
+        rl = _RateLimiter(10, 60.0)
+        rl.check()
+        rl.check()
+        assert rl.remaining == 8
+
+    def test_remaining_at_zero(self) -> None:
+        from sovyx.plugins.official.knowledge import _RateLimiter
+
+        rl = _RateLimiter(2, 60.0)
+        rl.check()
+        rl.check()
+        assert rl.remaining == 0
+
+
+class TestRetryHelper:
+    """Cover _retry function."""
+
+    @pytest.mark.asyncio
+    async def test_retry_succeeds_first_try(self) -> None:
+        from sovyx.plugins.official.knowledge import _retry
+
+        call_count = 0
+
+        async def fn():
+            nonlocal call_count
+            call_count += 1
+            return "ok"
+
+        result = await _retry(fn)
+        assert result == "ok"
+        assert call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_retry_non_transient_propagates(self) -> None:
+        from sovyx.plugins.official.knowledge import _retry
+
+        async def fn():
+            raise ValueError("not transient")
+
+        with pytest.raises(ValueError, match="not transient"):
+            await _retry(fn)
+
+
+class TestMiscCoverage:
+    """Cover remaining uncovered lines."""
+
+    @pytest.mark.asyncio
+    async def test_forget_delete_failed(self) -> None:
+        results = [{"id": "c-1", "name": "target", "content": "x"}]
+        brain = _mock_brain(search_results=results)
+        brain.forget = AsyncMock(return_value=False)
+        plugin = KnowledgePlugin(brain=brain)
+
+        data = json.loads(await plugin.forget("target"))
+        assert data["action"] == "not_found"
+
+    @pytest.mark.asyncio
+    async def test_search_about_person_in_result(self) -> None:
+        results = [
+            {
+                "id": "c-1",
+                "name": "Guipe",
+                "content": "likes coffee",
+                "category": "person",
+                "importance": 0.5,
+                "confidence": 0.5,
+                "score": 0.8,
+            }
+        ]
+        brain = _mock_brain(search_results=results)
+        plugin = KnowledgePlugin(brain=brain)
+
+        data = json.loads(await plugin.search("coffee", about_person="Guipe"))
+        assert data["about_person"] == "Guipe"
+        assert data["count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_recall_about_error(self) -> None:
+        brain = _mock_brain()
+        brain.search = AsyncMock(side_effect=RuntimeError("db crash"))
+        plugin = KnowledgePlugin(brain=brain)
+
+        data = json.loads(await plugin.recall_about("test"))
+        assert data["ok"] is False
+
+    @pytest.mark.asyncio
+    async def test_what_do_you_know_error(self) -> None:
+        brain = _mock_brain()
+        brain.get_stats = AsyncMock(side_effect=RuntimeError("stats crash"))
+        plugin = KnowledgePlugin(brain=brain)
+
+        data = json.loads(await plugin.what_do_you_know())
+        assert data["ok"] is False
