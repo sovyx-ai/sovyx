@@ -1533,3 +1533,212 @@ class FinancialMathPlugin(ISovyxPlugin):
                 f"Vol {_format_decimal(ann_vol * _HUNDRED)}%"
             ),
         )
+
+    # ── Position Sizing ──
+
+    @tool(
+        description=(
+            "Position sizing for risk management. Modes: "
+            "'kelly' (optimal fraction of bankroll to bet), "
+            "'half_kelly' (conservative — half the Kelly fraction), "
+            "'fixed_fractional' (risk X% of bankroll per trade), "
+            "'max_risk' (max units given entry, stop, and risk amount). "
+            "Example: position_size(mode='kelly', win_rate=60, "
+            "reward_risk_ratio=2.0, bankroll=50000)"
+        ),
+    )
+    async def position_size(
+        self,
+        mode: str,
+        *,
+        win_rate: float | None = None,
+        reward_risk_ratio: float | None = None,
+        bankroll: float | None = None,
+        risk_percent: float | None = None,
+        entry_price: float | None = None,
+        stop_price: float | None = None,
+        risk_amount: float | None = None,
+    ) -> str:
+        """Position sizing with Decimal precision.
+
+        Args:
+            mode: 'kelly', 'half_kelly', 'fixed_fractional', 'max_risk'.
+            win_rate: Win probability as % (e.g. 60 for 60%).
+            reward_risk_ratio: Average win / average loss (e.g. 2.0).
+            bankroll: Total capital available.
+            risk_percent: % of bankroll to risk per trade (fixed_fractional).
+            entry_price: Trade entry price (max_risk).
+            stop_price: Stop loss price (max_risk).
+            risk_amount: Max dollar amount to risk (max_risk).
+
+        Returns:
+            JSON with position size, rationale, and warnings.
+        """
+        mode = mode.strip().lower()
+
+        try:
+            if mode == "kelly":
+                return self._pos_kelly(
+                    win_rate,
+                    reward_risk_ratio,
+                    bankroll,
+                    full=True,
+                )
+            if mode == "half_kelly":
+                return self._pos_kelly(
+                    win_rate,
+                    reward_risk_ratio,
+                    bankroll,
+                    full=False,
+                )
+            if mode == "fixed_fractional":
+                return self._pos_fixed_fractional(
+                    bankroll,
+                    risk_percent,
+                )
+            if mode == "max_risk":
+                return self._pos_max_risk(
+                    entry_price,
+                    stop_price,
+                    risk_amount,
+                )
+        except _ValidationError as e:
+            return _err(str(e))
+        except (ZeroDivisionError, DecimalException, OverflowError) as e:
+            return _err(f"calculation error: {e}")
+
+        valid = "kelly, half_kelly, fixed_fractional, max_risk"
+        return _err(f"unknown mode: '{mode}'. Valid: {valid}")
+
+    # ── Position Sizing Internals ──
+
+    @staticmethod
+    def _pos_kelly(
+        win_rate: float | None,
+        rr_ratio: float | None,
+        bankroll: float | None,
+        *,
+        full: bool,
+    ) -> str:
+        """Kelly criterion: f* = (p*b - q) / b."""
+        _require(win_rate=win_rate, reward_risk_ratio=rr_ratio)
+        d_wr = _to_decimal(win_rate)
+        # Auto-detect: >1 treated as percentage
+        p = d_wr / _HUNDRED if d_wr > Decimal(1) else d_wr
+        if p <= _ZERO or p >= Decimal(1):
+            msg = "win_rate must be between 0% and 100% (exclusive)"
+            raise _ValidationError(msg)
+        b = _to_decimal(rr_ratio)
+        if b <= _ZERO:
+            msg = "reward_risk_ratio must be positive"
+            raise _ValidationError(msg)
+        q = Decimal(1) - p
+
+        # Kelly fraction: f* = (p*b - q) / b
+        kelly_f = (p * b - q) / b
+        label = "half_kelly" if not full else "kelly"
+        fraction = kelly_f / Decimal(2) if not full else kelly_f
+
+        warnings: list[str] = []
+        if kelly_f <= _ZERO:
+            warnings.append("No edge detected — Kelly says don't bet.")
+            fraction = _ZERO
+        elif kelly_f > Decimal("0.25"):
+            warnings.append(
+                f"Aggressive: Kelly fraction is {_format_decimal(kelly_f * _HUNDRED)}%. "
+                "Consider half-Kelly for safety."
+            )
+
+        result: dict[str, object] = {
+            "kelly_fraction": _format_decimal(kelly_f * _HUNDRED) + "%",
+            "recommended_fraction": _format_decimal(fraction * _HUNDRED) + "%",
+            "win_rate": _format_decimal(p * _HUNDRED) + "%",
+            "reward_risk_ratio": _format_decimal(b),
+        }
+
+        if bankroll is not None:
+            d_bank = _to_decimal(bankroll)
+            position = d_bank * fraction
+            result["bankroll"] = _format_decimal(d_bank)
+            result["position_size"] = _format_decimal(position)
+            result["result"] = _format_decimal(position)
+            msg_str = (
+                f"{label}: {_format_decimal(fraction * _HUNDRED)}% of "
+                f"{_format_decimal(d_bank)} = {_format_decimal(position)}"
+            )
+        else:
+            result["result"] = _format_decimal(fraction * _HUNDRED)
+            msg_str = f"{label}: bet {_format_decimal(fraction * _HUNDRED)}% of bankroll"
+
+        if warnings:
+            result["warnings"] = warnings
+
+        return _ok("position_size", mode=label, message=msg_str, **result)
+
+    @staticmethod
+    def _pos_fixed_fractional(
+        bankroll: float | None,
+        risk_percent: float | None,
+    ) -> str:
+        """Fixed fractional: risk X% of bankroll per trade."""
+        _require(bankroll=bankroll, risk_percent=risk_percent)
+        d_bank = _to_decimal(bankroll)
+        d_pct = _to_decimal(risk_percent)
+        if d_pct > Decimal(1):
+            d_pct = d_pct / _HUNDRED
+        risk_amount = d_bank * d_pct
+
+        return _ok(
+            "position_size",
+            mode="fixed_fractional",
+            bankroll=_format_decimal(d_bank),
+            risk_percent=_format_decimal(d_pct * _HUNDRED) + "%",
+            risk_amount=_format_decimal(risk_amount),
+            result=_format_decimal(risk_amount),
+            message=(
+                f"Risk {_format_decimal(d_pct * _HUNDRED)}% of "
+                f"{_format_decimal(d_bank)} = "
+                f"{_format_decimal(risk_amount)} per trade"
+            ),
+        )
+
+    @staticmethod
+    def _pos_max_risk(
+        entry_price: float | None,
+        stop_price: float | None,
+        risk_amount: float | None,
+    ) -> str:
+        """Max units: risk_amount / |entry - stop|."""
+        _require(
+            entry_price=entry_price,
+            stop_price=stop_price,
+            risk_amount=risk_amount,
+        )
+        d_entry = _to_decimal(entry_price)
+        d_stop = _to_decimal(stop_price)
+        d_risk = _to_decimal(risk_amount)
+        risk_per_unit = abs(d_entry - d_stop)
+        if risk_per_unit == _ZERO:
+            msg = "entry and stop prices cannot be equal"
+            raise _ValidationError(msg)
+        max_units = d_risk / risk_per_unit
+        total_position = max_units * d_entry
+
+        return _ok(
+            "position_size",
+            mode="max_risk",
+            entry_price=_format_decimal(d_entry),
+            stop_price=_format_decimal(d_stop),
+            risk_per_unit=_format_decimal(risk_per_unit),
+            risk_amount=_format_decimal(d_risk),
+            max_units=_format_decimal(max_units),
+            total_position=_format_decimal(total_position),
+            result=_format_decimal(max_units),
+            message=(
+                f"Entry {_format_decimal(d_entry)}, "
+                f"Stop {_format_decimal(d_stop)} "
+                f"(risk {_format_decimal(risk_per_unit)}/unit) → "
+                f"Max {_format_decimal(max_units)} units "
+                f"(position: {_format_decimal(total_position)})"
+            ),
+        )
