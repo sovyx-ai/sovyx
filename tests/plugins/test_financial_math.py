@@ -488,3 +488,200 @@ class TestPrecisionShowcase:
         expected = Decimal("10000") * Decimal("1.0115") ** 12
         diff = abs(result - expected)
         assert diff < Decimal("0.01")
+
+
+# ── Percentage Operations ──
+
+
+class TestPercentageOf:
+    """Test percentage 'of' mode."""
+
+    @pytest.mark.anyio()
+    async def test_basic(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.percentage(mode="of", rate=17.3, value=4827.50))
+        assert data["ok"] is True
+        assert data["mode"] == "of"
+        assert data["result"] == "835.1575"
+
+    @pytest.mark.anyio()
+    async def test_whole_percent(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.percentage(mode="of", rate=50, value=200))
+        assert data["result"] == "100"
+
+    @pytest.mark.anyio()
+    async def test_small_percent(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.percentage(mode="of", rate=0.5, value=10000))
+        assert data["result"] == "50"
+
+    @pytest.mark.anyio()
+    async def test_missing_rate(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.percentage(mode="of", value=100))
+        assert data["ok"] is False
+        assert "rate" in str(data["message"])
+
+    @pytest.mark.anyio()
+    async def test_missing_value(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.percentage(mode="of", rate=10))
+        assert data["ok"] is False
+        assert "value" in str(data["message"])
+
+
+class TestPercentageChange:
+    """Test percentage 'change' mode."""
+
+    @pytest.mark.anyio()
+    async def test_decrease(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.percentage(mode="change", from_value=67500, to_value=58200))
+        assert data["ok"] is True
+        result = Decimal(str(data["result"]))
+        # (58200 - 67500) / 67500 * 100 = -13.777...%
+        assert result < Decimal("-13.7")
+        assert result > Decimal("-13.8")
+
+    @pytest.mark.anyio()
+    async def test_increase(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.percentage(mode="change", from_value=100, to_value=150))
+        assert data["result"] == "50"
+
+    @pytest.mark.anyio()
+    async def test_no_change(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.percentage(mode="change", from_value=100, to_value=100))
+        assert data["result"] == "0"
+
+    @pytest.mark.anyio()
+    async def test_zero_from_value(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.percentage(mode="change", from_value=0, to_value=100))
+        assert data["ok"] is False
+        assert "zero" in str(data["message"]).lower()
+
+    @pytest.mark.anyio()
+    async def test_missing_params(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.percentage(mode="change", from_value=100))
+        assert data["ok"] is False
+
+
+class TestPercentageMarkup:
+    """Test percentage 'markup' mode."""
+
+    @pytest.mark.anyio()
+    async def test_basic_markup(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.percentage(mode="markup", rate=40, cost=100))
+        assert data["ok"] is True
+        assert data["result"] == "140"
+        assert data["markup_amount"] == "40"
+
+    @pytest.mark.anyio()
+    async def test_decimal_markup(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.percentage(mode="markup", rate=33.33, cost=150))
+        assert data["ok"] is True
+        result = Decimal(str(data["result"]))
+        assert result == Decimal("199.995")
+
+    @pytest.mark.anyio()
+    async def test_zero_markup(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.percentage(mode="markup", rate=0, cost=100))
+        assert data["result"] == "100"
+
+
+class TestGrossMargin:
+    """Test percentage 'gross_margin' mode."""
+
+    @pytest.mark.anyio()
+    async def test_basic_margin(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.percentage(mode="gross_margin", revenue=140, cost=100))
+        assert data["ok"] is True
+        result = Decimal(str(data["result"]))
+        # (140 - 100) / 140 * 100 = 28.571...%
+        assert result > Decimal("28.57")
+        assert result < Decimal("28.58")
+
+    @pytest.mark.anyio()
+    async def test_zero_margin(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.percentage(mode="gross_margin", revenue=100, cost=100))
+        assert data["result"] == "0"
+
+    @pytest.mark.anyio()
+    async def test_negative_margin(self) -> None:
+        """Loss scenario: cost > revenue."""
+        p = FinancialMathPlugin()
+        data = _parse(await p.percentage(mode="gross_margin", revenue=80, cost=100))
+        result = Decimal(str(data["result"]))
+        assert result < Decimal(0)
+
+    @pytest.mark.anyio()
+    async def test_zero_revenue(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.percentage(mode="gross_margin", revenue=0, cost=100))
+        assert data["ok"] is False
+
+
+class TestNetMargin:
+    """Test percentage 'net_margin' mode."""
+
+    @pytest.mark.anyio()
+    async def test_basic(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.percentage(mode="net_margin", revenue=1000, net_income=150))
+        assert data["ok"] is True
+        assert data["result"] == "15"
+
+    @pytest.mark.anyio()
+    async def test_loss(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.percentage(mode="net_margin", revenue=1000, net_income=-50))
+        result = Decimal(str(data["result"]))
+        assert result == Decimal("-5")
+
+    @pytest.mark.anyio()
+    async def test_zero_revenue(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.percentage(mode="net_margin", revenue=0, net_income=100))
+        assert data["ok"] is False
+
+
+class TestPercentageEdgeCases:
+    """Edge cases and error handling for percentage tool."""
+
+    @pytest.mark.anyio()
+    async def test_unknown_mode(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.percentage(mode="invalid"))
+        assert data["ok"] is False
+        assert "unknown mode" in str(data["message"])
+        assert "of" in str(data["message"])  # lists valid modes
+
+    @pytest.mark.anyio()
+    async def test_message_present(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.percentage(mode="of", rate=10, value=200))
+        assert "message" in data
+        assert "20" in str(data["message"])
+
+    @pytest.mark.anyio()
+    async def test_large_percentage(self) -> None:
+        """500% markup."""
+        p = FinancialMathPlugin()
+        data = _parse(await p.percentage(mode="markup", rate=500, cost=100))
+        assert data["result"] == "600"
+
+    @pytest.mark.anyio()
+    async def test_fractional_cent_precision(self) -> None:
+        """0.01% of $1,000,000 = $100 exactly."""
+        p = FinancialMathPlugin()
+        data = _parse(await p.percentage(mode="of", rate=0.01, value=1000000))
+        assert data["result"] == "100"

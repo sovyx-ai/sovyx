@@ -60,8 +60,9 @@ class TestPluginToToolDefinition:
         await mgr.load_single(CalculatorPlugin())
 
         defs = mgr.get_tool_definitions()
-        assert len(defs) == 1
-        assert defs[0].name == "calculator.calculate"
+        assert len(defs) == 2  # calculate + percentage (inherited)
+        names = [d.name for d in defs]
+        assert "calculator.calculate" in names
         assert "expression" in str(defs[0].parameters)
 
     @pytest.mark.anyio()
@@ -73,8 +74,9 @@ class TestPluginToToolDefinition:
         defs = mgr.get_tool_definitions()
         dicts = LLMRouter.tool_definitions_to_dicts(defs)
 
-        assert len(dicts) == 1
-        assert dicts[0]["name"] == "calculator.calculate"
+        assert len(dicts) == 2
+        dict_names = [d["name"] for d in dicts]
+        assert "calculator.calculate" in dict_names
         assert isinstance(dicts[0]["description"], str)
 
 
