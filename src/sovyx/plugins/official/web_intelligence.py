@@ -479,6 +479,117 @@ class _RateLimiter:
         return True
 
 
+# ── Adaptive Cache ──
+
+# TTL by intent type (seconds)
+_CACHE_TTL: dict[str, int] = {
+    "price": 300,  # 5 min — volatile data
+    "temporal": 600,  # 10 min — recent events
+    "factual": 3600,  # 1 hour — stable facts
+    "procedural": 86400,  # 24 hours — how-to rarely changes
+}
+_CACHE_TTL_DEFAULT = 1800  # 30 min fallback
+_CACHE_MAX_ENTRIES = 200
+
+
+class _CacheEntry:
+    """Single cache entry with adaptive TTL."""
+
+    __slots__ = ("value", "expires_at", "intent_type", "hits")
+
+    def __init__(self, value: str, ttl: int, intent_type: str) -> None:
+        self.value = value
+        self.expires_at = time.monotonic() + ttl
+        self.intent_type = intent_type
+        self.hits = 0
+
+    @property
+    def alive(self) -> bool:
+        """Check if entry is still valid."""
+        return time.monotonic() < self.expires_at
+
+
+class _SearchCache:
+    """In-memory cache with intent-adaptive TTL and LRU eviction."""
+
+    __slots__ = ("_store", "_max_entries", "_hits", "_misses")
+
+    def __init__(self, max_entries: int = _CACHE_MAX_ENTRIES) -> None:
+        self._store: dict[str, _CacheEntry] = {}
+        self._max_entries = max_entries
+        self._hits = 0
+        self._misses = 0
+
+    def _make_key(self, query: str, mode: str) -> str:
+        """Normalize query into cache key."""
+        return f"{mode}:{query.lower().strip()}"
+
+    def get(self, query: str, mode: str) -> str | None:
+        """Look up cached result. Returns None on miss or expiry."""
+        key = self._make_key(query, mode)
+        entry = self._store.get(key)
+        if entry is None or not entry.alive:
+            if entry is not None:
+                del self._store[key]  # expired
+            self._misses += 1
+            return None
+        entry.hits += 1
+        self._hits += 1
+        return entry.value
+
+    def put(
+        self,
+        query: str,
+        mode: str,
+        value: str,
+        intent_type: str = "",
+    ) -> None:
+        """Store result with intent-based TTL."""
+        ttl = _CACHE_TTL.get(intent_type, _CACHE_TTL_DEFAULT)
+        key = self._make_key(query, mode)
+
+        # Evict if full
+        if len(self._store) >= self._max_entries and key not in self._store:
+            self._evict()
+
+        self._store[key] = _CacheEntry(value, ttl, intent_type)
+
+    def _evict(self) -> None:
+        """Remove expired entries first, then LRU (fewest hits)."""
+        # Pass 1: remove expired
+        expired = [k for k, v in self._store.items() if not v.alive]
+        for k in expired:
+            del self._store[k]
+        if len(self._store) < self._max_entries:
+            return
+
+        # Pass 2: remove lowest-hit entry
+        if self._store:
+            victim = min(self._store, key=lambda k: self._store[k].hits)
+            del self._store[victim]
+
+    def clear(self) -> None:
+        """Clear all entries."""
+        self._store.clear()
+        self._hits = 0
+        self._misses = 0
+
+    @property
+    def stats(self) -> dict[str, int]:
+        """Cache statistics."""
+        alive = sum(1 for v in self._store.values() if v.alive)
+        return {
+            "entries": alive,
+            "hits": self._hits,
+            "misses": self._misses,
+            "hit_rate_pct": (
+                round(self._hits * 100 / (self._hits + self._misses))
+                if (self._hits + self._misses) > 0
+                else 0
+            ),
+        }
+
+
 # ── Search Result Schema ──
 
 
@@ -840,6 +951,7 @@ class WebIntelligencePlugin(ISovyxPlugin):
             _RATE_LIMIT_WINDOW,
         )
         self._brain = brain
+        self._cache = _SearchCache()
 
     @property
     def name(self) -> str:
@@ -898,6 +1010,11 @@ class WebIntelligencePlugin(ISovyxPlugin):
             intent = classify_query(query)
             mode = intent.search_mode
 
+        # Cache check
+        cached = self._cache.get(query, mode)
+        if cached is not None:
+            return cached
+
         # Rate limit
         if not self._rate_limiter.check():
             return _err("rate limit exceeded (30 searches/min)")
@@ -924,12 +1041,13 @@ class WebIntelligencePlugin(ISovyxPlugin):
             if intent is not None:
                 extra["intent"] = intent.to_dict()
 
-            return _ok(
+            response = _ok(
                 "search",
                 mode=mode,
                 query=query,
                 count=len(results),
                 backend=self._backend.name,
+                cached=False,
                 results=[
                     {**r.to_dict(), "credibility": score_credibility(r.url).to_dict()}
                     for r in results
@@ -938,6 +1056,12 @@ class WebIntelligencePlugin(ISovyxPlugin):
                 message=f"Found {len(results)} results for '{query}'",
                 **extra,
             )
+
+            # Cache the successful result
+            intent_type = intent.intent_type if intent else ""
+            self._cache.put(query, mode, response, intent_type)
+
+            return response
         except TimeoutError:
             return _err("search timed out")
         except Exception as e:  # noqa: BLE001
