@@ -134,11 +134,11 @@ Every plugin extends `ISovyxPlugin` and implements three required properties:
 ```python
 from sovyx.plugins.sdk import ISovyxPlugin, tool
 
-class WeatherPlugin(ISovyxPlugin):
+class MyPlugin(ISovyxPlugin):
     @property
     def name(self) -> str:
         """Unique identifier. Lowercase, hyphens allowed. No spaces."""
-        return "weather"
+        return "my-plugin"
 
     @property
     def version(self) -> str:
@@ -148,7 +148,7 @@ class WeatherPlugin(ISovyxPlugin):
     @property
     def description(self) -> str:
         """One-line description — shown in dashboard and marketplace."""
-        return "Get current weather and forecasts."
+        return "What my plugin does."
 ```
 
 ### Optional Lifecycle Methods
@@ -502,7 +502,7 @@ HTTP requests are restricted to domains declared in `plugin.yaml`:
 ```yaml
 network:
   allowed_domains:
-    - api.openweathermap.org
+    - api.example.com
 ```
 
 Requests to any other domain raise `NetworkAccessDenied`.
