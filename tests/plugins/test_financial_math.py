@@ -2046,3 +2046,211 @@ class TestCurrencyEdgeCases:
         p = FinancialMathPlugin()
         data = _parse(await p.currency(mode="format"))
         assert data["ok"] is False
+
+
+# ── i18n + Validation Hardening (TASK-493) ──
+
+
+class TestValidationBounds:
+    """Boundary and overflow protection tests."""
+
+    @pytest.mark.anyio()
+    async def test_cashflows_at_limit(self) -> None:
+        """Exactly 1000 cashflows should work."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.tvm(
+                mode="npv",
+                rate=10,
+                cashflows=list(range(1000)),
+            )
+        )
+        assert data["ok"] is True
+
+    @pytest.mark.anyio()
+    async def test_too_many_cashflows(self) -> None:
+        """Over 1000 cashflows rejected."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.tvm(
+                mode="npv",
+                rate=10,
+                cashflows=list(range(1001)),
+            )
+        )
+        assert data["ok"] is False
+        assert "too many" in data["message"]
+
+    @pytest.mark.anyio()
+    async def test_too_many_months(self) -> None:
+        """Over 1200 months rejected."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.amortization(
+                mode="price",
+                principal=100000,
+                annual_rate=10,
+                months=1201,
+            )
+        )
+        assert data["ok"] is False
+        assert "too many periods" in data["message"]
+
+    @pytest.mark.anyio()
+    async def test_max_months_ok(self) -> None:
+        """1200 months (100 years) should work."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.amortization(
+                mode="price",
+                principal=100000,
+                annual_rate=10,
+                months=1200,
+            )
+        )
+        assert data["ok"] is True
+
+    @pytest.mark.anyio()
+    async def test_huge_principal_rejected(self) -> None:
+        """Over 1E15 rejected."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.amortization(
+                mode="price",
+                principal=1e16,
+                annual_rate=10,
+                months=12,
+            )
+        )
+        assert data["ok"] is False
+        assert "too large" in data["message"]
+
+    @pytest.mark.anyio()
+    async def test_too_many_returns(self) -> None:
+        """Over 10000 returns rejected."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.portfolio(
+                mode="sharpe",
+                returns=list(range(10001)),
+            )
+        )
+        assert data["ok"] is False
+        assert "too many" in data["message"]
+
+    @pytest.mark.anyio()
+    async def test_expression_too_long(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.calculate("1+" * 300 + "1"))
+        assert data["ok"] is False
+        assert "too long" in data["message"]
+
+
+class TestValidationMessages:
+    """Error message quality tests."""
+
+    @pytest.mark.anyio()
+    async def test_missing_params_lists_names(self) -> None:
+        """Error should list which params are missing."""
+        p = FinancialMathPlugin()
+        data = _parse(await p.tvm(mode="pv"))
+        assert data["ok"] is False
+        assert "future_value" in data["message"]
+        assert "rate" in data["message"]
+        assert "periods" in data["message"]
+
+    @pytest.mark.anyio()
+    async def test_invalid_mode_lists_valid(self) -> None:
+        """Error should list valid modes."""
+        p = FinancialMathPlugin()
+        data = _parse(await p.percentage(mode="invalid"))
+        assert data["ok"] is False
+        assert "of" in data["message"]
+        assert "change" in data["message"]
+
+    @pytest.mark.anyio()
+    async def test_tvm_invalid_mode(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.tvm(mode="invalid"))
+        assert data["ok"] is False
+        assert "npv" in data["message"]
+
+    @pytest.mark.anyio()
+    async def test_portfolio_invalid_mode(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.portfolio(mode="invalid", returns=[1, 2]))
+        assert data["ok"] is False
+        assert "sharpe" in data["message"]
+
+    @pytest.mark.anyio()
+    async def test_amortization_invalid_mode(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.amortization(
+                mode="invalid",
+                principal=100000,
+                annual_rate=10,
+                months=12,
+            )
+        )
+        assert data["ok"] is False
+        assert "price" in data["message"]
+
+
+class TestOverflowProtection:
+    """Tests for extreme value handling."""
+
+    @pytest.mark.anyio()
+    async def test_huge_exponent_rejected(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.calculate("2 ** 10000"))
+        assert data["ok"] is False
+        assert "exponent" in data["message"].lower()
+
+    @pytest.mark.anyio()
+    async def test_division_by_zero(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.calculate("1 / 0"))
+        assert data["ok"] is False
+
+    @pytest.mark.anyio()
+    async def test_negative_rate_interest_rejected(self) -> None:
+        """Negative rate rejected for interest tool."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.interest(
+                mode="compound",
+                principal=10000,
+                rate=-5,
+                periods=10,
+            )
+        )
+        assert data["ok"] is False
+        assert "negative" in data["message"]
+
+    @pytest.mark.anyio()
+    async def test_zero_rate_cagr(self) -> None:
+        """Same start and end → 0% CAGR."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.interest(
+                mode="cagr",
+                initial_value=1000,
+                final_value=1000,
+                years=5,
+            )
+        )
+        assert data["result"] == "0"
+
+    @pytest.mark.anyio()
+    async def test_position_size_rr_zero(self) -> None:
+        """Zero reward:risk ratio rejected."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.position_size(
+                mode="kelly",
+                win_rate=60,
+                reward_risk_ratio=0,
+            )
+        )
+        assert data["ok"] is False

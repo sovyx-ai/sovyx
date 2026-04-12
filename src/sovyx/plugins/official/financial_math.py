@@ -23,7 +23,10 @@ import json
 import math
 import operator
 from decimal import ROUND_HALF_EVEN, Decimal, DecimalException, InvalidOperation
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 from sovyx.plugins.sdk import ISovyxPlugin, tool
 
@@ -33,6 +36,11 @@ _PRECISION = 28
 _MAX_EXPRESSION_LEN = 500
 _MAX_EXPONENT = 1000
 _MAX_RESULT = Decimal("1E308")
+_MAX_PERIODS = 1200  # 100 years monthly
+_MAX_CASHFLOWS = 1000
+_MAX_RETURNS = 10000
+_MAX_VALUE = Decimal("1E15")  # quadrillion — sanity cap
+_MIN_RATE = Decimal("-0.99")  # -99% floor (avoid div-by-zero)
 
 _ZERO = Decimal(0)
 _HUNDRED = Decimal(100)
@@ -54,6 +62,34 @@ def _require(**kwargs: object) -> None:
     if missing:
         names = ", ".join(missing)
         msg = f"missing required parameter(s): {names}"
+        raise _ValidationError(msg)
+
+
+def _validate_value(val: Decimal, name: str = "value") -> None:
+    """Check value is within sane bounds."""
+    if not val.is_finite():
+        msg = f"{name}: must be a finite number"
+        raise _ValidationError(msg)
+    if abs(val) > _MAX_VALUE:
+        msg = f"{name}: value too large (max ±{_MAX_VALUE})"
+        raise _ValidationError(msg)
+
+
+def _validate_list_len(
+    lst: Sequence[object],
+    name: str,
+    max_len: int,
+) -> None:
+    """Check list is not too long."""
+    if len(lst) > max_len:
+        msg = f"{name}: too many items ({len(lst)} > {max_len})"
+        raise _ValidationError(msg)
+
+
+def _validate_periods(n: int, name: str = "months") -> None:
+    """Check periods within bounds."""
+    if n > _MAX_PERIODS:
+        msg = f"{name}: too many periods ({n} > {_MAX_PERIODS})"
         raise _ValidationError(msg)
 
 
@@ -781,6 +817,7 @@ class FinancialMathPlugin(ISovyxPlugin):
         if not cashflows:
             msg = "cashflows cannot be empty"
             raise _ValidationError(msg)
+        _validate_list_len(cashflows, "cashflows", _MAX_CASHFLOWS)
         r = FinancialMathPlugin._normalize_rate(rate)
         npv = _ZERO
         for t, cf in enumerate(cashflows):
@@ -809,6 +846,7 @@ class FinancialMathPlugin(ISovyxPlugin):
         if len(cashflows) < 2:  # noqa: PLR2004
             msg = "need at least 2 cashflows"
             raise _ValidationError(msg)
+        _validate_list_len(cashflows, "cashflows", _MAX_CASHFLOWS)
 
         d_cfs = [_to_decimal(cf) for cf in cashflows]
 
@@ -1008,6 +1046,8 @@ class FinancialMathPlugin(ISovyxPlugin):
             if n <= 0:
                 msg = "months must be positive"
                 raise _ValidationError(msg)
+            _validate_periods(n)
+            _validate_value(p, "principal")
             # Monthly rate from annual
             monthly_r = (Decimal(1) + annual_r) ** (Decimal(1) / Decimal(12)) - Decimal(1)
 
@@ -1304,8 +1344,10 @@ class FinancialMathPlugin(ISovyxPlugin):
     ) -> list[Decimal]:
         """Get decimal returns from either returns or prices."""
         if returns is not None and len(returns) > 0:
+            _validate_list_len(returns, "returns", _MAX_RETURNS)
             return [_to_decimal(r) / _HUNDRED for r in returns]
         if prices is not None and len(prices) >= 2:  # noqa: PLR2004
+            _validate_list_len(prices, "prices", _MAX_RETURNS)
             d_prices = [_to_decimal(p) for p in prices]
             return [
                 (d_prices[i] - d_prices[i - 1]) / d_prices[i - 1] for i in range(1, len(d_prices))
