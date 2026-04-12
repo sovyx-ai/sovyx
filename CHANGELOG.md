@@ -3,6 +3,48 @@
 All notable changes to Sovyx will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+
+## [0.9.0] — 2026-04-12
+
+### Added — Knowledge Plugin v2.0 (Enterprise)
+
+- **Semantic deduplication engine** — cosine similarity ≥0.88 detects near-duplicates before creating new concepts
+- **LLM-assisted conflict resolution** — classifies content relationships as SAME/EXTENDS/CONTRADICTS/UNRELATED
+  - CONTRADICTS: recency wins, 30% confidence penalty
+  - EXTENDS: content merged, confidence boosted
+  - SAME: full reinforcement cycle with tracking
+- **Confidence reinforcement system** — tracks reinforcement count, "established" status after 5+ confirmations
+- **Auto-relation creation** — new concepts automatically linked to related existing concepts (similarity 0.65–0.87)
+- **Episode-aware recall** — `recall_about()` enriches results with conversation history (when, where, how many turns)
+- **Person-scoped memory** — `remember(about_person="X")` and `search(about_person="X")` for per-person knowledge
+- **Real forget with cascade** — deletes concept + relations + embeddings + working memory, emits `ConceptForgotten` event
+- **Bulk forget** — `forget(query, forget_all=True)` removes all matching concepts (cap: 20)
+- **Structured JSON output** — all 5 tools return `{action, ok, message, ...}` with documented schema
+- **Rate limiting** — sliding window: 30 writes/min, 60 reads/min per plugin instance
+- **Retry on transient errors** — automatic retry (2x) on `OSError`/`TimeoutError` for write operations
+- **i18n-ready messages** — all user-facing strings centralized in `_Msg` class
+- **`what_do_you_know()` introspection** — real stats + top 5 most important concepts
+
+### Added — BrainAccess API
+
+- `classify_content()` — expose contradiction detection engine to plugins
+- `reinforce()` — full reinforcement cycle (importance + confidence + access + metadata)
+- `create_relation()` — create typed relations between concepts (7 relation types)
+- `boost_importance()` — targeted importance boost with clamping
+- `get_stats()` — brain overview (concept count, categories, relations, episodes)
+- `get_top_concepts()` — top N concepts by importance with optional category filter
+- `forget_all()` — bulk search-and-delete with safety cap
+
+### Added — Events
+
+- `ConceptForgotten` event — emitted on concept deletion with audit metadata
+
+### Tests
+
+- 659 plugin tests (unit + integration + contract + E2E)
+- 7 E2E tests with real SQLite brain (no mocks)
+- 11 structured output contract tests
+- Full coverage of dedup, conflict, reinforcement, cascade, rate limiting
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.8.2] — 2026-04-11
