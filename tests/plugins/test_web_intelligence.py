@@ -1797,3 +1797,118 @@ class TestLookupTool:
         data = _parse(await p.lookup("test"))
         assert data["ok"] is True
         assert len(data["supporting_snippets"]) >= 1
+
+
+# ── Weather Backward Compat (TASK-505) ──
+
+from sovyx.plugins.official.web_intelligence import _extract_city
+
+
+class TestExtractCity:
+    """Tests for city extraction from weather queries."""
+
+    def test_simple(self) -> None:
+        assert _extract_city("weather in São Paulo") == "São Paulo"
+
+    def test_pt_br(self) -> None:
+        assert _extract_city("clima em Sorocaba") == "Sorocaba"
+
+    def test_forecast(self) -> None:
+        result = _extract_city("forecast Berlin")
+        assert "Berlin" in result
+
+    def test_rain(self) -> None:
+        result = _extract_city("will it rain Tokyo")
+        assert "Tokyo" in result
+
+    def test_temperature(self) -> None:
+        result = _extract_city("temperature New York")
+        assert "New" in result and "York" in result
+
+    def test_empty_strips_all(self) -> None:
+        result = _extract_city("weather forecast")
+        assert result != ""
+
+
+class TestWeatherMode:
+    """Tests for weather mode in lookup."""
+
+    def test_auto_detects_weather(self) -> None:
+        assert WebIntelligencePlugin._detect_lookup_mode("weather in Berlin") == "weather"
+
+    def test_auto_detects_temperatura(self) -> None:
+        assert WebIntelligencePlugin._detect_lookup_mode("temperatura São Paulo") == "weather"
+
+    def test_auto_detects_chuva(self) -> None:
+        assert WebIntelligencePlugin._detect_lookup_mode("vai chover hoje") == "weather"
+
+    def test_auto_detects_forecast(self) -> None:
+        assert WebIntelligencePlugin._detect_lookup_mode("forecast London") == "weather"
+
+    @pytest.mark.anyio()
+    async def test_weather_lookup_returns_structured(self) -> None:
+        """Weather lookup returns structured data."""
+        p = WebIntelligencePlugin()
+
+        async def mock_weather(_query: str) -> str:
+            return json.dumps(
+                {
+                    "ok": True,
+                    "action": "lookup",
+                    "mode": "weather",
+                    "city": "Berlin",
+                    "answer": "Clear sky, 20°C",
+                    "source": "Open-Meteo",
+                }
+            )
+
+        p._weather_lookup = mock_weather  # type: ignore[assignment]
+        data = _parse(await p.lookup("weather Berlin"))
+        assert data["ok"] is True
+        assert data["mode"] == "weather"
+
+    @pytest.mark.anyio()
+    async def test_weather_explicit_mode(self) -> None:
+        p = WebIntelligencePlugin()
+
+        async def mock_weather(_query: str) -> str:
+            return json.dumps(
+                {
+                    "ok": True,
+                    "action": "lookup",
+                    "mode": "weather",
+                    "answer": "Cloudy, 15°C",
+                }
+            )
+
+        p._weather_lookup = mock_weather  # type: ignore[assignment]
+        data = _parse(await p.lookup("Berlin", mode="weather"))
+        assert data["ok"] is True
+
+    @pytest.mark.anyio()
+    async def test_weather_fallback_to_search(self) -> None:
+        """When Open-Meteo import fails, falls back to web search."""
+        p = WebIntelligencePlugin()
+        p._backend.search_text = _mock_ddgs_text(_SAMPLE_WEB_RESULTS)  # type: ignore[assignment]
+
+        async def failing_weather(_query: str) -> str:
+            # Simulate import failure fallback — search via web
+            if not p._rate_limiter.check():
+                return json.dumps({"ok": False, "message": "rate limit"})
+            results = await p._backend.search_text(f"{_query} weather", 3)
+            if not results:
+                return json.dumps({"ok": False, "message": "no results"})
+            r = results[0]
+            return json.dumps(
+                {
+                    "ok": True,
+                    "action": "lookup",
+                    "mode": "weather",
+                    "answer": r.snippet,
+                    "source": "web search",
+                }
+            )
+
+        p._weather_lookup = failing_weather  # type: ignore[assignment]
+        data = _parse(await p.lookup("Berlin", mode="weather"))
+        assert data["ok"] is True

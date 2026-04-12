@@ -1486,7 +1486,7 @@ class WebIntelligencePlugin(ISovyxPlugin):
 
         Args:
             query: Lookup query.
-            mode: 'auto', 'define', 'convert', or 'price'.
+            mode: 'auto', 'define', 'convert', 'price', or 'weather'.
 
         Returns:
             JSON with answer, source, and type.
@@ -1524,6 +1524,23 @@ class WebIntelligencePlugin(ISovyxPlugin):
     def _detect_lookup_mode(query: str) -> str:
         """Auto-detect lookup mode from query."""
         q = query.lower()
+
+        # Weather detection
+        weather_triggers = {
+            "weather",
+            "temperatura",
+            "temperature",
+            "forecast",
+            "previsão",
+            "clima",
+            "rain",
+            "chuva",
+            "will it rain",
+            "vai chover",
+        }
+        if any(t in q for t in weather_triggers):
+            return "weather"
+
         # Price detection
         price_triggers = {
             "price",
@@ -1573,6 +1590,10 @@ class WebIntelligencePlugin(ISovyxPlugin):
 
     async def _do_lookup(self, query: str, mode: str) -> str:
         """Execute lookup via search backend."""
+        # Weather mode — use Open-Meteo directly if available
+        if mode == "weather":
+            return await self._weather_lookup(query)
+
         # Rate limit
         if not self._rate_limiter.check():
             return _err("rate limit exceeded")
@@ -1609,6 +1630,114 @@ class WebIntelligencePlugin(ISovyxPlugin):
             result=top.snippet[:200],
             message=f"Quick answer from {top.source}: {top.snippet[:100]}",
         )
+
+    async def _weather_lookup(self, query: str) -> str:
+        """Weather lookup via Open-Meteo (same backend as WeatherPlugin)."""
+        try:
+            from sovyx.plugins.official.weather import (  # noqa: PLC0415
+                _WMO_CODES,
+                _fetch_weather,
+                _geocode,
+            )
+        except ImportError:
+            # Fallback to web search for weather
+            if not self._rate_limiter.check():
+                return _err("rate limit exceeded")
+            results = await self._backend.search_text(f"{query} weather", 3)
+            if not results:
+                return _err(f"no weather results for '{query}'")
+            top = results[0]
+            return _ok(
+                "lookup",
+                mode="weather",
+                query=query,
+                answer=top.snippet,
+                source="web search",
+                url=top.url,
+                result=top.snippet[:200],
+                message=f"Weather (web): {top.snippet[:100]}",
+            )
+
+        # Extract city name from query
+        city = _extract_city(query)
+        coords = await _geocode(city)
+        if coords is None:
+            return _err(f"could not find city: {city}")
+
+        lat, lon, display_name = coords
+        data = await _fetch_weather(lat, lon, forecast_days=1)
+        if data is None:
+            return _err("error fetching weather data")
+
+        current: dict[str, Any] = data.get("current", {})
+        temp = current.get("temperature_2m", "?")
+        humidity = current.get("relative_humidity_2m", "?")
+        wind = current.get("wind_speed_10m", "?")
+        code = current.get("weather_code", 0)
+        condition = _WMO_CODES.get(int(code), "Unknown")
+
+        answer = f"{condition}, {temp}°C | Humidity: {humidity}% | Wind: {wind} km/h"
+
+        return _ok(
+            "lookup",
+            mode="weather",
+            query=query,
+            city=display_name,
+            answer=answer,
+            temperature_c=temp,
+            humidity_pct=humidity,
+            wind_kmh=wind,
+            condition=condition,
+            source="Open-Meteo",
+            url="https://open-meteo.com/",
+            credibility={
+                "score": 0.85,
+                "tier": "tier2",
+                "domain": "open-meteo.com",
+                "reasons": ["weather API"],
+            },
+            result=f"Weather in {display_name}: {answer}",
+            message=f"Weather in {display_name}: {answer}",
+        )
+
+
+def _extract_city(query: str) -> str:
+    """Extract city name from weather query."""
+    q = query.lower()
+    # Remove common weather-related words
+    remove_words = {
+        "weather",
+        "forecast",
+        "temperature",
+        "rain",
+        "clima",
+        "previsão",
+        "temperatura",
+        "chuva",
+        "tempo",
+        "will it",
+        "vai",
+        "chover",
+        "in",
+        "em",
+        "for",
+        "para",
+        "what is the",
+        "what's the",
+        "how is the",
+        "como está o",
+        "qual",
+        "hoje",
+        "today",
+        "tomorrow",
+        "amanhã",
+    }
+    words = q.split()
+    city_words = [w for w in words if w not in remove_words]
+    # If we stripped everything, use the original minus the first trigger word
+    if not city_words:
+        return query.strip()
+    return " ".join(city_words).strip().title()
 
 
 # ── URL Validation ──
