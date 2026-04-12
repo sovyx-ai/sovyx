@@ -110,7 +110,6 @@ jobs:
           --cov-report=xml:coverage.xml
           --cov-fail-under=95
           --timeout=30
-          --timeout-method=thread
           -v
       - name: Upload coverage
         if: matrix.python-version == '3.12'
