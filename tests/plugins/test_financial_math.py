@@ -1419,3 +1419,265 @@ class TestAmortizationEdgeCases:
         p = FinancialMathPlugin()
         data = _parse(await p.amortization(mode="price"))
         assert data["ok"] is False
+
+
+# ── Portfolio Analytics ──
+
+_SAMPLE_RETURNS = [3.2, 1.5, -0.8, 4.1, 2.7]
+
+
+class TestPortfolioReturns:
+    """Test portfolio 'returns' mode."""
+
+    @pytest.mark.anyio()
+    async def test_from_prices(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.portfolio(
+                mode="returns",
+                prices=[100, 105, 103, 110],
+            )
+        )
+        assert data["ok"] is True
+        assert data["count"] == "3"
+
+    @pytest.mark.anyio()
+    async def test_from_returns(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.portfolio(
+                mode="returns",
+                returns=_SAMPLE_RETURNS,
+            )
+        )
+        assert data["count"] == "5"
+
+    @pytest.mark.anyio()
+    async def test_no_data(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.portfolio(mode="returns"))
+        assert data["ok"] is False
+
+
+class TestSharpe:
+    """Test portfolio 'sharpe' mode."""
+
+    @pytest.mark.anyio()
+    async def test_basic(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.portfolio(
+                mode="sharpe",
+                returns=_SAMPLE_RETURNS,
+                risk_free_rate=1,
+            )
+        )
+        assert data["ok"] is True
+        sharpe = Decimal(str(data["sharpe"]))
+        assert sharpe > Decimal(0)
+
+    @pytest.mark.anyio()
+    async def test_zero_volatility(self) -> None:
+        """Constant returns → infinite Sharpe."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.portfolio(
+                mode="sharpe",
+                returns=[5, 5, 5, 5],
+            )
+        )
+        assert data["sharpe"] == "infinity"
+
+    @pytest.mark.anyio()
+    async def test_negative_sharpe(self) -> None:
+        """Returns below risk-free → negative Sharpe."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.portfolio(
+                mode="sharpe",
+                returns=[0.1, 0.2, -0.1, 0.1],
+                risk_free_rate=5,
+            )
+        )
+        sharpe = Decimal(str(data["sharpe"]))
+        assert sharpe < Decimal(0)
+
+
+class TestSortino:
+    """Test portfolio 'sortino' mode."""
+
+    @pytest.mark.anyio()
+    async def test_basic(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.portfolio(
+                mode="sortino",
+                returns=_SAMPLE_RETURNS,
+                risk_free_rate=1,
+            )
+        )
+        assert data["ok"] is True
+        sortino = Decimal(str(data["sortino"]))
+        assert sortino > Decimal(0)
+
+    @pytest.mark.anyio()
+    async def test_sortino_ge_sharpe(self) -> None:
+        """Sortino should be >= Sharpe (downside only)."""
+        p = FinancialMathPlugin()
+        sharpe_data = _parse(
+            await p.portfolio(
+                mode="sharpe",
+                returns=_SAMPLE_RETURNS,
+                risk_free_rate=0,
+            )
+        )
+        sortino_data = _parse(
+            await p.portfolio(
+                mode="sortino",
+                returns=_SAMPLE_RETURNS,
+                risk_free_rate=0,
+            )
+        )
+        s = Decimal(str(sharpe_data["sharpe"]))
+        so = Decimal(str(sortino_data["sortino"]))
+        assert so >= s
+
+    @pytest.mark.anyio()
+    async def test_no_downside(self) -> None:
+        """All positive returns → infinite Sortino."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.portfolio(
+                mode="sortino",
+                returns=[1, 2, 3, 4],
+            )
+        )
+        assert data["sortino"] == "infinity"
+
+
+class TestMaxDrawdown:
+    """Test portfolio 'max_drawdown' mode."""
+
+    @pytest.mark.anyio()
+    async def test_basic(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.portfolio(
+                mode="max_drawdown",
+                returns=_SAMPLE_RETURNS,
+            )
+        )
+        assert data["ok"] is True
+        dd = Decimal(str(data["result"]))
+        assert dd >= Decimal(0)
+
+    @pytest.mark.anyio()
+    async def test_severe_drawdown(self) -> None:
+        """50% loss after gain."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.portfolio(
+                mode="max_drawdown",
+                returns=[10, 20, -50, 5],
+            )
+        )
+        dd = Decimal(str(data["result"]))
+        # After +10%, +20%, then -50%: peak=1.32, bottom=0.66 → ~50% DD
+        assert dd > Decimal("40")
+
+    @pytest.mark.anyio()
+    async def test_no_drawdown(self) -> None:
+        """Only gains → 0% drawdown."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.portfolio(
+                mode="max_drawdown",
+                returns=[5, 5, 5],
+            )
+        )
+        assert data["result"] == "0"
+
+
+class TestVolatility:
+    """Test portfolio 'volatility' mode."""
+
+    @pytest.mark.anyio()
+    async def test_basic(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.portfolio(
+                mode="volatility",
+                returns=_SAMPLE_RETURNS,
+            )
+        )
+        assert data["ok"] is True
+        vol = Decimal(str(data["result"]))
+        assert vol > Decimal(0)
+
+    @pytest.mark.anyio()
+    async def test_zero_volatility(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.portfolio(
+                mode="volatility",
+                returns=[3, 3, 3],
+            )
+        )
+        assert data["result"] == "0"
+
+
+class TestPortfolioSummary:
+    """Test portfolio 'summary' mode."""
+
+    @pytest.mark.anyio()
+    async def test_all_metrics(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.portfolio(
+                mode="summary",
+                returns=_SAMPLE_RETURNS,
+                risk_free_rate=1,
+            )
+        )
+        assert data["ok"] is True
+        assert "sharpe" in data
+        assert "sortino" in data
+        assert "max_drawdown" in data
+        assert "volatility" in data
+        assert "mean_return" in data
+        assert "total_return" in data
+
+    @pytest.mark.anyio()
+    async def test_from_prices(self) -> None:
+        """Summary from price series."""
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.portfolio(
+                mode="summary",
+                prices=[100, 105, 103, 110, 108],
+            )
+        )
+        assert data["ok"] is True
+        assert data["periods"] == "4"
+
+
+class TestPortfolioEdgeCases:
+    """Edge cases for portfolio tool."""
+
+    @pytest.mark.anyio()
+    async def test_unknown_mode(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.portfolio(mode="invalid", returns=[1, 2]))
+        assert data["ok"] is False
+
+    @pytest.mark.anyio()
+    async def test_no_returns_no_prices(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.portfolio(mode="sharpe"))
+        assert data["ok"] is False
+
+    @pytest.mark.anyio()
+    async def test_single_price(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.portfolio(mode="sharpe", prices=[100]))
+        assert data["ok"] is False
