@@ -41,6 +41,17 @@ _MSG_SEARCH_FAILED = "search failed"
 _MSG_FETCH_FAILED = "failed to fetch URL"
 _MSG_INVALID_URL = "invalid or disallowed URL"
 _MSG_BACKEND_UNAVAILABLE = "search backend unavailable"
+_MSG_RATE_LIMIT_SEARCH = "rate limit exceeded (30 searches/min)"
+_MSG_RATE_LIMIT_FETCH = "fetch rate limit exceeded (20/min)"
+_MSG_RATE_LIMIT_RESEARCH = "research rate limit exceeded (5/min)"
+_MSG_RATE_LIMIT = "rate limit exceeded"
+_MSG_SEARCH_TIMEOUT = "search timed out"
+_MSG_FETCH_TIMEOUT = "fetch timed out"
+_MSG_RESEARCH_TIMEOUT = "research timed out"
+_MSG_LOOKUP_TIMEOUT = "lookup timed out"
+_MSG_EMPTY_NAME = "name cannot be empty"
+_MSG_EMPTY_CONTENT = "content cannot be empty"
+_MSG_WEATHER_ERROR = "error fetching weather data"
 
 # Control characters to strip from queries
 _CONTROL_CHARS = str.maketrans("", "", "".join(chr(c) for c in range(32) if c not in (10, 13)))
@@ -942,13 +953,56 @@ class WebIntelligencePlugin(ISovyxPlugin):
                 "type": "string",
                 "enum": ["duckduckgo", "searxng", "brave"],
                 "default": "duckduckgo",
+                "description": "Search backend to use.",
             },
-            "searxng_url": {"type": "string"},
-            "brave_api_key": {"type": "string"},
-            "max_results": {"type": "integer", "default": 5},
-            "fetch_max_chars": {"type": "integer", "default": 4000},
-            "cache_enabled": {"type": "boolean", "default": True},
-            "auto_learn": {"type": "boolean", "default": False},
+            "searxng_url": {
+                "type": "string",
+                "description": "SearXNG instance URL (required if backend=searxng).",
+            },
+            "brave_api_key": {
+                "type": "string",
+                "description": "Brave Search API key (required if backend=brave).",
+            },
+            "default_max_results": {
+                "type": "integer",
+                "default": 5,
+                "minimum": 1,
+                "maximum": 20,
+                "description": "Default number of search results.",
+            },
+            "fetch_max_chars": {
+                "type": "integer",
+                "default": 4000,
+                "minimum": 100,
+                "maximum": 50000,
+                "description": "Max characters to extract from a page.",
+            },
+            "cache_enabled": {
+                "type": "boolean",
+                "default": True,
+                "description": "Enable search result caching.",
+            },
+            "cache_max_size": {
+                "type": "integer",
+                "default": 200,
+                "minimum": 10,
+                "maximum": 1000,
+                "description": "Max cache entries.",
+            },
+            "auto_learn": {
+                "type": "boolean",
+                "default": False,
+                "description": "Auto-save research findings to brain.",
+            },
+            "timeouts": {
+                "type": "object",
+                "properties": {
+                    "search": {"type": "number", "default": 10},
+                    "fetch": {"type": "number", "default": 15},
+                    "research": {"type": "number", "default": 60},
+                },
+                "description": "Timeout overrides per operation (seconds).",
+            },
         },
     }
 
@@ -1031,7 +1085,7 @@ class WebIntelligencePlugin(ISovyxPlugin):
 
         # Rate limit
         if not self._rate_limiter.check():
-            return _err("rate limit exceeded (30 searches/min)")
+            return _err(_MSG_RATE_LIMIT_SEARCH)
 
         try:
             results: list[SearchResult]
@@ -1077,7 +1131,7 @@ class WebIntelligencePlugin(ISovyxPlugin):
 
             return response
         except TimeoutError:
-            return _err("search timed out")
+            return _err(_MSG_SEARCH_TIMEOUT)
         except Exception as e:  # noqa: BLE001
             return _err(f"{_MSG_SEARCH_FAILED}: {e}")
 
@@ -1110,7 +1164,7 @@ class WebIntelligencePlugin(ISovyxPlugin):
 
         # Rate limit
         if not self._fetch_limiter.check():
-            return _err("fetch rate limit exceeded (20/min)")
+            return _err(_MSG_RATE_LIMIT_FETCH)
 
         # Validate URL
         error = _validate_url(url)
@@ -1157,7 +1211,7 @@ class WebIntelligencePlugin(ISovyxPlugin):
                 ),
             )
         except TimeoutError:
-            return _err("fetch timed out")
+            return _err(_MSG_FETCH_TIMEOUT)
         except Exception as e:  # noqa: BLE001
             return _err(f"{_MSG_FETCH_FAILED}: {e}")
 
@@ -1200,7 +1254,7 @@ class WebIntelligencePlugin(ISovyxPlugin):
         max_sources = max(1, min(self._MAX_RESEARCH_SOURCES, max_sources))
 
         if not self._research_limiter.check():
-            return _err("research rate limit exceeded (5/min)")
+            return _err(_MSG_RATE_LIMIT_RESEARCH)
 
         try:
             return await asyncio.wait_for(
@@ -1208,7 +1262,7 @@ class WebIntelligencePlugin(ISovyxPlugin):
                 timeout=60.0,
             )
         except TimeoutError:
-            return _err("research timed out")
+            return _err(_MSG_RESEARCH_TIMEOUT)
         except Exception as e:  # noqa: BLE001
             return _err(f"research failed: {e}")
 
@@ -1374,9 +1428,9 @@ class WebIntelligencePlugin(ISovyxPlugin):
         name = name.strip()
         content = content.strip()
         if not name:
-            return _err("name cannot be empty")
+            return _err(_MSG_EMPTY_NAME)
         if not content:
-            return _err("content cannot be empty")
+            return _err(_MSG_EMPTY_CONTENT)
 
         # Score credibility if URL provided
         cred = score_credibility(url) if url else None
@@ -1537,7 +1591,7 @@ class WebIntelligencePlugin(ISovyxPlugin):
             self._cache.put(f"lookup:{query}", mode, result, intent)
             return result
         except TimeoutError:
-            return _err("lookup timed out")
+            return _err(_MSG_LOOKUP_TIMEOUT)
         except Exception as e:  # noqa: BLE001
             return _err(f"lookup failed: {e}")
 
@@ -1617,7 +1671,7 @@ class WebIntelligencePlugin(ISovyxPlugin):
 
         # Rate limit
         if not self._rate_limiter.check():
-            return _err("rate limit exceeded")
+            return _err(_MSG_RATE_LIMIT)
 
         # Use web search with small result count for quick answers
         search_query = query
@@ -1663,7 +1717,7 @@ class WebIntelligencePlugin(ISovyxPlugin):
         except ImportError:
             # Fallback to web search for weather
             if not self._rate_limiter.check():
-                return _err("rate limit exceeded")
+                return _err(_MSG_RATE_LIMIT)
             results = await self._backend.search_text(f"{query} weather", 3)
             if not results:
                 return _err(f"no weather results for '{query}'")
@@ -1688,7 +1742,7 @@ class WebIntelligencePlugin(ISovyxPlugin):
         lat, lon, display_name = coords
         data = await _fetch_weather(lat, lon, forecast_days=1)
         if data is None:
-            return _err("error fetching weather data")
+            return _err(_MSG_WEATHER_ERROR)
 
         current: dict[str, Any] = data.get("current", {})
         temp = current.get("temperature_2m", "?")
