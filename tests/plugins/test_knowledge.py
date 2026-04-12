@@ -278,3 +278,97 @@ class TestWhatDoYouKnow:
         raw = await p.what_do_you_know()
         data = json.loads(raw)
         assert data["action"] == "error"
+
+
+class TestMockBrainAccessMethods:
+    """Cover MockBrainAccess v2.0 methods."""
+
+    @pytest.mark.anyio()
+    async def test_find_similar(self) -> None:
+        from sovyx.plugins.testing import MockBrainAccess
+
+        b = MockBrainAccess()
+        assert await b.find_similar("test") == []
+
+    @pytest.mark.anyio()
+    async def test_classify_content(self) -> None:
+        from sovyx.plugins.testing import MockBrainAccess
+
+        b = MockBrainAccess()
+        assert await b.classify_content("old", "new") == "UNRELATED"
+
+    @pytest.mark.anyio()
+    async def test_reinforce(self) -> None:
+        from sovyx.plugins.testing import MockBrainAccess
+
+        b = MockBrainAccess()
+        assert await b.reinforce("c-1") is None
+
+    @pytest.mark.anyio()
+    async def test_forget(self) -> None:
+        from sovyx.plugins.testing import MockBrainAccess
+
+        b = MockBrainAccess()
+        b.seed([{"id": "c-1", "name": "test", "content": "x"}])
+        assert await b.forget("c-1") is True
+        assert await b.forget("nonexistent") is False
+
+    @pytest.mark.anyio()
+    async def test_forget_all(self) -> None:
+        from sovyx.plugins.testing import MockBrainAccess
+
+        b = MockBrainAccess()
+        assert await b.forget_all("test") == []
+
+    @pytest.mark.anyio()
+    async def test_create_relation(self) -> None:
+        from sovyx.plugins.testing import MockBrainAccess
+
+        b = MockBrainAccess()
+        assert "rel-mock" in await b.create_relation("a", "b")
+
+    @pytest.mark.anyio()
+    async def test_boost_importance(self) -> None:
+        from sovyx.plugins.testing import MockBrainAccess
+
+        b = MockBrainAccess()
+        await b.boost_importance("c-1", 0.1)  # no-op, shouldn't raise
+
+    @pytest.mark.anyio()
+    async def test_get_related(self) -> None:
+        from sovyx.plugins.testing import MockBrainAccess
+
+        b = MockBrainAccess()
+        assert await b.get_related("c-1") == []
+
+    @pytest.mark.anyio()
+    async def test_search_episodes(self) -> None:
+        from sovyx.plugins.testing import MockBrainAccess
+
+        b = MockBrainAccess()
+        assert await b.search_episodes("test") == []
+
+    @pytest.mark.anyio()
+    async def test_get_stats(self) -> None:
+        from sovyx.plugins.testing import MockBrainAccess
+
+        b = MockBrainAccess()
+        b.seed([{"name": "a"}, {"name": "b"}])
+        stats = await b.get_stats()
+        assert stats["total_concepts"] == 2
+
+    @pytest.mark.anyio()
+    async def test_get_top_concepts(self) -> None:
+        from sovyx.plugins.testing import MockBrainAccess
+
+        b = MockBrainAccess()
+        b.seed([{"name": "a"}, {"name": "b"}, {"name": "c"}])
+        top = await b.get_top_concepts(limit=2)
+        assert len(top) == 2
+
+    @pytest.mark.anyio()
+    async def test_update(self) -> None:
+        from sovyx.plugins.testing import MockBrainAccess
+
+        b = MockBrainAccess()
+        assert await b.update("c-1", content="new") is True
