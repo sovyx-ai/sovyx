@@ -107,7 +107,7 @@ jobs:
           --cov=sovyx
           --cov-report=term-missing
           --cov-report=xml:coverage.xml
-          --cov-fail-under=94
+          --cov-fail-under=95
           -v
       - name: Upload coverage
         if: matrix.python-version == '3.12'
