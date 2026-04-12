@@ -1893,3 +1893,156 @@ class TestPositionSizingEdgeCases:
         p = FinancialMathPlugin()
         data = _parse(await p.position_size(mode="kelly"))
         assert data["ok"] is False
+
+
+# ── Currency Formatting ──
+
+
+class TestCurrencyFormat:
+    """Test currency 'format' mode."""
+
+    @pytest.mark.anyio()
+    async def test_usd(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.currency(mode="format", value=1234567.89, code="USD"))
+        assert data["ok"] is True
+        assert data["formatted"] == "$1,234,567.89"
+
+    @pytest.mark.anyio()
+    async def test_brl(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.currency(mode="format", value=1234567.89, code="BRL"))
+        assert data["formatted"] == "R$1,234,567.89"
+
+    @pytest.mark.anyio()
+    async def test_jpy_no_decimals(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.currency(mode="format", value=1234567, code="JPY"))
+        assert data["formatted"] == "¥1,234,567"
+
+    @pytest.mark.anyio()
+    async def test_btc(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.currency(mode="format", value=0.00123456, code="BTC"))
+        assert data["ok"] is True
+        assert "₿" in data["formatted"]
+
+    @pytest.mark.anyio()
+    async def test_sat_suffix(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.currency(mode="format", value=100000, code="SAT"))
+        assert data["formatted"] == "100,000 sat"
+
+    @pytest.mark.anyio()
+    async def test_negative(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.currency(mode="format", value=-1500.50, code="USD"))
+        assert data["formatted"] == "-$1,500.50"
+
+    @pytest.mark.anyio()
+    async def test_override_decimals(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.currency(
+                mode="format",
+                value=1234.5,
+                code="USD",
+                decimals=4,
+            )
+        )
+        assert ".5000" in data["formatted"]
+
+    @pytest.mark.anyio()
+    async def test_unknown_currency(self) -> None:
+        """Unknown code uses code as suffix."""
+        p = FinancialMathPlugin()
+        data = _parse(await p.currency(mode="format", value=100, code="CHF"))
+        assert "CHF" in data["formatted"]
+
+
+class TestCurrencyConvert:
+    """Test currency 'convert' mode."""
+
+    @pytest.mark.anyio()
+    async def test_basic(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.currency(
+                mode="convert",
+                value=1000,
+                from_code="USD",
+                to_code="BRL",
+                rate=5.2,
+            )
+        )
+        assert data["ok"] is True
+        assert data["result"] == "5200"
+        assert "R$" in data["to_formatted"]
+
+    @pytest.mark.anyio()
+    async def test_btc_to_usd(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(
+            await p.currency(
+                mode="convert",
+                value=0.5,
+                from_code="BTC",
+                to_code="USD",
+                rate=65000,
+            )
+        )
+        result = Decimal(str(data["result"]))
+        assert result == Decimal("32500")
+
+
+class TestCurrencyParse:
+    """Test currency 'parse' mode."""
+
+    @pytest.mark.anyio()
+    async def test_usd(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.currency(mode="parse", text="$1,234,567.89"))
+        assert data["value"] == "1234567.89"
+        assert data["detected_currency"] == "USD"
+
+    @pytest.mark.anyio()
+    async def test_brl_style(self) -> None:
+        """BR style: 1.234.567,89."""
+        p = FinancialMathPlugin()
+        data = _parse(await p.currency(mode="parse", text="R$ 1.234.567,89"))
+        assert data["value"] == "1234567.89"
+
+    @pytest.mark.anyio()
+    async def test_plain_with_commas(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.currency(mode="parse", text="1,234,567"))
+        assert data["value"] == "1234567"
+
+    @pytest.mark.anyio()
+    async def test_european_decimal(self) -> None:
+        """1234,56 → 1234.56."""
+        p = FinancialMathPlugin()
+        data = _parse(await p.currency(mode="parse", text="1234,56"))
+        assert data["value"] == "1234.56"
+
+    @pytest.mark.anyio()
+    async def test_invalid_text(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.currency(mode="parse", text="not a number"))
+        assert data["ok"] is False
+
+
+class TestCurrencyEdgeCases:
+    """Edge cases for currency tool."""
+
+    @pytest.mark.anyio()
+    async def test_unknown_mode(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.currency(mode="invalid"))
+        assert data["ok"] is False
+
+    @pytest.mark.anyio()
+    async def test_missing_value(self) -> None:
+        p = FinancialMathPlugin()
+        data = _parse(await p.currency(mode="format"))
+        assert data["ok"] is False

@@ -1742,3 +1742,236 @@ class FinancialMathPlugin(ISovyxPlugin):
                 f"(position: {_format_decimal(total_position)})"
             ),
         )
+
+    # ── Currency Formatting ──
+
+    @tool(
+        description=(
+            "Format numbers as currency. Modes: "
+            "'format' (display a value as currency), "
+            "'convert' (apply exchange rate and format), "
+            "'parse' (extract numeric value from currency string). "
+            "Supports BRL, USD, EUR, GBP, JPY, BTC, ETH and custom. "
+            "Example: currency(mode='format', value=1234567.89, code='BRL')"
+        ),
+    )
+    async def currency(
+        self,
+        mode: str,
+        *,
+        value: float | None = None,
+        code: str = "USD",
+        decimals: int | None = None,
+        from_code: str | None = None,
+        to_code: str | None = None,
+        rate: float | None = None,
+        text: str | None = None,
+    ) -> str:
+        """Currency formatting with Decimal precision.
+
+        Args:
+            mode: 'format', 'convert', 'parse'.
+            value: Numeric value to format or convert.
+            code: Currency code (default: USD).
+            decimals: Override decimal places (auto if None).
+            from_code: Source currency (convert mode).
+            to_code: Target currency (convert mode).
+            rate: Exchange rate (convert mode).
+            text: Currency string to parse (parse mode).
+
+        Returns:
+            JSON with formatted value and metadata.
+        """
+        mode = mode.strip().lower()
+
+        try:
+            if mode == "format":
+                return self._curr_format(value, code, decimals)
+            if mode == "convert":
+                return self._curr_convert(
+                    value,
+                    from_code,
+                    to_code,
+                    rate,
+                    decimals,
+                )
+            if mode == "parse":
+                return self._curr_parse(text)
+        except _ValidationError as e:
+            return _err(str(e))
+        except (DecimalException, OverflowError) as e:
+            return _err(f"formatting error: {e}")
+
+        return _err(f"unknown mode: '{mode}'. Valid: format, convert, parse")
+
+    # ── Currency Config ──
+
+    _CURRENCY_INFO: dict[str, tuple[str, int, str]] = {
+        # code → (symbol, default_decimals, position)
+        "USD": ("$", 2, "prefix"),
+        "BRL": ("R$", 2, "prefix"),
+        "EUR": ("€", 2, "prefix"),
+        "GBP": ("£", 2, "prefix"),
+        "JPY": ("¥", 0, "prefix"),
+        "CNY": ("¥", 2, "prefix"),
+        "BTC": ("₿", 8, "prefix"),
+        "ETH": ("Ξ", 8, "prefix"),
+        "SAT": ("sat", 0, "suffix"),
+    }
+
+    @staticmethod
+    def _format_currency(
+        val: Decimal,
+        code: str,
+        override_decimals: int | None = None,
+    ) -> str:
+        """Format a Decimal as currency string."""
+        code_upper = code.upper()
+        symbol, default_dec, position = FinancialMathPlugin._CURRENCY_INFO.get(
+            code_upper,
+            ("", 2, "prefix"),
+        )
+        dec = override_decimals if override_decimals is not None else default_dec
+
+        # Quantize to desired precision
+        quantizer = Decimal(10) ** -dec
+        quantized = val.quantize(quantizer, rounding=ROUND_HALF_EVEN)
+
+        # Format with thousands separator
+        sign = "-" if quantized < _ZERO else ""
+        abs_val = abs(quantized)
+        int_part = int(abs_val)
+        frac_part = abs_val - Decimal(int_part)
+
+        # Thousands separator
+        int_str = f"{int_part:,}"
+
+        if dec > 0:
+            frac_str = str(frac_part.quantize(quantizer))[2:]  # skip "0."
+            unsigned_num = f"{int_str}.{frac_str}"
+        else:
+            unsigned_num = int_str
+
+        # Symbol placement (sign always before symbol for prefix)
+        if not symbol:
+            return f"{sign}{unsigned_num} {code_upper}"
+        if position == "suffix":
+            return f"{sign}{unsigned_num} {symbol}"
+        return f"{sign}{symbol}{unsigned_num}"
+
+    @staticmethod
+    def _curr_format(
+        value: float | None,
+        code: str,
+        decimals: int | None,
+    ) -> str:
+        _require(value=value)
+        d_val = _to_decimal(value)
+        formatted = FinancialMathPlugin._format_currency(d_val, code, decimals)
+        return _ok(
+            "currency",
+            mode="format",
+            value=_format_decimal(d_val),
+            code=code.upper(),
+            formatted=formatted,
+            result=formatted,
+            message=formatted,
+        )
+
+    @staticmethod
+    def _curr_convert(
+        value: float | None,
+        from_code: str | None,
+        to_code: str | None,
+        rate: float | None,
+        decimals: int | None,
+    ) -> str:
+        _require(value=value, rate=rate, from_code=from_code, to_code=to_code)
+        assert from_code is not None and to_code is not None
+        d_val = _to_decimal(value)
+        d_rate = _to_decimal(rate)
+        converted = d_val * d_rate
+        from_fmt = FinancialMathPlugin._format_currency(
+            d_val,
+            from_code,
+            decimals,
+        )
+        to_fmt = FinancialMathPlugin._format_currency(
+            converted,
+            to_code,
+            decimals,
+        )
+        return _ok(
+            "currency",
+            mode="convert",
+            from_value=_format_decimal(d_val),
+            from_code=from_code.upper(),
+            to_value=_format_decimal(converted),
+            to_code=to_code.upper(),
+            rate=_format_decimal(d_rate),
+            from_formatted=from_fmt,
+            to_formatted=to_fmt,
+            result=_format_decimal(converted),
+            message=f"{from_fmt} × {_format_decimal(d_rate)} = {to_fmt}",
+        )
+
+    @staticmethod
+    def _curr_parse(text: str | None) -> str:
+        """Extract numeric value from currency string."""
+        _require(text=text)
+        assert text is not None
+        raw = text.strip()
+
+        # Detect currency code/symbol
+        detected_code = ""
+        for code, (symbol, _, _) in FinancialMathPlugin._CURRENCY_INFO.items():
+            if symbol in raw or code in raw.upper():
+                detected_code = code
+                break
+
+        # Remove currency symbols (longest first to avoid partial matches)
+        cleaned = raw
+        symbols = sorted(
+            (s for _, (s, _, _) in FinancialMathPlugin._CURRENCY_INFO.items()),
+            key=len,
+            reverse=True,
+        )
+        for symbol in symbols:
+            cleaned = cleaned.replace(symbol, "")
+        cleaned = cleaned.strip()
+
+        # Handle comma as thousands separator (1,234,567.89)
+        # vs comma as decimal (1.234.567,89 — BR style)
+        if "," in cleaned and "." in cleaned:
+            if cleaned.rindex(",") > cleaned.rindex("."):
+                # BR style: dots are thousands, comma is decimal
+                cleaned = cleaned.replace(".", "").replace(",", ".")
+            else:
+                # US style: commas are thousands
+                cleaned = cleaned.replace(",", "")
+        elif "," in cleaned and "." not in cleaned:
+            # Could be thousands or decimal — check position
+            parts = cleaned.split(",")
+            if len(parts) == 2 and len(parts[1]) <= 2:  # noqa: PLR2004
+                # Likely decimal: "1234,56"
+                cleaned = cleaned.replace(",", ".")
+            else:
+                # Likely thousands: "1,234,567"
+                cleaned = cleaned.replace(",", "")
+
+        try:
+            d_val = Decimal(cleaned)
+        except DecimalException:
+            msg = f"could not parse '{raw}' as a number"
+            raise _ValidationError(msg)  # noqa: B904
+
+        result: dict[str, str] = {
+            "value": _format_decimal(d_val),
+            "result": _format_decimal(d_val),
+            "message": f"Parsed: {_format_decimal(d_val)}",
+        }
+        if detected_code:
+            result["detected_currency"] = detected_code
+            result["message"] += f" ({detected_code})"
+
+        return _ok("currency", mode="parse", **result)
