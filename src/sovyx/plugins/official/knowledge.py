@@ -36,6 +36,91 @@ _REINFORCEMENT_IMPORTANCE_DELTA = 0.05
 _REINFORCEMENT_CONFIDENCE_DELTA = 0.10
 
 
+# ── User-facing messages (i18n-ready) ──
+
+
+class _Msg:
+    """All user-facing strings, centralized for future i18n."""
+
+    NO_BRAIN = "brain access not configured"
+    MEMORY_EMPTY = "My memory is empty — I haven't learned anything yet."
+
+    @staticmethod
+    def remembered(name: str) -> str:
+        return f"Remembered: '{name}'"
+
+    @staticmethod
+    def remembered_linked(name: str, count: int) -> str:
+        return f"Remembered: '{name}' (linked to {count} related concept(s))"
+
+    @staticmethod
+    def reinforced(
+        name: str,
+        similarity: float,
+        old_c: float,
+        new_c: float,
+        old_i: float,
+        new_i: float,
+    ) -> str:
+        return (
+            f"I already knew this: '{name}' "
+            f"(similarity: {similarity:.0%}). Reinforced — "
+            f"confidence {old_c:.0%} → {new_c:.0%}, "
+            f"importance {old_i:.0%} → {new_i:.0%}."
+        )
+
+    @staticmethod
+    def contradiction(name: str, old_c: float, new_c: float) -> str:
+        return (
+            f"Updated '{name}' — detected contradiction. "
+            f"New info replaces old. Confidence reduced "
+            f"{old_c:.0%} → {new_c:.0%} (needs reconfirmation)."
+        )
+
+    @staticmethod
+    def extended(name: str, old_c: float, new_c: float) -> str:
+        return f"Extended '{name}' with new details. Confidence {old_c:.0%} → {new_c:.0%}."
+
+    @staticmethod
+    def search_found(count: int, query: str) -> str:
+        return f"Found {count} result(s) for: {query}"
+
+    @staticmethod
+    def search_empty(query: str, person: str = "") -> str:
+        suffix = f" (about {person})" if person else ""
+        return f"No memories found for: {query}{suffix}"
+
+    @staticmethod
+    def forgotten(name: str) -> str:
+        return f"Forgotten: '{name}'"
+
+    @staticmethod
+    def forgotten_all(count: int, query: str, names: list[str]) -> str:
+        return f"Forgotten {count} memory(ies) about '{query}': " + ", ".join(names)
+
+    @staticmethod
+    def not_found(query: str) -> str:
+        return f"Nothing found matching: {query}"
+
+    @staticmethod
+    def recall_empty(topic: str) -> str:
+        return f"I don't have any memories about: {topic}"
+
+    @staticmethod
+    def recall_found(count: int, topic: str, episodes: int = 0) -> str:
+        ep = f" ({episodes} episode(s))" if episodes else ""
+        return f"Found {count} concept(s) about '{topic}'{ep}"
+
+    @staticmethod
+    def introspection(total: int, cats: int, rels: object, eps: object) -> str:
+        return (
+            f"I know {total} concept(s) across "
+            f"{cats} categories, "
+            f"with {rels} connections "
+            f"and {eps} conversation memories."
+        )
+
+
 class KnowledgePlugin(ISovyxPlugin):
     """Brain knowledge interface for LLM tool calling.
 
@@ -109,7 +194,7 @@ class KnowledgePlugin(ISovyxPlugin):
             JSON with action (created|reinforced|updated|extended), details.
         """
         if self._brain is None:
-            return _err("brain access not configured")
+            return _err(_Msg.NO_BRAIN)
 
         if not name:
             name = _auto_name(what)
@@ -155,10 +240,10 @@ class KnowledgePlugin(ISovyxPlugin):
                             "old_content": _truncate(existing_content, 200),
                             "new_content": _truncate(what, 200),
                             "confidence": {"old": round(old_conf, 3), "new": round(new_conf, 3)},
-                            "message": (
-                                f"Updated '{existing_name}' — detected contradiction. "
-                                f"New info replaces old. Confidence reduced "
-                                f"{old_conf:.0%} → {new_conf:.0%} (needs reconfirmation)."
+                            "message": _Msg.contradiction(
+                                existing_name,
+                                old_conf,
+                                new_conf,
                             ),
                         }
                     )
@@ -183,9 +268,10 @@ class KnowledgePlugin(ISovyxPlugin):
                             "concept_id": existing_id,
                             "name": existing_name,
                             "confidence": {"old": round(old_conf, 3), "new": round(new_conf, 3)},
-                            "message": (
-                                f"Extended '{existing_name}' with new details. "
-                                f"Confidence {old_conf:.0%} → {new_conf:.0%}."
+                            "message": _Msg.extended(
+                                existing_name,
+                                old_conf,
+                                new_conf,
                             ),
                         }
                     )
@@ -212,11 +298,13 @@ class KnowledgePlugin(ISovyxPlugin):
                         rc = int(_float(rr.get("reinforcement_count", 1)))
                         established = bool(rr.get("established", False))
 
-                        msg = (
-                            f"I already knew this: '{existing_name}' "
-                            f"(similarity: {similarity:.0%}). Reinforced — "
-                            f"confidence {old_conf:.0%} → {new_conf:.0%}, "
-                            f"importance {old_imp:.0%} → {new_imp:.0%}."
+                        msg = _Msg.reinforced(
+                            existing_name,
+                            similarity,
+                            old_conf,
+                            new_conf,
+                            old_imp,
+                            new_imp,
                         )
                         if established:
                             msg += " This is now an established memory."
@@ -268,15 +356,13 @@ class KnowledgePlugin(ISovyxPlugin):
                 "concept_id": concept_id,
                 "name": name,
                 "category": category,
-                "message": f"Remembered: '{name}'",
+                "message": _Msg.remembered(name),
             }
             if about_person:
                 result["about_person"] = about_person
             if relations_created:
                 result["relations"] = relations_created
-                result["message"] = (
-                    f"Remembered: '{name}' (linked to {len(relations_created)} related concept(s))"
-                )
+                result["message"] = _Msg.remembered_linked(name, len(relations_created))
 
             return json.dumps(result)
 
@@ -375,7 +461,7 @@ class KnowledgePlugin(ISovyxPlugin):
             JSON with results array.
         """
         if self._brain is None:
-            return _err("brain access not configured")
+            return _err(_Msg.NO_BRAIN)
 
         # Over-fetch when filtering by person (post-filter)
         fetch_limit = max(1, min(self._max_results, limit))
@@ -400,8 +486,7 @@ class KnowledgePlugin(ISovyxPlugin):
                     "query": query,
                     "about_person": about_person or None,
                     "results": [],
-                    "message": f"No memories found for: {query}"
-                    + (f" (about {about_person})" if about_person else ""),
+                    "message": _Msg.search_empty(query, about_person),
                 }
             )
 
@@ -412,7 +497,7 @@ class KnowledgePlugin(ISovyxPlugin):
                 "query": query,
                 "about_person": about_person or None,
                 "count": len(results),
-                "message": f"Found {len(results)} result(s) for: {query}",
+                "message": _Msg.search_found(len(results), query),
                 "results": [
                     {
                         "id": str(r.get("id", "")),
@@ -451,7 +536,7 @@ class KnowledgePlugin(ISovyxPlugin):
             JSON with action and details of what was deleted.
         """
         if self._brain is None:
-            return _err("brain access not configured")
+            return _err(_Msg.NO_BRAIN)
 
         try:
             if forget_all:
@@ -462,7 +547,7 @@ class KnowledgePlugin(ISovyxPlugin):
                             "action": "not_found",
                             "ok": True,
                             "query": query,
-                            "message": f"Nothing found matching: {query}",
+                            "message": _Msg.not_found(query),
                         }
                     )
                 success_count = sum(1 for d in deleted_list if d.get("deleted"))
@@ -474,10 +559,7 @@ class KnowledgePlugin(ISovyxPlugin):
                         "query": query,
                         "count": success_count,
                         "deleted": deleted_list,
-                        "message": (
-                            f"Forgotten {success_count} memory(ies) about '{query}': "
-                            + ", ".join(names)
-                        ),
+                        "message": _Msg.forgotten_all(success_count, query, names),
                     }
                 )
 
@@ -490,7 +572,7 @@ class KnowledgePlugin(ISovyxPlugin):
                         "action": "not_found",
                         "ok": True,
                         "query": query,
-                        "message": f"Nothing found matching: {query}",
+                        "message": _Msg.not_found(query),
                     }
                 )
 
@@ -507,7 +589,7 @@ class KnowledgePlugin(ISovyxPlugin):
                         "ok": True,
                         "concept_id": concept_id,
                         "name": concept_name,
-                        "message": f"Forgotten: '{concept_name}'",
+                        "message": _Msg.forgotten(concept_name),
                     }
                 )
 
@@ -545,7 +627,7 @@ class KnowledgePlugin(ISovyxPlugin):
             JSON with concepts (enriched), episodes, and summary.
         """
         if self._brain is None:
-            return _err("brain access not configured")
+            return _err(_Msg.NO_BRAIN)
 
         try:
             results = await self._brain.search(topic, limit=self._max_results)
@@ -558,7 +640,7 @@ class KnowledgePlugin(ISovyxPlugin):
                         "topic": topic,
                         "results": [],
                         "episodes": [],
-                        "message": f"I don't have any memories about: {topic}",
+                        "message": _Msg.recall_empty(topic),
                     }
                 )
 
@@ -602,13 +684,12 @@ class KnowledgePlugin(ISovyxPlugin):
             except Exception:  # noqa: BLE001
                 pass  # episode search failure is non-fatal
 
-            ep_msg = f" ({len(episodes)} episode(s))" if episodes else ""
             result_data: dict[str, object] = {
                 "action": "recall",
                 "ok": True,
                 "topic": topic,
                 "count": len(concepts),
-                "message": f"Found {len(concepts)} concept(s) about '{topic}'{ep_msg}",
+                "message": _Msg.recall_found(len(concepts), topic, len(episodes)),
                 "results": concepts,
             }
 
@@ -630,7 +711,7 @@ class KnowledgePlugin(ISovyxPlugin):
         Returns category breakdown, total counts, and top concepts.
         """
         if self._brain is None:
-            return _err("brain access not configured")
+            return _err(_Msg.NO_BRAIN)
 
         try:
             stats = await self._brain.get_stats()
@@ -642,7 +723,7 @@ class KnowledgePlugin(ISovyxPlugin):
                         "action": "introspection",
                         "ok": True,
                         "total_concepts": 0,
-                        "message": "My memory is empty — I haven't learned anything yet.",
+                        "message": _Msg.MEMORY_EMPTY,
                     }
                 )
 
@@ -673,11 +754,11 @@ class KnowledgePlugin(ISovyxPlugin):
                 "categories": cats,
                 "total_relations": stats.get("total_relations", 0),
                 "total_episodes": stats.get("total_episodes", 0),
-                "message": (
-                    f"I know {total} concept(s) across "
-                    f"{cat_count} categories, "
-                    f"with {stats.get('total_relations', 0)} connections "
-                    f"and {stats.get('total_episodes', 0)} conversation memories."
+                "message": _Msg.introspection(
+                    total,
+                    cat_count,
+                    stats.get("total_relations", 0),
+                    stats.get("total_episodes", 0),
                 ),
             }
 
