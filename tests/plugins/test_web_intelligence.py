@@ -914,9 +914,10 @@ class TestAutoModeSearch:
         assert data["mode"] == "web"
 
     @pytest.mark.anyio()
-    async def test_auto_price_routes_to_news(self) -> None:
-        """Price queries route to news for freshness."""
+    async def test_auto_price_detected(self) -> None:
+        """Price queries are classified as price intent."""
         p = WebIntelligencePlugin()
+        p._backend.search_text = _mock_ddgs_text(_SAMPLE_WEB_RESULTS)  # type: ignore[assignment]
         p._backend.search_news = _mock_ddgs_news(_SAMPLE_NEWS_RESULTS)  # type: ignore[assignment]
         data = _parse(await p.search("bitcoin price", mode="auto"))
         assert data["ok"] is True
