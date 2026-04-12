@@ -478,3 +478,230 @@ class FinancialMathPlugin(ISovyxPlugin):
                 f"Net Margin {_format_decimal(margin)}%"
             ),
         )
+
+    # ── Interest & Growth ──
+
+    @tool(
+        description=(
+            "Interest and growth calculations. Modes: "
+            "'simple' (P*r*t), 'compound' (P*(1+r/n)^(n*t)), "
+            "'cagr' (annualized return from initial→final over years), "
+            "'rule_of_72' (years to double at given rate). "
+            "Rates auto-detected: >1 treated as percentage, ≤1 as decimal. "
+            "Example: interest(mode='compound', principal=10000, rate=13.75, periods=12)"
+        ),
+    )
+    async def interest(
+        self,
+        mode: str,
+        *,
+        principal: float | None = None,
+        rate: float | None = None,
+        periods: float | None = None,
+        compounds_per_period: int = 1,
+        initial_value: float | None = None,
+        final_value: float | None = None,
+        years: float | None = None,
+    ) -> str:
+        """Interest and growth calculations with Decimal precision.
+
+        Args:
+            mode: 'simple', 'compound', 'cagr', 'rule_of_72'.
+            principal: Starting amount (simple/compound).
+            rate: Interest rate — auto-detect: >1 = percentage, ≤1 = decimal.
+            periods: Number of periods (simple/compound).
+            compounds_per_period: Compounding frequency per period (default 1).
+            initial_value: Starting value (cagr).
+            final_value: Ending value (cagr).
+            years: Number of years (cagr).
+
+        Returns:
+            JSON with result, breakdown, and step-by-step explanation.
+        """
+        mode = mode.strip().lower()
+
+        try:
+            if mode == "simple":
+                return self._interest_simple(principal, rate, periods)
+            if mode == "compound":
+                return self._interest_compound(
+                    principal,
+                    rate,
+                    periods,
+                    compounds_per_period,
+                )
+            if mode == "cagr":
+                return self._interest_cagr(initial_value, final_value, years)
+            if mode == "rule_of_72":
+                return self._interest_rule72(rate)
+        except _ValidationError as e:
+            return _err(str(e))
+        except (ZeroDivisionError, DecimalException, OverflowError) as e:
+            return _err(f"calculation error: {e}")
+
+        valid = "simple, compound, cagr, rule_of_72"
+        return _err(f"unknown mode: '{mode}'. Valid: {valid}")
+
+    # ── Interest Internals ──
+
+    @staticmethod
+    def _normalize_rate(rate: float | None) -> Decimal:
+        """Convert rate to decimal form. >1 treated as percentage."""
+        _require(rate=rate)
+        d = _to_decimal(rate)
+        if d < _ZERO:
+            msg = "rate cannot be negative"
+            raise _ValidationError(msg)
+        # Auto-detect: 13.75 → 0.1375, 0.05 → 0.05
+        if d > Decimal(1):
+            return d / _HUNDRED
+        return d
+
+    @staticmethod
+    def _interest_simple(
+        principal: float | None,
+        rate: float | None,
+        periods: float | None,
+    ) -> str:
+        """Simple interest: A = P * (1 + r * t)."""
+        _require(principal=principal, rate=rate, periods=periods)
+        p = _to_decimal(principal)
+        r = FinancialMathPlugin._normalize_rate(rate)
+        t = _to_decimal(periods)
+        interest_amount = p * r * t
+        total = p + interest_amount
+        return _ok(
+            "interest",
+            mode="simple",
+            principal=_format_decimal(p),
+            rate=_format_decimal(r * _HUNDRED) + "%",
+            rate_decimal=_format_decimal(r),
+            periods=_format_decimal(t),
+            interest=_format_decimal(interest_amount),
+            total=_format_decimal(total),
+            result=_format_decimal(total),
+            message=(
+                f"P={_format_decimal(p)}, r={_format_decimal(r * _HUNDRED)}%, "
+                f"t={_format_decimal(t)} → "
+                f"Interest={_format_decimal(interest_amount)}, "
+                f"Total={_format_decimal(total)}"
+            ),
+        )
+
+    @staticmethod
+    def _interest_compound(
+        principal: float | None,
+        rate: float | None,
+        periods: float | None,
+        n: int = 1,
+    ) -> str:
+        """Compound interest: A = P * (1 + r/n)^(n*t)."""
+        _require(principal=principal, rate=rate, periods=periods)
+        p = _to_decimal(principal)
+        r = FinancialMathPlugin._normalize_rate(rate)
+        t = _to_decimal(periods)
+        d_n = _to_decimal(n)
+        if d_n <= _ZERO:
+            msg = "compounds_per_period must be positive"
+            raise _ValidationError(msg)
+
+        # A = P * (1 + r/n)^(n*t)
+        rate_per_compound = r / d_n
+        growth_factor = (Decimal(1) + rate_per_compound) ** (d_n * t)
+        total = p * growth_factor
+        interest_amount = total - p
+
+        return _ok(
+            "interest",
+            mode="compound",
+            principal=_format_decimal(p),
+            rate=_format_decimal(r * _HUNDRED) + "%",
+            rate_decimal=_format_decimal(r),
+            periods=_format_decimal(t),
+            compounds_per_period=str(n),
+            growth_factor=_format_decimal(growth_factor),
+            interest=_format_decimal(interest_amount),
+            total=_format_decimal(total),
+            result=_format_decimal(total),
+            message=(
+                f"P={_format_decimal(p)}, "
+                f"r={_format_decimal(r * _HUNDRED)}%/period, "
+                f"n={n}, t={_format_decimal(t)} → "
+                f"Total={_format_decimal(total)} "
+                f"(+{_format_decimal(interest_amount)} interest)"
+            ),
+        )
+
+    @staticmethod
+    def _interest_cagr(
+        initial_value: float | None,
+        final_value: float | None,
+        years: float | None,
+    ) -> str:
+        """CAGR = (final/initial)^(1/years) - 1."""
+        _require(
+            initial_value=initial_value,
+            final_value=final_value,
+            years=years,
+        )
+        v0 = _to_decimal(initial_value)
+        vf = _to_decimal(final_value)
+        y = _to_decimal(years)
+        if v0 <= _ZERO:
+            msg = "initial_value must be positive"
+            raise _ValidationError(msg)
+        if y <= _ZERO:
+            msg = "years must be positive"
+            raise _ValidationError(msg)
+
+        # CAGR = (Vf/V0)^(1/y) - 1
+        ratio = vf / v0
+        exponent = Decimal(1) / y
+        cagr = ratio**exponent - Decimal(1)
+        cagr_pct = cagr * _HUNDRED
+        total_return = (vf - v0) / v0 * _HUNDRED
+
+        return _ok(
+            "interest",
+            mode="cagr",
+            initial_value=_format_decimal(v0),
+            final_value=_format_decimal(vf),
+            years=_format_decimal(y),
+            cagr_decimal=_format_decimal(cagr),
+            cagr_percent=_format_decimal(cagr_pct),
+            total_return_percent=_format_decimal(total_return),
+            result=_format_decimal(cagr_pct),
+            message=(
+                f"{_format_decimal(v0)} → {_format_decimal(vf)} "
+                f"over {_format_decimal(y)} years: "
+                f"CAGR = {_format_decimal(cagr_pct)}%/year "
+                f"(total return: {_format_decimal(total_return)}%)"
+            ),
+        )
+
+    @staticmethod
+    def _interest_rule72(rate: float | None) -> str:
+        """Rule of 72: years to double ≈ 72 / rate%."""
+        _require(rate=rate)
+        d = _to_decimal(rate)
+        # Accept both percentage (8) and decimal (0.08)
+        if d > _ZERO and d <= Decimal(1):
+            d = d * _HUNDRED  # convert 0.08 → 8
+
+        if d <= _ZERO:
+            msg = "rate must be positive"
+            raise _ValidationError(msg)
+
+        years_to_double = Decimal(72) / d
+
+        return _ok(
+            "interest",
+            mode="rule_of_72",
+            rate=_format_decimal(d) + "%",
+            years_to_double=_format_decimal(years_to_double),
+            result=_format_decimal(years_to_double),
+            message=(
+                f"At {_format_decimal(d)}% per year, "
+                f"money doubles in ~{_format_decimal(years_to_double)} years"
+            ),
+        )

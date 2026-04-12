@@ -261,6 +261,6 @@ class TestThinkPassesToolsToLLM:
 
         call_kwargs = router.generate.call_args[1]
         assert call_kwargs["tools"] is not None
-        assert len(call_kwargs["tools"]) == 2  # calculate + percentage
+        assert len(call_kwargs["tools"]) >= 2  # calculate + inherited tools
         tool_names = [t["name"] for t in call_kwargs["tools"]]
         assert "calculator.calculate" in tool_names
