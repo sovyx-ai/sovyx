@@ -1046,3 +1046,81 @@ class TestStructuredOutput:
             data = self._assert_base_schema(await tool_fn("test"))
             assert data["ok"] is False
             assert data["action"] == "error"
+
+
+class TestWhatDoYouKnowEnhanced:
+    """TASK-480: what_do_you_know with top concepts."""
+
+    @pytest.mark.asyncio
+    async def test_includes_top_concepts(self) -> None:
+        brain = _mock_brain(
+            stats={
+                "total_concepts": 25,
+                "categories": {"fact": 15, "preference": 10},
+                "total_relations": 40,
+                "total_episodes": 100,
+            }
+        )
+        brain.get_top_concepts = AsyncMock(
+            return_value=[
+                {
+                    "name": "Python",
+                    "category": "fact",
+                    "importance": 0.95,
+                    "confidence": 0.9,
+                    "access_count": 42,
+                },
+                {
+                    "name": "dark mode pref",
+                    "category": "preference",
+                    "importance": 0.88,
+                    "confidence": 0.85,
+                    "access_count": 12,
+                },
+            ]
+        )
+        plugin = KnowledgePlugin(brain=brain)
+
+        data = json.loads(await plugin.what_do_you_know())
+        assert data["ok"] is True
+        assert data["action"] == "introspection"
+        assert data["total_concepts"] == 25
+        assert "top_concepts" in data
+        assert len(data["top_concepts"]) == 2
+        assert data["top_concepts"][0]["name"] == "Python"
+        assert data["top_concepts"][0]["access_count"] == 42
+
+    @pytest.mark.asyncio
+    async def test_empty_brain(self) -> None:
+        brain = _mock_brain(
+            stats={
+                "total_concepts": 0,
+                "categories": {},
+                "total_relations": 0,
+                "total_episodes": 0,
+            }
+        )
+        plugin = KnowledgePlugin(brain=brain)
+
+        data = json.loads(await plugin.what_do_you_know())
+        assert data["ok"] is True
+        assert data["total_concepts"] == 0
+        assert "empty" in data["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_top_concepts_failure_non_fatal(self) -> None:
+        brain = _mock_brain(
+            stats={
+                "total_concepts": 10,
+                "categories": {"fact": 10},
+                "total_relations": 5,
+                "total_episodes": 20,
+            }
+        )
+        brain.get_top_concepts = AsyncMock(side_effect=Exception("DB error"))
+        plugin = KnowledgePlugin(brain=brain)
+
+        data = json.loads(await plugin.what_do_you_know())
+        assert data["ok"] is True
+        assert data["total_concepts"] == 10
+        assert "top_concepts" not in data  # failed silently

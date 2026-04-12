@@ -540,6 +540,60 @@ class BrainAccess:
         )
         return str(relation.id)
 
+    async def get_top_concepts(
+        self,
+        limit: int = 10,
+        *,
+        category: str | None = None,
+    ) -> list[dict[str, object]]:
+        """Get top concepts ordered by importance (descending).
+
+        Args:
+            limit: Max results (capped at 50).
+            category: Optional filter by category.
+
+        Returns:
+            List of concept dicts with id, name, content, category,
+            importance, confidence, access_count.
+
+        Raises:
+            PermissionDeniedError: brain:read not granted.
+        """
+        from sovyx.engine.types import MindId
+
+        self._enforcer.check("brain:read")
+        capped = min(limit, _MAX_SEARCH_RESULTS)
+
+        async with self._brain._concepts._pool.read() as conn:
+            if category:
+                cursor = await conn.execute(
+                    "SELECT id, name, content, category, importance, confidence, "
+                    "access_count FROM concepts WHERE mind_id = ? AND category = ? "
+                    "ORDER BY importance DESC, confidence DESC LIMIT ?",
+                    (str(MindId(self._mind_id)), category, capped),
+                )
+            else:
+                cursor = await conn.execute(
+                    "SELECT id, name, content, category, importance, confidence, "
+                    "access_count FROM concepts WHERE mind_id = ? "
+                    "ORDER BY importance DESC, confidence DESC LIMIT ?",
+                    (str(MindId(self._mind_id)), capped),
+                )
+            rows = await cursor.fetchall()
+
+        return [
+            {
+                "id": str(r[0]),
+                "name": str(r[1]),
+                "content": str(r[2]),
+                "category": str(r[3]),
+                "importance": float(r[4]) if r[4] is not None else 0.0,
+                "confidence": float(r[5]) if r[5] is not None else 0.0,
+                "access_count": int(r[6]) if r[6] is not None else 0,
+            }
+            for r in rows
+        ]
+
     async def classify_content(
         self,
         old_content: str,
