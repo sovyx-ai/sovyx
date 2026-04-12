@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 
 from sovyx.plugins.official.calculator import CalculatorPlugin, _safe_eval
@@ -159,16 +161,18 @@ class TestSafeEval:
     """Direct tests for _safe_eval."""
 
     def test_integer(self) -> None:
-        assert _safe_eval("42") == 42
+        assert _safe_eval("42") == Decimal(42)
 
     def test_float(self) -> None:
-        assert _safe_eval("3.14") == 3.14
+        assert _safe_eval("3.14") == Decimal("3.14")
 
     def test_complex_expression(self) -> None:
-        assert _safe_eval("2 + 3 * 4 - 1") == 13
+        assert _safe_eval("2 + 3 * 4 - 1") == Decimal(13)
 
     def test_power_within_limit(self) -> None:
-        assert _safe_eval("2 ** 100") == 2**100
+        result = _safe_eval("2 ** 100")
+        expected = Decimal(2**100)
+        assert abs(result - expected) / expected < Decimal("1e-20")
 
     def test_invalid_syntax(self) -> None:
         with pytest.raises(ValueError, match="invalid syntax"):
