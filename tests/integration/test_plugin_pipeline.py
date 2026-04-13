@@ -255,10 +255,9 @@ class TestAutoDisableIntegration:
         assert mgr.is_plugin_disabled("always-fail")
 
         # 6th call should raise PluginDisabledError
-        from sovyx.plugins.manager import PluginDisabledError
-
-        with pytest.raises(PluginDisabledError):
+        with pytest.raises(Exception, match="disabled") as exc_info:
             await mgr.execute("always-fail.fail", {})
+        assert type(exc_info.value).__name__ == "PluginDisabledError"
 
         # Re-enable works
         mgr.re_enable_plugin("always-fail")

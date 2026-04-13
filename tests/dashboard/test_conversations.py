@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import sovyx.dashboard.conversations as _conv_mod
 from sovyx.dashboard.conversations import (
     count_active_conversations,
     get_conversation_messages,
@@ -41,8 +42,9 @@ class TestListConversations:
         ]
         registry, pool = _make_registry_with_pool(rows)
 
-        with patch(
-            "sovyx.dashboard.conversations._get_conversation_pool",
+        with patch.object(
+            _conv_mod,
+            "_get_conversation_pool",
             new_callable=AsyncMock,
             return_value=pool,
         ):
@@ -58,8 +60,9 @@ class TestListConversations:
     @pytest.mark.asyncio()
     async def test_empty_when_no_pool(self) -> None:
         registry = MagicMock()
-        with patch(
-            "sovyx.dashboard.conversations._get_conversation_pool",
+        with patch.object(
+            _conv_mod,
+            "_get_conversation_pool",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -76,8 +79,9 @@ class TestGetConversationMessages:
         ]
         registry, pool = _make_registry_with_pool(rows)
 
-        with patch(
-            "sovyx.dashboard.conversations._get_conversation_pool",
+        with patch.object(
+            _conv_mod,
+            "_get_conversation_pool",
             new_callable=AsyncMock,
             return_value=pool,
         ):
@@ -91,8 +95,9 @@ class TestGetConversationMessages:
     @pytest.mark.asyncio()
     async def test_empty_when_no_pool(self) -> None:
         registry = MagicMock()
-        with patch(
-            "sovyx.dashboard.conversations._get_conversation_pool",
+        with patch.object(
+            _conv_mod,
+            "_get_conversation_pool",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -105,8 +110,9 @@ class TestCountActiveConversations:
     async def test_returns_count(self) -> None:
         registry, pool = _make_registry_with_pool([(5,)])
 
-        with patch(
-            "sovyx.dashboard.conversations._get_conversation_pool",
+        with patch.object(
+            _conv_mod,
+            "_get_conversation_pool",
             new_callable=AsyncMock,
             return_value=pool,
         ):
@@ -116,8 +122,9 @@ class TestCountActiveConversations:
     @pytest.mark.asyncio()
     async def test_zero_when_no_pool(self) -> None:
         registry = MagicMock()
-        with patch(
-            "sovyx.dashboard.conversations._get_conversation_pool",
+        with patch.object(
+            _conv_mod,
+            "_get_conversation_pool",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -127,8 +134,9 @@ class TestCountActiveConversations:
     @pytest.mark.asyncio()
     async def test_survives_error(self) -> None:
         registry = MagicMock()
-        with patch(
-            "sovyx.dashboard.conversations._get_conversation_pool",
+        with patch.object(
+            _conv_mod,
+            "_get_conversation_pool",
             new_callable=AsyncMock,
             side_effect=RuntimeError("boom"),
         ):

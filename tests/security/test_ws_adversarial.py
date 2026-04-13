@@ -21,9 +21,10 @@ def app(monkeypatch: pytest.MonkeyPatch) -> object:
 
     monkeypatch.setattr(_srv, "_ensure_token", lambda: _TOKEN)
     a = create_app(APIConfig(host="127.0.0.1", port=0))
-    # Belt-and-suspenders: force _server_token in case create_app
-    # resolved _ensure_token from a different module reference.
+    # Force auth token on all possible locations — xdist may resolve
+    # module references differently across workers.
     _srv._server_token = _TOKEN
+    a.state.auth_token = _TOKEN  # type: ignore[union-attr]
     return a
 
 

@@ -19,10 +19,11 @@ _TOKEN = "config-test-token"
 
 @pytest.fixture()
 def _mock_token() -> object:
-    with patch("sovyx.dashboard.server.TOKEN_FILE") as mock_tf:
-        mock_tf.exists.return_value = True
-        mock_tf.read_text.return_value = _TOKEN
-        yield mock_tf
+    import sovyx.dashboard.server as _srv
+
+    with patch.object(_srv, "_ensure_token", return_value=_TOKEN):
+        _srv._server_token = _TOKEN
+        yield
 
 
 def _auth() -> dict[str, str]:

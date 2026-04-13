@@ -50,10 +50,8 @@ class WeatherPlugin(ISovyxPlugin):
 @pytest.fixture()
 def app_with_plugins() -> tuple[TestClient, PluginManager]:
     """Create a test app with a real PluginManager + loaded plugin."""
-    import sovyx.dashboard.server as _srv
-
     app = create_app()
-    token = _srv._server_token  # use module global directly
+    token = app.state.auth_token  # read from app instance, not module global
 
     # Create real PluginManager and load a plugin directly
     mgr = PluginManager()

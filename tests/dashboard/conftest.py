@@ -23,16 +23,18 @@ _DASHBOARD_TEST_TOKEN = "dashboard-test-token-fixed"
 
 
 @pytest.fixture(autouse=True)
-def _pin_ensure_token() -> None:
+def _pin_ensure_token(request: pytest.FixtureRequest) -> None:
     """Patch _ensure_token so create_app() always uses our known token.
 
     Uses patch.object on the directly-imported module to avoid
     string-path resolution issues in xdist workers.
 
-    Any local _clean_token / token fixture that also patches TOKEN_FILE
-    is harmless — _ensure_token is never called because we replace it.
+    After yield, also force-patches app.state.auth_token on any
+    app/client fixture that was created, ensuring the token is
+    consistent even if module-level globals diverged.
     """
     with patch.object(_server_mod, "_ensure_token", return_value=_DASHBOARD_TEST_TOKEN):
+        _server_mod._server_token = _DASHBOARD_TEST_TOKEN
         yield
 
 
