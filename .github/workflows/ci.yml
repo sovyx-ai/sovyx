@@ -110,6 +110,7 @@ jobs:
           uv run python -m pytest tests/
           --ignore=tests/smoke
           --timeout=30
+          --timeout-method=thread
           -n auto
           --dist loadfile
           -v
