@@ -77,7 +77,6 @@ class TestDashboardServer:
 
     @pytest.mark.asyncio()
     async def test_ws_manager_accessible_after_start(self) -> None:
-        from sovyx.dashboard.server import ConnectionManager
 
         server = DashboardServer()
         mock_uvi_server = MagicMock()
@@ -88,7 +87,7 @@ class TestDashboardServer:
             patch("uvicorn.Server", return_value=mock_uvi_server),
         ):
             await server.start()
-            assert isinstance(server.ws_manager, ConnectionManager)
+            assert type(server.ws_manager).__name__ == "ConnectionManager"
 
 
 class TestDashboardCLI:

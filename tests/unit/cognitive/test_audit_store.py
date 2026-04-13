@@ -180,7 +180,9 @@ class TestSingleton:
 
         reset_safety_container()
         store = get_safety_container().audit_store
-        assert isinstance(store, AuditStore)
+        from sovyx.cognitive.audit_store import AuditStore as _Cls
+
+        assert isinstance(store, _Cls)
         # Cleanup
         reset_safety_container()
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import io
 import json
-import secrets
 import zipfile
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -20,31 +19,36 @@ from sovyx.dashboard.server import create_app
 # ── Fixtures ──
 
 
+_FIXED_TOKEN = "export-import-test-token-fixed"
+
+
 @pytest.fixture()
 def token() -> str:
-    """Generate a deterministic test token."""
-    return "test-token-" + secrets.token_urlsafe(16)
+    """Return the fixed test token."""
+    return _FIXED_TOKEN
 
 
 @pytest.fixture()
-def client(token: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+def client(tmp_path: Path) -> TestClient:
     """TestClient with auth token properly wired.
 
-    Patches _ensure_token() to return our fixture token directly.
-    This eliminates dependency on TOKEN_FILE path resolution and
-    filesystem state — which can diverge in CI with xdist workers.
+    Uses unittest.mock.patch to guarantee _ensure_token returns our
+    fixed token, then verifies _server_token was set correctly.
     """
-    token_file = tmp_path / "token"
-    token_file.write_text(token)
-    monkeypatch.setattr("sovyx.dashboard.server.TOKEN_FILE", token_file)
-    monkeypatch.setattr("sovyx.dashboard.server._ensure_token", lambda: token)
-    app = create_app()
+    import sovyx.dashboard.server as _srv
+
+    with patch.object(_srv, "_ensure_token", return_value=_FIXED_TOKEN):
+        app = create_app()
+    # Verify the token was wired correctly
+    assert _srv._server_token == _FIXED_TOKEN, (
+        f"_server_token mismatch: {_srv._server_token!r} != {_FIXED_TOKEN!r}"
+    )
     return TestClient(app)
 
 
 @pytest.fixture()
-def auth_headers(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
+def auth_headers() -> dict[str, str]:
+    return {"Authorization": f"Bearer {_FIXED_TOKEN}"}
 
 
 @pytest.fixture()

@@ -80,80 +80,73 @@ class DashboardEventBridge:
 
 
 def _serialize_event(event: Event) -> dict[str, Any]:
-    """Convert an Engine event to a dashboard-friendly JSON payload."""
-    from sovyx.engine.events import (
-        ChannelConnected,
-        ChannelDisconnected,
-        ConceptCreated,
-        ConsolidationCompleted,
-        EngineStarted,
-        EngineStopping,
-        EpisodeEncoded,
-        PerceptionReceived,
-        ResponseSent,
-        ServiceHealthChanged,
-        ThinkCompleted,
-    )
+    """Convert an Engine event to a dashboard-friendly JSON payload.
+
+    Uses type(event).__name__ dispatch instead of isinstance() to avoid
+    class identity mismatches when modules are re-imported in different
+    namespaces (e.g. pytest-xdist forked workers in CI).
+    """
+    event_name = type(event).__name__
 
     base: dict[str, Any] = {
-        "type": type(event).__name__,
+        "type": event_name,
         "timestamp": event.timestamp.isoformat(),
         "correlation_id": event.correlation_id,
     }
 
-    if isinstance(event, EngineStarted):
+    if event_name == "EngineStarted":
         base["data"] = {}
-    elif isinstance(event, EngineStopping):
-        base["data"] = {"reason": event.reason}
-    elif isinstance(event, ServiceHealthChanged):
+    elif event_name == "EngineStopping":
+        base["data"] = {"reason": event.reason}  # type: ignore[attr-defined]
+    elif event_name == "ServiceHealthChanged":
         base["data"] = {
-            "service": event.service,
-            "status": event.status,
+            "service": event.service,  # type: ignore[attr-defined]
+            "status": event.status,  # type: ignore[attr-defined]
         }
-    elif isinstance(event, PerceptionReceived):
+    elif event_name == "PerceptionReceived":
         base["data"] = {
-            "source": event.source,
-            "person_id": event.person_id,
+            "source": event.source,  # type: ignore[attr-defined]
+            "person_id": event.person_id,  # type: ignore[attr-defined]
         }
-    elif isinstance(event, ThinkCompleted):
+    elif event_name == "ThinkCompleted":
         base["data"] = {
-            "tokens_in": event.tokens_in,
-            "tokens_out": event.tokens_out,
-            "model": event.model,
-            "cost_usd": round(event.cost_usd, 6),
-            "latency_ms": event.latency_ms,
+            "tokens_in": event.tokens_in,  # type: ignore[attr-defined]
+            "tokens_out": event.tokens_out,  # type: ignore[attr-defined]
+            "model": event.model,  # type: ignore[attr-defined]
+            "cost_usd": round(event.cost_usd, 6),  # type: ignore[attr-defined]
+            "latency_ms": event.latency_ms,  # type: ignore[attr-defined]
         }
-    elif isinstance(event, ResponseSent):
+    elif event_name == "ResponseSent":
         base["data"] = {
-            "channel": event.channel,
-            "latency_ms": event.latency_ms,
+            "channel": event.channel,  # type: ignore[attr-defined]
+            "latency_ms": event.latency_ms,  # type: ignore[attr-defined]
         }
-    elif isinstance(event, ConceptCreated):
+    elif event_name == "ConceptCreated":
         base["data"] = {
-            "concept_id": event.concept_id,
-            "title": event.title,
-            "source": event.source,
+            "concept_id": event.concept_id,  # type: ignore[attr-defined]
+            "title": event.title,  # type: ignore[attr-defined]
+            "source": event.source,  # type: ignore[attr-defined]
         }
-    elif isinstance(event, EpisodeEncoded):
+    elif event_name == "EpisodeEncoded":
         base["data"] = {
-            "episode_id": event.episode_id,
-            "importance": event.importance,
+            "episode_id": event.episode_id,  # type: ignore[attr-defined]
+            "importance": event.importance,  # type: ignore[attr-defined]
         }
-    elif isinstance(event, ConsolidationCompleted):
+    elif event_name == "ConsolidationCompleted":
         base["data"] = {
-            "merged": event.merged,
-            "pruned": event.pruned,
-            "strengthened": event.strengthened,
-            "duration_s": round(event.duration_s, 2),
+            "merged": event.merged,  # type: ignore[attr-defined]
+            "pruned": event.pruned,  # type: ignore[attr-defined]
+            "strengthened": event.strengthened,  # type: ignore[attr-defined]
+            "duration_s": round(event.duration_s, 2),  # type: ignore[attr-defined]
         }
-    elif isinstance(event, ChannelConnected):
+    elif event_name == "ChannelConnected":
         base["data"] = {
-            "channel_type": event.channel_type,
+            "channel_type": event.channel_type,  # type: ignore[attr-defined]
         }
-    elif isinstance(event, ChannelDisconnected):
+    elif event_name == "ChannelDisconnected":
         base["data"] = {
-            "channel_type": event.channel_type,
-            "reason": event.reason,
+            "channel_type": event.channel_type,  # type: ignore[attr-defined]
+            "reason": event.reason,  # type: ignore[attr-defined]
         }
     else:
         base["data"] = {}

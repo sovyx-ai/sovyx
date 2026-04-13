@@ -77,12 +77,12 @@ def _make_mock_registry(
 @pytest.fixture()
 def app() -> object:
     """Create app with mock token and registry."""
-    with patch("sovyx.dashboard.server.TOKEN_FILE") as mock_tf:
-        mock_tf.exists.return_value = True
-        mock_tf.read_text.return_value = _TOKEN
+    import sovyx.dashboard.server as _srv
+
+    with patch.object(_srv, "_ensure_token", return_value=_TOKEN):
         fa = create_app(APIConfig(host="127.0.0.1", port=0))
-        fa.state.registry = _make_mock_registry()  # type: ignore[union-attr]
-        return fa
+    fa.state.registry = _make_mock_registry()  # type: ignore[union-attr]
+    return fa
 
 
 @pytest.fixture()
