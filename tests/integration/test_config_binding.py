@@ -92,6 +92,7 @@ class TestCustomPort:
     async def test_custom_port(self) -> None:
         config = APIConfig(port=9999)
         app = create_app(config)
+        app.state.auth_token = _TOKEN  # type: ignore[union-attr]
         transport = ASGITransport(app=app)  # type: ignore[arg-type]
         async with AsyncClient(transport=transport, base_url="http://test") as c:
             r = await c.get("/api/status", headers=_auth())
