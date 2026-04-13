@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import secrets
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
@@ -15,25 +14,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-@pytest.fixture(autouse=True)
-def _clean_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Redirect token file to tmp_path."""
-    token_file = tmp_path / "token"
-    monkeypatch.setattr("sovyx.dashboard.server.TOKEN_FILE", token_file)
-
-
-@pytest.fixture()
-def token(tmp_path: Path) -> str:
-    """Generate a test token."""
-    t = secrets.token_urlsafe(32)
-    (tmp_path / "token").write_text(t)
-    return t
-
-
-@pytest.fixture()
-def auth_headers(token: str) -> dict[str, str]:
-    """Auth headers."""
-    return {"Authorization": f"Bearer {token}"}
+# token + auth_headers from tests/dashboard/conftest.py
 
 
 class TestChannelsEndpoint:

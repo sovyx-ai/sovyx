@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import secrets
-from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -11,22 +9,7 @@ from fastapi.testclient import TestClient
 
 from sovyx.dashboard.server import create_app
 
-if TYPE_CHECKING:
-    from pathlib import Path
-
-
-@pytest.fixture(autouse=True)
-def _clean_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Redirect token file to tmp_path for test isolation."""
-    token_file = tmp_path / "token"
-    monkeypatch.setattr("sovyx.dashboard.server.TOKEN_FILE", token_file)
-
-
-@pytest.fixture()
-def token(tmp_path: Path) -> str:
-    t = secrets.token_urlsafe(32)
-    (tmp_path / "token").write_text(t)
-    return t
+# token from tests/dashboard/conftest.py
 
 
 @pytest.fixture()

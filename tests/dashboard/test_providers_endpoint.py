@@ -6,8 +6,6 @@ active config, error handling, no-registry case.
 
 from __future__ import annotations
 
-import secrets
-from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, PropertyMock
 
 import pytest
@@ -15,9 +13,6 @@ from fastapi.testclient import TestClient
 
 from sovyx.dashboard.server import create_app
 from sovyx.mind.config import MindConfig
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _make_mock_provider(
@@ -48,32 +43,16 @@ def _make_ollama_provider(
     return p
 
 
-@pytest.fixture(autouse=True)
-def _clean_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Redirect token file to tmp_path for test isolation."""
-    token_file = tmp_path / "token"
-    monkeypatch.setattr("sovyx.dashboard.server.TOKEN_FILE", token_file)
-
-
-@pytest.fixture()
-def token(tmp_path: Path) -> str:
-    """Generate a token and write it to the test token file."""
-    t = secrets.token_urlsafe(32)
-    token_file = tmp_path / "token"
-    token_file.write_text(t)
-    return t
-
-
 @pytest.fixture()
 def app(token: str) -> TestClient:
-    """Create test client with valid auth."""
+    """Create test client with valid auth (token from conftest)."""
     application = create_app()
     return TestClient(application)
 
 
 @pytest.fixture()
 def auth(token: str) -> dict[str, str]:
-    """Auth headers."""
+    """Auth headers (token from conftest)."""
     return {"Authorization": f"Bearer {token}"}
 
 

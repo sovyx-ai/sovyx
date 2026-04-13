@@ -23,9 +23,9 @@ _TOKEN = "stress-test-token"
 
 @pytest.fixture()
 async def client() -> AsyncClient:
-    with patch("sovyx.dashboard.server.TOKEN_FILE") as mock_tf:
-        mock_tf.exists.return_value = True
-        mock_tf.read_text.return_value = _TOKEN
+    import sovyx.dashboard.server as _srv
+
+    with patch.object(_srv, "_ensure_token", return_value=_TOKEN):
         app = create_app(APIConfig(host="127.0.0.1", port=0))
     transport = ASGITransport(app=app)  # type: ignore[arg-type]
     async with AsyncClient(transport=transport, base_url="http://test") as c:

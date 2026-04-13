@@ -19,36 +19,14 @@ from sovyx.dashboard.server import create_app
 # ── Fixtures ──
 
 
-_FIXED_TOKEN = "export-import-test-token-fixed"
+# token + auth_headers from tests/dashboard/conftest.py
 
 
 @pytest.fixture()
-def token() -> str:
-    """Return the fixed test token."""
-    return _FIXED_TOKEN
-
-
-@pytest.fixture()
-def client(tmp_path: Path) -> TestClient:
-    """TestClient with auth token properly wired.
-
-    Uses unittest.mock.patch to guarantee _ensure_token returns our
-    fixed token, then verifies _server_token was set correctly.
-    """
-    import sovyx.dashboard.server as _srv
-
-    with patch.object(_srv, "_ensure_token", return_value=_FIXED_TOKEN):
-        app = create_app()
-    # Verify the token was wired correctly
-    assert _srv._server_token == _FIXED_TOKEN, (
-        f"_server_token mismatch: {_srv._server_token!r} != {_FIXED_TOKEN!r}"
-    )
+def client() -> TestClient:
+    """TestClient — auth handled by conftest _pin_ensure_token."""
+    app = create_app()
     return TestClient(app)
-
-
-@pytest.fixture()
-def auth_headers() -> dict[str, str]:
-    return {"Authorization": f"Bearer {_FIXED_TOKEN}"}
 
 
 @pytest.fixture()

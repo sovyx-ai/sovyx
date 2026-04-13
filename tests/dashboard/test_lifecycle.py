@@ -13,11 +13,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-@pytest.fixture(autouse=True)
-def _clean_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    token_file = tmp_path / "token"
-    token_file.write_text("test-token")
-    monkeypatch.setattr("sovyx.dashboard.server.TOKEN_FILE", token_file)
+# _pin_ensure_token from tests/dashboard/conftest.py handles auth
 
 
 class TestDashboardServer:
