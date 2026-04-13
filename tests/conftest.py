@@ -33,16 +33,26 @@ settings.load_profile("sovyx")
 
 
 @pytest.fixture(autouse=True)
-def _cleanup_async_resources() -> None:
+def _cleanup_async_resources(request: pytest.FixtureRequest) -> None:  # type: ignore[type-arg]
     """Lightweight cleanup between tests.
 
     Only runs gc.collect() to trigger __del__ on abandoned objects.
     Does NOT touch event loops or policies — pytest-asyncio owns those.
     Messing with asyncio.set_event_loop_policy(None) or closing loops
     here causes deadlocks in CI (see pytest-asyncio#1177).
+
+    Also prints test boundaries to stdout so CI logs show exactly where
+    a hang occurs (flush=True ensures output before any potential deadlock).
     """
+    import os
+    import sys
+
+    if os.environ.get("CI"):
+        print(f"\n>>> START {request.node.nodeid}", file=sys.stderr, flush=True)
     yield
     gc.collect()
+    if os.environ.get("CI"):
+        print(f"<<< END {request.node.nodeid}", file=sys.stderr, flush=True)
 
 
 @pytest.fixture(autouse=True)
