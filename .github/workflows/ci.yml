@@ -109,7 +109,8 @@ jobs:
           --ignore=tests/smoke
           --timeout=30
           -n auto
-          --dist loadgroup
+          --dist loadfile
+          -p no:randomly
           -v
       - name: Upload coverage
         if: matrix.python-version == '3.12'
