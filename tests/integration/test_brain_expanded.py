@@ -172,4 +172,5 @@ class TestConceptCategories:
             )
             fetched = await concept_repo.get(cid)
             assert fetched is not None
-            assert fetched.category == cat
+            # Compare by value to handle cross-namespace enum identity
+            assert fetched.category.value == cat.value

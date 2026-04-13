@@ -16,19 +16,19 @@ _TOKEN = "cors-test-token"
 
 @pytest.fixture()
 def app(monkeypatch: pytest.MonkeyPatch) -> object:
-    """Create app with pinned auth token.
+    """Create app with pinned auth token."""
+    import sovyx.dashboard.server as _srv
 
-    Patches _ensure_token() directly instead of mocking TOKEN_FILE,
-    eliminating filesystem/path divergence in CI with xdist.
-    """
-    monkeypatch.setattr("sovyx.dashboard.server._ensure_token", lambda: _TOKEN)
-    return create_app(
+    monkeypatch.setattr(_srv, "_ensure_token", lambda: _TOKEN)
+    a = create_app(
         APIConfig(
             host="127.0.0.1",
             port=0,
             cors_origins=["http://localhost:7777"],
         )
     )
+    _srv._server_token = _TOKEN
+    return a
 
 
 @pytest.fixture()
