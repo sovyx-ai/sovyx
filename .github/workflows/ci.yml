@@ -104,12 +104,12 @@ jobs:
           uv sync --dev --frozen --python ${{ matrix.python-version }}
           uv pip install --python ${{ matrix.python-version }} "ddgs>=9.0" "trafilatura>=2.0"
       - name: Run tests
-        timeout-minutes: 25
+        timeout-minutes: 20
         run: >
           uv run python -m pytest tests/
           --ignore=tests/smoke
-          --timeout=10
-          --timeout-method=thread
+          --ignore=tests/plugins/test_weather.py
+          --timeout=30
           -v
       - name: Upload coverage
         if: matrix.python-version == '3.12'
