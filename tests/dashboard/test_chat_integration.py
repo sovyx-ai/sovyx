@@ -14,7 +14,6 @@ the business logic with mocked dependencies.
 
 from __future__ import annotations
 
-import secrets
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -31,26 +30,34 @@ if TYPE_CHECKING:
 # ── Fixtures ──
 
 
+_TEST_TOKEN = "chat-integration-test-token"
+
+
 @pytest.fixture(autouse=True)
-def _clean_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Redirect token file to tmp_path for test isolation."""
+def _pin_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin auth token so create_app() and verify_token() agree.
+
+    Patches _ensure_token() to always return our known token.
+    This eliminates any dependency on TOKEN_FILE path resolution,
+    tmp_path ordering, or filesystem state — which can diverge
+    in CI with xdist workers.
+    """
     token_file = tmp_path / "token"
+    token_file.write_text(_TEST_TOKEN)
     monkeypatch.setattr("sovyx.dashboard.server.TOKEN_FILE", token_file)
+    monkeypatch.setattr("sovyx.dashboard.server._ensure_token", lambda: _TEST_TOKEN)
 
 
 @pytest.fixture()
-def token(tmp_path: Path) -> str:
-    """Generate a token and write it to the test token file."""
-    t = secrets.token_urlsafe(32)
-    token_file = tmp_path / "token"
-    token_file.write_text(t)
-    return t
+def token() -> str:
+    """Return the pinned test token."""
+    return _TEST_TOKEN
 
 
 @pytest.fixture()
-def auth_headers(token: str) -> dict[str, str]:
+def auth_headers() -> dict[str, str]:
     """Authorization header for authenticated requests."""
-    return {"Authorization": f"Bearer {token}"}
+    return {"Authorization": f"Bearer {_TEST_TOKEN}"}
 
 
 def _make_mock_registry(

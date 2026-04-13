@@ -20,25 +20,24 @@ from sovyx.dashboard.server import create_app
 # ── Fixtures ──
 
 
-@pytest.fixture(autouse=True)
-def _clean_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Redirect token file to tmp_path for test isolation."""
+@pytest.fixture()
+def token() -> str:
+    """Generate a deterministic test token."""
+    return "test-token-" + secrets.token_urlsafe(16)
+
+
+@pytest.fixture()
+def client(token: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    """TestClient with auth token properly wired.
+
+    Patches _ensure_token() to return our fixture token directly.
+    This eliminates dependency on TOKEN_FILE path resolution and
+    filesystem state — which can diverge in CI with xdist workers.
+    """
     token_file = tmp_path / "token"
+    token_file.write_text(token)
     monkeypatch.setattr("sovyx.dashboard.server.TOKEN_FILE", token_file)
-
-
-@pytest.fixture()
-def token(tmp_path: Path) -> str:
-    """Generate a token and write it to the test token file."""
-    t = secrets.token_urlsafe(32)
-    token_file = tmp_path / "token"
-    token_file.write_text(t)
-    return t
-
-
-@pytest.fixture()
-def client(token: str) -> TestClient:
-    """TestClient with auth token available."""
+    monkeypatch.setattr("sovyx.dashboard.server._ensure_token", lambda: token)
     app = create_app()
     return TestClient(app)
 

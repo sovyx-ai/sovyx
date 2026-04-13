@@ -5,8 +5,6 @@ Tests CORS policy enforcement and security headers on API responses.
 
 from __future__ import annotations
 
-from unittest.mock import patch
-
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -17,17 +15,20 @@ _TOKEN = "cors-test-token"
 
 
 @pytest.fixture()
-def app() -> object:
-    with patch("sovyx.dashboard.server.TOKEN_FILE") as mock_tf:
-        mock_tf.exists.return_value = True
-        mock_tf.read_text.return_value = _TOKEN
-        return create_app(
-            APIConfig(
-                host="127.0.0.1",
-                port=0,
-                cors_origins=["http://localhost:7777"],
-            )
+def app(monkeypatch: pytest.MonkeyPatch) -> object:
+    """Create app with pinned auth token.
+
+    Patches _ensure_token() directly instead of mocking TOKEN_FILE,
+    eliminating filesystem/path divergence in CI with xdist.
+    """
+    monkeypatch.setattr("sovyx.dashboard.server._ensure_token", lambda: _TOKEN)
+    return create_app(
+        APIConfig(
+            host="127.0.0.1",
+            port=0,
+            cors_origins=["http://localhost:7777"],
         )
+    )
 
 
 @pytest.fixture()

@@ -275,13 +275,15 @@ class TestSingleton:
     """Module-level singleton functions."""
 
     def test_get_audit_trail_returns_instance(self) -> None:
+        from sovyx.cognitive.safety_audit import SafetyAuditTrail as _Cls
         from sovyx.cognitive.safety_audit import get_audit_trail
 
         trail = get_audit_trail()
-        assert isinstance(trail, SafetyAuditTrail)
+        assert isinstance(trail, _Cls)
 
     def test_setup_creates_new_instance(self) -> None:
+        from sovyx.cognitive.safety_audit import SafetyAuditTrail as _Cls
         from sovyx.cognitive.safety_audit import setup_audit_trail
 
         trail = setup_audit_trail(max_events=100)
-        assert isinstance(trail, SafetyAuditTrail)
+        assert isinstance(trail, _Cls)

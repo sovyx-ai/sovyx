@@ -766,12 +766,18 @@ class TestFetchTool:
         p = WebIntelligencePlugin()
 
         async def slow_fetch(_url: str) -> str | None:
-            await asyncio.sleep(20)
+            await asyncio.sleep(60)
             return "<html></html>"
 
-        with patch(
-            "sovyx.plugins.official.web_intelligence._fetch_html",
-            side_effect=slow_fetch,
+        with (
+            patch(
+                "sovyx.plugins.official.web_intelligence._fetch_html",
+                side_effect=slow_fetch,
+            ),
+            patch(
+                "sovyx.plugins.official.web_intelligence._FETCH_TIMEOUT",
+                2.0,
+            ),
         ):
             data = _parse(await p.fetch("https://example.com"))
         assert data["ok"] is False

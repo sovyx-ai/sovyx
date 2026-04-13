@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from sovyx.engine.types import (
     ConceptCategory,
@@ -20,6 +20,24 @@ from sovyx.engine.types import (
     RelationType,
     generate_id,
 )
+
+
+def _coerce_enum(enum_cls: type, value: object) -> object:
+    """Coerce an enum value, handling cross-namespace identity mismatches.
+
+    In CI with pytest-xdist, forked workers may re-import modules
+    creating enum classes with different identity.  Pydantic's strict
+    enum validator rejects ``isinstance`` mismatches.  This helper
+    falls back to constructing the enum from its ``.value`` attribute.
+    """
+    if isinstance(value, enum_cls):
+        return value
+    if isinstance(value, str):
+        return enum_cls(value)
+    # Cross-namespace enum: same value, different class
+    if hasattr(value, "value"):
+        return enum_cls(value.value)
+    return value
 
 
 class Concept(BaseModel):
@@ -34,6 +52,11 @@ class Concept(BaseModel):
     name: str
     content: str = ""
     category: ConceptCategory = ConceptCategory.FACT
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def _coerce_category(cls, v: object) -> object:
+        return _coerce_enum(ConceptCategory, v)
     importance: float = Field(default=0.5, ge=0.0, le=1.0)
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     access_count: int = 0
@@ -78,6 +101,11 @@ class Relation(BaseModel):
     source_id: ConceptId
     target_id: ConceptId
     relation_type: RelationType = RelationType.RELATED_TO
+
+    @field_validator("relation_type", mode="before")
+    @classmethod
+    def _coerce_relation_type(cls, v: object) -> object:
+        return _coerce_enum(RelationType, v)
     weight: float = Field(default=0.5, ge=0.0, le=1.0)
     co_occurrence_count: int = 1
     last_activated: datetime = Field(default_factory=lambda: datetime.now(UTC))

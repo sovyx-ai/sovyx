@@ -93,8 +93,10 @@ class TestSingleton:
     """Test get_notifier / setup_notifier."""
 
     def test_get_notifier(self) -> None:
+        from sovyx.cognitive.safety_notifications import SafetyNotifier as _Cls
+
         n = get_notifier()
-        assert isinstance(n, SafetyNotifier)
+        assert isinstance(n, _Cls)
 
     def test_setup_notifier(self) -> None:
         sink = _CaptureSink()
