@@ -170,11 +170,10 @@ class TestRegistryCoverageGaps:
     @pytest.mark.asyncio()
     async def test_resolve_unregistered_raises(self) -> None:
         """Resolve raises ServiceNotRegisteredError for unknown interface."""
-        from sovyx.engine.errors import ServiceNotRegisteredError
-
         reg = ServiceRegistry()
-        with pytest.raises(ServiceNotRegisteredError, match="str"):
+        with pytest.raises(Exception, match="Service not registered: str") as exc_info:
             await reg.resolve(str)
+        assert type(exc_info.value).__name__ == "ServiceNotRegisteredError"
 
     @pytest.mark.asyncio()
     async def test_shutdown_skips_none_instances(self) -> None:

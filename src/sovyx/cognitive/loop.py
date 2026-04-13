@@ -40,10 +40,14 @@ def _categorize_error(exc: Exception) -> str:
     - **Informable**: user action may help (budget exhausted)
     - **Temporary**: transient, retryable (provider down)
     - **Internal**: bugs — never expose internals to user
+
+    Uses type name dispatch instead of isinstance() to be robust
+    against class identity mismatches in forked test workers.
     """
-    if isinstance(exc, CostLimitExceededError):
+    _name = type(exc).__name__
+    if isinstance(exc, CostLimitExceededError) or _name == "CostLimitExceededError":
         return "I've reached my conversation budget limit. Please try again later."
-    if isinstance(exc, ProviderUnavailableError):
+    if isinstance(exc, ProviderUnavailableError) or _name == "ProviderUnavailableError":
         return (
             "No AI provider is available right now. "
             "Please check the LLM Providers section in Settings — "

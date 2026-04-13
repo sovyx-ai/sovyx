@@ -263,7 +263,7 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
                 status_code=HTTP_401_UNAUTHORIZED,
                 detail="Missing Authorization header",
             )
-        if not secrets.compare_digest(credentials.credentials, _server_token):
+        if not secrets.compare_digest(credentials.credentials, app.state.auth_token):
             raise HTTPException(
                 status_code=HTTP_401_UNAUTHORIZED,
                 detail="Invalid token",
@@ -1746,7 +1746,7 @@ def create_app(config: APIConfig | None = None) -> FastAPI:
         Auth via query param: /ws?token=<token>
         (WebSocket doesn't support Authorization header easily)
         """
-        if not token or not secrets.compare_digest(token, _server_token):
+        if not token or not secrets.compare_digest(token, app.state.auth_token):
             await websocket.close(code=4001, reason="Unauthorized")
             return
 
