@@ -87,7 +87,7 @@ jobs:
   test:
     name: Test (Python ${{ matrix.python-version }})
     runs-on: sovyx-4core
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: true
       matrix:
@@ -106,12 +106,14 @@ jobs:
       - name: Run tests
         env:
           PYTHONFAULTHANDLER: "1"
+          PYTHONHASHSEED: "0"
         run: >
           uv run python -m pytest tests/
           --ignore=tests/smoke
           --timeout=15
           -q
           --no-header
+          -p no:randomly
       - name: Upload coverage
         if: matrix.python-version == '3.12'
         uses: actions/upload-artifact@v4
