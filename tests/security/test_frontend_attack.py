@@ -17,7 +17,7 @@ Tests run against the real FastAPI app with security middleware active.
 from __future__ import annotations
 
 import secrets
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -32,14 +32,14 @@ _TOKEN = "test-sec-token-" + secrets.token_hex(8)
 
 
 @pytest.fixture()
-def app() -> object:
+def app(monkeypatch: pytest.MonkeyPatch) -> object:
     """Create app with known token and mock registry."""
-    with patch("sovyx.dashboard.server.TOKEN_FILE") as mock_tf:
-        mock_tf.exists.return_value = True
-        mock_tf.read_text.return_value = _TOKEN
-        fa = create_app(APIConfig(host="127.0.0.1", port=0))
-        fa.state.registry = _mock_registry()  # type: ignore[union-attr]
-        return fa
+    import sovyx.dashboard.server as _srv
+
+    monkeypatch.setattr(_srv, "_ensure_token", lambda: _TOKEN)
+    fa = create_app(APIConfig(host="127.0.0.1", port=0))
+    fa.state.registry = _mock_registry()  # type: ignore[union-attr]
+    return fa
 
 
 @pytest.fixture()

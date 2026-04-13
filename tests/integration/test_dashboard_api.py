@@ -25,12 +25,12 @@ def api_config() -> APIConfig:
 
 
 @pytest.fixture()
-def app(api_config: APIConfig) -> object:
+def app(api_config: APIConfig, monkeypatch: pytest.MonkeyPatch) -> object:
     """Create FastAPI app with test token."""
-    with patch("sovyx.dashboard.server.TOKEN_FILE") as mock_tf:
-        mock_tf.exists.return_value = True
-        mock_tf.read_text.return_value = _TOKEN
-        return create_app(api_config)
+    import sovyx.dashboard.server as _srv
+
+    monkeypatch.setattr(_srv, "_ensure_token", lambda: _TOKEN)
+    return create_app(api_config)
 
 
 @pytest.fixture()
@@ -190,14 +190,13 @@ class TestConfigEndpointNoMind:
 @pytest.fixture()
 def app_with_mind(api_config: APIConfig) -> object:
     """Create FastAPI app with mind_config wired."""
+    import sovyx.dashboard.server as _srv
     from sovyx.mind.config import MindConfig
 
-    with patch("sovyx.dashboard.server.TOKEN_FILE") as mock_tf:
-        mock_tf.exists.return_value = True
-        mock_tf.read_text.return_value = _TOKEN
+    with patch.object(_srv, "_ensure_token", return_value=_TOKEN):
         fa = create_app(api_config)
-        fa.state.mind_config = MindConfig(name="TestMind")  # type: ignore[union-attr]
-        return fa
+    fa.state.mind_config = MindConfig(name="TestMind")  # type: ignore[union-attr]
+    return fa
 
 
 @pytest.fixture()

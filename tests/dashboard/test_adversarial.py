@@ -516,10 +516,10 @@ class TestQueryParamValidation:
 
     @pytest.fixture()
     def client(self) -> TestClient:
-        from sovyx.dashboard.server import TOKEN_FILE, create_app
+        from sovyx.dashboard.server import create_app
 
         app = create_app()
-        token = TOKEN_FILE.read_text().strip()
+        token = app.state.auth_token
         self._headers = {"Authorization": f"Bearer {token}"}
         return TestClient(app)
 

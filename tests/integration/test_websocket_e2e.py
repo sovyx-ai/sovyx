@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 from starlette.testclient import TestClient
@@ -38,12 +37,12 @@ _TOKEN = "ws-test-token"
 
 
 @pytest.fixture()
-def app() -> object:
+def app(monkeypatch: pytest.MonkeyPatch) -> object:
     """Create a FastAPI app with mocked token."""
-    with patch("sovyx.dashboard.server.TOKEN_FILE") as mock_tf:
-        mock_tf.exists.return_value = True
-        mock_tf.read_text.return_value = _TOKEN
-        return create_app(APIConfig(host="127.0.0.1", port=0))
+    import sovyx.dashboard.server as _srv
+
+    monkeypatch.setattr(_srv, "_ensure_token", lambda: _TOKEN)
+    return create_app(APIConfig(host="127.0.0.1", port=0))
 
 
 @pytest.fixture()

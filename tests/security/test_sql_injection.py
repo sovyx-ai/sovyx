@@ -10,8 +10,6 @@ these tests validate the defense-in-depth posture.
 
 from __future__ import annotations
 
-from unittest.mock import patch
-
 import pytest
 from starlette.testclient import TestClient
 
@@ -64,12 +62,12 @@ LEVEL_PAYLOADS = [
 
 
 @pytest.fixture()
-def client() -> TestClient:
-    with patch("sovyx.dashboard.server.TOKEN_FILE") as mock_tf:
-        mock_tf.exists.return_value = True
-        mock_tf.read_text.return_value = _TOKEN
-        app = create_app(APIConfig(host="127.0.0.1", port=0))
-        return TestClient(app)
+def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    import sovyx.dashboard.server as _srv
+
+    monkeypatch.setattr(_srv, "_ensure_token", lambda: _TOKEN)
+    app = create_app(APIConfig(host="127.0.0.1", port=0))
+    return TestClient(app)
 
 
 def _auth_headers() -> dict[str, str]:

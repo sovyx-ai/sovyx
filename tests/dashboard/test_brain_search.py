@@ -12,7 +12,6 @@ Covers:
 
 from __future__ import annotations
 
-import secrets
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -269,11 +268,8 @@ class TestSearchBrain:
 
 
 def _make_client(tmp_path_factory: pytest.TempPathFactory) -> tuple[TestClient, dict[str, str]]:
-    tmp = tmp_path_factory.mktemp("bsearch")
-    token = secrets.token_urlsafe(32)
-    (tmp / "token").write_text(token)
-    with patch("sovyx.dashboard.server.TOKEN_FILE", tmp / "token"):
-        app = create_app()
+    app = create_app()
+    token = app.state.auth_token
     return TestClient(app), {"Authorization": f"Bearer {token}"}
 
 

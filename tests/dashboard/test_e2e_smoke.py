@@ -11,8 +11,6 @@ Validates the full pipeline:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -20,19 +18,14 @@ from sovyx import __version__
 from sovyx.dashboard import STATIC_DIR
 from sovyx.dashboard.server import create_app
 
-if TYPE_CHECKING:
-    from pathlib import Path
-
 # Skip entire module when dashboard hasn't been built (CI without frontend build step)
 _has_build = STATIC_DIR.exists() and (STATIC_DIR / "index.html").exists()
 pytestmark = pytest.mark.skipif(not _has_build, reason="Dashboard not built (run npm run build)")
 
 
-@pytest.fixture(autouse=True)
-def _setup_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    token_file = tmp_path / "token"
-    token_file.write_text("smoke-test-token")
-    monkeypatch.setattr("sovyx.dashboard.server.TOKEN_FILE", token_file)
+# _pin_ensure_token from tests/dashboard/conftest.py handles auth
+
+_SMOKE_TOKEN = "dashboard-test-token-fixed"  # must match conftest
 
 
 @pytest.fixture()
@@ -40,7 +33,7 @@ def client() -> TestClient:
     return TestClient(create_app())
 
 
-AUTH = {"Authorization": "Bearer smoke-test-token"}
+AUTH = {"Authorization": f"Bearer {_SMOKE_TOKEN}"}
 
 
 class TestBuildOutput:
@@ -159,7 +152,7 @@ class TestWebSocketSmoke:
     """WebSocket connectivity smoke test."""
 
     def test_ws_connect_ping_pong(self, client: TestClient) -> None:
-        with client.websocket_connect("/ws?token=smoke-test-token") as ws:
+        with client.websocket_connect(f"/ws?token={_SMOKE_TOKEN}") as ws:
             ws.send_text("ping")
             assert ws.receive_text() == "pong"
 
@@ -186,7 +179,7 @@ class TestFullPipeline:
         assert "mind_name" in api_resp.json()
 
         # 3. JS would open WebSocket
-        with client.websocket_connect("/ws?token=smoke-test-token") as ws:
+        with client.websocket_connect(f"/ws?token={_SMOKE_TOKEN}") as ws:
             ws.send_text("ping")
             assert ws.receive_text() == "pong"
 

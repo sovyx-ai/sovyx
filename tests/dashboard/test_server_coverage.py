@@ -13,7 +13,6 @@ VAL-03: Covers all uncovered paths identified in the coverage audit:
 
 from __future__ import annotations
 
-import secrets
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -35,36 +34,18 @@ if TYPE_CHECKING:
 # ── Fixtures ──
 
 
-@pytest.fixture(autouse=True)
-def _clean_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Redirect token file to tmp_path for test isolation."""
-    token_file = tmp_path / "token"
-    monkeypatch.setattr("sovyx.dashboard.server.TOKEN_FILE", token_file)
+# token + auth_headers from tests/dashboard/conftest.py
 
 
 @pytest.fixture()
-def token(tmp_path: Path) -> str:
-    """Generate a token and write it to the test token file."""
-    t = secrets.token_urlsafe(32)
-    token_file = tmp_path / "token"
-    token_file.write_text(t)
-    return t
-
-
-@pytest.fixture()
-def app(token: str) -> FastAPI:
-    """FastAPI app instance."""
+def app() -> FastAPI:
+    """FastAPI app instance — auth handled by conftest."""
     return create_app()
 
 
 @pytest.fixture()
 def client(app: FastAPI) -> TestClient:
     return TestClient(app)
-
-
-@pytest.fixture()
-def auth_headers(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 # ── ConnectionManager broadcast tests ──

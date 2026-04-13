@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import secrets
 from pathlib import Path
 from unittest.mock import patch
 
@@ -19,32 +18,14 @@ from sovyx.dashboard.server import (
 # ── Fixtures ──
 
 
-@pytest.fixture(autouse=True)
-def _clean_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Redirect token file to tmp_path for test isolation."""
-    token_file = tmp_path / "token"
-    monkeypatch.setattr("sovyx.dashboard.server.TOKEN_FILE", token_file)
+# token + auth_headers from tests/dashboard/conftest.py
 
 
 @pytest.fixture()
-def token(tmp_path: Path) -> str:
-    """Generate a token and write it to the test token file."""
-    t = secrets.token_urlsafe(32)
-    token_file = tmp_path / "token"
-    token_file.write_text(t)
-    return t
-
-
-@pytest.fixture()
-def client(token: str) -> TestClient:
-    """TestClient with auth token available."""
+def client() -> TestClient:
+    """TestClient — auth handled by conftest."""
     app = create_app()
     return TestClient(app)
-
-
-@pytest.fixture()
-def auth_headers(token: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
 
 # ── Token Tests ──
