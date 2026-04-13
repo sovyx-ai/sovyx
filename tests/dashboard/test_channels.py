@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
-import pytest
+import pytest  # noqa: TC002 — used at runtime for fixture annotations
 from starlette.testclient import TestClient
 
 from sovyx.dashboard.server import create_app
