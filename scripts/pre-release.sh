@@ -106,11 +106,12 @@ for PYVER in 3.11 3.12; do
     # Install extras for this Python version
     uv pip install --python "$PYVER" "ddgs>=9.0" "trafilatura>=2.0" --quiet 2>/dev/null
     
-    if uv run --python "$PYVER" python -m pytest tests/ \
+    if timeout 600 uv run --python "$PYVER" python -m pytest tests/ \
         --ignore=tests/smoke \
         --cov=sovyx \
         --cov-report=term-missing \
         --cov-fail-under=95 \
+        --timeout=30 \
         -q; then
         pass "pytest Python $PYVER + coverage ≥95%"
     else
