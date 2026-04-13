@@ -57,6 +57,7 @@ class Concept(BaseModel):
     @classmethod
     def _coerce_category(cls, v: object) -> object:
         return _coerce_enum(ConceptCategory, v)
+
     importance: float = Field(default=0.5, ge=0.0, le=1.0)
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     access_count: int = 0
@@ -106,6 +107,7 @@ class Relation(BaseModel):
     @classmethod
     def _coerce_relation_type(cls, v: object) -> object:
         return _coerce_enum(RelationType, v)
+
     weight: float = Field(default=0.5, ge=0.0, le=1.0)
     co_occurrence_count: int = 1
     last_activated: datetime = Field(default_factory=lambda: datetime.now(UTC))
