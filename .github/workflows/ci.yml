@@ -20,8 +20,10 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           version: "latest"
+      - name: Verify lock file
+        run: uv lock --check
       - name: Install dependencies
-        run: uv sync --dev
+        run: uv sync --dev --frozen
       - name: Ruff check
         run: uv run ruff check src/ tests/
       - name: Ruff format check
@@ -36,7 +38,7 @@ jobs:
         with:
           version: "latest"
       - name: Install dependencies
-        run: uv sync --dev
+        run: uv sync --dev --frozen
       - name: mypy strict
         run: uv run mypy src/
 
@@ -49,7 +51,7 @@ jobs:
         with:
           version: "latest"
       - name: Install dependencies
-        run: uv sync --dev
+        run: uv sync --dev --frozen
       - name: Bandit scan
         run: uv run bandit -r src/sovyx/ --configfile pyproject.toml
 
@@ -99,7 +101,7 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
       - name: Install dependencies
         run: |
-          uv sync --dev --python ${{ matrix.python-version }}
+          uv sync --dev --frozen --python ${{ matrix.python-version }}
           uv pip install --python ${{ matrix.python-version }} "ddgs>=9.0" "trafilatura>=2.0"
       - name: Run tests with coverage
         run: >
