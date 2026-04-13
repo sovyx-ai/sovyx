@@ -98,9 +98,9 @@ def analyze_scores(
 
     Reports: mean, quartiles, entropy, spread, and health status.
     """
-    import asyncio
+    from sovyx.cli.main import _run
 
-    asyncio.run(_analyze_scores_async(mind_id, output_json, db_path))
+    _run(_analyze_scores_async(mind_id, output_json, db_path))
 
 
 async def _analyze_scores_async(

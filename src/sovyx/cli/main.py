@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import cast
 
 import typer
 from rich.console import Console
@@ -250,7 +251,6 @@ def doctor(
     Online checks (daemon required): database, brain, LLM, channels,
     consolidation, cost budget.
     """
-    import asyncio
     import json
 
     from sovyx.observability.health import (
@@ -259,11 +259,11 @@ def doctor(
         create_offline_registry,
     )
 
-    results = []
+    results: list[CheckResult] = []
 
     # ── Tier 1: Offline checks (always run) ─────────────────────────
     offline = create_offline_registry()
-    offline_results = asyncio.run(offline.run_all(timeout=10.0))
+    offline_results = cast("list[CheckResult]", _run(offline.run_all(timeout=10.0)))
     results.extend(offline_results)
 
     # Config validation (extra offline check)

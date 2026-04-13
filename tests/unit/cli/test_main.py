@@ -178,7 +178,7 @@ class TestWithDaemon:
         }
         with (
             patch("sovyx.cli.main._get_client") as mock,
-            patch("sovyx.cli.main._run", return_value=checks),
+            patch("sovyx.cli.main._run", side_effect=[[], checks]),
         ):
             mock.return_value.is_daemon_running.return_value = True
             result = runner.invoke(app, ["doctor"])
@@ -189,7 +189,7 @@ class TestWithDaemon:
         checks = {"checks": {"sqlite": True, "brain": False}}
         with (
             patch("sovyx.cli.main._get_client") as mock,
-            patch("sovyx.cli.main._run", return_value=checks),
+            patch("sovyx.cli.main._run", side_effect=[[], checks]),
         ):
             mock.return_value.is_daemon_running.return_value = True
             result = runner.invoke(app, ["doctor"])
