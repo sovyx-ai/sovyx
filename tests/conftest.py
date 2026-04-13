@@ -37,9 +37,7 @@ settings.load_profile("sovyx")
 def _count_aiosqlite_threads() -> int:
     """Count active aiosqlite worker threads."""
     return sum(
-        1
-        for t in threading.enumerate()
-        if t.is_alive() and "aiosqlite" in type(t).__module__
+        1 for t in threading.enumerate() if t.is_alive() and "aiosqlite" in type(t).__module__
     )
 
 
