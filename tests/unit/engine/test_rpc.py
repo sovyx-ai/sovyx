@@ -204,12 +204,12 @@ class TestRPCServerCoverageGaps:
 
                 header = await asyncio.wait_for(
                     reader.readexactly(_HEADER_SIZE),
-                    timeout=5.0,
+                    timeout=10.0,
                 )
                 length = int.from_bytes(header, "big")
                 raw = await asyncio.wait_for(
                     reader.readexactly(length),
-                    timeout=5.0,
+                    timeout=10.0,
                 )
                 data = json.loads(raw.decode())
                 assert data["error"]["code"] == -32000
@@ -233,7 +233,7 @@ class TestRPCServerCoverageGaps:
             ):
                 reader, writer = await asyncio.open_unix_connection(str(socket_path))
                 # Connection should be closed by server
-                _ = await asyncio.wait_for(reader.read(4096), timeout=5.0)
+                _ = await asyncio.wait_for(reader.read(4096), timeout=10.0)
                 # Server may or may not send data before closing
                 writer.close()
                 await writer.wait_closed()

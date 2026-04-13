@@ -27,6 +27,8 @@ async def client() -> AsyncClient:
 
     with patch.object(_srv, "_ensure_token", return_value=_TOKEN):
         app = create_app(APIConfig(host="127.0.0.1", port=0))
+    _srv._server_token = _TOKEN
+    app.state.auth_token = _TOKEN  # type: ignore[union-attr]
     transport = ASGITransport(app=app)  # type: ignore[arg-type]
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c  # type: ignore[misc]

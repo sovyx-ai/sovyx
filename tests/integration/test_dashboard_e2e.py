@@ -10,7 +10,7 @@ Uses mock registry (no real LLM) but validates the HTTP flow end-to-end.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -75,12 +75,15 @@ def _make_mock_registry(
 
 
 @pytest.fixture()
-def app() -> object:
+def app(monkeypatch: pytest.MonkeyPatch) -> object:
     """Create app with mock token and registry."""
     import sovyx.dashboard.server as _srv
 
-    with patch.object(_srv, "_ensure_token", return_value=_TOKEN):
-        fa = create_app(APIConfig(host="127.0.0.1", port=0))
+    monkeypatch.setattr(_srv, "_ensure_token", lambda: _TOKEN)
+    fa = create_app(APIConfig(host="127.0.0.1", port=0))
+    # Force token on all possible locations
+    _srv._server_token = _TOKEN
+    fa.state.auth_token = _TOKEN  # type: ignore[union-attr]
     fa.state.registry = _make_mock_registry()  # type: ignore[union-attr]
     return fa
 

@@ -6,8 +6,6 @@ Database is a fresh in-memory SQLite via DatabasePool.
 
 from __future__ import annotations
 
-from unittest.mock import patch
-
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -188,13 +186,15 @@ class TestConfigEndpointNoMind:
 
 
 @pytest.fixture()
-def app_with_mind(api_config: APIConfig) -> object:
+def app_with_mind(api_config: APIConfig, monkeypatch: pytest.MonkeyPatch) -> object:
     """Create FastAPI app with mind_config wired."""
     import sovyx.dashboard.server as _srv
     from sovyx.mind.config import MindConfig
 
-    with patch.object(_srv, "_ensure_token", return_value=_TOKEN):
-        fa = create_app(api_config)
+    monkeypatch.setattr(_srv, "_ensure_token", lambda: _TOKEN)
+    fa = create_app(api_config)
+    _srv._server_token = _TOKEN
+    fa.state.auth_token = _TOKEN  # type: ignore[union-attr]
     fa.state.mind_config = MindConfig(name="TestMind")  # type: ignore[union-attr]
     return fa
 
