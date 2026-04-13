@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import secrets
 from unittest.mock import patch
 
 import pytest
@@ -55,7 +54,7 @@ class TestConversationIdFuzz:
             "<script>alert(1)</script>",
             "null",
             "-1",
-            secrets.token_hex(32),
+            "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
         ],
     )
     async def test_random_ids_never_crash(

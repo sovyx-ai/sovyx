@@ -114,6 +114,8 @@ jobs:
           -q
           --no-header
           -p no:randomly
+          -n 4
+          --dist loadfile
       - name: Upload coverage
         if: matrix.python-version == '3.12'
         uses: actions/upload-artifact@v4
