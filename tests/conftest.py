@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
 import gc
+import threading
+import warnings
 from typing import TYPE_CHECKING
 
 import pytest
@@ -33,37 +34,45 @@ settings.register_profile(
 settings.load_profile("sovyx")
 
 
+def _count_aiosqlite_threads() -> int:
+    """Count active aiosqlite worker threads."""
+    return sum(
+        1
+        for t in threading.enumerate()
+        if t.is_alive() and "aiosqlite" in type(t).__module__
+    )
+
+
 @pytest.fixture(autouse=True)
-def _cleanup_async_resources() -> None:
-    """Force-close lingering event loops and threads between tests.
+def _cleanup_async_resources():
+    """Detect and clean up leaked aiosqlite threads between tests.
 
-    Prevents deadlocks caused by leaked asyncio event loops or background
-    threads (e.g., from watchdog, aiosqlite, or CLI runner.invoke) that
-    survive between test modules and block pytest in CI.
+    aiosqlite creates a background thread per connection. If a test
+    (or fixture) opens a connection without closing it, the thread
+    survives and can deadlock subsequent tests by polluting the
+    asyncio selector.
 
-    Root cause: test_main.py::TestWithDaemon leaves async resources that
-    block the next test's collection on GitHub Actions runners (but not
-    locally due to different cleanup timing).
+    This fixture:
+      1. Counts aiosqlite threads before the test
+      2. After the test, runs gc.collect() to trigger finalizers
+      3. Warns if new threads leaked (so we can fix the source)
 
-    See: MISSION-CI-FIX, 2026-04-13.
+    Does NOT touch event loops or policies — pytest-asyncio >= 1.2
+    manages those correctly, including the #1177 fix for asyncio.run().
     """
+    before = _count_aiosqlite_threads()
     yield
-    # Force garbage collection to trigger __del__ on abandoned objects
     gc.collect()
-    # Close any event loop that wasn't properly cleaned up
-    try:
-        loop = asyncio.get_event_loop_policy().get_event_loop()
-        if not loop.is_closed() and not loop.is_running():
-            # Cancel all pending tasks
-            pending = asyncio.all_tasks(loop)
-            for task in pending:
-                task.cancel()
-            if pending:
-                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-    except (RuntimeError, AttributeError):
-        pass
-    # Reset the event loop policy to get a fresh loop next time
-    asyncio.set_event_loop_policy(None)
+    after = _count_aiosqlite_threads()
+    leaked = after - before
+    if leaked > 0:
+        warnings.warn(
+            f"Test leaked {leaked} aiosqlite worker thread(s). "
+            "Ensure all DatabasePool/aiosqlite connections are closed "
+            "in fixture teardown (use yield + close, not return).",
+            ResourceWarning,
+            stacklevel=2,
+        )
 
 
 @pytest.fixture(autouse=True)

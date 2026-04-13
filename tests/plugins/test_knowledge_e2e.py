@@ -8,7 +8,6 @@ Uses a real in-memory SQLite brain (no mocks).
 
 from __future__ import annotations
 
-import contextlib
 import json
 import sys
 import threading
@@ -125,15 +124,7 @@ async def db_pool(tmp_path: Path):
         await conn.commit()
 
     yield pool
-    # Close DB synchronously to prevent aiosqlite background thread from
-    # raising RuntimeError('Event loop is closed') during shutdown on 3.11.
-    with contextlib.suppress(Exception):
-        if pool._write_conn is not None:
-            await pool._write_conn.close()
-            pool._write_conn = None
-        for conn in pool._read_conns:
-            await conn.close()
-        pool._read_conns.clear()
+    await pool.close()
 
 
 @pytest.fixture

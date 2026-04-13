@@ -176,7 +176,7 @@ class TestMigrationReport:
 
 
 @pytest.fixture()
-def _pool(tmp_path: Path) -> MagicMock:
+async def _pool(tmp_path: Path) -> MagicMock:
     """Create a real in-memory-style pool mock wired to aiosqlite."""
     import aiosqlite
 
@@ -243,7 +243,11 @@ def _pool(tmp_path: Path) -> MagicMock:
     pool.close = AsyncMock(side_effect=_close)
     pool.initialize = AsyncMock(side_effect=_initialize)
 
-    return pool
+    yield pool
+    # Ensure real aiosqlite connection is closed to prevent thread leak
+    if _conn_holder["conn"] is not None:
+        await _conn_holder["conn"].close()
+        _conn_holder["conn"] = None
 
 
 @pytest.fixture()

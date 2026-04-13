@@ -163,7 +163,8 @@ async def brain_pool(tmp_path: Path) -> DatabasePool:
     runner = MigrationRunner(pool)
     await runner.initialize()
     await runner.run_migrations(get_brain_migrations(has_sqlite_vec=pool.has_sqlite_vec))
-    return pool
+    yield pool  # type: ignore[misc]
+    await pool.close()
 
 
 @pytest.fixture
