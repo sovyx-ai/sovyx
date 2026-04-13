@@ -86,8 +86,8 @@ jobs:
 
   test:
     name: Test (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+    runs-on: sovyx-4core
+    timeout-minutes: 30
     strategy:
       fail-fast: true
       matrix:
