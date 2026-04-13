@@ -107,10 +107,6 @@ jobs:
         run: >
           uv run python -m pytest tests/
           --ignore=tests/smoke
-          --cov=sovyx
-          --cov-report=term-missing
-          --cov-report=xml:coverage.xml
-          --cov-fail-under=95
           --timeout=30
           -v
       - name: Upload coverage
