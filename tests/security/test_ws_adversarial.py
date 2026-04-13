@@ -20,7 +20,11 @@ def app(monkeypatch: pytest.MonkeyPatch) -> object:
     import sovyx.dashboard.server as _srv
 
     monkeypatch.setattr(_srv, "_ensure_token", lambda: _TOKEN)
-    return create_app(APIConfig(host="127.0.0.1", port=0))
+    a = create_app(APIConfig(host="127.0.0.1", port=0))
+    # Belt-and-suspenders: force _server_token in case create_app
+    # resolved _ensure_token from a different module reference.
+    _srv._server_token = _TOKEN
+    return a
 
 
 @pytest.fixture()
