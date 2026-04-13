@@ -34,51 +34,17 @@ settings.load_profile("sovyx")
 
 @pytest.fixture(autouse=True)
 def _cleanup_async_resources() -> None:
-    """Clean up leaked aiosqlite threads between tests.
+    """Lightweight cleanup between tests.
 
-    Root cause of CI deadlock: aiosqlite spawns daemon threads
-    (_connection_worker_thread) for each database connection. Tests that
-    don't properly close connections leave these threads alive, blocking
-    the asyncio selector when pytest-asyncio creates a new event loop
-    for the next test. This causes deadlocks only in CI (slower timing).
+    Only runs gc.collect() to trigger __del__ on abandoned objects.
+    Does NOT touch event loops or policies — pytest-asyncio owns those.
 
-    Fix: after each test, find ALL aiosqlite worker threads and force-stop
-    them by sending the stop sentinel through their internal queues.
-
-    See: CI Deadlock Hunt mission, 2026-04-13.
+    Note: aiosqlite worker threads may leak between tests. This is
+    mitigated in CI by running CLI tests in a separate pytest process
+    (see ci.yml), so leaked threads from async tests don't deadlock
+    the sync CLI tests.
     """
-    import threading
-
     yield
-
-    gc.collect()
-
-    # Kill ALL aiosqlite worker threads — not just new ones.
-    # The threads from tests 100+ tests ago can still be alive.
-    try:
-        import contextlib
-
-        import aiosqlite.core
-
-        _stop = aiosqlite.core._STOP_RUNNING_SENTINEL  # noqa: SLF001
-
-        # Approach 1: send stop sentinel to all Connection objects
-        for obj in gc.get_objects():
-            if isinstance(obj, aiosqlite.core.Connection):
-                with contextlib.suppress(Exception):
-                    obj._tx.put_nowait((None, lambda _s=_stop: _s))  # noqa: SLF001
-
-        # Approach 2: for threads that survived (Connection already GC'd
-        # but thread still alive), we can't reach their queue directly.
-        # Mark them daemon and force-join with timeout.
-        for thread in threading.enumerate():
-            if "_connection_worker" in (thread.name or ""):
-                thread.daemon = True
-                with contextlib.suppress(Exception):
-                    thread.join(timeout=0.1)
-    except ImportError:
-        pass
-
     gc.collect()
 
 

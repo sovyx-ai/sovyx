@@ -103,11 +103,13 @@ jobs:
         run: |
           uv sync --dev --frozen --python ${{ matrix.python-version }}
           uv pip install --python ${{ matrix.python-version }} "ddgs>=9.0" "trafilatura>=2.0"
-      - name: Run tests with coverage
+      - name: Run tests
         run: >
           uv run python -m pytest tests/
           --ignore=tests/smoke
           --timeout=30
+          -n auto
+          --dist loadgroup
           -v
       - name: Upload coverage
         if: matrix.python-version == '3.12'

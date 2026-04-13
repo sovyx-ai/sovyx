@@ -76,7 +76,10 @@ dev = [
 ]
 
 [dependency-groups]
-dev = ["sovyx[dev]"]
+dev = [
+    "pytest-xdist>=3.8.0",
+    "sovyx[dev]",
+]
 docs = [
     "mkdocs-material>=9.7.6",
 ]
