@@ -108,7 +108,6 @@ jobs:
           uv run python -m pytest tests/
           --ignore=tests/smoke
           --timeout=30
-          --timeout-method=thread
           -v
       - name: Upload coverage
         if: matrix.python-version == '3.12'

@@ -33,70 +33,53 @@ settings.load_profile("sovyx")
 
 
 @pytest.fixture(autouse=True)
-def _cleanup_async_resources(request: pytest.FixtureRequest) -> None:  # type: ignore[type-arg]
+def _cleanup_async_resources() -> None:
     """Clean up leaked aiosqlite threads between tests.
 
     Root cause of CI deadlock: aiosqlite spawns daemon threads
-    (_connection_worker_thread) for each connection. If tests don't
-    close connections, these threads accumulate and block the asyncio
-    event loop selector (selector.select/poll), deadlocking any test
-    that touches async — including sync CLI tests under asyncio_mode=auto,
-    because pytest-asyncio creates an event loop for every test.
+    (_connection_worker_thread) for each database connection. Tests that
+    don't properly close connections leave these threads alive, blocking
+    the asyncio selector when pytest-asyncio creates a new event loop
+    for the next test. This causes deadlocks only in CI (slower timing).
 
-    Fix: after each test, force-stop any lingering aiosqlite threads
-    by sending a stop sentinel through their queue.
+    Fix: after each test, find ALL aiosqlite worker threads and force-stop
+    them by sending the stop sentinel through their internal queues.
 
     See: CI Deadlock Hunt mission, 2026-04-13.
-    Traceback evidence: Thread-4132..4141 (_connection_worker_thread)
-    blocked on tx.get() in aiosqlite/core.py:59.
     """
-    import os
-    import sys
     import threading
-
-    if os.environ.get("CI"):
-        print(f"\n>>> START {request.node.nodeid}", file=sys.stderr, flush=True)
-
-    # Snapshot threads before test to know what's new
-    threads_before = set(threading.enumerate())
 
     yield
 
-    # Force GC first to trigger __del__ on abandoned connections
     gc.collect()
 
-    # Find and stop leaked aiosqlite worker threads
-    for thread in threading.enumerate():
-        if thread not in threads_before and "_connection_worker" in (thread.name or ""):
-            # aiosqlite workers block on self._tx.get().
-            # The clean way to stop them is to put a stop sentinel.
-            # But we don't have a reference to the Connection object.
-            # Mark as daemon so they don't block process exit,
-            # and rely on GC + the sentinel approach below.
-            thread.daemon = True
-
-    # More aggressive: find all aiosqlite Connection objects and close them
+    # Kill ALL aiosqlite worker threads — not just new ones.
+    # The threads from tests 100+ tests ago can still be alive.
     try:
         import contextlib
 
         import aiosqlite.core
 
+        _stop = aiosqlite.core._STOP_RUNNING_SENTINEL  # noqa: SLF001
+
+        # Approach 1: send stop sentinel to all Connection objects
         for obj in gc.get_objects():
             if isinstance(obj, aiosqlite.core.Connection):
                 with contextlib.suppress(Exception):
-                    # Send stop sentinel to unblock the worker thread.
-                    # aiosqlite worker loops on tx.get() → (future, function).
-                    # When function() returns _STOP_RUNNING_SENTINEL, it breaks.
-                    # We send (None, lambda: sentinel) to stop the thread cleanly.
-                    _stop = aiosqlite.core._STOP_RUNNING_SENTINEL  # noqa: SLF001
                     obj._tx.put_nowait((None, lambda _s=_stop: _s))  # noqa: SLF001
-    except (ImportError, TypeError):
+
+        # Approach 2: for threads that survived (Connection already GC'd
+        # but thread still alive), we can't reach their queue directly.
+        # Mark them daemon and force-join with timeout.
+        for thread in threading.enumerate():
+            if "_connection_worker" in (thread.name or ""):
+                thread.daemon = True
+                with contextlib.suppress(Exception):
+                    thread.join(timeout=0.1)
+    except ImportError:
         pass
 
     gc.collect()
-
-    if os.environ.get("CI"):
-        print(f"<<< END {request.node.nodeid}", file=sys.stderr, flush=True)
 
 
 @pytest.fixture(autouse=True)
