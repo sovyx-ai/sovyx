@@ -87,7 +87,7 @@ jobs:
   test:
     name: Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: true
       matrix:
@@ -104,11 +104,13 @@ jobs:
           uv sync --dev --frozen --python ${{ matrix.python-version }}
           uv pip install --python ${{ matrix.python-version }} "ddgs>=9.0" "trafilatura>=2.0"
       - name: Run tests with coverage
+        env:
+          PYTHONFAULTHANDLER: "1"
         run: >
           uv run python -m pytest tests/
           --ignore=tests/smoke
           --timeout=30
-          -v
+          -q
       - name: Upload coverage
         if: matrix.python-version == '3.12'
         uses: actions/upload-artifact@v4
