@@ -780,9 +780,8 @@ class TestPublicAPI:
         assert needs_cloud_fallback is not None
 
     def test_cloud_stt_extends_stt_engine(self) -> None:
-        from sovyx.voice.stt import STTEngine
-
-        assert issubclass(CloudSTT, STTEngine)
+        # Anti-pattern #8: issubclass is unreliable under pytest-cov reimport.
+        assert "STTEngine" in {c.__name__ for c in CloudSTT.__mro__}
 
     def test_cloud_stt_uses_httpx(self) -> None:
         """CloudSTT module imports httpx at top level."""

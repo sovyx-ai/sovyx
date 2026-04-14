@@ -335,7 +335,8 @@ class TestBeepSynthesis:
 
     def test_default_beep(self) -> None:
         chunk = synthesize_beep()
-        assert isinstance(chunk, AudioChunk)
+        # Anti-pattern #8: isinstance unreliable under pytest-cov reimport.
+        assert type(chunk).__name__ == "AudioChunk"
         assert chunk.sample_rate == 22050
         assert chunk.duration_ms == pytest.approx(50.0)
         import numpy as np
@@ -623,7 +624,8 @@ class TestJarvisProperties:
         """select_category always returns a valid FillerCategory."""
         ji = _make_illusion()
         cat = ji.select_category(user_input)
-        assert isinstance(cat, FillerCategory)
+        # Anti-pattern #8: FillerCategory now StrEnum; compare by name.
+        assert cat.name in {m.name for m in FillerCategory}
 
     @settings(deadline=None, suppress_health_check=[HealthCheck.too_slow])
     @given(user_input=st.text(min_size=0, max_size=100))
@@ -689,7 +691,8 @@ class TestJarvisConfigCompatibility:
             stt=stt,
             tts=tts,
         )
-        assert isinstance(pipeline.jarvis, JarvisIllusion)
+        # Anti-pattern #8: isinstance unreliable under pytest-cov reimport.
+        assert type(pipeline.jarvis).__name__ == "JarvisIllusion"
 
 
 # ---------------------------------------------------------------------------

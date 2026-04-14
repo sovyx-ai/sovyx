@@ -180,7 +180,8 @@ class TestSingleton:
 
         reset_safety_container()
         store = get_safety_container().audit_store
-        assert isinstance(store, AuditStore)
+        # Anti-pattern #8: isinstance unreliable under pytest-cov reimport.
+        assert type(store).__name__ == "AuditStore"
         # Cleanup
         reset_safety_container()
 

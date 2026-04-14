@@ -195,9 +195,8 @@ class TestErrors:
     """Tests for upgrade error hierarchy."""
 
     def test_upgrade_error_is_migration_error(self) -> None:
-        from sovyx.engine.errors import MigrationError
-
-        assert issubclass(UpgradeError, MigrationError)
+        # Anti-pattern #8: issubclass is unreliable under pytest-cov reimport.
+        assert "MigrationError" in {c.__name__ for c in UpgradeError.__mro__}
 
     def test_install_error_is_upgrade_error(self) -> None:
         assert issubclass(InstallError, UpgradeError)

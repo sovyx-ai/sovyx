@@ -278,10 +278,12 @@ class TestSingleton:
         from sovyx.cognitive.safety_audit import get_audit_trail
 
         trail = get_audit_trail()
-        assert isinstance(trail, SafetyAuditTrail)
+        # Anti-pattern #8: isinstance unreliable under pytest-cov reimport.
+        assert type(trail).__name__ == "SafetyAuditTrail"
 
     def test_setup_creates_new_instance(self) -> None:
         from sovyx.cognitive.safety_audit import setup_audit_trail
 
         trail = setup_audit_trail(max_events=100)
-        assert isinstance(trail, SafetyAuditTrail)
+        # Anti-pattern #8: isinstance unreliable under pytest-cov reimport.
+        assert type(trail).__name__ == "SafetyAuditTrail"

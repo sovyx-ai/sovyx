@@ -297,8 +297,9 @@ class TestActPhaseFinancialButtons:
 
         approve_btn = result.buttons[0][0]
         deny_btn = result.buttons[0][1]
-        assert isinstance(approve_btn, InlineButton)
-        assert isinstance(deny_btn, InlineButton)
+        # Anti-pattern #8: isinstance unreliable under pytest-cov reimport.
+        assert type(approve_btn).__name__ == "InlineButton"
+        assert type(deny_btn).__name__ == "InlineButton"
         assert approve_btn.text == "✅ Approve"
         assert deny_btn.text == "❌ Deny"
 

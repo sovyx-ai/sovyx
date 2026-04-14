@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
+from sovyx.plugins import sandbox_http as _sbx_mod  # anti-pattern #11
 from sovyx.plugins.permissions import PermissionDeniedError
 from sovyx.plugins.sandbox_http import (
     SandboxedHttpClient,
@@ -165,7 +166,7 @@ class TestUrlValidation:
         with pytest.raises(PermissionDeniedError, match="Invalid URL"):
             client._validate_url("not-a-url")
 
-    @patch("sovyx.plugins.sandbox_http._resolve_hostname", return_value="127.0.0.1")
+    @patch.object(_sbx_mod, "_resolve_hostname", return_value="127.0.0.1")
     def test_dns_rebinding_blocked(self, _mock: object) -> None:
         """Domain that resolves to local IP is blocked."""
         client = SandboxedHttpClient("test", ["evil.com"])

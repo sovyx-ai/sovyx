@@ -281,29 +281,32 @@ class TestBootstrap:
         """When bootstrap fails mid-way, already-started services are cleaned up."""
         from unittest.mock import patch
 
+        # Anti-pattern #11: patch on the module the production code uses, not on
+        # the test's own imported class — pytest-cov reimport may duplicate the
+        # class and the patch would miss the instance bootstrap instantiates.
+        from sovyx.engine import bootstrap as _bootstrap_mod
+
         config = EngineConfig(database=DatabaseConfig(data_dir=tmp_path))
         mind = MindConfig(name="Test")
 
-        # Inject failure after DatabaseManager starts (during mind init)
-        original_init = DatabaseManager.initialize_mind_databases
+        original_init = _bootstrap_mod.DatabaseManager.initialize_mind_databases
 
-        async def failing_init(self_: DatabaseManager, mind_id: MindId) -> None:
+        async def failing_init(self_: object, mind_id: MindId) -> None:
             await original_init(self_, mind_id)
             msg = "Simulated failure after DB init"
             raise RuntimeError(msg)
 
-        # Anti-pattern #8: catch Exception and assert by class name — under
-        # pytest-cov, even builtin-looking references can reimport.
         with (
-            patch.object(DatabaseManager, "initialize_mind_databases", failing_init),
+            patch.object(
+                _bootstrap_mod.DatabaseManager,
+                "initialize_mind_databases",
+                failing_init,
+            ),
             pytest.raises(Exception, match="Simulated") as exc,  # noqa: BLE001, PT011
         ):
             await bootstrap(config, [mind])
         assert type(exc.value).__name__ == "RuntimeError"
 
-        # Verify cleanup happened: system.db should exist (was created),
-        # but the DatabaseManager should have been stopped
-        # (If cleanup didn't work, we'd get resource leaks)
         assert (tmp_path / "system.db").exists()
 
 

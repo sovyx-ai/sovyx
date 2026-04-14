@@ -216,7 +216,6 @@ class TestEventEmission:
         self, cost_guard: CostGuard, event_bus: AsyncMock
     ) -> None:
         """ThinkCompleted event must include cost_usd from provider response."""
-        from sovyx.engine.events import ThinkCompleted
 
         p1 = _mock_provider("test")
         router = LLMRouter([p1], cost_guard, event_bus)
@@ -225,7 +224,8 @@ class TestEventEmission:
         event_bus.emit.assert_called_once()
 
         emitted_event = event_bus.emit.call_args[0][0]
-        assert isinstance(emitted_event, ThinkCompleted)
+        # Anti-pattern #8: isinstance unreliable under pytest-cov reimport.
+        assert type(emitted_event).__name__ == "ThinkCompleted"
         assert emitted_event.cost_usd == 0.001, (  # noqa: PLR2004
             f"cost_usd should be 0.001 from mock, got {emitted_event.cost_usd}"
         )

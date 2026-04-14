@@ -94,12 +94,13 @@ class TestSingleton:
 
     def test_get_notifier(self) -> None:
         n = get_notifier()
-        assert isinstance(n, SafetyNotifier)
+        # Anti-pattern #8: isinstance unreliable under pytest-cov reimport.
+        assert type(n).__name__ == "SafetyNotifier"
 
     def test_setup_notifier(self) -> None:
         sink = _CaptureSink()
         n = setup_notifier(sink=sink)
-        assert isinstance(n, SafetyNotifier)
+        assert type(n).__name__ == "SafetyNotifier"  # anti-pattern #8
         n.notify_escalation("test", 5, "alerted")
         assert len(sink.messages) == 1
 
