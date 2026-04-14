@@ -89,6 +89,18 @@ const EVENT_CONFIG: Record<
     icon: <MessageCircleIcon className="size-3.5" />,
     color: "text-[var(--svx-color-brand-primary)]",
   },
+  PluginStateChanged: {
+    icon: <PlugIcon className="size-3.5" />,
+    color: "text-[var(--svx-color-info)]",
+  },
+  PluginToolExecuted: {
+    icon: <RocketIcon className="size-3.5" />,
+    color: "text-[var(--svx-color-brand-primary)]",
+  },
+  PluginAutoDisabled: {
+    icon: <AlertTriangleIcon className="size-3.5" />,
+    color: "text-[var(--svx-color-error)]",
+  },
 };
 
 const FALLBACK_CONFIG = {

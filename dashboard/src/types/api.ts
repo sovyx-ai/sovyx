@@ -334,11 +334,24 @@ export interface OceanConfig {
   neuroticism: number;
 }
 
-/** Safety guardrails */
+/** Severity level of a safety guardrail (mirrors backend Literal). */
+export type GuardrailSeverity = "critical" | "warning";
+
+/** Single guardrail entry — shipped with defaults or user-authored. */
+export interface Guardrail {
+  id: string;
+  rule: string;
+  severity: GuardrailSeverity;
+  builtin: boolean;
+}
+
+/** Safety guardrails — mirrors backend `sovyx.mind.config.SafetyConfig`. */
 export interface SafetyConfig {
   child_safe_mode: boolean;
   financial_confirmation: boolean;
   content_filter: ContentFilter;
+  pii_protection: boolean;
+  guardrails: Guardrail[];
 }
 
 /** Brain memory system (read-only in dashboard) */

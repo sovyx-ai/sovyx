@@ -34,7 +34,6 @@ function RiskSummary({
 
   const highCount = permissions.filter((p) => p.risk === "high").length;
   const mediumCount = permissions.filter((p) => p.risk === "medium").length;
-  const lowCount = permissions.filter((p) => p.risk === "low").length;
 
   const hasHigh = highCount > 0;
   const hasMedium = mediumCount > 0;

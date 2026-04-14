@@ -253,7 +253,6 @@ export default function PluginsPage() {
 
   const hasPlugins = plugins.length > 0;
   const hasResults = displayPlugins.length > 0;
-  const isFiltering = pluginFilter !== "all" || pluginSearchQuery.trim() !== "";
 
   // Loading
   if (pluginsLoading && !hasPlugins) {

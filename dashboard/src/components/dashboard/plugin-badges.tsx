@@ -165,11 +165,15 @@ export function CategoryBadge({ category, className }: CategoryBadgeProps) {
 
 // ── Pricing Badge ──
 
-const PRICING_STYLES: Record<string, { bg: string; text: string }> = {
-  free: {
-    bg: "bg-[var(--svx-color-success)]/10",
-    text: "text-[var(--svx-color-success)]",
-  },
+type PricingStyle = { bg: string; text: string };
+
+const PRICING_FALLBACK: PricingStyle = {
+  bg: "bg-[var(--svx-color-success)]/10",
+  text: "text-[var(--svx-color-success)]",
+};
+
+const PRICING_STYLES: Record<string, PricingStyle> = {
+  free: PRICING_FALLBACK,
   paid: {
     bg: "bg-[var(--svx-color-warning)]/10",
     text: "text-[var(--svx-color-warning)]",
@@ -187,7 +191,7 @@ interface PricingBadgeProps {
 
 export function PricingBadge({ pricing, className }: PricingBadgeProps) {
   const { t } = useTranslation("plugins");
-  const styles = PRICING_STYLES[pricing] ?? PRICING_STYLES.free;
+  const styles = PRICING_STYLES[pricing] ?? PRICING_FALLBACK;
   const label = t(
     `pricing.${pricing}`,
     pricing.charAt(0).toUpperCase() + pricing.slice(1),

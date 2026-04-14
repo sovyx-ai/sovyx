@@ -45,7 +45,7 @@ import {
 } from "@/components/ui/dialog";
 import { PermissionBadge, PluginToolBadge, PricingBadge } from "./plugin-badges";
 import { PermissionDialog } from "./permission-dialog";
-import type { PluginDetail as PluginDetailType, PluginToolDetail } from "@/types/api";
+import type { PluginToolDetail } from "@/types/api";
 
 // ── Status Config ──
 

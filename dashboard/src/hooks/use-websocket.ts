@@ -265,7 +265,10 @@ export function useWebSocket(): void {
           case "PluginToolExecuted":
             useDashboardStore
               .getState()
-              .handlePluginEvent(event.type, event.data as import("@/types/api").PluginStateChangedEvent);
+              .handlePluginEvent(
+                event.type,
+                event.data as unknown as import("@/types/api").PluginStateChangedEvent,
+              );
             break;
         }
       } catch {

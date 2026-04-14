@@ -250,7 +250,10 @@ export default function SettingsPage() {
     }));
   };
 
-  const updateSafety = (field: string, value: boolean | string) => {
+  const updateSafety = (
+    field: string,
+    value: boolean | string | Array<{ id: string; rule: string; severity: string }>,
+  ) => {
     setEditedConfig((prev) => ({
       ...prev,
       safety: {
