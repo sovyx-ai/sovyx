@@ -20,7 +20,7 @@ import dataclasses
 import shutil
 import sqlite3
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -47,7 +47,7 @@ _RETENTION_LIMITS: dict[str, int] = {
 # ── Enums & Data classes ────────────────────────────────────────────
 
 
-class BackupTrigger(Enum):
+class BackupTrigger(StrEnum):
     """Why this backup was created."""
 
     MIGRATION = "migration"

@@ -9,7 +9,7 @@ Ref: SPE-031 §2, ADR-002 (hardware tiers).
 from __future__ import annotations
 
 import dataclasses
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from sovyx.observability.logging import get_logger
@@ -17,7 +17,7 @@ from sovyx.observability.logging import get_logger
 logger = get_logger(__name__)
 
 
-class HardwareTier(Enum):
+class HardwareTier(StrEnum):
     """Supported hardware tiers (ADR-002)."""
 
     PI5 = "pi5"

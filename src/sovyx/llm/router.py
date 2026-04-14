@@ -10,7 +10,7 @@ Ref: SPE-007 §5, Pre-Compute V05-37.
 from __future__ import annotations
 
 import dataclasses
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from sovyx.engine.errors import CostLimitExceededError, ProviderUnavailableError
@@ -34,7 +34,7 @@ logger = get_logger(__name__)
 # ── Complexity Classification ───────────────────────────────────────
 
 
-class ComplexityLevel(Enum):
+class ComplexityLevel(StrEnum):
     """Message complexity level for model routing."""
 
     SIMPLE = "simple"

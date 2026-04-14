@@ -25,7 +25,7 @@ logger = get_logger(__name__)
 # ── Plugin State ────────────────────────────────────────────────────
 
 
-class PluginState(enum.Enum):
+class PluginState(enum.StrEnum):
     """Plugin lifecycle states.
 
     State machine:

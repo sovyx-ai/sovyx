@@ -55,7 +55,7 @@ OUTPUT_QUEUE_MAXSIZE = 50
 # ---------------------------------------------------------------------------
 
 
-class AudioPlatform(enum.Enum):
+class AudioPlatform(enum.StrEnum):
     """Detected host audio subsystem."""
 
     ALSA = "alsa"

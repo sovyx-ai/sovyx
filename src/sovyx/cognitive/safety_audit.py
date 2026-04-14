@@ -12,7 +12,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from enum import Enum, unique
+from enum import StrEnum, unique
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
@@ -25,7 +25,7 @@ logger = get_logger(__name__)
 
 
 @unique
-class FilterDirection(Enum):
+class FilterDirection(StrEnum):
     """Direction of the filtered content."""
 
     INPUT = "input"
@@ -33,7 +33,7 @@ class FilterDirection(Enum):
 
 
 @unique
-class FilterAction(Enum):
+class FilterAction(StrEnum):
     """Action taken on filtered content."""
 
     BLOCKED = "blocked"

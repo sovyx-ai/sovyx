@@ -38,7 +38,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from enum import Enum, auto
+from enum import Enum, StrEnum, auto
 from typing import TYPE_CHECKING, Any
 
 from sovyx.engine.events import Event, EventCategory
@@ -56,7 +56,7 @@ logger = get_logger(__name__)
 # ── Enums ───────────────────────────────────────────────────────────────────
 
 
-class AlertSeverity(Enum):
+class AlertSeverity(StrEnum):
     """Alert severity levels."""
 
     INFO = "info"

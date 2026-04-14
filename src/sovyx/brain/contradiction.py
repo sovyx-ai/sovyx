@@ -15,7 +15,7 @@ Classification taxonomy:
 from __future__ import annotations
 
 import json
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-class ContentRelation(Enum):
+class ContentRelation(StrEnum):
     """Semantic relationship between old and new concept content."""
 
     SAME = "SAME"

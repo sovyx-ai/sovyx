@@ -21,7 +21,7 @@ import re
 import shutil
 import socket
 import sys
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -36,7 +36,7 @@ logger = get_logger(__name__)
 # ── Enums & Data classes ──────────────────────────────────────────────
 
 
-class DiagnosticStatus(Enum):
+class DiagnosticStatus(StrEnum):
     """Outcome of a single diagnostic check."""
 
     PASS = "pass"

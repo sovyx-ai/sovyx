@@ -33,7 +33,7 @@ logger = get_logger(__name__)
 # ── Enums & Data classes ────────────────────────────────────────────
 
 
-class UpgradePhase(enum.Enum):
+class UpgradePhase(enum.StrEnum):
     """Current phase of the blue-green upgrade."""
 
     PENDING = "pending"

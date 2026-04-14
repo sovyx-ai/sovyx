@@ -157,7 +157,7 @@ def get_classification_budget() -> ClassificationBudget:
     return get_safety_container().classification_budget
 
 
-class SafetyCategory(enum.Enum):
+class SafetyCategory(enum.StrEnum):
     """Safety violation categories aligned with PatternCategory."""
 
     VIOLENCE = "violence"

@@ -6,7 +6,7 @@ Strongly-typed IDs, enums, and utility functions used across all modules.
 from __future__ import annotations
 
 import time
-from enum import Enum
+from enum import StrEnum
 from typing import NewType
 from uuid import uuid4
 
@@ -36,7 +36,7 @@ def generate_id() -> str:
 # ── Enums ───────────────────────────────────────────────────────────────────
 
 
-class ConceptCategory(Enum):
+class ConceptCategory(StrEnum):
     """Categories for brain concepts."""
 
     FACT = "fact"
@@ -48,7 +48,7 @@ class ConceptCategory(Enum):
     RELATIONSHIP = "relationship"
 
 
-class RelationType(Enum):
+class RelationType(StrEnum):
     """Types of relations between concepts."""
 
     RELATED_TO = "related_to"
@@ -60,7 +60,7 @@ class RelationType(Enum):
     EMOTIONAL = "emotional"
 
 
-class ChannelType(Enum):
+class ChannelType(StrEnum):
     """Communication channel types."""
 
     TELEGRAM = "telegram"
@@ -71,7 +71,7 @@ class ChannelType(Enum):
     DASHBOARD = "dashboard"
 
 
-class CognitivePhase(Enum):
+class CognitivePhase(StrEnum):
     """Cognitive loop phases.
 
     The canonical enum for all cognitive states. TASK-029's
@@ -91,7 +91,7 @@ class CognitivePhase(Enum):
     DREAMING = "dreaming"
 
 
-class PerceptionType(Enum):
+class PerceptionType(StrEnum):
     """Types of perceptions entering the cognitive loop."""
 
     USER_MESSAGE = "user_message"

@@ -23,14 +23,14 @@ import asyncio
 import dataclasses
 import shutil
 from abc import ABC, abstractmethod
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 # ── Data types ──────────────────────────────────────────────────────────────
 
 
-class CheckStatus(Enum):
+class CheckStatus(StrEnum):
     """Health check status levels."""
 
     GREEN = "green"

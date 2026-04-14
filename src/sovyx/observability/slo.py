@@ -29,7 +29,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
@@ -43,7 +43,7 @@ logger = get_logger(__name__)
 # ── Enums ───────────────────────────────────────────────────────────────────
 
 
-class SLOStatus(Enum):
+class SLOStatus(StrEnum):
     """Current SLO health status."""
 
     MET = "met"
@@ -51,7 +51,7 @@ class SLOStatus(Enum):
     BREACHED = "breached"
 
 
-class AlertSeverity(Enum):
+class AlertSeverity(StrEnum):
     """Alert severity based on burn rate (Google SRE multi-window)."""
 
     NONE = "none"

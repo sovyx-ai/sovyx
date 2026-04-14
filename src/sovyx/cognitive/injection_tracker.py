@@ -24,7 +24,7 @@ import re
 import time
 from collections import deque
 from dataclasses import dataclass
-from enum import Enum, unique
+from enum import StrEnum, unique
 
 from sovyx.observability.logging import get_logger
 
@@ -42,7 +42,7 @@ MAX_CONVERSATIONS = 10_000  # Prevent unbounded memory growth
 
 
 @unique
-class InjectionVerdict(Enum):
+class InjectionVerdict(StrEnum):
     """Result of multi-turn injection analysis."""
 
     SAFE = "safe"

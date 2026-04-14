@@ -13,7 +13,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from dataclasses import dataclass
-from enum import Enum, unique
+from enum import StrEnum, unique
 
 from sovyx.observability.logging import get_logger
 
@@ -34,7 +34,7 @@ COOLDOWN_SEC = 900  # 15 min — reset after no blocks
 
 
 @unique
-class EscalationLevel(Enum):
+class EscalationLevel(StrEnum):
     """Current escalation state for a source."""
 
     NONE = "none"

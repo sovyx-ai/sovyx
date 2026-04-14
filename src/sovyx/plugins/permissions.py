@@ -21,7 +21,7 @@ logger = get_logger(__name__)
 # ── Permission Enum ─────────────────────────────────────────────────
 
 
-class Permission(enum.Enum):
+class Permission(enum.StrEnum):
     """Capabilities a plugin can request.
 
     Each permission maps to a specific PluginContext access object.

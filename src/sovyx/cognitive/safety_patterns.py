@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from enum import Enum, unique
+from enum import StrEnum, unique
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
 
 @unique
-class PatternCategory(Enum):
+class PatternCategory(StrEnum):
     """Safety pattern categories for audit trail."""
 
     VIOLENCE = "violence"
@@ -49,7 +49,7 @@ class PatternCategory(Enum):
 
 
 @unique
-class FilterTier(Enum):
+class FilterTier(StrEnum):
     """Content filter tiers — each tier includes all lower tiers."""
 
     STANDARD = "standard"

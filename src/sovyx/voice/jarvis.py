@@ -19,7 +19,7 @@ import random
 import re
 from collections import deque
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
@@ -67,7 +67,7 @@ _TEXT_MIN_WORDS = 3
 # ---------------------------------------------------------------------------
 
 
-class FillerCategory(Enum):
+class FillerCategory(StrEnum):
     """Category of filler phrase (SUP-005 §1.2)."""
 
     THINKING = "thinking"
