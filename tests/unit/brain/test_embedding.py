@@ -695,7 +695,7 @@ class TestDownloadAndLoad:
         transport = httpx.MockTransport(mock_handler)
 
         with patch(
-            "sovyx.brain.embedding.httpx.AsyncClient",
+            "sovyx.brain._model_downloader.httpx.AsyncClient",
             return_value=httpx.AsyncClient(transport=transport),
         ):
             await ModelDownloader._download("http://example.com/model.onnx", dest)
@@ -721,7 +721,7 @@ class TestDownloadAndLoad:
         transport = httpx.MockTransport(mock_handler)
 
         with patch(
-            "sovyx.brain.embedding.httpx.AsyncClient",
+            "sovyx.brain._model_downloader.httpx.AsyncClient",
             return_value=httpx.AsyncClient(transport=transport),
         ):
             await ModelDownloader._download(
@@ -747,9 +747,13 @@ class TestDownloadAndLoad:
         mock_tok_mod = MagicMock()
         mock_tok_mod.Tokenizer.from_file.return_value = mock_tok
 
-        with patch.dict(
-            "sys.modules",
-            {"onnxruntime": mock_ort_mod, "tokenizers": mock_tok_mod},
+        # `ort` is bound at module import in embedding.py, so a
+        # sys.modules patch can't intercept it — patch the module
+        # attribute directly. `tokenizers` is imported locally inside
+        # _load_model, so sys.modules still works for it.
+        with (
+            patch("sovyx.brain.embedding.ort", mock_ort_mod),
+            patch.dict("sys.modules", {"tokenizers": mock_tok_mod}),
         ):
             engine._load_model(tmp_path / "model.onnx", tmp_path / "tok.json")
 

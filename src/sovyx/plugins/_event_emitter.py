@@ -12,7 +12,7 @@ import asyncio
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover
-    from sovyx.engine.events import EventBus
+    from sovyx.engine.events import Event, EventBus
     from sovyx.plugins._manager_types import _PluginHealth
 
 
@@ -28,7 +28,7 @@ class PluginEventEmitter:
     def __init__(self, event_bus: EventBus | None) -> None:
         self._event_bus = event_bus
 
-    def _fire(self, event: object) -> None:
+    def _fire(self, event: Event) -> None:
         if self._event_bus is None:
             return
         try:

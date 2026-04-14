@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
-    from sovyx.voice.audio import AudioChunk
+    from sovyx.voice.tts_piper import AudioChunk
 
 logger = get_logger(__name__)
 

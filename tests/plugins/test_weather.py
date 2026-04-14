@@ -300,7 +300,10 @@ class TestGeocode:
 
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(return_value=mock_resp)
+            # SandboxedHttpClient wraps httpx.AsyncClient and calls
+            # ._client.request(method, url, ...) — not .get — so the mock
+            # must intercept .request, not .get.
+            mock_client.request = AsyncMock(return_value=mock_resp)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
             MockClient.return_value = mock_client
@@ -319,7 +322,10 @@ class TestGeocode:
 
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(return_value=mock_resp)
+            # SandboxedHttpClient wraps httpx.AsyncClient and calls
+            # ._client.request(method, url, ...) — not .get — so the mock
+            # must intercept .request, not .get.
+            mock_client.request = AsyncMock(return_value=mock_resp)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
             MockClient.return_value = mock_client
@@ -334,7 +340,10 @@ class TestGeocode:
 
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(return_value=mock_resp)
+            # SandboxedHttpClient wraps httpx.AsyncClient and calls
+            # ._client.request(method, url, ...) — not .get — so the mock
+            # must intercept .request, not .get.
+            mock_client.request = AsyncMock(return_value=mock_resp)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
             MockClient.return_value = mock_client
@@ -346,7 +355,7 @@ class TestGeocode:
     async def test_exception(self) -> None:
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(side_effect=Exception("network"))
+            mock_client.request = AsyncMock(side_effect=Exception("network"))
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
             MockClient.return_value = mock_client
@@ -363,7 +372,10 @@ class TestGeocode:
 
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(return_value=mock_resp)
+            # SandboxedHttpClient wraps httpx.AsyncClient and calls
+            # ._client.request(method, url, ...) — not .get — so the mock
+            # must intercept .request, not .get.
+            mock_client.request = AsyncMock(return_value=mock_resp)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
             MockClient.return_value = mock_client
@@ -384,7 +396,10 @@ class TestFetchWeather:
 
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(return_value=mock_resp)
+            # SandboxedHttpClient wraps httpx.AsyncClient and calls
+            # ._client.request(method, url, ...) — not .get — so the mock
+            # must intercept .request, not .get.
+            mock_client.request = AsyncMock(return_value=mock_resp)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
             MockClient.return_value = mock_client
@@ -400,7 +415,10 @@ class TestFetchWeather:
 
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(return_value=mock_resp)
+            # SandboxedHttpClient wraps httpx.AsyncClient and calls
+            # ._client.request(method, url, ...) — not .get — so the mock
+            # must intercept .request, not .get.
+            mock_client.request = AsyncMock(return_value=mock_resp)
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
             MockClient.return_value = mock_client
@@ -412,7 +430,7 @@ class TestFetchWeather:
     async def test_exception(self) -> None:
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(side_effect=Exception("timeout"))
+            mock_client.request = AsyncMock(side_effect=Exception("timeout"))
             mock_client.__aenter__ = AsyncMock(return_value=mock_client)
             mock_client.__aexit__ = AsyncMock(return_value=False)
             MockClient.return_value = mock_client

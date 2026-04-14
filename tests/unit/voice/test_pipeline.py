@@ -16,10 +16,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import numpy as np
 import pytest
 
-# Patch site for _play_audio: the function lives in pipeline._output_queue
-# now (after the god-file split). AudioOutputQueue calls it from there, so
-# `patch.object(_pipeline_mod, "_play_audio", ...)` must target that module.
-from sovyx.voice.pipeline import _output_queue as _pipeline_mod
 from sovyx.voice.pipeline import (
     AudioOutputQueue,
     BargeInDetector,
@@ -37,6 +33,11 @@ from sovyx.voice.pipeline import (
     split_at_boundaries,
     validate_config,
 )
+
+# Patch site for _play_audio: the function lives in pipeline._output_queue
+# now (after the god-file split). AudioOutputQueue calls it from there, so
+# `patch.object(_pipeline_mod, "_play_audio", ...)` must target that module.
+from sovyx.voice.pipeline import _output_queue as _pipeline_mod
 from sovyx.voice.tts_piper import AudioChunk
 from sovyx.voice.vad import VADEvent, VADState
 

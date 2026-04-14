@@ -156,7 +156,8 @@ class TestReadConnections:
         assert conns[0] is not conns[1]
 
     async def test_concurrent_read_index_is_locked(
-        self, pool: DatabasePool,
+        self,
+        pool: DatabasePool,
     ) -> None:
         """Under contention, _read_index must still advance by exactly N.
 

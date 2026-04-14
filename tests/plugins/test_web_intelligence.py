@@ -404,9 +404,10 @@ class TestSearXNGBackend:
 
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(return_value=mock_resp)
-            MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            # SandboxedHttpClient routes through ._client.request(...)
+            mock_client.request = AsyncMock(return_value=mock_resp)
+            mock_client.aclose = AsyncMock()
+            MockClient.return_value = mock_client
 
             results = await backend.search_text("python", 5)
 
@@ -432,9 +433,10 @@ class TestSearXNGBackend:
 
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(return_value=mock_resp)
-            MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            # SandboxedHttpClient routes through ._client.request(...)
+            mock_client.request = AsyncMock(return_value=mock_resp)
+            mock_client.aclose = AsyncMock()
+            MockClient.return_value = mock_client
 
             results = await backend.search_news("news", 5)
 
@@ -450,9 +452,10 @@ class TestSearXNGBackend:
 
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(return_value=mock_resp)
-            MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            # SandboxedHttpClient routes through ._client.request(...)
+            mock_client.request = AsyncMock(return_value=mock_resp)
+            mock_client.aclose = AsyncMock()
+            MockClient.return_value = mock_client
 
             results = await backend.search_text("test", 5)
 
@@ -464,9 +467,9 @@ class TestSearXNGBackend:
 
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(side_effect=Exception("connection refused"))
-            MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_client.request = AsyncMock(side_effect=Exception("connection refused"))
+            mock_client.aclose = AsyncMock()
+            MockClient.return_value = mock_client
 
             results = await backend.search_text("test", 5)
 
@@ -486,9 +489,10 @@ class TestSearXNGBackend:
 
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(return_value=mock_resp)
-            MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            # SandboxedHttpClient routes through ._client.request(...)
+            mock_client.request = AsyncMock(return_value=mock_resp)
+            mock_client.aclose = AsyncMock()
+            MockClient.return_value = mock_client
 
             results = await backend.search_text("test", 3)
 
@@ -520,16 +524,18 @@ class TestBraveBackend:
 
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(return_value=mock_resp)
-            MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            # SandboxedHttpClient routes through ._client.request(...)
+            mock_client.request = AsyncMock(return_value=mock_resp)
+            mock_client.aclose = AsyncMock()
+            MockClient.return_value = mock_client
 
             results = await backend.search_text("test", 5)
 
         assert len(results) == 1
         assert results[0].title == "Example"
-        # Verify API key was sent
-        call_kwargs = mock_client.get.call_args
+        # Verify API key was sent. SandboxedHttpClient calls the
+        # underlying httpx client via .request("GET", url, headers=..., ...)
+        call_kwargs = mock_client.request.call_args
         assert call_kwargs[1]["headers"]["X-Subscription-Token"] == "test-api-key"
 
     @pytest.mark.anyio()
@@ -552,9 +558,10 @@ class TestBraveBackend:
 
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(return_value=mock_resp)
-            MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            # SandboxedHttpClient routes through ._client.request(...)
+            mock_client.request = AsyncMock(return_value=mock_resp)
+            mock_client.aclose = AsyncMock()
+            MockClient.return_value = mock_client
 
             results = await backend.search_news("news", 5)
 
@@ -569,9 +576,10 @@ class TestBraveBackend:
 
         with patch("httpx.AsyncClient") as MockClient:
             mock_client = AsyncMock()
-            mock_client.get = AsyncMock(return_value=mock_resp)
-            MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+            # SandboxedHttpClient routes through ._client.request(...)
+            mock_client.request = AsyncMock(return_value=mock_resp)
+            mock_client.aclose = AsyncMock()
+            MockClient.return_value = mock_client
 
             results = await backend.search_text("test", 5)
 

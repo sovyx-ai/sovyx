@@ -29,7 +29,13 @@ class TestDocsStructure:
 
     @pytest.mark.parametrize(
         "page",
-        ["index.md", "quickstart.md", "api.md", "voice.md", "plugins.md"],
+        [
+            "getting-started.md",
+            "architecture.md",
+            "api-reference.md",
+            "configuration.md",
+            "security.md",
+        ],
     )
     def test_key_pages_exist(self, page: str) -> None:
         """Key doc pages must exist in docs/."""
