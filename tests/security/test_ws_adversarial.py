@@ -6,23 +6,18 @@ rapid reconnects, and protocol violations.
 
 from __future__ import annotations
 
-from unittest.mock import patch
-
 import pytest
 from starlette.testclient import TestClient
 
 from sovyx.dashboard.server import create_app
 from sovyx.engine.config import APIConfig
 
-_TOKEN = "ws-adv-token"
+_TOKEN = "test-token-fixo"
 
 
 @pytest.fixture()
 def app() -> object:
-    with patch("sovyx.dashboard.server.TOKEN_FILE") as mock_tf:
-        mock_tf.exists.return_value = True
-        mock_tf.read_text.return_value = _TOKEN
-        return create_app(APIConfig(host="127.0.0.1", port=0))
+    return create_app(APIConfig(host="127.0.0.1", port=0), token=_TOKEN)
 
 
 @pytest.fixture()

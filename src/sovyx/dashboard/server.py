@@ -204,14 +204,15 @@ def _empty_stats_month() -> dict[str, object]:
     return {"cost": 0.0, "messages": 0, "llm_calls": 0, "tokens": 0}
 
 
-def create_app(config: APIConfig | None = None) -> FastAPI:
+def create_app(config: APIConfig | None = None, *, token: str | None = None) -> FastAPI:
     """Create and configure the FastAPI application.
 
     Args:
         config: API configuration. Uses defaults if None.
+        token: Override auth token (tests). If None, reads/generates from TOKEN_FILE.
     """
     global _server_token  # noqa: PLW0603
-    _server_token = _ensure_token()
+    _server_token = token if token is not None else _ensure_token()
 
     app = FastAPI(
         title="Sovyx Dashboard",

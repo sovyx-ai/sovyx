@@ -6,8 +6,6 @@ Database is a fresh in-memory SQLite via DatabasePool.
 
 from __future__ import annotations
 
-from unittest.mock import patch
-
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -15,7 +13,7 @@ from sovyx.dashboard.server import create_app
 from sovyx.engine.config import APIConfig
 
 # Fixed test token
-_TOKEN = "test-token-val25"
+_TOKEN = "test-token-fixo"
 
 
 @pytest.fixture()
@@ -27,10 +25,7 @@ def api_config() -> APIConfig:
 @pytest.fixture()
 def app(api_config: APIConfig) -> object:
     """Create FastAPI app with test token."""
-    with patch("sovyx.dashboard.server.TOKEN_FILE") as mock_tf:
-        mock_tf.exists.return_value = True
-        mock_tf.read_text.return_value = _TOKEN
-        return create_app(api_config)
+    return create_app(api_config, token=_TOKEN)
 
 
 @pytest.fixture()
@@ -192,12 +187,9 @@ def app_with_mind(api_config: APIConfig) -> object:
     """Create FastAPI app with mind_config wired."""
     from sovyx.mind.config import MindConfig
 
-    with patch("sovyx.dashboard.server.TOKEN_FILE") as mock_tf:
-        mock_tf.exists.return_value = True
-        mock_tf.read_text.return_value = _TOKEN
-        fa = create_app(api_config)
-        fa.state.mind_config = MindConfig(name="TestMind")  # type: ignore[union-attr]
-        return fa
+    fa = create_app(api_config, token=_TOKEN)
+    fa.state.mind_config = MindConfig(name="TestMind")  # type: ignore[union-attr]
+    return fa
 
 
 @pytest.fixture()

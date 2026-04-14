@@ -10,15 +10,13 @@ these tests validate the defense-in-depth posture.
 
 from __future__ import annotations
 
-from unittest.mock import patch
-
 import pytest
 from starlette.testclient import TestClient
 
 from sovyx.dashboard.server import create_app
 from sovyx.engine.config import APIConfig
 
-_TOKEN = "sql-injection-test-token"
+_TOKEN = "test-token-fixo"
 
 # ── Classic SQL injection payloads ──────────────────────────────────────────
 
@@ -65,11 +63,8 @@ LEVEL_PAYLOADS = [
 
 @pytest.fixture()
 def client() -> TestClient:
-    with patch("sovyx.dashboard.server.TOKEN_FILE") as mock_tf:
-        mock_tf.exists.return_value = True
-        mock_tf.read_text.return_value = _TOKEN
-        app = create_app(APIConfig(host="127.0.0.1", port=0))
-        return TestClient(app)
+    app = create_app(APIConfig(host="127.0.0.1", port=0), token=_TOKEN)
+    return TestClient(app)
 
 
 def _auth_headers() -> dict[str, str]:

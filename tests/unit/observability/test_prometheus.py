@@ -7,8 +7,6 @@ label correctness, and edge cases.
 from __future__ import annotations
 
 import math
-import secrets
-from unittest.mock import patch
 
 import pytest
 from hypothesis import HealthCheck, given, settings
@@ -510,14 +508,11 @@ class TestPrometheusProperties:
 def _make_client(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> tuple[TestClient, dict[str, str]]:
-    """Create test client with patched token."""
-    tmp = tmp_path_factory.mktemp("test")
-    token = secrets.token_urlsafe(32)
-    (tmp / "token").write_text(token)
-    with patch("sovyx.dashboard.server.TOKEN_FILE", tmp / "token"):
-        from sovyx.dashboard.server import create_app
+    """Create test client with fixed token."""
+    token = "test-token-fixo"
+    from sovyx.dashboard.server import create_app
 
-        app = create_app()
+    app = create_app(token=token)
     return TestClient(app), {"Authorization": f"Bearer {token}"}
 
 
@@ -542,18 +537,13 @@ class TestMetricsEndpoint:
         assert "No metrics" in resp.text
 
     def test_with_reader_returns_metrics(self, tmp_path_factory: pytest.TempPathFactory) -> None:
-        tmp = tmp_path_factory.mktemp("test_reader")
-        token = secrets.token_urlsafe(32)
-        (tmp / "token").write_text(token)
-
         reader = InMemoryMetricReader()
         registry = setup_metrics(readers=[reader])
 
         try:
-            with patch("sovyx.dashboard.server.TOKEN_FILE", tmp / "token"):
-                from sovyx.dashboard.server import create_app
+            from sovyx.dashboard.server import create_app
 
-                app = create_app()
+            app = create_app(token="test-token-fixo")
 
             app.state.metrics_reader = reader
 

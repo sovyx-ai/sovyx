@@ -96,6 +96,11 @@ tests/
 5. **Dashboard `EngineConfig` from registry:** Dashboard resolves config from `ServiceRegistry`, not by instantiating a new `EngineConfig()`.
 6. **httpx logs:** Suppressed to WARNING in `setup_logging()`. If you see raw HTTP lines in console, `setup_logging()` wasn't called.
 7. **Dashboard frontend:** `LogEntry` has 4 required fields: `timestamp`, `level`, `logger`, `event`. Backend normalizes (`ts→timestamp`, `severity→level`, `message→event`, `module→logger`).
+8. **xdist class identity:** pytest-xdist can reimport modules, creating duplicate classes. Never use `pytest.raises(InternalClass)` directly — use `pytest.raises(Exception)` + assert on class name. Never use `isinstance()` for exception dispatch in production code — use `type(exc).__name__`.
+9. **Enums are StrEnum:** All enums with string values MUST inherit from `StrEnum`, never plain `Enum`. Guarantees value-based comparison, immune to xdist namespace duplication.
+10. **Auth in tests:** Use `create_app(token="...")` for tests. Never monkeypatch `_ensure_token` or set `_server_token` global. The `token` parameter bypasses all filesystem and global state.
+11. **patch string path:** Never use `patch("sovyx.module.function")` — use `patch.object(imported_module, "function")`. String paths resolve to different module objects under xdist.
+12. **Defense-in-depth in tests:** If a fix works, remove the workaround. If you need 3 layers to make a test pass, you don't understand which one works. One layer, understood, is better than three layers, mysterious.
 
 ## Testing Patterns
 
@@ -130,7 +135,37 @@ from hypothesis import strategies as st
 @given(level=st.sampled_from(["DEBUG", "INFO", "WARNING", "ERROR"]))
 @settings(max_examples=20)
 def test_any_valid_level(self, level: str) -> None: ...
+
+# Auth in dashboard/API tests — use token parameter, never monkeypatch
+_TOKEN = "test-token-fixo"
+
+@pytest.fixture()
+def app() -> FastAPI:
+    return create_app(token=_TOKEN)
+
+@pytest.fixture()
+def client(app: FastAPI) -> TestClient:
+    return TestClient(app, headers={"Authorization": f"Bearer {_TOKEN}"})
+
+# Exception assertions — xdist-safe, never pytest.raises(InternalException)
+with pytest.raises(Exception) as exc_info:
+    do_something_that_raises()
+assert type(exc_info.value).__name__ == "LLMError"
+assert "expected message" in str(exc_info.value)
 ```
+
+## Debugging Rules
+
+When investigating bugs:
+1. **Audit first** — before fixing anything, grep the full codebase for ALL instances of the same pattern. Map the size of the problem before solving any single instance.
+2. **Group by root cause** — if 28 tests fail, find out how many distinct root causes exist. Fix causes, not symptoms.
+3. **Don't band-aid** — understand the root cause. If you can't explain WHY a fix works, it's not ready.
+4. **One commit per root cause** — all fixes for the same root cause go in one commit. No partial pushes to CI for incremental testing.
+5. **No shotgun debugging** — if you're setting the same value in 3 places hoping one sticks, stop and trace the actual read path.
+6. **Local suite before push** — run the full affected test suite locally before pushing to CI. Each CI round-trip wastes minutes and fragments reasoning.
+7. **Check the full chain** — a config bug might affect CLI, dashboard, and API.
+8. **Write regression tests** — the bug must never recur.
+9. **If you're in the third fix→push→CI-fail cycle for the same problem, STOP** — the approach is wrong. Step back, reassess the strategy.
 
 ## Deploy Flow
 
@@ -149,13 +184,14 @@ When given a task:
 5. **Run ALL quality gates** — ruff, mypy, bandit, pytest, vitest, tsc
 6. **Commit with conventional message** — descriptive body explaining WHY
 
-When investigating bugs:
-1. **Don't band-aid** — understand the root cause
-2. **Check the full chain** — a config bug might affect CLI, dashboard, and API
-3. **Write regression tests** — the bug must never recur
+When modifying tests:
+1. **Never introduce workarounds** — if a test needs patching to pass, the production code might need a better interface (e.g., `create_app(token=...)` instead of monkeypatching globals)
+2. **Prefer explicit parameters over mocking** — dependency injection beats monkeypatch
+3. **One assertion pattern** — use the xdist-safe patterns documented above consistently
+4. **Remove dead code** — if a fix makes a workaround unnecessary, delete the workaround in the same commit
 
 ## Deep Reference
 - Architecture + decisions: `docs/SOVYX-BIBLE.md`
 - Backend specs: search for SPE/IMPL files in the repo
-- Frontend types: `dashboard/src/types/api.ts`
 - Code patterns: look at existing tests for real examples
+- Frontend types: `dashboard/src/types/api.ts`

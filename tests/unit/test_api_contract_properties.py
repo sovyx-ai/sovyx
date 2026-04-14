@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import secrets
-from unittest.mock import patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -11,15 +10,12 @@ from httpx import ASGITransport, AsyncClient
 from sovyx.dashboard.server import create_app
 from sovyx.engine.config import APIConfig
 
-_TOKEN = "contract-test"
+_TOKEN = "test-token-fixo"
 
 
 @pytest.fixture()
 async def client() -> AsyncClient:
-    with patch("sovyx.dashboard.server.TOKEN_FILE") as mock_tf:
-        mock_tf.exists.return_value = True
-        mock_tf.read_text.return_value = _TOKEN
-        app = create_app(APIConfig(host="127.0.0.1", port=0))
+    app = create_app(APIConfig(host="127.0.0.1", port=0), token=_TOKEN)
     transport = ASGITransport(app=app)  # type: ignore[arg-type]
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c  # type: ignore[misc]
