@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from sovyx.plugins.official import weather as _weather_mod  # anti-pattern #11
 from sovyx.plugins.official.weather import (
     _RAIN_CODES,
     _WMO_CODES,
@@ -78,13 +79,15 @@ class TestGetWeather:
     async def test_success(self) -> None:
         p = WeatherPlugin()
         with (
-            patch(
-                "sovyx.plugins.official.weather._geocode",
+            patch.object(
+                _weather_mod,
+                "_geocode",
                 new_callable=AsyncMock,
                 return_value=(52.52, 13.41, "Berlin, Germany"),
             ),
-            patch(
-                "sovyx.plugins.official.weather._fetch_weather",
+            patch.object(
+                _weather_mod,
+                "_fetch_weather",
                 new_callable=AsyncMock,
                 return_value=_mock_weather_response(),
             ),
@@ -98,8 +101,9 @@ class TestGetWeather:
     @pytest.mark.anyio()
     async def test_city_not_found(self) -> None:
         p = WeatherPlugin()
-        with patch(
-            "sovyx.plugins.official.weather._geocode",
+        with patch.object(
+            _weather_mod,
+            "_geocode",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -110,13 +114,15 @@ class TestGetWeather:
     async def test_api_error(self) -> None:
         p = WeatherPlugin()
         with (
-            patch(
-                "sovyx.plugins.official.weather._geocode",
+            patch.object(
+                _weather_mod,
+                "_geocode",
                 new_callable=AsyncMock,
                 return_value=(0, 0, "X"),
             ),
-            patch(
-                "sovyx.plugins.official.weather._fetch_weather",
+            patch.object(
+                _weather_mod,
+                "_fetch_weather",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
@@ -132,13 +138,15 @@ class TestGetForecast:
     async def test_3_day_forecast(self) -> None:
         p = WeatherPlugin()
         with (
-            patch(
-                "sovyx.plugins.official.weather._geocode",
+            patch.object(
+                _weather_mod,
+                "_geocode",
                 new_callable=AsyncMock,
                 return_value=(52.52, 13.41, "Berlin, Germany"),
             ),
-            patch(
-                "sovyx.plugins.official.weather._fetch_weather",
+            patch.object(
+                _weather_mod,
+                "_fetch_weather",
                 new_callable=AsyncMock,
                 return_value=_mock_weather_response(forecast_days=3),
             ),
@@ -154,13 +162,15 @@ class TestGetForecast:
         """Days clamped to 1-7 range."""
         p = WeatherPlugin()
         with (
-            patch(
-                "sovyx.plugins.official.weather._geocode",
+            patch.object(
+                _weather_mod,
+                "_geocode",
                 new_callable=AsyncMock,
                 return_value=(0, 0, "X"),
             ),
-            patch(
-                "sovyx.plugins.official.weather._fetch_weather",
+            patch.object(
+                _weather_mod,
+                "_fetch_weather",
                 new_callable=AsyncMock,
                 return_value=_mock_weather_response(forecast_days=7),
             ),
@@ -171,8 +181,9 @@ class TestGetForecast:
     @pytest.mark.anyio()
     async def test_forecast_city_not_found(self) -> None:
         p = WeatherPlugin()
-        with patch(
-            "sovyx.plugins.official.weather._geocode",
+        with patch.object(
+            _weather_mod,
+            "_geocode",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -183,13 +194,15 @@ class TestGetForecast:
     async def test_forecast_api_error(self) -> None:
         p = WeatherPlugin()
         with (
-            patch(
-                "sovyx.plugins.official.weather._geocode",
+            patch.object(
+                _weather_mod,
+                "_geocode",
                 new_callable=AsyncMock,
                 return_value=(0, 0, "X"),
             ),
-            patch(
-                "sovyx.plugins.official.weather._fetch_weather",
+            patch.object(
+                _weather_mod,
+                "_fetch_weather",
                 new_callable=AsyncMock,
                 return_value=None,
             ),
@@ -205,13 +218,15 @@ class TestWillItRain:
     async def test_no_rain(self) -> None:
         p = WeatherPlugin()
         with (
-            patch(
-                "sovyx.plugins.official.weather._geocode",
+            patch.object(
+                _weather_mod,
+                "_geocode",
                 new_callable=AsyncMock,
                 return_value=(0, 0, "SP, Brazil"),
             ),
-            patch(
-                "sovyx.plugins.official.weather._fetch_weather",
+            patch.object(
+                _weather_mod,
+                "_fetch_weather",
                 new_callable=AsyncMock,
                 return_value=_mock_weather_response(code=0, forecast_days=2),
             ),
@@ -223,13 +238,15 @@ class TestWillItRain:
     async def test_rain_expected(self) -> None:
         p = WeatherPlugin()
         with (
-            patch(
-                "sovyx.plugins.official.weather._geocode",
+            patch.object(
+                _weather_mod,
+                "_geocode",
                 new_callable=AsyncMock,
                 return_value=(0, 0, "London, UK"),
             ),
-            patch(
-                "sovyx.plugins.official.weather._fetch_weather",
+            patch.object(
+                _weather_mod,
+                "_fetch_weather",
                 new_callable=AsyncMock,
                 return_value=_mock_weather_response(code=63, forecast_days=2),
             ),
@@ -241,8 +258,9 @@ class TestWillItRain:
     @pytest.mark.anyio()
     async def test_rain_city_not_found(self) -> None:
         p = WeatherPlugin()
-        with patch(
-            "sovyx.plugins.official.weather._geocode",
+        with patch.object(
+            _weather_mod,
+            "_geocode",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -253,13 +271,15 @@ class TestWillItRain:
     async def test_rain_api_error(self) -> None:
         p = WeatherPlugin()
         with (
-            patch(
-                "sovyx.plugins.official.weather._geocode",
+            patch.object(
+                _weather_mod,
+                "_geocode",
                 new_callable=AsyncMock,
                 return_value=(0, 0, "X"),
             ),
-            patch(
-                "sovyx.plugins.official.weather._fetch_weather",
+            patch.object(
+                _weather_mod,
+                "_fetch_weather",
                 new_callable=AsyncMock,
                 return_value=None,
             ),

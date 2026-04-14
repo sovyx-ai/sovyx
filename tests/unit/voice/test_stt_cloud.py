@@ -18,6 +18,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
+from sovyx.voice import stt_cloud as _stt_mod  # for patch.object (anti-pattern #11)
 from sovyx.voice.stt import (
     PartialTranscription,
     STTState,
@@ -283,7 +284,7 @@ class TestCloudSTTLifecycle:
 
     @pytest.mark.asyncio()
     async def test_initialize_ready(self, config: CloudSTTConfig) -> None:
-        with patch("sovyx.voice.stt_cloud.httpx") as mock_httpx:
+        with patch.object(_stt_mod, "httpx") as mock_httpx:
             mock_httpx.AsyncClient.return_value = AsyncMock()
             mock_httpx.Timeout.return_value = MagicMock()
             engine = CloudSTT(config)
@@ -293,7 +294,7 @@ class TestCloudSTTLifecycle:
 
     @pytest.mark.asyncio()
     async def test_initialize_idempotent(self, config: CloudSTTConfig) -> None:
-        with patch("sovyx.voice.stt_cloud.httpx") as mock_httpx:
+        with patch.object(_stt_mod, "httpx") as mock_httpx:
             mock_httpx.AsyncClient.return_value = AsyncMock()
             mock_httpx.Timeout.return_value = MagicMock()
             engine = CloudSTT(config)
@@ -310,7 +311,7 @@ class TestCloudSTTLifecycle:
 
     @pytest.mark.asyncio()
     async def test_initialize_after_close(self, config: CloudSTTConfig) -> None:
-        with patch("sovyx.voice.stt_cloud.httpx") as mock_httpx:
+        with patch.object(_stt_mod, "httpx") as mock_httpx:
             mock_httpx.AsyncClient.return_value = AsyncMock()
             mock_httpx.Timeout.return_value = MagicMock()
             engine = CloudSTT(config)
@@ -321,7 +322,7 @@ class TestCloudSTTLifecycle:
 
     @pytest.mark.asyncio()
     async def test_close_sets_state(self, config: CloudSTTConfig) -> None:
-        with patch("sovyx.voice.stt_cloud.httpx") as mock_httpx:
+        with patch.object(_stt_mod, "httpx") as mock_httpx:
             mock_httpx.AsyncClient.return_value = AsyncMock()
             mock_httpx.Timeout.return_value = MagicMock()
             engine = CloudSTT(config)
@@ -347,7 +348,7 @@ class TestCloudSTTLifecycle:
     async def test_transcribe_after_close(
         self, config: CloudSTTConfig, audio_1s: np.ndarray
     ) -> None:
-        with patch("sovyx.voice.stt_cloud.httpx") as mock_httpx:
+        with patch.object(_stt_mod, "httpx") as mock_httpx:
             mock_httpx.AsyncClient.return_value = AsyncMock()
             mock_httpx.Timeout.return_value = MagicMock()
             engine = CloudSTT(config)
@@ -376,7 +377,7 @@ class TestCloudSTTTranscribe:
         mock_client = AsyncMock()
         mock_client.post.return_value = mock_response
 
-        with patch("sovyx.voice.stt_cloud.httpx") as mock_httpx:
+        with patch.object(_stt_mod, "httpx") as mock_httpx:
             mock_httpx.AsyncClient.return_value = mock_client
             mock_httpx.Timeout.return_value = MagicMock()
             engine = CloudSTT(config)
@@ -403,7 +404,7 @@ class TestCloudSTTTranscribe:
         mock_client = AsyncMock()
         mock_client.post.return_value = mock_response
 
-        with patch("sovyx.voice.stt_cloud.httpx") as mock_httpx:
+        with patch.object(_stt_mod, "httpx") as mock_httpx:
             mock_httpx.AsyncClient.return_value = mock_client
             mock_httpx.Timeout.return_value = MagicMock()
             engine = CloudSTT(config)
@@ -427,7 +428,7 @@ class TestCloudSTTTranscribe:
         mock_client = AsyncMock()
         mock_client.post.return_value = mock_response
 
-        with patch("sovyx.voice.stt_cloud.httpx") as mock_httpx:
+        with patch.object(_stt_mod, "httpx") as mock_httpx:
             mock_httpx.AsyncClient.return_value = mock_client
             mock_httpx.Timeout.return_value = MagicMock()
             engine = CloudSTT(config)
@@ -445,7 +446,7 @@ class TestCloudSTTTranscribe:
         mock_client = AsyncMock()
         mock_client.post.side_effect = ConnectionError("Network down")
 
-        with patch("sovyx.voice.stt_cloud.httpx") as mock_httpx:
+        with patch.object(_stt_mod, "httpx") as mock_httpx:
             mock_httpx.AsyncClient.return_value = mock_client
             mock_httpx.Timeout.return_value = MagicMock()
             engine = CloudSTT(config)
@@ -467,7 +468,7 @@ class TestCloudSTTTranscribe:
         mock_client = AsyncMock()
         mock_client.post.return_value = mock_response
 
-        with patch("sovyx.voice.stt_cloud.httpx") as mock_httpx:
+        with patch.object(_stt_mod, "httpx") as mock_httpx:
             mock_httpx.AsyncClient.return_value = mock_client
             mock_httpx.Timeout.return_value = MagicMock()
             engine = CloudSTT(config)
@@ -489,7 +490,7 @@ class TestCloudSTTTranscribe:
         mock_client = AsyncMock()
         mock_client.post.return_value = mock_response
 
-        with patch("sovyx.voice.stt_cloud.httpx") as mock_httpx:
+        with patch.object(_stt_mod, "httpx") as mock_httpx:
             mock_httpx.AsyncClient.return_value = mock_client
             mock_httpx.Timeout.return_value = MagicMock()
             engine = CloudSTT(config)
@@ -507,7 +508,7 @@ class TestCloudSTTTranscribe:
         long_audio = np.zeros(samples, dtype=np.float32)
 
         mock_client = AsyncMock()
-        with patch("sovyx.voice.stt_cloud.httpx") as mock_httpx:
+        with patch.object(_stt_mod, "httpx") as mock_httpx:
             mock_httpx.AsyncClient.return_value = mock_client
             mock_httpx.Timeout.return_value = MagicMock()
             engine = CloudSTT(config)
@@ -527,7 +528,7 @@ class TestCloudSTTTranscribe:
         mock_client = AsyncMock()
         mock_client.post.return_value = mock_response
 
-        with patch("sovyx.voice.stt_cloud.httpx") as mock_httpx:
+        with patch.object(_stt_mod, "httpx") as mock_httpx:
             mock_httpx.AsyncClient.return_value = mock_client
             mock_httpx.Timeout.return_value = MagicMock()
             engine = CloudSTT(config)
@@ -547,7 +548,7 @@ class TestCloudSTTTranscribe:
         mock_client = AsyncMock()
         mock_client.post.return_value = mock_response
 
-        with patch("sovyx.voice.stt_cloud.httpx") as mock_httpx:
+        with patch.object(_stt_mod, "httpx") as mock_httpx:
             mock_httpx.AsyncClient.return_value = mock_client
             mock_httpx.Timeout.return_value = MagicMock()
             engine = CloudSTT(config)
@@ -569,7 +570,7 @@ class TestCloudSTTTranscribe:
         mock_client = AsyncMock()
         mock_client.post.return_value = mock_response
 
-        with patch("sovyx.voice.stt_cloud.httpx") as mock_httpx:
+        with patch.object(_stt_mod, "httpx") as mock_httpx:
             mock_httpx.AsyncClient.return_value = mock_client
             mock_httpx.Timeout.return_value = MagicMock()
             engine = CloudSTT(cfg)
@@ -594,7 +595,7 @@ class TestCloudSTTTranscribe:
         mock_client = AsyncMock()
         mock_client.post.return_value = mock_response
 
-        with patch("sovyx.voice.stt_cloud.httpx") as mock_httpx:
+        with patch.object(_stt_mod, "httpx") as mock_httpx:
             mock_httpx.AsyncClient.return_value = mock_client
             mock_httpx.Timeout.return_value = MagicMock()
             engine = CloudSTT(cfg)
@@ -617,7 +618,7 @@ class TestCloudSTTTranscribe:
         mock_client = AsyncMock()
         mock_client.post.return_value = mock_response
 
-        with patch("sovyx.voice.stt_cloud.httpx") as mock_httpx:
+        with patch.object(_stt_mod, "httpx") as mock_httpx:
             mock_httpx.AsyncClient.return_value = mock_client
             mock_httpx.Timeout.return_value = MagicMock()
             engine = CloudSTT(config)
@@ -636,7 +637,7 @@ class TestCloudSTTTranscribe:
         mock_client = AsyncMock()
         mock_client.post.side_effect = ConnectionError("fail")
 
-        with patch("sovyx.voice.stt_cloud.httpx") as mock_httpx:
+        with patch.object(_stt_mod, "httpx") as mock_httpx:
             mock_httpx.AsyncClient.return_value = mock_client
             mock_httpx.Timeout.return_value = MagicMock()
             engine = CloudSTT(config)
@@ -670,7 +671,7 @@ class TestCloudSTTStreaming:
             for _ in range(3):
                 yield np.zeros(1600, dtype=np.float32), 16000
 
-        with patch("sovyx.voice.stt_cloud.httpx") as mock_httpx:
+        with patch.object(_stt_mod, "httpx") as mock_httpx:
             mock_httpx.AsyncClient.return_value = mock_client
             mock_httpx.Timeout.return_value = MagicMock()
             engine = CloudSTT(config)
@@ -695,7 +696,7 @@ class TestCloudSTTStreaming:
             return
             yield  # type: ignore[misc]  # Make it an async generator
 
-        with patch("sovyx.voice.stt_cloud.httpx") as mock_httpx:
+        with patch.object(_stt_mod, "httpx") as mock_httpx:
             mock_httpx.AsyncClient.return_value = mock_client
             mock_httpx.Timeout.return_value = MagicMock()
             engine = CloudSTT(config)
@@ -724,7 +725,7 @@ class TestCloudSTTStreaming:
         async def audio_gen() -> AsyncIterator[tuple[np.ndarray, int]]:
             yield np.zeros(1600, dtype=np.float32), 16000
 
-        with patch("sovyx.voice.stt_cloud.httpx") as mock_httpx:
+        with patch.object(_stt_mod, "httpx") as mock_httpx:
             mock_httpx.AsyncClient.return_value = mock_client
             mock_httpx.Timeout.return_value = MagicMock()
             engine = CloudSTT(config)
