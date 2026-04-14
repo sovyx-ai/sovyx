@@ -5,22 +5,51 @@
  * Shows error message in dev mode, generic message in prod.
  * Uses i18n.t() directly (class components can't use hooks).
  *
+ * On `componentDidCatch` posts an error report to
+ * ``POST /api/telemetry/frontend-error`` so unhandled SPA crashes land
+ * in the same structlog stream as backend errors. Best-effort: the POST
+ * never throws, so a server-side failure cannot cascade into another
+ * ErrorBoundary render.
+ *
  * Ref: DASH-36, Architecture §7
  */
 
-import { Component, type ReactNode } from "react";
+import { Component, type ErrorInfo, type ReactNode } from "react";
 import { AlertTriangleIcon, RefreshCwIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import i18n from "@/lib/i18n";
+import { apiFetch } from "@/lib/api";
 
 interface Props {
   children: ReactNode;
   fallback?: ReactNode;
+  /** Skip telemetry POST (used by tests). */
+  disableTelemetry?: boolean;
 }
 
 interface State {
   hasError: boolean;
   error: Error | null;
+}
+
+function reportFrontendError(error: Error, info: ErrorInfo): void {
+  const payload = {
+    name: error.name,
+    message: error.message,
+    stack: error.stack?.slice(0, 4_000),
+    component_stack: info.componentStack?.slice(0, 4_000),
+    url: typeof window !== "undefined" ? window.location.href : undefined,
+    user_agent:
+      typeof navigator !== "undefined" ? navigator.userAgent : undefined,
+  };
+  // Fire-and-forget — swallow every error, including apiFetch failures.
+  apiFetch("/api/telemetry/frontend-error", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  }).catch(() => {
+    /* telemetry is best-effort */
+  });
 }
 
 export class ErrorBoundary extends Component<Props, State> {
@@ -31,6 +60,15 @@ export class ErrorBoundary extends Component<Props, State> {
 
   static getDerivedStateFromError(error: Error): State {
     return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    if (this.props.disableTelemetry) return;
+    try {
+      reportFrontendError(error, info);
+    } catch {
+      /* never let telemetry break the boundary */
+    }
   }
 
   handleRetry = () => {
