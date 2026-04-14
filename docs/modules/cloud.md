@@ -1,45 +1,31 @@
-# Módulo: cloud
+# Module: cloud
 
-## Objetivo
+## What it does
 
-Camada de monetização e serviços de nuvem do Sovyx: assinaturas Stripe com 6 tiers, licenciamento offline-capable via JWT Ed25519, backup criptografado para Cloudflare R2 (zero-knowledge), scheduler GFS (Grandfather-Father-Son), dunning para recuperação de falhas de pagamento, flex balance (pay-as-you-go), usage cascade e gerenciamento de API keys.
+`sovyx.cloud` is the monetization and managed-services layer: Stripe-backed subscriptions across six tiers, offline-capable licensing with JWT Ed25519, zero-knowledge backups to Cloudflare R2, GFS retention, dunning for failed payments, a flex balance for pay-as-you-go credits, usage cascade from allowance to flex, API key management, and a cloud-side LLM proxy.
 
-**Estado atual: ~64% completo.** Fundamentos prontos; Stripe Connect (marketplace) e experimentos de pricing não foram implementados.
+Every user-visible operation is local-first: the daemon works without any cloud services, and cloud features are unlocked by a signed license token that validates offline.
 
-## Responsabilidades
+## Key components
 
-- **Billing** — Stripe Checkout + Customer Portal + Webhook com assinatura HMAC-SHA256 (6 events cobertos).
-- **Tiers** — 6 planos (`free`, `starter`, `sync`, `cloud`, `business`, `enterprise`) com price map e feature flags.
-- **License** — JWT Ed25519 assinado localmente, validação offline com chave pública embutida, grace period de 7 dias, background refresh 24 h.
-- **Backup** — `brain.db` via `VACUUM INTO` → gzip → Argon2id + AES-256-GCM (BackupCrypto) → upload R2 (S3-compat).
-- **Scheduler** — retenção GFS: últimos N daily + M weekly + K monthly.
-- **Dunning** — recuperação automática de `payment_failed` com retries progressivos.
-- **Flex balance** — créditos pay-as-you-go acima do allowance do tier.
-- **Usage cascade** — roteamento de cobrança: subscription allowance → flex balance → block.
-- **API keys** — geração, revogação, rate-limit por key.
-- **LLM proxy** — encaminha chamadas cloud para provider com observabilidade centralizada.
+| Name | Responsibility |
+|---|---|
+| `BillingService` | Stripe Checkout, Customer Portal, webhook dispatch with signature verification. |
+| `WebhookHandler` | HMAC-SHA256 signature check + replay protection + registry of event handlers. |
+| `LicenseService` | Issues and validates JWT Ed25519 license tokens; 7-day grace period, 24 h background refresh. |
+| `BackupService` | `brain.db` → `VACUUM INTO` → gzip → `Argon2id + AES-256-GCM` → upload to R2. |
+| `BackupCrypto` | Argon2id key derivation + AES-256-GCM encryption. |
+| `BackupScheduler` | Per-tier schedule plus GFS retention pruning. |
+| `DunningService` | Progressive retries and downgrade flow when a payment fails. |
+| `FlexBalanceService` | Prepaid balance topped up via Stripe, debited atomically by usage. |
+| `UsageCascade` | Billing router: allowance → flex balance → block. |
+| `APIKeyService` | Generation, revocation, scope and rate-limit per key. |
+| `LLMProxyService` | Cloud-side LLM router with metering and provider fallback. |
 
-## Arquitetura
-
-```
-cloud/
-  ├── billing.py     SubscriptionTier (6 tiers), checkout, portal, webhook (HMAC)
-  ├── license.py     JWT Ed25519, grace period 7d, background refresh 24h
-  ├── backup.py      VACUUM INTO → gzip → Argon2id+AES-256-GCM → R2 upload
-  ├── crypto.py      BackupCrypto (passphrase → key derivation)
-  ├── scheduler.py   GFS retention (daily/weekly/monthly)
-  ├── dunning.py     Recuperação de payment_failed
-  ├── flex.py        Saldo pay-as-you-go
-  ├── usage.py       Cascade: allowance → flex → block
-  ├── apikeys.py     Geração/revogação/rate-limit
-  └── llm_proxy.py   Cloud-side LLM router
-```
-
-## Código real (exemplos curtos)
-
-**`src/sovyx/cloud/billing.py`** — tiers e pricing (centavos USD):
+## Pricing tiers
 
 ```python
+# src/sovyx/cloud/billing.py — prices in cents (USD)
 class SubscriptionTier(enum.StrEnum):
     FREE = "free"
     STARTER = "starter"
@@ -48,120 +34,169 @@ class SubscriptionTier(enum.StrEnum):
     BUSINESS = "business"
     ENTERPRISE = "enterprise"
 
+
 TIER_PRICES: dict[SubscriptionTier, int] = {
     SubscriptionTier.FREE: 0,
-    SubscriptionTier.STARTER: 399,    # $3.99
-    SubscriptionTier.SYNC: 599,       # $5.99
-    SubscriptionTier.CLOUD: 999,      # $9.99
-    SubscriptionTier.BUSINESS: 9900,  # $99
-    SubscriptionTier.ENTERPRISE: 0,   # custom
-}
-
-WEBHOOK_TOLERANCE_SECONDS = 300        # replay protection
-STRIPE_SIGNATURE_PREFIX = "v1"         # HMAC-SHA256
-```
-
-**`src/sovyx/cloud/license.py`** — features por tier:
-
-```python
-TIER_FEATURES: dict[str, list[str]] = {
-    "free": [],
-    "starter": ["backup_daily", "relay"],
-    "sync":    ["backup_daily", "relay", "byok_routing", "byok_caching", "byok_analytics"],
-    "cloud":   ["backup_hourly", "relay", "llm_proxy"],
-    "business":["backup_hourly", "relay", "llm_proxy", "sso", "team"],
-    "enterprise": ["backup_hourly", "relay", "llm_proxy", "sso", "team",
-                   "ldap", "dedicated_relay", "sla"],
+    SubscriptionTier.STARTER: 399,     # $3.99
+    SubscriptionTier.SYNC: 599,        # $5.99
+    SubscriptionTier.CLOUD: 999,       # $9.99
+    SubscriptionTier.BUSINESS: 9900,   # $99
+    SubscriptionTier.ENTERPRISE: 0,    # custom pricing
 }
 ```
 
-**`src/sovyx/cloud/backup.py`** — wire format:
+| Tier | Price | Features |
+|---|---|---|
+| `free` | $0 | Local-only Sovyx. |
+| `starter` | $3.99 / month | Daily backup, relay. |
+| `sync` | $5.99 / month | Daily backup, relay, BYOK routing, BYOK caching, BYOK analytics. |
+| `cloud` | $9.99 / month | Hourly backup, relay, managed LLM proxy. |
+| `business` | $99 / month | Everything in `cloud` plus SSO and team. |
+| `enterprise` | custom | Adds LDAP, dedicated relay, SLA. |
+
+Mind count limits mirror the tier: `free` and `starter` → 2, `sync` → 5, `cloud` → 10, `business` → 25, `enterprise` → 999.
+
+## Licensing
+
+`LicenseService` signs a JWT with an Ed25519 private key on the cloud and distributes the token to the daemon. Validation is offline: the public key is embedded in the client, so the daemon does not need to reach the cloud to check the license.
 
 ```python
-# Wire format em R2:
-#   [gzip([brain.db VACUUM snapshot])] → encrypt(Argon2id+AES-256-GCM) → .enc.gz
-#
-# Restore reverse o pipeline: download → decrypt → decompress → integrity check
-GZIP_LEVEL = 6
+# src/sovyx/cloud/license.py
+TOKEN_VALIDITY_DAYS = 7
+REFRESH_BEFORE_DAYS = 5
+GRACE_PERIOD_DAYS = 7
+REFRESH_INTERVAL_SECONDS = 86400  # 24 h background refresh
+JWT_ALGORITHM = "EdDSA"
 ```
 
-## Specs-fonte
+After expiry the daemon enters a 7-day grace period and continues to run local-only features. `LicenseStatus` is one of `active`, `grace`, `expired`, `invalid`.
 
-- **SPE-033-CLOUD-SERVICES** — API do BackupService, LicenseService, Dunning.
-- **IMPL-011-STRIPE-CONNECT** — marketplace billing, Express onboarding, destination charges.
-- **IMPL-SUP-006-PRICING-PQL** — 6 tiers, Van Westendorp, Gabor-Granger, PQL.
-- **MONETIZATION-LIFECYCLE** — fluxos lifecycle.
+## Backups
 
-## Status de implementação
+Backups are zero-knowledge: the encryption key is derived from the user's passphrase on the device. The cloud only ever sees ciphertext.
 
-| Item | Status |
+```
+brain.db
+   │
+   ▼  (VACUUM INTO — consistent snapshot)
+   ▼  (gzip, level 6)
+   ▼  (BackupCrypto: Argon2id → AES-256-GCM)
+   ▼
+R2 bucket (<user_id>/<mind_id>/<backup_id>.enc.gz)
+```
+
+`BackupMetadata` records the SHA-256 checksum, compressed and original sizes, the Sovyx version, and the brain schema version for safe restore. `RestoreResult.integrity_ok` confirms the SHA-256 match on download.
+
+## GFS retention
+
+`BackupScheduler` prunes old backups using a Grandfather-Father-Son policy.
+
+```python
+@dataclass(frozen=True, slots=True)
+class RetentionPolicy:
+    keep_daily: int
+    keep_weekly: int
+    keep_monthly: int
+```
+
+Tiers get different schedules: `starter`/`sync` → daily snapshots, `cloud`/`business`/`enterprise` → hourly. The pruner returns a `PruneResult(kept=..., pruned=...)` for observability.
+
+## Webhook dispatch
+
+Stripe events hit a single endpoint, get their signature verified, and are routed through a registry.
+
+```python
+WEBHOOK_TOLERANCE_SECONDS = 300       # replay protection
+STRIPE_SIGNATURE_PREFIX = "v1"        # HMAC-SHA256
+
+
+# Handlers register themselves — no hard-coded dispatch.
+@webhook_handler.register("customer.subscription.updated")
+async def _on_sub_updated(event: WebhookEvent) -> None: ...
+```
+
+`WebhookSignatureError` is raised if the HMAC is wrong or the timestamp is older than 300 s. `WebhookPayloadError` is raised if the payload is malformed.
+
+## Flex balance and usage cascade
+
+`FlexBalanceService` gives users a prepaid balance for pay-as-you-go usage above the subscription allowance. `UsageCascade` routes every chargeable event through three stages.
+
+```
+charge(user, amount)
+   │
+   ├─► allowance stage: subscription quota left → consume it
+   │
+   ├─► flex stage: flex balance sufficient → debit
+   │
+   └─► blocked stage: raise InsufficientBalanceError
+```
+
+`ChargeResult` reports which stage paid (`allowance` / `flex` / `blocked`) and the remaining balance, so the dashboard can show accurate forecasts.
+
+## Dunning
+
+When Stripe signals `invoice.payment_failed`, `DunningService` walks the customer through progressive states.
+
+| State | Behavior |
 |---|---|
-| 6 SubscriptionTiers + price map | Aligned |
-| Stripe Checkout + Customer Portal | Aligned |
-| Webhook handler (HMAC-SHA256, 6 events, replay protection) | Aligned |
-| LicenseService (JWT Ed25519, grace 7d, refresh 24h) | Aligned |
-| BackupService (VACUUM + gzip + AES-256-GCM + R2) | Aligned |
-| BackupCrypto (Argon2id + AES-256-GCM) | Aligned |
-| Scheduler GFS retention | Aligned |
-| Dunning (payment recovery) | Aligned |
-| Flex balance + Usage cascade | Aligned |
-| API keys | Aligned |
-| LLM proxy cloud-side | Aligned |
-| Stripe Connect — webhook (20+ events completos) | Partial |
-| Stripe Connect — Express onboarding | Not Implemented |
-| Stripe Connect — destination charges | Not Implemented |
-| Stripe Connect — refund, dispute, payout | Not Implemented |
-| Stripe Tax | Not Implemented |
-| Van Westendorp analyzer (4 price questions) | Not Implemented |
-| Gabor-Granger analyzer (WTP) | Not Implemented |
-| PQLScorer + FunnelTracker | Not Implemented |
+| `warning` | Email reminder, Stripe retries. |
+| `suspended` | Cloud features disabled; local features continue. |
+| `cancelled` | Subscription terminated; downgrade to `free`. |
 
-## Divergências
+Each transition emits a `DunningRecord` with the attempt count and the email type sent (`EmailType`).
 
-**Stripe Connect (IMPL-011) parcialmente implementado** — `billing.py` cobre Checkout, Portal e **6 eventos de webhook**, mas a spec IMPL-011 pede *marketplace billing* completo:
+## API keys
 
-- Express account onboarding (plugin authors recebem payout).
-- Destination charges (taxa Sovyx + pagamento ao desenvolvedor).
-- Refund, dispute e payout management.
-- Stripe Tax para cálculo automático de impostos.
-- Webhook handler com 20+ events (hoje cobre 6).
+`APIKeyService` issues keys for the LLM proxy and other cloud endpoints. Keys carry a `Scope` flag, a per-tier `RateTier` rate limit, and a revocation state. `APIKeyValidation` returns whether the key is valid and whether it was rate-limited.
 
-**Impacto comercial: bloqueia launch do plugin marketplace** (gap-analysis Top 10 #2).
+## LLM proxy
 
-**Pricing experiments (IMPL-SUP-006) não implementados** — `VanWestendorpAnalyzer` (4 questões de preço com curvas OPP/IPP/PMC/PME), `GaborGrangerAnalyzer` (willingness-to-pay), `PQLScorer` (Product-Qualified Lead por adoção de features) e `FunnelTracker` (conversão por etapa). Bloqueia otimização de revenue.
+`LLMProxyService` is the cloud-side counterpart to the local `LLMRouter`. It accepts requests from `cloud` and `business` subscribers, forwards them to the selected provider via `LiteLLMBackend`, and returns a `ProxyResponse` with token counts, cost, and latency for metering. `MeteringSnapshot` aggregates usage for billing.
 
-**Features sem doc dedicada** — `dunning.py`, `flex.py`, `usage.py` estão implementados e testados, mas não há spec dedicada (apenas menções em SPE-033 e MONETIZATION-LIFECYCLE). Oportunidade para ADR retroativa.
+## Errors
 
-## Dependências
+| Exception | Raised when |
+|---|---|
+| `WebhookSignatureError` | HMAC mismatch or timestamp outside 300 s tolerance. |
+| `WebhookPayloadError` | Stripe event payload is malformed. |
+| `FlexError` | Base for flex balance errors. |
+| `InvalidTopupAmountError` | Top-up outside allowed range. |
+| `InsufficientBalanceError` | Debit exceeds balance. |
+| `MaxBalanceExceededError` | Top-up would exceed the per-account cap. |
+| `PaymentError` | Stripe rejected a charge. |
+| `RateLimitExceededError` | Proxy rate limit exceeded for a key or tier. |
+| `ModelNotFoundError` | Requested model is not mapped in the proxy. |
+| `AllProvidersFailedError` | Every provider in the fallback chain failed. |
 
-- `stripe` (SDK Python) — `billing.py`, `llm_proxy.py`.
-- `pyjwt>=2` + `cryptography` — `license.py` (Ed25519).
-- `boto3` ou S3-compat client — `backup.py` (R2).
-- `argon2-cffi` + `cryptography` — `crypto.py` (Argon2id, AES-256-GCM).
-- `sovyx.engine.errors.CloudError`.
-- `sovyx.observability.logging` — todos os arquivos.
+## Configuration
 
-## Testes
+```yaml
+cloud:
+  billing:
+    secret_key: "${STRIPE_SECRET_KEY}"
+    webhook_secret: "${STRIPE_WEBHOOK_SECRET}"
+    success_url: https://sovyx.ai/billing/success
+    cancel_url:  https://sovyx.ai/billing/cancel
+    portal_return_url: https://sovyx.ai/billing
+    currency: usd
+  backup:
+    r2_endpoint_url: https://<account>.r2.cloudflarestorage.com
+    r2_bucket: sovyx-backups
+    r2_access_key_id:     "${R2_KEY_ID}"
+    r2_secret_access_key: "${R2_SECRET}"
+  proxy:
+    providers: [anthropic, openai, google]
+    rate_tier: cloud
+```
 
-- `tests/unit/cloud/` — webhook signature verification (replay, tamper), JWT grace period, BackupCrypto roundtrip, GFS retention logic, usage cascade decisions.
-- `tests/integration/cloud/` — Stripe mock server (stripe-mock) para fluxos completos.
-- Nunca testar com Stripe real, mesmo em test mode — usar `stripe-mock` ou SDK em `mock=True`.
+## Roadmap
 
-## Referências
+- **Stripe Connect for marketplace** — Express onboarding for plugin authors, destination charges that split revenue, refund / dispute / payout handling, Stripe Tax, and a complete set of webhook handlers (today the registry covers the subscription lifecycle).
+- **Pricing experiments** — Van Westendorp, Gabor-Granger, PQL scoring, and a funnel tracker to feed pricing decisions.
+- **Dedicated specs for flex, usage, and dunning** — currently implemented and tested but documented only through code.
 
-- `src/sovyx/cloud/billing.py` — Stripe checkout, portal, webhook.
-- `src/sovyx/cloud/license.py` — JWT Ed25519, grace period.
-- `src/sovyx/cloud/backup.py` — VACUUM + encrypt + R2 upload.
-- `src/sovyx/cloud/crypto.py` — Argon2id + AES-256-GCM.
-- `src/sovyx/cloud/scheduler.py` — GFS retention.
-- `src/sovyx/cloud/dunning.py` — payment recovery.
-- `src/sovyx/cloud/flex.py` — pay-as-you-go.
-- `src/sovyx/cloud/usage.py` — cascade allowance → flex → block.
-- `src/sovyx/cloud/apikeys.py` — API keys.
-- `src/sovyx/cloud/llm_proxy.py` — cloud-side LLM.
-- SPE-033-CLOUD-SERVICES — contratos de serviço.
-- IMPL-011-STRIPE-CONNECT — marketplace billing (parcial).
-- IMPL-SUP-006-PRICING-PQL — 6 tiers + experimentos (NOT IMPL).
-- MONETIZATION-LIFECYCLE — lifecycle de assinaturas.
-- `docs/_meta/gap-inputs/analysis-C-integration.md` §cloud — 64% completion.
-- `docs/_meta/gap-analysis.md` Top 10 #2, #5.
+## See also
+
+- Source: `src/sovyx/cloud/billing.py`, `license.py`, `backup.py`, `crypto.py`, `scheduler.py`, `dunning.py`, `flex.py`, `usage.py`, `apikeys.py`, `llm_proxy.py`.
+- Tests: `tests/unit/cloud/`, `tests/integration/cloud/` (Stripe is exercised via `stripe-mock`, never the real API).
+- Related modules: [`engine`](./engine.md) for `CloudError`, [`llm`](./engine.md) for the local router that pairs with the cloud proxy.

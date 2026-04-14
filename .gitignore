@@ -72,3 +72,6 @@ site/
 
 # VPS brain dump (cópia temporária usada pela reescrita de docs — reprocessável do VPS)
 vps-brain-dump/
+
+# Internal documentation (specs, gap analysis, research) — reference only, não pública
+docs-internal/

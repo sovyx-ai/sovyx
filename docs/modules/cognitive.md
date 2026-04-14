@@ -1,96 +1,89 @@
-# Módulo: cognitive
+# Module: cognitive
 
-## Objetivo
+## What it does
 
-O pacote `sovyx.cognitive` implementa o loop cognitivo que transforma uma
-perception (mensagem recebida) em uma response executada e refletida em
-memória. A SPE-003 prevê 7 fases contínuas (Perceive → Attend → Think → Act
-→ Reflect → Consolidate → Dream); o código roda as **5 primeiras fases de
-forma síncrona por request**, e mantém Consolidate como job de background
-desacoplado em `brain/consolidation.py`. Além do loop, este pacote
-concentra a stack completa de segurança (serialization gate, injection
-tracker, PII guard, financial gate, output guard, shadow mode,
-classifier e escalation).
+The `sovyx.cognitive` package turns an incoming message (a perception) into an executed response and a memory update. It runs five synchronous phases per request — Perceive, Attend, Think, Act, Reflect — and hosts the safety stack that guards both input and output.
 
-## Responsabilidades
+## Key classes
 
-- Enforcar a sequência OODA (PERCEIVE → ATTEND → THINK → ACT → REFLECT)
-  via `CognitiveStateMachine` com transições validadas.
-- Serializar requests concorrentes de múltiplos canais via `CogLoopGate`
-  (PriorityQueue + single worker + Future-per-request).
-- Executar cada fase como classe independente com responsabilidade única
-  (`PerceivePhase`, `AttendPhase`, `ThinkPhase`, `ActPhase`, `ReflectPhase`).
-- Chamar o LLM via router com roteamento por complexidade (fast_model
-  vs default_model) e assemble de contexto.
-- Atualizar memória via `BrainService` na Reflect phase.
-- Aplicar guardrails de segurança em input (PII, injection) e em output
-  (output guard, financial gate, classifier multi-tier).
-- Emitir métricas, spans OTel e eventos `ThinkCompleted` / `ResponseSent`
-  no `EventBus`.
+| Name | Responsibility |
+|---|---|
+| `CognitiveLoop` | Runs the five phases. Never raises: always returns `ActionResult`. |
+| `CognitiveStateMachine` | Enforces valid phase transitions; `reset()` returns to `IDLE`. |
+| `CogLoopGate` | Single entrypoint from bridges. Priority queue + single worker + future per request. |
+| `CognitiveRequest` | Bundle submitted to the loop (perception, mind_id, conversation_id, history). |
+| `PerceivePhase` | Validates and normalizes input, classifies complexity. |
+| `AttendPhase` | Filters by priority and normalization; decides `should_process`. |
+| `ThinkPhase` | Selects a model by complexity, assembles context, calls `LLMRouter`. |
+| `ActPhase` | Formats the response, executes tool calls via `ToolExecutor`. |
+| `ReflectPhase` | Encodes the episode, extracts concepts, updates the brain. |
 
-## Arquitetura
+## State machine
 
-`CognitiveLoop.process_request()` **nunca lança exceção** — o contrato é
-retornar sempre um `ActionResult`, com state machine resetado para IDLE
-no `finally`. Erros conhecidos (`CostLimitExceededError`,
-`ProviderUnavailableError`) viram mensagens user-facing via
-`_categorize_error()`; erros desconhecidos caem em "unexpected error"
-sem vazar internals.
+```mermaid
+stateDiagram-v2
+    [*] --> IDLE
+    IDLE --> PERCEIVING
+    PERCEIVING --> ATTENDING
+    PERCEIVING --> IDLE : filtered
+    ATTENDING --> THINKING
+    ATTENDING --> IDLE : filtered
+    THINKING --> ACTING
+    ACTING --> REFLECTING
+    REFLECTING --> IDLE
+```
 
-`CogLoopGate` é o único ponto de entrada vindo do bridge: cria
-`CognitiveRequest` com tudo que o loop precisa (perception, mind_id,
-conversation_id, history, person_name), publica em PriorityQueue
-(maxsize=10), worker único drena sequencialmente. Backpressure: quando
-fila cheia, `submit()` levanta `CognitiveError`.
+Transitions are enforced by `CognitiveStateMachine.transition()`. The loop always calls `reset()` in a `finally` block so a crashed phase cannot lock the state machine.
 
-A stack de safety é composta e independente do loop: cada guard é
-chamado nas fases relevantes. `CogLoopGate` também vincula contexto
-estruturado de logging (`mind_id`, `conversation_id`) antes de cada
-processamento, para que todos os logs emitidos durante o loop carreguem
-correlação.
-
-## Código real
+## Request contract
 
 ```python
-# src/sovyx/cognitive/loop.py:92-109 — contrato do processamento
+# src/sovyx/cognitive/loop.py
 async def process_request(self, request: CognitiveRequest) -> ActionResult:
     """Process a CognitiveRequest through the full loop.
+
     NEVER raises an exception — always returns ActionResult.
     State machine always resets to IDLE via finally block.
     """
+    tracer = get_tracer()
+    metrics = get_metrics()
     with (
-        tracer.start_span("cognitive.loop", ...),
+        tracer.start_span("cognitive.loop",
+                          mind_id=str(request.mind_id),
+                          conversation_id=str(request.conversation_id)),
         metrics.measure_latency(metrics.cognitive_loop_latency),
     ):
         return await self._execute_loop(request, tracer, metrics)
 ```
 
-```python
-# src/sovyx/cognitive/state.py:15-22 — transições válidas (OODA)
-VALID_TRANSITIONS: dict[CognitivePhase, set[CognitivePhase]] = {
-    CognitivePhase.IDLE: {CognitivePhase.PERCEIVING},
-    CognitivePhase.PERCEIVING: {CognitivePhase.ATTENDING, CognitivePhase.IDLE},
-    CognitivePhase.ATTENDING: {CognitivePhase.THINKING, CognitivePhase.IDLE},
-    CognitivePhase.THINKING: {CognitivePhase.ACTING},
-    CognitivePhase.ACTING: {CognitivePhase.REFLECTING},
-    CognitivePhase.REFLECTING: {CognitivePhase.IDLE},
-}
-```
+Known errors (`CostLimitExceededError`, `ProviderUnavailableError`) are turned into user-facing messages by `_categorize_error()`. Unknown errors collapse to a generic message without leaking internals.
+
+## Complexity classification
+
+`PerceivePhase` scores the message to drive model routing in `ThinkPhase`:
 
 ```python
-# src/sovyx/cognitive/perceive.py:112-126 — complexidade sem LLM
+# src/sovyx/cognitive/perceive.py
 @staticmethod
 def classify_complexity(content: str) -> float:
     """Result determines model routing:
-    - complexity < 0.3 → fast_model (haiku)
-    - complexity >= 0.3 → default_model (sonnet)
+       complexity < 0.3 -> fast_model
+       complexity >= 0.3 -> default_model
     """
 ```
 
+## Serialization gate
+
+`CogLoopGate` is the only entry point from bridges. It creates a `CognitiveRequest`, puts it on a `PriorityQueue(maxsize=10)`, and waits on a per-request `Future`. The gate also binds structured logging context so every log line emitted during processing carries `mind_id` and `conversation_id`.
+
 ```python
-# src/sovyx/cognitive/gate.py:59-94 — submit com timeout+backpressure
-async def submit(self, request: CognitiveRequest, timeout: float = 30.0) -> ActionResult:
-    future = asyncio.get_running_loop().create_future()
+# src/sovyx/cognitive/gate.py
+async def submit(
+    self,
+    request: CognitiveRequest,
+    timeout: float = 30.0,
+) -> ActionResult:
+    future: asyncio.Future[ActionResult] = asyncio.get_running_loop().create_future()
     item = (request.perception.priority, next(self._counter), request, future)
     try:
         self._queue.put_nowait(item)
@@ -102,115 +95,55 @@ async def submit(self, request: CognitiveRequest, timeout: float = 30.0) -> Acti
         raise CognitiveError(f"Cognitive loop timed out after {timeout}s") from None
 ```
 
-## Specs-fonte
+## Safety stack
 
-- `SOVYX-BKD-SPE-003-COGNITIVE-LOOP.md` (1408 linhas) — 7 fases planejadas,
-  OODA Loop (Boyd 1987), ReAct (Yao et al. 2023), Schneier OODA critique.
-- `SOVYX-BKD-IMPL-006-COGNITIVE-LOOP.md` — detalhes de implementação,
-  error handling, tracing.
-- ADRs de safety (dispersas em `vps-brain-dump/.../adrs/`) — filtros
-  multi-tier, shadow mode, escalation.
+The safety stack is independent of the loop — each guard is invoked in the relevant phase:
 
-## Status de implementação
+- `CogLoopGate` — request serialization and logging context.
+- `InjectionContextTracker` — multi-turn prompt-injection detection.
+- `PIIGuard` — detects and redacts PII in input and output.
+- `FinancialGate` — intercepts financial tool calls and requires user confirmation.
+- `OutputGuard` — post-LLM filter on generated responses.
+- `SafetyClassifier` — multi-tier content classifier with cache and hourly LLM budget.
+- `SafetyEscalationTracker` — per-source escalation state.
+- `ShadowMode` — dry-runs new rules without blocking.
+- `SafetyAuditTrail` — records safety events without storing original content.
 
-### ✅ Implementado
+## Events
 
-- Fase 1 **PERCEIVE** (`perceive.py`, 155 LOC): `Perception` dataclass;
-  validação, normalização, `MAX_INPUT_CHARS = 10_000`; classify_complexity
-  por heurística (length, complex markers, multi-question, simple triggers).
-- Fase 2 **ATTEND** (`attend.py`, 310 LOC): filtro por prioridade,
-  normalização de texto (`text_normalizer.py`), decisão `should_process`.
-- Fase 3 **THINK** (`think.py`, 126 LOC): seleção de modelo por
-  complexidade → context_window do modelo escolhido → `ContextAssembler` →
-  `LLMRouter.generate()` com tools opcionais do PluginManager. Em erro,
-  retorna `LLMResponse` degradado.
-- Fase 4 **ACT** (`act.py`, 459 LOC): `ActionResult`, execução de tool
-  calls via `ToolExecutor`, re-invocação de LLM com resultados de tool.
-- Fase 5 **REFLECT** (`reflect.py`, 1021 LOC): extração de conceitos via
-  LLM, update em `BrainService`, tagging emocional, decay de working
-  memory após reflect.
-- `CognitiveStateMachine` (`state.py`, 77 LOC) com transições validadas
-  e `reset()` incondicional para IDLE.
-- `CogLoopGate` (`gate.py`, 148 LOC) — **extra, não documentado em spec**
-  — PriorityQueue(maxsize=10), single worker, Future-per-request,
-  binding de `bind_request_context` para logging estruturado.
+| Event | Emitted when |
+|---|---|
+| `PerceptionReceived` | A perception enters the loop. |
+| `ThinkCompleted` | `ThinkPhase` finishes an LLM call (model, tokens, cost, latency). |
+| `ResponseSent` | A response is delivered by a channel. |
 
-### ⚠️ Parcial
+## Configuration
 
-- **Fase 6 CONSOLIDATE**: `brain/consolidation.py` (`ConsolidationCycle`,
-  `ConsolidationScheduler`) existe e implementa Ebbinghaus decay + merge +
-  prune. **Não é chamada pelo CognitiveLoop**. A spec (§1.1) pede
-  "periodic: prune, strengthen" — semanticamente o agendador o faz fora
-  do loop, mas o mapping spec→código é confuso.
+```yaml
+cognitive:
+  gate:
+    queue_max: 10
+    submit_timeout_s: 30.0
+  perceive:
+    max_input_chars: 10000
+```
 
-### ❌ [NOT IMPLEMENTED]
+Safety rules and thresholds live under `cognitive.safety` in the mind config.
 
-- **Fase 7 DREAM** — spec: "nightly: discover patterns". Nenhum arquivo
-  `cognitive/dream.py`. Nenhum scheduler batch descobrindo padrões em
-  episódios. Implementação futura (v1.0+).
+## Testing notes
 
-### Features de safety (extras da spec cognitive)
+- Use `pytest.raises(Exception) as exc_info` and assert on `type(exc_info.value).__name__`. Exception class identity is not stable under pytest-xdist.
+- Avoid `isinstance` dispatch in production code; use `type(exc).__name__` like `_categorize_error` does.
 
-14 arquivos implementando defense-in-depth não totalmente mapeados em
-SPE-003:
+## Roadmap
 
-- `gate.py` — serialization
-- `injection_tracker.py` (453 LOC) — detecção de prompt injection
-- `pii_guard.py` (466 LOC) — PII scrubbing
-- `financial_gate.py` (453 LOC) — confirmação em ações financeiras
-- `output_guard.py` (303 LOC) — filtro de output
-- `safety_patterns.py` (1165 LOC) — patterns library
-- `safety_classifier.py` (704 LOC) — classificação multi-tier
-- `safety_escalation.py` (201 LOC) — escalation policy
-- `shadow_mode.py` (277 LOC) — dry-run de novas rules
-- `audit_store.py`, `custom_rules.py`, `safety_audit.py`, `safety_i18n.py`,
-  `safety_notifications.py`, `safety_container.py`, `text_normalizer.py`.
+- **Consolidate phase** — schedule `brain/consolidation.py` as a cognitive phase, not only a background job.
+- **Dream phase** — nightly pattern discovery over episodes.
+- **Streaming Think/Act** — cooperate with the LLM router's streaming path for faster first-token latency.
 
-## Divergências [DIVERGENCE]
+## See also
 
-- [DIVERGENCE] Spec SPE-003 lista 7 fases como "contínuas". Código
-  executa 5 fases síncronas por turn; fases 6 e 7 seriam ciclos de
-  background. Consolidation existe mas não é invocada do loop — ela
-  depende de agendador externo (SPE-004 prevê `consolidation_interval_hours`
-  na `BrainConfig`). Dream inexistente.
-- [DIVERGENCE] Spec não documenta `CogLoopGate`; priorização e
-  backpressure foram decisões de implementação (INT-001) não refletidas
-  em SPE-003.
-
-## Dependências
-
-- **Externas**: `asyncio`, `structlog`.
-- **Internas**: `sovyx.brain.service.BrainService`,
-  `sovyx.context.assembler.ContextAssembler`, `sovyx.llm.router.LLMRouter`,
-  `sovyx.llm.models.LLMResponse`, `sovyx.mind.config.MindConfig`,
-  `sovyx.plugins.manager.PluginManager`, `sovyx.engine.events.EventBus`,
-  `sovyx.engine.types`, `sovyx.observability.{logging,metrics,tracing}`.
-
-## Testes
-
-- `tests/unit/cognitive/` — uma suite por fase (`test_perceive`,
-  `test_attend`, `test_think`, `test_act`, `test_reflect`).
-- `tests/unit/cognitive/test_state.py` — transições válidas/inválidas.
-- `tests/unit/cognitive/test_gate.py` — backpressure, timeout, shutdown
-  draining.
-- `tests/integration/test_cognitive_loop.py` — cadeia completa com mocks
-  de LLM/Brain.
-- `tests/unit/cognitive/safety_*` — cada guard tem sua suite.
-- Anti-pattern #8 (xdist class-identity): loop usa
-  `type(exc).__name__` em `_categorize_error` — igualmente aplicado em
-  testes.
-
-## Referências
-
-- Code: `src/sovyx/cognitive/loop.py`, `src/sovyx/cognitive/perceive.py`,
-  `src/sovyx/cognitive/attend.py`, `src/sovyx/cognitive/think.py`,
-  `src/sovyx/cognitive/act.py`, `src/sovyx/cognitive/reflect.py`,
-  `src/sovyx/cognitive/state.py`, `src/sovyx/cognitive/gate.py`,
-  `src/sovyx/cognitive/safety_*.py`, `src/sovyx/cognitive/injection_tracker.py`,
-  `src/sovyx/cognitive/pii_guard.py`, `src/sovyx/cognitive/financial_gate.py`,
-  `src/sovyx/cognitive/output_guard.py`, `src/sovyx/cognitive/shadow_mode.py`,
-  `src/sovyx/cognitive/audit_store.py`, `src/sovyx/cognitive/custom_rules.py`,
-  `src/sovyx/cognitive/text_normalizer.py`.
-- Specs: `SOVYX-BKD-SPE-003-COGNITIVE-LOOP.md`,
-  `SOVYX-BKD-IMPL-006-COGNITIVE-LOOP.md`.
-- Gap analysis: `docs/_meta/gap-inputs/analysis-A-core.md` §cognitive.
+- `engine.md` — the `EventBus` and DI that wire the loop
+- `brain.md` — the memory updated by `ReflectPhase`
+- `llm.md` — router invoked by `ThinkPhase`
+- `../architecture.md` — end-to-end request flow
