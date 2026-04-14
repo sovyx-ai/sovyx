@@ -1,21 +1,27 @@
-"""VoicePipeline orchestrator: mic → VAD → wake → STT → LLM → TTS → speaker.
-
-State-machine-driven pipeline that chains voice components into a continuous
-listening/speaking loop.  Supports barge-in (user interrupts TTS), Jarvis-style
-filler injection, and streaming TTS from LLM token output.
-
-Ref: SPE-010 §8 (VoicePipeline), §13 (state machine), IMPL-004 §1.7 (timing)
-"""
+"""Auto-extracted from voice/pipeline.py - see __init__.py for the public re-exports."""
 
 from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass
-from enum import IntEnum, auto
 from typing import TYPE_CHECKING, Any
 
 from sovyx.observability.logging import get_logger
+from sovyx.voice.jarvis import JarvisConfig, JarvisIllusion, split_at_boundaries
+from sovyx.voice.pipeline._barge_in import BargeInDetector
+from sovyx.voice.pipeline._config import VoicePipelineConfig, validate_config
+from sovyx.voice.pipeline._events import (
+    BargeInEvent,
+    PipelineErrorEvent,
+    SpeechEndedEvent,
+    SpeechStartedEvent,
+    TranscriptionCompletedEvent,
+    TTSCompletedEvent,
+    TTSStartedEvent,
+    WakeWordDetectedEvent,
+)
+from sovyx.voice.pipeline._output_queue import AudioOutputQueue
+from sovyx.voice.pipeline._state import VoicePipelineState
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -25,359 +31,20 @@ if TYPE_CHECKING:
 
     from sovyx.engine.events import EventBus
     from sovyx.voice.stt import STTEngine
-    from sovyx.voice.tts_piper import AudioChunk, TTSEngine
+    from sovyx.voice.tts_piper import TTSEngine
     from sovyx.voice.vad import SileroVAD, VADEvent
     from sovyx.voice.wake_word import WakeWordDetector
 
 logger = get_logger(__name__)
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
+# Pipeline tuning constants (timing/frame thresholds).
 _SAMPLE_RATE = 16_000
 _FRAME_SAMPLES = 512  # 32ms at 16kHz
-_SILENCE_FRAMES_END = 22  # ~700ms silence → end of utterance
+_SILENCE_FRAMES_END = 22  # ~700ms silence -> end of utterance
 _MAX_RECORDING_FRAMES = 312  # ~10s max recording
-_BARGE_IN_THRESHOLD_FRAMES = 5  # ~160ms sustained speech → barge-in
+_BARGE_IN_THRESHOLD_FRAMES = 5  # ~160ms sustained speech -> barge-in
 _FILLER_DELAY_MS = 800  # Play filler if no LLM token within this
 _TEXT_MIN_WORDS = 3  # Min words before TTS synthesis
-
-
-# ---------------------------------------------------------------------------
-# State Machine
-# ---------------------------------------------------------------------------
-
-
-class VoicePipelineState(IntEnum):
-    """Pipeline state machine.
-
-    Transitions (SPE-010 §13):
-        IDLE → WAKE_DETECTED → RECORDING → TRANSCRIBING → THINKING → SPEAKING → IDLE
-    Barge-in: SPEAKING → RECORDING (skip wake word — already engaged).
-    Timeout:  RECORDING → IDLE (10s max).
-    Empty:    TRANSCRIBING → IDLE (empty transcription).
-    """
-
-    IDLE = auto()
-    WAKE_DETECTED = auto()
-    RECORDING = auto()
-    TRANSCRIBING = auto()
-    THINKING = auto()
-    SPEAKING = auto()
-
-
-# ---------------------------------------------------------------------------
-# Events (emitted via EventBus)
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class WakeWordDetectedEvent:
-    """Emitted when the wake word is detected."""
-
-    mind_id: str = ""
-
-
-@dataclass(frozen=True, slots=True)
-class SpeechStartedEvent:
-    """Emitted when speech recording begins (after wake word)."""
-
-    mind_id: str = ""
-
-
-@dataclass(frozen=True, slots=True)
-class SpeechEndedEvent:
-    """Emitted when speech recording ends (silence detected)."""
-
-    mind_id: str = ""
-    duration_ms: float = 0.0
-
-
-@dataclass(frozen=True, slots=True)
-class TranscriptionCompletedEvent:
-    """Emitted when STT produces a transcription."""
-
-    text: str = ""
-    confidence: float = 0.0
-    language: str | None = None
-    latency_ms: float = 0.0
-
-
-@dataclass(frozen=True, slots=True)
-class TTSStartedEvent:
-    """Emitted when TTS playback begins."""
-
-    mind_id: str = ""
-
-
-@dataclass(frozen=True, slots=True)
-class TTSCompletedEvent:
-    """Emitted when TTS playback finishes."""
-
-    mind_id: str = ""
-
-
-@dataclass(frozen=True, slots=True)
-class BargeInEvent:
-    """Emitted when the user interrupts TTS playback."""
-
-    mind_id: str = ""
-
-
-@dataclass(frozen=True, slots=True)
-class PipelineErrorEvent:
-    """Emitted on unrecoverable pipeline errors."""
-
-    mind_id: str = ""
-    error: str = ""
-
-
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class VoicePipelineConfig:
-    """Configuration for the VoicePipeline orchestrator.
-
-    Attributes:
-        mind_id: Owning mind identifier.
-        wake_word_enabled: Whether to require wake word before recording.
-        barge_in_enabled: Whether user can interrupt TTS by speaking.
-        fillers_enabled: Whether to play filler phrases during LLM thinking.
-        filler_delay_ms: Milliseconds to wait before playing a filler.
-        silence_frames_end: Consecutive silent frames to end utterance (~32ms each).
-        max_recording_frames: Maximum frames before force-ending recording.
-        barge_in_threshold: Consecutive speech frames to trigger barge-in.
-        confirmation_tone: Type of tone on wake word (``"beep"`` or ``"none"``).
-        filler_phrases: Phrases used during LLM thinking time.
-    """
-
-    mind_id: str = "default"
-    wake_word_enabled: bool = True
-    barge_in_enabled: bool = True
-    fillers_enabled: bool = True
-    filler_delay_ms: int = _FILLER_DELAY_MS
-    silence_frames_end: int = _SILENCE_FRAMES_END
-    max_recording_frames: int = _MAX_RECORDING_FRAMES
-    barge_in_threshold: int = _BARGE_IN_THRESHOLD_FRAMES
-    confirmation_tone: str = "beep"
-    filler_phrases: tuple[str, ...] = (
-        "Let me think about that...",
-        "Hmm...",
-        "One moment...",
-        "Let me check...",
-        "Sure, let me look into that...",
-    )
-
-
-def validate_config(config: VoicePipelineConfig) -> None:
-    """Validate pipeline configuration.
-
-    Raises:
-        ValueError: If any parameter is out of range.
-    """
-    if config.filler_delay_ms < 0:
-        msg = f"filler_delay_ms must be >= 0, got {config.filler_delay_ms}"
-        raise ValueError(msg)
-    if config.silence_frames_end < 1:
-        msg = f"silence_frames_end must be >= 1, got {config.silence_frames_end}"
-        raise ValueError(msg)
-    if config.max_recording_frames < 1:
-        msg = f"max_recording_frames must be >= 1, got {config.max_recording_frames}"
-        raise ValueError(msg)
-    if config.barge_in_threshold < 1:
-        msg = f"barge_in_threshold must be >= 1, got {config.barge_in_threshold}"
-        raise ValueError(msg)
-    if config.confirmation_tone not in ("beep", "none"):
-        msg = f"confirmation_tone must be 'beep' or 'none', got {config.confirmation_tone!r}"
-        raise ValueError(msg)
-
-
-# ---------------------------------------------------------------------------
-# AudioOutputQueue — managed playback with interruption
-# ---------------------------------------------------------------------------
-
-
-class AudioOutputQueue:
-    """Queue-based audio output with interruption support.
-
-    Manages a FIFO of :class:`AudioChunk` objects and plays them
-    sequentially.  :meth:`interrupt` clears the queue and stops
-    current playback (used for barge-in).
-    """
-
-    def __init__(self) -> None:
-        self._queue: asyncio.Queue[AudioChunk] = asyncio.Queue()
-        self._playing = False
-        self._interrupted = False
-
-    @property
-    def is_playing(self) -> bool:
-        """Whether audio is currently being played."""
-        return self._playing
-
-    async def enqueue(self, chunk: AudioChunk) -> None:
-        """Add an audio chunk to the playback queue.
-
-        Args:
-            chunk: Audio data to play.
-        """
-        await self._queue.put(chunk)
-
-    async def play_immediate(self, chunk: AudioChunk) -> None:
-        """Play a single chunk immediately (blocking until done).
-
-        Args:
-            chunk: Audio data to play.
-        """
-        self._playing = True
-        try:
-            await _play_audio(chunk)
-        finally:
-            self._playing = False
-
-    async def drain(self) -> None:
-        """Play all queued chunks sequentially until queue is empty."""
-        self._playing = True
-        self._interrupted = False
-        try:
-            while not self._queue.empty() and not self._interrupted:
-                chunk = self._queue.get_nowait()
-                await _play_audio(chunk)
-        finally:
-            self._playing = False
-            self._interrupted = False
-
-    def interrupt(self) -> None:
-        """Stop current playback and clear the queue (barge-in)."""
-        self._interrupted = True
-        # Drain queue without awaiting
-        while not self._queue.empty():
-            try:
-                self._queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-
-    def clear(self) -> None:
-        """Clear pending chunks without interrupting current playback."""
-        while not self._queue.empty():
-            try:
-                self._queue.get_nowait()
-            except asyncio.QueueEmpty:
-                break
-
-
-async def _play_audio(chunk: AudioChunk) -> None:
-    """Play an audio chunk via sounddevice (or simulate in test).
-
-    This is the low-level playback function.  In production it uses
-    ``sounddevice``; unit tests can patch this function.
-
-    Args:
-        chunk: The audio chunk to play.
-    """
-    try:
-        import sounddevice as sd
-
-        sd.play(chunk.audio, chunk.sample_rate)
-        sd.wait()
-    except ImportError:
-        # Headless / test environment — simulate playback duration
-        if chunk.duration_ms > 0:
-            await asyncio.sleep(chunk.duration_ms / 1000)
-
-
-# ---------------------------------------------------------------------------
-# BargeInDetector
-# ---------------------------------------------------------------------------
-
-
-class BargeInDetector:
-    """Detects when the user speaks while TTS is playing (barge-in).
-
-    Monitors the VAD while :class:`AudioOutputQueue` is playing.
-    If consecutive speech frames exceed the threshold, triggers
-    barge-in by interrupting the output queue.
-
-    Args:
-        vad: The voice-activity detector.
-        output: The audio output queue to interrupt on barge-in.
-        threshold_frames: Consecutive speech frames needed to trigger.
-    """
-
-    def __init__(
-        self,
-        vad: SileroVAD,
-        output: AudioOutputQueue,
-        threshold_frames: int = _BARGE_IN_THRESHOLD_FRAMES,
-    ) -> None:
-        self._vad = vad
-        self._output = output
-        self._threshold = threshold_frames
-
-    def check_frame(self, frame: npt.NDArray[np.int16]) -> bool:
-        """Process one audio frame and return True if barge-in detected.
-
-        Args:
-            frame: Audio frame (512 samples, 16-bit PCM, 16kHz).
-
-        Returns:
-            ``True`` if barge-in threshold was reached.
-        """
-        import numpy as np
-
-        audio_f32 = frame.astype(np.float32) / 32768.0
-        event = self._vad.process_frame(audio_f32)
-        return event.is_speech
-
-    async def monitor(
-        self,
-        get_frame: Callable[[], npt.NDArray[np.int16] | None],
-    ) -> bool:
-        """Monitor for barge-in while output is playing.
-
-        Args:
-            get_frame: Callable that returns the next audio frame or None.
-
-        Returns:
-            ``True`` if barge-in was detected and output was interrupted.
-        """
-        consecutive = 0
-        while self._output.is_playing:
-            frame = get_frame()
-            if frame is None:
-                await asyncio.sleep(0.01)
-                continue
-            if self.check_frame(frame):
-                consecutive += 1
-                if consecutive >= self._threshold:
-                    self._output.interrupt()
-                    return True
-            else:
-                consecutive = 0
-            await asyncio.sleep(0)  # Yield to event loop
-        return False
-
-
-# ---------------------------------------------------------------------------
-# JarvisIllusion — re-exported from jarvis.py (V05-24)
-# ---------------------------------------------------------------------------
-
-from sovyx.voice.jarvis import (  # noqa: E402
-    JarvisConfig,
-    JarvisIllusion,
-    split_at_boundaries,
-)
-
-__all_jarvis__ = ["JarvisIllusion", "JarvisConfig", "split_at_boundaries"]
-
-
-# ---------------------------------------------------------------------------
-# VoicePipeline — main orchestrator
-# ---------------------------------------------------------------------------
 
 
 class VoicePipeline:
