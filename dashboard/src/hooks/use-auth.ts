@@ -1,15 +1,21 @@
 /**
  * Auth initialization hook.
  *
- * On mount: checks if a token exists in localStorage.
- * - If yes → validates against /api/status
- * - If no → shows token entry modal
+ * On mount: checks if a token exists in session storage (via the
+ * centralized `api` client) and validates it against `/api/status`.
+ *
+ * - If no token → shows token entry modal.
+ * - If token valid → authenticated.
+ * - If token invalid (401/403) → clears token, shows modal.
+ * - If server unreachable → **fail-closed**: shows modal. The previous
+ *   fail-open behaviour (trust the existing token on network error)
+ *   let stale/compromised tokens bypass revalidation.
  *
  * Called once in App.tsx.
  */
 import { useEffect } from "react";
 import { useDashboardStore } from "@/stores/dashboard";
-import { BASE_URL } from "@/lib/api";
+import { ApiError, api, clearToken } from "@/lib/api";
 
 export function useAuth(): { ready: boolean } {
   const authenticated = useDashboardStore((s) => s.authenticated);
@@ -17,31 +23,38 @@ export function useAuth(): { ready: boolean } {
   const setShowTokenModal = useDashboardStore((s) => s.setShowTokenModal);
 
   useEffect(() => {
-    const token = localStorage.getItem("sovyx_token");
+    let cancelled = false;
 
-    if (!token) {
-      setShowTokenModal(true);
-      return;
-    }
-
-    // Validate existing token
-    fetch(`${BASE_URL}/api/status`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((res) => {
-        if (res.ok) {
+    const validate = async (): Promise<void> => {
+      try {
+        // `api.get` injects the Authorization header itself and triggers
+        // the 401 handler that already clears the token + opens the modal.
+        await api.get("/api/status");
+        if (!cancelled) {
           setAuthenticated(true);
-        } else {
-          // Token expired or invalid
-          localStorage.removeItem("sovyx_token");
-          setShowTokenModal(true);
         }
-      })
-      .catch(() => {
-        // Server unreachable — still allow with existing token
-        // (will retry on reconnect via WebSocket)
-        setAuthenticated(true);
-      });
+      } catch (err) {
+        if (cancelled) return;
+        // Explicit auth failure — token is gone or rejected. Always ask
+        // the user to re-enter it rather than continuing authenticated.
+        if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+          clearToken();
+          setShowTokenModal(true);
+          setAuthenticated(false);
+          return;
+        }
+        // Network / server unreachable: fail CLOSED. We cannot prove the
+        // token is still valid, so require the user to re-enter it.
+        clearToken();
+        setShowTokenModal(true);
+        setAuthenticated(false);
+      }
+    };
+
+    void validate();
+    return () => {
+      cancelled = true;
+    };
   }, [setAuthenticated, setShowTokenModal]);
 
   return { ready: authenticated };

@@ -1,16 +1,19 @@
 /**
  * Tests for useAuth hook.
  *
- * VAL-19: Covers token validation, auth state management,
- * and error handling (server unreachable).
+ * Covers token validation, auth state management, and error handling.
+ * Storage is `sessionStorage` (token persists within a tab, not across
+ * tabs/restarts) after the P0 XSS-hardening.
  */
 import { renderHook, waitFor } from "@testing-library/react";
 import { useAuth } from "./use-auth";
 import { useDashboardStore } from "@/stores/dashboard";
 
-// Reset store between tests
+// Reset store + storages between tests. Clearing both avoids leakage
+// from the one-shot localStorage → sessionStorage legacy migration.
 beforeEach(() => {
   localStorage.clear();
+  sessionStorage.clear();
   useDashboardStore.setState({
     authenticated: false,
     showTokenModal: false,
@@ -19,7 +22,7 @@ beforeEach(() => {
 });
 
 describe("useAuth", () => {
-  it("shows token modal when no token in localStorage", async () => {
+  it("shows token modal when no token in storage", async () => {
     renderHook(() => useAuth());
 
     await waitFor(() => {
@@ -29,7 +32,7 @@ describe("useAuth", () => {
   });
 
   it("validates existing token against /api/status — success", async () => {
-    localStorage.setItem("sovyx_token", "valid-token");
+    sessionStorage.setItem("sovyx_token", "valid-token");
 
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       new Response(JSON.stringify({ version: "1.0" }), { status: 200 }),
@@ -44,7 +47,7 @@ describe("useAuth", () => {
   });
 
   it("clears token and shows modal when /api/status returns 401", async () => {
-    localStorage.setItem("sovyx_token", "expired-token");
+    sessionStorage.setItem("sovyx_token", "expired-token");
 
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       new Response("Unauthorized", { status: 401 }),
@@ -55,12 +58,12 @@ describe("useAuth", () => {
     await waitFor(() => {
       expect(useDashboardStore.getState().showTokenModal).toBe(true);
     });
-    expect(localStorage.getItem("sovyx_token")).toBeNull();
+    expect(sessionStorage.getItem("sovyx_token")).toBeNull();
     expect(useDashboardStore.getState().authenticated).toBe(false);
   });
 
   it("clears token and shows modal on 403", async () => {
-    localStorage.setItem("sovyx_token", "bad-token");
+    sessionStorage.setItem("sovyx_token", "bad-token");
 
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       new Response("Forbidden", { status: 403 }),
@@ -71,11 +74,14 @@ describe("useAuth", () => {
     await waitFor(() => {
       expect(useDashboardStore.getState().showTokenModal).toBe(true);
     });
-    expect(localStorage.getItem("sovyx_token")).toBeNull();
+    expect(sessionStorage.getItem("sovyx_token")).toBeNull();
   });
 
-  it("sets authenticated on network error (server unreachable)", async () => {
-    localStorage.setItem("sovyx_token", "some-token");
+  it("fails closed on network error (server unreachable)", async () => {
+    // Previous fail-open behaviour trusted the existing token when the
+    // server was unreachable — letting stale or compromised tokens bypass
+    // revalidation. Fail-closed: clear token and force re-entry.
+    sessionStorage.setItem("sovyx_token", "some-token");
 
     vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(
       new TypeError("Failed to fetch"),
@@ -84,14 +90,14 @@ describe("useAuth", () => {
     renderHook(() => useAuth());
 
     await waitFor(() => {
-      expect(useDashboardStore.getState().authenticated).toBe(true);
+      expect(useDashboardStore.getState().showTokenModal).toBe(true);
     });
-    // Token should NOT be removed — server might be temporarily down
-    expect(localStorage.getItem("sovyx_token")).toBe("some-token");
+    expect(useDashboardStore.getState().authenticated).toBe(false);
+    expect(sessionStorage.getItem("sovyx_token")).toBeNull();
   });
 
   it("returns ready=false initially, then true after auth", async () => {
-    localStorage.setItem("sovyx_token", "valid-token");
+    sessionStorage.setItem("sovyx_token", "valid-token");
 
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       new Response("{}", { status: 200 }),
@@ -108,7 +114,7 @@ describe("useAuth", () => {
   });
 
   it("sends Authorization header with Bearer token", async () => {
-    localStorage.setItem("sovyx_token", "my-secret-token");
+    sessionStorage.setItem("sovyx_token", "my-secret-token");
 
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       new Response("{}", { status: 200 }),

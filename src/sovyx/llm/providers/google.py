@@ -129,14 +129,18 @@ class GoogleProvider:
         if tools:
             payload["tools"] = format_tools_google(tools)
 
-        url = f"{_API_BASE}/{model}:generateContent?key={self._api_key}"
+        url = f"{_API_BASE}/{model}:generateContent"
+        # Send API key via header (NOT query string) — keeps the key out of
+        # access logs, error stacktraces (httpx stringifies URL on failure),
+        # and any URL-based caching/telemetry layers.
+        headers = {"x-goog-api-key": self._api_key}
 
         start = time.monotonic()
         last_error: Exception | None = None
 
         for attempt in range(_MAX_RETRIES):
             try:
-                resp = await self._client.post(url, json=payload)
+                resp = await self._client.post(url, json=payload, headers=headers)
 
                 if resp.status_code == 429 or resp.status_code >= 500:  # noqa: PLR2004
                     last_error = LLMError(f"Google API error {resp.status_code}: {resp.text}")

@@ -25,6 +25,15 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 import { useDashboardStore } from "@/stores/dashboard";
 import { api, isAbortError } from "@/lib/api";
 import { toast } from "sonner";
@@ -97,6 +106,11 @@ export default function SettingsPage() {
     confirmation_channels: { channel: string; inline_buttons: boolean; method: string }[];
     classification_fallback: string;
   } | null>(null);
+
+  // Custom guardrail add modal (replaces window.prompt — keyboard accessible,
+  // styled, testable, does not block the event loop).
+  const [guardrailDialogOpen, setGuardrailDialogOpen] = useState(false);
+  const [guardrailDraft, setGuardrailDraft] = useState("");
 
   // Dirty checks
   const settingsDirty = settings != null && selectedLevel !== settings.log_level;
@@ -605,19 +619,71 @@ export default function SettingsPage() {
                 size="sm"
                 className="mt-2 h-7 text-xs"
                 onClick={() => {
-                  const rule = prompt(t("safety.guardrailPlaceholder"));
-                  if (rule?.trim()) {
-                    const custom = guardrails
-                      .filter((r: { builtin: boolean }) => !r.builtin)
-                      .map((r: { id: string; rule: string; severity: string }) => ({ id: r.id, rule: r.rule, severity: r.severity }));
-                    custom.push({ id: `custom-${Date.now()}`, rule: rule.trim(), severity: "critical" });
-                    updateSafety("guardrails", custom);
-                  }
+                  setGuardrailDraft("");
+                  setGuardrailDialogOpen(true);
                 }}
               >
                 <PlusIcon className="mr-1 size-3" />
                 {t("safety.guardrailAdd")}
               </Button>
+
+              <Dialog open={guardrailDialogOpen} onOpenChange={setGuardrailDialogOpen}>
+                <DialogContent className="sm:max-w-[480px]">
+                  <DialogHeader>
+                    <DialogTitle>{t("safety.guardrailAdd")}</DialogTitle>
+                    <DialogDescription>{t("safety.guardrailsDesc")}</DialogDescription>
+                  </DialogHeader>
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const rule = guardrailDraft.trim();
+                      if (!rule) return;
+                      const custom = guardrails
+                        .filter((r: { builtin: boolean }) => !r.builtin)
+                        .map((r: { id: string; rule: string; severity: string }) => ({
+                          id: r.id,
+                          rule: r.rule,
+                          severity: r.severity,
+                        }));
+                      custom.push({
+                        id: `custom-${Date.now()}`,
+                        rule,
+                        severity: "critical",
+                      });
+                      updateSafety("guardrails", custom);
+                      setGuardrailDraft("");
+                      setGuardrailDialogOpen(false);
+                    }}
+                  >
+                    <Textarea
+                      autoFocus
+                      value={guardrailDraft}
+                      onChange={(e) => setGuardrailDraft(e.target.value)}
+                      placeholder={t("safety.guardrailPlaceholder")}
+                      aria-label={t("safety.guardrailAdd")}
+                      className="mt-2 min-h-[100px]"
+                      maxLength={500}
+                    />
+                    <DialogFooter className="mt-4">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setGuardrailDraft("");
+                          setGuardrailDialogOpen(false);
+                        }}
+                      >
+                        {t("actions.cancel", { defaultValue: "Cancel" })}
+                      </Button>
+                      <Button type="submit" size="sm" disabled={!guardrailDraft.trim()}>
+                        <PlusIcon className="mr-1 size-3" />
+                        {t("safety.guardrailAdd")}
+                      </Button>
+                    </DialogFooter>
+                  </form>
+                </DialogContent>
+              </Dialog>
             </div>
           </div>
         </section>

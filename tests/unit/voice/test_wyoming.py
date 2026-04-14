@@ -351,7 +351,14 @@ class TestWyomingConfig:
         assert cfg.snd_width == 2
         assert cfg.snd_channels == 1
         assert cfg.zeroconf_enabled is True
-        assert cfg.host == "0.0.0.0"  # noqa: S104
+        # Safe default: loopback-only. Non-loopback binds require an auth_token
+        # and the server refuses to start without it (see test_auth_required_for_lan).
+        assert cfg.host == "127.0.0.1"
+        assert cfg.auth_token is None
+        assert cfg.auth_timeout_seconds == 5.0
+        assert cfg.idle_timeout_seconds == 300.0
+        assert cfg.max_event_payload_bytes == 32 * 1024 * 1024
+        assert cfg.max_events_per_minute == 600
 
     def test_custom_config(self) -> None:
         """Custom values override defaults."""

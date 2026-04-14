@@ -21,15 +21,16 @@ afterEach(() => {
 });
 
 describe("Token management", () => {
-  it("setToken stores token in localStorage", () => {
+  it("setToken stores token in sessionStorage (not localStorage)", () => {
     setToken("test-token");
-    expect(localStorage.getItem("sovyx_token")).toBe("test-token");
+    expect(sessionStorage.getItem("sovyx_token")).toBe("test-token");
+    expect(localStorage.getItem("sovyx_token")).toBeNull();
   });
 
-  it("clearToken removes token from localStorage", () => {
+  it("clearToken removes token from sessionStorage", () => {
     setToken("test-token");
     clearToken();
-    expect(localStorage.getItem("sovyx_token")).toBeNull();
+    expect(sessionStorage.getItem("sovyx_token")).toBeNull();
   });
 });
 
@@ -129,6 +130,6 @@ describe("Error handling", () => {
     });
 
     await expect(api.get("/api/status")).rejects.toThrow();
-    expect(localStorage.getItem("sovyx_token")).toBeNull();
+    expect(sessionStorage.getItem("sovyx_token")).toBeNull();
   });
 });

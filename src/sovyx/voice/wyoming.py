@@ -13,6 +13,7 @@ Ref: SPE-010 §11, IMPL-SUP-003
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import socket
 from dataclasses import dataclass, field
@@ -124,10 +125,25 @@ class WyomingConfig:
     """Configuration for the Wyoming protocol server.
 
     Attributes:
-        host: TCP bind address.
+        host: TCP bind address. Defaults to ``127.0.0.1`` (loopback only)
+            for a safe default. Set to ``0.0.0.0`` **only** in combination
+            with ``auth_token`` — the server refuses to start on a
+            non-loopback host without a token.
         port: TCP bind port (default 10700, Wyoming standard).
         name: Service name for Zeroconf discovery.
         area: HA area name (e.g., "Living Room").
+        auth_token: Optional shared secret. When set, clients must send an
+            ``{"type":"auth","data":{"token":"…"}}`` event within
+            ``auth_timeout_seconds`` of connecting or be disconnected.
+        auth_timeout_seconds: How long a client has to present the token
+            before the server closes the connection.
+        idle_timeout_seconds: Max idle time between events on an active
+            connection. Protects against slow-loris / half-dead peers.
+        max_event_payload_bytes: Hard cap on a single Wyoming event
+            payload (binary audio + JSON header combined). Defeats
+            memory-exhaustion uploads.
+        max_events_per_minute: Per-connection event rate limit. Excess
+            events are dropped with a warning; ``0`` disables the limiter.
         mic_rate: Input audio sample rate (Hz).
         mic_width: Input audio sample width (bytes).
         mic_channels: Input audio channel count.
@@ -139,10 +155,15 @@ class WyomingConfig:
         version: Wyoming protocol version string.
     """
 
-    host: str = "0.0.0.0"  # noqa: S104 — bind all interfaces for LAN discovery
+    host: str = "127.0.0.1"
     port: int = _WYOMING_TCP_PORT
     name: str = "Sovyx Voice"
     area: str | None = None
+    auth_token: str | None = None
+    auth_timeout_seconds: float = 5.0
+    idle_timeout_seconds: float = 300.0
+    max_event_payload_bytes: int = 32 * 1024 * 1024  # 32 MiB
+    max_events_per_minute: int = 600
     mic_rate: int = _MIC_RATE
     mic_width: int = _MIC_WIDTH
     mic_channels: int = _MIC_CHANNELS
@@ -184,10 +205,20 @@ class WyomingEvent:
         return line.encode("utf-8") + self.payload
 
     @staticmethod
-    async def read_from(reader: asyncio.StreamReader) -> WyomingEvent | None:
+    async def read_from(
+        reader: asyncio.StreamReader,
+        *,
+        max_payload_bytes: int | None = None,
+    ) -> WyomingEvent | None:
         """Read a single Wyoming event from a stream.
 
-        Returns None on EOF or read error.
+        Args:
+            reader: Stream to read from.
+            max_payload_bytes: If set, any event whose declared ``data_length``
+                or ``payload_length`` exceeds this value is rejected. Used to
+                defeat memory-exhaustion attacks from hostile peers.
+
+        Returns None on EOF, read error, or size-cap violation.
         """
         try:
             line = await reader.readline()
@@ -208,6 +239,14 @@ class WyomingEvent:
 
         # Read additional JSON data if present
         data_length = header.get("data_length", 0)
+        if max_payload_bytes is not None and data_length > max_payload_bytes:
+            logger.warning(
+                "wyoming_data_too_large",
+                data_length=data_length,
+                max_bytes=max_payload_bytes,
+                event_type=event_type,
+            )
+            return None
         if data_length > 0:
             try:
                 extra_bytes = await reader.readexactly(data_length)
@@ -219,6 +258,14 @@ class WyomingEvent:
         # Read binary payload if present
         payload = b""
         payload_length = header.get("payload_length", 0)
+        if max_payload_bytes is not None and payload_length > max_payload_bytes:
+            logger.warning(
+                "wyoming_payload_too_large",
+                payload_length=payload_length,
+                max_bytes=max_payload_bytes,
+                event_type=event_type,
+            )
+            return None
         if payload_length > 0:
             try:
                 payload = await reader.readexactly(payload_length)
@@ -414,12 +461,47 @@ class WyomingClientHandler:
         return self._closed
 
     async def run(self) -> None:
-        """Main event loop — read and dispatch events until disconnect."""
+        """Main event loop — read and dispatch events until disconnect.
+
+        Enforces per-event payload caps and an idle timeout between
+        consecutive events (``WyomingConfig.idle_timeout_seconds``) and a
+        simple sliding-window event rate limit
+        (``WyomingConfig.max_events_per_minute``).
+        """
+        max_payload = self._config.max_event_payload_bytes
+        idle_timeout = self._config.idle_timeout_seconds
+        # Sliding-window counter: (window_start_monotonic, count_in_window).
+        window_start = 0.0
+        window_count = 0
+        rate_limit = self._config.max_events_per_minute
         try:
             while not self._closed:
-                event = await WyomingEvent.read_from(self._reader)
+                try:
+                    event = await asyncio.wait_for(
+                        WyomingEvent.read_from(self._reader, max_payload_bytes=max_payload),
+                        timeout=idle_timeout,
+                    )
+                except TimeoutError:
+                    logger.info("wyoming_idle_timeout")
+                    break
                 if event is None:
                     break
+
+                # Per-connection rate limit (simple sliding 60 s window).
+                if rate_limit > 0:
+                    now = asyncio.get_event_loop().time()
+                    if now - window_start >= 60.0:
+                        window_start = now
+                        window_count = 0
+                    window_count += 1
+                    if window_count > rate_limit:
+                        logger.warning(
+                            "wyoming_rate_limit_exceeded",
+                            limit=rate_limit,
+                            event_type=event.type,
+                        )
+                        break
+
                 await self._dispatch(event)
         except (ConnectionError, asyncio.CancelledError):
             pass
@@ -686,9 +768,25 @@ class SovyxWyomingServer:
         return len([h for h in self._handlers if not h.closed])
 
     async def start(self) -> None:
-        """Start the TCP server and optional Zeroconf registration."""
+        """Start the TCP server and optional Zeroconf registration.
+
+        Refuses to bind on a non-loopback interface when ``auth_token`` is
+        unset — prevents unauthenticated LAN exposure of the cognitive
+        pipeline (which bills LLM cost to the Sovyx owner).
+        """
         if self._running:
             return
+
+        # Enforce secure default: non-loopback bind requires a token.
+        loopback_hosts = {"127.0.0.1", "::1", "localhost"}
+        if self._config.host not in loopback_hosts and not self._config.auth_token:
+            msg = (
+                f"Wyoming server refuses to bind on {self._config.host!r} "
+                "without an auth_token — would expose the cognitive pipeline "
+                "unauthenticated. Set WyomingConfig.auth_token or bind to "
+                "127.0.0.1."
+            )
+            raise RuntimeError(msg)
 
         self._running = True
 
@@ -707,6 +805,7 @@ class SovyxWyomingServer:
             host=self._config.host,
             port=self._config.port,
             name=self._config.name,
+            auth_required=bool(self._config.auth_token),
         )
 
     async def stop(self) -> None:
@@ -742,9 +841,31 @@ class SovyxWyomingServer:
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
     ) -> None:
-        """Handle a new incoming TCP connection."""
+        """Handle a new incoming TCP connection.
+
+        If ``auth_token`` is configured, the client must send an
+        ``{"type": "auth", "data": {"token": "…"}}`` event within
+        ``auth_timeout_seconds`` before any other traffic is accepted.
+        """
         peer = writer.get_extra_info("peername", ("unknown", 0))
         logger.info("wyoming_client_connected", peer=str(peer))
+
+        # Auth handshake (only when a token is configured).
+        if self._config.auth_token:
+            try:
+                authed = await asyncio.wait_for(
+                    self._authenticate(reader, writer),
+                    timeout=self._config.auth_timeout_seconds,
+                )
+            except TimeoutError:
+                logger.warning("wyoming_auth_timeout", peer=str(peer))
+                authed = False
+            if not authed:
+                logger.warning("wyoming_auth_failed", peer=str(peer))
+                with contextlib.suppress(ConnectionError, OSError):
+                    writer.close()
+                    await writer.wait_closed()
+                return
 
         handler = WyomingClientHandler(
             reader=reader,
@@ -763,6 +884,37 @@ class SovyxWyomingServer:
             if handler in self._handlers:
                 self._handlers.remove(handler)
             logger.info("wyoming_client_disconnected", peer=str(peer))
+
+    async def _authenticate(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> bool:
+        """Read one event and verify it is ``auth`` with the right token.
+
+        Uses constant-time comparison to avoid timing side-channels.
+        """
+        import hmac
+
+        expected = self._config.auth_token
+        if not expected:
+            return True  # Should not reach here, but fail open on config drift.
+
+        event = await WyomingEvent.read_from(
+            reader,
+            max_payload_bytes=self._config.max_event_payload_bytes,
+        )
+        if event is None or event.type != "auth":
+            return False
+        provided = event.data.get("token", "")
+        if not isinstance(provided, str):
+            return False
+        if not hmac.compare_digest(provided, expected):
+            return False
+        # ACK — Wyoming doesn't standardize this; we send an info-like event
+        # so compatible clients can detect success deterministically.
+        await write_event(writer, WyomingEvent(type="auth-ok"))
+        return True
 
     async def _register_zeroconf(self) -> None:
         """Register Sovyx as a Wyoming service via mDNS."""

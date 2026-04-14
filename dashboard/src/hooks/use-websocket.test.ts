@@ -72,7 +72,8 @@ beforeEach(() => {
   vi.useFakeTimers({ shouldAdvanceTime: true });
   MockWebSocket.instances = [];
   localStorage.clear();
-  localStorage.setItem("sovyx_token", "test-token");
+  sessionStorage.clear();
+  sessionStorage.setItem("sovyx_token", "test-token");
 
   useDashboardStore.setState({
     authenticated: false,

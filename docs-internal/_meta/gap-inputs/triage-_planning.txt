@@ -1,0 +1,149 @@
+=== Triage entries for module: _planning (74 docs) ===
+[SOVYX-PLANNING|alta] vps-brain-dump/SOVYX-DEVELOPMENT-STRATEGY.md
+  Development strategy v0.1
+[SOVYX-PLANNING|alta] vps-brain-dump/SOVYX-MISSION-AUDIT-V3.md
+  Mission audit v3 SPE gaps
+[SOVYX-PLANNING|alta] vps-brain-dump/SOVYX-MISSION-AUDIT-V4.md
+  Mission audit v4 architecture
+[SOVYX-PLANNING|alta] vps-brain-dump/SOVYX-MISSION-AUDIT-V5.md
+  Mission audit v5 ADRs
+[SOVYX-PLANNING|alta] vps-brain-dump/SOVYX-MISSION-AUDIT-V6.md
+  Mission audit v6 interfaces
+[SOVYX-PLANNING|alta] vps-brain-dump/SOVYX-MISSION-AUDIT-V7.md
+  Mission audit v7 ordering
+[SOVYX-PLANNING|alta] vps-brain-dump/SOVYX-MISSION-AUDIT-V8.md
+  Mission audit v8 68 issues
+[SOVYX-PLANNING|alta] vps-brain-dump/SOVYX-MISSION-AUDIT.md
+  Mission audit inconsistencies
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/SOVYX-ACTIVITY-REDESIGN-MISSION.md
+  SOVYX-ACTIVITY-REDESIGN-MISSION
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/SOVYX-DAILY-STATS-MISSION.md
+  SOVYX-DAILY-STATS-MISSION
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/SOVYX-FINANCIAL-GATE-V2-MISSION.md
+  SOVYX-FINANCIAL-GATE-V2-MISSION
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/SOVYX-GLOBAL-SAFETY-MISSION.md
+  SOVYX-GLOBAL-SAFETY-MISSION
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/SOVYX-HEALTH-WIRE-MISSION.md
+  SOVYX-HEALTH-WIRE-MISSION
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/SOVYX-KNOWLEDGE-TRANSFER-MISSION.md
+  SOVYX-KNOWLEDGE-TRANSFER-MISSION
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/SOVYX-LOGS-MISSION.md
+  SOVYX-LOGS-MISSION
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/SOVYX-MARKDOWN-CHAT-MISSION.md
+  SOVYX-MARKDOWN-CHAT-MISSION
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/SOVYX-METAMISSION-DEVELOPMENT-ROADMAP.md
+  SOVYX-METAMISSION-DEVELOPMENT-ROADMAP
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/SOVYX-ONBOARDING-MISSION.md
+  SOVYX-ONBOARDING-MISSION
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/SOVYX-QUALITY-MISSION.md
+  SOVYX-QUALITY-MISSION
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/SOVYX-SAFETY-GUARDRAILS-MISSION.md
+  SOVYX-SAFETY-GUARDRAILS-MISSION
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/SOVYX-SCORING-REFINEMENT-MISSION.md
+  SOVYX-SCORING-REFINEMENT-MISSION
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/SOVYX-SITE-POLISH-MISSION.md
+  SOVYX-SITE-POLISH-MISSION
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/SOVYX-SITE-REBUILD-MISSION.md
+  SOVYX-SITE-REBUILD-MISSION
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/SOVYX-TEST-FIXES-MISSION.md
+  SOVYX-TEST-FIXES-MISSION
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/SOVYX-V05-POLISH-MISSION.md
+  SOVYX-V05-POLISH-MISSION
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/plans/SOVYX-BKD-PLN-001-LAUNCH-PLAN.md
+  Launch plan: timeline, milestones, go-to-market strategy, rollout phases, risk mitigation tactics
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/plans/SOVYX-BKD-PLN-002-ROADMAP.md
+  Product roadmap: Q1-Q4 features, dependency graph, resource allocation, velocity forecasting
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/product/SOVYX-BKD-PRD-001-PRODUCT-REQUIREMENTS.md
+  Product requirements: feature specs, acceptance criteria, user stories, success metrics definition
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/product/SOVYX-BKD-PRD-002-PRICING-MONETIZATION.md
+  Pricing strategy: freemium tiers, enterprise billing, usage-based costs, unit economics modeling
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/sovyx-bible/missions/MISSION-CI-FIX.md
+  CI fix aiosqlite deadlock
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/sovyx-bible/missions/MISSION-PRICING-REDESIGN.md
+  Pricing redesign enterprise
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/sovyx-bible/missions/MISSIONS-AUDIT.md
+  Missions audit recommend
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/sovyx-bible/missions/SOVYX-DASH-DESIGN-MISSION.md
+  Dashboard design system
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/sovyx-bible/missions/SOVYX-FRONTEND-ARCHITECTURE-MISSION.md
+  Frontend architecture
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/sovyx-bible/missions/SOVYX-PRODUCTION-ROADMAP.md
+  Production roadmap v0.5
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/sovyx-bible/missions/SOVYX-V05-MASTER-MISSION.md
+  Master mission v0.5 73
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/sovyx-bible/missions/archive/SOVYX-CLOUD-ENTERPRISE-MISSION.md
+  Cloud Enterprise spec
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/sovyx-bible/missions/archive/SOVYX-DEEP-RESEARCH-MISSION.md
+  Deep research 15 IMPLs
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/sovyx-bible/missions/archive/SOVYX-DOC-AUDIT-MISSION.md
+  Doc audit contradictions
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/sovyx-bible/missions/archive/SOVYX-GAP-ELIMINATION-MISSION.md
+  Gap elimination 50 funcs
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/sovyx-bible/missions/archive/SOVYX-GAPS-CLOSURE-MISSION.md
+  Gaps closure 6 tasks
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/sovyx-bible/missions/archive/SOVYX-IMMERSION-002-MISSION.md
+  Immersion 002 saturation
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/sovyx-bible/missions/archive/SOVYX-IMPL-GAPS-MISSION.md
+  Implementation gaps 7
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/sovyx-bible/missions/archive/SOVYX-MSN-001-GENESIS-REWRITE.md
+  Genesis rewrite 47 docs
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/sovyx-bible/missions/archive/SOVYX-MSN-002-INTEGRATION-PATTERNS.md
+  Integration patterns code
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/sovyx-bible/missions/archive/SOVYX-PLUGIN-ECOSYSTEM-MISSION.md
+  Plugin ecosystem 15 tasks
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/sovyx-bible/missions/archive/SOVYX-PRICING-FORTRESS-MISSION.md
+  Pricing fortress 12 tasks
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/sovyx-bible/missions/archive/SOVYX-REVENUE-GAPS-MISSION.md
+  Revenue gaps monetization
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/sovyx-bible/missions/archive/SOVYX-WEB-REBUILD-MISSION.md
+  Web rebuild sovyx.ai
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/sovyx-bible/missions/archive/dashboard/SOVYX-DASHBOARD-INVENTORY.md
+  Dashboard inventory 258
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/sovyx-bible/missions/archive/dashboard/SOVYX-DASHBOARD-METAMISSION.md
+  Dashboard metamission v3
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/confidential/sovyx-bible/research/SOVYX-VR-065-GTM-STRATEGY.md
+  Go-to-market and hype strategy, master document, positioning
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/nodes/competitive-landscape.md
+  competitive-landscape
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/nodes/distribution-channels.md
+  distribution-channels
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/nodes/license-landscape.md
+  license-landscape
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/nodes/seo-discoverability.md
+  seo-discoverability
+[SOVYX-PLANNING|alta] vps-brain-dump/memory/nodes/sovyx-mission-hub.md
+  Sovyx — Mission Hub & Navigation Index
+[SOVYX-PLANNING|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-VAL-005-PRICING-FORTRESS-VALIDATION.md
+  Pricing fortress validation specification: model consistency, revenue projections detailed
+[SOVYX-PLANNING|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-VR-093-CONVERSION-FUNNEL.md
+  Conversion funnel specification: onboarding, trial conversion, upsell, retention metrics
+[SOVYX-PLANNING|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-VR-095-PRICE-VALIDATION.md
+  Price validation specification: willingness to pay, elasticity, market research findings
+[SOVYX-PLANNING|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-VR-096-ENTERPRISE-PRICING.md
+  Enterprise pricing specification: custom contracts, volume discounts, SLA pricing models
+[SOVYX-PLANNING|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-VR-098-UNIT-ECONOMICS.md
+  Unit economics specification: CAC, LTV, payback period, margin analysis, financial models
+[SOVYX-PLANNING|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-VR-099-PSYCHOLOGICAL-PRICING.md
+  Psychological pricing specification: anchoring, charm pricing, bundling, scarcity tactics
+[SOVYX-PLANNING|media] vps-brain-dump/memory/confidential/sovyx-bible/research/SOVYX-VR-047-PRICING-PAGE.md
+  Pricing psychology, OSS pricing patterns, competitor analysis (SUPERSEDED)
+[SOVYX-PLANNING|media] vps-brain-dump/memory/confidential/sovyx-bible/research/SOVYX-VR-061-DEMO-VIDEO.md
+  Demo video strategy, Dollar Shave Club case study, viral hooks
+[SOVYX-PLANNING|media] vps-brain-dump/memory/confidential/sovyx-bible/research/SOVYX-VR-062-LAUNCH-DAY.md
+  Launch day playbook, PH HN Reddit timing, algorithm mechanics
+[SOVYX-PLANNING|media] vps-brain-dump/memory/confidential/sovyx-bible/research/SOVYX-VR-063-POST-LAUNCH.md
+  Post-launch amplification, momentum waves, content calendar
+[SOVYX-PLANNING|media] vps-brain-dump/memory/confidential/sovyx-bible/research/SOVYX-VR-064-GROWTH-ENGINE.md
+  Growth engine sustainable, flywheel mechanics, SEO integration
+[SOVYX-PLANNING|media] vps-brain-dump/memory/confidential/sovyx-bible/research/SOVYX-VR-067-MESSAGING-MATRIX.md
+  6 narratives for 6 audiences, tinkerer, privacy absolutist, personas
+[SOVYX-PLANNING|media] vps-brain-dump/memory/confidential/sovyx-bible/research/SOVYX-VR-068-PRICING-VALIDATION.md
+  Pricing competitor benchmarking, $20/mo standard (SUPERSEDED)
+[SOVYX-PLANNING|media] vps-brain-dump/memory/confidential/sovyx-bible/research/SOVYX-VR-077-BUSINESS-TIER.md
+  Business white-label tier, enterprise escalation, SSO LDAP (SUPERSEDED)
+[SOVYX-PLANNING|media] vps-brain-dump/memory/confidential/sovyx-bible/research/SOVYX-VR-082-COMMUNITY-BUILDING-PRELAUNCH.md
+  Community building pre-launch, D-90 to D+30 playbook, zero budget
+[SOVYX-PLANNING|baixa] vps-brain-dump/memory/daily/2025-03-25.md
+  Diario: 2025-03-25.md
+[SOVYX-PLANNING|baixa] vps-brain-dump/memory/daily/2026-04-01.md
+  Diario: 2026-04-01.md

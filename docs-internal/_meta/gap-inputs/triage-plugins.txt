@@ -1,0 +1,65 @@
+=== Triage entries for module: plugins (32 docs) ===
+[SOVYX-PLUGINS|alta] vps-brain-dump/memory/confidential/SOVYX-SITE-PLUGINS-MISSION.md
+  SOVYX-SITE-PLUGINS-MISSION
+[SOVYX-PLUGINS|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/docs/SOVYX-BKD-DOC-001-PLUGIN-GUIDE.md
+  Plugin development guide: SDK, sandbox, governance, IPC patterns, security model, marketplace policies
+[SOVYX-PLUGINS|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-010-DEPENDENCY-RESOLVER.md
+  Dependency resolver specification: plugin versioning, DAG resolution, conflict detection logic
+[SOVYX-PLUGINS|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-012-PLUGIN-SANDBOX.md
+  Plugin sandbox specification: resource limits, permission checks, runtime isolation enforcement
+[SOVYX-PLUGINS|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-008-PLUGIN-IPC.md
+  Plugin IPC specification: message passing, request-reply, pub-sub patterns, serialization
+[SOVYX-PLUGINS|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-008-PLUGIN-SANDBOX.md
+  Plugin sandbox specification: execution isolation, capability-based security, resource limits
+[SOVYX-PLUGINS|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-008-PLUGIN-SDK.md
+  Plugin SDK specification: libraries, interfaces, helpers, best practices, documentation
+[SOVYX-PLUGINS|alta] vps-brain-dump/memory/nodes/sovyx-plugin-system.md
+  Sovyx — Plugin System & Marketplace
+[SOVYX-SECURITY|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-001-CRYPTO.md
+  Cryptography specification: encryption algorithms, key management, TLS stack, post-quantum preparation
+[SOVYX-SECURITY|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-013-SSO-SECURITY.md
+  SSO security specification: OAuth2/OIDC, token handling, federated identity, MFA integration
+[SOVYX-SECURITY|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-SUP-007-ANTIABUSE-CRASH.md
+  Anti-abuse specification: rate limiting, anomaly detection, crash mitigation strategies
+[SOVYX-SECURITY|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-SUP-009-COMPLIANCE.md
+  Compliance specification: GDPR, CCPA, HIPAA-ready status, data residency, audit logging
+[SOVYX-SECURITY|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-SUP-010-SECURITY-TOOLCHAIN.md
+  Security toolchain specification: SAST, dependency scanning, container scanning, pen-testing
+[SOVYX-SECURITY|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-SUP-011-DIFFERENTIAL-PRIVACY.md
+  Differential privacy specification: federated learning, privacy-preserving aggregation methods
+[SOVYX-SECURITY|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-024-SECURITY-CREDENTIAL-VAULT.md
+  Security credential vault specification: secret storage, rotation, access control, audit
+[SOVYX-SECURITY|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-025-IDENTITY-ACCESS-CONTROL.md
+  Identity and access control specification: RBAC, authz policies, credential verification
+[SOVYX-SECURITY|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-032-PRIVACY-COMPLIANCE.md
+  Privacy and compliance specification: data minimization, retention, user rights, transparency
+[SOVYX-SECURITY|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-034-ENTERPRISE-IDENTITY.md
+  Enterprise identity specification: SAML, LDAP, group management, directory sync detailed
+[SOVYX-SECURITY|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-VR-086-SSO-LDAP.md
+  SSO and LDAP specification: enterprise authentication, user provisioning, group mapping
+[SOVYX-SECURITY|alta] vps-brain-dump/memory/nodes/sovyx-privacy-compliance.md
+  Sovyx — Privacy & Compliance
+[SOVYX-SECURITY|alta] vps-brain-dump/memory/nodes/sovyx-security-identity.md
+  Sovyx — Security, Credentials & Identity
+[SOVYX-PLUGINS|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-008-PLUGIN-ANALYTICS.md
+  Plugin analytics specification: usage metrics, telemetry, performance monitoring detailed
+[SOVYX-PLUGINS|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-008-PLUGIN-COMPATIBILITY.md
+  Plugin compatibility specification: version constraints, API evolution, deprecation handling
+[SOVYX-PLUGINS|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-008-PLUGIN-CONFIG-UI.md
+  Plugin configuration UI specification: schema-driven forms, validation, runtime updates
+[SOVYX-PLUGINS|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-008-PLUGIN-DATA-MIGRATION.md
+  Plugin data migration specification: versioned schemas, backward compatibility, repair tools
+[SOVYX-PLUGINS|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-008-PLUGIN-GOVERNANCE.md
+  Plugin governance specification: marketplace policies, content moderation, liability limits
+[SOVYX-PLUGINS|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-008-PLUGIN-REGISTRY.md
+  Plugin registry specification: discovery, versioning, metadata, installation workflow clear
+[SOVYX-PLUGINS|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-008-PLUGIN-REVIEW-CI.md
+  Plugin review and CI specification: automated tests, security checks, quality gates detailed
+[SOVYX-PLUGINS|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-008-PLUGIN-SCAFFOLD.md
+  Plugin scaffold specification: templates, boilerplate, initialization, project structure
+[SOVYX-PLUGINS|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-008-PLUGIN-SDK-TESTING.md
+  Plugin SDK testing specification: unit tests, integration tests, mocking, fixtures detailed
+[SOVYX-PLUGINS|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-008-PLUGIN-UPDATE.md
+  Plugin update specification: version checking, installation, rollback, zero-downtime strategy
+[SOVYX-PLUGINS|media] vps-brain-dump/memory/daily/2026-03-28.md
+  2026-03-28

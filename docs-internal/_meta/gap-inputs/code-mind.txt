@@ -1,0 +1,29 @@
+=== src/sovyx/mind/ — files ===
+src/sovyx/mind/__init__.py
+src/sovyx/mind/config.py
+src/sovyx/mind/personality.py
+
+=== modules classes/functions (public) ===
+--- src/sovyx/mind/config.py ---
+class PersonalityConfig(BaseModel):
+class OceanConfig(BaseModel):
+class LLMConfig(BaseModel):
+class ScoringConfig(BaseModel):
+class BrainConfig(BaseModel):
+class TelegramChannelConfig(BaseModel):
+class DiscordChannelConfig(BaseModel):
+class ChannelsConfig(BaseModel):
+class Guardrail(BaseModel):
+class CustomRule(BaseModel):
+class ShadowPattern(BaseModel):
+class SafetyConfig(BaseModel):
+class PluginConfigEntry(BaseModel):
+class PluginsConfig(BaseModel):
+class MindConfig(BaseModel):
+def load_mind_config(path: Path) -> MindConfig:
+def create_default_mind_config(name: str, data_dir: Path) -> Path:
+def validate_plugin_config(
+
+--- src/sovyx/mind/personality.py ---
+class PersonalityEngine:
+

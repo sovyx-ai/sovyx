@@ -1,0 +1,86 @@
+=== src/sovyx/dashboard/ — files ===
+src/sovyx/dashboard/__init__.py
+src/sovyx/dashboard/_shared.py
+src/sovyx/dashboard/activity.py
+src/sovyx/dashboard/brain.py
+src/sovyx/dashboard/chat.py
+src/sovyx/dashboard/config.py
+src/sovyx/dashboard/conversations.py
+src/sovyx/dashboard/daily_stats.py
+src/sovyx/dashboard/events.py
+src/sovyx/dashboard/export_import.py
+src/sovyx/dashboard/logs.py
+src/sovyx/dashboard/plugins.py
+src/sovyx/dashboard/rate_limit.py
+src/sovyx/dashboard/server.py
+src/sovyx/dashboard/settings.py
+src/sovyx/dashboard/status.py
+src/sovyx/dashboard/voice_status.py
+
+=== modules classes/functions (public) ===
+--- src/sovyx/dashboard/_shared.py ---
+async def get_active_mind_id(registry: ServiceRegistry) -> str:
+
+--- src/sovyx/dashboard/activity.py ---
+async def get_activity_timeline(
+
+--- src/sovyx/dashboard/brain.py ---
+async def get_brain_graph(
+async def search_brain(
+
+--- src/sovyx/dashboard/chat.py ---
+async def handle_chat_message(
+
+--- src/sovyx/dashboard/config.py ---
+def get_config(mind_config: MindConfig) -> dict[str, Any]:
+def apply_config(
+
+--- src/sovyx/dashboard/conversations.py ---
+async def list_conversations(
+async def get_conversation_messages(
+async def count_active_conversations(registry: ServiceRegistry) -> int:
+
+--- src/sovyx/dashboard/daily_stats.py ---
+class DailyStatsRecorder:
+
+--- src/sovyx/dashboard/events.py ---
+class DashboardEventBridge:
+
+--- src/sovyx/dashboard/export_import.py ---
+async def export_mind(registry: ServiceRegistry, mind_id: str) -> Path:
+async def import_mind(
+
+--- src/sovyx/dashboard/logs.py ---
+def query_logs(
+
+--- src/sovyx/dashboard/plugins.py ---
+def get_plugins_status(
+def get_plugin_detail(
+def get_tools_list(
+
+--- src/sovyx/dashboard/rate_limit.py ---
+class _SlidingWindow:
+class RateLimitMiddleware(BaseHTTPMiddleware):
+
+--- src/sovyx/dashboard/server.py ---
+class ConnectionManager:
+class RequestIdMiddleware(BaseHTTPMiddleware):
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+def create_app(config: APIConfig | None = None, *, token: str | None = None) -> FastAPI:
+class DashboardServer:
+
+--- src/sovyx/dashboard/settings.py ---
+def get_settings(config: EngineConfig) -> dict[str, Any]:
+def apply_settings(
+
+--- src/sovyx/dashboard/status.py ---
+class StatusSnapshot:
+class DashboardCounters:
+def get_counters() -> DashboardCounters:
+def configure_timezone(
+class StatusCollector:
+
+--- src/sovyx/dashboard/voice_status.py ---
+async def get_voice_status(registry: ServiceRegistry) -> dict[str, Any]:
+async def get_voice_models(registry: ServiceRegistry) -> dict[str, Any]:
+

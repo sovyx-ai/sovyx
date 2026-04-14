@@ -48,6 +48,11 @@ logger = get_logger(__name__)
 
 TOKEN_FILE = Path.home() / ".sovyx" / "token"
 
+# ── Upload Limits ──
+
+MAX_IMPORT_BYTES = 100 * 1024 * 1024  # 100 MiB — hard cap on /api/import uploads.
+_IMPORT_CHUNK_BYTES = 1 * 1024 * 1024  # 1 MiB streaming read chunk size.
+
 
 def _ensure_token() -> str:
     """Read or generate the dashboard auth token."""
@@ -674,6 +679,10 @@ def create_app(config: APIConfig | None = None, *, token: str | None = None) -> 
         Expects multipart/form-data with a ``file`` field containing
         the archive.  Optional query param ``overwrite=true`` to replace
         an existing mind.
+
+        Upload is capped at ``MAX_IMPORT_BYTES`` (100 MiB). The cap is
+        enforced both via the ``Content-Length`` header (fast reject) and
+        via streaming chunk accumulation (defeats missing/lying headers).
         """
         import shutil
         import tempfile
@@ -701,6 +710,25 @@ def create_app(config: APIConfig | None = None, *, token: str | None = None) -> 
                 status_code=422,
             )
 
+        # Fast reject via Content-Length header (before reading body).
+        content_length_hdr = request.headers.get("content-length")
+        if content_length_hdr is not None:
+            try:
+                declared_size = int(content_length_hdr)
+            except ValueError:
+                declared_size = -1
+            if declared_size > MAX_IMPORT_BYTES:
+                return JSONResponse(
+                    {
+                        "error": (
+                            f"Upload too large (declared {declared_size} bytes, "
+                            f"max {MAX_IMPORT_BYTES})"
+                        ),
+                    },
+                    status_code=413,
+                    headers={"Content-Length": "0"},
+                )
+
         form = await request.form()
         upload = form.get("file")
         if upload is None or not hasattr(upload, "read"):
@@ -709,12 +737,25 @@ def create_app(config: APIConfig | None = None, *, token: str | None = None) -> 
                 status_code=422,
             )
 
-        # Write upload to a temp file
+        # Stream upload to disk with cap — defeats lying/missing Content-Length.
         tmp_dir = Path(tempfile.mkdtemp(prefix="sovyx-import-"))
         tmp_path = tmp_dir / "upload.sovyx-mind"
         try:
-            data = await upload.read()
-            tmp_path.write_bytes(data)
+            written = 0
+            with tmp_path.open("wb") as out:
+                while True:
+                    chunk = await upload.read(_IMPORT_CHUNK_BYTES)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > MAX_IMPORT_BYTES:
+                        return JSONResponse(
+                            {
+                                "error": (f"Upload exceeded max size of {MAX_IMPORT_BYTES} bytes"),
+                            },
+                            status_code=413,
+                        )
+                    out.write(chunk)
 
             from sovyx.dashboard.export_import import import_mind
 

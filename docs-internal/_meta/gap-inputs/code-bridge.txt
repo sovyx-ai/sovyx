@@ -1,0 +1,35 @@
+=== src/sovyx/bridge/ — files ===
+src/sovyx/bridge/__init__.py
+src/sovyx/bridge/channels/__init__.py
+src/sovyx/bridge/channels/signal.py
+src/sovyx/bridge/channels/telegram.py
+src/sovyx/bridge/identity.py
+src/sovyx/bridge/manager.py
+src/sovyx/bridge/protocol.py
+src/sovyx/bridge/sessions.py
+
+=== modules classes/functions (public) ===
+--- src/sovyx/bridge/channels/signal.py ---
+class SignalChannel:
+
+--- src/sovyx/bridge/channels/telegram.py ---
+class TelegramChannel:
+
+--- src/sovyx/bridge/identity.py ---
+class PersonResolver:
+
+--- src/sovyx/bridge/manager.py ---
+class _LRULockDict(Generic[_K]):
+class PersonResolver(Protocol):
+class ConversationTracker(Protocol):
+class _PendingConfirmationCtx:
+class BridgeManager:
+
+--- src/sovyx/bridge/protocol.py ---
+class InlineButton:
+class InboundMessage:
+class OutboundMessage:
+
+--- src/sovyx/bridge/sessions.py ---
+class ConversationTracker:
+

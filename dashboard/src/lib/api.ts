@@ -2,27 +2,69 @@
  * Sovyx Dashboard — API client
  *
  * Thin fetch wrapper with:
- * - Bearer auth (token from localStorage)
+ * - Bearer auth (token kept in `sessionStorage` + in-memory fallback;
+ *   never in `localStorage`, to reduce XSS token-theft blast radius)
  * - 401 → clear token + show auth modal
  * - AbortSignal support for cancellation
- * - Content-Type only on requests with body (POLISH-12 fix)
+ * - Content-Type only on requests with body
  * - Typed ApiError for non-2xx responses
- *
- * Ref: POLISH-01, POLISH-12
  */
 
 export const BASE_URL = import.meta.env.VITE_API_URL ?? "";
 
+const TOKEN_STORAGE_KEY = "sovyx_token";
+/** Legacy keys that may hold a token from pre-hardening builds. */
+const LEGACY_STORAGE_KEYS = ["sovyx_token"] as const;
+
+// In-memory fallback — survives within the tab lifetime when sessionStorage
+// is disabled (e.g. privacy mode, embedded contexts).
+let memoryToken: string | null = null;
+
+function getSessionStorage(): Storage | null {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+
+/** Pull any token left in `localStorage` by old builds into sessionStorage. */
+function migrateLegacyToken(): void {
+  try {
+    for (const key of LEGACY_STORAGE_KEYS) {
+      const legacy = window.localStorage?.getItem(key);
+      if (legacy) {
+        getSessionStorage()?.setItem(TOKEN_STORAGE_KEY, legacy);
+        window.localStorage.removeItem(key);
+      }
+    }
+  } catch {
+    // localStorage unavailable — nothing to migrate.
+  }
+}
+migrateLegacyToken();
+
 function getToken(): string | null {
-  return localStorage.getItem("sovyx_token");
+  const stored = getSessionStorage()?.getItem(TOKEN_STORAGE_KEY) ?? null;
+  return stored ?? memoryToken;
 }
 
 export function setToken(token: string): void {
-  localStorage.setItem("sovyx_token", token);
+  memoryToken = token;
+  getSessionStorage()?.setItem(TOKEN_STORAGE_KEY, token);
 }
 
 export function clearToken(): void {
-  localStorage.removeItem("sovyx_token");
+  memoryToken = null;
+  getSessionStorage()?.removeItem(TOKEN_STORAGE_KEY);
+  // Also scrub any lingering legacy localStorage entry.
+  try {
+    for (const key of LEGACY_STORAGE_KEYS) {
+      window.localStorage?.removeItem(key);
+    }
+  } catch {
+    // ignore
+  }
 }
 
 export class ApiError extends Error {

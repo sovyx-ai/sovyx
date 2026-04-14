@@ -1,0 +1,79 @@
+=== Triage entries for module: _mixed (39 docs) ===
+[MIXED|baixa] vps-brain-dump/memory/daily/2026-03-25.md
+  Misto Sovyx/Erebus: 2026-03-25
+[MIXED|baixa] vps-brain-dump/memory/daily/2026-03-26.md
+  Pouco-signal Sovyx: 2026-03-26
+[MIXED|baixa] vps-brain-dump/memory/daily/2026-03-29.md
+  Misto Sovyx/Erebus: 2026-03-29
+[MIXED|baixa] vps-brain-dump/memory/daily/2026-03-30.md
+  Pouco-signal Sovyx: 2026-03-30
+[MIXED|baixa] vps-brain-dump/memory/daily/2026-03-31.md
+  Pouco-signal Sovyx: 2026-03-31
+[MIXED|baixa] vps-brain-dump/memory/daily/2026-04-02.md
+  Pouco-signal Sovyx: 2026-04-02
+[MIXED|baixa] vps-brain-dump/memory/daily/2026-04-03.md
+  Pouco-signal Sovyx: 2026-04-03
+[MIXED|baixa] vps-brain-dump/memory/daily/2026-04-06.md
+  Pouco-signal Sovyx: 2026-04-06
+[MIXED|baixa] vps-brain-dump/memory/daily/2026-04-07.md
+  Misto Sovyx/Erebus: 2026-04-07
+[MIXED|baixa] vps-brain-dump/memory/daily/2026-04-08.md
+  Pouco-signal Sovyx: 2026-04-08
+[MIXED|baixa] vps-brain-dump/memory/daily/2026-04-09.md
+  Pouco-signal Sovyx: 2026-04-09
+[MIXED|baixa] vps-brain-dump/memory/daily/2026-04-10.md
+  Pouco-signal Sovyx: 2026-04-10
+[MIXED|baixa] vps-brain-dump/memory/daily/2026-04-12.md
+  Pouco-signal Sovyx: 2026-04-12
+[MIXED|baixa] vps-brain-dump/memory/nodes/VR-078-voice-latency-optimization.md
+  Pouco-signal Sovyx: Voice Latency Optimization — STT/TTS Pipeline Stacks
+[MIXED|baixa] vps-brain-dump/memory/nodes/VR-079-plugin-demand-ranking.md
+  Pouco-signal Sovyx: Plugin Community Demand Mining — Top 30 Ranked
+[MIXED|baixa] vps-brain-dump/memory/nodes/VR-080-mobile-engineering-dd29.md
+  Pouco-signal Sovyx: Mobile Engineering Deep-Dive (DD-29) — Flutter + Cloud Relay
+[MIXED|baixa] vps-brain-dump/memory/nodes/VR-081-competitor-hands-on-testing.md
+  Pouco-signal Sovyx: Competitor Hands-On Testing — 5 Products Benchmarked
+[MIXED|baixa] vps-brain-dump/memory/nodes/VR-082-community-building-prelaunch.md
+  Pouco-signal Sovyx: Community Building Pre-Launch — D-90 to D+30 Playbook
+[MIXED|baixa] vps-brain-dump/memory/nodes/dimitri-complete.md
+  Ambiguo: Dimitri — Pentest Platform (Arquivo Único Consolidado)
+[MIXED|baixa] vps-brain-dump/memory/nodes/nyx-brain-v2-architecture.md
+  Ambiguo: nyx-brain-v2-architecture
+[MIXED|baixa] vps-brain-dump/memory/nodes/react-force-graph-2d-reference.md
+  Pouco-signal Sovyx: react-force-graph-2d — API Reference & Patterns
+[MIXED|baixa] vps-brain-dump/memory/nodes/release-protocol-lesson.md
+  Ambiguo: release-protocol-lesson
+[MIXED|baixa] vps-brain-dump/memory/nodes/stripe-fastapi-integration.md
+  Pouco-signal Sovyx: Stripe + FastAPI — Subscription SaaS Integration
+[MIXED|baixa] vps-brain-dump/memory/nodes/tech-backend-fastapi.md
+  Ambiguo: tech-backend-fastapi
+[MIXED|baixa] vps-brain-dump/memory/nodes/ux-ui-bento-varfonts.md
+  Ambiguo: ux-ui-bento-varfonts
+[MIXED|baixa] vps-brain-dump/memory/nodes/ux-ui-charts-realtime.md
+  Ambiguo: ux-ui-charts-realtime
+[MIXED|baixa] vps-brain-dump/memory/nodes/ux-ui-contrast-tokens.md
+  Ambiguo: ux-ui-contrast-tokens
+[MIXED|baixa] vps-brain-dump/memory/nodes/ux-ui-design-systems-study.md
+  Ambiguo: ux-ui-design-systems-study
+[MIXED|baixa] vps-brain-dump/memory/nodes/ux-ui-dnd-a11y-realtime.md
+  Ambiguo: ux-ui-dnd-a11y-realtime
+[MIXED|baixa] vps-brain-dump/memory/nodes/ux-ui-edge-states-tables.md
+  Ambiguo: ux-ui-edge-states-tables
+[MIXED|baixa] vps-brain-dump/memory/nodes/ux-ui-mastery.md
+  Ambiguo: ux-ui-mastery
+[MIXED|baixa] vps-brain-dump/memory/nodes/ux-ui-morphisms-gradients.md
+  Ambiguo: ux-ui-morphisms-gradients
+[MIXED|baixa] vps-brain-dump/memory/nodes/ux-ui-motion-loading.md
+  Ambiguo: ux-ui-motion-loading
+[MIXED|baixa] vps-brain-dump/memory/nodes/ux-ui-navigation-typography.md
+  Ambiguo: ux-ui-navigation-typography
+[MIXED|baixa] vps-brain-dump/memory/nodes/vr-061-demo-video.md
+  Pouco-signal Sovyx: Vr 061 Demo Video
+[MIXED|baixa] vps-brain-dump/memory/nodes/vr-062-launch-day-playbook.md
+  Pouco-signal Sovyx: Vr 062 Launch Day Playbook
+[MIXED|baixa] vps-brain-dump/memory/nodes/vr-063-post-launch-amplification.md
+  Pouco-signal Sovyx: Vr 063 Post Launch Amplification
+[MIXED|baixa] vps-brain-dump/memory/nodes/vr-064-growth-engine-sustentavel.md
+  Pouco-signal Sovyx: Vr 064 Growth Engine Sustentavel
+[MIXED|baixa] vps-brain-dump/memory/nodes/zod-v4-react-hook-form.md
+  Pouco-signal Sovyx: Zod v4 + react-hook-form — Migration & Patterns

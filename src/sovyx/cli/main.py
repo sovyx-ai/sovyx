@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 
 import typer
@@ -102,12 +103,41 @@ def token(
     console.print("[dim]Use this token to authenticate with the dashboard.[/dim]\n")
 
 
+_MIND_NAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
+
+
+def _validate_mind_name(name: str) -> str:
+    """Validate mind-name before using it in filesystem paths.
+
+    Prevents path traversal (``../``), absolute paths, separators, and other
+    filesystem-dangerous characters. The resulting name is lowercased for the
+    filesystem directory but the original is kept for display.
+
+    Raises:
+        typer.BadParameter: if the name contains disallowed characters or is
+            longer than 64 characters.
+    """
+    if not _MIND_NAME_PATTERN.match(name):
+        raise typer.BadParameter(
+            f"Invalid mind name {name!r}: must match "
+            f"^[A-Za-z][A-Za-z0-9_-]{{0,63}}$ (ASCII letters/digits/_/-, "
+            f"starting with a letter, 1-64 chars).",
+            param_hint="name",
+        )
+    return name
+
+
 @app.command()
 def init(
-    name: str = typer.Argument("Aria", help="Mind name"),
+    name: str = typer.Argument(
+        "Aria",
+        help="Mind name (letters/digits/_/-, 1-64 chars, starts with letter)",
+    ),
     quick: bool = typer.Option(False, "--quick", "-q", help="Quick mode: defaults, zero prompts"),
 ) -> None:
     """Initialize Sovyx: create config files and data directory."""
+
+    name = _validate_mind_name(name)
 
     data_dir = Path.home() / ".sovyx"
     data_dir.mkdir(parents=True, exist_ok=True)

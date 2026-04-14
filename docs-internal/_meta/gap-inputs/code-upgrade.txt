@@ -1,0 +1,51 @@
+=== src/sovyx/upgrade/ — files ===
+src/sovyx/upgrade/__init__.py
+src/sovyx/upgrade/backup_manager.py
+src/sovyx/upgrade/blue_green.py
+src/sovyx/upgrade/doctor.py
+src/sovyx/upgrade/exporter.py
+src/sovyx/upgrade/importer.py
+src/sovyx/upgrade/migrations/__init__.py
+src/sovyx/upgrade/schema.py
+
+=== modules classes/functions (public) ===
+--- src/sovyx/upgrade/backup_manager.py ---
+class BackupTrigger(StrEnum):
+class BackupInfo:
+class BackupError(PersistenceError):
+class BackupIntegrityError(BackupError):
+class BackupManager:
+
+--- src/sovyx/upgrade/blue_green.py ---
+class UpgradePhase(enum.StrEnum):
+class UpgradeResult:
+class UpgradeError(MigrationError):
+class InstallError(UpgradeError):
+class VerificationError(UpgradeError):
+class RollbackError(UpgradeError):
+class VersionInstaller:
+class BlueGreenUpgrader:
+
+--- src/sovyx/upgrade/doctor.py ---
+class DiagnosticStatus(StrEnum):
+class DiagnosticResult:
+class DiagnosticReport:
+class Doctor:
+
+--- src/sovyx/upgrade/exporter.py ---
+class ExportManifest:
+class ExportInfo:
+class MindExporter:
+
+--- src/sovyx/upgrade/importer.py ---
+class ImportValidationError(MigrationError):
+class ImportInfo:
+class MindImporter:
+
+--- src/sovyx/upgrade/schema.py ---
+class SemVer:
+class UpgradeMigration:
+class MigrationReport:
+class SchemaVersion:
+class MigrationRunner:
+

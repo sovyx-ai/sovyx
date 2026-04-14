@@ -1,0 +1,125 @@
+=== src/sovyx/plugins/ — files ===
+src/sovyx/plugins/__init__.py
+src/sovyx/plugins/context.py
+src/sovyx/plugins/events.py
+src/sovyx/plugins/hot_reload.py
+src/sovyx/plugins/lifecycle.py
+src/sovyx/plugins/manager.py
+src/sovyx/plugins/manifest.py
+src/sovyx/plugins/official/__init__.py
+src/sovyx/plugins/official/calculator.py
+src/sovyx/plugins/official/financial_math.py
+src/sovyx/plugins/official/knowledge.py
+src/sovyx/plugins/official/weather.py
+src/sovyx/plugins/official/web_intelligence.py
+src/sovyx/plugins/permissions.py
+src/sovyx/plugins/sandbox_fs.py
+src/sovyx/plugins/sandbox_http.py
+src/sovyx/plugins/sdk.py
+src/sovyx/plugins/security.py
+src/sovyx/plugins/testing.py
+
+=== modules classes/functions (public) ===
+--- src/sovyx/plugins/context.py ---
+class BrainAccess:
+class EventBusAccess:
+class PluginContext:
+
+--- src/sovyx/plugins/events.py ---
+class PluginStateChanged(Event):
+class PluginLoaded(Event):
+class PluginUnloaded(Event):
+class PluginToolExecuted(Event):
+class PluginAutoDisabled(Event):
+
+--- src/sovyx/plugins/hot_reload.py ---
+class PluginFileWatcher:
+
+--- src/sovyx/plugins/lifecycle.py ---
+class PluginState(enum.StrEnum):
+class PluginStateTracker:
+class InvalidTransitionError(Exception):
+
+--- src/sovyx/plugins/manager.py ---
+class PluginError(Exception):
+class PluginDisabledError(PluginError):
+class _PluginHealth:
+class LoadedPlugin:
+class PluginManager:
+
+--- src/sovyx/plugins/manifest.py ---
+class NetworkConfig(BaseModel):
+class PluginDependency(BaseModel):
+class EventDeclaration(BaseModel):
+class EventsConfig(BaseModel):
+class ToolDeclaration(BaseModel):
+class PluginManifest(BaseModel):
+class ManifestError(Exception):
+def load_manifest(plugin_dir: Path) -> PluginManifest:
+
+--- src/sovyx/plugins/official/calculator.py ---
+class CalculatorPlugin(FinancialMathPlugin):
+
+--- src/sovyx/plugins/official/financial_math.py ---
+class _ValidationError(Exception):
+class FinancialMathPlugin(ISovyxPlugin):
+
+--- src/sovyx/plugins/official/knowledge.py ---
+class _Msg:
+class KnowledgePlugin(ISovyxPlugin):
+class _RelationInfo(typing.NamedTuple):
+class _RateLimiter:
+
+--- src/sovyx/plugins/official/weather.py ---
+class WeatherPlugin(ISovyxPlugin):
+
+--- src/sovyx/plugins/official/web_intelligence.py ---
+class CredibilityScore:
+def score_credibility(url: str) -> CredibilityScore:
+class QueryIntent:
+def classify_query(query: str) -> QueryIntent:
+class _RateLimiter:
+class _CacheEntry:
+class _SearchCache:
+class SearchResult:
+class SearchBackend:
+class DuckDuckGoBackend(SearchBackend):
+class SearXNGBackend(SearchBackend):
+class BraveBackend(SearchBackend):
+class WebIntelligencePlugin(ISovyxPlugin):
+
+--- src/sovyx/plugins/permissions.py ---
+class Permission(enum.StrEnum):
+def get_risk(permission: Permission) -> str:
+def get_risk_emoji(permission: Permission) -> str:
+def get_description(permission: Permission) -> str:
+class PermissionDeniedError(Exception):
+class PluginAutoDisabledError(Exception):
+class PermissionEnforcer:
+
+--- src/sovyx/plugins/sandbox_fs.py ---
+class SandboxedFsAccess:
+
+--- src/sovyx/plugins/sandbox_http.py ---
+class _RateLimiter:
+class SandboxedHttpClient:
+
+--- src/sovyx/plugins/sdk.py ---
+class ToolDefinition:
+class _ToolMeta:
+def tool(
+class ISovyxPlugin(ABC):
+
+--- src/sovyx/plugins/security.py ---
+class SecurityFinding:
+class PluginSecurityScanner:
+class ImportGuard(MetaPathFinder):
+
+--- src/sovyx/plugins/testing.py ---
+class MockBrainAccess:
+class MockEventBus:
+class MockHttpResponse:
+class MockHttpClient:
+class MockFsAccess:
+class MockPluginContext:
+

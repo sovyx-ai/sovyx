@@ -1,0 +1,9 @@
+=== Triage entries for module: llm (4 docs) ===
+[SOVYX-LLM|alta] vps-brain-dump/memory/confidential/SOVYX-OLLAMA-AUTODETECT-MISSION.md
+  SOVYX-OLLAMA-AUTODETECT-MISSION
+[SOVYX-LLM|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-007-LLM-ROUTER.md
+  LLM router specification: model selection, cost optimization, latency trade-offs evaluation
+[SOVYX-LLM|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-VR-085-CLOUD-LLM-PROXY.md
+  Cloud LLM proxy specification: multi-model routing, cost optimization, fallback handling
+[SOVYX-LLM|alta] vps-brain-dump/memory/nodes/sovyx-imm-d2-llm-providers.md
+  sovyx-imm-d2-llm-providers

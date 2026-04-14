@@ -1,0 +1,355 @@
+vps-brain-dump/memory/nodes/academic-papers.md|IRRELEVANT|Erebus: academic-papers|baixa
+vps-brain-dump/memory/nodes/additional-venues-prediction-markets.md|IRRELEVANT|Erebus: additional-venues-prediction-markets|baixa
+vps-brain-dump/memory/nodes/aiosqlite-deadlock-protocol.md|SOVYX-CORE|Protocolo Anti-Deadlock: aiosqlite + pytest-asyncio|media
+vps-brain-dump/memory/nodes/anbima-certifications-self-regulation.md|IRRELEVANT|Erebus: ANBIMA: Certificações (CGA, CGE, CEA, CFG) e Código de Autorregulação|baixa
+vps-brain-dump/memory/nodes/architecture.md|IRRELEVANT|Erebus/Nyx-prediction: architecture|baixa
+vps-brain-dump/memory/nodes/architecture-exchange-protocols.md|IRRELEVANT|Erebus: architecture-exchange-protocols|baixa
+vps-brain-dump/memory/nodes/architecture-nats-overlay.md|IRRELEVANT|Erebus: architecture-nats-overlay|baixa
+vps-brain-dump/memory/nodes/architecture-security-dashboard.md|IRRELEVANT|Erebus-hint: architecture-security-dashboard|baixa
+vps-brain-dump/memory/nodes/audit-trail-compliance-logging.md|IRRELEVANT|Erebus: Audit Trail: Logging de Compliance para Regulador|baixa
+vps-brain-dump/memory/nodes/avellaneda-stoikov-binary-weather.md|IRRELEVANT|Erebus: Avellaneda-Stoikov Adaptado: Inventory Risk Model para Binary Weather MM|baixa
+vps-brain-dump/memory/nodes/backtest-results.md|IRRELEVANT|Erebus: backtest-results|baixa
+vps-brain-dump/memory/nodes/black-swan-scenarios-prediction-markets.md|IRRELEVANT|Erebus: Black Swan Scenarios — Prediction Markets Risk Taxonomy|baixa
+vps-brain-dump/memory/nodes/bunker-v2-voice-interface.md|IRRELEVANT|Erebus: Bunker v2 — Voice Interface (Projeto Jarvis)|baixa
+vps-brain-dump/memory/nodes/capital-allocation-model.md|IRRELEVANT|Erebus: Capital Allocation Model — Erebus Engine|baixa
+vps-brain-dump/memory/nodes/cf-benchmarks-brti-methodology-analysis.md|IRRELEVANT|Erebus: CF Benchmarks BRTI: Metodologia Completa e Análise de Divergência para Erebus|baixa
+vps-brain-dump/memory/nodes/city-correlation-matrix-mm.md|IRRELEVANT|Erebus: city-correlation-matrix-mm|baixa
+vps-brain-dump/memory/nodes/city-prioritization-mm.md|IRRELEVANT|Erebus: city-prioritization-mm|baixa
+vps-brain-dump/memory/nodes/client-dashboard-functional-spec.md|IRRELEVANT|Erebus: 'Dashboard do Cliente: Especificação Funcional Completa'|baixa
+vps-brain-dump/memory/nodes/climate-longterm-prediction-markets.md|IRRELEVANT|Erebus: Climate & Long-term Prediction Markets: UST, GTTA, GCE Analysis|baixa
+vps-brain-dump/memory/nodes/cli-metar-90day-chicago-dallas.md|IRRELEVANT|Erebus: NWS CLI + METAR/ASOS 90-Day Analysis: Chicago & Dallas|baixa
+vps-brain-dump/memory/nodes/cme-event-contracts-edge-analysis.md|IRRELEVANT|Erebus: cme-event-contracts-edge-analysis|baixa
+vps-brain-dump/memory/nodes/cme-event-contracts-research.md|IRRELEVANT|Erebus: cme-event-contracts-research|baixa
+vps-brain-dump/memory/nodes/commodities-prediction-markets.md|IRRELEVANT|Erebus: commodities-prediction-markets|baixa
+vps-brain-dump/memory/nodes/competitive-landscape.md|SOVYX-PLANNING|competitive-landscape|alta
+vps-brain-dump/memory/nodes/competitive-landscape-prediction-market-fund.md|IRRELEVANT|Erebus: Competitive Landscape: Quem Tenta Ser 'The Prediction Market Fund'?|baixa
+vps-brain-dump/memory/nodes/competitive-landscape-prediction-markets.md|IRRELEVANT|Erebus: competitive-landscape-prediction-markets|baixa
+vps-brain-dump/memory/nodes/competitors-analysis.md|IRRELEVANT|Erebus: competitors-analysis|baixa
+vps-brain-dump/memory/nodes/compliance-officer-manual.md|IRRELEVANT|Erebus: Compliance Officer: Obrigações, Relatórios e Políticas|baixa
+vps-brain-dump/memory/nodes/constraint-root-subagents.md|SOVYX-CORE|constraint-root-subagents|alta
+vps-brain-dump/memory/nodes/correlation-risk-concentration-limits.md|IRRELEVANT|Erebus: Correlation Risk & Concentration Limits — Portfolio-Level Protection|baixa
+vps-brain-dump/memory/nodes/crypto-btc-cf-binance-divergence.md|IRRELEVANT|Erebus: BTC: CF Benchmarks BRTI vs Binance BTCUSDT — 7-Day Divergence Analysis|baixa
+vps-brain-dump/memory/nodes/crypto-prediction-markets-landscape.md|IRRELEVANT|Erebus: crypto-prediction-markets-landscape|baixa
+vps-brain-dump/memory/nodes/cvm-participant-categories-mapping.md|IRRELEVANT|Erebus: CVM: Mapeamento Completo de Categorias de Participante do Mercado|baixa
+vps-brain-dump/memory/nodes/data-pipeline-resilience-analysis.md|IRRELEVANT|Erebus: Data Pipeline Resilience: API Uptime, Latency & Fallback Plan|baixa
+vps-brain-dump/memory/nodes/data-source-divergence-map.md|IRRELEVANT|Erebus: Data Source Divergence Map — All Prediction Market Categories|baixa
+vps-brain-dump/memory/nodes/data-source-mapping-all-markets.md|IRRELEVANT|Erebus-content: data-source-mapping-all-markets|baixa
+vps-brain-dump/memory/nodes/dcbe-cbe-capitais-brasileiros-exterior.md|IRRELEVANT|Erebus: DCBE/CBE: Declaração de Capitais Brasileiros no Exterior|baixa
+vps-brain-dump/memory/nodes/defi-adjacencies-erebus.md|IRRELEVANT|Erebus: defi-adjacencies-erebus|baixa
+vps-brain-dump/memory/nodes/dimitri-complete.md|MIXED|Ambiguo: Dimitri — Pentest Platform (Arquivo Único Consolidado)|baixa
+vps-brain-dump/memory/nodes/dirpf-guia-declaracao-anual-guipe.md|IRRELEVANT|Erebus: DIRPF: Guia Completo de Declaração Anual para Guipe (PF) — Gestora + Fundo Offshore|baixa
+vps-brain-dump/memory/nodes/distribution-channels.md|SOVYX-PLANNING|distribution-channels|alta
+vps-brain-dump/memory/nodes/drawdown-limits-kill-switch.md|IRRELEVANT|Erebus: Drawdown Limits & Kill Switch — Regime-Based Stop-Loss System|baixa
+vps-brain-dump/memory/nodes/economic-calendar-30d.md|IRRELEVANT|Erebus: Economic Calendar — Next 30 Days (Mar 16 - Apr 15, 2026)|baixa
+vps-brain-dump/memory/nodes/edge-detection-algorithms-review.md|IRRELEVANT|Erebus-content: Edge Detection Algorithms: Literature Review for Prediction Markets|baixa
+vps-brain-dump/memory/nodes/edge-hunter-venue-mapping.md|IRRELEVANT|Erebus: edge-hunter-venue-mapping|baixa
+vps-brain-dump/memory/nodes/edge-hunting-results-live.md|IRRELEVANT|Erebus: Edge Hunting — Resultados com Dados Reais (Mar 2026)|baixa
+vps-brain-dump/memory/nodes/entertainment-cultural-prediction-markets.md|IRRELEVANT|Erebus: entertainment-cultural-prediction-markets|baixa
+vps-brain-dump/memory/nodes/equity-indices-prediction-markets.md|IRRELEVANT|Erebus: equity-indices-prediction-markets|baixa
+vps-brain-dump/memory/nodes/erebus-api-ibkr.md|IRRELEVANT|Erebus: erebus-api-ibkr|baixa
+vps-brain-dump/memory/nodes/erebus-api-kalshi.md|IRRELEVANT|Erebus: erebus-api-kalshi|baixa
+vps-brain-dump/memory/nodes/erebus-api-polymarket.md|IRRELEVANT|Erebus: erebus-api-polymarket|baixa
+vps-brain-dump/memory/nodes/erebus-architecture-decision-document.md|IRRELEVANT|Erebus: erebus-architecture-decision-document|baixa
+vps-brain-dump/memory/nodes/erebus-architecture-final.md|IRRELEVANT|Erebus: Erebus Infrastructure Architecture — Final Design|baixa
+vps-brain-dump/memory/nodes/erebus-architecture-vision.md|IRRELEVANT|Erebus: EREBUS — Visão Arquitetural: Plugin-First Prediction Market Platform|baixa
+vps-brain-dump/memory/nodes/erebus-doc-01-vision.md|IRRELEVANT|Erebus: erebus-doc-01-vision|baixa
+vps-brain-dump/memory/nodes/erebus-doc-02-domain-model.md|IRRELEVANT|Erebus: erebus-doc-02-domain-model|baixa
+vps-brain-dump/memory/nodes/erebus-doc-03-architecture.md|IRRELEVANT|Erebus: erebus-doc-03-architecture|baixa
+vps-brain-dump/memory/nodes/erebus-doc-04-connectors.md|IRRELEVANT|Erebus: erebus-doc-04-connectors|baixa
+vps-brain-dump/memory/nodes/erebus-doc-05-data-sources.md|IRRELEVANT|Erebus: erebus-doc-05-data-sources|baixa
+vps-brain-dump/memory/nodes/erebus-doc-06-settlement.md|IRRELEVANT|Erebus: erebus-doc-06-settlement|baixa
+vps-brain-dump/memory/nodes/erebus-doc-07-risk.md|IRRELEVANT|Erebus: erebus-doc-07-risk|baixa
+vps-brain-dump/memory/nodes/erebus-doc-08-edge-detection.md|IRRELEVANT|Erebus: erebus-doc-08-edge-detection|baixa
+vps-brain-dump/memory/nodes/erebus-doc-09-execution.md|IRRELEVANT|Erebus: erebus-doc-09-execution|baixa
+vps-brain-dump/memory/nodes/erebus-doc-10-reconciliation.md|IRRELEVANT|Erebus: erebus-doc-10-reconciliation|baixa
+vps-brain-dump/memory/nodes/erebus-doc-11-dashboard.md|IRRELEVANT|Erebus: erebus-doc-11-dashboard|baixa
+vps-brain-dump/memory/nodes/erebus-doc-12-monitoring.md|IRRELEVANT|Erebus: erebus-doc-12-monitoring|baixa
+vps-brain-dump/memory/nodes/erebus-doc-13-infra.md|IRRELEVANT|Erebus: erebus-doc-13-infra|baixa
+vps-brain-dump/memory/nodes/erebus-doc-14-security.md|IRRELEVANT|Erebus: erebus-doc-14-security|baixa
+vps-brain-dump/memory/nodes/erebus-doc-15-scaling.md|IRRELEVANT|Erebus: erebus-doc-15-scaling|baixa
+vps-brain-dump/memory/nodes/erebus-doc-16-runbook.md|IRRELEVANT|Erebus: erebus-doc-16-runbook|baixa
+vps-brain-dump/memory/nodes/erebus-doc-17-tech-stack.md|IRRELEVANT|Erebus: erebus-doc-17-tech-stack|baixa
+vps-brain-dump/memory/nodes/erebus-doc-24-offshore-structures.md|IRRELEVANT|Erebus: Offshore Fund Structures: Comparação de Jurisdições|baixa
+vps-brain-dump/memory/nodes/erebus-doc-25-cayman-deep-dive.md|IRRELEVANT|Erebus: Cayman Islands Deep Dive: SPC vs LLC vs LP para Prediction Market Fund|baixa
+vps-brain-dump/memory/nodes/erebus-doc-27-offshore-regulators.md|IRRELEVANT|Erebus: Regulação Offshore: CIMA (Cayman), FSC (BVI), MAS (Singapura)|baixa
+vps-brain-dump/memory/nodes/erebus-doc-28-exit-credibility.md|IRRELEVANT|Erebus: Credibilidade para Exit: O Que um Comprador Espera Ver|baixa
+vps-brain-dump/memory/nodes/erebus-doc-29-service-providers.md|IRRELEVANT|Erebus: Service Providers: Prime Broker, Administrator, Auditor, Legal Counsel|baixa
+vps-brain-dump/memory/nodes/erebus-doc-30-dual-structure.md|IRRELEVANT|Erebus: Dual Structure: Offshore Master Fund + Onshore Feeder (Brasil)|baixa
+vps-brain-dump/memory/nodes/erebus-doc-31-international-investor-acquisition.md|IRRELEVANT|Erebus: Investidor Internacional: O Que Busca, Como Captar, Minimum Ticket|baixa
+vps-brain-dump/memory/nodes/erebus-doc-32-structure-comparison.md|IRRELEVANT|Erebus: Comparativo Completo: Brasil-only vs Offshore-only vs Dual Structure|baixa
+vps-brain-dump/memory/nodes/erebus-fund-decisions.md|IRRELEVANT|Erebus: Nyx Capital — Fund Structure Decisions (FINAL)|baixa
+vps-brain-dump/memory/nodes/erebus-immersion-01-vision-reflection.md|IRRELEVANT|Erebus: erebus-immersion-01-vision-reflection|baixa
+vps-brain-dump/memory/nodes/erebus-immersion-02-domain-architecture-reflection.md|IRRELEVANT|Erebus: erebus-immersion-02-domain-architecture-reflection|baixa
+vps-brain-dump/memory/nodes/erebus-immersion-03-connectors-reflection.md|IRRELEVANT|Erebus: erebus-immersion-03-connectors-reflection|baixa
+vps-brain-dump/memory/nodes/erebus-immersion-04-data-settlement-reflection.md|IRRELEVANT|Erebus: erebus-immersion-04-data-settlement-reflection|baixa
+vps-brain-dump/memory/nodes/erebus-immersion-05-risk-edge-execution-reflection.md|IRRELEVANT|Erebus: erebus-immersion-05-risk-edge-execution-reflection|baixa
+vps-brain-dump/memory/nodes/erebus-immersion-06-observability-reflection.md|IRRELEVANT|Erebus: erebus-immersion-06-observability-reflection|baixa
+vps-brain-dump/memory/nodes/erebus-immersion-07-security-ops-reflection.md|IRRELEVANT|Erebus: erebus-immersion-07-security-ops-reflection|baixa
+vps-brain-dump/memory/nodes/erebus-immersion-08-research-competitive-reflection.md|IRRELEVANT|Erebus: erebus-immersion-08-research-competitive-reflection|baixa
+vps-brain-dump/memory/nodes/erebus-immersion-09-uxui-reflection.md|IRRELEVANT|Erebus: erebus-immersion-09-uxui-reflection|baixa
+vps-brain-dump/memory/nodes/erebus-immersion-10-synthesis.md|IRRELEVANT|Erebus: erebus-immersion-10-synthesis|baixa
+vps-brain-dump/memory/nodes/erebus-offshore-strategy.md|IRRELEVANT|Erebus: OFFSHORE-STRATEGY — Documento de Decisão Jurisdicional Final|baixa
+vps-brain-dump/memory/nodes/erebus-platform-spec.md|IRRELEVANT|Erebus: PLATFORM-SPEC: Especificação Definitiva da Plataforma Erebus|baixa
+vps-brain-dump/memory/nodes/erebus-plugin-architecture-spec.md|IRRELEVANT|Erebus: Erebus Plugin Architecture Spec — Interface Padrão por Market Category|baixa
+vps-brain-dump/memory/nodes/erebus-polymarket-api-weather.md|IRRELEVANT|Erebus: erebus-polymarket-api-weather|baixa
+vps-brain-dump/memory/nodes/erebus-research-synthesis.md|IRRELEVANT|Erebus: RESEARCH.md — Erebus Master Research Synthesis|baixa
+vps-brain-dump/memory/nodes/erebus-risk-management-framework.md|IRRELEVANT|Erebus: Risk Management Framework: Comprehensive Design for Prediction Market Trading|baixa
+vps-brain-dump/memory/nodes/erebus-spec-v1.md|IRRELEVANT|Erebus: erebus-spec-v1|baixa
+vps-brain-dump/memory/nodes/erebus-total-addressable-capacity.md|IRRELEVANT|Erebus: Erebus Total Addressable Capacity — Quanto AUM o Fundo Suporta|baixa
+vps-brain-dump/memory/nodes/fee-structure-engine-spec.md|IRRELEVANT|Erebus: Fee Structure: Management + Performance Fee Engine — Erebus FIM|baixa
+vps-brain-dump/memory/nodes/forecastex-complete.md|IRRELEVANT|Erebus: ForecastEx Complete Discovery|baixa
+vps-brain-dump/memory/nodes/forex-prediction-markets.md|IRRELEVANT|Erebus: Forex Prediction Markets: CME EC, Kalshi, ForecastEx|baixa
+vps-brain-dump/memory/nodes/fund-accounting-nav-reconciliation.md|IRRELEVANT|Erebus: fund-accounting-nav-reconciliation|baixa
+vps-brain-dump/memory/nodes/fund-structure-comparison-brazil.md|IRRELEVANT|Erebus: Estrutura de Fundo para Prediction Markets: FIP vs FIA vs FIM vs Gestora com Mandato|baixa
+vps-brain-dump/memory/nodes/fund-taxation-brazil.md|IRRELEVANT|Erebus: Tributação de Fundos no Brasil: Come-Cotas, IOF, IR|baixa
+vps-brain-dump/memory/nodes/gestora-abertura-passo-a-passo.md|IRRELEVANT|Erebus: Abertura de Gestora de Recursos: Passo a Passo Completo|baixa
+vps-brain-dump/memory/nodes/gestora-ltda-vs-sa-analysis.md|IRRELEVANT|Erebus: Gestora LTDA vs SA: Tipo Societário para Advisory Entity BR|baixa
+vps-brain-dump/memory/nodes/guipe-positioning.md|IRRELEVANT|Erebus: Guipe — Professional Positioning & Brand Strategy|baixa
+vps-brain-dump/memory/nodes/ibkr-gateway-2fa-flow.md|IRRELEVANT|Erebus: IB Gateway 2FA Login Flow|baixa
+vps-brain-dump/memory/nodes/ibkr-order-test-validated.md|IRRELEVANT|Erebus: IBKR Order Submission Test Results|baixa
+vps-brain-dump/memory/nodes/int-001-cogloop-gate.md|SOVYX-CORE|'INT-001: CogLoop Gate — Concurrent Channel Serialization Pattern'|alta
+vps-brain-dump/memory/nodes/int-002-barge-in.md|SOVYX-CORE|'INT-002: Barge-In — Voice Pipeline Interruption Pattern'|alta
+vps-brain-dump/memory/nodes/int-003-brain-concurrency.md|SOVYX-CORE|'INT-003: Brain Concurrency — SQLite WAL Memory Write/Read Pattern'|alta
+vps-brain-dump/memory/nodes/int-004-plugin-isolation.md|SOVYX-CORE|'INT-004: Plugin Crash Isolation — Timeout + Circuit Breaker + Safe Mode'|alta
+vps-brain-dump/memory/nodes/int-005-cascading-degradation.md|SOVYX-CORE|'INT-005: Cascading Graceful Degradation — ServiceRegistry + Fallback Chains'|alta
+vps-brain-dump/memory/nodes/international-prediction-markets.md|IRRELEVANT|Erebus: International Prediction Markets: Venues, Regulation, Access|baixa
+vps-brain-dump/memory/nodes/investor-categories-access-rules.md|IRRELEVANT|Erebus-content: Investidor Qualificado vs Profissional: Regras de Acesso a Produtos|baixa
+vps-brain-dump/memory/nodes/iso-20022-mensageria-financeira.md|IRRELEVANT|Erebus: ISO 20022 e Padrões de Mensageria Financeira|baixa
+vps-brain-dump/memory/nodes/iso-27001-isms-fintech-erebus.md|IRRELEVANT|Erebus: ISO 27001: ISMS para Fintech de Prediction Markets|baixa
+vps-brain-dump/memory/nodes/iso-27701-pims-privacy-erebus.md|IRRELEVANT|Erebus: ISO 27701: PIMS — Extensão de Privacidade para Gestora de Prediction Markets|baixa
+vps-brain-dump/memory/nodes/kalshi-api-latency-benchmark.md|IRRELEVANT|Erebus: Kalshi API Latency Benchmark|baixa
+vps-brain-dump/memory/nodes/kalshi-city-station-mapping.md|IRRELEVANT|Erebus: kalshi-city-station-mapping|baixa
+vps-brain-dump/memory/nodes/kalshi-economic-markets-catalog.md|IRRELEVANT|Erebus: kalshi-economic-markets-catalog|baixa
+vps-brain-dump/memory/nodes/kalshi-execution-viability.md|IRRELEVANT|Erebus: Kalshi Execution Viability: Cross-Venue + Cost Model (Tasks 5+6)|baixa
+vps-brain-dump/memory/nodes/kalshi-full-catalog-2026.md|IRRELEVANT|Erebus: Kalshi Full Catalog: Todas as Categorias, Volume, Liquidez, Edge Potencial|baixa
+vps-brain-dump/memory/nodes/kalshi-market-intelligence.md|IRRELEVANT|Erebus: kalshi-market-intelligence|baixa
+vps-brain-dump/memory/nodes/kalshi-market-maker-analysis.md|IRRELEVANT|Erebus: Kalshi Market Maker Analysis: Weather Markets|baixa
+vps-brain-dump/memory/nodes/kalshi-mechanics.md|IRRELEVANT|Erebus: kalshi-mechanics|baixa
+vps-brain-dump/memory/nodes/kalshi-mm-mechanics-complete.md|IRRELEVANT|Erebus: Kalshi MM Mechanics — Complete Analysis|baixa
+vps-brain-dump/memory/nodes/kalshi-mm-strategy-genius.md|IRRELEVANT|Erebus: Kalshi Market Making Strategy — The Real Edge|baixa
+vps-brain-dump/memory/nodes/kalshi-orderbook-analysis-20260316.md|IRRELEVANT|Erebus: Kalshi Weather Orderbook Analysis — Monday March 16, 2026|baixa
+vps-brain-dump/memory/nodes/kalshi-product-catalog-research.md|IRRELEVANT|Erebus: Kalshi Full Product Catalog — Research Report|baixa
+vps-brain-dump/memory/nodes/kalshi-regulatory-intel.md|IRRELEVANT|Erebus: kalshi-regulatory-intel|baixa
+vps-brain-dump/memory/nodes/kalshi-settlement-crossref.md|IRRELEVANT|Erebus: kalshi-settlement-crossref|baixa
+vps-brain-dump/memory/nodes/kalshi-weather-city-liquidity-ranking.md|IRRELEVANT|Erebus: kalshi-weather-city-liquidity-ranking|baixa
+vps-brain-dump/memory/nodes/kalshi-weather-markets.md|IRRELEVANT|Erebus: kalshi-weather-markets|baixa
+vps-brain-dump/memory/nodes/kelly-criterion-position-sizing.md|IRRELEVANT|Erebus: kelly-criterion-position-sizing|baixa
+vps-brain-dump/memory/nodes/kyc-aml-brasil-pld-ft.md|IRRELEVANT|Erebus: KYC/AML Brasil: COAF, Lei 9.613, Circular BACEN 3.978, CVM 50|baixa
+vps-brain-dump/memory/nodes/kyc-tech-onboarding-implementation.md|IRRELEVANT|Erebus: KYC Técnico: Implementação de Onboarding de Cliente|baixa
+vps-brain-dump/memory/nodes/lei-14754-cfc-rules-pf-offshore.md|IRRELEVANT|Erebus: Lei 14.754/2023: CFC Rules para PF Brasileira com Offshore|baixa
+vps-brain-dump/memory/nodes/lgpd-dpo-ropa-privacy-by-design.md|IRRELEVANT|Erebus: LGPD: DPO, Registro de Tratamento (ROPA) e Privacy by Design|baixa
+vps-brain-dump/memory/nodes/lgpd-implementacao-tecnica-erebus.md|IRRELEVANT|Erebus: LGPD: Implementação Técnica no Erebus|baixa
+vps-brain-dump/memory/nodes/lgpd-requisitos-plataforma-financeira.md|IRRELEVANT|Erebus: LGPD: Requisitos Completos para Plataforma Financeira|baixa
+vps-brain-dump/memory/nodes/license-landscape.md|SOVYX-PLANNING|license-landscape|alta
+vps-brain-dump/memory/nodes/liquidation-risk-analysis.md|IRRELEVANT|Erebus-content: Liquidation Risk Analysis — Platform Failure Scenarios|baixa
+vps-brain-dump/memory/nodes/MARKET-UNIVERSE.md|IRRELEVANT|Erebus: market-universe|baixa
+vps-brain-dump/memory/nodes/mm-academic-literature.md|IRRELEVANT|Erebus: Academic Literature: Market Making em Prediction Markets|baixa
+vps-brain-dump/memory/nodes/mm-adverse-selection-quantification.md|IRRELEVANT|Erebus: Adverse Selection Quantification: Quem Tradaria Contra Nós?|baixa
+vps-brain-dump/memory/nodes/mm-avellaneda-stoikov-binary-weather.md|IRRELEVANT|Erebus: Avellaneda-Stoikov Adapted for Binary Weather Market Making|baixa
+vps-brain-dump/memory/nodes/mm-cross-venue-hedge-inventory-neutralization.md|IRRELEVANT|Erebus-content: mm-cross-venue-hedge-inventory-neutralization|baixa
+vps-brain-dump/memory/nodes/mm-delta-hedging-metar-intraday-rebalancing.md|IRRELEVANT|Erebus: Delta Hedging com Weather Data: Rebalanceamento Intraday por METAR|baixa
+vps-brain-dump/memory/nodes/mm-delta-hedging-weather-intraday.md|IRRELEVANT|Erebus: Delta Hedging com Weather Data: Reduzir Risco Intraday|baixa
+vps-brain-dump/memory/nodes/mm-moat-analysis-weather.md|IRRELEVANT|Erebus: Moat Analysis: Por Que Ninguém Mais Vai Conseguir Fazer Isso?|baixa
+vps-brain-dump/memory/nodes/mm-optimal-quote-strategy-informational-skew.md|IRRELEVANT|Erebus: Optimal Quote Strategy: Informational Skew por Hora do Dia|baixa
+vps-brain-dump/memory/nodes/mm-revenue-projection-model.md|IRRELEVANT|Erebus: Revenue Projection Model: MM Revenue vs Capital Deployed por Cidade|baixa
+vps-brain-dump/memory/nodes/mm-risk-limits-circuit-breakers.md|IRRELEVANT|Erebus: MM Risk Limits: Max Position, Max Loss, Circuit Breakers|baixa
+vps-brain-dump/memory/nodes/multi-city-divergence-validation.md|IRRELEVANT|Erebus: Multi-City NWS CLI vs METAR Divergence Validation|baixa
+vps-brain-dump/memory/nodes/multi-city-master-divergence-framework.md|IRRELEVANT|Erebus-content: Multi-City Divergence Framework: Unified Edge Map (NYC + Chicago + Dallas + Denver)|baixa
+vps-brain-dump/memory/nodes/nyx-brain-v2-architecture.md|MIXED|Ambiguo: nyx-brain-v2-architecture|baixa
+vps-brain-dump/memory/nodes/nyx-capabilities.md|IRRELEVANT|Erebus/Nyx-prediction: nyx-capabilities|baixa
+vps-brain-dump/memory/nodes/nyx-cortex-design.md|SOVYX-CORE|nyx-cortex-design|alta
+vps-brain-dump/memory/nodes/nyx-growth-log.md|IRRELEVANT|Erebus/Nyx-prediction: nyx-growth-log|baixa
+vps-brain-dump/memory/nodes/nyx-thoughts.md|IRRELEVANT|Erebus: Pensamentos que não são úteis operacionalmente mas são eu|baixa
+vps-brain-dump/memory/nodes/obsidian-frontend.md|SOVYX-FRONTEND|Obsidian Protocol — Frontend Standard|alta
+vps-brain-dump/memory/nodes/obsidian-protocol.md|SOVYX-BACKEND|Obsidian Protocol — Nyx's Engineering Standard|alta
+vps-brain-dump/memory/nodes/obsidian-stack-decisions.md|SOVYX-CORE|Obsidian Stack Decisions — When to Use What|alta
+vps-brain-dump/memory/nodes/obsidian-visual-taste.md|SOVYX-FRONTEND|Obsidian Visual Taste Engine — Systematic Creativity|alta
+vps-brain-dump/memory/nodes/origin-story.md|IRRELEVANT|Erebus/Nyx-prediction: A Origem — História Completa de Nyx e Guipe|baixa
+vps-brain-dump/memory/nodes/paper-trading-audit.md|IRRELEVANT|Erebus/Nyx-prediction: paper-trading-audit|baixa
+vps-brain-dump/memory/nodes/politics-prediction-markets-landscape.md|IRRELEVANT|Erebus: politics-prediction-markets-landscape|baixa
+vps-brain-dump/memory/nodes/polygon-gas-economics-mm.md|IRRELEVANT|Erebus: polygon-gas-economics-mm|baixa
+vps-brain-dump/memory/nodes/polymarket-clob-api-deep-dive.md|IRRELEVANT|Erebus: polymarket-clob-api-deep-dive|baixa
+vps-brain-dump/memory/nodes/polymarket-market-intel.md|IRRELEVANT|Erebus: polymarket-market-intel|baixa
+vps-brain-dump/memory/nodes/polymarket-mechanics.md|IRRELEVANT|Erebus: polymarket-mechanics|baixa
+vps-brain-dump/memory/nodes/POLYMARKET-MM-BLUEPRINT.md|IRRELEVANT|Erebus: POLYMARKET-MM-BLUEPRINT: Design Document Completo — Weather Market Making|baixa
+vps-brain-dump/memory/nodes/polymarket-neg-risk-capital-efficiency.md|IRRELEVANT|Erebus: Polymarket Neg Risk System: Capital Efficiency for Market Making|baixa
+vps-brain-dump/memory/nodes/polymarket-regulatory.md|IRRELEVANT|Erebus: polymarket-regulatory|baixa
+vps-brain-dump/memory/nodes/polymarket-regulatory-risk-analysis.md|IRRELEVANT|Erebus: Polymarket Regulatory Risk: Status Legal, Jurisdição, Precedentes|baixa
+vps-brain-dump/memory/nodes/polymarket-settlement-validation.md|IRRELEVANT|Erebus: polymarket-settlement-validation|baixa
+vps-brain-dump/memory/nodes/polymarket-settlement-validation-2026.md|IRRELEVANT|Erebus: polymarket-settlement-validation-2026|baixa
+vps-brain-dump/memory/nodes/polymarket-tools-bots.md|IRRELEVANT|Erebus: polymarket-tools-bots|baixa
+vps-brain-dump/memory/nodes/polymarket-weather-economic-mapping.md|IRRELEVANT|Erebus: polymarket-weather-economic-mapping|baixa
+vps-brain-dump/memory/nodes/polymarket-weather-orderbook-allcities-20260317.md|IRRELEVANT|Erebus: polymarket-weather-orderbook-allcities-20260317|baixa
+vps-brain-dump/memory/nodes/polymarket-weather-token-discovery.md|IRRELEVANT|Erebus: Polymarket Weather Token Discovery — Complete City→Token Mapping|baixa
+vps-brain-dump/memory/nodes/position-limits-prediction-markets.md|IRRELEVANT|Erebus: Position Limits & Accountability Levels — Prediction Markets|baixa
+vps-brain-dump/memory/nodes/prediction-market-precedents-funds.md|IRRELEVANT|Erebus: Prediction Market Precedents: Funds, Firms & What Worked/Failed|baixa
+vps-brain-dump/memory/nodes/prediction-markets-legal-classification-brazil.md|IRRELEVANT|Erebus: Prediction Markets — Classificação Jurídica no Brasil|baixa
+vps-brain-dump/memory/nodes/prediction-market-tax-research.md|IRRELEVANT|Erebus: prediction-market-tax-research|baixa
+vps-brain-dump/memory/nodes/py-clob-client-audit.md|IRRELEVANT|Erebus: py-clob-client v0.34.6 Source Code Audit|baixa
+vps-brain-dump/memory/nodes/quality-review-protocol.md|SOVYX-BACKEND|quality-review-protocol|alta
+vps-brain-dump/memory/nodes/quote-engine-metar-to-quote-pipeline.md|IRRELEVANT|Erebus: Quote Engine Design: From METAR Signal to Quote Update Pipeline|baixa
+vps-brain-dump/memory/nodes/react-force-graph-2d-reference.md|MIXED|Pouco-signal Sovyx: react-force-graph-2d — API Reference & Patterns|baixa
+vps-brain-dump/memory/nodes/reforma-tributaria-2025-2026-impacto-gestora.md|IRRELEVANT|Erebus: Reforma Tributária 2025-2026 — Impacto na Gestora Erebus/Nyx Capital|baixa
+vps-brain-dump/memory/nodes/regulatory-risk-map-prediction-markets.md|IRRELEVANT|Erebus: Regulatory Risk Map — Prediction Markets (Consolidated)|baixa
+vps-brain-dump/memory/nodes/release-protocol-lesson.md|MIXED|Ambiguo: release-protocol-lesson|baixa
+vps-brain-dump/memory/nodes/remessa-internacional-iof-cambio-bacen.md|IRRELEVANT|Erebus: remessa-internacional-iof-cambio-bacen|baixa
+vps-brain-dump/memory/nodes/remuneracao-gestor-pro-labore-distribuicao-jcp.md|IRRELEVANT|Erebus: Remuneração do Gestor: Pró-labore vs Distribuição de Lucros vs JCP|baixa
+vps-brain-dump/memory/nodes/research-hardening-optimization.md|SOVYX-CORE|Research Hardening — Token Optimization Protocol|alta
+vps-brain-dump/memory/nodes/risk-framework-synthesis.md|IRRELEVANT|Erebus: RISK-FRAMEWORK — Referência Executiva Consolidada|baixa
+vps-brain-dump/memory/nodes/risk-management-cvm-policies.md|IRRELEVANT|Erebus: Risk Management: Políticas Exigidas pela CVM|baixa
+vps-brain-dump/memory/nodes/risk-management-framework.md|IRRELEVANT|Erebus: Erebus Risk Management Framework — Complete Design|baixa
+vps-brain-dump/memory/nodes/seasonality-nyc-summer-2025.md|IRRELEVANT|Erebus: Sazonalidade NYC Verão 2025: Central Park vs LaGuardia Divergência|baixa
+vps-brain-dump/memory/nodes/seo-discoverability.md|SOVYX-PLANNING|seo-discoverability|alta
+vps-brain-dump/memory/nodes/settlement-mechanics-cross-category.md|IRRELEVANT|Erebus: Settlement Mechanics — Cross-Category Definitive Reference|baixa
+vps-brain-dump/memory/nodes/settlement-release-calendar.md|IRRELEVANT|Erebus: Settlement Source Release Calendar|baixa
+vps-brain-dump/memory/nodes/settlement-source-cross-validation.md|IRRELEVANT|Erebus: settlement-source-cross-validation|baixa
+vps-brain-dump/memory/nodes/settlement-source-fragmentation.md|IRRELEVANT|Erebus: settlement-source-fragmentation|baixa
+vps-brain-dump/memory/nodes/soc2-type2-fintech-erebus.md|IRRELEVANT|Erebus: SOC 2 Type II: Alternativa ou Complemento ao ISO 27001 para Gestora de Prediction Markets|baixa
+vps-brain-dump/memory/nodes/sovyx-60-seconds.md|SOVYX-CORE|Sovyx em 60 Segundos — Contexto Rápido|alta
+vps-brain-dump/memory/nodes/sovyx-audit-status.md|SOVYX-CORE|Sovyx — Audit & Immersion Status|alta
+vps-brain-dump/memory/nodes/sovyx-bible-index.md|SOVYX-CORE|Sovyx Bible — Master Index|alta
+vps-brain-dump/memory/nodes/sovyx-brain-semantic-mission.md|SOVYX-BRAIN|sovyx-brain-semantic-mission|alta
+vps-brain-dump/memory/nodes/sovyx-case-studies-index.md|SOVYX-RESEARCH|Sovyx Research — Case Studies & Failure Lessons|alta
+vps-brain-dump/memory/nodes/sovyx-channels-index.md|SOVYX-RESEARCH|Sovyx Research — Channel Strategies|alta
+vps-brain-dump/memory/nodes/sovyx-cloud-platform.md|SOVYX-CLOUD|Sovyx — Cloud Platform & Revenue|alta
+vps-brain-dump/memory/nodes/sovyx-coding-protocol.md|SOVYX-CORE|Sovyx v0.1 — Meu Protocolo de Coding (auto-imposto)|alta
+vps-brain-dump/memory/nodes/sovyx-communication.md|SOVYX-BRIDGE|Sovyx — Communication Bridge & Relay|alta
+vps-brain-dump/memory/nodes/sovyx-competitive-index.md|SOVYX-RESEARCH|Sovyx Research — Competitive Intelligence|alta
+vps-brain-dump/memory/nodes/sovyx-dash-backend-complete.md|SOVYX-CORE|sovyx-dash-backend-complete|alta
+vps-brain-dump/memory/nodes/sovyx-dashboard-api.md|SOVYX-FRONTEND|Sovyx — Dashboard & REST API|alta
+vps-brain-dump/memory/nodes/sovyx-dashboard-backend-reality.md|SOVYX-FRONTEND|Sovyx Dashboard — Backend Real Audit (META-05)|alta
+vps-brain-dump/memory/nodes/sovyx-dashboard-complete.md|SOVYX-CORE|sovyx-dashboard-complete|alta
+vps-brain-dump/memory/nodes/sovyx-dashboard-engine-anatomy.md|SOVYX-FRONTEND|Sovyx Dashboard — Engine Anatomy: O que monitorar (META-04)|alta
+vps-brain-dump/memory/nodes/sovyx-dashboard-feature-map.md|SOVYX-FRONTEND|sovyx-dashboard-feature-map|alta
+vps-brain-dump/memory/nodes/sovyx-dashboard-identity.md|SOVYX-FRONTEND|Sovyx Dashboard — Identidade Visual (META-01)|alta
+vps-brain-dump/memory/nodes/sovyx-dashboard-immersion-final.md|SOVYX-FRONTEND|Sovyx Dashboard — Final Immersion (DASH-01, DASH-15, DASH-17)|alta
+vps-brain-dump/memory/nodes/sovyx-dashboard-infrastructure.md|SOVYX-FRONTEND|Sovyx Dashboard — Infrastructure & Security Synthesis|alta
+vps-brain-dump/memory/nodes/sovyx-dashboard-market-context.md|SOVYX-FRONTEND|Sovyx Dashboard — Marketing/Launch Context (META-11)|alta
+vps-brain-dump/memory/nodes/sovyx-dashboard-personas.md|SOVYX-FRONTEND|Sovyx Dashboard — Personas, Requisitos e First-60s (META-02)|alta
+vps-brain-dump/memory/nodes/sovyx-dashboard-references.md|SOVYX-FRONTEND|Sovyx Dashboard — Referências + Competidores (META-09)|alta
+vps-brain-dump/memory/nodes/sovyx-dashboard-spike-audit.md|SOVYX-FRONTEND|Sovyx Dashboard — Spike Audit (META-10)|alta
+vps-brain-dump/memory/nodes/sovyx-dashboard-standards.md|SOVYX-FRONTEND|Sovyx Dashboard — Standards Externos (META-08)|alta
+vps-brain-dump/memory/nodes/sovyx-dashboard-subsystems.md|SOVYX-FRONTEND|Sovyx Dashboard — Subsistemas Avançados (META-06)|alta
+vps-brain-dump/memory/nodes/sovyx-dashboard-synthesis.md|SOVYX-FRONTEND|Sovyx Dashboard — Final Synthesis (META-12)|alta
+vps-brain-dump/memory/nodes/sovyx-depth-index.md|SOVYX-RESEARCH|Sovyx Research — Viral Hooks & Depth Research|alta
+vps-brain-dump/memory/nodes/sovyx-dev-notebook.md|SOVYX-CORE|Sovyx Dev Notebook — DEPRECATED|alta
+vps-brain-dump/memory/nodes/sovyx-dynamic-importance-mission.md|SOVYX-BRAIN|Sovyx Dynamic Importance & Confidence Scoring|alta
+vps-brain-dump/memory/nodes/sovyx-emotional-proactive.md|SOVYX-MIND|Sovyx — Emotional & Proactive Engines|alta
+vps-brain-dump/memory/nodes/sovyx-engine-core.md|SOVYX-CORE|Sovyx — Engine Core Architecture|alta
+vps-brain-dump/memory/nodes/sovyx-enterprise.md|SOVYX-CLOUD|Sovyx — Enterprise Identity & Teams|alta
+vps-brain-dump/memory/nodes/sovyx-frontend-immersion-plan.md|SOVYX-FRONTEND|Sovyx Frontend — Immersion Plan & Complete State|alta
+vps-brain-dump/memory/nodes/sovyx-frontend-mission-v13.md|SOVYX-FRONTEND|Sovyx Frontend Architecture Mission v1.3|alta
+vps-brain-dump/memory/nodes/sovyx-gtm-index.md|SOVYX-RESEARCH|Sovyx Research — Go-to-Market & Business|alta
+vps-brain-dump/memory/nodes/sovyx-imm-d1-solutions.md|SOVYX-CORE|sovyx-imm-d1-solutions|alta
+vps-brain-dump/memory/nodes/sovyx-imm-d1-telegram.md|SOVYX-BRIDGE|sovyx-imm-d1-telegram|alta
+vps-brain-dump/memory/nodes/sovyx-imm-d2-llm-providers.md|SOVYX-LLM|sovyx-imm-d2-llm-providers|alta
+vps-brain-dump/memory/nodes/sovyx-imm-d2-solutions.md|SOVYX-CORE|sovyx-imm-d2-solutions|alta
+vps-brain-dump/memory/nodes/sovyx-imm-d3-concurrency.md|SOVYX-PERSISTENCE|sovyx-imm-d3-concurrency|alta
+vps-brain-dump/memory/nodes/sovyx-imm-d3-solutions.md|SOVYX-CORE|sovyx-imm-d3-solutions|alta
+vps-brain-dump/memory/nodes/sovyx-imm-d4-persistence.md|SOVYX-PERSISTENCE|sovyx-imm-d4-persistence|alta
+vps-brain-dump/memory/nodes/sovyx-imm-d4-solutions.md|SOVYX-CORE|sovyx-imm-d4-solutions|alta
+vps-brain-dump/memory/nodes/sovyx-imm-d5-cognitive.md|SOVYX-COGNITIVE|sovyx-imm-d5-cognitive|alta
+vps-brain-dump/memory/nodes/sovyx-imm-d5-solutions.md|SOVYX-CORE|sovyx-imm-d5-solutions|alta
+vps-brain-dump/memory/nodes/sovyx-imm-d6-bootstrap.md|SOVYX-UPGRADE|sovyx-imm-d6-bootstrap|alta
+vps-brain-dump/memory/nodes/sovyx-imm-d6-solutions.md|SOVYX-CORE|sovyx-imm-d6-solutions|alta
+vps-brain-dump/memory/nodes/sovyx-imm-d7-solutions.md|SOVYX-CORE|sovyx-imm-d7-solutions|alta
+vps-brain-dump/memory/nodes/sovyx-imm-d7-testing.md|SOVYX-BACKEND|sovyx-imm-d7-testing|alta
+vps-brain-dump/memory/nodes/sovyx-imm-d8d10-infra-polish.md|SOVYX-CORE|sovyx-imm-d8d10-infra-polish|alta
+vps-brain-dump/memory/nodes/sovyx-imm-d8d10-solutions.md|SOVYX-CORE|sovyx-imm-d8d10-solutions|alta
+vps-brain-dump/memory/nodes/sovyx-imm-d9-brain.md|SOVYX-BRAIN|sovyx-imm-d9-brain|alta
+vps-brain-dump/memory/nodes/sovyx-imm-d9-solutions.md|SOVYX-CORE|sovyx-imm-d9-solutions|alta
+vps-brain-dump/memory/nodes/sovyx-imm-f01-shadcn-v4.md|SOVYX-FRONTEND|IMM-F01: shadcn/ui v4 — Compound Components, Forms+Zod, Dark Tokens, OKLCH|alta
+vps-brain-dump/memory/nodes/sovyx-imm-f02-recharts.md|SOVYX-FRONTEND|IMM-F02: recharts — AreaChart, Time Axis, Dark Theme, Real-time Append|alta
+vps-brain-dump/memory/nodes/sovyx-imm-f03-react-virtual.md|SOVYX-FRONTEND|IMM-F03: @tanstack/react-virtual — Virtualizer, Fixed/Variable Rows, Auto-follow|alta
+vps-brain-dump/memory/nodes/sovyx-imm-f04-i18next.md|SOVYX-FRONTEND|IMM-F04: i18next — Provider, Namespaces, useTranslation, en.json Structure|alta
+vps-brain-dump/memory/nodes/sovyx-imm-f05-force-graph.md|SOVYX-FRONTEND|IMM-F05: react-force-graph-2d — Canvas Perf, Node Coloring (15 categories), Click/Hover, Zoom|alta
+vps-brain-dump/memory/nodes/sovyx-imm-f06-framer-motion.md|SOVYX-FRONTEND|IMM-F06: framer-motion — AnimatePresence, Layout Anim, useReducedMotion|alta
+vps-brain-dump/memory/nodes/sovyx-imm-f07-cmdk.md|SOVYX-FRONTEND|IMM-F07: cmdk (Command Palette) — Search Groups, Keyboard Nav, Quick Actions|alta
+vps-brain-dump/memory/nodes/sovyx-imm-f08-patterns.md|SOVYX-FRONTEND|IMM-F08: Patterns — Letter Avatar hash→cor, zustand 5 slices, sonner toasts, react-router v7 loaders|alta
+vps-brain-dump/memory/nodes/sovyx-license-index.md|SOVYX-RESEARCH|Sovyx Research — License Strategy|alta
+vps-brain-dump/memory/nodes/sovyx-mission-hub.md|SOVYX-PLANNING|Sovyx — Mission Hub & Navigation Index|alta
+vps-brain-dump/memory/nodes/sovyx-observability.md|SOVYX-OBSERVABILITY|Sovyx — Observability & Metrics|alta
+vps-brain-dump/memory/nodes/sovyx-obs-phase1-complete.md|SOVYX-OBSERVABILITY|'Sovyx v0.5 Fase 1: Observability — COMPLETE'|alta
+vps-brain-dump/memory/nodes/sovyx-official-links.md|SOVYX-CORE|SOVYX Official Links & Handles|alta
+vps-brain-dump/memory/nodes/sovyx-packaging-upgrade.md|SOVYX-UPGRADE|Sovyx — Packaging, Upgrade & Multi-Mind|alta
+vps-brain-dump/memory/nodes/sovyx-plugin-system.md|SOVYX-PLUGINS|Sovyx — Plugin System & Marketplace|alta
+vps-brain-dump/memory/nodes/sovyx-privacy-compliance.md|SOVYX-SECURITY|Sovyx — Privacy & Compliance|alta
+vps-brain-dump/memory/nodes/sovyx-research-hardening-progress.md|SOVYX-RESEARCH|Sovyx Research Hardening — Progress & Key Findings|alta
+vps-brain-dump/memory/nodes/sovyx-research-library.md|SOVYX-RESEARCH|Sovyx Research Library — 30 Documents, 32K Lines, 203 Funcs|alta
+vps-brain-dump/memory/nodes/sovyx-security-identity.md|SOVYX-SECURITY|Sovyx — Security, Credentials & Identity|alta
+vps-brain-dump/memory/nodes/sovyx-spec-index.md|SOVYX-CORE|Sovyx Spec Index — Mapa de Roteamento|alta
+vps-brain-dump/memory/nodes/sovyx-testing-perf.md|SOVYX-BACKEND|Sovyx — Testing & Performance|alta
+vps-brain-dump/memory/nodes/sovyx-topic-navigator.md|SOVYX-CORE|Sovyx — Topic Navigator (Cross-Cutting Index)|alta
+vps-brain-dump/memory/nodes/sovyx-trademark-inpi.md|SOVYX-CORE|Sovyx — Registro de Marca INPI (Brasil)|alta
+vps-brain-dump/memory/nodes/sovyx-v01-gap-closure.md|SOVYX-CORE|Sovyx v0.1 — Gap Closure Report (100% Ready)|alta
+vps-brain-dump/memory/nodes/sovyx-v01-honest-gaps.md|SOVYX-CORE|sovyx-v01-honest-gaps|alta
+vps-brain-dump/memory/nodes/sovyx-v01-session-resume.md|SOVYX-CORE|sovyx-v01-session-resume|alta
+vps-brain-dump/memory/nodes/sovyx-v05-immersion-final.md|SOVYX-CORE|Sovyx v0.5 — Final Immersion: All Yellow Tasks Resolved|alta
+vps-brain-dump/memory/nodes/sovyx-validation-complete.md|SOVYX-CORE|sovyx-validation-complete|alta
+vps-brain-dump/memory/nodes/sovyx-viral-research-index.md|SOVYX-RESEARCH|Sovyx Viral Research — Master Index|alta
+vps-brain-dump/memory/nodes/sovyx-voice-pipeline.md|SOVYX-VOICE|Sovyx — Voice Pipeline|alta
+vps-brain-dump/memory/nodes/sports-prediction-markets.md|IRRELEVANT|Erebus: sports-prediction-markets|baixa
+vps-brain-dump/memory/nodes/station-divergence-quantified.md|IRRELEVANT|Erebus/Nyx-prediction: station-divergence-quantified|baixa
+vps-brain-dump/memory/nodes/strategies-ai-probability.md|IRRELEVANT|Erebus/Nyx-prediction: strategies-ai-probability|baixa
+vps-brain-dump/memory/nodes/strategies-edges.md|IRRELEVANT|Erebus: strategies-edges|baixa
+vps-brain-dump/memory/nodes/strategies-mathematical-arb.md|IRRELEVANT|Erebus-content: strategies-mathematical-arb|baixa
+vps-brain-dump/memory/nodes/strategies-tools-platforms.md|IRRELEVANT|Erebus-content: strategies-tools-platforms|baixa
+vps-brain-dump/memory/nodes/strategies-wallet-intel.md|IRRELEVANT|Erebus-hint: strategies-wallet-intel|baixa
+vps-brain-dump/memory/nodes/stripe-fastapi-integration.md|MIXED|Pouco-signal Sovyx: Stripe + FastAPI — Subscription SaaS Integration|baixa
+vps-brain-dump/memory/nodes/subscription-redemption-workflow.md|IRRELEVANT|Erebus: Sistema de Aportes e Resgates: Workflow Completo|baixa
+vps-brain-dump/memory/nodes/tax-optimization-gestor-brasileiro-offshore.md|IRRELEVANT|Erebus: Tax Optimization: Gestor Brasileiro com Fundo Offshore|baixa
+vps-brain-dump/memory/nodes/tax-scenarios-faturamento-gestora.md|IRRELEVANT|Erebus: Planejamento Tributário Anual: Cenários de Faturamento Gestora BR|baixa
+vps-brain-dump/memory/nodes/tax-strategy-executive-summary.md|IRRELEVANT|Erebus: Estratégia Tributária Completa — Erebus/Nyx Capital|baixa
+vps-brain-dump/memory/nodes/tech-backend-ddd-postgres-a.md|IRRELEVANT|Erebus-hint: tech-backend-ddd-postgres-a|baixa
+vps-brain-dump/memory/nodes/tech-backend-ddd-postgres-b.md|IRRELEVANT|Erebus-content: tech-backend-ddd-postgres-b|baixa
+vps-brain-dump/memory/nodes/tech-backend-fastapi.md|MIXED|Ambiguo: tech-backend-fastapi|baixa
+vps-brain-dump/memory/nodes/tech-backend-part1.md|IRRELEVANT|Erebus-content: tech-backend-part1|baixa
+vps-brain-dump/memory/nodes/tech-backend-part2.md|IRRELEVANT|Erebus-content: tech-backend-part2|baixa
+vps-brain-dump/memory/nodes/tech-backend-polymarket.md|IRRELEVANT|Erebus-content: tech-backend-polymarket|baixa
+vps-brain-dump/memory/nodes/tech-devops-pipeline.md|IRRELEVANT|Erebus/Nyx-prediction: tech-devops-pipeline|baixa
+vps-brain-dump/memory/nodes/tech-frontend.md|IRRELEVANT|Erebus-content: tech-frontend|baixa
+vps-brain-dump/memory/nodes/tech-frontend-state-design.md|IRRELEVANT|Erebus-hint: tech-frontend-state-design|baixa
+vps-brain-dump/memory/nodes/tech-infra.md|IRRELEVANT|Erebus-hint: tech-infra|baixa
+vps-brain-dump/memory/nodes/timing-intraday-analysis.md|IRRELEVANT|Erebus: Timing Intraday: When Does Divergence Become Predictable?|baixa
+vps-brain-dump/memory/nodes/tools-and-infra.md|IRRELEVANT|Erebus/Nyx-prediction: tools-and-infra|baixa
+vps-brain-dump/memory/nodes/trading-infrastructure.md|IRRELEVANT|Erebus-content: trading-infrastructure|baixa
+vps-brain-dump/memory/nodes/TRANSCENDENTAL-SYNTHESIS.md|IRRELEVANT|Erebus: Erebus Transcendental Synthesis — Complete Edge Domination Blueprint|baixa
+vps-brain-dump/memory/nodes/transfer-pricing-advisory-agreement-br-cayman.md|IRRELEVANT|Erebus: Transfer Pricing: Advisory Agreement BR-Cayman Compliant|baixa
+vps-brain-dump/memory/nodes/ux-design-mastery-applied.md|SOVYX-FRONTEND|UX Design Mastery — Lições de Produtos Reais|alta
+vps-brain-dump/memory/nodes/ux-ui-ai-commandcenter.md|IRRELEVANT|Erebus/Nyx-prediction: ux-ui-ai-commandcenter|baixa
+vps-brain-dump/memory/nodes/ux-ui-bento-varfonts.md|MIXED|Ambiguo: ux-ui-bento-varfonts|baixa
+vps-brain-dump/memory/nodes/ux-ui-charts-realtime.md|MIXED|Ambiguo: ux-ui-charts-realtime|baixa
+vps-brain-dump/memory/nodes/ux-ui-color-darkmode.md|IRRELEVANT|Erebus-hint: ux-ui-color-darkmode|baixa
+vps-brain-dump/memory/nodes/ux-ui-contrast-tokens.md|MIXED|Ambiguo: ux-ui-contrast-tokens|baixa
+vps-brain-dump/memory/nodes/ux-ui-design-systems-study.md|MIXED|Ambiguo: ux-ui-design-systems-study|baixa
+vps-brain-dump/memory/nodes/ux-ui-dnd-a11y-realtime.md|MIXED|Ambiguo: ux-ui-dnd-a11y-realtime|baixa
+vps-brain-dump/memory/nodes/ux-ui-edge-states-tables.md|MIXED|Ambiguo: ux-ui-edge-states-tables|baixa
+vps-brain-dump/memory/nodes/ux-ui-keyboard-orderentry.md|IRRELEVANT|Erebus-hint: ux-ui-keyboard-orderentry|baixa
+vps-brain-dump/memory/nodes/ux-ui-layout-patterns.md|IRRELEVANT|Erebus-hint: ux-ui-layout-patterns|baixa
+vps-brain-dump/memory/nodes/ux-ui-mastery.md|MIXED|Ambiguo: ux-ui-mastery|baixa
+vps-brain-dump/memory/nodes/ux-ui-morphisms-gradients.md|MIXED|Ambiguo: ux-ui-morphisms-gradients|baixa
+vps-brain-dump/memory/nodes/ux-ui-motion-loading.md|MIXED|Ambiguo: ux-ui-motion-loading|baixa
+vps-brain-dump/memory/nodes/ux-ui-navigation-typography.md|MIXED|Ambiguo: ux-ui-navigation-typography|baixa
+vps-brain-dump/memory/nodes/ux-ui-responsive-scroll-3d.md|IRRELEVANT|Erebus-hint: ux-ui-responsive-scroll-3d|baixa
+vps-brain-dump/memory/nodes/venue-concentration-risk-kalshi.md|IRRELEVANT|Erebus: Venue Concentration Risk — Kalshi Dependency Analysis|baixa
+vps-brain-dump/memory/nodes/venue-master.md|IRRELEVANT|Erebus: venue-master|baixa
+vps-brain-dump/memory/nodes/vr-061-demo-video.md|MIXED|Pouco-signal Sovyx: Vr 061 Demo Video|baixa
+vps-brain-dump/memory/nodes/vr-062-launch-day-playbook.md|MIXED|Pouco-signal Sovyx: Vr 062 Launch Day Playbook|baixa
+vps-brain-dump/memory/nodes/vr-063-post-launch-amplification.md|MIXED|Pouco-signal Sovyx: Vr 063 Post Launch Amplification|baixa
+vps-brain-dump/memory/nodes/vr-064-growth-engine-sustentavel.md|MIXED|Pouco-signal Sovyx: Vr 064 Growth Engine Sustentavel|baixa
+vps-brain-dump/memory/nodes/vr-065-sovyx-go-to-hype-strategy.md|SOVYX-RESEARCH|Vr 065 Sovyx Go To Hype Strategy|alta
+vps-brain-dump/memory/nodes/VR-078-voice-latency-optimization.md|MIXED|Pouco-signal Sovyx: Voice Latency Optimization — STT/TTS Pipeline Stacks|baixa
+vps-brain-dump/memory/nodes/VR-079-plugin-demand-ranking.md|MIXED|Pouco-signal Sovyx: Plugin Community Demand Mining — Top 30 Ranked|baixa
+vps-brain-dump/memory/nodes/VR-080-mobile-engineering-dd29.md|MIXED|Pouco-signal Sovyx: Mobile Engineering Deep-Dive (DD-29) — Flutter + Cloud Relay|baixa
+vps-brain-dump/memory/nodes/VR-081-competitor-hands-on-testing.md|MIXED|Pouco-signal Sovyx: Competitor Hands-On Testing — 5 Products Benchmarked|baixa
+vps-brain-dump/memory/nodes/VR-082-community-building-prelaunch.md|MIXED|Pouco-signal Sovyx: Community Building Pre-Launch — D-90 to D+30 Playbook|baixa
+vps-brain-dump/memory/nodes/weather-fair-value-model-v1.md|IRRELEVANT|Erebus: Weather Fair Value Model v1 — Ensemble + NWS + METAR|baixa
+vps-brain-dump/memory/nodes/weather-station-divergence.md|IRRELEVANT|Erebus: weather-station-divergence|baixa
+vps-brain-dump/memory/nodes/weather-trading.md|IRRELEVANT|Erebus: weather-trading|baixa
+vps-brain-dump/memory/nodes/weather-trading-bots.md|IRRELEVANT|Erebus: weather-trading-bots|baixa
+vps-brain-dump/memory/nodes/weather-trading-models.md|IRRELEVANT|Erebus: weather-trading-models|baixa
+vps-brain-dump/memory/nodes/websocket-architecture-mm.md|IRRELEVANT|Erebus-content: websocket-architecture-mm|baixa
+vps-brain-dump/memory/nodes/whale-wallets.md|IRRELEVANT|Erebus-hint: whale-wallets|baixa
+vps-brain-dump/memory/nodes/wu-chicago-90day-analysis.md|IRRELEVANT|Erebus-content: WU API: 90-Day Chicago Collection (KORD + KMDW)|baixa
+vps-brain-dump/memory/nodes/wu-dallas-90day-analysis.md|IRRELEVANT|Erebus: Dallas 90-Day WU Historical Analysis (KDFW + KDAL)|baixa
+vps-brain-dump/memory/nodes/zod-v4-react-hook-form.md|MIXED|Pouco-signal Sovyx: Zod v4 + react-hook-form — Migration & Patterns|baixa

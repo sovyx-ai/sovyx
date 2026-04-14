@@ -1,0 +1,166 @@
+=== src/sovyx/cognitive/ — files ===
+src/sovyx/cognitive/__init__.py
+src/sovyx/cognitive/act.py
+src/sovyx/cognitive/attend.py
+src/sovyx/cognitive/audit_store.py
+src/sovyx/cognitive/custom_rules.py
+src/sovyx/cognitive/financial_gate.py
+src/sovyx/cognitive/gate.py
+src/sovyx/cognitive/injection_tracker.py
+src/sovyx/cognitive/loop.py
+src/sovyx/cognitive/output_guard.py
+src/sovyx/cognitive/perceive.py
+src/sovyx/cognitive/pii_guard.py
+src/sovyx/cognitive/reflect.py
+src/sovyx/cognitive/safety_audit.py
+src/sovyx/cognitive/safety_classifier.py
+src/sovyx/cognitive/safety_container.py
+src/sovyx/cognitive/safety_escalation.py
+src/sovyx/cognitive/safety_i18n.py
+src/sovyx/cognitive/safety_notifications.py
+src/sovyx/cognitive/safety_patterns.py
+src/sovyx/cognitive/shadow_mode.py
+src/sovyx/cognitive/state.py
+src/sovyx/cognitive/text_normalizer.py
+src/sovyx/cognitive/think.py
+
+=== modules classes/functions (public) ===
+--- src/sovyx/cognitive/act.py ---
+class ActionResult:
+class ToolExecutor:
+class ActPhase:
+
+--- src/sovyx/cognitive/attend.py ---
+class AttendPhase:
+
+--- src/sovyx/cognitive/audit_store.py ---
+class AuditQueryResult:
+class AuditStore:
+def get_audit_store(db_path: str = "safety_audit.db") -> AuditStore:
+
+--- src/sovyx/cognitive/custom_rules.py ---
+class CustomRuleMatch:
+def check_custom_rules(
+def check_banned_topics(
+def clear_compiled_cache() -> None:
+
+--- src/sovyx/cognitive/financial_gate.py ---
+class PendingConfirmation:
+class FinancialGateState:
+def is_confirmation(text: str) -> bool:
+def is_cancellation(text: str) -> bool:
+async def classify_intent_llm(
+def classify_intent(text: str) -> str:
+class FinancialGate:
+
+--- src/sovyx/cognitive/gate.py ---
+class CognitiveRequest:
+class CogLoopGate:
+
+--- src/sovyx/cognitive/injection_tracker.py ---
+class InjectionVerdict(StrEnum):
+class ScoredMessage:
+class InjectionAnalysis:
+class SuspicionSignal:
+class InjectionContextTracker:
+def get_injection_tracker() -> InjectionContextTracker:
+
+--- src/sovyx/cognitive/loop.py ---
+class CognitiveLoop:
+
+--- src/sovyx/cognitive/output_guard.py ---
+class OutputFilterResult:
+class OutputGuard:
+
+--- src/sovyx/cognitive/perceive.py ---
+class Perception:
+class PerceivePhase:
+
+--- src/sovyx/cognitive/pii_guard.py ---
+class PIIPattern:
+class PIIFilterResult:
+class PIIGuard:
+
+--- src/sovyx/cognitive/reflect.py ---
+class ExtractedConcept:
+def resolve_category(raw_category: str) -> str:
+def get_importance(category: str) -> float:
+def get_source_confidence(source: str) -> float:
+def detect_explicit_importance(message: str) -> bool:
+def compute_episode_importance(
+def clamp_sentiment(value: float) -> float:
+class ReflectPhase:
+
+--- src/sovyx/cognitive/safety_audit.py ---
+class FilterDirection(StrEnum):
+class FilterAction(StrEnum):
+class SafetyEvent:
+class SafetyStats:
+class SafetyAuditTrail:
+def get_audit_trail() -> SafetyAuditTrail:
+def setup_audit_trail(max_events: int = 10000) -> SafetyAuditTrail:
+
+--- src/sovyx/cognitive/safety_classifier.py ---
+class ClassificationBudget:
+def get_classification_budget() -> ClassificationBudget:
+class SafetyCategory(enum.StrEnum):
+class SafetyVerdict:
+class _CacheEntry:
+class ClassificationCache:
+def get_classification_cache() -> ClassificationCache:
+async def classify_content(
+class BatchClassificationResult:
+async def batch_classify_content(
+class CacheStats:
+def get_cache_stats() -> CacheStats:
+
+--- src/sovyx/cognitive/safety_container.py ---
+class SafetyContainer:
+def get_safety_container() -> SafetyContainer:
+def set_safety_container(container: SafetyContainer) -> SafetyContainer:
+def reset_safety_container() -> None:
+
+--- src/sovyx/cognitive/safety_escalation.py ---
+class EscalationLevel(StrEnum):
+class SourceState:
+class SafetyEscalationTracker:
+def get_escalation_tracker() -> SafetyEscalationTracker:
+
+--- src/sovyx/cognitive/safety_i18n.py ---
+def get_safety_message(
+
+--- src/sovyx/cognitive/safety_notifications.py ---
+class NotificationSink(Protocol):
+class LogNotificationSink:
+class SafetyAlert:
+class SafetyNotifier:
+def get_notifier() -> SafetyNotifier:
+def setup_notifier(sink: NotificationSink | None = None) -> SafetyNotifier:
+
+--- src/sovyx/cognitive/safety_patterns.py ---
+class PatternCategory(StrEnum):
+class FilterTier(StrEnum):
+class SafetyPattern:
+class FilterMatch:
+def resolve_patterns(safety: SafetyConfig) -> tuple[SafetyPattern, ...]:
+def check_content(text: str, safety: SafetyConfig) -> FilterMatch:
+def get_pattern_count(safety: SafetyConfig) -> int:
+def get_tier_counts() -> dict[str, int]:
+
+--- src/sovyx/cognitive/shadow_mode.py ---
+class CompiledShadowPattern:
+class ShadowMatch:
+def compile_shadow_patterns(
+def invalidate_cache() -> None:
+def evaluate_shadow(
+def get_shadow_stats(safety: SafetyConfig) -> dict[str, object]:
+
+--- src/sovyx/cognitive/state.py ---
+class CognitiveStateMachine:
+
+--- src/sovyx/cognitive/text_normalizer.py ---
+def normalize_text(text: str) -> str:
+
+--- src/sovyx/cognitive/think.py ---
+class ThinkPhase:
+

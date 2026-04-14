@@ -34,7 +34,16 @@ import type {
   ConversationDetailResponse,
 } from "@/types/api";
 
-const WS_BASE = import.meta.env.VITE_WS_URL ?? `ws://${window.location.host}`;
+/**
+ * Build the default WebSocket base URL.
+ *
+ * Derives the scheme from the current page (`https:` → `wss:`, otherwise
+ * `ws:`) so the dashboard does not silently break when served from HTTPS.
+ * Can be overridden with `VITE_WS_URL`.
+ */
+const WS_BASE =
+  import.meta.env.VITE_WS_URL ??
+  `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}`;
 const MAX_BACKOFF_MS = 30_000;
 const INITIAL_BACKOFF_MS = 1_000;
 const STATUS_POLL_MS = 5_000;
@@ -43,7 +52,15 @@ const DEBOUNCE_MS = 300;
 
 /** Read token for WS URL query param (WebSocket API has no custom headers). */
 function getWsToken(): string {
-  return localStorage.getItem("sovyx_token") ?? "";
+  // Read via sessionStorage + in-memory fallback to match `@/lib/api`.
+  // Never fall back to localStorage — legacy builds are migrated once in
+  // `api.ts`, and keeping an explicit `localStorage` read here would
+  // re-open the XSS-token-exfiltration surface we just closed.
+  try {
+    return window.sessionStorage?.getItem("sovyx_token") ?? "";
+  } catch {
+    return "";
+  }
 }
 
 // ── Debounce utility (trailing edge, per-key) ──

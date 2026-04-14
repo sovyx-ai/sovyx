@@ -783,7 +783,7 @@ class SearXNGBackend(SearchBackend):
         categories: str = "general",
         result_type: str = "web",
     ) -> list[SearchResult]:
-        import httpx  # noqa: PLC0415
+        from sovyx.plugins.sandbox_http import SandboxedHttpClient  # noqa: PLC0415
 
         params: dict[str, str | int] = {
             "q": query,
@@ -791,31 +791,35 @@ class SearXNGBackend(SearchBackend):
             "categories": categories,
             "pageno": 1,
         }
+        domain = _extract_domain(self._url)
+        client = SandboxedHttpClient(
+            plugin_name="web_intelligence.searxng",
+            allowed_domains=[domain] if domain else [],
+            timeout_s=_SEARCH_TIMEOUT,
+        )
         try:
-            async with httpx.AsyncClient(timeout=_SEARCH_TIMEOUT) as client:
-                resp = await client.get(
-                    f"{self._url}/search",
-                    params=params,
+            resp = await client.get(f"{self._url}/search", params=params)
+            if resp.status_code != 200:  # noqa: PLR2004
+                return []
+            data: dict[str, Any] = resp.json()
+            raw_results: list[dict[str, Any]] = data.get("results", [])
+            results: list[SearchResult] = []
+            for r in raw_results[:max_results]:
+                results.append(
+                    SearchResult(
+                        title=str(r.get("title", "")),
+                        url=str(r.get("url", "")),
+                        snippet=str(r.get("content", "")),
+                        source=_extract_domain(str(r.get("url", ""))),
+                        date=str(r.get("publishedDate", "")),
+                        result_type=result_type,
+                    ),
                 )
-                if resp.status_code != 200:  # noqa: PLR2004
-                    return []
-                data: dict[str, Any] = resp.json()
-                raw_results: list[dict[str, Any]] = data.get("results", [])
-                results: list[SearchResult] = []
-                for r in raw_results[:max_results]:
-                    results.append(
-                        SearchResult(
-                            title=str(r.get("title", "")),
-                            url=str(r.get("url", "")),
-                            snippet=str(r.get("content", "")),
-                            source=_extract_domain(str(r.get("url", ""))),
-                            date=str(r.get("publishedDate", "")),
-                            result_type=result_type,
-                        ),
-                    )
-                return results
+            return results
         except Exception:  # noqa: BLE001
             return []
+        finally:
+            await client.close()
 
 
 class BraveBackend(SearchBackend):
@@ -857,7 +861,7 @@ class BraveBackend(SearchBackend):
         endpoint: str = "web/search",
         result_type: str = "web",
     ) -> list[SearchResult]:
-        import httpx  # noqa: PLC0415
+        from sovyx.plugins.sandbox_http import SandboxedHttpClient  # noqa: PLC0415
 
         headers = {
             "Accept": "application/json",
@@ -868,39 +872,45 @@ class BraveBackend(SearchBackend):
             "q": query,
             "count": min(max_results, 20),
         }
+        client = SandboxedHttpClient(
+            plugin_name="web_intelligence.brave",
+            allowed_domains=["api.search.brave.com"],
+            timeout_s=_SEARCH_TIMEOUT,
+        )
         try:
-            async with httpx.AsyncClient(timeout=_SEARCH_TIMEOUT) as client:
-                resp = await client.get(
-                    f"{self._API_URL}/{endpoint}",
-                    headers=headers,
-                    params=params,
+            resp = await client.get(
+                f"{self._API_URL}/{endpoint}",
+                headers=headers,
+                params=params,
+            )
+            if resp.status_code != 200:  # noqa: PLR2004
+                return []
+            data: dict[str, Any] = resp.json()
+
+            # Brave web results are in data.web.results
+            # Brave news results are in data.news.results
+            if result_type == "news":
+                raw: list[dict[str, Any]] = data.get("news", {}).get("results", [])
+            else:
+                raw = data.get("web", {}).get("results", [])
+
+            results: list[SearchResult] = []
+            for r in raw[:max_results]:
+                results.append(
+                    SearchResult(
+                        title=str(r.get("title", "")),
+                        url=str(r.get("url", "")),
+                        snippet=str(r.get("description", "")),
+                        source=_extract_domain(str(r.get("url", ""))),
+                        date=str(r.get("age", r.get("page_age", ""))),
+                        result_type=result_type,
+                    ),
                 )
-                if resp.status_code != 200:  # noqa: PLR2004
-                    return []
-                data: dict[str, Any] = resp.json()
-
-                # Brave web results are in data.web.results
-                # Brave news results are in data.news.results
-                if result_type == "news":
-                    raw: list[dict[str, Any]] = data.get("news", {}).get("results", [])
-                else:
-                    raw = data.get("web", {}).get("results", [])
-
-                results: list[SearchResult] = []
-                for r in raw[:max_results]:
-                    results.append(
-                        SearchResult(
-                            title=str(r.get("title", "")),
-                            url=str(r.get("url", "")),
-                            snippet=str(r.get("description", "")),
-                            source=_extract_domain(str(r.get("url", ""))),
-                            date=str(r.get("age", r.get("page_age", ""))),
-                            result_type=result_type,
-                        ),
-                    )
-                return results
+            return results
         except Exception:  # noqa: BLE001
             return []
+        finally:
+            await client.close()
 
 
 def _create_backend(

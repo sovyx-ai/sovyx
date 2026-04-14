@@ -93,6 +93,7 @@ _DASHBOARD_CHANNEL_USER_ID = "dashboard-user"
 
 # Default timeout for cognitive loop submission (seconds).
 _DEFAULT_TIMEOUT: float = 30.0
+_MAX_MESSAGE_CHARS: int = 10_000  # Hard cap on chat input to bound LLM cost/context burn.
 
 
 async def handle_chat_message(
@@ -121,7 +122,8 @@ async def handle_chat_message(
         ``timestamp`` keys.
 
     Raises:
-        ValueError: If message is empty or whitespace-only.
+        ValueError: If message is empty/whitespace-only or exceeds
+            ``_MAX_MESSAGE_CHARS`` (10 000 characters).
         CognitiveError: If the cognitive loop times out or fails.
         ServiceNotRegisteredError: If required services are not registered.
     """
@@ -129,6 +131,9 @@ async def handle_chat_message(
     stripped = message.strip()
     if not stripped:
         msg = "Message cannot be empty"
+        raise ValueError(msg)
+    if len(stripped) > _MAX_MESSAGE_CHARS:
+        msg = f"Message too long ({len(stripped)} chars); limit is {_MAX_MESSAGE_CHARS:,}."
         raise ValueError(msg)
 
     # ── Resolve dependencies (lazy imports avoid circular deps) ──

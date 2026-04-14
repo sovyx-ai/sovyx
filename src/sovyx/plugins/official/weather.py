@@ -10,9 +10,12 @@ Ref: SPE-008 §7.2, Appendix A.2
 
 from __future__ import annotations
 
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from sovyx.plugins.sdk import ISovyxPlugin, tool
+
+if TYPE_CHECKING:  # pragma: no cover
+    from sovyx.plugins.sandbox_http import SandboxedHttpClient
 
 # Open-Meteo API endpoints (free, no key)
 _GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
@@ -179,34 +182,54 @@ class WeatherPlugin(ISovyxPlugin):
 # ── API Helpers ─────────────────────────────────────────────────────
 
 
+_ALLOWED_DOMAINS = ["api.open-meteo.com", "geocoding-api.open-meteo.com"]
+
+
+def _make_client() -> SandboxedHttpClient:
+    """Build a sandboxed HTTP client scoped to Open-Meteo domains.
+
+    Routes the plugin through :class:`sovyx.plugins.sandbox_http.SandboxedHttpClient`
+    so that domain allowlist, local-network blocking, rate limit, and
+    response size cap apply uniformly — keeping official plugins honest
+    with the sandbox they ship with.
+    """
+    from sovyx.plugins.sandbox_http import SandboxedHttpClient
+
+    return SandboxedHttpClient(
+        plugin_name="weather",
+        allowed_domains=_ALLOWED_DOMAINS,
+        timeout_s=10.0,
+    )
+
+
 async def _geocode(city: str) -> tuple[float, float, str] | None:
     """Geocode a city name to coordinates via Open-Meteo.
 
     Returns (latitude, longitude, display_name) or None.
     """
-    import httpx
-
+    client = _make_client()
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                _GEOCODING_URL,
-                params={"name": city, "count": 1, "language": "en"},
-            )
-            if resp.status_code != 200:  # noqa: PLR2004
-                return None
-            data: dict[str, Any] = resp.json()
-            results = data.get("results", [])
-            if not results:
-                return None
-            r = results[0]
-            lat = float(r["latitude"])
-            lon = float(r["longitude"])
-            name = r.get("name", city)
-            country = r.get("country", "")
-            display = f"{name}, {country}" if country else name
-            return (lat, lon, display)
+        resp = await client.get(
+            _GEOCODING_URL,
+            params={"name": city, "count": 1, "language": "en"},
+        )
+        if resp.status_code != 200:  # noqa: PLR2004
+            return None
+        data: dict[str, Any] = resp.json()
+        results = data.get("results", [])
+        if not results:
+            return None
+        r = results[0]
+        lat = float(r["latitude"])
+        lon = float(r["longitude"])
+        name = r.get("name", city)
+        country = r.get("country", "")
+        display = f"{name}, {country}" if country else name
+        return (lat, lon, display)
     except Exception:  # noqa: BLE001
         return None
+    finally:
+        await client.close()
 
 
 async def _fetch_weather(
@@ -218,8 +241,6 @@ async def _fetch_weather(
 
     Returns parsed JSON or None on error.
     """
-    import httpx
-
     params: dict[str, str | float | int] = {
         "latitude": lat,
         "longitude": lon,
@@ -228,12 +249,14 @@ async def _fetch_weather(
         "forecast_days": forecast_days,
         "timezone": "auto",
     }
+    client = _make_client()
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(_WEATHER_URL, params=params)
-            if resp.status_code != 200:  # noqa: PLR2004
-                return None
-            result: dict[str, Any] = resp.json()
-            return result
+        resp = await client.get(_WEATHER_URL, params=params)
+        if resp.status_code != 200:  # noqa: PLR2004
+            return None
+        result: dict[str, Any] = resp.json()
+        return result
     except Exception:  # noqa: BLE001
         return None
+    finally:
+        await client.close()

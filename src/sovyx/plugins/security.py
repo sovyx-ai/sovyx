@@ -62,24 +62,39 @@ class PluginSecurityScanner:
 
     BLOCKED_IMPORTS: frozenset[str] = frozenset(
         {
+            # Process / system access
             "os",
             "subprocess",
             "shutil",
             "sys",
+            "resource",
+            "signal",
+            "multiprocessing",
+            "threading",
+            "pty",
+            # Dynamic import / code execution
             "importlib",
-            "ctypes",
-            "pickle",
-            "marshal",
+            "builtins",
             "code",
             "codeop",
             "compileall",
-            "multiprocessing",
-            "threading",
-            "signal",
-            "resource",
+            "inspect",
+            "gc",
+            # Memory / native access
+            "ctypes",
+            "mmap",
+            # Unsafe serialization
+            "pickle",
+            "marshal",
+            "shelve",
+            "dill",
+            # Filesystem (beyond sandboxed paths)
+            "tempfile",
+            # Network (beyond sandboxed HTTP)
             "socket",
             "http.server",
             "xmlrpc",
+            # UI / interactive
             "webbrowser",
             "turtle",
             "tkinter",
@@ -92,17 +107,38 @@ class PluginSecurityScanner:
             "exec",
             "compile",
             "__import__",
+            "breakpoint",
+            "open",  # plugins must go through SandboxedFsAccess
         }
     )
 
     BLOCKED_ATTRIBUTES: frozenset[str] = frozenset(
         {
+            # Import / execution bypass
             "__import__",
+            # Class hierarchy traversal (blocks the classic escape
+            # `().__class__.__base__.__subclasses__()`)
+            "__class__",
             "__subclasses__",
             "__bases__",
+            "__base__",
+            "__mro__",
+            # Function / code introspection
             "__globals__",
             "__code__",
+            "__closure__",
+            "__defaults__",
+            # Builtins access
             "__builtins__",
+            # Stack / frame access
+            "f_back",
+            "f_locals",
+            "f_globals",
+            "f_builtins",
+            "gi_frame",
+            "cr_frame",
+            # Attribute dictionary bypass
+            "__dict__",
         }
     )
 
