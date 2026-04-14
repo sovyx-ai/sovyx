@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 from typing import TYPE_CHECKING
 
 import pytest
@@ -29,6 +30,20 @@ settings.register_profile(
     suppress_health_check=[HealthCheck.too_slow],
 )
 settings.load_profile("sovyx")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_test_state() -> None:
+    """Force GC between tests to collect leaked refs and close __del__-managed resources.
+
+    Does NOT reset the event loop policy or cancel asyncio tasks — that was the
+    expensive part of the previous version and caused a 4× suite slowdown on CI.
+    A single gc.collect() is O(live objects) and costs ~1-5ms per test, but
+    restores isolation lost when the original fixture was removed (which let
+    prior tests' state leak into modules like cognitive/safety_patterns on CI).
+    """
+    yield
+    gc.collect()
 
 
 @pytest.fixture(autouse=True)
