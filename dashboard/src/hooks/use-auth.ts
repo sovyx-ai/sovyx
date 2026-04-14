@@ -29,7 +29,9 @@ export function useAuth(): { ready: boolean } {
       try {
         // `api.get` injects the Authorization header itself and triggers
         // the 401 handler that already clears the token + opens the modal.
-        await api.get("/api/status");
+        // `retries: 0` — auth probe must fail fast; backoff would delay
+        // the "ask the user to re-enter the token" UX by several seconds.
+        await api.get("/api/status", { retries: 0 });
         if (!cancelled) {
           setAuthenticated(true);
         }
