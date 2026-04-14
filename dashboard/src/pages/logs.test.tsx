@@ -44,8 +44,9 @@ describe("LogsPage", () => {
     });
     render(<LogsPage />);
     await waitFor(() => {
-      // Shows "1 entries" count header (virtualised rows may not be visible in jsdom)
-      expect(screen.getByText(/1/)).toBeInTheDocument();
+      // Count header reads "1 entry" — target that exact string
+      // instead of /1/ which now matches the rendered log row too
+      expect(screen.getByText(/^1 entry$/)).toBeInTheDocument();
     });
   });
 

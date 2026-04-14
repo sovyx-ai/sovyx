@@ -204,9 +204,14 @@ describe("ChatThread", () => {
     expect(container.querySelector(".animate-spin")).toBeTruthy();
   });
 
-  it("calls scrollIntoView on mount", () => {
-    render(<ChatThread messages={messages} participantName="Bob" />);
-    expect(Element.prototype.scrollIntoView).toHaveBeenCalled();
+  it("renders a scrollable container with the virtualized feed", () => {
+    // ChatThread now uses TanStack Virtual — auto-scroll uses
+    // virtualizer.scrollToIndex instead of Element.scrollIntoView.
+    const { container } = render(
+      <ChatThread messages={messages} participantName="Bob" />,
+    );
+    const scrollRoot = container.querySelector(".overflow-auto");
+    expect(scrollRoot).not.toBeNull();
   });
 });
 

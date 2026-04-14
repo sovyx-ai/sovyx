@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { MessageSquareIcon } from "lucide-react";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { EmptyState } from "@/components/empty-state";
 import { ChatBubble } from "./chat-bubble";
 import type { Message } from "@/types/api";
@@ -14,12 +14,26 @@ interface ChatThreadProps {
 
 export function ChatThread({ messages, participantName, loading }: ChatThreadProps) {
   const { t } = useTranslation("conversations");
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const parentRef = useRef<HTMLDivElement>(null);
+  const prevCountRef = useRef(0);
 
-  // Scroll to bottom on new messages
+  const virtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => parentRef.current,
+    // Tuned to typical ChatBubble height (1–3 lines + avatar + timestamp).
+    // Rows remeasure via `measureElement`, so inexact estimate is fine.
+    estimateSize: () => 96,
+    overscan: 6,
+    getItemKey: (index) => messages[index]?.id ?? index,
+  });
+
+  // Auto-scroll to the newest message when the thread grows.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length]);
+    if (messages.length > prevCountRef.current && messages.length > 0) {
+      virtualizer.scrollToIndex(messages.length - 1, { align: "end" });
+    }
+    prevCountRef.current = messages.length;
+  }, [messages.length, virtualizer]);
 
   if (loading) {
     return (
@@ -41,17 +55,40 @@ export function ChatThread({ messages, participantName, loading }: ChatThreadPro
   }
 
   return (
-    <ScrollArea className="h-full">
-      <div className="space-y-1 py-4">
-        {messages.map((msg) => (
-          <ChatBubble
-            key={msg.id}
-            message={msg}
-            participantName={participantName}
-          />
-        ))}
-        <div ref={bottomRef} />
+    <div
+      ref={parentRef}
+      className="h-full overflow-auto contain-strict"
+      style={{ overflowAnchor: "none" }}
+    >
+      <div
+        style={{
+          height: virtualizer.getTotalSize(),
+          width: "100%",
+          position: "relative",
+        }}
+        className="py-4"
+      >
+        {virtualizer.getVirtualItems().map((virtualRow) => {
+          const msg = messages[virtualRow.index];
+          if (!msg) return null;
+          return (
+            <div
+              key={virtualRow.key}
+              data-index={virtualRow.index}
+              ref={virtualizer.measureElement}
+              style={{
+                position: "absolute",
+                top: 0,
+                left: 0,
+                width: "100%",
+                transform: `translateY(${virtualRow.start}px)`,
+              }}
+            >
+              <ChatBubble message={msg} participantName={participantName} />
+            </div>
+          );
+        })}
       </div>
-    </ScrollArea>
+    </div>
   );
 }

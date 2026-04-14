@@ -8,9 +8,9 @@
  * Time grouping: "Just now" (<5min), "Earlier today", "Yesterday", date headers.
  */
 
-import { memo, useEffect, useMemo } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   MessageSquareIcon,
   LightbulbIcon,
@@ -281,6 +281,27 @@ interface CognitiveTimelineProps {
   className?: string;
 }
 
+/**
+ * Flattened view of the timeline: a stream of alternating group headers and
+ * entry rows. This lets the virtualizer own the scroll offset for the whole
+ * thing instead of nesting virtualizers per group.
+ */
+type FlatItem =
+  | { kind: "header"; group: TimeGroup; key: string }
+  | { kind: "row"; entry: TimelineEntry; key: string };
+
+function flattenGroups(groups: Map<TimeGroup, TimelineEntry[]>): FlatItem[] {
+  const out: FlatItem[] = [];
+  for (const [group, rows] of groups) {
+    out.push({ kind: "header", group, key: `h:${group}` });
+    for (let i = 0; i < rows.length; i++) {
+      const entry = rows[i]!;
+      out.push({ kind: "row", entry, key: `r:${entry.timestamp}:${i}` });
+    }
+  }
+  return out;
+}
+
 export function CognitiveTimeline({ className }: CognitiveTimelineProps) {
   const { t } = useTranslation("overview");
   const entries = useDashboardStore((s) => s.timelineEntries);
@@ -298,6 +319,18 @@ export function CognitiveTimeline({ className }: CognitiveTimelineProps) {
   }, [fetchTimeline, connected]);
 
   const groups = useMemo(() => groupEntries(entries), [entries]);
+  const items = useMemo(() => flattenGroups(groups), [groups]);
+
+  const parentRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: items.length,
+    getScrollElement: () => parentRef.current,
+    // Headers render taller than rows — use a single estimate tuned
+    // between the two and let measureElement correct each item.
+    estimateSize: (index) => (items[index]?.kind === "header" ? 24 : 40),
+    overscan: 6,
+    getItemKey: (index) => items[index]?.key ?? index,
+  });
 
   return (
     <div
@@ -313,40 +346,66 @@ export function CognitiveTimeline({ className }: CognitiveTimelineProps) {
         {t("timeline.title")}
       </h2>
 
-      <ScrollArea className="h-72 pr-3">
-        {isLoading ? (
+      {isLoading ? (
+        <div className="h-72 pr-3">
           <TimelineSkeleton />
-        ) : entries.length === 0 ? (
-          <div className="flex flex-col items-center gap-1.5 py-8 text-center">
-            <div className="flex items-center gap-1.5 text-xs text-[var(--svx-color-text-tertiary)]">
-              <LightbulbIcon className="size-3.5" />
-              {t("timeline.empty")}
-            </div>
-            <p className="text-[10px] text-[var(--svx-color-text-tertiary)]">
-              {t("timeline.emptyHint")}
-            </p>
+        </div>
+      ) : entries.length === 0 ? (
+        <div className="flex h-72 flex-col items-center justify-center gap-1.5 py-8 text-center">
+          <div className="flex items-center gap-1.5 text-xs text-[var(--svx-color-text-tertiary)]">
+            <LightbulbIcon className="size-3.5" />
+            {t("timeline.empty")}
           </div>
-        ) : (
-          <div className="space-y-3" role="feed" aria-label="Cognitive timeline">
-            {[...groups.entries()].map(([group, groupEntries]) => (
-              <div key={group}>
-                {/* Group header */}
-                <div className="sticky top-0 z-10 mb-1 bg-[var(--svx-color-bg-surface)] pb-1">
-                  <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--svx-color-text-tertiary)]">
-                    {groupLabel(group, t)}
-                  </span>
+          <p className="text-[10px] text-[var(--svx-color-text-tertiary)]">
+            {t("timeline.emptyHint")}
+          </p>
+        </div>
+      ) : (
+        <div
+          ref={parentRef}
+          className="h-72 overflow-auto pr-3 contain-strict"
+          style={{ overflowAnchor: "none" }}
+          role="feed"
+          aria-label="Cognitive timeline"
+        >
+          <div
+            style={{
+              height: virtualizer.getTotalSize(),
+              width: "100%",
+              position: "relative",
+            }}
+          >
+            {virtualizer.getVirtualItems().map((vrow) => {
+              const item = items[vrow.index];
+              if (!item) return null;
+              return (
+                <div
+                  key={vrow.key}
+                  data-index={vrow.index}
+                  ref={virtualizer.measureElement}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    transform: `translateY(${vrow.start}px)`,
+                  }}
+                >
+                  {item.kind === "header" ? (
+                    <div className="mb-1 bg-[var(--svx-color-bg-surface)] pb-1">
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--svx-color-text-tertiary)]">
+                        {groupLabel(item.group, t)}
+                      </span>
+                    </div>
+                  ) : (
+                    <TimelineRow entry={item.entry} t={t} />
+                  )}
                 </div>
-                {/* Entries */}
-                <div className="space-y-0.5">
-                  {groupEntries.map((entry, idx) => (
-                    <TimelineRow key={`${entry.timestamp}-${idx}`} entry={entry} t={t} />
-                  ))}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
-        )}
-      </ScrollArea>
+        </div>
+      )}
     </div>
   );
 }
