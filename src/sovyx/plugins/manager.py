@@ -14,11 +14,18 @@ Spec: SPE-008 §6, IMMERSION-004 (dependency resolution), SPE-008-SANDBOX §2 §
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import time
 import typing
 
 from sovyx.observability.logging import get_logger
+from sovyx.plugins._dependency import _topological_sort
+from sovyx.plugins._event_emitter import PluginEventEmitter
+from sovyx.plugins._manager_types import (
+    LoadedPlugin,
+    PluginDisabledError,
+    PluginError,
+    _PluginHealth,
+)
 from sovyx.plugins.context import BrainAccess, EventBusAccess, PluginContext
 from sovyx.plugins.permissions import (
     Permission,
@@ -43,84 +50,15 @@ _DEFAULT_TOOL_TIMEOUT_S = 30.0
 _MAX_CONSECUTIVE_FAILURES = 5
 
 
-# ── Data Structures ─────────────────────────────────────────────────
-
-
-class PluginError(Exception):
-    """Raised when a plugin operation fails."""
-
-
-class PluginDisabledError(PluginError):
-    """Raised when executing a tool on an auto-disabled plugin."""
-
-
-@dataclasses.dataclass
-class _PluginHealth:
-    """Per-plugin health tracking."""
-
-    consecutive_failures: int = 0
-    disabled: bool = False
-    last_error: str = ""
-    active_tasks: int = 0
-
-
-@dataclasses.dataclass
-class LoadedPlugin:
-    """A plugin that has been loaded and initialized."""
-
-    plugin: ISovyxPlugin
-    tools: list[ToolDefinition]
-    context: PluginContext
-    enforcer: PermissionEnforcer
-    manifest: PluginManifest | None = None
-    guard: ImportGuard | None = None
-
-
-# ── Dependency Resolution ───────────────────────────────────────────
-
-
-def _topological_sort(
-    plugins: dict[str, list[str]],
-) -> list[str]:
-    """Topological sort of plugins by dependencies.
-
-    Args:
-        plugins: Mapping of plugin_name → list of dependency names.
-
-    Returns:
-        Ordered list of plugin names (dependencies first).
-
-    Raises:
-        PluginError: Circular dependency detected.
-    """
-    # Kahn's algorithm
-    in_degree: dict[str, int] = {name: 0 for name in plugins}
-    graph: dict[str, list[str]] = {name: [] for name in plugins}
-
-    for name, deps in plugins.items():
-        for dep in deps:
-            if dep in plugins:
-                graph[dep].append(name)
-                in_degree[name] += 1
-
-    queue = [n for n in plugins if in_degree[n] == 0]
-    result: list[str] = []
-
-    while queue:
-        queue.sort()  # Deterministic order
-        node = queue.pop(0)
-        result.append(node)
-        for dependent in graph[node]:
-            in_degree[dependent] -= 1
-            if in_degree[dependent] == 0:
-                queue.append(dependent)
-
-    if len(result) != len(plugins):
-        missing = set(plugins) - set(result)
-        msg = f"Circular dependency detected among: {sorted(missing)}"
-        raise PluginError(msg)
-
-    return result
+# Public re-exports — keep backward-compatible imports working.
+__all__ = [
+    "LoadedPlugin",
+    "PluginDisabledError",
+    "PluginError",
+    "PluginManager",
+    "_PluginHealth",
+    "_topological_sort",
+]
 
 
 # ── Plugin Manager ──────────────────────────────────────────────────
@@ -163,6 +101,7 @@ class PluginManager:
         """
         self._brain = brain
         self._event_bus = event_bus
+        self._emitter = PluginEventEmitter(event_bus)
         self._data_dir = data_dir
         self._enabled = enabled
         self._disabled = disabled or set()
@@ -536,6 +475,8 @@ class PluginManager:
             )
             self._emit_auto_disabled(plugin_name, health)
 
+    # ── Lifecycle event emission (delegated to PluginEventEmitter) ──
+
     def _emit_tool_executed(
         self,
         plugin_name: str,
@@ -544,26 +485,14 @@ class PluginManager:
         duration_ms: int,
         error_msg: str,
     ) -> None:
-        """Emit PluginToolExecuted event."""
-        if not self._event_bus:
-            return
-        try:
-            from sovyx.plugins.events import PluginToolExecuted
-
-            event = PluginToolExecuted(
-                plugin_name=plugin_name,
-                tool_name=tool_name,
-                success=success,
-                duration_ms=duration_ms,
-                error_message=error_msg,
-            )
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(self._event_bus.emit(event))
-            except RuntimeError:
-                pass  # No event loop
-        except Exception:  # noqa: BLE001  # nosec B110
-            pass  # Event emission must never crash
+        """Emit PluginToolExecuted (delegate)."""
+        self._emitter.tool_executed(
+            plugin_name=plugin_name,
+            tool_name=tool_name,
+            success=success,
+            duration_ms=duration_ms,
+            error_msg=error_msg,
+        )
 
     def _emit_plugin_loaded(
         self,
@@ -571,71 +500,20 @@ class PluginManager:
         version: str,
         tools_count: int,
     ) -> None:
-        """Emit PluginLoaded event."""
-        if not self._event_bus:
-            return
-        try:
-            from sovyx.plugins.events import PluginLoaded
+        """Emit PluginLoaded (delegate)."""
+        self._emitter.loaded(
+            plugin_name=plugin_name,
+            version=version,
+            tools_count=tools_count,
+        )
 
-            event = PluginLoaded(
-                plugin_name=plugin_name,
-                plugin_version=version,
-                tools_count=tools_count,
-            )
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(self._event_bus.emit(event))
-            except RuntimeError:
-                pass  # No event loop
-        except Exception:  # noqa: BLE001  # nosec B110
-            pass  # Event emission must never crash
+    def _emit_plugin_unloaded(self, plugin_name: str, reason: str) -> None:
+        """Emit PluginUnloaded (delegate)."""
+        self._emitter.unloaded(plugin_name=plugin_name, reason=reason)
 
-    def _emit_plugin_unloaded(
-        self,
-        plugin_name: str,
-        reason: str,
-    ) -> None:
-        """Emit PluginUnloaded event."""
-        if not self._event_bus:
-            return
-        try:
-            from sovyx.plugins.events import PluginUnloaded
-
-            event = PluginUnloaded(
-                plugin_name=plugin_name,
-                reason=reason,
-            )
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(self._event_bus.emit(event))
-            except RuntimeError:
-                pass  # No event loop
-        except Exception:  # noqa: BLE001  # nosec B110
-            pass  # Event emission must never crash
-
-    def _emit_auto_disabled(
-        self,
-        plugin_name: str,
-        health: _PluginHealth,
-    ) -> None:
-        """Emit PluginAutoDisabled event."""
-        if not self._event_bus:
-            return
-        try:
-            from sovyx.plugins.events import PluginAutoDisabled
-
-            event = PluginAutoDisabled(
-                plugin_name=plugin_name,
-                consecutive_failures=health.consecutive_failures,
-                last_error=health.last_error,
-            )
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(self._event_bus.emit(event))
-            except RuntimeError:
-                pass  # No event loop
-        except Exception:  # noqa: BLE001  # nosec B110
-            pass  # Event emission must never crash
+    def _emit_auto_disabled(self, plugin_name: str, health: _PluginHealth) -> None:
+        """Emit PluginAutoDisabled (delegate)."""
+        self._emitter.auto_disabled(plugin_name=plugin_name, health=health)
 
     # ── Query ───────────────────────────────────────────────────────
 
