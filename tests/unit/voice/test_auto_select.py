@@ -188,7 +188,9 @@ class TestDetectHardware:
 
     @patch.object(_auto_select_mod.platform, "machine", return_value="aarch64")
     @patch.object(_auto_select_mod.os, "cpu_count", return_value=4)
-    @patch.object(_auto_select_mod.os, "sysconf", create=True, side_effect=[4096, 2_097_152])  # 8GB
+    @patch.object(
+        _auto_select_mod.os, "sysconf", create=True, side_effect=[4096, 2_097_152]
+    )  # 8GB
     @patch.object(_auto_select_mod, "_detect_gpu", return_value=(False, 0))
     def test_pi5_detection(
         self,
@@ -205,7 +207,9 @@ class TestDetectHardware:
 
     @patch.object(_auto_select_mod.platform, "machine", return_value="x86_64")
     @patch.object(_auto_select_mod.os, "cpu_count", return_value=8)
-    @patch.object(_auto_select_mod.os, "sysconf", create=True, side_effect=[4096, 8_388_608])  # 32GB
+    @patch.object(
+        _auto_select_mod.os, "sysconf", create=True, side_effect=[4096, 8_388_608]
+    )  # 32GB
     @patch.object(_auto_select_mod, "_detect_gpu", return_value=(True, 12000))
     def test_gpu_detection(
         self,
@@ -221,7 +225,9 @@ class TestDetectHardware:
 
     @patch.object(_auto_select_mod.platform, "machine", return_value="x86_64")
     @patch.object(_auto_select_mod.os, "cpu_count", return_value=None)
-    @patch.object(_auto_select_mod.os, "sysconf", create=True, side_effect=[4096, 4_194_304])  # 16GB
+    @patch.object(
+        _auto_select_mod.os, "sysconf", create=True, side_effect=[4096, 4_194_304]
+    )  # 16GB
     @patch.object(_auto_select_mod, "_detect_gpu", return_value=(False, 0))
     def test_cpu_count_none_defaults_to_1(
         self,
