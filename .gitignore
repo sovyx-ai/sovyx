@@ -75,3 +75,6 @@ vps-brain-dump/
 
 # audit_coverage.py output — regenerable tooling artifact
 docs/_meta/
+
+# Internal design docs, audits, and planning — kept local only
+docs-internal/

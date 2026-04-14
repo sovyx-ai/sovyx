@@ -1,3 +1,0 @@
-=== Triage entries for module: _mission (1 docs) ===
-[SOVYX-MISSION|alta] vps-brain-dump/sovyx-para-natasha.md
-  Sovyx explanation audience

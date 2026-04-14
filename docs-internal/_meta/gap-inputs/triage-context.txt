@@ -1,5 +1,0 @@
-=== Triage entries for module: context (2 docs) ===
-[SOVYX-CONTEXT|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-003-CONTEXT-ASSEMBLY.md
-  Context assembly specification: dynamic prompt building, memory retrieval, relevance ranking logic
-[SOVYX-CONTEXT|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-006-CONTEXT-ASSEMBLY.md
-  Context assembly specification: dynamic prompting, relevance ranking, token budgets management
