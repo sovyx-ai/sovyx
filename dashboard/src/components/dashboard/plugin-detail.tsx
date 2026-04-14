@@ -7,7 +7,7 @@
  * TASK-457 (redesign)
  */
 
-import { useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
@@ -126,7 +126,7 @@ function Section({
 
 // ── Tool Item ──
 
-function ToolItem({ tool }: { tool: PluginToolDetail }) {
+const ToolItem = memo(function ToolItem({ tool }: { tool: PluginToolDetail }) {
   const { t } = useTranslation("plugins");
   const [expanded, setExpanded] = useState(false);
   const hasParams =
@@ -181,7 +181,7 @@ function ToolItem({ tool }: { tool: PluginToolDetail }) {
       )}
     </div>
   );
-}
+});
 
 // ── Health Bar ──
 
@@ -256,51 +256,67 @@ export function PluginDetailPanel({
     }
   }, [pluginName, open, fetchPluginDetail]);
 
-  const executeAction = async (action: "enable" | "disable" | "reload") => {
-    if (!pluginName) return;
-    setActionLoading(action);
-    setActionError(null);
-    try {
-      let success = false;
-      if (action === "enable") success = await enablePlugin(pluginName);
-      else if (action === "disable") success = await disablePlugin(pluginName);
-      else success = await reloadPlugin(pluginName);
+  const executeAction = useCallback(
+    async (action: "enable" | "disable" | "reload") => {
+      if (!pluginName) return;
+      setActionLoading(action);
+      setActionError(null);
+      try {
+        let success = false;
+        if (action === "enable") success = await enablePlugin(pluginName);
+        else if (action === "disable") success = await disablePlugin(pluginName);
+        else success = await reloadPlugin(pluginName);
 
-      if (success) {
-        const key = action === "enable" ? "enabled" : action === "disable" ? "disabled" : "reloaded";
-        toast.success(t(`actions.${key}`));
-      } else {
+        if (success) {
+          const key = action === "enable" ? "enabled" : action === "disable" ? "disabled" : "reloaded";
+          toast.success(t(`actions.${key}`));
+        } else {
+          const msg = t(`actions.${action}Failed`);
+          toast.error(msg);
+          setActionError(msg);
+        }
+        void fetchPluginDetail(pluginName);
+      } catch {
         const msg = t(`actions.${action}Failed`);
         toast.error(msg);
         setActionError(msg);
+      } finally {
+        setActionLoading(null);
       }
-      void fetchPluginDetail(pluginName);
-    } catch {
-      const msg = t(`actions.${action}Failed`);
-      toast.error(msg);
-      setActionError(msg);
-    } finally {
-      setActionLoading(null);
-    }
-  };
+    },
+    [pluginName, enablePlugin, disablePlugin, reloadPlugin, fetchPluginDetail, t],
+  );
 
-  const handleAction = (action: "enable" | "disable" | "reload") => {
-    if (action === "disable" || action === "reload") {
-      setConfirmAction(action);
-    } else {
-      void executeAction(action);
-    }
-  };
+  const handleAction = useCallback(
+    (action: "enable" | "disable" | "reload") => {
+      if (action === "disable" || action === "reload") {
+        setConfirmAction(action);
+      } else {
+        void executeAction(action);
+      }
+    },
+    [executeAction],
+  );
 
-  const onConfirm = () => {
+  const onConfirm = useCallback(() => {
     if (confirmAction) {
       void executeAction(confirmAction);
       setConfirmAction(null);
     }
-  };
+  }, [confirmAction, executeAction]);
 
-  const manifest = detail?.manifest && "name" in detail.manifest ? detail.manifest : null;
-  const statusCfg = detail ? STATUS_CONFIG[detail.status as keyof typeof STATUS_CONFIG] ?? STATUS_CONFIG.disabled : STATUS_CONFIG.disabled;
+  const manifest = useMemo(
+    () => (detail?.manifest && "name" in detail.manifest ? detail.manifest : null),
+    [detail?.manifest],
+  );
+  const statusCfg = useMemo(
+    () =>
+      detail
+        ? STATUS_CONFIG[detail.status as keyof typeof STATUS_CONFIG] ?? STATUS_CONFIG.disabled
+        : STATUS_CONFIG.disabled,
+    [detail],
+  );
+  const headerHue = useMemo(() => (detail ? nameToHue(detail.name) : 0), [detail]);
 
   return (
     <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
@@ -321,7 +337,7 @@ export function PluginDetailPanel({
                 <div
                   className="flex size-14 shrink-0 items-center justify-center rounded-2xl text-xl font-bold text-white shadow-lg"
                   style={{
-                    background: `linear-gradient(135deg, hsl(${nameToHue(detail.name)}, 70%, 50%), hsl(${(nameToHue(detail.name) + 40) % 360}, 70%, 40%))`,
+                    background: `linear-gradient(135deg, hsl(${headerHue}, 70%, 50%), hsl(${(headerHue + 40) % 360}, 70%, 40%))`,
                   }}
                 >
                   {detail.name.charAt(0).toUpperCase()}

@@ -7,7 +7,7 @@
  * Ref: Architecture §3.4, immersion-final §3
  */
 
-import { useState, type MouseEvent } from "react";
+import { memo, useCallback, useMemo, useState, type MouseEvent } from "react";
 import type { LogEntry } from "@/types/api";
 import { formatTimePrecise } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -34,17 +34,19 @@ const LEVEL_BG: Record<LogEntry["level"], string> = {
 
 
 
-export function LogRow({ entry }: LogRowProps) {
+function LogRowImpl({ entry }: LogRowProps) {
   const [expanded, setExpanded] = useState(false);
 
-  const handleClick = (e: MouseEvent) => {
+  const handleClick = useCallback((e: MouseEvent) => {
     e.stopPropagation();
     setExpanded((v) => !v);
-  };
+  }, []);
 
   // Extract known fields; rest is extra structured data
-  const { timestamp: _ts, level: _lv, logger: _lg, event: _ev, ...extraFields } = entry;
-  const hasExtra = Object.keys(extraFields).length > 0;
+  const { extraFields, hasExtra } = useMemo(() => {
+    const { timestamp: _ts, level: _lv, logger: _lg, event: _ev, ...rest } = entry;
+    return { extraFields: rest, hasExtra: Object.keys(rest).length > 0 };
+  }, [entry]);
 
   return (
     <div
@@ -77,3 +79,5 @@ export function LogRow({ entry }: LogRowProps) {
     </div>
   );
 }
+
+export const LogRow = memo(LogRowImpl);

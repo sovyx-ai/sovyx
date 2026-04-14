@@ -7,7 +7,7 @@
  * TASK-454
  */
 
-import { useState, useRef, useEffect } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { MoreVerticalIcon, AlertTriangleIcon } from "lucide-react";
@@ -26,7 +26,7 @@ function nameToHue(name: string): number {
   return Math.abs(hash) % 360;
 }
 
-function LetterAvatar({
+const LetterAvatar = memo(function LetterAvatar({
   name,
   className,
 }: {
@@ -50,7 +50,7 @@ function LetterAvatar({
       {letter}
     </div>
   );
-}
+});
 
 // ── Status Dot ──
 
@@ -62,12 +62,12 @@ const STATUS_STYLES = {
     "bg-[var(--svx-color-error)] shadow-[0_0_6px_var(--svx-color-error)] animate-pulse",
 } as const;
 
-function PluginStatusDot({ status }: { status: string }) {
+const PluginStatusDot = memo(function PluginStatusDot({ status }: { status: string }) {
   const style =
     STATUS_STYLES[status as keyof typeof STATUS_STYLES] ??
     STATUS_STYLES.disabled;
   return <div className={cn("size-2 rounded-full shrink-0", style)} />;
-}
+});
 
 // ── Risk Indicator ──
 
@@ -231,17 +231,20 @@ interface PluginCardProps {
   delay?: number;
 }
 
-export function PluginCard({
+function PluginCardImpl({
   plugin,
   onClick,
   className,
   delay = 0,
 }: PluginCardProps) {
   const { t } = useTranslation("plugins");
-  const risk = highestRisk(plugin.permissions);
+  const risk = useMemo(() => highestRisk(plugin.permissions), [plugin.permissions]);
   const isActive = plugin.status === "active";
   const categoryIcon =
     CATEGORY_ICONS[plugin.category] ?? (plugin.category ? "🔌" : "");
+  const handleViewDetails = useCallback(() => {
+    onClick?.();
+  }, [onClick]);
 
   return (
     <button
@@ -302,7 +305,7 @@ export function PluginCard({
           <PluginStatusDot status={plugin.status} />
           <QuickActions
             plugin={plugin}
-            onViewDetails={() => onClick?.()}
+            onViewDetails={handleViewDetails}
           />
         </div>
       </div>
@@ -360,3 +363,5 @@ export function PluginCard({
     </button>
   );
 }
+
+export const PluginCard = memo(PluginCardImpl);

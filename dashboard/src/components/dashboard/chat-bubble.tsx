@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { Message } from "@/types/api";
 import { MarkdownContent } from "@/components/chat";
 import { LetterAvatar, MindAvatar } from "./letter-avatar";
@@ -9,7 +10,7 @@ interface ChatBubbleProps {
   participantName: string;
 }
 
-export function ChatBubble({ message, participantName }: ChatBubbleProps) {
+function ChatBubbleImpl({ message, participantName }: ChatBubbleProps) {
   const isUser = message.role === "user";
 
   return (
@@ -56,3 +57,5 @@ export function ChatBubble({ message, participantName }: ChatBubbleProps) {
     </div>
   );
 }
+
+export const ChatBubble = memo(ChatBubbleImpl);

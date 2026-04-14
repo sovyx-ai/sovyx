@@ -8,7 +8,7 @@
  * Time grouping: "Just now" (<5min), "Earlier today", "Yesterday", date headers.
  */
 
-import { useEffect } from "react";
+import { memo, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -196,7 +196,7 @@ function ImportanceDot({ importance }: { importance: number }) {
 
 // ── Single entry row ──
 
-function TimelineRow({ entry, t }: { entry: TimelineEntry; t: (key: string, opts?: Record<string, unknown>) => string }) {
+const TimelineRow = memo(function TimelineRow({ entry, t }: { entry: TimelineEntry; t: (key: string, opts?: Record<string, unknown>) => string }) {
   const d = entry.data;
   return (
     <div className="group flex items-start gap-2.5 py-1.5 transition-colors hover:bg-[var(--svx-color-bg-elevated)]">
@@ -242,7 +242,7 @@ function TimelineRow({ entry, t }: { entry: TimelineEntry; t: (key: string, opts
       </span>
     </div>
   );
-}
+});
 
 // ── Group header label ──
 
@@ -297,7 +297,7 @@ export function CognitiveTimeline({ className }: CognitiveTimelineProps) {
     return () => { cancelled = true; };
   }, [fetchTimeline, connected]);
 
-  const groups = groupEntries(entries);
+  const groups = useMemo(() => groupEntries(entries), [entries]);
 
   return (
     <div
