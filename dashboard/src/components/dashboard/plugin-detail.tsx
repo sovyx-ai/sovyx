@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { nameToHue } from "@/lib/format";
+import { safeStringify } from "@/lib/safe-json";
 import { useDashboardStore } from "@/stores/dashboard";
 import {
   Sheet,
@@ -176,7 +177,7 @@ const ToolItem = memo(function ToolItem({ tool }: { tool: PluginToolDetail }) {
       {expanded && hasParams && (
         <div className="border-t border-[var(--svx-color-border-default)] px-3 pb-3 pt-2">
           <pre className="max-h-40 overflow-auto rounded-[var(--svx-radius-md)] bg-[var(--svx-color-bg-base)] p-3 text-xs leading-relaxed text-[var(--svx-color-text-secondary)] font-mono">
-            {JSON.stringify(tool.parameters, null, 2)}
+            {safeStringify(tool.parameters)}
           </pre>
         </div>
       )}
@@ -642,7 +643,7 @@ export function PluginDetailPanel({
                 defaultOpen={false}
               >
                 <pre className="max-h-56 overflow-auto rounded-[var(--svx-radius-lg)] bg-[var(--svx-color-bg-elevated)] p-4 text-xs leading-relaxed text-[var(--svx-color-text-secondary)] font-mono">
-                  {JSON.stringify(manifest, null, 2)}
+                  {safeStringify(manifest, { maxLength: 8_000 })}
                 </pre>
               </Section>
             )}

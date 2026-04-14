@@ -10,6 +10,7 @@
 import { memo, useCallback, useMemo, useState, type MouseEvent } from "react";
 import type { LogEntry } from "@/types/api";
 import { formatTimePrecise } from "@/lib/format";
+import { safeStringify } from "@/lib/safe-json";
 import { cn } from "@/lib/utils";
 
 interface LogRowProps {
@@ -73,7 +74,7 @@ function LogRowImpl({ entry }: LogRowProps) {
       </div>
       {expanded && hasExtra && (
         <pre className="mt-1 overflow-x-auto rounded-[var(--svx-radius-sm)] bg-[var(--svx-color-bg-elevated)] p-2 text-[10px] text-[var(--svx-color-text-secondary)]">
-          {JSON.stringify(extraFields, null, 2)}
+          {safeStringify(extraFields)}
         </pre>
       )}
     </div>
