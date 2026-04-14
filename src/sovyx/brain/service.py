@@ -511,50 +511,35 @@ class BrainService:
     ) -> float:
         """Compute semantic novelty of a concept against existing knowledge.
 
-        Strategy (3-tier with graceful degradation):
+        3-tier strategy with graceful degradation:
 
-        1. **Embedding cosine distance** (preferred): encode text, compare
-           against category centroid. High distance = high novelty.
-        2. **FTS5 text search** (fallback): if embeddings unavailable,
-           use text search similarity as proxy.
-        3. **Cold start prior** (0.70): if category has < 10 concepts,
-           embeddings are unreliable — return moderate-high novelty.
+        1. Embedding cosine distance from category centroid (preferred).
+        2. FTS5 text search (fallback when embeddings unavailable).
+        3. Cold-start prior (0.70) when the category has < 10 concepts.
 
         Novelty scale:
-        - 1.0: completely unprecedented topic
-        - 0.70: cold start / insufficient data
-        - 0.50: moderately novel
-        - 0.05: near-duplicate of existing knowledge
-
-        Args:
-            text: Concept name + content to assess.
-            category: ConceptCategory value for scoped comparison.
-            mind_id: Mind to compare against.
+            1.0   completely unprecedented topic
+            0.70  cold start / insufficient data
+            0.50  moderately novel
+            0.05  near-duplicate of existing knowledge
 
         Returns:
             Novelty score in [0.05, 1.0].
         """
-        # Check category population for cold start
         try:
             count = await self._concepts.count_by_category(mind_id, category)
-        except Exception:
+        except Exception:  # noqa: BLE001
             return self._COLD_START_NOVELTY
 
         if count < self._COLD_START_THRESHOLD:
             return self._COLD_START_NOVELTY
 
-        # Tier 1: Embedding-based novelty
         if self._embedding.has_embeddings:
             try:
-                return await self._compute_novelty_embedding(
-                    text,
-                    category,
-                    mind_id,
-                )
-            except Exception:
+                return await self._compute_novelty_embedding(text, category, mind_id)
+            except Exception:  # noqa: BLE001
                 logger.debug("embedding_novelty_failed_falling_back_to_fts5")
 
-        # Tier 2: FTS5-based novelty (existing approach)
         return await self._compute_novelty_fts5(text, mind_id)
 
     async def _compute_novelty_embedding(
@@ -563,150 +548,46 @@ class BrainService:
         category: str,
         mind_id: MindId,
     ) -> float:
-        """Compute novelty via embedding cosine distance from category centroid.
+        """Embedding-based novelty (delegate to ``brain._novelty``)."""
+        from sovyx.brain._novelty import compute_novelty_embedding
 
-        Encodes the new concept text, fetches existing embeddings in the
-        same category, computes the centroid, and measures cosine distance.
-
-        High cosine similarity to centroid = low novelty (concept is
-        "in the neighborhood" of known knowledge).
-        Low similarity = high novelty (concept is far from the cluster).
-
-        The mapping from similarity to novelty uses a calibrated curve:
-        - similarity >= 0.85 → novelty 0.05 (near-duplicate)
-        - similarity ~0.60 → novelty 0.50 (moderately novel)
-        - similarity <= 0.30 → novelty 0.95 (very novel)
-        """
-        from sovyx.brain.embedding import EmbeddingEngine
-
-        # Encode the new concept
-        new_embedding = await self._embedding.encode(text, is_query=True)
-
-        # Try centroid cache first (populated by consolidation)
-        cache_key = (str(mind_id), category)
-        centroid = self._centroid_cache.get(cache_key)
-
-        if centroid is None:
-            # Cache miss: compute from scratch, cache the result
-            category_embeddings = await self._concepts.get_embeddings_by_category(
-                mind_id,
-                category,
-                limit=500,
-            )
-            if not category_embeddings:
-                return self._COLD_START_NOVELTY
-
-            centroid = await self._embedding.compute_category_centroid(
-                category_embeddings,
-            )
-            self._centroid_cache[cache_key] = centroid
-
-        # Cosine similarity (both vectors are L2-normalized)
-        similarity = EmbeddingEngine.cosine_similarity(new_embedding, centroid)
-
-        # Map similarity → novelty with calibrated piecewise linear curve:
-        # sim >= 0.85 → novelty 0.05
-        # sim in [0.30, 0.85] → linear from 0.95 to 0.05
-        # sim <= 0.30 → novelty 0.95
-        if similarity >= 0.85:  # noqa: PLR2004
-            return 0.05
-        if similarity <= 0.30:  # noqa: PLR2004
-            return 0.95
-        # Linear interpolation: (0.30, 0.95) → (0.85, 0.05)
-        t = (similarity - 0.30) / (0.85 - 0.30)  # 0.0 → 1.0
-        novelty = 0.95 - t * 0.90  # 0.95 → 0.05
-        return max(0.05, min(1.0, novelty))
+        return await compute_novelty_embedding(
+            text,
+            category,
+            mind_id,
+            embedding=self._embedding,
+            concepts=self._concepts,
+            centroid_cache=self._centroid_cache,
+        )
 
     async def _compute_novelty_fts5(
         self,
         text: str,
         mind_id: MindId,
     ) -> float:
-        """Compute novelty via FTS5 text search (fallback).
+        """FTS5 fallback novelty (delegate to ``brain._novelty``)."""
+        from sovyx.brain._novelty import compute_novelty_fts5
 
-        Uses the existing search() pipeline. High match score = low novelty.
-        Less precise than embeddings but always available.
-        """
-        try:
-            matches = await self.search(text, mind_id, limit=3)
-        except Exception:
-            return self._COLD_START_NOVELTY
+        async def _search(text: str, mid: MindId, limit: int) -> list[tuple[Concept, float]]:
+            return await self.search(text, mid, limit=limit)
 
-        if not matches:
-            return 1.0
+        return await compute_novelty_fts5(text, mind_id, search_fn=_search)
 
-        best_concept, best_score = matches[0]
-        # Exact name match = very low novelty
-        if best_concept.name.lower() == text.lower():
-            return 0.05
-        # Convert search score to novelty (inverse relationship)
-        novelty = max(0.05, 1.0 - min(1.0, best_score * 1.5))
-        return novelty
-
-    # ── Centroid Cache ──────────────────────────────────────────────
+    # ── Centroid Cache (delegated to ``brain._centroid``) ───────────
 
     async def refresh_centroid_cache(self, mind_id: MindId) -> int:
-        """Pre-compute and cache category centroids from current embeddings.
+        """Refresh centroid cache for a mind."""
+        from sovyx.brain._centroid import refresh_centroid_cache
 
-        Called by consolidation after score recalculation. Replaces stale
-        centroids so that subsequent ``compute_novelty`` calls use fresh
-        cluster centers without per-call DB round-trips.
-
-        Args:
-            mind_id: Mind to refresh centroids for.
-
-        Returns:
-            Number of categories cached.
-        """
-        if not self._embedding.has_embeddings:
-            return 0
-
-        categories = await self._concepts.get_categories(mind_id)
-        cached = 0
-
-        for cat in categories:
-            try:
-                count = await self._concepts.count_by_category(mind_id, cat)
-                if count < self._COLD_START_THRESHOLD:
-                    continue
-
-                embeddings = await self._concepts.get_embeddings_by_category(
-                    mind_id,
-                    cat,
-                    limit=500,
-                )
-                if not embeddings:
-                    continue
-
-                centroid = await self._embedding.compute_category_centroid(embeddings)
-                self._centroid_cache[(str(mind_id), cat)] = centroid
-                cached += 1
-            except Exception:
-                logger.debug(
-                    "centroid_cache_refresh_failed",
-                    category=cat,
-                    exc_info=True,
-                )
-
-        logger.info(
-            "centroid_cache_refreshed",
-            mind_id=str(mind_id),
-            categories_cached=cached,
-            total_categories=len(categories),
+        return await refresh_centroid_cache(
+            mind_id,
+            embedding=self._embedding,
+            concepts=self._concepts,
+            centroid_cache=self._centroid_cache,
         )
-        return cached
 
     def invalidate_centroid_cache(self, mind_id: MindId | None = None) -> None:
-        """Clear centroid cache (all or for specific mind).
+        """Clear centroid cache (all or for a specific mind)."""
+        from sovyx.brain._centroid import invalidate_centroid_cache
 
-        Args:
-            mind_id: If given, clear only entries for this mind.
-                     If None, clear all entries.
-        """
-        if mind_id is None:
-            self._centroid_cache.clear()
-        else:
-            mind_str = str(mind_id)
-            keys_to_remove = [k for k in self._centroid_cache if k[0] == mind_str]
-            for k in keys_to_remove:
-                del self._centroid_cache[k]
+        invalidate_centroid_cache(self._centroid_cache, mind_id)
