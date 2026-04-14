@@ -8,7 +8,11 @@
  * - AbortSignal support for cancellation
  * - Content-Type only on requests with body
  * - Typed ApiError for non-2xx responses
+ * - Optional zod schema validation on response body (safeParse + warn —
+ *   catches backend contract drift without hard-failing production)
  */
+
+import type { ZodType } from "zod";
 
 export const BASE_URL = import.meta.env.VITE_API_URL ?? "";
 
@@ -82,17 +86,41 @@ export function isAbortError(err: unknown): boolean {
   return err instanceof DOMException && err.name === "AbortError";
 }
 
+/**
+ * Extra options accepted by every api.* method on top of RequestInit.
+ *
+ * `schema` is optional: when present, the response JSON is validated
+ * through `schema.safeParse(...)`. On mismatch we log a console warning
+ * with the issue list (visible in staging / dev tools) but still return
+ * the raw payload — the backend is the source of truth and feature
+ * failure from a single added field would be worse than a quiet warning.
+ */
+export interface ApiOptions extends RequestInit {
+  schema?: ZodType;
+}
+
+function validateResponse(path: string, schema: ZodType, data: unknown): void {
+  const result = schema.safeParse(data);
+  if (!result.success) {
+    console.warn(
+      `[api] response schema mismatch for ${path}`,
+      result.error.issues,
+    );
+  }
+}
+
 async function request<T>(
   path: string,
-  options: RequestInit = {},
+  options: ApiOptions = {},
 ): Promise<T> {
+  const { schema, ...init } = options;
   const token = getToken();
   const headers: Record<string, string> = {
-    ...((options.headers as Record<string, string>) ?? {}),
+    ...((init.headers as Record<string, string>) ?? {}),
   };
 
   // Only set Content-Type when there's a body (POLISH-12: not on GET/DELETE)
-  if (options.body) {
+  if (init.body) {
     headers["Content-Type"] = "application/json";
   }
 
@@ -101,7 +129,7 @@ async function request<T>(
   }
 
   const response = await fetch(`${BASE_URL}${path}`, {
-    ...options,
+    ...init,
     headers,
   });
 
@@ -116,27 +144,31 @@ async function request<T>(
     throw new ApiError(response.status, body);
   }
 
-  return response.json() as Promise<T>;
+  const data = (await response.json()) as unknown;
+  if (schema) {
+    validateResponse(path, schema, data);
+  }
+  return data as T;
 }
 
 export const api = {
-  get: <T>(path: string, options?: RequestInit) =>
+  get: <T>(path: string, options?: ApiOptions) =>
     request<T>(path, options),
 
-  post: <T>(path: string, body?: unknown, options?: RequestInit) =>
+  post: <T>(path: string, body?: unknown, options?: ApiOptions) =>
     request<T>(path, {
       ...options,
       method: "POST",
       body: body ? JSON.stringify(body) : undefined,
     }),
 
-  put: <T>(path: string, body?: unknown, options?: RequestInit) =>
+  put: <T>(path: string, body?: unknown, options?: ApiOptions) =>
     request<T>(path, {
       ...options,
       method: "PUT",
       body: body ? JSON.stringify(body) : undefined,
     }),
 
-  delete: <T>(path: string, options?: RequestInit) =>
+  delete: <T>(path: string, options?: ApiOptions) =>
     request<T>(path, { ...options, method: "DELETE" }),
 };

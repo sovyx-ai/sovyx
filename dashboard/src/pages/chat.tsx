@@ -26,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useDashboardStore } from "@/stores/dashboard";
 import { api, isAbortError } from "@/lib/api";
+import { ChatResponseSchema } from "@/types/schemas";
 import { cn } from "@/lib/utils";
 import { MarkdownContent } from "@/components/chat";
 import { EmptyState } from "@/components/empty-state";
@@ -109,7 +110,7 @@ export default function ChatPage() {
           user_name: "Dashboard",
           conversation_id: conversationId,
         },
-        { signal: controller.signal },
+        { signal: controller.signal, schema: ChatResponseSchema },
       );
 
       // Store conversation ID for continuity

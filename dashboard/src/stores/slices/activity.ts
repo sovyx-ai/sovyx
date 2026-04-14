@@ -8,6 +8,7 @@ import type { StateCreator } from "zustand";
 import type { TimelineEntry } from "@/types/api";
 import type { DashboardState } from "../dashboard";
 import { api } from "@/lib/api";
+import { TimelineResponseSchema } from "@/types/schemas";
 
 interface TimelineResponse {
   entries: TimelineEntry[];
@@ -41,6 +42,7 @@ export const createActivitySlice: StateCreator<
     try {
       const data = await api.get<TimelineResponse>(
         `/api/activity/timeline?hours=${hours}&limit=${limit}`,
+        { schema: TimelineResponseSchema },
       );
       set({ timelineEntries: data.entries, isLoadingTimeline: false });
     } catch {

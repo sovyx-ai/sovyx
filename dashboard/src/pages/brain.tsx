@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { useDashboardStore } from "@/stores/dashboard";
 import { api, isAbortError } from "@/lib/api";
+import { BrainGraphSchema, BrainSearchResponseSchema } from "@/types/schemas";
 import { BrainGraph } from "@/components/dashboard/brain-graph";
 import {
   CategoryLegend,
@@ -72,7 +73,7 @@ export default function BrainPage() {
         setError(null);
         const data = await api.get<BrainGraphType>(
           "/api/brain/graph?limit=200",
-          { signal },
+          { signal, schema: BrainGraphSchema },
         );
         setBrainGraph(data);
       } catch (err) {
@@ -104,6 +105,7 @@ export default function BrainPage() {
         setSearchLoading(true);
         const data = await api.get<BrainSearchResponse>(
           `/api/brain/search?q=${encodeURIComponent(query)}&limit=20`,
+          { schema: BrainSearchResponseSchema },
         );
         setBrainSearchResults(data.results);
       } catch {

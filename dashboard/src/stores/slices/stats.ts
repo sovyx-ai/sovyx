@@ -7,6 +7,7 @@ import type {
 } from "@/types/api";
 import type { DashboardState } from "../dashboard";
 import { api, isAbortError } from "@/lib/api";
+import { StatsHistoryResponseSchema } from "@/types/schemas";
 
 export interface StatsSlice {
   statsHistory: DailyStats[];
@@ -34,6 +35,7 @@ export const createStatsSlice: StateCreator<
     try {
       const data = await api.get<StatsHistoryResponse>(
         `/api/stats/history?days=${days}`,
+        { schema: StatsHistoryResponseSchema },
       );
       set({
         statsHistory: data.days,

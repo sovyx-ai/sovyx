@@ -18,6 +18,11 @@ import type {
 } from "@/types/api";
 import type { DashboardState } from "../dashboard";
 import { api } from "@/lib/api";
+import {
+  PluginsResponseSchema,
+  PluginDetailSchema,
+  PluginActionResponseSchema,
+} from "@/types/schemas";
 
 /** Filter values for the plugin list */
 export type PluginFilter = "all" | "active" | "disabled" | "error";
@@ -90,7 +95,9 @@ export const createPluginsSlice: StateCreator<
   fetchPlugins: async () => {
     set({ pluginsLoading: true, pluginsError: null });
     try {
-      const data = await api.get<PluginsResponse>("/api/plugins");
+      const data = await api.get<PluginsResponse>("/api/plugins", {
+        schema: PluginsResponseSchema,
+      });
       set({
         plugins: data.plugins,
         pluginsAvailable: data.available,
@@ -112,7 +119,9 @@ export const createPluginsSlice: StateCreator<
   fetchPluginDetail: async (name: string) => {
     set({ pluginDetailLoading: true });
     try {
-      const data = await api.get<PluginDetail>(`/api/plugins/${name}`);
+      const data = await api.get<PluginDetail>(`/api/plugins/${name}`, {
+        schema: PluginDetailSchema,
+      });
       set({ pluginDetail: data, pluginDetailLoading: false });
     } catch {
       set({ pluginDetailLoading: false, pluginDetail: null });
@@ -130,7 +139,9 @@ export const createPluginsSlice: StateCreator<
     });
 
     try {
-      await api.post<PluginActionResponse>(`/api/plugins/${name}/enable`);
+      await api.post<PluginActionResponse>(`/api/plugins/${name}/enable`, undefined, {
+        schema: PluginActionResponseSchema,
+      });
       // Refetch for accurate counts
       void get().fetchPlugins();
       return true;
@@ -155,6 +166,8 @@ export const createPluginsSlice: StateCreator<
     try {
       await api.post<PluginActionResponse>(
         `/api/plugins/${name}/disable`,
+        undefined,
+        { schema: PluginActionResponseSchema },
       );
       void get().fetchPlugins();
       return true;
@@ -169,6 +182,8 @@ export const createPluginsSlice: StateCreator<
     try {
       await api.post<PluginActionResponse>(
         `/api/plugins/${name}/reload`,
+        undefined,
+        { schema: PluginActionResponseSchema },
       );
       void get().fetchPlugins();
       // Refresh detail if viewing this plugin

@@ -33,6 +33,13 @@ import type {
   ConversationsResponse,
   ConversationDetailResponse,
 } from "@/types/api";
+import {
+  SystemStatusSchema,
+  HealthResponseSchema,
+  BrainGraphSchema,
+  ConversationsResponseSchema,
+  ConversationDetailResponseSchema,
+} from "@/types/schemas";
 
 /**
  * Build the default WebSocket base URL.
@@ -84,7 +91,7 @@ function debouncedCall(key: string, fn: () => void, ms = DEBOUNCE_MS): void {
 /** Force an immediate status poll. Useful for onboarding responsiveness. */
 export async function refreshStatus(): Promise<void> {
   try {
-    const data = await api.get<SystemStatus>("/api/status");
+    const data = await api.get<SystemStatus>("/api/status", { schema: SystemStatusSchema });
     const store = useDashboardStore.getState();
     store.setStatus(data);
 
@@ -104,7 +111,7 @@ export async function refreshStatus(): Promise<void> {
 /** Force an immediate health poll. Useful for onboarding responsiveness. */
 export async function refreshHealth(): Promise<void> {
   try {
-    const data = await api.get<HealthResponse>("/api/health");
+    const data = await api.get<HealthResponse>("/api/health", { schema: HealthResponseSchema });
     useDashboardStore.getState().setHealthChecks(data.checks);
   } catch {
     // Will retry on next poll
@@ -113,7 +120,7 @@ export async function refreshHealth(): Promise<void> {
 
 async function refreshBrain(): Promise<void> {
   try {
-    const data = await api.get<BrainGraph>("/api/brain/graph?limit=200");
+    const data = await api.get<BrainGraph>("/api/brain/graph?limit=200", { schema: BrainGraphSchema });
     useDashboardStore.getState().setBrainGraph(data);
   } catch {
     // Will retry on next event
@@ -126,6 +133,7 @@ async function refreshActiveConversation(): Promise<void> {
   try {
     const data = await api.get<ConversationDetailResponse>(
       `/api/conversations/${activeConversationId}`,
+      { schema: ConversationDetailResponseSchema },
     );
     setActiveMessages(data.messages);
   } catch {
@@ -145,6 +153,7 @@ async function refreshConversationList(): Promise<void> {
   try {
     const data = await api.get<ConversationsResponse>(
       "/api/conversations?limit=50&offset=0",
+      { schema: ConversationsResponseSchema },
     );
     useDashboardStore.getState().setConversations(data.conversations);
   } catch {

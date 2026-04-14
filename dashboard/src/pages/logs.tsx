@@ -8,6 +8,7 @@ import { useDashboardStore } from "@/stores/dashboard";
 import { api, isAbortError } from "@/lib/api";
 import { LogRow } from "@/components/dashboard/log-row";
 import type { LogEntry } from "@/types/api";
+import { LogsResponseSchema } from "@/types/schemas";
 import { EmptyState } from "@/components/empty-state";
 import { LogsEmptyAnimation } from "@/components/empty-state-animations";
 import { cn } from "@/lib/utils";
@@ -49,7 +50,10 @@ export default function LogsPage() {
       const params = new URLSearchParams({ limit: "500" });
       if (levelFilter !== "ALL") params.set("level", levelFilter);
       if (search) params.set("search", search);
-      const data = await api.get<{ entries: LogEntry[] }>(`/api/logs?${params}`, { signal });
+      const data = await api.get<{ entries: LogEntry[] }>(`/api/logs?${params}`, {
+        signal,
+        schema: LogsResponseSchema,
+      });
       setLogs(data.entries);
       // Track latest timestamp for incremental polling
       if (data.entries.length > 0) {
@@ -86,7 +90,9 @@ export default function LogsPage() {
         });
         if (levelFilter !== "ALL") params.set("level", levelFilter);
         if (search) params.set("search", search);
-        const data = await api.get<{ entries: LogEntry[] }>(`/api/logs?${params}`);
+        const data = await api.get<{ entries: LogEntry[] }>(`/api/logs?${params}`, {
+          schema: LogsResponseSchema,
+        });
         if (data.entries.length > 0) {
           // Entries come most-recent-first; append in chronological order
           const chronological = [...data.entries].reverse();

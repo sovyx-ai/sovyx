@@ -16,6 +16,10 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useDashboardStore } from "@/stores/dashboard";
 import { api, isAbortError } from "@/lib/api";
+import {
+  ConversationsResponseSchema,
+  ConversationDetailResponseSchema,
+} from "@/types/schemas";
 import { formatTimeAgo } from "@/lib/format";
 import { LetterAvatar } from "@/components/dashboard/letter-avatar";
 import { ChannelBadge } from "@/components/dashboard/channel-badge";
@@ -55,7 +59,7 @@ export default function ConversationsPage() {
         setError(null);
         const data = await api.get<ConversationsResponse>(
           `/api/conversations?limit=${PAGE_SIZE}&offset=${offset}`,
-          { signal },
+          { signal, schema: ConversationsResponseSchema },
         );
         if (offset === 0) {
           setConversations(data.conversations);
@@ -88,7 +92,7 @@ export default function ConversationsPage() {
       try {
         const data = await api.get<{ conversation_id: string; messages: Message[] }>(
           `/api/conversations/${activeId}`,
-          { signal: controller.signal },
+          { signal: controller.signal, schema: ConversationDetailResponseSchema },
         );
         setActiveMessages(data.messages);
       } catch (err) {
@@ -115,7 +119,7 @@ export default function ConversationsPage() {
         setError(null);
         const data = await api.get<ConversationsResponse>(
           `/api/conversations?limit=${PAGE_SIZE}&offset=0`,
-          { signal: controller.signal },
+          { signal: controller.signal, schema: ConversationsResponseSchema },
         );
         setConversations(data.conversations);
         setHasMore(data.conversations.length === PAGE_SIZE);
