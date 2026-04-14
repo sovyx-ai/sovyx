@@ -14,6 +14,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
+from sovyx.voice import auto_select as _auto_select_mod  # anti-pattern #11
 from sovyx.voice.auto_select import (
     HardwareProfile,
     HardwareTier,
@@ -153,22 +154,22 @@ class TestDetectTier:
         assert _detect_tier("x86_64", 32000, True, 2000) == HardwareTier.DESKTOP_CPU
 
     def test_high_ram_no_gpu(self) -> None:
-        with patch("sovyx.voice.auto_select._read_cpuinfo", return_value="Intel Core i9"):
+        with patch.object(_auto_select_mod, "_read_cpuinfo", return_value="Intel Core i9"):
             assert _detect_tier("x86_64", 32000, False, 0) == HardwareTier.DESKTOP_CPU
 
-    @patch("sovyx.voice.auto_select._read_cpuinfo", return_value="Intel N100 processor")
+    @patch.object(_auto_select_mod, "_read_cpuinfo", return_value="Intel N100 processor")
     def test_n100_detected(self, _mock: MagicMock) -> None:
         assert _detect_tier("x86_64", 8192, False, 0) == HardwareTier.N100
 
-    @patch("sovyx.voice.auto_select._read_cpuinfo", return_value="Intel Alder Lake-N")
+    @patch.object(_auto_select_mod, "_read_cpuinfo", return_value="Intel Alder Lake-N")
     def test_alder_lake_detected_as_n100(self, _mock: MagicMock) -> None:
         assert _detect_tier("x86_64", 8192, False, 0) == HardwareTier.N100
 
-    @patch("sovyx.voice.auto_select._read_cpuinfo", return_value="Intel Core i5-12400")
+    @patch.object(_auto_select_mod, "_read_cpuinfo", return_value="Intel Core i5-12400")
     def test_non_n100_low_ram(self, _mock: MagicMock) -> None:
         assert _detect_tier("x86_64", 8192, False, 0) == HardwareTier.DESKTOP_CPU
 
-    @patch("sovyx.voice.auto_select._read_cpuinfo", return_value="")
+    @patch.object(_auto_select_mod, "_read_cpuinfo", return_value="")
     def test_empty_cpuinfo(self, _mock: MagicMock) -> None:
         assert _detect_tier("x86_64", 8192, False, 0) == HardwareTier.DESKTOP_CPU
 
@@ -185,10 +186,10 @@ class TestDetectTier:
 class TestDetectHardware:
     """Tests for detect_hardware integration."""
 
-    @patch("sovyx.voice.auto_select.platform.machine", return_value="aarch64")
-    @patch("sovyx.voice.auto_select.os.cpu_count", return_value=4)
-    @patch("sovyx.voice.auto_select.os.sysconf", side_effect=[4096, 2_097_152])  # 8GB
-    @patch("sovyx.voice.auto_select._detect_gpu", return_value=(False, 0))
+    @patch.object(_auto_select_mod.platform, "machine", return_value="aarch64")
+    @patch.object(_auto_select_mod.os, "cpu_count", return_value=4)
+    @patch.object(_auto_select_mod.os, "sysconf", create=True, side_effect=[4096, 2_097_152])  # 8GB
+    @patch.object(_auto_select_mod, "_detect_gpu", return_value=(False, 0))
     def test_pi5_detection(
         self,
         _gpu: MagicMock,
@@ -202,10 +203,10 @@ class TestDetectHardware:
         assert profile.cpu_cores == 4
         assert profile.has_gpu is False
 
-    @patch("sovyx.voice.auto_select.platform.machine", return_value="x86_64")
-    @patch("sovyx.voice.auto_select.os.cpu_count", return_value=8)
-    @patch("sovyx.voice.auto_select.os.sysconf", side_effect=[4096, 8_388_608])  # 32GB
-    @patch("sovyx.voice.auto_select._detect_gpu", return_value=(True, 12000))
+    @patch.object(_auto_select_mod.platform, "machine", return_value="x86_64")
+    @patch.object(_auto_select_mod.os, "cpu_count", return_value=8)
+    @patch.object(_auto_select_mod.os, "sysconf", create=True, side_effect=[4096, 8_388_608])  # 32GB
+    @patch.object(_auto_select_mod, "_detect_gpu", return_value=(True, 12000))
     def test_gpu_detection(
         self,
         _gpu: MagicMock,
@@ -218,10 +219,10 @@ class TestDetectHardware:
         assert profile.has_gpu is True
         assert profile.gpu_vram_mb == 12000
 
-    @patch("sovyx.voice.auto_select.platform.machine", return_value="x86_64")
-    @patch("sovyx.voice.auto_select.os.cpu_count", return_value=None)
-    @patch("sovyx.voice.auto_select.os.sysconf", side_effect=[4096, 4_194_304])  # 16GB
-    @patch("sovyx.voice.auto_select._detect_gpu", return_value=(False, 0))
+    @patch.object(_auto_select_mod.platform, "machine", return_value="x86_64")
+    @patch.object(_auto_select_mod.os, "cpu_count", return_value=None)
+    @patch.object(_auto_select_mod.os, "sysconf", create=True, side_effect=[4096, 4_194_304])  # 16GB
+    @patch.object(_auto_select_mod, "_detect_gpu", return_value=(False, 0))
     def test_cpu_count_none_defaults_to_1(
         self,
         _gpu: MagicMock,
@@ -241,7 +242,7 @@ class TestDetectHardware:
 class TestDetectGPU:
     """Tests for _detect_gpu."""
 
-    @patch("sovyx.voice.auto_select.subprocess.run")
+    @patch.object(_auto_select_mod.subprocess, "run")
     def test_nvidia_smi_success(self, mock_run: MagicMock) -> None:
         from sovyx.voice.auto_select import _detect_gpu
 
@@ -250,7 +251,7 @@ class TestDetectGPU:
         assert has_gpu is True
         assert vram == 8192
 
-    @patch("sovyx.voice.auto_select.subprocess.run", side_effect=FileNotFoundError)
+    @patch.object(_auto_select_mod.subprocess, "run", side_effect=FileNotFoundError)
     def test_nvidia_smi_not_found(self, _mock: MagicMock) -> None:
         from sovyx.voice.auto_select import _detect_gpu
 
@@ -271,7 +272,7 @@ class TestDetectGPU:
             assert has_gpu is False
             assert vram == 0
 
-    @patch("sovyx.voice.auto_select.subprocess.run")
+    @patch.object(_auto_select_mod.subprocess, "run")
     def test_nvidia_smi_failure_returncode(self, mock_run: MagicMock) -> None:
         from sovyx.voice.auto_select import _detect_gpu
 
@@ -280,7 +281,7 @@ class TestDetectGPU:
         assert has_gpu is False
         assert vram == 0
 
-    @patch("sovyx.voice.auto_select.subprocess.run")
+    @patch.object(_auto_select_mod.subprocess, "run")
     def test_nvidia_smi_multi_gpu(self, mock_run: MagicMock) -> None:
         from sovyx.voice.auto_select import _detect_gpu
 
@@ -289,7 +290,7 @@ class TestDetectGPU:
         assert has_gpu is True
         assert vram == 16384  # Takes first GPU
 
-    @patch("sovyx.voice.auto_select.subprocess.run")
+    @patch.object(_auto_select_mod.subprocess, "run")
     def test_nvidia_smi_empty_stdout(self, mock_run: MagicMock) -> None:
         from sovyx.voice.auto_select import _detect_gpu
 
@@ -482,7 +483,7 @@ class TestVoiceModelAutoSelector:
         assert selector.profile is None
         assert selector.selection is None
 
-    @patch("sovyx.voice.auto_select.detect_hardware")
+    @patch.object(_auto_select_mod, "detect_hardware")
     def test_detect_hardware_caches(self, mock_detect: MagicMock) -> None:
         mock_detect.return_value = _profile(HardwareTier.PI5)
         selector = VoiceModelAutoSelector()
@@ -497,7 +498,7 @@ class TestVoiceModelAutoSelector:
         assert ms.stt_primary == "parakeet-tdt-0.6b-v3-int8"
         assert selector.selection is not None
 
-    @patch("sovyx.voice.auto_select.detect_hardware")
+    @patch.object(_auto_select_mod, "detect_hardware")
     def test_select_models_auto_detects(self, mock_detect: MagicMock) -> None:
         mock_detect.return_value = _profile(
             HardwareTier.DESKTOP_GPU,
@@ -509,7 +510,7 @@ class TestVoiceModelAutoSelector:
         assert ms.tts_primary == "kokoro-onnx-fp32"
         mock_detect.assert_called_once()
 
-    @patch("sovyx.voice.auto_select.detect_hardware")
+    @patch.object(_auto_select_mod, "detect_hardware")
     def test_auto_select(self, mock_detect: MagicMock) -> None:
         mock_detect.return_value = _profile(HardwareTier.CLOUD)
         selector = VoiceModelAutoSelector()
@@ -521,7 +522,7 @@ class TestVoiceModelAutoSelector:
         selector = VoiceModelAutoSelector()
         assert selector.fallback("stt", "moonshine-base") == "moonshine-tiny"
 
-    @patch("sovyx.voice.auto_select.detect_hardware")
+    @patch.object(_auto_select_mod, "detect_hardware")
     def test_doctor_report(self, mock_detect: MagicMock) -> None:
         mock_detect.return_value = _profile(HardwareTier.N100, ram_mb=8192)
         selector = VoiceModelAutoSelector()
@@ -533,14 +534,14 @@ class TestVoiceModelAutoSelector:
         assert report["models"]["tts_primary"] == "kokoro-onnx-q8"
         assert isinstance(report["adjustments"], list)
 
-    @patch("sovyx.voice.auto_select.detect_hardware")
+    @patch.object(_auto_select_mod, "detect_hardware")
     def test_doctor_report_with_adjustments(self, mock_detect: MagicMock) -> None:
         mock_detect.return_value = _profile(HardwareTier.N100, ram_mb=3000)
         selector = VoiceModelAutoSelector()
         report = selector.doctor_report()
         assert len(report["adjustments"]) > 0
 
-    @patch("sovyx.voice.auto_select.detect_hardware")
+    @patch.object(_auto_select_mod, "detect_hardware")
     def test_select_models_uses_cached_profile(self, mock_detect: MagicMock) -> None:
         mock_detect.return_value = _profile(HardwareTier.PI5)
         selector = VoiceModelAutoSelector()

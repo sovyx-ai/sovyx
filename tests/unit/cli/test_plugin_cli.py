@@ -8,6 +8,7 @@ from unittest.mock import patch
 import yaml
 from typer.testing import CliRunner
 
+from sovyx.cli.commands import plugin as _plugin_mod  # anti-pattern #11
 from sovyx.cli.commands.plugin import (
     _get_plugin_status,
     _list,
@@ -241,7 +242,7 @@ class TestPluginListCommand:
         _create_plugin_dir(plugins_dir, "timer")
 
         with (
-            patch("sovyx.cli.commands.plugin._plugins_dir", return_value=plugins_dir),
+            patch.object(_plugin_mod, "_plugins_dir", return_value=plugins_dir),
             patch(
                 "sovyx.cli.commands.plugin._mind_yaml_path",
                 return_value=tmp_path / "no.yaml",
@@ -267,7 +268,7 @@ class TestPluginInfoCommand:
         )
 
         with (
-            patch("sovyx.cli.commands.plugin._plugins_dir", return_value=plugins_dir),
+            patch.object(_plugin_mod, "_plugins_dir", return_value=plugins_dir),
             patch(
                 "sovyx.cli.commands.plugin._mind_yaml_path",
                 return_value=tmp_path / "no.yaml",
@@ -280,7 +281,7 @@ class TestPluginInfoCommand:
         assert "network:internet" in result.output
 
     def test_info_not_found(self, tmp_path: Path) -> None:
-        with patch("sovyx.cli.commands.plugin._plugins_dir", return_value=tmp_path):
+        with patch.object(_plugin_mod, "_plugins_dir", return_value=tmp_path):
             result = runner.invoke(plugin_app, ["info", "ghost"])
         assert result.exit_code == 1
 
@@ -295,7 +296,7 @@ class TestPluginInstallCommand:
         plugins_dir = tmp_path / "plugins"
         plugins_dir.mkdir()
 
-        with patch("sovyx.cli.commands.plugin._plugins_dir", return_value=plugins_dir):
+        with patch.object(_plugin_mod, "_plugins_dir", return_value=plugins_dir):
             result = runner.invoke(plugin_app, ["install", str(source), "--yes"])
         assert result.exit_code == 0
         assert "installed" in result.output.lower()
@@ -304,7 +305,7 @@ class TestPluginInstallCommand:
         source = tmp_path / "empty"
         source.mkdir()
 
-        with patch("sovyx.cli.commands.plugin._plugins_dir", return_value=tmp_path):
+        with patch.object(_plugin_mod, "_plugins_dir", return_value=tmp_path):
             result = runner.invoke(plugin_app, ["install", str(source), "--yes"])
         assert result.exit_code == 1
 
@@ -345,7 +346,7 @@ class TestPluginRemoveCommand:
         _create_plugin_dir(plugins_dir, "weather")
 
         with (
-            patch("sovyx.cli.commands.plugin._plugins_dir", return_value=plugins_dir),
+            patch.object(_plugin_mod, "_plugins_dir", return_value=plugins_dir),
             patch(
                 "sovyx.cli.commands.plugin._mind_yaml_path",
                 return_value=tmp_path / "no.yaml",
@@ -357,7 +358,7 @@ class TestPluginRemoveCommand:
         assert not (plugins_dir / "weather").exists()
 
     def test_remove_not_found(self, tmp_path: Path) -> None:
-        with patch("sovyx.cli.commands.plugin._plugins_dir", return_value=tmp_path):
+        with patch.object(_plugin_mod, "_plugins_dir", return_value=tmp_path):
             result = runner.invoke(plugin_app, ["remove", "ghost"])
         assert result.exit_code == 1
 
@@ -380,7 +381,7 @@ class TestEdgeCases:
         plugins_dir.mkdir()
         (plugins_dir / "not-a-dir.txt").write_text("nope")
 
-        with patch("sovyx.cli.commands.plugin._plugins_dir", return_value=plugins_dir):
+        with patch.object(_plugin_mod, "_plugins_dir", return_value=plugins_dir):
             result = runner.invoke(plugin_app, ["list"])
         assert result.exit_code == 0
         assert "No plugins" in result.output
@@ -390,7 +391,7 @@ class TestEdgeCases:
         plugins_dir = tmp_path / "plugins"
         (plugins_dir / "broken").mkdir(parents=True)
 
-        with patch("sovyx.cli.commands.plugin._plugins_dir", return_value=plugins_dir):
+        with patch.object(_plugin_mod, "_plugins_dir", return_value=plugins_dir):
             result = runner.invoke(plugin_app, ["list"])
         assert result.exit_code == 0
         assert "No plugins" in result.output
@@ -402,7 +403,7 @@ class TestEdgeCases:
         bad_dir.mkdir(parents=True)
         (bad_dir / "plugin.yaml").write_text("- not a dict")
 
-        with patch("sovyx.cli.commands.plugin._plugins_dir", return_value=plugins_dir):
+        with patch.object(_plugin_mod, "_plugins_dir", return_value=plugins_dir):
             result = runner.invoke(plugin_app, ["info", "bad"])
         assert result.exit_code == 1
 
@@ -415,7 +416,7 @@ class TestEdgeCases:
             depends=[{"name": "base-plugin", "version": ">=1.0.0"}],
         )
         with (
-            patch("sovyx.cli.commands.plugin._plugins_dir", return_value=plugins_dir),
+            patch.object(_plugin_mod, "_plugins_dir", return_value=plugins_dir),
             patch(
                 "sovyx.cli.commands.plugin._mind_yaml_path",
                 return_value=tmp_path / "no.yaml",
@@ -433,7 +434,7 @@ class TestEdgeCases:
         plugins_dir = tmp_path / "plugins"
         _create_plugin_dir(plugins_dir, "source")  # Already exists
 
-        with patch("sovyx.cli.commands.plugin._plugins_dir", return_value=plugins_dir):
+        with patch.object(_plugin_mod, "_plugins_dir", return_value=plugins_dir):
             result = runner.invoke(plugin_app, ["install", str(source), "--yes"])
         assert result.exit_code == 0
         assert "Replacing" in result.output or "installed" in result.output.lower()
@@ -539,7 +540,7 @@ class TestPermissionPrompt:
         plugins_dir = tmp_path / "plugins"
         plugins_dir.mkdir()
 
-        with patch("sovyx.cli.commands.plugin._plugins_dir", return_value=plugins_dir):
+        with patch.object(_plugin_mod, "_plugins_dir", return_value=plugins_dir):
             result = runner.invoke(plugin_app, ["install", str(source)], input="y\n")
         assert result.exit_code == 0
         assert "installed" in result.output.lower()
@@ -549,7 +550,7 @@ class TestPermissionPrompt:
         source = tmp_path / "src"
         _create_plugin_dir(source.parent, "src", permissions=["brain:write"])
 
-        with patch("sovyx.cli.commands.plugin._plugins_dir", return_value=tmp_path):
+        with patch.object(_plugin_mod, "_plugins_dir", return_value=tmp_path):
             result = runner.invoke(plugin_app, ["install", str(source)], input="n\n")
         assert result.exit_code == 0
         assert "cancelled" in result.output.lower()
@@ -558,7 +559,7 @@ class TestPermissionPrompt:
         """Enable already-enabled shows 'already enabled'."""
         mind_yaml = tmp_path / "mind.yaml"
         mind_yaml.write_text(yaml.dump({"name": "t", "plugins": {"disabled": []}}))
-        with patch("sovyx.cli.commands.plugin._mind_yaml_path", return_value=mind_yaml):
+        with patch.object(_plugin_mod, "_mind_yaml_path", return_value=mind_yaml):
             result = runner.invoke(plugin_app, ["enable", "weather"])
         assert "already" in result.output.lower()
 
@@ -566,7 +567,7 @@ class TestPermissionPrompt:
         """Disable already-disabled shows 'already disabled'."""
         mind_yaml = tmp_path / "mind.yaml"
         mind_yaml.write_text(yaml.dump({"name": "t", "plugins": {"disabled": ["weather"]}}))
-        with patch("sovyx.cli.commands.plugin._mind_yaml_path", return_value=mind_yaml):
+        with patch.object(_plugin_mod, "_mind_yaml_path", return_value=mind_yaml):
             result = runner.invoke(plugin_app, ["disable", "weather"])
         assert "already" in result.output.lower()
 

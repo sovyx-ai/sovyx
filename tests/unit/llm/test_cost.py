@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from sovyx.llm import cost as _cost_mod  # anti-pattern #11
 from sovyx.llm.cost import CostBreakdown, CostGuard
 
 if TYPE_CHECKING:
@@ -88,7 +89,7 @@ class TestDailyReset:
 
         # Simulate next day
         tomorrow = datetime.now(tz=UTC) + timedelta(days=1)
-        with patch("sovyx.llm.cost.datetime") as mock_dt:
+        with patch.object(_cost_mod, "datetime") as mock_dt:
             mock_dt.now.return_value = tomorrow
             mock_dt.side_effect = lambda *a, **k: datetime(*a, **k)
             assert g.get_daily_spend() == 0.0
@@ -102,7 +103,7 @@ class TestDailyReset:
         assert g.get_conversation_spend("conv1") == 1.0
 
         tomorrow = datetime.now(tz=UTC) + timedelta(days=1)
-        with patch("sovyx.llm.cost.datetime") as mock_dt:
+        with patch.object(_cost_mod, "datetime") as mock_dt:
             mock_dt.now.return_value = tomorrow
             mock_dt.side_effect = lambda *a, **k: datetime(*a, **k)
             assert g.can_afford(2.0, "conv1") is True
@@ -408,7 +409,7 @@ class TestCostBreakdown:
         assert bd.total_cost == pytest.approx(1.0)
 
         tomorrow = datetime.now(tz=UTC) + timedelta(days=1)
-        with patch("sovyx.llm.cost.datetime") as mock_dt:
+        with patch.object(_cost_mod, "datetime") as mock_dt:
             mock_dt.now.return_value = tomorrow
             mock_dt.side_effect = lambda *a, **k: datetime(*a, **k)
             bd = g.get_breakdown("day")
@@ -525,7 +526,7 @@ class TestCostHistory:
 
         # Simulate next day
         tomorrow = datemod(2099, 1, 2)
-        with patch("sovyx.llm.cost.datetime") as mock_dt:
+        with patch.object(_cost_mod, "datetime") as mock_dt:
             mock_dt.now.return_value = type("DT", (), {"date": lambda self: tomorrow})()
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
             # Force reset by accessing
@@ -574,7 +575,7 @@ class TestCostGuardDaySnapshot:
 
         # Force day change
         tomorrow = datemod(2099, 1, 2)
-        with patch("sovyx.llm.cost.datetime") as mock_dt:
+        with patch.object(_cost_mod, "datetime") as mock_dt:
             mock_dt.now.return_value = type("DT", (), {"date": lambda self: tomorrow})()
             mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
             g._maybe_reset()

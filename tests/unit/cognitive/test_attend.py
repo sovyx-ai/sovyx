@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+from sovyx.cognitive import attend as _attend_mod  # anti-pattern #11
 from sovyx.cognitive.attend import AttendPhase, _map_safety_category
 from sovyx.cognitive.perceive import Perception
 from sovyx.engine.types import PerceptionType
@@ -226,7 +227,7 @@ class TestLLMCascade:
                 "sovyx.cognitive.attend.AttendPhase._classify_with_llm",
                 return_value=unsafe_verdict,
             ),
-            patch("sovyx.cognitive.attend.get_audit_trail") as mock_audit,
+            patch.object(_attend_mod, "get_audit_trail") as mock_audit,
         ):
             result = await phase.process(_perception("test"))
 
@@ -246,7 +247,7 @@ class TestLLMCascade:
                 "sovyx.cognitive.attend.AttendPhase._classify_with_llm",
                 return_value=unsafe_verdict,
             ),
-            patch("sovyx.cognitive.attend.get_escalation_tracker") as mock_tracker,
+            patch.object(_attend_mod, "get_escalation_tracker") as mock_tracker,
         ):
             mock_tracker.return_value.is_rate_limited.return_value = False
             result = await phase.process(_perception("test"))
