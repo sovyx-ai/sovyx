@@ -169,8 +169,10 @@ class TestUrlValidation:
     def test_dns_rebinding_blocked(self, _mock: object) -> None:
         """Domain that resolves to local IP is blocked."""
         client = SandboxedHttpClient("test", ["evil.com"])
-        with pytest.raises(PermissionDeniedError, match="resolves to local"):
+        # Anti-pattern #8: catch Exception and assert by class name.
+        with pytest.raises(Exception, match="resolves to local") as exc:  # noqa: BLE001, PT011
             client._validate_url("https://evil.com/steal")
+        assert type(exc.value).__name__ == "PermissionDeniedError"
 
 
 # ── HTTP Requests ───────────────────────────────────────────────────

@@ -292,11 +292,14 @@ class TestBootstrap:
             msg = "Simulated failure after DB init"
             raise RuntimeError(msg)
 
+        # Anti-pattern #8: catch Exception and assert by class name — under
+        # pytest-cov, even builtin-looking references can reimport.
         with (
             patch.object(DatabaseManager, "initialize_mind_databases", failing_init),
-            pytest.raises(RuntimeError, match="Simulated"),
+            pytest.raises(Exception, match="Simulated") as exc,  # noqa: BLE001, PT011
         ):
             await bootstrap(config, [mind])
+        assert type(exc.value).__name__ == "RuntimeError"
 
         # Verify cleanup happened: system.db should exist (was created),
         # but the DatabaseManager should have been stopped
