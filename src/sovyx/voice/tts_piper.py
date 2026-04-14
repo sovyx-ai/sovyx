@@ -8,6 +8,7 @@ Ref: SPE-010 §6.2, IMPL-004 §2.2 (complete Piper pipeline)
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from abc import ABC, abstractmethod
@@ -434,7 +435,14 @@ class PiperTTS(TTSEngine):
             if not phonemes:
                 continue
             ids = self._phonemes_to_ids(phonemes)
-            audio = self._synthesize_ids(ids, speaker_id=self._config.speaker_id)
+            # Piper ONNX inference is CPU-bound — offload to a worker
+            # thread so concurrent dashboard / HTTP / pipeline tasks
+            # stay responsive while a sentence is being synthesized.
+            audio = await asyncio.to_thread(
+                self._synthesize_ids,
+                ids,
+                speaker_id=self._config.speaker_id,
+            )
             all_audio.append(audio)
             all_audio.append(silence)
 

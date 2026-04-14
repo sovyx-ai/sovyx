@@ -44,19 +44,28 @@ class BargeInDetector:
         self._threshold = threshold_frames
 
     def check_frame(self, frame: npt.NDArray[np.int16]) -> bool:
-        """Process one audio frame and return True if barge-in detected.
+        """Process one audio frame and return True if speech is detected.
 
-        Args:
-            frame: Audio frame (512 samples, 16-bit PCM, 16kHz).
-
-        Returns:
-            ``True`` if barge-in threshold was reached.
+        Synchronous variant — used by tests and any non-async callers.
+        Async callers running inside the voice pipeline should use
+        :meth:`check_frame_async` instead so the ONNX VAD inference does
+        not block the event loop.
         """
         import numpy as np
 
         audio_f32 = frame.astype(np.float32) / 32768.0
         event = self._vad.process_frame(audio_f32)
         return event.is_speech
+
+    async def check_frame_async(self, frame: npt.NDArray[np.int16]) -> bool:
+        """Async variant of :meth:`check_frame` that offloads the ONNX
+        inference to a worker thread.
+
+        Use this from any ``async def`` context (e.g. :meth:`monitor`)
+        to keep dashboard/HTTP traffic responsive while barge-in is
+        being evaluated frame-by-frame.
+        """
+        return await asyncio.to_thread(self.check_frame, frame)
 
     async def monitor(
         self,
@@ -76,14 +85,14 @@ class BargeInDetector:
             if frame is None:
                 await asyncio.sleep(0.01)
                 continue
-            if self.check_frame(frame):
+            if await self.check_frame_async(frame):
                 consecutive += 1
                 if consecutive >= self._threshold:
                     self._output.interrupt()
                     return True
             else:
                 consecutive = 0
-            await asyncio.sleep(0)  # Yield to event loop
+            # Yielding is implicit in `await to_thread(...)` above.
         return False
 
 

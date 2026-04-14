@@ -10,6 +10,7 @@ Ref: SPE-010 §6.2, IMPL-004 §2.3 (kokoro-onnx wrapper)
 
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -277,7 +278,11 @@ class KokoroTTS(TTSEngine):
             msg = "KokoroTTS not initialized"
             raise RuntimeError(msg)
 
-        samples, sample_rate = self._kokoro.create(
+        # Kokoro's `create` runs G2P + ONNX VITS2 synchronously and is
+        # CPU-bound (multiple seconds for a long sentence). Offload to a
+        # worker thread so the event loop stays responsive.
+        samples, sample_rate = await asyncio.to_thread(
+            self._kokoro.create,
             text,
             voice=self._config.voice,
             speed=self._config.speed,

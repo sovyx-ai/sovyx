@@ -187,7 +187,10 @@ class VoicePipeline:
         import numpy as np
 
         audio_f32 = frame.astype(np.float32) / 32768.0
-        vad_event = self._vad.process_frame(audio_f32)
+        # ONNX inference is CPU-bound and was blocking the event loop —
+        # move it to a worker thread so the dashboard / HTTP / other async
+        # tasks remain responsive while VAD runs.
+        vad_event = await asyncio.to_thread(self._vad.process_frame, audio_f32)
 
         if self._state == VoicePipelineState.IDLE:
             return await self._handle_idle(frame, vad_event)
@@ -219,11 +222,12 @@ class VoicePipeline:
             # No wake word required — go straight to recording
             return await self._transition_to_recording(frame)
 
-        # Run wake word detector
+        # Run wake word detector — wrap ONNX inference in to_thread so the
+        # detection pass does not block the loop while audio chunks queue up.
         import numpy as np
 
         audio_f32 = frame.astype(np.float32) / 32768.0
-        ww_event = self._wake_word.process_frame(audio_f32)
+        ww_event = await asyncio.to_thread(self._wake_word.process_frame, audio_f32)
 
         if ww_event.detected:
             self._state = VoicePipelineState.WAKE_DETECTED

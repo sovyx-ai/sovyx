@@ -662,7 +662,10 @@ class WyomingClientHandler:
                     chunk_event.payload,
                     self._config.mic_width,
                 )
-                result = self._wake.process_frame(audio_np)
+                # Wake word ONNX inference is CPU-bound — offload so the
+                # Wyoming server keeps reading the next audio chunk in
+                # parallel rather than serializing on the model.
+                result = await asyncio.to_thread(self._wake.process_frame, audio_np)
                 if hasattr(result, "detected") and result.detected:
                     name = getattr(result, "name", "hey_sovyx")
                     await self._write_event(
