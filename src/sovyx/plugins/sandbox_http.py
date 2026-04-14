@@ -157,6 +157,7 @@ class SandboxedHttpClient:
         allowed_domains: list[str] | None = None,
         *,
         allow_local: bool = False,
+        allow_any_domain: bool = False,
         rate_limit: int = _DEFAULT_RATE_LIMIT,
         timeout_s: float = _DEFAULT_TIMEOUT_S,
         max_response_bytes: int = _DEFAULT_MAX_RESPONSE_BYTES,
@@ -165,8 +166,15 @@ class SandboxedHttpClient:
 
         Args:
             plugin_name: Plugin name for logging.
-            allowed_domains: List of allowed domains. Empty = no domains allowed.
+            allowed_domains: List of allowed domains. Empty = no domains allowed
+                (unless ``allow_any_domain`` is set).
             allow_local: If True, allow local network (network:local permission).
+            allow_any_domain: If True, skip the domain-allowlist check. Every
+                other protection still applies (local-IP block, DNS rebinding
+                check, rate limit, timeout, size cap). Use this for the narrow
+                case of tools that fetch arbitrary user-supplied URLs from
+                the public web (e.g. the ``fetch`` tool of web_intelligence).
+                Requires ``network:internet`` permission on the plugin manifest.
             rate_limit: Max requests per minute.
             timeout_s: Request timeout in seconds.
             max_response_bytes: Max response body size.
@@ -174,6 +182,7 @@ class SandboxedHttpClient:
         self._plugin = plugin_name
         self._allowed = set(allowed_domains or [])
         self._allow_local = allow_local
+        self._allow_any_domain = allow_any_domain
         self._timeout = timeout_s
         self._max_bytes = max_response_bytes
         self._limiter = _RateLimiter(max_calls=rate_limit)
@@ -201,8 +210,10 @@ class SandboxedHttpClient:
         if not hostname:
             raise PermissionDeniedError(self._plugin, f"Invalid URL: {url}")
 
-        # Check domain allowlist (empty = no domains allowed)
-        if hostname not in self._allowed:
+        # Check domain allowlist (empty = no domains allowed) unless the
+        # client was built in open-web mode. The local-IP + DNS-rebinding +
+        # rate-limit + size-cap checks below still apply.
+        if not self._allow_any_domain and hostname not in self._allowed:
             raise PermissionDeniedError(
                 self._plugin,
                 f"Domain '{hostname}' not in allowed list: {sorted(self._allowed)}",

@@ -1886,31 +1886,42 @@ def _validate_url(url: str) -> str:
 
 
 async def _fetch_html(url: str) -> str | None:
-    """Fetch HTML content from URL."""
-    import httpx  # noqa: PLC0415
+    """Fetch HTML content from URL through the sandboxed HTTP client.
+
+    Uses :class:`SandboxedHttpClient` in ``allow_any_domain`` mode — the
+    ``fetch`` tool by design retrieves arbitrary user-supplied URLs from
+    the public web, so a domain allowlist doesn't fit. The other sandbox
+    protections (local-IP block for SSRF, DNS-rebinding check, per-plugin
+    rate limit, timeout, response-size cap) still apply.
+    """
+    from sovyx.plugins.sandbox_http import SandboxedHttpClient  # noqa: PLC0415
 
     headers = {
-        "User-Agent": ("Mozilla/5.0 (compatible; SovyxBot/1.0; +https://sovyx.ai)"),
+        "User-Agent": "Mozilla/5.0 (compatible; SovyxBot/1.0; +https://sovyx.ai)",
         "Accept": "text/html,application/xhtml+xml,*/*",
     }
+    client = SandboxedHttpClient(
+        plugin_name="web_intelligence.fetch",
+        allow_any_domain=True,
+        timeout_s=_FETCH_TIMEOUT,
+        max_response_bytes=1_048_576,
+    )
     try:
-        async with httpx.AsyncClient(
-            timeout=_FETCH_TIMEOUT,
-            follow_redirects=True,
-            max_redirects=5,
-        ) as client:
-            resp = await client.get(url, headers=headers)
-            if resp.status_code != 200:  # noqa: PLR2004
-                return None
-            content_type = resp.headers.get("content-type", "")
-            if "text/html" not in content_type and "xhtml" not in content_type:
-                return None
-            # Size check: max 1MB
-            if len(resp.content) > 1_048_576:
-                return None
-            return resp.text
+        resp = await client.get(url, headers=headers)
+        if resp.status_code != 200:  # noqa: PLR2004
+            return None
+        content_type = resp.headers.get("content-type", "")
+        if "text/html" not in content_type and "xhtml" not in content_type:
+            return None
+        # Explicit size check — sandbox logs oversize via content-length
+        # header, but the actual body length is the ground truth.
+        if len(resp.content) > 1_048_576:
+            return None
+        return resp.text
     except Exception:  # noqa: BLE001
         return None
+    finally:
+        await client.close()
 
 
 # ── Content Extraction ──

@@ -175,6 +175,47 @@ class TestUrlValidation:
             client._validate_url("https://evil.com/steal")
         assert type(exc.value).__name__ == "PermissionDeniedError"
 
+    def test_allow_any_domain_skips_allowlist(self) -> None:
+        """allow_any_domain=True lets arbitrary public domains through.
+
+        Used by the web_intelligence ``fetch`` tool which retrieves
+        user-supplied URLs. Every other protection (local IP, DNS
+        rebinding, rate limit, size cap) still applies.
+        """
+        client = SandboxedHttpClient(
+            "test.fetch",
+            allowed_domains=None,
+            allow_any_domain=True,
+        )
+        client._validate_url("https://example.com/page")
+        client._validate_url("https://another-domain.example.org/")
+
+    def test_allow_any_domain_still_blocks_local_ip(self) -> None:
+        """allow_any_domain doesn't relax the local-IP block."""
+        client = SandboxedHttpClient(
+            "test.fetch",
+            allowed_domains=None,
+            allow_any_domain=True,
+        )
+        with pytest.raises(Exception, match="local") as exc:  # noqa: BLE001, PT011
+            client._validate_url("http://127.0.0.1:8080/")
+        assert type(exc.value).__name__ == "PermissionDeniedError"
+
+    @patch.object(_sbx_mod, "_resolve_hostname", return_value="10.0.0.1")
+    def test_allow_any_domain_still_blocks_dns_rebinding(
+        self,
+        _mock: object,
+    ) -> None:
+        """DNS-rebinding protection still fires under allow_any_domain."""
+        client = SandboxedHttpClient(
+            "test.fetch",
+            allowed_domains=None,
+            allow_any_domain=True,
+        )
+        with pytest.raises(Exception, match="resolves to local") as exc:  # noqa: BLE001, PT011
+            client._validate_url("https://evil.example.com/")
+        assert type(exc.value).__name__ == "PermissionDeniedError"
+
 
 # ── HTTP Requests ───────────────────────────────────────────────────
 
