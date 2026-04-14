@@ -391,7 +391,11 @@ class MigrationRunner:
                 logger.warning("migration_import_failed", module=module_name, exc_info=True)
                 continue
             migration = getattr(mod, "MIGRATION", None)
-            if isinstance(migration, UpgradeMigration):
+            # Anti-pattern #8: isinstance fails under pytest-cov reimport —
+            # the test writes migration files that `from sovyx.upgrade.schema
+            # import UpgradeMigration`, but by the time discover runs, the
+            # in-memory class may differ. Dispatch by class name.
+            if type(migration).__name__ == "UpgradeMigration":
                 migrations.append(migration)
 
         return sorted(migrations, key=lambda m: m.semver)

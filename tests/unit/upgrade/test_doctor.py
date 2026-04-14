@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 import aiosqlite
 import pytest
 
+from sovyx.upgrade import doctor as _doctor_mod  # anti-pattern #11
 from sovyx.upgrade.doctor import (
     _DEFAULT_PORT,
     DiagnosticReport,
@@ -480,7 +481,7 @@ class TestMemoryUsage:
         mock_rusage.ru_maxrss = 3_500_000  # ~3.4GB in KB
         with (
             patch.object(_resource_mod, "getrusage", return_value=mock_rusage),
-            patch("sovyx.upgrade.doctor._get_total_memory_mb", return_value=4000),
+            patch.object(_doctor_mod, "_get_total_memory_mb", return_value=4000),
         ):
             result = _check_memory_usage()
         assert result.status == DiagnosticStatus.FAIL
@@ -492,7 +493,7 @@ class TestMemoryUsage:
         mock_rusage.ru_maxrss = 3_000_000  # ~2.9GB in KB
         with (
             patch.object(_resource_mod, "getrusage", return_value=mock_rusage),
-            patch("sovyx.upgrade.doctor._get_total_memory_mb", return_value=4000),
+            patch.object(_doctor_mod, "_get_total_memory_mb", return_value=4000),
         ):
             result = _check_memory_usage()
         assert result.status == DiagnosticStatus.WARN
@@ -588,7 +589,7 @@ class TestPythonVersion:
         )
 
     def test_fail_old_version(self) -> None:
-        with patch("sovyx.upgrade.doctor.sys") as mock_sys:
+        with patch.object(_doctor_mod, "sys") as mock_sys:
             mock_sys.version_info = (3, 9, 0, "final", 0)
             result = _check_python_version()
         assert result.status == DiagnosticStatus.FAIL

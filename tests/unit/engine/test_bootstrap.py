@@ -281,15 +281,14 @@ class TestBootstrap:
         """When bootstrap fails mid-way, already-started services are cleaned up."""
         from unittest.mock import patch
 
-        # Anti-pattern #11: patch on the module the production code uses, not on
-        # the test's own imported class — pytest-cov reimport may duplicate the
-        # class and the patch would miss the instance bootstrap instantiates.
-        from sovyx.engine import bootstrap as _bootstrap_mod
+        # Anti-pattern #11: patch on the module that owns the class (persistence
+        # .manager), not on the test's own import — string-path reimport issues.
+        from sovyx.persistence import manager as _mgr_mod
 
         config = EngineConfig(database=DatabaseConfig(data_dir=tmp_path))
         mind = MindConfig(name="Test")
 
-        original_init = _bootstrap_mod.DatabaseManager.initialize_mind_databases
+        original_init = _mgr_mod.DatabaseManager.initialize_mind_databases
 
         async def failing_init(self_: object, mind_id: MindId) -> None:
             await original_init(self_, mind_id)
@@ -298,7 +297,7 @@ class TestBootstrap:
 
         with (
             patch.object(
-                _bootstrap_mod.DatabaseManager,
+                _mgr_mod.DatabaseManager,
                 "initialize_mind_databases",
                 failing_init,
             ),

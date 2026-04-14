@@ -9,10 +9,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from sovyx.cognitive.act import ActionResult
-from sovyx.engine.errors import (
-    CostLimitExceededError,
-    ProviderUnavailableError,
-)
 from sovyx.engine.types import CognitivePhase
 from sovyx.observability.logging import get_logger
 from sovyx.observability.metrics import MetricsRegistry, get_metrics
@@ -41,9 +37,13 @@ def _categorize_error(exc: Exception) -> str:
     - **Temporary**: transient, retryable (provider down)
     - **Internal**: bugs — never expose internals to user
     """
-    if isinstance(exc, CostLimitExceededError):
+    # Anti-pattern #8: dispatch by class name — isinstance fails when pytest-cov
+    # reimports the exception classes, making the in-module and in-test class
+    # objects distinct.
+    name = type(exc).__name__
+    if name == "CostLimitExceededError":
         return "I've reached my conversation budget limit. Please try again later."
-    if isinstance(exc, ProviderUnavailableError):
+    if name == "ProviderUnavailableError":
         return (
             "No AI provider is available right now. "
             "Please check the LLM Providers section in Settings — "

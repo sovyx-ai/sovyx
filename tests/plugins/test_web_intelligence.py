@@ -708,7 +708,9 @@ class TestFetchTool:
     @pytest.mark.anyio()
     async def test_basic_fetch(self) -> None:
         p = WebIntelligencePlugin()
-        with patch.object(_web_mod, "_fetch_html",
+        with patch.object(
+            _web_mod,
+            "_fetch_html",
             new_callable=AsyncMock,
             return_value=_SAMPLE_HTML,
         ):
@@ -721,7 +723,9 @@ class TestFetchTool:
     async def test_truncation(self) -> None:
         p = WebIntelligencePlugin()
         long_html = "<html><body><p>" + "x" * 5000 + "</p></body></html>"
-        with patch.object(_web_mod, "_fetch_html",
+        with patch.object(
+            _web_mod,
+            "_fetch_html",
             new_callable=AsyncMock,
             return_value=long_html,
         ):
@@ -752,7 +756,9 @@ class TestFetchTool:
     @pytest.mark.anyio()
     async def test_fetch_failed(self) -> None:
         p = WebIntelligencePlugin()
-        with patch.object(_web_mod, "_fetch_html",
+        with patch.object(
+            _web_mod,
+            "_fetch_html",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -767,7 +773,9 @@ class TestFetchTool:
             await asyncio.sleep(20)
             return "<html></html>"
 
-        with patch.object(_web_mod, "_fetch_html",
+        with patch.object(
+            _web_mod,
+            "_fetch_html",
             side_effect=slow_fetch,
         ):
             data = _parse(await p.fetch("https://example.com"))
@@ -777,7 +785,9 @@ class TestFetchTool:
     @pytest.mark.anyio()
     async def test_metadata_in_output(self) -> None:
         p = WebIntelligencePlugin()
-        with patch.object(_web_mod, "_fetch_html",
+        with patch.object(
+            _web_mod,
+            "_fetch_html",
             new_callable=AsyncMock,
             return_value=_SAMPLE_HTML,
         ):
@@ -1080,7 +1090,9 @@ class TestCredibilityInSearchResults:
     async def test_fetch_has_credibility(self) -> None:
         p = WebIntelligencePlugin()
         html = "<html><body><p>Content here.</p></body></html>"
-        with patch.object(_web_mod, "_fetch_html",
+        with patch.object(
+            _web_mod,
+            "_fetch_html",
             new_callable=AsyncMock,
             return_value=html,
         ):
@@ -1102,7 +1114,9 @@ class TestResearchTool:
         p._backend.search_text = _mock_ddgs_text(_SAMPLE_WEB_RESULTS)  # type: ignore[assignment]
         p._backend.search_news = _mock_ddgs_news(_SAMPLE_NEWS_RESULTS)  # type: ignore[assignment]
 
-        with patch.object(_web_mod, "_fetch_html",
+        with patch.object(
+            _web_mod,
+            "_fetch_html",
             new_callable=AsyncMock,
             return_value="<html><body><p>Detailed content about the topic.</p></body></html>",
         ):
@@ -1120,7 +1134,9 @@ class TestResearchTool:
         p._backend.search_text = _mock_ddgs_text(_SAMPLE_WEB_RESULTS)  # type: ignore[assignment]
         p._backend.search_news = _mock_ddgs_news(_SAMPLE_NEWS_RESULTS)  # type: ignore[assignment]
 
-        with patch.object(_web_mod, "_fetch_html",
+        with patch.object(
+            _web_mod,
+            "_fetch_html",
             new_callable=AsyncMock,
             return_value="<html><body><p>Content here.</p></body></html>",
         ):
@@ -1139,7 +1155,9 @@ class TestResearchTool:
         p._backend.search_text = _mock_ddgs_text(_SAMPLE_WEB_RESULTS)  # type: ignore[assignment]
         p._backend.search_news = _mock_ddgs_news([])  # type: ignore[assignment]
 
-        with patch.object(_web_mod, "_fetch_html",
+        with patch.object(
+            _web_mod,
+            "_fetch_html",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -1176,7 +1194,9 @@ class TestResearchTool:
         p._backend.search_text = AsyncMock(return_value=mixed_results)  # type: ignore[assignment]
         p._backend.search_news = _mock_ddgs_news([])  # type: ignore[assignment]
 
-        with patch.object(_web_mod, "_fetch_html",
+        with patch.object(
+            _web_mod,
+            "_fetch_html",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -1202,7 +1222,9 @@ class TestResearchTool:
         p._backend.search_text = AsyncMock(return_value=same_results)  # type: ignore[assignment]
         p._backend.search_news = AsyncMock(return_value=same_results)  # type: ignore[assignment]
 
-        with patch.object(_web_mod, "_fetch_html",
+        with patch.object(
+            _web_mod,
+            "_fetch_html",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -1242,7 +1264,9 @@ class TestResearchTool:
         p._backend.search_text = AsyncMock(return_value=many)  # type: ignore[assignment]
         p._backend.search_news = _mock_ddgs_news([])  # type: ignore[assignment]
 
-        with patch.object(_web_mod, "_fetch_html",
+        with patch.object(
+            _web_mod,
+            "_fetch_html",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -1267,7 +1291,9 @@ class TestResearchTool:
         p._backend.search_text = AsyncMock(return_value=results)  # type: ignore[assignment]
         p._backend.search_news = _mock_ddgs_news([])  # type: ignore[assignment]
 
-        with patch.object(_web_mod, "_fetch_html",
+        with patch.object(
+            _web_mod,
+            "_fetch_html",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -1293,7 +1319,9 @@ class TestResearchTool:
 
         long_content = "x" * 5000
         html = f"<html><body><p>{long_content}</p></body></html>"
-        with patch.object(_web_mod, "_fetch_html",
+        with patch.object(
+            _web_mod,
+            "_fetch_html",
             new_callable=AsyncMock,
             return_value=html,
         ):
@@ -1318,7 +1346,9 @@ class TestResearchTool:
         p._backend.search_text = AsyncMock(return_value=results)  # type: ignore[assignment]
         p._backend.search_news = _mock_ddgs_news([])  # type: ignore[assignment]
 
-        with patch.object(_web_mod, "_fetch_html",
+        with patch.object(
+            _web_mod,
+            "_fetch_html",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -1340,7 +1370,9 @@ class TestResearchTool:
 
         p._backend.search_news = track_news  # type: ignore[assignment]
 
-        with patch.object(_web_mod, "_fetch_html",
+        with patch.object(
+            _web_mod,
+            "_fetch_html",
             new_callable=AsyncMock,
             return_value=None,
         ):
@@ -2052,7 +2084,9 @@ class TestOutputContract:
     async def test_fetch_contract(self) -> None:
         p = WebIntelligencePlugin()
         html = "<html><body><p>Test.</p></body></html>"
-        with patch.object(_web_mod, "_fetch_html",
+        with patch.object(
+            _web_mod,
+            "_fetch_html",
             new_callable=AsyncMock,
             return_value=html,
         ):
@@ -2067,7 +2101,9 @@ class TestOutputContract:
         p = WebIntelligencePlugin()
         p._backend.search_text = _mock_ddgs_text(_SAMPLE_WEB_RESULTS)  # type: ignore[assignment]
         p._backend.search_news = _mock_ddgs_news(_SAMPLE_NEWS_RESULTS)  # type: ignore[assignment]
-        with patch.object(_web_mod, "_fetch_html",
+        with patch.object(
+            _web_mod,
+            "_fetch_html",
             new_callable=AsyncMock,
             return_value=None,
         ):

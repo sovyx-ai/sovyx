@@ -22,7 +22,6 @@ from sovyx.observability.logging import get_logger
 from sovyx.plugins.context import BrainAccess, EventBusAccess, PluginContext
 from sovyx.plugins.permissions import (
     Permission,
-    PermissionDeniedError,
     PermissionEnforcer,
 )
 from sovyx.plugins.sdk import ISovyxPlugin, ToolDefinition
@@ -475,16 +474,18 @@ class PluginManager:
                 output=error_msg,
                 success=False,
             )
-        except PermissionDeniedError as e:
-            error_msg = f"Permission denied: {e}"
-            # Permission errors don't count as plugin failures
-            return _ToolResult(
-                call_id="",
-                name=tool_name,
-                output=error_msg,
-                success=False,
-            )
         except Exception as e:  # noqa: BLE001
+            # Anti-pattern #8: isinstance/except-by-class fails under pytest-cov
+            # reimport. Dispatch by name.
+            if type(e).__name__ == "PermissionDeniedError":
+                error_msg = f"Permission denied: {e}"
+                # Permission errors don't count as plugin failures
+                return _ToolResult(
+                    call_id="",
+                    name=tool_name,
+                    output=error_msg,
+                    success=False,
+                )
             error_msg = str(e)
             self._record_failure(plugin_name, error_msg)
             logger.error(
