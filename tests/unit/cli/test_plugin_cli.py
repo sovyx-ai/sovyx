@@ -90,8 +90,9 @@ class TestGetPluginStatus:
     """Tests for _get_plugin_status."""
 
     def test_enabled_by_default(self, tmp_path: Path) -> None:
-        with patch(
-            "sovyx.cli.commands.plugin._mind_yaml_path",
+        with patch.object(
+            _plugin_mod,
+            "_mind_yaml_path",
             return_value=tmp_path / "nonexistent.yaml",
         ):
             assert _get_plugin_status("weather") == "enabled"
@@ -102,8 +103,9 @@ class TestGetPluginStatus:
             yaml.dump({"plugins": {"disabled": ["weather"]}}),
             encoding="utf-8",
         )
-        with patch(
-            "sovyx.cli.commands.plugin._mind_yaml_path",
+        with patch.object(
+            _plugin_mod,
+            "_mind_yaml_path",
             return_value=mind_yaml,
         ):
             assert _get_plugin_status("weather") == "disabled"
@@ -120,8 +122,9 @@ class TestGetPluginStatus:
             ),
             encoding="utf-8",
         )
-        with patch(
-            "sovyx.cli.commands.plugin._mind_yaml_path",
+        with patch.object(
+            _plugin_mod,
+            "_mind_yaml_path",
             return_value=mind_yaml,
         ):
             assert _get_plugin_status("weather") == "disabled"
@@ -139,8 +142,9 @@ class TestUpdateMindYaml:
             yaml.dump({"name": "test", "plugins": {"disabled": []}}),
             encoding="utf-8",
         )
-        with patch(
-            "sovyx.cli.commands.plugin._mind_yaml_path",
+        with patch.object(
+            _plugin_mod,
+            "_mind_yaml_path",
             return_value=mind_yaml,
         ):
             changed = _update_mind_yaml_plugins("weather")
@@ -154,8 +158,9 @@ class TestUpdateMindYaml:
             yaml.dump({"name": "test", "plugins": {"disabled": ["weather"]}}),
             encoding="utf-8",
         )
-        with patch(
-            "sovyx.cli.commands.plugin._mind_yaml_path",
+        with patch.object(
+            _plugin_mod,
+            "_mind_yaml_path",
             return_value=mind_yaml,
         ):
             changed = _update_mind_yaml_plugins("weather", enable=True)
@@ -169,8 +174,9 @@ class TestUpdateMindYaml:
             yaml.dump({"name": "test", "plugins": {"disabled": []}}),
             encoding="utf-8",
         )
-        with patch(
-            "sovyx.cli.commands.plugin._mind_yaml_path",
+        with patch.object(
+            _plugin_mod,
+            "_mind_yaml_path",
             return_value=mind_yaml,
         ):
             changed = _update_mind_yaml_plugins("weather", enable=True)
@@ -182,8 +188,9 @@ class TestUpdateMindYaml:
             yaml.dump({"name": "test", "plugins": {"disabled": ["weather"]}}),
             encoding="utf-8",
         )
-        with patch(
-            "sovyx.cli.commands.plugin._mind_yaml_path",
+        with patch.object(
+            _plugin_mod,
+            "_mind_yaml_path",
             return_value=mind_yaml,
         ):
             changed = _update_mind_yaml_plugins("weather")
@@ -195,16 +202,18 @@ class TestUpdateMindYaml:
             yaml.dump({"name": "test", "plugins": {"disabled": ["weather"]}}),
             encoding="utf-8",
         )
-        with patch(
-            "sovyx.cli.commands.plugin._mind_yaml_path",
+        with patch.object(
+            _plugin_mod,
+            "_mind_yaml_path",
             return_value=mind_yaml,
         ):
             changed = _update_mind_yaml_plugins("weather", remove=True)
         assert changed
 
     def test_no_mind_yaml_enable(self, tmp_path: Path) -> None:
-        with patch(
-            "sovyx.cli.commands.plugin._mind_yaml_path",
+        with patch.object(
+            _plugin_mod,
+            "_mind_yaml_path",
             return_value=tmp_path / "nonexistent.yaml",
         ):
             changed = _update_mind_yaml_plugins("weather", enable=True)
@@ -212,8 +221,9 @@ class TestUpdateMindYaml:
 
     def test_no_mind_yaml_disable_creates(self, tmp_path: Path) -> None:
         mind_yaml = tmp_path / "mind.yaml"
-        with patch(
-            "sovyx.cli.commands.plugin._mind_yaml_path",
+        with patch.object(
+            _plugin_mod,
+            "_mind_yaml_path",
             return_value=mind_yaml,
         ):
             changed = _update_mind_yaml_plugins("weather")
@@ -228,8 +238,9 @@ class TestPluginListCommand:
     """Tests for 'sovyx plugin list'."""
 
     def test_no_plugins(self, tmp_path: Path) -> None:
-        with patch(
-            "sovyx.cli.commands.plugin._plugins_dir",
+        with patch.object(
+            _plugin_mod,
+            "_plugins_dir",
             return_value=tmp_path / "empty",
         ):
             result = runner.invoke(plugin_app, ["list"])
@@ -243,8 +254,9 @@ class TestPluginListCommand:
 
         with (
             patch.object(_plugin_mod, "_plugins_dir", return_value=plugins_dir),
-            patch(
-                "sovyx.cli.commands.plugin._mind_yaml_path",
+            patch.object(
+                _plugin_mod,
+                "_mind_yaml_path",
                 return_value=tmp_path / "no.yaml",
             ),
         ):
@@ -269,8 +281,9 @@ class TestPluginInfoCommand:
 
         with (
             patch.object(_plugin_mod, "_plugins_dir", return_value=plugins_dir),
-            patch(
-                "sovyx.cli.commands.plugin._mind_yaml_path",
+            patch.object(
+                _plugin_mod,
+                "_mind_yaml_path",
                 return_value=tmp_path / "no.yaml",
             ),
         ):
@@ -317,8 +330,9 @@ class TestPluginEnableDisable:
         mind_yaml = tmp_path / "mind.yaml"
         mind_yaml.write_text(yaml.dump({"name": "test", "plugins": {"disabled": []}}))
 
-        with patch(
-            "sovyx.cli.commands.plugin._mind_yaml_path",
+        with patch.object(
+            _plugin_mod,
+            "_mind_yaml_path",
             return_value=mind_yaml,
         ):
             result = runner.invoke(plugin_app, ["disable", "weather"])
@@ -329,8 +343,9 @@ class TestPluginEnableDisable:
         mind_yaml = tmp_path / "mind.yaml"
         mind_yaml.write_text(yaml.dump({"name": "test", "plugins": {"disabled": ["weather"]}}))
 
-        with patch(
-            "sovyx.cli.commands.plugin._mind_yaml_path",
+        with patch.object(
+            _plugin_mod,
+            "_mind_yaml_path",
             return_value=mind_yaml,
         ):
             result = runner.invoke(plugin_app, ["enable", "weather"])
@@ -347,8 +362,9 @@ class TestPluginRemoveCommand:
 
         with (
             patch.object(_plugin_mod, "_plugins_dir", return_value=plugins_dir),
-            patch(
-                "sovyx.cli.commands.plugin._mind_yaml_path",
+            patch.object(
+                _plugin_mod,
+                "_mind_yaml_path",
                 return_value=tmp_path / "no.yaml",
             ),
         ):
@@ -417,8 +433,9 @@ class TestEdgeCases:
         )
         with (
             patch.object(_plugin_mod, "_plugins_dir", return_value=plugins_dir),
-            patch(
-                "sovyx.cli.commands.plugin._mind_yaml_path",
+            patch.object(
+                _plugin_mod,
+                "_mind_yaml_path",
                 return_value=tmp_path / "no.yaml",
             ),
         ):
@@ -472,8 +489,9 @@ class TestEdgeCases:
         """Status returns enabled for invalid mind.yaml."""
         mind_yaml = tmp_path / "mind.yaml"
         mind_yaml.write_text(":::invalid")
-        with patch(
-            "sovyx.cli.commands.plugin._mind_yaml_path",
+        with patch.object(
+            _plugin_mod,
+            "_mind_yaml_path",
             return_value=mind_yaml,
         ):
             assert _get_plugin_status("weather") == "enabled"
@@ -482,8 +500,9 @@ class TestEdgeCases:
         """Status returns enabled for non-dict yaml."""
         mind_yaml = tmp_path / "mind.yaml"
         mind_yaml.write_text("- list\n- items")
-        with patch(
-            "sovyx.cli.commands.plugin._mind_yaml_path",
+        with patch.object(
+            _plugin_mod,
+            "_mind_yaml_path",
             return_value=mind_yaml,
         ):
             assert _get_plugin_status("weather") == "enabled"
@@ -492,8 +511,9 @@ class TestEdgeCases:
         """Update returns False for non-dict yaml."""
         mind_yaml = tmp_path / "mind.yaml"
         mind_yaml.write_text("- list")
-        with patch(
-            "sovyx.cli.commands.plugin._mind_yaml_path",
+        with patch.object(
+            _plugin_mod,
+            "_mind_yaml_path",
             return_value=mind_yaml,
         ):
             assert _update_mind_yaml_plugins("weather") is False
@@ -502,8 +522,9 @@ class TestEdgeCases:
         """Update handles non-dict plugins section."""
         mind_yaml = tmp_path / "mind.yaml"
         mind_yaml.write_text(yaml.dump({"name": "test", "plugins": "not-a-dict"}))
-        with patch(
-            "sovyx.cli.commands.plugin._mind_yaml_path",
+        with patch.object(
+            _plugin_mod,
+            "_mind_yaml_path",
             return_value=mind_yaml,
         ):
             assert _update_mind_yaml_plugins("weather") is False
@@ -512,8 +533,9 @@ class TestEdgeCases:
         """Update handles non-list disabled."""
         mind_yaml = tmp_path / "mind.yaml"
         mind_yaml.write_text(yaml.dump({"name": "test", "plugins": {"disabled": "string"}}))
-        with patch(
-            "sovyx.cli.commands.plugin._mind_yaml_path",
+        with patch.object(
+            _plugin_mod,
+            "_mind_yaml_path",
             return_value=mind_yaml,
         ):
             changed = _update_mind_yaml_plugins("weather")
@@ -523,8 +545,9 @@ class TestEdgeCases:
         """Status returns enabled when plugins is not a dict."""
         mind_yaml = tmp_path / "mind.yaml"
         mind_yaml.write_text(yaml.dump({"plugins": "not-dict"}))
-        with patch(
-            "sovyx.cli.commands.plugin._mind_yaml_path",
+        with patch.object(
+            _plugin_mod,
+            "_mind_yaml_path",
             return_value=mind_yaml,
         ):
             assert _get_plugin_status("weather") == "enabled"

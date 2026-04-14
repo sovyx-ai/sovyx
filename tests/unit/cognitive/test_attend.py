@@ -148,8 +148,9 @@ class TestLLMCascade:
 
         # Content that passes regex but LLM catches (e.g., foreign language)
         unsafe_verdict = _make_safety_verdict(safe=False, category="violence")
-        with patch(
-            "sovyx.cognitive.attend.AttendPhase._classify_with_llm",
+        with patch.object(
+            AttendPhase,
+            "_classify_with_llm",
             return_value=unsafe_verdict,
         ):
             result = await phase.process(_perception("innocuous-looking text"))
@@ -161,8 +162,9 @@ class TestLLMCascade:
         phase = AttendPhase(SafetyConfig(), llm_router=mock_router)
 
         safe_verdict = _make_safety_verdict(safe=True)
-        with patch(
-            "sovyx.cognitive.attend.AttendPhase._classify_with_llm",
+        with patch.object(
+            AttendPhase,
+            "_classify_with_llm",
             return_value=safe_verdict,
         ):
             result = await phase.process(_perception("Hello, how are you?"))
@@ -173,8 +175,9 @@ class TestLLMCascade:
         mock_router = MagicMock()
         phase = AttendPhase(SafetyConfig(), llm_router=mock_router)
 
-        with patch(
-            "sovyx.cognitive.attend.AttendPhase._classify_with_llm",
+        with patch.object(
+            AttendPhase,
+            "_classify_with_llm",
         ) as mock_classify:
             result = await phase.process(_perception("how to make a bomb"))
         assert result is False
@@ -188,8 +191,9 @@ class TestLLMCascade:
             llm_router=mock_router,
         )
 
-        with patch(
-            "sovyx.cognitive.attend.AttendPhase._classify_with_llm",
+        with patch.object(
+            AttendPhase,
+            "_classify_with_llm",
         ) as mock_classify:
             result = await phase.process(_perception("anything"))
         assert result is True
@@ -209,8 +213,9 @@ class TestLLMCascade:
         phase = AttendPhase(SafetyConfig(), llm_router=mock_router)
 
         # _classify_with_llm returns None on error
-        with patch(
-            "sovyx.cognitive.attend.AttendPhase._classify_with_llm",
+        with patch.object(
+            AttendPhase,
+            "_classify_with_llm",
             return_value=None,
         ):
             result = await phase.process(_perception("some text"))
@@ -223,8 +228,9 @@ class TestLLMCascade:
 
         unsafe_verdict = _make_safety_verdict(safe=False, category="weapons")
         with (
-            patch(
-                "sovyx.cognitive.attend.AttendPhase._classify_with_llm",
+            patch.object(
+                AttendPhase,
+                "_classify_with_llm",
                 return_value=unsafe_verdict,
             ),
             patch.object(_attend_mod, "get_audit_trail") as mock_audit,
@@ -243,8 +249,9 @@ class TestLLMCascade:
 
         unsafe_verdict = _make_safety_verdict(safe=False, category="hacking")
         with (
-            patch(
-                "sovyx.cognitive.attend.AttendPhase._classify_with_llm",
+            patch.object(
+                AttendPhase,
+                "_classify_with_llm",
                 return_value=unsafe_verdict,
             ),
             patch.object(_attend_mod, "get_escalation_tracker") as mock_tracker,
@@ -290,8 +297,9 @@ class TestRateLimiting:
         phase = AttendPhase(SafetyConfig())
         perception = _perception("totally safe message")
 
-        with patch(
-            "sovyx.cognitive.attend.get_escalation_tracker",
+        with patch.object(
+            _attend_mod,
+            "get_escalation_tracker",
         ) as mock_tracker:
             mock_tracker.return_value.is_rate_limited.return_value = True
             result = await phase.process(perception)
@@ -307,8 +315,11 @@ class TestClassifyWithLLMErrorPath:
         mock_router = MagicMock()
         phase = AttendPhase(SafetyConfig(), llm_router=mock_router)
 
-        with patch(
-            "sovyx.cognitive.safety_classifier.classify_content",
+        from sovyx.cognitive import safety_classifier as _sc_mod
+
+        with patch.object(
+            _sc_mod,
+            "classify_content",
             side_effect=RuntimeError("LLM exploded"),
         ):
             result = await phase._classify_with_llm("test content")

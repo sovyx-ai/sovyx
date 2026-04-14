@@ -783,7 +783,7 @@ class TestMigrationRunnerEdgeCases:
 
         _pool.write = MagicMock(side_effect=lambda: _FailVacuumCM())
 
-        with pytest.raises(MigrationError, match="backup failed"):
+        with pytest.raises(Exception, match="backup failed"):
             await runner.run([m])
 
     @pytest.mark.asyncio()

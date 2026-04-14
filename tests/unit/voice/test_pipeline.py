@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import numpy as np
 import pytest
 
+from sovyx.voice import pipeline as _pipeline_mod  # anti-pattern #11
 from sovyx.voice.pipeline import (
     AudioOutputQueue,
     BargeInDetector,
@@ -260,7 +261,7 @@ class TestAudioOutputQueue:
         q = AudioOutputQueue()
         chunk = _audio_chunk(10)
         await q.enqueue(chunk)
-        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
             await q.drain()
         assert q.is_playing is False
 
@@ -268,7 +269,7 @@ class TestAudioOutputQueue:
     async def test_play_immediate(self) -> None:
         q = AudioOutputQueue()
         chunk = _audio_chunk(10)
-        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
             await q.play_immediate(chunk)
         assert q.is_playing is False
 
@@ -302,7 +303,7 @@ class TestAudioOutputQueue:
             if call_count == 1:
                 q.interrupt()
 
-        with patch("sovyx.voice.pipeline._play_audio", side_effect=_slow_play):
+        with patch.object(_pipeline_mod, "_play_audio", side_effect=_slow_play):
             await q.drain()
         # Should have played at most 1 chunk before interrupt
         assert call_count == 1
@@ -392,7 +393,7 @@ class TestJarvisIllusion:
         jarvis = JarvisIllusion(config, tts)
         await jarvis.pre_cache()
         output = AudioOutputQueue()
-        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
             await jarvis.play_beep(output)
 
     @pytest.mark.asyncio
@@ -430,7 +431,7 @@ class TestJarvisIllusion:
         await jarvis.pre_cache()
         output = AudioOutputQueue()
         cancel = asyncio.Event()  # Never set
-        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
             played = await jarvis.play_filler_after_delay(output, cancel)
         assert played is True
 
@@ -521,7 +522,7 @@ class TestPipelineStateMachine:
         pipeline, refs = _make_pipeline(vad_speech=True, ww_detected=True)
         await pipeline.start()
 
-        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
             result = await pipeline.feed_frame(_speech_frame())
         assert result["state"] == "WAKE_DETECTED"
         assert result["event"] == "wake_word_detected"
@@ -533,7 +534,7 @@ class TestPipelineStateMachine:
         pipeline, refs = _make_pipeline(vad_speech=True, ww_detected=True)
         await pipeline.start()
 
-        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
             await pipeline.feed_frame(_speech_frame())  # → WAKE_DETECTED
         result = await pipeline.feed_frame(_speech_frame())  # → RECORDING
         assert result["state"] == "RECORDING"
@@ -545,7 +546,7 @@ class TestPipelineStateMachine:
         pipeline, _ = _make_pipeline(vad_speech=True, ww_detected=True)
         await pipeline.start()
 
-        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
             await pipeline.feed_frame(_speech_frame())  # WAKE_DETECTED
         await pipeline.feed_frame(_speech_frame())  # → RECORDING (counter=1)
         result = await pipeline.feed_frame(_speech_frame())  # counter=2
@@ -558,7 +559,7 @@ class TestPipelineStateMachine:
         pipeline, refs = _make_pipeline(vad_speech=True, ww_detected=True, stt_text="test")
         await pipeline.start()
 
-        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
             await pipeline.feed_frame(_speech_frame())  # WAKE_DETECTED
 
         await pipeline.feed_frame(_speech_frame())  # RECORDING
@@ -580,7 +581,7 @@ class TestPipelineStateMachine:
         pipeline, refs = _make_pipeline(vad_speech=True, ww_detected=True, stt_text="timeout test")
         await pipeline.start()
 
-        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
             await pipeline.feed_frame(_speech_frame())  # WAKE_DETECTED
 
         # Feed 10 speech frames (max_recording_frames=10)
@@ -597,7 +598,7 @@ class TestPipelineStateMachine:
         pipeline, refs = _make_pipeline(vad_speech=True, ww_detected=True, stt_text="")
         await pipeline.start()
 
-        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
             await pipeline.feed_frame(_speech_frame())
 
         await pipeline.feed_frame(_speech_frame())
@@ -616,7 +617,7 @@ class TestPipelineStateMachine:
         refs["stt"].transcribe.side_effect = RuntimeError("model crash")
         await pipeline.start()
 
-        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
             await pipeline.feed_frame(_speech_frame())
 
         await pipeline.feed_frame(_speech_frame())
@@ -637,7 +638,7 @@ class TestPipelineStateMachine:
         )
         await pipeline.start()
 
-        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
             await pipeline.feed_frame(_speech_frame())
 
         await pipeline.feed_frame(_speech_frame())
@@ -673,7 +674,7 @@ class TestPipelineSpeaking:
         await pipeline.start()
         refs["tts"].synthesize.reset_mock()  # Clear pre_cache calls
 
-        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
             await pipeline.speak("Hello there!")
 
         refs["tts"].synthesize.assert_called_once_with("Hello there!")
@@ -684,7 +685,7 @@ class TestPipelineSpeaking:
         pipeline, refs = _make_pipeline()
         await pipeline.start()
 
-        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
             await pipeline.speak("test")
 
         events = [call.args[0] for call in refs["bus"].emit.call_args_list]
@@ -732,7 +733,7 @@ class TestPipelineSpeaking:
         await pipeline.start()
 
         await pipeline.stream_text("Remaining text")
-        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
             await pipeline.flush_stream()
 
         assert pipeline.state == VoicePipelineState.IDLE
@@ -857,7 +858,7 @@ class TestPipelineEvents:
         pipeline, refs = _make_pipeline(vad_speech=True, ww_detected=True)
         await pipeline.start()
 
-        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
             await pipeline.feed_frame(_speech_frame())
 
         events = [call.args[0] for call in refs["bus"].emit.call_args_list]
@@ -870,7 +871,7 @@ class TestPipelineEvents:
         pipeline, refs = _make_pipeline(vad_speech=True, ww_detected=True, stt_text="hi")
         await pipeline.start()
 
-        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
             await pipeline.feed_frame(_speech_frame())
         await pipeline.feed_frame(_speech_frame())
 
@@ -906,7 +907,7 @@ class TestPipelineEvents:
         )
         await pipeline.start()
 
-        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
             result = await pipeline.feed_frame(_speech_frame())
         assert result["state"] == "WAKE_DETECTED"
 
@@ -932,7 +933,7 @@ class TestPipelineFullCycle:
         await pipeline.start()
 
         # 1. Wake word detected
-        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
             r = await pipeline.feed_frame(_speech_frame())
         assert r["state"] == "WAKE_DETECTED"
 
@@ -952,7 +953,7 @@ class TestPipelineFullCycle:
         assert r["text"] == "turn on the lights"
 
         # 5. CogLoop responds — speak
-        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
             await pipeline.speak("Lights are on!")
 
         assert pipeline.state == VoicePipelineState.IDLE
@@ -974,7 +975,7 @@ class TestPipelineFullCycle:
         await pipeline.stream_text("And this is more text.")
 
         # Flush remaining
-        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
             await pipeline.flush_stream()
 
         assert pipeline.state == VoicePipelineState.IDLE
@@ -1000,7 +1001,7 @@ class TestEdgeCases:
         )
         await pipeline.start()
 
-        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
             await pipeline.feed_frame(_speech_frame())
         await pipeline.feed_frame(_speech_frame())
         refs["vad"].process_frame.return_value = _vad_event(False)
@@ -1017,7 +1018,7 @@ class TestEdgeCases:
         refs["bus"].emit.side_effect = RuntimeError("bus crash")
         await pipeline.start()
 
-        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
             await pipeline.feed_frame(_speech_frame())
         # Should still transition despite bus error
         assert pipeline.state in (
@@ -1055,7 +1056,7 @@ class TestEdgeCases:
         await pipeline.start()
         pipeline._state = VoicePipelineState.SPEAKING
 
-        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
             await pipeline.flush_stream()
 
         assert pipeline.state == VoicePipelineState.IDLE
@@ -1243,7 +1244,7 @@ class TestPipelineCoverageGaps:
         pipeline._state = VoicePipelineState.SPEAKING
         pipeline._output._playing = False
 
-        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
             result = await pipeline.feed_frame(_silence_frame())
 
         assert result["state"] == "IDLE"
@@ -1281,7 +1282,7 @@ class TestPipelineCoverageGaps:
         pipeline._text_buffer = "pending text"
         refs["tts"].synthesize.side_effect = RuntimeError("TTS error")
 
-        with patch("sovyx.voice.pipeline._play_audio", new_callable=AsyncMock):
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
             await pipeline.flush_stream()
 
         # Should still transition to IDLE despite error
