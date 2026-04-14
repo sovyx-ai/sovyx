@@ -267,7 +267,11 @@ _NER_PROMPT = (
     "Text: {text}"
 )
 
-_NER_TIMEOUT_SEC = 2.0
+# Default sourced from EngineConfig.tuning.safety; overridable via
+# ``SOVYX_TUNING__SAFETY__PII_NER_TIMEOUT_SECONDS``.
+from sovyx.engine.config import SafetyTuningConfig as _SafetyTuning  # noqa: E402
+
+_NER_TIMEOUT_SEC = _SafetyTuning().pii_ner_timeout_seconds
 
 
 class PIIGuard:

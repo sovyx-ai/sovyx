@@ -51,8 +51,12 @@ INSERT INTO safety_events (timestamp, direction, action, category, tier, pattern
 VALUES (?, ?, ?, ?, ?, ?)
 """
 
-_FLUSH_INTERVAL_SEC = 10.0
-_BUFFER_MAX = 100
+# Defaults sourced from EngineConfig.tuning.safety so a single place owns
+# the tunable values; overridable via ``SOVYX_TUNING__SAFETY__*``.
+from sovyx.engine.config import SafetyTuningConfig as _SafetyTuning  # noqa: E402
+
+_FLUSH_INTERVAL_SEC = _SafetyTuning().audit_flush_interval_seconds
+_BUFFER_MAX = _SafetyTuning().audit_buffer_max
 
 
 @dataclass(frozen=True, slots=True)

@@ -28,8 +28,13 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 _DEFAULT_SAMPLE_RATE = 16_000
-_TRANSCRIBE_TIMEOUT_S = 10.0
-_STREAMING_DRAIN_S = 0.5
+
+# Defaults sourced from EngineConfig.tuning.voice; overridable via
+# ``SOVYX_TUNING__VOICE__*``.
+from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning  # noqa: E402
+
+_TRANSCRIBE_TIMEOUT_S = _VoiceTuning().transcribe_timeout_seconds
+_STREAMING_DRAIN_S = _VoiceTuning().streaming_drain_seconds
 
 # Model sizes and their characteristics (Pi 5 benchmarks)
 _MODEL_SPECS: dict[str, dict[str, float | int]] = {

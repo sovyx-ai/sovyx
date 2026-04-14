@@ -26,7 +26,11 @@ from sovyx.observability.logging import get_logger
 logger = get_logger(__name__)
 
 # ── Debounce ────────────────────────────────────────────────────────────
-_DEBOUNCE_SEC = 900.0  # 15 minutes
+# Default sourced from EngineConfig.tuning.safety; overridable via
+# ``SOVYX_TUNING__SAFETY__NOTIFICATION_DEBOUNCE_SECONDS``.
+from sovyx.engine.config import SafetyTuningConfig as _SafetyTuning  # noqa: E402
+
+_DEBOUNCE_SEC = _SafetyTuning().notification_debounce_seconds
 
 
 class NotificationSink(Protocol):

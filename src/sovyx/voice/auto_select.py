@@ -27,9 +27,14 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 _NVIDIA_SMI_TIMEOUT_S = 5
-_MIN_GPU_VRAM_MB = 4000
-_HIGH_RAM_THRESHOLD_MB = 16_000
-_LOW_RAM_THRESHOLD_MB = 2048
+
+# Hardware-detection thresholds: defaults sourced from
+# ``EngineConfig.tuning.voice``, overridable via ``SOVYX_TUNING__VOICE__*``.
+from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning  # noqa: E402
+
+_MIN_GPU_VRAM_MB = _VoiceTuning().auto_select_min_gpu_vram_mb
+_HIGH_RAM_THRESHOLD_MB = _VoiceTuning().auto_select_high_ram_threshold_mb
+_LOW_RAM_THRESHOLD_MB = _VoiceTuning().auto_select_low_ram_threshold_mb
 _N100_LOW_RAM_THRESHOLD_MB = 4096
 
 

@@ -20,7 +20,11 @@ logger = get_logger(__name__)
 
 # Default K for star topology cross-turn pairing.
 # Each new concept pairs with top-K existing by activation.
-_STAR_K = 15
+# Default sourced from EngineConfig.tuning.brain; overridable via
+# ``SOVYX_TUNING__BRAIN__STAR_TOPOLOGY_K``.
+from sovyx.engine.config import BrainTuningConfig as _BrainTuning  # noqa: E402
+
+_STAR_K = _BrainTuning().star_topology_k
 
 
 class HebbianLearning:

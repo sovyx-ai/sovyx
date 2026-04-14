@@ -102,6 +102,56 @@ class LLMDefaultsConfig(BaseModel):
     )
 
 
+class SafetyTuningConfig(BaseModel):
+    """Tunable thresholds for the cognitive safety subsystem.
+
+    All defaults match the previously hardcoded module-level constants —
+    overriding via env vars (``SOVYX_TUNING__SAFETY__*``) or
+    ``system.yaml`` is purely additive (zero behaviour change at default).
+    """
+
+    audit_flush_interval_seconds: float = 10.0
+    audit_buffer_max: int = 100
+    pii_ner_timeout_seconds: float = 2.0
+    notification_debounce_seconds: float = 900.0  # 15 minutes
+
+
+class BrainTuningConfig(BaseModel):
+    """Tunable thresholds for the Brain memory subsystem."""
+
+    star_topology_k: int = 15
+    novelty_high_similarity: float = 0.85  # >= -> novelty 0.05 (near-dup)
+    novelty_low_similarity: float = 0.30  # <= -> novelty 0.95 (very novel)
+    cold_start_threshold: int = 10
+    cold_start_novelty: float = 0.70
+    model_download_cooldown_seconds: int = 900  # 15 minutes
+
+
+class VoiceTuningConfig(BaseModel):
+    """Tunable thresholds for the voice pipeline + STT/TTS engines."""
+
+    transcribe_timeout_seconds: float = 10.0
+    streaming_drain_seconds: float = 0.5
+    cloud_stt_timeout_seconds: float = 30.0
+    cloud_stt_max_audio_seconds: float = 120.0
+    auto_select_min_gpu_vram_mb: int = 4_000
+    auto_select_high_ram_threshold_mb: int = 16_000
+    auto_select_low_ram_threshold_mb: int = 2_048
+
+
+class TuningConfig(BaseModel):
+    """Aggregate tuning knobs for cognitive / brain / voice subsystems.
+
+    Single source of truth for previously module-level constants. All
+    defaults match the historical hardcoded values; subsystems read from
+    a ``TuningConfig`` instance built from ``EngineConfig.tuning``.
+    """
+
+    safety: SafetyTuningConfig = Field(default_factory=SafetyTuningConfig)
+    brain: BrainTuningConfig = Field(default_factory=BrainTuningConfig)
+    voice: VoiceTuningConfig = Field(default_factory=VoiceTuningConfig)
+
+
 class SocketConfig(BaseModel):
     """Unix socket path for daemon RPC.
 
@@ -144,6 +194,7 @@ class EngineConfig(BaseSettings):
     relay: RelayConfig = Field(default_factory=RelayConfig)
     api: APIConfig = Field(default_factory=APIConfig)
     socket: SocketConfig = Field(default_factory=SocketConfig)
+    tuning: TuningConfig = Field(default_factory=TuningConfig)
 
     @model_validator(mode="after")
     def resolve_log_file(self) -> EngineConfig:

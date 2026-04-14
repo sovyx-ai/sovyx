@@ -39,8 +39,13 @@ logger = get_logger(__name__)
 
 _WHISPER_MODEL = "whisper-1"
 _DEFAULT_CONFIDENCE_THRESHOLD = 0.6
-_API_TIMEOUT_S = 30.0
-_MAX_AUDIO_DURATION_S = 120.0
+
+# Defaults sourced from EngineConfig.tuning.voice; overridable via
+# ``SOVYX_TUNING__VOICE__*``.
+from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning  # noqa: E402
+
+_API_TIMEOUT_S = _VoiceTuning().cloud_stt_timeout_seconds
+_MAX_AUDIO_DURATION_S = _VoiceTuning().cloud_stt_max_audio_seconds
 _WAV_SAMPLE_WIDTH = 2  # 16-bit PCM
 
 

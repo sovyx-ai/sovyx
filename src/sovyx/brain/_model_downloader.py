@@ -67,7 +67,11 @@ def _is_permanent(status_code: int) -> bool:
 
 # ── Download cooldown ───────────────────────────────────────────────────────
 
-_COOLDOWN_SECONDS = 900  # 15 minutes
+# Default sourced from EngineConfig.tuning.brain; overridable via
+# ``SOVYX_TUNING__BRAIN__MODEL_DOWNLOAD_COOLDOWN_SECONDS``.
+from sovyx.engine.config import BrainTuningConfig as _BrainTuning  # noqa: E402
+
+_COOLDOWN_SECONDS = _BrainTuning().model_download_cooldown_seconds
 
 
 def _cooldown_path(models_dir: Path, filename: str) -> Path:
