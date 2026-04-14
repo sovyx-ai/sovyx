@@ -35,6 +35,7 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -206,6 +207,12 @@ class AlertManager:
         # rule_name → current state (tracks firing/resolved transitions)
         self._states: dict[str, AlertState] = {}
 
+        # Serializes evaluate() + state transitions so two concurrent
+        # callers can't interleave reads of _states with writes around
+        # the `await self._emit_*` hand-offs (would double-fire events
+        # or report stale states).
+        self._state_lock = asyncio.Lock()
+
         if rules:
             for rule in rules:
                 self.add_rule(rule)
@@ -370,29 +377,34 @@ class AlertManager:
         evaluates SLO burn rates. Emits :class:`AlertFired` and
         :class:`AlertResolved` events on state transitions.
 
+        Serialized through ``_state_lock`` — two concurrent evaluate()
+        callers would otherwise race the transition bookkeeping around
+        the ``await self._emit_*`` hand-offs (double-fire, stale state).
+
         Returns:
             List of currently firing alerts.
         """
-        fired_alerts: list[Alert] = []
+        async with self._state_lock:
+            fired_alerts: list[Alert] = []
 
-        # Evaluate threshold rules
-        currently_firing: set[str] = set()
-        for rule in self._rules.values():
-            alert = self._evaluate_rule(rule)
-            if alert is not None:
+            # Evaluate threshold rules
+            currently_firing: set[str] = set()
+            for rule in self._rules.values():
+                alert = self._evaluate_rule(rule)
+                if alert is not None:
+                    fired_alerts.append(alert)
+                    currently_firing.add(rule.name)
+
+            # Evaluate SLO alerts
+            slo_alerts = self._evaluate_slo_alerts()
+            for alert in slo_alerts:
                 fired_alerts.append(alert)
-                currently_firing.add(rule.name)
+                currently_firing.add(alert.rule_name)
 
-        # Evaluate SLO alerts
-        slo_alerts = self._evaluate_slo_alerts()
-        for alert in slo_alerts:
-            fired_alerts.append(alert)
-            currently_firing.add(alert.rule_name)
+            # Handle state transitions
+            await self._process_transitions(currently_firing, fired_alerts)
 
-        # Handle state transitions
-        await self._process_transitions(currently_firing, fired_alerts)
-
-        return fired_alerts
+            return fired_alerts
 
     async def _process_transitions(
         self,

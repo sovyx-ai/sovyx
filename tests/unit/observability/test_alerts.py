@@ -6,6 +6,7 @@ state transitions, event bus emission, and the default rule factory.
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -688,3 +689,25 @@ class TestStatusSummaryEdgeCases:
         assert status["firing_count"] == 2
         assert status["severity_counts"][AlertSeverity.WARNING.value] >= 1
         assert status["severity_counts"][AlertSeverity.CRITICAL.value] >= 1
+
+
+class TestAlertManagerConcurrentEvaluate:
+    """Concurrency guards around evaluate() + state transitions."""
+
+    async def test_concurrent_evaluate_emits_fire_once(self) -> None:
+        """Multiple concurrent evaluate() calls must not double-fire."""
+        bus = MagicMock()
+        bus.emit = AsyncMock()
+        mgr = AlertManager(event_bus=bus)
+        mgr.add_rule(
+            _make_rule(name="spike", severity=AlertSeverity.WARNING, threshold=0.5),
+        )
+        mgr.record_metric("test_metric", 1.0)
+
+        await asyncio.gather(*(mgr.evaluate() for _ in range(10)))
+
+        # Only the first transition RESOLVED → FIRING should emit.
+        fired_emissions = [
+            call for call in bus.emit.call_args_list if isinstance(call.args[0], AlertFired)
+        ]
+        assert len(fired_emissions) == 1
