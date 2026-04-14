@@ -224,9 +224,7 @@ class TestRPCServerCoverageGaps:
         finally:
             await server.stop()
 
-    @pytest.mark.skip(
-        reason="Same async-race cause as test_handle_timeout_error above."
-    )
+    @pytest.mark.skip(reason="Same async-race cause as test_handle_timeout_error above.")
     @pytest.mark.asyncio()
     async def test_handle_generic_exception(self, tmp_path: Path) -> None:
         """Generic exception during handling is logged silently."""
