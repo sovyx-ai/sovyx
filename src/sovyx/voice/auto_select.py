@@ -14,7 +14,7 @@ import os
 import platform
 import subprocess
 from dataclasses import dataclass
-from enum import Enum, auto
+from enum import IntEnum, auto
 from typing import Any
 
 from sovyx.observability.logging import get_logger
@@ -38,7 +38,7 @@ _N100_LOW_RAM_THRESHOLD_MB = 4096
 # ---------------------------------------------------------------------------
 
 
-class HardwareTier(Enum):
+class HardwareTier(IntEnum):
     """Supported hardware tiers for voice processing."""
 
     PI5 = auto()  # BCM2712, Cortex A76, 4-8GB

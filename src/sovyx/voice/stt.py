@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from enum import Enum, auto
+from enum import IntEnum, auto
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
@@ -44,7 +44,7 @@ _MODEL_SPECS: dict[str, dict[str, float | int]] = {
 # ---------------------------------------------------------------------------
 
 
-class STTState(Enum):
+class STTState(IntEnum):
     """STT engine lifecycle states."""
 
     UNINITIALIZED = auto()

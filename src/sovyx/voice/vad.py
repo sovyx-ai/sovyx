@@ -9,7 +9,7 @@ Ref: SPE-010 §3 (VAD), IMPL-004 §2.4 (SileroVAD v5 code)
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum, auto
+from enum import IntEnum, auto
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
@@ -38,7 +38,7 @@ _LSTM_STATE_SHAPE = (2, 1, 128)
 # ---------------------------------------------------------------------------
 
 
-class VADState(Enum):
+class VADState(IntEnum):
     """Hysteresis state machine states.
 
     Transitions: SILENCE → SPEECH_ONSET → SPEECH → SPEECH_OFFSET → SILENCE

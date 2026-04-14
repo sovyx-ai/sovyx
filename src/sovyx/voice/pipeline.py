@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass
-from enum import Enum, auto
+from enum import IntEnum, auto
 from typing import TYPE_CHECKING, Any
 
 from sovyx.observability.logging import get_logger
@@ -49,7 +49,7 @@ _TEXT_MIN_WORDS = 3  # Min words before TTS synthesis
 # ---------------------------------------------------------------------------
 
 
-class VoicePipelineState(Enum):
+class VoicePipelineState(IntEnum):
     """Pipeline state machine.
 
     Transitions (SPE-010 §13):

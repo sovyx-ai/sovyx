@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import shutil
-from enum import Enum, auto
+from enum import IntEnum, auto
 from typing import TYPE_CHECKING, Any
 
 from sovyx.observability.logging import get_logger
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-class DegradationLevel(Enum):
+class DegradationLevel(IntEnum):
     """System degradation levels."""
 
     HEALTHY = auto()

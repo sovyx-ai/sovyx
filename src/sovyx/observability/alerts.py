@@ -38,7 +38,7 @@ from __future__ import annotations
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from enum import Enum, StrEnum, auto
+from enum import IntEnum, StrEnum, auto
 from typing import TYPE_CHECKING, Any
 
 from sovyx.engine.events import Event, EventCategory
@@ -64,7 +64,7 @@ class AlertSeverity(StrEnum):
     CRITICAL = "critical"
 
 
-class AlertState(Enum):
+class AlertState(IntEnum):
     """Alert lifecycle state."""
 
     FIRING = auto()

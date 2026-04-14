@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from enum import Enum, auto
+from enum import IntEnum, auto
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
@@ -58,7 +58,7 @@ _WAKE_VARIANTS: frozenset[str] = frozenset(
 # ---------------------------------------------------------------------------
 
 
-class WakeWordState(Enum):
+class WakeWordState(IntEnum):
     """Detector state machine.
 
     IDLE: listening for wake word

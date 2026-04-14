@@ -11,7 +11,7 @@ import dataclasses
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from enum import Enum, auto
+from enum import IntEnum, auto
 from uuid import uuid4
 
 from sovyx.observability.logging import get_logger, set_correlation_id
@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 # ── Event Categories ────────────────────────────────────────────────────────
 
 
-class EventCategory(Enum):
+class EventCategory(IntEnum):
     """Categories for event classification."""
 
     ENGINE = auto()
