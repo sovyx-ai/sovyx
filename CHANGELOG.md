@@ -2,373 +2,251 @@
 
 All notable changes to Sovyx will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Added — Web Intelligence Plugin
+## [0.11.0] — 2026-04-14
 
-- **6 tools** — `search`, `fetch`, `research`, `lookup`, `learn_from_web`, `recall_web`
-- **3 search backends** — DuckDuckGo (zero API key), SearXNG (self-hosted), Brave (API key)
-- **Auto intent classification** — factual, temporal, price, procedural routing
-- **Content extraction** — trafilatura with regex fallback, metadata (title, author, date)
-- **Research mode** — multi-step pipeline with numbered citations and credibility ranking
-- **Source credibility** — 3-tier domain reputation (academic/gov → news → social)
-- **Intelligent cache** — intent-adaptive TTL (price: 5min, factual: 1h, procedural: 24h)
-- **Brain integration** — save findings with provenance metadata (URL, author, credibility)
-- **Quick lookup** — definitions, prices, conversions, weather (Open-Meteo)
-- **Safety** — SSRF protection, query sanitization, per-tool rate limiting
-- **224 tests** — 200 unit + 24 Hypothesis property tests
+The v0.11 line is an enterprise hardening pass across backend, frontend, and CI infrastructure. Five focused sprints: security P0, god-file splits, concurrency + config hardening, frontend hardening, and 90% polish.
 
-### Added — Financial Math Plugin (Enterprise Showcase)
+### Security
 
-- **9 financial tools** replacing basic calculator — `calculate`, `percentage`, `interest`, `tvm`, `amortization`, `portfolio`, `position_size`, `currency`
-- **Decimal-first engine** — all math via `Decimal(str(value))` with banker's rounding, no floating-point errors
-- **5 percentage modes** — of, change, markup, gross_margin, net_margin
-- **4 interest modes** — simple, compound, CAGR, Rule of 72
-- **6 time-value-of-money modes** — NPV, IRR (Newton-Raphson), PV, FV, annuity PV/FV
-- **3 amortization modes** — Price (French), SAC (Brazilian), side-by-side comparison
-- **6 portfolio analytics modes** — returns, Sharpe, Sortino, max drawdown, volatility, summary
-- **4 position sizing modes** — Kelly criterion, half-Kelly, fixed fractional, max risk
-- **3 currency modes** — format (9 currencies), convert, parse (US & BR number formats)
-- **Input validation hardening** — bounds checking, overflow protection, structured error messages
-- **228 tests** — 215 unit + 13 Hypothesis property-based invariant tests
-- **Backward compatibility** — `CalculatorPlugin` wrapper preserves name + output format
-- **Zero external dependencies** — no numpy, scipy, or pandas
+- Wyoming voice server: bearer-token auth, rate limit, payload cap, read timeout.
+- Plugins: every official plugin now routes HTTP through `SandboxedHttpClient`; raw `httpx` from plugin code is no longer permitted.
+- AST scanner: blocks `builtins`, `tempfile`, `gc`, `inspect`, `mmap`, `pty`, plus the `().__class__.__base__.__subclasses__()` escape chain.
+- CLI: `sovyx init --name` validated via regex; path traversal closed.
+- Dashboard: import endpoint size cap (100 MB) + streaming parse; chat max-length 10 000 chars.
+- LLM providers: Google API key moved from URL parameter to `x-goog-api-key` header.
+- Frontend: token migrated from `localStorage` to `sessionStorage` + in-memory fallback; `window.prompt()` replaced with Radix Dialog; WS URL derived from `location.protocol`; `use-auth` now fail-closed on network errors.
+- Frontend: `safeStringify` (size clamp + secret redaction) applied to `plugin-detail` manifest, tool parameters, and `log-row` extra fields.
 
-## [0.9.0] — 2026-04-12
+### Added
 
-### Added — Knowledge Plugin v2.0 (Enterprise)
+- `engine/_lock_dict.LRULockDict` — bounded `asyncio.Lock` dict with LRU eviction; shared by `bridge/manager.py`, `cloud/flex.py`, `cloud/usage.py`.
+- `EngineConfig.tuning.{safety,brain,voice}` — tuning knobs previously hardcoded now overridable via `SOVYX_TUNING__*` env variables.
+- Frontend runtime response validation: `src/types/schemas.ts` holds zod schemas for 11 response shapes; `api.get/post/put/patch/delete` accept an optional `{ schema }` option that runs `safeParse` and logs mismatches.
+- Frontend: `api.patch()`, `buildQuery()` helper, default 30 s timeout via composable `AbortController`, retry with exponential backoff + jitter on 408/429/502/503/504 for idempotent verbs.
+- Frontend error telemetry: `POST /api/telemetry/frontend-error` endpoint (rate-limited 20 / 60 s, pydantic length caps) + `ErrorBoundary.componentDidCatch` hook.
+- Virtualization on `chat-thread.tsx` and `cognitive-timeline.tsx` via TanStack Virtual.
+- 56 new component tests across 13 `components/dashboard/` files + 3 `components/ui/` primitives.
+- 5 new critical tests: `plugins.tsx` page-level, command palette Cmd+K, `router.tsx` lazy + ErrorBoundary, settings slider/preset/save interactions.
+- `src/lib/safe-json.ts` with 9 tests — size clamp and secret-key redaction for DOM-rendered JSON.
+- `persistence/pool._read_index_lock` — round-robin cursor now atomic under contention.
+- `observability/alerts._state_lock` — evaluate() serialized; concurrent callers no longer double-fire `AlertFired`.
 
-- **Semantic deduplication engine** — cosine similarity ≥0.88 detects near-duplicates before creating new concepts
-- **LLM-assisted conflict resolution** — classifies content relationships as SAME/EXTENDS/CONTRADICTS/UNRELATED
-  - CONTRADICTS: recency wins, 30% confidence penalty
-  - EXTENDS: content merged, confidence boosted
-  - SAME: full reinforcement cycle with tracking
-- **Confidence reinforcement system** — tracks reinforcement count, "established" status after 5+ confirmations
-- **Auto-relation creation** — new concepts automatically linked to related existing concepts (similarity 0.65–0.87)
-- **Episode-aware recall** — `recall_about()` enriches results with conversation history (when, where, how many turns)
-- **Person-scoped memory** — `remember(about_person="X")` and `search(about_person="X")` for per-person knowledge
-- **Real forget with cascade** — deletes concept + relations + embeddings + working memory, emits `ConceptForgotten` event
-- **Bulk forget** — `forget(query, forget_all=True)` removes all matching concepts (cap: 20)
-- **Structured JSON output** — all 5 tools return `{action, ok, message, ...}` with documented schema
-- **Rate limiting** — sliding window: 30 writes/min, 60 reads/min per plugin instance
-- **Retry on transient errors** — automatic retry (2x) on `OSError`/`TimeoutError` for write operations
-- **i18n-ready messages** — all user-facing strings centralized in `_Msg` class
-- **`what_do_you_know()` introspection** — real stats + top 5 most important concepts
+### Changed
 
-### Added — BrainAccess API
+- **God files split into subpackages** (public surface preserved via `__init__.py` re-exports):
+  - `dashboard/server.py` (2 134 LOC) → `dashboard/routes/` (16 APIRouter modules).
+  - `cognitive/safety_patterns.py` (1 165 LOC) → `cognitive/safety/patterns_{en,pt,es,child_safe}.py`.
+  - `cognitive/safety_classifier.py` (704 LOC) → `cognitive/safety/_classifier_*`.
+  - `cognitive/reflect.py` (1 021 LOC) → `cognitive/reflect/` (phase.py + 5 helpers).
+  - `voice/pipeline.py` (840 LOC) → `voice/pipeline/` (orchestrator + state + output queue + barge-in + config).
+  - `plugins/manager.py` (819 LOC) — `_event_emitter.py`, `_manager_types.py`, `_dependency.py` extracted.
+  - `brain/service.py` (712 LOC) — `_novelty.py` + `_centroid.py` extracted.
+  - `brain/embedding.py` (705 LOC) — `_model_downloader.py` extracted.
+- ONNX inference (Piper, Kokoro, Silero, Moonshine, openWakeWord) now runs via `asyncio.to_thread()`; the event loop no longer stalls during synthesis or wake-word checks.
+- `cloud/backup` boto3 calls (upload / list / batch-delete) in the scheduler wrapped in `asyncio.to_thread()` so backup cycles don't block the loop.
+- BLE001 sweep: `except Exception:` turned into typed handlers with explicit `log + re-raise` where appropriate; blanket exception catches removed from cognitive/, plugins/, cloud/, cli/.
+- Frontend hot paths memoized: `LogRow`, `ChatBubble`, `PluginCard`, `TimelineRow`, `ToolItem`, `LetterAvatar`, `PluginStatusDot`.
+- `nameToHue` consolidated in `dashboard/src/lib/format.ts`; duplicate copies in `plugin-card` and `plugin-detail` removed.
+- `apiFetch` helper centralizes Bearer-header injection; `token-entry-modal` and `settings/export-import` no longer call raw `fetch()`.
 
-- `classify_content()` — expose contradiction detection engine to plugins
-- `reinforce()` — full reinforcement cycle (importance + confidence + access + metadata)
-- `create_relation()` — create typed relations between concepts (7 relation types)
-- `boost_importance()` — targeted importance boost with clamping
-- `get_stats()` — brain overview (concept count, categories, relations, episodes)
-- `get_top_concepts()` — top N concepts by importance with optional category filter
-- `forget_all()` — bulk search-and-delete with safety cap
+### Fixed
 
-### Added — Events
-
-- `ConceptForgotten` event — emitted on concept deletion with audit metadata
+- `bridge/manager`: `defaultdict(asyncio.Lock)` replaced with `LRULockDict(maxsize=500)` — long-running daemons no longer leak locks.
+- Hardcoded timeouts / thresholds across cognitive/, brain/, voice/ now route through `EngineConfig.tuning`.
+- Dashboard `CommandDialog` (shadcn/ui) wasn't wrapping children in `<Command>` — caused cmdk internals to crash on render in tests; fixed.
+- Dashboard tests for `chat-thread` / `cognitive-timeline` adapted to virtualized rendering (setup.ts now stubs `offsetWidth/Height` and fires ResizeObserver synchronously).
 
 ### Tests
 
-- 659 plugin tests (unit + integration + contract + E2E)
-- 7 E2E tests with real SQLite brain (no mocks)
-- 11 structured output contract tests
-- Full coverage of dedup, conflict, reinforcement, cascade, rate limiting
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+- Backend: ~7 820 tests on Python 3.11 and 3.12 matrix.
+- Dashboard: 767 vitest tests (was 676 pre-v0.11).
+- Every quality gate green on `sovyx-4core` runners: `uv lock --check`, ruff, ruff format, mypy strict, bandit, pytest, vitest, `tsc -b`.
+
+## [0.10.1] — 2026-04-13
+
+### Fixed
+
+- Plugin manager: handle `PluginStateChanged` serialization edge case when an auto-disabled plugin emits during teardown.
+- Cognitive: `safety_classifier` cache eviction under high fan-in.
+
+## [0.10.0] — 2026-04-13
+
+### Added
+
+- **Web Intelligence plugin** (6 tools — `search`, `fetch`, `research`, `lookup`, `learn_from_web`, `recall_web`). Three backends: DuckDuckGo (no key), SearXNG (self-hosted), Brave (API key). Intent-adaptive cache, source credibility tiers, SSRF protection, per-tool rate limits. 224 tests (200 unit + 24 Hypothesis).
+- **Financial Math plugin** — 9 Decimal-native tools (`calculate`, `percentage`, `interest`, `tvm`, `amortization`, `portfolio`, `position_size`, `currency`). Banker's rounding, 28-digit precision, zero external deps. 228 tests.
+
+### Changed
+
+- `CalculatorPlugin` is now a backward-compatibility wrapper over `FinancialMathPlugin.calculate`.
+
+## [0.9.0] — 2026-04-12
+
+### Added — Knowledge plugin v2.0
+
+- **Semantic deduplication** — cosine similarity ≥ 0.88 detects near-duplicates.
+- **LLM-assisted conflict resolution** — classifies as SAME / EXTENDS / CONTRADICTS / UNRELATED.
+- **Confidence reinforcement** — "established" status after 5+ confirmations.
+- **Auto-relation creation** — new concepts linked to related existing concepts (similarity 0.65–0.87).
+- **Episode-aware recall** — `recall_about()` enriches results with conversation history.
+- **Person-scoped memory** — `remember(about_person="X")` and `search(about_person="X")`.
+- **Real forget with cascade** — deletes concept + relations + embeddings + working memory; emits `ConceptForgotten`.
+- **Structured JSON output** — all 5 tools return `{action, ok, message, ...}`.
+- **Rate limiting** — sliding window: 30 writes/min, 60 reads/min.
+- `BrainAccess` API: `classify_content`, `reinforce`, `create_relation`, `boost_importance`, `get_stats`, `get_top_concepts`, `forget_all`.
+
+### Tests
+
+- 659 plugin tests (unit + integration + contract + E2E).
 
 ## [0.8.2] — 2026-04-11
 
 ### Fixed
 
-- **ReAct loop**: Sanitize tool function names in re-invocation messages — OpenAI
-  requires `^[a-zA-Z0-9_-]+$` but Sovyx uses dots (`calculator.calculate`). Now
-  properly converts to `calculator--calculate` before sending back to the LLM.
+- ReAct loop: sanitize tool function names in re-invocation messages — OpenAI requires `^[a-zA-Z0-9_-]+$` but Sovyx uses dots (`calculator.calculate`). Now properly converts to `calculator--calculate` before sending back.
 
 ## [0.8.1] — 2026-04-11
 
 ### Fixed
 
-- **ReAct loop**: Tool re-invocation now includes `tool_calls` on assistant message and
-  `tool_call_id` on tool results — fixes OpenAI 400 error that caused raw fallback
-  output (`✓ calculator.calculate: 2`) instead of natural LLM responses.
-- **Plugin detail panel**: Complete UX redesign — proper spacing, sections in cards,
-  labeled action buttons, smooth collapse animations, visual hierarchy.
-- **Plugin card**: Larger badges, readable text (10px→11px), health warnings in styled
-  cards, breathing room (p-4→p-5).
-- **Cognitive timeline**: Scrollbar no longer overlaps right-aligned timestamps (pr-3).
-- **Metric chart**: YAxis width increased (40→52) so cost labels aren't clipped.
+- ReAct loop: tool re-invocation now includes `tool_calls` on assistant message and `tool_call_id` on tool results — fixes OpenAI 400 that caused raw fallback output.
+- Plugin detail panel redesign: proper spacing, sections in cards, labeled action buttons, collapse animations.
+- Plugin card polish: larger badges, readable text (10 → 11 px), health warnings in styled cards.
+- Cognitive timeline: scrollbar no longer overlaps right-aligned timestamps.
+- Metric chart: `YAxis` width increased (40 → 52) so cost labels aren't clipped.
 
 ## [0.8.0] — 2026-04-11
 
-### Added — Plugin Dashboard & Management UI
+### Added — Plugin dashboard
 
-- **Plugins Page** (`/plugins`): Full-featured plugin management page with grid layout,
-  search, filters by status/category, and real-time stats (total, active, disabled, tools).
-- **PluginCard Component**: Hero card with glass morphism, status badges, tool/permission
-  indicators, category labels, and pricing display.
-- **Plugin Detail Panel**: Slide-over Sheet with complete plugin information — description,
-  version, author, permissions breakdown, available tools, and configuration.
-- **Plugin Badge System**: Reusable badge components for tools count, permission levels,
-  category tags, and pricing tiers.
-- **Plugin Actions**: Enable/disable/remove with confirmation dialogs, toast notifications,
-  kebab overflow menu, and double-click guard for destructive actions.
-- **Permission Approval Dialog**: Security-first UX — users explicitly review and approve
-  each permission a plugin requests before activation.
-- **Plugin REST API** (`/api/plugins`): Backend endpoints for listing plugins with enriched
-  data (status, tools, permissions, marketplace metadata).
-- **Zustand Plugin Slice**: Frontend state management with optimistic updates, WebSocket
-  event handling for real-time sync.
-- **Plugin Animations**: Smooth mount/unmount transitions, skeleton loading states,
-  responsive grid that adapts to viewport.
-- **Engine State Awareness**: Dashboard distinguishes "plugin engine off" from "no plugins
-  installed" — each with appropriate empty state and CTA.
+- `/plugins` page with grid layout, search, filters by status / category, real-time stats.
+- `PluginCard` hero card (glass morphism, status badges, tool / permission indicators).
+- Plugin Detail slide-over panel — description, version, author, permissions, tools, config.
+- Reusable badge system — tools count, permission levels, category tags, pricing.
+- Enable / disable / remove flow with confirmation dialogs + double-click guard.
+- Permission Approval Dialog: users explicitly review and approve each permission before activation.
+- `/api/plugins` REST endpoints with enriched data.
+- Zustand plugin slice with optimistic updates + WebSocket sync.
+- Engine-state awareness: distinguishes "plugin engine off" from "no plugins installed".
 
-### Added — Testing & Quality
+### Testing
 
-- **25 Contract Tests**: Every field in backend response validated against frontend
-  TypeScript types — bidirectional contract coverage.
-- **12 E2E Integration Tests**: Real PluginManager through FastAPI endpoints — no mocks,
-  full pipeline validation.
-- **20 Vitest Plugin Tests**: Full zustand slice coverage — actions, selectors, edge cases.
-- **689 dashboard backend tests** total (36 plugin + 25 contract + 12 E2E + 616 existing).
-- **672 dashboard frontend tests** total (22 plugin + 650 existing).
-
-### Fixed
-
-- **Hardcoded strings**: 15 hardcoded English strings migrated to i18n system (107 keys
-  total, zero hardcoded strings remaining in plugin components).
-- **Dialog UX**: Replaced `window.confirm` with proper Dialog components, added Escape key
-  handling on kebab menus, inline error display, and double-click prevention.
+- 25 contract tests (backend ↔ frontend type parity).
+- 12 E2E tests through real `PluginManager` + FastAPI.
+- 20 vitest plugin-slice tests.
 
 ## [0.7.1] — 2026-04-11
 
-### Fixed — Plugin SDK Deep Validation
-- **ImportGuard PEP 451** (CRITICAL): `ImportGuard` used deprecated `find_module` (PEP 302)
-  which Python 3.12+ ignores completely — runtime import guard did nothing. Replaced with
-  `find_spec` (PEP 451) that raises `ImportError` directly.
-- **Tool name sanitization**: Changed separator from `__` to `--` in LLM-facing tool names.
-  Old `__` broke roundtrip for plugin names containing underscores (e.g., `calc__v2.add`).
-  `--` is safe: manifests block consecutive hyphens, Python methods can't have hyphens.
-- **Disabled plugins in tools=**: `get_tool_definitions()` now filters out disabled plugins.
-  Previously LLM received tools for disabled plugins, causing execution errors.
-- **Empty enabled set bypass**: `set() or None` converted empty enabled (= load nothing)
-  to `None` (= load all). Fixed with explicit `is not None` check.
-- **ThinkPhase tools=[] vs None**: Empty tool list now converted to `None` so providers
-  don't receive an empty `tools` parameter.
-- **Entry points group mismatch**: pyproject.toml used `sovyx_plugins` (underscore) but
-  manager searched `sovyx.plugins` (dot). Aligned to `sovyx.plugins` everywhere.
+### Fixed — Plugin SDK deep validation
+
+- `ImportGuard` PEP 451 (CRITICAL): replaced deprecated `find_module` with `find_spec` — runtime import guard now actually runs on Python 3.12+.
+- Tool name separator `__` → `--` (manifests block consecutive hyphens; Python methods can't have hyphens).
+- Disabled plugins now filtered from `get_tool_definitions()`.
+- Empty `enabled` set no longer falls through to "load everything" via `or None`.
+- `ThinkPhase` tools=[] normalized to `None` so providers don't receive empty tools arrays.
+- Entry-points group alignment: `sovyx.plugins` everywhere (was split `sovyx_plugins` / `sovyx.plugins`).
 
 ### Added
-- **Marketplace manifest fields**: `category`, `tags`, `icon_url`, `screenshots`, `pricing`,
-  `price_usd`, `trial_days` — backward compatible, all optional with sensible defaults.
-- **PluginManager wired into bootstrap**: `load_all()` on startup, tools passed to LLM via
-  `ThinkPhase`, cleanup on shutdown.
-- **72 new validation tests** (VAL-001 through VAL-014): sanitization fuzzing, contract
-  chain, security probing, chaos testing, dashboard consistency, full integration pipeline.
-- **1038 plugin-related tests** total, all passing.
+
+- Marketplace manifest fields (`category`, `tags`, `icon_url`, `screenshots`, `pricing`, `price_usd`, `trial_days`).
+- `PluginManager` wired into bootstrap — `load_all()` on startup, cleanup on shutdown.
+- 72 new validation tests (VAL-001 … VAL-014).
 
 ## [0.7.0] — 2026-04-11
 
 ### Added — Plugin SDK
 
-- **Plugin SDK** (`sovyx.plugins.sdk`): `ISovyxPlugin` base class, `@tool` decorator,
-  `ToolDefinition` schema — everything needed to build plugins for Sovyx Minds.
-- **Plugin Manager** (`sovyx.plugins.manager`): Load, unload, execute, and lifecycle
-  management with error boundary (5 consecutive failures → auto-disable).
-- **Permission System** (`sovyx.plugins.permissions`): Capability-based (`network:internet`,
-  `brain:read`, `fs:write`, etc.) with `PermissionEnforcer` + `PermissionDeniedError`.
-- **Sandbox** (`sovyx.plugins.sandbox_http`, `sandbox_fs`): Domain-whitelisted HTTP and
-  scoped filesystem access for plugins.
-- **Security Scanner** (`sovyx.plugins.security`): AST scanner blocks `eval`, `exec`,
-  `subprocess`, `__import__`; runtime `ImportGuard` on `sys.meta_path`.
-- **Plugin Events** (`sovyx.plugins.events`): Frozen dataclass events — `PluginLoaded`,
-  `PluginUnloaded`, `PluginAutoDisabled`, `PluginToolExecuted`, `PluginStateChanged`.
-- **Plugin Config** (`sovyx.mind.config`): Whitelist/blacklist model in `mind.yaml` with
-  `PluginsConfig`, `PluginConfigEntry`, and JSON Schema validation.
-- **LLM Tool Integration**: `tools=` parameter on all 4 providers (Anthropic, OpenAI,
-  Google, Ollama) with provider-specific formatting (`input_schema`, `functionDeclarations`,
-  `{"type":"function",...}`).
-- **LLMRouter.generate()** passes tools from `PluginManager.get_tool_definitions()` +
-  `tool_definitions_to_dicts()` static helper.
-- **ReAct Loop** in `ActPhase`: LLM → tool_call → PluginManager.execute() → result injected
-  → LLM re-invoked (max 3 iterations). Financial gate preserved across iterations.
-- **Plugin CLI** (`sovyx plugin`): `list`, `info`, `install` (local/pip/git), `enable`,
-  `disable`, `remove`, `create` (scaffold), `validate` (quality gates).
-- **Hot Reload** (`sovyx.plugins.hot_reload`): `watchdog`-based file watcher for dev mode —
-  teardown → reimport → setup on file change.
-- **Built-in Plugins**: Calculator (safe AST math), Weather (Open-Meteo, 3 tools),
-  Knowledge (brain interface, 5 tools).
-- **Testing Harness** (`sovyx.plugins.testing`): `MockPluginContext`, `MockBrainAccess`,
-  `MockEventBus`, `MockHttpClient`, `MockFsAccess` for plugin developers.
-- **Dashboard Plugin Endpoints** (`sovyx.dashboard.plugins`): `get_plugins_status()`,
-  `get_plugin_detail()`, `get_tools_list()`.
-- **Plugin Developer Guide** (`docs/plugin-developer-guide.md`): Complete documentation
-  covering architecture, SDK, permissions, testing, CLI, distribution.
-- **Integration Tests**: Full pipeline — perception → LLM → tool_call → plugin → response.
-- **504 new plugin tests**, 97.61% coverage across all plugin modules.
-- **`[project.entry-points.sovyx_plugins]`** for built-in plugin discovery.
+- `sovyx.plugins.sdk`: `ISovyxPlugin` ABC, `@tool` decorator, `ToolDefinition` schema.
+- `sovyx.plugins.manager`: load, unload, execute, lifecycle with auto-disable on 5 consecutive failures.
+- `sovyx.plugins.permissions`: capability-based (`network:internet`, `brain:read`, `fs:write`, …).
+- `sovyx.plugins.sandbox_http` / `sandbox_fs`: domain-whitelisted HTTP + scoped filesystem.
+- `sovyx.plugins.security`: AST scanner blocks `eval`, `exec`, `subprocess`, `__import__`; runtime `ImportGuard`.
+- `sovyx.plugins.events`: `PluginLoaded`, `PluginUnloaded`, `PluginAutoDisabled`, `PluginToolExecuted`, `PluginStateChanged`.
+- Plugin config whitelist / blacklist model in `mind.yaml`.
+- LLM tool integration across all 4 providers (Anthropic, OpenAI, Google, Ollama).
+- ReAct loop in `ActPhase`: LLM → tool_call → `PluginManager.execute()` → result → LLM re-invoke (max 3 iterations).
+- `sovyx plugin` CLI: `list`, `info`, `install` (local / pip / git), `enable`, `disable`, `remove`, `create`, `validate`.
+- Hot reload via `watchdog` for dev mode.
+- Built-in plugins: Calculator, Weather (Open-Meteo), Knowledge.
+- Testing harness: `MockPluginContext`, `MockBrainAccess`, `MockEventBus`, `MockHttpClient`, `MockFsAccess`.
+- Plugin Developer Guide (docs).
 
-### Changed
-- `ActPhase` refactored: `ToolExecutor` now dispatches to `PluginManager` instead of
-  internal tool registry.
-- `LLMResponse.tool_calls` and `ToolCall` model fully integrated across all providers.
+### Tests
+
+- 504 new plugin tests, 97.61 % coverage across plugin modules.
 
 ## [0.6.0] — 2026-04-10
 
 ### Added
-- Financial Gate v2: Language-agnostic with inline buttons + LLM fallback.
 
-## [0.5.40] — 2026-04-10
+- Financial Gate v2: language-agnostic with inline buttons + LLM fallback.
 
-### Fixed
-- `__version__` derived from `importlib.metadata` instead of hardcoded.
-
-## [0.5.38] — 2026-04-09
+## [0.5.x] — 2026-04-06 … 2026-04-10
 
 ### Added
-- Safety Guardrails: Enterprise multilingual safety system.
-- Enterprise Audit: 13-task compliance suite.
 
-## [0.5.14] — 2026-04-08
-
-### Added — Brain Semantic Enrichment
-- Full-spectrum concept categorization — 7 categories (fact, preference, entity, skill, belief, event, relationship) with rewritten LLM extraction prompt, regex fallback for all types, and alias mapping
-- LLM-based relation type classification — second LLM call classifies within-turn concept pairs into 7 relation types (related_to, part_of, causes, contradicts, example_of, temporal, emotional)
-- Emotional valence and arousal — sentiment field (-1.0 to 1.0) extracted per concept via LLM, `ExtractedConcept` dataclass replaces raw tuples, episode-level valence (avg) and arousal (max |sentiment|)
-- Confidence evolution — +0.1 per corroboration on concept re-encounter, capped at 1.0, tracks `corroboration_count` in metadata
-- Importance reinforcement — +0.05 on dedup (repeated access), +0.02 on high co-activation (>0.7) in Hebbian learning
-- Dynamic episode importance — `compute_episode_importance()` based on input length, concept count, and emotional arousal (replaces hardcoded 0.5)
-- Episode summary generation — LLM-generated 1-sentence summary per episode, used in context formatting
-- Episode `concepts_mentioned` wiring — concept IDs from extraction now stored in episode records
-- Concept merging in consolidation — FTS5 name containment + Levenshtein distance ≤3, same mind + category; transfers relations, deletes merged concept; max 10 per cycle
-- Dashboard relation legend — shows counts per relation type, hides zero-count types, link hover tooltip with type + weight
-- Comprehensive integration test — 5 realistic messages through full pipeline, verifies ≥4 categories, ≥2 relation types, confidence growth, emotional valence, dynamic importance, summaries, merging
+- Safety guardrails: enterprise multilingual safety system.
+- Enterprise audit tooling (13-task compliance suite).
+- Dashboard chat (`POST /api/chat` + `ChannelType.DASHBOARD`).
+- `sovyx token` CLI command + startup banner.
+- Welcome banner, channel status card, request-ID middleware.
+- Dashboard build step + attack testing suite (74 security tests).
+- `publish.yml` workflow with OIDC trusted publishing.
+- Voice pipeline: wake word, Silero VAD, Moonshine STT, Piper + Kokoro TTS, Wyoming protocol.
+- Dashboard: brain viz, conversations, logs, settings, system status, WebSocket live updates.
+- Cloud backup: zero-knowledge encryption (Argon2id + AES-256-GCM) to Cloudflare R2, Stripe billing.
+- Signal channel via signal-cli-rest-api.
+- Observability: SLO monitoring, Prometheus `/metrics`, structured logging, cost tracking.
+- Zero-downtime upgrades: blue-green with automatic rollback, schema migrations.
+- Performance benchmarks: hardware-tier budgets (Pi 5, N100, GPU).
+- Security headers middleware, timing-safe token auth.
 
 ### Changed
-- `ConsolidationCycle` — new `_merge_similar()` step between decay and prune; `merged` field reflects actual count
-- `HebbianLearning` — accepts optional `concept_repo` for importance boost; `_strengthen_pair` boosts importance when co_activation > 0.7
-- `ContextFormatter.format_episode()` — uses episode summary when available, falls back to truncated input
-- `BrainService.encode_episode()` — accepts `summary` and `concepts_mentioned` params
 
-## [0.5.11] — 2026-04-08
-
-### Added
-- Star topology Hebbian learning — `strengthen_star()` with 3-layer pairing (within-turn, cross-turn top-K, existing reinforcement). Linear O(n*K) scaling replaces O(n^2) all-pairs
-- Canonical relation ordering — `_canonical_order(a, b)` ensures `min(source, target)` as source_id. Eliminates bidirectional duplicates at write time
-- Migration v3 — merges pre-existing duplicate relations (sum co_occurrence, max weight, flip non-canonical)
-- Working memory decay in cognitive loop — `decay_all()` called after reflect phase, rate 0.15
-- Graph API orphan audit — nodes with 0 edges rescued via top-3 relations from RelationRepository
-- Dynamic graph cap — `nodes * 30` for small graphs (<500), `limit * 3` for large
-- Bidirectional graph query — `WHERE source_id IN (...) OR target_id IN (...)`
-- Integration test suite for island prevention — 6 tests with real SQLite, BFS connectivity check
-- `@pytest.mark.no_islands` regression marker
-- `docs/brain-architecture.md` — full brain subsystem architecture documentation
-
-### Fixed
-- Hebbian island formation — new concepts no longer become isolated when total concepts > 20
-- Working memory dedup path — `learn_concept()` now re-activates concepts in working memory (0.5) on dedup, preventing decay-induced invisibility for star topology top-K selection
-- Graph API missed edges — bidirectional query catches relations where concept is in target_id column
-- Graph API ORDER BY — strongest edges returned first (weight DESC), weakest dropped if cap hit
-
-### Changed
-- `HebbianLearning.strengthen()` — removed `priority_ids` param, now within-turn only
-- `BrainService.encode_episode()` — uses `strengthen_star()` with new/existing concept separation
-- `WorkingMemory` default decay_rate — 0.10 to 0.15
-- `CognitiveLoop` — accepts optional `brain` parameter for decay integration
-- Graph API chunk_size — 900 to 450 (halved for bidirectional placeholders)
-
-## [0.5.1] — 2026-04-08
-
-### Added
-- Dashboard chat — `POST /api/chat` endpoint with `ChannelType.DASHBOARD`, full cognitive loop integration
-- Chat page — `/chat` route with optimistic UI, auto-scroll, conversation continuity
-- CLI `sovyx token` command — display dashboard authentication token
-- Startup banner — prints dashboard URL and token on `sovyx start`
-- Welcome banner — 3-step onboarding for fresh engines (choose model, set API key, start chatting)
-- Channel status card — real-time indicator for configured channels via `/api/channels`
-- Request ID middleware — `X-Request-Id` header on every request/response for tracing
-- Dashboard build step in CI workflow
-- E2E integration tests for full dashboard bootstrap + chat flow
-- Attack testing suite — 74 security tests across 10 categories (XSS, token exposure, CSP, auth bypass, input sanitization, CORS, information disclosure, WebSocket, devtools)
-- `publish.yml` workflow — tag-triggered PyPI release via OIDC trusted publishing
-- Dashboard quickstart documentation (`docs/dashboard-quickstart.md`)
-- Smoke test checklist for manual validation
-
-### Fixed
-- FastAPI version hardcoded as `"0.1.0"` — now reads from `__version__`
-- Error detail leak in chat endpoint — `str(exc)` replaced with generic message
-- `BridgeManager._mind_id` private access — exposed as `mind_id` property (returns `MindId`)
-- 4 additional private attribute accesses (`SLF001`) resolved with public properties on `PersonalityEngine`, `CloudBackupService`, `MigrationRunner`, `DatabasePool`
-- 9 unnecessary `type: ignore` suppressions eliminated (lambda keys, explicit casts, timezone union, intermediate typed variables)
-
-### Changed
-- Dashboard `package.json` version synced to `0.5.0` (was `0.0.0`)
-- Token modal command updated from `cat ~/.sovyx/token` to `sovyx token`
-- Dashboard static assets rebuilt (37 chunks, chat: 6.13kB / 2.26kB gzip)
-
-### Technical
-- 4,396 backend tests (pytest), 381 frontend tests (vitest)
-- 98% coverage on `chat.py`, 95%+ on all modified files
-- 28 remaining `type: ignore` — all audited and documented (optional deps, upstream stub limitations)
-- Zero `SLF001` violations remaining
-- CI green: ruff, mypy strict, bandit, pytest, dashboard build
-
-## [0.5.0] — 2026-04-06
-
-### Added
-- Voice pipeline — wake word detection (Silero VAD), streaming STT (Moonshine), TTS (Piper, Kokoro), Home Assistant Wyoming protocol
-- Dashboard — real-time web UI with brain visualization, conversations, logs, settings, system status, WebSocket live updates
-- Cloud backup — zero-knowledge encrypted (Argon2id + AES-256-GCM) to Cloudflare R2, with Stripe billing and usage metering
-- Signal integration — via signal-cli-rest-api
-- Observability — SLO monitoring, Prometheus `/metrics` endpoint, structured logging, cost tracking
-- Zero-downtime upgrades — blue-green pipeline with automatic rollback, schema migrations
-- Performance benchmarks — hardware-tier budgets (Pi5, N100, GPU), baseline regression detection
-- Plugin system — architecture ready (v1.0 feature)
-- Security headers middleware — CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy
-- Token-based dashboard authentication with timing-safe comparison
-
-### Technical
-- 54 tasks completed across 4 development phases
-- 4,246 tests at release
-- Published to PyPI (`pip install sovyx`), Docker (`ghcr.io/sovyx-ai/sovyx`), GitHub Releases
+- `__version__` derived from `importlib.metadata`.
 
 ## [0.1.0] — 2026-04-03
 
 ### Added
-- Cognitive Loop — perception, attention, thinking, action, reflection (OODA)
-- Brain system — concept/episode/relation storage with SQLite + sqlite-vec embeddings
-- Working memory — activation-based with geometric decay
-- Spreading activation — multi-hop concept retrieval
-- Hebbian learning — co-occurrence strengthening
-- Ebbinghaus decay — forgetting curve with rehearsal reinforcement
-- Hybrid retrieval — RRF fusion of FTS5 text search + vector KNN
-- Memory consolidation — scheduled decay and pruning cycles
-- Personality engine — OCEAN model with 3-level descriptors
-- Context assembly — token-budget-aware with Lost-in-Middle ordering (Liu et al. 2023)
-- LLM router — multi-provider failover (Anthropic, OpenAI, Ollama) with circuit breaker
-- Cost guard — per-conversation and daily budget limits
-- Telegram channel — aiogram 3.x with exponential backoff reconnect
-- Person resolver — auto-create identity on first contact
-- Conversation tracker — 30-minute timeout, 50-turn history
-- CLI — `sovyx init/start/stop/status/doctor/brain/mind` commands (typer + rich)
-- Daemon — JSON-RPC 2.0 over Unix socket (0o600 permissions)
-- Lifecycle manager — PID lock, SIGTERM/SIGINT graceful shutdown, sd_notify
-- Health checker — 10 concurrent checks (SQLite, brain, LLM, disk, memory)
-- Service registry — lightweight DI with singleton factories
-- Event bus — typed pub/sub for system events
-- Docker — multi-stage build, non-root user, healthcheck
-- systemd unit file with security hardening
 
-### Technical
-- 1,138 tests (1,130 passed, 8 skipped)
-- 95%+ code coverage
-- mypy strict, ruff, bandit — zero errors
-- Python 3.11 + 3.12 CI matrix
-- Property-based tests (Hypothesis) for core algorithms
+- Cognitive Loop (Perceive → Attend → Think → Act → Reflect).
+- Brain system: concept / episode / relation storage in SQLite + `sqlite-vec`.
+- Working memory with activation-based geometric decay.
+- Spreading activation (multi-hop retrieval).
+- Hebbian learning (co-occurrence strengthening).
+- Ebbinghaus decay with rehearsal reinforcement.
+- Hybrid retrieval: RRF fusion of FTS5 + vector KNN.
+- Memory consolidation (scheduled decay + pruning).
+- Personality engine (OCEAN model).
+- Context assembly with Lost-in-Middle ordering (Liu et al. 2023).
+- LLM router: multi-provider failover + circuit breaker (Anthropic, OpenAI, Ollama).
+- Cost guard: per-conversation and daily USD budgets.
+- Telegram channel (`aiogram` 3.x with exponential-backoff reconnect).
+- Person resolver, conversation tracker (30-min timeout, 50-turn history).
+- CLI (`init` / `start` / `stop` / `status` / `doctor` / `brain` / `mind`) with Typer + Rich.
+- Daemon: JSON-RPC 2.0 over Unix socket.
+- Lifecycle manager: PID lock, SIGTERM / SIGINT graceful shutdown, `sd_notify`.
+- Health checker: 10 concurrent checks.
+- Service registry, event bus, Docker multi-stage build, systemd unit file.
 
-[0.5.1]: https://github.com/sovyx-ai/sovyx/compare/v0.5.0...v0.5.1
-[0.5.0]: https://github.com/sovyx-ai/sovyx/compare/v0.1.0...v0.5.0
+### Tests
+
+- 1 138 tests, ≥ 95 % coverage, mypy strict, ruff, bandit — zero errors.
+- Python 3.11 + 3.12 CI matrix.
+
+[Unreleased]: https://github.com/sovyx-ai/sovyx/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/sovyx-ai/sovyx/compare/v0.10.1...v0.11.0
+[0.10.1]: https://github.com/sovyx-ai/sovyx/compare/v0.10.0...v0.10.1
+[0.10.0]: https://github.com/sovyx-ai/sovyx/compare/v0.9.0...v0.10.0
+[0.9.0]: https://github.com/sovyx-ai/sovyx/compare/v0.8.2...v0.9.0
+[0.8.2]: https://github.com/sovyx-ai/sovyx/compare/v0.8.1...v0.8.2
+[0.8.1]: https://github.com/sovyx-ai/sovyx/compare/v0.8.0...v0.8.1
+[0.8.0]: https://github.com/sovyx-ai/sovyx/compare/v0.7.1...v0.8.0
+[0.7.1]: https://github.com/sovyx-ai/sovyx/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/sovyx-ai/sovyx/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/sovyx-ai/sovyx/compare/v0.5.40...v0.6.0
 [0.1.0]: https://github.com/sovyx-ai/sovyx/releases/tag/v0.1.0
