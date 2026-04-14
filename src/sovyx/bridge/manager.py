@@ -17,8 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-from collections import OrderedDict
-from typing import TYPE_CHECKING, Generic, Protocol, TypeVar
+from typing import TYPE_CHECKING, Protocol, TypeVar
 
 from sovyx.bridge.protocol import InboundMessage, OutboundMessage
 from sovyx.cognitive.gate import CognitiveRequest
@@ -45,31 +44,11 @@ logger = get_logger(__name__)
 _K = TypeVar("_K")
 
 
-class _LRULockDict(Generic[_K]):
-    """Bounded dict of asyncio.Lock instances with LRU eviction.
-
-    Prevents unbounded memory growth when conversation IDs are
-    generated per-session (e.g. one per chat message over months).
-    When *maxsize* is reached, the least-recently-used lock is evicted.
-    """
-
-    def __init__(self, maxsize: int = 500) -> None:
-        self._maxsize = maxsize
-        self._locks: OrderedDict[_K, asyncio.Lock] = OrderedDict()
-
-    def setdefault(self, key: _K, default: asyncio.Lock) -> asyncio.Lock:
-        """Get or insert a lock, promoting to most-recently-used."""
-        if key in self._locks:
-            self._locks.move_to_end(key)
-            return self._locks[key]
-        # Evict oldest if at capacity
-        while len(self._locks) >= self._maxsize:
-            self._locks.popitem(last=False)
-        self._locks[key] = default
-        return default
-
-    def __len__(self) -> int:
-        return len(self._locks)
+# `_LRULockDict` was promoted to ``sovyx.engine._lock_dict.LRULockDict``
+# so cloud/flex.py and cloud/usage.py can share the implementation. The
+# leading-underscore alias is preserved here to avoid breaking any test
+# that imported it from this module.
+from sovyx.engine._lock_dict import LRULockDict as _LRULockDict  # noqa: E402, F401
 
 
 class PersonResolver(Protocol):
