@@ -1,0 +1,56 @@
+=== src/sovyx/llm/ — files ===
+src/sovyx/llm/__init__.py
+src/sovyx/llm/circuit.py
+src/sovyx/llm/cost.py
+src/sovyx/llm/models.py
+src/sovyx/llm/providers/__init__.py
+src/sovyx/llm/providers/_shared.py
+src/sovyx/llm/providers/anthropic.py
+src/sovyx/llm/providers/google.py
+src/sovyx/llm/providers/ollama.py
+src/sovyx/llm/providers/openai.py
+src/sovyx/llm/router.py
+
+=== modules classes/functions (public) ===
+--- src/sovyx/llm/circuit.py ---
+class CircuitBreaker:
+
+--- src/sovyx/llm/cost.py ---
+class CostBreakdown:
+class CostGuard:
+
+--- src/sovyx/llm/models.py ---
+class ToolCall:
+class ToolResult:
+class LLMResponse:
+
+--- src/sovyx/llm/providers/_shared.py ---
+def safe_parse_json(resp: httpx.Response, provider: str) -> dict[str, Any]:
+def format_tools_openai(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def format_tools_anthropic(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def format_tools_google(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def parse_tool_calls_openai(tool_calls_data: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def parse_tool_calls_anthropic(content_blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def parse_tool_calls_google(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def retry_delay(attempt: int, resp: httpx.Response | None = None) -> float:
+
+--- src/sovyx/llm/providers/anthropic.py ---
+class AnthropicProvider:
+
+--- src/sovyx/llm/providers/google.py ---
+class GoogleProvider:
+
+--- src/sovyx/llm/providers/ollama.py ---
+class OllamaProvider:
+
+--- src/sovyx/llm/providers/openai.py ---
+class OpenAIProvider:
+
+--- src/sovyx/llm/router.py ---
+class ComplexityLevel(StrEnum):
+class ComplexitySignals:
+def classify_complexity(signals: ComplexitySignals) -> ComplexityLevel:
+def extract_signals(messages: Sequence[dict[str, str]]) -> ComplexitySignals:
+def select_model_for_complexity(
+class LLMRouter:
+

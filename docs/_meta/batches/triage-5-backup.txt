@@ -1,0 +1,183 @@
+vps-brain-dump/memory/archive/erebus-immersion-v1/erebus-immersion-01-vision-reflection.md|IRRELEVANT|Erebus: immersion reflection notes|Erebus
+vps-brain-dump/memory/archive/erebus-immersion-v1/erebus-immersion-02-domain-architecture-reflection.md|IRRELEVANT|Erebus: immersion reflection notes|Erebus
+vps-brain-dump/memory/archive/erebus-immersion-v1/erebus-immersion-03-venues-connectors-reflection.md|IRRELEVANT|Erebus: immersion reflection notes|Erebus
+vps-brain-dump/memory/archive/erebus-immersion-v1/erebus-immersion-04-data-settlement-reflection.md|IRRELEVANT|Erebus: immersion reflection notes|Erebus
+vps-brain-dump/memory/archive/erebus-immersion-v1/erebus-immersion-05-edge-risk-execution-reflection.md|IRRELEVANT|Erebus: immersion reflection notes|Erebus
+vps-brain-dump/memory/archive/erebus-immersion-v1/erebus-immersion-07-security-ops-reflection.md|IRRELEVANT|Erebus: immersion reflection notes|Erebus
+vps-brain-dump/memory/archive/erebus-immersion-v1/erebus-immersion-08-competitive-edge-reflection.md|IRRELEVANT|Erebus: immersion reflection notes|Erebus
+vps-brain-dump/memory/archive/erebus-immersion-v1/erebus-immersion-09-uxui-reflection.md|IRRELEVANT|Erebus: immersion reflection notes|Erebus
+vps-brain-dump/memory/archive/nodes/central-park-vs-laguardia.md|IRRELEVANT|Archive: Erebus operational notes|Erebus
+vps-brain-dump/memory/archive/nodes/cme-weather-derivatives.md|IRRELEVANT|Archive: Erebus trading research|Erebus
+vps-brain-dump/memory/archive/nodes/command-center-plan.md|IRRELEVANT|Archive: Erebus trading research|Erebus
+vps-brain-dump/memory/archive/nodes/command-center-v2-restructure.md|IRRELEVANT|Archive: Erebus trading research|Erebus
+vps-brain-dump/memory/archive/nodes/conf-edge-hunter-venue-mapping-part1.md|IRRELEVANT|Archive: Erebus trading research|Erebus
+vps-brain-dump/memory/archive/nodes/conf-edge-hunter-venue-mapping-part2.md|IRRELEVANT|Archive: Erebus trading research|Erebus
+vps-brain-dump/memory/archive/nodes/conf-venue-master-international.md|IRRELEVANT|Erebus/Openclaw trading/infrastructure|Erebus
+vps-brain-dump/memory/archive/nodes/conf-venue-master-list.md|IRRELEVANT|Erebus/Openclaw trading/infrastructure|Erebus
+vps-brain-dump/memory/archive/nodes/conf-venue-master-us-other.md|IRRELEVANT|Erebus/Openclaw trading/infrastructure|Erebus
+vps-brain-dump/memory/archive/nodes/conf-venue-master-us-weather.md|IRRELEVANT|Erebus/Openclaw trading/infrastructure|Erebus
+vps-brain-dump/memory/archive/nodes/cross-venue-execution.md|IRRELEVANT|Archive: Erebus trading research|Erebus
+vps-brain-dump/memory/archive/nodes/dark-intel-competition-part1.md|IRRELEVANT|Erebus: dark-intel competitive intelligence|Erebus
+vps-brain-dump/memory/archive/nodes/dark-intel-competition-part2.md|IRRELEVANT|Erebus: dark-intel competitive intelligence|Erebus
+vps-brain-dump/memory/archive/nodes/dark-intel-regulatory-part1.md|IRRELEVANT|Erebus: dark-intel competitive intelligence|Erebus
+vps-brain-dump/memory/archive/nodes/dark-intel-regulatory-part2.md|IRRELEVANT|Erebus: dark-intel competitive intelligence|Erebus
+vps-brain-dump/memory/archive/nodes/edge-hunter-backtest-validation-part1.md|IRRELEVANT|Erebus: edge-hunter trading research|Erebus
+vps-brain-dump/memory/archive/nodes/edge-hunter-backtest-validation-part2.md|IRRELEVANT|Erebus: edge-hunter trading research|Erebus
+vps-brain-dump/memory/archive/nodes/edge-hunter-competitive-expansion-part1.md|IRRELEVANT|Erebus: edge-hunter trading research|Erebus
+vps-brain-dump/memory/archive/nodes/edge-hunter-competitive-expansion-part2.md|IRRELEVANT|Erebus: edge-hunter trading research|Erebus
+vps-brain-dump/memory/archive/nodes/edge-hunter-competitive-expansion-part3.md|IRRELEVANT|Erebus: edge-hunter trading research|Erebus
+vps-brain-dump/memory/archive/nodes/edge-hunter-findings.md|IRRELEVANT|Erebus: edge-hunter trading research|Erebus
+vps-brain-dump/memory/archive/nodes/edge-hunter-findings-part1.md|IRRELEVANT|Erebus: edge-hunter trading research|Erebus
+vps-brain-dump/memory/archive/nodes/edge-hunter-findings-part2.md|IRRELEVANT|Erebus: edge-hunter trading research|Erebus
+vps-brain-dump/memory/archive/nodes/forecastex-mechanics.md|IRRELEVANT|Erebus/Openclaw trading/infrastructure|Erebus
+vps-brain-dump/memory/archive/nodes/ibkr-trading-infra.md|IRRELEVANT|Erebus/Openclaw trading/infrastructure|Erebus
+vps-brain-dump/memory/archive/nodes/market-data-sources.md|IRRELEVANT|Archive: Erebus trading research|Erebus
+vps-brain-dump/memory/archive/nodes/tech-backend-part3.md|IRRELEVANT|Archive: Erebus operational notes|Erebus
+vps-brain-dump/memory/archive/nodes/tech-frontend-cyberpunk-ui.md|IRRELEVANT|Archive: Erebus operational notes|Erebus
+vps-brain-dump/memory/archive/nodes/tech-infra-a.md|IRRELEVANT|Archive: Erebus operational notes|Erebus
+vps-brain-dump/memory/archive/nodes/tech-infra-b.md|IRRELEVANT|Archive: Erebus operational notes|Erebus
+vps-brain-dump/memory/archive/nodes/tech-infra-part1.md|IRRELEVANT|Archive: Erebus operational notes|Erebus
+vps-brain-dump/memory/archive/nodes/tools-and-infra-part1.md|IRRELEVANT|Archive: Erebus operational notes|Erebus
+vps-brain-dump/memory/archive/nodes/tools-and-infra-part2.md|IRRELEVANT|Archive: Erebus trading research|Erebus
+vps-brain-dump/memory/confidential/arb-engine-architecture.md|IRRELEVANT|Erebus: arb-engine architecture|Erebus
+vps-brain-dump/memory/confidential/CODEX-01-architecture.md|IRRELEVANT|Erebus: CODEX risk/execution engine|Erebus
+vps-brain-dump/memory/confidential/CODEX-02-weather-engine.md|IRRELEVANT|Erebus: CODEX risk/execution engine|Erebus
+vps-brain-dump/memory/confidential/CODEX-03-btc-econ-engines.md|IRRELEVANT|Erebus: CODEX risk/execution engine|Erebus
+vps-brain-dump/memory/confidential/CODEX-04B-connectors-integration.md|IRRELEVANT|Erebus: CODEX risk/execution engine|Erebus
+vps-brain-dump/memory/confidential/CODEX-04-data-pipeline.md|IRRELEVANT|Erebus: CODEX risk/execution engine|Erebus
+vps-brain-dump/memory/confidential/CODEX-05-apis-complete.md|IRRELEVANT|Erebus: CODEX risk/execution engine|Erebus
+vps-brain-dump/memory/confidential/CODEX-06B-settlement.md|IRRELEVANT|Erebus: CODEX risk/execution engine|Erebus
+vps-brain-dump/memory/confidential/CODEX-06-execution-engine.md|IRRELEVANT|Erebus: CODEX risk/execution engine|Erebus
+vps-brain-dump/memory/confidential/CODEX-07-risk-engine.md|IRRELEVANT|Erebus: CODEX risk/execution engine|Erebus
+vps-brain-dump/memory/confidential/CODEX-08-monitoring.md|IRRELEVANT|Erebus: CODEX risk/execution engine|Erebus
+vps-brain-dump/memory/confidential/CODEX-09-security.md|IRRELEVANT|Erebus: CODEX risk/execution engine|Erebus
+vps-brain-dump/memory/confidential/CODEX-10-compliance.md|IRRELEVANT|Erebus: CODEX risk/execution engine|Erebus
+vps-brain-dump/memory/confidential/CODEX-11-client-platform.md|IRRELEVANT|Erebus: CODEX risk/execution engine|Erebus
+vps-brain-dump/memory/confidential/CODEX-12-strategies-masterfile.md|IRRELEVANT|Erebus: CODEX risk/execution engine|Erebus
+vps-brain-dump/memory/confidential/CODEX-13-disaster-recovery.md|IRRELEVANT|Erebus: CODEX risk/execution engine|Erebus
+vps-brain-dump/memory/confidential/CODEX-14-competitive-intel.md|IRRELEVANT|Erebus: CODEX risk/execution engine|Erebus
+vps-brain-dump/memory/confidential/CODEX-15B-market-universe.md|IRRELEVANT|Erebus: CODEX risk/execution engine|Erebus
+vps-brain-dump/memory/confidential/CODEX-15C-ui-design.md|IRRELEVANT|Erebus: CODEX risk/execution engine|Erebus
+vps-brain-dump/memory/confidential/CODEX-15D-backtesting.md|IRRELEVANT|Erebus: CODEX risk/execution engine|Erebus
+vps-brain-dump/memory/confidential/CODEX-15E-reconciliation.md|IRRELEVANT|Erebus: CODEX risk/execution engine|Erebus
+vps-brain-dump/memory/confidential/CODEX-15F-edge-decay.md|IRRELEVANT|Erebus: CODEX risk/execution engine|Erebus
+vps-brain-dump/memory/confidential/CODEX-15-go-live.md|IRRELEVANT|Erebus: CODEX risk/execution engine|Erebus
+vps-brain-dump/memory/confidential/CODEX-16-erebus-bible.md|IRRELEVANT|Erebus: CODEX risk/execution engine|Erebus
+vps-brain-dump/memory/confidential/dark-intel.md|IRRELEVANT|Erebus: dark-intel competitive intelligence|Erebus
+vps-brain-dump/memory/confidential/dark-intel-academic.md|IRRELEVANT|Erebus: dark-intel competitive intelligence|Erebus
+vps-brain-dump/memory/confidential/dark-intel-competition.md|IRRELEVANT|Erebus: dark-intel competitive intelligence|Erebus
+vps-brain-dump/memory/confidential/dark-intel-regulatory.md|IRRELEVANT|Erebus: dark-intel competitive intelligence|Erebus
+vps-brain-dump/memory/confidential/divergence-matrix-90day-report.md|IRRELEVANT|Erebus: divergence-matrix 90day report|Erebus
+vps-brain-dump/memory/confidential/edge-hunter-backtest-validation.md|IRRELEVANT|Erebus: edge-hunter trading research|Erebus
+vps-brain-dump/memory/confidential/edge-hunter-competitive-expansion.md|IRRELEVANT|Erebus: edge-hunter trading research|Erebus
+vps-brain-dump/memory/confidential/edge-hunter-double-divergence.md|IRRELEVANT|Erebus: edge-hunter trading research|Erebus
+vps-brain-dump/memory/confidential/edge-hunter-dual-product.md|IRRELEVANT|Erebus: edge-hunter trading research|Erebus
+vps-brain-dump/memory/confidential/edge-hunter-execution-infra.md|IRRELEVANT|Erebus: edge-hunter trading research|Erebus
+vps-brain-dump/memory/confidential/edge-hunter-executive-report.md|IRRELEVANT|Erebus: edge-hunter trading research|Erebus
+vps-brain-dump/memory/confidential/edge-hunter-findings.md|IRRELEVANT|Erebus: edge-hunter trading research|Erebus
+vps-brain-dump/memory/confidential/edge-hunter-intra-exchange.md|IRRELEVANT|Erebus: edge-hunter trading research|Erebus
+vps-brain-dump/memory/confidential/edge-hunter-market-evolution.md|IRRELEVANT|Erebus: edge-hunter trading research|Erebus
+vps-brain-dump/memory/confidential/edge-hunter-monitoring-log.md|IRRELEVANT|Erebus: edge-hunter trading research|Erebus
+vps-brain-dump/memory/confidential/edge-hunter-regulatory-landscape.md|IRRELEVANT|Erebus: edge-hunter trading research|Erebus
+vps-brain-dump/memory/confidential/edge-hunter-station-data.md|IRRELEVANT|Erebus: edge-hunter trading research|Erebus
+vps-brain-dump/memory/confidential/edge-hunter-venue-intel.md|IRRELEVANT|Erebus: edge-hunter trading research|Erebus
+vps-brain-dump/memory/confidential/edge-hunter-venue-tracker.md|IRRELEVANT|Erebus: edge-hunter trading research|Erebus
+vps-brain-dump/memory/confidential/erebus-data-pipeline-design.md|IRRELEVANT|Erebus: data-pipeline-design|Erebus
+vps-brain-dump/memory/confidential/EREBUS-DEV-MISSION.md|IRRELEVANT|Erebus: DEV-MISSION|Erebus
+vps-brain-dump/memory/confidential/erebus-disaster-recovery.md|IRRELEVANT|Erebus: disaster-recovery|Erebus
+vps-brain-dump/memory/confidential/erebus-execution-strategy.md|IRRELEVANT|Erebus: execution-strategy|Erebus
+vps-brain-dump/memory/confidential/erebus-go-live-checklist.md|IRRELEVANT|Erebus: go-live-checklist|Erebus
+vps-brain-dump/memory/confidential/erebus-latency-budget.md|IRRELEVANT|Erebus: latency-budget|Erebus
+vps-brain-dump/memory/confidential/erebus-logging-audit-trail.md|IRRELEVANT|Erebus: logging-audit-trail|Erebus
+vps-brain-dump/memory/confidential/erebus-monitoring-alerting.md|IRRELEVANT|Erebus: monitoring-alerting|Erebus
+vps-brain-dump/memory/confidential/EREBUS-OBSIDIAN-UPGRADE.md|IRRELEVANT|Erebus: OBSIDIAN-UPGRADE|Erebus
+vps-brain-dump/memory/confidential/EREBUS-PRODUCTION-READINESS.md|IRRELEVANT|Erebus: PRODUCTION-READINESS|Erebus
+vps-brain-dump/memory/confidential/erebus-risk-engine.md|IRRELEVANT|Erebus: risk-engine|Erebus
+vps-brain-dump/memory/confidential/EREBUS-STAFF-POLISH.md|IRRELEVANT|Erebus: STAFF-POLISH|Erebus
+vps-brain-dump/memory/confidential/EREBUS-STRESS-TEST-MISSION.md|IRRELEVANT|Erebus: STRESS-TEST-MISSION|Erebus
+vps-brain-dump/memory/confidential/forecastex-immersion-report.md|IRRELEVANT|Erebus/Openclaw trading/infrastructure|Erebus
+vps-brain-dump/memory/confidential/GUIPE-POSITIONING-PLAYBOOK.md|IRRELEVANT|Erebus/Openclaw trading/infrastructure|Erebus
+vps-brain-dump/memory/confidential/ibkr-credentials.md|IRRELEVANT|Erebus/Openclaw trading/infrastructure|Erebus
+vps-brain-dump/memory/confidential/immersion-saturacao-tecnica.md|IRRELEVANT|Erebus/Openclaw trading/infrastructure|Erebus
+vps-brain-dump/memory/confidential/nws-cli-90day-analysis.md|IRRELEVANT|Erebus/Openclaw trading/infrastructure|Erebus
+vps-brain-dump/memory/confidential/nyx-edge-discoveries.md|IRRELEVANT|Erebus/Openclaw trading/infrastructure|Erebus
+vps-brain-dump/memory/confidential/SOVYX-ACTIVITY-REDESIGN-MISSION.md|SOVYX-PLANNING|Activity redesign mission|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-AIOSQLITE-DEADLOCK-RESEARCH.md|SOVYX-BACKEND|Deadlock research aiosqlite threading|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-BRAIN-HARDENING-MISSION.md|SOVYX-BRAIN|Brain hardening/semantic mission|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-BRAIN-SEMANTIC-MISSION.md|SOVYX-BRAIN|Brain hardening/semantic mission|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-CI-DEADLOCK-HUNT-MISSION.md|SOVYX-BACKEND|CI deadlock hunt mission aiosqlite|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-CODEBASE-MAP.md|SOVYX-CORE|Codebase map and patterns|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-CODE-PATTERNS.md|SOVYX-PLANNING|Sovyx mission/research|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-CONSTRUCTION-MANIFEST.md|SOVYX-CORE|Construction manifest|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-DAILY-STATS-MISSION.md|SOVYX-PLANNING|Sovyx mission/research|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-DASHBOARD-CREDIBILITY-MISSION.md|SOVYX-FRONTEND|Dashboard mission credibility/nav|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-DASHBOARD-NAV-MISSION.md|SOVYX-FRONTEND|Dashboard mission credibility/nav|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-DEADLOCK-RESEARCH-FINDINGS.md|SOVYX-PLANNING|Sovyx mission/research|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-DYNAMIC-IMPORTANCE-MISSION.md|SOVYX-BRAIN|Dynamic importance mission|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-ENTERPRISE-AUDIT-MISSION.md|SOVYX-RESEARCH|Enterprise audit mission|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-FINANCIAL-GATE-V2-MISSION.md|SOVYX-PLANNING|Financial gate mission|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-GLOBAL-SAFETY-MISSION.md|SOVYX-SECURITY|Global safety mission|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-HEALTH-WIRE-MISSION.md|SOVYX-OBSERVABILITY|Health wire mission|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-KNOWLEDGE-TRANSFER-MISSION.md|SOVYX-PLANNING|Knowledge transfer mission|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-LOGS-MISSION.md|SOVYX-OBSERVABILITY|Logs mission|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-MARKDOWN-CHAT-MISSION.md|SOVYX-FRONTEND|Markdown chat mission|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-METAMISSION-DEVELOPMENT-ROADMAP.md|SOVYX-PLANNING|Development roadmap metamission|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-OLLAMA-AUTODETECT-MISSION.md|SOVYX-BACKEND|Ollama autodetect mission|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-ONBOARDING-MISSION.md|SOVYX-PLANNING|Onboarding mission|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-QUALITY-IMMERSION.md|SOVYX-RESEARCH|Quality mission and immersion|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-QUALITY-MISSION.md|SOVYX-RESEARCH|Quality mission and immersion|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-SAFETY-GUARDRAILS-MISSION.md|SOVYX-PLANNING|Sovyx mission/research|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-SCORING-REFINEMENT-MISSION.md|SOVYX-BRAIN|Scoring refinement mission|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-SITE-DEVELOPERS-POLISH.md|SOVYX-FRONTEND|Site rebuild/plugins/polish|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-SITE-PLUGINS-MISSION.md|SOVYX-FRONTEND|Site rebuild/plugins/polish|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-SITE-POLISH-MISSION.md|SOVYX-FRONTEND|Site rebuild/plugins/polish|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-SITE-REBUILD-MISSION.md|SOVYX-FRONTEND|Site rebuild/plugins/polish|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-TASK415-FUNCMAP-AUDIT.md|SOVYX-PLANNING|Sovyx mission/research|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-TEST-FIXES-MISSION.md|SOVYX-BACKEND|Test fixes mission|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-V01-MISSION.md|SOVYX-PLANNING|Sovyx mission/research|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-V05-DASHBOARD-MISSION.md|SOVYX-UPGRADE|V05 dashboard/frontend mission|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-V05-FRONTEND-DIAGNOSTIC.md|SOVYX-UPGRADE|V05 dashboard/frontend mission|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-V05-POLISH-MISSION.md|SOVYX-UPGRADE|V05 dashboard/frontend mission|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-V05-TASK-PRECOMPUTE.md|SOVYX-UPGRADE|V05 dashboard/frontend mission|SOVYX
+vps-brain-dump/memory/confidential/SOVYX-VALIDATION-MISSION.md|SOVYX-RESEARCH|Validation mission|SOVYX
+vps-brain-dump/memory/confidential/venue-master-list.md|IRRELEVANT|Erebus/Openclaw trading/infrastructure|Erebus
+vps-brain-dump/memory/daily/2025-03-25.md|IRRELEVANT|Daily: operational log (Erebus default)|Erebus
+vps-brain-dump/memory/daily/2026-03-07.md|IRRELEVANT|Daily: Erebus/trading operations|Erebus
+vps-brain-dump/memory/daily/2026-03-08.md|IRRELEVANT|Daily: Erebus/trading operations|Erebus
+vps-brain-dump/memory/daily/2026-03-09.md|IRRELEVANT|Daily: Erebus/trading operations|Erebus
+vps-brain-dump/memory/daily/2026-03-10.md|IRRELEVANT|Daily: Erebus/trading operations|Erebus
+vps-brain-dump/memory/daily/2026-03-11.md|IRRELEVANT|Daily: Erebus/trading operations|Erebus
+vps-brain-dump/memory/daily/2026-03-12.md|IRRELEVANT|Daily: Erebus/trading operations|Erebus
+vps-brain-dump/memory/daily/2026-03-13.md|IRRELEVANT|Daily: Erebus/trading operations|Erebus
+vps-brain-dump/memory/daily/2026-03-14.md|IRRELEVANT|Daily: Erebus/trading operations|Erebus
+vps-brain-dump/memory/daily/2026-03-15.md|IRRELEVANT|Daily: Erebus/trading operations|Erebus
+vps-brain-dump/memory/daily/2026-03-16.md|IRRELEVANT|Daily: Erebus/trading operations|Erebus
+vps-brain-dump/memory/daily/2026-03-17.md|IRRELEVANT|Daily: Erebus/trading operations|Erebus
+vps-brain-dump/memory/daily/2026-03-18.md|IRRELEVANT|Daily: Erebus/trading operations|Erebus
+vps-brain-dump/memory/daily/2026-03-19.md|IRRELEVANT|Daily: Erebus/trading operations|Erebus
+vps-brain-dump/memory/daily/2026-03-19-journal.md|IRRELEVANT|Daily: Erebus/trading operations|Erebus
+vps-brain-dump/memory/daily/2026-03-20.md|IRRELEVANT|Daily: Erebus/trading operations|Erebus
+vps-brain-dump/memory/daily/2026-03-21.md|SOVYX-PLANNING|Daily: Sovyx development|SOVYX
+vps-brain-dump/memory/daily/2026-03-22.md|SOVYX-PLANNING|Daily: Sovyx development|SOVYX
+vps-brain-dump/memory/daily/2026-03-23.md|SOVYX-PLANNING|Daily: Sovyx development|SOVYX
+vps-brain-dump/memory/daily/2026-03-24.md|SOVYX-PLANNING|Daily: Sovyx development|SOVYX
+vps-brain-dump/memory/daily/2026-03-25.md|SOVYX-PLANNING|Daily: Sovyx development|SOVYX
+vps-brain-dump/memory/daily/2026-03-26.md|SOVYX-PLANNING|Daily: Sovyx development|SOVYX
+vps-brain-dump/memory/daily/2026-03-27.md|SOVYX-PLANNING|Daily: Sovyx development|SOVYX
+vps-brain-dump/memory/daily/2026-03-28.md|SOVYX-PLANNING|Daily: Sovyx development|SOVYX
+vps-brain-dump/memory/daily/2026-03-29.md|SOVYX-PLANNING|Daily: Sovyx development|SOVYX
+vps-brain-dump/memory/daily/2026-03-30.md|SOVYX-PLANNING|Daily: Sovyx development|SOVYX
+vps-brain-dump/memory/daily/2026-03-31.md|IRRELEVANT|Daily: Openclaw operations|Openclaw
+vps-brain-dump/memory/daily/2026-04-01.md|IRRELEVANT|Daily: Openclaw operations|Openclaw
+vps-brain-dump/memory/daily/2026-04-02.md|SOVYX-PLANNING|Daily: Sovyx development|SOVYX
+vps-brain-dump/memory/daily/2026-04-03.md|SOVYX-PLANNING|Daily: Sovyx development|SOVYX
+vps-brain-dump/memory/daily/2026-04-04.md|SOVYX-PLANNING|Daily: Sovyx development|SOVYX
+vps-brain-dump/memory/daily/2026-04-05.md|SOVYX-PLANNING|Daily: Sovyx development|SOVYX
+vps-brain-dump/memory/daily/2026-04-06.md|SOVYX-PLANNING|Daily: Sovyx development|SOVYX
+vps-brain-dump/memory/daily/2026-04-07.md|SOVYX-PLANNING|Daily: Sovyx development|SOVYX
+vps-brain-dump/memory/daily/2026-04-08.md|SOVYX-PLANNING|Daily: Sovyx development|SOVYX
+vps-brain-dump/memory/daily/2026-04-09.md|SOVYX-PLANNING|Daily: Sovyx development|SOVYX
+vps-brain-dump/memory/daily/2026-04-10.md|SOVYX-PLANNING|Daily: Sovyx development|SOVYX
+vps-brain-dump/memory/daily/2026-04-11.md|SOVYX-PLANNING|Daily: Sovyx development|SOVYX
+vps-brain-dump/memory/daily/2026-04-12.md|SOVYX-PLANNING|Daily: Sovyx development|SOVYX
+vps-brain-dump/memory/daily/2026-04-13.md|SOVYX-PLANNING|Daily: Sovyx development|SOVYX

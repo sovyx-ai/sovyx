@@ -69,3 +69,6 @@ site/
 .context/
 # CLAUDE.md — kept in repo for Claude Code + Cursor
 .cursorrules
+
+# VPS brain dump (cópia temporária usada pela reescrita de docs — reprocessável do VPS)
+vps-brain-dump/

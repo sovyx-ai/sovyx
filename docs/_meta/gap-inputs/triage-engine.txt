@@ -1,0 +1,215 @@
+=== Triage entries for module: engine (107 docs) ===
+[SOVYX-BACKEND|alta] vps-brain-dump/memory/confidential/SOVYX-AIOSQLITE-DEADLOCK-RESEARCH.md
+  SOVYX-AIOSQLITE-DEADLOCK-RESEARCH
+[SOVYX-BACKEND|alta] vps-brain-dump/memory/confidential/SOVYX-CI-DEADLOCK-HUNT-MISSION.md
+  SOVYX-CI-DEADLOCK-HUNT-MISSION
+[SOVYX-BACKEND|alta] vps-brain-dump/memory/confidential/SOVYX-DEADLOCK-RESEARCH-FINDINGS.md
+  SOVYX-DEADLOCK-RESEARCH-FINDINGS
+[SOVYX-BACKEND|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/SOVYX-BKD-IMPL-000-INDEX.md
+  Implementation index: complete specs catalog, cross-references, navigation and organization guide
+[SOVYX-BACKEND|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-001-ENGINE-CORE.md
+  Engine core specification: main reasoning loop, dispatch, lifecycle, initialization process
+[SOVYX-BACKEND|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-016-REST-API-WEBHOOKS.md
+  REST API and webhooks specification: endpoints, authentication, versioning, event streams
+[SOVYX-BACKEND|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-VR-084-PLATFORM-BACKEND.md
+  Platform backend specification: API gateway, authentication, rate limiting, load balancing
+[SOVYX-BACKEND|alta] vps-brain-dump/memory/nodes/obsidian-protocol.md
+  Obsidian Protocol — Nyx's Engineering Standard
+[SOVYX-BACKEND|alta] vps-brain-dump/memory/nodes/quality-review-protocol.md
+  quality-review-protocol
+[SOVYX-BACKEND|alta] vps-brain-dump/memory/nodes/sovyx-imm-d7-testing.md
+  sovyx-imm-d7-testing
+[SOVYX-BACKEND|alta] vps-brain-dump/memory/nodes/sovyx-testing-perf.md
+  Sovyx — Testing & Performance
+[SOVYX-CORE|alta] vps-brain-dump/memory/confidential/SOVYX-CODE-PATTERNS.md
+  SOVYX-CODE-PATTERNS
+[SOVYX-CORE|alta] vps-brain-dump/memory/confidential/SOVYX-CODEBASE-MAP.md
+  SOVYX-CODEBASE-MAP
+[SOVYX-CORE|alta] vps-brain-dump/memory/confidential/SOVYX-CONSTRUCTION-MANIFEST.md
+  SOVYX-CONSTRUCTION-MANIFEST
+[SOVYX-CORE|alta] vps-brain-dump/memory/confidential/SOVYX-QUALITY-IMMERSION.md
+  SOVYX-QUALITY-IMMERSION
+[SOVYX-CORE|alta] vps-brain-dump/memory/confidential/SOVYX-SITE-DEVELOPERS-POLISH.md
+  SOVYX-SITE-DEVELOPERS-POLISH
+[SOVYX-CORE|alta] vps-brain-dump/memory/confidential/SOVYX-TASK415-FUNCMAP-AUDIT.md
+  SOVYX-TASK415-FUNCMAP-AUDIT
+[SOVYX-CORE|alta] vps-brain-dump/memory/confidential/SOVYX-V01-MISSION.md
+  SOVYX v0.1 First Breath — Development Mission
+[SOVYX-CORE|alta] vps-brain-dump/memory/confidential/SOVYX-V05-TASK-PRECOMPUTE.md
+  SOVYX-V05-TASK-PRECOMPUTE
+[SOVYX-CORE|alta] vps-brain-dump/memory/confidential/SOVYX-VALIDATION-MISSION.md
+  SOVYX Validation Mission v2 — Zero-Risk Foundation
+[SOVYX-CORE|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/SOVYX-BKD-000-MASTER-BLUEPRINT.md
+  Master blueprint: complete system architecture, component interaction graph, dependencies and dataflow
+[SOVYX-CORE|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/adrs/SOVYX-BKD-ADR-003-LICENSE-MODEL.md
+  License model decision: AGPL-3.0 with Developer Certificate of Origin and open-core monetization
+[SOVYX-CORE|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/adrs/SOVYX-BKD-ADR-008-LOCAL-FIRST.md
+  Local-first computing strategy: offline-capable design, eventually consistent replication patterns
+[SOVYX-CORE|alta] vps-brain-dump/memory/confidential/sovyx-bible/research/SOVYX-VR-073-VOICE-CORE-SPEC.md
+  Voice pipeline specification, local architecture, Wyoming protocol
+[SOVYX-CORE|alta] vps-brain-dump/memory/confidential/sovyx-bible/research/SOVYX-VR-074-MIND-TEMPLATES.md
+  Mind templates catalog, blank canvas problem, Obsidian precedent
+[SOVYX-CORE|alta] vps-brain-dump/memory/confidential/sovyx-bible/research/SOVYX-VR-075-MEMORY-PORTABILITY.md
+  Memory portability, import export, data sovereignty, GDPR advantage
+[SOVYX-CORE|alta] vps-brain-dump/memory/confidential/sovyx-bible/research/SOVYX-VR-076-MOBILE-STRATEGY.md
+  Mobile companion app strategy, cloud relay, HA precedent model
+[SOVYX-CORE|alta] vps-brain-dump/memory/confidential/sovyx-bible/research/SOVYX-VR-078-VOICE-LATENCY-OPTIMIZATION.md
+  Voice latency optimization techniques, Moonshine STT, streaming
+[SOVYX-CORE|alta] vps-brain-dump/memory/confidential/sovyx-bible/research/SOVYX-VR-080-MOBILE-ENGINEERING-DD29.md
+  Mobile engineering deep-dive, LAN mode, cloud relay, E2E encryption
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/constraint-root-subagents.md
+  constraint-root-subagents
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/int-001-cogloop-gate.md
+  'INT-001: CogLoop Gate — Concurrent Channel Serialization Pattern'
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/int-002-barge-in.md
+  'INT-002: Barge-In — Voice Pipeline Interruption Pattern'
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/int-003-brain-concurrency.md
+  'INT-003: Brain Concurrency — SQLite WAL Memory Write/Read Pattern'
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/int-004-plugin-isolation.md
+  'INT-004: Plugin Crash Isolation — Timeout + Circuit Breaker + Safe Mode'
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/int-005-cascading-degradation.md
+  'INT-005: Cascading Graceful Degradation — ServiceRegistry + Fallback Chains'
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/nyx-cortex-design.md
+  nyx-cortex-design
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/obsidian-stack-decisions.md
+  Obsidian Stack Decisions — When to Use What
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/research-hardening-optimization.md
+  Research Hardening — Token Optimization Protocol
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/sovyx-60-seconds.md
+  Sovyx em 60 Segundos — Contexto Rápido
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/sovyx-audit-status.md
+  Sovyx — Audit & Immersion Status
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/sovyx-bible-index.md
+  Sovyx Bible — Master Index
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/sovyx-coding-protocol.md
+  Sovyx v0.1 — Meu Protocolo de Coding (auto-imposto)
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/sovyx-dash-backend-complete.md
+  sovyx-dash-backend-complete
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/sovyx-dashboard-complete.md
+  sovyx-dashboard-complete
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/sovyx-dev-notebook.md
+  Sovyx Dev Notebook — DEPRECATED
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/sovyx-engine-core.md
+  Sovyx — Engine Core Architecture
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/sovyx-imm-d1-solutions.md
+  sovyx-imm-d1-solutions
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/sovyx-imm-d2-solutions.md
+  sovyx-imm-d2-solutions
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/sovyx-imm-d3-solutions.md
+  sovyx-imm-d3-solutions
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/sovyx-imm-d4-solutions.md
+  sovyx-imm-d4-solutions
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/sovyx-imm-d5-solutions.md
+  sovyx-imm-d5-solutions
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/sovyx-imm-d6-solutions.md
+  sovyx-imm-d6-solutions
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/sovyx-imm-d7-solutions.md
+  sovyx-imm-d7-solutions
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/sovyx-imm-d8d10-infra-polish.md
+  sovyx-imm-d8d10-infra-polish
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/sovyx-imm-d8d10-solutions.md
+  sovyx-imm-d8d10-solutions
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/sovyx-imm-d9-solutions.md
+  sovyx-imm-d9-solutions
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/sovyx-official-links.md
+  SOVYX Official Links & Handles
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/sovyx-spec-index.md
+  Sovyx Spec Index — Mapa de Roteamento
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/sovyx-topic-navigator.md
+  Sovyx — Topic Navigator (Cross-Cutting Index)
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/sovyx-trademark-inpi.md
+  Sovyx — Registro de Marca INPI (Brasil)
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/sovyx-v01-gap-closure.md
+  Sovyx v0.1 — Gap Closure Report (100% Ready)
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/sovyx-v01-honest-gaps.md
+  sovyx-v01-honest-gaps
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/sovyx-v01-session-resume.md
+  sovyx-v01-session-resume
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/sovyx-v05-immersion-final.md
+  Sovyx v0.5 — Final Immersion: All Yellow Tasks Resolved
+[SOVYX-CORE|alta] vps-brain-dump/memory/nodes/sovyx-validation-complete.md
+  sovyx-validation-complete
+[SOVYX-SECURITY|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-001-CRYPTO.md
+  Cryptography specification: encryption algorithms, key management, TLS stack, post-quantum preparation
+[SOVYX-SECURITY|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-013-SSO-SECURITY.md
+  SSO security specification: OAuth2/OIDC, token handling, federated identity, MFA integration
+[SOVYX-SECURITY|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-SUP-007-ANTIABUSE-CRASH.md
+  Anti-abuse specification: rate limiting, anomaly detection, crash mitigation strategies
+[SOVYX-SECURITY|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-SUP-009-COMPLIANCE.md
+  Compliance specification: GDPR, CCPA, HIPAA-ready status, data residency, audit logging
+[SOVYX-SECURITY|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-SUP-010-SECURITY-TOOLCHAIN.md
+  Security toolchain specification: SAST, dependency scanning, container scanning, pen-testing
+[SOVYX-SECURITY|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-SUP-011-DIFFERENTIAL-PRIVACY.md
+  Differential privacy specification: federated learning, privacy-preserving aggregation methods
+[SOVYX-SECURITY|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-024-SECURITY-CREDENTIAL-VAULT.md
+  Security credential vault specification: secret storage, rotation, access control, audit
+[SOVYX-SECURITY|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-025-IDENTITY-ACCESS-CONTROL.md
+  Identity and access control specification: RBAC, authz policies, credential verification
+[SOVYX-SECURITY|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-032-PRIVACY-COMPLIANCE.md
+  Privacy and compliance specification: data minimization, retention, user rights, transparency
+[SOVYX-SECURITY|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-034-ENTERPRISE-IDENTITY.md
+  Enterprise identity specification: SAML, LDAP, group management, directory sync detailed
+[SOVYX-SECURITY|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-VR-086-SSO-LDAP.md
+  SSO and LDAP specification: enterprise authentication, user provisioning, group mapping
+[SOVYX-SECURITY|alta] vps-brain-dump/memory/nodes/sovyx-privacy-compliance.md
+  Sovyx — Privacy & Compliance
+[SOVYX-SECURITY|alta] vps-brain-dump/memory/nodes/sovyx-security-identity.md
+  Sovyx — Security, Credentials & Identity
+[SOVYX-BACKEND|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-SUP-013-EXTERNAL-APIS.md
+  External APIs specification: rate limiting, retry logic, circuit breaker, timeout handling
+[SOVYX-BACKEND|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-009-DASHBOARD-API.md
+  Dashboard API specification: user preferences, statistics, real-time updates, analytics
+[SOVYX-BACKEND|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-015-CLI-TOOLS.md
+  CLI tools specification: REPL, admin utilities, diagnostics, configuration management system
+[SOVYX-BACKEND|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-027-PACKAGING-DISTRIBUTION.md
+  Packaging and distribution specification: container images, releases, signatures, manifests
+[SOVYX-BACKEND|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-030-TESTING-STRATEGY.md
+  Testing strategy specification: unit, integration, E2E, performance, chaos engineering test
+[SOVYX-BACKEND|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-031-PERFORMANCE-BENCHMARKS.md
+  Performance benchmarks specification: latency, throughput, resource consumption, profiling
+[SOVYX-CORE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/SOVYX-BKD-AUDIT-001-SELF-KNOWLEDGE-F001-F050.md
+  Audit document: self-knowledge features F001-F050, completeness assessment, implementation gaps
+[SOVYX-CORE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/SOVYX-BKD-AUDIT-002-SELF-KNOWLEDGE-F051-F100.md
+  Audit document: self-knowledge features F051-F100, completeness assessment, implementation gaps
+[SOVYX-CORE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/SOVYX-BKD-AUDIT-003-SELF-KNOWLEDGE-F101-F150.md
+  Audit document: self-knowledge features F101-F150, completeness assessment, implementation gaps
+[SOVYX-CORE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/SOVYX-BKD-AUDIT-004-SELF-KNOWLEDGE-F151-F200.md
+  Audit document: self-knowledge features F151-F200, completeness assessment, implementation gaps
+[SOVYX-CORE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/SOVYX-BKD-AUDIT-005-SELF-KNOWLEDGE-F201-F250.md
+  Audit document: self-knowledge features F201-F250, completeness assessment, implementation gaps
+[SOVYX-CORE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/SOVYX-BKD-AUDIT-006-SELF-KNOWLEDGE-F251-F300.md
+  Audit document: self-knowledge features F251-F300, completeness assessment, implementation gaps
+[SOVYX-CORE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/SOVYX-BKD-AUDIT-007-SELF-KNOWLEDGE-F301-F350.md
+  Audit document: self-knowledge features F301-F350, completeness assessment, implementation gaps
+[SOVYX-CORE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/SOVYX-BKD-AUDIT-008-SELF-KNOWLEDGE-F351-F400.md
+  Audit document: self-knowledge features F351-F400, completeness assessment, implementation gaps
+[SOVYX-CORE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/SOVYX-BKD-AUDIT-009-SELF-KNOWLEDGE-F401-F450.md
+  Audit document: self-knowledge features F401-F450, completeness assessment, implementation gaps
+[SOVYX-CORE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/SOVYX-BKD-AUDIT-010-SELF-KNOWLEDGE-F451-F500.md
+  Audit document: self-knowledge features F451-F500, completeness assessment, implementation gaps
+[SOVYX-CORE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/SOVYX-BKD-AUDIT-011-SELF-KNOWLEDGE-F501-F550.md
+  Audit document: self-knowledge features F501-F550, completeness assessment, implementation gaps
+[SOVYX-CORE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/SOVYX-BKD-AUDIT-012-SELF-KNOWLEDGE-F551-F600.md
+  Audit document: self-knowledge features F551-F600, completeness assessment, implementation gaps
+[SOVYX-CORE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/SOVYX-BKD-AUDIT-013-SELF-KNOWLEDGE-F601-F650.md
+  Audit document: self-knowledge features F601-F650, completeness assessment, implementation gaps
+[SOVYX-CORE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/SOVYX-BKD-AUDIT-014-SELF-KNOWLEDGE-F651-F700.md
+  Audit document: self-knowledge features F651-F700, completeness assessment, implementation gaps
+[SOVYX-CORE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/SOVYX-BKD-AUDIT-015-SELF-KNOWLEDGE-F701-F748.md
+  Audit document: self-knowledge features F701-F748, completeness assessment, implementation gaps
+[SOVYX-CORE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/SOVYX-BKD-FUNCMAP-001-COMPLETE.md
+  Functional map: complete feature inventory, cross-references, implementation status tracking
+[SOVYX-CORE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/SOVYX-BKD-GAP-001-CONFIDENCE-AUDIT.md
+  Gap audit: confidence assessment of feature coverage, risk indicators, priority assessment
+[SOVYX-CORE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/SOVYX-BKD-GAP-002-CONFIDENCE-REASSESSMENT.md
+  Gap reassessment: confidence updates, remediation priorities, timeline adjustments refined
+[SOVYX-CORE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/SOVYX-BKD-VAL-001-CROSS-REFERENCE-VALIDATION.md
+  Validation document: cross-references, consistency checks, spec completeness audit detailed
+[SOVYX-CORE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/SOVYX-BKD-VAL-002-COMPLETENESS-AUDIT.md
+  Completeness audit: feature coverage assessment, implementation status, gaps identification
+[SOVYX-CORE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-SUP-016-FINAL-GAPS.md
+  Final gaps documentation: outstanding issues, workarounds, future improvements definition
+[SOVYX-CORE|media] vps-brain-dump/memory/daily/2026-04-13.md
+  2026-04-13
+[SOVYX-CORE|media] vps-brain-dump/memory/nodes/aiosqlite-deadlock-protocol.md
+  Protocolo Anti-Deadlock: aiosqlite + pytest-asyncio

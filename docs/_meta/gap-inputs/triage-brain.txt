@@ -1,0 +1,27 @@
+=== Triage entries for module: brain (13 docs) ===
+[SOVYX-BRAIN|alta] vps-brain-dump/memory/confidential/SOVYX-BRAIN-HARDENING-MISSION.md
+  SOVYX-BRAIN-HARDENING-MISSION
+[SOVYX-BRAIN|alta] vps-brain-dump/memory/confidential/SOVYX-BRAIN-SEMANTIC-MISSION.md
+  SOVYX-BRAIN-SEMANTIC-MISSION
+[SOVYX-BRAIN|alta] vps-brain-dump/memory/confidential/SOVYX-DYNAMIC-IMPORTANCE-MISSION.md
+  SOVYX-DYNAMIC-IMPORTANCE-MISSION
+[SOVYX-BRAIN|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-002-BRAIN-ALGORITHMS.md
+  Brain algorithms specification: memory networks, spreading activation, semantic similarity computation
+[SOVYX-BRAIN|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-SUP-012-AGM-ALGORITHMS.md
+  AGM algorithms specification: Adaptive Golomb Markov coding, memory compression, lossless
+[SOVYX-BRAIN|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-004-BRAIN-MEMORY.md
+  Brain memory specification: episode storage, semantic networks, spatial indexing architecture
+[SOVYX-BRAIN|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-029-MULTI-MIND-ARCHITECTURE.md
+  Multi-mind architecture specification: orchestration, shared memory, federation, sync logic
+[SOVYX-BRAIN|alta] vps-brain-dump/memory/nodes/sovyx-brain-semantic-mission.md
+  sovyx-brain-semantic-mission
+[SOVYX-BRAIN|alta] vps-brain-dump/memory/nodes/sovyx-dynamic-importance-mission.md
+  Sovyx Dynamic Importance & Confidence Scoring
+[SOVYX-BRAIN|alta] vps-brain-dump/memory/nodes/sovyx-imm-d9-brain.md
+  sovyx-imm-d9-brain
+[SOVYX-BRAIN|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/SOVYX-BKD-BRAIN-AUDIT-001-ARCHITECTURE.md
+  Brain architecture audit: cognitive regions, memory subsystems, pathways validation, coverage assessment
+[SOVYX-BRAIN|media] vps-brain-dump/memory/daily/2026-03-23.md
+  2026-03-23
+[SOVYX-BRAIN|media] vps-brain-dump/memory/daily/2026-04-05.md
+  2026-04-05

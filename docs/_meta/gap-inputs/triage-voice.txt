@@ -1,0 +1,23 @@
+=== Triage entries for module: voice (11 docs) ===
+[SOVYX-VOICE|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/adrs/SOVYX-BKD-ADR-002-VOICE-STACK.md
+  Voice stack architecture decision: TTS, STT, speaker recognition, neural vocoder, ONNX inference stack
+[SOVYX-VOICE|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-004-VOICE-ONNX.md
+  Voice ONNX inference specification: low-latency TTS/STT, model quantization, edge deployment
+[SOVYX-VOICE|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-005-SPEAKER-RECOGNITION.md
+  Speaker recognition specification: voice biometrics, enrollment process, authentication pipeline
+[SOVYX-VOICE|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-SUP-002-VOICE-CLONING.md
+  Voice cloning specification: speaker adaptation, zero-shot synthesis, neural vocoder training
+[SOVYX-VOICE|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-SUP-003-WYOMING-PROTOCOL.md
+  Wyoming protocol specification: satellite integration, local inference coordination detailed
+[SOVYX-VOICE|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-SUP-004-PARAKEET-TDT.md
+  Parakeet TDT specification: text detection, language identification, multilingual synthesis
+[SOVYX-VOICE|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-SUP-005-VOICE-EDGE-CASES.md
+  Voice edge cases specification: homophones, pronunciation variants, emotional prosody handling
+[SOVYX-VOICE|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-010-VOICE-PIPELINE.md
+  Voice pipeline specification: capture, enhancement, VAD, STT, emotion extraction, synthesis
+[SOVYX-VOICE|alta] vps-brain-dump/memory/nodes/sovyx-voice-pipeline.md
+  Sovyx — Voice Pipeline
+[SOVYX-VOICE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-SUP-014-CONTENT-VOICE-APIS.md
+  Content voice APIs specification: podcast ingestion, content-to-speech, voice search engine
+[SOVYX-VOICE|media] vps-brain-dump/memory/daily/2026-03-27.md
+  2026-03-27

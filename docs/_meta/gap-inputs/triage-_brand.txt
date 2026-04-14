@@ -1,0 +1,9 @@
+=== Triage entries for module: _brand (4 docs) ===
+[SOVYX-BRAND|alta] vps-brain-dump/memory/confidential/sovyx-bible/brand/SOVYX-BRD-001-BRANDING.md
+  Branding etymology manifesto
+[SOVYX-BRAND|alta] vps-brain-dump/memory/confidential/sovyx-bible/brand/SOVYX-BRD-002-CREATIVE-BIBLE.md
+  Creative Bible brand voice
+[SOVYX-BRAND|alta] vps-brain-dump/memory/confidential/sovyx-bible/brand/SOVYX-BRD-003-DESIGN-SYSTEM.md
+  Design system v1.0
+[SOVYX-BRAND|alta] vps-brain-dump/memory/confidential/sovyx-bible/brand/SOVYX-BRD-004-LOGO-BLUEPRINT.md
+  Logo blueprint design

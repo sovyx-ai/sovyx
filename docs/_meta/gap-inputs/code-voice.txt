@@ -1,0 +1,119 @@
+=== src/sovyx/voice/ — files ===
+src/sovyx/voice/__init__.py
+src/sovyx/voice/audio.py
+src/sovyx/voice/auto_select.py
+src/sovyx/voice/jarvis.py
+src/sovyx/voice/pipeline.py
+src/sovyx/voice/stt.py
+src/sovyx/voice/stt_cloud.py
+src/sovyx/voice/tts_kokoro.py
+src/sovyx/voice/tts_piper.py
+src/sovyx/voice/vad.py
+src/sovyx/voice/wake_word.py
+src/sovyx/voice/wyoming.py
+
+=== modules classes/functions (public) ===
+--- src/sovyx/voice/audio.py ---
+class AudioPlatform(enum.StrEnum):
+def detect_platform() -> AudioPlatform:
+class RingBuffer:
+class AudioCaptureConfig:
+class AudioCapture:
+class OutputPriority(enum.IntEnum):
+class OutputChunk:
+class AudioOutputConfig:
+class AudioDucker:
+def normalize_lufs(audio: np.ndarray, target: float = -16.0) -> np.ndarray:
+class AudioOutput:
+
+--- src/sovyx/voice/auto_select.py ---
+class HardwareTier(IntEnum):
+class HardwareProfile:
+class ModelSelection:
+def detect_hardware() -> HardwareProfile:
+def select_models(profile: HardwareProfile) -> ModelSelection:
+def get_fallback(role: str, failed_model: str) -> str | None:
+class VoiceModelAutoSelector:
+
+--- src/sovyx/voice/jarvis.py ---
+class FillerCategory(StrEnum):
+class JarvisConfig:
+def validate_jarvis_config(config: JarvisConfig) -> None:
+class JarvisIllusion:
+def split_at_boundaries(text: str) -> list[str]:
+def synthesize_beep(
+
+--- src/sovyx/voice/pipeline.py ---
+class VoicePipelineState(IntEnum):
+class WakeWordDetectedEvent:
+class SpeechStartedEvent:
+class SpeechEndedEvent:
+class TranscriptionCompletedEvent:
+class TTSStartedEvent:
+class TTSCompletedEvent:
+class BargeInEvent:
+class PipelineErrorEvent:
+class VoicePipelineConfig:
+def validate_config(config: VoicePipelineConfig) -> None:
+class AudioOutputQueue:
+class BargeInDetector:
+class VoicePipeline:
+
+--- src/sovyx/voice/stt.py ---
+class STTState(IntEnum):
+class TranscriptionResult:
+class TranscriptionSegment:
+class PartialTranscription:
+class MoonshineConfig:
+class STTEngine(ABC):
+class MoonshineSTT(STTEngine):
+
+--- src/sovyx/voice/stt_cloud.py ---
+class CloudSTTConfig:
+def needs_cloud_fallback(
+class CloudSTT(STTEngine):
+class CloudSTTError(VoiceError):
+
+--- src/sovyx/voice/tts_kokoro.py ---
+class KokoroConfig:
+class KokoroTTS(TTSEngine):
+
+--- src/sovyx/voice/tts_piper.py ---
+class AudioChunk:
+class PiperConfig:
+class TTSEngine(ABC):
+class PiperTTS(TTSEngine):
+
+--- src/sovyx/voice/vad.py ---
+class VADState(IntEnum):
+class VADEvent:
+class VADConfig:
+class SileroVAD:
+
+--- src/sovyx/voice/wake_word.py ---
+class WakeWordState(IntEnum):
+class WakeWordEvent:
+class WakeWordConfig:
+class VerificationResult:
+def default_verifier(
+def create_stt_verifier(
+class WakeWordDetector:
+
+--- src/sovyx/voice/wyoming.py ---
+class STTResult:
+class TTSResult:
+class WakeWordResult:
+class STTEngineProtocol(Protocol):
+class TTSEngineProtocol(Protocol):
+class WakeWordEngineProtocol(Protocol):
+class CogLoopProtocol(Protocol):
+class WyomingConfig:
+class WyomingEvent:
+async def write_event(writer: asyncio.StreamWriter, event: WyomingEvent) -> None:
+def build_service_info(config: WyomingConfig) -> dict[str, Any]:
+def pcm_bytes_to_ndarray(pcm: bytes, width: int = _MIC_WIDTH) -> np.ndarray:
+def ndarray_to_pcm_bytes(audio: np.ndarray) -> bytes:
+class WyomingClientHandler:
+class SovyxWyomingServer:
+def get_local_ip() -> str:
+

@@ -1,0 +1,80 @@
+=== src/sovyx/observability/ — files ===
+src/sovyx/observability/__init__.py
+src/sovyx/observability/alerts.py
+src/sovyx/observability/health.py
+src/sovyx/observability/logging.py
+src/sovyx/observability/metrics.py
+src/sovyx/observability/prometheus.py
+src/sovyx/observability/slo.py
+src/sovyx/observability/tracing.py
+
+=== modules classes/functions (public) ===
+--- src/sovyx/observability/alerts.py ---
+class AlertSeverity(StrEnum):
+class AlertState(IntEnum):
+class AlertRule:
+class Alert:
+class AlertFired(Event):
+class AlertResolved(Event):
+class MetricSample:
+class AlertManager:
+def create_default_rules() -> list[AlertRule]:
+def create_default_alert_manager(
+
+--- src/sovyx/observability/health.py ---
+class CheckStatus(StrEnum):
+class CheckResult:
+class HealthCheck(ABC):
+class HealthRegistry:
+class DiskSpaceCheck(HealthCheck):
+class RAMCheck(HealthCheck):
+class CPUCheck(HealthCheck):
+class DatabaseCheck(HealthCheck):
+class BrainIndexedCheck(HealthCheck):
+class LLMReachableCheck(HealthCheck):
+class ModelLoadedCheck(HealthCheck):
+class ChannelConnectedCheck(HealthCheck):
+class ConsolidationCheck(HealthCheck):
+class CostBudgetCheck(HealthCheck):
+def create_default_registry(
+def create_offline_registry(
+
+--- src/sovyx/observability/logging.py ---
+def bind_request_context(
+def clear_request_context() -> None:
+def get_request_context() -> dict[str, Any]:
+def bound_request_context(
+def set_correlation_id(cid: str) -> None:
+def get_correlation_id() -> str:
+class SecretMasker:
+def setup_logging(config: LoggingConfig) -> None:
+def get_logger(name: str) -> structlog.stdlib.BoundLogger:
+
+--- src/sovyx/observability/metrics.py ---
+class MetricsRegistry:
+class _NoOpRegistry:
+def setup_metrics(
+def teardown_metrics() -> None:
+def get_metrics() -> MetricsRegistry | _NoOpRegistry:
+def collect_json(reader: InMemoryMetricReader) -> list[dict[str, Any]]:
+
+--- src/sovyx/observability/prometheus.py ---
+class PrometheusExporter:
+
+--- src/sovyx/observability/slo.py ---
+class SLOStatus(StrEnum):
+class AlertSeverity(StrEnum):
+class SLODefinition:
+class BurnRateAlertRule:
+class SLOEvent:
+class SLOReport:
+class SLOTracker:
+class SLOMonitor:
+def create_default_monitor(
+
+--- src/sovyx/observability/tracing.py ---
+class SovyxTracer:
+def setup_tracing(
+def teardown_tracing() -> None:
+def get_tracer() -> SovyxTracer:
+

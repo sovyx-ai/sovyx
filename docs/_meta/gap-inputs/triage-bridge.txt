@@ -1,0 +1,21 @@
+=== Triage entries for module: bridge (10 docs) ===
+[SOVYX-BRIDGE|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/adrs/SOVYX-BKD-ADR-006-CLOUD-RELAY.md
+  Cloud relay protocol architecture: local-first with cloud synchronization, conflict resolution, offline-first
+[SOVYX-BRIDGE|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/adrs/SOVYX-BKD-ADR-009-UNIFIED-CHANNEL.md
+  Unified communication channel abstraction: multi-modal interactions, normalization, context preservation
+[SOVYX-BRIDGE|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-007-RELAY-CLIENT.md
+  Relay client specification: cloud sync protocol, conflict resolution, offline queue management
+[SOVYX-BRIDGE|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-011-RELAY-CLIENT.md
+  Relay client specification: sync protocol, offline buffering, conflict resolution, compression
+[SOVYX-BRIDGE|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-014-COMMUNICATION-BRIDGE.md
+  Communication bridge specification: multi-channel, normalization, context preservation
+[SOVYX-BRIDGE|alta] vps-brain-dump/memory/nodes/sovyx-communication.md
+  Sovyx — Communication Bridge & Relay
+[SOVYX-BRIDGE|alta] vps-brain-dump/memory/nodes/sovyx-imm-d1-telegram.md
+  sovyx-imm-d1-telegram
+[SOVYX-BRIDGE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-008-HOME-ASSISTANT.md
+  Home Assistant integration specification: entity discovery, automation, state synchronization
+[SOVYX-BRIDGE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-009-CALDAV.md
+  CalDAV integration specification: calendar events, recurring schedules, conflict handling detailed
+[SOVYX-BRIDGE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-SUP-017-INTEGRATION-PATTERNS.md
+  Integration patterns specification: webhooks, event streams, adapter architecture detailed

@@ -1,0 +1,31 @@
+=== Triage entries for module: cognitive (15 docs) ===
+[SOVYX-COGNITIVE|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-006-COGNITIVE-LOOP.md
+  Cognitive loop specification: perception, reasoning, action, memory consolidation cycles detailed
+[SOVYX-COGNITIVE|alta] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-003-COGNITIVE-LOOP.md
+  Cognitive loop specification: perception, context, reasoning, action, memory consolidation
+[SOVYX-COGNITIVE|alta] vps-brain-dump/memory/nodes/sovyx-imm-d5-cognitive.md
+  sovyx-imm-d5-cognitive
+[SOVYX-COGNITIVE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-IMPL-SUP-001-SPECULATIVE-RESPONSE.md
+  Speculative response spec: predictive behavior, anticipation, proactive suggestions engine
+[SOVYX-COGNITIVE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-013-PROACTIVE-ENGINE.md
+  Proactive engine specification: monitoring, predictions, interrupts, autonomy levels control
+[SOVYX-COGNITIVE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-017-TEMPORAL-INTELLIGENCE.md
+  Temporal intelligence specification: time-aware reasoning, schedules, timezone handling
+[SOVYX-COGNITIVE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-018-FINANCIAL-INTELLIGENCE.md
+  Financial intelligence specification: budget tracking, transaction analysis, forecasting
+[SOVYX-COGNITIVE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-019-CURIOSITY-ENGINE.md
+  Curiosity engine specification: interest detection, learning suggestions, knowledge gaps
+[SOVYX-COGNITIVE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-020-OPINION-FORMATION.md
+  Opinion formation specification: belief systems, argument handling, perspective modeling
+[SOVYX-COGNITIVE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-021-DAILY-PRODUCTIVITY.md
+  Daily productivity specification: scheduling, task prioritization, focus assistance system
+[SOVYX-COGNITIVE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-022-PHYSICAL-PRESENCE.md
+  Physical presence specification: avatar, gestures, spatial awareness, embodiment simulation
+[SOVYX-COGNITIVE|media] vps-brain-dump/memory/confidential/sovyx-bible/backend/specs/SOVYX-BKD-SPE-023-AUTONOMOUS-BEHAVIORS.md
+  Autonomous behaviors specification: background tasks, proactive actions, autonomy framework
+[SOVYX-COGNITIVE|media] vps-brain-dump/memory/daily/2026-03-21.md
+  2026-03-21
+[SOVYX-COGNITIVE|media] vps-brain-dump/memory/daily/2026-04-04.md
+  2026-04-04
+[SOVYX-COGNITIVE|media] vps-brain-dump/memory/daily/2026-04-11.md
+  2026-04-11

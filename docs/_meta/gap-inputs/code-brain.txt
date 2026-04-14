@@ -1,0 +1,67 @@
+=== src/sovyx/brain/ — files ===
+src/sovyx/brain/__init__.py
+src/sovyx/brain/concept_repo.py
+src/sovyx/brain/consolidation.py
+src/sovyx/brain/contradiction.py
+src/sovyx/brain/embedding.py
+src/sovyx/brain/episode_repo.py
+src/sovyx/brain/learning.py
+src/sovyx/brain/models.py
+src/sovyx/brain/relation_repo.py
+src/sovyx/brain/retrieval.py
+src/sovyx/brain/scoring.py
+src/sovyx/brain/service.py
+src/sovyx/brain/spreading.py
+src/sovyx/brain/working_memory.py
+
+=== modules classes/functions (public) ===
+--- src/sovyx/brain/concept_repo.py ---
+class ConceptRepository:
+
+--- src/sovyx/brain/consolidation.py ---
+class ConsolidationCycle:
+class ConsolidationScheduler:
+
+--- src/sovyx/brain/contradiction.py ---
+class ContentRelation(StrEnum):
+async def detect_contradiction(
+
+--- src/sovyx/brain/embedding.py ---
+class ModelDownloader:
+class EmbeddingEngine:
+
+--- src/sovyx/brain/episode_repo.py ---
+class EpisodeRepository:
+
+--- src/sovyx/brain/learning.py ---
+class HebbianLearning:
+class EbbinghausDecay:
+
+--- src/sovyx/brain/models.py ---
+class Concept(BaseModel):
+class Episode(BaseModel):
+class Relation(BaseModel):
+
+--- src/sovyx/brain/relation_repo.py ---
+class RelationRepository:
+
+--- src/sovyx/brain/retrieval.py ---
+class HybridRetrieval:
+
+--- src/sovyx/brain/scoring.py ---
+class ImportanceWeights:
+class ConfidenceWeights:
+class EvolutionWeights:
+class ImportanceScorer:
+class ConfidenceScorer:
+class ScoreNormalizer:
+
+--- src/sovyx/brain/service.py ---
+class BrainService:
+
+--- src/sovyx/brain/spreading.py ---
+class SpreadingActivation:
+
+--- src/sovyx/brain/working_memory.py ---
+class WorkingMemory:
+
