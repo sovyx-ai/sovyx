@@ -31,10 +31,7 @@ At 10k messages/day = ~$1/day.
 from __future__ import annotations
 
 import asyncio
-import enum
-import hashlib
 import time
-from collections import OrderedDict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -46,261 +43,47 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-
-# ── Micro-prompt ────────────────────────────────────────────────────────
-# Engineered for minimal tokens, maximum accuracy, zero ambiguity.
-# The prompt MUST NOT be modified without adversarial testing (TASK-387).
-
-_SYSTEM_PROMPT = (
-    "You are a content safety classifier. "
-    "Classify the user message as SAFE or UNSAFE.\n"
-    "If UNSAFE, append |category from: "
-    "violence, weapons, self_harm, hacking, substance, sexual, "
-    "gambling, hate_speech, manipulation, illegal, injection.\n"
-    "Reply with ONLY one of:\n"
-    "SAFE\n"
-    "UNSAFE|category\n"
-    "No explanation. No other text."
+# ── Re-exports for backward compat ──
+from sovyx.cognitive.safety._classifier_budget import (  # noqa: E402, F401
+    _CLASSIFY_TIMEOUT_SEC,
+    _PREFERRED_MODELS,
+    _SYSTEM_PROMPT,
+    ClassificationBudget,
+    get_classification_budget,
+)
+from sovyx.cognitive.safety._classifier_cache import (  # noqa: E402, F401
+    CacheStats,
+    ClassificationCache,
+    _CacheEntry,
+    get_cache_stats,
+    get_classification_cache,
+)
+from sovyx.cognitive.safety._classifier_types import (  # noqa: E402, F401
+    SAFE_VERDICT,
+    SafetyCategory,
+    SafetyVerdict,
 )
 
-# Preferred models for classification (cheapest first)
-_PREFERRED_MODELS: tuple[str, ...] = (
-    "gpt-4o-mini",
-    "gpt-4o-mini-2024-07-18",
-    "gemini-2.0-flash",
-    "claude-3-5-haiku-20241022",
-)
-
-# Timeout for LLM call
-_CLASSIFY_TIMEOUT_SEC = 2.0
-
-# ── Cost Control ────────────────────────────────────────────────────────
-# Budget cap: max LLM classifications per hour (0 = unlimited)
-_HOURLY_BUDGET_CAP = 0  # Default: unlimited
-
-# Estimated cost per classification (gpt-4o-mini ~80 input + 20 output tokens)
-_COST_PER_CALL_USD = 0.0001
-
-
-class ClassificationBudget:
-    """Tracks LLM classification spending with hourly budget cap.
-
-    Prevents runaway costs from high traffic or attack floods.
-    When budget is exhausted, classifier falls back to regex-only.
-    """
-
-    def __init__(self, hourly_cap: int = _HOURLY_BUDGET_CAP) -> None:
-        self._hourly_cap = hourly_cap
-        self._calls_this_hour = 0
-        self._total_calls = 0
-        self._hour_start = time.monotonic()
-        self._total_cost_usd = 0.0
-
-    def can_classify(self) -> bool:
-        """Check if budget allows another classification."""
-        self._maybe_reset_hour()
-        if self._hourly_cap <= 0:
-            return True  # Unlimited
-        return self._calls_this_hour < self._hourly_cap
-
-    def record_call(self) -> None:
-        """Record a classification call."""
-        self._maybe_reset_hour()
-        self._calls_this_hour += 1
-        self._total_calls += 1
-        self._total_cost_usd += _COST_PER_CALL_USD
-
-    def _maybe_reset_hour(self) -> None:
-        """Reset counter if hour has elapsed."""
-        now = time.monotonic()
-        if now - self._hour_start >= 3600:
-            self._calls_this_hour = 0
-            self._hour_start = now
-
-    @property
-    def calls_this_hour(self) -> int:
-        """Classifications in current hour."""
-        self._maybe_reset_hour()
-        return self._calls_this_hour
-
-    @property
-    def total_calls(self) -> int:
-        """Total classifications ever."""
-        return self._total_calls
-
-    @property
-    def estimated_cost_usd(self) -> float:
-        """Estimated total cost in USD."""
-        return round(self._total_cost_usd, 4)
-
-    @property
-    def hourly_cap(self) -> int:
-        """Current hourly cap (0 = unlimited)."""
-        return self._hourly_cap
-
-    def set_cap(self, cap: int) -> None:
-        """Update the hourly budget cap."""
-        self._hourly_cap = cap
-
-
-# ── Budget accessor (delegates to SafetyContainer) ─────────────────────
-
-
-def get_classification_budget() -> ClassificationBudget:
-    """Get the ClassificationBudget from the global container.
-
-    Returns:
-        The ClassificationBudget instance managed by SafetyContainer.
-    """
-    from sovyx.cognitive.safety_container import get_safety_container
-
-    return get_safety_container().classification_budget
-
-
-class SafetyCategory(enum.StrEnum):
-    """Safety violation categories aligned with PatternCategory."""
-
-    VIOLENCE = "violence"
-    WEAPONS = "weapons"
-    SELF_HARM = "self_harm"
-    HACKING = "hacking"
-    SUBSTANCE = "substance"
-    SEXUAL = "sexual"
-    GAMBLING = "gambling"
-    HATE_SPEECH = "hate_speech"
-    MANIPULATION = "manipulation"
-    ILLEGAL = "illegal"
-    INJECTION = "injection"
-    UNKNOWN = "unknown"
-
-
-@dataclass(frozen=True, slots=True)
-class SafetyVerdict:
-    """Result of LLM safety classification.
-
-    Attributes:
-        safe: True if content is safe, False if unsafe.
-        category: Violation category (None if safe).
-        confidence: Classification confidence (1.0 for LLM, 0.8 for regex).
-        method: How the verdict was reached ("llm", "regex", "timeout", "error").
-        latency_ms: Classification latency in milliseconds.
-    """
-
-    safe: bool
-    category: SafetyCategory | None = None
-    confidence: float = 1.0
-    method: str = "llm"
-    latency_ms: int = 0
-
-
-# Singleton safe verdict
-SAFE_VERDICT = SafetyVerdict(safe=True, method="pass")
-
-
-# ── Classification Cache ────────────────────────────────────────────────
-# LRU cache with TTL. Key = hash of first 200 chars (deterministic for
-# same input). Bounded to prevent memory growth.
-
-_CACHE_TTL_SEC = 300.0  # 5 minutes
-_CACHE_MAX_SIZE = 1024
-
-
-@dataclass(slots=True)
-class _CacheEntry:
-    """Cached classification result with expiry."""
-
-    verdict: SafetyVerdict
-    expires_at: float
-
-
-class ClassificationCache:
-    """Thread-safe LRU cache for safety classifications.
-
-    Key: SHA-256 of first 200 chars of input text.
-    Value: SafetyVerdict with TTL.
-    Max size: bounded with LRU eviction.
-
-    GIL-protected (single-threaded asyncio) — no explicit locking needed.
-    """
-
-    def __init__(
-        self,
-        *,
-        max_size: int = _CACHE_MAX_SIZE,
-        ttl_sec: float = _CACHE_TTL_SEC,
-    ) -> None:
-        self._cache: OrderedDict[str, _CacheEntry] = OrderedDict()
-        self._max_size = max_size
-        self._ttl_sec = ttl_sec
-        self._hits = 0
-        self._misses = 0
-
-    @staticmethod
-    def _key(text: str) -> str:
-        """Generate cache key from text prefix."""
-        return hashlib.sha256(text[:200].encode()).hexdigest()[:16]
-
-    def get(self, text: str) -> SafetyVerdict | None:
-        """Look up cached verdict. Returns None on miss or expired."""
-        key = self._key(text)
-        entry = self._cache.get(key)
-        if entry is None:
-            self._misses += 1
-            return None
-        if time.monotonic() > entry.expires_at:
-            # Expired — remove and miss
-            del self._cache[key]
-            self._misses += 1
-            return None
-        # Hit — move to end (most recently used)
-        self._cache.move_to_end(key)
-        self._hits += 1
-        return entry.verdict
-
-    def put(self, text: str, verdict: SafetyVerdict) -> None:
-        """Store verdict in cache. Evicts LRU if at capacity."""
-        key = self._key(text)
-        self._cache[key] = _CacheEntry(
-            verdict=verdict,
-            expires_at=time.monotonic() + self._ttl_sec,
-        )
-        self._cache.move_to_end(key)
-        # Evict oldest if over capacity
-        while len(self._cache) > self._max_size:
-            self._cache.popitem(last=False)
-
-    @property
-    def hit_rate(self) -> float:
-        """Cache hit rate (0.0-1.0). Returns 0.0 if no lookups."""
-        total = self._hits + self._misses
-        if total == 0:
-            return 0.0
-        return self._hits / total
-
-    @property
-    def size(self) -> int:
-        """Current number of cached entries."""
-        return len(self._cache)
-
-    def clear(self) -> None:
-        """Clear all cached entries (for testing)."""
-        self._cache.clear()
-        self._hits = 0
-        self._misses = 0
-
-
-# ── Cache accessor (delegates to SafetyContainer) ──────────────────────
-
-
-def get_classification_cache() -> ClassificationCache:
-    """Get the ClassificationCache from the global container.
-
-    Returns:
-        The ClassificationCache instance managed by SafetyContainer.
-    """
-    from sovyx.cognitive.safety_container import get_safety_container
-
-    return get_safety_container().classification_cache
+__all__ = [
+    "BatchClassificationResult",
+    "CacheStats",
+    "ClassificationBudget",
+    "ClassificationCache",
+    "SAFE_VERDICT",
+    "SafetyCategory",
+    "SafetyVerdict",
+    "_CLASSIFY_TIMEOUT_SEC",
+    "_CacheEntry",
+    "_PREFERRED_MODELS",
+    "_SYSTEM_PROMPT",
+    "_parse_llm_response",
+    "_select_model",
+    "batch_classify_content",
+    "classify_content",
+    "get_cache_stats",
+    "get_classification_budget",
+    "get_classification_cache",
+]
 
 
 def _parse_llm_response(raw: str) -> SafetyVerdict:
@@ -661,44 +444,4 @@ async def batch_classify_content(
         total_ms=elapsed_ms,
         cache_hits=cache_hits,
         llm_calls=llm_calls,
-    )
-
-
-# ── Cache Statistics ────────────────────────────────────────────────────
-
-
-@dataclass(frozen=True, slots=True)
-class CacheStats:
-    """Snapshot of cache statistics.
-
-    Attributes:
-        size: Current number of entries.
-        max_size: Maximum capacity.
-        hit_rate: Hit rate (0.0-1.0).
-        hits: Total cache hits.
-        misses: Total cache misses.
-        ttl_sec: TTL for entries in seconds.
-    """
-
-    size: int
-    max_size: int
-    hit_rate: float
-    hits: int
-    misses: int
-    ttl_sec: float
-
-
-def get_cache_stats() -> CacheStats:
-    """Get a snapshot of the classification cache statistics.
-
-    Useful for dashboard display and monitoring.
-    """
-    cache = get_classification_cache()
-    return CacheStats(
-        size=cache.size,
-        max_size=cache._max_size,
-        hit_rate=cache.hit_rate,
-        hits=cache._hits,
-        misses=cache._misses,
-        ttl_sec=cache._ttl_sec,
     )
