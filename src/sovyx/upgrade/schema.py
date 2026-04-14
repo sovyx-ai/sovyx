@@ -17,7 +17,7 @@ import re
 import shutil
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from sovyx.engine.errors import MigrationError
 from sovyx.observability.logging import get_logger
@@ -396,7 +396,7 @@ class MigrationRunner:
             # import UpgradeMigration`, but by the time discover runs, the
             # in-memory class may differ. Dispatch by class name.
             if type(migration).__name__ == "UpgradeMigration":
-                migrations.append(migration)
+                migrations.append(cast("UpgradeMigration", migration))
 
         return sorted(migrations, key=lambda m: m.semver)
 
