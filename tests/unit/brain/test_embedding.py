@@ -734,25 +734,26 @@ class TestDownloadAndLoad:
 
     def test_load_model_calls_onnx(self, tmp_path: Path) -> None:
         """_load_model instantiates ONNX session and tokenizer."""
+        import onnxruntime
+
         engine = EmbeddingEngine(model_dir=tmp_path)
 
         mock_sess = MagicMock()
         mock_tok = MagicMock()
 
-        mock_ort_mod = MagicMock()
-        mock_ort_mod.SessionOptions.return_value = MagicMock()
-        mock_ort_mod.GraphOptimizationLevel.ORT_ENABLE_ALL = 99
-        mock_ort_mod.InferenceSession.return_value = mock_sess
-
         mock_tok_mod = MagicMock()
         mock_tok_mod.Tokenizer.from_file.return_value = mock_tok
 
-        # `ort` is bound at module import in embedding.py, so a
-        # sys.modules patch can't intercept it — patch the module
-        # attribute directly. `tokenizers` is imported locally inside
-        # _load_model, so sys.modules still works for it.
+        # Patch onnxruntime's attributes directly rather than replacing
+        # the `ort` alias in sovyx.brain.embedding. The module alias
+        # approach worked on Windows but not on Linux CI — patching the
+        # real module is platform-agnostic because `ort.InferenceSession`
+        # resolves through the module's attribute table at call time.
+        # `tokenizers` is imported locally inside _load_model, so
+        # sys.modules patching still works for it.
         with (
-            patch("sovyx.brain.embedding.ort", mock_ort_mod),
+            patch.object(onnxruntime, "InferenceSession", return_value=mock_sess),
+            patch.object(onnxruntime, "SessionOptions", return_value=MagicMock()),
             patch.dict("sys.modules", {"tokenizers": mock_tok_mod}),
         ):
             engine._load_model(tmp_path / "model.onnx", tmp_path / "tok.json")
