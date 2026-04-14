@@ -41,15 +41,24 @@ class TestPatternReachability:
     )
     def test_standard_pattern_reachable(self, pattern: object) -> None:
         """Each standard pattern matches its description-derived input."""
+        import sys
+
         from sovyx.cognitive.safety_patterns import SafetyPattern
 
         assert isinstance(pattern, SafetyPattern)
-        # The description itself should be matchable or the regex
-        # should match a constructed input from description keywords.
-        # We test with a generic probe per category.
         probes = _REACHABILITY_PROBES.get(pattern.description)
         assert probes is not None, f"No probe for: {pattern.description}"
-        matched = any(pattern.regex.search(probe) for probe in probes)
+        matches = [(probe, pattern.regex.search(probe)) for probe in probes]
+        matched = any(m is not None for _, m in matches)
+        # TEMPORARY CI DIAGNOSIS — remove after root cause found.
+        if not matched:
+            print(f"\n[DEBUG-F] description: {pattern.description!r}", file=sys.stderr)
+            print(f"[DEBUG-F] regex pattern: {pattern.regex.pattern!r}", file=sys.stderr)
+            print(f"[DEBUG-F] regex flags: {pattern.regex.flags}", file=sys.stderr)
+            print(f"[DEBUG-F] python: {sys.version}", file=sys.stderr)
+            print(f"[DEBUG-F] re module: {__import__('re').__file__}", file=sys.stderr)
+            for probe, m in matches:
+                print(f"[DEBUG-F]   probe {probe!r} -> {m!r}", file=sys.stderr)
         assert matched, f"Pattern unreachable: {pattern.description}"
 
     @pytest.mark.parametrize(
