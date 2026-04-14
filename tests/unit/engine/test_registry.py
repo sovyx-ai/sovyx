@@ -229,7 +229,8 @@ class TestRegistryCoverageGaps:
         reg = ServiceRegistry()
         reg.register_instance(str, "a")
         reg.register_instance(str, "b")
-        assert reg._init_order.count(str) == 1  # noqa: SLF001
+        str_key = "builtins.str"
+        assert reg._init_order.count(str_key) == 1  # noqa: SLF001
 
     @pytest.mark.asyncio()
     async def test_resolve_factory_twice_no_duplicate_order(self) -> None:
@@ -238,10 +239,11 @@ class TestRegistryCoverageGaps:
         reg.register_singleton(list, lambda: [1, 2])
         await reg.resolve(list)
         # Manually re-add to factories to force the branch
-        reg._factories[list] = lambda: [3, 4]  # noqa: SLF001
-        del reg._instances[list]  # noqa: SLF001
+        list_key = "builtins.list"
+        reg._factories[list_key] = lambda: [3, 4]  # noqa: SLF001
+        del reg._instances[list_key]  # noqa: SLF001
         await reg.resolve(list)
-        assert reg._init_order.count(list) == 1  # noqa: SLF001
+        assert reg._init_order.count(list_key) == 1  # noqa: SLF001
 
     @pytest.mark.asyncio()
     async def test_shutdown_non_callable_shutdown_attr(self) -> None:

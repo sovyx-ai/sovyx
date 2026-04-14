@@ -81,41 +81,30 @@ class DashboardEventBridge:
 
 def _serialize_event(event: Event) -> dict[str, Any]:
     """Convert an Engine event to a dashboard-friendly JSON payload."""
-    from sovyx.engine.events import (
-        ChannelConnected,
-        ChannelDisconnected,
-        ConceptCreated,
-        ConsolidationCompleted,
-        EngineStarted,
-        EngineStopping,
-        EpisodeEncoded,
-        PerceptionReceived,
-        ResponseSent,
-        ServiceHealthChanged,
-        ThinkCompleted,
-    )
-
+    name = type(event).__name__
     base: dict[str, Any] = {
-        "type": type(event).__name__,
+        "type": name,
         "timestamp": event.timestamp.isoformat(),
         "correlation_id": event.correlation_id,
     }
 
-    if isinstance(event, EngineStarted):
+    # Name-based dispatch — class identity is unreliable under pytest-cov /
+    # xdist module reimport. See CLAUDE.md anti-pattern #8.
+    if name == "EngineStarted":
         base["data"] = {}
-    elif isinstance(event, EngineStopping):
+    elif name == "EngineStopping":
         base["data"] = {"reason": event.reason}
-    elif isinstance(event, ServiceHealthChanged):
+    elif name == "ServiceHealthChanged":
         base["data"] = {
             "service": event.service,
             "status": event.status,
         }
-    elif isinstance(event, PerceptionReceived):
+    elif name == "PerceptionReceived":
         base["data"] = {
             "source": event.source,
             "person_id": event.person_id,
         }
-    elif isinstance(event, ThinkCompleted):
+    elif name == "ThinkCompleted":
         base["data"] = {
             "tokens_in": event.tokens_in,
             "tokens_out": event.tokens_out,
@@ -123,34 +112,34 @@ def _serialize_event(event: Event) -> dict[str, Any]:
             "cost_usd": round(event.cost_usd, 6),
             "latency_ms": event.latency_ms,
         }
-    elif isinstance(event, ResponseSent):
+    elif name == "ResponseSent":
         base["data"] = {
             "channel": event.channel,
             "latency_ms": event.latency_ms,
         }
-    elif isinstance(event, ConceptCreated):
+    elif name == "ConceptCreated":
         base["data"] = {
             "concept_id": event.concept_id,
             "title": event.title,
             "source": event.source,
         }
-    elif isinstance(event, EpisodeEncoded):
+    elif name == "EpisodeEncoded":
         base["data"] = {
             "episode_id": event.episode_id,
             "importance": event.importance,
         }
-    elif isinstance(event, ConsolidationCompleted):
+    elif name == "ConsolidationCompleted":
         base["data"] = {
             "merged": event.merged,
             "pruned": event.pruned,
             "strengthened": event.strengthened,
             "duration_s": round(event.duration_s, 2),
         }
-    elif isinstance(event, ChannelConnected):
+    elif name == "ChannelConnected":
         base["data"] = {
             "channel_type": event.channel_type,
         }
-    elif isinstance(event, ChannelDisconnected):
+    elif name == "ChannelDisconnected":
         base["data"] = {
             "channel_type": event.channel_type,
             "reason": event.reason,

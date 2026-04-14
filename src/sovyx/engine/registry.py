@@ -20,6 +20,12 @@ logger = get_logger(__name__)
 T = TypeVar("T")
 
 
+def _key(interface: type) -> str:
+    # Qualified name survives module reimport under pytest-cov/xdist — plain
+    # class identity does not.
+    return f"{interface.__module__}.{interface.__qualname__}"
+
+
 class ServiceRegistry:
     """Lightweight DI container (~100 LOC).
 
@@ -32,9 +38,9 @@ class ServiceRegistry:
     """
 
     def __init__(self) -> None:
-        self._factories: dict[type[object], Callable[..., object]] = {}
-        self._instances: dict[type[object], object] = {}
-        self._init_order: list[type[object]] = []
+        self._factories: dict[str, Callable[..., object]] = {}
+        self._instances: dict[str, object] = {}
+        self._init_order: list[str] = []
 
     def register_singleton(
         self,
@@ -47,12 +53,13 @@ class ServiceRegistry:
             interface: The type/protocol to register.
             factory: Callable that returns an instance (sync or async).
         """
-        if interface in self._factories or interface in self._instances:
+        key = _key(interface)
+        if key in self._factories or key in self._instances:
             logger.warning(
                 "service_overwritten",
                 interface=interface.__name__,
             )
-        self._factories[interface] = factory
+        self._factories[key] = factory
 
     def register_instance(
         self,
@@ -65,14 +72,15 @@ class ServiceRegistry:
             interface: The type/protocol to register.
             instance: Pre-built instance.
         """
-        if interface in self._factories or interface in self._instances:
+        key = _key(interface)
+        if key in self._factories or key in self._instances:
             logger.warning(
                 "service_overwritten",
                 interface=interface.__name__,
             )
-        self._instances[interface] = instance
-        if interface not in self._init_order:
-            self._init_order.append(interface)
+        self._instances[key] = instance
+        if key not in self._init_order:
+            self._init_order.append(key)
 
     async def resolve(self, interface: type[T]) -> T:
         """Resolve interface to instance.
@@ -89,17 +97,18 @@ class ServiceRegistry:
         Raises:
             ServiceNotRegisteredError: If interface not registered.
         """
+        key = _key(interface)
         # Check cached instances first
-        if interface in self._instances:
-            return cast("T", self._instances[interface])
+        if key in self._instances:
+            return cast("T", self._instances[key])
 
         # Check factories
-        if interface in self._factories:
-            factory = self._factories[interface]
+        if key in self._factories:
+            factory = self._factories[key]
             instance = factory()
-            self._instances[interface] = instance
-            if interface not in self._init_order:
-                self._init_order.append(interface)
+            self._instances[key] = instance
+            if key not in self._init_order:
+                self._init_order.append(key)
             return cast("T", instance)
 
         msg = f"Service not registered: {interface.__name__}"
@@ -107,7 +116,8 @@ class ServiceRegistry:
 
     def is_registered(self, interface: type[object]) -> bool:
         """Check if interface has a registration."""
-        return interface in self._factories or interface in self._instances
+        key = _key(interface)
+        return key in self._factories or key in self._instances
 
     async def shutdown_all(self) -> None:
         """Shutdown all services in reverse init order.
@@ -115,8 +125,8 @@ class ServiceRegistry:
         Calls shutdown() (if exists) on each service.
         Exceptions logged but not propagated (best-effort).
         """
-        for iface in reversed(self._init_order):
-            instance = self._instances.get(iface)
+        for key in reversed(self._init_order):
+            instance = self._instances.get(key)
             if instance is None:
                 continue
             shutdown = getattr(instance, "shutdown", None)
@@ -125,7 +135,7 @@ class ServiceRegistry:
             with contextlib.suppress(Exception):
                 logger.debug(
                     "service_shutting_down",
-                    service=iface.__name__,
+                    service=key,
                 )
                 if callable(shutdown):
                     result = shutdown()
