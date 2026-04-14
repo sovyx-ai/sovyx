@@ -67,8 +67,14 @@ def exporter() -> InMemoryExporter:
 
 @pytest.fixture()
 def tracer(exporter: InMemoryExporter) -> SovyxTracer:
-    """Set up tracing with in-memory exporter."""
-    return setup_tracing(exporters=[exporter])
+    """Set up tracing with in-memory exporter.
+
+    ``batch=False`` forces synchronous span export so assertions on
+    ``exporter.spans`` right after a ``with`` block see the finished
+    span without having to wait on BatchSpanProcessor's worker thread.
+    Production code uses the default ``batch=True``.
+    """
+    return setup_tracing(exporters=[exporter], batch=False)
 
 
 # ── Setup / Teardown ────────────────────────────────────────────────────────
@@ -78,7 +84,7 @@ class TestSetupTeardown:
     """Tracing lifecycle."""
 
     def test_setup_returns_sovyx_tracer(self, exporter: InMemoryExporter) -> None:
-        t = setup_tracing(exporters=[exporter])
+        t = setup_tracing(exporters=[exporter], batch=False)
         assert isinstance(t, SovyxTracer)
 
     def test_get_tracer_returns_sovyx_tracer(
@@ -89,7 +95,7 @@ class TestSetupTeardown:
         assert isinstance(t, SovyxTracer)
 
     def test_teardown_cleans_up(self, exporter: InMemoryExporter) -> None:
-        setup_tracing(exporters=[exporter])
+        setup_tracing(exporters=[exporter], batch=False)
         teardown_tracing()
         # Should not raise; get_tracer returns no-op based tracer
         t = get_tracer()
@@ -99,6 +105,34 @@ class TestSetupTeardown:
         """No exporters = spans created but not exported."""
         t = setup_tracing()
         assert isinstance(t, SovyxTracer)
+
+    def test_batch_true_installs_batch_processor(
+        self,
+        exporter: InMemoryExporter,
+    ) -> None:
+        """Production default — batch=True wires BatchSpanProcessor."""
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+        setup_tracing(exporters=[exporter], batch=True)
+        # _active_provider is set by setup_tracing; its _active_span_processor
+        # (or _span_processors in recent OTel) must contain a BatchSpanProcessor.
+        from sovyx.observability import tracing as _tracing
+
+        provider = _tracing._active_provider
+        assert provider is not None
+        # TracerProvider exposes span processors via the _active_span_processor
+        # attribute, which wraps a list internally. Walk both public-ish paths.
+        processors = getattr(provider, "_active_span_processor", None) or getattr(
+            provider, "_span_processors", ()
+        )
+        # MultiSpanProcessor wraps its children in `_span_processors`.
+        children = getattr(processors, "_span_processors", None)
+        if children is None and hasattr(processors, "__iter__"):
+            children = list(processors)
+        assert children is not None
+        assert any(isinstance(p, BatchSpanProcessor) for p in children)
+        # Clean up so other tests don't see the batch-wired provider.
+        teardown_tracing()
 
 
 # ── Cognitive Spans ─────────────────────────────────────────────────────────

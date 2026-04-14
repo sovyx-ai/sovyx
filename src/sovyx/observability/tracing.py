@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Any
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import (
+    BatchSpanProcessor,
     SimpleSpanProcessor,
     SpanExporter,
 )
@@ -50,6 +51,24 @@ _TRACER_NAME = "sovyx"
 # Tracks the observability API version (not the package version in pyproject.toml).
 # Bump when span names, attribute schemas, or namespace conventions change.
 _TRACER_VERSION = "0.2.0"
+
+# ── BatchSpanProcessor knobs (IMPL-015) ────────────────────────────────
+#
+# Production default. The synchronous ``SimpleSpanProcessor`` blocks every
+# span end on the exporter's HTTP round trip; under load that's a latency
+# cliff. BatchSpanProcessor moves export onto a worker thread that flushes
+# on a timer or when the queue fills.
+#
+# Values tuned for a single-node daemon under moderate traffic:
+#   - max_queue_size: 2048 spans buffered in memory before back-pressure.
+#   - schedule_delay_millis: 5000 ms between scheduled flushes (default
+#     behaviour; kept explicit so the intent stays visible).
+#   - max_export_batch_size: 512 spans per export call — balances HTTP
+#     overhead against exporter memory footprint.
+
+_BATCH_MAX_QUEUE_SIZE = 2048
+_BATCH_SCHEDULE_DELAY_MILLIS = 5000
+_BATCH_MAX_EXPORT_SIZE = 512
 
 # ── SovyxTracer ────────────────────────────────────────────────────────────
 
@@ -197,6 +216,7 @@ def setup_tracing(
     *,
     exporters: list[SpanExporter] | None = None,
     service_name: str = "sovyx",
+    batch: bool = True,
 ) -> SovyxTracer:
     """Initialize the OTel tracing pipeline.
 
@@ -208,6 +228,13 @@ def setup_tracing(
             exported — useful for testing with ``get_finished_spans``
             on the provider).
         service_name: OTel service name attribute.
+        batch: When True (the production default), spans are exported
+            asynchronously via :class:`BatchSpanProcessor`
+            (``max_queue_size=2048``, ``schedule_delay_millis=5000``,
+            ``max_export_batch_size=512``). When False, uses
+            :class:`SimpleSpanProcessor` so exporter observation is
+            synchronous — tests that assert on span state immediately
+            after the ``with`` block should pass ``batch=False``.
 
     Returns:
         A configured :class:`SovyxTracer`.
@@ -221,7 +248,17 @@ def setup_tracing(
 
     if exporters:
         for exporter in exporters:
-            provider.add_span_processor(SimpleSpanProcessor(exporter))
+            if batch:
+                provider.add_span_processor(
+                    BatchSpanProcessor(
+                        exporter,
+                        max_queue_size=_BATCH_MAX_QUEUE_SIZE,
+                        schedule_delay_millis=_BATCH_SCHEDULE_DELAY_MILLIS,
+                        max_export_batch_size=_BATCH_MAX_EXPORT_SIZE,
+                    ),
+                )
+            else:
+                provider.add_span_processor(SimpleSpanProcessor(exporter))
 
     trace.set_tracer_provider(provider)
     _active_provider = provider
