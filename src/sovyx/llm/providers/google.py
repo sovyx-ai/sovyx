@@ -16,6 +16,7 @@ import httpx
 
 from sovyx.engine.errors import LLMError, ProviderUnavailableError
 from sovyx.llm.models import LLMResponse, ToolCall
+from sovyx.llm.pricing import PROVIDER_DEFAULT_PRICING, compute_cost
 from sovyx.llm.providers._shared import (
     format_tools_google,
     parse_tool_calls_google,
@@ -30,14 +31,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 _API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
-
-# Cost per 1M tokens (USD) — (input, output)
-_PRICING: dict[str, tuple[float, float]] = {
-    "gemini-2.0-flash": (0.10, 0.40),
-    "gemini-2.5-flash-preview-04-17": (0.15, 0.60),
-    "gemini-2.5-pro-preview-03-25": (1.25, 10.0),
-}
-_DEFAULT_PRICING = (0.10, 0.40)  # fallback to flash pricing
+_FALLBACK_PRICING = PROVIDER_DEFAULT_PRICING["google"]
 
 _CONTEXT_WINDOWS: dict[str, int] = {
     "gemini-2.0-flash": 1_048_576,
@@ -183,8 +177,7 @@ class GoogleProvider:
                 tokens_in = usage.get("promptTokenCount", 0)
                 tokens_out = usage.get("candidatesTokenCount", 0)
 
-                pricing = _PRICING.get(model, _DEFAULT_PRICING)
-                cost = (tokens_in * pricing[0] + tokens_out * pricing[1]) / 1_000_000
+                cost = compute_cost(model, tokens_in, tokens_out, fallback=_FALLBACK_PRICING)
 
                 # Extract finish reason
                 finish_reason = "stop"

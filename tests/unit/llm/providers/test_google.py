@@ -9,12 +9,18 @@ import httpx
 import pytest
 
 from sovyx.engine.errors import LLMError, ProviderUnavailableError
+from sovyx.llm.pricing import (
+    PRICING as _PRICING,
+)
+from sovyx.llm.pricing import (
+    PROVIDER_DEFAULT_PRICING,
+)
 from sovyx.llm.providers.google import (
     _DEFAULT_CONTEXT_WINDOW,
-    _DEFAULT_PRICING,
-    _PRICING,
     GoogleProvider,
 )
+
+_DEFAULT_PRICING = PROVIDER_DEFAULT_PRICING["google"]
 
 # ── Helpers ───────────────────────────────────────────────────────────
 

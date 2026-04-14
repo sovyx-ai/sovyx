@@ -17,6 +17,7 @@ from sovyx.engine.errors import CostLimitExceededError, ProviderUnavailableError
 from sovyx.engine.events import ThinkCompleted
 from sovyx.llm.circuit import CircuitBreaker
 from sovyx.llm.models import LLMResponse
+from sovyx.llm.pricing import compute_cost, get_pricing
 from sovyx.observability.logging import get_logger
 from sovyx.observability.metrics import get_metrics
 from sovyx.observability.tracing import get_tracer
@@ -266,8 +267,7 @@ class LLMRouter:
         # Cost estimation: chars/4 ≈ tokens (rough but order-of-magnitude correct)
         input_chars = sum(len(m.get("content", "")) for m in messages)
         est_input_tokens = input_chars // 4
-        pricing = self._get_pricing(model)
-        estimated_cost = (est_input_tokens * pricing[0] + max_tokens * pricing[1]) / 1_000_000
+        estimated_cost = compute_cost(model, est_input_tokens, max_tokens)
         if not self._cost_guard.can_afford(estimated_cost, conversation_id):
             msg = (
                 f"Budget exhausted. Daily remaining: "
@@ -485,29 +485,13 @@ class LLMRouter:
 
     @staticmethod
     def _get_pricing(model: str | None) -> tuple[float, float]:
-        """Get (input, output) pricing per 1M tokens for a model.
+        """Thin delegate to :func:`sovyx.llm.pricing.get_pricing`.
 
-        Falls back to a conservative default if model is unknown.
+        Kept for backward compatibility with existing test coverage that
+        reaches into the router. New code should import ``get_pricing``
+        (or ``compute_cost``) directly from ``sovyx.llm.pricing``.
         """
-        # Consolidated pricing table (per 1M tokens USD)
-        pricing: dict[str, tuple[float, float]] = {
-            # Anthropic
-            "claude-sonnet-4-20250514": (3.0, 15.0),
-            "claude-3-5-haiku-20241022": (1.0, 5.0),
-            "claude-opus-4-20250514": (15.0, 75.0),
-            # OpenAI
-            "gpt-4o": (5.0, 15.0),
-            "gpt-4o-mini": (0.15, 0.6),
-            "o1": (15.0, 60.0),
-            "o3-mini": (1.1, 4.4),
-            # Google
-            "gemini-2.0-flash": (0.10, 0.40),
-            "gemini-2.5-pro-preview-03-25": (1.25, 10.0),
-        }
-        if model and model in pricing:
-            return pricing[model]
-        # Conservative default (Sonnet-class)
-        return (3.0, 15.0)
+        return get_pricing(model)
 
     async def stop(self) -> None:
         """Close all providers (best-effort)."""

@@ -10,6 +10,7 @@ import httpx
 
 from sovyx.engine.errors import LLMError, ProviderUnavailableError
 from sovyx.llm.models import LLMResponse, ToolCall
+from sovyx.llm.pricing import PROVIDER_DEFAULT_PRICING, compute_cost
 from sovyx.llm.providers._shared import (
     format_tools_openai,
     parse_tool_calls_openai,
@@ -24,14 +25,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 _API_URL = "https://api.openai.com/v1/chat/completions"
-
-_PRICING: dict[str, tuple[float, float]] = {
-    "gpt-4o": (5.0, 15.0),
-    "gpt-4o-mini": (0.15, 0.6),
-    "o1": (15.0, 60.0),
-    "o3-mini": (1.1, 4.4),
-}
-_DEFAULT_PRICING = (5.0, 15.0)
+_FALLBACK_PRICING = PROVIDER_DEFAULT_PRICING["openai"]
 
 _CONTEXT_WINDOWS: dict[str, int] = {
     "gpt-4o": 128_000,
@@ -150,8 +144,7 @@ class OpenAIProvider:
                 tokens_in = usage.get("prompt_tokens", 0)
                 tokens_out = usage.get("completion_tokens", 0)
 
-                pricing = _PRICING.get(model, _DEFAULT_PRICING)
-                cost = (tokens_in * pricing[0] + tokens_out * pricing[1]) / 1_000_000
+                cost = compute_cost(model, tokens_in, tokens_out, fallback=_FALLBACK_PRICING)
 
                 logger.debug(
                     "openai_response",

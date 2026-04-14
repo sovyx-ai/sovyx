@@ -10,6 +10,7 @@ import httpx
 
 from sovyx.engine.errors import LLMError, ProviderUnavailableError
 from sovyx.llm.models import LLMResponse, ToolCall
+from sovyx.llm.pricing import PROVIDER_DEFAULT_PRICING, compute_cost
 from sovyx.llm.providers._shared import (
     format_tools_anthropic,
     parse_tool_calls_anthropic,
@@ -25,14 +26,7 @@ logger = get_logger(__name__)
 
 _API_URL = "https://api.anthropic.com/v1/messages"
 _API_VERSION = "2023-06-01"
-
-# Cost per 1M tokens (USD)
-_PRICING: dict[str, tuple[float, float]] = {
-    "claude-sonnet-4-20250514": (3.0, 15.0),
-    "claude-3-5-haiku-20241022": (1.0, 5.0),
-    "claude-opus-4-20250514": (15.0, 75.0),
-}
-_DEFAULT_PRICING = (3.0, 15.0)  # fallback
+_FALLBACK_PRICING = PROVIDER_DEFAULT_PRICING["anthropic"]
 
 _MAX_RETRIES = 3
 
@@ -173,8 +167,7 @@ class AnthropicProvider:
                 tokens_in = usage.get("input_tokens", 0)
                 tokens_out = usage.get("output_tokens", 0)
 
-                pricing = _PRICING.get(model, _DEFAULT_PRICING)
-                cost = (tokens_in * pricing[0] + tokens_out * pricing[1]) / 1_000_000
+                cost = compute_cost(model, tokens_in, tokens_out, fallback=_FALLBACK_PRICING)
 
                 logger.debug(
                     "anthropic_response",
