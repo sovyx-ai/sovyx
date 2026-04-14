@@ -155,6 +155,28 @@ class TestReadConnections:
         assert conns[1] is conns[3]
         assert conns[0] is not conns[1]
 
+    async def test_concurrent_read_index_is_locked(
+        self, pool: DatabasePool,
+    ) -> None:
+        """Under contention, _read_index must still advance by exactly N.
+
+        Regression guard: a lost update on _read_index would leave the
+        cursor at a value lower than the number of acquire() calls. We
+        acquire the read lock many times concurrently and then assert
+        the cursor matches (calls mod pool_size).
+        """
+        acquired = 0
+
+        async def one_read() -> None:
+            nonlocal acquired
+            async with pool.read():
+                acquired += 1
+
+        await asyncio.gather(*(one_read() for _ in range(16)))
+        assert acquired == 16
+        # 16 calls, pool_size=2 → cursor wraps to 16 % 2 == 0
+        assert pool._read_index == 0
+
     async def test_read_not_initialized_raises(self, db_path: Path) -> None:
         pool = DatabasePool(db_path=db_path)
         with pytest.raises(DatabaseConnectionError):

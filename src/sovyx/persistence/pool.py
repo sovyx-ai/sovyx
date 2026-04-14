@@ -67,6 +67,11 @@ class DatabasePool:
         self._write_conn: aiosqlite.Connection | None = None
         self._read_conns: list[aiosqlite.Connection] = []
         self._write_lock = asyncio.Lock()
+        # Guards the round-robin cursor below. Without it, concurrent
+        # reads race on the read-then-bump and can hand the same
+        # connection to multiple coroutines — correctness is fine under
+        # WAL, but the load balance collapses.
+        self._read_index_lock = asyncio.Lock()
         self._read_index = 0
         self._initialized = False
         self._has_sqlite_vec = False
@@ -236,8 +241,9 @@ class DatabasePool:
             msg = "Database pool not initialized"
             raise DatabaseConnectionError(msg)
 
-        conn = self._read_conns[self._read_index % self._read_pool_size]
-        self._read_index = (self._read_index + 1) % self._read_pool_size
+        async with self._read_index_lock:
+            conn = self._read_conns[self._read_index % self._read_pool_size]
+            self._read_index = (self._read_index + 1) % self._read_pool_size
         yield conn
 
     @asynccontextmanager
