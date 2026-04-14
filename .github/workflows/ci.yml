@@ -104,11 +104,30 @@ jobs:
           uv sync --dev --frozen --python ${{ matrix.python-version }}
           uv pip install --python ${{ matrix.python-version }} "ddgs>=9.0" "trafilatura>=2.0"
       - name: Run tests with coverage
-        run: >
-          uv run python -m pytest tests/
-          --ignore=tests/smoke
-          --timeout=30
-          -v
+        shell: bash
+        run: |
+          set +e
+          LOG=/tmp/pytest.log
+          # Wrap pytest with shell timeout: process hangs ~20min after summary on
+          # CI due to non-daemon threads / async cleanup not releasing the event
+          # loop. If the summary prints cleanly, we trust pytest's result and kill
+          # any lingering hang. Failing tests (summary with "N failed") still fail
+          # the job — only the post-summary hang is ignored.
+          timeout --kill-after=30s 600s \
+            uv run python -m pytest tests/ --ignore=tests/smoke --timeout=30 -v \
+            2>&1 | tee "$LOG"
+
+          if grep -qE '^=+ .*[0-9]+ failed' "$LOG"; then
+            echo "::error::one or more tests failed"
+            exit 1
+          fi
+
+          if grep -qE '^=+ .*[0-9]+ passed.* in [0-9.]+s' "$LOG"; then
+            exit 0
+          fi
+
+          echo "::error::pytest did not produce a summary; run likely hung before tests completed"
+          exit 1
       - name: Upload coverage
         if: matrix.python-version == '3.12'
         uses: actions/upload-artifact@v4
