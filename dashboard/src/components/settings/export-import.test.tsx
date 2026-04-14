@@ -40,6 +40,7 @@ beforeEach(() => {
   mockCreateObjectURL.mockClear();
   mockRevokeObjectURL.mockClear();
   localStorage.clear();
+  sessionStorage.clear();
 });
 
 // ════════════════════════════════════════════════════════
@@ -131,7 +132,8 @@ describe("export flow", () => {
   });
 
   it("sends auth header when token exists", async () => {
-    localStorage.setItem("sovyx_token", "test-token-123");
+    // Token now lives in sessionStorage + memory (see lib/api.ts)
+    sessionStorage.setItem("sovyx_token", "test-token-123");
     mockFetch.mockResolvedValueOnce({
       ok: true,
       blob: () => Promise.resolve(new Blob(["data"])),

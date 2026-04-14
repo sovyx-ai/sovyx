@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { setToken, BASE_URL } from "@/lib/api";
+import { setToken, apiFetch } from "@/lib/api";
 import { useDashboardStore } from "@/stores/dashboard";
 import { Loader2Icon, KeyIcon, CheckCircleIcon, XCircleIcon } from "lucide-react";
 
@@ -33,9 +33,7 @@ export function TokenEntryModal() {
     setErrorMsg("");
 
     try {
-      const res = await fetch(`${BASE_URL}/api/status`, {
-        headers: { Authorization: `Bearer ${trimmed}` },
-      });
+      const res = await apiFetch("/api/status", {}, trimmed);
 
       if (res.ok) {
         setState("valid");

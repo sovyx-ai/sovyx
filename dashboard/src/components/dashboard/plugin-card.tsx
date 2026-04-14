@@ -12,19 +12,11 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { MoreVerticalIcon, AlertTriangleIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { nameToHue } from "@/lib/format";
 import { useDashboardStore } from "@/stores/dashboard";
 import type { PluginInfo, PermissionRisk } from "@/types/api";
 
 // ── Letter Avatar ──
-
-/** Generate a deterministic gradient from plugin name. */
-function nameToHue(name: string): number {
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) {
-    hash = name.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  return Math.abs(hash) % 360;
-}
 
 const LetterAvatar = memo(function LetterAvatar({
   name,

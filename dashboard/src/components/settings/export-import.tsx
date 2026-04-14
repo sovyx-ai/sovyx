@@ -18,7 +18,7 @@ import {
   ShieldCheckIcon,
 } from "lucide-react";
 import { toast } from "sonner";
-import { BASE_URL } from "@/lib/api";
+import { apiFetch } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -28,10 +28,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-
-function getToken(): string | null {
-  return localStorage.getItem("sovyx_token");
-}
 
 export function ExportImportSection() {
   const { t } = useTranslation(["settings", "common"]);
@@ -44,10 +40,7 @@ export function ExportImportSection() {
   const handleExport = useCallback(async () => {
     setExporting(true);
     try {
-      const token = getToken();
-      const res = await fetch(`${BASE_URL}/api/export`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
+      const res = await apiFetch("/api/export");
 
       if (!res.ok) {
         const body = await res.text().catch(() => "Export failed");
@@ -110,13 +103,11 @@ export function ExportImportSection() {
     setImporting(true);
 
     try {
-      const token = getToken();
       const form = new FormData();
       form.append("file", file);
 
-      const res = await fetch(`${BASE_URL}/api/import`, {
+      const res = await apiFetch("/api/import", {
         method: "POST",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: form,
       });
 

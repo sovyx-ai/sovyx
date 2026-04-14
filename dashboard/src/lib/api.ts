@@ -99,6 +99,36 @@ export interface ApiOptions extends RequestInit {
   schema?: ZodType;
 }
 
+/**
+ * Low-level fetch wrapper that injects the current auth token into the
+ * request headers without parsing the response. Use this when you need
+ * the raw `Response` — e.g. for binary downloads (Blob), multipart
+ * uploads (FormData), or for probing with a candidate token before
+ * calling `setToken()`.
+ *
+ * `overrideToken`:
+ *   - `undefined` (default): pull token from session/memory like `api.*`.
+ *   - `null`: no Authorization header is sent.
+ *   - a string: that exact value is used as the Bearer token.
+ *
+ * 401 responses are returned as-is — callers decide whether to treat
+ * them as "bad token" vs. "session expired".
+ */
+export async function apiFetch(
+  path: string,
+  init: RequestInit = {},
+  overrideToken?: string | null,
+): Promise<Response> {
+  const token = overrideToken === undefined ? getToken() : overrideToken;
+  const headers: Record<string, string> = {
+    ...((init.headers as Record<string, string>) ?? {}),
+  };
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+  return fetch(`${BASE_URL}${path}`, { ...init, headers });
+}
+
 function validateResponse(path: string, schema: ZodType, data: unknown): void {
   const result = schema.safeParse(data);
   if (!result.success) {

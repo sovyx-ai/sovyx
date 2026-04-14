@@ -87,3 +87,17 @@ export function formatChartTime(ts: number): string {
     hour12: false,
   });
 }
+
+/**
+ * Deterministic 0–359 hue derived from a string, used for letter-avatar
+ * style gradients that must stay consistent across renders and reloads.
+ * Inlined copies of this function previously lived in plugin-card and
+ * plugin-detail — keep them here so future consumers can't drift.
+ */
+export function nameToHue(name: string): number {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return Math.abs(hash) % 360;
+}
