@@ -14,7 +14,20 @@ from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
     from sovyx.dashboard.server import ConnectionManager
-    from sovyx.engine.events import Event, EventBus
+    from sovyx.engine.events import (
+        ChannelConnected,
+        ChannelDisconnected,
+        ConceptCreated,
+        ConsolidationCompleted,
+        EngineStopping,
+        EpisodeEncoded,
+        Event,
+        EventBus,
+        PerceptionReceived,
+        ResponseSent,
+        ServiceHealthChanged,
+        ThinkCompleted,
+    )
 
 logger = get_logger(__name__)
 
@@ -89,60 +102,73 @@ def _serialize_event(event: Event) -> dict[str, Any]:
     }
 
     # Name-based dispatch — class identity is unreliable under pytest-cov /
-    # xdist module reimport. See CLAUDE.md anti-pattern #8.
+    # xdist module reimport. See CLAUDE.md anti-pattern #8. Per-branch casts
+    # restore attribute access typing without restoring isinstance.
+    from typing import cast
+
     if name == "EngineStarted":
         base["data"] = {}
     elif name == "EngineStopping":
-        base["data"] = {"reason": event.reason}
+        ev = cast("EngineStopping", event)
+        base["data"] = {"reason": ev.reason}
     elif name == "ServiceHealthChanged":
+        ev_shc = cast("ServiceHealthChanged", event)
         base["data"] = {
-            "service": event.service,
-            "status": event.status,
+            "service": ev_shc.service,
+            "status": ev_shc.status,
         }
     elif name == "PerceptionReceived":
+        ev_pr = cast("PerceptionReceived", event)
         base["data"] = {
-            "source": event.source,
-            "person_id": event.person_id,
+            "source": ev_pr.source,
+            "person_id": ev_pr.person_id,
         }
     elif name == "ThinkCompleted":
+        ev_tc = cast("ThinkCompleted", event)
         base["data"] = {
-            "tokens_in": event.tokens_in,
-            "tokens_out": event.tokens_out,
-            "model": event.model,
-            "cost_usd": round(event.cost_usd, 6),
-            "latency_ms": event.latency_ms,
+            "tokens_in": ev_tc.tokens_in,
+            "tokens_out": ev_tc.tokens_out,
+            "model": ev_tc.model,
+            "cost_usd": round(ev_tc.cost_usd, 6),
+            "latency_ms": ev_tc.latency_ms,
         }
     elif name == "ResponseSent":
+        ev_rs = cast("ResponseSent", event)
         base["data"] = {
-            "channel": event.channel,
-            "latency_ms": event.latency_ms,
+            "channel": ev_rs.channel,
+            "latency_ms": ev_rs.latency_ms,
         }
     elif name == "ConceptCreated":
+        ev_cc = cast("ConceptCreated", event)
         base["data"] = {
-            "concept_id": event.concept_id,
-            "title": event.title,
-            "source": event.source,
+            "concept_id": ev_cc.concept_id,
+            "title": ev_cc.title,
+            "source": ev_cc.source,
         }
     elif name == "EpisodeEncoded":
+        ev_ee = cast("EpisodeEncoded", event)
         base["data"] = {
-            "episode_id": event.episode_id,
-            "importance": event.importance,
+            "episode_id": ev_ee.episode_id,
+            "importance": ev_ee.importance,
         }
     elif name == "ConsolidationCompleted":
+        ev_cons = cast("ConsolidationCompleted", event)
         base["data"] = {
-            "merged": event.merged,
-            "pruned": event.pruned,
-            "strengthened": event.strengthened,
-            "duration_s": round(event.duration_s, 2),
+            "merged": ev_cons.merged,
+            "pruned": ev_cons.pruned,
+            "strengthened": ev_cons.strengthened,
+            "duration_s": round(ev_cons.duration_s, 2),
         }
     elif name == "ChannelConnected":
+        ev_chc = cast("ChannelConnected", event)
         base["data"] = {
-            "channel_type": event.channel_type,
+            "channel_type": ev_chc.channel_type,
         }
     elif name == "ChannelDisconnected":
+        ev_chd = cast("ChannelDisconnected", event)
         base["data"] = {
-            "channel_type": event.channel_type,
-            "reason": event.reason,
+            "channel_type": ev_chd.channel_type,
+            "reason": ev_chd.reason,
         }
     else:
         base["data"] = {}
