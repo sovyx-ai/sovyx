@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@/test/test-utils";
+import { render, screen, waitFor, fireEvent } from "@/test/test-utils";
 import SettingsPage from "./settings";
 
 vi.mock("@/lib/api", () => ({
@@ -220,5 +220,64 @@ describe("SettingsPage", () => {
       expect(screen.getByText("INFO")).toBeInTheDocument();
     });
     expect(screen.queryByText(/Coming in v1\.0/)).not.toBeInTheDocument();
+  });
+
+  // ── Interaction tests — actual state + save flow ──
+
+  it("selecting a log level toggles the active-state styling", async () => {
+    mockApi.get.mockResolvedValueOnce(mockSettings);
+    render(<SettingsPage />);
+    await waitFor(() => {
+      expect(screen.getByText("INFO")).toBeInTheDocument();
+    });
+
+    // DEBUG is not the current level — clicking it should mark it active.
+    const debugButton = screen.getByText("DEBUG").closest("button");
+    expect(debugButton).not.toBeNull();
+    fireEvent.click(debugButton!);
+    // Active buttons use the brand-primary background token.
+    expect(debugButton!.className).toContain("brand-primary");
+  });
+
+  it("clicking a tone preset flips the highlighted tone button", async () => {
+    mockApi.get
+      .mockResolvedValueOnce(mockSettings)
+      .mockResolvedValueOnce(mockMindConfig);
+    render(<SettingsPage />);
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("TestMind")).toBeInTheDocument();
+    });
+
+    // Locate the tone row buttons. "warm" is a preset different from the
+    // current "neutral" state — after the click it should carry the
+    // active brand-primary style.
+    const warmButton = screen
+      .getAllByText(/warm/i)
+      .map((n) => n.closest("button"))
+      .find((b): b is HTMLButtonElement => b !== null);
+    expect(warmButton).toBeDefined();
+    fireEvent.click(warmButton!);
+    expect(warmButton!.className).toContain("brand-primary");
+  });
+
+  it("save-settings button triggers PUT /api/settings", async () => {
+    mockApi.get.mockResolvedValueOnce(mockSettings);
+    mockApi.put.mockResolvedValueOnce({ ok: true, changes: {} });
+    render(<SettingsPage />);
+    await waitFor(() => {
+      expect(screen.getByText("INFO")).toBeInTheDocument();
+    });
+
+    // Select a different log level to mark the form dirty, then click save.
+    fireEvent.click(screen.getByText("DEBUG").closest("button")!);
+    const saveButtons = screen.getAllByRole("button", { name: /save/i });
+    expect(saveButtons.length).toBeGreaterThan(0);
+    fireEvent.click(saveButtons[0]!);
+    await waitFor(() => {
+      expect(mockApi.put).toHaveBeenCalledWith(
+        "/api/settings",
+        expect.objectContaining({ log_level: "DEBUG" }),
+      );
+    });
   });
 });
