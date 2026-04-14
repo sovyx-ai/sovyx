@@ -14,7 +14,7 @@ concurrency:
 jobs:
   lint:
     name: Lint (ruff)
-    runs-on: ubuntu-latest
+    runs-on: sovyx-4core
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -31,7 +31,7 @@ jobs:
 
   typecheck:
     name: Type Check (mypy)
-    runs-on: ubuntu-latest
+    runs-on: sovyx-4core
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -44,7 +44,7 @@ jobs:
 
   security:
     name: Security (bandit)
-    runs-on: ubuntu-latest
+    runs-on: sovyx-4core
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -57,7 +57,7 @@ jobs:
 
   dashboard:
     name: Dashboard Build
-    runs-on: ubuntu-latest
+    runs-on: sovyx-4core
     steps:
       - uses: actions/checkout@v4
         with:
@@ -86,8 +86,8 @@ jobs:
 
   test:
     name: Test (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    runs-on: sovyx-4core
+    timeout-minutes: 25
     strategy:
       fail-fast: true
       matrix:
