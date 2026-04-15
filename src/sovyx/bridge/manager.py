@@ -306,7 +306,7 @@ class BridgeManager:
                 )
                 await self._send_response(error_out)
                 get_counters().record_message()  # count crash-path error response
-            except Exception:
+            except Exception:  # noqa: BLE001 — error-response path must not itself raise
                 logger.warning("error_response_also_failed", exc_info=True)
 
     async def _handle_financial_callback(self, message: InboundMessage) -> None:

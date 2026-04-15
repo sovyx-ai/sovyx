@@ -288,7 +288,7 @@ class SignalChannel:
                 await asyncio.sleep(_POLL_INTERVAL)
             except asyncio.CancelledError:
                 break
-            except Exception:
+            except Exception:  # noqa: BLE001 — poll loop must survive single failures
                 logger.warning(
                     "signal_poll_error",
                     backoff=backoff,

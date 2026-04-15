@@ -323,7 +323,7 @@ class MigrationRunner:
             await self._verify_integrity()
             report.status = "success"
 
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — migration translation — wraps into MigrationError caller
             logger.error(
                 "migration_failed_restoring_backup",
                 error=str(exc),
@@ -387,7 +387,7 @@ class MigrationRunner:
             module_name = f"{package}.{py_file.stem}"
             try:
                 mod = importlib.import_module(module_name)
-            except Exception:
+            except Exception:  # noqa: BLE001 — migration module import — skip bad files, log and continue
                 logger.warning("migration_import_failed", module=module_name, exc_info=True)
                 continue
             migration = getattr(mod, "MIGRATION", None)

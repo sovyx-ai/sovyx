@@ -125,7 +125,7 @@ class HealthRegistry:
                 status=CheckStatus.RED,
                 message=f"Check timed out after {timeout}s",
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — health-check runner boundary
             return CheckResult(
                 name=check.name,
                 status=CheckStatus.RED,
@@ -319,7 +319,7 @@ class DatabaseCheck(HealthCheck):
                 status=CheckStatus.GREEN,
                 message="Database writable",
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — health-check boundary
             return CheckResult(
                 name=self.name,
                 status=CheckStatus.RED,
@@ -360,7 +360,7 @@ class BrainIndexedCheck(HealthCheck):
                 status=CheckStatus.YELLOW,
                 message="Brain model not yet loaded (lazy load on first use)",
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — health-check boundary
             return CheckResult(
                 name=self.name,
                 status=CheckStatus.RED,
@@ -407,7 +407,7 @@ class LLMReachableCheck(HealthCheck):
                 message="No LLM providers available",
                 metadata=meta,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — health-check boundary
             return CheckResult(
                 name=self.name,
                 status=CheckStatus.RED,
@@ -488,7 +488,7 @@ class ChannelConnectedCheck(HealthCheck):
                 message="No channels connected",
                 metadata=meta,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — health-check boundary
             return CheckResult(
                 name=self.name,
                 status=CheckStatus.RED,
@@ -529,7 +529,7 @@ class ConsolidationCheck(HealthCheck):
                 status=CheckStatus.YELLOW,
                 message="Consolidation scheduler not running",
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — health-check boundary
             return CheckResult(
                 name=self.name,
                 status=CheckStatus.RED,
@@ -601,7 +601,7 @@ class CostBudgetCheck(HealthCheck):
                 message=f"Budget exceeded: ${spend:.4f} / ${self._daily_budget:.2f} ({pct:.0f}%)",
                 metadata=meta,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — health-check boundary
             return CheckResult(
                 name=self.name,
                 status=CheckStatus.RED,

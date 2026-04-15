@@ -143,7 +143,7 @@ target-version = "py311"
 line-length = 99
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "N", "UP", "ANN", "B", "A", "SIM", "TCH"]
+select = ["E", "F", "W", "I", "N", "UP", "ANN", "B", "A", "SIM", "TCH", "BLE"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/sovyx/cognitive/safety_i18n.py" = ["E501"]

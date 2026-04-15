@@ -241,7 +241,7 @@ def stop() -> None:
     try:
         _run(client.call("shutdown"))
         console.print("[green]Sovyx daemon stopped[/green]")
-    except Exception as e:  # pragma: no cover
+    except Exception as e:  # noqa: BLE001 — CLI boundary — renders error and exits; pragma: no cover
         console.print(f"[red]Failed to stop daemon: {e}[/red]")
         raise typer.Exit(1) from None
 
@@ -265,7 +265,7 @@ def status() -> None:
             console.print(table)
         else:
             console.print(result)
-    except Exception as e:  # pragma: no cover
+    except Exception as e:  # noqa: BLE001 — CLI boundary — renders error and exits; pragma: no cover
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from None
 
@@ -347,7 +347,7 @@ def doctor(
                                 message="ok" if ok else "failed",
                             )
                         )
-        except Exception as exc:  # pragma: no cover
+        except Exception as exc:  # noqa: BLE001 — CLI boundary — renders RPC failure to doctor table; pragma: no cover
             results.append(
                 CheckResult(
                     name="Daemon RPC",
@@ -445,7 +445,7 @@ def brain_search(
                 console.print(f"  • {item}")
         else:
             console.print(result)
-    except Exception as e:  # pragma: no cover
+    except Exception as e:  # noqa: BLE001 — CLI boundary — renders error and exits; pragma: no cover
         console.print(f"[red]Error: {e}[/red]")
 
 
@@ -466,7 +466,7 @@ def brain_stats(
                 console.print(f"  {k}: [cyan]{v}[/cyan]")
         else:
             console.print(result)
-    except Exception as e:  # pragma: no cover
+    except Exception as e:  # noqa: BLE001 — CLI boundary — renders error and exits; pragma: no cover
         console.print(f"[red]Error: {e}[/red]")
 
 
@@ -486,7 +486,7 @@ def mind_list() -> None:
                 console.print(f"  • [cyan]{m}[/cyan]")
         else:
             console.print(result)
-    except Exception as e:  # pragma: no cover
+    except Exception as e:  # noqa: BLE001 — CLI boundary — renders error and exits; pragma: no cover
         console.print(f"[red]Error: {e}[/red]")
 
 
@@ -507,5 +507,5 @@ def mind_status(
                 console.print(f"  {k}: [cyan]{v}[/cyan]")
         else:
             console.print(result)
-    except Exception as e:  # pragma: no cover
+    except Exception as e:  # noqa: BLE001 — CLI boundary — renders error and exits; pragma: no cover
         console.print(f"[red]Error: {e}[/red]")

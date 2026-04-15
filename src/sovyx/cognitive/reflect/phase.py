@@ -166,7 +166,7 @@ class ReflectPhase:
                 concept_ids.append(cid)
                 sentiments.append(ec.sentiment)
                 concept_importances.append(combined_importance)
-            except Exception:
+            except Exception:  # noqa: BLE001 — per-concept learning is best-effort, logs and continues
                 logger.warning(
                     "concept_extraction_failed",
                     name=ec.name,
@@ -182,7 +182,7 @@ class ReflectPhase:
         if len(concept_ids) >= 2:  # noqa: PLR2004
             try:
                 await self._brain.strengthen_connection(concept_ids, relation_types=relation_types)
-            except Exception:
+            except Exception:  # noqa: BLE001 — Hebbian strengthen is best-effort, logs and continues
                 logger.warning("hebbian_failed", exc_info=True)
 
         # Compute episode emotional signals from extracted concepts
@@ -218,7 +218,7 @@ class ReflectPhase:
                 concepts_mentioned=concept_ids or None,
                 summary=summary,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 — episode encoding is best-effort, logs and continues
             logger.warning("episode_encoding_failed", exc_info=True)
 
         logger.debug(
@@ -344,7 +344,7 @@ class ReflectPhase:
             )
             return result
 
-        except Exception:
+        except Exception:  # noqa: BLE001 — LLM extraction failure falls back to regex
             logger.debug("llm_extraction_failed_using_regex", exc_info=True)
             return None
 
@@ -427,7 +427,7 @@ class ReflectPhase:
             )
             return result if result else None
 
-        except Exception:
+        except Exception:  # noqa: BLE001 — LLM relation-classification is optional
             logger.debug("relation_classification_failed", exc_info=True)
             return None
 
@@ -464,7 +464,7 @@ class ReflectPhase:
             if len(summary) > 200:  # noqa: PLR2004
                 summary = summary[:197] + "..."
             return summary if summary else None
-        except Exception:
+        except Exception:  # noqa: BLE001 — LLM summary is optional, None on failure
             logger.debug("summary_generation_failed", exc_info=True)
             return None
 

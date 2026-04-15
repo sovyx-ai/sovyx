@@ -106,7 +106,7 @@ class DaemonRPCServer:
                 "result": result,
                 "id": req_id,
             }
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — RPC dispatch boundary — translates to error response
             return self._error_response(req_id, -32000, str(e))
 
     @staticmethod

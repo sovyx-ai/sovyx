@@ -160,7 +160,7 @@ async def update_provider(request: Request) -> JSONResponse:
                 },
                 status_code=422,
             )
-    except Exception:
+    except Exception:  # noqa: BLE001 — route boundary — translates to HTTP 500
         logger.warning("provider_switch_validation_failed", exc_info=True)
         return JSONResponse(
             {"ok": False, "error": "Provider validation failed"},

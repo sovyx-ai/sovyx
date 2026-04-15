@@ -268,7 +268,7 @@ class TelegramChannel:
                 await self._dp.start_polling(self._bot, handle_signals=False)
             except asyncio.CancelledError:
                 break
-            except Exception:
+            except Exception:  # noqa: BLE001 — poll loop must survive single failures
                 logger.warning(
                     "telegram_poll_error",
                     backoff=backoff,

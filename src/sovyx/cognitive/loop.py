@@ -166,7 +166,7 @@ class CognitiveLoop:
                         mind_id=request.mind_id,
                         conversation_id=request.conversation_id,
                     )
-                except Exception:
+                except Exception:  # noqa: BLE001 — reflect phase isolated from main request path
                     logger.warning("reflect_phase_failed", exc_info=True)
 
                 # Decay working memory after reflect — concepts not
@@ -175,7 +175,7 @@ class CognitiveLoop:
                 try:
                     if self._brain is not None:
                         self._brain.decay_working_memory()
-                except Exception:
+                except Exception:  # noqa: BLE001 — working-memory decay isolated from main request path
                     logger.warning("working_memory_decay_failed", exc_info=True)
 
             m.messages_processed.add(1, {"mind_id": str(request.mind_id)})

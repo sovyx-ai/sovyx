@@ -383,7 +383,7 @@ class BlueGreenUpgrader:
         try:
             await self._installer.cleanup(install_path)
             result.phases_completed.append(UpgradePhase.CLEANUP.value)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — cleanup phase is non-fatal for upgrade
             # Cleanup failure is non-fatal — log but don't fail upgrade
             logger.warning("upgrade_cleanup_failed", error=str(exc))
             result.phases_completed.append(UpgradePhase.CLEANUP.value)
@@ -407,7 +407,7 @@ class BlueGreenUpgrader:
                     "upgrade_rollback_db_restored",
                     path=str(backup_info.path),
                 )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — rollback DB restore must not cascade
                 logger.error(
                     "upgrade_rollback_db_restore_failed",
                     error=str(exc),
@@ -416,7 +416,7 @@ class BlueGreenUpgrader:
         # 2. Swap back to old version
         try:
             await self._installer.swap_back(install_path)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — rollback swap-back must not cascade
             logger.error(
                 "upgrade_rollback_swap_back_failed",
                 error=str(exc),

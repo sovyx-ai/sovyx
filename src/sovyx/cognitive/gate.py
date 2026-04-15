@@ -141,7 +141,7 @@ class CogLoopGate:
                 result = await self._loop.process_request(request)
                 if not future.done():
                     future.set_result(result)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — relays exception to awaiter via future.set_exception
                 if not future.done():
                     future.set_exception(e)
             finally:

@@ -141,7 +141,7 @@ class HealthChecker:
             async with pool.write() as conn:
                 await conn.execute("SELECT 1")
             return True, "ok"
-        except Exception as e:  # pragma: no cover
+        except Exception as e:  # noqa: BLE001 — health-check boundary; pragma: no cover
             return False, str(e)
 
     async def _check_sqlite_vec(self) -> tuple[bool, str]:
@@ -153,7 +153,7 @@ class HealthChecker:
                 return False, "DatabaseManager not registered"
             db = await self._registry.resolve(DatabaseManager)
             return db.has_sqlite_vec, "available" if db.has_sqlite_vec else "not available"
-        except Exception as e:  # pragma: no cover
+        except Exception as e:  # noqa: BLE001 — health-check boundary; pragma: no cover
             return False, str(e)
 
     async def _check_embedding(self) -> tuple[bool, str]:
@@ -165,7 +165,7 @@ class HealthChecker:
                 return False, "EmbeddingEngine not registered"
             engine = await self._registry.resolve(EmbeddingEngine)
             return engine.is_loaded, "loaded" if engine.is_loaded else "not loaded"
-        except Exception as e:  # pragma: no cover
+        except Exception as e:  # noqa: BLE001 — health-check boundary; pragma: no cover
             return False, str(e)
 
     async def _check_event_bus(self) -> tuple[bool, str]:
@@ -177,7 +177,7 @@ class HealthChecker:
                 return False, "EventBus not registered"
             await self._registry.resolve(EventBus)
             return True, "ok"
-        except Exception as e:  # pragma: no cover
+        except Exception as e:  # noqa: BLE001 — health-check boundary; pragma: no cover
             return False, str(e)
 
     async def _check_brain(self) -> tuple[bool, str]:
@@ -189,7 +189,7 @@ class HealthChecker:
                 return False, "BrainService not registered"
             await self._registry.resolve(BrainService)
             return True, "ok"
-        except Exception as e:  # pragma: no cover
+        except Exception as e:  # noqa: BLE001 — health-check boundary; pragma: no cover
             return False, str(e)
 
     async def _check_llm(self) -> tuple[bool, str]:
@@ -202,7 +202,7 @@ class HealthChecker:
             router = await self._registry.resolve(LLMRouter)
             count = len(router._providers)
             return count > 0, f"{count} providers"
-        except Exception as e:  # pragma: no cover
+        except Exception as e:  # noqa: BLE001 — health-check boundary; pragma: no cover
             return False, str(e)
 
     async def _check_telegram(self) -> tuple[bool, str]:
@@ -219,7 +219,7 @@ class HealthChecker:
                 return True, "not configured"
             running = getattr(adapter, "is_running", False)
             return bool(running), "connected" if running else "disconnected"
-        except Exception as e:  # pragma: no cover
+        except Exception as e:  # noqa: BLE001 — health-check boundary; pragma: no cover
             return False, str(e)
 
     async def _check_disk(self) -> tuple[bool, str]:
@@ -229,7 +229,7 @@ class HealthChecker:
             free_mb = usage.free / (1024 * 1024)
             ok = free_mb > _MIN_DISK_MB
             return ok, f"{free_mb:.0f}MB free"
-        except Exception as e:  # pragma: no cover
+        except Exception as e:  # noqa: BLE001 — health-check boundary; pragma: no cover
             return False, str(e)
 
     async def _check_memory(self) -> tuple[bool, str]:
@@ -248,7 +248,7 @@ class HealthChecker:
                         ok = pct < _MAX_RSS_PERCENT
                         return ok, f"{pct:.1f}% RSS"
             return True, "unknown"  # pragma: no cover
-        except Exception as e:  # pragma: no cover
+        except Exception as e:  # noqa: BLE001 — health-check boundary; pragma: no cover
             return False, str(e)
 
     async def _check_event_loop_lag(self) -> tuple[bool, str]:
@@ -259,5 +259,5 @@ class HealthChecker:
             lag_ms = (time.monotonic() - start) * 1000
             ok = lag_ms < _MAX_EVENT_LOOP_LAG_MS
             return ok, f"{lag_ms:.1f}ms"
-        except Exception as e:  # pragma: no cover
+        except Exception as e:  # noqa: BLE001 — health-check boundary; pragma: no cover
             return False, str(e)

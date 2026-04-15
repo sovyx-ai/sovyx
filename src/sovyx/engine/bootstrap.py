@@ -479,7 +479,7 @@ async def bootstrap(
                     await shutdown_fn()
                 elif close_fn is not None:
                     await close_fn()
-            except Exception:
+            except Exception:  # noqa: BLE001 — cleanup in bootstrap rollback — must not raise
                 logger.warning(
                     "bootstrap_cleanup_failed",
                     resource=type(resource).__name__,

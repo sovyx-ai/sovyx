@@ -833,7 +833,7 @@ class SovyxWyomingServer:
         if self._zeroconf is not None:
             try:
                 await self._unregister_zeroconf()
-            except Exception:
+            except Exception:  # noqa: BLE001 — shutdown cleanup — zeroconf unregister best-effort
                 logger.warning("wyoming_zeroconf_unregister_failed", exc_info=True)
             self._zeroconf = None
 

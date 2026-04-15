@@ -396,7 +396,7 @@ class LLMRouter:
 
                     return response
 
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 — provider failover — must catch anything so next provider is tried
                     if circuit:
                         circuit.record_failure()
                     errors.append(f"{provider.name}: {e}")
@@ -498,7 +498,7 @@ class LLMRouter:
         for provider in self._providers:
             try:
                 await provider.close()
-            except Exception:
+            except Exception:  # noqa: BLE001 — shutdown cleanup — best-effort close of every provider
                 logger.warning(
                     "provider_close_failed",
                     provider=provider.name,

@@ -380,7 +380,7 @@ class VoicePipeline:
         if self._on_perception is not None:
             try:
                 await self._on_perception(result.text, self._config.mind_id)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — perception callback isolation
                 logger.error("Perception callback failed", error=str(exc))
 
         return {
@@ -489,7 +489,7 @@ class VoicePipeline:
         if self._event_bus is not None:
             try:
                 await self._event_bus.emit(event)  # type: ignore[arg-type]
-            except Exception:
+            except Exception:  # noqa: BLE001 — event bus emission isolation
                 logger.warning("Event emission failed", event_type=type(event).__name__)
 
     def _cancel_filler(self) -> None:
