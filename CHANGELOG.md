@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.11.3] — 2026-04-15
+
+Quality pass: exhaustive bare-`except` audit + cleanup across the backend, plus a latent React render bug in the brain-graph accessibility fallback.
+
+### Changed
+
+- **BLE001 sweep across `src/sovyx/`** (4 commits). Ruff's `flake8-blind-except` rule is now enabled (`BLE` added to `[tool.ruff.lint] select`), so any new `except Exception:` fails CI. Net effect: **77 un-justified broad catches → 0**. Categorised cleanup:
+  - **Batch 1** (`4d1833f`) — 49 legitimate boundaries explicitly annotated with `# noqa: BLE001 — <reason>`. Covers health-check runners (`engine/health.py` + `observability/health.py`), CLI command handlers (`cli/main.py`), boundary translation into domain exceptions (`engine/bootstrap.py`, `engine/rpc_server.py`, `cognitive/reflect/phase.py`, `bridge/manager.py`, `upgrade/blue_green.py`, `upgrade/schema.py`, `voice/pipeline/_orchestrator.py`), and background loops that must not die on single failures (`cognitive/loop.py`, `bridge/channels/{telegram,signal}.py`, `voice/wyoming.py`, `llm/router.py`).
+  - **Batch 2** (`069d3eb`) — 9 silent-swallow sites narrowed to typed exception tuples with `exc_info=True` added where missing: `plugins/sdk.py` `get_type_hints`, `engine/bootstrap.py` YAML read/write, `brain/_model_downloader.py` retry loop, `llm/providers/ollama.py` ping/list-models, `voice/jarvis.py` filler synthesis, `cognitive/reflect/phase.py` novelty compute, `brain/contradiction.py` LLM detection, `cognitive/financial_gate.py` intent classification.
+  - **Batch 3** (`4e696fe`) — brain + persistence + cost DB narrows: `brain/consolidation.py` centroid refresh + per-pair merge, `brain/embedding.py` ONNX model load, `brain/retrieval.py` vector/episode search, `brain/service.py` `_safe_record_access`, `persistence/pool.py` WAL checkpoint + extension load, `llm/cost.py` restore/persist/daily-flush.
+  - **Batch 5** (`853c8d3`) — voice + bridge API narrows: `voice/pipeline/_orchestrator.py` STT transcribe + TTS synthesize (all 4 call sites), `voice/tts_kokoro.py` `list_voices`, `bridge/channels/telegram.py` `edit_message_text` (narrowed to `AiogramError`).
+- Pre-existing `# noqa: BLE001` catches triaged in the earlier Sprint 2 sweep were spot-checked and left as-is — all 12 sampled were legitimate resilience boundaries with fallback + logging.
+- `tests/**/*.py` added to BLE001 per-file-ignores: security fuzz (`tests/security/test_frontend_attack.py`) and stress loops (`tests/stress/ws_stress_test.py`) legitimately need broad catches to probe attack surfaces / keep harnesses alive.
+
+### Fixed
+
+- **React error #31 on `/brain`** (`c74aab9`). `react-force-graph-2d` (via d3-force) mutates link objects in place once the simulation starts — `link.source` and `link.target` are replaced with references to the node objects themselves. The screen-reader fallback table was rendering the raw mutated object as a `<td>` child, triggering "Objects are not valid as a React child". A silent correctness bug also lived in the same paths: `connectionCounts` was keying its Map by the mutated objects, so every concept silently showed "0" connections in the SR table. Introduced `linkEndpointId()` coercion helper applied at every leak site (memo, render keys, table cells); regression test constructs a link with fully mutated endpoints and asserts both symptoms.
+- Tests that seeded typed exceptions (`LLMError`, `SearchError`) in `AsyncMock.side_effect` were updated to use the builtin/stdlib equivalents already present in the narrow tuples (`ValueError`, `sqlite3.OperationalError`). Internal-class seeding is covered by CLAUDE.md anti-pattern #8 — under pytest-cov's trace-based source rewriting, the test-side and production-side class objects can diverge, causing `except (..., SearchError, ...)` to miss. Seeding builtins avoids the class-identity drift while keeping the production narrow unchanged.
+
+### Diagnostic improvements
+
+- 15 `logger.*` call sites gained `exc_info=True`. Previously-silent degradation paths — TTS/STT failures, Ollama ping, YAML persist, cost-guard errors, model-download retry, filler synthesis, Kokoro voice listing — now emit full tracebacks at their existing log level, so real bugs can be told apart from expected fallback.
+- `react_iteration` log line now carries `tools=[...]` and `plugins=[...]` fields alongside the per-iteration counts, completing the observability parity promised by the v0.11.2 module-tags feature.
+
 ## [0.11.2] — 2026-04-15
 
 ### Added
