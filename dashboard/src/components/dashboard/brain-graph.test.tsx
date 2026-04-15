@@ -10,8 +10,21 @@
  * The visual encoding rules are extracted and tested as pure functions.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import "@/lib/i18n";
 import type { BrainNode } from "@/types/api";
+
+// react-force-graph-2d renders to <canvas>, which jsdom can't execute.
+// Mock it to a null-rendering component so we can assert on the
+// surrounding accessible fallback without the canvas pulling real
+// force-graph machinery into the test run.
+vi.mock("react-force-graph-2d", () => ({
+  __esModule: true,
+  default: () => null,
+}));
+
+import { BrainGraph } from "./brain-graph";
 
 // ── Pure function extraction for testability ──────────────────────
 
@@ -192,11 +205,90 @@ describe("BrainGraph visual encoding — link color", () => {
 });
 
 describe("BrainGraph — smoke render", () => {
-  it("module exports BrainGraph component", async () => {
-    // Verify the module can be imported without crashing
-    // (react-force-graph-2d needs canvas which jsdom stubs)
-    const mod = await import("./brain-graph");
-    expect(mod.BrainGraph).toBeDefined();
-    expect(typeof mod.BrainGraph).toBe("function");
+  it("module exports BrainGraph component", () => {
+    expect(BrainGraph).toBeDefined();
+    expect(typeof BrainGraph).toBe("function");
+  });
+});
+
+describe("BrainGraph — accessible fallback", () => {
+  it("exposes a region role with node/link counts in the aria-label", () => {
+    render(
+      <BrainGraph
+        data={{
+          nodes: [
+            { id: "n1", name: "Alice", category: "entity", importance: 0.9, confidence: 0.8, access_count: 10 },
+            { id: "n2", name: "Paris", category: "entity", importance: 0.5, confidence: 0.6, access_count: 3 },
+          ],
+          links: [
+            { source: "n1", target: "n2", relation_type: "related_to", weight: 0.7 },
+          ],
+        }}
+        width={100}
+        height={100}
+      />,
+    );
+    const region = screen.getByRole("region");
+    expect(region.getAttribute("aria-label") ?? "").toMatch(/2 concepts/);
+    expect(region.getAttribute("aria-label") ?? "").toMatch(/1 relations/);
+  });
+
+  it("renders an sr-only table listing concepts by importance", () => {
+    const { container } = render(
+      <BrainGraph
+        data={{
+          nodes: [
+            { id: "n1", name: "Alice", category: "entity", importance: 0.9, confidence: 0.8, access_count: 10 },
+          ],
+          links: [],
+        }}
+        width={100}
+        height={100}
+      />,
+    );
+    expect(screen.getByRole("rowheader", { name: "Alice" })).toBeInTheDocument();
+    expect(container.querySelector(".sr-only")).not.toBeNull();
+  });
+
+  it("marks contradiction relations in the fallback table", () => {
+    render(
+      <BrainGraph
+        data={{
+          nodes: [
+            { id: "a", name: "A", category: "fact", importance: 0.5, confidence: 0.5, access_count: 1 },
+            { id: "b", name: "B", category: "fact", importance: 0.5, confidence: 0.5, access_count: 1 },
+          ],
+          links: [
+            { source: "a", target: "b", relation_type: "contradicts", weight: 0.8 },
+          ],
+        }}
+        width={100}
+        height={100}
+      />,
+    );
+    expect(screen.getByText(/contradiction/)).toBeInTheDocument();
+  });
+
+  it("truncates the relations list and emits a notice when over the cap", () => {
+    const links = Array.from({ length: 75 }, (_, i) => ({
+      source: "a",
+      target: "b",
+      relation_type: "related_to" as const,
+      weight: (75 - i) / 75,
+    }));
+    render(
+      <BrainGraph
+        data={{
+          nodes: [
+            { id: "a", name: "A", category: "fact", importance: 0.5, confidence: 0.5, access_count: 1 },
+            { id: "b", name: "B", category: "fact", importance: 0.5, confidence: 0.5, access_count: 1 },
+          ],
+          links,
+        }}
+        width={100}
+        height={100}
+      />,
+    );
+    expect(screen.getByText(/50 of 75 relations shown/)).toBeInTheDocument();
   });
 });

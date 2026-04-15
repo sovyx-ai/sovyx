@@ -36,5 +36,21 @@
     "loadFailed": "Failed to load brain graph",
     "engineHint": "Check that the engine is running.",
     "retry": "Retry"
+  },
+  "graph": {
+    "regionLabel": "Brain knowledge graph — {{nodes}} concepts and {{links}} relations",
+    "a11ySummary": "Interactive force-directed graph of {{nodes}} concepts connected by {{links}} relations. The canvas visualisation is not reachable with a keyboard; the tables below list the same data in a screen-reader-accessible form.",
+    "a11yConceptsHeading": "Concepts",
+    "a11yRelationsHeading": "Relations",
+    "a11yTableColName": "Name",
+    "a11yTableColCategory": "Category",
+    "a11yTableColImportance": "Importance",
+    "a11yTableColConnections": "Connections",
+    "a11yRelationsTableColSource": "From",
+    "a11yRelationsTableColTarget": "To",
+    "a11yRelationsTableColType": "Type",
+    "a11yRelationsTableColWeight": "Weight",
+    "a11yContradictsBadge": "contradiction",
+    "a11yRelationsTruncated": "{{shown}} of {{total}} relations shown (strongest by weight)."
   }
 }

@@ -116,9 +116,15 @@ describe("BrainPage", () => {
     const searchInput = screen.getByRole("textbox", { name: /search concepts/i });
     fireEvent.change(searchInput, { target: { value: "typescript" } });
 
-    // Wait for debounce (300ms) + search fetch to resolve — results appear
+    // Wait for debounce (300ms) + the search fetch to actually fire. We
+    // can't assert on DOM text like "TypeScript" because it now also
+    // appears in the sr-only a11y concept table rendered by BrainGraph
+    // (from MOCK_GRAPH), so it matches immediately and the test would
+    // race the debounce. Waiting on mock-call count is deterministic and
+    // drains the queued `mockResolvedValueOnce(MOCK_SEARCH)` so it can't
+    // leak into the next test.
     await waitFor(() => {
-      expect(screen.getByText("TypeScript")).toBeInTheDocument();
+      expect(mockApi.get).toHaveBeenCalledTimes(2);
     });
 
     // Verify the search endpoint was called with correct URL
@@ -142,12 +148,12 @@ describe("BrainPage", () => {
     const searchInput = screen.getByRole("textbox", { name: /search concepts/i });
     fireEvent.change(searchInput, { target: { value: "typescript" } });
 
-    // Wait for debounce + fetch — chip shows result name
+    // Wait for the search fetch to complete (debounce + mock resolve).
+    // The score-badge chip is unique to the rendered search-results
+    // panel — it can't race the sr-only fallback.
     await waitFor(() => {
-      expect(screen.getByText("TypeScript")).toBeInTheDocument();
+      expect(screen.getByText("92%")).toBeInTheDocument();
     });
-    // Score badge
-    expect(screen.getByText("92%")).toBeInTheDocument();
   });
 
   it("clears search when X button is clicked", async () => {
@@ -163,8 +169,10 @@ describe("BrainPage", () => {
     const searchInput = screen.getByRole("textbox", { name: /search concepts/i });
     fireEvent.change(searchInput, { target: { value: "typescript" } });
 
+    // Wait for the search API to actually fire so the queued mock is
+    // consumed and cannot leak into the next test.
     await waitFor(() => {
-      expect(screen.getByText("TypeScript")).toBeInTheDocument();
+      expect(mockApi.get).toHaveBeenCalledTimes(2);
     });
 
     // aria-label is t("common:clear", { defaultValue: "Clear" }) = "Clear"

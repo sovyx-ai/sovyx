@@ -20,7 +20,8 @@
  * Ref: Architecture §3.3, META-04 §5, V05-P03 search highlight
  */
 
-import { useCallback, useRef, useEffect, useState } from "react";
+import { useCallback, useMemo, useRef, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import ForceGraph2D, { type ForceGraphMethods } from "react-force-graph-2d";
 import type { BrainNode, BrainLink, RelationType } from "@/types/api";
 import { CATEGORY_COLORS } from "@/lib/constants";
@@ -52,9 +53,50 @@ const RELATION_LINE_DASH: Record<RelationType, number[] | null> = {
 
 import { GRAPH_COLORS } from "@/lib/constants";
 
+/** Max rows surfaced in the accessible fallback tables.
+ *
+ * Canvas renders every node/link up to the server-side limit (200 by the
+ * current dashboard query). Exposing all 200 × 200 = 40 000 cells via the
+ * SR tree would be hostile even for SR users; we truncate to the most
+ * important concepts and the strongest relations and emit a translated
+ * "N of M" notice when the list is clipped.
+ */
+const _A11Y_MAX_ROWS = 50;
+
 export function BrainGraph({ data, width, height, onNodeClick, highlightedNodeIds }: BrainGraphProps) {
+  const { t } = useTranslation("brain");
   const fgRef = useRef<ForceGraphMethods<BrainNode>>(undefined);
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
+
+  // ── Accessible fallback data ───────────────────────────────────────
+  //
+  // Screen readers can't read the <canvas> visualisation. Derive the
+  // same information — top concepts by importance + strongest relations
+  // — into plain HTML tables hidden from sighted users via `sr-only`.
+  const { nodesByImportance, linksByWeight, connectionCounts } = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const link of data.links) {
+      counts.set(link.source, (counts.get(link.source) ?? 0) + 1);
+      counts.set(link.target, (counts.get(link.target) ?? 0) + 1);
+    }
+    const sortedNodes = [...data.nodes]
+      .sort((a, b) => b.importance - a.importance)
+      .slice(0, _A11Y_MAX_ROWS);
+    const sortedLinks = [...data.links]
+      .sort((a, b) => b.weight - a.weight)
+      .slice(0, _A11Y_MAX_ROWS);
+    return {
+      nodesByImportance: sortedNodes,
+      linksByWeight: sortedLinks,
+      connectionCounts: counts,
+    };
+  }, [data]);
+
+  const nodeNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const n of data.nodes) map.set(n.id, n.name);
+    return map;
+  }, [data.nodes]);
 
   // Zoom to fit on data change
   useEffect(() => {
@@ -167,37 +209,126 @@ export function BrainGraph({ data, width, height, onNodeClick, highlightedNodeId
     [],
   );
 
+  const nodesTotal = data.nodes.length;
+  const linksTotal = data.links.length;
+  const linksShown = linksByWeight.length;
+
   return (
-    <ForceGraph2D
-      ref={fgRef}
-      graphData={data}
-      width={width}
-      height={height}
-      backgroundColor="transparent"
-      nodeCanvasObject={nodeCanvasObject}
-      nodePointerAreaPaint={(node: BrainNode, color: string, ctx: CanvasRenderingContext2D) => {
-        const x = (node as unknown as { x: number }).x;
-        const y = (node as unknown as { y: number }).y;
-        if (x === undefined || y === undefined) return;
-        const radius = 3 + node.importance * 9 + 4;
-        ctx.beginPath();
-        ctx.arc(x, y, radius, 0, 2 * Math.PI);
-        ctx.fillStyle = color;
-        ctx.fill();
-      }}
-      linkLineDash={linkLineDash}
-      linkColor={linkColor}
-      linkWidth={linkWidth}
-      linkLabel={(link: BrainLink) => `${link.relation_type.replace("_", " ")} (${link.weight.toFixed(2)})`}
-      linkDirectionalParticles={0}
-      nodeLabel={(node: BrainNode) =>
-        `${node.name}\n📊 importance: ${node.importance.toFixed(2)} | confidence: ${node.confidence.toFixed(2)}\n🏷️ ${node.category} | 👁️ ${node.access_count} views`
-      }
-      onNodeHover={(node: BrainNode | null) => setHoveredNode(node?.id ?? null)}
-      onNodeClick={(node: BrainNode) => onNodeClick?.(node)}
-      cooldownTicks={100}
-      d3AlphaDecay={0.02}
-      d3VelocityDecay={0.3}
-    />
+    <div
+      role="region"
+      aria-label={t("graph.regionLabel", {
+        nodes: nodesTotal,
+        links: linksTotal,
+      })}
+    >
+      <ForceGraph2D
+        ref={fgRef}
+        graphData={data}
+        width={width}
+        height={height}
+        backgroundColor="transparent"
+        nodeCanvasObject={nodeCanvasObject}
+        nodePointerAreaPaint={(node: BrainNode, color: string, ctx: CanvasRenderingContext2D) => {
+          const x = (node as unknown as { x: number }).x;
+          const y = (node as unknown as { y: number }).y;
+          if (x === undefined || y === undefined) return;
+          const radius = 3 + node.importance * 9 + 4;
+          ctx.beginPath();
+          ctx.arc(x, y, radius, 0, 2 * Math.PI);
+          ctx.fillStyle = color;
+          ctx.fill();
+        }}
+        linkLineDash={linkLineDash}
+        linkColor={linkColor}
+        linkWidth={linkWidth}
+        linkLabel={(link: BrainLink) => `${link.relation_type.replace("_", " ")} (${link.weight.toFixed(2)})`}
+        linkDirectionalParticles={0}
+        nodeLabel={(node: BrainNode) =>
+          `${node.name}\n📊 importance: ${node.importance.toFixed(2)} | confidence: ${node.confidence.toFixed(2)}\n🏷️ ${node.category} | 👁️ ${node.access_count} views`
+        }
+        onNodeHover={(node: BrainNode | null) => setHoveredNode(node?.id ?? null)}
+        onNodeClick={(node: BrainNode) => onNodeClick?.(node)}
+        cooldownTicks={100}
+        d3AlphaDecay={0.02}
+        d3VelocityDecay={0.3}
+      />
+
+      {/* ── Screen-reader fallback ─────────────────────────────────
+       *
+       * force-graph-2d is a <canvas> — opaque to assistive tech and
+       * keyboard users. The block below surfaces the same data as two
+       * plain tables, visually hidden with Tailwind's `sr-only` utility.
+       * Tables list the top-50 concepts by importance and the
+       * strongest relations by weight. Category + relation type route
+       * through the existing brain i18n namespace so future locales
+       * work without extra plumbing.
+       */}
+      <div className="sr-only">
+        <p>
+          {t("graph.a11ySummary", { nodes: nodesTotal, links: linksTotal })}
+        </p>
+
+        <h3>{t("graph.a11yConceptsHeading")}</h3>
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">{t("graph.a11yTableColName")}</th>
+              <th scope="col">{t("graph.a11yTableColCategory")}</th>
+              <th scope="col">{t("graph.a11yTableColImportance")}</th>
+              <th scope="col">{t("graph.a11yTableColConnections")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {nodesByImportance.map((node) => (
+              <tr key={node.id}>
+                <th scope="row">{node.name}</th>
+                <td>{t(`categories.${node.category}`)}</td>
+                <td>{node.importance.toFixed(2)}</td>
+                <td>{connectionCounts.get(node.id) ?? 0}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        {linksTotal > 0 && (
+          <>
+            <h3>{t("graph.a11yRelationsHeading")}</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">{t("graph.a11yRelationsTableColSource")}</th>
+                  <th scope="col">{t("graph.a11yRelationsTableColTarget")}</th>
+                  <th scope="col">{t("graph.a11yRelationsTableColType")}</th>
+                  <th scope="col">{t("graph.a11yRelationsTableColWeight")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {linksByWeight.map((link, idx) => (
+                  <tr key={`${link.source}-${link.target}-${idx}`}>
+                    <td>{nodeNameById.get(link.source) ?? link.source}</td>
+                    <td>{nodeNameById.get(link.target) ?? link.target}</td>
+                    <td>
+                      {t(`relations.${link.relation_type}`)}
+                      {link.relation_type === "contradicts" && (
+                        <> — {t("graph.a11yContradictsBadge")}</>
+                      )}
+                    </td>
+                    <td>{link.weight.toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {linksShown < linksTotal && (
+              <p>
+                {t("graph.a11yRelationsTruncated", {
+                  shown: linksShown,
+                  total: linksTotal,
+                })}
+              </p>
+            )}
+          </>
+        )}
+      </div>
+    </div>
   );
 }
