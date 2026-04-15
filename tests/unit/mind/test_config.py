@@ -18,6 +18,7 @@ from sovyx.engine.types import MindId
 from sovyx.mind.config import (
     BrainConfig,
     ChannelsConfig,
+    EmotionalBaselineConfig,
     LLMConfig,
     MindConfig,
     OceanConfig,
@@ -173,6 +174,42 @@ class TestBrainConfig:
     def test_interval_overflow_rejected(self) -> None:
         with pytest.raises(ValidationError, match="consolidation_interval_hours"):
             BrainConfig(consolidation_interval_hours=200)
+
+    def test_emotional_baseline_defaults_neutral(self) -> None:
+        """Default baseline preserves zero-anchor behaviour (no breaking change)."""
+        b = BrainConfig()
+        assert b.emotional_baseline.valence == 0.0
+        assert b.emotional_baseline.arousal == 0.0
+        assert b.emotional_baseline.dominance == 0.0
+        assert b.emotional_baseline.homeostasis_rate == 0.05
+
+
+class TestEmotionalBaselineConfig:
+    """ADR-001 per-mind emotional baseline."""
+
+    def test_explicit_override(self) -> None:
+        b = EmotionalBaselineConfig(valence=0.3, arousal=-0.1, dominance=0.2)
+        assert b.valence == 0.3
+        assert b.arousal == -0.1
+        assert b.dominance == 0.2
+
+    @pytest.mark.parametrize("axis", ["valence", "arousal", "dominance"])
+    def test_axis_below_minus_one_rejected(self, axis: str) -> None:
+        with pytest.raises(ValidationError, match=axis):
+            EmotionalBaselineConfig(**{axis: -1.1})
+
+    @pytest.mark.parametrize("axis", ["valence", "arousal", "dominance"])
+    def test_axis_above_plus_one_rejected(self, axis: str) -> None:
+        with pytest.raises(ValidationError, match=axis):
+            EmotionalBaselineConfig(**{axis: 1.1})
+
+    def test_homeostasis_rate_bounds(self) -> None:
+        EmotionalBaselineConfig(homeostasis_rate=0.0)
+        EmotionalBaselineConfig(homeostasis_rate=1.0)
+        with pytest.raises(ValidationError, match="homeostasis_rate"):
+            EmotionalBaselineConfig(homeostasis_rate=1.1)
+        with pytest.raises(ValidationError, match="homeostasis_rate"):
+            EmotionalBaselineConfig(homeostasis_rate=-0.1)
 
 
 class TestScoringConfig:

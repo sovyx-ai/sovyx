@@ -839,3 +839,75 @@ class TestProtocolCompliance:
         from sovyx.engine.protocols import BrainWriter
 
         assert isinstance(brain, BrainWriter)
+
+
+class TestEmotionalBaseline:
+    """ADR-001 per-mind emotional baseline is injected and consumed."""
+
+    def test_default_baseline_neutral(
+        self, brain: BrainService,
+    ) -> None:
+        """Omitting the baseline dep gives a zero-anchor config."""
+        assert brain.emotional_baseline.valence == 0.0
+        assert brain.emotional_baseline.arousal == 0.0
+        assert brain.emotional_baseline.homeostasis_rate == 0.05
+
+    def test_injected_baseline_exposed_via_property(
+        self,
+        mock_deps: dict[str, AsyncMock | WorkingMemory],
+    ) -> None:
+        """Baseline passed to __init__ is exposed for downstream consumers."""
+        from sovyx.mind.config import EmotionalBaselineConfig
+
+        baseline = EmotionalBaselineConfig(valence=0.3, arousal=0.1, homeostasis_rate=0.2)
+        b = BrainService(**mock_deps, emotional_baseline=baseline)  # type: ignore[arg-type]
+        assert b.emotional_baseline is baseline
+        assert b.emotional_baseline.valence == 0.3
+
+    async def test_encode_episode_without_emotion_uses_baseline(
+        self,
+        mock_deps: dict[str, AsyncMock | WorkingMemory],
+    ) -> None:
+        """Caller omits emotional_valence → baseline.valence lands in the Episode."""
+        from sovyx.mind.config import EmotionalBaselineConfig
+
+        baseline = EmotionalBaselineConfig(valence=0.25, arousal=-0.15)
+        b = BrainService(**mock_deps, emotional_baseline=baseline)  # type: ignore[arg-type]
+        # Record the Episode that gets created so we can inspect its emotional axes.
+        mock_deps["episode_repo"].create = AsyncMock(return_value=EpisodeId("ep-1"))  # type: ignore[index]
+
+        await b.encode_episode(
+            mind_id=MIND,
+            conversation_id=ConversationId("conv-1"),
+            user_input="hi",
+            assistant_response="hello",
+            # no emotional_valence, no emotional_arousal → baseline fills in
+        )
+        call = mock_deps["episode_repo"].create.await_args  # type: ignore[index, union-attr]
+        episode = call.args[0]
+        assert episode.emotional_valence == 0.25
+        assert episode.emotional_arousal == -0.15
+
+    async def test_encode_episode_explicit_emotion_overrides_baseline(
+        self,
+        mock_deps: dict[str, AsyncMock | WorkingMemory],
+    ) -> None:
+        """Explicit emotional_valence wins over the baseline anchor."""
+        from sovyx.mind.config import EmotionalBaselineConfig
+
+        baseline = EmotionalBaselineConfig(valence=0.5, arousal=0.5)
+        b = BrainService(**mock_deps, emotional_baseline=baseline)  # type: ignore[arg-type]
+        mock_deps["episode_repo"].create = AsyncMock(return_value=EpisodeId("ep-2"))  # type: ignore[index]
+
+        await b.encode_episode(
+            mind_id=MIND,
+            conversation_id=ConversationId("conv-1"),
+            user_input="news",
+            assistant_response="reply",
+            emotional_valence=-0.9,
+            emotional_arousal=0.8,
+        )
+        call = mock_deps["episode_repo"].create.await_args  # type: ignore[index, union-attr]
+        episode = call.args[0]
+        assert episode.emotional_valence == -0.9
+        assert episode.emotional_arousal == 0.8

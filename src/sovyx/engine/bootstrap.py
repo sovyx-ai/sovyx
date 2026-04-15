@@ -203,6 +203,7 @@ async def bootstrap(
                 retrieval=retrieval,
                 working_memory=working_memory,
                 event_bus=event_bus,
+                emotional_baseline=mind_config.brain.emotional_baseline,
             )
             registry.register_instance(BrainService, brain_service)
             registry.register_instance(ConceptRepository, concept_repo)

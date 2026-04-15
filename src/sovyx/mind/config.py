@@ -154,6 +154,46 @@ class ScoringConfig(BaseModel):
         return self
 
 
+class EmotionalBaselineConfig(BaseModel):
+    """Per-mind emotional baseline — the "resting" state a mind drifts toward.
+
+    The Concept / Episode models store emotional deltas (`emotional_valence`,
+    `emotional_arousal` — see ``brain/models.py``). This config defines the
+    neutral anchor: where a concept's emotional charge settles in the absence
+    of reinforcement, and how fast it gets there.
+
+    Defaults match the hardcoded zero-anchor behaviour present before this
+    config existed — a neutral-affect baseline with a gentle pull back to it.
+    Overriding per mind (e.g. an assistant with a naturally warmer baseline)
+    shifts all newly-encoded concepts by the same delta without touching
+    existing data.
+
+    References:
+        - ADR-001 §2 — per-mind emotional baseline + homeostasis_rate.
+        - `brain/models.py` — Concept.emotional_valence / Episode.emotional_*.
+
+    Attributes:
+        valence: Resting pleasure/displeasure axis, in [-1.0, +1.0].
+            Default 0.0 (neutral) matches the historical behaviour.
+        arousal: Resting activation axis, in [-1.0, +1.0].
+            Default 0.0 (calm). Positive values bias new episodes toward
+            "intense" encodings, negative toward "quiet".
+        dominance: Resting sense-of-control axis, in [-1.0, +1.0]. Reserved
+            for the planned 2D → 3D PAD migration (ADR-001); currently read
+            by the config but not yet consumed by the scoring pipeline.
+        homeostasis_rate: How strongly a concept's emotional state is pulled
+            back toward baseline per consolidation cycle, in [0.0, 1.0].
+            ``0.0`` disables homeostasis (concepts keep whatever affect they
+            last saw); ``1.0`` resets to baseline every cycle. Default 0.05
+            is a light nudge — consistent with the current decay-only model.
+    """
+
+    valence: float = Field(default=0.0, ge=-1.0, le=1.0)
+    arousal: float = Field(default=0.0, ge=-1.0, le=1.0)
+    dominance: float = Field(default=0.0, ge=-1.0, le=1.0)
+    homeostasis_rate: float = Field(default=0.05, ge=0.0, le=1.0)
+
+
 class BrainConfig(BaseModel):
     """Brain memory system configuration.
 
@@ -168,6 +208,9 @@ class BrainConfig(BaseModel):
     decay_rate: float = Field(default=0.1, ge=0.0, le=1.0)
     min_strength: float = Field(default=0.01, ge=0.0, le=1.0)
     scoring: ScoringConfig = Field(default_factory=ScoringConfig)
+    emotional_baseline: EmotionalBaselineConfig = Field(
+        default_factory=EmotionalBaselineConfig,
+    )
 
 
 class TelegramChannelConfig(BaseModel):
