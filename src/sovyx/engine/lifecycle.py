@@ -297,21 +297,28 @@ class LifecycleManager:
             gate = await self._registry.resolve(CogLoopGate)
             await gate.start()
 
-        # Resolve active mind id once — shared by both schedulers.
-        mind_mgr = await self._registry.resolve(MindManager)
-        mind_id = MindIdType(mind_mgr._active[0] if mind_mgr._active else "default")
+        # Resolve active mind id once — shared by both schedulers. Only
+        # touch MindManager when at least one scheduler is registered, so
+        # minimal lifecycle tests (which wire just the cognitive loop)
+        # don't need to register MindManager just to call _start_services.
+        needs_mind_id = self._registry.is_registered(
+            ConsolidationScheduler
+        ) or self._registry.is_registered(DreamScheduler)
+        if needs_mind_id:
+            mind_mgr = await self._registry.resolve(MindManager)
+            mind_id = MindIdType(mind_mgr._active[0] if mind_mgr._active else "default")
 
-        # Start consolidation scheduler (memory decay/prune/strengthen)
-        if self._registry.is_registered(ConsolidationScheduler):
-            scheduler = await self._registry.resolve(ConsolidationScheduler)
-            await scheduler.start(mind_id)
+            # Start consolidation scheduler (memory decay/prune/strengthen)
+            if self._registry.is_registered(ConsolidationScheduler):
+                scheduler = await self._registry.resolve(ConsolidationScheduler)
+                await scheduler.start(mind_id)
 
-        # Start DREAM scheduler (nightly pattern discovery; independent of
-        # consolidation — schedulers run in parallel and are idempotent
-        # under SQLite WAL).
-        if self._registry.is_registered(DreamScheduler):
-            dream = await self._registry.resolve(DreamScheduler)
-            await dream.start(mind_id)
+            # Start DREAM scheduler (nightly pattern discovery; independent of
+            # consolidation — schedulers run in parallel and are idempotent
+            # under SQLite WAL).
+            if self._registry.is_registered(DreamScheduler):
+                dream = await self._registry.resolve(DreamScheduler)
+                await dream.start(mind_id)
 
         # Start bridge (channels connect last)
         if self._registry.is_registered(BridgeManager):
