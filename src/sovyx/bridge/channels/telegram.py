@@ -11,6 +11,7 @@ import contextlib
 from typing import TYPE_CHECKING
 
 from aiogram import Bot, Dispatcher, Router
+from aiogram.exceptions import AiogramError
 from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -198,11 +199,18 @@ class TelegramChannel:
             kwargs["reply_markup"] = self._build_inline_keyboard(buttons)
         try:
             await self._bot.edit_message_text(**kwargs)  # type: ignore[arg-type]
-        except Exception as e:
+        except (TimeoutError, AiogramError, OSError) as e:
+            # AiogramError: base for every aiogram-typed failure
+            # (rate-limit, bad request, forbidden, network). Timeout
+            # and OSError cover raw transport issues that don't get
+            # wrapped. Edit failures are non-fatal — the original
+            # message stays visible to the user — but we log with
+            # traceback so rate-limit storms are diagnosable.
             logger.error(
                 "telegram_edit_failed",
                 message_id=message_id,
                 error=str(e),
+                exc_info=True,
             )
 
     @staticmethod

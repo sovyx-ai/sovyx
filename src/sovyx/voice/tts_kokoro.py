@@ -354,8 +354,13 @@ class KokoroTTS(TTSEngine):
 
         try:
             voices: list[str] = self._kokoro.get_voices()
-        except Exception:
-            logger.warning("Failed to list Kokoro voices")
+        except (RuntimeError, AttributeError, OSError):
+            # RuntimeError: Kokoro's internal ONNX / inference errors.
+            # AttributeError: upstream API drift (get_voices removed
+            # or renamed). OSError: voice-file access failure.
+            # Returning [] lets the caller render "no voices" instead
+            # of crashing; traceback surfaces persistent issues.
+            logger.warning("Failed to list Kokoro voices", exc_info=True)
             return []
 
         return sorted(voices)

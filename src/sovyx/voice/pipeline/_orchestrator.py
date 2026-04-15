@@ -6,6 +6,7 @@ import asyncio
 import time
 from typing import TYPE_CHECKING, Any
 
+from sovyx.engine.errors import VoiceError
 from sovyx.observability.logging import get_logger
 from sovyx.voice.jarvis import JarvisConfig, JarvisIllusion, split_at_boundaries
 from sovyx.voice.pipeline._barge_in import BargeInDetector
@@ -348,8 +349,13 @@ class VoicePipeline:
         start = time.monotonic()
         try:
             result = await self._stt.transcribe(utterance)
-        except Exception as exc:
-            logger.error("STT failed", error=str(exc))
+        except (VoiceError, RuntimeError, OSError) as exc:
+            # VoiceError: typed STT subsystem failures (CloudSTTError
+            # and siblings). RuntimeError: ONNX inference errors from
+            # on-device backends (Moonshine). OSError: audio-device /
+            # temp-file I/O. The pipeline transitions to IDLE so a
+            # single bad utterance doesn't wedge the loop.
+            logger.error("STT failed", error=str(exc), exc_info=True)
             await self._emit(
                 PipelineErrorEvent(
                     mind_id=self._config.mind_id,
@@ -405,8 +411,12 @@ class VoicePipeline:
         try:
             chunk = await self._tts.synthesize(text)
             await self._output.play_immediate(chunk)
-        except Exception as exc:
-            logger.error("TTS failed", error=str(exc))
+        except (VoiceError, RuntimeError, OSError) as exc:
+            # TTS backends (Piper, Kokoro, cloud) share the same
+            # failure profile as STT — typed subsystem errors, ONNX
+            # runtime failures, and I/O. Emit a pipeline error event
+            # so the cognitive loop knows the utterance didn't speak.
+            logger.error("TTS failed", error=str(exc), exc_info=True)
             await self._emit(
                 PipelineErrorEvent(
                     mind_id=self._config.mind_id,
@@ -442,8 +452,15 @@ class VoicePipeline:
             try:
                 chunk = await self._tts.synthesize(segment)
                 await self._output.enqueue(chunk)
-            except Exception as exc:
-                logger.warning("Stream TTS failed", error=str(exc))
+            except (VoiceError, RuntimeError, OSError) as exc:
+                # Per-segment resilience during streaming: skip the
+                # bad segment, keep speaking the rest. Traceback
+                # preserved so persistent TTS failures don't hide.
+                logger.warning(
+                    "Stream TTS failed",
+                    error=str(exc),
+                    exc_info=True,
+                )
 
         # Keep incomplete segment in buffer
         self._text_buffer = segments[-1] if segments else ""
@@ -457,8 +474,15 @@ class VoicePipeline:
             try:
                 chunk = await self._tts.synthesize(self._text_buffer)
                 await self._output.enqueue(chunk)
-            except Exception as exc:
-                logger.warning("Flush TTS failed", error=str(exc))
+            except (VoiceError, RuntimeError, OSError) as exc:
+                # Final-segment flush — losing this tail means the
+                # user hears an abrupt cut, but the loop advances.
+                # Traceback on warning so a broken TTS config surfaces.
+                logger.warning(
+                    "Flush TTS failed",
+                    error=str(exc),
+                    exc_info=True,
+                )
         self._text_buffer = ""
 
         # Drain all queued audio
