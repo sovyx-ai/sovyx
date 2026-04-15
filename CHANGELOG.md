@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.11.2] — 2026-04-15
+
+### Added
+
+- **Module/plugin tags on every chat response.** Every assistant message now carries at least one visible tag (pill) indicating which modules produced the reply. Pure cognitive replies show `brain`; tool-backed replies show the plugin name(s) followed by `brain`. Tags are derived from the ReAct loop's `tool_calls_made` list (no new data plumbing — plugin names come from the existing namespaced `plugin.tool` format) and rendered above the assistant bubble via a new `MessageTags` React component with i18n labels and raw-name fallback for unknown plugins.
+- `react_iteration` log call now includes `tools` and `plugins` fields for observability parity with the new wire-format contract.
+- `ChatResponse.tags?: string[]` and matching zod schema on the frontend; `ChatMessage` extended with the same field for thread-level rendering.
+
 ## [0.11.1] — 2026-04-15
 
 Sprint 6 — 90 % → 95 % enterprise polish. Thirteen focused items across accessibility, resilience, observability, and schema hygiene. All CI gates green.
