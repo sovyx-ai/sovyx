@@ -1,0 +1,83 @@
+[
+  {
+    "uuid": "claude-text-only-uuid",
+    "name": "React hooks question",
+    "created_at": "2024-11-15T10:30:45.123456Z",
+    "updated_at": "2024-11-15T10:35:12.789012Z",
+    "account": {"uuid": "acct-uuid-1"},
+    "chat_messages": [
+      {
+        "uuid": "msg-a1",
+        "sender": "human",
+        "text": "When should I use useEffect vs useMemo?",
+        "content": [
+          {"type": "text", "text": "When should I use useEffect vs useMemo?"}
+        ],
+        "created_at": "2024-11-15T10:30:45.123456Z"
+      },
+      {
+        "uuid": "msg-a2",
+        "sender": "assistant",
+        "text": "useEffect runs side effects after render; useMemo memoizes a computed value.",
+        "content": [
+          {"type": "text", "text": "useEffect runs side effects after render; useMemo memoizes a computed value."}
+        ],
+        "created_at": "2024-11-15T10:31:02.456789Z"
+      },
+      {
+        "uuid": "msg-a3",
+        "sender": "human",
+        "text": "Got it, thanks.",
+        "content": [
+          {"type": "text", "text": "Got it, thanks."}
+        ],
+        "created_at": "2024-11-15T10:32:10.987654Z"
+      }
+    ]
+  },
+  {
+    "uuid": "claude-multimodal-uuid",
+    "name": "Image analysis",
+    "created_at": "2024-12-01T14:00:00.000000Z",
+    "chat_messages": [
+      {
+        "uuid": "msg-b1",
+        "sender": "human",
+        "text": "",
+        "content": [
+          {"type": "text", "text": "What's in this screenshot?"},
+          {"type": "image", "source": {"type": "base64", "media_type": "image/png"}}
+        ],
+        "created_at": "2024-12-01T14:00:00.000000Z"
+      },
+      {
+        "uuid": "msg-b2",
+        "sender": "assistant",
+        "text": "",
+        "content": [
+          {"type": "text", "text": "It shows a terminal running a Python script."}
+        ],
+        "created_at": "2024-12-01T14:00:15.000000Z"
+      }
+    ]
+  },
+  {
+    "uuid": "claude-legacy-text-only-uuid",
+    "name": "",
+    "created_at": "2024-03-10T08:00:00.000000Z",
+    "chat_messages": [
+      {
+        "uuid": "msg-c1",
+        "sender": "human",
+        "text": "Explain SQLite WAL mode in one sentence.",
+        "created_at": "2024-03-10T08:00:00.000000Z"
+      },
+      {
+        "uuid": "msg-c2",
+        "sender": "assistant",
+        "text": "WAL lets readers and writers coexist by staging writes in a separate log file.",
+        "created_at": "2024-03-10T08:00:30.000000Z"
+      }
+    ]
+  }
+]

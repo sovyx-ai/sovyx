@@ -6,13 +6,14 @@ Each platform parses its native archive into a platform-neutral
 the brain as one ``Episode`` per conversation plus LLM-derived concept
 rows.
 
-This v1 ships ChatGPT only; sibling files for the other platforms
-follow the same interface.
+This release ships ChatGPT + Claude; Gemini and Obsidian follow the
+same interface in later PRs.
 
 Public surface:
 
     from sovyx.upgrade.conv_import import (
         ChatGPTImporter,
+        ClaudeImporter,
         ConversationImportError,
         ImportJobStatus,
         ImportProgressTracker,
@@ -42,9 +43,11 @@ from sovyx.upgrade.conv_import._tracker import (
     ImportState,
 )
 from sovyx.upgrade.conv_import.chatgpt import ChatGPTImporter
+from sovyx.upgrade.conv_import.claude import ClaudeImporter
 
 __all__ = [
     "ChatGPTImporter",
+    "ClaudeImporter",
     "ConversationImportError",
     "ConversationImporter",
     "ImportJobStatus",

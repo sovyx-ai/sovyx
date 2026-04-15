@@ -33,6 +33,9 @@ from starlette.testclient import TestClient
 from sovyx.dashboard.server import create_app
 
 _FIXTURE = Path(__file__).parent.parent / "fixtures" / "chatgpt" / "sample_conversations.json"
+_CLAUDE_FIXTURE = (
+    Path(__file__).parent.parent / "fixtures" / "claude" / "sample_conversations.json"
+)
 
 # ── Dict-backed pool stub ──────────────────────────────────────────
 #
@@ -308,6 +311,33 @@ class TestConversationImportValidation:
             headers=auth,
         )
         assert resp.status_code == 422  # noqa: PLR2004
+
+    def test_claude_platform_accepted(
+        self,
+        client: TestClient,
+        auth: dict[str, str],
+    ) -> None:
+        """Registry wiring smoke-test: ``platform=claude`` reaches the worker.
+
+        The heavy end-to-end flow (progress polling, dedup, summary
+        encoding) is exercised via the ChatGPT fixture and is fully
+        platform-agnostic, so we don't duplicate it for every new
+        platform — we just assert that the router accepts the new
+        identifier and starts a job.
+        """
+        registry, _ = _make_registry()
+        client.app.state.registry = registry  # type: ignore[union-attr]
+        resp = client.post(
+            "/api/import/conversations",
+            files={"file": ("c.json", _CLAUDE_FIXTURE.read_bytes())},
+            data={"platform": "claude"},
+            headers=auth,
+        )
+        assert resp.status_code == 202  # noqa: PLR2004
+        body = resp.json()
+        assert body["platform"] == "claude"
+        assert body["conversations_total"] == 3  # noqa: PLR2004
+        _wait_for_completion(client, body["job_id"], auth)
 
 
 # ── Happy path + dedup ────────────────────────────────────────────

@@ -31,6 +31,7 @@ from sovyx.dashboard.routes._deps import verify_token
 from sovyx.observability.logging import get_logger
 from sovyx.upgrade.conv_import import (
     ChatGPTImporter,
+    ClaudeImporter,
     ConversationImporter,
     ConversationImportError,
     ImportProgressTracker,
@@ -63,6 +64,7 @@ _IMPORT_CHUNK_BYTES = 1 * 1024 * 1024  # 1 MiB streaming chunk
 # here. The endpoint stays unchanged.
 _IMPORTERS: dict[str, type[ConversationImporter]] = {
     "chatgpt": ChatGPTImporter,
+    "claude": ClaudeImporter,
 }
 
 
