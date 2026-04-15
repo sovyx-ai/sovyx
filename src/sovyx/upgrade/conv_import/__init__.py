@@ -6,8 +6,10 @@ Each platform parses its native archive into a platform-neutral
 the brain as one ``Episode`` per conversation plus LLM-derived concept
 rows.
 
-This release ships ChatGPT + Claude + Gemini; Obsidian follows the
-same interface in a later PR.
+This release ships ChatGPT + Claude + Gemini + Grok (v0 best-guess);
+Obsidian vault import lives in the sibling ``sovyx.upgrade.vault_import``
+subpackage because notes require a fundamentally different encoding
+path (no summary LLM call, wikilinks become Relations).
 
 Public surface:
 
@@ -15,6 +17,7 @@ Public surface:
         ChatGPTImporter,
         ClaudeImporter,
         GeminiImporter,
+        GrokImporter,
         ConversationImportError,
         ImportJobStatus,
         ImportProgressTracker,
@@ -46,6 +49,7 @@ from sovyx.upgrade.conv_import._tracker import (
 from sovyx.upgrade.conv_import.chatgpt import ChatGPTImporter
 from sovyx.upgrade.conv_import.claude import ClaudeImporter
 from sovyx.upgrade.conv_import.gemini import GeminiImporter
+from sovyx.upgrade.conv_import.grok import GrokImporter
 
 __all__ = [
     "ChatGPTImporter",
@@ -53,6 +57,7 @@ __all__ = [
     "ConversationImportError",
     "ConversationImporter",
     "GeminiImporter",
+    "GrokImporter",
     "ImportJobStatus",
     "ImportProgressTracker",
     "ImportState",

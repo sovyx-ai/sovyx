@@ -37,6 +37,7 @@ _CLAUDE_FIXTURE = (
     Path(__file__).parent.parent / "fixtures" / "claude" / "sample_conversations.json"
 )
 _GEMINI_FIXTURE = Path(__file__).parent.parent / "fixtures" / "gemini" / "sample_activity.json"
+_GROK_FIXTURE = Path(__file__).parent.parent / "fixtures" / "grok" / "sample_conversations.json"
 
 # ── Dict-backed pool stub ──────────────────────────────────────────
 #
@@ -366,6 +367,65 @@ class TestConversationImportValidation:
         # Fixture produces 4 conversations: Bard 2023-06-01, EN SQLite
         # 2024-10-20, PT Curitiba 2024-10-21 14:01, EN React 2024-10-21 17:45.
         assert body["conversations_total"] == 4  # noqa: PLR2004
+        _wait_for_completion(client, body["job_id"], auth)
+
+    def test_grok_platform_accepted(
+        self,
+        client: TestClient,
+        auth: dict[str, str],
+    ) -> None:
+        """Registry wiring smoke-test: ``platform=grok`` reaches the worker."""
+        registry, _ = _make_registry()
+        client.app.state.registry = registry  # type: ignore[union-attr]
+        resp = client.post(
+            "/api/import/conversations",
+            files={"file": ("gk.json", _GROK_FIXTURE.read_bytes())},
+            data={"platform": "grok"},
+            headers=auth,
+        )
+        assert resp.status_code == 202  # noqa: PLR2004
+        body = resp.json()
+        assert body["platform"] == "grok"
+        assert body["conversations_total"] == 2  # noqa: PLR2004
+        _wait_for_completion(client, body["job_id"], auth)
+
+    def test_obsidian_platform_accepted(
+        self,
+        client: TestClient,
+        auth: dict[str, str],
+        tmp_path: Path,
+    ) -> None:
+        """Registry wiring smoke-test: ``platform=obsidian`` with a ZIP vault."""
+        import zipfile as _zipfile
+
+        vault_zip = tmp_path / "vault.zip"
+        with _zipfile.ZipFile(vault_zip, "w", _zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(
+                "welcome.md",
+                "---\ntags: [greeting]\n---\n# Welcome\nHi.",
+            )
+            zf.writestr(
+                "topics/portuguese.md",
+                "---\ntags: [language, learning]\n---\n# Portuguese\nSee [[Welcome]].\n",
+            )
+            zf.writestr(
+                "topics/spanish.md",
+                "# Spanish\nAnother language. See [[Portuguese]] and #language.",
+            )
+
+        registry, _ = _make_registry()
+        client.app.state.registry = registry  # type: ignore[union-attr]
+        resp = client.post(
+            "/api/import/conversations",
+            files={"file": ("vault.zip", vault_zip.read_bytes())},
+            data={"platform": "obsidian"},
+            headers=auth,
+        )
+        assert resp.status_code == 202  # noqa: PLR2004
+        body = resp.json()
+        assert body["platform"] == "obsidian"
+        # 3 notes in the vault.
+        assert body["conversations_total"] == 3  # noqa: PLR2004
         _wait_for_completion(client, body["job_id"], auth)
 
 

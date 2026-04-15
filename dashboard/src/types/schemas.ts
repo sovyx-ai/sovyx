@@ -241,6 +241,8 @@ export const ConversationImportPlatformSchema = z.enum([
   "chatgpt",
   "claude",
   "gemini",
+  "obsidian",
+  "grok",
 ]);
 
 export const ConversationImportStateSchema = z.enum([

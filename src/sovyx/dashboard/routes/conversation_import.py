@@ -35,19 +35,22 @@ from sovyx.upgrade.conv_import import (
     ConversationImporter,
     ConversationImportError,
     GeminiImporter,
+    GrokImporter,
     ImportProgressTracker,
     ImportState,
     RawConversation,
     source_hash,
     summarize_and_encode,
 )
+from sovyx.upgrade.vault_import import ObsidianImporter, encode_note
 
 if TYPE_CHECKING:
     from sovyx.brain.service import BrainService
     from sovyx.engine.registry import ServiceRegistry
-    from sovyx.engine.types import MindId
+    from sovyx.engine.types import ConceptId, MindId
     from sovyx.llm.router import LLMRouter
     from sovyx.persistence.pool import DatabasePool
+    from sovyx.upgrade.vault_import import RawNote
 
 logger = get_logger(__name__)
 
@@ -60,14 +63,42 @@ _IMPORT_CHUNK_BYTES = 1 * 1024 * 1024  # 1 MiB streaming chunk
 
 # ── Platform registry ─────────────────────────────────────────────
 #
-# Adding a new platform (Obsidian next) is a matter of dropping a new
-# importer module in sovyx.upgrade.conv_import and registering it
-# here. The endpoint stays unchanged.
+# Two registries because conversation imports and vault imports have
+# fundamentally different shapes: conversation importers yield
+# ``RawConversation`` (needs LLM summary per row), vault importers
+# yield ``RawNote`` (no summary needed — note body *is* the concept
+# content). The worker below dispatches on which registry the platform
+# lives in; the HTTP surface and the ``conversation_imports`` dedup
+# table are shared. Name-spaced ``source_hash`` keys keep rows from
+# colliding across shapes.
 _IMPORTERS: dict[str, type[ConversationImporter]] = {
     "chatgpt": ChatGPTImporter,
     "claude": ClaudeImporter,
     "gemini": GeminiImporter,
+    "grok": GrokImporter,
 }
+
+_VAULT_IMPORTERS: dict[str, type[ObsidianImporter]] = {
+    "obsidian": ObsidianImporter,
+}
+
+
+def _is_vault_platform(platform: str) -> bool:
+    return platform in _VAULT_IMPORTERS
+
+
+def _all_platforms() -> list[str]:
+    return sorted({*_IMPORTERS.keys(), *_VAULT_IMPORTERS.keys()})
+
+
+def _upload_extension(platform: str) -> str:
+    """Return the file extension the on-disk upload should use.
+
+    Vaults land as ZIPs; conversation exports land as JSON. Using a
+    stable extension helps downstream utilities (zipfile,
+    :mod:`json`) recognise the file without mime-sniffing.
+    """
+    return "zip" if _is_vault_platform(platform) else "json"
 
 
 # ── POST /api/import/conversations ────────────────────────────────
@@ -127,12 +158,10 @@ async def start_conversation_import(request: Request) -> JSONResponse:
     form = await request.form()
     platform_raw = form.get("platform")
     platform = platform_raw.strip().lower() if isinstance(platform_raw, str) else ""
-    if platform not in _IMPORTERS:
+    if platform not in _IMPORTERS and platform not in _VAULT_IMPORTERS:
         return JSONResponse(
             {
-                "error": (
-                    f"Platform '{platform}' not supported. Known: {sorted(_IMPORTERS.keys())}"
-                ),
+                "error": (f"Platform '{platform}' not supported. Known: {_all_platforms()}"),
             },
             status_code=422,
         )
@@ -144,9 +173,11 @@ async def start_conversation_import(request: Request) -> JSONResponse:
             status_code=422,
         )
 
-    # Stream the upload to a temp file with cap enforcement.
+    # Stream the upload to a temp file with cap enforcement. Vault
+    # imports ship as ZIPs; conversation imports as JSON — matching
+    # the extension helps downstream parsers recognise the format.
     tmp_dir = Path(tempfile.mkdtemp(prefix=f"sovyx-conv-import-{platform}-"))
-    tmp_path = tmp_dir / f"{platform}-export.json"
+    tmp_path = tmp_dir / f"{platform}-export.{_upload_extension(platform)}"
     try:
         written = 0
         with tmp_path.open("wb") as out:
@@ -172,8 +203,14 @@ async def start_conversation_import(request: Request) -> JSONResponse:
             status_code=500,
         )
 
-    # Pre-parse just to count conversations for the progress bar.
-    importer = _IMPORTERS[platform]()
+    # Pre-parse just to count rows for the progress bar.
+    # ``_IMPORTERS`` yields RawConversation; ``_VAULT_IMPORTERS`` yields
+    # RawNote — both support ``parse(path)`` and both raise
+    # ``ConversationImportError`` on malformed input.
+    importer_cls = (
+        _VAULT_IMPORTERS[platform] if _is_vault_platform(platform) else _IMPORTERS[platform]
+    )
+    importer = importer_cls()
     try:
         total = sum(1 for _ in importer.parse(tmp_path))
     except ConversationImportError as exc:
@@ -263,12 +300,13 @@ async def _run_import_job(
     registry: ServiceRegistry,
     tracker: ImportProgressTracker,
 ) -> None:
-    """Drive one conversation-import job from start to finish.
+    """Drive one import job from start to finish.
 
-    Each conversation is encoded via ``summarize_and_encode``, dedup-
-    checked via the ``conversation_imports`` table, and counted in the
-    progress tracker. The job ends in COMPLETED or FAILED state; the
-    tmp upload is cleaned up either way.
+    Dispatches on ``platform`` between the conversation encoder (one
+    LLM call per row → ``Episode`` + extracted concepts) and the vault
+    encoder (no LLM — each note is one concept, wikilinks are
+    relations). Job ends in COMPLETED or FAILED; tmp upload is cleaned
+    up either way.
     """
     try:
         await tracker.update(job_id, state=ImportState.PARSING)
@@ -283,25 +321,36 @@ async def _run_import_job(
             await tracker.finish(job_id, error="Brain database pool unavailable")
             return
 
-        llm_router = await _resolve_llm_router(registry)
         mind_id = await _resolve_active_mind(registry)
         if mind_id is None:
             await tracker.finish(job_id, error="No active mind")
             return
 
-        importer = _IMPORTERS[platform]()
         await tracker.update(job_id, state=ImportState.PROCESSING)
 
-        for conv in importer.parse(tmp_path):
-            await _process_one_conversation(
-                conv=conv,
+        if _is_vault_platform(platform):
+            await _run_vault_job(
                 job_id=job_id,
+                platform=platform,
+                tmp_path=tmp_path,
                 brain=brain,
                 pool=pool,
-                llm_router=llm_router,
                 mind_id=mind_id,
                 tracker=tracker,
             )
+        else:
+            llm_router = await _resolve_llm_router(registry)
+            importer = _IMPORTERS[platform]()
+            for conv in importer.parse(tmp_path):
+                await _process_one_conversation(
+                    conv=conv,
+                    job_id=job_id,
+                    brain=brain,
+                    pool=pool,
+                    llm_router=llm_router,
+                    mind_id=mind_id,
+                    tracker=tracker,
+                )
 
         await tracker.finish(job_id)
     except ConversationImportError as exc:
@@ -311,6 +360,114 @@ async def _run_import_job(
         await tracker.finish(job_id, error=f"Unexpected error: {exc}")
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+async def _run_vault_job(
+    *,
+    job_id: str,
+    platform: str,
+    tmp_path: Path,
+    brain: BrainService,
+    pool: DatabasePool,
+    mind_id: MindId,
+    tracker: ImportProgressTracker,
+) -> None:
+    """Drive a vault-import job (currently Obsidian only).
+
+    Shared state across every note:
+
+    * ``concept_by_name`` — lets forward ``[[wikilinks]]`` create stubs
+      that the real note later reinforces via learn_concept's dedup
+      path.
+    * ``tag_by_name`` — same pattern for tag concepts and their nested
+      parents so ``#project/alpha`` in many notes resolves to a single
+      Concept chain.
+
+    The tracker fields get re-purposed: ``episodes_created`` is the
+    count of notes encoded (one per row), ``concepts_learned`` is the
+    total **new** concepts emitted including stubs and tag hierarchy
+    entries.
+    """
+    importer = _VAULT_IMPORTERS[platform]()
+
+    concept_by_name: dict[str, ConceptId] = {}
+    tag_by_name: dict[str, ConceptId] = {}
+
+    for note in importer.parse(tmp_path):
+        await _process_one_note(
+            note=note,
+            job_id=job_id,
+            platform=platform,
+            brain=brain,
+            pool=pool,
+            mind_id=mind_id,
+            tracker=tracker,
+            concept_by_name=concept_by_name,
+            tag_by_name=tag_by_name,
+        )
+
+
+async def _process_one_note(
+    *,
+    note: RawNote,
+    job_id: str,
+    platform: str,
+    brain: BrainService,
+    pool: DatabasePool,
+    mind_id: MindId,
+    tracker: ImportProgressTracker,
+    concept_by_name: dict[str, ConceptId],
+    tag_by_name: dict[str, ConceptId],
+) -> None:
+    """Encode a single note, respecting content-hash dedup.
+
+    Dedup key is ``sha256("{platform}:{path}:{content_hash}")`` — so
+    re-importing the *same* vault with some notes edited picks up just
+    the changes. Unedited notes are a no-op (skipped in the tracker).
+    """
+    source_key = f"{note.path}:{note.content_hash}"
+    s_hash = source_hash(platform, source_key)
+
+    if await _already_imported(pool, s_hash):
+        await tracker.update(job_id, conversations_skipped_delta=1)
+        return
+
+    try:
+        result = await encode_note(
+            note,
+            brain,
+            mind_id,
+            concept_by_name=concept_by_name,
+            tag_by_name=tag_by_name,
+        )
+    except (ValueError, AttributeError) as exc:
+        await tracker.update(
+            job_id,
+            conversations_processed_delta=1,
+            warning=f"encode failed for {note.path}: {exc}",
+        )
+        return
+
+    await _record_import(
+        pool=pool,
+        source_hash_value=s_hash,
+        platform=platform,
+        mind_id=str(mind_id),
+        conversation_id=note.path,
+        episode_id=str(result.note_concept_id),
+        title=note.title,
+        messages_count=len(note.tags) + len(note.links),
+        concepts_learned=result.concepts_created,
+    )
+
+    await tracker.update(
+        job_id,
+        conversations_processed_delta=1,
+        episodes_created_delta=1,
+        concepts_learned_delta=result.concepts_created,
+    )
+    for w in result.warnings:
+        await tracker.update(job_id, warning=w)
 
 
 async def _process_one_conversation(
