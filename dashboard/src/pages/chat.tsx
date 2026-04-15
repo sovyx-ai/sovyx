@@ -32,6 +32,7 @@ import { MarkdownContent } from "@/components/chat";
 import { EmptyState } from "@/components/empty-state";
 import { formatTimeShort } from "@/lib/format";
 import { LetterAvatar, MindAvatar } from "@/components/dashboard/letter-avatar";
+import { ErrorBoundary } from "@/components/error-boundary";
 import type { ChatResponse } from "@/types/api";
 
 /** Generate a local ID for optimistic UI messages. */
@@ -194,82 +195,89 @@ export default function ChatPage() {
       </div>
 
       {/* ── Message Thread ── */}
-      <ScrollArea className="flex-1">
-        <div className="mx-auto max-w-3xl">
-          {messages.length === 0 && !loading ? (
-            <EmptyState
-              icon={<MessageSquareIcon className="size-8" />}
-              title={t("empty.title")}
-              description={t("empty.description")}
-              className="h-[60vh]"
-            />
-          ) : (
-            <div className="space-y-1 py-4">
-              {messages.map((msg) => (
-                <div
-                  key={msg.id}
-                  className={cn(
-                    "flex gap-3 px-4 py-2",
-                    msg.role === "user" ? "flex-row-reverse" : "flex-row",
-                  )}
-                >
-                  {/* Avatar */}
-                  <div className="shrink-0 pt-1">
-                    {msg.role === "user" ? (
-                      <LetterAvatar name={t("you")} />
-                    ) : (
-                      <MindAvatar />
-                    )}
-                  </div>
-
-                  {/* Bubble */}
+      {/*
+        Boundary isolates a crash in message rendering (e.g. MarkdownContent
+        choking on a pathological assistant response) so the Input Area
+        below stays usable and the user can start a new chat.
+      */}
+      <ErrorBoundary name="section.chat.thread" variant="section">
+        <ScrollArea className="flex-1">
+          <div className="mx-auto max-w-3xl">
+            {messages.length === 0 && !loading ? (
+              <EmptyState
+                icon={<MessageSquareIcon className="size-8" />}
+                title={t("empty.title")}
+                description={t("empty.description")}
+                className="h-[60vh]"
+              />
+            ) : (
+              <div className="space-y-1 py-4">
+                {messages.map((msg) => (
                   <div
+                    key={msg.id}
                     className={cn(
-                      "max-w-[75%] space-y-1",
-                      msg.role === "user" ? "items-end" : "items-start",
+                      "flex gap-3 px-4 py-2",
+                      msg.role === "user" ? "flex-row-reverse" : "flex-row",
                     )}
                   >
-                    <div
-                      className={cn(
-                        "rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
-                        msg.role === "user"
-                          ? "rounded-tr-sm bg-[var(--svx-color-brand-subtle)] text-[var(--svx-color-text-primary)]"
-                          : "rounded-tl-sm bg-[var(--svx-color-bg-elevated)] text-[var(--svx-color-text-primary)]",
-                      )}
-                    >
+                    {/* Avatar */}
+                    <div className="shrink-0 pt-1">
                       {msg.role === "user" ? (
-                        <p className="whitespace-pre-wrap break-words">{msg.content}</p>
+                        <LetterAvatar name={t("you")} />
                       ) : (
-                        <MarkdownContent content={msg.content} />
+                        <MindAvatar />
                       )}
                     </div>
-                    <span className="block px-1 text-[10px] text-[var(--svx-color-text-secondary)]">
-                      {formatTimeShort(msg.timestamp)}
-                    </span>
-                  </div>
-                </div>
-              ))}
 
-              {/* Loading indicator */}
-              {loading && (
-                <div className="flex gap-3 px-4 py-2" data-testid="chat-loading">
-                  <div className="shrink-0 pt-1">
-                    <MindAvatar />
+                    {/* Bubble */}
+                    <div
+                      className={cn(
+                        "max-w-[75%] space-y-1",
+                        msg.role === "user" ? "items-end" : "items-start",
+                      )}
+                    >
+                      <div
+                        className={cn(
+                          "rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
+                          msg.role === "user"
+                            ? "rounded-tr-sm bg-[var(--svx-color-brand-subtle)] text-[var(--svx-color-text-primary)]"
+                            : "rounded-tl-sm bg-[var(--svx-color-bg-elevated)] text-[var(--svx-color-text-primary)]",
+                        )}
+                      >
+                        {msg.role === "user" ? (
+                          <p className="whitespace-pre-wrap break-words">{msg.content}</p>
+                        ) : (
+                          <MarkdownContent content={msg.content} />
+                        )}
+                      </div>
+                      <span className="block px-1 text-[10px] text-[var(--svx-color-text-secondary)]">
+                        {formatTimeShort(msg.timestamp)}
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2 rounded-2xl rounded-tl-sm bg-[var(--svx-color-bg-elevated)] px-4 py-2.5">
-                    <Loader2Icon className="size-4 animate-spin text-[var(--svx-color-brand-primary)]" />
-                    <span className="text-sm text-[var(--svx-color-text-secondary)]">
-                      {t("sending")}
-                    </span>
-                  </div>
-                </div>
-              )}
+                ))}
 
-              <div ref={bottomRef} />
-            </div>
-          )}
-        </div>
-      </ScrollArea>
+                {/* Loading indicator */}
+                {loading && (
+                  <div className="flex gap-3 px-4 py-2" data-testid="chat-loading">
+                    <div className="shrink-0 pt-1">
+                      <MindAvatar />
+                    </div>
+                    <div className="flex items-center gap-2 rounded-2xl rounded-tl-sm bg-[var(--svx-color-bg-elevated)] px-4 py-2.5">
+                      <Loader2Icon className="size-4 animate-spin text-[var(--svx-color-brand-primary)]" />
+                      <span className="text-sm text-[var(--svx-color-text-secondary)]">
+                        {t("sending")}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                <div ref={bottomRef} />
+              </div>
+            )}
+          </div>
+        </ScrollArea>
+      </ErrorBoundary>
 
       {/* ── Error Banner ── */}
       {error && (
@@ -288,46 +296,48 @@ export default function ChatPage() {
       )}
 
       {/* ── Input Area ── */}
-      <div className="border-t border-[var(--svx-color-border-subtle)] px-6 py-4">
-        <div className="mx-auto flex max-w-3xl items-end gap-3">
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={handleInputChange}
-            onKeyDown={handleKeyDown}
-            placeholder={t("placeholder")}
-            disabled={loading}
-            rows={1}
-            className={cn(
-              "flex-1 resize-none rounded-xl border border-[var(--svx-color-border-default)]",
-              "bg-[var(--svx-color-bg-elevated)] px-4 py-3 text-sm",
-              "text-[var(--svx-color-text-primary)] placeholder:text-[var(--svx-color-text-disabled)]",
-              "focus:border-[var(--svx-color-brand-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--svx-color-brand-primary)]",
-              "disabled:opacity-50",
-              "transition-colors",
-            )}
-            data-testid="chat-input"
-          />
-          <Button
-            onClick={() => void sendMessage()}
-            disabled={!input.trim() || loading}
-            size="icon"
-            className={cn(
-              "size-11 shrink-0 rounded-xl",
-              "bg-[var(--svx-color-brand-primary)] hover:bg-[var(--svx-color-brand-hover)]",
-              "text-[var(--svx-color-text-inverse)]",
-              "disabled:opacity-50",
-            )}
-            data-testid="chat-send"
-          >
-            {loading ? (
-              <Loader2Icon className="size-5 animate-spin" />
-            ) : (
-              <SendIcon className="size-5" />
-            )}
-          </Button>
+      <ErrorBoundary name="section.chat.input" variant="section">
+        <div className="border-t border-[var(--svx-color-border-subtle)] px-6 py-4">
+          <div className="mx-auto flex max-w-3xl items-end gap-3">
+            <textarea
+              ref={inputRef}
+              value={input}
+              onChange={handleInputChange}
+              onKeyDown={handleKeyDown}
+              placeholder={t("placeholder")}
+              disabled={loading}
+              rows={1}
+              className={cn(
+                "flex-1 resize-none rounded-xl border border-[var(--svx-color-border-default)]",
+                "bg-[var(--svx-color-bg-elevated)] px-4 py-3 text-sm",
+                "text-[var(--svx-color-text-primary)] placeholder:text-[var(--svx-color-text-disabled)]",
+                "focus:border-[var(--svx-color-brand-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--svx-color-brand-primary)]",
+                "disabled:opacity-50",
+                "transition-colors",
+              )}
+              data-testid="chat-input"
+            />
+            <Button
+              onClick={() => void sendMessage()}
+              disabled={!input.trim() || loading}
+              size="icon"
+              className={cn(
+                "size-11 shrink-0 rounded-xl",
+                "bg-[var(--svx-color-brand-primary)] hover:bg-[var(--svx-color-brand-hover)]",
+                "text-[var(--svx-color-text-inverse)]",
+                "disabled:opacity-50",
+              )}
+              data-testid="chat-send"
+            >
+              {loading ? (
+                <Loader2Icon className="size-5 animate-spin" />
+              ) : (
+                <SendIcon className="size-5" />
+              )}
+            </Button>
+          </div>
         </div>
-      </div>
+      </ErrorBoundary>
     </div>
   );
 }

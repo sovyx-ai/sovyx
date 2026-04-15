@@ -70,10 +70,21 @@ class TestFrontendErrorEndpoint:
                 "component_stack": "  at App\n    at Router",
                 "url": "https://example.com/logs",
                 "user_agent": "Mozilla/5.0",
+                "boundary": "section.settings.safety",
             },
         )
         assert res.status_code == 200
         assert res.json()["dropped"] is False
+
+    def test_rejects_oversized_boundary(self, client: TestClient, auth: dict[str, str]) -> None:
+        # boundary field is capped at 200 chars so a malicious or buggy
+        # SPA can't flood the log with huge labels.
+        res = client.post(
+            "/api/telemetry/frontend-error",
+            headers=auth,
+            json={"message": "boom", "boundary": "x" * 300},
+        )
+        assert res.status_code == 422
 
     def test_rejects_oversized_message(self, client: TestClient, auth: dict[str, str]) -> None:
         # message field is capped at 1000 chars by pydantic Field

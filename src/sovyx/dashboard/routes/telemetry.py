@@ -58,6 +58,10 @@ class FrontendError(BaseModel):
     component_stack: str | None = Field(default=None, max_length=4_000)
     url: str | None = Field(default=None, max_length=2_000)
     user_agent: str | None = Field(default=None, max_length=500)
+    # Logical boundary name set by the SPA, e.g. "route.settings" or
+    # "section.settings.safety". Used for grouping in log aggregation so a
+    # crash in one section can be distinguished from a full page crash.
+    boundary: str | None = Field(default=None, max_length=200)
 
 
 @router.post("/frontend-error")
@@ -80,5 +84,6 @@ async def report_frontend_error(payload: FrontendError) -> JSONResponse:
         component_stack=payload.component_stack,
         url=payload.url,
         user_agent=payload.user_agent,
+        boundary=payload.boundary,
     )
     return JSONResponse({"ok": True, "dropped": False})

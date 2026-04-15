@@ -32,9 +32,11 @@ const PluginsPage = lazy(() => import("@/pages/plugins"));
 const NotFoundPage = lazy(() => import("@/pages/not-found"));
 
 function PageWrapper({
+  name,
   children,
   fallback,
 }: {
+  name: string;
   children: React.ReactNode;
   fallback?: React.ReactNode;
 }) {
@@ -46,7 +48,7 @@ function PageWrapper({
   );
 
   return (
-    <ErrorBoundary>
+    <ErrorBoundary name={`route.${name}`}>
       <Suspense fallback={fallback ?? defaultFallback}>
         {children}
       </Suspense>
@@ -61,7 +63,7 @@ export const router = createBrowserRouter([
       {
         index: true,
         element: (
-          <PageWrapper fallback={<OverviewSkeleton />}>
+          <PageWrapper name="overview" fallback={<OverviewSkeleton />}>
             <OverviewPage />
           </PageWrapper>
         ),
@@ -69,7 +71,7 @@ export const router = createBrowserRouter([
       {
         path: "chat",
         element: (
-          <PageWrapper>
+          <PageWrapper name="chat">
             <ChatPage />
           </PageWrapper>
         ),
@@ -77,7 +79,7 @@ export const router = createBrowserRouter([
       {
         path: "conversations",
         element: (
-          <PageWrapper fallback={<ConversationsSkeleton />}>
+          <PageWrapper name="conversations" fallback={<ConversationsSkeleton />}>
             <ConversationsPage />
           </PageWrapper>
         ),
@@ -85,7 +87,7 @@ export const router = createBrowserRouter([
       {
         path: "brain",
         element: (
-          <PageWrapper fallback={<BrainSkeleton />}>
+          <PageWrapper name="brain" fallback={<BrainSkeleton />}>
             <BrainPage />
           </PageWrapper>
         ),
@@ -93,7 +95,7 @@ export const router = createBrowserRouter([
       {
         path: "emotions",
         element: (
-          <PageWrapper>
+          <PageWrapper name="emotions">
             <EmotionsPage />
           </PageWrapper>
         ),
@@ -101,7 +103,7 @@ export const router = createBrowserRouter([
       {
         path: "productivity",
         element: (
-          <PageWrapper>
+          <PageWrapper name="productivity">
             <ProductivityPage />
           </PageWrapper>
         ),
@@ -109,7 +111,7 @@ export const router = createBrowserRouter([
       {
         path: "logs",
         element: (
-          <PageWrapper fallback={<LogsSkeleton />}>
+          <PageWrapper name="logs" fallback={<LogsSkeleton />}>
             <LogsPage />
           </PageWrapper>
         ),
@@ -117,7 +119,7 @@ export const router = createBrowserRouter([
       {
         path: "settings",
         element: (
-          <PageWrapper fallback={<SettingsSkeleton />}>
+          <PageWrapper name="settings" fallback={<SettingsSkeleton />}>
             <SettingsPage />
           </PageWrapper>
         ),
@@ -125,7 +127,7 @@ export const router = createBrowserRouter([
       {
         path: "plugins",
         element: (
-          <PageWrapper fallback={<PluginsSkeleton />}>
+          <PageWrapper name="plugins" fallback={<PluginsSkeleton />}>
             <PluginsPage />
           </PageWrapper>
         ),
@@ -133,7 +135,7 @@ export const router = createBrowserRouter([
       {
         path: "about",
         element: (
-          <PageWrapper>
+          <PageWrapper name="about">
             <AboutPage />
           </PageWrapper>
         ),
@@ -141,7 +143,7 @@ export const router = createBrowserRouter([
       {
         path: "voice",
         element: (
-          <PageWrapper>
+          <PageWrapper name="voice">
             <VoicePage />
           </PageWrapper>
         ),
@@ -149,7 +151,7 @@ export const router = createBrowserRouter([
       {
         path: "*",
         element: (
-          <PageWrapper>
+          <PageWrapper name="not-found">
             <NotFoundPage />
           </PageWrapper>
         ),

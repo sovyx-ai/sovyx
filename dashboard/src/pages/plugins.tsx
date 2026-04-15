@@ -15,6 +15,7 @@ import { StatCard } from "@/components/dashboard/stat-card";
 import { PluginCard } from "@/components/dashboard/plugin-card";
 import { PluginDetailPanel } from "@/components/dashboard/plugin-detail";
 import { PluginsSkeleton } from "@/components/skeletons";
+import { ErrorBoundary } from "@/components/error-boundary";
 import type { PluginInfo } from "@/types/api";
 import type { PluginFilter, PluginSort } from "@/stores/slices/plugins";
 
@@ -311,7 +312,7 @@ export default function PluginsPage() {
 
       {/* Plugin grid (only if we have plugins) */}
       {hasPlugins && (
-        <>
+        <ErrorBoundary name="section.plugins.grid" variant="section">
           {/* Toolbar: Search + Filters + Sort */}
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <input
@@ -348,15 +349,17 @@ export default function PluginsPage() {
               }}
             />
           )}
-        </>
+        </ErrorBoundary>
       )}
 
       {/* Detail Panel */}
-      <PluginDetailPanel
-        pluginName={selectedPlugin}
-        open={selectedPlugin !== null}
-        onClose={() => setSelectedPlugin(null)}
-      />
+      <ErrorBoundary name="section.plugins.detail" variant="section">
+        <PluginDetailPanel
+          pluginName={selectedPlugin}
+          open={selectedPlugin !== null}
+          onClose={() => setSelectedPlugin(null)}
+        />
+      </ErrorBoundary>
     </div>
   );
 }

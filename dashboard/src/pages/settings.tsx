@@ -38,6 +38,7 @@ import { useDashboardStore } from "@/stores/dashboard";
 import { api, isAbortError } from "@/lib/api";
 import { toast } from "sonner";
 import { ExportImportSection } from "@/components/settings/export-import";
+import { ErrorBoundary } from "@/components/error-boundary";
 import type {
   Settings,
   MindConfigResponse,
@@ -359,85 +360,91 @@ export default function SettingsPage() {
 
       {/* ── Personality (MUTABLE) ── */}
       {mindConfig && (
-        <section className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-4">
-          <div className="flex items-center gap-2">
-            <SparklesIcon className="size-4 text-[var(--svx-color-brand-primary)]" />
-            <h2 className="text-sm font-medium text-[var(--svx-color-text-primary)]">
-              {t("personality.title")}
-            </h2>
-          </div>
-          <p className="mt-1 text-xs text-[var(--svx-color-text-tertiary)]">
-            {t("personality.description")}
-          </p>
+        <ErrorBoundary name="section.settings.personality" variant="section">
+          <section className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-4">
+            <div className="flex items-center gap-2">
+              <SparklesIcon className="size-4 text-[var(--svx-color-brand-primary)]" />
+              <h2 className="text-sm font-medium text-[var(--svx-color-text-primary)]">
+                {t("personality.title")}
+              </h2>
+            </div>
+            <p className="mt-1 text-xs text-[var(--svx-color-text-tertiary)]">
+              {t("personality.description")}
+            </p>
 
-          {/* Tone selector */}
-          <div className="mt-4 space-y-2">
-            <Label className="text-xs">{t("personality.tone")}</Label>
-            <div className="flex rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-strong)]">
-              {TONES.map((tone) => (
-                <button
-                  key={tone}
-                  type="button"
-                  onClick={() => applyTonePreset(tone)}
-                  className={cn(
-                    "flex-1 px-3 py-1.5 text-xs font-medium capitalize transition-colors",
-                    getEffectiveTone() === tone
-                      ? "bg-[var(--svx-color-brand-primary)] text-[var(--svx-color-text-inverse)]"
-                      : "hover:bg-[var(--svx-color-bg-hover)] text-[var(--svx-color-text-secondary)]",
-                  )}
-                >
-                  {t(`personality.tones.${tone}`)}
-                </button>
+            {/* Tone selector */}
+            <div className="mt-4 space-y-2">
+              <Label className="text-xs">{t("personality.tone")}</Label>
+              <div className="flex rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-strong)]">
+                {TONES.map((tone) => (
+                  <button
+                    key={tone}
+                    type="button"
+                    onClick={() => applyTonePreset(tone)}
+                    className={cn(
+                      "flex-1 px-3 py-1.5 text-xs font-medium capitalize transition-colors",
+                      getEffectiveTone() === tone
+                        ? "bg-[var(--svx-color-brand-primary)] text-[var(--svx-color-text-inverse)]"
+                        : "hover:bg-[var(--svx-color-bg-hover)] text-[var(--svx-color-text-secondary)]",
+                    )}
+                  >
+                    {t(`personality.tones.${tone}`)}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Float trait sliders */}
+            <div className="mt-4 space-y-4">
+              {PERSONALITY_TRAIT_KEYS.map((key) => (
+                <TraitSlider
+                  key={key}
+                  label={t(`personality.traits.${key}`)}
+                  lowLabel={t(`personality.traitLow.${key}`)}
+                  highLabel={t(`personality.traitHigh.${key}`)}
+                  value={getPersonalityValue(key) as number}
+                  onChange={(v) => updatePersonality(key, v)}
+                />
               ))}
             </div>
-          </div>
-
-          {/* Float trait sliders */}
-          <div className="mt-4 space-y-4">
-            {PERSONALITY_TRAIT_KEYS.map((key) => (
-              <TraitSlider
-                key={key}
-                label={t(`personality.traits.${key}`)}
-                lowLabel={t(`personality.traitLow.${key}`)}
-                highLabel={t(`personality.traitHigh.${key}`)}
-                value={getPersonalityValue(key) as number}
-                onChange={(v) => updatePersonality(key, v)}
-              />
-            ))}
-          </div>
-        </section>
+          </section>
+        </ErrorBoundary>
       )}
 
       {/* ── OCEAN (MUTABLE) ── */}
       {mindConfig && (
-        <section className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-4">
-          <div className="flex items-center gap-2">
-            <BrainIcon className="size-4 text-[var(--svx-color-brand-primary)]" />
-            <h2 className="text-sm font-medium text-[var(--svx-color-text-primary)]">
-              {t("ocean.title")}
-            </h2>
-          </div>
-          <p className="mt-1 text-xs text-[var(--svx-color-text-tertiary)]">
-            {t("ocean.description")}
-          </p>
+        <ErrorBoundary name="section.settings.ocean" variant="section">
+          <section className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-4">
+            <div className="flex items-center gap-2">
+              <BrainIcon className="size-4 text-[var(--svx-color-brand-primary)]" />
+              <h2 className="text-sm font-medium text-[var(--svx-color-text-primary)]">
+                {t("ocean.title")}
+              </h2>
+            </div>
+            <p className="mt-1 text-xs text-[var(--svx-color-text-tertiary)]">
+              {t("ocean.description")}
+            </p>
 
-          <div className="mt-4 space-y-4">
-            {OCEAN_TRAIT_KEYS.map((key) => (
-              <TraitSlider
-                key={key}
-                label={t(`ocean.traits.${key}`)}
-                lowLabel={t(`ocean.traitLow.${key}`)}
-                highLabel={t(`ocean.traitHigh.${key}`)}
-                value={getOceanValue(key)}
-                onChange={(v) => updateOcean(key, v)}
-              />
-            ))}
-          </div>
-        </section>
+            <div className="mt-4 space-y-4">
+              {OCEAN_TRAIT_KEYS.map((key) => (
+                <TraitSlider
+                  key={key}
+                  label={t(`ocean.traits.${key}`)}
+                  lowLabel={t(`ocean.traitLow.${key}`)}
+                  highLabel={t(`ocean.traitHigh.${key}`)}
+                  value={getOceanValue(key)}
+                  onChange={(v) => updateOcean(key, v)}
+                />
+              ))}
+            </div>
+          </section>
+        </ErrorBoundary>
       )}
 
       {/* ── Safety (MUTABLE) ── */}
-      {mindConfig && (() => {
+      {mindConfig && (
+        <ErrorBoundary name="section.settings.safety" variant="section">
+          {(() => {
         const isChildSafe = editedConfig.safety?.child_safe_mode ?? mindConfig.safety.child_safe_mode;
         const currentFilter = editedConfig.safety?.content_filter ?? mindConfig.safety.content_filter;
         const guardrails = mindConfig.safety.guardrails ?? [];
@@ -691,7 +698,9 @@ export default function SettingsPage() {
           </div>
         </section>
         );
-      })()}
+          })()}
+        </ErrorBoundary>
+      )}
 
       {/* ── General: Log Level (MUTABLE) ── */}
       <section className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-4">
@@ -746,7 +755,9 @@ export default function SettingsPage() {
       </section>
 
       {/* ── LLM Provider Config (interactive) ── */}
-      <ProviderConfig />
+      <ErrorBoundary name="section.settings.providers" variant="section">
+        <ProviderConfig />
+      </ErrorBoundary>
 
       {/* ── LLM Parameters + Brain Info (READ-ONLY, from /api/config) ── */}
       {mindConfig && (
@@ -792,7 +803,9 @@ export default function SettingsPage() {
       )}
 
       {/* ── Export / Import ── */}
-      <ExportImportSection />
+      <ErrorBoundary name="section.settings.exportImport" variant="section">
+        <ExportImportSection />
+      </ErrorBoundary>
     </div>
   );
 }

@@ -81,6 +81,7 @@
     "notFoundPage": "This page doesn't exist in your Mind's memory.",
     "unauthorized": "Authentication expired. Re-enter your token.",
     "tryAgain": "Try Again",
+    "sectionFailed": "This section couldn't load",
     "backToOverview": "Back to Overview"
   },
   "command": {
