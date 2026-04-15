@@ -78,3 +78,6 @@ docs/_meta/
 
 # Internal design docs, audits, and planning — kept local only
 docs-internal/
+
+# Claude Code local runtime state (scheduled task locks, etc.)
+.claude/

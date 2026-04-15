@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.11.1] — 2026-04-15
+
+Sprint 6 — 90 % → 95 % enterprise polish. Thirteen focused items across accessibility, resilience, observability, and schema hygiene. All CI gates green.
+
+### Fixed
+
+- 10 pre-existing TypeScript errors (schema drift `SafetyConfig`).
+- Pricing tables unified into single source (`llm/pricing.py`).
+- `BatchSpanProcessor` replaces `SimpleSpanProcessor` (IMPL-015).
+- Last raw `httpx` in plugins migrated to `SandboxedHttpClient`.
+- OTel `setup_tracing` resilient to prior shutdown.
+
+### Added
+
+- Emotional baseline config (`EmotionalBaselineConfig` in `EngineConfig`).
+- Per-section `ErrorBoundary`s with telemetry reporting.
+- `brain-graph` screen-reader fallback table.
+- `log-row` keyboard accessibility (role, tabIndex, onKeyDown).
+- i18n aria-label sweep (9 hardcoded → `useTranslation`).
+- `safeStringify` with secret redaction.
+- Vector search documented as implemented.
+
+### Security
+
+- Sidebar cookie hardened (`SameSite=Strict`, `Secure`).
+
 ## [0.11.0] — 2026-04-14
 
 The v0.11 line is an enterprise hardening pass across backend, frontend, and CI infrastructure. Five focused sprints: security P0, god-file splits, concurrency + config hardening, frontend hardening, and 90% polish.
