@@ -130,9 +130,9 @@ class TestDashboardEventBridge:
 
         bridge.subscribe_all()
 
-        # Should have 11 event types subscribed
+        # Should have 12 event types subscribed (11 + DreamCompleted)
         total_handlers = sum(len(h) for h in bus._handlers.values())
-        assert total_handlers == 11
+        assert total_handlers == 12  # noqa: PLR2004
 
     def test_subscribe_idempotent(self) -> None:
         ws = MagicMock()
@@ -143,7 +143,7 @@ class TestDashboardEventBridge:
         bridge.subscribe_all()
 
         total_handlers = sum(len(h) for h in bus._handlers.values())
-        assert total_handlers == 11  # Not 22
+        assert total_handlers == 12  # Not 24  # noqa: PLR2004
 
     @pytest.mark.asyncio()
     async def test_handle_event_broadcasts(self) -> None:

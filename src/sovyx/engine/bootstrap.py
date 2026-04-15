@@ -70,6 +70,7 @@ async def bootstrap(
     """
     from sovyx.brain.concept_repo import ConceptRepository
     from sovyx.brain.consolidation import ConsolidationCycle, ConsolidationScheduler
+    from sovyx.brain.dream import DreamCycle, DreamScheduler
     from sovyx.brain.embedding import EmbeddingEngine
     from sovyx.brain.episode_repo import EpisodeRepository
     from sovyx.brain.learning import EbbinghausDecay, HebbianLearning
@@ -338,6 +339,30 @@ async def bootstrap(
             )
             _closables.append(router)
             registry.register_instance(LLMRouter, router)
+
+            # DREAM scheduler (SPE-003 phase 7 — nightly pattern discovery).
+            # Wired after the LLM router since DREAM's pattern extraction
+            # is a single LLM call per run. dream_max_patterns == 0 is the
+            # kill-switch: skip registration entirely so the engine pays
+            # zero runtime cost.
+            if mind_config.brain.dream_max_patterns > 0:
+                dream_cycle = DreamCycle(
+                    brain_service=brain_service,
+                    episode_repo=episode_repo,
+                    concept_repo=concept_repo,
+                    hebbian=hebbian,
+                    llm_router=router,
+                    event_bus=event_bus,
+                    lookback_hours=mind_config.brain.dream_lookback_hours,
+                    max_patterns=mind_config.brain.dream_max_patterns,
+                )
+                dream_scheduler = DreamScheduler(
+                    cycle=dream_cycle,
+                    dream_time=mind_config.brain.dream_time,
+                    timezone=mind_config.timezone,
+                )
+                _closables.append(dream_scheduler)
+                registry.register_instance(DreamScheduler, dream_scheduler)
 
             # Cognitive phases
             state_machine = CognitiveStateMachine()

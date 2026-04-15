@@ -203,6 +203,8 @@ class BrainConfig(BaseModel):
 
     consolidation_interval_hours: int = Field(default=6, ge=1, le=168)
     dream_time: str = "02:00"
+    dream_lookback_hours: int = Field(default=24, ge=1, le=168)
+    dream_max_patterns: int = Field(default=5, ge=0, le=50)
     max_concepts: int = Field(default=50000, ge=100, le=1_000_000)
     forgetting_enabled: bool = True
     decay_rate: float = Field(default=0.1, ge=0.0, le=1.0)

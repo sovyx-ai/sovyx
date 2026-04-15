@@ -280,6 +280,7 @@ class LifecycleManager:
     async def _start_services(self) -> None:
         """Start services that have start() methods."""
         from sovyx.brain.consolidation import ConsolidationScheduler
+        from sovyx.brain.dream import DreamScheduler
         from sovyx.bridge.manager import BridgeManager
         from sovyx.cognitive.gate import CogLoopGate
         from sovyx.cognitive.loop import CognitiveLoop
@@ -296,12 +297,21 @@ class LifecycleManager:
             gate = await self._registry.resolve(CogLoopGate)
             await gate.start()
 
+        # Resolve active mind id once — shared by both schedulers.
+        mind_mgr = await self._registry.resolve(MindManager)
+        mind_id = MindIdType(mind_mgr._active[0] if mind_mgr._active else "default")
+
         # Start consolidation scheduler (memory decay/prune/strengthen)
         if self._registry.is_registered(ConsolidationScheduler):
             scheduler = await self._registry.resolve(ConsolidationScheduler)
-            mind_mgr = await self._registry.resolve(MindManager)
-            mind_id = MindIdType(mind_mgr._active[0] if mind_mgr._active else "default")
             await scheduler.start(mind_id)
+
+        # Start DREAM scheduler (nightly pattern discovery; independent of
+        # consolidation — schedulers run in parallel and are idempotent
+        # under SQLite WAL).
+        if self._registry.is_registered(DreamScheduler):
+            dream = await self._registry.resolve(DreamScheduler)
+            await dream.start(mind_id)
 
         # Start bridge (channels connect last)
         if self._registry.is_registered(BridgeManager):
@@ -319,6 +329,7 @@ class LifecycleManager:
         await self._stop_dashboard()
 
         from sovyx.brain.consolidation import ConsolidationScheduler
+        from sovyx.brain.dream import DreamScheduler
         from sovyx.bridge.manager import BridgeManager
         from sovyx.cognitive.gate import CogLoopGate
         from sovyx.cognitive.loop import CognitiveLoop
@@ -340,17 +351,24 @@ class LifecycleManager:
             loop = await self._registry.resolve(CognitiveLoop)
             await loop.stop()
 
-        # 4. Stop consolidation scheduler (writes to brain DB)
+        # 4. Stop DREAM scheduler (writes to brain DB via learn_concept +
+        # Hebbian — must stop before DatabaseManager for the same reason
+        # consolidation does, P28).
+        if self._registry.is_registered(DreamScheduler):
+            dream = await self._registry.resolve(DreamScheduler)
+            await dream.stop()
+
+        # 5. Stop consolidation scheduler (writes to brain DB)
         if self._registry.is_registered(ConsolidationScheduler):
             scheduler = await self._registry.resolve(ConsolidationScheduler)
             await scheduler.stop()
 
-        # 5. Stop LLM router (close HTTP clients)
+        # 6. Stop LLM router (close HTTP clients)
         if self._registry.is_registered(LLMRouter):
             router = await self._registry.resolve(LLMRouter)
             await router.stop()
 
-        # 6. Stop database (last — everything else must be stopped)
+        # 7. Stop database (last — everything else must be stopped)
         if self._registry.is_registered(DatabaseManager):
             db = await self._registry.resolve(DatabaseManager)
             await db.stop()

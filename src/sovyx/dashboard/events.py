@@ -19,6 +19,7 @@ if TYPE_CHECKING:
         ChannelDisconnected,
         ConceptCreated,
         ConsolidationCompleted,
+        DreamCompleted,
         EngineStopping,
         EpisodeEncoded,
         Event,
@@ -54,6 +55,7 @@ class DashboardEventBridge:
             ChannelDisconnected,
             ConceptCreated,
             ConsolidationCompleted,
+            DreamCompleted,
             EngineStarted,
             EngineStopping,
             EpisodeEncoded,
@@ -73,6 +75,7 @@ class DashboardEventBridge:
             ConceptCreated,
             EpisodeEncoded,
             ConsolidationCompleted,
+            DreamCompleted,
             ChannelConnected,
             ChannelDisconnected,
         ]
@@ -158,6 +161,15 @@ def _serialize_event(event: Event) -> dict[str, Any]:
             "pruned": ev_cons.pruned,
             "strengthened": ev_cons.strengthened,
             "duration_s": round(ev_cons.duration_s, 2),
+        }
+    elif name == "DreamCompleted":
+        ev_dream = cast("DreamCompleted", event)
+        base["data"] = {
+            "patterns_found": ev_dream.patterns_found,
+            "concepts_derived": ev_dream.concepts_derived,
+            "relations_strengthened": ev_dream.relations_strengthened,
+            "episodes_analyzed": ev_dream.episodes_analyzed,
+            "duration_s": round(ev_dream.duration_s, 2),
         }
     elif name == "ChannelConnected":
         ev_chc = cast("ChannelConnected", event)

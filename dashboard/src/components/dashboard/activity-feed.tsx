@@ -20,6 +20,7 @@ import {
   LightbulbIcon,
   BookmarkIcon,
   MergeIcon,
+  MoonIcon,
   PlugIcon,
   RocketIcon,
   SquareIcon,
@@ -68,6 +69,10 @@ const EVENT_CONFIG: Record<
   ConsolidationCompleted: {
     icon: <MergeIcon className="size-3.5" />,
     color: "text-[var(--svx-color-brand-primary)]",
+  },
+  DreamCompleted: {
+    icon: <MoonIcon className="size-3.5" />,
+    color: "text-[var(--svx-color-accent-cyan)]",
   },
   EngineStarted: {
     icon: <RocketIcon className="size-3.5" />,
@@ -134,6 +139,8 @@ function eventSummary(event: WsEvent, t: TFunction): string {
       return t("eventSummary.ServiceHealthChanged", { service: s("service"), status: s("status") });
     case "ConsolidationCompleted":
       return t("eventSummary.ConsolidationCompleted", { merged: s("merged", "0"), pruned: s("pruned", "0"), strengthened: s("strengthened", "0") });
+    case "DreamCompleted":
+      return t("eventSummary.DreamCompleted", { patterns: s("patterns_found", "0"), concepts: s("concepts_derived", "0"), relations: s("relations_strengthened", "0") });
     case "EngineStarted":
       return t("eventSummary.EngineStarted");
     case "EngineStopping":

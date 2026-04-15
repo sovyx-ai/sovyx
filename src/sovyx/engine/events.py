@@ -237,6 +237,30 @@ class ConsolidationCompleted(Event):
         return EventCategory.BRAIN
 
 
+@dataclasses.dataclass(frozen=True)
+class DreamCompleted(Event):
+    """Emitted when a DREAM phase cycle completes (SPE-003 phase 7).
+
+    DREAM is the nightly offline pass that discovers themes recurring
+    across recent episodes, materializes them as derived concepts
+    (``source="dream:pattern"``, low initial confidence), and
+    strengthens Hebbian edges between concepts that co-occur across
+    episode boundaries — a wider temporal window than within-turn
+    Reflect.
+    """
+
+    patterns_found: int = 0
+    concepts_derived: int = 0
+    relations_strengthened: int = 0
+    episodes_analyzed: int = 0
+    duration_s: float = 0.0
+
+    @property
+    def category(self) -> EventCategory:
+        """Event category."""
+        return EventCategory.BRAIN
+
+
 # ── Bridge Events ───────────────────────────────────────────────────────────
 
 

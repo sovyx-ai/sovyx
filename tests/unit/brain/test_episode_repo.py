@@ -142,6 +142,45 @@ class TestGetRecent:
         assert len(recent) == 3  # noqa: PLR2004
 
 
+class TestGetSince:
+    """Lookback window query used by the DREAM phase."""
+
+    async def test_returns_episodes_after_threshold(self, repo: EpisodeRepository) -> None:
+        from datetime import UTC, datetime, timedelta  # noqa: PLC0415
+
+        now = datetime.now(UTC)
+        await repo.create(_make_episode(user="recent"))
+        episodes = await repo.get_since(MIND, now - timedelta(hours=1))
+        assert len(episodes) == 1
+        assert episodes[0].user_input == "recent"
+
+    async def test_excludes_earlier_episodes(self, repo: EpisodeRepository) -> None:
+        from datetime import UTC, datetime, timedelta  # noqa: PLC0415
+
+        await repo.create(_make_episode(user="any"))
+        # Threshold strictly *after* now → no rows match.
+        future = datetime.now(UTC) + timedelta(hours=1)
+        episodes = await repo.get_since(MIND, future)
+        assert episodes == []
+
+    async def test_respects_limit(self, repo: EpisodeRepository) -> None:
+        from datetime import UTC, datetime, timedelta  # noqa: PLC0415
+
+        for i in range(8):
+            await repo.create(_make_episode(user=f"msg{i}"))
+        episodes = await repo.get_since(MIND, datetime.now(UTC) - timedelta(hours=1), limit=3)
+        assert len(episodes) == 3  # noqa: PLR2004
+
+    async def test_returns_chronological_order(self, repo: EpisodeRepository) -> None:
+        from datetime import UTC, datetime, timedelta  # noqa: PLC0415
+
+        await repo.create(_make_episode(user="first"))
+        time.sleep(0.01)
+        await repo.create(_make_episode(user="second"))
+        episodes = await repo.get_since(MIND, datetime.now(UTC) - timedelta(hours=1))
+        assert [e.user_input for e in episodes] == ["first", "second"]
+
+
 class TestSearchByEmbedding:
     """Vector search."""
 

@@ -14,6 +14,8 @@ from sovyx.observability.logging import get_logger
 from sovyx.persistence.datetime_utils import parse_db_datetime
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from sovyx.brain.embedding import EmbeddingEngine
     from sovyx.brain.models import Episode
     from sovyx.persistence.pool import DatabasePool
@@ -118,6 +120,40 @@ class EpisodeRepository:
             cursor = await conn.execute(
                 "SELECT * FROM episodes WHERE mind_id = ? ORDER BY created_at DESC LIMIT ?",
                 (str(mind_id), limit),
+            )
+            rows = await cursor.fetchall()
+
+        return [self._row_to_episode(r) for r in rows]
+
+    async def get_since(
+        self,
+        mind_id: MindId,
+        since: datetime,
+        limit: int = 500,
+    ) -> list[Episode]:
+        """Get episodes created at or after ``since`` (chronological order).
+
+        Used by the DREAM phase to fetch a lookback window of recent
+        conversations for pattern extraction. Chronological order
+        (oldest first) gives the LLM a natural temporal narrative.
+
+        Args:
+            mind_id: Scope to a single mind.
+            since: Lower bound (inclusive). Timezone-aware datetimes
+                are serialized in ISO format for the SQL comparison.
+            limit: Hard cap on rows returned. Default 500 is generous
+                for a 24-hour window even in heavy-use minds.
+
+        Returns:
+            Episodes created at or after ``since``, oldest first.
+        """
+        async with self._pool.read() as conn:
+            cursor = await conn.execute(
+                """SELECT * FROM episodes
+                WHERE mind_id = ? AND created_at >= ?
+                ORDER BY created_at ASC
+                LIMIT ?""",
+                (str(mind_id), since.isoformat(), limit),
             )
             rows = await cursor.fetchall()
 

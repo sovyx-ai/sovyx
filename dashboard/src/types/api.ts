@@ -181,6 +181,7 @@ export type WsEventType =
   | "ConceptCreated"
   | "EpisodeEncoded"
   | "ConsolidationCompleted"
+  | "DreamCompleted"
   | "ChannelConnected"
   | "ChannelDisconnected"
   | "ChatMessage"
