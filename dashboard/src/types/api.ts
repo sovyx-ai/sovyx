@@ -345,7 +345,18 @@ export interface Guardrail {
   builtin: boolean;
 }
 
-/** Safety guardrails — mirrors backend `sovyx.mind.config.SafetyConfig`. */
+/**
+ * Safety slice of the `/api/config` wire response.
+ *
+ * Mirrors the JSON shape emitted by `sovyx.dashboard.config.get_config`
+ * — NOT the full `sovyx.mind.config.SafetyConfig` Pydantic model. The
+ * backend domain model also carries `custom_rules`, `banned_topics`,
+ * `shadow_mode` and `shadow_patterns`, but those are intentionally kept
+ * out of `/api/config`: `custom_rules` + `banned_topics` live behind
+ * `/api/safety/rules`, and `shadow_*` stay internal to the cognitive
+ * loop. When a future dashboard feature needs them, add a dedicated
+ * type mirroring that endpoint's shape rather than expanding this one.
+ */
 export interface SafetyConfig {
   child_safe_mode: boolean;
   financial_confirmation: boolean;
