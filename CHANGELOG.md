@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.11.4] — 2026-04-15
+
+New-user onboarding: import existing conversation history from other assistants so the mind already knows you on day one. Ships ChatGPT this release; Claude / Gemini follow the same shape in later releases.
+
+### Added
+
+- **ChatGPT conversation importer** (IMPL-SUP-015 first tranche). Parses a ChatGPT data-export `conversations.json`, walks the `mapping` tree from `current_node` up through parents to extract the mainline (forks from regeneration stay abandoned), and encodes each conversation as one `Episode` plus up to five extracted `Concept` rows. Architecture is **summary-first** (Option C in IMPL-SUP-015): one fast-model LLM call per conversation produces `{summary, concepts, emotional_valence/arousal, importance}`. Target cost ~$0.001-0.003 per conversation — $3 and ~20 minutes for a 1000-conversation import. A synchronous fallback path preserves the Episode even when the LLM router is missing or returns malformed JSON.
+- **New subpackage `sovyx.upgrade.conv_import`** housing the import machinery: platform-neutral `RawConversation`/`RawMessage` dataclasses, a `ConversationImporter` Protocol, the `ChatGPTImporter`, `summarize_and_encode` encoder, `ImportProgressTracker` (async-lock-guarded, snapshot-returning), `source_hash` dedup helper. Follow-up platform parsers (Claude, Gemini) drop a sibling file and register in the endpoint's platform map; the HTTP surface and tracker stay unchanged.
+- **New endpoints**: `POST /api/import/conversations` (multipart: `platform` + `file`) → `202 Accepted {job_id, conversations_total}` with a background `asyncio.Task` driving the encode loop; and `GET /api/import/{job_id}/progress` → live snapshot `{state, conversations_total/processed/skipped, episodes_created, concepts_learned, warnings, error, elapsed_ms}`. Same 100 MiB upload cap + Bearer-token auth as every other dashboard route.
+- **Dedup at conversation level** via a new `conversation_imports` table keyed by `sha256(platform||conversation_id)`. Re-importing the same export is a no-op per conversation; verified by an end-to-end HTTP test. Backed by a new migration 005 on `brain.db`.
+- Frontend types: `ConversationImportPlatform`, `ConversationImportState`, `StartConversationImportResponse`, `ConversationImportProgress` in `dashboard/src/types/api.ts` with mirrored zod schemas in `schemas.ts` — ready for a UI follow-up PR.
+- Test fixture `tests/fixtures/chatgpt/sample_conversations.json` (3 synthetic conversations: linear, branched, multimodal) plus 54 new tests across parser / hash / tracker / summary-encoder / HTTP endpoints.
+
+### Fixed
+
+- `test_brain_schema.py` migration-count assertions and three test function names bumped for migration 005.
+
+### Non-goals (explicit — roadmap candidates for later releases)
+
+- Claude, Gemini, Obsidian importers — same Protocol + HTTP surface, follow-up PRs.
+- Deep-import mode (per-turn REFLECT) — expensive; deferred.
+- Attachments / multimodal asset extraction — v1 stringifies with a marker only.
+- PII scrubbing on import — user's own data, explicit decision.
+- WebSocket progress events — polling only for v1.
+- Resuming interrupted imports — daemon restart means re-submit.
+- Frontend UI for import — this release ships backend + types only; dashboard wiring lands in a follow-up.
+
 ## [0.11.3] — 2026-04-15
 
 Quality pass: exhaustive bare-`except` audit + cleanup across the backend, plus a latent React render bug in the brain-graph accessibility fallback.
