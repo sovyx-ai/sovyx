@@ -40,6 +40,7 @@ function Shimmer({ className }: { className?: string }) {
  * StatCardSkeleton — Loading placeholder matching StatCard layout.
  */
 export function StatCardSkeleton({ className }: { className?: string }) {
+  const { t } = useTranslation("common");
   return (
     <div
       className={cn(
@@ -47,7 +48,7 @@ export function StatCardSkeleton({ className }: { className?: string }) {
         className,
       )}
       role="group"
-      aria-label="Loading"
+      aria-label={t("aria.loading")}
     >
       {/* Title shimmer */}
       <div className="flex items-center justify-between pb-2">

@@ -82,7 +82,7 @@ function FilterTabs({
   const { t } = useTranslation("plugins");
 
   return (
-    <div className="flex gap-1" role="tablist" aria-label="Plugin filter">
+    <div className="flex gap-1" role="tablist" aria-label={t("aria.filter")}>
       {FILTERS.map((f) => (
         <button
           key={f}
@@ -121,7 +121,7 @@ function SortSelect({
       value={current}
       onChange={(e) => onChange(e.target.value as PluginSort)}
       className="rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] px-2 py-1.5 text-xs text-[var(--svx-color-text-secondary)] outline-none"
-      aria-label="Sort plugins"
+      aria-label={t("aria.sort")}
     >
       {SORTS.map((s) => (
         <option key={s} value={s}>

@@ -366,7 +366,7 @@ export function CognitiveTimeline({ className }: CognitiveTimelineProps) {
           className="h-72 overflow-auto pr-3 contain-strict"
           style={{ overflowAnchor: "none" }}
           role="feed"
-          aria-label="Cognitive timeline"
+          aria-label={t("common:aria.cognitiveTimeline")}
         >
           <div
             style={{

@@ -112,5 +112,13 @@
   "productivity": {
     "title": "Productivity",
     "description": "Understand your work patterns. Focus time tracking, task completion rhythms, decision fatigue detection, journaling impact analysis, and weekly trends — measured from your actual behavior, not self-reported estimates."
+  },
+  "aria": {
+    "mindAvatar": "Sovyx Mind",
+    "mainNavigation": "Main navigation",
+    "breadcrumb": "Breadcrumb",
+    "liveFeed": "Live feed",
+    "cognitiveTimeline": "Cognitive timeline",
+    "loading": "Loading"
   }
 }

@@ -210,7 +210,12 @@ export function ActivityFeed({ events, className }: ActivityFeedProps) {
             </p>
           </div>
         ) : (
-          <div className="space-y-px" role="log" aria-label="Live feed" aria-live="polite">
+          <div
+            className="space-y-px"
+            role="log"
+            aria-label={t("common:aria.liveFeed")}
+            aria-live="polite"
+          >
             {reversed.map((event, i) => {
               const config = EVENT_CONFIG[event.type] ?? FALLBACK_CONFIG;
               const label = getLabel(event.type);

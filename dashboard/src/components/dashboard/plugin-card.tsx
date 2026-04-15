@@ -170,7 +170,7 @@ function QuickActions({
           setOpen(!open);
         }}
         className="rounded-[var(--svx-radius-sm)] p-1 text-[var(--svx-color-text-tertiary)] hover:bg-[var(--svx-color-bg-elevated)] hover:text-[var(--svx-color-text-secondary)] opacity-0 group-hover:opacity-100 transition-opacity"
-        aria-label="Plugin actions"
+        aria-label={t("aria.cardActions")}
       >
         <MoreVerticalIcon className="size-3.5" />
       </button>

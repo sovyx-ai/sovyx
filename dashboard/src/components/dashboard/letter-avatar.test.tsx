@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
+import "@/lib/i18n";
 import { LetterAvatar, MindAvatar } from "./letter-avatar";
 
 describe("LetterAvatar", () => {

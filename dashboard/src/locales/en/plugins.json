@@ -116,5 +116,10 @@
     "title": "Engine not running",
     "subtitle": "Start the Sovyx engine to manage plugins",
     "hint": "sovyx start"
+  },
+  "aria": {
+    "cardActions": "Plugin actions",
+    "filter": "Plugin filter",
+    "sort": "Sort plugins"
   }
 }

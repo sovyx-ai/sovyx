@@ -86,7 +86,7 @@ export function AppSidebar() {
         : t("sidebar.connecting");
 
   return (
-    <Sidebar collapsible="icon" aria-label="Main navigation">
+    <Sidebar collapsible="icon" aria-label={t("aria.mainNavigation")}>
       {/* ── Mind display (static — name + connection status) ── */}
       <SidebarHeader>
         <div className="px-2 py-2">

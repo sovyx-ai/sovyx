@@ -3,6 +3,7 @@
  * Colors use HEX values aligned with the Sovyx design system.
  */
 
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 
 /**
@@ -68,6 +69,7 @@ export function LetterAvatar({ name, size = 32, className }: LetterAvatarProps) 
  * Previous version pulled in Avatar primitive (325KB chunk).
  */
 export function MindAvatar({ className }: { className?: string }) {
+  const { t } = useTranslation("common");
   return (
     <div
       className={cn(
@@ -76,7 +78,7 @@ export function MindAvatar({ className }: { className?: string }) {
         className,
       )}
       role="img"
-      aria-label="Sovyx Mind"
+      aria-label={t("aria.mindAvatar")}
     >
       S
     </div>
