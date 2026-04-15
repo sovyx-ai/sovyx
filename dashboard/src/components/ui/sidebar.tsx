@@ -80,8 +80,17 @@ function SidebarProvider({
         _setOpen(openState)
       }
 
-      // This sets the cookie to keep the sidebar state.
-      document.cookie = `${SIDEBAR_COOKIE_NAME}=${openState}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`
+      // Persist the sidebar state. Hardened flags:
+      //   Path=/        — scope to the app, don't leak to unrelated paths.
+      //   SameSite=Strict — never sent on cross-site requests (sidebar
+      //                   state has no business leaving the origin).
+      //   Secure        — only emitted on HTTPS. Omitted on plain http://
+      //                   localhost so dev mode still persists state.
+      // The payload is a non-sensitive boolean, so a cookie is fine;
+      // the backend doesn't read it.
+      const isHttps = typeof window !== "undefined" && window.location.protocol === "https:"
+      const secureFlag = isHttps ? "; Secure" : ""
+      document.cookie = `${SIDEBAR_COOKIE_NAME}=${openState}; Path=/; Max-Age=${SIDEBAR_COOKIE_MAX_AGE}; SameSite=Strict${secureFlag}`
     },
     [setOpenProp, open]
   )
