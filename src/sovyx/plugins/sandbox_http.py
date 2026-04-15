@@ -261,6 +261,18 @@ class SandboxedHttpClient:
         """Send POST request with sandbox enforcement."""
         return await self._request("POST", url, **kwargs)
 
+    async def request(self, method: str, url: str, **kwargs: object) -> httpx.Response:
+        """Send a request with an arbitrary HTTP method (PROPFIND, REPORT, …).
+
+        Public counterpart to ``_request``: needed by plugins that
+        speak protocols extending HTTP — CalDAV uses PROPFIND for
+        collection discovery and REPORT for ``calendar-query``.
+        Every sandbox guard (URL allowlist, local-IP block, rate
+        limit, response size cap, timeout) still applies; only the
+        verb is open.
+        """
+        return await self._request(method.upper(), url, **kwargs)
+
     async def _request(self, method: str, url: str, **kwargs: object) -> httpx.Response:
         """Execute sandboxed HTTP request.
 

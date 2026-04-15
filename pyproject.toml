@@ -48,6 +48,8 @@ dependencies = [
     "argon2-cffi>=23.1",
     "cryptography>=42.0",
     "PyJWT>=2.8",
+    "icalendar>=5.0",
+    "defusedxml>=0.7",
 ]
 
 [project.optional-dependencies]
@@ -90,6 +92,7 @@ financial-math = "sovyx.plugins.official.financial_math:FinancialMathPlugin"
 web-intelligence = "sovyx.plugins.official.web_intelligence:WebIntelligencePlugin"
 knowledge = "sovyx.plugins.official.knowledge:KnowledgePlugin"
 home-assistant = "sovyx.plugins.official.home_assistant:HomeAssistantPlugin"
+caldav = "sovyx.plugins.official.caldav:CalDAVPlugin"
 
 [project.urls]
 Homepage = "https://sovyx.ai"
@@ -137,6 +140,8 @@ module = [
     "watchdog.*",
     "ddgs.*",
     "trafilatura.*",
+    "dateutil.*",
+    "icalendar.*",
 ]
 ignore_missing_imports = true
 
