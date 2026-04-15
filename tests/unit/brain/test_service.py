@@ -845,7 +845,8 @@ class TestEmotionalBaseline:
     """ADR-001 per-mind emotional baseline is injected and consumed."""
 
     def test_default_baseline_neutral(
-        self, brain: BrainService,
+        self,
+        brain: BrainService,
     ) -> None:
         """Omitting the baseline dep gives a zero-anchor config."""
         assert brain.emotional_baseline.valence == 0.0
