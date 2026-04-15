@@ -218,6 +218,12 @@ def start(
         rpc = DaemonRPCServer()
         rpc.register_method("status", lambda: {"version": __version__, "status": "running"})
         rpc.register_method("shutdown", lambda: "ok")
+
+        # CLI surface — chat, mind.list, config.get (SPE-015 §2).
+        from sovyx.engine._rpc_handlers import register_cli_handlers
+
+        register_cli_handlers(rpc, registry)
+
         await rpc.start()
         registry.register_instance(DaemonRPCServer, rpc)
 
@@ -228,6 +234,21 @@ def start(
         await lifecycle.run_forever()
 
     _run(_start())
+
+
+@app.command()
+def chat() -> None:  # pragma: no cover — interactive REPL
+    """Open an interactive chat REPL with the active mind.
+
+    Slash commands (``/help``, ``/status``, ``/minds``, ``/config``,
+    ``/new``, ``/clear``, ``/exit``) work inline. History persists
+    across sessions in ``~/.sovyx/history``. Press Ctrl+D to leave.
+
+    Requires the daemon to be running (``sovyx start``).
+    """
+    from sovyx.cli.chat import run_repl
+
+    raise typer.Exit(run_repl())
 
 
 @app.command()

@@ -102,20 +102,35 @@ async def handle_chat_message(
     user_name: str = "Dashboard",
     conversation_id: str | None = None,
     timeout: float = _DEFAULT_TIMEOUT,
+    *,
+    channel: ChannelType = ChannelType.DASHBOARD,
+    channel_user_id: str = _DASHBOARD_CHANNEL_USER_ID,
 ) -> dict[str, Any]:
     """Process a chat message through the full cognitive pipeline.
 
     Mirrors BridgeManager.handle_inbound but returns the response directly
-    instead of routing through a channel adapter.
+    instead of routing through a channel adapter. Used by the dashboard
+    HTTP endpoint *and* by the CLI REPL (via the ``chat`` RPC handler) —
+    both treat one shell session as one stable identity.
 
     Args:
         registry: Service registry with PersonResolver, ConversationTracker,
             CogLoopGate registered.
         message: User message text.
-        user_name: Display name for the dashboard user.
+        user_name: Display name for the entity sending the message.
+            Default ``"Dashboard"`` keeps existing call sites unchanged.
         conversation_id: Optional existing conversation to continue.
             If None, the ConversationTracker auto-creates one.
         timeout: Max wait for cognitive loop response.
+        channel: Which ``ChannelType`` is invoking the pipeline. Defaults
+            to ``DASHBOARD`` so existing HTTP callers behave unchanged.
+            REPL passes ``ChannelType.CLI`` so analytics + ChannelConnected
+            events distinguish CLI traffic from dashboard traffic.
+        channel_user_id: Stable per-channel user id used by ``PersonResolver``
+            to attach all messages from this caller to the same person
+            row. Defaults to the legacy dashboard constant. The REPL
+            passes its own ``cli-user`` so CLI sessions don't collide
+            with the dashboard's identity.
 
     Returns:
         Dict with ``response``, ``conversation_id``, ``mind_id``, and
@@ -152,8 +167,8 @@ async def handle_chat_message(
 
     # ── Resolve person (auto-create on first contact) ──
     person_id = await person_resolver.resolve(
-        ChannelType.DASHBOARD,
-        _DASHBOARD_CHANNEL_USER_ID,
+        channel,
+        channel_user_id,
         user_name,
     )
 
@@ -164,13 +179,13 @@ async def handle_chat_message(
         _, history = await conversation_tracker.get_or_create(
             mind_id,
             person_id,
-            ChannelType.DASHBOARD,
+            channel,
         )
     else:
         conv_id, history = await conversation_tracker.get_or_create(
             mind_id,
             person_id,
-            ChannelType.DASHBOARD,
+            channel,
         )
 
     # ── Build perception ──
@@ -178,12 +193,12 @@ async def handle_chat_message(
     perception = Perception(
         id=msg_id,
         type=PerceptionType.USER_MESSAGE,
-        source=ChannelType.DASHBOARD.value,
+        source=channel.value,
         content=stripped,
         person_id=person_id,
         metadata={
             "reply_to_message_id": msg_id,
-            "chat_id": _DASHBOARD_CHANNEL_USER_ID,
+            "chat_id": channel_user_id,
         },
     )
 
