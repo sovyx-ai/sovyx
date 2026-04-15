@@ -17,7 +17,7 @@ Headers returned:
 from __future__ import annotations
 
 import time
-from collections import defaultdict
+from collections import OrderedDict
 from threading import Lock
 from typing import TYPE_CHECKING
 
@@ -30,6 +30,13 @@ if TYPE_CHECKING:
 
 # Window size in seconds
 _WINDOW = 60
+
+# Hard cap on the bucket dict to bound memory under adversarial paths.
+# A single client cycling unique URLs faster than the 5-min cleanup
+# could otherwise grow ``_buckets`` until the next sweep — _MAX_BUCKETS
+# eviction-on-insert keeps the dict bounded between cleanups.
+# 10 000 buckets ≈ 600 KB worst case, well above legitimate usage.
+_MAX_BUCKETS = 10_000
 
 # Per-endpoint limits (requests per window)
 _LIMITS: dict[str, int] = {
@@ -68,14 +75,43 @@ class _SlidingWindow:
         return count, oldest + window
 
 
-# Global state: {client_key: SlidingWindow}
-_buckets: dict[str, _SlidingWindow] = defaultdict(_SlidingWindow)
+# Global state: bounded LRU dict of {client_key: SlidingWindow}.
+# OrderedDict + eviction-on-insert mirrors ``LRULockDict`` semantics
+# from ``engine/_lock_dict.py`` — same anti-pattern #15 fix applied
+# to a non-Lock value type. Evicting a bucket gives that key a fresh
+# window, which is *not* exploitable: worst case the attacker buys
+# themselves a few extra requests, never bypasses the limit cap.
+_buckets: OrderedDict[str, _SlidingWindow] = OrderedDict()
+_buckets_lock = Lock()
 _cleanup_lock = Lock()
 _last_cleanup = 0.0
 
 
+def _get_or_create_bucket(key: str) -> _SlidingWindow:
+    """Return the bucket for ``key`` (promoted to MRU) or insert one.
+
+    Eviction-on-insert keeps ``_buckets`` bounded by ``_MAX_BUCKETS``.
+    Mirrors :class:`sovyx.engine._lock_dict.LRULockDict.setdefault`.
+    """
+    with _buckets_lock:
+        bucket = _buckets.get(key)
+        if bucket is not None:
+            _buckets.move_to_end(key)
+            return bucket
+        while len(_buckets) >= _MAX_BUCKETS:
+            _buckets.popitem(last=False)
+        bucket = _SlidingWindow()
+        _buckets[key] = bucket
+        return bucket
+
+
 def _cleanup_stale(now: float) -> None:
-    """Periodically prune stale buckets (every 5 minutes)."""
+    """Periodically prune stale buckets (every 5 minutes).
+
+    LRU eviction-on-insert handles adversarial growth between
+    cleanups; this sweep still runs to release memory back proactively
+    in the common no-attack case where most buckets simply go quiet.
+    """
     global _last_cleanup  # noqa: PLW0603
     if now - _last_cleanup < 300:
         return
@@ -83,9 +119,12 @@ def _cleanup_stale(now: float) -> None:
         if now - _last_cleanup < 300:
             return
         _last_cleanup = now
-        stale = [k for k, v in _buckets.items() if not v._hits or v._hits[-1] < now - _WINDOW * 2]
-        for k in stale:
-            del _buckets[k]
+        with _buckets_lock:
+            stale = [
+                k for k, v in _buckets.items() if not v._hits or v._hits[-1] < now - _WINDOW * 2
+            ]
+            for k in stale:
+                del _buckets[k]
 
 
 def _get_client_ip(request: Request) -> str:
@@ -131,7 +170,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         now = time.monotonic()
         _cleanup_stale(now)
 
-        count, reset_at = _buckets[bucket_key].hit(now, _WINDOW)
+        count, reset_at = _get_or_create_bucket(bucket_key).hit(now, _WINDOW)
         remaining = max(0, limit - count)
         reset_seconds = max(0, int(reset_at - now))
 

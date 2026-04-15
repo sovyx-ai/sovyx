@@ -91,10 +91,41 @@ class TestRateLimitMiddleware:
     def test_class_exists(self) -> None:
         assert RateLimitMiddleware is not None
 
-    def test_buckets_are_defaultdict(self) -> None:
-        # Accessing a new key should create a SlidingWindow
+    def test_get_or_create_bucket_returns_sliding_window(self) -> None:
+        # Bucket dict is now a bounded LRU OrderedDict — accessor lives in
+        # ``_get_or_create_bucket`` which mirrors LRULockDict.setdefault.
+        from sovyx.dashboard.rate_limit import _get_or_create_bucket
+
         key = f"test-{time.monotonic()}"
-        window = _buckets[key]
+        window = _get_or_create_bucket(key)
         assert isinstance(window, _SlidingWindow)
+        # Same key returns same bucket (MRU promotion, no duplicate).
+        assert _get_or_create_bucket(key) is window
         # Cleanup
         del _buckets[key]
+
+    def test_buckets_evicts_oldest_at_capacity(self) -> None:
+        """Eviction-on-insert keeps ``_buckets`` bounded."""
+        from sovyx.dashboard.rate_limit import _MAX_BUCKETS, _get_or_create_bucket
+
+        # Ensure clean slate for the slice of keys this test owns.
+        prefix = f"evict-{time.monotonic()}"
+        try:
+            # Fill up to (but not over) the cap with our prefix,
+            # marking the first one so we can detect its eviction.
+            first_key = f"{prefix}-first"
+            first = _get_or_create_bucket(first_key)
+            assert first_key in _buckets
+
+            # Now fill enough to push past the cap.
+            for i in range(_MAX_BUCKETS + 5):
+                _get_or_create_bucket(f"{prefix}-{i}")
+
+            # The first key must have been evicted (no longer present).
+            assert first_key not in _buckets
+            # Dict size never exceeds the cap.
+            assert len(_buckets) <= _MAX_BUCKETS
+        finally:
+            # Clean up our prefix to avoid polluting other tests.
+            for k in [k for k in list(_buckets) if k.startswith(prefix)]:
+                del _buckets[k]
