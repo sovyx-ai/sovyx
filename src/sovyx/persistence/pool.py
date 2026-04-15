@@ -125,7 +125,11 @@ class DatabasePool:
             try:
                 await self._write_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
                 logger.debug("wal_checkpoint_completed", db_path=str(self._db_path))
-            except Exception:
+            except aiosqlite.Error:
+                # Checkpoint is best-effort on shutdown — a failure
+                # leaves the WAL file intact, which the next startup
+                # will replay. Log so persistent checkpoint failures
+                # (disk full, locked DB) don't silently accumulate WAL.
                 logger.warning(
                     "wal_checkpoint_failed",
                     db_path=str(self._db_path),
@@ -175,7 +179,13 @@ class DatabasePool:
                 if name == "vec0":
                     self._has_sqlite_vec = True
                 logger.debug("extension_loaded", extension=name, path=ext_path)
-            except Exception:
+            except (aiosqlite.Error, OSError):
+                # aiosqlite.Error: sqlite rejected the extension (wrong
+                # ABI, missing symbols, not built with enable_load_extension).
+                # OSError: extension file on disk is unreadable or
+                # missing (we found it but something changed between
+                # discovery and load). Retrieval degrades to FTS5-only
+                # — log with traceback for post-mortem.
                 logger.warning(
                     "extension_load_failed",
                     extension=name,

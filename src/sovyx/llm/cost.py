@@ -10,6 +10,7 @@ for fine-grained billing dashboards (SPE-026 §7).
 from __future__ import annotations
 
 import json
+import sqlite3
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
@@ -190,7 +191,12 @@ class CostGuard:
                         "cost_guard_state_stale_no_recorder",
                         saved_date=saved_date,
                     )
-        except Exception:
+        except (sqlite3.Error, json.JSONDecodeError, ValueError, KeyError):
+            # sqlite3.Error: DB read failure. json.JSONDecodeError:
+            # the persisted state blob is corrupt. ValueError /
+            # KeyError: state shape drift across a schema change.
+            # Cost guard starts from zero on restore failure — the
+            # next record() will repopulate in-memory counters.
             logger.warning("cost_guard_restore_failed", exc_info=True)
 
     async def persist(self) -> None:
@@ -238,7 +244,13 @@ class CostGuard:
                 )
                 await conn.commit()
             self._dirty = False
-        except Exception:
+        except (sqlite3.Error, TypeError, ValueError):
+            # sqlite3.Error: DB write failed (lock, readonly, disk).
+            # TypeError / ValueError: state serialisation failure
+            # (non-JSON-encodable value slipped into the state dict).
+            # Leave _dirty=True so the next persist attempt retries;
+            # traceback tells us whether it's a transient DB issue
+            # or a data-shape bug worth fixing.
             logger.warning("cost_guard_persist_failed", exc_info=True)
 
         # Piggyback: persist DashboardCounters alongside CostGuard
@@ -330,7 +342,12 @@ class CostGuard:
                 messages=snap_msgs,
                 llm_calls=snap_calls,
             )
-        except Exception:
+        except sqlite3.Error:
+            # DailyStatsRecorder writes via the persistence pool; any
+            # recording failure is DB-side. Skip the snapshot — the
+            # next daily rollover will flush whatever's still in
+            # memory. Traceback preserved to diagnose persistent
+            # write failures.
             logger.warning("daily_snapshot_flush_failed", exc_info=True)
 
     def can_afford(

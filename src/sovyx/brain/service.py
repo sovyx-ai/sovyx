@@ -10,6 +10,7 @@ Implements BrainReader + BrainWriter protocols.
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from typing import TYPE_CHECKING
 
 from sovyx.engine.events import ConceptContradicted, ConceptCreated, EpisodeEncoded
@@ -515,7 +516,11 @@ class BrainService:
         """Record access with error swallowing."""
         try:
             await self._concepts.record_access(concept_id)
-        except Exception:
+        except sqlite3.Error:
+            # Best-effort access tracking — losing a single increment
+            # is acceptable, but the traceback surfaces persistent DB
+            # issues (lock contention, readonly filesystem) instead of
+            # letting access counts silently drift.
             logger.warning(
                 "access_tracking_failed",
                 concept_id=str(concept_id),

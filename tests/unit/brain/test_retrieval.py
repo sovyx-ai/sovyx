@@ -263,12 +263,23 @@ class TestHybridWithVec:
         mock_episode_repo: AsyncMock,
         mock_embedding: AsyncMock,
     ) -> None:
+        """Typed vector-search failure → fall back to FTS5.
+
+        Uses ``SearchError`` because that's the typed subsystem
+        failure the narrow catch in ``HybridRetrieval.search_concepts``
+        is designed to handle. A bare ``RuntimeError`` would represent
+        a programmer error that SHOULD bubble up.
+        """
+        from sovyx.engine.errors import SearchError
+
         mock_embedding.has_embeddings = True
         mock_concept_repo._pool.has_sqlite_vec = True
 
         c1 = _concept("test", "c1")
         mock_concept_repo.search_by_text = AsyncMock(return_value=[(c1, -1.0)])
-        mock_concept_repo.search_by_embedding = AsyncMock(side_effect=RuntimeError("vec failed"))
+        mock_concept_repo.search_by_embedding = AsyncMock(
+            side_effect=SearchError("vec failed"),
+        )
 
         retrieval = HybridRetrieval(
             mock_concept_repo,
@@ -315,9 +326,17 @@ class TestSearchEpisodes:
         mock_episode_repo: AsyncMock,
         mock_embedding: AsyncMock,
     ) -> None:
+        """Typed vec-search failure → fall back to recency.
+
+        Same typed-contract alignment as the concept-path sibling.
+        """
+        from sovyx.engine.errors import SearchError
+
         mock_embedding.has_embeddings = True
         mock_episode_repo._pool.has_sqlite_vec = True
-        mock_episode_repo.search_by_embedding = AsyncMock(side_effect=RuntimeError("fail"))
+        mock_episode_repo.search_by_embedding = AsyncMock(
+            side_effect=SearchError("fail"),
+        )
         e1 = _episode("recent", "e1")
         mock_episode_repo.get_recent = AsyncMock(return_value=[e1])
 

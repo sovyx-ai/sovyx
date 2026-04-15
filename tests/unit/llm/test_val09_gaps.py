@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -41,9 +42,16 @@ class TestCostGuardRestoreGaps:
 
     @pytest.mark.asyncio()
     async def test_restore_exception(self) -> None:
-        """restore() handles DB exception gracefully."""
+        """restore() recovers from a typed DB exception.
+
+        sqlite3.OperationalError is what aiosqlite forwards when the
+        underlying DB is unreachable; the narrow catch in
+        ``CostGuard.restore`` is scoped to sqlite3.Error + data-shape
+        errors, so using the typed exception documents the real
+        contract (programmer RuntimeErrors bubble up).
+        """
         pool = MagicMock()
-        pool.read = MagicMock(side_effect=RuntimeError("db broken"))
+        pool.read = MagicMock(side_effect=sqlite3.OperationalError("db broken"))
 
         guard = CostGuard(daily_budget=10.0, per_conversation_budget=2.0, system_pool=pool)
         await guard.restore()
@@ -53,9 +61,9 @@ class TestCostGuardRestoreGaps:
 class TestCostGuardPersistGaps:
     @pytest.mark.asyncio()
     async def test_persist_exception(self) -> None:
-        """persist() handles DB exception gracefully."""
+        """persist() recovers from a typed DB exception."""
         pool = MagicMock()
-        pool.write = MagicMock(side_effect=RuntimeError("db broken"))
+        pool.write = MagicMock(side_effect=sqlite3.OperationalError("db broken"))
 
         guard = CostGuard(daily_budget=10.0, per_conversation_budget=2.0, system_pool=pool)
         guard._daily_spend = 1.0

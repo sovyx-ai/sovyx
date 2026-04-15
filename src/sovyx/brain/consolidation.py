@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import math
 import random
+import sqlite3
 import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
@@ -399,8 +400,13 @@ class ConsolidationCycle:
             result = await self._brain.refresh_centroid_cache(mind_id)
             return int(result) if isinstance(result, (int, float)) else 0
         except (AttributeError, TypeError):
+            # Shape drift in the brain API — fall back silently.
             return 0
-        except Exception:
+        except (sqlite3.Error, ValueError):
+            # sqlite3.Error: DB trouble during centroid recomputation.
+            # ValueError: bad numeric embedding data. Either way, skip
+            # this cycle's cache refresh; next cycle will retry. Log
+            # with traceback so repeated failures surface as a real bug.
             logger.debug("centroid_cache_refresh_error", exc_info=True)
             return 0
 
@@ -456,7 +462,13 @@ class ConsolidationCycle:
                     merged=to_merge.name,
                     survivor_id=str(survivor.id),
                 )
-            except Exception:
+            except (sqlite3.Error, ValueError, AttributeError):
+                # Per-pair resilience: a single merge failure must not
+                # abort the whole consolidation cycle. sqlite3.Error
+                # covers update/transfer/delete DB errors; ValueError
+                # and AttributeError catch degenerate concept state
+                # (missing IDs, stale references). Programmer errors
+                # (TypeError, NameError) still bubble up.
                 logger.warning(
                     "concept_merge_failed",
                     survivor=survivor.name,

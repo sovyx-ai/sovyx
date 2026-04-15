@@ -216,13 +216,20 @@ class TestPersistence:
         await pool.close()
 
     async def test_restore_db_error(self) -> None:
-        """Restore with broken pool → no crash (except path)."""
+        """Typed DB failure during restore → no crash.
+
+        Uses ``sqlite3.OperationalError`` because the narrow catch in
+        ``CostGuard.restore`` only recovers from typed DB failures.
+        A bare ``RuntimeError`` would now surface as a programmer
+        error, which is the correct new contract.
+        """
+        import sqlite3
         from unittest.mock import AsyncMock, MagicMock
 
         mock_pool = MagicMock()
         # Make read() context manager raise
         cm = AsyncMock()
-        cm.__aenter__ = AsyncMock(side_effect=RuntimeError("db broken"))
+        cm.__aenter__ = AsyncMock(side_effect=sqlite3.OperationalError("db broken"))
         cm.__aexit__ = AsyncMock(return_value=False)
         mock_pool.read.return_value = cm
 
@@ -231,12 +238,16 @@ class TestPersistence:
         assert g.get_daily_spend() == 0.0
 
     async def test_persist_db_error(self) -> None:
-        """Persist with broken pool → no crash (except path)."""
+        """Typed DB failure during persist → spend still in-memory.
+
+        Same typed-contract alignment as the restore sibling.
+        """
+        import sqlite3
         from unittest.mock import AsyncMock, MagicMock
 
         mock_pool = MagicMock()
         cm = AsyncMock()
-        cm.__aenter__ = AsyncMock(side_effect=RuntimeError("db broken"))
+        cm.__aenter__ = AsyncMock(side_effect=sqlite3.OperationalError("db broken"))
         cm.__aexit__ = AsyncMock(return_value=False)
         mock_pool.write.return_value = cm
 

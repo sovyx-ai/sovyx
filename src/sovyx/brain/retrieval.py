@@ -6,8 +6,10 @@ Falls back to FTS5-only when sqlite-vec is unavailable.
 
 from __future__ import annotations
 
+import sqlite3
 from typing import TYPE_CHECKING
 
+from sovyx.engine.errors import EmbeddingError, SearchError
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
@@ -71,7 +73,13 @@ class HybridRetrieval:
                 vec_results = await self._concepts.search_by_embedding(
                     query_emb, mind_id, limit=limit * 2
                 )
-            except Exception:
+            except (EmbeddingError, SearchError, sqlite3.Error, ValueError):
+                # EmbeddingError / SearchError: typed subsystem failures
+                # (model not loaded, bad input). sqlite3.Error: DB issue
+                # during the vec0 MATCH query. ValueError: embedding-
+                # shape mismatch. All fall through to FTS5-only —
+                # full-text search still works without the semantic
+                # ranking. Traceback preserved for the debug log.
                 logger.debug("vector_search_failed_using_fts_only", exc_info=True)
 
         if not vec_results:
@@ -117,7 +125,9 @@ class HybridRetrieval:
                     (episode, 1.0 / (self._k + rank_pos + 1))
                     for rank_pos, (episode, _) in enumerate(vec_results)
                 ]
-            except Exception:
+            except (EmbeddingError, SearchError, sqlite3.Error, ValueError):
+                # Same failure profile as the concept-search path above.
+                # Fall through to the recency-only fallback below.
                 logger.debug("episode_vector_search_failed", exc_info=True)
 
         # Fallback: return recent episodes
