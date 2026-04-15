@@ -361,6 +361,10 @@ class ActPhase:
                 "react_iteration",
                 iteration=iteration + 1,
                 tool_calls=len(tool_calls),
+                tools=[tc.function_name for tc in tool_calls],
+                plugins=sorted(
+                    {tc.function_name.split(".", 1)[0] for tc in tool_calls if tc.function_name},
+                ),
                 successes=sum(1 for r in results if r.success),
                 failures=sum(1 for r in results if not r.success),
             )

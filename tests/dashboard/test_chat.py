@@ -67,9 +67,23 @@ def _make_action_result(
     filtered: bool = False,
     error: bool = False,
     reply_to: str | None = None,
+    tool_names: list[str] | None = None,
 ) -> object:
-    """Create a mock ActionResult with the given properties."""
+    """Create a mock ActionResult with the given properties.
+
+    ``tool_names`` is a convenience list of fully-qualified tool names
+    (``"plugin.tool"``) that get converted into synthetic ``ToolCall``
+    entries on ``tool_calls_made``. Used by tag-derivation tests.
+    """
     from sovyx.cognitive.act import ActionResult
+    from sovyx.llm.models import ToolCall
+
+    tool_calls_made: list[ToolCall] = []
+    if tool_names:
+        tool_calls_made = [
+            ToolCall(id=f"call-{i}", function_name=name, arguments={})
+            for i, name in enumerate(tool_names)
+        ]
 
     return ActionResult(
         response_text=response_text,
@@ -77,6 +91,7 @@ def _make_action_result(
         reply_to=reply_to,
         filtered=filtered,
         error=error,
+        tool_calls_made=tool_calls_made,
     )
 
 
@@ -465,6 +480,102 @@ class TestChatHappyPath:
         assert resp.status_code == 200
         call_args = mock_registry._person_resolver.resolve.call_args
         assert call_args[0][2] == "Dashboard"
+
+
+# ── Tag Derivation Tests ──
+
+
+class TestChatTags:
+    """``tags`` field on the /api/chat response.
+
+    Every assistant response must carry at least one tag so the chat UI
+    can always show the user which modules produced the reply. Plugin
+    tags are derived from ReAct tool names (``"plugin.tool"`` →
+    ``"plugin"``), deduplicated, sorted, and followed by ``"brain"``
+    to signal that the cognitive loop always participated.
+    """
+
+    def test_no_tools_tags_brain_only(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+    ) -> None:
+        """Pure cognitive reply (no tool calls) surfaces ["brain"]."""
+        mock_registry = _make_mock_registry(_make_action_result())
+        client.app.state.registry = mock_registry  # type: ignore[union-attr]
+
+        resp = client.post(
+            "/api/chat",
+            json={"message": "Hi"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["tags"] == ["brain"]
+
+    def test_tool_call_adds_plugin_tag(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+    ) -> None:
+        """A single tool call adds its plugin tag before ``brain``."""
+        mock_registry = _make_mock_registry(
+            _make_action_result(tool_names=["financial_math.compute_interest"]),
+        )
+        client.app.state.registry = mock_registry  # type: ignore[union-attr]
+
+        resp = client.post(
+            "/api/chat",
+            json={"message": "What's 5% on $1000 for 3 years?"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["tags"] == ["financial_math", "brain"]
+
+    def test_multiple_plugins_dedup_and_sort(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+    ) -> None:
+        """Plugin names are deduplicated and sorted alphabetically."""
+        mock_registry = _make_mock_registry(
+            _make_action_result(
+                tool_names=[
+                    "weather.current",
+                    "financial_math.compute_interest",
+                    "financial_math.format_currency",  # same plugin twice
+                ],
+            ),
+        )
+        client.app.state.registry = mock_registry  # type: ignore[union-attr]
+
+        resp = client.post(
+            "/api/chat",
+            json={"message": "Compare cost and weather"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        # financial_math < weather (alphabetical), brain last, no dupes.
+        assert resp.json()["tags"] == ["financial_math", "weather", "brain"]
+
+    def test_malformed_tool_name_no_crash(
+        self,
+        client: TestClient,
+        auth_headers: dict[str, str],
+    ) -> None:
+        """A tool name without a dot is treated as the whole plugin name."""
+        mock_registry = _make_mock_registry(
+            _make_action_result(tool_names=["orphan_tool"]),
+        )
+        client.app.state.registry = mock_registry  # type: ignore[union-attr]
+
+        resp = client.post(
+            "/api/chat",
+            json={"message": "Legacy tool"},
+            headers=auth_headers,
+        )
+        assert resp.status_code == 200
+        # split(".", 1)[0] on "orphan_tool" returns "orphan_tool" itself.
+        assert resp.json()["tags"] == ["orphan_tool", "brain"]
 
 
 # ── Turn Recording Tests ──

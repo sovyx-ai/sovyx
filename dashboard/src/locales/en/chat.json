@@ -19,5 +19,13 @@
     "copied": "Copied",
     "code": "code",
     "copyAria": "Copy code"
+  },
+  "tags": {
+    "aria": "Modules that produced this response",
+    "brain": "brain",
+    "financial_math": "financial",
+    "weather": "weather",
+    "knowledge": "knowledge",
+    "web_intelligence": "web"
   }
 }

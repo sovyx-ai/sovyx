@@ -273,4 +273,82 @@ describe("ChatPage", () => {
       expect.objectContaining({ conversation_id: "conv-new" }),
     );
   });
+
+  // ── Tag rendering ─────────────────────────────────────────────────
+
+  it("renders tags from the backend on the assistant message", async () => {
+    const user = userEvent.setup();
+    mockApi.post.mockResolvedValueOnce({
+      response: "Rate calculated.",
+      conversation_id: "conv-1",
+      mind_id: "aria",
+      timestamp: new Date().toISOString(),
+      tags: ["financial_math", "brain"],
+    });
+
+    render(<ChatPage />);
+    const input = screen.getByTestId("chat-input");
+    await user.type(input, "5% on 1000?");
+    await user.click(screen.getByTestId("chat-send"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Rate calculated.")).toBeInTheDocument();
+    });
+
+    // Both pills present, with translated labels.
+    expect(
+      screen.getByText("financial", { selector: "[data-tag]" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("brain", { selector: "[data-tag]" }),
+    ).toBeInTheDocument();
+  });
+
+  it("never renders tags on user messages", async () => {
+    const user = userEvent.setup();
+    mockApi.post.mockResolvedValueOnce({
+      response: "Hi back.",
+      conversation_id: "conv-1",
+      mind_id: "aria",
+      timestamp: new Date().toISOString(),
+      tags: ["brain"],
+    });
+
+    render(<ChatPage />);
+    const input = screen.getByTestId("chat-input");
+    await user.type(input, "Hello");
+    await user.click(screen.getByTestId("chat-send"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Hi back.")).toBeInTheDocument();
+    });
+
+    // Exactly one brain pill (on the assistant message), never duplicated
+    // beside the user's "Hello" bubble.
+    expect(screen.getAllByText("brain")).toHaveLength(1);
+  });
+
+  it("renders no tags when the backend omits the tags field", async () => {
+    const user = userEvent.setup();
+    // Older backends (pre-0.11.2) may not send the tags field. The UI
+    // must degrade gracefully rather than crashing.
+    mockApi.post.mockResolvedValueOnce({
+      response: "Legacy reply.",
+      conversation_id: "conv-1",
+      mind_id: "aria",
+      timestamp: new Date().toISOString(),
+    });
+
+    render(<ChatPage />);
+    const input = screen.getByTestId("chat-input");
+    await user.type(input, "hey");
+    await user.click(screen.getByTestId("chat-send"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Legacy reply.")).toBeInTheDocument();
+    });
+
+    // No tag pill rendered at all for legacy responses.
+    expect(document.querySelector("[data-tag]")).toBeNull();
+  });
 });

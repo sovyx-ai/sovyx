@@ -232,6 +232,7 @@ export const ChatResponseSchema = z.object({
   conversation_id: z.string(),
   mind_id: z.string(),
   timestamp: z.string().optional(),
+  tags: z.array(z.string()).optional(),
 });
 
 // ── Plugins ──

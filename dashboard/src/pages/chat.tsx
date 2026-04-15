@@ -28,7 +28,7 @@ import { useDashboardStore } from "@/stores/dashboard";
 import { api, isAbortError } from "@/lib/api";
 import { ChatResponseSchema } from "@/types/schemas";
 import { cn } from "@/lib/utils";
-import { MarkdownContent } from "@/components/chat";
+import { MarkdownContent, MessageTags } from "@/components/chat";
 import { EmptyState } from "@/components/empty-state";
 import { formatTimeShort } from "@/lib/format";
 import { LetterAvatar, MindAvatar } from "@/components/dashboard/letter-avatar";
@@ -126,6 +126,7 @@ export default function ChatPage() {
         content: resp.response,
         timestamp: resp.timestamp ?? new Date().toISOString(),
         mind_id: resp.mind_id,
+        tags: resp.tags,
       };
       addMessage(aiMsg);
     } catch (err) {
@@ -236,6 +237,9 @@ export default function ChatPage() {
                         msg.role === "user" ? "items-end" : "items-start",
                       )}
                     >
+                      {msg.role === "assistant" && msg.tags && msg.tags.length > 0 && (
+                        <MessageTags tags={msg.tags} />
+                      )}
                       <div
                         className={cn(
                           "rounded-2xl px-4 py-2.5 text-sm leading-relaxed",

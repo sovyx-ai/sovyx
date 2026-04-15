@@ -255,11 +255,34 @@ async def handle_chat_message(
 
     now = datetime.now(UTC)
 
+    # Derive module/plugin tags surfaced to the chat UI.
+    #
+    # Tool names from the ReAct loop are already namespaced as
+    # "plugin.tool" (enforced by PluginManager at sovyx/plugins/manager.py)
+    # so the plugin name is the prefix before the first dot. Plugins are
+    # deduplicated and sorted alphabetically for stable rendering, and
+    # "brain" is always appended because the cognitive loop ran even
+    # when tools did the heavy lifting (the LLM reasoned about which
+    # tool to call, how to phrase the reply, etc.). Pending-confirmation,
+    # degraded, and error paths all still carry tags — every response
+    # the user sees should be traceable to the modules that produced it.
+    plugin_tags: list[str] = []
+    if result is not None and result.tool_calls_made:
+        plugin_tags = sorted(
+            {
+                tc.function_name.split(".", 1)[0]
+                for tc in result.tool_calls_made
+                if tc.function_name
+            }
+        )
+    tags: list[str] = [*plugin_tags, "brain"]
+
     resp: dict[str, Any] = {
         "response": response_text,
         "conversation_id": str(conv_id),
         "mind_id": str(mind_id),
         "timestamp": now.isoformat(),
+        "tags": tags,
     }
     if buttons_payload:
         resp["buttons"] = buttons_payload

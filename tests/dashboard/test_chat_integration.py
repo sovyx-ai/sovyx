@@ -124,7 +124,7 @@ class TestChatResponseSchema:
         token: str,
         auth_headers: dict[str, str],
     ) -> None:
-        """Success response contains response, conversation_id, mind_id, timestamp."""
+        """Success response contains response, conversation_id, mind_id, timestamp, tags."""
         app = create_app()
         app.state.registry = _make_mock_registry()
         client = TestClient(app)
@@ -142,11 +142,16 @@ class TestChatResponseSchema:
             "conversation_id",
             "mind_id",
             "timestamp",
+            "tags",
         }
         assert isinstance(data["response"], str)
         assert isinstance(data["conversation_id"], str)
         assert isinstance(data["mind_id"], str)
         assert isinstance(data["timestamp"], str)
+        # Tags is always present, always a list, always non-empty —
+        # at minimum contains "brain" for pure cognitive replies.
+        assert isinstance(data["tags"], list)
+        assert data["tags"] == ["brain"]
 
     def test_error_response_has_error_field(
         self,

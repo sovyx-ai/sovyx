@@ -278,6 +278,14 @@ export interface ChatResponse {
   conversation_id: string;
   mind_id: string;
   timestamp?: string;
+  /**
+   * Module/plugin tags surfaced to the chat UI. Backend guarantees at
+   * least `["brain"]` on every response; plugin tags (derived from the
+   * ReAct loop's `tool_calls_made`) appear before `brain` when tools
+   * participated. Optional in the type for forward/backward
+   * compatibility during rollout — renderers MUST handle undefined.
+   */
+  tags?: string[];
 }
 
 /** Local chat message for the thread UI */
@@ -287,6 +295,8 @@ export interface ChatMessage {
   content: string;
   timestamp: string;
   mind_id?: string;
+  /** Same semantics as `ChatResponse.tags`; always undefined for user messages. */
+  tags?: string[];
 }
 
 // ── Settings ──
