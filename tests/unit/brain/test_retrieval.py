@@ -265,20 +265,25 @@ class TestHybridWithVec:
     ) -> None:
         """Typed vector-search failure → fall back to FTS5.
 
-        Uses ``SearchError`` because that's the typed subsystem
-        failure the narrow catch in ``HybridRetrieval.search_concepts``
-        is designed to handle. A bare ``RuntimeError`` would represent
-        a programmer error that SHOULD bubble up.
+        Seeds ``ValueError`` because it's in the narrow catch tuple
+        in ``HybridRetrieval.search_concepts`` AND is a builtin — so
+        the test-side reference and the production-side reference are
+        always the same class object. Using an internal class
+        (``SearchError``) here tripped CLAUDE.md anti-pattern #8:
+        under Linux CI (coverage + Python 3.11), the test's class
+        object didn't match the production catch's class object,
+        and the "typed" exception propagated unhandled. ``SearchError``
+        stays in the production narrow for real-world propagation
+        via the subsystem; the test just uses a builtin that can't
+        suffer class-identity drift.
         """
-        from sovyx.engine.errors import SearchError
-
         mock_embedding.has_embeddings = True
         mock_concept_repo._pool.has_sqlite_vec = True
 
         c1 = _concept("test", "c1")
         mock_concept_repo.search_by_text = AsyncMock(return_value=[(c1, -1.0)])
         mock_concept_repo.search_by_embedding = AsyncMock(
-            side_effect=SearchError("vec failed"),
+            side_effect=ValueError("vec failed"),
         )
 
         retrieval = HybridRetrieval(
@@ -328,14 +333,15 @@ class TestSearchEpisodes:
     ) -> None:
         """Typed vec-search failure → fall back to recency.
 
-        Same typed-contract alignment as the concept-path sibling.
+        Seeds ``ValueError`` (builtin, in the narrow tuple) for the
+        same CLAUDE.md anti-pattern #8 reason as the concept-path
+        sibling: internal class identity isn't stable under Linux
+        CI's pytest-cov instrumentation.
         """
-        from sovyx.engine.errors import SearchError
-
         mock_embedding.has_embeddings = True
         mock_episode_repo._pool.has_sqlite_vec = True
         mock_episode_repo.search_by_embedding = AsyncMock(
-            side_effect=SearchError("fail"),
+            side_effect=ValueError("fail"),
         )
         e1 = _episode("recent", "e1")
         mock_episode_repo.get_recent = AsyncMock(return_value=[e1])
