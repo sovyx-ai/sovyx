@@ -34,6 +34,7 @@ from sovyx.upgrade.conv_import import (
     ClaudeImporter,
     ConversationImporter,
     ConversationImportError,
+    GeminiImporter,
     ImportProgressTracker,
     ImportState,
     RawConversation,
@@ -59,12 +60,13 @@ _IMPORT_CHUNK_BYTES = 1 * 1024 * 1024  # 1 MiB streaming chunk
 
 # ── Platform registry ─────────────────────────────────────────────
 #
-# Adding Claude/Gemini/Obsidian later is a matter of dropping a new
+# Adding a new platform (Obsidian next) is a matter of dropping a new
 # importer module in sovyx.upgrade.conv_import and registering it
 # here. The endpoint stays unchanged.
 _IMPORTERS: dict[str, type[ConversationImporter]] = {
     "chatgpt": ChatGPTImporter,
     "claude": ClaudeImporter,
+    "gemini": GeminiImporter,
 }
 
 

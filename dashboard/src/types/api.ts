@@ -302,7 +302,7 @@ export interface ChatMessage {
 // ── Conversation Imports ──
 
 /** Platform identifier for conversation-import endpoints. */
-export type ConversationImportPlatform = "chatgpt" | "claude";
+export type ConversationImportPlatform = "chatgpt" | "claude" | "gemini";
 
 /** Lifecycle state of an import job. Mirrors backend `ImportState` enum. */
 export type ConversationImportState =

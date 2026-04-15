@@ -36,6 +36,7 @@ _FIXTURE = Path(__file__).parent.parent / "fixtures" / "chatgpt" / "sample_conve
 _CLAUDE_FIXTURE = (
     Path(__file__).parent.parent / "fixtures" / "claude" / "sample_conversations.json"
 )
+_GEMINI_FIXTURE = Path(__file__).parent.parent / "fixtures" / "gemini" / "sample_activity.json"
 
 # ── Dict-backed pool stub ──────────────────────────────────────────
 #
@@ -337,6 +338,34 @@ class TestConversationImportValidation:
         body = resp.json()
         assert body["platform"] == "claude"
         assert body["conversations_total"] == 3  # noqa: PLR2004
+        _wait_for_completion(client, body["job_id"], auth)
+
+    def test_gemini_platform_accepted(
+        self,
+        client: TestClient,
+        auth: dict[str, str],
+    ) -> None:
+        """Registry wiring smoke-test: ``platform=gemini`` reaches the worker.
+
+        Same rationale as ``test_claude_platform_accepted``: we only
+        assert that the router accepts the new identifier and starts a
+        job. The heavy end-to-end flow is exercised via ChatGPT and is
+        platform-agnostic.
+        """
+        registry, _ = _make_registry()
+        client.app.state.registry = registry  # type: ignore[union-attr]
+        resp = client.post(
+            "/api/import/conversations",
+            files={"file": ("g.json", _GEMINI_FIXTURE.read_bytes())},
+            data={"platform": "gemini"},
+            headers=auth,
+        )
+        assert resp.status_code == 202  # noqa: PLR2004
+        body = resp.json()
+        assert body["platform"] == "gemini"
+        # Fixture produces 4 conversations: Bard 2023-06-01, EN SQLite
+        # 2024-10-20, PT Curitiba 2024-10-21 14:01, EN React 2024-10-21 17:45.
+        assert body["conversations_total"] == 4  # noqa: PLR2004
         _wait_for_completion(client, body["job_id"], auth)
 
 

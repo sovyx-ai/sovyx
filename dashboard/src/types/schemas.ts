@@ -237,7 +237,11 @@ export const ChatResponseSchema = z.object({
 
 // ── Conversation Imports ──
 
-export const ConversationImportPlatformSchema = z.enum(["chatgpt", "claude"]);
+export const ConversationImportPlatformSchema = z.enum([
+  "chatgpt",
+  "claude",
+  "gemini",
+]);
 
 export const ConversationImportStateSchema = z.enum([
   "pending",

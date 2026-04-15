@@ -1,0 +1,60 @@
+[
+  {
+    "header": "Gemini Apps",
+    "title": "Gemini said: WAL lets readers and writers coexist by staging writes in a separate log file.",
+    "time": "2024-10-20T09:31:05.000Z",
+    "products": ["Gemini Apps"]
+  },
+  {
+    "header": "Gemini Apps",
+    "title": "You said: Explain SQLite WAL mode in one sentence.",
+    "time": "2024-10-20T09:31:00.000Z",
+    "products": ["Gemini Apps"]
+  },
+  {
+    "header": "Gemini Apps",
+    "title": "You used Gemini",
+    "time": "2024-10-20T09:30:58.000Z"
+  },
+  {
+    "header": "Gemini Apps",
+    "title": "You searched for: chocolate cake recipe",
+    "time": "2024-10-20T10:15:00.000Z"
+  },
+  {
+    "header": "Gemini Apps",
+    "title": "O Gemini respondeu: O clima hoje em Curitiba est&aacute; ensolarado com 22\u00b0C.",
+    "time": "2024-10-21T14:01:30.000Z",
+    "products": ["Gemini Apps"]
+  },
+  {
+    "header": "Gemini Apps",
+    "title": "Você disse: Como está o clima hoje em Curitiba?",
+    "time": "2024-10-21T14:01:25.000Z",
+    "products": ["Gemini Apps"]
+  },
+  {
+    "header": "Gemini Apps",
+    "title": "Gemini said: React hooks like useEffect run side effects after render.",
+    "time": "2024-10-21T17:45:12.000Z",
+    "products": ["Gemini Apps"]
+  },
+  {
+    "header": "Gemini Apps",
+    "title": "You said: When should I use <b>useEffect</b>?",
+    "time": "2024-10-21T17:45:05.000Z",
+    "products": ["Gemini Apps"]
+  },
+  {
+    "header": "Bard",
+    "title": "Bard said: You can&#39;t index a tuple beyond its length.",
+    "time": "2023-06-01T08:00:30.000Z",
+    "products": ["Bard"]
+  },
+  {
+    "header": "Bard",
+    "title": "You said: Why does Python raise IndexError?",
+    "time": "2023-06-01T08:00:25.000Z",
+    "products": ["Bard"]
+  }
+]
