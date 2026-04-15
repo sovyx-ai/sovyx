@@ -291,4 +291,76 @@ describe("BrainGraph — accessible fallback", () => {
     );
     expect(screen.getByText(/50 of 75 relations shown/)).toBeInTheDocument();
   });
+
+  it("survives post-simulation link mutation without crashing", () => {
+    // react-force-graph-2d mutates links in place: once d3-force has
+    // ticked, `link.source` and `link.target` are replaced with
+    // references to the actual node objects (complete with `x`, `y`,
+    // `vx`, `vy`, `__indexColor`, `index` fields). The SR fallback
+    // table has to render the concept NAME, not the mutated object —
+    // otherwise React throws error #31 ("Objects are not valid as a
+    // React child").
+    const alice = {
+      id: "n1",
+      name: "Alice",
+      category: "entity" as const,
+      importance: 0.9,
+      confidence: 0.8,
+      access_count: 10,
+      // Fields injected by the simulation:
+      __indexColor: "#abcdef",
+      index: 0,
+      x: 1.2,
+      y: -3.4,
+      vx: 0.1,
+      vy: 0.2,
+    };
+    const bob = {
+      id: "n2",
+      name: "Bob",
+      category: "entity" as const,
+      importance: 0.7,
+      confidence: 0.7,
+      access_count: 5,
+      __indexColor: "#fedcba",
+      index: 1,
+      x: 5.6,
+      y: 7.8,
+      vx: -0.1,
+      vy: -0.2,
+    };
+    // source/target hold the node *objects*, not their string ids —
+    // exactly what force-graph-2d produces post-tick.
+    const mutatedLink = {
+      source: alice as unknown as string,
+      target: bob as unknown as string,
+      relation_type: "related_to" as const,
+      weight: 0.6,
+    };
+    render(
+      <BrainGraph
+        data={{ nodes: [alice, bob], links: [mutatedLink] }}
+        width={100}
+        height={100}
+      />,
+    );
+    // The relations table must resolve the mutated endpoints back to
+    // their concept names, not stringify-or-object-render them.
+    const cells = screen.getAllByRole("cell");
+    const cellText = cells.map((c) => c.textContent ?? "");
+    expect(cellText).toContain("Alice");
+    expect(cellText).toContain("Bob");
+
+    // And connectionCounts must still key by string id so the
+    // concepts table shows the correct number of connections.
+    // Alice participates in 1 relation (with Bob) — assert the count
+    // cell next to "Alice" is "1", not "0".
+    const aliceRow = screen.getByRole("rowheader", { name: "Alice" }).closest(
+      "tr",
+    );
+    expect(aliceRow).not.toBeNull();
+    const aliceCells = aliceRow!.querySelectorAll("td");
+    // Concept table columns: Category, Importance, Connections.
+    expect(aliceCells[aliceCells.length - 1]?.textContent).toBe("1");
+  });
 });

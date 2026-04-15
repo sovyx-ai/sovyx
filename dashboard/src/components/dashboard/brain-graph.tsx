@@ -63,6 +63,33 @@ import { GRAPH_COLORS } from "@/lib/constants";
  */
 const _A11Y_MAX_ROWS = 50;
 
+/**
+ * Normalise a link endpoint to its string node ID.
+ *
+ * ``react-force-graph-2d`` (via d3-force) **mutates links in place**
+ * once the simulation starts: ``link.source`` and ``link.target`` are
+ * replaced with direct references to the node objects so the physics
+ * loop can read ``x/y/vx/vy`` without a lookup. Our wire-format type
+ * declares them as strings (matching the backend), but at runtime
+ * they can be either a string ID (pre-simulation) or a node object
+ * with an ``id`` field (post-simulation, with extra fields like
+ * ``__indexColor``, ``index``, ``x``, ``vx``). Rendering the mutated
+ * object as a JSX child triggers React error #31, and feeding it to a
+ * ``Map<string, ...>`` silently misses every lookup.
+ *
+ * This helper accepts both shapes and returns the string ID. All
+ * downstream code (connection counts, render keys, table cells) must
+ * go through it.
+ */
+function linkEndpointId(endpoint: unknown): string {
+  if (typeof endpoint === "string") return endpoint;
+  if (endpoint != null && typeof endpoint === "object" && "id" in endpoint) {
+    const id = (endpoint as { id: unknown }).id;
+    return typeof id === "string" ? id : String(id);
+  }
+  return String(endpoint);
+}
+
 export function BrainGraph({ data, width, height, onNodeClick, highlightedNodeIds }: BrainGraphProps) {
   const { t } = useTranslation("brain");
   const fgRef = useRef<ForceGraphMethods<BrainNode>>(undefined);
@@ -76,8 +103,10 @@ export function BrainGraph({ data, width, height, onNodeClick, highlightedNodeId
   const { nodesByImportance, linksByWeight, connectionCounts } = useMemo(() => {
     const counts = new Map<string, number>();
     for (const link of data.links) {
-      counts.set(link.source, (counts.get(link.source) ?? 0) + 1);
-      counts.set(link.target, (counts.get(link.target) ?? 0) + 1);
+      const sourceId = linkEndpointId(link.source);
+      const targetId = linkEndpointId(link.target);
+      counts.set(sourceId, (counts.get(sourceId) ?? 0) + 1);
+      counts.set(targetId, (counts.get(targetId) ?? 0) + 1);
     }
     const sortedNodes = [...data.nodes]
       .sort((a, b) => b.importance - a.importance)
@@ -303,19 +332,27 @@ export function BrainGraph({ data, width, height, onNodeClick, highlightedNodeId
                 </tr>
               </thead>
               <tbody>
-                {linksByWeight.map((link, idx) => (
-                  <tr key={`${link.source}-${link.target}-${idx}`}>
-                    <td>{nodeNameById.get(link.source) ?? link.source}</td>
-                    <td>{nodeNameById.get(link.target) ?? link.target}</td>
-                    <td>
-                      {t(`relations.${link.relation_type}`)}
-                      {link.relation_type === "contradicts" && (
-                        <> — {t("graph.a11yContradictsBadge")}</>
-                      )}
-                    </td>
-                    <td>{link.weight.toFixed(2)}</td>
-                  </tr>
-                ))}
+                {linksByWeight.map((link, idx) => {
+                  // Coerce each endpoint through linkEndpointId so the
+                  // post-simulation object form (see helper docstring)
+                  // renders as the concept name string, not as a raw
+                  // node object — which would crash with React #31.
+                  const sourceId = linkEndpointId(link.source);
+                  const targetId = linkEndpointId(link.target);
+                  return (
+                    <tr key={`${sourceId}-${targetId}-${idx}`}>
+                      <td>{nodeNameById.get(sourceId) ?? sourceId}</td>
+                      <td>{nodeNameById.get(targetId) ?? targetId}</td>
+                      <td>
+                        {t(`relations.${link.relation_type}`)}
+                        {link.relation_type === "contradicts" && (
+                          <> — {t("graph.a11yContradictsBadge")}</>
+                        )}
+                      </td>
+                      <td>{link.weight.toFixed(2)}</td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
             {linksShown < linksTotal && (
