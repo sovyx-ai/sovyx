@@ -220,7 +220,14 @@ def setup_tracing(
 ) -> SovyxTracer:
     """Initialize the OTel tracing pipeline.
 
-    Call once at application startup.
+    Safe to call multiple times. If tracing was already configured (and
+    possibly shut down), the prior provider is torn down and OTel's
+    ``set-once`` guard is reset before the new provider is installed.
+    Without this, OTel's :data:`trace._TRACER_PROVIDER_SET_ONCE` makes
+    every subsequent :func:`trace.set_tracer_provider` call a silent
+    no-op, so span export would stay wired to a stale (possibly
+    shut-down) provider and :data:`_active_provider` would appear to
+    reset to ``None`` under certain test-ordering sequences.
 
     Args:
         exporters: List of SpanExporters.  If ``None``, tracing is
@@ -243,6 +250,15 @@ def setup_tracing(
 
     from opentelemetry.sdk.resources import Resource
 
+    # Tear down any prior provider so its exporter/worker threads stop
+    # cleanly before we install the new one. Swallowed: the prior
+    # provider may already be shut down or in a degraded state, and we
+    # never want setup_tracing to raise on the cleanup path.
+    if _active_provider is not None:
+        with contextlib.suppress(Exception):
+            _active_provider.shutdown()
+        _active_provider = None
+
     resource = Resource.create({"service.name": service_name})
     provider = TracerProvider(resource=resource)
 
@@ -260,19 +276,45 @@ def setup_tracing(
             else:
                 provider.add_span_processor(SimpleSpanProcessor(exporter))
 
+    # Reset OTel's set-once latch so the new provider actually replaces
+    # whatever was there before. Touching the private attribute is
+    # deliberate — it's the only public-ish way to re-initialise tracing
+    # across a full app lifecycle (startup, test restart, shutdown).
+    _reset_tracer_provider_latch()
     trace.set_tracer_provider(provider)
     _active_provider = provider
 
     return SovyxTracer(provider.get_tracer(_TRACER_NAME, _TRACER_VERSION))
 
 
+def _reset_tracer_provider_latch() -> None:
+    """Force OTel's ``_TRACER_PROVIDER_SET_ONCE`` to allow re-installation.
+
+    OTel guards ``trace.set_tracer_provider`` with a one-shot latch so the
+    first caller wins. That's fine in production where tracing is wired
+    once at startup, but it makes :func:`setup_tracing` a silent no-op if
+    any code path — test suite, REPL warm-up, plugin — touched OTel
+    first. Resetting the latch restores "last writer wins" semantics,
+    which is the behaviour :func:`setup_tracing` already promised.
+    """
+    with contextlib.suppress(Exception):
+        trace._TRACER_PROVIDER_SET_ONCE._done = False  # noqa: SLF001
+
+
 def teardown_tracing() -> None:
-    """Shut down the tracing pipeline."""
+    """Shut down the tracing pipeline.
+
+    Also releases OTel's one-shot ``_TRACER_PROVIDER_SET_ONCE`` latch so a
+    later :func:`setup_tracing` call can install a fresh provider —
+    essential for daemon restarts and for test suites that run multiple
+    setup/teardown cycles in the same interpreter.
+    """
     global _active_provider  # noqa: PLW0603
 
     if _active_provider is not None:
         _active_provider.shutdown()
         _active_provider = None
+    _reset_tracer_provider_latch()
 
 
 def get_tracer() -> SovyxTracer:

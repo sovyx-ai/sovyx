@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from opentelemetry import trace
 from opentelemetry.sdk.trace.export import (
     SpanExporter,
     SpanExportResult,
@@ -132,6 +133,31 @@ class TestSetupTeardown:
         assert children is not None
         assert any(isinstance(p, BatchSpanProcessor) for p in children)
         # Clean up so other tests don't see the batch-wired provider.
+        teardown_tracing()
+
+    def test_setup_after_shutdown_reinstalls_provider(
+        self,
+        exporter: InMemoryExporter,
+    ) -> None:
+        """setup_tracing must recover after a prior teardown.
+
+        Regression for CI failure where the full suite ordering left
+        OTel's ``_TRACER_PROVIDER_SET_ONCE`` latched, so a second
+        ``setup_tracing`` call silently no-oped. Production daemons
+        restart tracing across reconfig reloads and the test suite cycles
+        through setup/teardown many times — both must work.
+        """
+        setup_tracing(exporters=[exporter], batch=False)
+        teardown_tracing()
+
+        # Re-install tracing after teardown.
+        setup_tracing(exporters=[exporter], batch=True)
+        from sovyx.observability import tracing as _tracing
+
+        assert _tracing._active_provider is not None
+        # The installed provider must be the one we just created — not a
+        # leftover from the first setup_tracing call.
+        assert trace.get_tracer_provider() is _tracing._active_provider
         teardown_tracing()
 
 
