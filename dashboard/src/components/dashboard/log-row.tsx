@@ -7,7 +7,14 @@
  * Ref: Architecture §3.4, immersion-final §3
  */
 
-import { memo, useCallback, useMemo, useState, type MouseEvent } from "react";
+import {
+  memo,
+  useCallback,
+  useMemo,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+} from "react";
 import type { LogEntry } from "@/types/api";
 import { formatTimePrecise } from "@/lib/format";
 import { safeStringify } from "@/lib/safe-json";
@@ -38,10 +45,29 @@ const LEVEL_BG: Record<LogEntry["level"], string> = {
 function LogRowImpl({ entry }: LogRowProps) {
   const [expanded, setExpanded] = useState(false);
 
-  const handleClick = useCallback((e: MouseEvent) => {
-    e.stopPropagation();
+  const toggle = useCallback(() => {
     setExpanded((v) => !v);
   }, []);
+
+  const handleClick = useCallback(
+    (e: MouseEvent) => {
+      e.stopPropagation();
+      toggle();
+    },
+    [toggle],
+  );
+
+  const handleKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLDivElement>) => {
+      // Only Enter and Space activate — matches native <button> semantics.
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        e.stopPropagation();
+        toggle();
+      }
+    },
+    [toggle],
+  );
 
   // Extract known fields; rest is extra structured data
   const { extraFields, hasExtra } = useMemo(() => {
@@ -49,14 +75,26 @@ function LogRowImpl({ entry }: LogRowProps) {
     return { extraFields: rest, hasExtra: Object.keys(rest).length > 0 };
   }, [entry]);
 
+  // Only expose the button role + tabstop when there's something to expand.
+  // An inert row (no extra fields) stays as a plain <div>.
+  const interactiveProps = hasExtra
+    ? {
+        role: "button" as const,
+        tabIndex: 0,
+        "aria-expanded": expanded,
+        onClick: handleClick,
+        onKeyDown: handleKeyDown,
+      }
+    : {};
+
   return (
     <div
       className={cn(
         "font-code border-b border-[var(--svx-color-border-subtle)] px-3 py-1.5 text-xs transition-colors",
         LEVEL_BG[entry.level],
-        hasExtra && "cursor-pointer hover:bg-[var(--svx-color-bg-hover)]",
+        hasExtra && "cursor-pointer hover:bg-[var(--svx-color-bg-hover)] focus:outline-none focus:ring-2 focus:ring-[var(--svx-color-brand-primary)]/60",
       )}
-      onClick={handleClick}
+      {...interactiveProps}
     >
       <div className="flex items-baseline gap-3">
         <span className="shrink-0 text-[var(--svx-color-text-tertiary)]">
