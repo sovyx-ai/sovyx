@@ -89,6 +89,7 @@ sovyx = "sovyx.cli.main:app"
 financial-math = "sovyx.plugins.official.financial_math:FinancialMathPlugin"
 web-intelligence = "sovyx.plugins.official.web_intelligence:WebIntelligencePlugin"
 knowledge = "sovyx.plugins.official.knowledge:KnowledgePlugin"
+home-assistant = "sovyx.plugins.official.home_assistant:HomeAssistantPlugin"
 
 [project.urls]
 Homepage = "https://sovyx.ai"
