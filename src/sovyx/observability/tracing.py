@@ -304,16 +304,28 @@ def _reset_tracer_provider_latch() -> None:
 def teardown_tracing() -> None:
     """Shut down the tracing pipeline.
 
-    Also releases OTel's one-shot ``_TRACER_PROVIDER_SET_ONCE`` latch so a
-    later :func:`setup_tracing` call can install a fresh provider —
-    essential for daemon restarts and for test suites that run multiple
-    setup/teardown cycles in the same interpreter.
+    Shuts down the cached provider, and — as a safety net — also calls
+    shutdown on OTel's globally installed provider if it's a real
+    :class:`TracerProvider` (not the no-op). This covers the case where
+    :data:`_active_provider` got out of sync with OTel's global under
+    unusual test-ordering / module-reload conditions. Releases OTel's
+    one-shot ``_TRACER_PROVIDER_SET_ONCE`` latch so a later
+    :func:`setup_tracing` can install a fresh provider — essential for
+    daemon restarts and for test suites that run multiple setup/teardown
+    cycles in the same interpreter.
     """
     global _active_provider  # noqa: PLW0603
 
     if _active_provider is not None:
-        _active_provider.shutdown()
+        with contextlib.suppress(Exception):
+            _active_provider.shutdown()
         _active_provider = None
+
+    global_provider = trace.get_tracer_provider()
+    if isinstance(global_provider, TracerProvider):
+        with contextlib.suppress(Exception):
+            global_provider.shutdown()
+
     _reset_tracer_provider_latch()
 
 

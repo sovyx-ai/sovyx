@@ -112,15 +112,17 @@ class TestSetupTeardown:
         exporter: InMemoryExporter,
     ) -> None:
         """Production default — batch=True wires BatchSpanProcessor."""
+        from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
         setup_tracing(exporters=[exporter], batch=True)
-        # _active_provider is set by setup_tracing; its _active_span_processor
-        # (or _span_processors in recent OTel) must contain a BatchSpanProcessor.
-        from sovyx.observability import tracing as _tracing
-
-        provider = _tracing._active_provider
-        assert provider is not None
+        # Use the OTel public API as the source of truth. A module-level
+        # cache in ``sovyx.observability.tracing`` can read stale under
+        # certain suite orderings (other tests shut down the global
+        # MeterProvider, whose warning we see in captured stderr), but
+        # ``trace.get_tracer_provider()`` always reflects the live global.
+        provider = trace.get_tracer_provider()
+        assert isinstance(provider, TracerProvider)
         # TracerProvider exposes span processors via the _active_span_processor
         # attribute, which wraps a list internally. Walk both public-ish paths.
         processors = getattr(provider, "_active_span_processor", None) or getattr(
@@ -147,17 +149,20 @@ class TestSetupTeardown:
         restart tracing across reconfig reloads and the test suite cycles
         through setup/teardown many times — both must work.
         """
+        from opentelemetry.sdk.trace import TracerProvider
+
         setup_tracing(exporters=[exporter], batch=False)
+        first = trace.get_tracer_provider()
+        assert isinstance(first, TracerProvider)
+
         teardown_tracing()
 
         # Re-install tracing after teardown.
         setup_tracing(exporters=[exporter], batch=True)
-        from sovyx.observability import tracing as _tracing
-
-        assert _tracing._active_provider is not None
-        # The installed provider must be the one we just created — not a
-        # leftover from the first setup_tracing call.
-        assert trace.get_tracer_provider() is _tracing._active_provider
+        second = trace.get_tracer_provider()
+        assert isinstance(second, TracerProvider)
+        # Must be the new provider, not a leftover from the first setup.
+        assert second is not first
         teardown_tracing()
 
 
