@@ -120,7 +120,12 @@ Retrieval combines three algorithms:
   ones decay via an Ebbinghaus curve.
 
 A consolidation cycle runs periodically (default every 6 hours) to prune low-
-value concepts, merge duplicates, and archive old episodes.
+value concepts, merge duplicates, and archive old episodes. A separate
+**dream phase** runs nightly (default `02:00` in the mind's timezone) — one
+LLM call extracts recurring themes from the last 24 h of episodes and
+materializes them as low-confidence derived concepts plus cross-episode
+Hebbian boosts. See [`brain.md`](modules/brain.md) for the dream cycle
+details.
 
 ## LLM Routing
 
@@ -149,7 +154,7 @@ EngineStarted         PerceptionReceived     ConceptCreated
 EngineStopping        ThinkCompleted         ConceptContradicted
 ServiceHealthChanged  ResponseSent           ConceptForgotten
 ChannelConnected      EpisodeEncoded         ConsolidationCompleted
-ChannelDisconnected
+ChannelDisconnected                          DreamCompleted
 ```
 
 Each event carries a correlation ID for distributed tracing. The dashboard

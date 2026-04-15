@@ -6,6 +6,236 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.11.9] — 2026-04-15
+
+CalDAV calendar integration as a plugin — IMPL-009 v0, scope-tightened
+from spec to read-only.
+
+### Added
+
+- **CalDAV plugin** (`plugins/official/caldav.py`) — 6 read-only tools
+  (`list_calendars`, `get_today`, `get_upcoming`, `get_event`,
+  `find_free_slot`, `search_events`). Compatible with Nextcloud,
+  iCloud, Fastmail, Radicale, SOGo, and Baikal. Talks PROPFIND /
+  REPORT XML directly through the existing `SandboxedHttpClient`
+  (with the new public `request()` method) — does **not** use the
+  third-party `caldav` package because it routes its own HTTP and
+  bypasses the sandbox. iCalendar parsing via the lightweight
+  `icalendar` library; RRULE expansion via `python-dateutil`, capped
+  at 200 instances. `defusedxml` parses every server-controlled XML
+  body to defuse XXE risk on REPORT/PROPFIND responses. Per-window
+  event cache (5 min TTL). Configuration in `mind.yaml` under
+  `plugins_config.caldav` with `base_url`, `username`, `password`
+  (use app-specific passwords for iCloud / Fastmail), optional
+  `verify_ssl`, `default_calendar`, `allow_local`, `timezone`.
+- **`SandboxedHttpClient.request(method, url, ...)`** — public
+  arbitrary-method entry point for plugins that speak HTTP-extension
+  protocols (CalDAV PROPFIND/REPORT, WebDAV). Every existing sandbox
+  guard — URL allowlist, local-IP block, DNS rebinding check, rate
+  limit, response size cap, timeout — applies unchanged.
+- New deps: `icalendar>=5.0`, `defusedxml>=0.7`.
+
+### Non-goals (deliberate)
+
+- No write surface — events are read-only. No create / edit / delete.
+- No incremental sync (no ctag/etag) — every refresh re-issues a full
+  REPORT for the time window. Acceptable for v0 (~50 KB per request);
+  ctag/etag is on the next-PR list.
+- No subscribe / push notifications.
+- One calendar source per plugin instance (multi-account is v0.2).
+- **Google Calendar discontinued CalDAV in 2023** — not supported.
+
+### Tests
+
+- 43 unit tests covering metadata, lifecycle, every tool's success
+  and error paths (auth failure / not-found / malformed XML / empty
+  results), calendar discovery + cache TTL, calendar-name filtering,
+  free-slot algorithm pure logic, helpers.
+
+## [0.11.8] — 2026-04-15
+
+Home Assistant integration as a plugin — IMPL-008 v0.
+
+### Added
+
+- **Home Assistant plugin** (`plugins/official/home_assistant.py`) —
+  4 domains, 8 LLM-callable tools across light (`list_lights`,
+  `turn_on_light`, `turn_off_light`), switch (`turn_on_switch`,
+  `turn_off_switch`), sensor (`read_sensor`, `list_sensors`), and
+  climate (`set_temperature`, the only confirmation-required tool in
+  v0). Talks REST to the user's Home Assistant instance via
+  `SandboxedHttpClient` with `allow_local=True` (HA usually lives at
+  `http://homeassistant.local:8123` or a private IP). Per-domain
+  in-memory entity cache (60 s TTL) with eviction on service-call.
+  Declares `Permission.NETWORK_LOCAL`.
+- **Architectural decision**: HA was originally specced as a bridge
+  (IMPL-008). Shipped as a **plugin** instead — HA exposes a device
+  API, not a conversational channel; the plugin substrate gives it
+  sandbox, permissions, lifecycle, dashboard UI, and HACS-compatible
+  packaging for free.
+
+### Non-goals (deliberate)
+
+- No WebSocket subscription — entity state is fetched on demand. The
+  mind doesn't see a light flipped manually until the next tool call.
+- No mDNS discovery — caller supplies `base_url` explicitly.
+- Only 4 domains in v0 — covers / locks / fans / media_player /
+  scenes / scripts ship one PR per domain.
+
+### Tests
+
+- 50 unit tests covering metadata, lifecycle, the not-configured
+  guard, every tool's happy path, every tool's error paths
+  (401 / 404 / 500 / network exception / invalid entity_id / wrong
+  domain), cache TTL behaviour (hit / invalidation / staleness /
+  fallback), and module-level helpers.
+
+## [0.11.7] — 2026-04-15
+
+Interactive CLI REPL — `sovyx chat` (SPE-015 §3.1). Closes a long-
+standing gap noted in the CLI module spec.
+
+### Added
+
+- **`sovyx chat`** — line-oriented REPL over the existing JSON-RPC
+  Unix socket (not HTTP). Runs even when the dashboard is disabled.
+  prompt_toolkit session with persistent history at
+  `~/.sovyx/history` (chmod 0600), word-completer over the slash
+  command vocabulary, history search.
+- **7 slash commands**: `/help` (also `/?`), `/exit` / `/quit`
+  (Ctrl+D works too), `/new` (rotate `conversation_id`), `/clear`
+  (wipe screen + rotate), `/status`, `/minds`, `/config`. Every
+  unknown command returns a friendly help-pointer instead of
+  raising. Every boundary handler wraps the call in a `try` that
+  renders the error inline — one bad turn never crashes the session.
+- **3 new RPC handlers** wired in `engine/_rpc_handlers.py`:
+  `chat`, `mind.list`, `config.get`. The `chat` handler reuses
+  `dashboard.chat.handle_chat_message` (the same entry point
+  `POST /api/chat` uses) with `ChannelType.CLI` and a stable
+  `cli-user` channel id, so `PersonResolver` keeps CLI sessions on
+  a separate identity from the dashboard.
+- New dep: `prompt_toolkit>=3.0`.
+
+### Tests
+
+- 47 tests across slash-command parsing + dispatch (24) and REPL
+  loop integration with mocked client + fake session (23). Covers
+  every command, every error path, EOF handling, history-file
+  permissions on POSIX, and the full driven-session entry point.
+
+## [0.11.6] — 2026-04-15
+
+DREAM phase — the seventh and final phase of the cognitive loop
+(SPE-003 §1.1, "nightly: discover patterns"). Closes Top-10 gap #9.
+
+### Added
+
+- **DREAM phase** (`brain/dream.py`) — `DreamCycle` + `DreamScheduler`
+  in the same module, mirroring `brain/consolidation.py`. Unlike the
+  request-driven phases (Perceive → Reflect), DREAM runs on a
+  time-of-day schedule (default `02:00` in the mind's timezone) while
+  the user is likely asleep — biologically inspired by REM-era
+  hippocampal replay (Buzsáki 2006).
+- **3-phase pipeline per run**: (1) fetch episodes in
+  `dream_lookback_hours` window (default 24 h) via the new
+  `EpisodeRepository.get_since`, (2) short-circuit if fewer than 3
+  episodes, (3) one LLM call extracts up to `dream_max_patterns`
+  recurring themes (default 5) → each pattern becomes a `Concept`
+  with `source="dream:pattern"`, `category=BELIEF`, and a modest
+  `confidence=0.4` (lifts via access). Concepts that appear in two
+  or more distinct episodes get fed to `HebbianLearning.strengthen`
+  with attenuated activation (0.5) — cross-episode is a weaker
+  signal than within-turn. Capped at 12 concepts per run to bound
+  the O(n²) within-pair cost.
+- **Time-of-day scheduler** — `DreamScheduler._loop` sleeps until
+  the next `dream_time` occurrence in the mind's timezone, with
+  ±15 min jitter. Survives cycle exceptions (logged, not bubbled).
+  Time arithmetic in `_seconds_until_next_dream(now=...)` accepts an
+  injectable clock so tests can drive it deterministically.
+- **`DreamCompleted` event** — `patterns_found, concepts_derived,
+  relations_strengthened, episodes_analyzed, duration_s`. Emitted on
+  every run (including short-circuits). Subscribed by the dashboard
+  WebSocket bridge with a Moon icon in the activity feed.
+- **Kill-switch via config**: `dream_max_patterns: 0` in `mind.yaml`
+  causes bootstrap to skip `DreamScheduler` registration entirely.
+  No flag sprawl, zero runtime overhead when disabled.
+- **`EpisodeRepository.get_since(mind_id, since, limit=500)`** — new
+  method returning episodes created at or after `since` in
+  chronological order.
+- **`BrainConfig.dream_lookback_hours`** (default 24, range 1–168)
+  and `BrainConfig.dream_max_patterns` (default 5, range 0–50).
+
+### Tests
+
+- 27 cycle tests across short-circuits, pattern extraction (LLM
+  failure, malformed JSON, code-fenced wrappers, empty fields),
+  cross-episode Hebbian (co-occurring boost, single-episode skip,
+  Hebbian failure, activation damping), event payload, digest
+  rendering (long summary truncation, missing summary fallback),
+  and lookback window respect.
+- 13 scheduler tests on time arithmetic (target later today, target
+  passed, exactly-now rolls to tomorrow, midnight edge, naive `now`
+  treated as scheduler tz, delta never exceeds one day), fallbacks
+  (invalid HH:MM, unknown timezone), lifecycle idempotency.
+- 4 `EpisodeRepository.get_since` tests.
+
+### Fixed
+
+- `lifecycle.py`: gate `MindManager.resolve` behind scheduler
+  registration. The DREAM wiring originally hoisted the resolve out
+  of the per-scheduler `if`-block to share `mind_id`, which broke
+  seven lifecycle tests on Linux CI that wire only the cognitive
+  loop without `MindManager`. Resolve now happens only when at least
+  one scheduler is registered.
+
+## [0.11.5] — 2026-04-15
+
+Claude and Gemini conversation importers — second and third of four
+planned platforms (ChatGPT shipped in v0.11.4; Obsidian remains).
+
+### Added
+
+- **ClaudeImporter** (`upgrade/conv_import/claude.py`) — parses the
+  `conversations.json` that Anthropic emails users on data export.
+  Substantially simpler shape than ChatGPT's regeneration-capable
+  tree: a flat array of conversation objects, each with a flat
+  `chat_messages` list in chronological order. Maps `sender:"human"`
+  → `role:"user"`, prefers the newer typed `content[]` array over
+  the legacy flat `text` field, parses ISO-8601 timestamps via
+  `datetime.fromisoformat` (Z-suffix tolerated). Attachments and
+  files explicitly ignored in v1 (consistent non-goal across all
+  importers).
+- **GeminiImporter** (`upgrade/conv_import/gemini.py`) — handles
+  Google Takeout's activity-stream format (no native conversation
+  boundaries, no role field — just a flat stream of localized
+  "You said:" / "Gemini said:" title strings). Three-pass pipeline:
+  (1) classify + filter — keep entries from `Gemini Apps` /
+  `Bard` headers, drop meta-activity ("You used Gemini"); (2) sort
+  chronologically (Takeout emits newest-first); (3) group by time
+  gap — consecutive turns within 30 minutes form one conversation.
+  Locale prefix catalogs for EN, PT, ES, FR, DE, IT, plus legacy
+  `Bard` headers. HTML entities decoded (`&aacute;`, `&#39;`); `<b>`
+  / `<i>` tags stripped. Synthesized `conversation_id` =
+  `sha256(f"gemini:{first_turn_iso}").hexdigest()[:16]` — re-importing
+  the same archive produces identical IDs, so the
+  `conversation_imports` dedup table skips previously-seen sessions.
+  The 30-minute session-gap is a load-bearing constant: changing it
+  retroactively shifts group boundaries and therefore IDs (documented
+  as a dedup-stability contract in the constant's docstring).
+- Both importers wired into
+  `dashboard/routes/conversation_import.py::_IMPORTERS` and the
+  frontend `ConversationImportPlatform` type extended to accept
+  `"claude"` and `"gemini"`.
+
+### Tests
+
+- ~70 parser tests across the two new platforms (role detection,
+  session grouping boundaries, content[]+text fallback, meta-activity
+  filtering, HTML handling, ID stability, malformed input,
+  unsupported-locale drop, title synthesis).
+- HTTP smoke tests assert the dashboard router accepts
+  `platform=claude` and `platform=gemini` and starts a job for each.
+
 ## [0.11.4] — 2026-04-15
 
 New-user onboarding: import existing conversation history from other assistants so the mind already knows you on day one. Ships ChatGPT this release; Claude / Gemini follow the same shape in later releases.
@@ -323,7 +553,16 @@ The v0.11 line is an enterprise hardening pass across backend, frontend, and CI 
 - 1 138 tests, ≥ 95 % coverage, mypy strict, ruff, bandit — zero errors.
 - Python 3.11 + 3.12 CI matrix.
 
-[Unreleased]: https://github.com/sovyx-ai/sovyx/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/sovyx-ai/sovyx/compare/v0.11.9...HEAD
+[0.11.9]: https://github.com/sovyx-ai/sovyx/compare/v0.11.8...v0.11.9
+[0.11.8]: https://github.com/sovyx-ai/sovyx/compare/v0.11.7...v0.11.8
+[0.11.7]: https://github.com/sovyx-ai/sovyx/compare/v0.11.6...v0.11.7
+[0.11.6]: https://github.com/sovyx-ai/sovyx/compare/v0.11.5...v0.11.6
+[0.11.5]: https://github.com/sovyx-ai/sovyx/compare/v0.11.4...v0.11.5
+[0.11.4]: https://github.com/sovyx-ai/sovyx/compare/v0.11.3...v0.11.4
+[0.11.3]: https://github.com/sovyx-ai/sovyx/compare/v0.11.2...v0.11.3
+[0.11.2]: https://github.com/sovyx-ai/sovyx/compare/v0.11.1...v0.11.2
+[0.11.1]: https://github.com/sovyx-ai/sovyx/compare/v0.11.0...v0.11.1
 [0.11.0]: https://github.com/sovyx-ai/sovyx/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/sovyx-ai/sovyx/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/sovyx-ai/sovyx/compare/v0.9.0...v0.10.0

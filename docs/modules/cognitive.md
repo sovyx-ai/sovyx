@@ -135,11 +135,31 @@ Safety rules and thresholds live under `cognitive.safety` in the mind config.
 - Use `pytest.raises(Exception) as exc_info` and assert on `type(exc_info.value).__name__`. Exception class identity is not stable under pytest-xdist.
 - Avoid `isinstance` dispatch in production code; use `type(exc).__name__` like `_categorize_error` does.
 
+## Periodic and nightly phases
+
+- **CONSOLIDATE** (every 6 h by default) is implemented in
+  `brain/consolidation.py` as `ConsolidationCycle` + `ConsolidationScheduler`,
+  wired in `engine/bootstrap.py` and started/stopped by
+  `engine/lifecycle.py`. Decay → score recalc → centroid refresh →
+  merge similar (FTS5 + Levenshtein) → prune → emit
+  `ConsolidationCompleted`. SPE-003 §1.1 specifies this as periodic
+  (dotted arrow), not per-turn.
+- **DREAM** (nightly, default `02:00` in the mind's timezone) ships in
+  `brain/dream.py` as `DreamCycle` + `DreamScheduler` (v0.11.6). One
+  LLM call per run extracts up to `dream_max_patterns` recurring themes
+  from the last `dream_lookback_hours` of episodes; each pattern becomes
+  a `Concept` (`source="dream:pattern"`, `category=BELIEF`,
+  `confidence=0.4`). Concepts that appear in two or more distinct
+  episodes get fed to `HebbianLearning.strengthen` with attenuated
+  activation. Kill-switch: `dream_max_patterns: 0` skips registration
+  entirely.
+
 ## Roadmap
 
-- **Consolidate phase** — schedule `brain/consolidation.py` as a cognitive phase, not only a background job.
-- **Dream phase** — nightly pattern discovery over episodes.
-- **Streaming Think/Act** — cooperate with the LLM router's streaming path for faster first-token latency.
+- **Streaming Think/Act** — cooperate with the LLM router's streaming
+  path for faster first-token latency.
+- **PAD 3D emotional model** (ADR-001) — `Episode` is 2D today,
+  `Concept` is 1D; migrate both to PAD 3D with a backfill pass.
 
 ## See also
 

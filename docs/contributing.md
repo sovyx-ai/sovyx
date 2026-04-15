@@ -81,14 +81,14 @@ uv run ruff check src/ tests/
 uv run ruff format --check src/ tests/
 uv run mypy src/                          # strict mode
 uv run bandit -r src/sovyx/ --configfile pyproject.toml
-uv run pytest tests/ --timeout=20         # 4900+ tests, coverage ≥ 95%
+uv run pytest tests/ --ignore=tests/smoke --timeout=30   # 8 200+ tests, coverage ≥ 95%
 ```
 
 ### Dashboard (from `dashboard/`)
 
 ```bash
 npx tsc -b tsconfig.app.json             # zero errors
-npx vitest run                            # 400+ tests
+npx vitest run                            # 790+ tests
 ```
 
 **If any gate fails, fix it before committing. Never skip.** The only

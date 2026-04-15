@@ -151,7 +151,22 @@ class ImportanceWeights:
 3. Prune concepts below the importance threshold.
 4. Emit `ConsolidationCompleted` with `merged`, `pruned`, `strengthened`, `duration_s`.
 
-`ConsolidationScheduler` runs it periodically (configured via `BrainConfig.consolidation_interval_hours`).
+`ConsolidationScheduler` runs it periodically (configured via `BrainConfig.consolidation_interval_hours`, default 6 h).
+
+## Dream cycle (v0.11.6)
+
+`DreamCycle.run()` is the seventh phase of the cognitive loop (SPE-003 §1.1, "nightly: discover patterns"). Lives in `brain/dream.py` rather than `cognitive/dream.py` because it is an operation over brain state, not a per-turn cognitive phase.
+
+Per run:
+
+1. Fetch episodes in `BrainConfig.dream_lookback_hours` (default 24 h) via `EpisodeRepository.get_since`.
+2. Short-circuit if fewer than 3 episodes — not enough signal for *recurring* themes.
+3. One LLM call extracts up to `BrainConfig.dream_max_patterns` recurring themes (default 5).
+4. Each pattern becomes a `Concept` with `source="dream:pattern"`, `category=BELIEF`, and `confidence=0.4` (lifts via access-driven reinforcement).
+5. Concepts that appear in ≥2 distinct episodes are fed to `HebbianLearning.strengthen` with attenuated activation (0.5) — cross-episode is a weaker signal than within-turn. Capped at 12 concepts per run to bound the within-pair O(n²) cost.
+6. Emit `DreamCompleted` with `patterns_found, concepts_derived, relations_strengthened, episodes_analyzed, duration_s`.
+
+`DreamScheduler` is a separate background task wired alongside `ConsolidationScheduler`. It sleeps until the next `dream_time` (HH:MM, default `02:00`) in the mind's timezone, with ±15 min jitter. Survives cycle exceptions (logged, not bubbled). Kill-switch: `dream_max_patterns: 0` causes bootstrap to skip registration entirely — zero runtime overhead when disabled.
 
 ## Events
 
@@ -162,6 +177,7 @@ class ImportanceWeights:
 | `ConceptContradicted` | New content contradicts an existing concept (via `detect_contradiction` utility). |
 | `ConceptForgotten` | A concept is pruned by consolidation. |
 | `ConsolidationCompleted` | A consolidation cycle finished. |
+| `DreamCompleted` | A nightly DREAM run finished (v0.11.6). |
 
 ## Configuration
 

@@ -114,10 +114,12 @@ Every response carries `X-Request-Id`. Include it when reporting bugs.
 
 ### Data portability
 
-| Method | Path           | Description                                               |
-| ------ | -------------- | --------------------------------------------------------- |
-| GET    | `/api/export`  | Export the active mind in SMF format.                     |
-| POST   | `/api/import`  | Import an SMF archive (replace or merge, declared in body)|
+| Method | Path                                  | Description                                               |
+| ------ | ------------------------------------- | --------------------------------------------------------- |
+| GET    | `/api/export`                         | Export the active mind in SMF format.                     |
+| POST   | `/api/import`                         | Import an SMF archive (replace or merge, declared in body). |
+| POST   | `/api/import/conversations`           | Multipart upload (`platform=chatgpt\|claude\|gemini` + `file`). Returns `202` with `{job_id, conversations_total}`; encoding runs in a background `asyncio.Task`. |
+| GET    | `/api/import/{job_id}/progress`       | Live snapshot for an import job: `{state, conversations_processed/skipped, episodes_created, concepts_learned, warnings, error, elapsed_ms}`. |
 
 ### Safety
 
@@ -185,11 +187,9 @@ The bridge forwards twelve event types from the engine bus:
 | `ConceptCreated`          | `concept_id`, `title`, `source`                                                |
 | `EpisodeEncoded`          | `episode_id`, `importance`                                                     |
 | `ConsolidationCompleted`  | `merged`, `pruned`, `strengthened`, `duration_s`                               |
+| `DreamCompleted`          | `patterns_found`, `concepts_derived`, `relations_strengthened`, `episodes_analyzed`, `duration_s` (v0.11.6) |
 | `ChannelConnected`        | `channel_type`                                                                 |
 | `ChannelDisconnected`     | `channel_type`, `reason`                                                       |
-
-The twelfth type is a periodic heartbeat used by the dashboard to keep the
-connection alive on restrictive networks.
 
 ---
 

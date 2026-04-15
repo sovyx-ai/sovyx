@@ -17,7 +17,7 @@
   <a href="https://github.com/sovyx-ai/sovyx/blob/main/LICENSE">
     <img alt="License" src="https://img.shields.io/pypi/l/sovyx.svg">
   </a>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-8%2C500%2B-success">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-8%2C200%2B-success">
 </p>
 
 ---
@@ -65,13 +65,16 @@ That's it. The daemon runs in the foreground by default; use `--foreground=false
 
 ## Features
 
-- **Cognitive loop** — Perceive → Attend → Think → Act → Reflect, serialized per mind.
-- **Brain graph** — concepts, episodes, and relations in SQLite with WAL + `sqlite-vec`; hybrid FTS5 + vector retrieval.
+- **Cognitive loop** — Perceive → Attend → Think → Act → Reflect per turn, plus periodic CONSOLIDATE (decay/merge/prune every 6 h) and nightly DREAM (pattern discovery from recent episodes — see `brain/dream.py`).
+- **Brain graph** — concepts, episodes, and relations in SQLite with WAL + `sqlite-vec`; hybrid FTS5 + vector retrieval; cross-episode Hebbian learning.
 - **LLM router** — complexity-aware routing across Anthropic, OpenAI, Google, and Ollama with budget caps and per-provider circuit breakers.
 - **Voice pipeline** — wake word (openWakeWord), VAD (Silero), STT (Moonshine / Parakeet), TTS (Piper / Kokoro), Wyoming protocol.
-- **React dashboard** — real-time WebSocket feed, brain graph viewer, conversation browser, log viewer, plugin manager, live chat.
-- **Plugin system** — `ISovyxPlugin` ABC, `@tool` decorator, five-layer sandbox (AST scan, sandboxed HTTP, sandboxed FS, permission manifest, hot-reload).
+- **React dashboard** — real-time WebSocket feed, brain graph viewer, conversation browser, log viewer, plugin manager, live chat. Runtime zod validation on every response.
+- **Plugin system** — `ISovyxPlugin` ABC, `@tool` decorator, five-layer sandbox (AST scan, sandboxed HTTP, sandboxed FS, permission manifest, hot-reload). Seven first-party plugins ship in-tree.
 - **Channels** — Telegram, Signal, and the dashboard chat, all wired to the same cognitive loop.
+- **Smart-home + calendar** — Home Assistant plugin (read sensors, control lights/switches/climate) and CalDAV plugin (read events from Nextcloud / iCloud / Fastmail / Radicale / SOGo / Baikal).
+- **Conversation importers** — bring your existing chats from ChatGPT, Claude, and Gemini exports into the brain on day one.
+- **Interactive CLI REPL** — `sovyx chat` opens a prompt_toolkit session with persistent history and slash commands (`/status`, `/minds`, `/config`, `/new`, `/clear`).
 - **Runs on Raspberry Pi 5** — auto-detected hardware tier picks ONNX models that fit in 4 GB RAM.
 - **Self-hostable** — one Python process, one SQLite file per mind, optional encrypted cloud backup (Argon2id + AES-256-GCM).
 
@@ -173,7 +176,7 @@ class WeatherPlugin(ISovyxPlugin):
         ...
 ```
 
-Built-in plugins: `calculator`, `financial-math`, `knowledge`, `weather`, `web-intelligence`. All live under [`src/sovyx/plugins/official/`](src/sovyx/plugins/official/).
+Built-in plugins: `calculator`, `financial-math`, `knowledge`, `weather`, `web-intelligence`, `home-assistant`, `caldav`. All live under [`src/sovyx/plugins/official/`](src/sovyx/plugins/official/). The Home Assistant plugin (4 domains, 8 tools) needs `network:local` and a long-lived access token; the CalDAV plugin (6 read-only tools) needs `network:internet` and HTTP Basic credentials (use app-specific passwords for iCloud / Fastmail; **Google Calendar discontinued CalDAV in 2023**, use a self-hosted alternative).
 
 ```bash
 sovyx plugin list                 # installed plugins
@@ -224,6 +227,7 @@ sovyx stop                 # stop the daemon
 sovyx status               # daemon health
 sovyx doctor               # full readiness check
 sovyx token                # print dashboard bearer token
+sovyx chat                 # interactive REPL with the active mind (history at ~/.sovyx/history)
 sovyx brain search <q>     # query the brain graph from the CLI
 sovyx brain stats          # concept / episode / relation counts
 sovyx plugin list|info|install|enable|disable|remove|validate|create
@@ -247,7 +251,7 @@ sovyx logs [--level]       # tail daemon logs
 git clone https://github.com/sovyx-ai/sovyx.git
 cd sovyx
 uv sync --dev
-uv run python -m pytest tests/ --ignore=tests/smoke --timeout=30   # ~7 800 backend tests
+uv run python -m pytest tests/ --ignore=tests/smoke --timeout=30   # ~8 200 backend tests
 ```
 
 Before the first PR, read [`CLAUDE.md`](CLAUDE.md) — it's the development guide: stack, conventions, anti-patterns, testing patterns, and the quality gates CI enforces (`ruff`, `mypy --strict`, `bandit`, pytest on 3.11 + 3.12, vitest, `tsc`).
@@ -257,10 +261,10 @@ Before the first PR, read [`CLAUDE.md`](CLAUDE.md) — it's the development guid
 Next in the pipeline (see [`docs/roadmap.md`](docs/roadmap.md) for the full plan):
 
 - **Speaker recognition** — ECAPA-TDNN biometrics for multi-user voice.
-- **Conversation importers** — ChatGPT, Claude, Gemini, and Obsidian vaults into the brain graph.
+- **Obsidian importer** — fourth and final conversation importer (ChatGPT, Claude, Gemini already shipped in v0.11.4-5).
 - **Relay client** — WebSocket + Opus audio streaming for a mobile companion.
-- **Home Assistant bridge** — ten-domain entity registry with graduated action safety.
 - **Plugin marketplace** — Stripe-Connect-powered distribution once the sandbox clears its v2 review.
+- **PAD 3D emotional model** — migrate from 2D (valence + arousal) to 3D (pleasure + arousal + dominance) per ADR-001.
 
 ## License
 

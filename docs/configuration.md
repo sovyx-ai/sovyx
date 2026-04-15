@@ -158,7 +158,9 @@ See [LLM Router](llm-router.md) for routing behavior.
 ```yaml
 brain:
   consolidation_interval_hours: 6       # 1 – 168
-  dream_time: "02:00"                   # HH:MM for nightly jobs
+  dream_time: "02:00"                   # HH:MM for the nightly DREAM phase (mind tz)
+  dream_lookback_hours: 24              # 1 – 168 — how far back DREAM looks at episodes
+  dream_max_patterns: 5                 # 0 – 50 — set 0 to disable DREAM entirely
   max_concepts: 50000                   # 100 – 1,000,000
   forgetting_enabled: true
   decay_rate: 0.1                       # Ebbinghaus rate, 0.0 – 1.0
@@ -231,7 +233,21 @@ plugins:
         default_unit: celsius
       permissions:
         - network.outbound
+    home-assistant:
+      base_url: "http://homeassistant.local:8123"  # or http://192.168.x.x:8123
+      token: "<long-lived access token from HA Profile page>"
+    caldav:
+      base_url: "https://caldav.fastmail.com/dav/calendars/user/me@example.com/"
+      username: "me@example.com"
+      password: "<app-specific password>"   # iCloud + Fastmail require this
+      verify_ssl: true                      # default true
+      default_calendar: "Personal"          # optional
+      allow_local: false                    # set true for self-hosted Nextcloud on LAN
+      timezone: "America/Sao_Paulo"         # optional, defaults to UTC
 ```
+
+> Google Calendar is **not** supported — Google discontinued CalDAV in 2023.
+> Use Nextcloud, iCloud, Fastmail, Radicale, SOGo, or Baikal instead.
 
 ## Complete Example
 

@@ -120,10 +120,22 @@ v1.0.
 
 ## Can I migrate from ChatGPT, Claude, or Gemini?
 
-First-class importers for ChatGPT (`conversations.json`), Claude, Gemini,
-and Obsidian vaults are planned for v0.6. Until then, you can import any
-plaintext conversation by formatting it as the SMF schema and using `sovyx
-import`.
+Yes — first-class importers shipped in v0.11.4 (ChatGPT) and v0.11.5
+(Claude + Gemini). Drop the export file at the dashboard's import endpoint
+or the API:
+
+```bash
+curl -X POST -H "Authorization: Bearer $(sovyx token)" \
+     -F platform=chatgpt -F file=@conversations.json \
+     http://localhost:7777/api/import/conversations
+# → 202 Accepted with a job_id; poll /api/import/{job_id}/progress
+```
+
+Each conversation is summary-encoded into one `Episode` plus extracted
+`Concept` rows; re-importing the same archive is deduplicated via a SHA-256
+key on the `conversation_imports` table. Obsidian vault import is the
+fourth and final platform on the v0.6 roadmap. For anything else, you can
+still wrap raw text into the SMF schema and use `sovyx mind import`.
 
 ## Can I export everything?
 

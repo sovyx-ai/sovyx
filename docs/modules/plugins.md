@@ -2,7 +2,7 @@
 
 ## What it does
 
-`sovyx.plugins` is the extension system: plugins are Python packages that expose **tools** (LLM-callable functions) to the Mind via function calling. The module discovers plugins, validates their manifest, runs a static AST scan plus a runtime import guard, enforces a capability-based permission model, and injects a sandboxed filesystem and HTTP client. Five official plugins ship in the tree: `calculator`, `financial_math`, `knowledge`, `weather`, and `web_intelligence`.
+`sovyx.plugins` is the extension system: plugins are Python packages that expose **tools** (LLM-callable functions) to the Mind via function calling. The module discovers plugins, validates their manifest, runs a static AST scan plus a runtime import guard, enforces a capability-based permission model, and injects a sandboxed filesystem and HTTP client. Seven official plugins ship in the tree: `calculator`, `financial_math`, `knowledge`, `weather`, `web_intelligence`, `home_assistant`, and `caldav`.
 
 ## Create a plugin in 10 lines
 
@@ -191,9 +191,11 @@ Install performs the AST scan. Any `SecurityFinding` aborts the install unless `
 | `financial_math` | `calculate`, compound interest, NPV, IRR, amortization helpers | none (pure) |
 | `knowledge` | `remember`, `search`, `recall`, `forget` | `brain:read`, `brain:write` |
 | `weather` | `get_weather`, `get_forecast` | `network:internet` |
-| `web_intelligence` | `fetch_url`, `extract_content` | `network:internet` |
+| `web_intelligence` | `fetch_url`, `extract_content`, `search`, `research`, `lookup`, `learn_from_web`, `recall_web` | `network:internet` |
+| `home_assistant` (v0.11.8) | `list_lights`, `turn_on_light`, `turn_off_light`, `turn_on_switch`, `turn_off_switch`, `read_sensor`, `list_sensors`, `set_temperature` | `network:local` |
+| `caldav` (v0.11.9) | `list_calendars`, `get_today`, `get_upcoming`, `get_event`, `find_free_slot`, `search_events` | `network:internet` |
 
-`financial_math` uses `Decimal` end-to-end and is the recommended study target for tool design, input validation, and structured JSON output.
+`financial_math` uses `Decimal` end-to-end and is the recommended study target for tool design, input validation, and structured JSON output. `home_assistant` is the canonical example of a LAN-bound plugin (`allow_local=True` on `SandboxedHttpClient`) with a `requires_confirmation=True` tool (`set_temperature`). `caldav` is the canonical example of a plugin that speaks an HTTP-extension protocol (PROPFIND / REPORT) via the public `SandboxedHttpClient.request()` method, with `defusedxml` for XXE-safe parsing of server-controlled XML and `icalendar` + `python-dateutil` for RRULE expansion.
 
 ## Events
 
@@ -225,6 +227,6 @@ Install performs the AST scan. Any `SecurityFinding` aborts the install unless `
 ## See also
 
 - Source: `src/sovyx/plugins/sdk.py`, `manager.py`, `manifest.py`, `permissions.py`, `security.py`, `sandbox_fs.py`, `sandbox_http.py`, `context.py`, `lifecycle.py`, `hot_reload.py`.
-- Official plugins: `src/sovyx/plugins/official/{calculator,financial_math,knowledge,weather,web_intelligence}.py`.
+- Official plugins: `src/sovyx/plugins/official/{calculator,financial_math,knowledge,weather,web_intelligence,home_assistant,caldav}.py`. Helper models: `_ha_models.py`, `_caldav_models.py`.
 - Tests: `tests/plugins/`, `tests/unit/plugins/`, `tests/security/plugins/`.
 - Related modules: [`engine`](./engine.md) for the `ServiceRegistry` that binds `PluginContext`, [`dashboard`](./dashboard.md) for the `/api/plugins` endpoints.

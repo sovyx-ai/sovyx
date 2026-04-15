@@ -153,8 +153,10 @@ Credentials can come from environment variables (`SOVYX_CHANNELS__TELEGRAM__TOKE
 ## Roadmap
 
 - **Relay client** — WebSocket audio streaming with Opus (24 kbps, 20 ms frames, DTX/FEC), a 60 ms ring buffer, 16 ↔ 48 kHz resampling, offline queue, and exponential backoff with jitter. Required for the mobile app and the cloud relay.
-- **Home Assistant bridge** — entity registry for 10 domains, an `ActionSafety` framework (`SAFE` / `CONFIRM` / `DENY`), mDNS discovery, and WebSocket reconnect.
-- **CalDAV** — incremental sync (`ctag` + `etag`), `RRULE` expansion via `dateutil`, timezone handling (DATE vs DATE-TIME, DST), and conflict resolution.
+
+## Architecture note — Home Assistant and CalDAV
+
+These were originally specced as bridges (IMPL-008 / IMPL-009). They shipped instead as **plugins** in v0.11.8 (`plugins/official/home_assistant.py`) and v0.11.9 (`plugins/official/caldav.py`). HA exposes a device API and CalDAV exposes a calendar API — neither delivers conversational messages from people, so the plugin substrate (sandbox, permissions, lifecycle, dashboard UI, hot-reload, HACS-compatible packaging) is the right home for them. The bridge module stays focused on conversational channel adapters: Telegram, Signal, Discord (stub), and the future Voice/Relay client. See [plugins.md](./plugins.md).
 
 ## See also
 
