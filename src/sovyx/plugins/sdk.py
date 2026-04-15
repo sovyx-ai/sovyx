@@ -16,6 +16,10 @@ import typing
 from abc import ABC, abstractmethod
 from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
 
+from sovyx.observability.logging import get_logger
+
+logger = get_logger(__name__)
+
 if typing.TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -194,7 +198,18 @@ def _generate_schema_from_hints(func: Callable[..., Any]) -> dict[str, Any]:
     """
     try:
         hints = get_type_hints(func, include_extras=True)
-    except Exception:
+    except (NameError, TypeError, AttributeError):
+        # NameError: unresolved forward reference (e.g. `"SomeClass"`
+        # pointing at a missing import). TypeError: malformed annotation
+        # at runtime. AttributeError: lookup into a namespace that no
+        # longer has the referenced name. All three mean the plugin
+        # author has a broken annotation — log it so the mistake is
+        # visible rather than silently degrading to an empty schema.
+        logger.debug(
+            "plugin_tool_type_hints_unresolvable",
+            func=getattr(func, "__qualname__", repr(func)),
+            exc_info=True,
+        )
         hints = {}
 
     sig = inspect.signature(func)

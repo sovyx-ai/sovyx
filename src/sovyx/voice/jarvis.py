@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
+from sovyx.engine.errors import VoiceError
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
@@ -249,8 +250,19 @@ class JarvisIllusion:
             for phrase in phrases:
                 try:
                     self._filler_cache[phrase] = await self._tts.synthesize(phrase)
-                except Exception:
-                    logger.warning("Failed to cache filler", phrase=phrase)
+                except (VoiceError, RuntimeError, OSError):
+                    # VoiceError covers the documented TTS backend types
+                    # (Kokoro, Piper, cloud). RuntimeError captures ONNX
+                    # inference failures that don't inherit VoiceError.
+                    # OSError catches model-file I/O. Missing from the
+                    # cache just means the filler gets synthesized on
+                    # demand — never-fatal degradation — but we want the
+                    # traceback so TTS misconfig isn't invisible.
+                    logger.warning(
+                        "Failed to cache filler",
+                        phrase=phrase,
+                        exc_info=True,
+                    )
 
     # -- Beep ----------------------------------------------------------------
 
@@ -393,8 +405,15 @@ class JarvisIllusion:
             if chunk is None:
                 try:
                     chunk = await self._tts.synthesize(phrase)
-                except Exception:
-                    logger.warning("Filler synthesis failed", phrase=phrase)
+                except (VoiceError, RuntimeError, OSError):
+                    # Same failure modes as the cache-warm path above —
+                    # log with traceback, skip the filler, let the real
+                    # response carry the conversation forward.
+                    logger.warning(
+                        "Filler synthesis failed",
+                        phrase=phrase,
+                        exc_info=True,
+                    )
                     return False
             await output.play_immediate(chunk)
             return True

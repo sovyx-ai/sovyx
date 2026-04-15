@@ -128,9 +128,17 @@ class OllamaProvider:
                     status=resp.status_code,
                 )
             return self._verified
-        except Exception:
+        except (httpx.HTTPError, OSError, TimeoutError):
+            # Ollama is optional — daemon-not-running, wrong port, and
+            # DNS failures all look the same to us. Log with traceback
+            # so "Ollama ping failed" can be told apart from permanent
+            # misconfig without repro'ing the request.
             self._verified = False
-            logger.debug("ollama_ping_failed", base_url=self._base_url)
+            logger.debug(
+                "ollama_ping_failed",
+                base_url=self._base_url,
+                exc_info=True,
+            )
             return False
 
     async def list_models(self, timeout: float = 5.0) -> list[str]:
@@ -157,8 +165,17 @@ class OllamaProvider:
             models = sorted(m["name"] for m in data.get("models", []) if "name" in m)
             logger.debug("ollama_models_listed", count=len(models), models=models[:5])
             return models
-        except Exception:
-            logger.debug("ollama_list_models_failed", base_url=self._base_url)
+        except (httpx.HTTPError, OSError, TimeoutError, ValueError):
+            # httpx: network. OSError: low-level socket. TimeoutError:
+            # asyncio. ValueError: json.JSONDecodeError (subclass) when
+            # the response body isn't valid JSON. Returning an empty
+            # list signals "no models" upstream; traceback preserved so
+            # the failure mode is distinguishable in logs.
+            logger.debug(
+                "ollama_list_models_failed",
+                base_url=self._base_url,
+                exc_info=True,
+            )
             return []
 
     # ── Lifecycle ────────────────────────────────────────────

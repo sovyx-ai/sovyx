@@ -22,6 +22,7 @@ from sovyx.brain.contradiction import (
     _detect_contradiction_heuristic,
     detect_contradiction,
 )
+from sovyx.engine.errors import LLMError
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -220,9 +221,16 @@ class TestFallback:
     """Error handling and fallback."""
 
     async def test_llm_error_falls_back_to_heuristic(self) -> None:
-        """LLM failure → graceful fallback to heuristic."""
+        """LLM failure → graceful fallback to heuristic.
+
+        The production router wraps transport / provider failures in
+        ``LLMError``, which is the type the narrow catch in
+        ``detect_contradiction`` is designed to handle. Using it here
+        documents the real contract: only LLM-subsystem errors trigger
+        fallback — other programmer errors bubble up as real bugs.
+        """
         router = AsyncMock()
-        router.generate = AsyncMock(side_effect=RuntimeError("API down"))
+        router.generate = AsyncMock(side_effect=LLMError("API down"))
         result = await detect_contradiction(
             "Favorite color is blue",
             "Favorite color is red",

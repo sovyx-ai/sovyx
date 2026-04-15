@@ -469,12 +469,21 @@ class TestClassifyIntentLLM:
         assert result == "unclear"
 
     async def test_llm_failure_returns_unclear(self) -> None:
+        """Typed LLM failure → fall back to 'unclear'.
+
+        Uses ``LLMError`` because that's what the production router
+        raises for provider/transport problems; the narrow catch in
+        ``classify_intent_llm`` covers it. A bare ``RuntimeError``
+        would represent a programmer error that SHOULD bubble up,
+        not a recognised LLM failure.
+        """
         from unittest.mock import AsyncMock, MagicMock
 
         from sovyx.cognitive.financial_gate import classify_intent_llm
+        from sovyx.engine.errors import LLMError
 
         router = MagicMock()
-        router.generate = AsyncMock(side_effect=RuntimeError("LLM down"))
+        router.generate = AsyncMock(side_effect=LLMError("LLM down"))
 
         result = await classify_intent_llm("yes", router)
         assert result == "unclear"

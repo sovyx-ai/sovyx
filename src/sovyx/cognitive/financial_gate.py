@@ -26,6 +26,7 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from sovyx.engine.errors import LLMError
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
@@ -227,7 +228,12 @@ async def classify_intent_llm(
             return "cancelled"
         logger.debug("financial_intent_llm", result="unclear", raw=raw, text=text[:50])
         return "unclear"
-    except Exception:
+    except (LLMError, AttributeError):
+        # LLMError: provider/router-level failure. AttributeError:
+        # response shape drift (no `.content` / `.strip`). Either way
+        # we fall back to "unclear" which forces the regex heuristic
+        # path below. Traceback is preserved because a persistent LLM
+        # failure here is a real operational issue, not just a retry.
         logger.warning("financial_intent_llm_failed", exc_info=True)
         return "unclear"
 

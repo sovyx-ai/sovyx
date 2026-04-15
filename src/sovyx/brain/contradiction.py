@@ -18,6 +18,7 @@ import json
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
+from sovyx.engine.errors import LLMError
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
@@ -146,7 +147,12 @@ async def detect_contradiction(
                 llm_router,
                 fast_model,
             )
-        except Exception:
+        except (LLMError, json.JSONDecodeError, ValueError):
+            # LLMError: provider/router-level failure (circuit open,
+            # budget exceeded, provider unavailable). JSONDecodeError:
+            # model returned malformed JSON. ValueError: parsed JSON
+            # didn't match the expected shape. Heuristic fallback below
+            # is non-ambiguous and safe; traceback was already logged.
             logger.debug(
                 "llm_contradiction_detection_failed_falling_back",
                 exc_info=True,

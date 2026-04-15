@@ -256,8 +256,19 @@ class ReflectPhase:
                     mind_id=mind_id,
                 )
                 result[ec.name] = novelty
-            except Exception:
-                logger.debug("novelty_check_failed", name=ec.name)
+            except (ValueError, AttributeError):
+                # ValueError: bad category string or embedding input.
+                # AttributeError: shape drift in the brain API. Either
+                # way, fall back to the neutral 0.5 novelty — but log
+                # with traceback so repeated novelty failures surface
+                # as a real bug rather than "everything scores 0.5".
+                # Programmer errors (TypeError, OSError, KeyError) are
+                # intentionally NOT caught here so they bubble up.
+                logger.debug(
+                    "novelty_check_failed",
+                    name=ec.name,
+                    exc_info=True,
+                )
                 result[ec.name] = 0.5
         return result
 

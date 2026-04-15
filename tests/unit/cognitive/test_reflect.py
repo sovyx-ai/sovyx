@@ -252,8 +252,18 @@ class TestNoveltyDetection:
         assert novelty["new topic"] == pytest.approx(0.70)
 
     async def test_novelty_error_defaults_moderate(self, mock_brain: AsyncMock) -> None:
-        """On error, novelty defaults to 0.5."""
-        mock_brain.compute_novelty = AsyncMock(side_effect=RuntimeError("db error"))
+        """On a recognised value error, novelty defaults to 0.5.
+
+        The narrow catch in ``_compute_novelty_batch`` targets
+        ``(ValueError, AttributeError)`` — typed failures that mean
+        "the brain API couldn't score this concept". A bare
+        ``RuntimeError`` from the dependency would represent a
+        programmer error and SHOULD bubble up, so we seed a
+        ``ValueError`` that matches the narrow contract.
+        """
+        mock_brain.compute_novelty = AsyncMock(
+            side_effect=ValueError("bad embedding input"),
+        )
         phase = ReflectPhase(mock_brain)
         from sovyx.cognitive.reflect import ExtractedConcept
 

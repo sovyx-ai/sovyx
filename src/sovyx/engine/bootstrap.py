@@ -550,8 +550,15 @@ def _persist_ollama_config(mind_config: MindConfig, mind_yaml_path: Path) -> Non
                 loaded = yaml.safe_load(f)
             if isinstance(loaded, dict):
                 existing = loaded
-        except Exception:
-            logger.debug("mind_yaml_read_failed", path=str(mind_yaml_path))
+        except (OSError, yaml.YAMLError):
+            # Stale mind.yaml is tolerable — we'll overwrite it below —
+            # but log with full traceback so corruption and permission
+            # issues don't get masked as "no config yet".
+            logger.debug(
+                "mind_yaml_read_failed",
+                path=str(mind_yaml_path),
+                exc_info=True,
+            )
 
     # Update only the LLM section — don't clobber other config
     existing["llm"] = {
@@ -569,5 +576,13 @@ def _persist_ollama_config(mind_config: MindConfig, mind_yaml_path: Path) -> Non
         with open(mind_yaml_path, "w") as f:
             yaml.safe_dump(existing, f, default_flow_style=False, sort_keys=False)
         logger.info("ollama_config_persisted", path=str(mind_yaml_path))
-    except Exception:
-        logger.warning("ollama_config_persist_failed", path=str(mind_yaml_path))
+    except (OSError, yaml.YAMLError):
+        # A failed persist means the auto-detected Ollama config
+        # won't survive a daemon restart — user-visible only on the
+        # next boot. Traceback matters because permission errors,
+        # read-only mounts, and disk-full surface differently.
+        logger.warning(
+            "ollama_config_persist_failed",
+            path=str(mind_yaml_path),
+            exc_info=True,
+        )
