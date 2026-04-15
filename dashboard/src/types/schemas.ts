@@ -235,6 +235,38 @@ export const ChatResponseSchema = z.object({
   tags: z.array(z.string()).optional(),
 });
 
+// ── Conversation Imports ──
+
+export const ConversationImportPlatformSchema = z.enum(["chatgpt"]);
+
+export const ConversationImportStateSchema = z.enum([
+  "pending",
+  "parsing",
+  "processing",
+  "completed",
+  "failed",
+]);
+
+export const StartConversationImportResponseSchema = z.object({
+  job_id: z.string(),
+  platform: ConversationImportPlatformSchema,
+  conversations_total: z.number(),
+});
+
+export const ConversationImportProgressSchema = z.object({
+  job_id: z.string(),
+  platform: ConversationImportPlatformSchema,
+  state: ConversationImportStateSchema,
+  conversations_total: z.number(),
+  conversations_processed: z.number(),
+  conversations_skipped: z.number(),
+  episodes_created: z.number(),
+  concepts_learned: z.number(),
+  warnings: z.array(z.string()),
+  error: z.string().nullable(),
+  elapsed_ms: z.number(),
+});
+
 // ── Plugins ──
 
 export const PluginPermissionSchema = z.object({

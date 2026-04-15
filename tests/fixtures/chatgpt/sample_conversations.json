@@ -1,0 +1,160 @@
+[
+  {
+    "conversation_id": "simple-linear-uuid",
+    "title": "Python list comprehension question",
+    "create_time": 1711100000.0,
+    "update_time": 1711100500.0,
+    "current_node": "node-a3",
+    "mapping": {
+      "node-root": {
+        "id": "node-root",
+        "parent": null,
+        "children": ["node-a1"],
+        "message": null
+      },
+      "node-a1": {
+        "id": "node-a1",
+        "parent": "node-root",
+        "children": ["node-a2"],
+        "message": {
+          "id": "msg-a1",
+          "author": {"role": "user"},
+          "create_time": 1711100100.0,
+          "content": {
+            "content_type": "text",
+            "parts": ["How do I filter a list with a comprehension?"]
+          }
+        }
+      },
+      "node-a2": {
+        "id": "node-a2",
+        "parent": "node-a1",
+        "children": ["node-a3"],
+        "message": {
+          "id": "msg-a2",
+          "author": {"role": "assistant"},
+          "create_time": 1711100200.0,
+          "content": {
+            "content_type": "text",
+            "parts": ["Use [x for x in xs if predicate(x)]."]
+          }
+        }
+      },
+      "node-a3": {
+        "id": "node-a3",
+        "parent": "node-a2",
+        "children": [],
+        "message": {
+          "id": "msg-a3",
+          "author": {"role": "user"},
+          "create_time": 1711100300.0,
+          "content": {
+            "content_type": "text",
+            "parts": ["Thanks, that helps!"]
+          }
+        }
+      }
+    }
+  },
+  {
+    "conversation_id": "branching-uuid",
+    "title": "Forked via regenerate",
+    "create_time": 1711200000.0,
+    "current_node": "node-b-winner",
+    "mapping": {
+      "node-b-root": {
+        "id": "node-b-root",
+        "parent": null,
+        "children": ["node-b-user"],
+        "message": null
+      },
+      "node-b-user": {
+        "id": "node-b-user",
+        "parent": "node-b-root",
+        "children": ["node-b-loser", "node-b-winner"],
+        "message": {
+          "id": "msg-b-user",
+          "author": {"role": "user"},
+          "create_time": 1711200050.0,
+          "content": {
+            "content_type": "text",
+            "parts": ["Explain SQLite WAL mode."]
+          }
+        }
+      },
+      "node-b-loser": {
+        "id": "node-b-loser",
+        "parent": "node-b-user",
+        "children": [],
+        "message": {
+          "id": "msg-b-loser",
+          "author": {"role": "assistant"},
+          "create_time": 1711200100.0,
+          "content": {
+            "content_type": "text",
+            "parts": ["Regenerated answer (abandoned branch — should NOT appear in mainline)."]
+          }
+        }
+      },
+      "node-b-winner": {
+        "id": "node-b-winner",
+        "parent": "node-b-user",
+        "children": [],
+        "message": {
+          "id": "msg-b-winner",
+          "author": {"role": "assistant"},
+          "create_time": 1711200200.0,
+          "content": {
+            "content_type": "text",
+            "parts": ["WAL mode uses a write-ahead log so readers and writers don't block each other."]
+          }
+        }
+      }
+    }
+  },
+  {
+    "conversation_id": "multimodal-uuid",
+    "title": "With an image attached",
+    "create_time": 1711300000.0,
+    "current_node": "node-c2",
+    "mapping": {
+      "node-c-root": {
+        "id": "node-c-root",
+        "parent": null,
+        "children": ["node-c1"],
+        "message": null
+      },
+      "node-c1": {
+        "id": "node-c1",
+        "parent": "node-c-root",
+        "children": ["node-c2"],
+        "message": {
+          "id": "msg-c1",
+          "author": {"role": "user"},
+          "create_time": 1711300050.0,
+          "content": {
+            "content_type": "multimodal_text",
+            "parts": [
+              "What's in this photo?",
+              {"content_type": "image_asset_pointer", "asset_pointer": "file-service://abc"}
+            ]
+          }
+        }
+      },
+      "node-c2": {
+        "id": "node-c2",
+        "parent": "node-c1",
+        "children": [],
+        "message": {
+          "id": "msg-c2",
+          "author": {"role": "assistant"},
+          "create_time": 1711300100.0,
+          "content": {
+            "content_type": "text",
+            "parts": ["A cat on a windowsill."]
+          }
+        }
+      }
+    }
+  }
+]

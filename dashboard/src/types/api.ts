@@ -299,6 +299,44 @@ export interface ChatMessage {
   tags?: string[];
 }
 
+// ── Conversation Imports ──
+
+/** Platform identifier for conversation-import endpoints. */
+export type ConversationImportPlatform = "chatgpt";
+
+/** Lifecycle state of an import job. Mirrors backend `ImportState` enum. */
+export type ConversationImportState =
+  | "pending"
+  | "parsing"
+  | "processing"
+  | "completed"
+  | "failed";
+
+/**
+ * `POST /api/import/conversations` response — the job is running in
+ * the background; poll `/api/import/{job_id}/progress`.
+ */
+export interface StartConversationImportResponse {
+  job_id: string;
+  platform: ConversationImportPlatform;
+  conversations_total: number;
+}
+
+/** `GET /api/import/{job_id}/progress` response shape. */
+export interface ConversationImportProgress {
+  job_id: string;
+  platform: ConversationImportPlatform;
+  state: ConversationImportState;
+  conversations_total: number;
+  conversations_processed: number;
+  conversations_skipped: number;
+  episodes_created: number;
+  concepts_learned: number;
+  warnings: string[];
+  error: string | null;
+  elapsed_ms: number;
+}
+
 // ── Settings ──
 
 /**

@@ -248,6 +248,12 @@ def create_app(config: APIConfig | None = None, *, token: str | None = None) -> 
     app.state.ws_manager = ws_manager
     app.state.auth_token = _server_token
 
+    # Conversation-import tracker — process-local, one per app instance.
+    # Read by routes/conversation_import.py via request.app.state.
+    from sovyx.upgrade.conv_import import ImportProgressTracker
+
+    app.state.import_tracker = ImportProgressTracker()
+
     # ── Auth dependency (using Header) ──
 
     from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -288,6 +294,9 @@ def create_app(config: APIConfig | None = None, *, token: str | None = None) -> 
     )
     from sovyx.dashboard.routes import (
         config as config_routes,
+    )
+    from sovyx.dashboard.routes import (
+        conversation_import as conversation_import_routes,
     )
     from sovyx.dashboard.routes import (
         conversations as conversations_routes,
@@ -338,6 +347,7 @@ def create_app(config: APIConfig | None = None, *, token: str | None = None) -> 
     app.include_router(providers_routes.router)
     app.include_router(channels_routes.router)
     app.include_router(chat_routes.router)
+    app.include_router(conversation_import_routes.router)
     app.include_router(telemetry_routes.router)
     app.include_router(ws_routes.router)
 

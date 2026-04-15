@@ -228,6 +228,38 @@ _MIGRATION_004 = Migration(
 )
 
 
+# ── Migration 005: conversation_imports dedup table ────────────────────────
+#
+# Tracks which external-platform conversations have already been imported,
+# keyed by a stable sha256(platform||conversation_id) so re-submitting the
+# same ChatGPT/Claude/Gemini export twice is a no-op per conversation.
+# See sovyx.upgrade.conv_import for the encoder that writes this table.
+
+_MIGRATION_005_SQL = """\
+CREATE TABLE conversation_imports (
+    source_hash TEXT PRIMARY KEY,
+    platform TEXT NOT NULL,
+    mind_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    episode_id TEXT NOT NULL,
+    title TEXT,
+    messages_count INTEGER NOT NULL,
+    concepts_learned INTEGER NOT NULL DEFAULT 0,
+    imported_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_conv_imports_mind ON conversation_imports(mind_id);
+CREATE INDEX idx_conv_imports_platform ON conversation_imports(platform);
+"""
+
+_MIGRATION_005 = Migration(
+    version=5,
+    description="conversation_imports dedup table for external-platform import",
+    sql_up=_MIGRATION_005_SQL,
+    checksum=Migration.compute_checksum(_MIGRATION_005_SQL),
+)
+
+
 def get_brain_migrations(*, has_sqlite_vec: bool = True) -> list[Migration]:
     """Return brain database migrations.
 
@@ -242,6 +274,9 @@ def get_brain_migrations(*, has_sqlite_vec: bool = True) -> list[Migration]:
     it merges bidirectional duplicate relations and flips non-canonical
     rows so that ``source_id < target_id`` (string comparison).
 
+    Migration 005 (conversation_imports) backs the conversation-importer
+    dedup check — one row per imported conversation.
+
     Args:
         has_sqlite_vec: Whether the sqlite-vec extension is available.
 
@@ -253,4 +288,5 @@ def get_brain_migrations(*, has_sqlite_vec: bool = True) -> list[Migration]:
         migrations.append(_MIGRATION_002)
     migrations.append(_MIGRATION_003)
     migrations.append(_MIGRATION_004)
+    migrations.append(_MIGRATION_005)
     return migrations
