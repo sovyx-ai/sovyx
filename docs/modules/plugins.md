@@ -197,6 +197,103 @@ Install performs the AST scan. Any `SecurityFinding` aborts the install unless `
 
 `financial_math` uses `Decimal` end-to-end and is the recommended study target for tool design, input validation, and structured JSON output. `home_assistant` is the canonical example of a LAN-bound plugin (`allow_local=True` on `SandboxedHttpClient`) with a `requires_confirmation=True` tool (`set_temperature`). `caldav` is the canonical example of a plugin that speaks an HTTP-extension protocol (PROPFIND / REPORT) via the public `SandboxedHttpClient.request()` method, with `defusedxml` for XXE-safe parsing of server-controlled XML and `icalendar` + `python-dateutil` for RRULE expansion.
 
+## Setup Schema
+
+Since v0.14.0, plugins can declare a `setup_schema` in their manifest to get automatic UI generation in the dashboard. No plugin-specific frontend code needed.
+
+### Manifest declaration
+
+```yaml
+# plugin.yaml
+name: caldav
+version: 1.0.0
+description: Calendar sync via CalDAV.
+
+setup_schema:
+  providers:
+    - id: fastmail
+      name: Fastmail
+      help_url: https://www.fastmail.help/hc/en-us/articles/1500000278342
+      defaults:
+        base_url: https://caldav.fastmail.com/dav/
+    - id: icloud
+      name: iCloud
+      defaults:
+        base_url: https://caldav.icloud.com/
+
+  fields:
+    - id: base_url
+      type: url
+      label: CalDAV Server URL
+      required: true
+      placeholder: https://caldav.example.com/dav/
+    - id: username
+      type: string
+      label: Username
+      required: true
+    - id: password
+      type: secret
+      label: App Password
+      required: true
+      help: Use an app-specific password, not your main password.
+    - id: calendar_name
+      type: string
+      label: Calendar Name
+      placeholder: Personal
+    - id: sync_interval
+      type: number
+      label: Sync Interval (minutes)
+      default: 30
+      min: 5
+      max: 1440
+
+  test_connection: true
+```
+
+### Field types
+
+| Type | Rendered as |
+|---|---|
+| `string` | Text input |
+| `secret` | Password input (masked, redacted in logs) |
+| `url` | URL input with validation |
+| `number` | Numeric input with optional `min`/`max` |
+| `boolean` | Toggle switch |
+| `select` | Dropdown from `options` list |
+
+### Providers
+
+Providers are presets for multi-provider plugins. When the user selects a provider, the `defaults` map is applied to the form fields. The `help_url` opens in a new tab next to the provider selector.
+
+### test_connection
+
+If `test_connection: true`, the dashboard shows a "Test Connection" button. The plugin must implement:
+
+```python
+from sovyx.plugins.sdk import ISovyxPlugin, TestResult
+
+class CalDAVPlugin(ISovyxPlugin):
+    async def test_connection(self, config: dict[str, object]) -> TestResult:
+        # Try connecting with the provided config
+        return TestResult(success=True, message="Connected to 3 calendars")
+```
+
+`TestResult` is a frozen dataclass with `success: bool` and `message: str`.
+
+### Dashboard API
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/setup/{name}/schema` | GET | Returns setup_schema + current config |
+| `/api/setup/{name}/test-connection` | POST | Calls plugin.test_connection(config) |
+| `/api/setup/{name}/configure` | POST | Calls manager.reconfigure(name, config) |
+| `/api/setup/{name}/enable` | POST | Calls manager.re_enable_plugin(name) |
+| `/api/setup/{name}/disable` | POST | Calls manager.disable_plugin(name) |
+
+### ConfigEditor
+
+`sovyx.engine.config_editor.ConfigEditor` handles atomic YAML writes. It uses `ruamel.yaml` to preserve comments and formatting, writes to a temporary file first, then atomically replaces the target. Per-file locking prevents concurrent writes.
+
 ## Events
 
 | Event | Payload |

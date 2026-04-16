@@ -1,12 +1,17 @@
-"""Voice status + models endpoints."""
+"""Voice status + models + setup endpoints."""
 
 from __future__ import annotations
+
+import asyncio
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from starlette.status import HTTP_503_SERVICE_UNAVAILABLE
 
 from sovyx.dashboard.routes._deps import verify_token
+from sovyx.observability.logging import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/voice", dependencies=[Depends(verify_token)])
 
@@ -41,3 +46,235 @@ async def get_voice_models_endpoint(request: Request) -> JSONResponse:
 
     models = await get_voice_models(registry)
     return JSONResponse(models)
+
+
+@router.get("/hardware-detect")
+async def hardware_detect(request: Request) -> JSONResponse:
+    """Detect hardware capabilities for voice pipeline.
+
+    Returns CPU, RAM, GPU info, detected hardware tier, recommended
+    models with sizes, and whether audio I/O devices are available.
+    """
+    from sovyx.voice.auto_select import detect_hardware
+    from sovyx.voice.model_registry import get_models_for_tier
+
+    try:
+        hw = await asyncio.to_thread(detect_hardware)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("hardware_detection_failed", error=str(exc))
+        return JSONResponse({"error": f"Hardware detection failed: {exc}"}, status_code=500)
+
+    # Audio device detection
+    audio_available = False
+    input_devices: list[str] = []
+    output_devices: list[str] = []
+    try:
+        import sounddevice as sd
+
+        devices = sd.query_devices()
+        if isinstance(devices, list):
+            for d in devices:
+                if isinstance(d, dict):
+                    if d.get("max_input_channels", 0) > 0:
+                        input_devices.append(str(d.get("name", "unknown")))
+                    if d.get("max_output_channels", 0) > 0:
+                        output_devices.append(str(d.get("name", "unknown")))
+        audio_available = bool(input_devices and output_devices)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Recommended models for detected tier
+    tier_name = hw.tier.name if hasattr(hw, "tier") else "DESKTOP_CPU"
+    models = get_models_for_tier(tier_name)
+
+    total_download_mb = sum(m.size_mb for m in models if m.download_available)
+
+    return JSONResponse(
+        {
+            "hardware": {
+                "cpu_cores": hw.cpu_cores,
+                "ram_mb": hw.ram_mb,
+                "has_gpu": hw.has_gpu,
+                "gpu_vram_mb": hw.gpu_vram_mb,
+                "tier": tier_name,
+            },
+            "audio": {
+                "available": audio_available,
+                "input_devices": input_devices[:5],
+                "output_devices": output_devices[:5],
+            },
+            "recommended_models": [
+                {
+                    "name": m.name,
+                    "category": m.category,
+                    "size_mb": m.size_mb,
+                    "download_available": m.download_available,
+                    "description": m.description,
+                }
+                for m in models
+            ],
+            "total_download_mb": round(total_download_mb, 1),
+        }
+    )
+
+
+@router.post("/enable")
+async def enable_voice(request: Request) -> JSONResponse:
+    """Enable the voice pipeline (hot-enable, no restart needed).
+
+    Flow:
+        1. Check Python voice deps (moonshine-voice, sounddevice).
+        2. Check audio hardware availability.
+        3. Check if pipeline already running (idempotent).
+        4. Instantiate all components (VAD, STT, TTS, WakeWord).
+        5. Register in ServiceRegistry.
+        6. Persist to mind.yaml.
+        7. Return active status.
+    """
+    # 1. Check deps
+    from sovyx.voice.model_registry import check_voice_deps, detect_tts_engine
+
+    _installed, missing = check_voice_deps()
+    tts_engine = detect_tts_engine()
+    if missing:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "missing_deps",
+                "missing_deps": missing,
+                "install_command": "pip install sovyx[voice]",
+            },
+            status_code=400,
+        )
+    if tts_engine == "none":
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "missing_deps",
+                "missing_deps": [
+                    {"module": "piper_phonemize or kokoro_onnx", "package": "piper-tts"}
+                ],
+                "install_command": "pip install piper-tts",
+            },
+            status_code=400,
+        )
+
+    # 2. Check audio
+    audio_ok = False
+    try:
+        import sounddevice as sd
+
+        devices = sd.query_devices()
+        if isinstance(devices, list):
+            has_in = any(
+                d.get("max_input_channels", 0) > 0 for d in devices if isinstance(d, dict)
+            )
+            has_out = any(
+                d.get("max_output_channels", 0) > 0 for d in devices if isinstance(d, dict)
+            )
+            audio_ok = has_in and has_out
+    except Exception:  # noqa: BLE001
+        pass
+
+    if not audio_ok:
+        return JSONResponse(
+            {"ok": False, "error": "No audio devices detected (microphone + speaker required)"},
+            status_code=400,
+        )
+
+    # 3. Idempotent check
+    registry = getattr(request.app.state, "registry", None)
+    if registry is not None:
+        from sovyx.voice.pipeline._orchestrator import VoicePipeline
+
+        if registry.is_registered(VoicePipeline):
+            return JSONResponse({"ok": True, "status": "already_active"})
+
+    # 4. Create pipeline
+    from sovyx.voice.factory import VoiceFactoryError, create_voice_pipeline
+
+    event_bus = None
+    if registry is not None:
+        from sovyx.engine.events import EventBus
+
+        if registry.is_registered(EventBus):
+            event_bus = await registry.resolve(EventBus)
+
+    try:
+        pipeline = await create_voice_pipeline(
+            event_bus=event_bus,
+            wake_word_enabled=False,
+            mind_id=getattr(request.app.state, "mind_id", "default"),
+        )
+    except VoiceFactoryError as exc:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": str(exc),
+                "missing_models": exc.missing_models,
+            },
+            status_code=400,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("voice_enable_failed")
+        return JSONResponse(
+            {"ok": False, "error": f"Pipeline creation failed: {exc}"},
+            status_code=500,
+        )
+
+    # 5. Register
+    if registry is not None:
+        from sovyx.voice.pipeline._orchestrator import VoicePipeline
+
+        registry.register_instance(VoicePipeline, pipeline)
+
+    # 6. Persist config
+    mind_yaml_path = getattr(request.app.state, "mind_yaml_path", None)
+    if mind_yaml_path is not None:
+        from pathlib import Path
+
+        from sovyx.engine.config_editor import ConfigEditor
+
+        editor = ConfigEditor()
+        await editor.update_section(Path(mind_yaml_path), "voice", {"enabled": True})
+
+    logger.info("voice_pipeline_hot_enabled", tts=tts_engine)
+    return JSONResponse({"ok": True, "status": "active", "tts_engine": tts_engine})
+
+
+@router.post("/disable")
+async def disable_voice(request: Request) -> JSONResponse:
+    """Disable the voice pipeline (graceful shutdown)."""
+    # Stop pipeline if running
+    registry = getattr(request.app.state, "registry", None)
+    if registry is not None:
+        from sovyx.voice.pipeline._orchestrator import VoicePipeline
+
+        if registry.is_registered(VoicePipeline):
+            try:
+                pipeline = await registry.resolve(VoicePipeline)
+                await pipeline.stop()
+                logger.info("voice_pipeline_stopped")
+            except Exception:  # noqa: BLE001
+                logger.warning("voice_pipeline_stop_failed", exc_info=True)
+
+    # Persist config
+    mind_yaml_path = getattr(request.app.state, "mind_yaml_path", None)
+    if mind_yaml_path is not None:
+        from pathlib import Path
+
+        from sovyx.engine.config_editor import ConfigEditor
+
+        editor = ConfigEditor()
+        await editor.update_section(
+            Path(mind_yaml_path),
+            "voice",
+            {"enabled": False},
+        )
+        logger.info("voice_disabled_via_wizard")
+        return JSONResponse({"ok": True})
+
+    return JSONResponse(
+        {"ok": False, "error": "No mind.yaml path available"},
+        status_code=503,
+    )

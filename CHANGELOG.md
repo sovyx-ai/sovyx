@@ -6,6 +6,70 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-04-16
+
+**Setup Wizard -- declarative plugin configuration + voice hot-enable.**
+
+Plugins can now declare a `setup_schema` in their manifest and get
+automatic UI generation in the dashboard. Users configure plugins
+through a wizard with provider presets, test-connection validation,
+and type-safe form fields. Voice can be enabled at runtime from the
+dashboard without restarting the daemon.
+
+### Added
+
+- **Declarative setup wizard framework.** Plugins declare
+  `setup_schema` (providers, fields, test_connection) in `plugin.yaml`.
+  Dashboard auto-renders forms with provider presets, input validation,
+  and connection testing. Zero plugin-specific UI code needed.
+- **`ISovyxPlugin.test_connection()`** — SDK method for validating
+  config before persisting. Returns `TestResult(success, message)`.
+- **`PluginManager.reconfigure()`** — runtime config update: teardown,
+  rebuild context, re-setup, without daemon restart.
+- **`ConfigEditor`** — `ruamel.yaml`-based atomic YAML writer with
+  per-file locking. Preserves comments and formatting.
+- **Setup wizard manifest models** — `SetupSchema`, `SetupField`,
+  `SetupProvider`, `SetupFieldOption` in `plugins/manifest.py`.
+- **5 setup API endpoints** — `/api/setup/{name}/schema`,
+  `test-connection`, `configure`, `enable`, `disable`.
+- **Dashboard setup wizard components** — `SetupWizardModal`,
+  `DynamicForm`, `ProviderSelect`, `TestConnectionButton`.
+- **CalDAV setup schema** — 5 providers (Fastmail, iCloud, Google,
+  Nextcloud, Radicale), 5 fields, test_connection via PROPFIND.
+- **Home Assistant setup schema** — 2 fields (URL, token),
+  test_connection via `GET /api/`.
+- **Voice hot-enable** — `POST /api/voice/enable` instantiates the
+  full voice pipeline (SileroVAD + MoonshineSTT + TTS + WakeWord)
+  in-process without daemon restart. Dependency detection returns
+  structured error with install command.
+- **Voice factory** (`voice/factory.py`) — async factory creating all
+  5 components with ONNX loads in `to_thread`. TTS fallback chain:
+  Piper > Kokoro > error.
+- **Voice model registry** (`voice/model_registry.py`) —
+  `check_voice_deps()`, `detect_tts_engine()`, `ensure_silero_vad()`
+  with auto-download (2.3 MB, atomic write).
+- **Hardware detection endpoint** — `GET /api/voice/hardware-detect`
+  returns CPU, RAM, GPU, audio devices, tier, recommended models.
+- **Voice disable endpoint** — `POST /api/voice/disable` for graceful
+  pipeline shutdown with config persistence.
+- **`HardwareDetection` component** — auto-detects hardware, shows
+  CPU/RAM/GPU/audio summary with tier badge and model list.
+- **`VoiceSetupModal` component** — handles success (hot-enable) and
+  failure (missing deps panel with copy-able install command, audio
+  hardware warning panel).
+- **Plugin card "Configure" button** — visible for plugins with
+  `has_setup: true`, opens the setup wizard modal.
+- **`[voice]` extras group** in `pyproject.toml` — `moonshine-voice`,
+  `piper-tts`, `sounddevice`, `kokoro-onnx`.
+- **51 new tests** — `test_voice_factory.py` (7), `test_model_registry.py`
+  (17), `test_voice_routes.py` (10), expanded `test_setup_routes.py` (17).
+
+### Changed
+
+- `PluginManifest` gains `setup_schema: SetupSchema | None` field.
+- `PluginInfo` API response includes `has_setup: bool`.
+- Voice page shows "Set up Voice" banner when pipeline not configured.
+
 ## [0.13.3] — 2026-04-16
 
 **Open-core GA release — clean public repo with enterprise audit.**

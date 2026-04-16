@@ -27,6 +27,7 @@ import {
   RefreshCwIcon,
 } from "lucide-react";
 import { api, isAbortError } from "@/lib/api";
+import { VoiceSetupModal } from "@/components/setup-wizard";
 
 /* ── Types ── */
 
@@ -291,10 +292,13 @@ export default function VoicePage() {
         </button>
       </div>
 
-      {/* Not configured banner */}
+      {/* Not configured banner with setup wizard */}
       {!isConfigured && (
-        <div className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border)] bg-[var(--svx-color-surface-secondary)] p-4 text-sm text-[var(--svx-color-text-secondary)]">
-          {t("notConfigured")}
+        <div className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border)] bg-[var(--svx-color-surface-secondary)] p-4">
+          <p className="text-sm text-[var(--svx-color-text-secondary)]">{t("notConfigured")}</p>
+          <div className="mt-3">
+            <VoiceSetupModal />
+          </div>
         </div>
       )}
 

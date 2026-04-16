@@ -117,6 +117,63 @@ The handshake returns an `info` payload describing the supported services (`asr`
 | `DESKTOP_GPU` | x86 + NVIDIA GPU (≥ 4 GB VRAM) | Moonshine-large | Kokoro v0 (GPU) | Silero v5 | OpenWakeWord |
 | `CLOUD` | Cloud GPU instance | Moonshine-large | Kokoro v1 | Silero v5 | OpenWakeWord |
 
+## Hot-enable from dashboard
+
+Since v0.14.0, voice can be enabled at runtime from the dashboard without restarting the daemon.
+
+### Extras group
+
+Voice dependencies are optional. Install them with:
+
+```bash
+pip install sovyx[voice]
+# or with uv:
+uv pip install sovyx[voice]
+```
+
+This pulls in `moonshine-voice`, `piper-tts`, `sounddevice`, and `kokoro-onnx`.
+
+### Voice factory
+
+`sovyx.voice.factory.create_voice_pipeline()` is the async factory that instantiates all five components (SileroVAD, MoonshineSTT, TTS, WakeWord, VoicePipeline). All ONNX model loads are wrapped in `asyncio.to_thread()` to avoid blocking the event loop. SileroVAD (2.3 MB) is auto-downloaded on first use; Moonshine auto-downloads via HuggingFace Hub.
+
+```python
+from sovyx.voice.factory import create_voice_pipeline
+
+pipeline = await create_voice_pipeline(
+    event_bus=event_bus,
+    wake_word_enabled=False,
+    mind_id="default",
+)
+```
+
+### Model registry
+
+`sovyx.voice.model_registry` provides:
+
+- `check_voice_deps()` -- returns `(installed, missing)` package lists
+- `detect_tts_engine()` -- returns `"piper"`, `"kokoro"`, or `"none"` (priority order)
+- `ensure_silero_vad(model_dir)` -- auto-downloads SileroVAD ONNX if missing, atomic write with cleanup on failure
+
+### Dashboard endpoints
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/voice/hardware-detect` | GET | CPU, RAM, GPU, audio devices, tier, recommended models |
+| `/api/voice/enable` | POST | Check deps, check audio, create pipeline, register, persist config |
+| `/api/voice/disable` | POST | Graceful stop, unregister, persist config |
+
+The enable endpoint validates in order: dependencies, TTS engine, audio hardware, idempotency. Each failure returns 400 with a structured error body that the dashboard renders as a specific panel (missing deps with install command, audio hardware warning, etc.).
+
+### Setup wizard UI
+
+The Voice page in the dashboard shows a "Set up Voice" button that opens a modal with:
+
+1. Hardware detection (auto-fetches `/api/voice/hardware-detect`)
+2. CPU, RAM, GPU, audio device summary
+3. "Enable Voice" button (always visible after detection)
+4. Error panels for missing deps (with copy-able install command) or missing audio hardware
+
 Each tier has a fallback chain: if the primary TTS or STT fails to load, the selector walks down to the next lighter model.
 
 ## Events

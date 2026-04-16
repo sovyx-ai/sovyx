@@ -174,6 +174,8 @@ def get_plugins_status(
             "tags": tags,
             "icon_url": icon_url,
             "pricing": pricing,
+            "has_setup": hasattr(loaded.plugin, "setup_schema")
+            and getattr(loaded.plugin, "setup_schema", None) is not None,
         }
         plugins.append(plugin_info)
 

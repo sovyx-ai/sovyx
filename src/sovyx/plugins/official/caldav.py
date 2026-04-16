@@ -72,7 +72,7 @@ from sovyx.plugins.official._caldav_models import (
 )
 from sovyx.plugins.permissions import Permission
 from sovyx.plugins.sandbox_http import SandboxedHttpClient
-from sovyx.plugins.sdk import ISovyxPlugin, tool
+from sovyx.plugins.sdk import ISovyxPlugin, TestResult, tool
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -199,6 +199,76 @@ class CalDAVPlugin(ISovyxPlugin):
             },
         },
         "required": ["base_url", "username", "password"],
+    }
+
+    setup_schema: ClassVar[dict[str, object]] = {
+        "providers": [
+            {
+                "id": "fastmail",
+                "name": "Fastmail",
+                "help_url": "https://www.fastmail.com/settings/security/devicekeys",
+                "defaults": {"base_url": "https://caldav.fastmail.com/dav/"},
+            },
+            {
+                "id": "icloud",
+                "name": "iCloud",
+                "help_url": "https://appleid.apple.com/account/manage",
+                "defaults": {"base_url": "https://caldav.icloud.com/"},
+            },
+            {
+                "id": "nextcloud",
+                "name": "Nextcloud",
+                "help_url": "",
+                "defaults": {"allow_local": "true"},
+            },
+            {
+                "id": "radicale",
+                "name": "Radicale",
+                "help_url": "https://radicale.org/v3.html",
+                "defaults": {"allow_local": "true"},
+            },
+            {"id": "custom", "name": "Custom CalDAV"},
+        ],
+        "fields": [
+            {
+                "id": "base_url",
+                "type": "url",
+                "label": "CalDAV URL",
+                "required": True,
+                "placeholder": "https://caldav.example.com/dav/",
+                "autofill_from": "provider",
+            },
+            {
+                "id": "username",
+                "type": "string",
+                "label": "Username",
+                "required": True,
+            },
+            {
+                "id": "password",
+                "type": "secret",
+                "label": "Password",
+                "required": True,
+                "help": "Use an app-specific password for iCloud and Fastmail.",
+                "help_links": {
+                    "fastmail": "https://www.fastmail.com/settings/security/devicekeys",
+                    "icloud": "https://appleid.apple.com/account/manage",
+                },
+            },
+            {
+                "id": "verify_ssl",
+                "type": "boolean",
+                "label": "Verify TLS",
+                "default": True,
+            },
+            {
+                "id": "default_calendar",
+                "type": "string",
+                "label": "Default Calendar",
+                "placeholder": "Personal",
+            },
+        ],
+        "test_connection": True,
     }
 
     def __init__(self) -> None:
@@ -414,6 +484,45 @@ class CalDAVPlugin(ISovyxPlugin):
 
     def _configured(self) -> bool:
         return bool(self._base_url and self._username and self._password)
+
+    async def test_connection(self, config: dict[str, object]) -> TestResult:
+        """Validate CalDAV credentials via PROPFIND discovery."""
+        base_url = str(config.get("base_url", ""))
+        username = str(config.get("username", ""))
+        password = str(config.get("password", ""))
+        if not base_url or not username or not password:
+            return TestResult(
+                success=False, message="base_url, username, and password are required"
+            )
+
+        host = _hostname_from_url(base_url)
+        allow_local = bool(config.get("allow_local", False))
+        client = SandboxedHttpClient(
+            plugin_name=self.name,
+            allowed_domains=sorted({host}) if host else [],
+            allow_local=allow_local,
+            timeout_s=_HTTP_TIMEOUT_S,
+        )
+        try:
+            resp = await client.request(
+                "PROPFIND",
+                base_url,
+                content=_PROPFIND_CALENDARS,
+                headers={"Content-Type": "application/xml; charset=utf-8", "Depth": "1"},
+                auth=(username, password),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return TestResult(success=False, message=f"Connection failed: {exc}")
+        finally:
+            await client.close()
+
+        if resp.status_code in (207, 200):  # noqa: PLR2004
+            return TestResult(success=True, message="Connected successfully")
+        if resp.status_code == 401:  # noqa: PLR2004
+            return TestResult(
+                success=False, message="Authentication failed — check username and password"
+            )
+        return TestResult(success=False, message=f"Server returned HTTP {resp.status_code}")
 
     def _make_client(self) -> SandboxedHttpClient:
         host = _hostname_from_url(self._base_url)

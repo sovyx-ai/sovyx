@@ -10,10 +10,11 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { MoreVerticalIcon, AlertTriangleIcon } from "lucide-react";
+import { MoreVerticalIcon, AlertTriangleIcon, SettingsIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { nameToHue } from "@/lib/format";
 import { useDashboardStore } from "@/stores/dashboard";
+import { SetupWizardModal } from "@/components/setup-wizard";
 import type { PluginInfo, PermissionRisk } from "@/types/api";
 
 // ── Letter Avatar ──
@@ -339,6 +340,25 @@ function PluginCardImpl({
           </span>
         )}
       </div>
+
+      {/* Setup wizard trigger */}
+      {plugin.has_setup && (
+        <div className="mt-3" onClick={(e) => e.stopPropagation()}>
+          <SetupWizardModal
+            pluginName={plugin.name}
+            pluginDescription={plugin.description}
+            trigger={
+              <button
+                type="button"
+                className="flex w-full items-center justify-center gap-1.5 rounded-[var(--svx-radius-md)] border border-dashed border-[var(--svx-color-border-default)] px-3 py-2 text-xs text-[var(--svx-color-text-secondary)] transition-colors hover:border-[var(--svx-color-brand-primary)]/40 hover:text-[var(--svx-color-brand-primary)]"
+              >
+                <SettingsIcon className="size-3" />
+                Configure
+              </button>
+            }
+          />
+        </div>
+      )}
 
       {/* Health warning */}
       {plugin.health.consecutive_failures > 0 && (

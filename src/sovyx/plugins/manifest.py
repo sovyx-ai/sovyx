@@ -60,6 +60,58 @@ class ToolDeclaration(BaseModel):
     description: str = ""
 
 
+# ── Setup Schema (UI-driven config wizard) ────────────────────────
+
+
+class SetupFieldOption(BaseModel):
+    """A single option in a select/provider_select field."""
+
+    value: str
+    label: str
+
+
+class SetupProvider(BaseModel):
+    """A provider preset for multi-provider plugins (e.g. CalDAV → Fastmail/iCloud)."""
+
+    id: str
+    name: str
+    help_url: str = ""
+    defaults: dict[str, str] = Field(default_factory=dict)
+
+
+class SetupField(BaseModel):
+    """A single field in the setup wizard form."""
+
+    id: str
+    type: str = "string"  # string | secret | url | number | boolean | select
+    label: str
+    required: bool = False
+    placeholder: str = ""
+    help: str = ""
+    help_links: dict[str, str] = Field(default_factory=dict)
+    validation: str = ""
+    autofill_from: str = ""
+    default: str | int | float | bool | None = None
+    min: float | None = None
+    max: float | None = None
+    options: list[SetupFieldOption] = Field(default_factory=list)
+
+
+class SetupSchema(BaseModel):
+    """Declarative setup wizard schema.
+
+    Plugins declare this to get automatic UI generation in the
+    dashboard. The dashboard renders a form from the fields, handles
+    provider presets, and calls ``test_connection`` before saving.
+
+    No plugin-specific UI code needed — schema in, form out.
+    """
+
+    providers: list[SetupProvider] = Field(default_factory=list)
+    fields: list[SetupField] = Field(default_factory=list)
+    test_connection: bool = False
+
+
 # ── Main Manifest Model ────────────────────────────────────────────
 
 
@@ -99,8 +151,11 @@ class PluginManifest(BaseModel):
     # Tools (informational — authoritative list comes from get_tools())
     tools: list[ToolDeclaration] = Field(default_factory=list)
 
-    # Config schema for plugin settings
+    # Config schema for plugin settings (JSON Schema)
     config_schema: dict[str, object] = Field(default_factory=dict)
+
+    # Setup wizard schema (UI-driven, rendered by dashboard)
+    setup_schema: SetupSchema | None = None
 
     # Marketplace metadata (optional — for future marketplace)
     category: str = ""  # e.g., "productivity", "finance", "weather"

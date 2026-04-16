@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sovyx"
-version = "0.13.3"
+version = "0.14.0"
 description = "Sovereign Minds Engine — Persistent AI companion with real memory"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
@@ -49,6 +49,7 @@ dependencies = [
     "PyJWT>=2.8",
     "icalendar>=5.0",
     "defusedxml>=0.7",
+    "ruamel-yaml>=0.19.1",
 ]
 
 [project.optional-dependencies]
@@ -58,6 +59,12 @@ plugins = [
 search = [
     "ddgs>=9.0",
     "trafilatura>=2.0",
+]
+voice = [
+    "moonshine-voice>=0.0.50",
+    "piper-tts>=1.4",
+    "sounddevice>=0.5",
+    "kokoro-onnx>=0.4",
 ]
 dev = [
     "pytest>=8.0",

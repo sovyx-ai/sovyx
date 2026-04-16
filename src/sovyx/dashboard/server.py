@@ -320,6 +320,9 @@ def create_app(config: APIConfig | None = None, *, token: str | None = None) -> 
         settings as settings_routes,
     )
     from sovyx.dashboard.routes import (
+        setup as setup_routes,
+    )
+    from sovyx.dashboard.routes import (
         status as status_routes,
     )
     from sovyx.dashboard.routes import (
@@ -349,6 +352,7 @@ def create_app(config: APIConfig | None = None, *, token: str | None = None) -> 
     app.include_router(chat_routes.router)
     app.include_router(conversation_import_routes.router)
     app.include_router(telemetry_routes.router)
+    app.include_router(setup_routes.router)
     app.include_router(ws_routes.router)
 
     # ── Static Files + SPA Fallback ──

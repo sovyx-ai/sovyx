@@ -694,3 +694,56 @@ class PluginManager:
         loaded.tools = plugin.get_tools()
 
         logger.info("plugin_reloaded", name=name)
+
+    async def reconfigure(self, name: str, new_config: dict[str, object]) -> None:
+        """Update a plugin's config and re-initialize it.
+
+        Tears down the current instance, rebuilds PluginContext with
+        the new config, and re-runs setup. Tools are re-collected.
+        The plugin_config cache is updated so subsequent reloads
+        preserve the new config.
+
+        Args:
+            name: Plugin name.
+            new_config: New configuration dict to apply.
+
+        Raises:
+            PluginError: Plugin not found.
+        """
+        if name not in self._plugins:
+            msg = f"Plugin not found: {name}"
+            raise PluginError(msg)
+
+        # Update the config cache
+        self._plugin_config[name] = new_config
+
+        loaded = self._plugins[name]
+        plugin = loaded.plugin
+        old_ctx = loaded.context
+
+        # Teardown
+        if old_ctx.event_bus:
+            old_ctx.event_bus.cleanup()
+        await plugin.teardown()
+
+        # Rebuild context with new config (preserve everything else)
+        new_ctx = PluginContext(
+            plugin_name=old_ctx.plugin_name,
+            plugin_version=old_ctx.plugin_version,
+            data_dir=old_ctx.data_dir,
+            config=new_config,
+            logger=old_ctx.logger,
+            brain=old_ctx.brain,
+            event_bus=old_ctx.event_bus,
+        )
+
+        # Re-setup with new context
+        guard = loaded.guard or ImportGuard(name)
+        with guard:
+            await plugin.setup(new_ctx)
+
+        # Update loaded entry
+        loaded.context = new_ctx
+        loaded.tools = plugin.get_tools()
+
+        logger.info("plugin_reconfigured", name=name)

@@ -52,7 +52,7 @@ from typing import Any, ClassVar
 from sovyx.plugins.official._ha_models import HAEntity, parse_entity, parse_entity_list
 from sovyx.plugins.permissions import Permission
 from sovyx.plugins.sandbox_http import SandboxedHttpClient
-from sovyx.plugins.sdk import ISovyxPlugin, tool
+from sovyx.plugins.sdk import ISovyxPlugin, TestResult, tool
 
 # ── Constants ───────────────────────────────────────────────────────
 
@@ -96,6 +96,31 @@ class HomeAssistantPlugin(ISovyxPlugin):
             },
         },
         "required": ["token"],
+    }
+
+    setup_schema: ClassVar[dict[str, object]] = {
+        "fields": [
+            {
+                "id": "base_url",
+                "type": "url",
+                "label": "Home Assistant URL",
+                "required": True,
+                "default": "http://homeassistant.local:8123",
+                "placeholder": "http://homeassistant.local:8123",
+                "help": "The base URL of your Home Assistant instance.",
+            },
+            {
+                "id": "token",
+                "type": "secret",
+                "label": "Long-Lived Access Token",
+                "required": True,
+                "help": "Generate in HA: Profile > Security > Long-Lived Access Tokens.",
+                "help_links": {
+                    "docs": "https://developers.home-assistant.io/docs/auth_api/#long-lived-access-token",
+                },
+            },
+        ],
+        "test_connection": True,
     }
 
     def __init__(self) -> None:
@@ -271,6 +296,40 @@ class HomeAssistantPlugin(ISovyxPlugin):
 
     def _configured(self) -> bool:
         return bool(self._token)
+
+    async def test_connection(self, config: dict[str, object]) -> TestResult:
+        """Validate Home Assistant credentials via GET /api/states."""
+        base_url = str(config.get("base_url", _DEFAULT_BASE_URL)).rstrip("/")
+        token = str(config.get("token", ""))
+        if not token:
+            return TestResult(success=False, message="Long-lived access token is required")
+
+        host = _hostname_from_url(base_url)
+        client = SandboxedHttpClient(
+            plugin_name=self.name,
+            allowed_domains=sorted({host, "homeassistant.local"}),
+            allow_local=True,
+            timeout_s=_HTTP_TIMEOUT_S,
+        )
+        try:
+            resp = await client.request(
+                "GET",
+                f"{base_url}/api/",
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            )
+        except Exception as exc:  # noqa: BLE001
+            return TestResult(success=False, message=f"Connection failed: {exc}")
+        finally:
+            await client.close()
+
+        if resp.status_code == 200:  # noqa: PLR2004
+            return TestResult(success=True, message="Connected to Home Assistant")
+        if resp.status_code == 401:  # noqa: PLR2004
+            return TestResult(
+                success=False,
+                message="Invalid token — generate a new long-lived access token in HA settings",
+            )
+        return TestResult(success=False, message=f"Server returned HTTP {resp.status_code}")
 
     def _auth_headers(self) -> dict[str, str]:
         return {

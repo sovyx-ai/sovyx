@@ -516,6 +516,7 @@ export interface PluginInfo {
   tags: string[];
   icon_url: string;
   pricing: string;
+  has_setup: boolean;
 }
 
 /** Plugin manifest — serialized from backend */

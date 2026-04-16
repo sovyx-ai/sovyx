@@ -1,0 +1,1 @@
+import{t as e}from"./vendor-react-C4IjcV3X.js";import{t}from"./coming-soon-BZnwSdmS.js";import{t as n}from"./heart-CilvQA2M.js";var r=e();function i(){return(0,r.jsx)(t,{icon:n,titleKey:`emotions.title`,descriptionKey:`emotions.description`})}export{i as default};

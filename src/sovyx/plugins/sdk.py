@@ -84,6 +84,22 @@ class ToolDefinition:
         }
 
 
+# ── TestResult ──────────────────────────────────────────────────────
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class TestResult:
+    """Outcome of a plugin connection test.
+
+    Returned by :meth:`ISovyxPlugin.test_connection` to indicate
+    whether proposed configuration is valid before persisting.
+    """
+
+    success: bool
+    message: str
+    details: dict[str, object] = dataclasses.field(default_factory=dict)
+
+
 # ── @tool Decorator ─────────────────────────────────────────────────
 
 
@@ -440,6 +456,24 @@ class ISovyxPlugin(ABC):
 
         Not abstract — override only if your plugin needs cleanup.
         """
+
+    async def test_connection(self, config: dict[str, object]) -> TestResult:
+        """Validate proposed configuration without persisting.
+
+        Called by the setup wizard before saving config to mind.yaml.
+        Override in plugins that connect to external services (CalDAV,
+        Home Assistant, etc.) to validate credentials and reachability.
+
+        Default returns success — plugins with no external dependencies
+        need no connection test.
+
+        Args:
+            config: Proposed plugin configuration to validate.
+
+        Returns:
+            TestResult with success/failure and a user-facing message.
+        """
+        return TestResult(success=True, message="No validation required")
 
     def get_tools(self) -> list[ToolDefinition]:
         """Return all tools this plugin provides.
