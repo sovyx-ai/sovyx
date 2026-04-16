@@ -38,6 +38,13 @@ class VoiceCognitiveBridge:
 
     In both paths, ``start_thinking()`` fires the filler timer so the
     user hears a natural "thinking" cue while the LLM processes.
+
+    Bootstrap wiring::
+
+        bridge = VoiceCognitiveBridge(
+            cogloop, pipeline,
+            streaming=mind_config.llm.streaming,
+        )
     """
 
     def __init__(

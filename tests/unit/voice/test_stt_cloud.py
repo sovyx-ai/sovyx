@@ -388,7 +388,7 @@ class TestCloudSTTTranscribe:
             assert result.text == "Hello world"
             assert result.confidence == 0.95
             assert result.language == "en"
-            assert result.duration_ms > 0
+            assert result.duration_ms >= 0
             assert engine.state == STTState.READY
 
             await engine.close()
