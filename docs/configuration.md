@@ -36,9 +36,10 @@ Prefix: `SOVYX_`. Nested fields use `__` (two underscores) as the delimiter.
 | `SOVYX_HARDWARE__TIER` | `hardware.tier` | `pi` / `n100` / `gpu` / `auto` |
 
 Provider credentials use their native names (not `SOVYX_`-prefixed):
-`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`. Channel tokens use
-the variable named in `channels.<channel>.token_env` (default
-`SOVYX_TELEGRAM_TOKEN` for Telegram).
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `XGROK_API_KEY`,
+`DEEPSEEK_API_KEY`, `MISTRAL_API_KEY`, `TOGETHER_API_KEY`, `GROQ_API_KEY`,
+`FIREWORKS_API_KEY`. Channel tokens use the variable named in
+`channels.<channel>.token_env` (default `SOVYX_TELEGRAM_TOKEN` for Telegram).
 
 ## Engine Config — `system.yaml`
 

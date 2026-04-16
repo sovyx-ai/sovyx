@@ -57,11 +57,7 @@ internet.
 
 ## Which LLM providers are supported?
 
-The router currently supports **Anthropic**, **OpenAI**, **Google** (Gemini),
-and **Ollama**. Complexity-based routing (simple, moderate, complex) sends
-each request to an appropriate tier, and you can override per-mind or
-per-request. Adding a new provider means implementing the provider interface;
-the router and cost tracker come for free.
+The router supports ten providers: **Anthropic**, **OpenAI**, **Google** (Gemini), **Ollama**, **xAI** (Grok), **DeepSeek**, **Mistral**, **Together AI**, **Groq**, and **Fireworks AI**. All ten support both batch and streaming generation. Complexity-based routing (simple, moderate, complex) sends each request to an appropriate tier, and you can override per-mind or per-request. Adding a new OpenAI-compatible provider means ~30 LOC of configuration on top of the shared base class.
 
 ## Do I need a GPU?
 
@@ -120,9 +116,8 @@ v1.0.
 
 ## Can I migrate from ChatGPT, Claude, or Gemini?
 
-Yes — first-class importers shipped in v0.11.4 (ChatGPT) and v0.11.5
-(Claude + Gemini). Drop the export file at the dashboard's import endpoint
-or the API:
+Yes — first-class importers exist for ChatGPT, Claude, Gemini, and Grok.
+Drop the export file at the dashboard's import endpoint or the API:
 
 ```bash
 curl -X POST -H "Authorization: Bearer $(sovyx token)" \
@@ -133,9 +128,10 @@ curl -X POST -H "Authorization: Bearer $(sovyx token)" \
 
 Each conversation is summary-encoded into one `Episode` plus extracted
 `Concept` rows; re-importing the same archive is deduplicated via a SHA-256
-key on the `conversation_imports` table. Obsidian vault import is the
-fourth and final platform on the v0.6 roadmap. For anything else, you can
-still wrap raw text into the SMF schema and use `sovyx mind import`.
+key on the `conversation_imports` table. Obsidian vault import reads
+Markdown files with YAML frontmatter, wiki links, and nested tags. For
+anything else, you can still wrap raw text into the SMF schema and use
+`sovyx mind import`.
 
 ## Can I export everything?
 
@@ -148,8 +144,8 @@ same format.
 ## Is Sovyx production-ready?
 
 It depends on the definition of production. The cognitive core, brain,
-persistence, observability, and dashboard are at version **0.5** and have
-thousands of tests behind them. We run Sovyx ourselves every day. The public
+persistence, observability, and dashboard are at version **0.13** and have
+over 9 100 tests behind them (8 300+ backend, 792 frontend). We run Sovyx ourselves every day. The public
 API surface is stable and SemVer'd. What is labelled "planned" in
 `roadmap.md` is not yet implemented — treat it accordingly.
 

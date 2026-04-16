@@ -28,9 +28,9 @@ The router classifies each request into one of three tiers.
 
 | Tier | Triggers | Target models |
 |---|---|---|
-| **SIMPLE** | message length ≤ 500 chars **and** ≤ 3 turns, no code, no tool use | `gemini-2.0-flash`, `claude-3-5-haiku-20241022`, `gpt-4o-mini` |
+| **SIMPLE** | message length ≤ 500 chars **and** ≤ 3 turns, no code, no tool use | `gemini-2.0-flash`, `claude-3-5-haiku-20241022`, `gpt-4o-mini`, `deepseek-chat`, `mistral-small-latest`, `mixtral-8x7b-32768`, `llama-3.1-8b-instant` |
 | **MODERATE** | everything else, or a user-requested model | Mind's default provider |
-| **COMPLEX** | message length ≥ 2000 chars, or ≥ 8 turns, or code detected, or tool use requested | `claude-sonnet-4-20250514`, `gemini-2.5-pro-preview-03-25`, `gpt-4o` |
+| **COMPLEX** | message length ≥ 2000 chars, or ≥ 8 turns, or code detected, or tool use requested | `claude-sonnet-4-20250514`, `gemini-2.5-pro-preview-03-25`, `gpt-4o`, `grok-3`, `deepseek-reasoner`, `mistral-large-latest`, `llama-3.1-70b-versatile` |
 
 `ComplexityLevel` is a `StrEnum`:
 
@@ -88,15 +88,22 @@ def classify_complexity(signals: ComplexitySignals) -> ComplexityLevel:
 
 ## Providers
 
-Four providers ship in-box. All implement the same async `LLMProvider` ABC
-(`generate`, `supports_model`, `get_context_window`, `is_available`,
-`close`).
+Ten providers ship in-box. All implement the `LLMProvider` Protocol
+(`generate`, `stream`, `supports_model`, `get_context_window`, `is_available`,
+`close`). The six OpenAI-compatible providers share a base class
+(`OpenAICompatibleProvider`) — each is ~30 LOC of configuration.
 
 | Provider | Auth | Models | Notes |
 |---|---|---|---|
 | **Anthropic** | `ANTHROPIC_API_KEY` | Claude Sonnet 4, Haiku 3.5, Opus 4 | BYOK — preferred default when present |
 | **OpenAI** | `OPENAI_API_KEY` | GPT-4o, GPT-4o-mini, o1, o3-mini | BYOK |
 | **Google** | `GOOGLE_API_KEY` | Gemini 2.5 Pro, 2.0 Flash | BYOK |
+| **xAI** | `XGROK_API_KEY` | Grok-2, Grok-3 | BYOK |
+| **DeepSeek** | `DEEPSEEK_API_KEY` | deepseek-chat, deepseek-reasoner | BYOK |
+| **Mistral** | `MISTRAL_API_KEY` | mistral-large-latest, mistral-small-latest | BYOK |
+| **Together AI** | `TOGETHER_API_KEY` | Llama 3.1 70B, 8B | BYOK — open-source models |
+| **Groq** | `GROQ_API_KEY` | Llama 3.1 70B, Mixtral 8x7B | BYOK — fast inference |
+| **Fireworks AI** | `FIREWORKS_API_KEY` | Llama 3.1 70B, 8B | BYOK — fast inference |
 | **Ollama** | none | Any pulled model | Local, auto-detected on `http://localhost:11434` |
 
 ## Routing and Fallback
@@ -122,9 +129,9 @@ other providers. Example equivalence groups:
 
 | Tier | Equivalent models |
 |---|---|
-| Flagship | `claude-sonnet-4-20250514` ↔ `gpt-4o` ↔ `gemini-2.5-pro-preview-03-25` |
-| Fast | `claude-3-5-haiku-20241022` ↔ `gpt-4o-mini` ↔ `gemini-2.0-flash` |
-| Reasoning | `claude-opus-4-20250514` ↔ `o1` |
+| Flagship | `claude-sonnet-4-20250514` ↔ `gpt-4o` ↔ `gemini-2.5-pro-preview-03-25` ↔ `grok-3` ↔ `mistral-large-latest` |
+| Fast | `claude-3-5-haiku-20241022` ↔ `gpt-4o-mini` ↔ `gemini-2.0-flash` ↔ `deepseek-chat` ↔ `mistral-small-latest` |
+| Reasoning | `claude-opus-4-20250514` ↔ `o1` ↔ `deepseek-reasoner` |
 
 ## Circuit Breaker
 
@@ -163,6 +170,14 @@ Pricing is built in for the common models (per 1M tokens, input/output):
 | `o1` | 15.00 | 60.00 |
 | `gemini-2.0-flash` | 0.10 | 0.40 |
 | `gemini-2.5-pro-preview-03-25` | 1.25 | 10.00 |
+| `grok-2` | 2.00 | 10.00 |
+| `grok-3` | 3.00 | 15.00 |
+| `deepseek-chat` | 0.14 | 0.28 |
+| `deepseek-reasoner` | 0.55 | 2.19 |
+| `mistral-large-latest` | 2.00 | 6.00 |
+| `mistral-small-latest` | 0.10 | 0.30 |
+
+See `src/sovyx/llm/pricing.py` for Together AI, Groq, and Fireworks rates.
 
 Unknown models fall back to a conservative Sonnet-class rate so you never
 under-count.
@@ -191,6 +206,10 @@ the router auto-detects them from available API keys at start-up:
 | `ANTHROPIC_API_KEY` | `claude-sonnet-4-20250514` |
 | `OPENAI_API_KEY` | `gpt-4o` |
 | `GOOGLE_API_KEY` | `gemini-2.5-pro-preview-03-25` |
+| `XGROK_API_KEY` | `grok-2` |
+| `DEEPSEEK_API_KEY` | `deepseek-chat` |
+| `MISTRAL_API_KEY` | `mistral-large-latest` |
+| `GROQ_API_KEY` | `llama-3.1-70b-versatile` |
 
 Fast-tier fallback (`fast_model`) resolves the same way to
 `claude-3-5-haiku-20241022`, `gpt-4o-mini`, or `gemini-2.0-flash`.
@@ -218,10 +237,12 @@ ThinkCompleted(
     tokens_out=312,
     cost_usd=0.00842,
     latency_ms=1823,
+    streamed=True,      # True when using stream() path
+    ttft_ms=287,        # time-to-first-token (streaming only)
 )
 ```
 
-The dashboard subscribes over WebSocket and updates its LLM counters live.
+Streaming calls also emit `ThinkStreamStarted(model, provider, ttft_ms)` when the first token arrives. The dashboard subscribes over WebSocket and updates its LLM counters live.
 
 Prometheus metrics exported by the router:
 

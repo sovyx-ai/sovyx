@@ -164,7 +164,7 @@ voice:
 - **Speaker recognition** (ECAPA-TDNN) — enrollment, verification, multi-user voice auth.
 - **Voice cloning** — few-shot speaker adaptation on top of the existing TTS.
 - **Multilingual text detection** — Parakeet TDT for language-agnostic pipelines.
-- **Streaming LLM → TTS** — expose `LLMRouter.stream()` so the Jarvis filler runs for long queries.
+- **Per-chunk output guard** — regex pass per streaming delta (currently output guard runs on the final assembled text only).
 
 ## See also
 

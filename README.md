@@ -17,7 +17,7 @@
   <a href="https://github.com/sovyx-ai/sovyx/blob/main/LICENSE">
     <img alt="License" src="https://img.shields.io/pypi/l/sovyx.svg">
   </a>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-8%2C200%2B-success">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-9%2C100%2B-success">
 </p>
 
 ---
@@ -55,7 +55,7 @@ $ sovyx start
 
 ```bash
 pip install sovyx
-export ANTHROPIC_API_KEY=sk-ant-...   # or OPENAI_API_KEY / GOOGLE_API_KEY, or run Ollama locally
+export ANTHROPIC_API_KEY=sk-ant-...   # or OPENAI_API_KEY, GOOGLE_API_KEY, DEEPSEEK_API_KEY, etc. — or run Ollama locally
 sovyx init my-mind
 sovyx start
 # open http://localhost:7777 — `sovyx token` prints the auth token
@@ -67,13 +67,13 @@ That's it. The daemon runs in the foreground by default; use `--foreground=false
 
 - **Cognitive loop** — Perceive → Attend → Think → Act → Reflect per turn, plus periodic CONSOLIDATE (decay/merge/prune every 6 h) and nightly DREAM (pattern discovery from recent episodes — see `brain/dream.py`).
 - **Brain graph** — concepts, episodes, and relations in SQLite with WAL + `sqlite-vec`; hybrid FTS5 + vector retrieval; cross-episode Hebbian learning.
-- **LLM router** — complexity-aware routing across Anthropic, OpenAI, Google, and Ollama with budget caps and per-provider circuit breakers.
-- **Voice pipeline** — wake word (openWakeWord), VAD (Silero), STT (Moonshine / Parakeet), TTS (Piper / Kokoro), Wyoming protocol.
+- **LLM router** — complexity-aware routing across 10 providers (Anthropic, OpenAI, Google, Ollama, xAI/Grok, DeepSeek, Mistral, Together AI, Groq, Fireworks) with budget caps, per-provider circuit breakers, and token-level streaming.
+- **Voice pipeline** — wake word (openWakeWord), VAD (Silero), STT (Moonshine / Parakeet), TTS (Piper / Kokoro), Wyoming protocol. LLM streaming feeds tokens directly to TTS for ~300 ms perceived latency (Jarvis Illusion).
 - **React dashboard** — real-time WebSocket feed, brain graph viewer, conversation browser, log viewer, plugin manager, live chat. Runtime zod validation on every response.
 - **Plugin system** — `ISovyxPlugin` ABC, `@tool` decorator, five-layer sandbox (AST scan, sandboxed HTTP, sandboxed FS, permission manifest, hot-reload). Seven first-party plugins ship in-tree.
 - **Channels** — Telegram, Signal, and the dashboard chat, all wired to the same cognitive loop.
 - **Smart-home + calendar** — Home Assistant plugin (read sensors, control lights/switches/climate) and CalDAV plugin (read events from Nextcloud / iCloud / Fastmail / Radicale / SOGo / Baikal).
-- **Conversation importers** — bring your existing chats from ChatGPT, Claude, and Gemini exports into the brain on day one.
+- **Conversation importers** — bring your existing chats from ChatGPT, Claude, Gemini, and Grok exports into the brain on day one. Obsidian vault import reads Markdown frontmatter, wiki links, and nested tags.
 - **Interactive CLI REPL** — `sovyx chat` opens a prompt_toolkit session with persistent history and slash commands (`/status`, `/minds`, `/config`, `/new`, `/clear`).
 - **Runs on Raspberry Pi 5** — auto-detected hardware tier picks ONNX models that fit in 4 GB RAM.
 - **Self-hostable** — one Python process, one SQLite file per mind, optional encrypted cloud backup (Argon2id + AES-256-GCM).
@@ -251,7 +251,7 @@ sovyx logs [--level]       # tail daemon logs
 git clone https://github.com/sovyx-ai/sovyx.git
 cd sovyx
 uv sync --dev
-uv run python -m pytest tests/ --ignore=tests/smoke --timeout=30   # ~8 200 backend tests
+uv run python -m pytest tests/ --ignore=tests/smoke --timeout=30   # ~8 300+ backend tests
 ```
 
 Before the first PR, read [`CLAUDE.md`](CLAUDE.md) — it's the development guide: stack, conventions, anti-patterns, testing patterns, and the quality gates CI enforces (`ruff`, `mypy --strict`, `bandit`, pytest on 3.11 + 3.12, vitest, `tsc`).
@@ -261,10 +261,8 @@ Before the first PR, read [`CLAUDE.md`](CLAUDE.md) — it's the development guid
 Next in the pipeline (see [`docs/roadmap.md`](docs/roadmap.md) for the full plan):
 
 - **Speaker recognition** — ECAPA-TDNN biometrics for multi-user voice.
-- **Obsidian importer** — fourth and final conversation importer (ChatGPT, Claude, Gemini already shipped in v0.11.4-5).
 - **Relay client** — WebSocket + Opus audio streaming for a mobile companion.
 - **Plugin marketplace** — Stripe-Connect-powered distribution once the sandbox clears its v2 review.
-- **PAD 3D emotional model** — migrate from 2D (valence + arousal) to 3D (pleasure + arousal + dominance) per ADR-001.
 
 ## License
 

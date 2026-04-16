@@ -2,7 +2,7 @@
 
 ## What it does
 
-`sovyx.plugins` is the extension system: plugins are Python packages that expose **tools** (LLM-callable functions) to the Mind via function calling. The module discovers plugins, validates their manifest, runs a static AST scan plus a runtime import guard, enforces a capability-based permission model, and injects a sandboxed filesystem and HTTP client. Seven official plugins ship in the tree: `calculator`, `financial_math`, `knowledge`, `weather`, `web_intelligence`, `home_assistant`, and `caldav`.
+`sovyx.plugins` is the extension system: plugins are Python packages that expose **tools** (LLM-callable functions) to the Mind via function calling. The module discovers plugins, validates their manifest, runs a static AST scan plus a runtime import guard, enforces a capability-based permission model, and injects a sandboxed filesystem and HTTP client. Seven official plugins ship in the tree: `calculator`, `financial_math`, `knowledge`, `weather`, `web_intelligence`, `home_assistant`, and `caldav` (plus model helpers `_caldav_models` and `_ha_models`).
 
 ## Create a plugin in 10 lines
 

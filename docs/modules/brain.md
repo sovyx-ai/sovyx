@@ -206,9 +206,9 @@ brain:
 
 ## Roadmap
 
-- 3D emotional model (valence / arousal / dominance) with homeostasis rate.
-- Consolidate phase invoked from the cognitive loop, not only from the scheduler.
 - Pluggable embedding backends beyond ONNX Runtime.
+- Homeostasis processing (baseline drift from recent PAD exposure).
+- Personality prompt modulation driven by PAD state.
 
 ## See also
 

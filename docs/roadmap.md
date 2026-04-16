@@ -4,15 +4,16 @@ This is a rolling roadmap for Sovyx. Dates are best-effort and may shift; the
 scope of each version is stable and only widens with explicit notes in release
 announcements.
 
-The current stable line is **v0.5**. The next major cut is **v0.6 — "The Mind
+The current stable line is **v0.13**. The next major cut is **v0.6 — "The Mind
 That Connects"**, followed by **v1.0 — "The Mind That Remembers"**.
 
 ---
 
-## v0.11 — current
+## v0.11–v0.13 — current
 
-The v0.11 line shipped the enterprise-hardening pass plus a streak of
-feature additions that closed several gaps originally targeted for v0.6:
+The v0.11–v0.13 line shipped the enterprise-hardening pass, streaming
+LLM-to-voice, 10-provider routing, and closed every major spec
+divergence. Key releases:
 
 - **DREAM phase** (v0.11.6) — nightly pattern discovery from recent
   episodes, derived concepts at low confidence, cross-episode Hebbian.
@@ -23,19 +24,20 @@ feature additions that closed several gaps originally targeted for v0.6:
 - **CalDAV integration** (v0.11.9) — first-party plugin, 6 read-only
   tools, supports Nextcloud / iCloud / Fastmail / Radicale / SOGo /
   Baikal (Google discontinued CalDAV in 2023).
-- **Conversation importers** (v0.11.4–5) — ChatGPT, Claude, Gemini.
-  Obsidian remains for v0.6.
+- **Conversation importers** (v0.11.4–5, v0.12.0) — ChatGPT, Claude,
+  Gemini, Grok, plus Obsidian vault import.
+- **PAD 3D emotional model** (v0.12.1) — concepts + episodes carry
+  pleasure, arousal, dominance. ADR-001 closed.
+- **LLM streaming** (v0.13.0) — token-level streaming from router to
+  voice pipeline for ~300 ms perceived latency.
+- **6 new LLM providers** (v0.13.1) — xAI, DeepSeek, Mistral,
+  Together AI, Groq, Fireworks via shared base class.
 
-Active work:
+This set of files reflects **v0.13.1**.
 
-- Documentation alignment (this set of files reflects v0.11.9).
-- Clarifying three dashboard stubs (Voice, Emotions, Productivity)
-  targeted at v0.6.
-- Closing residual polish tickets ahead of v0.6 preview.
+Release criteria:
 
-Release criteria for v0.5.x patch releases:
-
-- Test coverage ≥ 95% (currently just above 96%).
+- Test coverage ≥ 95% (9 100+ tests: 8 300+ pytest, 792 vitest).
 - Zero `ruff` errors, zero `mypy --strict` errors, zero `bandit` HIGH.
 - Multi-arch Docker build (`linux/amd64`, `linux/arm64`) green.
 - Dashboard `npx tsc -b` with zero errors.
@@ -67,15 +69,14 @@ pays down the main architectural divergences accumulated during v0.5.
   deferred to a follow-up; the v0 plugin reissues a full REPORT per
   refresh window (cheap enough — ~50 KB per request).
 
-### Planned — data portability and onboarding
+### Already shipped in v0.12 (was originally v0.6 scope)
 
-- **Obsidian importer.** Markdown with wiki links and YAML frontmatter,
-  the fourth and final conversation importer. ChatGPT (v0.11.4), Claude
-  (v0.11.5), and Gemini (v0.11.5) have already shipped under
-  `sovyx.upgrade.conv_import` with a summary-first encoder and SHA-256
-  dedup table on `brain.db`.
-- **SMF exporter.** Complete Sovyx Mind Format export for data portability
-  outbound.
+- **Obsidian vault importer** — shipped in v0.12.0. Reads Markdown with
+  YAML frontmatter, wiki links, nested tags. Two-pass resolution for
+  forward references. Lives in `sovyx.upgrade.vault_import`.
+- **Grok importer** — shipped in v0.12.0. Fifth conversation platform.
+- **SMF exporter** — shipped earlier. Complete Sovyx Mind Format export
+  for GDPR Art. 20 data portability.
 
 ### Planned — voice
 
@@ -83,19 +84,22 @@ pays down the main architectural divergences accumulated during v0.5.
   verification. Enables multi-user voice interactions.
 - **Voice cloning.** Speaker adaptation as a premium feature.
 
-### Planned — cognitive and emotional refinements
+### Already shipped in v0.12–v0.13 (was originally v0.6 scope)
 
-- **Emotional model migration to 3D PAD.** Move from the current 2D
-  (valence + arousal) representation on episodes to a 3D model (pleasure,
-  arousal, dominance) across both concepts and episodes, with a schema
-  migration and optional backfill via LLM inference. Updates to importance
-  weighting, consolidation, context assembly, and personality drift follow.
-- **Configurable emotional baseline.** Per-mind baseline and homeostasis
-  rate in `MindConfig`.
-- **In-loop consolidation.** The existing `ConsolidationScheduler` runs
-  every 6 h as a background job, which is what SPE-003 §1.1 actually
-  specified ("periodic", dotted arrow). The earlier "in-loop" framing was
-  redundant; consolidation stays as scheduler.
+- **PAD 3D emotional model** — shipped in v0.12.1 (ADR-001 closed).
+  Concepts + episodes carry valence, arousal, dominance (all [-1,+1]).
+  Migration 006 on brain.db, no LLM backfill. Importance scorer uses
+  sub-weights 0.45/0.30/0.25.
+- **Configurable emotional baseline** — `EmotionalBaselineConfig` in
+  `MindConfig` with homeostasis_rate. Present since v0.12.0.
+- **LLM streaming → TTS** — shipped in v0.13.0. Token-level streaming
+  from all 10 providers through `VoiceCognitiveBridge` to the voice
+  pipeline's `stream_text()`. ~300 ms perceived latency.
+- **6 new LLM providers** — shipped in v0.13.1. xAI (Grok), DeepSeek,
+  Mistral, Together AI, Groq, Fireworks. Shared `OpenAICompatibleProvider`
+  base class.
+- **Consolidation** — `ConsolidationScheduler` runs every 6 h as a
+  background job. Wired in bootstrap.
 
 ### Already shipped in v0.11 (was originally v0.6 scope)
 
@@ -115,21 +119,7 @@ pays down the main architectural divergences accumulated during v0.5.
 
 ### Planned — tooling
 
-- **CLI admin utilities.** DB inspection, config reset, user and mind
-  management.
-- **Streaming LLM to TTS.** Pipeline token chunks into the speech pipeline
-  for lower end-to-end latency.
 - **BYOK token isolation.** Per-user API-key routing at the LLM layer.
-
-### Already shipped in v0.11 (was originally v0.6 scope)
-
-- **CLI REPL** — shipped in v0.11.7 as `sovyx chat`. Talks to the daemon
-  over the existing JSON-RPC Unix socket (not HTTP), so the REPL works
-  even when the dashboard is disabled. prompt_toolkit session with
-  persistent history at `~/.sovyx/history` (chmod 0600), word-completer
-  over the slash-command vocabulary, history search. Seven slash
-  commands: `/help`, `/exit`, `/quit`, `/new`, `/clear`, `/status`,
-  `/minds`, `/config`.
 
 ---
 
@@ -185,10 +175,9 @@ signals.
 
 | Quarter         | Milestone         | Main scope                                               |
 | --------------- | ----------------- | -------------------------------------------------------- |
-| **2026 Q2**     | v0.11.x           | Enterprise hardening + DREAM, REPL, HA, CalDAV, importers (shipped) |
-| **2026 Q3**     | v0.6 preview      | Audio relay, Stripe Connect, Obsidian importer, speaker recognition |
-| **2026 Q3–Q4** | v0.6 GA           | PAD 3D emotional migration, pricing experiments, BYOK isolation |
-| **2026 Q4**     | v0.6 polish       | Streaming LLM→TTS, CLI admin utilities, voice cloning     |
+| **2026 Q2**     | v0.13.x (shipped) | Enterprise hardening, DREAM, REPL, HA, CalDAV, importers, PAD 3D, streaming, 10 providers |
+| **2026 Q3**     | v0.6 preview      | Audio relay, Stripe Connect, speaker recognition         |
+| **2026 Q3–Q4** | v0.6 GA           | Pricing experiments, BYOK isolation, voice cloning       |
 | **2027 Q1**     | v1.0 preview      | Sandbox v2, subprocess IPC, multi-mind                   |
 | **2027 Q1–Q2** | v1.0 GA           | Security audit, foundation, marketplace launch           |
 
