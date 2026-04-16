@@ -134,7 +134,7 @@ async def ensure_silero_vad(model_dir: Path | None = None) -> Path:
         destination=str(model_path),
     )
 
-    await asyncio.to_thread(_self._download_file, info.url, model_path)
+    await asyncio.to_thread(lambda: _self._download_file(info.url, model_path))
     logger.info("silero_vad_downloaded", path=str(model_path))
     return model_path
 

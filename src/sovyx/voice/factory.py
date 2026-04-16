@@ -72,19 +72,19 @@ async def create_voice_pipeline(
     # ── 1. SileroVAD (auto-download) ──────────────────────────
     logger.info("voice_factory_creating_vad")
     vad_path = await ensure_silero_vad(models_dir)
-    vad = await asyncio.to_thread(_self._create_vad, vad_path)
+    vad = await asyncio.to_thread(lambda: _self._create_vad(vad_path))
 
     # ── 2. MoonshineSTT (auto-download via HF Hub) ───────────
     logger.info("voice_factory_creating_stt", language=language)
-    stt = await asyncio.to_thread(_self._create_stt, language)
+    stt = await asyncio.to_thread(lambda: _self._create_stt(language))
 
     # ── 3. TTS (Piper > Kokoro > error) ──────────────────────
     tts_engine = detect_tts_engine()
     logger.info("voice_factory_creating_tts", engine=tts_engine)
     if tts_engine == "piper":
-        tts = await asyncio.to_thread(_self._create_piper_tts, models_dir)
+        tts = await asyncio.to_thread(lambda: _self._create_piper_tts(models_dir))
     elif tts_engine == "kokoro":
-        tts = await asyncio.to_thread(_self._create_kokoro_tts, models_dir)
+        tts = await asyncio.to_thread(lambda: _self._create_kokoro_tts(models_dir))
     else:
         msg = "No TTS engine available. Install piper-tts or kokoro-onnx."
         raise VoiceFactoryError(
