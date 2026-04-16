@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
 
@@ -178,6 +180,22 @@ async def get_health(request: Request) -> JSONResponse:
             seen_names.add(r.name)
 
     overall = HealthRegistry().summary(all_results)
+
+    # Emit ServiceHealthChanged for any check that changed status
+    prev: dict[str, str] = getattr(request.app.state, "_prev_health", {})
+    ws_manager = getattr(request.app.state, "ws_manager", None)
+    for r in all_results:
+        old_status = prev.get(r.name)
+        if old_status is not None and old_status != r.status.value and ws_manager is not None:
+            await ws_manager.broadcast(
+                {
+                    "type": "ServiceHealthChanged",
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "correlation_id": "",
+                    "data": {"service": r.name, "status": r.status.value},
+                }
+            )
+    request.app.state._prev_health = {r.name: r.status.value for r in all_results}
 
     checks_json = [
         {

@@ -188,6 +188,13 @@ async def handle_chat_message(
             channel,
         )
 
+    # ── Emit PerceptionReceived ──
+    from sovyx.engine.events import EventBus, PerceptionReceived, ResponseSent
+
+    if registry.is_registered(EventBus):
+        bus = await registry.resolve(EventBus)
+        await bus.emit(PerceptionReceived(source=channel.value, person_id=person_id))
+
     # ── Build perception ──
     msg_id = generate_id()
     perception = Perception(
@@ -303,4 +310,17 @@ async def handle_chat_message(
         resp["buttons"] = buttons_payload
     if result is not None and result.pending_confirmation:
         resp["pending_confirmation"] = True
+
+    # ── Emit ResponseSent ──
+    if response_text and registry.is_registered(EventBus):
+        bus = await registry.resolve(EventBus)
+        elapsed = int((datetime.now(UTC) - now).total_seconds() * 1000)
+        await bus.emit(
+            ResponseSent(
+                mind_id=str(mind_id),
+                channel=channel.value,
+                latency_ms=elapsed,
+            )
+        )
+
     return resp

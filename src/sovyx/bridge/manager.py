@@ -142,6 +142,16 @@ class BridgeManager:
             channel=adapter.channel_type.value,
         )
 
+        from sovyx.engine.events import ChannelConnected
+
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(
+                self._events.emit(ChannelConnected(channel_type=adapter.channel_type.value))
+            )
+        except RuntimeError:
+            pass
+
     async def start(self) -> None:
         """Start all registered channel adapters."""
         for adapter in self._adapters.values():
@@ -153,8 +163,16 @@ class BridgeManager:
 
     async def stop(self) -> None:
         """Stop all registered channel adapters."""
+        from sovyx.engine.events import ChannelDisconnected
+
         for adapter in self._adapters.values():
             await adapter.stop()
+            await self._events.emit(
+                ChannelDisconnected(
+                    channel_type=adapter.channel_type.value,
+                    reason="shutdown",
+                )
+            )
         logger.info("bridge_stopped")
 
     async def handle_inbound(self, message: InboundMessage) -> None:
@@ -177,6 +195,17 @@ class BridgeManager:
         from sovyx.dashboard.status import get_counters
 
         get_counters().record_message()
+
+        # Emit PerceptionReceived for Live Feed
+        from sovyx.engine.events import PerceptionReceived
+
+        await self._events.emit(
+            PerceptionReceived(
+                source=message.channel_type.value,
+                person_id="",
+            )
+        )
+
         try:
             # 1. Resolve person
             person_id = await self._resolver.resolve(
@@ -293,6 +322,16 @@ class BridgeManager:
                     reply_to=result.reply_to,
                 )
                 await self._send_response(outbound)
+
+                # Emit ResponseSent for Live Feed
+                from sovyx.engine.events import ResponseSent
+
+                await self._events.emit(
+                    ResponseSent(
+                        mind_id=str(self._mind_id),
+                        channel=message.channel_type.value,
+                    )
+                )
 
         except Exception:  # noqa: BLE001
             logger.exception("handle_inbound_failed")
