@@ -259,6 +259,8 @@ class TestSearchBrain:
             "confidence",
             "access_count",
             "emotional_valence",
+            "emotional_arousal",
+            "emotional_dominance",
             "score",
             "match_type",
         }
