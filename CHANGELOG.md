@@ -6,6 +6,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.15.2] — 2026-04-16
+
+### Added
+
+- **Emotions page** — full PAD 3D emotional state visualization
+  replacing the Coming Soon stub. Current mood card with human
+  labels, valence timeline (recharts AreaChart), PAD scatter plot
+  with projection toggle (VxA/VxD/AxD), emotional triggers list,
+  mood distribution pie chart. 4 backend endpoints, 5 components.
+- **Voice setup in onboarding** — Step 4 (optional) with hardware
+  detection + hot-enable when deps installed, or install command
+  with copy button when deps missing. Onboarding is now 5 steps.
+
+### Fixed
+
+- **Live Feed health icons** — dynamic icon based on status
+  (green=checkmark, yellow=triangle, red=X) instead of always
+  showing warning triangle.
+- **user_name in system prompt** — field added to MindConfig,
+  saved by onboarding, injected as "You are talking to {name}".
+- **Knowledge plugin** — missing `permissions` (BRAIN_READ/WRITE)
+  and `setup()`. All 5 tools were silently failing.
+- **Web-intelligence plugin** — ddgs+trafilatura moved to default
+  deps, httpx fallback for DuckDuckGo, permissions+setup() for
+  brain access, setup_schema with provider select.
+- **Plugin tags in conversations** — tags persisted in turn
+  metadata column, returned by API, rendered in ChatBubble.
+- **LLM pricing** — 6 price corrections (gpt-4o, deepseek,
+  gemini-2.5-flash, mistral-large, claude-3-5-haiku), 15 new
+  models added, provider defaults updated.
+
 ## [0.15.1] — 2026-04-16
 
 ### Fixed
