@@ -371,6 +371,7 @@ class TestClassifyComplexity:
         assert cfg.complex_min_length == 2000  # noqa: PLR2004
         assert cfg.complex_min_turns == 8  # noqa: PLR2004
 
+
 class TestExtractSignals:
     """Tests for extract_signals function."""
 
