@@ -94,11 +94,8 @@ def app() -> object:
         ),
     }.get(name)
     manager.reconfigure = AsyncMock()
-    manager.re_enable_plugin = AsyncMock()
-    manager.disable_plugin = AsyncMock()
-    manager.reconfigure = AsyncMock()
-    manager.re_enable_plugin = AsyncMock()
-    manager.disable_plugin = AsyncMock()
+    manager.re_enable_plugin = MagicMock()
+    manager.disable_plugin = MagicMock()
 
     registry = MagicMock()
     registry.is_registered.return_value = True
