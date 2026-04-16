@@ -146,19 +146,19 @@ class TestEnsureSileroVAD:
         assert result == tmp_path / "silero_vad.onnx"
         assert result.exists()
 
-    @pytest.mark.asyncio()
-    async def test_cleans_up_on_download_failure(self, tmp_path: Path) -> None:
-        import sovyx.voice.model_registry as reg_mod
+    def test_download_file_cleans_up_on_failure(self, tmp_path: Path) -> None:
+        import httpx
 
-        def fail_download(url: str, dest: Path) -> None:
-            raise ConnectionError("network down")
+        from sovyx.voice.model_registry import _download_file
 
-        original = reg_mod._download_file
-        reg_mod._download_file = fail_download  # type: ignore[assignment]
-        try:
-            with pytest.raises(Exception) as exc_info:
-                await ensure_silero_vad(tmp_path)
-            assert type(exc_info.value).__name__ == "ConnectionError"
-            assert not (tmp_path / "silero_vad.onnx").exists()
-        finally:
-            reg_mod._download_file = original
+        dest = tmp_path / "test_model.onnx"
+
+        with (
+            patch.object(httpx, "Client", side_effect=ConnectionError("down")),
+            pytest.raises(Exception) as exc_info,
+        ):
+            _download_file("https://example.com/model.onnx", dest)
+        assert type(exc_info.value).__name__ == "ConnectionError"
+        assert not dest.exists()
+        tmp_files = list(tmp_path.glob(".vad_*"))
+        assert len(tmp_files) == 0
