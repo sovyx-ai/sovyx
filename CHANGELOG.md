@@ -6,6 +6,62 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.13.3] — 2026-04-16
+
+**Open-core GA release — clean public repo with enterprise audit.**
+
+Consolidates all changes since v0.13.1: open-core separation,
+enterprise audit fixes, docs alignment, and quality hardening.
+
+### Changed
+
+- **Open-core separation.** Commercial layer (`cloud/` module — billing,
+  marketplace, license issuer, LLM proxy, backup R2, dunning, flex,
+  usage, API keys) extracted to private `sovyx-cloud` package. Public
+  repo runs 100% standalone with zero cloud dependencies.
+- **Tier nomenclature aligned** with sovyx-cloud: `STARTER` → `SYNC`
+  ($3.99), `SYNC` → `BYOK_PLUS` ($5.99). `ServiceTier` enum in
+  `sovyx.tiers` matches `SubscriptionTier` in sovyx-cloud so license
+  JWTs validate correctly.
+- `argon2-cffi` removed from dependencies (was used only by cloud
+  crypto, now in sovyx-cloud). `cryptography` retained for Ed25519
+  license validation.
+
+### Added
+
+- **`sovyx.tiers`** — `ServiceTier` enum, `TIER_FEATURES`,
+  `TIER_MIND_LIMITS`, `VALID_TIERS` (informational — resolution
+  requires sovyx-cloud).
+- **`sovyx.license`** — `LicenseValidator` (Ed25519 public key JWT),
+  `LicenseStatus`, `LicenseClaims`, `LicenseInfo`. Validates offline.
+- **`BackupEncryptor` Protocol** in `upgrade/backup_manager.py` —
+  typed interface for at-rest encryption (implemented by sovyx-cloud).
+- **`GET /api/brain/search/vector`** — pure KNN vector search endpoint
+  (sqlite-vec, separate from hybrid FTS+vector).
+- **`LLMTuningConfig`** — complexity classification thresholds
+  (`simple_max_length`, `simple_max_turns`, `complex_min_length`,
+  `complex_min_turns`) moved from hardcoded constants to
+  `EngineConfig.tuning.llm` (overridable via `SOVYX_TUNING__LLM__*`).
+- **VoiceCognitiveBridge streaming gate** — `streaming` kwarg respects
+  `LLMConfig.streaming` flag (False → batch TTS, True → chunk TTS).
+- **7 public module docs** added (16/16 complete): mind, persistence,
+  upgrade, observability, cli, context, benchmarks.
+- **30 new tests**: `test_tiers.py` (11), `test_license.py` (16),
+  `test_public_api_imports.py` (6 smoke tests for sovyx-cloud
+  consumer surface).
+- All 266 `except Exception` handlers annotated with `# noqa: BLE001`.
+
+### Removed
+
+- `src/sovyx/cloud/` (14 files) — moved to sovyx-cloud.
+- `tests/unit/cloud/` (15 files) — moved to sovyx-cloud.
+- `tests/property/test_billing_invariants.py` — moved to sovyx-cloud.
+- `tests/property/test_dunning_invariants.py` — moved to sovyx-cloud.
+- `docs/modules/cloud.md` — moved to sovyx-cloud.
+- Cloud optional deps (boto3, litellm, stripe, argon2-cffi).
+- Git history rewritten (`git filter-repo`) to eliminate all traces
+  of commercial code from public repo.
+
 ## [0.13.2] — 2026-04-16
 
 **Open-core separation — commercial layer moved to sovyx-cloud.**
