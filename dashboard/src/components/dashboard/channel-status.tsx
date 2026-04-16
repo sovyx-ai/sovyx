@@ -33,7 +33,7 @@ interface TelegramSetupResult {
   ok: boolean;
   bot_username?: string;
   bot_name?: string;
-  requires_restart?: boolean;
+  hot_started?: boolean;
   error?: string;
 }
 
@@ -54,7 +54,7 @@ function TelegramSetup({ onDone }: { onDone: () => void }) {
     setError("");
 
     try {
-      const res = await api.post<TelegramSetupResult>("/api/channels/telegram/setup", {
+      const res = await api.post<TelegramSetupResult>("/api/onboarding/channel/telegram", {
         token: trimmed,
       });
 
@@ -81,7 +81,7 @@ function TelegramSetup({ onDone }: { onDone: () => void }) {
           </span>
         </div>
         <p className="text-[11px] text-[var(--svx-color-text-tertiary)]">
-          {t("channelSetup.restartToActivate")}
+          {t("channelSetup.activeNow")}
         </p>
         <button
           type="button"

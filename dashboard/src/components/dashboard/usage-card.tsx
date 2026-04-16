@@ -14,6 +14,7 @@
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
+import { formatCost } from "@/lib/format";
 import { useDashboardStore } from "@/stores/dashboard";
 import type { DailyStats } from "@/types/api";
 
@@ -84,12 +85,6 @@ function SparkLine({
   );
 }
 
-function formatCost(cost: number): string {
-  if (cost < 0.01) return "$0.00";
-  if (cost < 10) return `$${cost.toFixed(2)}`;
-  if (cost < 100) return `$${cost.toFixed(1)}`;
-  return `$${Math.round(cost)}`;
-}
 
 export function UsageCard({ className }: { className?: string }) {
   const { t } = useTranslation("overview");

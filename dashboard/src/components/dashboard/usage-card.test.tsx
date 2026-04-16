@@ -85,7 +85,7 @@ describe("UsageCard", () => {
     render(<UsageCard />);
 
     const total = screen.getByTestId("usage-total");
-    expect(total).toHaveTextContent("$12.9"); // formatCost: >= $10 uses 1 decimal
+    expect(total).toHaveTextContent("$12.87");
     expect(total).toHaveTextContent("14 days");
   });
 

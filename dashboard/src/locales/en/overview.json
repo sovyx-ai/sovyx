@@ -125,6 +125,7 @@
     "done": "Done",
     "connectedTo": "Connected to @{{username}}",
     "restartToActivate": "Restart Sovyx to activate the channel.",
+    "activeNow": "Connected and active now. No restart needed.",
     "tokenLabel": "Bot token"
   },
   "channels": {
