@@ -102,7 +102,12 @@ class PersonalityEngine:
         sections: list[str] = []
 
         # Identity
-        sections.append(f"You are {cfg.name}, a personal AI Mind.")
+        if cfg.user_name:
+            sections.append(
+                f"You are {cfg.name}, a personal AI Mind. You are talking to {cfg.user_name}."
+            )
+        else:
+            sections.append(f"You are {cfg.name}, a personal AI Mind.")
 
         # Communication style
         tone_desc = _TONE_MAP.get(p.tone, p.tone)

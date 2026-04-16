@@ -223,6 +223,10 @@ async def configure_personality(request: Request) -> JSONResponse:
     if lang and isinstance(lang, str):
         mind_config.language = lang
 
+    user_name = body.get("user_name")
+    if user_name and isinstance(user_name, str) and user_name.strip():
+        mind_config.user_name = user_name.strip()
+
     companion_name = body.get("companion_name")
     if companion_name and isinstance(companion_name, str) and companion_name.strip():
         mind_config.name = companion_name.strip()

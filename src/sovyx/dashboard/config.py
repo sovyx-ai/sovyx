@@ -31,6 +31,7 @@ _MUTABLE_SECTIONS = frozenset(
         "language",
         "timezone",
         "llm",
+        "user_name",
         "onboarding_complete",
     }
 )

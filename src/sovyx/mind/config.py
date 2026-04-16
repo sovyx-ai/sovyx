@@ -443,6 +443,7 @@ class MindConfig(BaseModel):
     language: str = "en"
     timezone: str = "UTC"
     template: str = "assistant"
+    user_name: str = ""
     onboarding_complete: bool = False
     personality: PersonalityConfig = Field(default_factory=PersonalityConfig)
     ocean: OceanConfig = Field(default_factory=OceanConfig)
