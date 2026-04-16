@@ -71,8 +71,8 @@ class TestGetConversationMessages:
     @pytest.mark.asyncio()
     async def test_returns_messages(self) -> None:
         rows = [
-            ("turn-1", "user", "Hello", "2026-04-04T19:00:00"),
-            ("turn-2", "assistant", "Hi!", "2026-04-04T19:00:01"),
+            ("turn-1", "user", "Hello", "2026-04-04T19:00:00", "{}"),
+            ("turn-2", "assistant", "Hi!", "2026-04-04T19:00:01", "{}"),
         ]
         registry, pool = _make_registry_with_pool(rows)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
@@ -256,7 +257,7 @@ def _empty_distribution(period: str) -> dict[str, object]:
     }
 
 
-async def _get_brain_pool(request: Request) -> object | None:
+async def _get_brain_pool(request: Request) -> Any | None:
     registry = getattr(request.app.state, "registry", None)
     if registry is None:
         return None
