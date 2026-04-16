@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.15.1] — 2026-04-16
+
+### Fixed
+
+- **LLM pricing table** — 6 price corrections: gpt-4o ($5 -> $2.50
+  input), deepseek-chat/reasoner (V3.2 unified), gemini-2.5-flash
+  (preview -> GA), mistral-large-latest, claude-3-5-haiku. 15 new
+  models added (Claude 4.5-4.7, GPT-4.1, o3, Gemini GA, Grok 4,
+  Llama 3.3). Provider defaults updated. Baseline pinning test (16
+  models) catches future drift.
+- **Live Feed events** — 5 event types were defined, subscribed by
+  DashboardEventBridge, and expected by the frontend but never
+  emitted: PerceptionReceived (now in chat + bridge), ResponseSent
+  (now after response delivery), ServiceHealthChanged (now on
+  health poll status change), ChannelConnected/Disconnected (now on
+  channel register/stop).
+
 ## [0.15.0] — 2026-04-16
 
 **First-run onboarding -- zero to first conversation in 90 seconds.**
