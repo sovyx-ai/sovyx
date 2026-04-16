@@ -191,7 +191,7 @@ Full reference in [Configuration](docs/configuration.md).
 
 Hosted offering for teams and power users. Encrypted relay, managed backup, orchestrated models, plugin marketplace. Runs on top of the same open-source engine.
 
-Details at [sovyx.dev](https://sovyx.dev).
+Details at [sovyx.ai](https://sovyx.ai).
 
 ## Documentation
 
