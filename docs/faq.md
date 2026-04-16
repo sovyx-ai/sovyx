@@ -44,8 +44,9 @@ brain in the middle.
 Local by default. The daemon, the dashboard, and the database all run on
 your machine. The LLM call is the only step that typically leaves the box,
 and you choose the provider. A cloud tier exists for optional add-ons —
-encrypted backups, a relay for mobile clients, a marketplace — and every
-cloud feature is opt-in.
+encrypted backups, a mobile relay, and a plugin marketplace — available as
+part of Sovyx Cloud (separate commercial offering). Every cloud feature is
+opt-in; the open-source daemon is fully functional without it.
 
 ## Does it work offline?
 
@@ -155,10 +156,9 @@ security audit, a fuller sandbox, and a 99.9% cloud SLA.
 ## What is the license?
 
 The library, the daemon, the dashboard, and all official plugins are licensed
-under **AGPL-3.0-or-later**. Commercial services layered on top (hosted
-cloud backups, the relay for mobile clients, the paid plugin marketplace) are
-proprietary but optional. Choosing Sovyx never locks you into a hosted
-service; the core works standalone forever.
+under **AGPL-3.0-or-later**. Commercial services (Sovyx Cloud) are
+proprietary and distributed as a separate package. Choosing Sovyx never
+locks you into a hosted service; the core works standalone forever.
 
 If AGPL is incompatible with your use case, contact us about a commercial
 license.
@@ -167,13 +167,9 @@ license.
 
 Three paths:
 
-1. **Subscribe to the cloud tier** — it pays for the development of the
-   core too. Tiers run from free through enterprise; see the
-   [website](https://sovyx.ai) for current pricing.
-2. **Buy or sell plugins** in the upcoming marketplace (v0.6+ for
-   infrastructure, v1.0 for public launch). Paid plugins share revenue
-   85/15 with the plugin author.
-3. **Contribute code** — time and expertise are the scarcest resources.
+1. **Subscribe to Sovyx Cloud** — it pays for the development of the
+   open-source core too. See [sovyx.ai](https://sovyx.ai).
+2. **Contribute code** — time and expertise are the scarcest resources.
    See `contributing.md`.
 
 ## Where do I report bugs?

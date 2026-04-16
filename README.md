@@ -262,7 +262,7 @@ Next in the pipeline (see [`docs/roadmap.md`](docs/roadmap.md) for the full plan
 
 - **Speaker recognition** — ECAPA-TDNN biometrics for multi-user voice.
 - **Relay client** — WebSocket + Opus audio streaming for a mobile companion.
-- **Plugin marketplace** — Stripe-Connect-powered distribution once the sandbox clears its v2 review.
+- **Plugin marketplace** (Sovyx Cloud) — distribution and monetization for third-party plugins.
 
 ## License
 

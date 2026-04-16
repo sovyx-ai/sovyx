@@ -163,7 +163,7 @@ ACL (`0o600`). There is no network listener.
 
 ## Data at rest
 
-**Backup encryption.** `cloud/crypto.py` provides zero-knowledge backups with:
+**Backup encryption.** Sovyx Cloud provides zero-knowledge backups with:
 
 - KDF: **Argon2id** (RFC 9106 second recommendation) — memory cost 64 MiB,
   time cost 3, parallelism 4, 32-byte hash, 16-byte salt.
@@ -192,8 +192,8 @@ permissions.
 attempting unauthorized resource access, path traversal, SSRF, DNS rebinding,
 prompt injection (single and multi-turn), PII leakage through LLM output,
 unauthorized financial tool calls, backup exfiltration by a cloud provider,
-Bearer-token interception, license forgery, Stripe webhook spoofing, abuse by
-volume (rate limit plus escalation), and post-incident detection (audit log).
+Bearer-token interception, license forgery, abuse by volume (rate limit plus
+escalation), and post-incident detection (audit log).
 
 **Out of scope.** Physical access to the device, OS-level privilege
 escalation, kernel exploits, hardware side channels (Spectre, Rowhammer),

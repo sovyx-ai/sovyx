@@ -4,8 +4,6 @@ The daemon validates licenses locally using an Ed25519 public key.
 Token issuance (private key signing) lives in ``sovyx-cloud``.
 
 A 7-day grace period after expiry allows degraded local-only operation.
-
-Ref: SPE-033 §3.3: LicenseService specification.
 """
 
 from __future__ import annotations

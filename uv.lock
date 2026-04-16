@@ -2830,7 +2830,7 @@ requires-dist = [
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
     { name = "watchdog", marker = "extra == 'plugins'", specifier = ">=4.0" },
 ]
-provides-extras = ["plugins", "search", "cloud", "dev"]
+provides-extras = ["plugins", "search", "dev"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "sovyx", extras = ["dev"] }]
