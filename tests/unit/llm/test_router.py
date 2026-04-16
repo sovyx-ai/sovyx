@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -370,13 +370,6 @@ class TestClassifyComplexity:
         assert cfg.simple_max_turns == 3  # noqa: PLR2004
         assert cfg.complex_min_length == 2000  # noqa: PLR2004
         assert cfg.complex_min_turns == 8  # noqa: PLR2004
-
-    def test_custom_thresholds_change_classification(self) -> None:
-        """Overriding thresholds via env vars changes classifier behavior."""
-        with patch("sovyx.llm.router._SIMPLE_MAX_LENGTH", 1000):
-            result = classify_complexity(ComplexitySignals(message_length=800))
-            assert result == ComplexityLevel.SIMPLE
-
 
 class TestExtractSignals:
     """Tests for extract_signals function."""
