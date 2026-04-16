@@ -26,6 +26,8 @@ import {
   SquareIcon,
   AlertTriangleIcon,
   CircleHelpIcon,
+  CheckCircle2Icon,
+  XCircleIcon,
 } from "lucide-react";
 import type { WsEvent, WsEventType } from "@/types/api";
 import { formatTimePrecise } from "@/lib/format";
@@ -63,8 +65,8 @@ const EVENT_CONFIG: Record<
     color: "text-[var(--svx-color-brand-muted)]",
   },
   ServiceHealthChanged: {
-    icon: <AlertTriangleIcon className="size-3.5" />,
-    color: "text-[var(--svx-color-warning)]",
+    icon: <CheckCircle2Icon className="size-3.5" />,
+    color: "text-[var(--svx-color-success)]",
   },
   ConsolidationCompleted: {
     icon: <MergeIcon className="size-3.5" />,
@@ -112,6 +114,15 @@ const FALLBACK_CONFIG = {
   icon: <CircleHelpIcon className="size-3.5" />,
   color: "text-[var(--svx-color-text-tertiary)]",
 };
+
+function resolveHealthConfig(event: WsEvent): { icon: ReactNode; color: string } {
+  const status = String((event.data as Record<string, unknown>)?.status ?? "");
+  if (status === "red")
+    return { icon: <XCircleIcon className="size-3.5" />, color: "text-[var(--svx-color-error)]" };
+  if (status === "yellow" || status === "degraded")
+    return { icon: <AlertTriangleIcon className="size-3.5" />, color: "text-[var(--svx-color-warning)]" };
+  return { icon: <CheckCircle2Icon className="size-3.5" />, color: "text-[var(--svx-color-success)]" };
+}
 
 /** Resolve event type label from i18n. */
 function eventLabel(type: string, t: TFunction): string {
@@ -224,7 +235,10 @@ export function ActivityFeed({ events, className }: ActivityFeedProps) {
             aria-live="polite"
           >
             {reversed.map((event, i) => {
-              const config = EVENT_CONFIG[event.type] ?? FALLBACK_CONFIG;
+              const config =
+                event.type === "ServiceHealthChanged"
+                  ? resolveHealthConfig(event)
+                  : (EVENT_CONFIG[event.type] ?? FALLBACK_CONFIG);
               const label = getLabel(event.type);
               return (
                 <div
