@@ -146,7 +146,7 @@ same format.
 
 It depends on the definition of production. The cognitive core, brain,
 persistence, observability, and dashboard are at version **0.13** and have
-over 9 100 tests behind them (8 300+ backend, 792 frontend). We run Sovyx ourselves every day. The public
+over 8,400 tests behind them (7,700+ backend, 792 frontend). We run Sovyx ourselves every day. The public
 API surface is stable and SemVer'd. What is labelled "planned" in
 `roadmap.md` is not yet implemented — treat it accordingly.
 

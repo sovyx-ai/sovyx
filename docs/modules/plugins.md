@@ -222,7 +222,7 @@ Install performs the AST scan. Any `SecurityFinding` aborts the install unless `
 
 - **Kernel-level isolation for marketplace plugins** — seccomp-BPF (Linux), mount/PID/user namespaces, Seatbelt profile on macOS, and a subprocess IPC protocol so plugins run out-of-process.
 - **Zero-downtime rollback** — automatic revert to the previous version if a hot reload fails health checks.
-- **Marketplace billing** — see [`cloud`](./cloud.md) roadmap for Stripe Connect.
+- **Plugin marketplace** — distribution and monetization for third-party plugins (Sovyx Cloud, separate offering).
 
 ## See also
 

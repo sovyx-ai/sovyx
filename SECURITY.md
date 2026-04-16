@@ -6,8 +6,8 @@ Security fixes are applied to the latest minor release on `main`. Older lines do
 
 | Version | Supported |
 |---|---|
-| Latest `0.x` release on `main` | ✅ |
-| Any earlier release | ❌ — upgrade to the latest |
+| Latest `0.x` release on `main` | Supported |
+| Any earlier release | Not supported -- upgrade to the latest |
 
 ## Reporting a vulnerability
 

@@ -190,8 +190,8 @@ channels:
   telegram:
     token_env: SOVYX_TELEGRAM_TOKEN      # Env var NAME, not the token itself
     allowed_users: []                    # Empty = anyone
-  discord:
-    token_env: SOVYX_DISCORD_TOKEN
+  signal:
+    enabled: true
 ```
 
 Tokens are always read from environment variables. `token_env` is the

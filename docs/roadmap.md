@@ -33,11 +33,11 @@ divergence. Key releases:
 - **6 new LLM providers** (v0.13.1) — xAI, DeepSeek, Mistral,
   Together AI, Groq, Fireworks via shared base class.
 
-This set of files reflects **v0.13.1**.
+This set of files reflects **v0.13.3**.
 
 Release criteria:
 
-- Test coverage ≥ 95% (9 100+ tests: 8 300+ pytest, 792 vitest).
+- Test coverage >= 95% (8,463 tests: 7,671 pytest, 792 vitest).
 - Zero `ruff` errors, zero `mypy --strict` errors, zero `bandit` HIGH.
 - Multi-arch Docker build (`linux/amd64`, `linux/arm64`) green.
 - Dashboard `npx tsc -b` with zero errors.

@@ -81,7 +81,7 @@ uv run ruff check src/ tests/
 uv run ruff format --check src/ tests/
 uv run mypy src/                          # strict mode
 uv run bandit -r src/sovyx/ --configfile pyproject.toml
-uv run pytest tests/ --ignore=tests/smoke --timeout=30   # 8 300+ tests, coverage ≥ 95%
+uv run pytest tests/ --ignore=tests/smoke --timeout=30   # 7 700+ tests, coverage >= 95%
 ```
 
 ### Dashboard (from `dashboard/`)

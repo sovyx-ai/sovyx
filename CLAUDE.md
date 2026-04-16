@@ -19,7 +19,7 @@ uv run ruff check src/ tests/
 uv run ruff format --check src/ tests/
 uv run mypy src/                              # strict mode, 222 files
 uv run bandit -r src/sovyx/ --configfile pyproject.toml
-uv run python -m pytest tests/ --ignore=tests/smoke --timeout=30   # ~7 800 tests
+uv run python -m pytest tests/ --ignore=tests/smoke --timeout=30   # ~7 700 tests
 
 # Dashboard (from dashboard/)
 npx tsc -b tsconfig.app.json                  # zero new errors
@@ -63,7 +63,8 @@ src/sovyx/
 │       ├── logs, plugins, providers, safety, settings, status, telemetry,
 │       ├── voice, websocket
 │       └── _deps.py     # Shared verify_token dependency
-├── cloud/               # Billing, licensing, backup, scheduler, LLM proxy, crypto
+├── tiers.py             # ServiceTier enum, feature/mind-limit maps (informational)
+├── license.py           # LicenseValidator (Ed25519 public key JWT, offline)
 ├── voice/               # STT, TTS, VAD, wake word, Wyoming
 │   └── pipeline/        # Split from pipeline.py: state machine + output queue + barge-in
 │       ├── _orchestrator.py, _output_queue.py, _barge_in.py
