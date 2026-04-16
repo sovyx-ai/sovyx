@@ -6,6 +6,83 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-04-16
+
+**Stripe Connect marketplace + tier alignment (IMPL-011).**
+
+### Changed
+
+- **Tier nomenclature aligned with GTM strategy** (gtm-strategy.md §5):
+  `STARTER` ($3.99) renamed to `SYNC`; `SYNC` ($5.99) renamed to
+  `BYOK_PLUS`. Affects `SubscriptionTier`, `UsageTier`, `RateTier`,
+  `TIER_FEATURES`, `TIER_MIND_LIMITS`, `TIER_MONTHLY_TOKENS`,
+  `TIER_RATE_LIMITS`, and all tests.
+- `create_checkout()` gains `interval` (`"month"` or `"year"`) and
+  `coupon_code` parameters. Annual billing uses `TIER_ANNUAL_PRICES`
+  (2 months free). Coupons add Stripe `discounts` to the session.
+
+### Added
+
+- **`cloud/marketplace.py`** — plugin marketplace service layer:
+  - `MarketplaceConfig`: platform fee 15% (developer keeps 85%),
+    geo-restriction US+BR only, per-plugin fee overrides.
+  - `RevenueCalculator`: split with `math.floor` rounding (Sovyx
+    absorbs fractional cents — developer never shorted).
+  - `PluginAuthorService`: Stripe Express account creation,
+    geo-restriction enforcement, onboarding URL generation.
+  - `PluginChargeService`: destination charges with
+    `application_fee_amount` + `transfer_data.destination`.
+- **`cloud/marketplace_store.py`** — SQLite-backed persistence
+  (not InMemory) for connected accounts, charges (with revenue
+  split tracking), transfers, and payouts.
+- **`persistence/schemas/marketplace.py`** — migration 001: 4 tables
+  (`connected_accounts`, `marketplace_charges`,
+  `marketplace_transfers`, `marketplace_payouts`) with indices.
+- **`cloud/webhook_handlers.py`** — `register_all_handlers()` wires
+  11 Stripe events to the `WebhookHandler` dispatch registry:
+  - Billing MVP (5): `checkout.session.completed`,
+    `customer.subscription.updated/deleted`,
+    `invoice.payment_succeeded/failed`.
+  - Connect (3): `account.updated` (updates charges_enabled /
+    payouts_enabled in SQLite), `transfer.created/failed`.
+  - P1 (3): `charge.refunded` (marks charge "refunded"),
+    `charge.dispute.created/closed`.
+- **`dashboard/routes/marketplace.py`** — 5 REST endpoints:
+  `GET /api/marketplace/authors`, `GET .../authors/{id}`,
+  `POST .../authors/onboard` (403 on geo-restriction),
+  `GET .../authors/{id}/payouts`, `GET /api/marketplace/revenue`.
+- **Annual pricing**: `TIER_ANNUAL_PRICES` (2 months free).
+- **Launch coupons**: `LAUNCH_COUPON_DISCOUNTS` per tier (17-17.5%).
+- **Business extra seats**: `BUSINESS_EXTRA_SEAT_CENTS = 400` ($4/mo).
+- **Enterprise minimum**: `ENTERPRISE_MIN_SEAT_CENTS = 600` ($6/seat).
+- **ADR-012**: Stripe Tax deferral + geo-restriction rationale with
+  6 acceptance criteria for removal.
+
+### Design decisions
+
+- **Revenue split 85/15** (developer/Sovyx) per roadmap.md:50.
+  Configurable per-plugin via `MarketplaceConfig.plugin_overrides`.
+- **Stripe Express accounts** — Stripe-hosted onboarding (simplest
+  Connect type).
+- **SQLite persistence** for marketplace data — real money flows
+  must survive daemon restarts (unlike billing/flex InMemory stores).
+- **Geo-restriction US+BR only** until Stripe Tax is integrated
+  (ADR-012). EU/UK blocked to avoid tax compliance risk.
+- **Floor rounding**: `math.floor(total * fee)` guarantees the
+  developer never receives less than their contracted share.
+
+### Tests
+
+- 72 marketplace-specific tests across 4 files:
+  - `test_marketplace.py` (18): service layer + geo-restriction.
+  - `test_marketplace_store.py` (11): SQLite CRUD + split arithmetic.
+  - `test_webhook_handlers.py` (18): 11 event registrations + handlers.
+  - `test_marketplace_e2e.py` (25): full flows (checkout→license,
+    destination charge→webhook→SQLite→payout, refund reversal,
+    dispute lifecycle, geo-restriction with zero persistence verified,
+    custom 70/30 split, dashboard auth 401, 1000-value arithmetic
+    sweep, 9 fee-rate matrix, tier-price boundary values).
+
 ## [0.13.1] — 2026-04-15
 
 **6 new LLM providers via OpenAI-compatible base class.**
