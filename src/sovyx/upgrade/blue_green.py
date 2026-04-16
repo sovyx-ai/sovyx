@@ -260,7 +260,7 @@ class BlueGreenUpgrader:
             )
             await self._rollback(result, backup_info, install_path)
 
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             result.status = "failed"
             result.error = f"Unexpected error: {exc}"
             logger.error(
@@ -296,7 +296,7 @@ class BlueGreenUpgrader:
             result.backup_path = backup_info.path
             result.phases_completed.append(UpgradePhase.BACKUP.value)
             return backup_info
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             msg = f"Backup failed: {exc}"
             raise UpgradeError(msg) from exc
 
@@ -313,7 +313,7 @@ class BlueGreenUpgrader:
             return install_path
         except UpgradeError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             msg = f"Installation failed: {exc}"
             raise InstallError(msg) from exc
 
@@ -332,7 +332,7 @@ class BlueGreenUpgrader:
 
         except UpgradeError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             msg = f"Migration error: {exc}"
             raise UpgradeError(msg) from exc
 
@@ -355,7 +355,7 @@ class BlueGreenUpgrader:
 
         except VerificationError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             msg = f"Verification error: {exc}"
             raise VerificationError(msg) from exc
 
@@ -369,7 +369,7 @@ class BlueGreenUpgrader:
         try:
             await self._installer.swap(install_path)
             result.phases_completed.append(UpgradePhase.SWAP.value)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             msg = f"Swap failed: {exc}"
             raise UpgradeError(msg) from exc
 

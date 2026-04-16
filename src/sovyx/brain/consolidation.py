@@ -547,6 +547,6 @@ class ConsolidationScheduler:
                 await self._cycle.run(mind_id)
             except asyncio.CancelledError:
                 break
-            except Exception:
+            except Exception:  # noqa: BLE001
                 logger.exception("consolidation_cycle_failed", mind_id=str(mind_id))
                 # Continue loop — don't crash scheduler on single failure

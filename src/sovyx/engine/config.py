@@ -275,7 +275,7 @@ def load_engine_config(
 
     try:
         return EngineConfig(**yaml_data)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         raise ConfigValidationError(
             f"Configuration validation failed: {exc}",
             context={"fields": str(yaml_data.keys())},

@@ -103,7 +103,7 @@ class ThinkPhase:
 
             return response, ctx.messages
 
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.exception("think_phase_failed")
             degraded = LLMResponse(
                 content=self._degradation_message,
@@ -163,7 +163,7 @@ class ThinkPhase:
 
             return chunk_iter, ctx.messages
 
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.exception("think_phase_streaming_failed")
 
             async def _degraded_iter() -> AsyncIterator[LLMStreamChunk]:

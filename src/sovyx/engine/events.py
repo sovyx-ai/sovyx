@@ -371,7 +371,7 @@ class EventBus:
         for handler in handlers:
             try:
                 await handler(event)
-            except Exception:
+            except Exception:  # noqa: BLE001
                 logger.error(
                     "event_handler_error",
                     event_type=type(event).__name__,

@@ -131,7 +131,7 @@ class SignalChannel:
                 )
         except ChannelConnectionError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             msg = f"Cannot connect to signal-cli-rest-api at {self._api_url}: {exc}"
             raise ChannelConnectionError(msg) from exc
 
@@ -212,7 +212,7 @@ class SignalChannel:
                 return timestamp
         except ChannelConnectionError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.error("signal_send_failed", target=target, error=str(exc))
             msg = f"Failed to send Signal message: {exc}"
             raise ChannelConnectionError(msg) from exc

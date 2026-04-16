@@ -294,7 +294,7 @@ class BridgeManager:
                 )
                 await self._send_response(outbound)
 
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.exception("handle_inbound_failed")
             # Best-effort error response so user doesn't get silence
             try:
@@ -392,7 +392,7 @@ class BridgeManager:
                 reply_to=outbound.reply_to,
                 buttons=outbound.buttons,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.exception(
                 "send_response_failed",
                 channel=outbound.channel_type.value,

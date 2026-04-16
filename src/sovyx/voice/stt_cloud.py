@@ -407,7 +407,7 @@ class CloudSTT(STTEngine):
                 files=files,
                 data=data,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             msg = f"Whisper API request failed: {exc}"
             raise CloudSTTError(msg) from exc
 
@@ -417,7 +417,7 @@ class CloudSTT(STTEngine):
 
         try:
             body = response.json()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             msg = f"Invalid JSON from Whisper API: {response.text[:200]}"
             raise CloudSTTError(msg) from exc
 

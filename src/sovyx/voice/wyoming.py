@@ -701,7 +701,7 @@ class WyomingClientHandler:
                     data={"text": response},
                 )
             )
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.exception("wyoming_intent_handling_failed")
             await self._write_event(
                 WyomingEvent(

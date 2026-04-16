@@ -14,11 +14,15 @@ from enum import StrEnum
 
 
 class ServiceTier(StrEnum):
-    """Sovyx service tiers (informational — resolution requires sovyx-cloud)."""
+    """Sovyx service tiers (informational — resolution requires sovyx-cloud).
+
+    Aligned with sovyx-cloud SubscriptionTier so license JWTs issued
+    by the cloud are validated correctly by the public daemon.
+    """
 
     FREE = "free"
-    STARTER = "starter"
     SYNC = "sync"
+    BYOK_PLUS = "byok_plus"
     CLOUD = "cloud"
     BUSINESS = "business"
     ENTERPRISE = "enterprise"
@@ -26,8 +30,8 @@ class ServiceTier(StrEnum):
 
 TIER_FEATURES: dict[str, list[str]] = {
     "free": [],
-    "starter": ["backup_daily", "relay"],
-    "sync": ["backup_daily", "relay", "byok_routing", "byok_caching", "byok_analytics"],
+    "sync": ["backup_daily", "relay"],
+    "byok_plus": ["backup_daily", "relay", "byok_routing", "byok_caching", "byok_analytics"],
     "cloud": ["backup_hourly", "relay", "llm_proxy"],
     "business": ["backup_hourly", "relay", "llm_proxy", "sso", "team"],
     "enterprise": [
@@ -44,8 +48,8 @@ TIER_FEATURES: dict[str, list[str]] = {
 
 TIER_MIND_LIMITS: dict[str, int] = {
     "free": 2,
-    "starter": 2,
-    "sync": 5,
+    "sync": 2,
+    "byok_plus": 5,
     "cloud": 10,
     "business": 25,
     "enterprise": 999,

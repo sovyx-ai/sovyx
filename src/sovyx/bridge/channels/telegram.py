@@ -136,7 +136,7 @@ class TelegramChannel:
                 **kwargs,  # type: ignore[arg-type]
             )
             return str(result.message_id)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(
                 "telegram_send_failed",
                 target=target,

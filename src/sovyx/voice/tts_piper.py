@@ -251,7 +251,7 @@ class PiperTTS(TTSEngine):
                 sess_options=opts,
                 providers=["CPUExecutionProvider"],
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             msg = f"Failed to create Piper ONNX session: {exc}"
             raise RuntimeError(msg) from exc
 

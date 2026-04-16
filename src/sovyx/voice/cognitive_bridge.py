@@ -70,7 +70,7 @@ class VoiceCognitiveBridge:
                 request,
                 on_text_chunk=self._pipeline.stream_text,
             )
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.exception("voice_cognitive_bridge_error")
             await self._pipeline.flush_stream()
             raise
@@ -89,7 +89,7 @@ class VoiceCognitiveBridge:
         """Non-streaming path: wait for full response, then speak it."""
         try:
             result = await self._cogloop.process_request(request)
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.exception("voice_cognitive_bridge_error")
             raise
 

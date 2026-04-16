@@ -536,7 +536,7 @@ async def bootstrap(
         )
         return registry
 
-    except Exception:
+    except Exception:  # noqa: BLE001
         # Cleanup already-initialized resources in reverse order
         for resource in reversed(_closables):
             try:

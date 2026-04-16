@@ -22,13 +22,31 @@ import sqlite3
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from sovyx.engine.errors import PersistenceError
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
     from sovyx.persistence.pool import DatabasePool
+
+
+class BackupEncryptor(Protocol):
+    """Protocol for at-rest backup encryption (provided by sovyx-cloud).
+
+    Implementations must supply ``encrypt`` and ``decrypt`` that accept
+    raw bytes + a passphrase and return transformed bytes. The default
+    sovyx-cloud implementation uses Argon2id key derivation + AES-256-GCM.
+    """
+
+    def encrypt(self, data: bytes, passphrase: str) -> bytes:
+        """Encrypt *data* using *passphrase*-derived key."""
+        ...
+
+    def decrypt(self, data: bytes, passphrase: str) -> bytes:
+        """Decrypt *data* using *passphrase*-derived key."""
+        ...
+
 
 logger = get_logger(__name__)
 
@@ -91,7 +109,7 @@ class BackupManager:
         db: Async database pool for executing ``VACUUM INTO``.
         backup_dir: Directory where backups are stored.  Defaults to
             ``~/.sovyx/backups``.
-        crypto: Optional :class:`object` instance for at-rest encryption.
+        crypto: Optional :class:`BackupEncryptor` for at-rest encryption.
         passphrase: Passphrase for encryption (required when *crypto* is set).
     """
 
@@ -100,7 +118,7 @@ class BackupManager:
         db: DatabasePool,
         *,
         backup_dir: Path | None = None,
-        crypto: object | None = None,
+        crypto: BackupEncryptor | None = None,
         passphrase: str | None = None,
     ) -> None:
         self._db = db
@@ -134,7 +152,7 @@ class BackupManager:
         try:
             async with self._db.write() as conn:
                 await conn.execute(f"VACUUM INTO '{backup_path}'")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             # Clean up partial file
             backup_path.unlink(missing_ok=True)
             msg = f"Failed to create backup: {exc}"
@@ -145,11 +163,11 @@ class BackupManager:
             encrypted_path = backup_path.with_suffix(".db.enc")
             try:
                 raw = backup_path.read_bytes()
-                encrypted = self._crypto.encrypt(raw, self._passphrase)  # type: ignore[attr-defined]
+                encrypted = self._crypto.encrypt(raw, self._passphrase)
                 encrypted_path.write_bytes(encrypted)
                 backup_path.unlink()
                 backup_path = encrypted_path
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 encrypted_path.unlink(missing_ok=True)
                 msg = f"Failed to encrypt backup: {exc}"
                 raise BackupError(msg) from exc
@@ -215,8 +233,7 @@ class BackupManager:
                 msg = "Cannot restore encrypted backup without crypto and passphrase"
                 raise BackupError(msg)
             raw = backup_path.read_bytes()
-            data = self._crypto.decrypt(raw, self._passphrase)  # type: ignore[attr-defined]
-
+            data = self._crypto.decrypt(raw, self._passphrase)
         # Write to temp file for integrity check (if encrypted)
         check_path = backup_path
         if data is not None:
@@ -238,7 +255,7 @@ class BackupManager:
                 db_path.write_bytes(data)
             else:
                 shutil.copy2(backup_path, db_path)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             msg = f"Failed to restore backup: {exc}"
             raise BackupError(msg) from exc
 

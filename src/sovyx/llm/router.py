@@ -533,7 +533,7 @@ class LLMRouter:
                     final_chunk = chunk
                 yield chunk
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             if circuit:
                 circuit.record_failure()
             raise ProviderUnavailableError(f"{chosen_provider.name} stream failed: {e}") from e

@@ -459,7 +459,7 @@ class DreamScheduler:
                 await self._cycle.run(mind_id)
             except asyncio.CancelledError:
                 break
-            except Exception:
+            except Exception:  # noqa: BLE001
                 # Survive cycle exceptions: tomorrow is another day.
                 logger.exception("dream_cycle_failed", mind_id=str(mind_id))
 

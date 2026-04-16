@@ -80,7 +80,7 @@ class DaemonRPCServer:
         except (json.JSONDecodeError, asyncio.IncompleteReadError):
             error_resp = self._error_response(None, -32700, "Parse error")
             await rpc_send(writer, error_resp)
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.exception("rpc_connection_error")
         finally:
             writer.close()

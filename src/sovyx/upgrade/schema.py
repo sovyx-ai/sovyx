@@ -422,7 +422,7 @@ class MigrationRunner:
 
         except MigrationError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             msg = f"Upgrade migration v{migration.version} ({migration.description}) failed: {exc}"
             raise MigrationError(msg) from exc
 
@@ -453,7 +453,7 @@ class MigrationRunner:
         try:
             async with self._pool.write() as conn:
                 await conn.execute(f"VACUUM INTO '{backup_path}'")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             msg = f"Pre-migration backup failed: {exc}"
             raise MigrationError(msg) from exc
 

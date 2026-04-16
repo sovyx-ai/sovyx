@@ -85,7 +85,7 @@ async def chat(request: Request) -> JSONResponse:
             {"error": "Invalid message format."},
             status_code=422,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001
         logger.exception("dashboard_chat_failed")
         return JSONResponse(
             {"error": "Failed to process message. Please try again."},

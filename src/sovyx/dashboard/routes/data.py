@@ -51,7 +51,7 @@ async def export_mind_endpoint(request: Request) -> Response:
             {"error": str(exc)},
             status_code=HTTP_503_SERVICE_UNAVAILABLE,
         )
-    except Exception:
+    except Exception:  # noqa: BLE001
         logger.exception("export_mind_failed")
         return JSONResponse(
             {"error": "Export failed"},
@@ -150,7 +150,7 @@ async def import_mind_endpoint(request: Request) -> JSONResponse:
 
         result = await import_mind(registry, tmp_path, overwrite=overwrite)
         return JSONResponse({"ok": True, **result})
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.exception("import_mind_failed")
         return JSONResponse(
             {"ok": False, "error": str(exc)},

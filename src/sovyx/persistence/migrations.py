@@ -265,7 +265,7 @@ class MigrationRunner:
                 )
         except MigrationError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             msg = f"Migration v{migration.version} ({migration.description}) failed: {exc}"
             raise MigrationError(msg) from exc
 

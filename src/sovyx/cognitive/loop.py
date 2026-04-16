@@ -224,7 +224,7 @@ class CognitiveLoop:
             )
             return action_result
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             error_type = type(e).__name__
             user_message = _categorize_error(e)
             m.errors.add(1, {"error_type": error_type, "module": "cognitive"})
@@ -383,7 +383,7 @@ class CognitiveLoop:
             m.messages_processed.add(1, {"mind_id": str(request.mind_id)})
             return action_result
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             error_type = type(e).__name__
             user_message = _categorize_error(e)
             m.errors.add(1, {"error_type": error_type, "module": "cognitive"})

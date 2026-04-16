@@ -110,7 +110,7 @@ class DegradationManager:
                     component=component,
                     error=str(error),
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001
                 logger.exception("fallback_activation_failed", component=component)
         else:
             logger.warning("no_fallback_available", component=component)

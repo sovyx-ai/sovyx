@@ -104,7 +104,7 @@ class DatabasePool:
                 read_pool_size=self._read_pool_size,
                 has_sqlite_vec=self._has_sqlite_vec,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             msg = f"Failed to initialize database pool: {exc}"
             raise DatabaseConnectionError(msg) from exc
 
@@ -284,7 +284,7 @@ class DatabasePool:
             try:
                 yield conn
                 await conn.execute("COMMIT")
-            except Exception:
+            except Exception:  # noqa: BLE001
                 await conn.execute("ROLLBACK")
                 raise
 

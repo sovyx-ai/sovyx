@@ -191,7 +191,7 @@ class KokoroTTS(TTSEngine):
 
         try:
             self._kokoro = Kokoro(str(model_path), str(voices_path))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             msg = f"Failed to initialize Kokoro: {exc}"
             raise RuntimeError(msg) from exc
 

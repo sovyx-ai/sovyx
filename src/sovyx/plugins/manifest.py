@@ -194,5 +194,5 @@ def load_manifest(plugin_dir: Path) -> PluginManifest:
 
     try:
         return PluginManifest(**data)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         raise ManifestError(str(manifest_path), str(e)) from e

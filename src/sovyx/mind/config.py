@@ -493,7 +493,7 @@ def load_mind_config(path: Path) -> MindConfig:
 
     try:
         config = MindConfig(**data)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         msg = f"Mind config validation failed: {e}"
         raise MindConfigError(msg) from e
 
