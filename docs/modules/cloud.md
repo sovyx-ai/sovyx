@@ -10,13 +10,8 @@ Every user-visible operation is local-first: the daemon works without any cloud 
 
 | Name | Responsibility |
 |---|---|
-| `BillingService` | Stripe Checkout, Customer Portal, webhook dispatch with signature verification. Annual billing, coupon support. |
-| `WebhookHandler` | HMAC-SHA256 signature check + replay protection + registry of 11 event handlers. |
-| `MarketplaceConfig` | Revenue split (85/15), geo-restriction (US+BR), per-plugin fee overrides. |
-| `RevenueCalculator` | Split calculation with floor rounding (developer never shorted). |
-| `PluginAuthorService` | Stripe Express account onboarding, geo-restriction enforcement. |
-| `PluginChargeService` | Destination charges with `application_fee_amount` + `transfer_data`. |
-| `SQLiteMarketplaceStore` | SQLite persistence for connected accounts, charges, transfers, payouts. |
+| `BillingService` | Stripe Checkout, Customer Portal, webhook dispatch with signature verification. |
+| `WebhookHandler` | HMAC-SHA256 signature check + replay protection + registry of event handlers. |
 | `LicenseService` | Issues and validates JWT Ed25519 license tokens; 7-day grace period, 24 h background refresh. |
 | `BackupService` | `brain.db` → `VACUUM INTO` → gzip → `Argon2id + AES-256-GCM` → upload to R2. |
 | `BackupCrypto` | Argon2id key derivation + AES-256-GCM encryption. |
@@ -33,8 +28,8 @@ Every user-visible operation is local-first: the daemon works without any cloud 
 # src/sovyx/cloud/billing.py — prices in cents (USD)
 class SubscriptionTier(enum.StrEnum):
     FREE = "free"
+    STARTER = "starter"
     SYNC = "sync"
-    BYOK_PLUS = "byok_plus"
     CLOUD = "cloud"
     BUSINESS = "business"
     ENTERPRISE = "enterprise"
@@ -42,46 +37,24 @@ class SubscriptionTier(enum.StrEnum):
 
 TIER_PRICES: dict[SubscriptionTier, int] = {
     SubscriptionTier.FREE: 0,
-    SubscriptionTier.SYNC: 399,        # $3.99
-    SubscriptionTier.BYOK_PLUS: 599,   # $5.99
+    SubscriptionTier.STARTER: 399,     # $3.99
+    SubscriptionTier.SYNC: 599,        # $5.99
     SubscriptionTier.CLOUD: 999,       # $9.99
     SubscriptionTier.BUSINESS: 9900,   # $99
     SubscriptionTier.ENTERPRISE: 0,    # custom pricing
 }
 ```
 
-| Tier | Monthly | Annual | Features | Minds |
-|---|---|---|---|---|
-| `free` | $0 | — | Local-only Sovyx. | 2 |
-| `sync` | $3.99 | $39/yr | Daily backup, relay. | 2 |
-| `byok_plus` | $5.99 | $59/yr | Daily backup, relay, BYOK routing/caching/analytics. | 5 |
-| `cloud` | $9.99 | $99/yr | Hourly backup, relay, managed LLM proxy. | 10 |
-| `business` | $99 | $990/yr | Everything in `cloud` plus SSO and team. 25 seats (+$4/extra). | 25 |
-| `enterprise` | custom | custom | Adds LDAP, dedicated relay, SLA. From $6/seat. | unlimited |
+| Tier | Price | Features |
+|---|---|---|
+| `free` | $0 | Local-only Sovyx. |
+| `starter` | $3.99 / month | Daily backup, relay. |
+| `sync` | $5.99 / month | Daily backup, relay, BYOK routing, BYOK caching, BYOK analytics. |
+| `cloud` | $9.99 / month | Hourly backup, relay, managed LLM proxy. |
+| `business` | $99 / month | Everything in `cloud` plus SSO and team. |
+| `enterprise` | custom | Adds LDAP, dedicated relay, SLA. |
 
-Launch coupon `LAUNCH` applies 17-17.5% discount per tier. Annual billing gives 2 months free.
-
-## Marketplace
-
-Plugin marketplace with Stripe Connect Express accounts and
-destination charges. Revenue split: developer 85%, Sovyx 15%
-(configurable per-plugin).
-
-Geo-restriction: US and BR only until Stripe Tax is integrated
-(ADR-012). EU/UK blocked.
-
-```
-POST /api/marketplace/authors/onboard
-  → creates Express account → returns onboarding URL
-
-GET  /api/marketplace/authors?user_id=...
-GET  /api/marketplace/authors/{stripe_account_id}
-GET  /api/marketplace/authors/{id}/payouts
-GET  /api/marketplace/revenue
-```
-
-11 webhook events registered: checkout, subscription lifecycle,
-invoice, account.updated, transfer, charge.refunded, dispute.
+Mind count limits mirror the tier: `free` and `starter` → 2, `sync` → 5, `cloud` → 10, `business` → 25, `enterprise` → 999.
 
 ## Licensing
 
