@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 262 80">
+  <defs>
+    <linearGradient id="neural" x1="0" y1="40" x2="262" y2="40" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8B5CF6"/>
+      <stop offset="1" stop-color="#22D3EE"/>
+    </linearGradient>
+  </defs>
+  <g fill="url(#neural)" fill-rule="evenodd">
+    <path d="M51 8L6 8Q3 8 3 11L3 37Q3 40 6 40L48 40Q51 40 51 43L51 69Q51 72 48 72L6 72Q3 72 3 69L3 61L37 61Q40 61 40 58L40 43Q40 40 37 40L17 40Q14 40 14 37L14 22Q14 19 17 19L51 19Z"/>
+    <path d="M82 6C95 6 106 21 106 40C106 59 95 74 82 74C69 74 58 59 58 40C58 21 69 6 82 6ZM82 17C89 17 95 27 95 40C95 53 89 63 82 63C75 63 69 53 69 40C69 27 75 17 82 17Z"/>
+    <path d="M112 8L135 72Q136 74 137 72L160 8L148 8L137 39Q136 41 135 39L124 8Z"/>
+    <path d="M165 8L181 35C182 36 182 37 182 39L182 72L192 72L192 39C192 37 192 36 193 35L209 8L196 8L188 21Q187 23 186 21L178 8Z"/>
+    <path d="M215 8L227 8L236 27Q237 29 238 27L247 8L259 8L244 37Q243 40 244 43L259 72L247 72L238 53Q237 51 236 53L227 72L215 72L230 43Q231 40 230 37Z"/>
+  </g>
+</svg>

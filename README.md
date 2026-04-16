@@ -1,211 +1,180 @@
-<h1 align="center">Sovyx</h1>
-
 <p align="center">
-  <em>Self-hosted AI companion with persistent memory.</em>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/_assets/sovyx-wordmark-accent.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/_assets/sovyx-wordmark-bw.svg">
+    <img alt="Sovyx" src="docs/_assets/sovyx-wordmark-bw.svg" width="240">
+  </picture>
 </p>
 
 <p align="center">
-  <a href="https://github.com/sovyx-ai/sovyx/actions/workflows/ci.yml">
-    <img alt="CI" src="https://img.shields.io/github/actions/workflow/status/sovyx-ai/sovyx/ci.yml?branch=main&label=CI">
-  </a>
-  <a href="https://pypi.org/project/sovyx/">
-    <img alt="PyPI" src="https://img.shields.io/pypi/v/sovyx.svg">
-  </a>
-  <a href="https://pypi.org/project/sovyx/">
-    <img alt="Python" src="https://img.shields.io/pypi/pyversions/sovyx.svg">
-  </a>
-  <a href="https://github.com/sovyx-ai/sovyx/blob/main/LICENSE">
-    <img alt="License" src="https://img.shields.io/pypi/l/sovyx.svg">
-  </a>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-9%2C100%2B-success">
+  Self-hosted AI companion with a brain graph, a 7-phase cognitive loop, and 10 LLM providers.<br>
+  Local-first. AGPL. Your hardware. Your data.
+</p>
+
+<p align="center">
+  <a href="https://github.com/sovyx-ai/sovyx/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/sovyx-ai/sovyx/ci.yml?branch=main&label=CI"></a>
+  <a href="https://pypi.org/project/sovyx/"><img alt="PyPI" src="https://img.shields.io/pypi/v/sovyx.svg"></a>
+  <a href="https://pypi.org/project/sovyx/"><img alt="Python" src="https://img.shields.io/pypi/pyversions/sovyx.svg"></a>
+  <a href="https://github.com/sovyx-ai/sovyx/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-AGPL--3.0-blue"></a>
+  <img alt="Tests" src="https://img.shields.io/badge/tests-8%2C463-brightgreen">
 </p>
 
 ---
 
-## What it is
+## Why Sovyx
 
-Sovyx is a Python daemon that runs a cognitive loop — Perceive → Attend → Think → Act → Reflect — against a local brain graph and any LLM provider you point it at. It's for developers and self-hosters who want an AI that remembers across sessions, runs on a Raspberry Pi 5, and keeps its memory in a SQLite file on their own disk.
+Sovyx is an application, not a framework. Install it, point it at an API key, and talk to it from Telegram, Signal, the dashboard, or a microphone.
 
-It's an application, not a framework. Install it, point it at an API key, and talk to it — from Telegram, Signal, the dashboard, or the CLI.
+- **10 LLM providers, your keys.** Anthropic, OpenAI, Google, Ollama, xAI, DeepSeek, Mistral, Together, Groq, Fireworks. Complexity-based routing picks the right model per message. Streaming end-to-end.
+- **Runs on a Raspberry Pi 5 or a rack server.** Auto-detected hardware tier selects ONNX models that fit in 4 GB RAM. Same codebase, same config, any scale.
+- **Memory that persists and consolidates.** Brain graph in SQLite with hybrid vector + keyword retrieval, Hebbian learning, nightly dream cycles, and a PAD 3D emotional model. Not a vector dump -- a cognitive architecture.
+- **No telemetry. No phone-home. AGPL-3.0.** Your data stays in a SQLite file on your disk. The daemon never calls anywhere you didn't configure.
 
-## Demo
-
-```
-$ sovyx init my-mind
-✓ Created ~/.sovyx/system.yaml
-✓ Created ~/.sovyx/logs
-✓ Created mind 'my-mind' at ~/.sovyx/my-mind/mind.yaml
-
-Sovyx initialized!
-Data directory: /home/you/.sovyx
-
-Next: sovyx start to launch the daemon
-
-$ sovyx start
-[info  ] dashboard_listening       url=http://localhost:7777
-[info  ] bridge_started            channels=3
-[info  ] brain_loaded              concepts=1842 episodes=317
-[info  ] cognitive_loop_ready      mind=my-mind
-```
-
-> Screenshot of the React dashboard goes here once we publish one.
-> `![Sovyx Dashboard](docs/_assets/dashboard.png)`
-
-## Quickstart
+## Quick Start
 
 ```bash
 pip install sovyx
-export ANTHROPIC_API_KEY=sk-ant-...   # or OPENAI_API_KEY, GOOGLE_API_KEY, DEEPSEEK_API_KEY, etc. — or run Ollama locally
+export ANTHROPIC_API_KEY=sk-ant-...   # or any of the 10 supported providers
 sovyx init my-mind
 sovyx start
-# open http://localhost:7777 — `sovyx token` prints the auth token
 ```
 
-That's it. The daemon runs in the foreground by default; use `--foreground=false` to daemonize.
+```
+[info] dashboard_listening       url=http://localhost:7777
+[info] bridge_started            channels=3
+[info] brain_loaded              concepts=1842 episodes=317
+[info] cognitive_loop_ready      mind=my-mind
+```
 
-## Features
+Open `http://localhost:7777` and run `sovyx token` to get the auth token. Full setup in [Getting Started](docs/getting-started.md).
 
-- **Cognitive loop** — Perceive → Attend → Think → Act → Reflect per turn, plus periodic CONSOLIDATE (decay/merge/prune every 6 h) and nightly DREAM (pattern discovery from recent episodes — see `brain/dream.py`).
-- **Brain graph** — concepts, episodes, and relations in SQLite with WAL + `sqlite-vec`; hybrid FTS5 + vector retrieval; cross-episode Hebbian learning.
-- **LLM router** — complexity-aware routing across 10 providers (Anthropic, OpenAI, Google, Ollama, xAI/Grok, DeepSeek, Mistral, Together AI, Groq, Fireworks) with budget caps, per-provider circuit breakers, and token-level streaming.
-- **Voice pipeline** — wake word (openWakeWord), VAD (Silero), STT (Moonshine / Parakeet), TTS (Piper / Kokoro), Wyoming protocol. LLM streaming feeds tokens directly to TTS for ~300 ms perceived latency (Jarvis Illusion).
-- **React dashboard** — real-time WebSocket feed, brain graph viewer, conversation browser, log viewer, plugin manager, live chat. Runtime zod validation on every response.
-- **Plugin system** — `ISovyxPlugin` ABC, `@tool` decorator, five-layer sandbox (AST scan, sandboxed HTTP, sandboxed FS, permission manifest, hot-reload). Seven first-party plugins ship in-tree.
-- **Channels** — Telegram, Signal, and the dashboard chat, all wired to the same cognitive loop.
-- **Smart-home + calendar** — Home Assistant plugin (read sensors, control lights/switches/climate) and CalDAV plugin (read events from Nextcloud / iCloud / Fastmail / Radicale / SOGo / Baikal).
-- **Conversation importers** — bring your existing chats from ChatGPT, Claude, Gemini, and Grok exports into the brain on day one. Obsidian vault import reads Markdown frontmatter, wiki links, and nested tags.
-- **Interactive CLI REPL** — `sovyx chat` opens a prompt_toolkit session with persistent history and slash commands (`/status`, `/minds`, `/config`, `/new`, `/clear`).
-- **Runs on Raspberry Pi 5** — auto-detected hardware tier picks ONNX models that fit in 4 GB RAM.
-- **Self-hostable** — one Python process, one SQLite file per mind, optional encrypted cloud backup (Argon2id + AES-256-GCM).
+## What's Inside
 
-## Architecture
+Every inbound message -- Telegram, Signal, voice, or the dashboard -- enters the same cognitive loop. The loop assembles context from the brain graph, calls the LLM, executes tool calls if needed, and reflects the outcome back into memory. Consolidation and dream cycles run in the background to maintain the graph.
 
 ```mermaid
-flowchart LR
-    subgraph Inputs
+flowchart TB
+    subgraph Channels
         TG[Telegram]
         SG[Signal]
         VX[Voice]
-        DC[Dashboard]
+        WEB[Dashboard]
     end
 
     subgraph Engine
         BR[Bridge]
-        CL[Cognitive Loop<br/>Perceive → Attend → Think → Act → Reflect]
+        GATE[CogLoopGate]
+
+        subgraph CognitiveLoop["Cognitive Loop"]
+            direction LR
+            P[Perceive] --> AT[Attend] --> TH[Think] --> ACT[Act] --> RF[Reflect]
+        end
+
+        subgraph Safety
+            PII[PII Guard]
+            INJ[Injection Tracker]
+            OUT[Output Guard]
+            FIN[Financial Gate]
+        end
+
         CTX[Context Assembler]
-        LR[LLM Router]
-        BRAIN[(Brain graph<br/>SQLite + sqlite-vec)]
-        EB(((Event bus)))
+        LLM[LLM Router -- 10 providers]
+        PLG[Plugin Executor]
     end
 
-    TG & SG & VX & DC --> BR --> CL
-    CL <--> CTX
-    CL <--> LR
-    CL <--> BRAIN
-    CL --> EB
-    EB --> DC
+    subgraph Brain["Brain Graph -- SQLite + sqlite-vec"]
+        CON[(Concepts)]
+        EPI[(Episodes)]
+        REL[(Relations)]
+        EMB[Embeddings -- KNN + FTS5 + RRF]
+    end
+
+    subgraph Background
+        CONS[Consolidation -- every 6h]
+        DREAM[Dream -- nightly]
+    end
+
+    EB(((Event Bus)))
+
+    TG & SG & VX & WEB -->|message| BR
+    BR -->|perception| GATE
+    GATE --> CognitiveLoop
+
+    AT <-.-> Safety
+    TH -->|query| CTX
+    CTX -->|recall| Brain
+    TH -->|generate / stream| LLM
+    ACT -->|tool calls| PLG
+    RF -->|"concepts + episodes + Hebbian"| Brain
+
+    CONS -->|decay + merge| Brain
+    DREAM -->|patterns| Brain
+
+    CognitiveLoop -->|response| BR
+    BR -->|reply| Channels
+
+    CognitiveLoop --> EB
+    EB -->|WebSocket| WEB
 ```
 
-Every inbound message becomes an `InboundMessage`. The bridge normalizes it, the cognitive loop drives context assembly and LLM calls, and the brain graph records the outcome. The event bus broadcasts state changes to the dashboard over WebSocket in real time. See [`docs/architecture.md`](docs/architecture.md) for the full data flow.
+## Features
 
-## LLM Router
+| Category | What it does |
+|----------|-------------|
+| **Cognition** | 7-phase loop: Perceive, Attend, Think, Act, Reflect + periodic Consolidate + nightly Dream. PAD 3D emotional model (pleasure / arousal / dominance). Spreading activation across the concept graph. |
+| **LLM routing** | 10 providers with complexity-based tier selection (simple / moderate / complex). Per-provider circuit breaker. Daily and per-conversation cost caps. Cross-provider failover. Token-level streaming. |
+| **Voice** | Local STT (Moonshine ONNX) + TTS (Piper / Kokoro). SileroVAD. Wake word detection. Barge-in. Filler injection for perceived latency under 300 ms. Wyoming protocol. Streaming LLM chunks direct to TTS. |
+| **Channels** | Telegram, Signal, dashboard chat, CLI REPL (`sovyx chat`). Home Assistant plugin (4 domains, 8 tools). CalDAV plugin (6 read-only tools, Nextcloud / iCloud / Fastmail / Radicale). |
+| **Import** | Bring existing conversations from ChatGPT, Claude, Gemini, Grok. Import Obsidian vaults (frontmatter, wiki links, nested tags). Summary-first encoding with SHA-256 dedup. |
+| **Plugins** | 7 official plugins. `@tool` decorator SDK. 5-layer sandbox: AST scan, import guard, sandboxed HTTP (domain allowlist, rate limit, size cap), sandboxed filesystem, capability-based permissions. Hot reload. |
+| **Dashboard** | React 19 + TypeScript + Zustand. Real-time WebSocket. Brain graph visualization (force-graph-2d). Virtualized log viewer. Zod runtime response validation. Token auth. Dark mode. i18n. |
+| **Privacy** | Local-first. One SQLite file per mind. Zero telemetry by default. AGPL-3.0. No cloud requirement. Optional [Sovyx Cloud](#sovyx-cloud) for teams. |
 
-Sovyx routes every LLM call through a single component that classifies the request, picks a model, and enforces a cost budget.
-
-- **Tiered routing** — `SIMPLE` (short / no code) → cheap fast models; `MODERATE` → mind's default; `COMPLEX` (long context / code / tool use) → flagship models.
-- **Cost caps** — per-conversation and per-day USD budgets; requests exceeding budget fall back or fail closed.
-- **Circuit breaker** — per-provider failure count with exponential backoff; healthy providers absorb traffic while a failing one cools down.
-- **Fallback chain** — provider order defined in config, automatic retry on the next healthy provider.
-
-```yaml
-# ~/.sovyx/my-mind/mind.yaml
-llm:
-  default_provider: anthropic
-  default_model: claude-sonnet-4-20250514
-  fast_model: claude-3-5-haiku-20241022
-  budget_daily_usd: 2.0
-  budget_per_conversation_usd: 0.25
-  fallback_providers:
-    - openai
-    - ollama
-```
-
-Full router design in [`docs/llm-router.md`](docs/llm-router.md).
-
-## Dashboard
-
-```bash
-sovyx start        # starts the FastAPI server on :7777
-sovyx token        # prints the bearer token for the web UI
-```
-
-React 19 + TypeScript + Zustand. Real-time WebSocket feed (brain updates, messages, health). Virtualized lists for logs and chat. Zod runtime validation on every response. Built-in token auth, dark mode, and i18n.
-
-> Screenshot goes here: `docs/_assets/dashboard.png`
-
-## Plugin System
-
-A plugin is an `ISovyxPlugin` subclass with `@tool`-decorated methods. The LLM calls the tools by name during `THINK` when the conversation needs them.
+## Plugin Example
 
 ```python
 from sovyx.plugins.sdk import ISovyxPlugin, tool
 
 
 class WeatherPlugin(ISovyxPlugin):
-    @property
-    def name(self) -> str:
-        return "weather"
-
-    @property
-    def version(self) -> str:
-        return "1.0.0"
-
-    @property
-    def description(self) -> str:
-        return "Current weather and forecasts via Open-Meteo."
+    name = "weather"
+    version = "1.0.0"
+    description = "Current weather and forecasts via Open-Meteo."
 
     @tool(description="Get current weather for a city.")
     async def get_weather(self, city: str) -> str:
-        # HTTP calls must go through the sandboxed client.
         from sovyx.plugins.sandbox_http import SandboxedHttpClient
         async with SandboxedHttpClient(
             plugin_name="weather",
             allowed_domains=["api.open-meteo.com"],
         ) as client:
-            resp = await client.get("https://api.open-meteo.com/v1/forecast", params={"...": "..."})
-        ...
+            resp = await client.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={"latitude": "...", "longitude": "..."},
+            )
+        return resp.text
 ```
-
-Built-in plugins: `calculator`, `financial-math`, `knowledge`, `weather`, `web-intelligence`, `home-assistant`, `caldav`. All live under [`src/sovyx/plugins/official/`](src/sovyx/plugins/official/). The Home Assistant plugin (4 domains, 8 tools) needs `network:local` and a long-lived access token; the CalDAV plugin (6 read-only tools) needs `network:internet` and HTTP Basic credentials (use app-specific passwords for iCloud / Fastmail; **Google Calendar discontinued CalDAV in 2023**, use a self-hosted alternative).
 
 ```bash
 sovyx plugin list                 # installed plugins
-sovyx plugin create my-plugin     # scaffold a new plugin
-sovyx plugin validate ./my-plugin # run quality gates (manifest, AST, permissions)
-sovyx plugin install ./my-plugin  # install into the running daemon
+sovyx plugin create my-plugin     # scaffold
+sovyx plugin validate ./my-plugin # manifest + AST + permissions check
+sovyx plugin install ./my-plugin  # hot-load into running daemon
 ```
 
 ## Configuration
 
-Three sources, in priority order: environment variables (`SOVYX_*`, `__` for nesting), YAML files (`system.yaml` for the engine, `mind.yaml` per mind), built-in defaults.
-
-Minimal `mind.yaml`:
+Three sources in priority order: environment variables (`SOVYX_*`), YAML files (`system.yaml` + `mind.yaml`), built-in defaults.
 
 ```yaml
+# ~/.sovyx/my-mind/mind.yaml
 name: my-mind
 language: en
-timezone: UTC
 
 personality:
   tone: warm
   humor: 0.4
   empathy: 0.8
-  verbosity: 0.5
-
-safety:
-  content_filter: standard
-  child_safe_mode: false
-  financial_confirmation: true
 
 llm:
   budget_daily_usd: 2.0
@@ -216,58 +185,40 @@ channels:
     token_env: SOVYX_TELEGRAM_TOKEN
 ```
 
-Every knob documented in [`docs/configuration.md`](docs/configuration.md).
+Full reference in [Configuration](docs/configuration.md).
 
-## CLI
+## Sovyx Cloud
 
-```bash
-sovyx init [name]          # create ~/.sovyx/<name>/ with mind.yaml
-sovyx start [--foreground] # launch daemon + dashboard (:7777)
-sovyx stop                 # stop the daemon
-sovyx status               # daemon health
-sovyx doctor               # full readiness check
-sovyx token                # print dashboard bearer token
-sovyx chat                 # interactive REPL with the active mind (history at ~/.sovyx/history)
-sovyx brain search <q>     # query the brain graph from the CLI
-sovyx brain stats          # concept / episode / relation counts
-sovyx plugin list|info|install|enable|disable|remove|validate|create
-sovyx logs [--level]       # tail daemon logs
-```
+Hosted offering for teams and power users. Encrypted relay, managed backup, orchestrated models, plugin marketplace. Runs on top of the same open-source engine.
+
+Details at [sovyx.dev](https://sovyx.dev).
 
 ## Documentation
 
-- [Getting Started](docs/getting-started.md) — install, configure, first run.
-- [Architecture](docs/architecture.md) — data flow, cognitive loop, brain graph.
-- [LLM Router](docs/llm-router.md) — routing tiers, budgets, fallback.
-- [Configuration](docs/configuration.md) — all config keys and env vars.
-- [API Reference](docs/api-reference.md) — REST + WebSocket endpoints.
-- [Security](docs/security.md) — sandbox, auth, data handling.
-- [FAQ](docs/faq.md) — how Sovyx compares to LangChain, Siri, Home Assistant, etc.
-- [Per-module docs](docs/modules/) — brain, cognitive, bridge, cloud, dashboard.
+- [Getting Started](docs/getting-started.md) -- install, configure, first run
+- [Architecture](docs/architecture.md) -- data flow, cognitive loop, brain graph
+- [LLM Router](docs/llm-router.md) -- routing tiers, budgets, failover
+- [Configuration](docs/configuration.md) -- all config keys and env vars
+- [API Reference](docs/api-reference.md) -- REST + WebSocket endpoints
+- [Security](docs/security.md) -- sandbox, auth, data handling
+- [Plugin Development](docs/modules/plugins.md) -- SDK, permissions, sandbox
+- [FAQ](docs/faq.md) -- comparisons, offline mode, data portability
 
 ## Development
 
 ```bash
-git clone https://github.com/sovyx-ai/sovyx.git
-cd sovyx
+git clone https://github.com/sovyx-ai/sovyx.git && cd sovyx
 uv sync --dev
-uv run python -m pytest tests/ --ignore=tests/smoke --timeout=30   # ~8 300+ backend tests
+uv run python -m pytest tests/ --ignore=tests/smoke --timeout=30  # 7671 backend tests
+cd dashboard && npx vitest run                                     # 792 frontend tests
 ```
 
-Before the first PR, read [`CLAUDE.md`](CLAUDE.md) — it's the development guide: stack, conventions, anti-patterns, testing patterns, and the quality gates CI enforces (`ruff`, `mypy --strict`, `bandit`, pytest on 3.11 + 3.12, vitest, `tsc`).
+Read [CLAUDE.md](CLAUDE.md) before your first PR -- it covers stack, conventions, anti-patterns, and the quality gates CI enforces (ruff, mypy strict, bandit, pytest 3.11 + 3.12, vitest, tsc).
 
-## Roadmap
+## Contributing
 
-Next in the pipeline (see [`docs/roadmap.md`](docs/roadmap.md) for the full plan):
-
-- **Speaker recognition** — ECAPA-TDNN biometrics for multi-user voice.
-- **Relay client** — WebSocket + Opus audio streaming for a mobile companion.
-- **Plugin marketplace** (Sovyx Cloud) — distribution and monetization for third-party plugins.
+Issues and pull requests welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md) first.
 
 ## License
 
-[AGPL-3.0-or-later](LICENSE).
-
-## Star history
-
-> Added once we have meaningful stars: `https://api.star-history.com/svg?repos=sovyx-ai/sovyx&type=Date`
+[AGPL-3.0-or-later](LICENSE)
