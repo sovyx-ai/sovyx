@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.15.3] — 2026-04-16
+
+### Fixed
+
+- **Language directive in system prompt** — changed `Language: pt`
+  (ambiguous label) to `Language: Always respond in Portuguese.`
+  (direct instruction). LLMs now follow the configured language.
+- **Translated welcome messages** — onboarding Step 5 welcome
+  message available in pt, es, fr, de instead of English-only.
+
 ## [0.15.2] — 2026-04-16
 
 ### Added
