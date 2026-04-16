@@ -11,18 +11,29 @@ interface Message {
 
 interface FirstChatStepProps {
   mindName: string;
+  language: string;
   provider: string;
   model: string;
   onComplete: () => void;
 }
 
-export function FirstChatStep({ mindName, provider, model, onComplete }: FirstChatStepProps) {
+const WELCOME: Record<string, (name: string) => string> = {
+  en: (n) =>
+    `Hi! I'm ${n}. I run entirely on your hardware \u2014 everything we discuss stays between us. Over time, I'll learn your preferences and get better at helping you.\n\nWhat's on your mind?`,
+  pt: (n) =>
+    `Oi! Eu sou ${n}. Rodo inteiramente no seu hardware \u2014 tudo o que conversamos fica entre n\u00f3s. Com o tempo, vou aprender suas prefer\u00eancias e melhorar cada vez mais.\n\nNo que posso ajudar?`,
+  es: (n) =>
+    `\u00a1Hola! Soy ${n}. Funciono completamente en tu hardware \u2014 todo lo que hablemos se queda entre nosotros. Con el tiempo, aprender\u00e9 tus preferencias.\n\n\u00bfEn qu\u00e9 puedo ayudarte?`,
+  fr: (n) =>
+    `Bonjour ! Je suis ${n}. Je fonctionne enti\u00e8rement sur votre mat\u00e9riel \u2014 tout ce dont nous discutons reste entre nous.\n\nComment puis-je vous aider ?`,
+  de: (n) =>
+    `Hallo! Ich bin ${n}. Ich laufe vollst\u00e4ndig auf deiner Hardware \u2014 alles, wor\u00fcber wir sprechen, bleibt unter uns.\n\nWie kann ich dir helfen?`,
+};
+
+export function FirstChatStep({ mindName, language, provider, model, onComplete }: FirstChatStepProps) {
+  const welcomeFn = WELCOME[language] ?? WELCOME.en ?? ((n: string) => `Hi! I'm ${n}.`);
   const [messages, setMessages] = useState<Message[]>([
-    {
-      role: "assistant",
-      content:
-        `Hi! I'm ${mindName}. I run entirely on your hardware \u2014 everything we discuss stays between us. Over time, I'll learn your preferences and get better at helping you.\n\nWhat's on your mind?`,
-    },
+    { role: "assistant", content: welcomeFn(mindName) },
   ]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);

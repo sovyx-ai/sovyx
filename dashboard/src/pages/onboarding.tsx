@@ -41,6 +41,9 @@ export default function OnboardingPage() {
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
   const [mindName, setMindName] = useState("Sovyx");
+  const [language, setLanguage] = useState(
+    () => navigator.language?.split("-")[0] ?? "en",
+  );
   const [ollamaAvailable, setOllamaAvailable] = useState(false);
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
 
@@ -71,8 +74,9 @@ export default function OnboardingPage() {
     setStep(2);
   }, []);
 
-  const handlePersonalityDone = useCallback((newName?: string) => {
+  const handlePersonalityDone = useCallback((newName?: string, lang?: string) => {
     if (newName) setMindName(newName);
+    if (lang) setLanguage(lang);
     setStep(3);
   }, []);
 
@@ -153,6 +157,7 @@ export default function OnboardingPage() {
         {step === 5 && (
           <FirstChatStep
             mindName={mindName}
+            language={language}
             provider={provider}
             model={model}
             onComplete={handleComplete}

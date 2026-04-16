@@ -138,7 +138,21 @@ class PersonalityEngine:
             sections.append("Response length: Provide detailed, thorough responses.")
 
         # Language
-        sections.append(f"Language: {cfg.language}")
+        lang = cfg.language
+        lang_names: dict[str, str] = {
+            "en": "English",
+            "pt": "Portuguese",
+            "es": "Spanish",
+            "fr": "French",
+            "de": "German",
+            "it": "Italian",
+            "ja": "Japanese",
+            "ko": "Korean",
+            "zh": "Chinese",
+            "ru": "Russian",
+        }
+        lang_name = lang_names.get(lang, lang)
+        sections.append(f"Language: Always respond in {lang_name}.")
 
         # Safety
         if cfg.safety.child_safe_mode:

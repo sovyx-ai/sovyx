@@ -19,7 +19,7 @@ const PRESETS: PersonalityPreset[] = [
 
 interface PersonalityStepProps {
   mindName: string;
-  onConfigured: (newName?: string) => void;
+  onConfigured: (newName?: string, lang?: string) => void;
   onSkip: () => void;
 }
 
@@ -41,9 +41,9 @@ export function PersonalityStep({ mindName, onConfigured, onSkip }: PersonalityS
         user_name: userName || undefined,
         companion_name: companionName !== mindName ? companionName : undefined,
       });
-      onConfigured(companionName !== mindName ? companionName : undefined);
+      onConfigured(companionName !== mindName ? companionName : undefined, language);
     } catch {
-      onConfigured();
+      onConfigured(undefined, language);
     } finally {
       setSaving(false);
     }
