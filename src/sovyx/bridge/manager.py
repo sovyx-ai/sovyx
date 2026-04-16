@@ -313,7 +313,22 @@ class BridgeManager:
                     return
 
                 # Record assistant turn + send response
-                await self._tracker.add_turn(conv_id, "assistant", result.response_text)
+                bridge_tags: list[str] = []
+                if result.tool_calls_made:
+                    bridge_tags = sorted(
+                        {
+                            tc.function_name.split(".", 1)[0]
+                            for tc in result.tool_calls_made
+                            if tc.function_name
+                        }
+                    )
+                bridge_tags.append("brain")
+                await self._tracker.add_turn(
+                    conv_id,
+                    "assistant",
+                    result.response_text,
+                    metadata={"tags": bridge_tags},
+                )
                 get_counters().record_message()  # count AI response too
                 outbound = OutboundMessage(
                     channel_type=message.channel_type,
