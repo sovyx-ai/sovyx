@@ -51,6 +51,7 @@ export interface Message {
   role: "user" | "assistant";
   content: string;
   timestamp: string; // ISO datetime (created_at from conversation_turns)
+  tags?: string[];
 }
 
 /** Conversation list item — from list_conversations() */

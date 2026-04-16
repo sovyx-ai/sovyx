@@ -109,19 +109,24 @@ class ConversationTracker:
         conversation_id: ConversationId,
         role: str,
         content: str,
+        *,
+        metadata: dict[str, object] | None = None,
     ) -> None:
         """Persist turn AND update conversation metadata.
 
         v14 fix: INSERT turn + UPDATE conversation in atomic transaction.
         Without UPDATE, last_message_at freezes and conversations die after timeout.
         """
+        import json  # noqa: PLC0415
+
         turn_id = str(uuid.uuid4())
+        meta_json = json.dumps(metadata) if metadata else "{}"
         async with self._pool.transaction() as conn:
             await conn.execute(
                 """INSERT INTO conversation_turns
-                   (id, conversation_id, role, content)
-                   VALUES (?, ?, ?, ?)""",
-                (turn_id, str(conversation_id), role, content),
+                   (id, conversation_id, role, content, metadata)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (turn_id, str(conversation_id), role, content, meta_json),
             )
             await conn.execute(
                 """UPDATE conversations

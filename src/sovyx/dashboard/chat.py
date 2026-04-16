@@ -263,10 +263,20 @@ async def handle_chat_message(
             _chat_pending_confirmations[str(conv_id)] = True
 
         if response_text and not result.pending_confirmation:
+            turn_meta: dict[str, object] = {}
+            if result.tool_calls_made:
+                turn_meta["tags"] = sorted(
+                    {
+                        tc.function_name.split(".", 1)[0]
+                        for tc in result.tool_calls_made
+                        if tc.function_name
+                    }
+                )
             await conversation_tracker.add_turn(
                 conv_id,
                 "assistant",
                 response_text,
+                metadata=turn_meta if turn_meta else None,
             )
 
     # Handle error result gracefully

@@ -135,7 +135,7 @@ async def get_conversation_messages(
 
         async with pool.read() as conn:
             cursor = await conn.execute(
-                """SELECT id, role, content, created_at
+                """SELECT id, role, content, created_at, metadata
                    FROM conversation_turns
                    WHERE conversation_id = ?
                    ORDER BY created_at ASC
@@ -144,15 +144,25 @@ async def get_conversation_messages(
             )
             rows = await cursor.fetchall()
 
-        return [
-            {
+        import json  # noqa: PLC0415
+
+        messages: list[dict[str, Any]] = []
+        for row in rows:
+            msg: dict[str, Any] = {
                 "id": row[0],
                 "role": row[1],
                 "content": row[2],
                 "timestamp": row[3],
             }
-            for row in rows
-        ]
+            if row[4] and row[4] != "{}":
+                try:
+                    meta = json.loads(row[4])
+                    if isinstance(meta, dict) and "tags" in meta:
+                        msg["tags"] = meta["tags"]
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            messages.append(msg)
+        return messages
     except Exception:  # noqa: BLE001
         logger.debug("get_conversation_messages_failed", conversation_id=conversation_id)
         return []

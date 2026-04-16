@@ -1,6 +1,6 @@
 import { memo } from "react";
 import type { Message } from "@/types/api";
-import { MarkdownContent } from "@/components/chat";
+import { MarkdownContent, MessageTags } from "@/components/chat";
 import { LetterAvatar, MindAvatar } from "./letter-avatar";
 import { formatTimeShort } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -50,9 +50,14 @@ function ChatBubbleImpl({ message, participantName }: ChatBubbleProps) {
             <MarkdownContent content={message.content} />
           )}
         </div>
-        <span className="block text-[10px] text-[var(--svx-color-text-secondary)] px-1">
-          {formatTimeShort(message.timestamp)}
-        </span>
+        <div className="flex items-center gap-2 px-1">
+          <span className="text-[10px] text-[var(--svx-color-text-secondary)]">
+            {formatTimeShort(message.timestamp)}
+          </span>
+          {!isUser && message.tags && message.tags.length > 0 && (
+            <MessageTags tags={message.tags} />
+          )}
+        </div>
       </div>
     </div>
   );
