@@ -71,7 +71,8 @@ async def db_pool(tmp_path: Path):
                 metadata TEXT DEFAULT '{}',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                embedding BLOB
+                emotional_arousal REAL NOT NULL DEFAULT 0.0,
+                emotional_dominance REAL NOT NULL DEFAULT 0.0
             );
             CREATE TABLE IF NOT EXISTS relations (
                 id TEXT PRIMARY KEY,
@@ -100,7 +101,7 @@ async def db_pool(tmp_path: Path):
                 concepts_mentioned TEXT DEFAULT '[]',
                 metadata TEXT DEFAULT '{}',
                 created_at TEXT NOT NULL,
-                embedding BLOB
+                emotional_dominance REAL NOT NULL DEFAULT 0.0
             );
             CREATE VIRTUAL TABLE IF NOT EXISTS concepts_fts USING fts5(
                 name, content, content='concepts', content_rowid='rowid'

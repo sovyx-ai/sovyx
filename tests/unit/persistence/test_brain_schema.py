@@ -37,22 +37,24 @@ async def migrated_pool(pool: DatabasePool) -> DatabasePool:
 class TestGetBrainMigrations:
     """Migration list generation."""
 
-    def test_without_vec_returns_four(self) -> None:
+    def test_without_vec_returns_five(self) -> None:
         migrations = get_brain_migrations(has_sqlite_vec=False)
-        assert len(migrations) == 4  # noqa: PLR2004
+        assert len(migrations) == 5  # noqa: PLR2004
         assert migrations[0].version == 1
         assert migrations[1].version == 3  # noqa: PLR2004  # canonical ordering
         assert migrations[2].version == 4  # noqa: PLR2004  # covering indices
         assert migrations[3].version == 5  # noqa: PLR2004  # conversation_imports
+        assert migrations[4].version == 6  # noqa: PLR2004  # PAD 3D (ADR-001)
 
-    def test_with_vec_returns_five(self) -> None:
+    def test_with_vec_returns_six(self) -> None:
         migrations = get_brain_migrations(has_sqlite_vec=True)
-        assert len(migrations) == 5  # noqa: PLR2004
+        assert len(migrations) == 6  # noqa: PLR2004
         assert migrations[0].version == 1
         assert migrations[1].version == 2  # noqa: PLR2004
         assert migrations[2].version == 3  # noqa: PLR2004
         assert migrations[3].version == 4  # noqa: PLR2004
         assert migrations[4].version == 5  # noqa: PLR2004
+        assert migrations[5].version == 6  # noqa: PLR2004  # PAD 3D (ADR-001)
 
     def test_checksums_are_valid(self) -> None:
         from sovyx.persistence.migrations import Migration
@@ -63,7 +65,7 @@ class TestGetBrainMigrations:
 
     def test_default_includes_vec_canonical_indices_and_conv_imports(self) -> None:
         migrations = get_brain_migrations()
-        assert len(migrations) == 5  # noqa: PLR2004
+        assert len(migrations) == 6  # noqa: PLR2004
 
 
 class TestMigration001:
@@ -74,7 +76,7 @@ class TestMigration001:
         await runner.initialize()
         migrations = get_brain_migrations(has_sqlite_vec=False)
         applied = await runner.run_migrations(migrations)
-        assert applied == 4  # noqa: PLR2004  # migrations 1 + 3 + 4 + 5
+        assert applied == 5  # noqa: PLR2004  # migrations 1 + 3 + 4 + 5 + 6
 
     async def test_tables_created(self, migrated_pool: DatabasePool) -> None:
         expected_tables = {
@@ -232,7 +234,7 @@ class TestMigration002:
         await runner.initialize()
         migrations = get_brain_migrations(has_sqlite_vec=True)
         applied = await runner.run_migrations(migrations)
-        assert applied == 5  # noqa: PLR2004  # migrations 1 + 2 + 3 + 4 + 5
+        assert applied == 6  # noqa: PLR2004  # migrations 1 + 2 + 3 + 4 + 5 + 6
 
         async with pool.read() as conn:
             for table in ("concept_embeddings", "episode_embeddings"):
@@ -244,14 +246,14 @@ class TestMigration002:
 
         await pool.close()
 
-    async def test_without_vec_only_migration_001_003_004_005(
+    async def test_without_vec_only_migration_001_003_004_005_006(
         self,
         pool: DatabasePool,
     ) -> None:
-        """Without sqlite-vec, migrations 001 + 003 + 004 + 005 apply (skip 002)."""
+        """Without sqlite-vec, migrations 001 + 003 + 004 + 005 + 006 apply (skip 002)."""
         runner = MigrationRunner(pool)
         await runner.initialize()
         migrations = get_brain_migrations(has_sqlite_vec=False)
         applied = await runner.run_migrations(migrations)
-        assert applied == 4  # noqa: PLR2004  # migrations 1 + 3 + 4 + 5
-        assert await runner.get_current_version() == 5  # noqa: PLR2004
+        assert applied == 5  # noqa: PLR2004  # migrations 1 + 3 + 4 + 5 + 6
+        assert await runner.get_current_version() == 6  # noqa: PLR2004

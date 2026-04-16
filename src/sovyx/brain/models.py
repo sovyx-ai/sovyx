@@ -27,6 +27,14 @@ class Concept(BaseModel):
 
     Represents a piece of knowledge: facts, preferences, entities,
     skills, beliefs, events, or relationships.
+
+    Emotional model: PAD 3D per ADR-001 (Mehrabian 1996).
+    ``emotional_valence`` is the pleasure axis (–1 unpleasant ↔ +1
+    pleasant), ``emotional_arousal`` the activation axis
+    (–1 calm ↔ +1 intense), ``emotional_dominance`` the agency axis
+    (–1 submissive/hedging ↔ +1 assertive/in-control). Prior to
+    migration 006 concepts carried valence only; arousal and
+    dominance default to 0.0 (neutral) for backfill.
     """
 
     id: ConceptId = Field(default_factory=lambda: ConceptId(generate_id()))
@@ -39,6 +47,8 @@ class Concept(BaseModel):
     access_count: int = 0
     last_accessed: datetime | None = None
     emotional_valence: float = Field(default=0.0, ge=-1.0, le=1.0)
+    emotional_arousal: float = Field(default=0.0, ge=-1.0, le=1.0)
+    emotional_dominance: float = Field(default=0.0, ge=-1.0, le=1.0)
     source: str = "conversation"
     metadata: dict[str, object] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -50,6 +60,10 @@ class Episode(BaseModel):
     """An episodic memory in the brain's hippocampus.
 
     Represents a conversation exchange with emotional context.
+
+    Emotional model: PAD 3D per ADR-001. Prior to migration 006
+    episodes carried valence + arousal; dominance defaults to 0.0
+    (neutral agency) for backfill.
     """
 
     id: EpisodeId = Field(default_factory=lambda: EpisodeId(generate_id()))
@@ -61,6 +75,7 @@ class Episode(BaseModel):
     importance: float = Field(default=0.5, ge=0.0, le=1.0)
     emotional_valence: float = Field(default=0.0, ge=-1.0, le=1.0)
     emotional_arousal: float = Field(default=0.0, ge=-1.0, le=1.0)
+    emotional_dominance: float = Field(default=0.0, ge=-1.0, le=1.0)
     concepts_mentioned: list[ConceptId] = Field(default_factory=list)
     metadata: dict[str, object] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

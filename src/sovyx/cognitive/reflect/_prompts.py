@@ -12,7 +12,11 @@ _EXTRACTION_PROMPT = (
     '- "name": short label (2-5 words)\n'
     '- "content": one-sentence description of what was learned\n'
     '- "category": one of the categories below\n'
-    '- "sentiment": float -1.0 to 1.0 (emotional tone)\n'
+    '- "sentiment": float -1.0 to 1.0 (pleasure axis — '
+    "pleasant/unpleasant)\n"
+    '- "arousal": float -1.0 to 1.0 (activation axis — calm/intense)\n'
+    '- "dominance": float -1.0 to 1.0 (agency axis — '
+    "hedging/assertive)\n"
     '- "importance": float 0.0-1.0 (how critical to remember?)\n'
     '- "confidence": float 0.0-1.0 (how certain is this info?)\n'
     '- "explicit": boolean (did user ask to remember this?)\n'
@@ -48,10 +52,21 @@ _EXTRACTION_PROMPT = (
     "- 0.7-0.8: clearly stated but could change\n"
     "- 0.9-1.0: definitively stated, identity, strong assertion\n"
     "\n"
-    "Sentiment guide:\n"
+    "PAD emotional axes (ADR-001):\n"
+    "Sentiment (pleasure):\n"
     "- Positive (0.3 to 1.0): love, enjoy, excited, great\n"
     "- Neutral (~0.0): factual statements, introductions\n"
     "- Negative (-1.0 to -0.3): hate, frustrate, terrible\n"
+    "Arousal (activation):\n"
+    "- High (0.5 to 1.0): urgent, intense, peak event\n"
+    "- Neutral (~0.0): calm/routine\n"
+    "- Low (-1.0 to -0.5): exhausted, numb, resignation\n"
+    "Dominance (agency):\n"
+    "- High (0.5 to 1.0): assertive, 'I decided', 'I built'\n"
+    "- Neutral (~0.0): collaborative, no strong agency\n"
+    "- Low (-1.0 to -0.5): hedging, 'I'm not sure', deferring\n"
+    "Use 0.0 for any axis you can't confidently judge — lets\n"
+    "downstream scoring treat it as no-signal rather than mislead.\n"
     "\n"
     "Rules:\n"
     "- Extract ALL meaningful information\n"

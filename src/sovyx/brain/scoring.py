@@ -116,6 +116,54 @@ class EvolutionWeights:
 _SCORE_FLOOR = 0.05  # Absolute minimum for any score
 
 
+# ── PAD 3D emotional intensity (ADR-001) ───────────────────────────────
+#
+# The ``emotional`` axis of ImportanceWeights takes a single scalar in
+# [0, 1]. With PAD 3D we combine the three axes' magnitudes into that
+# scalar via fixed sub-weights that sum to 1.0 — keeps the overall
+# ImportanceWeights validation intact (no 3-axis-specific sub-fields
+# to break external callers).
+#
+# Sub-weight rationale:
+#   * Valence 0.45 — pleasure/displeasure dominates memorability (classic
+#     von Restorff effect).
+#   * Arousal 0.30 — activation is the second-strongest predictor of
+#     recall (LaBar & Cabeza 2006).
+#   * Dominance 0.25 — agency/control differentiates same-valence-and-
+#     arousal emotion pairs (fear vs anger) but the absolute effect on
+#     memorability is smaller than valence.
+#
+# abs() on every axis: both extremes are memorable. A "fear" concept
+# (low dominance, high arousal, negative valence) is just as
+# retention-boosted as "triumph" (high dominance, high arousal,
+# positive valence).
+
+_VALENCE_WEIGHT = 0.45
+_AROUSAL_WEIGHT = 0.30
+_DOMINANCE_WEIGHT = 0.25
+
+
+def _emotional_intensity(
+    valence: float,
+    arousal: float = 0.0,
+    dominance: float = 0.0,
+) -> float:
+    """Combine the three PAD axes into a single [0, 1] intensity scalar.
+
+    Defaults of 0.0 for arousal + dominance keep the function
+    backward-compatible: callers that only pass ``valence`` get the
+    pre-ADR-001 behaviour of ``abs(valence) * 0.45`` — slightly
+    smaller than the legacy ``abs(valence) * 1.0`` but scaled by the
+    same ``ImportanceWeights.emotional`` outside this helper, so the
+    net effect on un-migrated rows is proportional, not a regression.
+    """
+    return _clamp01(
+        _VALENCE_WEIGHT * _clamp01(abs(valence))
+        + _AROUSAL_WEIGHT * _clamp01(abs(arousal))
+        + _DOMINANCE_WEIGHT * _clamp01(abs(dominance)),
+    )
+
+
 # ── Importance Scorer ──────────────────────────────────────────────────
 
 
@@ -160,6 +208,9 @@ class ImportanceScorer:
         emotional_valence: float = 0.0,
         novelty: float = 0.5,
         explicit_signal: bool = False,
+        *,
+        emotional_arousal: float = 0.0,
+        emotional_dominance: float = 0.0,
     ) -> float:
         """Score at concept creation time.
 
@@ -170,11 +221,18 @@ class ImportanceScorer:
         Args:
             category_base: Per-category importance (0.0-1.0).
             llm_importance: LLM-assessed importance (0.0-1.0).
-            emotional_valence: Sentiment score (-1.0 to 1.0).
-                Uses absolute value (emotional = memorable).
+            emotional_valence: Pleasure axis (-1.0 to 1.0).
+                Absolute value contributes to the emotional signal.
             novelty: Semantic novelty score (0.0-1.0).
                 1.0 = completely new topic, 0.0 = exact duplicate.
             explicit_signal: True if user explicitly asked to remember.
+            emotional_arousal: Activation axis (-1.0 to 1.0) per
+                ADR-001 (PAD 3D). Absolute value contributes.
+            emotional_dominance: Agency axis (-1.0 to 1.0) per
+                ADR-001 (PAD 3D). Absolute value contributes — fear
+                (low dominance) and anger (high dominance) are both
+                memorable, so we treat either extreme as a retention
+                booster.
 
         Returns:
             Importance value in [0.05, 1.0].
@@ -182,7 +240,12 @@ class ImportanceScorer:
         raw = (
             self._w.category_base * _clamp01(category_base)
             + self._w.llm_assessment * _clamp01(llm_importance)
-            + self._w.emotional * _clamp01(abs(emotional_valence))
+            + self._w.emotional
+            * _emotional_intensity(
+                emotional_valence,
+                emotional_arousal,
+                emotional_dominance,
+            )
             + self._w.novelty * _clamp01(novelty)
             + self._w.explicit_signal * (1.0 if explicit_signal else 0.0)
         )
@@ -256,6 +319,9 @@ class ImportanceScorer:
         emotional_valence: float,
         days_since_access: float,
         max_access: int = 1,
+        *,
+        emotional_arousal: float = 0.0,
+        emotional_dominance: float = 0.0,
     ) -> float:
         """Full importance recalculation during consolidation.
 
@@ -271,9 +337,13 @@ class ImportanceScorer:
             degree: Number of relations (edges) in the graph.
             avg_weight: Average weight of relations.
             max_degree: Maximum degree across all concepts.
-            emotional_valence: Current emotional valence (-1.0 to 1.0).
+            emotional_valence: Current pleasure axis (-1.0 to 1.0).
             days_since_access: Days since last access.
             max_access: Maximum access_count across all concepts.
+            emotional_arousal: Current activation axis (-1.0 to 1.0)
+                per ADR-001 (PAD 3D).
+            emotional_dominance: Current agency axis (-1.0 to 1.0)
+                per ADR-001 (PAD 3D).
 
         Returns:
             New importance value in [0.05, 1.0].
@@ -282,7 +352,11 @@ class ImportanceScorer:
         access_score = math.log1p(access_count) / math.log1p(max(1, max_access))
         connectivity = self.score_connectivity(degree, avg_weight, max_degree)
         recency = self.score_recency(days_since_access)
-        emotional = _clamp01(abs(emotional_valence))
+        emotional = _emotional_intensity(
+            emotional_valence,
+            emotional_arousal,
+            emotional_dominance,
+        )
 
         # Weighted combination
         evolved = (

@@ -73,9 +73,10 @@ class ConceptRepository:
             await conn.execute(
                 """INSERT INTO concepts
                 (id, mind_id, name, content, category, importance, confidence,
-                 access_count, last_accessed, emotional_valence, source,
-                 metadata, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 access_count, last_accessed,
+                 emotional_valence, emotional_arousal, emotional_dominance,
+                 source, metadata, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     str(concept.id),
                     str(concept.mind_id),
@@ -87,6 +88,8 @@ class ConceptRepository:
                     concept.access_count,
                     concept.last_accessed.isoformat() if concept.last_accessed else None,
                     concept.emotional_valence,
+                    concept.emotional_arousal,
+                    concept.emotional_dominance,
                     concept.source,
                     json.dumps(concept.metadata),
                     concept.created_at.isoformat(),
@@ -160,7 +163,8 @@ class ConceptRepository:
             await conn.execute(
                 """UPDATE concepts SET
                 name=?, content=?, category=?, importance=?, confidence=?,
-                access_count=?, last_accessed=?, emotional_valence=?,
+                access_count=?, last_accessed=?,
+                emotional_valence=?, emotional_arousal=?, emotional_dominance=?,
                 source=?, metadata=?, updated_at=?
                 WHERE id=?""",
                 (
@@ -172,6 +176,8 @@ class ConceptRepository:
                     concept.access_count,
                     concept.last_accessed.isoformat() if concept.last_accessed else None,
                     concept.emotional_valence,
+                    concept.emotional_arousal,
+                    concept.emotional_dominance,
                     concept.source,
                     json.dumps(concept.metadata),
                     datetime.now(UTC).isoformat(),
@@ -481,11 +487,29 @@ class ConceptRepository:
 
     @staticmethod
     def _row_to_concept(row: object) -> Concept:
-        """Convert a database row to a Concept model."""
-        from sovyx.brain.models import Concept
+        """Convert a database row to a Concept model.
+
+        Column layout after migration 006 (ALTER TABLE appends new
+        columns at the end, so original positions 0-13 are preserved
+        and PAD 3D additions land at 14/15):
+
+        0 id, 1 mind_id, 2 name, 3 content, 4 category, 5 importance,
+        6 confidence, 7 access_count, 8 last_accessed,
+        9 emotional_valence, 10 source, 11 metadata, 12 created_at,
+        13 updated_at, 14 emotional_arousal, 15 emotional_dominance.
+        """
+        from sovyx.brain.models import Concept  # noqa: PLC0415
 
         r = tuple(row)  # type: ignore[arg-type,var-annotated]  # aiosqlite.Row → tuple
         last_accessed = parse_db_datetime(r[8])
+
+        # ALTER TABLE ADD COLUMN appends; older DBs that predate
+        # migration 006 would have shorter rows. Defensive fallback
+        # to 0.0 (neutral) keeps the parser robust to ordering quirks
+        # in edge cases (e.g. manual inspection queries with SELECT
+        # on a subset of columns).
+        arousal = float(r[14]) if len(r) > 14 else 0.0  # noqa: PLR2004
+        dominance = float(r[15]) if len(r) > 15 else 0.0  # noqa: PLR2004
 
         return Concept(
             id=ConceptId(r[0]),
@@ -498,6 +522,8 @@ class ConceptRepository:
             access_count=int(r[7]),
             last_accessed=last_accessed,
             emotional_valence=float(r[9]),
+            emotional_arousal=arousal,
+            emotional_dominance=dominance,
             source=r[10],
             metadata=json.loads(r[11]) if isinstance(r[11], str) else r[11],
             created_at=parse_db_datetime(r[12]),

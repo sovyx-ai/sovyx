@@ -164,7 +164,11 @@ async def encode_note(
         source="obsidian:note",
         importance=_NOTE_IMPORTANCE,
         confidence=_NOTE_CONFIDENCE,
+        # Obsidian notes carry no emotional signal on any PAD axis —
+        # they're distilled structured knowledge, not conversations.
         emotional_valence=0.0,
+        emotional_arousal=0.0,
+        emotional_dominance=0.0,
     )
     # Track whether we created a new one or reinforced an existing stub.
     if note_name not in concept_by_name:
@@ -207,6 +211,8 @@ async def encode_note(
                 importance=_NOTE_IMPORTANCE,
                 confidence=_NOTE_CONFIDENCE,
                 emotional_valence=0.0,
+                emotional_arousal=0.0,
+                emotional_dominance=0.0,
             )
             concept_by_name[target_name] = target_id
             concepts_created += 1
@@ -246,6 +252,8 @@ async def encode_note(
                     importance=_TAG_IMPORTANCE,
                     confidence=_TAG_CONFIDENCE,
                     emotional_valence=0.0,
+                    emotional_arousal=0.0,
+                    emotional_dominance=0.0,
                 )
                 tag_by_name[tag_path] = tag_id
                 concepts_created += 1

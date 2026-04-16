@@ -91,6 +91,8 @@ def _sample_concept_row() -> tuple[object, ...]:
         '{"key": "val"}',  # metadata
         "2026-02-10T08:30:00",  # created_at
         "2026-03-15T14:22:00",  # updated_at
+        0.4,  # emotional_arousal (PAD 3D, ADR-001)
+        0.2,  # emotional_dominance (PAD 3D, ADR-001)
     )
 
 
@@ -108,6 +110,7 @@ def _sample_episode_row() -> tuple[object, ...]:
         '["c-001"]',  # concepts_mentioned
         "{}",  # metadata
         "2026-03-15T07:30:00",  # created_at
+        0.0,  # emotional_dominance (PAD 3D, ADR-001)
     )
 
 

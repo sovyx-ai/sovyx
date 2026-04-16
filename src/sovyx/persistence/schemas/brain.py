@@ -260,6 +260,44 @@ _MIGRATION_005 = Migration(
 )
 
 
+_MIGRATION_006_SQL = """
+-- Migration 006 (ADR-001): PAD 3D emotional model.
+--
+-- Concepts gain emotional_arousal and emotional_dominance; episodes
+-- gain emotional_dominance. Prior to this migration, concepts carried
+-- valence only (1D) and episodes valence + arousal (2D). All three
+-- new columns default to 0.0 (neutral) — we do not backfill existing
+-- rows by running the LLM over every historical concept. Neutral is
+-- the honest "we don't know" signal, and scoring formulas treat 0.0
+-- as contributing nothing to the emotional boost.
+--
+-- Rationale for adding arousal to concepts (not just dominance): the
+-- PAD model is three independent axes; keeping concepts at 1D while
+-- moving episodes to 3D would create an asymmetric schema that
+-- complicates consolidation (merging an episode's emotional state
+-- into its referenced concepts becomes lossy). Aligning both tables
+-- on 3D keeps the merge path trivial.
+--
+-- Range: [-1.0, +1.0] for all three axes (Mehrabian 1996, unified
+-- with the existing valence/arousal columns). Scoring code that
+-- needs magnitude uses abs() — extremes memorable in both directions
+-- (fear is low-dominance memorable, anger is high-dominance memorable).
+
+ALTER TABLE concepts ADD COLUMN emotional_arousal REAL NOT NULL DEFAULT 0.0;
+ALTER TABLE concepts ADD COLUMN emotional_dominance REAL NOT NULL DEFAULT 0.0;
+ALTER TABLE episodes ADD COLUMN emotional_dominance REAL NOT NULL DEFAULT 0.0;
+"""
+
+_MIGRATION_006 = Migration(
+    version=6,
+    description=(
+        "PAD 3D emotional model (ADR-001): +concepts.arousal/dominance, +episodes.dominance"
+    ),
+    sql_up=_MIGRATION_006_SQL,
+    checksum=Migration.compute_checksum(_MIGRATION_006_SQL),
+)
+
+
 def get_brain_migrations(*, has_sqlite_vec: bool = True) -> list[Migration]:
     """Return brain database migrations.
 
@@ -277,6 +315,11 @@ def get_brain_migrations(*, has_sqlite_vec: bool = True) -> list[Migration]:
     Migration 005 (conversation_imports) backs the conversation-importer
     dedup check — one row per imported conversation.
 
+    Migration 006 (ADR-001 PAD 3D) adds emotional_arousal and
+    emotional_dominance to concepts plus emotional_dominance to
+    episodes. All three columns default to 0.0 (neutral) so existing
+    rows backfill without an LLM pass.
+
     Args:
         has_sqlite_vec: Whether the sqlite-vec extension is available.
 
@@ -289,4 +332,5 @@ def get_brain_migrations(*, has_sqlite_vec: bool = True) -> list[Migration]:
     migrations.append(_MIGRATION_003)
     migrations.append(_MIGRATION_004)
     migrations.append(_MIGRATION_005)
+    migrations.append(_MIGRATION_006)
     return migrations

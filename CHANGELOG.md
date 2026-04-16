@@ -6,6 +6,81 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.12.1] — 2026-04-15
+
+**PAD 3D emotional model (ADR-001).** The single highest-priority
+architectural divergence from the spec — the 1D emotional model
+(concepts) / 2D (episodes) moves to unified 3D Pleasure-Arousal-
+Dominance (Mehrabian 1996). Additive, backward-compatible: existing
+rows backfill to neutral (0.0) on all new axes, no data migration
+required beyond ALTER TABLE ADD COLUMN.
+
+### Changed
+
+- **Concepts** gain `emotional_arousal` (activation, [-1, +1]) and
+  `emotional_dominance` (agency, [-1, +1]).
+- **Episodes** gain `emotional_dominance` ([-1, +1]). `emotional_arousal`
+  was already there from earlier work.
+- **Importance scoring** — the existing `emotional` signal weight
+  (0.10) is now apportioned across the three axes via fixed
+  sub-weights: valence 0.45, arousal 0.30, dominance 0.25. Total
+  emotional contribution stays at 0.10, so the formula's overall
+  calibration is unchanged — a purely-valence concept at |v|=1 now
+  lands at 0.045 of emotional weight (down from 0.10), but a concept
+  that's emotional on all three axes saturates at the full 0.10.
+  Both axes use `abs()` — fear (low-dominance, high-arousal) and
+  triumph (high-dominance, high-arousal) are equally memorable.
+- **Consolidation** — weighted-average merge now applies independently
+  to all three axes (valence, arousal, dominance) during concept
+  reinforcement. Guard: only averages an axis when the incoming signal
+  is non-zero, so neutral baselines don't drag existing affect toward
+  zero on every reinforcement.
+- **REFLECT phase** — concept-extraction LLM prompt now asks for
+  arousal + dominance alongside sentiment/valence. Clamps to
+  [-1, +1], defaults to 0.0 when the LLM omits a field. Episode
+  arousal prefers the explicit LLM value when any is present, falls
+  back to the legacy peak-magnitude heuristic otherwise.
+- **Conversation import (IMPL-SUP-015)** — summariser prompt extracts
+  `emotional_dominance` alongside the existing valence/arousal; the
+  summary-first encoder passes all three axes into `learn_concept`
+  and `encode_episode`.
+- **Exports** — SMF / .sovyx-mind archives now carry the three axes
+  in concept + episode frontmatter. Legacy archives lacking the new
+  fields re-import cleanly with 0.0 fallbacks.
+- **Dashboard** — `/api/brain/graph` node payloads now include
+  `emotional_arousal` and `emotional_dominance` alongside valence
+  (3dp rounding, frontend-compatible additive change).
+
+### Added
+
+- Migration 006 on brain.db: ALTER TABLE ADD COLUMN for the three
+  new fields with DEFAULT 0.0.
+- `_emotional_intensity(v, a, d)` helper in `brain/scoring.py` — the
+  single source of truth for how PAD axes combine into the scorer's
+  scalar `emotional` signal.
+
+### Non-goals for v0.12.1 (deferred)
+
+Deliberate MVP scope — the following PAD consumers stay on the roadmap
+for a later patch but are not load-bearing for v0.12.1:
+
+- Homeostasis processing (baseline drift from recent PAD exposure).
+- Personality prompt modulation (PAD → system-prompt coloring).
+- TTS affective modulation (PAD → voice prosody).
+- Frontend types + visualisations (dashboard currently exposes the
+  fields but no UI widget renders them).
+
+### Migration notes
+
+- **Backward compatibility.** `_row_to_concept` / `_row_to_episode`
+  defensively fall back to 0.0 when a row predates migration 006 —
+  handles edge cases like partial SELECT on mid-migration DBs.
+- **Existing rows stay neutral.** We do NOT LLM-backfill historical
+  concepts/episodes. Neutral (0.0 on all three axes) is the honest
+  "we don't know" signal, and scoring treats 0.0 as contributing
+  nothing to the emotional boost — rows just look emotionally silent
+  until they're re-learned or consolidated.
+
 ## [0.11.9] — 2026-04-15
 
 CalDAV calendar integration as a plugin — IMPL-009 v0, scope-tightened

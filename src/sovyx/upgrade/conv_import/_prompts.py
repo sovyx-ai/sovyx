@@ -33,9 +33,14 @@ conversation imported from another assistant. Extract:
    (facts, preferences, skills, goals, entities, beliefs, events,
    relationships). Each carries a category, a short content line,
    and an importance in [0.0, 1.0].
-3. EMOTIONAL tone: valence in [-1.0, 1.0] (negative = sad/angry,
-   positive = happy/excited) and arousal in [0.0, 1.0] (low = calm,
-   high = intense).
+3. EMOTIONAL tone — Pleasure-Arousal-Dominance (PAD 3D model):
+   - valence in [-1.0, 1.0] (pleasure axis: negative = sad/angry,
+     positive = happy/excited).
+   - arousal in [0.0, 1.0] (activation axis: low = calm/bored,
+     high = intense/excited).
+   - dominance in [-1.0, 1.0] (agency axis: negative = submissive/
+     hedging/"I don't know", positive = assertive/confident/
+     "I decided", "I built").
 4. IMPORTANCE — how important this conversation is for long-term
    memory, in [0.0, 1.0]. High for conversations that establish user
    preferences, goals, or relationships; low for throwaway requests.
@@ -52,7 +57,7 @@ Transcript:
 Respond with valid JSON only. No markdown fences, no commentary. Use
 exactly this shape:
 
-{{"summary": "...", "concepts": [{{"name": "...", "category": "fact", "content": "...", "importance": 0.7}}, ...], "emotional_valence": 0.0, "emotional_arousal": 0.3, "importance": 0.5}}
+{{"summary": "...", "concepts": [{{"name": "...", "category": "fact", "content": "...", "importance": 0.7}}, ...], "emotional_valence": 0.0, "emotional_arousal": 0.3, "emotional_dominance": 0.0, "importance": 0.5}}
 """  # noqa: E501 — JSON example on one line matches how the model should emit it
 """Prompt fed to the LLM for each conversation. The encoder fills the
 format placeholders and calls ``llm_router.generate``."""

@@ -123,7 +123,19 @@ class TestImportanceScorerInitial:
 
     def test_all_max_returns_ceiling(self) -> None:
         scorer = ImportanceScorer()
-        result = scorer.score_initial(1.0, 1.0, 1.0, 1.0, explicit_signal=False)
+        # PAD 3D (ADR-001): saturate all three emotional axes to
+        # reach the full 0.10 emotional weight. Passing valence=1
+        # alone only fills 0.45 of the sub-weight, leaving 0.055
+        # unspent.
+        result = scorer.score_initial(
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            explicit_signal=False,
+            emotional_arousal=1.0,
+            emotional_dominance=1.0,
+        )
         # Sum of weights * 1.0 = 0.15+0.35+0.10+0.15+0 = 0.75 (no explicit)
         assert result <= 1.0
         assert result >= 0.7

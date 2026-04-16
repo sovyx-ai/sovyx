@@ -211,7 +211,7 @@ class ConsolidationCycle:
             ref_time = concept.last_accessed or concept.created_at
             days = (now - ref_time).total_seconds() / 86400 if ref_time else 30.0
 
-            # Recalculate importance
+            # Recalculate importance — 3-axis PAD signal per ADR-001.
             new_importance = self._importance_scorer.recalculate(
                 current_importance=concept.importance,
                 access_count=concept.access_count,
@@ -219,6 +219,8 @@ class ConsolidationCycle:
                 avg_weight=avg_weight,
                 max_degree=max_degree,
                 emotional_valence=concept.emotional_valence,
+                emotional_arousal=concept.emotional_arousal,
+                emotional_dominance=concept.emotional_dominance,
                 days_since_access=days,
                 max_access=max_access,
             )
@@ -439,12 +441,24 @@ class ConsolidationCycle:
                     survivor.content = to_merge.content
                 survivor.access_count += to_merge.access_count
                 survivor.confidence = max(survivor.confidence, to_merge.confidence)
-                # Weighted average valence
+                # Weighted average across all three PAD axes (ADR-001).
+                # Each axis is merged independently so a high-dominance
+                # survivor merging with a low-dominance candidate lands
+                # at a combined dominance that reflects their relative
+                # access counts — same pattern valence already used
+                # pre-migration 006.
                 total_access = survivor.access_count + to_merge.access_count
                 if total_access > 0:
+                    s_n = survivor.access_count
+                    m_n = to_merge.access_count
                     survivor.emotional_valence = (
-                        survivor.emotional_valence * survivor.access_count
-                        + to_merge.emotional_valence * to_merge.access_count
+                        survivor.emotional_valence * s_n + to_merge.emotional_valence * m_n
+                    ) / total_access
+                    survivor.emotional_arousal = (
+                        survivor.emotional_arousal * s_n + to_merge.emotional_arousal * m_n
+                    ) / total_access
+                    survivor.emotional_dominance = (
+                        survivor.emotional_dominance * s_n + to_merge.emotional_dominance * m_n
                     ) / total_access
 
                 await self._concepts.update(survivor)

@@ -367,8 +367,9 @@ class MindImporter:
                 "INSERT OR REPLACE INTO concepts "
                 "(id, mind_id, name, content, category, importance, "
                 "confidence, access_count, emotional_valence, source, "
-                "metadata, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "metadata, created_at, updated_at, "
+                "emotional_arousal, emotional_dominance) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     concept["id"],
                     concept["mind_id"],
@@ -383,6 +384,10 @@ class MindImporter:
                     metadata,
                     concept.get("created_at", ""),
                     concept.get("updated_at", ""),
+                    # PAD 3D — legacy SMF archives lack these keys;
+                    # fall back to 0.0 so old exports import cleanly.
+                    concept.get("emotional_arousal", 0.0),
+                    concept.get("emotional_dominance", 0.0),
                 ),
             )
             await conn.commit()
@@ -424,8 +429,9 @@ class MindImporter:
                 "(id, mind_id, conversation_id, user_input, "
                 "assistant_response, summary, importance, "
                 "emotional_valence, emotional_arousal, "
-                "concepts_mentioned, metadata, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "concepts_mentioned, metadata, created_at, "
+                "emotional_dominance) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     episode["id"],
                     episode["mind_id"],
@@ -439,6 +445,9 @@ class MindImporter:
                     concepts_mentioned,
                     metadata,
                     episode.get("created_at", ""),
+                    # PAD 3D — legacy SMF archives lack this key; fall
+                    # back to 0.0 so old exports import cleanly.
+                    episode.get("emotional_dominance", 0.0),
                 ),
             )
             await conn.commit()
@@ -553,6 +562,8 @@ class MindImporter:
             "confidence": float(meta.get("confidence", 0.5)),
             "access_count": int(meta.get("access_count", 0)),
             "emotional_valence": float(meta.get("emotional_valence", 0.0)),
+            "emotional_arousal": float(meta.get("emotional_arousal", 0.0)),
+            "emotional_dominance": float(meta.get("emotional_dominance", 0.0)),
             "source": meta.get("source", "import"),
             "created_at": str(meta.get("created", "")),
             "updated_at": str(meta.get("updated", "")),
@@ -607,6 +618,7 @@ class MindImporter:
             "importance": float(meta.get("importance", 0.5)),
             "emotional_valence": float(meta.get("emotional_valence", 0.0)),
             "emotional_arousal": float(meta.get("emotional_arousal", 0.0)),
+            "emotional_dominance": float(meta.get("emotional_dominance", 0.0)),
             "created_at": str(meta.get("created", "")),
         }
 

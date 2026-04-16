@@ -95,6 +95,8 @@ class ReflectPhase:
         # Regex path: use category importance + source confidence only.
         concept_ids: list[ConceptId] = []
         sentiments: list[float] = []
+        arousals: list[float] = []
+        dominances: list[float] = []
 
         # Pre-compute novelty for all concepts in batch
         # Uses embedding cosine distance → FTS5 fallback → cold start
@@ -162,9 +164,13 @@ class ReflectPhase:
                     importance=combined_importance,
                     confidence=combined_confidence,
                     emotional_valence=ec.sentiment,
+                    emotional_arousal=ec.arousal,
+                    emotional_dominance=ec.dominance,
                 )
                 concept_ids.append(cid)
                 sentiments.append(ec.sentiment)
+                arousals.append(ec.arousal)
+                dominances.append(ec.dominance)
                 concept_importances.append(combined_importance)
             except Exception:  # noqa: BLE001 — per-concept learning is best-effort, logs and continues
                 logger.warning(
@@ -186,11 +192,26 @@ class ReflectPhase:
                 logger.warning("hebbian_failed", exc_info=True)
 
         # Compute episode emotional signals from extracted concepts
+        # per ADR-001. Pleasure = mean (direction-preserving),
+        # arousal = peak magnitude of pleasure (legacy behaviour —
+        # retains the "intense turn" heuristic even when arousal
+        # itself isn't extracted yet), dominance = mean (direction-
+        # preserving — an assertive turn's average agency is its
+        # signal, not its peak).
         episode_valence = 0.0
         episode_arousal = 0.0
+        episode_dominance = 0.0
         if sentiments:
             episode_valence = clamp_sentiment(sum(sentiments) / len(sentiments))
-            episode_arousal = clamp_sentiment(max(abs(s) for s in sentiments))
+            # Prefer explicit arousal when the LLM provided it; fall
+            # back to the peak-magnitude heuristic otherwise so older
+            # models / truncated responses keep working.
+            if arousals and any(a != 0.0 for a in arousals):
+                episode_arousal = clamp_sentiment(sum(arousals) / len(arousals))
+            else:
+                episode_arousal = clamp_sentiment(max(abs(s) for s in sentiments))
+        if dominances:
+            episode_dominance = clamp_sentiment(sum(dominances) / len(dominances))
 
         # Dynamic episode importance based on message + concept scores
         episode_importance = compute_episode_importance(
@@ -215,6 +236,7 @@ class ReflectPhase:
                 new_concept_ids=concept_ids or None,
                 emotional_valence=episode_valence,
                 emotional_arousal=episode_arousal,
+                emotional_dominance=episode_dominance,
                 concepts_mentioned=concept_ids or None,
                 summary=summary,
             )
@@ -227,6 +249,7 @@ class ReflectPhase:
             concepts_learned=len(concept_ids),
             episode_valence=round(episode_valence, 2),
             episode_arousal=round(episode_arousal, 2),
+            episode_dominance=round(episode_dominance, 2),
         )
 
     async def _compute_novelty_batch(
@@ -305,12 +328,28 @@ class ReflectPhase:
                 content = str(item.get("content", "")).strip()
                 category = str(item.get("category", "fact")).strip().lower()
 
-                # Parse sentiment — default 0.0 if missing or invalid
+                # Parse sentiment (PAD pleasure) — default 0.0 if
+                # missing or invalid.
                 raw_sentiment = item.get("sentiment", 0.0)
                 try:
                     sentiment = clamp_sentiment(float(raw_sentiment))
                 except (TypeError, ValueError):
                     sentiment = 0.0
+
+                # PAD arousal + dominance (ADR-001) — new LLM fields.
+                # Both default to 0.0 when the LLM omits them (older
+                # prompt caches, smaller models that truncate output).
+                raw_arousal = item.get("arousal", 0.0)
+                try:
+                    arousal = clamp_sentiment(float(raw_arousal))
+                except (TypeError, ValueError):
+                    arousal = 0.0
+
+                raw_dominance = item.get("dominance", 0.0)
+                try:
+                    dominance = clamp_sentiment(float(raw_dominance))
+                except (TypeError, ValueError):
+                    dominance = 0.0
 
                 # Parse importance — LLM-assessed, default 0.5
                 raw_importance = item.get("importance", 0.5)
@@ -340,6 +379,8 @@ class ReflectPhase:
                             content=content,
                             category=category,
                             sentiment=sentiment,
+                            arousal=arousal,
+                            dominance=dominance,
                             importance=llm_importance,
                             confidence=llm_confidence,
                             explicit=llm_explicit,

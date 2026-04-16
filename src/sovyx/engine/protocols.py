@@ -67,6 +67,8 @@ class BrainWriter(Protocol):
         importance: float | None = None,
         confidence: float | None = None,
         emotional_valence: float = 0.0,
+        emotional_arousal: float = 0.0,
+        emotional_dominance: float = 0.0,
         **kwargs: object,
     ) -> ConceptId:
         """Learn a new concept. Returns the concept ID.
@@ -74,7 +76,9 @@ class BrainWriter(Protocol):
         Args:
             importance: Initial importance [0.0, 1.0] or None for default.
             confidence: Initial confidence [0.0, 1.0] or None for default.
-            emotional_valence: Sentiment score [-1.0, 1.0].
+            emotional_valence: Pleasure axis [-1.0, 1.0].
+            emotional_arousal: Activation axis [-1.0, 1.0] (ADR-001).
+            emotional_dominance: Agency axis [-1.0, 1.0] (ADR-001).
         """
         ...
 

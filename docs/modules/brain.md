@@ -36,7 +36,9 @@ Pydantic v2 models in `src/sovyx/brain/models.py`.
 | `confidence` | `float` | 0.0–1.0. |
 | `access_count` | `int` | Incremented on recall. |
 | `last_accessed` | `datetime | None` | |
-| `emotional_valence` | `float` | -1.0–1.0. |
+| `emotional_valence` | `float` | -1.0–1.0. Pleasure axis (PAD). |
+| `emotional_arousal` | `float` | -1.0–1.0. Activation axis (PAD, ADR-001). |
+| `emotional_dominance` | `float` | -1.0–1.0. Agency axis (PAD, ADR-001). |
 | `source` | `str` | Default `"conversation"`. |
 | `metadata` | `dict[str, object]` | Free-form. |
 | `created_at` / `updated_at` | `datetime` | UTC. |
@@ -51,8 +53,9 @@ Pydantic v2 models in `src/sovyx/brain/models.py`.
 | `user_input` / `assistant_response` | `str` | |
 | `summary` | `str | None` | |
 | `importance` | `float` | 0.0–1.0. |
-| `emotional_valence` | `float` | -1.0–1.0. |
-| `emotional_arousal` | `float` | -1.0–1.0. |
+| `emotional_valence` | `float` | -1.0–1.0. Pleasure axis (PAD). |
+| `emotional_arousal` | `float` | -1.0–1.0. Activation axis (PAD). |
+| `emotional_dominance` | `float` | -1.0–1.0. Agency axis (PAD, ADR-001). |
 | `concepts_mentioned` | `list[ConceptId]` | |
 | `metadata` | `dict[str, object]` | |
 | `created_at` | `datetime` | |

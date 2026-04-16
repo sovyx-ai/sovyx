@@ -93,6 +93,8 @@ def _concept_to_search_result(
         "confidence": round(concept.confidence, 3),
         "access_count": concept.access_count,
         "emotional_valence": round(concept.emotional_valence, 3),
+        "emotional_arousal": round(concept.emotional_arousal, 3),
+        "emotional_dominance": round(concept.emotional_dominance, 3),
         "score": round(score, 4),
         "match_type": match_type,
     }
@@ -247,6 +249,8 @@ async def _get_concepts(
                 "confidence": round(c.confidence, 3),
                 "access_count": c.access_count,
                 "emotional_valence": round(c.emotional_valence, 3),
+                "emotional_arousal": round(c.emotional_arousal, 3),
+                "emotional_dominance": round(c.emotional_dominance, 3),
             }
             for c in concepts
         ]

@@ -55,9 +55,10 @@ class EpisodeRepository:
             await conn.execute(
                 """INSERT INTO episodes
                 (id, mind_id, conversation_id, user_input, assistant_response,
-                 summary, importance, emotional_valence, emotional_arousal,
+                 summary, importance,
+                 emotional_valence, emotional_arousal, emotional_dominance,
                  concepts_mentioned, metadata, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     str(episode.id),
                     str(episode.mind_id),
@@ -68,6 +69,7 @@ class EpisodeRepository:
                     episode.importance,
                     episode.emotional_valence,
                     episode.emotional_arousal,
+                    episode.emotional_dominance,
                     json.dumps([str(c) for c in episode.concepts_mentioned]),
                     json.dumps(episode.metadata),
                     episode.created_at.isoformat(),
@@ -222,10 +224,22 @@ class EpisodeRepository:
 
     @staticmethod
     def _row_to_episode(row: object) -> Episode:
-        """Convert a database row to an Episode model."""
-        from sovyx.brain.models import Episode
+        """Convert a database row to an Episode model.
+
+        Column layout after migration 006 (ALTER TABLE appends at end):
+        0 id, 1 mind_id, 2 conversation_id, 3 user_input,
+        4 assistant_response, 5 summary, 6 importance,
+        7 emotional_valence, 8 emotional_arousal,
+        9 concepts_mentioned, 10 metadata, 11 created_at,
+        12 emotional_dominance.
+        """
+        from sovyx.brain.models import Episode  # noqa: PLC0415
 
         r = tuple(row)  # type: ignore[arg-type,var-annotated]  # aiosqlite.Row → tuple
+
+        # Defensive fallback for pre-migration rows (same rationale as
+        # ``_row_to_concept``).
+        dominance = float(r[12]) if len(r) > 12 else 0.0  # noqa: PLR2004
 
         return Episode(
             id=EpisodeId(r[0]),
@@ -237,6 +251,7 @@ class EpisodeRepository:
             importance=float(r[6]),
             emotional_valence=float(r[7]),
             emotional_arousal=float(r[8]),
+            emotional_dominance=dominance,
             concepts_mentioned=[ConceptId(c) for c in json.loads(r[9])]
             if isinstance(r[9], str)
             else r[9],

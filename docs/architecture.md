@@ -98,7 +98,7 @@ The Brain is a cognitive graph persisted in SQLite. Three core models:
 | Model | Region analogue | What it stores |
 |---|---|---|
 | `Concept` | Neocortex (semantic) | A fact, preference, entity, skill, or belief — name, content, category, importance, confidence, 384-d embedding. |
-| `Episode` | Hippocampus (episodic) | A conversation turn — user input, assistant response, emotional valence and arousal, mentioned concepts. |
+| `Episode` | Hippocampus (episodic) | A conversation turn — user input, assistant response, PAD 3D emotional signal (valence / arousal / dominance, ADR-001), mentioned concepts. |
 | `Relation` | Synaptic edge | A weighted link between two concepts, strengthened by co-occurrence. |
 
 ```mermaid

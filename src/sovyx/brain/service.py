@@ -211,6 +211,8 @@ class BrainService:
         importance: float | None = None,
         confidence: float | None = None,
         emotional_valence: float | None = None,
+        emotional_arousal: float | None = None,
+        emotional_dominance: float | None = None,
         **kwargs: object,
     ) -> ConceptId:
         """Learn a new concept with dedup check (v13 audit fix).
@@ -225,14 +227,27 @@ class BrainService:
             confidence: Initial confidence score [0.0, 1.0]. If None,
                 uses model default (0.5). Callers should pass source-quality
                 based confidence for meaningful differentiation.
-            emotional_valence: Sentiment score (-1.0 to 1.0) for this
-                concept. If ``None``, falls back to
+            emotional_valence: Pleasure/displeasure axis (-1.0 to 1.0).
+                If ``None``, falls back to
                 ``self.emotional_baseline.valence`` (ADR-001 per-mind
                 anchor). On dedup, uses weighted average with existing.
+            emotional_arousal: Activation axis (-1.0 to 1.0) per
+                ADR-001 (PAD 3D, migration 006). ``None`` falls back
+                to ``self.emotional_baseline.arousal``. Weighted
+                average on dedup.
+            emotional_dominance: Agency axis (-1.0 to 1.0): +1 = the
+                concept represents something the mind is confidently
+                in control of, -1 = a source of hedging/uncertainty.
+                Per ADR-001. ``None`` falls back to
+                ``self.emotional_baseline.dominance``.
         """
         # Resolve emotional signal — caller wins, baseline fills the gap.
         if emotional_valence is None:
             emotional_valence = self._emotional_baseline.valence
+        if emotional_arousal is None:
+            emotional_arousal = self._emotional_baseline.arousal
+        if emotional_dominance is None:
+            emotional_dominance = self._emotional_baseline.dominance
         # Dedup check via FTS5
         existing = await self._concepts.search_by_text(name, mind_id, limit=3)
         for concept, _rank in existing:
@@ -320,13 +335,29 @@ class BrainService:
                     # to avoid inflating everything equally
                     concept.importance = min(1.0, concept.importance + 0.02)
 
-                # Update emotional valence: weighted average
-                # (existing has more history, weight it 2:1)
+                # Update PAD 3D emotional state on dedup: weighted
+                # average (existing has more history, weight it 2:1).
+                # Only write the axis when the incoming signal is
+                # meaningful (non-zero) — otherwise the baseline-filled
+                # zero would drag the existing affect toward neutral
+                # on every reinforcement.
                 if emotional_valence != 0.0:
                     old_v = concept.emotional_valence
                     concept.emotional_valence = max(
                         -1.0,
                         min(1.0, (old_v * 2 + emotional_valence) / 3),
+                    )
+                if emotional_arousal != 0.0:
+                    old_a = concept.emotional_arousal
+                    concept.emotional_arousal = max(
+                        -1.0,
+                        min(1.0, (old_a * 2 + emotional_arousal) / 3),
+                    )
+                if emotional_dominance != 0.0:
+                    old_d = concept.emotional_dominance
+                    concept.emotional_dominance = max(
+                        -1.0,
+                        min(1.0, (old_d * 2 + emotional_dominance) / 3),
                     )
 
                 await self._concepts.update(concept)
@@ -357,6 +388,8 @@ class BrainService:
             importance=effective_importance,
             confidence=effective_confidence,
             emotional_valence=max(-1.0, min(1.0, emotional_valence)),
+            emotional_arousal=max(-1.0, min(1.0, emotional_arousal)),
+            emotional_dominance=max(-1.0, min(1.0, emotional_dominance)),
             metadata=extra_meta,
         )
         concept_id = await self._concepts.create(concept)
@@ -396,6 +429,7 @@ class BrainService:
         new_concept_ids: list[ConceptId] | None = None,
         emotional_valence: float | None = None,
         emotional_arousal: float | None = None,
+        emotional_dominance: float | None = None,
         concepts_mentioned: list[ConceptId] | None = None,
         summary: str | None = None,
         **kwargs: object,
@@ -409,12 +443,17 @@ class BrainService:
         Args:
             new_concept_ids: Concepts learned this turn — form the hub
                 of the star topology. Each connects to top-K existing.
-            emotional_valence: Average sentiment of the exchange
+            emotional_valence: Pleasure axis of the exchange
                 (-1.0 to 1.0). If ``None``, falls back to
                 ``self.emotional_baseline.valence``.
-            emotional_arousal: Intensity of emotion in the exchange
-                (0.0 to 1.0). If ``None``, falls back to
+            emotional_arousal: Activation axis of the exchange
+                (-1.0 to 1.0). If ``None``, falls back to
                 ``self.emotional_baseline.arousal``.
+            emotional_dominance: Agency axis of the exchange
+                (-1.0 to 1.0) per ADR-001 PAD 3D. +1 = the assistant
+                was confidently in control of the conversation, -1 =
+                deferred / hedged. ``None`` falls back to
+                ``self.emotional_baseline.dominance``.
             concepts_mentioned: Concept IDs extracted from this exchange.
                 Stored on the episode for future retrieval/linking.
             summary: Optional 1-sentence summary of the exchange.
@@ -424,7 +463,9 @@ class BrainService:
             emotional_valence = self._emotional_baseline.valence
         if emotional_arousal is None:
             emotional_arousal = self._emotional_baseline.arousal
-        from sovyx.brain.models import Episode
+        if emotional_dominance is None:
+            emotional_dominance = self._emotional_baseline.dominance
+        from sovyx.brain.models import Episode  # noqa: PLC0415
 
         episode = Episode(
             mind_id=mind_id,
@@ -434,6 +475,7 @@ class BrainService:
             importance=importance,
             emotional_valence=max(-1.0, min(1.0, emotional_valence)),
             emotional_arousal=max(-1.0, min(1.0, emotional_arousal)),
+            emotional_dominance=max(-1.0, min(1.0, emotional_dominance)),
             concepts_mentioned=concepts_mentioned or [],
             summary=summary,
         )

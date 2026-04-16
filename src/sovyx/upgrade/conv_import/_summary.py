@@ -63,6 +63,7 @@ class _ParsedSummary:
     concepts: tuple[_ParsedConcept, ...]
     emotional_valence: float
     emotional_arousal: float
+    emotional_dominance: float
     importance: float
 
 
@@ -82,6 +83,7 @@ class _ParsedConcept:
 _FALLBACK_IMPORTANCE = 0.3
 _FALLBACK_VALENCE = 0.0
 _FALLBACK_AROUSAL = 0.0
+_FALLBACK_DOMINANCE = 0.0
 
 
 async def summarize_and_encode(
@@ -140,6 +142,8 @@ async def summarize_and_encode(
                 importance=c.importance,
                 confidence=0.6,
                 emotional_valence=parsed.emotional_valence,
+                emotional_arousal=parsed.emotional_arousal,
+                emotional_dominance=parsed.emotional_dominance,
             )
             concept_ids.append(cid)
         except (ValueError, AttributeError) as exc:
@@ -154,6 +158,7 @@ async def summarize_and_encode(
         importance=parsed.importance,
         emotional_valence=parsed.emotional_valence,
         emotional_arousal=parsed.emotional_arousal,
+        emotional_dominance=parsed.emotional_dominance,
         new_concept_ids=concept_ids,
         concepts_mentioned=concept_ids,
         summary=parsed.summary,
@@ -248,6 +253,9 @@ def _validate_summary(
         concepts=tuple(concepts),
         emotional_valence=_clamp(data.get("emotional_valence"), -1.0, 1.0, 0.0),
         emotional_arousal=_clamp(data.get("emotional_arousal"), 0.0, 1.0, 0.0),
+        # PAD 3D dominance axis — range [-1, +1] (ADR-001). Negative =
+        # hedging/submissive, positive = assertive/in-control.
+        emotional_dominance=_clamp(data.get("emotional_dominance"), -1.0, 1.0, 0.0),
         importance=_clamp(data.get("importance"), 0.0, 1.0, 0.5),
     )
 
@@ -298,6 +306,7 @@ def _build_fallback(
         concepts=(),
         emotional_valence=_FALLBACK_VALENCE,
         emotional_arousal=_FALLBACK_AROUSAL,
+        emotional_dominance=_FALLBACK_DOMINANCE,
         importance=_FALLBACK_IMPORTANCE,
     )
 

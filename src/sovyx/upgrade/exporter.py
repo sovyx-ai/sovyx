@@ -280,7 +280,8 @@ class MindExporter:
             cursor = await conn.execute(
                 "SELECT id, mind_id, name, content, category, importance, "
                 "confidence, access_count, last_accessed, emotional_valence, "
-                "source, metadata, created_at, updated_at "
+                "source, metadata, created_at, updated_at, "
+                "emotional_arousal, emotional_dominance "
                 "FROM concepts WHERE mind_id = ? ORDER BY created_at",
                 (mind_id,),
             )
@@ -301,6 +302,8 @@ class MindExporter:
                         "metadata": row[11],
                         "created_at": row[12],
                         "updated_at": row[13],
+                        "emotional_arousal": row[14],
+                        "emotional_dominance": row[15],
                     }
                 )
         return rows
@@ -313,7 +316,8 @@ class MindExporter:
                 "SELECT id, mind_id, conversation_id, user_input, "
                 "assistant_response, summary, importance, "
                 "emotional_valence, emotional_arousal, "
-                "concepts_mentioned, metadata, created_at "
+                "concepts_mentioned, metadata, created_at, "
+                "emotional_dominance "
                 "FROM episodes WHERE mind_id = ? ORDER BY created_at",
                 (mind_id,),
             )
@@ -332,6 +336,7 @@ class MindExporter:
                         "concepts_mentioned": row[9],
                         "metadata": row[10],
                         "created_at": row[11],
+                        "emotional_dominance": row[12],
                     }
                 )
         return rows

@@ -225,6 +225,7 @@ class BrainAccess:
                 "importance": ep.importance,
                 "emotional_valence": ep.emotional_valence,
                 "emotional_arousal": ep.emotional_arousal,
+                "emotional_dominance": ep.emotional_dominance,
                 "conversation_id": str(ep.conversation_id),
                 "created_at": ep.metadata.get(
                     "created_at",
@@ -245,6 +246,8 @@ class BrainAccess:
         importance: float | None = None,
         confidence: float | None = None,
         emotional_valence: float = 0.0,
+        emotional_arousal: float = 0.0,
+        emotional_dominance: float = 0.0,
         metadata: dict[str, object] | None = None,
     ) -> str:
         """Create a new concept in the Mind's memory.
@@ -262,7 +265,12 @@ class BrainAccess:
             category: Category string. Default "fact".
             importance: Initial importance [0.0, 1.0]. None = 0.5.
             confidence: Initial confidence [0.0, 1.0]. None = 0.5.
-            emotional_valence: Sentiment [-1.0, 1.0]. Default 0.0.
+            emotional_valence: Pleasure axis [-1.0, 1.0]. Default 0.0.
+            emotional_arousal: Activation axis [-1.0, 1.0] (ADR-001).
+                Default 0.0 — leave at 0 unless the concept carries a
+                meaningful activation signal.
+            emotional_dominance: Agency axis [-1.0, 1.0] (ADR-001).
+                Default 0.0.
 
         Returns:
             Created/reinforced concept ID string.
@@ -271,7 +279,7 @@ class BrainAccess:
             PermissionDeniedError: brain:write not granted.
             ValueError: Content exceeds 10KB limit.
         """
-        from sovyx.engine.types import ConceptCategory, MindId
+        from sovyx.engine.types import ConceptCategory, MindId  # noqa: PLC0415
 
         self._enforcer.check("brain:write")
         if not self._write:
@@ -297,6 +305,8 @@ class BrainAccess:
             importance=importance,
             confidence=confidence,
             emotional_valence=emotional_valence,
+            emotional_arousal=emotional_arousal,
+            emotional_dominance=emotional_dominance,
             metadata=metadata or {},
         )
 
