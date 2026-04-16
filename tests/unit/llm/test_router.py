@@ -282,7 +282,7 @@ class TestPricingTable:
     """_get_pricing coverage for known and unknown models."""
 
     def test_known_model(self) -> None:
-        assert LLMRouter._get_pricing("gpt-4o") == (5.0, 15.0)
+        assert LLMRouter._get_pricing("gpt-4o") == (2.5, 10.0)
 
     def test_unknown_model(self) -> None:
         assert LLMRouter._get_pricing("some-unknown-model") == (3.0, 15.0)

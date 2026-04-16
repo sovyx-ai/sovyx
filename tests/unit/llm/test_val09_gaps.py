@@ -165,7 +165,7 @@ class TestRouterPricingLookup:
         from sovyx.llm.router import LLMRouter
 
         pricing = LLMRouter._get_pricing("gpt-4o")
-        assert pricing == (5.0, 15.0)
+        assert pricing == (2.5, 10.0)
 
     def test_unknown_model_default_pricing(self) -> None:
         """Unknown model returns conservative default."""
