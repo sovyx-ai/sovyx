@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, Request
+
+if TYPE_CHECKING:
+    from sovyx.persistence.pool import DatabasePool
 from fastapi.responses import JSONResponse
 
 from sovyx.dashboard.routes._deps import verify_token
@@ -66,14 +69,15 @@ async def get_current_mood(request: Request) -> JSONResponse:
                    ORDER BY created_at DESC
                    LIMIT 20""",
             )
-            rows = await cursor.fetchall()
+            rows = list(await cursor.fetchall())
 
         if not rows:
             return JSONResponse(_empty_current())
 
-        avg_v = sum(r[0] for r in rows) / len(rows)
-        avg_a = sum(r[1] for r in rows) / len(rows)
-        avg_d = sum(r[2] for r in rows) / len(rows)
+        n = len(rows)
+        avg_v = sum(r[0] for r in rows) / n
+        avg_a = sum(r[1] for r in rows) / n
+        avg_d = sum(r[2] for r in rows) / n
         mood = _mood_label(avg_v, avg_a, avg_d)
 
         return JSONResponse(
@@ -82,7 +86,7 @@ async def get_current_mood(request: Request) -> JSONResponse:
                 "arousal": round(avg_a, 3),
                 "dominance": round(avg_d, 3),
                 **mood,
-                "episode_count": len(rows),
+                "episode_count": n,
             }
         )
     except Exception:  # noqa: BLE001
@@ -117,7 +121,7 @@ async def get_timeline(request: Request) -> JSONResponse:
 
         async with pool.read() as conn:
             cursor = await conn.execute(query, params)
-            rows = await cursor.fetchall()
+            rows = list(await cursor.fetchall())
 
         points = [
             {
@@ -158,7 +162,7 @@ async def get_triggers(request: Request) -> JSONResponse:
                    LIMIT ?""",
                 (limit,),
             )
-            rows = await cursor.fetchall()
+            rows = list(await cursor.fetchall())
 
         triggers = []
         for row in rows:
@@ -203,7 +207,7 @@ async def get_distribution(request: Request) -> JSONResponse:
 
         async with pool.read() as conn:
             cursor = await conn.execute(query, params_t)
-            rows = await cursor.fetchall()
+            rows = list(await cursor.fetchall())
 
         if not rows:
             return JSONResponse(_empty_distribution(period))
@@ -257,7 +261,7 @@ def _empty_distribution(period: str) -> dict[str, object]:
     }
 
 
-async def _get_brain_pool(request: Request) -> Any | None:
+async def _get_brain_pool(request: Request) -> DatabasePool | None:
     registry = getattr(request.app.state, "registry", None)
     if registry is None:
         return None
@@ -270,6 +274,6 @@ async def _get_brain_pool(request: Request) -> Any | None:
         mind_config = getattr(request.app.state, "mind_config", None)
         if mind_config is None:
             return None
-        return db.get_mind_pool(str(mind_config.id))
+        return db.get_mind_pool(str(mind_config.id))  # type: ignore[no-any-return]
     except Exception:  # noqa: BLE001
         return None
