@@ -109,14 +109,6 @@ pays down the main architectural divergences accumulated during v0.5.
   derives concepts at low confidence, attenuated cross-episode Hebbian
   on co-occurring concepts. Kill-switch via `dream_max_patterns: 0`.
 
-### Planned — cloud and monetization
-
-- **Stripe Connect.** Complete the integration beyond the current webhook
-  surface: Express onboarding, destination charges, refunds, disputes,
-  payouts, and tax. Unblocks the plugin marketplace revenue share.
-- **Pricing experiments.** Van Westendorp and Gabor-Granger instrumentation
-  for willingness-to-pay, PQL scoring, and funnel tracking.
-
 ### Planned — tooling
 
 - **BYOK token isolation.** Per-user API-key routing at the LLM layer.
@@ -152,9 +144,10 @@ plugin marketplace, and the deeper sandbox.
 ### Planned — ecosystem
 
 - **Public plugin marketplace.** Discoverable, permissioned, with signed
-  manifests and a revenue share for paid plugins.
-- **Third-party security audit.** External pen-test of the sandbox, the
-  cognitive safety stack, the backup crypto, and the billing webhooks.
+  manifests. Monetization handled by Sovyx Cloud (separate commercial
+  offering).
+- **Third-party security audit.** External pen-test of the sandbox and
+  the cognitive safety stack.
 - **Foundation governance.** Dual-license structure with an independent
   foundation for long-term stewardship.
 
@@ -164,7 +157,7 @@ Release criteria for v1.0 extend the v0.5.x list with:
   critical findings.
 - At least fifty community plugins in the marketplace, or ten official
   plugins plus a working public SDK.
-- 99.9% SLA measured over a quarter on the cloud tier.
+- Cloud SLA targets tracked in sovyx-cloud (separate repo).
 
 ---
 
@@ -176,8 +169,8 @@ signals.
 | Quarter         | Milestone         | Main scope                                               |
 | --------------- | ----------------- | -------------------------------------------------------- |
 | **2026 Q2**     | v0.13.x (shipped) | Enterprise hardening, DREAM, REPL, HA, CalDAV, importers, PAD 3D, streaming, 10 providers |
-| **2026 Q3**     | v0.6 preview      | Audio relay, Stripe Connect, speaker recognition         |
-| **2026 Q3–Q4** | v0.6 GA           | Pricing experiments, BYOK isolation, voice cloning       |
+| **2026 Q3**     | v0.6 preview      | Audio relay, speaker recognition                         |
+| **2026 Q3–Q4** | v0.6 GA           | BYOK isolation, voice cloning                            |
 | **2027 Q1**     | v1.0 preview      | Sandbox v2, subprocess IPC, multi-mind                   |
 | **2027 Q1–Q2** | v1.0 GA           | Security audit, foundation, marketplace launch           |
 
