@@ -54,7 +54,21 @@ class TestGetPricing:
         custom = (999.0, 999.0)
         assert get_pricing("gpt-4o", fallback=custom) == PRICING["gpt-4o"]
 
-    @pytest.mark.parametrize("provider", ["anthropic", "openai", "google", "ollama"])
+    @pytest.mark.parametrize(
+        "provider",
+        [
+            "anthropic",
+            "openai",
+            "google",
+            "ollama",
+            "xai",
+            "deepseek",
+            "mistral",
+            "groq",
+            "together",
+            "fireworks",
+        ],
+    )
     def test_every_provider_has_a_default(self, provider: str) -> None:
         assert provider in PROVIDER_DEFAULT_PRICING
 
@@ -82,3 +96,48 @@ class TestComputeCost:
         tokens_in, tokens_out = 1_000, 2_000
         expected = (tokens_in * DEFAULT_PRICING[0] + tokens_out * DEFAULT_PRICING[1]) / 1_000_000
         assert compute_cost("nope", tokens_in, tokens_out) == expected
+
+
+class TestPricingBaseline:
+    """Pin critical model prices to catch accidental drift."""
+
+    _BASELINE: dict[str, tuple[float, float]] = {
+        # Anthropic
+        "claude-sonnet-4-20250514": (3.0, 15.0),
+        "claude-haiku-4-5-20251001": (1.0, 5.0),
+        "claude-opus-4-7-20260401": (5.0, 25.0),
+        # OpenAI
+        "gpt-4o": (2.5, 10.0),
+        "gpt-4o-mini": (0.15, 0.6),
+        "o3": (2.0, 8.0),
+        "o3-mini": (1.1, 4.4),
+        # Google
+        "gemini-2.5-flash": (0.30, 2.50),
+        "gemini-2.5-pro": (1.25, 10.0),
+        # DeepSeek
+        "deepseek-chat": (0.28, 0.42),
+        "deepseek-reasoner": (0.28, 0.42),
+        # xAI
+        "grok-4": (2.0, 6.0),
+        # Groq
+        "llama-3.3-70b-versatile": (0.59, 0.79),
+        "llama-3.1-8b-instant": (0.05, 0.08),
+        # Together
+        "meta-llama/Llama-3.3-70B-Instruct-Turbo": (0.88, 0.88),
+    }
+
+    @pytest.mark.parametrize("model", list(_BASELINE.keys()))
+    def test_price_matches_baseline(self, model: str) -> None:
+        assert model in PRICING, f"{model} missing from PRICING table"
+        assert PRICING[model] == self._BASELINE[model], (
+            f"{model}: expected {self._BASELINE[model]}, got {PRICING[model]}"
+        )
+
+    def test_ollama_always_free(self) -> None:
+        assert PROVIDER_DEFAULT_PRICING["ollama"] == (0.0, 0.0)
+
+    def test_provider_defaults_updated(self) -> None:
+        assert PROVIDER_DEFAULT_PRICING["openai"] == (2.5, 10.0)
+        assert PROVIDER_DEFAULT_PRICING["deepseek"] == (0.28, 0.42)
+        assert PROVIDER_DEFAULT_PRICING["xai"] == (2.0, 6.0)
+        assert PROVIDER_DEFAULT_PRICING["google"] == (0.30, 2.50)
