@@ -139,8 +139,20 @@ class VoiceTuningConfig(BaseModel):
     auto_select_low_ram_threshold_mb: int = 2_048
 
 
+class LLMTuningConfig(BaseModel):
+    """Tunable thresholds for the LLM router complexity classifier.
+
+    Overridable via ``SOVYX_TUNING__LLM__SIMPLE_MAX_LENGTH=300`` etc.
+    """
+
+    simple_max_length: int = 500
+    simple_max_turns: int = 3
+    complex_min_length: int = 2000
+    complex_min_turns: int = 8
+
+
 class TuningConfig(BaseModel):
-    """Aggregate tuning knobs for cognitive / brain / voice subsystems.
+    """Aggregate tuning knobs for cognitive / brain / voice / llm subsystems.
 
     Single source of truth for previously module-level constants. All
     defaults match the historical hardcoded values; subsystems read from
@@ -150,6 +162,7 @@ class TuningConfig(BaseModel):
     safety: SafetyTuningConfig = Field(default_factory=SafetyTuningConfig)
     brain: BrainTuningConfig = Field(default_factory=BrainTuningConfig)
     voice: VoiceTuningConfig = Field(default_factory=VoiceTuningConfig)
+    llm: LLMTuningConfig = Field(default_factory=LLMTuningConfig)
 
 
 class SocketConfig(BaseModel):

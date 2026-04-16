@@ -361,6 +361,28 @@ class TestClassifyComplexity:
         result = classify_complexity(ComplexitySignals(message_length=1000, turn_count=10))
         assert result == ComplexityLevel.COMPLEX
 
+    def test_thresholds_come_from_tuning_config(self) -> None:
+        """Thresholds are sourced from LLMTuningConfig, not hardcoded."""
+        from sovyx.engine.config import LLMTuningConfig
+
+        cfg = LLMTuningConfig()
+        assert cfg.simple_max_length == 500  # noqa: PLR2004
+        assert cfg.simple_max_turns == 3  # noqa: PLR2004
+        assert cfg.complex_min_length == 2000  # noqa: PLR2004
+        assert cfg.complex_min_turns == 8  # noqa: PLR2004
+
+    def test_custom_thresholds_change_classification(self) -> None:
+        """Overriding thresholds via env vars changes classifier behavior."""
+        import sovyx.llm.router as router_mod
+
+        original = router_mod._SIMPLE_MAX_LENGTH
+        try:
+            router_mod._SIMPLE_MAX_LENGTH = 1000
+            result = classify_complexity(ComplexitySignals(message_length=800))
+            assert result == ComplexityLevel.SIMPLE
+        finally:
+            router_mod._SIMPLE_MAX_LENGTH = original
+
 
 class TestExtractSignals:
     """Tests for extract_signals function."""

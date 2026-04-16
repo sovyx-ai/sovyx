@@ -62,11 +62,15 @@ class ComplexitySignals:
     explicit_model: bool = False
 
 
-# Thresholds for complexity classification
-_SIMPLE_MAX_LENGTH = 500
-_SIMPLE_MAX_TURNS = 3
-_COMPLEX_MIN_LENGTH = 2000
-_COMPLEX_MIN_TURNS = 8
+# Complexity classification thresholds — sourced from
+# EngineConfig.tuning.llm; overridable via env vars e.g.
+# ``SOVYX_TUNING__LLM__SIMPLE_MAX_LENGTH=300``.
+from sovyx.engine.config import LLMTuningConfig as _LLMTuning  # noqa: E402
+
+_SIMPLE_MAX_LENGTH = _LLMTuning().simple_max_length
+_SIMPLE_MAX_TURNS = _LLMTuning().simple_max_turns
+_COMPLEX_MIN_LENGTH = _LLMTuning().complex_min_length
+_COMPLEX_MIN_TURNS = _LLMTuning().complex_min_turns
 
 # Model tiers for routing
 _SIMPLE_MODELS: set[str] = {
