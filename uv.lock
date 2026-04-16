@@ -3056,6 +3056,7 @@ dependencies = [
     { name = "aiogram" },
     { name = "aiosqlite" },
     { name = "cryptography" },
+    { name = "ddgs" },
     { name = "defusedxml" },
     { name = "fastapi" },
     { name = "httpx" },
@@ -3077,6 +3078,7 @@ dependencies = [
     { name = "telegramify-markdown" },
     { name = "tiktoken" },
     { name = "tokenizers" },
+    { name = "trafilatura" },
     { name = "typer" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -3098,7 +3100,6 @@ plugins = [
     { name = "watchdog" },
 ]
 search = [
-    { name = "ddgs" },
     { name = "trafilatura" },
 ]
 voice = [
@@ -3122,7 +3123,7 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20" },
     { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.7" },
     { name = "cryptography", specifier = ">=42.0" },
-    { name = "ddgs", marker = "extra == 'search'", specifier = ">=9.0" },
+    { name = "ddgs", specifier = ">=9.0" },
     { name = "defusedxml", specifier = ">=0.7" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
@@ -3155,6 +3156,7 @@ requires-dist = [
     { name = "telegramify-markdown", specifier = ">=1.0" },
     { name = "tiktoken", specifier = ">=0.7" },
     { name = "tokenizers", specifier = ">=0.15" },
+    { name = "trafilatura", specifier = ">=2.0" },
     { name = "trafilatura", marker = "extra == 'search'", specifier = ">=2.0" },
     { name = "typer", specifier = ">=0.12" },
     { name = "types-psutil", marker = "extra == 'dev'", specifier = ">=5.9" },

@@ -16,7 +16,11 @@ import json
 import time
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from sovyx.plugins.sdk import ISovyxPlugin, tool
+from sovyx.observability.logging import get_logger
+from sovyx.plugins.permissions import Permission
+from sovyx.plugins.sdk import ISovyxPlugin, TestResult, tool
+
+_logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from sovyx.plugins.context import BrainAccess
@@ -687,7 +691,7 @@ class SearchBackend:
 
 
 class DuckDuckGoBackend(SearchBackend):
-    """DuckDuckGo search via ddgs library. Zero API key."""
+    """DuckDuckGo search via ddgs library with httpx HTML fallback."""
 
     name = "duckduckgo"
 
@@ -697,25 +701,10 @@ class DuckDuckGoBackend(SearchBackend):
         max_results: int,
     ) -> list[SearchResult]:
         """Search DuckDuckGo for text results."""
-        try:
-            from ddgs import DDGS  # noqa: PLC0415
-        except ImportError:
-            return []
-
-        def _search() -> list[dict[str, Any]]:
-            with DDGS() as ddgs:
-                return list(ddgs.text(query, max_results=max_results))
-
-        raw = await asyncio.to_thread(_search)
-        return [
-            SearchResult(
-                title=r.get("title", ""),
-                url=r.get("href", ""),
-                snippet=r.get("body", ""),
-                source=_extract_domain(r.get("href", "")),
-            )
-            for r in raw
-        ]
+        results = await self._search_via_ddgs(query, max_results, mode="text")
+        if results is not None:
+            return results
+        return await self._search_via_httpx(query, max_results)
 
     async def search_news(
         self,
@@ -723,27 +712,110 @@ class DuckDuckGoBackend(SearchBackend):
         max_results: int,
     ) -> list[SearchResult]:
         """Search DuckDuckGo for news results."""
+        results = await self._search_via_ddgs(query, max_results, mode="news")
+        if results is not None:
+            return results
+        return await self._search_via_httpx(query, max_results)
+
+    @staticmethod
+    async def _search_via_ddgs(
+        query: str,
+        max_results: int,
+        *,
+        mode: str,
+    ) -> list[SearchResult] | None:
+        """Try ddgs library. Returns None if unavailable."""
         try:
             from ddgs import DDGS  # noqa: PLC0415
-        except ImportError:
+        except (ImportError, OSError):
+            return None
+
+        try:
+            if mode == "news":
+
+                def _news() -> list[dict[str, Any]]:
+                    with DDGS() as d:
+                        return list(d.news(query, max_results=max_results))
+
+                raw = await asyncio.to_thread(_news)
+                return [
+                    SearchResult(
+                        title=r.get("title", ""),
+                        url=r.get("url", ""),
+                        snippet=r.get("body", ""),
+                        source=r.get("source", _extract_domain(r.get("url", ""))),
+                        date=r.get("date", ""),
+                        result_type="news",
+                    )
+                    for r in raw
+                ]
+
+            def _text() -> list[dict[str, Any]]:
+                with DDGS() as d:
+                    return list(d.text(query, max_results=max_results))
+
+            raw = await asyncio.to_thread(_text)
+            return [
+                SearchResult(
+                    title=r.get("title", ""),
+                    url=r.get("href", ""),
+                    snippet=r.get("body", ""),
+                    source=_extract_domain(r.get("href", "")),
+                )
+                for r in raw
+            ]
+        except Exception:  # noqa: BLE001
+            return None
+
+    @staticmethod
+    async def _search_via_httpx(query: str, max_results: int) -> list[SearchResult]:
+        """Fallback: scrape DuckDuckGo HTML endpoint via httpx."""
+        import re  # noqa: PLC0415
+
+        import httpx  # noqa: PLC0415
+
+        _logger.info("ddg_httpx_fallback", query=query[:50])
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    "https://html.duckduckgo.com/html/",
+                    params={"q": query},
+                    headers={"User-Agent": "Mozilla/5.0 (compatible; SovyxBot/1.0)"},
+                )
+                resp.raise_for_status()
+                html = resp.text
+
+            results: list[SearchResult] = []
+            for m in re.finditer(
+                r'class="result__a"[^>]*href="([^"]*)"[^>]*>(.+?)</a>.*?'
+                r'class="result__snippet"[^>]*>(.+?)</span>',
+                html,
+                re.DOTALL,
+            ):
+                url = m.group(1)
+                if "duckduckgo.com/y.js" in url:
+                    ud_match = re.search(r"uddg=([^&]+)", url)
+                    if ud_match:
+                        from urllib.parse import unquote  # noqa: PLC0415
+
+                        url = unquote(ud_match.group(1))
+                title = re.sub(r"<[^>]+>", "", m.group(2)).strip()
+                snippet = re.sub(r"<[^>]+>", "", m.group(3)).strip()
+                if url.startswith("http"):
+                    results.append(
+                        SearchResult(
+                            title=title,
+                            url=url,
+                            snippet=snippet,
+                            source=_extract_domain(url),
+                        )
+                    )
+                if len(results) >= max_results:
+                    break
+            return results
+        except Exception:  # noqa: BLE001
+            _logger.warning("ddg_httpx_fallback_failed", exc_info=True)
             return []
-
-        def _search() -> list[dict[str, Any]]:
-            with DDGS() as ddgs:
-                return list(ddgs.news(query, max_results=max_results))
-
-        raw = await asyncio.to_thread(_search)
-        return [
-            SearchResult(
-                title=r.get("title", ""),
-                url=r.get("url", ""),
-                snippet=r.get("body", ""),
-                source=r.get("source", _extract_domain(r.get("url", ""))),
-                date=r.get("date", ""),
-                result_type="news",
-            )
-            for r in raw
-        ]
 
 
 class SearXNGBackend(SearchBackend):
@@ -1016,6 +1088,45 @@ class WebIntelligencePlugin(ISovyxPlugin):
         },
     }
 
+    setup_schema: ClassVar[dict[str, object]] = {
+        "providers": [
+            {"id": "duckduckgo", "name": "DuckDuckGo", "defaults": {"backend": "duckduckgo"}},
+            {"id": "brave", "name": "Brave Search", "defaults": {"backend": "brave"}},
+            {"id": "searxng", "name": "SearXNG", "defaults": {"backend": "searxng"}},
+        ],
+        "fields": [
+            {
+                "id": "backend",
+                "type": "select",
+                "label": "Search Backend",
+                "options": [
+                    {"value": "duckduckgo", "label": "DuckDuckGo (free, no key)"},
+                    {"value": "brave", "label": "Brave Search (API key)"},
+                    {"value": "searxng", "label": "SearXNG (self-hosted)"},
+                ],
+                "default": "duckduckgo",
+            },
+            {
+                "id": "brave_api_key",
+                "type": "secret",
+                "label": "Brave API Key",
+                "required": False,
+                "placeholder": "BSA...",
+                "help": "Required if Brave backend selected.",
+                "help_links": {"get_key": "https://brave.com/search/api/"},
+            },
+            {
+                "id": "searxng_url",
+                "type": "url",
+                "label": "SearXNG Instance URL",
+                "required": False,
+                "placeholder": "https://searxng.example.com",
+                "help": "Required if SearXNG backend selected.",
+            },
+        ],
+        "test_connection": True,
+    }
+
     def __init__(
         self,
         brain: BrainAccess | None = None,
@@ -1028,8 +1139,8 @@ class WebIntelligencePlugin(ISovyxPlugin):
         )
         self._brain = brain
         self._cache = _SearchCache()
-        self._fetch_limiter = _RateLimiter(20, _RATE_LIMIT_WINDOW)  # 20/min
-        self._research_limiter = _RateLimiter(5, _RATE_LIMIT_WINDOW)  # 5/min
+        self._fetch_limiter = _RateLimiter(20, _RATE_LIMIT_WINDOW)
+        self._research_limiter = _RateLimiter(5, _RATE_LIMIT_WINDOW)
 
     @property
     def name(self) -> str:
@@ -1038,6 +1149,42 @@ class WebIntelligencePlugin(ISovyxPlugin):
     @property
     def version(self) -> str:
         return "1.0.0"
+
+    @property
+    def permissions(self) -> list[Permission]:
+        return [Permission.NETWORK_INTERNET, Permission.BRAIN_READ, Permission.BRAIN_WRITE]
+
+    async def setup(self, ctx: object) -> None:
+        brain = getattr(ctx, "brain", None)
+        if brain is not None:
+            self._brain = brain
+        config = getattr(ctx, "config", {})
+        if isinstance(config, dict):
+            backend_name = config.get("backend", "duckduckgo")
+            try:
+                self._backend = _create_backend(
+                    str(backend_name),
+                    searxng_url=str(config.get("searxng_url", "")),
+                    brave_api_key=str(config.get("brave_api_key", "")),
+                )
+                _logger.info("web_intelligence_backend", backend=str(backend_name))
+            except ValueError:
+                _logger.warning("web_intelligence_backend_fallback", backend=str(backend_name))
+
+    async def test_connection(self, config: dict[str, object]) -> TestResult:
+        backend_name = str(config.get("backend", "duckduckgo"))
+        try:
+            backend = _create_backend(
+                backend_name,
+                searxng_url=str(config.get("searxng_url", "")),
+                brave_api_key=str(config.get("brave_api_key", "")),
+            )
+        except ValueError as e:
+            return TestResult(success=False, message=str(e))
+        results = await backend.search_text("test", 1)
+        if results:
+            return TestResult(success=True, message=f"Search works ({backend_name})")
+        return TestResult(success=False, message="Search returned no results")
 
     @property
     def description(self) -> str:
