@@ -18,12 +18,14 @@ const PRESETS: PersonalityPreset[] = [
 ];
 
 interface PersonalityStepProps {
-  onConfigured: () => void;
+  mindName: string;
+  onConfigured: (newName?: string) => void;
   onSkip: () => void;
 }
 
-export function PersonalityStep({ onConfigured, onSkip }: PersonalityStepProps) {
+export function PersonalityStep({ mindName, onConfigured, onSkip }: PersonalityStepProps) {
   const [selected, setSelected] = useState("warm");
+  const [companionName, setCompanionName] = useState(mindName);
   const [language, setLanguage] = useState(
     () => navigator.language?.split("-")[0] ?? "en",
   );
@@ -37,20 +39,21 @@ export function PersonalityStep({ onConfigured, onSkip }: PersonalityStepProps) 
         preset: selected,
         language,
         user_name: userName || undefined,
+        companion_name: companionName !== mindName ? companionName : undefined,
       });
-      onConfigured();
+      onConfigured(companionName !== mindName ? companionName : undefined);
     } catch {
       onConfigured();
     } finally {
       setSaving(false);
     }
-  }, [selected, language, userName, onConfigured]);
+  }, [selected, language, userName, companionName, mindName, onConfigured]);
 
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-xl font-semibold text-[var(--svx-color-text-primary)]">
-          Meet Aria
+          Meet {companionName}
         </h2>
         <p className="mt-1 text-sm text-[var(--svx-color-text-secondary)]">
           How should your companion communicate?
@@ -81,8 +84,19 @@ export function PersonalityStep({ onConfigured, onSkip }: PersonalityStepProps) 
         ))}
       </div>
 
-      {/* Language + Name */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      {/* Companion name + Language + Your name */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div>
+          <label className="mb-1 block text-xs font-medium text-[var(--svx-color-text-secondary)]">
+            Companion name
+          </label>
+          <input
+            type="text"
+            value={companionName}
+            onChange={(e) => setCompanionName(e.target.value)}
+            className="w-full rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-elevated)] px-3 py-2 text-sm text-[var(--svx-color-text-primary)]"
+          />
+        </div>
         <div>
           <label className="mb-1 block text-xs font-medium text-[var(--svx-color-text-secondary)]">
             Language
@@ -112,7 +126,7 @@ export function PersonalityStep({ onConfigured, onSkip }: PersonalityStepProps) 
             type="text"
             value={userName}
             onChange={(e) => setUserName(e.target.value)}
-            placeholder="How should Aria address you?"
+            placeholder="How should it address you?"
             className="w-full rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-elevated)] px-3 py-2 text-sm text-[var(--svx-color-text-primary)] placeholder:text-[var(--svx-color-text-disabled)]"
           />
         </div>

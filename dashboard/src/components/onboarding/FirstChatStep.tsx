@@ -10,17 +10,18 @@ interface Message {
 }
 
 interface FirstChatStepProps {
+  mindName: string;
   provider: string;
   model: string;
   onComplete: () => void;
 }
 
-export function FirstChatStep({ provider, model, onComplete }: FirstChatStepProps) {
+export function FirstChatStep({ mindName, provider, model, onComplete }: FirstChatStepProps) {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: "assistant",
       content:
-        "Hi! I'm Aria. I run entirely on your hardware \u2014 everything we discuss stays between us. Over time, I'll learn your preferences and get better at helping you.\n\nWhat's on your mind?",
+        `Hi! I'm ${mindName}. I run entirely on your hardware \u2014 everything we discuss stays between us. Over time, I'll learn your preferences and get better at helping you.\n\nWhat's on your mind?`,
     },
   ]);
   const [input, setInput] = useState("");
@@ -73,7 +74,6 @@ export function FirstChatStep({ provider, model, onComplete }: FirstChatStepProp
         </p>
       </div>
 
-      {/* Chat area */}
       <div className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)]">
         <div className="max-h-[320px] min-h-[200px] overflow-y-auto p-4 space-y-3">
           {messages.map((msg, i) => (
@@ -89,7 +89,7 @@ export function FirstChatStep({ provider, model, onComplete }: FirstChatStepProp
               {msg.role === "assistant" && (
                 <div className="mb-1 flex items-center gap-1 text-[10px] font-medium text-[var(--svx-color-text-tertiary)]">
                   <SparklesIcon className="size-3" />
-                  Aria
+                  {mindName}
                 </div>
               )}
               <p className="whitespace-pre-wrap">{msg.content}</p>
@@ -98,12 +98,11 @@ export function FirstChatStep({ provider, model, onComplete }: FirstChatStepProp
           {sending && (
             <div className="flex items-center gap-2 text-xs text-[var(--svx-color-text-tertiary)]">
               <LoaderIcon className="size-3.5 animate-spin" />
-              Aria is thinking...
+              {mindName} is thinking...
             </div>
           )}
         </div>
 
-        {/* Input */}
         <div className="border-t border-[var(--svx-color-border-default)] p-3">
           <form
             onSubmit={(e) => {
@@ -133,7 +132,6 @@ export function FirstChatStep({ provider, model, onComplete }: FirstChatStepProp
         </div>
       </div>
 
-      {/* Post-chat action */}
       <div className="flex items-center justify-end">
         <Button onClick={onComplete} variant={hasReplied ? "default" : "outline"}>
           {hasReplied ? "Explore Dashboard" : "Skip to Dashboard"}

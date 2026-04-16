@@ -57,6 +57,7 @@ async def get_onboarding_state(request: Request) -> JSONResponse:
     return JSONResponse(
         {
             "complete": mind_config.onboarding_complete if mind_config else False,
+            "mind_name": mind_config.name if mind_config else "Sovyx",
             "provider_configured": provider_configured or ollama_available,
             "default_provider": mind_config.llm.default_provider if mind_config else "",
             "default_model": mind_config.llm.default_model if mind_config else "",
@@ -222,6 +223,10 @@ async def configure_personality(request: Request) -> JSONResponse:
     if lang and isinstance(lang, str):
         mind_config.language = lang
 
+    companion_name = body.get("companion_name")
+    if companion_name and isinstance(companion_name, str) and companion_name.strip():
+        mind_config.name = companion_name.strip()
+
     # Persist
     mind_yaml_path = getattr(request.app.state, "mind_yaml_path", None)
     if mind_yaml_path is not None:
@@ -230,6 +235,77 @@ async def configure_personality(request: Request) -> JSONResponse:
         _persist_to_yaml(mind_config, mind_yaml_path)
 
     return JSONResponse({"ok": True})
+
+
+@router.post("/channel/telegram")
+async def setup_telegram_channel(request: Request) -> JSONResponse:
+    """Validate Telegram bot token, hot-start channel, persist for next boot."""
+    import aiohttp
+
+    try:
+        body = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        return JSONResponse({"ok": False, "error": "Invalid JSON"}, status_code=422)
+
+    token = (body.get("token") or "").strip() if isinstance(body, dict) else ""
+    if not token:
+        return JSONResponse({"ok": False, "error": "Token is required"}, status_code=422)
+
+    # Validate via Telegram API
+    try:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(
+                f"https://api.telegram.org/bot{token}/getMe",
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp,
+        ):
+            data = await resp.json()
+            if not data.get("ok"):
+                return JSONResponse(
+                    {"ok": False, "error": data.get("description", "Invalid token")},
+                    status_code=400,
+                )
+            bot_info = data["result"]
+    except Exception:  # noqa: BLE001
+        return JSONResponse(
+            {"ok": False, "error": "Could not reach Telegram API"}, status_code=502
+        )
+
+    # Hot-add: create channel and start polling
+    hot_started = False
+    registry = getattr(request.app.state, "registry", None)
+    if registry is not None:
+        from sovyx.bridge.manager import BridgeManager
+
+        if registry.is_registered(BridgeManager):
+            bridge = await registry.resolve(BridgeManager)
+            try:
+                from sovyx.bridge.channels.telegram import TelegramChannel
+
+                telegram = TelegramChannel(token=token, bridge_manager=bridge)
+                bridge.register_channel(telegram)
+                await telegram.start()
+                hot_started = True
+                logger.info(
+                    "telegram_channel_hot_started",
+                    bot=bot_info.get("username", ""),
+                )
+            except Exception:  # noqa: BLE001
+                logger.warning("telegram_hot_start_failed", exc_info=True)
+
+    # Persist for next boot
+    os.environ["SOVYX_TELEGRAM_TOKEN"] = token
+    _persist_channel_token(request, token)
+
+    return JSONResponse(
+        {
+            "ok": True,
+            "bot_username": bot_info.get("username", ""),
+            "bot_name": bot_info.get("first_name", ""),
+            "hot_started": hot_started,
+        }
+    )
 
 
 @router.post("/complete")
@@ -402,3 +478,27 @@ async def _apply_provider(
             "model": model,
         }
     )
+
+
+def _persist_channel_token(request: Request, token: str) -> None:
+    """Write Telegram token to channel.env."""
+    from pathlib import Path
+
+    engine_config = getattr(request.app.state, "engine_config", None)
+    data_dir = engine_config.data_dir if engine_config is not None else Path.home() / ".sovyx"
+    env_path = Path(data_dir) / "channel.env"
+
+    existing: dict[str, str] = {}
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()  # noqa: PLW2901
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                existing[k.strip()] = v.strip()
+    existing["SOVYX_TELEGRAM_TOKEN"] = token
+
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [f"{k}={v}" for k, v in existing.items()]
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with contextlib.suppress(OSError):
+        env_path.chmod(0o600)

@@ -23,6 +23,7 @@ def app():
     application.state.mind_id = "test-mind"
 
     mind_config = MagicMock()
+    mind_config.configure_mock(name="test-mind")
     mind_config.onboarding_complete = False
     mind_config.llm.default_provider = ""
     mind_config.llm.default_model = ""
@@ -48,6 +49,7 @@ class TestGetOnboardingState:
         assert data["complete"] is False
         assert "provider_configured" in data
         assert "ollama_available" in data
+        assert "mind_name" in data
 
     def test_complete_true_when_set(self, app, client: TestClient) -> None:
         app.state.mind_config.onboarding_complete = True
@@ -172,6 +174,14 @@ class TestConfigurePersonality:
         assert resp.status_code == 200  # noqa: PLR2004
         assert app.state.mind_config.language == "pt"
 
+    def test_companion_name_update(self, client: TestClient, app) -> None:
+        resp = client.post(
+            "/api/onboarding/personality",
+            json={"companion_name": "Nova"},
+        )
+        assert resp.status_code == 200  # noqa: PLR2004
+        assert app.state.mind_config.name == "Nova"
+
     def test_invalid_json_422(self, client: TestClient) -> None:
         resp = client.post(
             "/api/onboarding/personality",
@@ -181,6 +191,18 @@ class TestConfigurePersonality:
                 "Content-Type": "application/json",
             },
         )
+        assert resp.status_code == 422  # noqa: PLR2004
+
+
+class TestTelegramChannel:
+    """POST /api/onboarding/channel/telegram."""
+
+    def test_missing_token_422(self, client: TestClient) -> None:
+        resp = client.post("/api/onboarding/channel/telegram", json={})
+        assert resp.status_code == 422  # noqa: PLR2004
+
+    def test_empty_token_422(self, client: TestClient) -> None:
+        resp = client.post("/api/onboarding/channel/telegram", json={"token": ""})
         assert resp.status_code == 422  # noqa: PLR2004
 
 
