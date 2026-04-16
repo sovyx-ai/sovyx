@@ -305,6 +305,9 @@ def create_app(config: APIConfig | None = None, *, token: str | None = None) -> 
         data as data_routes,
     )
     from sovyx.dashboard.routes import (
+        emotions as emotions_routes,
+    )
+    from sovyx.dashboard.routes import (
         logs as logs_routes,
     )
     from sovyx.dashboard.routes import (
@@ -346,6 +349,7 @@ def create_app(config: APIConfig | None = None, *, token: str | None = None) -> 
     app.include_router(logs_routes.router)
     app.include_router(settings_routes.router)
     app.include_router(data_routes.router)
+    app.include_router(emotions_routes.router)
     app.include_router(safety_routes.router)
     app.include_router(voice_routes.router)
     app.include_router(plugins_routes.router)
