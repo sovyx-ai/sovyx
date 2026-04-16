@@ -39,3 +39,25 @@ async def brain_search(
         results = await search_brain(registry, q, limit=limit)
         return JSONResponse({"results": results, "query": q})
     return JSONResponse({"results": [], "query": q})
+
+
+@router.get("/brain/search/vector")
+async def brain_search_vector(
+    request: Request,
+    q: str = Query(default="", max_length=500),
+    limit: int = Query(default=10, ge=1, le=100),
+    min_score: float = Query(default=0.0, ge=0.0, le=1.0),
+) -> JSONResponse:
+    """Pure vector similarity search (KNN only, no FTS5).
+
+    Returns concepts ranked by embedding cosine similarity to the query.
+    Requires sqlite-vec; returns ``vector_available: false`` when the
+    extension is not loaded.
+    """
+    registry = getattr(request.app.state, "registry", None)
+    if registry is not None:
+        from sovyx.dashboard.brain import search_brain_vector
+
+        result = await search_brain_vector(registry, q, limit=limit, min_score=min_score)
+        return JSONResponse(result)
+    return JSONResponse({"results": [], "query": q, "vector_available": False})

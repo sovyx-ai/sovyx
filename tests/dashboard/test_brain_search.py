@@ -472,3 +472,74 @@ class TestSearchBrainVectorPath:
 
         assert len(results) == 1
         assert results[0]["id"] == "c2"
+
+
+class TestSearchBrainVector:
+    """search_brain_vector — pure KNN endpoint."""
+
+    @pytest.mark.asyncio()
+    async def test_returns_vector_results(self) -> None:
+        from sovyx.dashboard.brain import search_brain_vector
+
+        concept = _mock_concept("c1", "Alpha", importance=0.9)
+        repo = AsyncMock()
+        repo.search_by_embedding = AsyncMock(return_value=[(concept, 0.2)])
+
+        registry = MagicMock()
+        registry.is_registered = MagicMock(return_value=True)
+        registry.resolve = AsyncMock(return_value=repo)
+
+        with (
+            patch("sovyx.dashboard.brain._get_active_mind_id", return_value="m1"),
+            patch("sovyx.dashboard.brain._get_query_embedding", return_value=[0.1]),
+        ):
+            result = await search_brain_vector(registry, "test", limit=5)
+
+        assert result["vector_available"] is True
+        assert result["query"] == "test"
+        assert len(result["results"]) == 1
+        assert result["results"][0]["match_type"] == "vector"
+        assert result["results"][0]["score"] == pytest.approx(0.8, abs=0.01)
+
+    @pytest.mark.asyncio()
+    async def test_no_embedding_returns_unavailable(self) -> None:
+        from sovyx.dashboard.brain import search_brain_vector
+
+        registry = MagicMock()
+        with patch("sovyx.dashboard.brain._get_query_embedding", return_value=None):
+            result = await search_brain_vector(registry, "test")
+
+        assert result["vector_available"] is False
+        assert result["results"] == []
+
+    @pytest.mark.asyncio()
+    async def test_min_score_filters(self) -> None:
+        from sovyx.dashboard.brain import search_brain_vector
+
+        c1 = _mock_concept("c1", "High", importance=0.9)
+        c2 = _mock_concept("c2", "Low", importance=0.3)
+        repo = AsyncMock()
+        repo.search_by_embedding = AsyncMock(return_value=[(c1, 0.1), (c2, 0.8)])
+
+        registry = MagicMock()
+        registry.is_registered = MagicMock(return_value=True)
+        registry.resolve = AsyncMock(return_value=repo)
+
+        with (
+            patch("sovyx.dashboard.brain._get_active_mind_id", return_value="m1"),
+            patch("sovyx.dashboard.brain._get_query_embedding", return_value=[0.1]),
+        ):
+            result = await search_brain_vector(registry, "test", limit=10, min_score=0.5)
+
+        assert len(result["results"]) == 1
+        assert result["results"][0]["id"] == "c1"
+
+    @pytest.mark.asyncio()
+    async def test_empty_query_returns_empty(self) -> None:
+        from sovyx.dashboard.brain import search_brain_vector
+
+        registry = MagicMock()
+        result = await search_brain_vector(registry, "")
+
+        assert result["results"] == []
+        assert result["vector_available"] is False

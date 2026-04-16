@@ -220,6 +220,66 @@ async def search_brain(
         return []
 
 
+# ── Vector search (pure KNN) ──────────────────────────────────────────
+
+
+async def search_brain_vector(
+    registry: ServiceRegistry,
+    query: str,
+    *,
+    limit: int = 10,
+    min_score: float = 0.0,
+) -> dict[str, Any]:
+    """Pure vector similarity search over brain concepts.
+
+    Unlike :func:`search_brain` (hybrid FTS5 + vector + RRF), this
+    endpoint runs KNN-only via sqlite-vec. Useful when the caller
+    wants purely semantic results without keyword matching.
+
+    Args:
+        registry: Service registry.
+        query: Natural-language query to encode.
+        limit: Max results (capped at 100 by the route).
+        min_score: Minimum similarity threshold (0.0-1.0). Results
+            below this score are filtered out.
+
+    Returns:
+        ``{"results": [...], "query": ..., "vector_available": bool}``
+        where each result has the standard search-result shape with
+        ``match_type="vector"`` and ``score`` = 1.0 - distance.
+    """
+    if not query or not query.strip():
+        return {"results": [], "query": query, "vector_available": False}
+
+    embedding = await _get_query_embedding(registry, query)
+    if embedding is None:
+        return {"results": [], "query": query, "vector_available": False}
+
+    try:
+        from sovyx.brain.concept_repo import ConceptRepository
+        from sovyx.engine.types import MindId
+
+        if not registry.is_registered(ConceptRepository):
+            return {"results": [], "query": query, "vector_available": False}
+
+        repo = await registry.resolve(ConceptRepository)
+        mind_id = MindId(await _get_active_mind_id(registry))
+
+        raw = await repo.search_by_embedding(embedding, mind_id, limit=limit)
+
+        results: list[dict[str, Any]] = []
+        for concept, distance in raw:
+            score = max(0.0, 1.0 - float(distance))
+            if score >= min_score:
+                results.append(_concept_to_search_result(concept, score, "vector"))
+
+        return {"results": results, "query": query, "vector_available": True}
+
+    except Exception:  # noqa: BLE001
+        logger.warning("brain_vector_search_failed", query=query, exc_info=True)
+        return {"results": [], "query": query, "vector_available": False}
+
+
 # ── Graph internals ────────────────────────────────────────────────────
 
 
