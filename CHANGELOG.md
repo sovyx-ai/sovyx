@@ -6,6 +6,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-04-16
+
+**First-run onboarding -- zero to first conversation in 90 seconds.**
+
+New users opening the dashboard for the first time are guided through
+a three-step wizard that configures an LLM provider, personalizes
+Aria, and lands them in a live conversation. API keys are validated,
+persisted to `secrets.env`, and hot-registered in the LLM router
+without restarting the daemon.
+
+### Added
+
+- **Three-step onboarding wizard.** Full-page flow outside the
+  dashboard layout: Choose Your Brain (provider + API key),
+  Meet Aria (personality preset), Say Hello (live chat).
+- **API key hot-registration.** `LLMRouter.add_provider()` registers
+  a new provider at runtime. No daemon restart needed after entering
+  an API key in the wizard.
+- **`secrets.env` persistence.** API keys saved to
+  `~/.sovyx/secrets.env` (chmod 0600). Loaded by bootstrap alongside
+  `channel.env`.
+- **4 personality presets** — Warm & Friendly, Direct & Concise,
+  Playful & Creative, Professional. Each maps to a combination of
+  PersonalityConfig values.
+- **Ollama auto-detection** in wizard. If Ollama is running, it
+  appears first in the provider grid with a "Detected" badge and
+  model picker. Zero API key needed.
+- **Provider metadata** (`providers-data.ts`) — 10 providers with
+  names, descriptions, default models, key URLs, pricing info.
+- **`MindConfig.onboarding_complete`** — boolean flag persisted to
+  mind.yaml. Dashboard checks this to decide whether to show the
+  wizard or the normal overview.
+- **Auto-redirect** — Overview page redirects to `/onboarding` on
+  first run when no LLM provider is configured.
+- **4 onboarding API endpoints:**
+  - `GET /api/onboarding/state` — completion status, provider
+    detection, Ollama availability + models
+  - `POST /api/onboarding/provider` — validate key, persist, hot-register
+  - `POST /api/onboarding/personality` — save preset or custom values
+  - `POST /api/onboarding/complete` — mark onboarding done
+- **16 new backend tests** — state, provider validation (cloud +
+  Ollama), personality presets, completion, E2E flow.
+
 ## [0.14.0] — 2026-04-16
 
 **Setup Wizard -- declarative plugin configuration + voice hot-enable.**
