@@ -68,16 +68,7 @@ async def get_onboarding_state(request: Request) -> JSONResponse:
 
 @router.post("/provider")
 async def configure_provider(request: Request) -> JSONResponse:
-    """Validate API key, persist to secrets.env, hot-register in LLM router.
-
-    Body::
-
-        {"provider": "anthropic", "api_key": "sk-ant-...", "model": "claude-sonnet-4-20250514"}
-
-    For Ollama, api_key is omitted::
-
-        {"provider": "ollama", "model": "llama3.1:latest"}
-    """
+    """Validate API key, persist, and hot-register in LLM router."""
     try:
         body = await request.json()
     except (ValueError, UnicodeDecodeError):
