@@ -14,16 +14,16 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from sovyx.engine.errors import CostLimitExceededError, ProviderUnavailableError
-from sovyx.engine.events import ThinkCompleted
+from sovyx.engine.events import ThinkCompleted, ThinkStreamStarted
 from sovyx.llm.circuit import CircuitBreaker
-from sovyx.llm.models import LLMResponse
+from sovyx.llm.models import LLMResponse, LLMStreamChunk
 from sovyx.llm.pricing import compute_cost, get_pricing
 from sovyx.observability.logging import get_logger
 from sovyx.observability.metrics import get_metrics
 from sovyx.observability.tracing import get_tracer
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import AsyncIterator, Sequence
 
     from sovyx.engine.events import EventBus
     from sovyx.engine.protocols import LLMProvider
@@ -411,6 +411,173 @@ class LLMRouter:
             f"All providers failed: {'; '.join(errors)}" if errors else "No available providers"
         )
         raise ProviderUnavailableError(error_msg)
+
+    async def stream(
+        self,
+        messages: Sequence[dict[str, str]],
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        conversation_id: str = "",
+        tools: list[dict[str, object]] | None = None,
+    ) -> AsyncIterator[LLMStreamChunk]:
+        """Stream LLM response chunks via the first available provider.
+
+        Provider selection, cost pre-flight, and circuit-breaker checks
+        mirror :meth:`generate` — but failover only works BEFORE the
+        first chunk (once a provider starts streaming, mid-stream errors
+        propagate to the caller).
+
+        Cost/usage accounting waits for the final ``is_final`` chunk
+        because cloud providers emit token counts only at stream end.
+
+        Yields:
+            :class:`LLMStreamChunk` per-token (text) or per-delta
+            (tool_call). The last chunk has ``is_final=True``.
+        """
+        import time as _time
+
+        if model is None:
+            signals = extract_signals(messages)
+            complexity = classify_complexity(signals)
+            available = [
+                m for p in self._providers if p.is_available for m in self._get_provider_models(p)
+            ]
+            routed_model = select_model_for_complexity(complexity, available)
+            if routed_model:
+                model = routed_model
+
+        input_chars = sum(len(m.get("content", "")) for m in messages)
+        est_input_tokens = input_chars // 4
+        estimated_cost = compute_cost(model, est_input_tokens, max_tokens)
+        if not self._cost_guard.can_afford(estimated_cost, conversation_id):
+            msg = (
+                f"Budget exhausted. Daily remaining: "
+                f"${self._cost_guard.get_remaining_budget():.2f}"
+            )
+            raise CostLimitExceededError(msg)
+
+        models_to_try: list[str | None] = [model]
+        if model:
+            models_to_try.extend(self._get_equivalent_models(model))
+
+        errors: list[str] = []
+        chosen_provider: LLMProvider | None = None
+        chosen_model: str | None = None
+
+        for try_model in models_to_try:
+            for provider in self._providers:
+                if try_model and not provider.supports_model(try_model):
+                    continue
+                if not provider.is_available:
+                    continue
+                circuit = self._circuits.get(provider.name)
+                if circuit and not circuit.can_call():
+                    errors.append(f"{provider.name}: circuit open")
+                    continue
+                chosen_provider = provider
+                chosen_model = try_model or "default"
+                break
+            if chosen_provider:
+                break
+
+        if chosen_provider is None:
+            error_msg = (
+                f"All providers failed: {'; '.join(errors)}"
+                if errors
+                else "No available providers"
+            )
+            raise ProviderUnavailableError(error_msg)
+
+        circuit = self._circuits.get(chosen_provider.name)
+        start = _time.monotonic()
+        first_chunk_emitted = False
+        final_chunk: LLMStreamChunk | None = None
+        metrics = get_metrics()
+
+        use_model = chosen_model or "default"
+
+        try:
+            raw_iter = chosen_provider.stream(
+                messages,
+                model=use_model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                tools=tools,
+            )
+            async for raw in raw_iter:
+                chunk: LLMStreamChunk = raw  # type: ignore[assignment]
+                if not first_chunk_emitted and (chunk.delta_text or chunk.tool_call_delta):
+                    first_chunk_emitted = True
+                    ttft = int((_time.monotonic() - start) * 1000)
+                    await self._events.emit(
+                        ThinkStreamStarted(
+                            model=use_model,
+                            provider=chosen_provider.name,
+                            ttft_ms=ttft,
+                        )
+                    )
+                if chunk.is_final:
+                    final_chunk = chunk
+                yield chunk
+
+        except Exception as e:
+            if circuit:
+                circuit.record_failure()
+            raise ProviderUnavailableError(f"{chosen_provider.name} stream failed: {e}") from e
+
+        if circuit:
+            circuit.record_success()
+
+        if final_chunk:
+            latency = int((_time.monotonic() - start) * 1000)
+            cost = compute_cost(
+                final_chunk.model or chosen_model,
+                final_chunk.tokens_in,
+                final_chunk.tokens_out,
+            )
+            await self._cost_guard.record(
+                cost, final_chunk.model or chosen_model or "", conversation_id
+            )
+
+            from sovyx.dashboard.status import get_counters
+
+            get_counters().record_llm_call(cost, final_chunk.tokens_in + final_chunk.tokens_out)
+
+            metrics.llm_calls.add(
+                1, {"provider": chosen_provider.name, "model": final_chunk.model}
+            )
+            metrics.tokens_used.add(
+                final_chunk.tokens_in,
+                {"direction": "in", "provider": chosen_provider.name},
+            )
+            metrics.tokens_used.add(
+                final_chunk.tokens_out,
+                {"direction": "out", "provider": chosen_provider.name},
+            )
+            metrics.llm_cost.add(cost, {"provider": chosen_provider.name})
+
+            ttft_final = int((_time.monotonic() - start) * 1000) if not first_chunk_emitted else 0
+            await self._events.emit(
+                ThinkCompleted(
+                    model=final_chunk.model or chosen_model or "",
+                    tokens_in=final_chunk.tokens_in,
+                    tokens_out=final_chunk.tokens_out,
+                    cost_usd=cost,
+                    latency_ms=latency,
+                    streamed=True,
+                    ttft_ms=ttft_final,
+                )
+            )
+
+            logger.info(
+                "llm_stream_complete",
+                provider=chosen_provider.name,
+                model=final_chunk.model,
+                tokens=final_chunk.tokens_in + final_chunk.tokens_out,
+                cost=round(cost, 6),
+                latency_ms=latency,
+            )
 
     @staticmethod
     def tool_definitions_to_dicts(

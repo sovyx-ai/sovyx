@@ -9,24 +9,27 @@ Ref: SPE-007 §GoogleProvider, Pre-Compute V05-36.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from sovyx.engine.errors import LLMError, ProviderUnavailableError
-from sovyx.llm.models import LLMResponse, ToolCall
+from sovyx.llm.models import LLMResponse, LLMStreamChunk, ToolCall, ToolCallDelta
 from sovyx.llm.pricing import PROVIDER_DEFAULT_PRICING, compute_cost
 from sovyx.llm.providers._shared import (
+    _unsanitize_tool_name,
     format_tools_google,
     parse_tool_calls_google,
     retry_delay,
     safe_parse_json,
 )
+from sovyx.llm.providers._streaming import iter_sse_events
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import AsyncIterator, Sequence
 
 logger = get_logger(__name__)
 
@@ -225,6 +228,119 @@ class GoogleProvider:
 
         error_msg = "Google: unexpected error"
         raise LLMError(error_msg)
+
+    async def stream(
+        self,
+        messages: Sequence[dict[str, str]],
+        model: str = "gemini-2.0-flash",
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> AsyncIterator[LLMStreamChunk]:
+        """Stream incremental chunks from Gemini.
+
+        Gemini's ``:streamGenerateContent?alt=sse`` flow:
+            * Each SSE event carries a ``GenerateContentResponse``-shaped
+              JSON with ``candidates[0].content.parts``. Text parts hold
+              incremental tokens; ``functionCall`` parts arrive complete
+              (Gemini does NOT split function-call args across chunks).
+            * ``usageMetadata`` is included on the FINAL chunk only.
+            * ``finishReason`` arrives on the final candidate.
+        """
+        if not self.is_available:
+            msg = "Google API key not configured"
+            raise ProviderUnavailableError(msg)
+
+        contents, system_instruction = self._convert_messages(messages)
+
+        payload: dict[str, Any] = {
+            "contents": contents,
+            "generationConfig": {
+                "temperature": temperature,
+                "maxOutputTokens": max_tokens,
+            },
+        }
+        if system_instruction:
+            payload["systemInstruction"] = {
+                "parts": [{"text": system_instruction}],
+            }
+        if tools:
+            payload["tools"] = format_tools_google(tools)
+
+        url = f"{_API_BASE}/{model}:streamGenerateContent?alt=sse"
+        headers = {"x-goog-api-key": self._api_key}
+
+        tokens_in = 0
+        tokens_out = 0
+        finish_reason = "stop"
+        # Gemini emits each functionCall as a complete part. We assign
+        # synthetic indices in the order they appear so downstream
+        # ToolCallDelta indices stay monotonic across the stream.
+        tool_index_counter = 0
+
+        try:
+            async with self._client.stream("POST", url, json=payload, headers=headers) as resp:
+                if resp.status_code != 200:  # noqa: PLR2004
+                    body = await resp.aread()
+                    error_msg = (
+                        f"Google stream error {resp.status_code}: "
+                        f"{body.decode('utf-8', errors='replace')[:200]}"
+                    )
+                    raise LLMError(error_msg)
+
+                async for _event_type, data in iter_sse_events(resp):
+                    candidates = data.get("candidates") or []
+                    if candidates:
+                        candidate = candidates[0]
+                        parts = candidate.get("content", {}).get("parts", []) or []
+                        for part in parts:
+                            text = part.get("text")
+                            if text:
+                                yield LLMStreamChunk(
+                                    delta_text=text,
+                                    model=model,
+                                    provider="google",
+                                )
+                            fc = part.get("functionCall")
+                            if fc:
+                                args = fc.get("args", {}) or {}
+                                yield LLMStreamChunk(
+                                    tool_call_delta=ToolCallDelta(
+                                        index=tool_index_counter,
+                                        id=f"gemini-{tool_index_counter}",
+                                        function_name=_unsanitize_tool_name(fc.get("name", "")),
+                                        arguments_json_delta=json.dumps(args)
+                                        if isinstance(args, dict)
+                                        else str(args),
+                                    ),
+                                    model=model,
+                                    provider="google",
+                                )
+                                tool_index_counter += 1
+                        raw_reason = candidate.get("finishReason")
+                        if raw_reason:
+                            finish_reason = raw_reason.lower()
+
+                    usage = data.get("usageMetadata") or {}
+                    if usage:
+                        tokens_in = usage.get("promptTokenCount", tokens_in)
+                        tokens_out = usage.get("candidatesTokenCount", tokens_out)
+
+        except httpx.ConnectError as exc:
+            error_msg = f"Google stream connection failed: {exc}"
+            raise ProviderUnavailableError(error_msg) from exc
+        except httpx.TimeoutException as exc:
+            error_msg = f"Google stream timed out: {exc}"
+            raise ProviderUnavailableError(error_msg) from exc
+
+        yield LLMStreamChunk(
+            is_final=True,
+            finish_reason=finish_reason,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            model=model,
+            provider="google",
+        )
 
     # ── Helpers ─────────────────────────────────────────────────
 

@@ -127,6 +127,23 @@ class ThinkCompleted(Event):
     model: str = ""
     cost_usd: float = 0.0
     latency_ms: int = 0
+    streamed: bool = False
+    ttft_ms: int = 0
+
+    @property
+    def category(self) -> EventCategory:
+        """Event category."""
+        return EventCategory.COGNITIVE
+
+
+@dataclasses.dataclass(frozen=True)
+class ThinkStreamStarted(Event):
+    """Emitted when the first LLM token arrives during streaming."""
+
+    mind_id: str = ""
+    model: str = ""
+    provider: str = ""
+    ttft_ms: int = 0
 
     @property
     def category(self) -> EventCategory:

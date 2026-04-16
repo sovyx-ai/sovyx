@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import AsyncIterator, Sequence
 
 from sovyx.engine.protocols import (
     BrainReader,
@@ -95,6 +95,15 @@ class MockLLMProvider:
         max_tokens: int = 4096,
     ) -> object:
         return {"response": "mock"}
+
+    async def stream(
+        self,
+        messages: Sequence[dict[str, str]],
+        model: str,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ) -> AsyncIterator[object]:
+        yield {"delta": "mock"}  # pragma: no cover
 
 
 class MockChannelAdapter:

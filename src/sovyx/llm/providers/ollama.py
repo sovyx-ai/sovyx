@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 from typing import TYPE_CHECKING, Any
@@ -10,17 +11,19 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from sovyx.engine.errors import LLMError, ProviderUnavailableError
-from sovyx.llm.models import LLMResponse, ToolCall
+from sovyx.llm.models import LLMResponse, LLMStreamChunk, ToolCall, ToolCallDelta
 from sovyx.llm.providers._shared import (
+    _unsanitize_tool_name,
     format_tools_openai,
     parse_tool_calls_openai,
     retry_delay,
     safe_parse_json,
 )
+from sovyx.llm.providers._streaming import iter_ndjson_lines
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import AsyncIterator, Sequence
 
 logger = get_logger(__name__)
 
@@ -292,3 +295,97 @@ class OllamaProvider:
 
         error_msg = "Ollama: unexpected error"
         raise LLMError(error_msg)
+
+    async def stream(
+        self,
+        messages: Sequence[dict[str, str]],
+        model: str = "llama3.2:1b",
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> AsyncIterator[LLMStreamChunk]:
+        """Stream incremental chunks from Ollama.
+
+        Ollama NDJSON flow:
+            * Each JSON line carries ``message.content`` (text delta).
+            * The terminal line has ``done: true`` plus
+              ``prompt_eval_count`` / ``eval_count`` for usage.
+        """
+        url = f"{self._base_url}/api/chat"
+
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": list(messages),
+            "stream": True,
+            "options": {
+                "temperature": temperature,
+                "num_predict": max_tokens,
+            },
+        }
+        if tools:
+            payload["tools"] = format_tools_openai(tools)
+
+        tokens_in = 0
+        tokens_out = 0
+
+        try:
+            async with self._client.stream("POST", url, json=payload) as resp:
+                if resp.status_code != 200:  # noqa: PLR2004
+                    body = await resp.aread()
+                    error_msg = (
+                        f"Ollama stream error {resp.status_code}: "
+                        f"{body.decode('utf-8', errors='replace')[:200]}"
+                    )
+                    raise LLMError(error_msg)
+
+                async for data in iter_ndjson_lines(resp):
+                    if data.get("done"):
+                        tokens_in = data.get("prompt_eval_count", 0)
+                        tokens_out = data.get("eval_count", 0)
+                        break
+
+                    message = data.get("message", {}) or {}
+                    text = message.get("content", "") or ""
+                    if text:
+                        yield LLMStreamChunk(
+                            delta_text=text,
+                            model=data.get("model", model),
+                            provider="ollama",
+                        )
+
+                    # Ollama tool calls arrive complete in the message
+                    raw_tcs = message.get("tool_calls") or []
+                    for i, raw_tc in enumerate(raw_tcs):
+                        func = raw_tc.get("function", {})
+                        name = func.get("name", "")
+                        if name:
+                            name = _unsanitize_tool_name(name)
+                        args = func.get("arguments", {}) or {}
+                        yield LLMStreamChunk(
+                            tool_call_delta=ToolCallDelta(
+                                index=i,
+                                id=f"ollama-{i}",
+                                function_name=name,
+                                arguments_json_delta=json.dumps(args)
+                                if isinstance(args, dict)
+                                else str(args),
+                            ),
+                            model=data.get("model", model),
+                            provider="ollama",
+                        )
+
+        except httpx.ConnectError as exc:
+            error_msg = f"Ollama stream not reachable at {self._base_url}: {exc}"
+            raise ProviderUnavailableError(error_msg) from exc
+        except httpx.TimeoutException as exc:
+            error_msg = f"Ollama stream timed out: {exc}"
+            raise ProviderUnavailableError(error_msg) from exc
+
+        yield LLMStreamChunk(
+            is_final=True,
+            finish_reason="stop",
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            model=model,
+            provider="ollama",
+        )

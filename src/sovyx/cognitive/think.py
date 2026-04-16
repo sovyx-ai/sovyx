@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sovyx.llm.models import LLMResponse
+from sovyx.llm.models import LLMResponse, LLMStreamChunk
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
     from sovyx.cognitive.perceive import Perception
     from sovyx.context.assembler import ContextAssembler
     from sovyx.engine.types import MindId
@@ -114,6 +116,66 @@ class ThinkPhase:
                 provider="none",
             )
             return degraded, []
+
+    async def process_streaming(
+        self,
+        perception: Perception,
+        mind_id: MindId,
+        conversation_history: list[dict[str, str]],
+        person_name: str | None = None,
+    ) -> tuple[AsyncIterator[LLMStreamChunk], list[dict[str, str]]]:
+        """Think (streaming): assemble context → stream LLM → yield chunks.
+
+        Returns ``(chunk_iterator, assembled_messages)`` so the caller
+        can iterate chunks for real-time TTS while keeping the messages
+        for tool re-invocation if the stream ends with tool_calls.
+        """
+        try:
+            raw_complexity = perception.metadata.get("complexity", 0.5)
+            complexity = (
+                float(raw_complexity) if isinstance(raw_complexity, (int, float, str)) else 0.5
+            )
+            model = self._select_model(complexity)
+            context_window = self._router.get_context_window(model)
+
+            ctx = await self._assembler.assemble(
+                mind_id=mind_id,
+                current_message=perception.content,
+                conversation_history=conversation_history,
+                person_name=person_name,
+                complexity=complexity,
+                context_window=context_window,
+            )
+
+            tools: list[dict[str, object]] | None = None
+            if self._plugin_manager and self._plugin_manager.plugin_count > 0:
+                from sovyx.llm.router import LLMRouter as _LLMRouter
+
+                defs = self._plugin_manager.get_tool_definitions()
+                tools = _LLMRouter.tool_definitions_to_dicts(defs) or None
+
+            chunk_iter = self._router.stream(
+                messages=ctx.messages,
+                model=model,
+                temperature=self._mind_config.llm.temperature,
+                tools=tools,
+            )
+
+            return chunk_iter, ctx.messages
+
+        except Exception:
+            logger.exception("think_phase_streaming_failed")
+
+            async def _degraded_iter() -> AsyncIterator[LLMStreamChunk]:
+                yield LLMStreamChunk(
+                    delta_text=self._degradation_message,
+                    is_final=True,
+                    finish_reason="error",
+                    model="degraded",
+                    provider="none",
+                )
+
+            return _degraded_iter(), []
 
     def _select_model(self, complexity: float) -> str:
         """Select model based on complexity.

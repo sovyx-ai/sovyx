@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import AsyncIterator, Sequence
 
     from sovyx.engine.types import (
         ChannelType,
@@ -133,6 +133,22 @@ class LLMProvider(Protocol):
         tools: list[dict[str, object]] | None = None,
     ) -> object:
         """Generate a response from the LLM."""
+        ...
+
+    def stream(
+        self,
+        messages: Sequence[dict[str, str]],
+        model: str,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        tools: list[dict[str, object]] | None = None,
+    ) -> AsyncIterator[object]:
+        """Stream incremental :class:`LLMStreamChunk`-shaped objects.
+
+        Yields chunks as the model produces tokens. The final chunk has
+        ``is_final=True`` and carries final usage + finish_reason for
+        cost accounting (cloud providers emit usage only at end of SSE).
+        """
         ...
 
 

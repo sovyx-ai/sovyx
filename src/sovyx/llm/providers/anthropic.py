@@ -9,18 +9,20 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from sovyx.engine.errors import LLMError, ProviderUnavailableError
-from sovyx.llm.models import LLMResponse, ToolCall
+from sovyx.llm.models import LLMResponse, LLMStreamChunk, ToolCall, ToolCallDelta
 from sovyx.llm.pricing import PROVIDER_DEFAULT_PRICING, compute_cost
 from sovyx.llm.providers._shared import (
+    _unsanitize_tool_name,
     format_tools_anthropic,
     parse_tool_calls_anthropic,
     retry_delay,
     safe_parse_json,
 )
+from sovyx.llm.providers._streaming import iter_sse_events
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import AsyncIterator, Sequence
 
 logger = get_logger(__name__)
 
@@ -209,3 +211,162 @@ class AnthropicProvider:
 
         error_msg = "Anthropic: unexpected error"
         raise LLMError(error_msg)
+
+    async def stream(
+        self,
+        messages: Sequence[dict[str, str]],
+        model: str = "claude-sonnet-4-20250514",
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> AsyncIterator[LLMStreamChunk]:
+        """Stream incremental chunks from Claude.
+
+        Anthropic Messages SSE event flow:
+            * ``message_start`` — initial usage (input_tokens only).
+            * ``content_block_start`` — begins a text or tool_use block.
+            * ``content_block_delta`` — ``text_delta`` (visible text) or
+              ``input_json_delta`` (tool args being serialized).
+            * ``content_block_stop`` — block boundary (no payload needed).
+            * ``message_delta`` — final usage (output_tokens) and
+              stop_reason.
+            * ``message_stop`` — terminal marker.
+
+        Yields:
+            Per-chunk text deltas and tool-call deltas, then a final
+            ``is_final=True`` chunk with usage + finish_reason.
+        """
+        if not self.is_available:
+            msg = "Anthropic API key not configured"
+            raise ProviderUnavailableError(msg)
+
+        system_msg = ""
+        chat_messages: list[dict[str, str]] = []
+        for msg_item in messages:
+            if msg_item.get("role") == "system":
+                system_msg = msg_item.get("content", "")
+            else:
+                chat_messages.append(msg_item)
+
+        payload: dict[str, Any] = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "messages": chat_messages,
+            "stream": True,
+        }
+        if system_msg:
+            payload["system"] = system_msg
+        if tools:
+            payload["tools"] = format_tools_anthropic(tools)
+
+        headers = {
+            "x-api-key": self._api_key,
+            "anthropic-version": _API_VERSION,
+            "content-type": "application/json",
+        }
+
+        # Per-block tool-use accumulator. Block index -> (id, name, args_str).
+        # Anthropic emits tool_use as a sequence: content_block_start with
+        # id+name, then a stream of input_json_delta with partial JSON,
+        # then content_block_stop. We forward the deltas as ToolCallDelta
+        # so the router/cogloop can rebuild the final ToolCall.
+        tool_blocks: dict[int, dict[str, str]] = {}
+
+        tokens_in = 0
+        tokens_out = 0
+        finish_reason = "stop"
+
+        try:
+            async with self._client.stream(
+                "POST", _API_URL, json=payload, headers=headers
+            ) as resp:
+                if resp.status_code != 200:  # noqa: PLR2004
+                    body = await resp.aread()
+                    error_msg = (
+                        f"Anthropic stream error {resp.status_code}: "
+                        f"{body.decode('utf-8', errors='replace')[:200]}"
+                    )
+                    raise LLMError(error_msg)
+
+                async for event_type, data in iter_sse_events(resp):
+                    if event_type == "message_start":
+                        usage = data.get("message", {}).get("usage", {})
+                        tokens_in = usage.get("input_tokens", 0)
+                        continue
+
+                    if event_type == "content_block_start":
+                        index = data.get("index", 0)
+                        block = data.get("content_block", {})
+                        if block.get("type") == "tool_use":
+                            tool_blocks[index] = {
+                                "id": block.get("id", ""),
+                                "name": _unsanitize_tool_name(block.get("name", "")),
+                                "args": "",
+                            }
+                            yield LLMStreamChunk(
+                                tool_call_delta=ToolCallDelta(
+                                    index=index,
+                                    id=tool_blocks[index]["id"],
+                                    function_name=tool_blocks[index]["name"],
+                                ),
+                                model=model,
+                                provider="anthropic",
+                            )
+                        continue
+
+                    if event_type == "content_block_delta":
+                        index = data.get("index", 0)
+                        delta = data.get("delta", {})
+                        delta_type = delta.get("type")
+                        if delta_type == "text_delta":
+                            text = delta.get("text", "")
+                            if text:
+                                yield LLMStreamChunk(
+                                    delta_text=text,
+                                    model=model,
+                                    provider="anthropic",
+                                )
+                        elif delta_type == "input_json_delta":
+                            partial = delta.get("partial_json", "")
+                            if index in tool_blocks:
+                                tool_blocks[index]["args"] += partial
+                            yield LLMStreamChunk(
+                                tool_call_delta=ToolCallDelta(
+                                    index=index,
+                                    arguments_json_delta=partial,
+                                ),
+                                model=model,
+                                provider="anthropic",
+                            )
+                        continue
+
+                    if event_type == "message_delta":
+                        delta = data.get("delta", {})
+                        stop_reason = delta.get("stop_reason")
+                        if stop_reason:
+                            finish_reason = (
+                                "tool_use" if stop_reason == "tool_use" else stop_reason
+                            )
+                        usage = data.get("usage", {})
+                        if "output_tokens" in usage:
+                            tokens_out = usage["output_tokens"]
+                        continue
+
+                    # message_stop / content_block_stop / unknown — no-op.
+
+        except httpx.ConnectError as exc:
+            error_msg = f"Anthropic stream connection failed: {exc}"
+            raise ProviderUnavailableError(error_msg) from exc
+        except httpx.TimeoutException as exc:
+            error_msg = f"Anthropic stream timed out: {exc}"
+            raise ProviderUnavailableError(error_msg) from exc
+
+        yield LLMStreamChunk(
+            is_final=True,
+            finish_reason=finish_reason,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            model=model,
+            provider="anthropic",
+        )

@@ -6,6 +6,60 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-04-15
+
+**LLM streaming — router to voice pipeline (SPE-007 §streaming).**
+First-token latency drops from 3-7 s (full LLM response) to ~300 ms
+(first SSE chunk → TTS synthesis). The voice pipeline's speculative
+TTS path (`stream_text` / `flush_stream` / `start_thinking`) was
+scaffolded in v0.9 but never wired — this release closes the loop.
+
+### Added
+
+- `LLMStreamChunk` + `ToolCallDelta` models in `llm/models.py`.
+- `LLMProvider.stream()` method added to the Protocol — yields
+  `LLMStreamChunk` per token.
+- Streaming implementations for all 4 providers:
+  **Anthropic** (Messages SSE), **OpenAI** (Chat Completions SSE),
+  **Google** (Gemini `streamGenerateContent?alt=sse`), **Ollama**
+  (NDJSON `stream: true`).
+- `LLMRouter.stream()` — provider selection + complexity routing
+  identical to `generate()`; failover only before first chunk;
+  cost/metrics/events deferred to the final `is_final` chunk.
+- `ThinkStreamStarted` event with `ttft_ms` (time-to-first-token).
+  `ThinkCompleted` gains `streamed: bool` + `ttft_ms: int`.
+- `ThinkPhase.process_streaming()` — streaming counterpart of
+  `process()`. Degradation path yields a single fake chunk.
+- `CognitiveLoop.process_request_streaming(request, on_text_chunk)` —
+  streaming cognitive loop that reconstructs `LLMResponse` from
+  accumulated chunks for ActPhase + ReflectPhase. Tool-call streams
+  fall back to the normal ReAct path (no voice streaming during
+  tool execution — fillers continue playing).
+- `VoiceCognitiveBridge` (`voice/cognitive_bridge.py`) — wires
+  `pipeline.start_thinking()` → `cogloop.process_request_streaming`
+  → `pipeline.stream_text` → `pipeline.flush_stream`.
+- Shared SSE/NDJSON parsers in `llm/providers/_streaming.py`
+  (`iter_sse_events`, `iter_ndjson_lines`).
+
+### Design decisions
+
+- **Output guard**: runs on the FINAL text only (option A). If the
+  guard rejects, `pipeline.output.interrupt()` stops playback. Per-
+  chunk regex guard deferred to V2.
+- **Tool-use mid-stream**: when `finish_reason="tool_use"`, no chunks
+  reach the voice pipeline — filler continues. Only the final post-
+  tool response is spoken (non-streamed — V2 work).
+- **Failover**: only before the first chunk. Once a provider starts
+  emitting, mid-stream errors propagate to the caller.
+- **Cost accounting**: waits for the `is_final` chunk because cloud
+  providers emit usage only at SSE stream end.
+
+### Tests
+
+- 12 unit tests: SSE parser, NDJSON parser, LLMStreamChunk shape,
+  Router stream provider selection + accounting, CognitiveLoop
+  streaming chunk forwarding + LLMResponse reconstruction.
+
 ## [0.12.1] — 2026-04-15
 
 **PAD 3D emotional model (ADR-001).** The single highest-priority

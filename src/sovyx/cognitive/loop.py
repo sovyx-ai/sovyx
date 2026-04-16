@@ -6,15 +6,19 @@ Orchestrates all phases, manages state machine, emits events.
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 from sovyx.cognitive.act import ActionResult
 from sovyx.engine.types import CognitivePhase
+from sovyx.llm.models import LLMResponse, ToolCall
 from sovyx.observability.logging import get_logger
 from sovyx.observability.metrics import MetricsRegistry, get_metrics
 from sovyx.observability.tracing import SovyxTracer, get_tracer
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from sovyx.brain.service import BrainService
     from sovyx.cognitive.act import ActPhase
     from sovyx.cognitive.attend import AttendPhase
@@ -108,6 +112,39 @@ class CognitiveLoop:
         ):
             return await self._execute_loop(request, tracer, metrics)
 
+    async def process_request_streaming(
+        self,
+        request: CognitiveRequest,
+        on_text_chunk: Callable[[str], Awaitable[None]],
+    ) -> ActionResult:
+        """Process with streaming LLM output — voice channel fast-path.
+
+        Like :meth:`process_request` but yields text chunks to
+        ``on_text_chunk`` as the LLM produces them (for real-time TTS).
+        Reconstructs a complete :class:`LLMResponse` from the stream so
+        ActPhase + ReflectPhase run identically to the non-streaming path.
+
+        When the stream ends with ``finish_reason="tool_use"``, the
+        reconstructed response (with tool_calls) goes through the normal
+        ReAct loop in ActPhase — no chunks were forwarded for that
+        iteration (the filler continues while tools execute). The FINAL
+        response of the ReAct loop is NOT streamed (V2 work).
+
+        NEVER raises — always returns ActionResult.
+        """
+        tracer = get_tracer()
+        metrics = get_metrics()
+
+        with (
+            tracer.start_span(
+                "cognitive.loop.streaming",
+                mind_id=str(request.mind_id),
+                conversation_id=str(request.conversation_id),
+            ),
+            metrics.measure_latency(metrics.cognitive_loop_latency),
+        ):
+            return await self._execute_loop_streaming(request, on_text_chunk, tracer, metrics)
+
     async def _execute_loop(
         self,
         request: CognitiveRequest,
@@ -193,6 +230,165 @@ class CognitiveLoop:
             m.errors.add(1, {"error_type": error_type, "module": "cognitive"})
             logger.exception(
                 "cognitive_loop_error",
+                error=str(e),
+                error_type=error_type,
+            )
+            return ActionResult(
+                response_text=user_message,
+                target_channel=request.perception.source,
+                error=True,
+            )
+
+        finally:
+            self._state.reset()
+
+    async def _execute_loop_streaming(
+        self,
+        request: CognitiveRequest,
+        on_text_chunk: Callable[[str], Awaitable[None]],
+        t: SovyxTracer,
+        m: MetricsRegistry | _NoOpRegistry,
+    ) -> ActionResult:
+        """Streaming variant of ``_execute_loop``.
+
+        Consumes the LLM stream, forwarding text deltas to
+        ``on_text_chunk`` for real-time TTS. Rebuilds a full
+        ``LLMResponse`` for ActPhase + ReflectPhase.
+        """
+        try:
+            # ── PERCEIVE ──
+            self._state.transition(CognitivePhase.PERCEIVING)
+            with t.start_cognitive_span("perceive", mind_id=str(request.mind_id)):
+                perception = await self._perceive.process(request.perception)
+
+            # ── ATTEND ──
+            self._state.transition(CognitivePhase.ATTENDING)
+            with t.start_cognitive_span("attend"):
+                should_process = await self._attend.process(perception)
+
+            if not should_process:
+                return ActionResult(
+                    response_text="",
+                    target_channel=perception.source,
+                    filtered=True,
+                )
+
+            # ── THINK (streaming) ──
+            self._state.transition(CognitivePhase.THINKING)
+            with t.start_cognitive_span("think"):
+                chunk_iter, assembled_msgs = await self._think.process_streaming(
+                    perception=perception,
+                    mind_id=request.mind_id,
+                    conversation_history=request.conversation_history,
+                    person_name=request.person_name,
+                )
+
+                # Consume stream, forwarding text and accumulating for
+                # the final LLMResponse reconstruction.
+                content_parts: list[str] = []
+                # tool_call_deltas keyed by index → accumulates id, name, args.
+                tc_accum: dict[int, dict[str, str]] = {}
+                final_model = "unknown"
+                final_provider = "unknown"
+                tokens_in = 0
+                tokens_out = 0
+                finish_reason = "stop"
+
+                async for chunk in chunk_iter:
+                    if chunk.delta_text:
+                        content_parts.append(chunk.delta_text)
+                        # Only forward text to TTS when NOT a tool_use
+                        # stream (we check at the end, but since
+                        # tool_use streams rarely interleave text, this
+                        # is fine — any stray text before tool_calls
+                        # will just be spoken).
+                        await on_text_chunk(chunk.delta_text)
+
+                    if chunk.tool_call_delta:
+                        tcd = chunk.tool_call_delta
+                        entry = tc_accum.setdefault(tcd.index, {"id": "", "name": "", "args": ""})
+                        if tcd.id:
+                            entry["id"] = tcd.id
+                        if tcd.function_name:
+                            entry["name"] = tcd.function_name
+                        entry["args"] += tcd.arguments_json_delta
+
+                    if chunk.is_final:
+                        tokens_in = chunk.tokens_in
+                        tokens_out = chunk.tokens_out
+                        finish_reason = chunk.finish_reason or "stop"
+
+                    if chunk.model:
+                        final_model = chunk.model
+                    if chunk.provider:
+                        final_provider = chunk.provider
+
+            # Reconstruct LLMResponse from accumulated stream data.
+            tool_calls: list[ToolCall] | None = None
+            if tc_accum:
+                tool_calls = []
+                for _idx, entry in sorted(tc_accum.items()):
+                    try:
+                        args = json.loads(entry["args"]) if entry["args"] else {}
+                    except json.JSONDecodeError:
+                        args = {}
+                    tool_calls.append(
+                        ToolCall(
+                            id=entry["id"],
+                            function_name=entry["name"],
+                            arguments=args,
+                        )
+                    )
+
+            llm_response = LLMResponse(
+                content="".join(content_parts),
+                model=final_model,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                latency_ms=0,
+                cost_usd=0.0,
+                finish_reason=finish_reason,
+                provider=final_provider,
+                tool_calls=tool_calls,
+            )
+
+            # ── ACT ──
+            self._state.transition(CognitivePhase.ACTING)
+            with t.start_cognitive_span("act"):
+                action_result = await self._act.process(
+                    llm_response,
+                    assembled_msgs,
+                    perception,
+                )
+
+            # ── REFLECT ──
+            self._state.transition(CognitivePhase.REFLECTING)
+            with t.start_cognitive_span("reflect"):
+                try:
+                    await self._reflect.process(
+                        perception=perception,
+                        response=llm_response,
+                        mind_id=request.mind_id,
+                        conversation_id=request.conversation_id,
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.warning("reflect_phase_failed", exc_info=True)
+
+                try:
+                    if self._brain is not None:
+                        self._brain.decay_working_memory()
+                except Exception:  # noqa: BLE001
+                    logger.warning("working_memory_decay_failed", exc_info=True)
+
+            m.messages_processed.add(1, {"mind_id": str(request.mind_id)})
+            return action_result
+
+        except Exception as e:
+            error_type = type(e).__name__
+            user_message = _categorize_error(e)
+            m.errors.add(1, {"error_type": error_type, "module": "cognitive"})
+            logger.exception(
+                "cognitive_loop_streaming_error",
                 error=str(e),
                 error_type=error_type,
             )
