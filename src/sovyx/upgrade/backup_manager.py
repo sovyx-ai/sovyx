@@ -3,7 +3,7 @@
 Provides :class:`BackupManager` for creating, listing, restoring, and pruning
 local database backups. Each backup is a SQLite ``VACUUM INTO`` snapshot named
 with trigger type and timestamp.  Optional at-rest encryption uses the
-:class:`~sovyx.cloud.crypto.BackupCrypto` (Argon2id + AES-256-GCM).
+an optional crypto provider (Argon2id + AES-256-GCM, provided by sovyx-cloud).
 
 Retention policy (per trigger type)::
 
@@ -28,7 +28,6 @@ from sovyx.engine.errors import PersistenceError
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
-    from sovyx.cloud.crypto import BackupCrypto
     from sovyx.persistence.pool import DatabasePool
 
 logger = get_logger(__name__)
@@ -92,7 +91,7 @@ class BackupManager:
         db: Async database pool for executing ``VACUUM INTO``.
         backup_dir: Directory where backups are stored.  Defaults to
             ``~/.sovyx/backups``.
-        crypto: Optional :class:`BackupCrypto` instance for at-rest encryption.
+        crypto: Optional :class:`object` instance for at-rest encryption.
         passphrase: Passphrase for encryption (required when *crypto* is set).
     """
 
@@ -101,7 +100,7 @@ class BackupManager:
         db: DatabasePool,
         *,
         backup_dir: Path | None = None,
-        crypto: BackupCrypto | None = None,
+        crypto: object | None = None,
         passphrase: str | None = None,
     ) -> None:
         self._db = db
@@ -146,7 +145,7 @@ class BackupManager:
             encrypted_path = backup_path.with_suffix(".db.enc")
             try:
                 raw = backup_path.read_bytes()
-                encrypted = self._crypto.encrypt(raw, self._passphrase)
+                encrypted = self._crypto.encrypt(raw, self._passphrase)  # type: ignore[attr-defined]
                 encrypted_path.write_bytes(encrypted)
                 backup_path.unlink()
                 backup_path = encrypted_path
@@ -216,7 +215,7 @@ class BackupManager:
                 msg = "Cannot restore encrypted backup without crypto and passphrase"
                 raise BackupError(msg)
             raw = backup_path.read_bytes()
-            data = self._crypto.decrypt(raw, self._passphrase)
+            data = self._crypto.decrypt(raw, self._passphrase)  # type: ignore[attr-defined]
 
         # Write to temp file for integrity check (if encrypted)
         check_path = backup_path

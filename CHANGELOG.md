@@ -6,6 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.13.2] — 2026-04-16
+
+**Open-core separation — commercial layer moved to sovyx-cloud.**
+
+### Changed
+
+- **`cloud/` module removed** — billing, licensing, marketplace, backup
+  orchestration, dunning, flex balance, usage cascade, API keys, LLM proxy,
+  and all Stripe integration moved to the private `sovyx-cloud` package.
+  The open-source daemon runs 100% standalone without cloud services.
+
+### Added
+
+- **`sovyx.tiers`** — `ServiceTier` enum, `TIER_FEATURES`, `TIER_MIND_LIMITS`,
+  `VALID_TIERS`. Informational only — tier resolution requires `sovyx-cloud`.
+- **`sovyx.license`** — `LicenseValidator` (Ed25519 public key JWT verification),
+  `LicenseStatus`, `LicenseClaims`, `LicenseInfo`. Validates licenses offline;
+  token issuance lives in `sovyx-cloud`.
+
+### Removed
+
+- `src/sovyx/cloud/` (14 files, ~6 460 LOC) — moved to `sovyx-cloud`.
+- `src/sovyx/dashboard/routes/marketplace.py` — moved to `sovyx-cloud`.
+- `src/sovyx/persistence/schemas/marketplace.py` — moved to `sovyx-cloud`.
+- `tests/unit/cloud/` (12 test files) — moved to `sovyx-cloud`.
+- `tests/property/test_billing_invariants.py` — moved to `sovyx-cloud`.
+- `tests/property/test_dunning_invariants.py` — moved to `sovyx-cloud`.
+
 ## [0.13.1] — 2026-04-15
 
 **6 new LLM providers via OpenAI-compatible base class.**
