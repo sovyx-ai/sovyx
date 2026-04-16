@@ -181,12 +181,14 @@ async def get_health(request: Request) -> JSONResponse:
 
     overall = HealthRegistry().summary(all_results)
 
-    # Emit ServiceHealthChanged for any check that changed status
+    # Emit ServiceHealthChanged on first poll (seeds Live Feed) and on status change
     prev: dict[str, str] = getattr(request.app.state, "_prev_health", {})
     ws_manager = getattr(request.app.state, "ws_manager", None)
+    is_first_poll = len(prev) == 0
     for r in all_results:
         old_status = prev.get(r.name)
-        if old_status is not None and old_status != r.status.value and ws_manager is not None:
+        changed = old_status is not None and old_status != r.status.value
+        if (is_first_poll or changed) and ws_manager is not None:
             await ws_manager.broadcast(
                 {
                     "type": "ServiceHealthChanged",
