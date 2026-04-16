@@ -213,6 +213,22 @@ class LLMRouter:
             for p in providers
         }
 
+    def add_provider(self, provider: LLMProvider) -> None:
+        """Hot-register a new provider at runtime.
+
+        Idempotent — if a provider with the same name already exists,
+        it is replaced. A new circuit breaker is created for the provider.
+        """
+        existing = [p for p in self._providers if p.name != provider.name]
+        existing.append(provider)
+        self._providers = existing
+        if provider.name not in self._circuits:
+            self._circuits[provider.name] = CircuitBreaker(
+                failure_threshold=3,
+                recovery_timeout_s=60,
+            )
+        logger.info("llm_provider_hot_registered", provider=provider.name)
+
     def get_context_window(self, model: str | None = None) -> int:
         """Get context window from the provider that serves this model.
 

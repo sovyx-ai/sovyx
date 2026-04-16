@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useNavigate } from "react-router";
 import { useTranslation } from "react-i18next";
 import { DollarSignIcon, BrainIcon, MessageSquareIcon, ActivityIcon, WifiOffIcon, RefreshCwIcon } from "lucide-react";
 import { useDashboardStore } from "@/stores/dashboard";
@@ -31,6 +32,7 @@ function smartValue(
 
 export default function OverviewPage() {
   const { t } = useTranslation(["overview", "common"]);
+  const navigate = useNavigate();
   const status = useDashboardStore((s) => s.status);
   const healthChecks = useDashboardStore((s) => s.healthChecks);
   const connected = useDashboardStore((s) => s.connected);
@@ -40,6 +42,25 @@ export default function OverviewPage() {
     step1, step2, step3, completedCount, allDone,
     showBanner, showAliveCard, setDismissed,
   } = useOnboardingProgress();
+
+  useEffect(() => {
+    if (!status) return;
+    const noProvider =
+      !status.llm_calls_today &&
+      !status.llm_cost_today &&
+      !status.memory_concepts &&
+      !status.messages_today;
+    if (noProvider && step1 === "pending") {
+      import("@/lib/api").then(({ api }) => {
+        api
+          .get<{ complete: boolean }>("/api/onboarding/state")
+          .then((state) => {
+            if (!state.complete) navigate("/onboarding", { replace: true });
+          })
+          .catch(() => {});
+      });
+    }
+  }, [status, step1, navigate]);
 
   // ── Transition: WelcomeBanner → MindAliveCard (Cenário A vs B) ──
   // Cenário A: user WITNESSES allDone becoming true → animated transition

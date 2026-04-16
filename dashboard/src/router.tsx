@@ -30,6 +30,7 @@ const VoicePage = lazy(() => import("@/pages/voice"));
 const ChatPage = lazy(() => import("@/pages/chat"));
 const PluginsPage = lazy(() => import("@/pages/plugins"));
 const NotFoundPage = lazy(() => import("@/pages/not-found"));
+const OnboardingPage = lazy(() => import("@/pages/onboarding"));
 
 function PageWrapper({
   name,
@@ -57,6 +58,16 @@ function PageWrapper({
 }
 
 export const router = createBrowserRouter([
+  {
+    path: "onboarding",
+    element: (
+      <ErrorBoundary name="route.onboarding">
+        <Suspense fallback={null}>
+          <OnboardingPage />
+        </Suspense>
+      </ErrorBoundary>
+    ),
+  },
   {
     element: <AppLayout />,
     children: [
