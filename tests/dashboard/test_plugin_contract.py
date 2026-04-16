@@ -145,6 +145,7 @@ class TestPluginInfoContract:
             "tags",
             "icon_url",
             "pricing",
+            "has_setup",
         }
         assert set(p.keys()) == expected_fields
 

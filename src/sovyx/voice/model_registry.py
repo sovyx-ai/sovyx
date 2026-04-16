@@ -10,9 +10,12 @@ Model files cached at ~/.sovyx/models/voice/.
 from __future__ import annotations
 
 import dataclasses
+import sys
 from pathlib import Path
 
 from sovyx.observability.logging import get_logger
+
+_self = sys.modules[__name__]
 
 logger = get_logger(__name__)
 
@@ -131,7 +134,7 @@ async def ensure_silero_vad(model_dir: Path | None = None) -> Path:
         destination=str(model_path),
     )
 
-    await asyncio.to_thread(_download_file, info.url, model_path)
+    await asyncio.to_thread(_self._download_file, info.url, model_path)
     logger.info("silero_vad_downloaded", path=str(model_path))
     return model_path
 
