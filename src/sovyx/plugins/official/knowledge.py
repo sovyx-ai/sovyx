@@ -25,6 +25,7 @@ import typing
 from collections import deque
 from typing import ClassVar
 
+from sovyx.plugins.permissions import Permission
 from sovyx.plugins.sdk import ISovyxPlugin, tool
 
 if typing.TYPE_CHECKING:  # pragma: no cover
@@ -172,6 +173,21 @@ class KnowledgePlugin(ISovyxPlugin):
     @property
     def version(self) -> str:
         return "2.0.0"
+
+    @property
+    def permissions(self) -> list[Permission]:
+        return [Permission.BRAIN_READ, Permission.BRAIN_WRITE]
+
+    async def setup(self, ctx: object) -> None:
+        brain = getattr(ctx, "brain", None)
+        if brain is not None:
+            self._brain = brain
+        config = getattr(ctx, "config", {})
+        if isinstance(config, dict):
+            if "dedup_threshold" in config:
+                self._dedup_threshold = max(0.5, min(0.99, float(config["dedup_threshold"])))
+            if "max_results" in config:
+                self._max_results = max(1, min(50, int(config["max_results"])))
 
     @property
     def description(self) -> str:
