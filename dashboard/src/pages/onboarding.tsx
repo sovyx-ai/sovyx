@@ -1,11 +1,12 @@
 /**
  * OnboardingPage -- full-page first-run wizard.
  *
- * Four steps:
+ * Five steps:
  *   1. Choose LLM provider + enter API key (or select Ollama)
  *   2. Personality preset + companion name + language (skippable)
  *   3. Connect channels — Telegram hot-add (skippable)
- *   4. First conversation (live chat with dynamic mind name)
+ *   4. Set up Voice — hot-enable or install instructions (skippable)
+ *   5. First conversation (live chat with dynamic mind name)
  *
  * After completion, marks onboarding_complete and redirects to overview.
  */
@@ -17,6 +18,7 @@ import {
   ProviderStep,
   PersonalityStep,
   ChannelsStep,
+  VoiceStep,
   FirstChatStep,
 } from "@/components/onboarding";
 
@@ -30,7 +32,7 @@ interface OnboardingState {
   ollama_models: string[];
 }
 
-const TOTAL_STEPS = 4;
+const TOTAL_STEPS = 5;
 
 export default function OnboardingPage() {
   const navigate = useNavigate();
@@ -76,6 +78,10 @@ export default function OnboardingPage() {
 
   const handleChannelsDone = useCallback(() => {
     setStep(4);
+  }, []);
+
+  const handleVoiceDone = useCallback(() => {
+    setStep(5);
   }, []);
 
   const handleComplete = useCallback(async () => {
@@ -138,6 +144,13 @@ export default function OnboardingPage() {
         )}
 
         {step === 4 && (
+          <VoiceStep
+            onConfigured={handleVoiceDone}
+            onSkip={handleVoiceDone}
+          />
+        )}
+
+        {step === 5 && (
           <FirstChatStep
             mindName={mindName}
             provider={provider}
