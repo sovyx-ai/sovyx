@@ -4,6 +4,7 @@
   "placeholder": "Type a message...",
   "send": "Send",
   "sending": "Thinking...",
+  "thinking": "Thinking...",
   "empty": {
     "title": "Start a conversation",
     "description": "Send a message to begin chatting with your mind."

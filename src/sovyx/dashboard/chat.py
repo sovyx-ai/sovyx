@@ -245,7 +245,9 @@ async def handle_chat_message(
     response_text = ""
     buttons_payload: list[dict[str, str]] | None = None
 
-    if result is not None and not result.filtered:
+    if result is not None and result.filtered:
+        response_text = "I can't respond to that request."
+    elif result is not None and not result.filtered:
         response_text = result.response_text
 
         # ── Financial confirmation pending → include buttons ──

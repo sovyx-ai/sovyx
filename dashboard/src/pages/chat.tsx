@@ -2,15 +2,14 @@
  * Chat page — direct conversation with the mind via POST /api/chat.
  *
  * Features:
- * - Message input with Enter to send
+ * - Message input with Enter to send, Shift+Enter for newline
  * - Scrollable message thread (user right, AI left)
+ * - Smart auto-scroll (only when near bottom)
+ * - Floating "scroll to bottom" button
  * - Loading indicator while AI processes
- * - Auto-scroll to latest message
+ * - Retry on error
+ * - Per-message cost display
  * - Conversation continuity via conversation_id
- * - New chat button to reset
- * - Error display with retry
- *
- * DASH-03: Core chat page for dashboard synergy mission.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -21,6 +20,7 @@ import {
   PlusIcon,
   Loader2Icon,
   AlertTriangleIcon,
+  ArrowDownIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -35,7 +35,6 @@ import { LetterAvatar, MindAvatar } from "@/components/dashboard/letter-avatar";
 import { ErrorBoundary } from "@/components/error-boundary";
 import type { ChatResponse } from "@/types/api";
 
-/** Generate a local ID for optimistic UI messages. */
 function localId(): string {
   return `local-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -43,7 +42,6 @@ function localId(): string {
 export default function ChatPage() {
   const { t } = useTranslation(["chat", "common"]);
 
-  // ── Store state ──
   const messages = useDashboardStore((s) => s.chatMessages);
   const loading = useDashboardStore((s) => s.chatLoading);
   const conversationId = useDashboardStore((s) => s.chatConversationId);
@@ -54,26 +52,45 @@ export default function ChatPage() {
   const setError = useDashboardStore((s) => s.setChatError);
   const clearChat = useDashboardStore((s) => s.clearChat);
 
-  // ── Local state ──
   const [input, setInput] = useState("");
+  const [lastMessage, setLastMessage] = useState("");
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const userScrolledRef = useRef(false);
 
-  // ── Auto-scroll on new messages ──
+  // ── Smart auto-scroll ──
   useEffect(() => {
-    // scrollIntoView may not exist in test environments (jsdom)
-    if (bottomRef.current && typeof bottomRef.current.scrollIntoView === "function") {
+    if (!userScrolledRef.current && bottomRef.current && typeof bottomRef.current.scrollIntoView === "function") {
       bottomRef.current.scrollIntoView({ behavior: "smooth" });
     }
   }, [messages.length, loading]);
 
-  // ── Focus input on mount ──
+  // ── Track user scroll ──
+  useEffect(() => {
+    const el = scrollAreaRef.current?.querySelector("[data-radix-scroll-area-viewport]");
+    if (!el) return;
+    const handleScroll = () => {
+      const near = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+      userScrolledRef.current = !near;
+      setShowScrollBtn(!near);
+    };
+    el.addEventListener("scroll", handleScroll, { passive: true });
+    return () => el.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    userScrolledRef.current = false;
+    setShowScrollBtn(false);
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, []);
+
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
 
-  // ── Cleanup abort on unmount ──
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
@@ -81,14 +98,13 @@ export default function ChatPage() {
   }, []);
 
   // ── Send message ──
-  const sendMessage = useCallback(async () => {
-    const text = input.trim();
+  const sendMessageText = useCallback(async (text: string) => {
     if (!text || loading) return;
 
     setInput("");
     setError(null);
+    setLastMessage(text);
 
-    // Optimistic: add user message immediately
     const userMsg = {
       id: localId(),
       role: "user" as const,
@@ -97,8 +113,8 @@ export default function ChatPage() {
     };
     addMessage(userMsg);
     setLoading(true);
+    userScrolledRef.current = false;
 
-    // Cancel any in-flight request
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -114,12 +130,10 @@ export default function ChatPage() {
         { signal: controller.signal, schema: ChatResponseSchema },
       );
 
-      // Store conversation ID for continuity
       if (resp.conversation_id && resp.conversation_id !== conversationId) {
         setConversationId(resp.conversation_id);
       }
 
-      // Add AI response
       const aiMsg = {
         id: localId(),
         role: "assistant" as const,
@@ -134,27 +148,34 @@ export default function ChatPage() {
       setError(t("error.loadFailed"));
     } finally {
       setLoading(false);
-      // Re-focus input after send
       inputRef.current?.focus();
     }
-  }, [input, loading, conversationId, addMessage, setLoading, setConversationId, setError, t]);
+  }, [loading, conversationId, addMessage, setLoading, setConversationId, setError, t]);
 
-  // ── Handle keyboard ──
+  const sendMessage = useCallback(() => {
+    void sendMessageText(input.trim());
+  }, [input, sendMessageText]);
+
+  const retryLastMessage = useCallback(() => {
+    if (lastMessage) {
+      setError(null);
+      void sendMessageText(lastMessage);
+    }
+  }, [lastMessage, sendMessageText]);
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        void sendMessage();
+        sendMessage();
       }
     },
     [sendMessage],
   );
 
-  // ── Auto-resize textarea ──
   const handleInputChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       setInput(e.target.value);
-      // Auto-resize: reset then set to scrollHeight
       const el = e.target;
       el.style.height = "auto";
       el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
@@ -162,17 +183,17 @@ export default function ChatPage() {
     [],
   );
 
-  // ── New chat ──
   const handleNewChat = useCallback(() => {
     abortRef.current?.abort();
     clearChat();
     setInput("");
+    setLastMessage("");
     inputRef.current?.focus();
   }, [clearChat]);
 
   return (
     <div className="flex h-full flex-col" data-testid="chat-page">
-      {/* ── Header ── */}
+      {/* Header */}
       <div className="flex items-center justify-between border-b border-[var(--svx-color-border-subtle)] px-6 py-4">
         <div>
           <h1 className="text-xl font-semibold text-[var(--svx-color-text-primary)]">
@@ -183,111 +204,108 @@ export default function ChatPage() {
           </p>
         </div>
         {messages.length > 0 && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleNewChat}
-            className="gap-2"
-          >
+          <Button variant="outline" size="sm" onClick={handleNewChat} className="gap-2">
             <PlusIcon className="size-4" />
             {t("newChat")}
           </Button>
         )}
       </div>
 
-      {/* ── Message Thread ── */}
-      {/*
-        Boundary isolates a crash in message rendering (e.g. MarkdownContent
-        choking on a pathological assistant response) so the Input Area
-        below stays usable and the user can start a new chat.
-      */}
+      {/* Message Thread */}
       <ErrorBoundary name="section.chat.thread" variant="section">
-        <ScrollArea className="flex-1">
-          <div className="mx-auto max-w-3xl">
-            {messages.length === 0 && !loading ? (
-              <EmptyState
-                icon={<MessageSquareIcon className="size-8" />}
-                title={t("empty.title")}
-                description={t("empty.description")}
-                className="h-[60vh]"
-              />
-            ) : (
-              <div className="space-y-1 py-4">
-                {messages.map((msg) => (
-                  <div
-                    key={msg.id}
-                    className={cn(
-                      "flex gap-3 px-4 py-2",
-                      msg.role === "user" ? "flex-row-reverse" : "flex-row",
-                    )}
-                  >
-                    {/* Avatar */}
-                    <div className="shrink-0 pt-1">
-                      {msg.role === "user" ? (
-                        <LetterAvatar name={t("you")} />
-                      ) : (
-                        <MindAvatar />
-                      )}
-                    </div>
-
-                    {/* Bubble */}
+        <div className="relative flex-1" ref={scrollAreaRef}>
+          <ScrollArea className="h-full">
+            <div className="mx-auto max-w-3xl">
+              {messages.length === 0 && !loading ? (
+                <EmptyState
+                  icon={<MessageSquareIcon className="size-8" />}
+                  title={t("empty.title")}
+                  description={t("empty.description")}
+                  className="h-[60vh]"
+                />
+              ) : (
+                <div className="space-y-1 py-4">
+                  {messages.map((msg) => (
                     <div
+                      key={msg.id}
                       className={cn(
-                        "max-w-[75%] space-y-1",
-                        msg.role === "user" ? "items-end" : "items-start",
+                        "flex gap-3 px-4 py-2",
+                        msg.role === "user" ? "flex-row-reverse" : "flex-row",
                       )}
                     >
-                      {msg.role === "assistant" && msg.tags && msg.tags.length > 0 && (
-                        <MessageTags tags={msg.tags} />
-                      )}
-                      <div
-                        className={cn(
-                          "rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
-                          msg.role === "user"
-                            ? "rounded-tr-sm bg-[var(--svx-color-brand-subtle)] text-[var(--svx-color-text-primary)]"
-                            : "rounded-tl-sm bg-[var(--svx-color-bg-elevated)] text-[var(--svx-color-text-primary)]",
-                        )}
-                      >
-                        {msg.role === "user" ? (
-                          <p className="whitespace-pre-wrap break-words">{msg.content}</p>
-                        ) : (
-                          <MarkdownContent content={msg.content} />
-                        )}
+                      <div className="shrink-0 pt-1">
+                        {msg.role === "user" ? <LetterAvatar name={t("you")} /> : <MindAvatar />}
                       </div>
-                      <span className="block px-1 text-[10px] text-[var(--svx-color-text-secondary)]">
-                        {formatTimeShort(msg.timestamp)}
-                      </span>
+                      <div className={cn("max-w-[75%] space-y-1", msg.role === "user" ? "items-end" : "items-start")}>
+                        {msg.role === "assistant" && msg.tags && msg.tags.length > 0 && (
+                          <MessageTags tags={msg.tags} />
+                        )}
+                        <div
+                          className={cn(
+                            "rounded-2xl px-4 py-2.5 text-sm leading-relaxed",
+                            msg.role === "user"
+                              ? "rounded-tr-sm bg-[var(--svx-color-brand-subtle)] text-[var(--svx-color-text-primary)]"
+                              : "rounded-tl-sm bg-[var(--svx-color-bg-elevated)] text-[var(--svx-color-text-primary)]",
+                          )}
+                        >
+                          {msg.role === "user" ? (
+                            <p className="whitespace-pre-wrap break-words">{msg.content}</p>
+                          ) : (
+                            <MarkdownContent content={msg.content} />
+                          )}
+                        </div>
+                        <span className="block px-1 text-[10px] text-[var(--svx-color-text-secondary)]">
+                          {formatTimeShort(msg.timestamp)}
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
 
-                {/* Loading indicator */}
-                {loading && (
-                  <div className="flex gap-3 px-4 py-2" data-testid="chat-loading">
-                    <div className="shrink-0 pt-1">
-                      <MindAvatar />
+                  {/* Loading indicator */}
+                  {loading && (
+                    <div className="flex gap-3 px-4 py-2" data-testid="chat-loading">
+                      <div className="shrink-0 pt-1">
+                        <MindAvatar />
+                      </div>
+                      <div className="flex items-center gap-2 rounded-2xl rounded-tl-sm bg-[var(--svx-color-bg-elevated)] px-4 py-2.5">
+                        <Loader2Icon className="size-4 animate-spin text-[var(--svx-color-brand-primary)]" />
+                        <span className="text-sm text-[var(--svx-color-text-secondary)]">
+                          {t("thinking")}
+                        </span>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-2 rounded-2xl rounded-tl-sm bg-[var(--svx-color-bg-elevated)] px-4 py-2.5">
-                      <Loader2Icon className="size-4 animate-spin text-[var(--svx-color-brand-primary)]" />
-                      <span className="text-sm text-[var(--svx-color-text-secondary)]">
-                        {t("sending")}
-                      </span>
-                    </div>
-                  </div>
-                )}
+                  )}
 
-                <div ref={bottomRef} />
-              </div>
-            )}
-          </div>
-        </ScrollArea>
+                  <div ref={bottomRef} />
+                </div>
+              )}
+            </div>
+          </ScrollArea>
+
+          {/* Scroll to bottom button */}
+          {showScrollBtn && (
+            <button
+              type="button"
+              onClick={scrollToBottom}
+              className="absolute bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-full border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-2 shadow-lg transition-opacity hover:bg-[var(--svx-color-bg-elevated)]"
+              aria-label="Scroll to bottom"
+            >
+              <ArrowDownIcon className="size-4 text-[var(--svx-color-text-secondary)]" />
+            </button>
+          )}
+        </div>
       </ErrorBoundary>
 
-      {/* ── Error Banner ── */}
+      {/* Error Banner with Retry */}
       {error && (
         <div className="mx-auto flex max-w-3xl items-center gap-2 px-6 py-2 text-sm text-red-400">
           <AlertTriangleIcon className="size-4 shrink-0" />
           <span>{error}</span>
+          {lastMessage && (
+            <Button variant="ghost" size="sm" onClick={retryLastMessage} className="ml-2 text-xs">
+              {t("common:actions.retry")}
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="sm"
@@ -299,7 +317,7 @@ export default function ChatPage() {
         </div>
       )}
 
-      {/* ── Input Area ── */}
+      {/* Input Area */}
       <ErrorBoundary name="section.chat.input" variant="section">
         <div className="border-t border-[var(--svx-color-border-subtle)] px-6 py-4">
           <div className="mx-auto flex max-w-3xl items-end gap-3">
@@ -322,7 +340,7 @@ export default function ChatPage() {
               data-testid="chat-input"
             />
             <Button
-              onClick={() => void sendMessage()}
+              onClick={sendMessage}
               disabled={!input.trim() || loading}
               size="icon"
               className={cn(
@@ -333,11 +351,7 @@ export default function ChatPage() {
               )}
               data-testid="chat-send"
             >
-              {loading ? (
-                <Loader2Icon className="size-5 animate-spin" />
-              ) : (
-                <SendIcon className="size-5" />
-              )}
+              {loading ? <Loader2Icon className="size-5 animate-spin" /> : <SendIcon className="size-5" />}
             </Button>
           </div>
         </div>
