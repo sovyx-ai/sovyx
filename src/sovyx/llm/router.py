@@ -73,12 +73,20 @@ _SIMPLE_MODELS: set[str] = {
     "gemini-2.0-flash",
     "claude-3-5-haiku-20241022",
     "gpt-4o-mini",
+    "deepseek-chat",
+    "mistral-small-latest",
+    "mixtral-8x7b-32768",
+    "llama-3.1-8b-instant",
 }
 
 _COMPLEX_MODELS: set[str] = {
     "claude-sonnet-4-20250514",
     "gemini-2.5-pro-preview-03-25",
     "gpt-4o",
+    "grok-3",
+    "deepseek-reasoner",
+    "mistral-large-latest",
+    "llama-3.1-70b-versatile",
 }
 
 
@@ -618,16 +626,74 @@ class LLMRouter:
         """
         _equivalence: dict[str, list[str]] = {
             # Flagship tier
-            "claude-sonnet-4-20250514": ["gpt-4o", "gemini-2.5-pro-preview-03-25"],
-            "gpt-4o": ["claude-sonnet-4-20250514", "gemini-2.5-pro-preview-03-25"],
-            "gemini-2.5-pro-preview-03-25": ["claude-sonnet-4-20250514", "gpt-4o"],
+            "claude-sonnet-4-20250514": [
+                "gpt-4o",
+                "gemini-2.5-pro-preview-03-25",
+                "grok-3",
+                "mistral-large-latest",
+            ],
+            "gpt-4o": [
+                "claude-sonnet-4-20250514",
+                "gemini-2.5-pro-preview-03-25",
+                "grok-3",
+                "mistral-large-latest",
+            ],
+            "gemini-2.5-pro-preview-03-25": [
+                "claude-sonnet-4-20250514",
+                "gpt-4o",
+                "grok-3",
+                "mistral-large-latest",
+            ],
+            "grok-3": [
+                "claude-sonnet-4-20250514",
+                "gpt-4o",
+                "gemini-2.5-pro-preview-03-25",
+                "mistral-large-latest",
+            ],
+            "mistral-large-latest": [
+                "claude-sonnet-4-20250514",
+                "gpt-4o",
+                "gemini-2.5-pro-preview-03-25",
+                "grok-3",
+            ],
+            "llama-3.1-70b-versatile": [
+                "gpt-4o",
+                "grok-2",
+                "meta-llama/Llama-3.1-70B-Instruct-Turbo",
+            ],
             # Fast tier
-            "claude-3-5-haiku-20241022": ["gpt-4o-mini", "gemini-2.0-flash"],
-            "gpt-4o-mini": ["claude-3-5-haiku-20241022", "gemini-2.0-flash"],
-            "gemini-2.0-flash": ["gpt-4o-mini", "claude-3-5-haiku-20241022"],
+            "claude-3-5-haiku-20241022": [
+                "gpt-4o-mini",
+                "gemini-2.0-flash",
+                "deepseek-chat",
+                "mistral-small-latest",
+            ],
+            "gpt-4o-mini": [
+                "claude-3-5-haiku-20241022",
+                "gemini-2.0-flash",
+                "deepseek-chat",
+                "mistral-small-latest",
+            ],
+            "gemini-2.0-flash": [
+                "gpt-4o-mini",
+                "claude-3-5-haiku-20241022",
+                "deepseek-chat",
+                "mistral-small-latest",
+            ],
+            "deepseek-chat": [
+                "gpt-4o-mini",
+                "gemini-2.0-flash",
+                "mistral-small-latest",
+            ],
+            "mistral-small-latest": [
+                "gpt-4o-mini",
+                "gemini-2.0-flash",
+                "deepseek-chat",
+            ],
             # Reasoning tier
-            "claude-opus-4-20250514": ["o1"],
-            "o1": ["claude-opus-4-20250514"],
+            "claude-opus-4-20250514": ["o1", "deepseek-reasoner"],
+            "o1": ["claude-opus-4-20250514", "deepseek-reasoner"],
+            "deepseek-reasoner": ["claude-opus-4-20250514", "o1"],
         }
         return _equivalence.get(model, [])
 
@@ -646,7 +712,13 @@ class LLMRouter:
             ],
             "openai": ["gpt-4o", "gpt-4o-mini", "o1", "o3-mini"],
             "google": ["gemini-2.0-flash", "gemini-2.5-pro-preview-03-25"],
-            "ollama": [],  # Local models vary
+            "ollama": [],
+            "xai": ["grok-2", "grok-3"],
+            "deepseek": ["deepseek-chat", "deepseek-reasoner"],
+            "mistral": ["mistral-large-latest", "mistral-small-latest"],
+            "together": ["meta-llama/Llama-3.1-70B-Instruct-Turbo"],
+            "groq": ["llama-3.1-70b-versatile", "mixtral-8x7b-32768"],
+            "fireworks": ["accounts/fireworks/models/llama-v3p1-70b-instruct"],
         }
         return _models_by_provider.get(provider.name, [])
 

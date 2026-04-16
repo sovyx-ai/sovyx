@@ -36,6 +36,25 @@ PRICING: dict[str, tuple[float, float]] = {
     "gemini-2.0-flash": (0.10, 0.40),
     "gemini-2.5-flash-preview-04-17": (0.15, 0.60),
     "gemini-2.5-pro-preview-03-25": (1.25, 10.0),
+    # ── xAI (Grok) ──
+    "grok-2": (2.0, 10.0),
+    "grok-3": (3.0, 15.0),
+    # ── DeepSeek ──
+    "deepseek-chat": (0.14, 0.28),
+    "deepseek-reasoner": (0.55, 2.19),
+    # ── Mistral ──
+    "mistral-large-latest": (2.0, 6.0),
+    "mistral-small-latest": (0.10, 0.30),
+    # ── Together AI ──
+    "meta-llama/Llama-3.1-70B-Instruct-Turbo": (0.88, 0.88),
+    "meta-llama/Llama-3.1-8B-Instruct-Turbo": (0.18, 0.18),
+    # ── Groq ──
+    "llama-3.1-70b-versatile": (0.59, 0.79),
+    "llama-3.1-8b-instant": (0.05, 0.08),
+    "mixtral-8x7b-32768": (0.24, 0.24),
+    # ── Fireworks ──
+    "accounts/fireworks/models/llama-v3p1-70b-instruct": (0.90, 0.90),
+    "accounts/fireworks/models/llama-v3p1-8b-instruct": (0.20, 0.20),
 }
 
 # Conservative fallback (Sonnet-class) when the model is unknown and the
@@ -49,6 +68,12 @@ PROVIDER_DEFAULT_PRICING: dict[str, tuple[float, float]] = {
     "openai": (5.0, 15.0),
     "google": (0.10, 0.40),
     "ollama": (0.0, 0.0),  # local inference — free
+    "xai": (2.0, 10.0),
+    "deepseek": (0.14, 0.28),
+    "mistral": (2.0, 6.0),
+    "together": (0.88, 0.88),
+    "groq": (0.59, 0.79),
+    "fireworks": (0.90, 0.90),
 }
 
 

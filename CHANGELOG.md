@@ -6,6 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.13.1] — 2026-04-15
+
+**6 new LLM providers via OpenAI-compatible base class.**
+
+### Added
+
+- **`OpenAICompatibleProvider`** base class
+  (`llm/providers/_openai_compat.py`) — shared `generate()` +
+  `stream()` logic for any provider that speaks the OpenAI Chat
+  Completions wire format. ~200 LOC replaces what would be ~1800 LOC
+  of copy-paste across providers.
+- **xAI (Grok)** — `api.x.ai/v1`, `XGROK_API_KEY`, models:
+  `grok-2`, `grok-3`.
+- **DeepSeek** — `api.deepseek.com/v1`, `DEEPSEEK_API_KEY`, models:
+  `deepseek-chat`, `deepseek-reasoner`.
+- **Mistral** — `api.mistral.ai/v1`, `MISTRAL_API_KEY`, models:
+  `mistral-large-latest`, `mistral-small-latest`.
+- **Together AI** — `api.together.xyz/v1`, `TOGETHER_API_KEY`,
+  models: `meta-llama/Llama-3.1-70B-Instruct-Turbo` and others.
+- **Groq** — `api.groq.com/openai/v1`, `GROQ_API_KEY`, models:
+  `llama-3.1-70b-versatile`, `mixtral-8x7b-32768`.
+- **Fireworks AI** — `api.fireworks.ai/inference/v1`,
+  `FIREWORKS_API_KEY`, models:
+  `accounts/fireworks/models/llama-v3p1-70b-instruct`.
+- All 6 providers support both `generate()` and `stream()` from day 1.
+- Pricing table extended with 12 new model entries.
+- Router equivalence map extended: flagship tier (grok-3,
+  mistral-large ↔ claude-sonnet, gpt-4o, gemini-pro), fast tier
+  (deepseek-chat, mistral-small ↔ haiku, gpt-4o-mini, gemini-flash),
+  reasoning tier (+deepseek-reasoner ↔ o1, claude-opus).
+- Auto-detection priority chain: Anthropic > OpenAI > Google > xAI >
+  DeepSeek > Mistral > Groq > Together > Fireworks.
+
+### Changed
+
+- **`OpenAIProvider` refactored** to subclass
+  `OpenAICompatibleProvider` — same public interface, zero duplication
+  with the 6 new providers. Existing tests pass unchanged.
+
+### Tests
+
+- 16 unit tests: base class properties, generate with mocked httpx,
+  stream with mocked SSE, all 7 subclass shapes, Together's org/
+  prefix matching.
+
 ## [0.13.0] — 2026-04-15
 
 **LLM streaming — router to voice pipeline (SPE-007 §streaming).**

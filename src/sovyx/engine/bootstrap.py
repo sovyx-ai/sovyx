@@ -98,8 +98,14 @@ async def bootstrap(
     from sovyx.engine.types import MindId
     from sovyx.llm.cost import CostGuard
     from sovyx.llm.providers.anthropic import AnthropicProvider
+    from sovyx.llm.providers.deepseek import DeepSeekProvider
+    from sovyx.llm.providers.fireworks import FireworksProvider
+    from sovyx.llm.providers.groq import GroqProvider
+    from sovyx.llm.providers.mistral import MistralProvider
     from sovyx.llm.providers.ollama import OllamaProvider
     from sovyx.llm.providers.openai import OpenAIProvider
+    from sovyx.llm.providers.together import TogetherProvider
+    from sovyx.llm.providers.xai import XAIProvider
     from sovyx.llm.router import LLMRouter
     from sovyx.mind.personality import PersonalityEngine
     from sovyx.persistence.manager import DatabaseManager
@@ -248,7 +254,16 @@ async def bootstrap(
             from sovyx.llm.providers.google import GoogleProvider
 
             providers: list[
-                AnthropicProvider | OpenAIProvider | GoogleProvider | OllamaProvider
+                AnthropicProvider
+                | OpenAIProvider
+                | GoogleProvider
+                | OllamaProvider
+                | XAIProvider
+                | DeepSeekProvider
+                | MistralProvider
+                | GroqProvider
+                | TogetherProvider
+                | FireworksProvider
             ] = []
 
             anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -265,6 +280,36 @@ async def bootstrap(
             if google_key:
                 providers.append(GoogleProvider(api_key=google_key))
                 logger.info("llm_provider_registered", provider="google")
+
+            xai_key = os.environ.get("XGROK_API_KEY", "")
+            if xai_key:
+                providers.append(XAIProvider(api_key=xai_key))
+                logger.info("llm_provider_registered", provider="xai")
+
+            deepseek_key = os.environ.get("DEEPSEEK_API_KEY", "")
+            if deepseek_key:
+                providers.append(DeepSeekProvider(api_key=deepseek_key))
+                logger.info("llm_provider_registered", provider="deepseek")
+
+            mistral_key = os.environ.get("MISTRAL_API_KEY", "")
+            if mistral_key:
+                providers.append(MistralProvider(api_key=mistral_key))
+                logger.info("llm_provider_registered", provider="mistral")
+
+            groq_key = os.environ.get("GROQ_API_KEY", "")
+            if groq_key:
+                providers.append(GroqProvider(api_key=groq_key))
+                logger.info("llm_provider_registered", provider="groq")
+
+            together_key = os.environ.get("TOGETHER_API_KEY", "")
+            if together_key:
+                providers.append(TogetherProvider(api_key=together_key))
+                logger.info("llm_provider_registered", provider="together")
+
+            fireworks_key = os.environ.get("FIREWORKS_API_KEY", "")
+            if fireworks_key:
+                providers.append(FireworksProvider(api_key=fireworks_key))
+                logger.info("llm_provider_registered", provider="fireworks")
 
             ollama_provider = OllamaProvider()
             providers.append(ollama_provider)

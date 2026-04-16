@@ -80,31 +80,48 @@ class LLMConfig(BaseModel):
         has_anthropic = bool(os.environ.get("ANTHROPIC_API_KEY"))
         has_openai = bool(os.environ.get("OPENAI_API_KEY"))
         has_google = bool(os.environ.get("GOOGLE_API_KEY"))
+        has_xai = bool(os.environ.get("XGROK_API_KEY"))
+        has_deepseek = bool(os.environ.get("DEEPSEEK_API_KEY"))
+        has_mistral = bool(os.environ.get("MISTRAL_API_KEY"))
+        has_groq = bool(os.environ.get("GROQ_API_KEY"))
+
+        # Priority: Anthropic > OpenAI > Google > xAI > DeepSeek >
+        # Mistral > Groq > Together > Fireworks.
+        _default_chain: list[tuple[bool, str, str]] = [
+            (has_anthropic, "anthropic", "claude-sonnet-4-20250514"),
+            (has_openai, "openai", "gpt-4o"),
+            (has_google, "google", "gemini-2.5-pro-preview-03-25"),
+            (has_xai, "xai", "grok-2"),
+            (has_deepseek, "deepseek", "deepseek-chat"),
+            (has_mistral, "mistral", "mistral-large-latest"),
+            (has_groq, "groq", "llama-3.1-70b-versatile"),
+        ]
 
         if not self.default_model:
-            if has_anthropic:
-                self.default_model = "claude-sonnet-4-20250514"
-            elif has_openai:
-                self.default_model = "gpt-4o"
-            elif has_google:
-                self.default_model = "gemini-2.5-pro-preview-03-25"
-            # else: stays empty — bootstrap will catch this
+            for available, _prov, model in _default_chain:
+                if available:
+                    self.default_model = model
+                    break
 
         if not self.default_provider:
-            if has_anthropic:
-                self.default_provider = "anthropic"
-            elif has_openai:
-                self.default_provider = "openai"
-            elif has_google:
-                self.default_provider = "google"
+            for available, prov, _model in _default_chain:
+                if available:
+                    self.default_provider = prov
+                    break
 
         if not self.fast_model:
-            if has_openai and not has_anthropic:
-                self.fast_model = "gpt-4o-mini"
-            elif has_google and not has_anthropic and not has_openai:
-                self.fast_model = "gemini-2.0-flash"
-            elif has_anthropic:
+            if has_anthropic:
                 self.fast_model = "claude-3-5-haiku-20241022"
+            elif has_openai:
+                self.fast_model = "gpt-4o-mini"
+            elif has_google:
+                self.fast_model = "gemini-2.0-flash"
+            elif has_deepseek:
+                self.fast_model = "deepseek-chat"
+            elif has_mistral:
+                self.fast_model = "mistral-small-latest"
+            elif has_groq:
+                self.fast_model = "mixtral-8x7b-32768"
 
         return self
 
