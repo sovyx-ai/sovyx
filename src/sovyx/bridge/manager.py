@@ -77,6 +77,8 @@ class ConversationTracker(Protocol):
         conversation_id: ConversationId,
         role: str,
         content: str,
+        *,
+        metadata: dict[str, object] | None = None,
     ) -> None: ...
 
 
