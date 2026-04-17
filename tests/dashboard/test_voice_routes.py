@@ -311,6 +311,265 @@ class TestEnableVoiceCaptureWiring:
         app.state.registry.register_instance.assert_not_called()
 
 
+class TestEnableVoiceCognitiveWiring:
+    """Enable wires VoiceCognitiveBridge when CognitiveLoop is registered."""
+
+    def test_enable_wires_bridge_when_cognitive_loop_registered(
+        self, app, client: TestClient
+    ) -> None:
+        """on_perception is passed to the factory and bridge is registered."""
+        from sovyx.cognitive.loop import CognitiveLoop
+
+        fake_sd = ModuleType("sounddevice")
+        fake_sd.query_devices = MagicMock(  # type: ignore[attr-defined]
+            return_value=[
+                {"name": "mic", "max_input_channels": 1, "max_output_channels": 0},
+                {"name": "spk", "max_input_channels": 0, "max_output_channels": 2},
+            ],
+        )
+
+        cog_loop = MagicMock(spec=CognitiveLoop)
+        capture = MagicMock()
+        capture.start = AsyncMock()
+        pipeline = MagicMock()
+        pipeline.stop = AsyncMock()
+        pipeline.config.wake_word_enabled = False
+
+        from sovyx.voice.factory import VoiceBundle
+
+        bundle = VoiceBundle(pipeline=pipeline, capture_task=capture)
+
+        def is_registered(cls):  # type: ignore[no-untyped-def]
+            return cls is CognitiveLoop
+
+        app.state.registry.is_registered.side_effect = is_registered
+        app.state.registry.resolve = AsyncMock(return_value=cog_loop)
+
+        factory_mock = AsyncMock(return_value=bundle)
+        with (
+            patch(
+                "sovyx.voice.model_registry.check_voice_deps",
+                return_value=(
+                    [
+                        {"module": "moonshine_voice", "package": "moonshine-voice"},
+                        {"module": "sounddevice", "package": "sounddevice"},
+                    ],
+                    [],
+                ),
+            ),
+            patch("sovyx.voice.model_registry.detect_tts_engine", return_value="piper"),
+            patch.dict(sys.modules, {"sounddevice": fake_sd}),
+            patch("sovyx.voice.factory.create_voice_pipeline", new=factory_mock),
+        ):
+            resp = client.post("/api/voice/enable")
+
+        assert resp.status_code == 200  # noqa: PLR2004
+        # on_perception was passed (not None) because CognitiveLoop is registered
+        kwargs = factory_mock.call_args.kwargs
+        assert kwargs["on_perception"] is not None
+        assert callable(kwargs["on_perception"])
+        # VoiceCognitiveBridge was registered
+        registered = [
+            call.args[0].__name__ for call in app.state.registry.register_instance.mock_calls
+        ]
+        assert "VoiceCognitiveBridge" in registered
+
+    def test_enable_skips_bridge_when_no_cognitive_loop(self, app, client: TestClient) -> None:
+        """Without CognitiveLoop, on_perception stays None — pipeline still works."""
+        fake_sd = ModuleType("sounddevice")
+        fake_sd.query_devices = MagicMock(  # type: ignore[attr-defined]
+            return_value=[
+                {"name": "mic", "max_input_channels": 1, "max_output_channels": 0},
+                {"name": "spk", "max_input_channels": 0, "max_output_channels": 2},
+            ],
+        )
+
+        capture = MagicMock()
+        capture.start = AsyncMock()
+        pipeline = MagicMock()
+        pipeline.stop = AsyncMock()
+        pipeline.config.wake_word_enabled = False
+
+        from sovyx.voice.factory import VoiceBundle
+
+        bundle = VoiceBundle(pipeline=pipeline, capture_task=capture)
+
+        factory_mock = AsyncMock(return_value=bundle)
+        with (
+            patch(
+                "sovyx.voice.model_registry.check_voice_deps",
+                return_value=(
+                    [
+                        {"module": "moonshine_voice", "package": "moonshine-voice"},
+                        {"module": "sounddevice", "package": "sounddevice"},
+                    ],
+                    [],
+                ),
+            ),
+            patch("sovyx.voice.model_registry.detect_tts_engine", return_value="piper"),
+            patch.dict(sys.modules, {"sounddevice": fake_sd}),
+            patch("sovyx.voice.factory.create_voice_pipeline", new=factory_mock),
+        ):
+            resp = client.post("/api/voice/enable")
+
+        assert resp.status_code == 200  # noqa: PLR2004
+        assert factory_mock.call_args.kwargs["on_perception"] is None
+        registered = [
+            call.args[0].__name__ for call in app.state.registry.register_instance.mock_calls
+        ]
+        assert "VoiceCognitiveBridge" not in registered
+
+
+class TestOnPerceptionCallback:
+    """The on_perception closure bridges transcription → cognitive loop."""
+
+    @pytest.mark.asyncio
+    async def test_callback_submits_cognitive_request_to_bridge(self) -> None:
+        """Callback builds a CognitiveRequest and hands it to the bridge."""
+        from sovyx.cognitive.loop import CognitiveLoop
+        from sovyx.dashboard.server import create_app
+
+        fake_sd = ModuleType("sounddevice")
+        fake_sd.query_devices = MagicMock(  # type: ignore[attr-defined]
+            return_value=[
+                {"name": "mic", "max_input_channels": 1, "max_output_channels": 0},
+                {"name": "spk", "max_input_channels": 0, "max_output_channels": 2},
+            ],
+        )
+
+        application = create_app(token=_TOKEN)
+        registry = MagicMock()
+        cog_loop = MagicMock(spec=CognitiveLoop)
+        registry.is_registered.side_effect = lambda cls: cls is CognitiveLoop
+        registry.resolve = AsyncMock(return_value=cog_loop)
+        application.state.registry = registry
+        application.state.mind_yaml_path = None
+        application.state.mind_id = "demo-mind"
+
+        capture = MagicMock()
+        capture.start = AsyncMock()
+        pipeline = MagicMock()
+        pipeline.stop = AsyncMock()
+        pipeline.config.wake_word_enabled = False
+
+        from sovyx.voice.factory import VoiceBundle
+
+        bundle = VoiceBundle(pipeline=pipeline, capture_task=capture)
+        factory_mock = AsyncMock(return_value=bundle)
+
+        bridge_process = AsyncMock()
+
+        class _StubBridge:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                self._args = args
+                self._kwargs = kwargs
+
+            async def process(self, req: object) -> None:  # noqa: ANN001
+                await bridge_process(req)
+
+        with (
+            patch(
+                "sovyx.voice.model_registry.check_voice_deps",
+                return_value=(
+                    [
+                        {"module": "moonshine_voice", "package": "moonshine-voice"},
+                        {"module": "sounddevice", "package": "sounddevice"},
+                    ],
+                    [],
+                ),
+            ),
+            patch("sovyx.voice.model_registry.detect_tts_engine", return_value="piper"),
+            patch.dict(sys.modules, {"sounddevice": fake_sd}),
+            patch("sovyx.voice.factory.create_voice_pipeline", new=factory_mock),
+            patch("sovyx.voice.cognitive_bridge.VoiceCognitiveBridge", _StubBridge),
+        ):
+            client = TestClient(application, headers={"Authorization": f"Bearer {_TOKEN}"})
+            resp = client.post("/api/voice/enable")
+            assert resp.status_code == 200  # noqa: PLR2004
+
+            # Extract the on_perception callback the route passed to the factory
+            on_perception = factory_mock.call_args.kwargs["on_perception"]
+            assert on_perception is not None
+
+            # Invoke it — this is what the pipeline does after STT
+            await on_perception("what time is it", "demo-mind")
+
+        bridge_process.assert_awaited_once()
+        submitted = bridge_process.call_args.args[0]
+        assert submitted.perception.content == "what time is it"
+        assert submitted.perception.source == "voice"
+        assert str(submitted.mind_id) == "demo-mind"
+
+    @pytest.mark.asyncio
+    async def test_callback_ignores_empty_text(self) -> None:
+        """Empty/whitespace transcriptions are dropped before the bridge."""
+        from sovyx.cognitive.loop import CognitiveLoop
+        from sovyx.dashboard.server import create_app
+
+        fake_sd = ModuleType("sounddevice")
+        fake_sd.query_devices = MagicMock(  # type: ignore[attr-defined]
+            return_value=[
+                {"name": "mic", "max_input_channels": 1, "max_output_channels": 0},
+                {"name": "spk", "max_input_channels": 0, "max_output_channels": 2},
+            ],
+        )
+
+        application = create_app(token=_TOKEN)
+        registry = MagicMock()
+        cog_loop = MagicMock(spec=CognitiveLoop)
+        registry.is_registered.side_effect = lambda cls: cls is CognitiveLoop
+        registry.resolve = AsyncMock(return_value=cog_loop)
+        application.state.registry = registry
+        application.state.mind_yaml_path = None
+        application.state.mind_id = "demo-mind"
+
+        capture = MagicMock()
+        capture.start = AsyncMock()
+        pipeline = MagicMock()
+        pipeline.stop = AsyncMock()
+        pipeline.config.wake_word_enabled = False
+
+        from sovyx.voice.factory import VoiceBundle
+
+        bundle = VoiceBundle(pipeline=pipeline, capture_task=capture)
+        factory_mock = AsyncMock(return_value=bundle)
+
+        bridge_process = AsyncMock()
+
+        class _StubBridge:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                pass
+
+            async def process(self, req: object) -> None:  # noqa: ANN001
+                await bridge_process(req)
+
+        with (
+            patch(
+                "sovyx.voice.model_registry.check_voice_deps",
+                return_value=(
+                    [
+                        {"module": "moonshine_voice", "package": "moonshine-voice"},
+                        {"module": "sounddevice", "package": "sounddevice"},
+                    ],
+                    [],
+                ),
+            ),
+            patch("sovyx.voice.model_registry.detect_tts_engine", return_value="piper"),
+            patch.dict(sys.modules, {"sounddevice": fake_sd}),
+            patch("sovyx.voice.factory.create_voice_pipeline", new=factory_mock),
+            patch("sovyx.voice.cognitive_bridge.VoiceCognitiveBridge", _StubBridge),
+        ):
+            client = TestClient(application, headers={"Authorization": f"Bearer {_TOKEN}"})
+            resp = client.post("/api/voice/enable")
+            assert resp.status_code == 200  # noqa: PLR2004
+            on_perception = factory_mock.call_args.kwargs["on_perception"]
+
+            await on_perception("", "demo-mind")
+            await on_perception("   ", "demo-mind")
+
+        bridge_process.assert_not_awaited()
+
+
 class TestDisableVoice:
     """POST /api/voice/disable."""
 

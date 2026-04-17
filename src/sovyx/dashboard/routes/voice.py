@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
@@ -11,6 +12,9 @@ from starlette.status import HTTP_503_SERVICE_UNAVAILABLE
 
 from sovyx.dashboard.routes._deps import verify_token
 from sovyx.observability.logging import get_logger
+
+if TYPE_CHECKING:
+    from sovyx.voice.cognitive_bridge import VoiceCognitiveBridge
 
 logger = get_logger(__name__)
 
@@ -212,15 +216,54 @@ async def enable_voice(request: Request) -> JSONResponse:
     from sovyx.voice.factory import VoiceFactoryError, create_voice_pipeline
 
     event_bus = None
+    cognitive_loop = None
     if registry is not None:
+        from sovyx.cognitive.loop import CognitiveLoop
         from sovyx.engine.events import EventBus
 
         if registry.is_registered(EventBus):
             event_bus = await registry.resolve(EventBus)
+        if registry.is_registered(CognitiveLoop):
+            cognitive_loop = await registry.resolve(CognitiveLoop)
+
+    # Closure holder — the bridge needs the pipeline, the pipeline needs the
+    # callback. Fill the holder after the bundle is built.
+    bridge_ref: list[VoiceCognitiveBridge | None] = [None]
+
+    async def _on_perception(text: str, mind_id_str: str) -> None:
+        """Feed a transcription into the cognitive loop via the bridge."""
+        bridge = bridge_ref[0]
+        if bridge is None or not text.strip():
+            return
+        from uuid import uuid4
+
+        from sovyx.cognitive.gate import CognitiveRequest
+        from sovyx.cognitive.perceive import Perception
+        from sovyx.engine.types import ConversationId, MindId, PerceptionType
+
+        cog_request = CognitiveRequest(
+            perception=Perception(
+                id=str(uuid4()),
+                type=PerceptionType.USER_MESSAGE,
+                source="voice",
+                content=text,
+            ),
+            mind_id=MindId(mind_id_str),
+            conversation_id=ConversationId(f"voice-{mind_id_str}"),
+            conversation_history=[],
+            person_name=None,
+        )
+        try:
+            await bridge.process(cog_request)
+        except Exception:  # noqa: BLE001
+            logger.exception("voice_cognitive_bridge_failed")
+
+    on_perception_cb = _on_perception if cognitive_loop is not None else None
 
     try:
         bundle = await create_voice_pipeline(
             event_bus=event_bus,
+            on_perception=on_perception_cb,
             wake_word_enabled=False,
             mind_id=getattr(request.app.state, "mind_id", "default"),
             input_device=input_device,
@@ -256,8 +299,28 @@ async def enable_voice(request: Request) -> JSONResponse:
             status_code=500,
         )
 
+    # 5.5 Wire the cognitive bridge now that the pipeline exists. Streaming
+    # (Jarvis illusion) defaults to the mind's LLM setting.
+    if cognitive_loop is not None:
+        from sovyx.voice.cognitive_bridge import (
+            VoiceCognitiveBridge as _VoiceCognitiveBridge,
+        )
+
+        streaming = True
+        mind_config = getattr(request.app.state, "mind_config", None)
+        if mind_config is not None:
+            llm_cfg = getattr(mind_config, "llm", None)
+            if llm_cfg is not None:
+                streaming = bool(getattr(llm_cfg, "streaming", True))
+        bridge_ref[0] = _VoiceCognitiveBridge(
+            cognitive_loop,
+            bundle.pipeline,
+            streaming=streaming,
+        )
+
     if registry is not None:
         from sovyx.voice._capture_task import AudioCaptureTask
+        from sovyx.voice.cognitive_bridge import VoiceCognitiveBridge
         from sovyx.voice.pipeline._orchestrator import VoicePipeline
         from sovyx.voice.stt import STTEngine
         from sovyx.voice.tts_piper import TTSEngine
@@ -273,6 +336,8 @@ async def enable_voice(request: Request) -> JSONResponse:
         registry.register_instance(TTSEngine, bundle.pipeline.tts)
         if bundle.pipeline.config.wake_word_enabled:
             registry.register_instance(WakeWordDetector, bundle.pipeline.wake_word)
+        if bridge_ref[0] is not None:
+            registry.register_instance(VoiceCognitiveBridge, bridge_ref[0])
 
     # 6. Persist config
     mind_yaml_path = getattr(request.app.state, "mind_yaml_path", None)
@@ -305,6 +370,7 @@ async def disable_voice(request: Request) -> JSONResponse:
     registry = getattr(request.app.state, "registry", None)
     if registry is not None:
         from sovyx.voice._capture_task import AudioCaptureTask
+        from sovyx.voice.cognitive_bridge import VoiceCognitiveBridge
         from sovyx.voice.pipeline._orchestrator import VoicePipeline
         from sovyx.voice.stt import STTEngine
         from sovyx.voice.tts_piper import TTSEngine
@@ -333,7 +399,13 @@ async def disable_voice(request: Request) -> JSONResponse:
 
         # Deregister sub-components so the next enable re-registers fresh
         # instances bound to the new pipeline.
-        for interface in (SileroVAD, STTEngine, TTSEngine, WakeWordDetector):
+        for interface in (
+            SileroVAD,
+            STTEngine,
+            TTSEngine,
+            WakeWordDetector,
+            VoiceCognitiveBridge,
+        ):
             if registry.is_registered(interface):
                 registry.deregister(interface)
 
