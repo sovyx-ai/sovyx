@@ -46,7 +46,7 @@ export function VoiceStep({ onConfigured, onSkip }: VoiceStepProps) {
         setEnabled(true);
       }
     } catch (err) {
-      if (err instanceof ApiError && err.status === 400) {
+      if (err instanceof ApiError) {
         try {
           const body = JSON.parse(err.message) as EnableResult;
           if (body.error === "missing_deps" && body.missing_deps) {
@@ -60,7 +60,7 @@ export function VoiceStep({ onConfigured, onSkip }: VoiceStepProps) {
             setError(body.error ?? "Failed to enable voice");
           }
         } catch {
-          setError(String(err));
+          setError(err.message || "Failed to enable voice pipeline");
         }
       } else {
         setError("Failed to enable voice pipeline");

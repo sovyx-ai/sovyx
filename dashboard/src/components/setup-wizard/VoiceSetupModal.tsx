@@ -86,7 +86,7 @@ export function VoiceSetupModal({ trigger, onEnabled }: VoiceSetupModalProps) {
         onEnabled?.();
       }
     } catch (err) {
-      if (err instanceof ApiError && err.status === 400) {
+      if (err instanceof ApiError) {
         try {
           const body = JSON.parse(err.message) as EnableResponse;
           if (body.error === "missing_deps" && body.missing_deps) {
@@ -103,7 +103,7 @@ export function VoiceSetupModal({ trigger, onEnabled }: VoiceSetupModalProps) {
             setEnableError(body.error ?? "Enable failed");
           }
         } catch {
-          setEnableError(String(err));
+          setEnableError(err.message || "Failed to enable voice pipeline");
         }
       } else {
         setEnableError("Failed to enable voice pipeline");
