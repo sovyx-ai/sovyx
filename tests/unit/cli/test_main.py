@@ -44,7 +44,7 @@ class TestInit:
         with patch("sovyx.cli.main.Path.home", return_value=tmp_path):
             result = runner.invoke(app, ["init", "--quick"])
         assert result.exit_code == 0
-        assert "Aria" in result.stdout
+        assert "Sovyx" in result.stdout
 
     def test_init_idempotent(self, tmp_path: Path) -> None:
         with patch("sovyx.cli.main.Path.home", return_value=tmp_path):
