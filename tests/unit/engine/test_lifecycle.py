@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+import sys
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, patch
 
@@ -241,8 +242,9 @@ class TestLifecycleCoverageGaps:
         assert mgr._shutdown_event.is_set()  # noqa: SLF001
 
     @pytest.mark.asyncio()
-    async def test_install_signal_handlers(self, tmp_path: Path) -> None:
-        """_install_signal_handlers adds handlers to the event loop."""
+    @pytest.mark.skipif(sys.platform == "win32", reason="Unix-only: add_signal_handler")
+    async def test_install_signal_handlers_unix(self, tmp_path: Path) -> None:
+        """_install_signal_handlers uses loop.add_signal_handler on Unix."""
         registry = ServiceRegistry()
         event_bus = AsyncMock()
         event_bus.emit = AsyncMock()
@@ -255,6 +257,24 @@ class TestLifecycleCoverageGaps:
             mgr._install_signal_handlers()  # noqa: SLF001
             assert mock_add.call_count == 2  # noqa: PLR2004
             sigs = {call[0][0] for call in mock_add.call_args_list}
+            assert signal.SIGTERM in sigs
+            assert signal.SIGINT in sigs
+
+    @pytest.mark.asyncio()
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only: signal.signal fallback")
+    async def test_install_signal_handlers_windows(self, tmp_path: Path) -> None:
+        """_install_signal_handlers uses signal.signal() on Windows."""
+        registry = ServiceRegistry()
+        event_bus = AsyncMock()
+        event_bus.emit = AsyncMock()
+        pid_path = tmp_path / "sovyx.pid"
+
+        mgr = LifecycleManager(registry, event_bus, pid_path)
+
+        with patch("signal.signal") as mock_sig:
+            mgr._install_signal_handlers()  # noqa: SLF001
+            assert mock_sig.call_count == 2  # noqa: PLR2004
+            sigs = {call[0][0] for call in mock_sig.call_args_list}
             assert signal.SIGTERM in sigs
             assert signal.SIGINT in sigs
 

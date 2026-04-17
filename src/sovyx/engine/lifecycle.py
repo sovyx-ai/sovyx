@@ -6,6 +6,7 @@ import asyncio
 import os
 import signal
 import socket
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
@@ -177,9 +178,13 @@ class LifecycleManager:
 
     def _install_signal_handlers(self) -> None:
         """Install SIGTERM and SIGINT handlers."""
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, self._handle_signal, sig)
+        if sys.platform == "win32":
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                signal.signal(sig, lambda s, _f: self._handle_signal(signal.Signals(s)))
+        else:
+            loop = asyncio.get_running_loop()
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                loop.add_signal_handler(sig, self._handle_signal, sig)
 
     def _print_startup_banner(self) -> None:
         """Print startup banner with dashboard URL and token.
