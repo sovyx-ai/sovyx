@@ -140,6 +140,19 @@ class VoiceTuningConfig(BaseModel):
     capture_reconnect_delay_seconds: float = 2.0
     capture_queue_maxsize: int = 256
 
+    # Voice device test (setup-wizard meters + TTS test button).
+    # Kill-switch + ballistics + rate limiting for the test endpoints.
+    device_test_enabled: bool = True
+    device_test_frame_rate_hz: int = 30  # WS level frames per second
+    device_test_peak_hold_ms: int = 1_500  # peak marker hold duration
+    device_test_peak_decay_db_per_sec: float = 20.0  # decay after hold
+    device_test_vad_trigger_db: float = -30.0  # shown as marker on meter
+    device_test_clipping_db: float = -0.3  # clipping flag threshold
+    device_test_reconnect_limit_per_min: int = 10  # per-token budget
+    device_test_max_sessions_per_token: int = 1  # singleton per user
+    device_test_max_phrase_chars: int = 200  # TTS test phrase cap
+    device_test_output_job_ttl_seconds: int = 60  # job cleanup
+
 
 class LLMTuningConfig(BaseModel):
     """Tunable thresholds for the LLM router complexity classifier.
