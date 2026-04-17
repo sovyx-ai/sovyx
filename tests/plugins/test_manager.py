@@ -79,7 +79,7 @@ class SlowPlugin(ISovyxPlugin):
 
     @tool(description="Slow operation")
     async def slow_op(self) -> str:
-        await asyncio.sleep(10)
+        await asyncio.sleep(0.5)  # cancelled by 0.01s manager timeout
         return "done"
 
 

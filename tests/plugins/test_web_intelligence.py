@@ -267,11 +267,12 @@ class TestSearchTimeout:
         p = WebIntelligencePlugin()
 
         async def slow_search(*_: object, **__: object) -> list[SearchResult]:
-            await asyncio.sleep(20)
+            await asyncio.sleep(0.5)
             return []
 
         p._backend.search_text = slow_search  # type: ignore[assignment]
-        data = _parse(await p.search("test"))
+        with patch.object(_web_mod, "_SEARCH_TIMEOUT", 0.05):
+            data = _parse(await p.search("test"))
         assert data["ok"] is False
         assert "timed out" in str(data["message"])
 
@@ -778,13 +779,12 @@ class TestFetchTool:
         p = WebIntelligencePlugin()
 
         async def slow_fetch(_url: str) -> str | None:
-            await asyncio.sleep(20)
+            await asyncio.sleep(0.5)
             return "<html></html>"
 
-        with patch.object(
-            _web_mod,
-            "_fetch_html",
-            side_effect=slow_fetch,
+        with (
+            patch.object(_web_mod, "_fetch_html", side_effect=slow_fetch),
+            patch.object(_web_mod, "_FETCH_TIMEOUT", 0.05),
         ):
             data = _parse(await p.fetch("https://example.com"))
         assert data["ok"] is False

@@ -54,7 +54,7 @@ async def _start_mock_daemon(
         length = int.from_bytes(header, "big")
         await reader.readexactly(length)
         if hang:
-            await asyncio.sleep(60)
+            await asyncio.sleep(2.0)  # bounded; client times out earlier
             return
         if response is not None:
             writer.write(_encode_rpc_response(response))

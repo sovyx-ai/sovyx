@@ -23,6 +23,8 @@ from sovyx.persistence.migrations import MigrationRunner
 from sovyx.persistence.pool import DatabasePool
 from sovyx.persistence.schemas.brain import get_brain_migrations
 
+pytestmark = pytest.mark.integration
+
 
 @pytest.fixture
 async def brain_pool(tmp_path: Path) -> DatabasePool:

@@ -39,7 +39,8 @@ class TestCountersThreadSafety:
         for t in threads:
             t.start()
         for t in threads:
-            t.join()
+            t.join(timeout=5)
+            assert not t.is_alive(), "worker thread did not finish in 5s"
 
         assert c.llm_calls == n_threads * n_increments
         assert c.tokens == n_threads * n_increments
@@ -66,7 +67,8 @@ class TestCountersThreadSafety:
         for t in threads:
             t.start()
         for t in threads:
-            t.join()
+            t.join(timeout=5)
+            assert not t.is_alive(), "worker thread did not finish in 5s"
 
         assert c.llm_calls == 1000
         assert c.messages_received == 1000
@@ -96,7 +98,8 @@ class TestCountersThreadSafety:
         for t in threads:
             t.start()
         for t in threads:
-            t.join()
+            t.join(timeout=5)
+            assert not t.is_alive(), "worker thread did not finish in 5s"
 
         # After reset + 500 increments, should be exactly 500
         assert c.llm_calls == 500

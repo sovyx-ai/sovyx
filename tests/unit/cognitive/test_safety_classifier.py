@@ -371,7 +371,7 @@ class TestClassifyContent:
         router_with_timeout = _make_mock_router()
 
         async def slow_generate(**kwargs: object) -> LLMResponse:
-            await asyncio.sleep(10)
+            await asyncio.sleep(0.5)  # cancelled by 0.01s timeout param
             return _make_llm_response("SAFE")
 
         router_with_timeout.generate = AsyncMock(side_effect=slow_generate)
@@ -823,7 +823,7 @@ class TestBatchClassify:
             nonlocal call_count
             call_count += 1
             if call_count == 2:
-                await asyncio.sleep(10)  # Will timeout
+                await asyncio.sleep(0.5)  # cancelled by 0.05s timeout param
             return _make_llm_response("SAFE")
 
         router = _make_mock_router()

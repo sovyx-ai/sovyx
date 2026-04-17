@@ -43,11 +43,14 @@ class TestTokenManagement:
     def test_generates_token_if_missing(self, tmp_path: Path) -> None:
         token_file = tmp_path / "token"
         assert not token_file.exists()
-        with patch("sovyx.dashboard.server.TOKEN_FILE", token_file):
+        with (
+            patch("sovyx.dashboard.server.TOKEN_FILE", token_file),
+            patch.object(Path, "chmod") as mock_chmod,
+        ):
             t = _ensure_token()
         assert token_file.exists()
         assert len(t) > 20
-        assert token_file.stat().st_mode & 0o777 == 0o600
+        mock_chmod.assert_called_once_with(0o600)
 
     def test_reads_existing_token(self, tmp_path: Path) -> None:
         token_file = tmp_path / "token"

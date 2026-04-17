@@ -216,7 +216,7 @@ class TestLifecycleCoverageGaps:
         mgr.SHUTDOWN_TIMEOUT = 0.01  # very short
 
         async def slow_shutdown() -> None:
-            await asyncio.sleep(5)
+            await asyncio.sleep(0.5)  # cancelled by 0.01s SHUTDOWN_TIMEOUT
 
         with patch.object(mgr, "_start_dashboard", new_callable=AsyncMock):
             await mgr.start()

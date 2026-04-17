@@ -160,10 +160,15 @@ select = ["E", "F", "W", "I", "N", "UP", "ANN", "B", "A", "SIM", "TCH", "BLE"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+timeout = 10
+timeout_method = "thread"
 markers = [
     "no_islands: brain graph connectivity regression tests",
     "network: tests that require outbound network (opt-in; excluded from default runs)",
+    "integration: tests that require real ML models, SQLite heavy IO, or cross-component wiring (opt-in)",
+    "slow: tests that take > 5 seconds (opt-in)",
 ]
+addopts = "-m 'not integration and not network and not slow' --ignore=tests/smoke"
 
 [tool.coverage.run]
 source = ["sovyx"]

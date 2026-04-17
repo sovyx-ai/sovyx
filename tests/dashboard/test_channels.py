@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import secrets
-from typing import TYPE_CHECKING
-from unittest.mock import MagicMock
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 from starlette.testclient import TestClient
 
 from sovyx.dashboard.server import create_app
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
@@ -316,11 +313,12 @@ class TestTelegramSetupEndpoint:
         app.state.engine_config = mock_config
         client = TestClient(app)
 
-        resp = client.post(
-            "/api/channels/telegram/setup",
-            json={"token": "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"},
-            headers=auth_headers,
-        )
+        with patch.object(Path, "chmod") as mock_chmod:
+            resp = client.post(
+                "/api/channels/telegram/setup",
+                json={"token": "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"},
+                headers=auth_headers,
+            )
         assert resp.status_code == 200
         data = resp.json()
         assert data["ok"] is True
@@ -333,5 +331,5 @@ class TestTelegramSetupEndpoint:
         assert env_path.exists()
         content = env_path.read_text()
         assert "SOVYX_TELEGRAM_TOKEN=123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11" in content
-        # Verify file permissions (owner-only)
-        assert oct(env_path.stat().st_mode)[-3:] == "600"
+        # Verify code attempted owner-only perms (cross-platform via spy on Path.chmod)
+        mock_chmod.assert_any_call(0o600)

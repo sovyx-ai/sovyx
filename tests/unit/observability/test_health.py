@@ -75,7 +75,7 @@ class _SlowCheck(HealthCheck):
         return "Slow"
 
     async def check(self) -> CheckResult:
-        await asyncio.sleep(30)
+        await asyncio.sleep(1.0)  # cancelled by 0.1s test timeout
         return CheckResult(name="Slow", status=CheckStatus.GREEN, message="done")
 
 

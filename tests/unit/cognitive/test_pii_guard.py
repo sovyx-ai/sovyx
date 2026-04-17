@@ -548,14 +548,18 @@ class TestLLMNERFallback:
         assert not result.redacted
         router.generate.assert_not_called()
 
-    async def test_llm_timeout_fails_open(self) -> None:
+    async def test_llm_timeout_fails_open(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """LLM timeout → falls back to regex result (no PII)."""
         import asyncio
+
+        import sovyx.cognitive.pii_guard as _pii_mod
+
+        monkeypatch.setattr(_pii_mod, "_NER_TIMEOUT_SEC", 0.05)
 
         router = MagicMock(spec=[])
 
         async def slow_generate(*a: object, **kw: object) -> None:
-            await asyncio.sleep(10)
+            await asyncio.sleep(0.5)  # cancelled by 0.05s patched timeout
 
         router.generate = slow_generate
         guard = PIIGuard(safety=SafetyConfig(pii_protection=True), llm_router=router)

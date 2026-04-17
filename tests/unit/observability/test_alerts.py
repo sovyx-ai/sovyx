@@ -325,17 +325,20 @@ class TestAlertManagerStateTransitions:
         await mgr.evaluate()
         assert mgr.states["r1"] == AlertState.FIRING
 
-    async def test_transition_to_resolved(self) -> None:
+    async def test_transition_to_resolved(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import sovyx.observability.alerts as _alerts
+
+        clock = [1000.0]
+        monkeypatch.setattr(_alerts.time, "monotonic", lambda: clock[0])
+
         mgr = AlertManager()
         mgr.add_rule(_make_rule(name="r1", threshold=100.0, window_seconds=1))
         mgr.record_metric("test_metric", 200.0)
         await mgr.evaluate()
         assert mgr.states["r1"] == AlertState.FIRING
 
-        # Wait for window to expire, then re-evaluate with healthy metric
-        import asyncio
-
-        await asyncio.sleep(1.1)
+        # Advance clock past window, re-evaluate with healthy metric
+        clock[0] += 1.1
         mgr.record_metric("test_metric", 1.0)
         await mgr.evaluate()
         assert mgr.states["r1"] == AlertState.RESOLVED
@@ -366,8 +369,11 @@ class TestAlertManagerEventBus:
         assert isinstance(event, AlertFired)
         assert event.rule_name == "test-rule"
 
-    async def test_emits_resolved_event(self) -> None:
-        import asyncio
+    async def test_emits_resolved_event(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import sovyx.observability.alerts as _alerts
+
+        clock = [1000.0]
+        monkeypatch.setattr(_alerts.time, "monotonic", lambda: clock[0])
 
         bus = MagicMock()
         bus.emit = AsyncMock()
@@ -376,7 +382,7 @@ class TestAlertManagerEventBus:
         mgr.record_metric("test_metric", 10.0)
         await mgr.evaluate()  # fires
 
-        await asyncio.sleep(1.1)
+        clock[0] += 1.1
         await mgr.evaluate()  # resolves (window expired, no new data above threshold)
 
         # Should have emitted AlertFired then AlertResolved

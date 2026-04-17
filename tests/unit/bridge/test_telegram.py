@@ -251,7 +251,7 @@ class TestPollLoop:
         ch = TelegramChannel(VALID_TOKEN, _mock_bridge())
 
         async def slow_poll(*_args: object, **_kwargs: object) -> None:
-            await asyncio.sleep(10)
+            await asyncio.sleep(1.0)  # cancelled by ch.stop()
 
         ch._dp.start_polling = AsyncMock(side_effect=slow_poll)
         ch._running = True
