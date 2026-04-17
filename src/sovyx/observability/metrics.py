@@ -184,6 +184,37 @@ class MetricsRegistry:
             unit="ms",
         )
 
+        # ── Voice device test (setup-wizard meter + TTS playback) ─
+        self.voice_test_sessions = meter.create_counter(
+            name="sovyx.voice.test.sessions",
+            description="Total voice-test meter sessions (label: result)",
+            unit="1",
+        )
+
+        self.voice_test_clipping_events = meter.create_counter(
+            name="sovyx.voice.test.clipping.events",
+            description="Voice-test meter frames flagged as clipping",
+            unit="1",
+        )
+
+        self.voice_test_stream_open_latency = meter.create_histogram(
+            name="sovyx.voice.test.stream.open.latency",
+            description="Latency from WS accept to first LevelFrame emitted",
+            unit="ms",
+        )
+
+        self.voice_test_output_synthesis_ms = meter.create_histogram(
+            name="sovyx.voice.test.output.synthesis.latency",
+            description="TTS synthesis latency for the voice-test playback job",
+            unit="ms",
+        )
+
+        self.voice_test_output_playback_ms = meter.create_histogram(
+            name="sovyx.voice.test.output.playback.latency",
+            description="Sink playback latency for the voice-test job",
+            unit="ms",
+        )
+
     @contextlib.contextmanager
     def measure_latency(
         self,

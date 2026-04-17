@@ -48,12 +48,12 @@ from starlette.status import (
 
 from sovyx.dashboard.routes._deps import verify_token
 from sovyx.observability.logging import get_logger
+from sovyx.observability.metrics import get_metrics
 from sovyx.voice.device_test import (
     PROTOCOL_VERSION,
     WS_CLOSE_DISABLED,
     WS_CLOSE_PIPELINE_ACTIVE,
     WS_CLOSE_RATE_LIMITED,
-    WS_CLOSE_REPLACED,
     WS_CLOSE_UNAUTHORIZED,
     AudioSinkError,
     CloseReason,
@@ -61,6 +61,7 @@ from sovyx.voice.device_test import (
     DevicesResponse,
     ErrorCode,
     ErrorResponse,
+    FrameType,
     NoopLimiter,
     SessionConfig,
     SessionRegistry,
@@ -229,6 +230,36 @@ class _FastAPIWSSender(WSSender):
             await self._ws.close(code=code, reason=reason)
 
 
+class _MeteredSender(WSSender):
+    """Decorator that records OTel metrics off the WS hot path.
+
+    * First ``LevelFrame`` emitted → records stream-open latency.
+    * Every frame with ``clipping=True`` → increments the clipping counter.
+
+    We measure after ``send_json`` returns so network latency is included
+    in the stream-open figure (closer to what the browser actually sees).
+    """
+
+    def __init__(self, inner: WSSender, *, accept_at: float) -> None:
+        self._inner = inner
+        self._accept_at = accept_at
+        self._first_level_seen = False
+        self._metrics = get_metrics()
+
+    async def send_json(self, payload: dict[str, object]) -> None:
+        await self._inner.send_json(payload)
+        if payload.get("t") == FrameType.LEVEL.value:
+            if not self._first_level_seen:
+                self._first_level_seen = True
+                elapsed_ms = (time.monotonic() - self._accept_at) * 1000
+                self._metrics.voice_test_stream_open_latency.record(elapsed_ms)
+            if payload.get("clipping"):
+                self._metrics.voice_test_clipping_events.add(1)
+
+    async def close(self, code: int, reason: str) -> None:
+        await self._inner.close(code, reason)
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -347,6 +378,7 @@ async def websocket_input_meter(
         return
 
     await websocket.accept()
+    accept_at = time.monotonic()
     sender = _FastAPIWSSender(websocket)
     session_id = new_session_id()
     source = SoundDeviceInputSource(
@@ -356,7 +388,7 @@ async def websocket_input_meter(
     session = TestSession(
         session_id=session_id,
         source=source,
-        sender=sender,
+        sender=_MeteredSender(sender, accept_at=accept_at),
         config=SessionConfig(
             frame_rate_hz=tuning.device_test_frame_rate_hz,
             peak_hold_ms=tuning.device_test_peak_hold_ms,
@@ -375,11 +407,6 @@ async def websocket_input_meter(
         # start pumping new frames on the same token.
         await asyncio.sleep(0)
 
-    # Signal the superseded sessions via their own WS close code so the
-    # browser can distinguish "you were replaced" from "device failed".
-    for old in superseded:
-        _close_superseded(old)
-
     logger.info(
         "voice_test_session_opened",
         session_id=session_id,
@@ -387,19 +414,16 @@ async def websocket_input_meter(
         sample_rate=sample_rate,
         token_hash=token_key[:8],
     )
+    metrics_reg = get_metrics()
+    result = "ok"
     try:
         await session.run()
+    except Exception:
+        result = "error"
+        raise
     finally:
         await registry.unregister(token_key, session)
-
-
-def _close_superseded(session: TestSession) -> None:  # noqa: ARG001
-    """Placeholder hook for future OTel counter wiring."""
-    # The TestSession.stop() call above will make run() exit with
-    # SESSION_REPLACED and the _finalize() path will close the WS with
-    # WS_CLOSE_REPLACED. Nothing more to do here; the function exists so
-    # we can wire metrics without touching the hot path.
-    _ = WS_CLOSE_REPLACED
+        metrics_reg.voice_test_sessions.add(1, attributes={"result": result})
 
 
 # ---------------------------------------------------------------------------
@@ -697,6 +721,9 @@ async def _run_output_job(
         playback_ms=round(play_ms, 1),
         peak_db=round(peak_db, 1) if peak_db is not None else None,
     )
+    metrics_reg = get_metrics()
+    metrics_reg.voice_test_output_synthesis_ms.record(synth_ms)
+    metrics_reg.voice_test_output_playback_ms.record(play_ms)
     logger.info(
         "voice_test_output_completed",
         job_id=job_id,

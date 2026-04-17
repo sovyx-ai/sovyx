@@ -74,6 +74,8 @@ class TestSession:
     #. on close → always sends :class:`ClosedFrame` before returning.
     """
 
+    __test__ = False  # not a pytest test class
+
     def __init__(
         self,
         *,

@@ -92,6 +92,8 @@ class DevicesResponse(BaseModel):
 class TestOutputRequest(BaseModel):
     """Request body for ``POST /api/voice/test/output``."""
 
+    __test__ = False  # not a pytest test class
+
     model_config = ConfigDict(frozen=True)
 
     device_id: int | None = Field(
@@ -114,6 +116,8 @@ class TestOutputRequest(BaseModel):
 class TestOutputJob(BaseModel):
     """Response for ``POST /api/voice/test/output`` (202-style)."""
 
+    __test__ = False  # not a pytest test class
+
     ok: bool = True
     job_id: str
     status: str = Field(description="queued | synthesising | playing | done | error")
@@ -121,6 +125,8 @@ class TestOutputJob(BaseModel):
 
 class TestOutputResult(BaseModel):
     """Final result surface for ``GET /api/voice/test/output/{job_id}``."""
+
+    __test__ = False  # not a pytest test class
 
     ok: bool
     job_id: str
