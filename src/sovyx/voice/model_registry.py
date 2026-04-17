@@ -75,9 +75,15 @@ _VOICE_DEPS: list[tuple[str, str]] = [
 def check_voice_deps() -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     """Check which voice Python packages are installed.
 
+    Catches both ImportError (package not installed) and OSError
+    (native library missing, e.g. PortAudio for sounddevice).
+
     Returns:
         (installed, missing) — each a list of {"module", "package"}.
+        On OSError, the entry includes a "message" key with install hint.
     """
+    import platform  # noqa: PLC0415
+
     installed: list[dict[str, str]] = []
     missing: list[dict[str, str]] = []
     for module, package in _VOICE_DEPS:
@@ -86,6 +92,17 @@ def check_voice_deps() -> tuple[list[dict[str, str]], list[dict[str, str]]]:
             installed.append({"module": module, "package": package})
         except ImportError:
             missing.append({"module": module, "package": package})
+        except OSError as exc:
+            hint = str(exc)
+            if "portaudio" in hint.lower():
+                system = platform.system()
+                if system == "Linux":
+                    hint = "PortAudio not found. Install: sudo apt install libportaudio2"
+                elif system == "Darwin":
+                    hint = "PortAudio not found. Install: brew install portaudio"
+                else:
+                    hint = "PortAudio not found. Install the PortAudio system library."
+            missing.append({"module": module, "package": package, "message": hint})
     return installed, missing
 
 
