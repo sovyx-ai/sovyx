@@ -4,21 +4,24 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import pytest
 
-from sovyx.cli.rpc_client import DaemonClient
+from sovyx.cli.rpc_client import DaemonClient, _port_file_for
 from sovyx.engine.errors import ChannelConnectionError
 from sovyx.engine.rpc_server import DaemonRPCServer
 
 if TYPE_CHECKING:
     from pathlib import Path
 
+_IS_WINDOWS = sys.platform == "win32"
+
 
 class TestRPCEndToEnd:
-    """Server + Client integration."""
+    """Server + Client integration (works on both Unix and Windows)."""
 
     async def test_simple_method(self, tmp_path: Path) -> None:
         socket_path = tmp_path / "test.sock"
@@ -105,9 +108,12 @@ class TestDaemonClient:
             await client.call("ping")
 
     def test_stale_socket_detected(self, tmp_path: Path) -> None:
-        """A stale socket file (no listener) returns False."""
+        """A stale file (no listener) returns False."""
         socket_path = tmp_path / "test.sock"
-        socket_path.touch()  # File exists but no daemon listening
+        if _IS_WINDOWS:
+            _port_file_for(socket_path).write_text("1", encoding="utf-8")
+        else:
+            socket_path.touch()
         client = DaemonClient(socket_path)
         assert client.is_daemon_running() is False
 
@@ -115,36 +121,47 @@ class TestDaemonClient:
 class TestDaemonRPCServer:
     """Server-side tests."""
 
-    async def test_start_creates_socket(self, tmp_path: Path) -> None:
+    async def test_start_creates_transport_file(self, tmp_path: Path) -> None:
         socket_path = tmp_path / "test.sock"
         server = DaemonRPCServer(socket_path)
         await server.start()
-        assert socket_path.exists()
+        if _IS_WINDOWS:
+            assert _port_file_for(socket_path).exists()
+        else:
+            assert socket_path.exists()
         await server.stop()
 
-    async def test_stop_removes_socket(self, tmp_path: Path) -> None:
+    async def test_stop_removes_transport_file(self, tmp_path: Path) -> None:
         socket_path = tmp_path / "test.sock"
         server = DaemonRPCServer(socket_path)
         await server.start()
         await server.stop()
-        assert not socket_path.exists()
+        if _IS_WINDOWS:
+            assert not _port_file_for(socket_path).exists()
+        else:
+            assert not socket_path.exists()
 
+    @pytest.mark.skipif(_IS_WINDOWS, reason="Unix socket permissions not applicable on Windows")
     async def test_socket_permissions(self, tmp_path: Path) -> None:
-
         socket_path = tmp_path / "test.sock"
         server = DaemonRPCServer(socket_path)
         await server.start()
         mode = socket_path.stat().st_mode
-        # Check owner-only (0o600) — socket type + permissions
         assert mode & 0o777 == 0o600  # noqa: PLR2004
         await server.stop()
 
-    async def test_stale_socket_replaced(self, tmp_path: Path) -> None:
+    async def test_stale_file_replaced(self, tmp_path: Path) -> None:
         socket_path = tmp_path / "test.sock"
-        socket_path.touch()  # Stale socket
+        if _IS_WINDOWS:
+            _port_file_for(socket_path).write_text("0", encoding="utf-8")
+        else:
+            socket_path.touch()
         server = DaemonRPCServer(socket_path)
         await server.start()
-        assert socket_path.exists()
+        if _IS_WINDOWS:
+            assert _port_file_for(socket_path).exists()
+        else:
+            assert socket_path.exists()
         await server.stop()
 
     async def test_register_method(self, tmp_path: Path) -> None:
@@ -174,6 +191,20 @@ class TestDaemonRPCServer:
         finally:
             await server.stop()
 
+    async def test_port_file_contains_valid_port(self, tmp_path: Path) -> None:
+        """On Windows, the .port file contains a valid TCP port number."""
+        if not _IS_WINDOWS:
+            pytest.skip("TCP port file only written on Windows")
+        socket_path = tmp_path / "test.sock"
+        server = DaemonRPCServer(socket_path)
+        await server.start()
+        try:
+            port_file = _port_file_for(socket_path)
+            port = int(port_file.read_text(encoding="utf-8").strip())
+            assert 1 <= port <= 65535  # noqa: PLR2004
+        finally:
+            await server.stop()
+
 
 class TestRPCServerCoverageGaps:
     """Cover remaining RPC server paths."""
@@ -184,7 +215,10 @@ class TestRPCServerCoverageGaps:
         socket_path = tmp_path / "test.sock"
         server = DaemonRPCServer(socket_path)
         await server.stop()  # _server is None — should not raise
-        assert not socket_path.exists()
+        if _IS_WINDOWS:
+            assert not _port_file_for(socket_path).exists()
+        else:
+            assert not socket_path.exists()
 
     @pytest.mark.skip(
         reason="Flaky 10s asyncio race on CI runners; socket timeouts interact "
@@ -203,8 +237,11 @@ class TestRPCServerCoverageGaps:
                 "sovyx.engine.rpc_server.rpc_recv",
                 side_effect=TimeoutError("timed out"),
             ):
-                reader, writer = await asyncio.open_unix_connection(str(socket_path))
-                # Server sends length-prefixed error response
+                if _IS_WINDOWS:
+                    port = int(_port_file_for(socket_path).read_text(encoding="utf-8").strip())
+                    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+                else:
+                    reader, writer = await asyncio.open_unix_connection(str(socket_path))
                 from sovyx.engine.rpc_protocol import _HEADER_SIZE
 
                 header = await asyncio.wait_for(
@@ -237,10 +274,12 @@ class TestRPCServerCoverageGaps:
                 "sovyx.engine.rpc_server.rpc_recv",
                 side_effect=RuntimeError("unexpected"),
             ):
-                reader, writer = await asyncio.open_unix_connection(str(socket_path))
-                # Connection should be closed by server
+                if _IS_WINDOWS:
+                    port = int(_port_file_for(socket_path).read_text(encoding="utf-8").strip())
+                    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+                else:
+                    reader, writer = await asyncio.open_unix_connection(str(socket_path))
                 _ = await asyncio.wait_for(reader.read(4096), timeout=2.0)
-                # Server may or may not send data before closing
                 writer.close()
                 await writer.wait_closed()
         finally:

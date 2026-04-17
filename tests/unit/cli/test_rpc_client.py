@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from typing import TYPE_CHECKING, Any
 from unittest.mock import patch
 
@@ -12,9 +13,11 @@ if TYPE_CHECKING:
 
 import pytest
 
-from sovyx.cli.rpc_client import DEFAULT_SOCKET_PATH, DaemonClient
+from sovyx.cli.rpc_client import DEFAULT_SOCKET_PATH, DaemonClient, _port_file_for
 from sovyx.engine.errors import ChannelConnectionError
 from sovyx.engine.rpc_protocol import _HEADER_SIZE
+
+_IS_WINDOWS = sys.platform == "win32"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -32,36 +35,49 @@ async def _start_mock_daemon(
     hang: bool = False,
     close_early: bool = False,
 ) -> asyncio.AbstractServer:
-    """Start a Unix socket server that replies with a fixed response."""
+    """Start a mock server that replies with a fixed response.
+
+    On Unix: Unix domain socket. On Windows: TCP 127.0.0.1 with port file.
+    """
 
     async def handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         if close_early:
             writer.close()
             await writer.wait_closed()
             return
-        # Read the request (length-prefixed); probe connections may close early
         try:
             header = await reader.readexactly(_HEADER_SIZE)
         except asyncio.IncompleteReadError:
-            # Probe connection from is_daemon_running() — just close
             writer.close()
             await writer.wait_closed()
             return
         length = int.from_bytes(header, "big")
         await reader.readexactly(length)
         if hang:
-            # Read request but never respond — triggers client timeout
             await asyncio.sleep(60)
             return
-        # Send response
         if response is not None:
             writer.write(_encode_rpc_response(response))
             await writer.drain()
         writer.close()
         await writer.wait_closed()
 
-    server = await asyncio.start_unix_server(handler, path=str(socket_path))
+    if _IS_WINDOWS:
+        server = await asyncio.start_server(handler, host="127.0.0.1", port=0)
+        port = server.sockets[0].getsockname()[1]
+        port_file = _port_file_for(socket_path)
+        port_file.write_text(str(port), encoding="utf-8")
+    else:
+        server = await asyncio.start_unix_server(handler, path=str(socket_path))
     return server
+
+
+async def _stop_mock_daemon(server: asyncio.AbstractServer, socket_path: Path) -> None:
+    """Stop mock daemon and clean up transport files."""
+    server.close()
+    await server.wait_closed()
+    if _IS_WINDOWS:
+        _port_file_for(socket_path).unlink(missing_ok=True)
 
 
 # ── Constructor ──────────────────────────────────────────────────────────────
@@ -90,14 +106,14 @@ class TestDaemonClientInit:
 class TestIsDaemonRunning:
     """Tests for DaemonClient.is_daemon_running."""
 
-    def test_socket_not_exists(self, tmp_path: Path) -> None:
-        """No socket file → False."""
+    def test_no_transport_file(self, tmp_path: Path) -> None:
+        """No socket/port file → False."""
         client = DaemonClient(socket_path=tmp_path / "nonexistent.sock")
         assert client.is_daemon_running() is False
 
     @pytest.mark.asyncio
     async def test_daemon_running(self, tmp_path: Path) -> None:
-        """Real Unix server listening → True."""
+        """Real server listening → True."""
         sock = tmp_path / "test.sock"
         resp = {"jsonrpc": "2.0", "id": 1, "result": "ok"}
         server = await _start_mock_daemon(sock, response=resp)
@@ -105,22 +121,34 @@ class TestIsDaemonRunning:
             client = DaemonClient(socket_path=sock)
             assert client.is_daemon_running() is True
         finally:
-            server.close()
-            await server.wait_closed()
+            await _stop_mock_daemon(server, sock)
 
-    def test_stale_socket_file(self, tmp_path: Path) -> None:
-        """Socket file exists but no server → False (stale socket)."""
+    def test_stale_file(self, tmp_path: Path) -> None:
+        """Transport file exists but no server → False."""
         sock = tmp_path / "stale.sock"
-        sock.touch()  # File exists but nothing listening
+        if _IS_WINDOWS:
+            _port_file_for(sock).write_text("1", encoding="utf-8")
+        else:
+            sock.touch()
         client = DaemonClient(socket_path=sock)
         assert client.is_daemon_running() is False
 
     def test_connection_refused(self, tmp_path: Path) -> None:
-        """Socket file exists but connection refused → False."""
+        """Transport file exists but connection refused → False."""
         sock = tmp_path / "refused.sock"
-        sock.touch()
+        if _IS_WINDOWS:
+            _port_file_for(sock).write_text("1", encoding="utf-8")
+        else:
+            sock.touch()
         client = DaemonClient(socket_path=sock)
-        # A regular file can't be connected to — triggers OSError
+        assert client.is_daemon_running() is False
+
+    @pytest.mark.skipif(not _IS_WINDOWS, reason="Windows-only: invalid port file content")
+    def test_invalid_port_file_content(self, tmp_path: Path) -> None:
+        """Port file with non-numeric content → False."""
+        sock = tmp_path / "bad.sock"
+        _port_file_for(sock).write_text("not-a-number", encoding="utf-8")
+        client = DaemonClient(socket_path=sock)
         assert client.is_daemon_running() is False
 
 
@@ -148,8 +176,7 @@ class TestCall:
             result = await client.call("status")
             assert result == {"status": "running"}
         finally:
-            server.close()
-            await server.wait_closed()
+            await _stop_mock_daemon(server, sock)
 
     @pytest.mark.asyncio
     async def test_request_id_increments(self, tmp_path: Path) -> None:
@@ -172,7 +199,12 @@ class TestCall:
             writer.close()
             await writer.wait_closed()
 
-        server = await asyncio.start_unix_server(capturing_handler, path=str(sock))
+        if _IS_WINDOWS:
+            server = await asyncio.start_server(capturing_handler, host="127.0.0.1", port=0)
+            port = server.sockets[0].getsockname()[1]
+            _port_file_for(sock).write_text(str(port), encoding="utf-8")
+        else:
+            server = await asyncio.start_unix_server(capturing_handler, path=str(sock))
         try:
             client = DaemonClient(socket_path=sock)
             await client.call("method1")
@@ -180,8 +212,7 @@ class TestCall:
             assert received_requests[0]["id"] == 1
             assert received_requests[1]["id"] == 2
         finally:
-            server.close()
-            await server.wait_closed()
+            await _stop_mock_daemon(server, sock)
 
     @pytest.mark.asyncio
     async def test_params_forwarded(self, tmp_path: Path) -> None:
@@ -201,14 +232,18 @@ class TestCall:
             writer.close()
             await writer.wait_closed()
 
-        server = await asyncio.start_unix_server(handler, path=str(sock))
+        if _IS_WINDOWS:
+            server = await asyncio.start_server(handler, host="127.0.0.1", port=0)
+            port = server.sockets[0].getsockname()[1]
+            _port_file_for(sock).write_text(str(port), encoding="utf-8")
+        else:
+            server = await asyncio.start_unix_server(handler, path=str(sock))
         try:
             client = DaemonClient(socket_path=sock)
             await client.call("test", params={"key": "value"})
             assert received_params[0] == {"key": "value"}
         finally:
-            server.close()
-            await server.wait_closed()
+            await _stop_mock_daemon(server, sock)
 
     @pytest.mark.asyncio
     async def test_default_params_empty_dict(self, tmp_path: Path) -> None:
@@ -228,14 +263,18 @@ class TestCall:
             writer.close()
             await writer.wait_closed()
 
-        server = await asyncio.start_unix_server(handler, path=str(sock))
+        if _IS_WINDOWS:
+            server = await asyncio.start_server(handler, host="127.0.0.1", port=0)
+            port = server.sockets[0].getsockname()[1]
+            _port_file_for(sock).write_text(str(port), encoding="utf-8")
+        else:
+            server = await asyncio.start_unix_server(handler, path=str(sock))
         try:
             client = DaemonClient(socket_path=sock)
             await client.call("test")
             assert received_params[0] == {}
         finally:
-            server.close()
-            await server.wait_closed()
+            await _stop_mock_daemon(server, sock)
 
     @pytest.mark.asyncio
     async def test_rpc_error_response(self, tmp_path: Path) -> None:
@@ -252,8 +291,7 @@ class TestCall:
             with pytest.raises(ChannelConnectionError, match="Method not found"):
                 await client.call("nonexistent")
         finally:
-            server.close()
-            await server.wait_closed()
+            await _stop_mock_daemon(server, sock)
 
     @pytest.mark.asyncio
     async def test_rpc_error_missing_fields(self, tmp_path: Path) -> None:
@@ -270,8 +308,7 @@ class TestCall:
             with pytest.raises(ChannelConnectionError, match=r"RPC error \(\?\): unknown"):
                 await client.call("test")
         finally:
-            server.close()
-            await server.wait_closed()
+            await _stop_mock_daemon(server, sock)
 
     @pytest.mark.asyncio
     async def test_result_none_when_missing(self, tmp_path: Path) -> None:
@@ -284,12 +321,11 @@ class TestCall:
             result = await client.call("test")
             assert result is None
         finally:
-            server.close()
-            await server.wait_closed()
+            await _stop_mock_daemon(server, sock)
 
     @pytest.mark.asyncio
-    async def test_connect_timeout_no_socket(self, tmp_path: Path) -> None:
-        """call() when is_daemon_running is mocked True but socket absent → error."""
+    async def test_connect_timeout_no_transport(self, tmp_path: Path) -> None:
+        """call() when is_daemon_running is mocked True but transport absent → error."""
         sock = tmp_path / "daemon.sock"
         client = DaemonClient(socket_path=sock)
 
@@ -308,10 +344,8 @@ class TestCall:
         try:
             client = DaemonClient(socket_path=sock)
             await client.call("test")
-            # If we got here without error, the finally block ran successfully
         finally:
-            server.close()
-            await server.wait_closed()
+            await _stop_mock_daemon(server, sock)
 
     @pytest.mark.asyncio
     async def test_writer_closed_on_error(self, tmp_path: Path) -> None:
@@ -327,7 +361,5 @@ class TestCall:
             client = DaemonClient(socket_path=sock)
             with pytest.raises(ChannelConnectionError):
                 await client.call("test")
-            # If we got here without hanging, finally ran correctly
         finally:
-            server.close()
-            await server.wait_closed()
+            await _stop_mock_daemon(server, sock)

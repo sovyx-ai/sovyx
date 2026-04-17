@@ -1,10 +1,11 @@
-"""Sovyx DaemonRPCServer — JSON-RPC 2.0 over Unix domain socket."""
+"""Sovyx DaemonRPCServer — JSON-RPC 2.0 over Unix socket (or TCP on Windows)."""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import os
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -16,15 +17,20 @@ from sovyx.observability.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Default socket path
+# Default socket path (on Windows, the .port sibling stores the TCP port)
 DEFAULT_SOCKET_PATH = Path.home() / ".sovyx" / "sovyx.sock"
 
 
-class DaemonRPCServer:
-    """JSON-RPC 2.0 server via Unix domain socket.
+def _port_file_for(socket_path: Path) -> Path:
+    """Derive TCP port-file path from the nominal socket path."""
+    return socket_path.with_suffix(".port")
 
-    Registers methods that CLI can invoke.
-    Socket permissions: 0o600 (owner-only).
+
+class DaemonRPCServer:
+    """JSON-RPC 2.0 server via Unix domain socket (or TCP localhost on Windows).
+
+    On Unix/macOS: binds a domain socket with 0o600 permissions.
+    On Windows: binds TCP 127.0.0.1 on an ephemeral port, writes port to .port file.
     """
 
     def __init__(
@@ -41,27 +47,38 @@ class DaemonRPCServer:
         logger.debug("rpc_method_registered", method=name)
 
     async def start(self) -> None:
-        """Create Unix socket and start accepting connections."""
+        """Start accepting connections (Unix socket or TCP on Windows)."""
         self._socket_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Remove stale socket
-        if self._socket_path.exists():
-            self._socket_path.unlink()
-
-        self._server = await asyncio.start_unix_server(
-            self._handle_connection,
-            path=str(self._socket_path),
-        )
-        # Set permissions to owner-only
-        os.chmod(self._socket_path, 0o600)
-        logger.info("rpc_server_started", path=str(self._socket_path))
+        if sys.platform == "win32":
+            self._server = await asyncio.start_server(
+                self._handle_connection,
+                host="127.0.0.1",
+                port=0,
+            )
+            port = self._server.sockets[0].getsockname()[1]
+            port_file = _port_file_for(self._socket_path)
+            port_file.write_text(str(port), encoding="utf-8")
+            logger.info("rpc_server_started", transport="tcp", port=port)
+        else:
+            if self._socket_path.exists():
+                self._socket_path.unlink()
+            self._server = await asyncio.start_unix_server(
+                self._handle_connection,
+                path=str(self._socket_path),
+            )
+            os.chmod(self._socket_path, 0o600)
+            logger.info("rpc_server_started", transport="unix", path=str(self._socket_path))
 
     async def stop(self) -> None:
-        """Close socket and cleanup file."""
+        """Close server and cleanup files."""
         if self._server:
             self._server.close()
             await self._server.wait_closed()
-        self._socket_path.unlink(missing_ok=True)
+        if sys.platform == "win32":
+            _port_file_for(self._socket_path).unlink(missing_ok=True)
+        else:
+            self._socket_path.unlink(missing_ok=True)
         logger.info("rpc_server_stopped")
 
     async def _handle_connection(
