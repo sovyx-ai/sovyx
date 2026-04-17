@@ -272,36 +272,35 @@ function DeviceSelect({
   }
 
   return (
-    <div
-      className={cn(
-        "flex items-center gap-2 rounded-[var(--svx-radius-md)] border px-3 py-1.5",
-        warn
-          ? "border-[var(--svx-color-warning)]/40 bg-[var(--svx-color-warning)]/5"
-          : "border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)]",
-      )}
-    >
-      <Icon
+    <div className="space-y-1">
+      <div
         className={cn(
-          "size-3.5 shrink-0",
+          "flex items-center gap-1.5 text-[10px]",
           warn ? "text-[var(--svx-color-warning)]" : "text-[var(--svx-color-text-tertiary)]",
         )}
-      />
-      <div className="min-w-0 flex-1">
-        <div className="text-[10px] text-[var(--svx-color-text-tertiary)]">{label}</div>
-        <div className="relative">
-          <select
-            value={selected ?? ""}
-            onChange={(e) => onChange(Number(e.target.value))}
-            className="w-full cursor-pointer appearance-none bg-transparent pr-5 text-xs font-medium text-[var(--svx-color-text-primary)] outline-none"
-          >
-            {devices.map((d) => (
-              <option key={d.index} value={d.index}>
-                {d.name}
-              </option>
-            ))}
-          </select>
-          <ChevronDownIcon className="pointer-events-none absolute right-0 top-1/2 size-3 -translate-y-1/2 text-[var(--svx-color-text-tertiary)]" />
-        </div>
+      >
+        <Icon className="size-3" />
+        <span>{label}</span>
+      </div>
+      <div className="relative">
+        <select
+          value={selected ?? ""}
+          onChange={(e) => onChange(Number(e.target.value))}
+          className={cn(
+            "w-full cursor-pointer rounded-[var(--svx-radius-md)] border px-3 py-2 pr-8 text-xs text-[var(--svx-color-text-primary)] outline-none",
+            warn
+              ? "border-[var(--svx-color-warning)]/40 bg-[var(--svx-color-warning)]/5"
+              : "border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-elevated)]",
+          )}
+          style={{ colorScheme: "dark" }}
+        >
+          {devices.map((d) => (
+            <option key={d.index} value={d.index}>
+              {d.name}
+            </option>
+          ))}
+        </select>
+        <ChevronDownIcon className="pointer-events-none absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 text-[var(--svx-color-text-tertiary)]" />
       </div>
     </div>
   );
