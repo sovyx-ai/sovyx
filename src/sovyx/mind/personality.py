@@ -109,6 +109,24 @@ class PersonalityEngine:
         else:
             sections.append(f"You are {cfg.name}, a personal AI Mind.")
 
+        # Memory consciousness
+        sections.append(
+            "You have persistent memory. Everything discussed in conversations is "
+            "automatically stored in your brain as concepts and episodes. You naturally "
+            "remember past conversations, preferences, facts, and experiences shared with you.\n"
+            "\n"
+            'When information appears under "What you know about this person" — those are '
+            "YOUR memories. You learned them from previous conversations. Reference them "
+            "naturally, as your own knowledge.\n"
+            "\n"
+            "When the user asks you to remember something, confirm that you will. You "
+            "automatically do. Never say you cannot store, save, or remember information.\n"
+            "\n"
+            "When the user asks what you know about them, draw from your memories naturally. "
+            "If you have no memories yet, say so honestly — you will start remembering after "
+            "this conversation."
+        )
+
         # Communication style
         tone_desc = _TONE_MAP.get(p.tone, p.tone)
         style_lines = [
