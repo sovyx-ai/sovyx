@@ -69,7 +69,7 @@ export function ChannelsStep({ mindName, onConfigured, onSkip }: ChannelsStepPro
           Connect Channels
         </h2>
         <p className="mt-1 text-sm text-[var(--svx-color-text-secondary)]">
-          Optional \u2014 set up messaging channels now or configure them later in Settings.
+          Optional — set up messaging channels now or configure them later in Settings.
         </p>
       </div>
 
@@ -127,8 +127,8 @@ export function ChannelsStep({ mindName, onConfigured, onSkip }: ChannelsStepPro
             )}
             <span>
               {result.message}
-              {result.ok && result.hotStarted && " \u2014 active now"}
-              {result.ok && !result.hotStarted && " \u2014 will activate next start"}
+              {result.ok && result.hotStarted && " — active now"}
+              {result.ok && !result.hotStarted && " — will activate next start"}
             </span>
           </div>
         )}
