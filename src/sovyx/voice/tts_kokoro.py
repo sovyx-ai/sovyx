@@ -175,13 +175,19 @@ class KokoroTTS(TTSEngine):
         Prefers quantized (q8) model when ``config.quantized`` is True and
         the file exists, falling back to full-precision model.
 
+        The ONNX session is pinned to ``CPUExecutionProvider``. ``kokoro_onnx``
+        auto-selects GPU providers when ``onnxruntime-gpu`` is installed or
+        ``ONNX_PROVIDER`` is set, which can trigger WDDM TDR resets on Windows
+        with unstable GPU drivers. We construct the session ourselves and pass
+        it via :meth:`Kokoro.from_session` to match the Piper pinning policy.
+
         Raises:
             FileNotFoundError: If model or voice files are missing.
             RuntimeError: If kokoro-onnx fails to initialize.
         """
+        import onnxruntime as ort
         from kokoro_onnx import Kokoro
 
-        # Resolve model path (prefer q8 if configured)
         model_path = self._resolve_model_path()
         voices_path = self._model_dir / _VOICES_FILE
 
@@ -189,8 +195,16 @@ class KokoroTTS(TTSEngine):
             msg = f"Kokoro voices file not found: {voices_path}"
             raise FileNotFoundError(msg)
 
+        opts = ort.SessionOptions()
+        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+
         try:
-            self._kokoro = Kokoro(str(model_path), str(voices_path))
+            session = ort.InferenceSession(
+                str(model_path),
+                sess_options=opts,
+                providers=["CPUExecutionProvider"],
+            )
+            self._kokoro = Kokoro.from_session(session, str(voices_path))
         except Exception as exc:  # noqa: BLE001
             msg = f"Failed to initialize Kokoro: {exc}"
             raise RuntimeError(msg) from exc

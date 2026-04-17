@@ -6,14 +6,16 @@ without requiring actual model files (~300MB) or ONNX runtime.
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Iterator
 
 import numpy as np
+import onnxruntime
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
@@ -29,6 +31,42 @@ from sovyx.voice.tts_kokoro import (
     _split_sentences,
     _validate_config,
 )
+
+
+@contextlib.contextmanager
+def _patch_kokoro_init(
+    *,
+    from_session: MagicMock | None = None,
+    session_side_effect: Exception | None = None,
+) -> Iterator[tuple[MagicMock, MagicMock]]:
+    """Patch the lazy imports inside :meth:`KokoroTTS.initialize`.
+
+    Returns ``(mock_from_session, mock_inference_session)`` so tests can assert
+    both the ONNX session construction (providers pinned to CPU) and the Kokoro
+    wiring through :meth:`kokoro_onnx.Kokoro.from_session`.
+    """
+    mock_from_session = from_session or MagicMock(return_value=_make_mock_kokoro())
+    mock_module = MagicMock(Kokoro=MagicMock(from_session=mock_from_session))
+
+    if session_side_effect is not None:
+        session_ctx = patch.object(
+            onnxruntime,
+            "InferenceSession",
+            side_effect=session_side_effect,
+        )
+    else:
+        session_ctx = patch.object(
+            onnxruntime,
+            "InferenceSession",
+            return_value=MagicMock(),
+        )
+
+    with (
+        patch.dict("sys.modules", {"kokoro_onnx": mock_module}),
+        session_ctx as mock_session,
+    ):
+        yield mock_from_session, mock_session
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -266,17 +304,15 @@ class TestInitialization:
         _setup_model_dir(tmp_path, q8=True, full=True)
         tts = KokoroTTS(tmp_path)
 
-        mock_kokoro = _make_mock_kokoro()
-        mock_cls = MagicMock(return_value=mock_kokoro)
-        mock_module = MagicMock(Kokoro=mock_cls)
-
-        with patch.dict("sys.modules", {"kokoro_onnx": mock_module}):
+        with _patch_kokoro_init() as (mock_from_session, mock_session):
             await tts.initialize()
 
         assert tts.is_initialized
-        # Should prefer q8 model
-        mock_cls.assert_called_once_with(
-            str(tmp_path / _MODEL_Q8),
+        session_args = mock_session.call_args
+        assert session_args.args[0] == str(tmp_path / _MODEL_Q8)
+        assert session_args.kwargs["providers"] == ["CPUExecutionProvider"]
+        mock_from_session.assert_called_once_with(
+            mock_session.return_value,
             str(tmp_path / _VOICES_FILE),
         )
 
@@ -285,16 +321,13 @@ class TestInitialization:
         _setup_model_dir(tmp_path, q8=False, full=True)
         tts = KokoroTTS(tmp_path)
 
-        mock_kokoro = _make_mock_kokoro()
-        mock_cls = MagicMock(return_value=mock_kokoro)
-        mock_module = MagicMock(Kokoro=mock_cls)
-
-        with patch.dict("sys.modules", {"kokoro_onnx": mock_module}):
+        with _patch_kokoro_init() as (mock_from_session, mock_session):
             await tts.initialize()
 
         assert tts.is_initialized
-        mock_cls.assert_called_once_with(
-            str(tmp_path / _MODEL_FULL),
+        assert mock_session.call_args.args[0] == str(tmp_path / _MODEL_FULL)
+        mock_from_session.assert_called_once_with(
+            mock_session.return_value,
             str(tmp_path / _VOICES_FILE),
         )
 
@@ -304,18 +337,32 @@ class TestInitialization:
         cfg = KokoroConfig(quantized=False)
         tts = KokoroTTS(tmp_path, cfg)
 
-        mock_kokoro = _make_mock_kokoro()
-        mock_cls = MagicMock(return_value=mock_kokoro)
-        mock_module = MagicMock(Kokoro=mock_cls)
-
-        with patch.dict("sys.modules", {"kokoro_onnx": mock_module}):
+        with _patch_kokoro_init() as (mock_from_session, mock_session):
             await tts.initialize()
 
         assert tts.is_initialized
-        mock_cls.assert_called_once_with(
-            str(tmp_path / _MODEL_FULL),
+        assert mock_session.call_args.args[0] == str(tmp_path / _MODEL_FULL)
+        mock_from_session.assert_called_once_with(
+            mock_session.return_value,
             str(tmp_path / _VOICES_FILE),
         )
+
+    @pytest.mark.asyncio
+    async def test_initialize_pins_cpu_execution_provider(self, tmp_path: Path) -> None:
+        """Regression: Kokoro ONNX session must never auto-select GPU providers.
+
+        ``kokoro_onnx`` uses all available providers when ``onnxruntime-gpu`` is
+        installed or ``ONNX_PROVIDER`` env var is set. On Windows with unstable
+        GPU drivers that can trigger WDDM TDR resets. We construct the session
+        ourselves to guarantee CPU-only execution.
+        """
+        _setup_model_dir(tmp_path, q8=True)
+        tts = KokoroTTS(tmp_path)
+
+        with _patch_kokoro_init() as (_, mock_session):
+            await tts.initialize()
+
+        assert mock_session.call_args.kwargs["providers"] == ["CPUExecutionProvider"]
 
     @pytest.mark.asyncio
     async def test_initialize_missing_model_raises(self, tmp_path: Path) -> None:
@@ -346,11 +393,8 @@ class TestInitialization:
         _setup_model_dir(tmp_path, q8=True)
         tts = KokoroTTS(tmp_path)
 
-        mock_cls = MagicMock(side_effect=RuntimeError("ONNX init failed"))
-        mock_module = MagicMock(Kokoro=mock_cls)
-
         with (
-            patch.dict("sys.modules", {"kokoro_onnx": mock_module}),
+            _patch_kokoro_init(session_side_effect=RuntimeError("ONNX init failed")),
             pytest.raises(RuntimeError, match="Failed to initialize Kokoro"),
         ):
             await tts.initialize()
@@ -370,16 +414,13 @@ class TestInitialization:
         _setup_model_dir(tmp_path, q8=False, full=True)
         tts = KokoroTTS(tmp_path, KokoroConfig(quantized=True))
 
-        mock_kokoro = _make_mock_kokoro()
-        mock_cls = MagicMock(return_value=mock_kokoro)
-        mock_module = MagicMock(Kokoro=mock_cls)
-
-        with patch.dict("sys.modules", {"kokoro_onnx": mock_module}):
+        with _patch_kokoro_init() as (mock_from_session, mock_session):
             await tts.initialize()
 
         assert tts.is_initialized
-        mock_cls.assert_called_once_with(
-            str(tmp_path / _MODEL_FULL),
+        assert mock_session.call_args.args[0] == str(tmp_path / _MODEL_FULL)
+        mock_from_session.assert_called_once_with(
+            mock_session.return_value,
             str(tmp_path / _VOICES_FILE),
         )
 
@@ -503,10 +544,7 @@ class TestSynthesize:
         assert not tts.is_initialized
 
         mock_kokoro = _make_mock_kokoro()
-        mock_cls = MagicMock(return_value=mock_kokoro)
-        mock_module = MagicMock(Kokoro=mock_cls)
-
-        with patch.dict("sys.modules", {"kokoro_onnx": mock_module}):
+        with _patch_kokoro_init(from_session=MagicMock(return_value=mock_kokoro)):
             result = await tts.synthesize("Hello")
 
         assert tts.is_initialized
@@ -589,13 +627,11 @@ class TestSynthesizeStreaming:
         tts = KokoroTTS(tmp_path)
 
         mock_kokoro = _make_mock_kokoro()
-        mock_cls = MagicMock(return_value=mock_kokoro)
-        mock_module = MagicMock(Kokoro=mock_cls)
 
         async def _stream() -> AsyncIterator[str]:
             yield "Hello."
 
-        with patch.dict("sys.modules", {"kokoro_onnx": mock_module}):
+        with _patch_kokoro_init(from_session=MagicMock(return_value=mock_kokoro)):
             chunks = []
             async for chunk in tts.synthesize_streaming(_stream()):
                 chunks.append(chunk)
@@ -666,12 +702,8 @@ class TestEdgeCases:
 
         assert not tts.is_initialized
 
-        # Re-init via mock
         mock_kokoro = _make_mock_kokoro()
-        mock_cls = MagicMock(return_value=mock_kokoro)
-        mock_module = MagicMock(Kokoro=mock_cls)
-
-        with patch.dict("sys.modules", {"kokoro_onnx": mock_module}):
+        with _patch_kokoro_init(from_session=MagicMock(return_value=mock_kokoro)):
             result = await tts.synthesize("Hello")
 
         assert tts.is_initialized
