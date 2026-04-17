@@ -199,14 +199,22 @@ def start(
     async def _start() -> None:
         system_yaml = Path.home() / ".sovyx" / "system.yaml"
         config = load_engine_config(config_path=system_yaml if system_yaml.exists() else None)
-        mind_config = MindConfig(name="Aria")  # v0.1: single mind
+        mind_config = MindConfig(name="Sovyx")  # v0.1: single mind
 
-        # Load mind.yaml if exists
-        mind_yaml = config.database.data_dir / "aria" / "mind.yaml"
-        if mind_yaml.exists():
+        # Load mind.yaml — discover first mind directory
+        mind_yaml: Path | None = None
+        data_dir = config.database.data_dir
+        if data_dir.exists():
+            for child in sorted(data_dir.iterdir()):
+                candidate = child / "mind.yaml"
+                if child.is_dir() and candidate.exists():
+                    mind_yaml = candidate
+                    break
+
+        if mind_yaml is not None and mind_yaml.exists():
             import yaml
 
-            with open(mind_yaml) as f:
+            with open(mind_yaml) as f:  # noqa: PTH123
                 mind_data = yaml.safe_load(f)
             if mind_data:
                 mind_config = MindConfig(**mind_data)
