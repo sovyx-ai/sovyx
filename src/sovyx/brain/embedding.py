@@ -138,17 +138,18 @@ class EmbeddingEngine:
                     model_dir=str(self._model_dir),
                 )
 
-            except (EmbeddingError, OSError, RuntimeError, ImportError):
-                # EmbeddingError: download/checksum failure from the
-                # model downloader. OSError: missing/unreadable model
-                # file. RuntimeError: ONNX session construction
-                # failure (invalid graph, EP unavailable). ImportError:
-                # onnxruntime or tokenizers not installable on this
-                # platform. Fall back to FTS5-only retrieval — search
-                # still works, just without semantic similarity.
+            except (EmbeddingError, OSError, RuntimeError, ImportError) as exc:
+                # EmbeddingError: download/checksum failure from the model
+                # downloader. OSError: missing/unreadable model file.
+                # RuntimeError: ONNX session construction failure (invalid
+                # graph, EP unavailable). ImportError: onnxruntime or
+                # tokenizers not installable on this platform. This is the
+                # graceful-fallback path — search still works via FTS5, so
+                # log the reason structured but don't dump a traceback.
                 logger.warning(
                     "embedding_model_unavailable_fts5_fallback",
-                    exc_info=True,
+                    reason=str(exc),
+                    reason_type=type(exc).__name__,
                 )
                 self._has_embeddings = False
                 self._loaded = True
