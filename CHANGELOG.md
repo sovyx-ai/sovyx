@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.15.5] — 2026-04-17
+
+### Fixed
+
+- **Default mind name** — `sovyx init` default changed from
+  "Aria" to "Sovyx" to match frontend fallback and project name.
+
 ## [0.15.4] — 2026-04-17
 
 **Chat redesign — SSE streaming with cognitive transparency.**
