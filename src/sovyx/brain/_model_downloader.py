@@ -345,14 +345,12 @@ class ModelDownloader:
                     sleep_time = wait  # Feed back into jitter.
 
             except (httpx.HTTPError, OSError, TimeoutError) as exc:
-                # Expected download failures: network (httpx.HTTPError
-                # covers TimeoutException, RequestError, HTTPStatusError
-                # and siblings), disk/filesystem (OSError) during stream-
-                # to-disk, and bare asyncio.TimeoutError which is
-                # aliased to builtins.TimeoutError in 3.11+. Each
-                # attempt is logged with a full traceback so flaky
-                # network vs. disk-full vs. permission can be told
-                # apart from the log stream alone.
+                # Expected transient failures: network (httpx.HTTPError covers
+                # TimeoutException/RequestError/HTTPStatusError + siblings),
+                # disk/filesystem (OSError) during stream-to-disk, and bare
+                # asyncio.TimeoutError. The one-line structured warning carries
+                # enough to diagnose — the full traceback only fires once on
+                # exhaustion (EmbeddingError chained from last_error).
                 last_error = exc
                 wait = min(
                     self.BACKOFF_MAX,
@@ -367,7 +365,7 @@ class ModelDownloader:
                     attempt=attempt,
                     wait_seconds=round(wait, 1),
                     error=str(exc),
-                    exc_info=True,
+                    error_type=type(exc).__name__,
                 )
                 if attempt < self.MAX_RETRIES:
                     await asyncio.sleep(wait)
