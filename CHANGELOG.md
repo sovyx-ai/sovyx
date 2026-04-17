@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.15.6] — 2026-04-17
+
+### Fixed
+
+- **Mind name discovery** — `sovyx start` now scans data directory
+  for the first mind.yaml instead of hardcoding path to "aria/".
+  Fixes mind name showing as "Aria" when user created a mind with
+  a different name via `sovyx init MyName`.
+- **PortAudio OSError** — voice dependency check catches OSError
+  (PortAudio library not found) in addition to ImportError. Returns
+  structured 400 with platform-specific install instructions instead
+  of crashing with 500.
+
 ## [0.15.5] — 2026-04-17
 
 ### Fixed
