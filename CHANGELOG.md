@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.15.7] — 2026-04-17
+
+### Added
+
+- **Memory consciousness in system prompt** — the mind now knows
+  it has persistent memory. Instructs the LLM to reference retrieved
+  concepts as first-person knowledge, confirm it will remember when
+  asked, and never claim it cannot store information.
+
+### Fixed
+
+- **Unicode em-dash** in ChannelsStep — `\u2014` rendered as
+  literal text in JSX, replaced with actual `—` character.
+
 ## [0.15.6] — 2026-04-17
 
 ### Fixed
