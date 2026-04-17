@@ -6,6 +6,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.15.4] — 2026-04-17
+
+**Chat redesign — SSE streaming with cognitive transparency.**
+
+### Added
+
+- **SSE streaming chat** (`POST /api/chat/stream`) — token-by-token
+  rendering via Server-Sent Events. Automatic fallback to batch
+  endpoint when SSE fails.
+- **Cognitive transparency** — real-time phase indicators during
+  message processing (perceiving, attending, thinking, acting,
+  reflecting) with detail strings inline in the SSE stream.
+- **Inline cost/tokens/latency** — each AI message shows tokens,
+  cost, latency, and model below the bubble. Ollama shows "local".
+- **Conversation sidebar** — collapsible sidebar in chat page with
+  conversation list, search, click-to-load history.
+- **Mood indicator** — PAD emotional state dot + label in chat
+  header from /api/emotions/current.
+- **Typing cursor** — blinking cursor during streaming.
+- **Smart scroll** — auto-scroll only when near bottom, floating
+  "scroll to bottom" button.
+- **Retry button** — error banner shows "Retry" to resend last
+  message.
+
+### Fixed
+
+- **Safety filter feedback** — filtered messages now return
+  "I can't respond to that request." instead of empty string.
+- **Telegram hot-add in Overview** — channel setup now uses
+  hot-add endpoint (zero restart).
+- **Unified formatCost** — single function across all cost displays.
+- **ConversationTracker Protocol** — metadata kwarg for add_turn.
+
 ## [0.15.3] — 2026-04-16
 
 ### Fixed
