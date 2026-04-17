@@ -32,7 +32,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { HardwareDetection } from "./HardwareDetection";
+import { HardwareDetection, type SelectedDevices } from "./HardwareDetection";
 
 interface MissingDep {
   module: string;
@@ -65,6 +65,10 @@ export function VoiceSetupModal({ trigger, onEnabled }: VoiceSetupModalProps) {
   const [audioError, setAudioError] = useState(false);
   const [enableError, setEnableError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [devices, setDevices] = useState<SelectedDevices>({
+    input_device: null,
+    output_device: null,
+  });
 
   const handleDetected = useCallback(() => {
     setDetected(true);
@@ -77,7 +81,7 @@ export function VoiceSetupModal({ trigger, onEnabled }: VoiceSetupModalProps) {
     setEnableError(null);
 
     try {
-      const result = await api.post<EnableResponse>("/api/voice/enable", {});
+      const result = await api.post<EnableResponse>("/api/voice/enable", devices);
       if (result.ok) {
         toast.success(
           `Voice pipeline enabled${result.tts_engine ? ` (${result.tts_engine} TTS)` : ""}`,
@@ -111,7 +115,7 @@ export function VoiceSetupModal({ trigger, onEnabled }: VoiceSetupModalProps) {
     } finally {
       setEnabling(false);
     }
-  }, [onEnabled]);
+  }, [onEnabled, devices]);
 
   const handleCopy = useCallback(
     (command: string) => {
@@ -144,7 +148,7 @@ export function VoiceSetupModal({ trigger, onEnabled }: VoiceSetupModalProps) {
         </DialogHeader>
 
         <div className="py-2 space-y-4">
-          <HardwareDetection onDetected={handleDetected} />
+          <HardwareDetection onDetected={handleDetected} onDeviceChange={setDevices} />
 
           {/* Dependency issue panel */}
           {depsIssue && (

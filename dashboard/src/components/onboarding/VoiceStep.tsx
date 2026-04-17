@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { HardwareDetection } from "@/components/setup-wizard";
+import { HardwareDetection, type SelectedDevices } from "@/components/setup-wizard";
 
 interface VoiceStepProps {
   onConfigured: () => void;
@@ -35,13 +35,17 @@ export function VoiceStep({ onConfigured, onSkip }: VoiceStepProps) {
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [devices, setDevices] = useState<SelectedDevices>({
+    input_device: null,
+    output_device: null,
+  });
 
   const handleEnable = useCallback(async () => {
     setEnabling(true);
     setMissingDeps(null);
     setError(null);
     try {
-      const result = await api.post<EnableResult>("/api/voice/enable", {});
+      const result = await api.post<EnableResult>("/api/voice/enable", devices);
       if (result.ok) {
         setEnabled(true);
       }
@@ -68,7 +72,7 @@ export function VoiceStep({ onConfigured, onSkip }: VoiceStepProps) {
     } finally {
       setEnabling(false);
     }
-  }, []);
+  }, [devices]);
 
   const handleCopy = useCallback((cmd: string) => {
     void navigator.clipboard.writeText(cmd);
@@ -87,7 +91,7 @@ export function VoiceStep({ onConfigured, onSkip }: VoiceStepProps) {
         </p>
       </div>
 
-      <HardwareDetection onDetected={() => setDetected(true)} />
+      <HardwareDetection onDetected={() => setDetected(true)} onDeviceChange={setDevices} />
 
       {/* Success state */}
       {enabled && (

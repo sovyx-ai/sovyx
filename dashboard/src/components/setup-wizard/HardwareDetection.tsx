@@ -3,11 +3,11 @@
  *
  * Fetches from GET /api/voice/hardware-detect and displays:
  * - CPU cores, RAM, GPU, tier
- * - Audio device availability (gate for voice enable)
+ * - Audio device dropdowns for input/output selection
  * - Recommended models with download sizes
  */
 
-import { memo, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import {
   CpuIcon,
@@ -17,8 +17,15 @@ import {
   AlertTriangleIcon,
   CheckCircle2Icon,
   LoaderIcon,
+  ChevronDownIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+interface AudioDevice {
+  index: number;
+  name: string;
+  is_default: boolean;
+}
 
 interface HardwareInfo {
   hardware: {
@@ -30,8 +37,8 @@ interface HardwareInfo {
   };
   audio: {
     available: boolean;
-    input_devices: string[];
-    output_devices: string[];
+    input_devices: AudioDevice[];
+    output_devices: AudioDevice[];
   };
   recommended_models: Array<{
     name: string;
@@ -43,27 +50,61 @@ interface HardwareInfo {
   total_download_mb: number;
 }
 
-interface HardwareDetectionProps {
-  onDetected?: (info: HardwareInfo) => void;
+export interface SelectedDevices {
+  input_device: number | null;
+  output_device: number | null;
 }
 
-function HardwareDetectionImpl({ onDetected }: HardwareDetectionProps) {
+interface HardwareDetectionProps {
+  onDetected?: (info: HardwareInfo) => void;
+  onDeviceChange?: (devices: SelectedDevices) => void;
+}
+
+function findDefault(devices: AudioDevice[]): number | null {
+  const def = devices.find((d) => d.is_default);
+  return def?.index ?? devices[0]?.index ?? null;
+}
+
+function HardwareDetectionImpl({ onDetected, onDeviceChange }: HardwareDetectionProps) {
   const [loading, setLoading] = useState(true);
   const [info, setInfo] = useState<HardwareInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [selectedInput, setSelectedInput] = useState<number | null>(null);
+  const [selectedOutput, setSelectedOutput] = useState<number | null>(null);
 
   useEffect(() => {
     api
       .get<HardwareInfo>("/api/voice/hardware-detect")
       .then((data) => {
         setInfo(data);
+        const defIn = findDefault(data.audio.input_devices);
+        const defOut = findDefault(data.audio.output_devices);
+        setSelectedInput(defIn);
+        setSelectedOutput(defOut);
         onDetected?.(data);
+        onDeviceChange?.({ input_device: defIn, output_device: defOut });
       })
       .catch((err) => {
         setError(String(err));
       })
       .finally(() => setLoading(false));
-  }, [onDetected]);
+  }, [onDetected, onDeviceChange]);
+
+  const handleInputChange = useCallback(
+    (index: number) => {
+      setSelectedInput(index);
+      onDeviceChange?.({ input_device: index, output_device: selectedOutput });
+    },
+    [selectedOutput, onDeviceChange],
+  );
+
+  const handleOutputChange = useCallback(
+    (index: number) => {
+      setSelectedOutput(index);
+      onDeviceChange?.({ input_device: selectedInput, output_device: index });
+    },
+    [selectedInput, onDeviceChange],
+  );
 
   if (loading) {
     return (
@@ -95,16 +136,24 @@ function HardwareDetectionImpl({ onDetected }: HardwareDetectionProps) {
           label="RAM"
           value={`${Math.round(hardware.ram_mb / 1024)} GB`}
         />
-        <InfoChip
+      </div>
+
+      {/* Audio device selectors */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <DeviceSelect
           icon={MicIcon}
           label="Input"
-          value={audio.input_devices.length > 0 ? (audio.input_devices[0] ?? "Unknown") : "None"}
+          devices={audio.input_devices}
+          selected={selectedInput}
+          onChange={handleInputChange}
           warn={!audio.available}
         />
-        <InfoChip
+        <DeviceSelect
           icon={Volume2Icon}
           label="Output"
-          value={audio.output_devices.length > 0 ? (audio.output_devices[0] ?? "Unknown") : "None"}
+          devices={audio.output_devices}
+          selected={selectedOutput}
+          onChange={handleOutputChange}
           warn={!audio.available}
         />
       </div>
@@ -150,7 +199,7 @@ function HardwareDetectionImpl({ onDetected }: HardwareDetectionProps) {
                   {m.description}
                 </p>
               </div>
-              <div className="flex items-center gap-2 shrink-0 ml-3">
+              <div className="ml-3 flex shrink-0 items-center gap-2">
                 <span className="text-[11px] text-[var(--svx-color-text-tertiary)]">
                   {m.size_mb} MB
                 </span>
@@ -172,17 +221,60 @@ function InfoChip({
   icon: Icon,
   label,
   value,
-  warn,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   label: string;
   value: string;
+}) {
+  return (
+    <div className="flex items-center gap-2 rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] px-3 py-2">
+      <Icon className="size-3.5 shrink-0 text-[var(--svx-color-text-tertiary)]" />
+      <div className="min-w-0">
+        <div className="text-[10px] text-[var(--svx-color-text-tertiary)]">{label}</div>
+        <div className="truncate text-xs font-medium text-[var(--svx-color-text-primary)]">
+          {value}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeviceSelect({
+  icon: Icon,
+  label,
+  devices,
+  selected,
+  onChange,
+  warn,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  devices: AudioDevice[];
+  selected: number | null;
+  onChange: (index: number) => void;
   warn?: boolean;
 }) {
+  if (devices.length === 0) {
+    return (
+      <div
+        className={cn(
+          "flex items-center gap-2 rounded-[var(--svx-radius-md)] border px-3 py-2",
+          "border-[var(--svx-color-warning)]/40 bg-[var(--svx-color-warning)]/5",
+        )}
+      >
+        <Icon className="size-3.5 shrink-0 text-[var(--svx-color-warning)]" />
+        <div className="min-w-0">
+          <div className="text-[10px] text-[var(--svx-color-text-tertiary)]">{label}</div>
+          <div className="text-xs font-medium text-[var(--svx-color-warning)]">None</div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className={cn(
-        "flex items-center gap-2 rounded-[var(--svx-radius-md)] border px-3 py-2",
+        "flex items-center gap-2 rounded-[var(--svx-radius-md)] border px-3 py-1.5",
         warn
           ? "border-[var(--svx-color-warning)]/40 bg-[var(--svx-color-warning)]/5"
           : "border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)]",
@@ -194,10 +286,21 @@ function InfoChip({
           warn ? "text-[var(--svx-color-warning)]" : "text-[var(--svx-color-text-tertiary)]",
         )}
       />
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1">
         <div className="text-[10px] text-[var(--svx-color-text-tertiary)]">{label}</div>
-        <div className="truncate text-xs font-medium text-[var(--svx-color-text-primary)]">
-          {value}
+        <div className="relative">
+          <select
+            value={selected ?? ""}
+            onChange={(e) => onChange(Number(e.target.value))}
+            className="w-full cursor-pointer appearance-none bg-transparent pr-5 text-xs font-medium text-[var(--svx-color-text-primary)] outline-none"
+          >
+            {devices.map((d) => (
+              <option key={d.index} value={d.index}>
+                {d.name}
+              </option>
+            ))}
+          </select>
+          <ChevronDownIcon className="pointer-events-none absolute right-0 top-1/2 size-3 -translate-y-1/2 text-[var(--svx-color-text-tertiary)]" />
         </div>
       </div>
     </div>

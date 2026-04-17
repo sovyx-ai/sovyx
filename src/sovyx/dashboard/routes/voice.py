@@ -64,20 +64,27 @@ async def hardware_detect(request: Request) -> JSONResponse:
         logger.warning("hardware_detection_failed", error=str(exc))
         return JSONResponse({"error": f"Hardware detection failed: {exc}"}, status_code=500)
 
-    # Audio device detection
+    # Audio device detection (deduplicated, with OS default marker)
     audio_available = False
-    input_devices: list[str] = []
-    output_devices: list[str] = []
+    input_devices: list[dict[str, object]] = []
+    output_devices: list[dict[str, object]] = []
     try:
         import sounddevice as sd  # noqa: PLC0415
 
         devices = sd.query_devices()
-        for d in devices:
-            if isinstance(d, dict):
-                if d.get("max_input_channels", 0) > 0:
-                    input_devices.append(str(d.get("name", "unknown")))
-                if d.get("max_output_channels", 0) > 0:
-                    output_devices.append(str(d.get("name", "unknown")))
+        default_in, default_out = sd.default.device
+        seen_in: set[str] = set()
+        seen_out: set[str] = set()
+        for i, d in enumerate(devices):
+            if not isinstance(d, dict):
+                continue
+            name = str(d.get("name", "unknown"))
+            if d.get("max_input_channels", 0) > 0 and name not in seen_in:
+                seen_in.add(name)
+                input_devices.append({"index": i, "name": name, "is_default": i == default_in})
+            if d.get("max_output_channels", 0) > 0 and name not in seen_out:
+                seen_out.add(name)
+                output_devices.append({"index": i, "name": name, "is_default": i == default_out})
         audio_available = bool(input_devices and output_devices)
     except ImportError:
         logger.debug("sounddevice_not_installed")
@@ -101,8 +108,8 @@ async def hardware_detect(request: Request) -> JSONResponse:
             },
             "audio": {
                 "available": audio_available,
-                "input_devices": input_devices[:5],
-                "output_devices": output_devices[:5],
+                "input_devices": input_devices,
+                "output_devices": output_devices,
             },
             "recommended_models": [
                 {
@@ -132,6 +139,16 @@ async def enable_voice(request: Request) -> JSONResponse:
         6. Persist to mind.yaml.
         7. Return active status.
     """
+    # 0. Parse optional device selection
+    try:
+        body = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    input_device: int | None = body.get("input_device")
+    output_device: int | None = body.get("output_device")
+
     # 1. Check deps
     from sovyx.voice.model_registry import check_voice_deps, detect_tts_engine
 
@@ -234,7 +251,12 @@ async def enable_voice(request: Request) -> JSONResponse:
         from sovyx.engine.config_editor import ConfigEditor
 
         editor = ConfigEditor()
-        await editor.update_section(Path(mind_yaml_path), "voice", {"enabled": True})
+        voice_cfg: dict[str, object] = {"enabled": True}
+        if input_device is not None:
+            voice_cfg["input_device"] = input_device
+        if output_device is not None:
+            voice_cfg["output_device"] = output_device
+        await editor.update_section(Path(mind_yaml_path), "voice", voice_cfg)
 
     logger.info("voice_pipeline_hot_enabled", tts=tts_engine)
     return JSONResponse({"ok": True, "status": "active", "tts_engine": tts_engine})
