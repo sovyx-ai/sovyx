@@ -235,19 +235,14 @@ class HealthChecker:
     async def _check_memory(self) -> tuple[bool, str]:
         """Check RSS < 85% of total RAM."""
         try:
-            import resource as res
+            import psutil  # noqa: PLC0415
 
-            rss_bytes = res.getrusage(res.RUSAGE_SELF).ru_maxrss * 1024  # KB to bytes
-            # Get total RAM
-            with open("/proc/meminfo") as f:
-                for line in f:
-                    if line.startswith("MemTotal:"):
-                        total_kb = int(line.split()[1])
-                        total_bytes = total_kb * 1024
-                        pct = (rss_bytes / total_bytes) * 100
-                        ok = pct < _MAX_RSS_PERCENT
-                        return ok, f"{pct:.1f}% RSS"
-            return True, "unknown"  # pragma: no cover
+            proc = psutil.Process()
+            rss_bytes = proc.memory_info().rss
+            total_bytes = psutil.virtual_memory().total
+            pct = (rss_bytes / total_bytes) * 100
+            ok = pct < _MAX_RSS_PERCENT
+            return ok, f"{pct:.1f}% RSS"
         except Exception as e:  # noqa: BLE001 — health-check boundary; pragma: no cover
             return False, str(e)
 

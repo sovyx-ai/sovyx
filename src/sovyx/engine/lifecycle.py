@@ -70,13 +70,21 @@ class PidLock:
 
     @staticmethod
     def _is_process_alive(pid: int) -> bool:
-        """Check if process exists via os.kill(pid, 0)."""
+        """Check if process with the given PID exists."""
+        if sys.platform == "win32":
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32
+            handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+            if handle:
+                kernel32.CloseHandle(handle)
+                return True
+            return False
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
             return False
         except PermissionError:  # pragma: no cover
-            # Process exists but we can't signal it
             return True
         return True
 
@@ -391,6 +399,8 @@ class LifecycleManager:
 
         Silent if systemd not present (desktop/Docker).
         """
+        if sys.platform == "win32":
+            return
         notify_socket = os.environ.get("NOTIFY_SOCKET")
         if not notify_socket:
             return

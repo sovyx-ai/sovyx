@@ -244,7 +244,9 @@ def detect_hardware() -> HardwareProfile:
     Returns:
         HardwareProfile with tier, RAM, CPU cores, and GPU info.
     """
-    ram_mb = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") // (1024 * 1024)
+    import psutil  # noqa: PLC0415
+
+    ram_mb = psutil.virtual_memory().total // (1024 * 1024)
     cpu_cores = os.cpu_count() or 1
     has_gpu, gpu_vram_mb = _detect_gpu()
     machine = platform.machine()

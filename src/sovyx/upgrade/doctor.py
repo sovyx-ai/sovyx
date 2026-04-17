@@ -453,18 +453,12 @@ def _check_memory_usage() -> DiagnosticResult:
     """
     check_name = "memory_usage"
     try:
-        import resource
+        import psutil  # noqa: PLC0415
 
-        # Get RSS in KB (on Linux, ru_maxrss is in KB)
-        rusage = resource.getrusage(resource.RUSAGE_SELF)
-        rss_kb = rusage.ru_maxrss
-        # On macOS, ru_maxrss is in bytes
-        if platform.system() == "Darwin":
-            rss_kb = rss_kb // 1024
-        rss_mb = rss_kb // 1024
+        proc = psutil.Process()
+        rss_mb = proc.memory_info().rss // (1024 * 1024)
 
-        # Total system memory
-        total_mb = _get_total_memory_mb()
+        total_mb = psutil.virtual_memory().total // (1024 * 1024)
         rss_percent = round((rss_mb / total_mb) * 100, 1) if total_mb > 0 else 0.0
 
         details = {
@@ -500,37 +494,8 @@ def _check_memory_usage() -> DiagnosticResult:
             check=check_name,
             status=DiagnosticStatus.FAIL,
             message=f"Memory usage check error: {exc}",
-            fix_suggestion="Ensure the 'resource' module is available.",
+            fix_suggestion="Ensure the 'psutil' package is installed.",
         )
-
-
-def _get_total_memory_mb() -> int:
-    """Get total system memory in MB.
-
-    Returns:
-        Total memory in megabytes, or 0 if detection fails.
-    """
-    try:
-        if platform.system() == "Linux":
-            with Path("/proc/meminfo").open() as fh:
-                for line in fh:
-                    if line.startswith("MemTotal:"):
-                        parts = line.split()
-                        return int(parts[1]) // 1024
-        elif platform.system() == "Darwin":
-            import subprocess  # noqa: S404
-
-            result = subprocess.run(  # noqa: S603
-                ["sysctl", "-n", "hw.memsize"],  # noqa: S607
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if result.returncode == 0:
-                return int(result.stdout.strip()) // (1024 * 1024)
-    except (OSError, ValueError):
-        pass
-    return 0
 
 
 def _check_model_files(data_dir: Path) -> DiagnosticResult:

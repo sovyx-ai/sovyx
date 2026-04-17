@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib
 import json
-import platform
 import socket
 import sys
 from pathlib import Path
@@ -31,7 +30,6 @@ from sovyx.upgrade.doctor import (
     _check_port_available,
     _check_python_version,
     _check_schema_version,
-    _get_total_memory_mb,
 )
 
 # ── Fixtures ──────────────────────────────────────────────────────────
@@ -466,7 +464,7 @@ class TestDiskSpace:
 
 
 class TestMemoryUsage:
-    """Tests for _check_memory_usage."""
+    """Tests for _check_memory_usage (psutil-based)."""
 
     def test_pass_normal(self) -> None:
         result = _check_memory_usage()
@@ -475,42 +473,36 @@ class TestMemoryUsage:
         assert "rss_mb" in result.details
 
     def test_fail_high_memory(self) -> None:
-        import resource as _resource_mod
+        import psutil
 
-        mock_rusage = MagicMock()
-        mock_rusage.ru_maxrss = 3_500_000  # ~3.4GB in KB
+        mock_mem_info = MagicMock()
+        mock_mem_info.rss = 3_500 * 1024 * 1024  # 3.5GB
+        mock_proc = MagicMock()
+        mock_proc.memory_info.return_value = mock_mem_info
+        mock_vm = MagicMock()
+        mock_vm.total = 4000 * 1024 * 1024  # 4GB
         with (
-            patch.object(_resource_mod, "getrusage", return_value=mock_rusage),
-            patch.object(_doctor_mod, "_get_total_memory_mb", return_value=4000),
+            patch.object(psutil, "Process", return_value=mock_proc),
+            patch.object(psutil, "virtual_memory", return_value=mock_vm),
         ):
             result = _check_memory_usage()
         assert result.status == DiagnosticStatus.FAIL
 
     def test_warn_elevated_memory(self) -> None:
-        import resource as _resource_mod
+        import psutil
 
-        mock_rusage = MagicMock()
-        mock_rusage.ru_maxrss = 3_000_000  # ~2.9GB in KB
+        mock_mem_info = MagicMock()
+        mock_mem_info.rss = 2_900 * 1024 * 1024  # 2.9GB
+        mock_proc = MagicMock()
+        mock_proc.memory_info.return_value = mock_mem_info
+        mock_vm = MagicMock()
+        mock_vm.total = 4000 * 1024 * 1024  # 4GB
         with (
-            patch.object(_resource_mod, "getrusage", return_value=mock_rusage),
-            patch.object(_doctor_mod, "_get_total_memory_mb", return_value=4000),
+            patch.object(psutil, "Process", return_value=mock_proc),
+            patch.object(psutil, "virtual_memory", return_value=mock_vm),
         ):
             result = _check_memory_usage()
         assert result.status == DiagnosticStatus.WARN
-
-
-class TestGetTotalMemoryMb:
-    """Tests for _get_total_memory_mb."""
-
-    def test_returns_positive_on_linux(self) -> None:
-        if platform.system() == "Linux":
-            total = _get_total_memory_mb()
-            assert total > 0
-
-    def test_returns_zero_on_failure(self) -> None:
-        with patch("sovyx.upgrade.doctor.platform.system", return_value="UnknownOS"):
-            total = _get_total_memory_mb()
-        assert total == 0
 
 
 # ── Model Files Check ─────────────────────────────────────────────────
@@ -797,55 +789,12 @@ class TestExceptionPaths:
 
     def test_memory_usage_exception(self) -> None:
         """Cover generic exception in memory_usage."""
-        import resource as _resource_mod
+        import psutil
 
-        with patch.object(_resource_mod, "getrusage", side_effect=Exception("no resource")):
+        with patch.object(psutil, "Process", side_effect=Exception("no psutil")):
             result = _check_memory_usage()
         assert result.status == DiagnosticStatus.FAIL
         assert result.fix_suggestion is not None
-
-    def test_memory_darwin_path(self) -> None:
-        """Cover the macOS branch in _check_memory_usage."""
-        import resource as _resource_mod
-
-        mock_rusage = MagicMock()
-        mock_rusage.ru_maxrss = 500_000_000  # bytes on Darwin
-        with (
-            patch("sovyx.upgrade.doctor.platform.system", return_value="Darwin"),
-            patch.object(_resource_mod, "getrusage", return_value=mock_rusage),
-            patch("sovyx.upgrade.doctor._get_total_memory_mb", return_value=16000),
-        ):
-            result = _check_memory_usage()
-        assert result.status == DiagnosticStatus.PASS
-        assert result.details is not None
-
-    def test_get_total_memory_darwin(self) -> None:
-        """Cover the Darwin path in _get_total_memory_mb."""
-        import subprocess
-
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_result.stdout = "17179869184\n"  # 16GB
-        with (
-            patch("sovyx.upgrade.doctor.platform.system", return_value="Darwin"),
-            patch.object(subprocess, "run", return_value=mock_result),
-        ):
-            total = _get_total_memory_mb()
-        assert total == 16384  # noqa: PLR2004
-
-    def test_get_total_memory_darwin_failure(self) -> None:
-        """Cover the Darwin path when sysctl fails."""
-        import subprocess
-
-        mock_result = MagicMock()
-        mock_result.returncode = 1
-        mock_result.stdout = ""
-        with (
-            patch("sovyx.upgrade.doctor.platform.system", return_value="Darwin"),
-            patch.object(subprocess, "run", return_value=mock_result),
-        ):
-            total = _get_total_memory_mb()
-        assert total == 0
 
     def test_model_files_os_error(self, data_dir: Path) -> None:
         """Cover OSError in model file scanning."""
@@ -866,12 +815,3 @@ class TestExceptionPaths:
             mock_sock.return_value = mock_instance
             result = _check_port_available(7777)
         assert result.status == DiagnosticStatus.FAIL
-
-    def test_get_total_memory_linux_os_error(self) -> None:
-        """Cover OSError reading /proc/meminfo."""
-        with (
-            patch("sovyx.upgrade.doctor.platform.system", return_value="Linux"),
-            patch.object(Path, "open", side_effect=OSError("no file")),
-        ):
-            total = _get_total_memory_mb()
-        assert total == 0
