@@ -4,14 +4,14 @@ This is a rolling roadmap for Sovyx. Dates are best-effort and may shift; the
 scope of each version is stable and only widens with explicit notes in release
 announcements.
 
-The current stable line is **v0.13**. The next major cut is **v0.6 — "The Mind
+The current stable line is **v0.16**. The next major cut is **v0.6 — "The Mind
 That Connects"**, followed by **v1.0 — "The Mind That Remembers"**.
 
 ---
 
-## v0.11–v0.13 — current
+## v0.11–v0.16 — current
 
-The v0.11–v0.13 line shipped the enterprise-hardening pass, streaming
+The v0.11–v0.16 line shipped the enterprise-hardening pass, streaming
 LLM-to-voice, 10-provider routing, and closed every major spec
 divergence. Key releases:
 
@@ -32,12 +32,20 @@ divergence. Key releases:
   voice pipeline for ~300 ms perceived latency.
 - **6 new LLM providers** (v0.13.1) — xAI, DeepSeek, Mistral,
   Together AI, Groq, Fireworks via shared base class.
+- **First-run onboarding wizard + SSE chat** (v0.14.0) — `/api/onboarding/*`
+  step machine and `POST /api/chat/stream` for token-level dashboard chat.
+- **Emotion telemetry + plugin setup flow** (v0.15.x) — `/api/emotions/*`
+  current state / timeline / triggers / distribution and the `/api/setup/*`
+  install-time wizard separate from `/api/plugins/*` runtime control.
+- **Voice device test + Windows parity** (v0.16.0–v0.16.11) — meter
+  WebSocket, TTS playback jobs, Kokoro auto-download (CPU-pinned),
+  audio device dropdowns, TCP RPC on Windows, psutil-based health.
 
-This set of files reflects **v0.13.3**.
+This set of files reflects **v0.16.11**.
 
 Release criteria:
 
-- Test coverage >= 95% (8,463 tests: 7,671 pytest, 792 vitest).
+- Test coverage >= 95% (~8,500 tests: ~7,700 pytest, ~767 vitest).
 - Zero `ruff` errors, zero `mypy --strict` errors, zero `bandit` HIGH.
 - Multi-arch Docker build (`linux/amd64`, `linux/arm64`) green.
 - Dashboard `npx tsc -b` with zero errors.
@@ -168,7 +176,7 @@ signals.
 
 | Quarter         | Milestone         | Main scope                                               |
 | --------------- | ----------------- | -------------------------------------------------------- |
-| **2026 Q2**     | v0.13.x (shipped) | Enterprise hardening, DREAM, REPL, HA, CalDAV, importers, PAD 3D, streaming, 10 providers |
+| **2026 Q2**     | v0.16.x (shipped) | Enterprise hardening, DREAM, REPL, HA, CalDAV, importers, PAD 3D, streaming, 10 providers, onboarding wizard, emotions API, voice device test, Windows parity |
 | **2026 Q3**     | v0.6 preview      | Audio relay, speaker recognition                         |
 | **2026 Q3–Q4** | v0.6 GA           | BYOK isolation, voice cloning                            |
 | **2027 Q1**     | v1.0 preview      | Sandbox v2, subprocess IPC, multi-mind                   |

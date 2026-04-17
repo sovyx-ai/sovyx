@@ -35,16 +35,33 @@ theme:
     code: JetBrains Mono
 
 nav:
-  - Home: index.md
-  - Quick Start: quickstart.md
+  - Home: getting-started.md
   - Architecture: architecture.md
   - Configuration: configuration.md
-  - API Reference: api.md
-  - Voice: voice.md
-  - Upgrade Guide: upgrade.md
-  - Plugins: plugins.md
-  - ADRs:
-    - Observability: adr/ADR-002-observability-fixes.md
+  - API Reference: api-reference.md
+  - LLM Router: llm-router.md
+  - Security: security.md
+  - Modules:
+    - Engine: modules/engine.md
+    - Cognitive: modules/cognitive.md
+    - Brain: modules/brain.md
+    - Persistence: modules/persistence.md
+    - Observability: modules/observability.md
+    - LLM: modules/llm.md
+    - Mind: modules/mind.md
+    - Context: modules/context.md
+    - Bridge: modules/bridge.md
+    - CLI: modules/cli.md
+    - Dashboard: modules/dashboard.md
+    - Plugins: modules/plugins.md
+    - Upgrade: modules/upgrade.md
+    - Voice: modules/voice.md
+    - Voice device test: modules/voice-device-test.md
+    - Licensing: modules/licensing.md
+    - Benchmarks: modules/benchmarks.md
+  - FAQ: faq.md
+  - Roadmap: roadmap.md
+  - Contributing: contributing.md
 
 markdown_extensions:
   - admonition

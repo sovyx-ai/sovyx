@@ -6,6 +6,252 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Added
+
+- **Voice device test — dashboard wiring.** The setup wizard's
+  `HardwareDetection` card now consumes the device-test backend: an
+  `AudioLevelMeter` (60 Hz canvas, VAD-aware, clipping indicator)
+  hooked to `WS /api/voice/test/input`, plus a `TtsTestButton` that
+  POSTs `/api/voice/test/output` and polls the playback job. New hook
+  `use-audio-level-stream` encapsulates reconnect + token auth. Zod
+  schemas for `VoiceTest*` types — backend remains the source of truth.
+- **Voice device test — backend foundation** (`voice/device_test/`).
+  Meter WebSocket (`GET /api/voice/test/devices`, `WS
+  /api/voice/test/input`) emits per-frame RMS/peak + VAD at ~60 Hz;
+  TTS playback job (`POST /api/voice/test/output`,
+  `GET /api/voice/test/output/{job_id}`) returns a decoded 16-bit PCM
+  WAV via the active Piper/Kokoro engine. OpenTelemetry metrics +
+  unit tests for both paths. Configurable under
+  `SOVYX_TUNING__VOICE__DEVICE_TEST__*`.
+
+### Fixed
+
+- **Kokoro ONNX session pinned to `CPUExecutionProvider`.** Forcing the
+  CPU provider avoids spurious "CUDA not available" warnings and the
+  startup failure path when the installed `onnxruntime` build enumerates
+  GPU providers it can't actually load.
+
+## [0.16.11] — 2026-04-17
+
+### Fixed
+
+- **Embedding model mirror works for real now.** The `_model_downloader`
+  fallback pointed at a GitHub release (`models-v1`) that had never
+  been cut — every primary-HuggingFace failure would drop into a
+  guaranteed 404, so the fallback was theater. Published the release
+  at `sovyx-ai/sovyx/releases/tag/models-v1` with
+  `e5-small-v2.onnx` + `tokenizer.json` (SHA-256 verified against the
+  constants in `_model_downloader.py`). Added an opt-in `network`-marked
+  integration test that HEAD-checks every URL in `MODEL_URLS` /
+  `TOKENIZER_URLS` so a future drift from the release surfaces in CI
+  rather than in a user's first boot. The release is intentionally
+  decoupled from Sovyx version tags — it only changes when the
+  embedding model itself changes.
+- **FTS5 fallback log is quiet.** Removed `exc_info=True` from
+  `embedding.py:151`. The FTS5 fallback is the graceful-success path
+  (search still works, just without vector similarity); it should not
+  dump a full traceback.
+
+## [0.16.10] — 2026-04-17
+
+### Fixed
+
+- **Model-download retry logs no longer spam tracebacks.** Removed
+  `exc_info=True` from the transient-retry warning in
+  `_model_downloader`. Under a DNS or connect failure the CLI was
+  printing a full Rich traceback (100+ lines) per retry × 5 attempts × 2
+  URLs, drowning the diagnosis in noise. The structured warning still
+  carries `filename`, `source`, `attempt`, `wait`, `error`, and now
+  `error_type`; the full traceback still surfaces once when all URLs
+  exhaust (via `EmbeddingError` chaining).
+
+## [0.16.9] — 2026-04-17
+
+### Fixed
+
+- **Voice pipeline finally reaches the cognitive loop (gap #5).**
+  Transcribed text from `MoonshineSTT` was being dropped silently
+  because `on_perception` was never passed to
+  `create_voice_pipeline()`. The pipeline captured audio, ran VAD+STT,
+  then hit `if self._on_perception is not None` with `None` and
+  returned — users saw "Running" cards but got no response. Now
+  `enable_voice` resolves the `CognitiveLoop` from the registry, builds
+  an `on_perception` closure that wraps the text in a `CognitiveRequest`
+  and calls `VoiceCognitiveBridge.process()`, registers the bridge in
+  the service registry, and deregisters it on `/api/voice/disable`.
+  Streaming defaults to `mind_config.llm.streaming` (Jarvis-illusion
+  path — tokens stream into `pipeline.stream_text` as the LLM produces
+  them). `VoiceCognitiveBridge` was previously dead code; it is now the
+  real bridge between STT transcriptions and the cognitive loop.
+
+### Tests
+
+- **PortAudio reconnect test given a generous wait budget.** The test
+  asserts that a second `sounddevice.InputStream` is opened after a
+  `PortAudioError`, but on loaded Linux CI runners the
+  `to_thread(close) → sleep → to_thread(open)` chain can exceed the old
+  500 ms budget. Poll window raised to ~5 s — no production change.
+
+## [0.16.8] — 2026-04-17
+
+### Added
+
+- **Microphone capture loop wired to the voice pipeline.**
+  `VoicePipeline` is push-based (`feed_frame`) but nothing opened a mic
+  stream, so "Running" in the dashboard meant "state=True, silent".
+  `AudioCaptureTask` now owns an `sd.InputStream`; a consumer task
+  forwards 16 kHz int16 frames into `pipeline.feed_frame`. Recovers
+  from `PortAudioError` by closing + sleeping + reopening. Frames that
+  overflow the queue drop the oldest (never block the audio thread).
+  `VoiceFactory` returns a `VoiceBundle(pipeline, capture_task)` and
+  threads `input_device` / `output_device` through. `/api/voice/enable`
+  creates the bundle, starts capture, registers both services; on
+  capture failure it tears the pipeline down and returns 500 instead of
+  leaving a half-wired registry. `/api/voice/disable` stops capture
+  first, then pipeline, and deregisters both.
+  `ServiceRegistry.deregister(interface)` added for targeted
+  hot-disable. Tunables `capture_reconnect_delay_seconds` /
+  `capture_queue_maxsize` under `SOVYX_TUNING__VOICE__*`.
+- **Status cards show the real voice engines.** `/api/voice/status`
+  previously reported defaults because only `VoicePipeline` was
+  registered — the dashboard reads `STTEngine` / `TTSEngine` /
+  `SileroVAD` / `WakeWordDetector` individually, so every card showed
+  "No engine configured" even with an active pipeline. `/api/voice/enable`
+  now registers each sub-component (plus `WakeWordDetector` when
+  enabled); `/api/voice/disable` deregisters them so the next enable
+  gets fresh instances. `VoicePipeline` exposes
+  `vad` / `stt` / `tts` / `wake_word` properties. "Running" now requires
+  `pipeline.is_running AND capture.is_running` — the only honest
+  semantics. `voice_status` reports a `capture` block (`running` +
+  `input_device`) and derives `pipeline.running` from both states.
+
+## [0.16.7] — 2026-04-17
+
+### Added
+
+- **Enterprise-grade model downloads (SileroVAD + Kokoro TTS).**
+  1. SHA-256 checksum verification — downloaded file hash is validated
+     before atomic rename; mismatch deletes the temp file and raises.
+     Hashes hardcoded in `VoiceModelInfo` for all 3 downloadable models.
+  2. Retry with exponential backoff — 3 attempts with 1 s / 2 s / 4 s
+     delays. Each attempt logged. Final failure raises `RuntimeError`
+     with context.
+  3. Progress logging — logs `downloaded_mb` / `total_mb` / `percent`
+     every 10 MB. Users on slow connections see incremental progress
+     instead of silence for 2+ minutes.
+  4. Temp file cleanup verified for all paths.
+
+## [0.16.6] — 2026-04-17
+
+### Added
+
+- **Auto-download Kokoro TTS model on first use.** Kokoro TTS
+  (88 MB int8) + voices file (27 MB) are auto-downloaded from the
+  GitHub release on first pipeline creation, same pattern as SileroVAD.
+  Files land in `~/.sovyx/models/voice/kokoro/`
+  (`kokoro-v1.0.int8.onnx`, `voices-v1.0.bin`). Download timeout raised
+  from 60 s to 300 s for larger models.
+
+### Fixed
+
+- **Kokoro model filename.** `_MODEL_Q8` was `kokoro-v1.0-q8.onnx`
+  but the release uses `kokoro-v1.0.int8.onnx` — silent 404 before.
+- **Device-select dropdowns follow the dark theme.** Replaced the
+  transparent bg + custom chevron layout with the same select styling
+  used by `PersonalityStep`'s language dropdown (`bg-elevated`,
+  `border-default`, `text-primary`, `colorScheme: dark`).
+
+## [0.16.5] — 2026-04-17
+
+### Added
+
+- **Audio device dropdown selectors for the voice pipeline.** Backend
+  `GET /api/voice/hardware-detect` returns devices as
+  `{index, name, is_default}` objects, deduplicated by name (Windows
+  exposes duplicates per host API). The OS default device is marked
+  via `sd.default.device`. Frontend Input/Output cards are now dropdown
+  selectors showing all detected devices, with the default
+  pre-selected from OS preference. Selected devices are passed to
+  `POST /api/voice/enable` and persisted to `voice` config in
+  `mind.yaml`. Updated in both `VoiceStep` (onboarding) and
+  `VoiceSetupModal` (settings).
+
+## [0.16.4] — 2026-04-17
+
+### Fixed
+
+- **Audio device detection silently skipped every device.**
+  `sounddevice.query_devices()` returns `DeviceList` (a `tuple`
+  subclass, not `list`); the old `isinstance(devices, list)` guard
+  returned empty lists for everyone. Iterate directly now. Split
+  exception handling: `ImportError` → silent skip, other exceptions
+  → logged. Fixes both `/api/voice/hardware-detect` and
+  `/api/voice/enable`.
+- **Voice-enable error propagation.** Frontend only parsed the response
+  body for 400 errors. For 500 (pipeline creation failure) it showed a
+  generic "Failed to enable voice pipeline" instead of the server's
+  actual error. Now parses the body for all `ApiError` statuses in
+  both `VoiceStep.tsx` (onboarding) and `VoiceSetupModal.tsx`
+  (settings).
+
+## [0.16.3] — 2026-04-17
+
+### Fixed
+
+- **Auth-gated WebSocket + polling.** The dashboard connected its
+  WebSocket with an empty token before the user authenticated, and
+  periodic status/health polling fired 401s for the same reason. Both
+  now gate on the `authenticated` store state — no WS connection or
+  API polling until the token is validated.
+- **Telegram channel setup no longer crashes with 502.** The handler
+  imported `aiohttp` (not a declared dependency), so the first webhook
+  registration 500'd with `ModuleNotFoundError`. Replaced with
+  `httpx.AsyncClient`, which is already in deps.
+
+## [0.16.2] — 2026-04-17
+
+### Fixed
+
+- **Full Windows-compat audit — 5 remaining Unix-only APIs eliminated.**
+  1. `lifecycle.py`: `_is_process_alive()` uses `ctypes.OpenProcess`
+     on Windows instead of `os.kill(pid, 0)` (which raises `OSError`
+     for signal 0 on Windows).
+  2. `lifecycle.py`: `_notify_systemd()` early-returns on Windows,
+     eliminating the `AF_UNIX` mypy error.
+  3. `health.py`: `_check_memory()` uses `psutil` instead of Unix-only
+     `resource` + `/proc/meminfo`.
+  4. `doctor.py`: `_check_memory_usage()` uses `psutil` instead of
+     `resource`; removed the dead `_get_total_memory_mb()` helper.
+  5. `auto_select.py`: `detect_hardware()` uses
+     `psutil.virtual_memory()` instead of `os.sysconf()`
+     (doesn't exist on Windows).
+  All 5 were the last remaining Unix-only APIs in `src/sovyx/`. Zero
+  Windows mypy errors remain (previously 6).
+
+## [0.16.1] — 2026-04-17
+
+### Fixed
+
+- **Lifecycle signal handlers on Windows.**
+  `loop.add_signal_handler()` raises `NotImplementedError` on Windows.
+  Uses a `sys.platform` conditional: `signal.signal()` fallback on
+  Windows, `loop.add_signal_handler()` on Unix/macOS (unchanged
+  behavior).
+
+## [0.16.0] — 2026-04-17
+
+### Added
+
+- **RPC TCP fallback on Windows.** `asyncio.start_unix_server` /
+  `AF_UNIX` don't exist on Windows; the RPC server and client now
+  branch on `sys.platform`:
+  - Unix/macOS: Unix domain socket (unchanged).
+  - Windows: TCP 127.0.0.1 on an ephemeral port, with the port written
+    to a `.port` file next to the socket path.
+  `DaemonClient._read_port()` validates that the port is in `1–65535`.
+  Tests are platform-aware: mock daemons use TCP on Windows, and the
+  Unix-only permission test is skipped there.
+
 ## [0.15.7] — 2026-04-17
 
 ### Added

@@ -73,20 +73,26 @@ class InboundMessage:
 ## Example — sending an outbound message
 
 ```python
-from sovyx.bridge.protocol import OutboundMessage, InlineButton
+from sovyx.bridge.protocol import InlineButton, OutboundMessage
 
 await bridge_manager.send(
     OutboundMessage(
-        chat_id=msg.chat_id,
         channel_type=msg.channel_type,
+        target=msg.chat_id,
         text="Confirm transferring $100 to Alice?",
-        inline_buttons=[
-            InlineButton(text="Yes", callback_data=f"fin_confirm:{tool_call_id}"),
-            InlineButton(text="No",  callback_data=f"fin_cancel:{tool_call_id}"),
+        buttons=[
+            [
+                InlineButton(text="Yes", callback_data=f"fin_confirm:{tool_call_id}"),
+                InlineButton(text="No",  callback_data=f"fin_cancel:{tool_call_id}"),
+            ],
         ],
     )
 )
 ```
+
+`OutboundMessage.buttons` is `list[list[InlineButton]]` — each inner list is a
+button row. Channels that don't support inline buttons (Signal today) convert
+the rows to numbered text options automatically.
 
 When the user presses a button, the channel adapter receives a callback query, builds an `InboundMessage` with `metadata["callback_data"]` populated, and hands it to the `BridgeManager`. Callbacks whose `callback_data` starts with `fin_confirm:` or `fin_cancel:` are routed directly to the `FinancialGate` and edit the original message to remove the buttons — they do not re-enter the cognitive loop.
 

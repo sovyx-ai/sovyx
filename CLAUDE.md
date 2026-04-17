@@ -58,10 +58,11 @@ src/sovyx/
 ├── cli/                 # Typer CLI: sovyx start/stop/init/logs/doctor
 ├── dashboard/           # FastAPI server
 │   ├── server.py        # ~700 LOC — wires routers only; endpoints live in routes/
-│   └── routes/          # 16 APIRouter modules (split from the old 2 134 LOC server.py)
-│       ├── activity, brain, channels, chat, config, conversations, data,
-│       ├── logs, plugins, providers, safety, settings, status, telemetry,
-│       ├── voice, websocket
+│   └── routes/          # 21 APIRouter modules (split from the old 2 134 LOC server.py)
+│       ├── activity, brain, channels, chat, config, conversation_import,
+│       ├── conversations, data, emotions, logs, onboarding, plugins,
+│       ├── providers, safety, settings, setup, status, telemetry,
+│       ├── voice, voice_test, websocket
 │       └── _deps.py     # Shared verify_token dependency
 ├── tiers.py             # ServiceTier enum, feature/mind-limit maps (informational)
 ├── license.py           # LicenseValidator (Ed25519 public key JWT, offline)

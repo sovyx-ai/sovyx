@@ -282,13 +282,24 @@ class CalDAVPlugin(ISovyxPlugin):
 
 ### Dashboard API
 
+Two **separate** router families:
+
+- `/api/plugins/*` — **runtime** control: list installed plugins, list
+  tools, enable/disable, hot-reload. Never takes credentials.
+- `/api/setup/*` — **install-time** wizard: schema, connection test,
+  credential persistence. Secrets flow through here and go to the
+  OS keyring, not the config file.
+
+They deliberately live under different prefixes so the ErrorBoundary
+crash and the credential entry can never share state.
+
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/setup/{name}/schema` | GET | Returns setup_schema + current config |
-| `/api/setup/{name}/test-connection` | POST | Calls plugin.test_connection(config) |
-| `/api/setup/{name}/configure` | POST | Calls manager.reconfigure(name, config) |
-| `/api/setup/{name}/enable` | POST | Calls manager.re_enable_plugin(name) |
-| `/api/setup/{name}/disable` | POST | Calls manager.disable_plugin(name) |
+| `/api/setup/{name}/schema` | GET | Returns setup_schema + current config. |
+| `/api/setup/{name}/test-connection` | POST | Calls `plugin.test_connection(config)`. |
+| `/api/setup/{name}/configure` | POST | Calls `manager.reconfigure(name, config)`; persists secrets to the keyring. |
+| `/api/setup/{name}/enable` | POST | Calls `manager.re_enable_plugin(name)`. |
+| `/api/setup/{name}/disable` | POST | Calls `manager.disable_plugin(name)` (equivalent to the runtime endpoint). |
 
 ### ConfigEditor
 

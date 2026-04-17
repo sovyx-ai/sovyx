@@ -295,6 +295,56 @@ plugins:
   tool_timeout_s: 30.0
 ```
 
+## Tuning knobs (`SOVYX_TUNING__*`)
+
+Thresholds, timeouts, URLs, and SHA-256 pins that used to be hardcoded
+constants live on `EngineConfig.tuning`, grouped into three sub-models.
+Each field is overridable at runtime via a `SOVYX_TUNING__<GROUP>__<FIELD>`
+environment variable (nesting delimiter is two underscores).
+
+```yaml
+tuning:
+  safety:
+    classifier_budget_per_hour: 20        # LLM classifier calls per hour
+    classifier_cache_ttl_seconds: 300     # memoization window
+    escalation_decay_minutes: 60
+    # … full list in src/sovyx/engine/config.py
+
+  brain:
+    model_url: "https://…/all-MiniLM-L6-v2.onnx"   # embedding model URL
+    model_sha256: "…"                              # pinned SHA, refuses wrong file
+    model_download_retries: 3
+    consolidation_levenshtein_threshold: 0.85
+    # …
+
+  voice:
+    auto_select_min_gpu_vram_mb: 4000     # GPU VRAM for auto-selecting Kokoro
+    kokoro_model_url: "…"
+    device_test_frame_rate_hz: 30
+    device_test_peak_hold_ms: 1500
+    # … see voice-device-test module for the full device-test family
+```
+
+Examples:
+
+```bash
+# Crank the safety classifier budget for a load test.
+export SOVYX_TUNING__SAFETY__CLASSIFIER_BUDGET_PER_HOUR=200
+
+# Pin a different embedding model for an offline environment.
+export SOVYX_TUNING__BRAIN__MODEL_URL=file:///opt/models/embedding.onnx
+export SOVYX_TUNING__BRAIN__MODEL_SHA256=<sha256>
+
+# Lower device-test frame rate on slow displays.
+export SOVYX_TUNING__VOICE__DEVICE_TEST_FRAME_RATE_HZ=15
+```
+
+Tuning fields are **not** documented individually in this page — the
+canonical source is `src/sovyx/engine/config.py` (`SafetyTuning`,
+`BrainTuning`, `VoiceTuning`). Overriding them is unsupported for
+deployment; change them only for benchmarks, debugging, or constrained
+environments.
+
 ## Validation
 
 Every startup validates config through Pydantic: types and ranges

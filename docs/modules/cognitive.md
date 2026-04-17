@@ -16,7 +16,8 @@ The `sovyx.cognitive` package turns an incoming message (a perception) into an e
 | `AttendPhase` | Filters by priority and normalization; decides `should_process`. |
 | `ThinkPhase` | Selects a model by complexity, assembles context, calls `LLMRouter`. |
 | `ActPhase` | Formats the response, executes tool calls via `ToolExecutor`. |
-| `ReflectPhase` | Encodes the episode, extracts concepts, updates the brain. |
+| `ReflectPhase` | Encodes the episode, extracts concepts, updates the brain. Split into `reflect/phase.py` orchestration + `_categories.py`, `_scoring.py`, `_prompts.py`, `_fallback.py`, `_models.py` sub-modules. |
+| `cognitive_bridge.py` | Bridges voice-pipeline transcripts into the cognitive loop. Owns the `Perception` → `CogLoopGate.submit()` hand-off for the microphone path. |
 
 ## State machine
 
@@ -114,8 +115,18 @@ The safety stack is independent of the loop — each guard is invoked in the rel
 | Event | Emitted when |
 |---|---|
 | `PerceptionReceived` | A perception enters the loop. |
+| `ThinkStreamStarted` | Streaming `ThinkPhase` emits its first token on the SSE path. |
 | `ThinkCompleted` | `ThinkPhase` finishes an LLM call (model, tokens, cost, latency). |
 | `ResponseSent` | A response is delivered by a channel. |
+
+## Streaming path
+
+`POST /api/chat/stream` bypasses the batch `ActionResult` contract and runs
+the same phases with an incremental token sink wired into `ThinkPhase`. The
+phase emits a `ThinkStreamStarted` event at first token and streams
+`token`/`phase`/`done`/`error` SSE events back to the dashboard. `ActPhase`
+and `ReflectPhase` still run in full after the stream completes so episodes
+and concepts are updated consistently with the non-streaming path.
 
 ## Configuration
 

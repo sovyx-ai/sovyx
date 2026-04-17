@@ -67,6 +67,7 @@ All events are frozen dataclasses with `event_id`, `timestamp`, and `correlation
 | `EngineStopping` | Engine begins shutdown. |
 | `ServiceHealthChanged` | A service health state changes. |
 | `PerceptionReceived` | A new perception enters the cognitive loop. |
+| `ThinkStreamStarted` | Streaming think phase begins emitting tokens (SSE path). |
 | `ThinkCompleted` | Think phase finishes an LLM call. |
 | `ResponseSent` | A response is delivered by a channel. |
 | `ConceptCreated` | A concept is stored in memory. |
@@ -74,8 +75,15 @@ All events are frozen dataclasses with `event_id`, `timestamp`, and `correlation
 | `ConceptContradicted` | New content contradicts an existing concept. |
 | `ConceptForgotten` | A concept is removed from the brain. |
 | `ConsolidationCompleted` | A consolidation cycle finishes. |
+| `DreamCompleted` | A dream cycle finishes (pattern mining + relation strengthening). |
 | `ChannelConnected` | A communication channel connects. |
 | `ChannelDisconnected` | A communication channel disconnects. |
+
+`DashboardEventBridge` forwards twelve of these events to the WebSocket
+stream (see [api-reference](../api-reference.md#event-types)).
+`ThinkStreamStarted`, `ConceptContradicted`, and `ConceptForgotten` stay
+internal — they are high-frequency (streaming) or privacy-sensitive
+(contradiction/forgetting) and would add churn to the UI event log.
 
 ## Errors
 

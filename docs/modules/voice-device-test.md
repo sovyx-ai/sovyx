@@ -126,20 +126,22 @@ warning in dev tools rather than silent mis-render.
 
 ## Tuning knobs
 
-All thresholds live on `EngineConfig.tuning.voice.device_test` and can
-be overridden via `SOVYX_TUNING__VOICE__DEVICE_TEST__*` env vars. Notable
-fields:
+All thresholds live on `EngineConfig.tuning.voice` (flat fields prefixed
+`device_test_*`) and can be overridden via
+`SOVYX_TUNING__VOICE__DEVICE_TEST_*` env vars:
 
 | Field | Default | Meaning |
 |---|---|---|
-| `enabled` | `true` | Master switch. When `false`, every endpoint returns `disabled`. |
-| `frame_rate_hz` | `30` | Meter frames per second emitted to the WebSocket. |
-| `hold_window_ms` | `1000` | Peak-hold latch window before decay starts. |
-| `hold_decay_db_per_s` | `10.0` | Decay rate once the window expires. |
-| `rate_limit_per_sec` | `1.0` | Tokens per second per auth token. |
-| `rate_limit_burst` | `3` | Bucket capacity (allows short bursts). |
-| `output_job_ttl_s` | `60` | How long finished playback jobs remain pollable. |
-| `output_job_timeout_s` | `15` | Max wall-clock for a playback job. |
+| `device_test_enabled` | `true` | Master switch. When `false`, every endpoint returns `disabled`. |
+| `device_test_frame_rate_hz` | `30` | Meter frames per second emitted to the WebSocket. |
+| `device_test_peak_hold_ms` | `1500` | Peak-hold latch window before decay starts. |
+| `device_test_peak_decay_db_per_sec` | `20.0` | Decay rate once the hold window expires. |
+| `device_test_vad_trigger_db` | `-30.0` | dBFS marker drawn on the meter as the VAD threshold. |
+| `device_test_clipping_db` | `-0.3` | dBFS threshold above which the frame is flagged as clipping. |
+| `device_test_reconnect_limit_per_min` | `10` | Per-token reconnect budget for the meter WebSocket. |
+| `device_test_max_sessions_per_token` | `1` | Concurrent meter sessions per auth token (1 = singleton). |
+| `device_test_max_phrase_chars` | `200` | Cap on the TTS test phrase length. |
+| `device_test_output_job_ttl_seconds` | `60` | How long finished playback jobs remain pollable. |
 
 ## Observability
 
