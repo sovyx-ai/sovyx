@@ -204,8 +204,10 @@ class TestAudioCaptureTaskReconnect:
             cb = captured_callback["cb"]
             frame = np.zeros(512, dtype=np.int16)
             cb(frame.reshape(-1, 1), 512, None, None)  # type: ignore[operator]
-            # Second frame after reconnect
-            for _ in range(50):
+            # Wait for reconnect. asyncio.to_thread dispatch can be slow on
+            # loaded CI runners, so give the close→sleep→open chain a generous
+            # budget (up to 5 s) instead of a tight 500 ms window.
+            for _ in range(500):
                 await asyncio.sleep(0.01)
                 if len(streams) >= 2:
                     break
