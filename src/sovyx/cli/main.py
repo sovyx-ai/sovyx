@@ -130,7 +130,7 @@ def _validate_mind_name(name: str) -> str:
 @app.command()
 def init(
     name: str = typer.Argument(
-        "Aria",
+        "Sovyx",
         help="Mind name (letters/digits/_/-, 1-64 chars, starts with letter)",
     ),
     quick: bool = typer.Option(False, "--quick", "-q", help="Quick mode: defaults, zero prompts"),
