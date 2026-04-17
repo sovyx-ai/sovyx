@@ -61,7 +61,7 @@ function migrateLegacyToken(): void {
 }
 migrateLegacyToken();
 
-function getToken(): string | null {
+export function getToken(): string | null {
   const stored = getSessionStorage()?.getItem(TOKEN_STORAGE_KEY) ?? null;
   return stored ?? memoryToken;
 }

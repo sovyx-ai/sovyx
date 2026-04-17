@@ -116,11 +116,14 @@ class CognitiveLoop:
         self,
         request: CognitiveRequest,
         on_text_chunk: Callable[[str], Awaitable[None]],
+        on_phase: Callable[[str, str], Awaitable[None]] | None = None,
     ) -> ActionResult:
         """Process with streaming LLM output — voice channel fast-path.
 
         Like :meth:`process_request` but yields text chunks to
         ``on_text_chunk`` as the LLM produces them (for real-time TTS).
+        Optional ``on_phase(phase_name, detail)`` callback emits cognitive
+        phase transitions for dashboard transparency.
         Reconstructs a complete :class:`LLMResponse` from the stream so
         ActPhase + ReflectPhase run identically to the non-streaming path.
 
@@ -143,7 +146,13 @@ class CognitiveLoop:
             ),
             metrics.measure_latency(metrics.cognitive_loop_latency),
         ):
-            return await self._execute_loop_streaming(request, on_text_chunk, tracer, metrics)
+            return await self._execute_loop_streaming(
+                request,
+                on_text_chunk,
+                tracer,
+                metrics,
+                on_phase=on_phase,
+            )
 
     async def _execute_loop(
         self,
@@ -192,6 +201,14 @@ class CognitiveLoop:
                     assembled_msgs,
                     perception,
                 )
+
+            # Attach LLM metadata to ActionResult for dashboard
+            action_result.metadata["model"] = llm_response.model
+            action_result.metadata["tokens_in"] = llm_response.tokens_in
+            action_result.metadata["tokens_out"] = llm_response.tokens_out
+            action_result.metadata["cost_usd"] = llm_response.cost_usd
+            action_result.metadata["latency_ms"] = llm_response.latency_ms
+            action_result.metadata["provider"] = llm_response.provider
 
             # ── REFLECT ──
             self._state.transition(CognitivePhase.REFLECTING)
@@ -248,6 +265,8 @@ class CognitiveLoop:
         on_text_chunk: Callable[[str], Awaitable[None]],
         t: SovyxTracer,
         m: MetricsRegistry | _NoOpRegistry,
+        *,
+        on_phase: Callable[[str, str], Awaitable[None]] | None = None,
     ) -> ActionResult:
         """Streaming variant of ``_execute_loop``.
 
@@ -256,13 +275,20 @@ class CognitiveLoop:
         ``LLMResponse`` for ActPhase + ReflectPhase.
         """
         try:
+
+            async def _emit_phase(name: str, detail: str = "") -> None:
+                if on_phase is not None:
+                    await on_phase(name, detail)
+
             # ── PERCEIVE ──
             self._state.transition(CognitivePhase.PERCEIVING)
+            await _emit_phase("perceiving")
             with t.start_cognitive_span("perceive", mind_id=str(request.mind_id)):
                 perception = await self._perceive.process(request.perception)
 
             # ── ATTEND ──
             self._state.transition(CognitivePhase.ATTENDING)
+            await _emit_phase("attending", "checking safety")
             with t.start_cognitive_span("attend"):
                 should_process = await self._attend.process(perception)
 
@@ -275,6 +301,7 @@ class CognitiveLoop:
 
             # ── THINK (streaming) ──
             self._state.transition(CognitivePhase.THINKING)
+            await _emit_phase("thinking")
             with t.start_cognitive_span("think"):
                 chunk_iter, assembled_msgs = await self._think.process_streaming(
                     perception=perception,
@@ -354,6 +381,11 @@ class CognitiveLoop:
 
             # ── ACT ──
             self._state.transition(CognitivePhase.ACTING)
+            tool_detail = ""
+            if tool_calls:
+                tool_names = [tc.function_name.split(".", 1)[0] for tc in tool_calls]
+                tool_detail = f"using {', '.join(tool_names)}"
+            await _emit_phase("acting", tool_detail)
             with t.start_cognitive_span("act"):
                 action_result = await self._act.process(
                     llm_response,
@@ -361,8 +393,15 @@ class CognitiveLoop:
                     perception,
                 )
 
+            # Attach LLM metadata to ActionResult for dashboard
+            action_result.metadata["model"] = final_model
+            action_result.metadata["tokens_in"] = tokens_in
+            action_result.metadata["tokens_out"] = tokens_out
+            action_result.metadata["provider"] = final_provider
+
             # ── REFLECT ──
             self._state.transition(CognitivePhase.REFLECTING)
+            await _emit_phase("reflecting")
             with t.start_cognitive_span("reflect"):
                 try:
                     await self._reflect.process(

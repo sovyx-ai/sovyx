@@ -5,7 +5,7 @@
  * Tests: render, input, send, loading, error, new chat, empty state.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@/test/test-utils";
 import userEvent from "@testing-library/user-event";
 import ChatPage from "./chat";
@@ -14,10 +14,11 @@ import { useDashboardStore } from "@/stores/dashboard";
 vi.mock("@/lib/api", () => ({
   api: {
     post: vi.fn(),
-    get: vi.fn(),
+    get: vi.fn().mockResolvedValue({ episode_count: 0, label: "", quadrant: "neutral" }),
   },
   isAbortError: (err: unknown) =>
     err instanceof DOMException && (err as DOMException).name === "AbortError",
+  getToken: () => "test-token",
   BASE_URL: "",
   setToken: vi.fn(),
   clearToken: vi.fn(),
@@ -27,9 +28,16 @@ import { api } from "@/lib/api";
 
 const mockApi = api as unknown as { post: ReturnType<typeof vi.fn> };
 
+// Mock fetch to reject (forces SSE fallback to batch endpoint)
+const originalFetch = globalThis.fetch;
 beforeEach(() => {
   vi.clearAllMocks();
   useDashboardStore.getState().clearChat();
+  globalThis.fetch = vi.fn().mockRejectedValue(new Error("SSE not available in test"));
+});
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
 });
 
 describe("ChatPage", () => {

@@ -315,12 +315,19 @@ async def handle_chat_message(
         )
     tags: list[str] = [*plugin_tags, "brain"]
 
+    llm_meta: dict[str, object] = {}
+    if result is not None and result.metadata:
+        for k in ("model", "tokens_in", "tokens_out", "cost_usd", "latency_ms", "provider"):
+            if k in result.metadata:
+                llm_meta[k] = result.metadata[k]
+
     resp: dict[str, Any] = {
         "response": response_text,
         "conversation_id": str(conv_id),
         "mind_id": str(mind_id),
         "timestamp": now.isoformat(),
         "tags": tags,
+        **llm_meta,
     }
     if buttons_payload:
         resp["buttons"] = buttons_payload
