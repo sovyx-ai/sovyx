@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from sovyx.observability.logging import get_logger
 from sovyx.voice.model_registry import (
     detect_tts_engine,
+    ensure_kokoro_tts,
     ensure_silero_vad,
     get_default_model_dir,
 )
@@ -84,6 +85,7 @@ async def create_voice_pipeline(
     if tts_engine == "piper":
         tts = await asyncio.to_thread(lambda: _self._create_piper_tts(models_dir))
     elif tts_engine == "kokoro":
+        await ensure_kokoro_tts(models_dir)
         tts = await asyncio.to_thread(lambda: _self._create_kokoro_tts(models_dir))
     else:
         msg = "No TTS engine available. Install piper-tts or kokoro-onnx."

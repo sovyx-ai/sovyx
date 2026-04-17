@@ -35,7 +35,7 @@ _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
 # Model file names
 _MODEL_FULL = "kokoro-v1.0.onnx"
-_MODEL_Q8 = "kokoro-v1.0-q8.onnx"
+_MODEL_Q8 = "kokoro-v1.0.int8.onnx"
 _VOICES_FILE = "voices-v1.0.bin"
 
 # Supported languages (kokoro-onnx)

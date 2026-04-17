@@ -51,6 +51,22 @@ VOICE_MODELS: dict[str, VoiceModelInfo] = {
         download_available=False,
         description="Speech-to-Text (managed by moonshine-voice package)",
     ),
+    "kokoro-v1.0-int8": VoiceModelInfo(
+        name="kokoro-v1.0-int8",
+        category="tts",
+        size_mb=88.0,
+        url="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx",
+        filename="kokoro-v1.0.int8.onnx",
+        description="Text-to-Speech (Kokoro v1.0, int8 quantized, 26 voices)",
+    ),
+    "kokoro-voices-v1.0": VoiceModelInfo(
+        name="kokoro-voices-v1.0",
+        category="tts",
+        size_mb=3.2,
+        url="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin",
+        filename="voices-v1.0.bin",
+        description="Kokoro voice style vectors (26 voices)",
+    ),
 }
 
 
@@ -156,6 +172,45 @@ async def ensure_silero_vad(model_dir: Path | None = None) -> Path:
     return model_path
 
 
+async def ensure_kokoro_tts(model_dir: Path | None = None) -> Path:
+    """Ensure Kokoro TTS model + voices exist on disk, downloading if needed.
+
+    Returns:
+        Path to the kokoro subdirectory containing model and voices files.
+    """
+    import asyncio
+
+    target_dir = (model_dir or get_default_model_dir()) / "kokoro"
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    model_info = VOICE_MODELS["kokoro-v1.0-int8"]
+    voices_info = VOICE_MODELS["kokoro-voices-v1.0"]
+
+    model_path = target_dir / model_info.filename
+    voices_path = target_dir / voices_info.filename
+
+    if not model_path.exists():
+        logger.info(
+            "downloading_kokoro_model",
+            url=model_info.url,
+            size_mb=model_info.size_mb,
+            destination=str(model_path),
+        )
+        await asyncio.to_thread(lambda: _self._download_file(model_info.url, model_path))
+        logger.info("kokoro_model_downloaded", path=str(model_path))
+
+    if not voices_path.exists():
+        logger.info(
+            "downloading_kokoro_voices",
+            url=voices_info.url,
+            destination=str(voices_path),
+        )
+        await asyncio.to_thread(lambda: _self._download_file(voices_info.url, voices_path))
+        logger.info("kokoro_voices_downloaded", path=str(voices_path))
+
+    return target_dir
+
+
 def _download_file(url: str, dest: Path) -> None:
     """Blocking download — called via to_thread."""
     import tempfile
@@ -164,14 +219,14 @@ def _download_file(url: str, dest: Path) -> None:
 
     tmp_path = None
     try:
-        fd, tmp_path_str = tempfile.mkstemp(dir=str(dest.parent), suffix=".tmp", prefix=".vad_")
+        fd, tmp_path_str = tempfile.mkstemp(dir=str(dest.parent), suffix=".tmp", prefix=".dl_")
         import os
 
         os.close(fd)
         tmp_path = Path(tmp_path_str)
 
         with (
-            httpx.Client(timeout=60.0, follow_redirects=True) as client,
+            httpx.Client(timeout=300.0, follow_redirects=True) as client,
             client.stream("GET", url) as resp,
         ):
             resp.raise_for_status()
