@@ -103,7 +103,10 @@ class TestInboundPipeline:
         gate.submit.assert_called_once()
         tracker.add_turn.assert_any_call(CONV, "user", "Hello")
         tracker.add_turn.assert_any_call(
-            CONV, "assistant", "Hi!", metadata={"tags": ["brain"]},
+            CONV,
+            "assistant",
+            "Hi!",
+            metadata={"tags": ["brain"]},
         )
         adapter.send.assert_called_once()
 
@@ -207,7 +210,10 @@ class TestRaceCondition:
         tracker = _mock_tracker()
 
         async def track_add_turn(
-            conv_id: ConversationId, role: str, content: str, **kwargs: object,
+            conv_id: ConversationId,
+            role: str,
+            content: str,
+            **kwargs: object,
         ) -> None:
             call_order.append(f"{role}:{content}")
             await asyncio.sleep(0.01)
