@@ -76,7 +76,7 @@ beforeEach(() => {
   sessionStorage.setItem("sovyx_token", "test-token");
 
   useDashboardStore.setState({
-    authenticated: false,
+    authenticated: true,
     showTokenModal: false,
     connected: false,
     connectionState: "disconnected",
@@ -95,6 +95,14 @@ afterEach(() => {
 });
 
 describe("useWebSocket", () => {
+  it("does not connect when not authenticated", () => {
+    useDashboardStore.setState({ authenticated: false });
+    mockFetchSuccess();
+    renderHook(() => useWebSocket());
+
+    expect(MockWebSocket.instances).toHaveLength(0);
+  });
+
   it("creates WebSocket with token in URL", () => {
     mockFetchSuccess();
     renderHook(() => useWebSocket());

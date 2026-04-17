@@ -244,7 +244,7 @@ async def configure_personality(request: Request) -> JSONResponse:
 @router.post("/channel/telegram")
 async def setup_telegram_channel(request: Request) -> JSONResponse:
     """Validate Telegram bot token, hot-start channel, persist for next boot."""
-    import aiohttp
+    import httpx  # noqa: PLC0415
 
     try:
         body = await request.json()
@@ -257,14 +257,9 @@ async def setup_telegram_channel(request: Request) -> JSONResponse:
 
     # Validate via Telegram API
     try:
-        async with (
-            aiohttp.ClientSession() as session,
-            session.get(
-                f"https://api.telegram.org/bot{token}/getMe",
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as resp,
-        ):
-            data = await resp.json()
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"https://api.telegram.org/bot{token}/getMe")
+            data = resp.json()
             if not data.get("ok"):
                 return JSONResponse(
                     {"ok": False, "error": data.get("description", "Invalid token")},

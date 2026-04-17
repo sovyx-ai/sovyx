@@ -1,1 +1,0 @@
-import{t as e}from"./vendor-react-C4IjcV3X.js";import{t}from"./chart-column-DrDdLnjV.js";import{t as n}from"./coming-soon-BZnwSdmS.js";var r=e();function i(){return(0,r.jsx)(n,{icon:t,titleKey:`productivity.title`,descriptionKey:`productivity.description`})}export{i as default};

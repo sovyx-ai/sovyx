@@ -201,6 +201,7 @@ export function useWebSocket(): void {
   const statusTimerRef = useRef<ReturnType<typeof setInterval>>(undefined);
   const healthTimerRef = useRef<ReturnType<typeof setInterval>>(undefined);
 
+  const authenticated = useDashboardStore((s) => s.authenticated);
   const setConnected = useDashboardStore((s) => s.setConnected);
   const setConnectionState = useDashboardStore((s) => s.setConnectionState);
   const addEvent = useDashboardStore((s) => s.addEvent);
@@ -315,8 +316,9 @@ export function useWebSocket(): void {
     };
   }, [setConnected, handleMessage]);
 
-  // Periodic polling (supplements WS events)
+  // Periodic polling (supplements WS events) — only when authenticated
   useEffect(() => {
+    if (!authenticated) return;
     statusTimerRef.current = setInterval(() => void refreshStatus(), STATUS_POLL_MS);
     healthTimerRef.current = setInterval(() => void refreshHealth(), HEALTH_POLL_MS);
 
@@ -324,10 +326,11 @@ export function useWebSocket(): void {
       clearInterval(statusTimerRef.current);
       clearInterval(healthTimerRef.current);
     };
-  }, []);
+  }, [authenticated]);
 
-  // WebSocket lifecycle
+  // WebSocket lifecycle — only when authenticated (token available)
   useEffect(() => {
+    if (!authenticated) return;
     mountedRef.current = true;
     connect();
 
@@ -337,5 +340,5 @@ export function useWebSocket(): void {
       for (const timer of debounceTimers.values()) clearTimeout(timer);
       debounceTimers.clear();
     };
-  }, [connect]);
+  }, [connect, authenticated]);
 }
