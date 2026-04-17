@@ -133,7 +133,9 @@ class TestEnsureSileroVAD:
     async def test_downloads_when_missing(self, tmp_path: Path) -> None:
         import sovyx.voice.model_registry as reg_mod
 
-        def fake_download(url: str, dest: Path) -> None:
+        def fake_download(
+            url: str, dest: Path, *, expected_sha256: str = "", label: str = ""
+        ) -> None:
             dest.write_bytes(b"onnx-data")
 
         original = reg_mod._download_file
@@ -160,5 +162,5 @@ class TestEnsureSileroVAD:
             _download_file("https://example.com/model.onnx", dest)
         assert type(exc_info.value).__name__ == "ConnectionError"
         assert not dest.exists()
-        tmp_files = list(tmp_path.glob(".vad_*"))
+        tmp_files = list(tmp_path.glob(".dl_*"))
         assert len(tmp_files) == 0

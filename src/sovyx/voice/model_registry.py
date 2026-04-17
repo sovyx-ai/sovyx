@@ -1,8 +1,8 @@
 """Voice model registry -- download, dependency check, and path resolution.
 
-SileroVAD is auto-downloaded (2.3 MB, GitHub URL).
+SileroVAD and Kokoro TTS are auto-downloaded on first use.
 Moonshine STT auto-downloads via HuggingFace Hub (managed by moonshine-voice).
-Piper TTS requires manual model download; Kokoro TTS is a zero-config fallback.
+Piper TTS requires manual model download.
 
 Model files cached at ~/.sovyx/models/voice/.
 """
@@ -29,6 +29,7 @@ class VoiceModelInfo:
     size_mb: float
     url: str
     filename: str
+    sha256: str = ""
     download_available: bool = True
     description: str = ""
 
@@ -40,6 +41,7 @@ VOICE_MODELS: dict[str, VoiceModelInfo] = {
         size_mb=2.3,
         url="https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx",
         filename="silero_vad.onnx",
+        sha256="1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
         description="Voice Activity Detection (Silero v5, ONNX)",
     ),
     "moonshine-tiny": VoiceModelInfo(
@@ -57,14 +59,16 @@ VOICE_MODELS: dict[str, VoiceModelInfo] = {
         size_mb=88.0,
         url="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.int8.onnx",
         filename="kokoro-v1.0.int8.onnx",
+        sha256="6e742170d309016e5891a994e1ce1559c702a2ccd0075e67ef7157974f6406cb",
         description="Text-to-Speech (Kokoro v1.0, int8 quantized, 26 voices)",
     ),
     "kokoro-voices-v1.0": VoiceModelInfo(
         name="kokoro-voices-v1.0",
         category="tts",
-        size_mb=3.2,
+        size_mb=27.0,
         url="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin",
         filename="voices-v1.0.bin",
+        sha256="bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d",
         description="Kokoro voice style vectors (26 voices)",
     ),
 }
@@ -140,7 +144,7 @@ def detect_tts_engine() -> str:
     return "none"
 
 
-# ── SileroVAD auto-download ─────────────────────────────────────────
+# ── Auto-download helpers ──────────────────────────────────────────
 
 
 async def ensure_silero_vad(model_dir: Path | None = None) -> Path:
@@ -149,26 +153,21 @@ async def ensure_silero_vad(model_dir: Path | None = None) -> Path:
     Returns:
         Path to the silero_vad.onnx file.
     """
-    import asyncio
+    import asyncio  # noqa: PLC0415
 
     target_dir = model_dir or get_default_model_dir()
     target_dir.mkdir(parents=True, exist_ok=True)
-    model_path = target_dir / "silero_vad.onnx"
+
+    info = VOICE_MODELS["silero-vad-v5"]
+    model_path = target_dir / info.filename
 
     if model_path.exists():
         logger.debug("silero_vad_model_exists", path=str(model_path))
         return model_path
 
-    info = VOICE_MODELS["silero-vad-v5"]
-    logger.info(
-        "downloading_silero_vad",
-        url=info.url,
-        size_mb=info.size_mb,
-        destination=str(model_path),
+    await asyncio.to_thread(
+        lambda: _self._download_model(info, model_path),
     )
-
-    await asyncio.to_thread(lambda: _self._download_file(info.url, model_path))
-    logger.info("silero_vad_downloaded", path=str(model_path))
     return model_path
 
 
@@ -178,7 +177,7 @@ async def ensure_kokoro_tts(model_dir: Path | None = None) -> Path:
     Returns:
         Path to the kokoro subdirectory containing model and voices files.
     """
-    import asyncio
+    import asyncio  # noqa: PLC0415
 
     target_dir = (model_dir or get_default_model_dir()) / "kokoro"
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -190,49 +189,124 @@ async def ensure_kokoro_tts(model_dir: Path | None = None) -> Path:
     voices_path = target_dir / voices_info.filename
 
     if not model_path.exists():
-        logger.info(
-            "downloading_kokoro_model",
-            url=model_info.url,
-            size_mb=model_info.size_mb,
-            destination=str(model_path),
+        await asyncio.to_thread(
+            lambda: _self._download_model(model_info, model_path),
         )
-        await asyncio.to_thread(lambda: _self._download_file(model_info.url, model_path))
-        logger.info("kokoro_model_downloaded", path=str(model_path))
 
     if not voices_path.exists():
-        logger.info(
-            "downloading_kokoro_voices",
-            url=voices_info.url,
-            destination=str(voices_path),
+        await asyncio.to_thread(
+            lambda: _self._download_model(voices_info, voices_path),
         )
-        await asyncio.to_thread(lambda: _self._download_file(voices_info.url, voices_path))
-        logger.info("kokoro_voices_downloaded", path=str(voices_path))
 
     return target_dir
 
 
-def _download_file(url: str, dest: Path) -> None:
-    """Blocking download — called via to_thread."""
-    import tempfile
+# ── Download engine (sync — called via to_thread) ──────────────────
 
-    import httpx
+_MAX_RETRIES = 3
+_BACKOFF_BASE_S = 1.0
+_PROGRESS_INTERVAL_BYTES = 10 * 1024 * 1024  # log every ~10 MB
+
+
+def _download_model(info: VoiceModelInfo, dest: Path) -> None:
+    """Download a model file with retry, SHA256 verification, and progress logging."""
+    import time  # noqa: PLC0415
+
+    last_exc: BaseException | None = None
+    for attempt in range(1, _MAX_RETRIES + 1):
+        try:
+            logger.info(
+                "model_download_start",
+                model=info.name,
+                size_mb=info.size_mb,
+                destination=str(dest),
+                attempt=attempt,
+            )
+            _download_file(info.url, dest, expected_sha256=info.sha256, label=info.name)
+            logger.info("model_download_complete", model=info.name, path=str(dest))
+            return
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if attempt < _MAX_RETRIES:
+                delay = _BACKOFF_BASE_S * (2 ** (attempt - 1))
+                logger.warning(
+                    "model_download_retry",
+                    model=info.name,
+                    attempt=attempt,
+                    error=str(exc),
+                    retry_in_s=delay,
+                )
+                time.sleep(delay)
+            else:
+                logger.error(
+                    "model_download_failed",
+                    model=info.name,
+                    attempts=_MAX_RETRIES,
+                    error=str(exc),
+                )
+    msg = f"Failed to download {info.name} after {_MAX_RETRIES} attempts"
+    raise RuntimeError(msg) from last_exc
+
+
+def _download_file(
+    url: str,
+    dest: Path,
+    *,
+    expected_sha256: str = "",
+    label: str = "",
+) -> None:
+    """Blocking download with SHA256 verification and progress logging."""
+    import hashlib  # noqa: PLC0415
+    import os  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+
+    import httpx  # noqa: PLC0415
 
     tmp_path = None
     try:
         fd, tmp_path_str = tempfile.mkstemp(dir=str(dest.parent), suffix=".tmp", prefix=".dl_")
-        import os
-
         os.close(fd)
         tmp_path = Path(tmp_path_str)
+
+        hasher = hashlib.sha256() if expected_sha256 else None
+        downloaded = 0
+        last_progress = 0
 
         with (
             httpx.Client(timeout=300.0, follow_redirects=True) as client,
             client.stream("GET", url) as resp,
         ):
             resp.raise_for_status()
+            total = int(resp.headers.get("content-length", 0))
+            tag = label or dest.name
+
             with tmp_path.open("wb") as f:
                 for chunk in resp.iter_bytes(chunk_size=65536):
                     f.write(chunk)
+                    if hasher is not None:
+                        hasher.update(chunk)
+                    downloaded += len(chunk)
+
+                    if total > 0 and downloaded - last_progress >= _PROGRESS_INTERVAL_BYTES:
+                        pct = int(downloaded * 100 / total)
+                        logger.info(
+                            "model_download_progress",
+                            model=tag,
+                            downloaded_mb=round(downloaded / (1024 * 1024), 1),
+                            total_mb=round(total / (1024 * 1024), 1),
+                            percent=pct,
+                        )
+                        last_progress = downloaded
+
+        if hasher is not None and expected_sha256:
+            actual = hasher.hexdigest()
+            if actual != expected_sha256:
+                tmp_path.unlink(missing_ok=True)
+                msg = (
+                    f"SHA256 mismatch for {dest.name}: "
+                    f"expected {expected_sha256[:16]}..., got {actual[:16]}..."
+                )
+                raise ValueError(msg)
 
         tmp_path.replace(dest)
     except BaseException:
