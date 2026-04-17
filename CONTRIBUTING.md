@@ -15,7 +15,7 @@ Thanks for wanting to contribute. This file is the short version; the long versi
 git clone https://github.com/sovyx-ai/sovyx.git
 cd sovyx
 uv sync --dev                                    # installs runtime + dev extras
-uv run sovyx --version                           # should print 0.11.0 or newer
+uv run sovyx --version                           # should print 0.16.0 or newer
 ```
 
 Dashboard:
@@ -23,7 +23,7 @@ Dashboard:
 ```bash
 cd dashboard
 npm install
-npx vitest run                                   # ~767 tests
+npx vitest run                                   # ~820 tests
 npx tsc -b tsconfig.app.json                     # type check
 ```
 

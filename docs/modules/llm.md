@@ -58,10 +58,7 @@ def classify_complexity(signals: ComplexitySignals) -> ComplexityLevel:
 
 Thresholds: `SIMPLE_MAX_LENGTH=500`, `SIMPLE_MAX_TURNS=3`, `COMPLEX_MIN_LENGTH=2000`, `COMPLEX_MIN_TURNS=8`.
 
-Tiers (used by `select_model_for_complexity`):
-
-- **Simple** — `gemini-2.0-flash`, `claude-3-5-haiku-20241022`, `gpt-4o-mini`, `deepseek-chat`, `mistral-small-latest`, `mixtral-8x7b-32768`, `llama-3.1-8b-instant`.
-- **Complex** — `claude-sonnet-4-20250514`, `gemini-2.5-pro-preview-03-25`, `gpt-4o`, `grok-3`, `deepseek-reasoner`, `mistral-large-latest`, `llama-3.1-70b-versatile`.
+Tier-to-model mapping is driven by `select_model_for_complexity` in `src/sovyx/llm/router.py` and the **single source of truth** for supported models and their prices is `src/sovyx/llm/pricing.py`. Tiers span every active provider (fast Haiku/Flash/mini on SIMPLE; flagship Sonnet/Opus/Pro/GPT-4o/Grok/Reasoner on COMPLEX). See `pricing.py` for the authoritative list — the doc intentionally does not duplicate model IDs, which move every release.
 
 ## Routing flow
 
@@ -79,23 +76,7 @@ Tiers (used by `select_model_for_complexity`):
 
 ## Cross-provider equivalence
 
-```python
-# src/sovyx/llm/router.py — _get_equivalent_models
-_equivalence: dict[str, list[str]] = {
-    # Flagship tier
-    "claude-sonnet-4-20250514": ["gpt-4o", "gemini-2.5-pro-preview-03-25", "grok-3", "mistral-large-latest"],
-    "gpt-4o": ["claude-sonnet-4-20250514", "gemini-2.5-pro-preview-03-25", "grok-3", "mistral-large-latest"],
-    # ... (symmetric entries for all flagship models)
-    # Fast tier
-    "claude-3-5-haiku-20241022": ["gpt-4o-mini", "gemini-2.0-flash", "deepseek-chat", "mistral-small-latest"],
-    "gpt-4o-mini": ["claude-3-5-haiku-20241022", "gemini-2.0-flash", "deepseek-chat", "mistral-small-latest"],
-    # ... (symmetric entries for all fast models)
-    # Reasoning tier
-    "claude-opus-4-20250514": ["o1", "deepseek-reasoner"],
-    "o1": ["claude-opus-4-20250514", "deepseek-reasoner"],
-    "deepseek-reasoner": ["claude-opus-4-20250514", "o1"],
-}
-```
+`_get_equivalent_models` in `src/sovyx/llm/router.py` maintains a symmetric equivalence map across three tiers — **flagship** (Sonnet / Opus / Pro / GPT-4o / Grok / Reasoner), **fast** (Haiku / Flash / mini / DeepSeek Chat / Mistral Small), and **reasoning** (Opus / o-series / DeepSeek Reasoner). When a requested model fails (circuit open or provider error), the router rotates through the same-tier peers in order. The map is updated each release as new models land in `pricing.py`.
 
 ## Cost tracking
 
@@ -105,35 +86,7 @@ _equivalence: dict[str, list[str]] = {
 - **Per-conversation** — `conversation_id` rolling budget.
 - **Daily** — engine-wide daily cap.
 
-Pricing table (USD per 1M tokens, input/output):
-
-```python
-# src/sovyx/llm/pricing.py (single source of truth)
-PRICING: dict[str, tuple[float, float]] = {
-    # Anthropic
-    "claude-sonnet-4-20250514":     (3.0,  15.0),
-    "claude-3-5-haiku-20241022":    (1.0,   5.0),
-    "claude-opus-4-20250514":       (15.0, 75.0),
-    # OpenAI
-    "gpt-4o":                       (5.0,  15.0),
-    "gpt-4o-mini":                  (0.15,  0.6),
-    "o1":                           (15.0, 60.0),
-    "o3-mini":                      (1.1,   4.4),
-    # Google
-    "gemini-2.0-flash":             (0.10,  0.40),
-    "gemini-2.5-pro-preview-03-25": (1.25, 10.0),
-    # xAI
-    "grok-2":                       (2.0,  10.0),
-    "grok-3":                       (3.0,  15.0),
-    # DeepSeek
-    "deepseek-chat":                (0.14,  0.28),
-    "deepseek-reasoner":            (0.55,  2.19),
-    # Mistral
-    "mistral-large-latest":         (2.0,   6.0),
-    "mistral-small-latest":         (0.10,  0.30),
-    # Together AI / Groq / Fireworks — see pricing.py for full table
-}
-```
+Prices (USD per 1M input/output tokens) for every supported model live in `src/sovyx/llm/pricing.py` — it is the single source of truth and is updated as providers publish new tiers. `CostGuard` reads from that table at runtime; the doc does not duplicate the entries.
 
 `CostGuard.record()` updates counters in `sovyx.dashboard.status` so the dashboard sees live cost and token usage.
 
@@ -187,13 +140,15 @@ llm:
   providers:
     anthropic:
       api_key: ${ANTHROPIC_API_KEY}
-      models: [claude-sonnet-4-20250514, claude-3-5-haiku-20241022]
+      # Pick the active IDs from src/sovyx/llm/pricing.py — the table is the
+      # source of truth and moves every release.
+      models: [<flagship-sonnet>, <fast-haiku>]
     openai:
       api_key: ${OPENAI_API_KEY}
-      models: [gpt-4o, gpt-4o-mini, o1]
+      models: [<flagship-gpt>, <fast-mini>, <reasoning>]
     google:
       api_key: ${GEMINI_API_KEY}
-      models: [gemini-2.5-pro-preview-03-25, gemini-2.0-flash]
+      models: [<flagship-pro>, <fast-flash>]
     ollama:
       base_url: http://localhost:11434
       models: [llama3.1:8b]

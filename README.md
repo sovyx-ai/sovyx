@@ -16,7 +16,7 @@
   <a href="https://pypi.org/project/sovyx/"><img alt="PyPI" src="https://img.shields.io/pypi/v/sovyx.svg"></a>
   <a href="https://pypi.org/project/sovyx/"><img alt="Python" src="https://img.shields.io/pypi/pyversions/sovyx.svg"></a>
   <a href="https://github.com/sovyx-ai/sovyx/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-AGPL--3.0-blue"></a>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-8%2C463-brightgreen">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-8%2C777-brightgreen">
 </p>
 
 ---
@@ -209,8 +209,8 @@ Details at [sovyx.ai](https://sovyx.ai).
 ```bash
 git clone https://github.com/sovyx-ai/sovyx.git && cd sovyx
 uv sync --dev
-uv run python -m pytest tests/ --ignore=tests/smoke --timeout=30  # 7671 backend tests
-cd dashboard && npx vitest run                                     # 792 frontend tests
+uv run python -m pytest tests/ --ignore=tests/smoke --timeout=30  # ~7,960 backend tests
+cd dashboard && npx vitest run                                     # ~820 frontend tests
 ```
 
 Read [CLAUDE.md](CLAUDE.md) before your first PR -- it covers stack, conventions, anti-patterns, and the quality gates CI enforces (ruff, mypy strict, bandit, pytest 3.11 + 3.12, vitest, tsc).

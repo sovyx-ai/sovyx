@@ -2,7 +2,7 @@
 
 ## What it does
 
-The Sovyx dashboard is a React SPA served by the daemon, backed by a FastAPI application that exposes REST endpoints, a WebSocket event stream, and a Prometheus metrics endpoint. The backend lives in `src/sovyx/dashboard/` and the frontend in the `dashboard/` submodule. Auth is a single bearer token — generated on first start and stored in `~/.sovyx/token` with `0600` permissions — used both for REST (`Authorization: Bearer …`) and for the WebSocket (`/ws?token=…`).
+The Sovyx dashboard is a React SPA served by the daemon, backed by a FastAPI application that exposes REST endpoints, a WebSocket event stream, and a Prometheus metrics endpoint. The backend lives in `src/sovyx/dashboard/` and the frontend in `dashboard/` (part of the main repo, not a submodule). Auth is a single bearer token — generated on first start and stored in `~/.sovyx/token` with `0600` permissions — used both for REST (`Authorization: Bearer …`) and for the WebSocket (`/ws?token=…`).
 
 ## Key components
 
@@ -18,7 +18,7 @@ The Sovyx dashboard is a React SPA served by the daemon, backed by a FastAPI app
 | `RateLimitMiddleware` | Sliding-window rate limit per IP/route for `/api/chat` and `/api/import`. |
 | `RequestIdMiddleware` / `SecurityHeadersMiddleware` | `X-Request-Id` correlation and CSP-style response headers. |
 
-REST routers live in one file per domain: `brain.py`, `conversations.py`, `chat.py`, `activity.py`, `logs.py`, `plugins.py`, `voice_status.py`, `config.py`, `settings.py`, `daily_stats.py`, `export_import.py`.
+REST routers live in one file per domain under `src/sovyx/dashboard/routes/` — 21 `APIRouter` modules: `activity`, `brain`, `channels`, `chat`, `config`, `conversation_import`, `conversations`, `data`, `emotions`, `logs`, `onboarding`, `plugins`, `providers`, `safety`, `settings`, `setup`, `status`, `telemetry`, `voice`, `voice_test`, `websocket`, plus a shared `_deps.py` for the `verify_token` dependency. `server.py` wires the routers and middleware; it does not define endpoints.
 
 ### Frontend (`dashboard/src/`)
 
@@ -70,23 +70,29 @@ app = create_app(token=TOKEN)
 client = TestClient(app, headers={"Authorization": f"Bearer {TOKEN}"})
 ```
 
-## REST endpoints (32)
+## REST endpoints
 
-| Group | Endpoints |
+The canonical list lives in [`api-reference.md`](../api-reference.md). Grouped here by router:
+
+| Router | Endpoints |
 |---|---|
-| Health / status | `/api/status`, `/api/health`, `/api/stats/history` |
-| Conversations | `/api/conversations`, `/api/conversations/{id}` |
-| Brain | `/api/brain/graph`, `/api/brain/search` |
-| Logs | `/api/logs` |
-| Activity | `/api/activity/timeline` |
-| Settings / config | `/api/settings`, `/api/config` |
-| Voice | `/api/voice/status`, `/api/voice/models` |
-| Plugins | `/api/plugins`, `/api/plugins/{name}`, `/api/plugins/tools`, `/api/plugins/{name}/{enable|disable|reload}` |
-| Channels | `/api/channels`, `/api/channels/telegram/setup` |
-| Chat | `/api/chat` |
-| Data | `/api/export`, `/api/import` |
-| Safety | `/api/safety/{stats,status,history,rules}` |
-| Providers | `/api/providers` |
+| `status` | `/api/status`, `/api/health`, `/api/stats/history` |
+| `conversations` / `conversation_import` | `/api/conversations`, `/api/conversations/{id}`, `/api/import/conversations`, `/api/import/{job_id}/progress` |
+| `brain` | `/api/brain/graph`, `/api/brain/search`, `/api/brain/concepts/{id}` |
+| `logs` | `/api/logs`, `/api/logs/stream` |
+| `activity` | `/api/activity/timeline` |
+| `emotions` | `/api/emotions/*` |
+| `settings` / `config` | `/api/settings`, `/api/config` |
+| `voice` / `voice_test` | `/api/voice/*`, `/api/voice/test/*`, `WS /api/voice/test/input` |
+| `plugins` | `/api/plugins`, `/api/plugins/{name}`, `/api/plugins/tools`, `/api/plugins/{name}/{enable|disable|reload}` |
+| `channels` | `/api/channels`, `/api/channels/telegram/setup` |
+| `chat` | `POST /api/chat`, `POST /api/chat/stream` |
+| `data` | `/api/export`, `/api/import` |
+| `safety` | `/api/safety/{stats,status,history,rules}` |
+| `providers` | `/api/providers` |
+| `telemetry` | `/api/telemetry/*` |
+| `onboarding` / `setup` | `/api/onboarding/*`, `/api/setup/*` |
+| `websocket` | `WS /ws?token=...` |
 | Infra | `/metrics` (Prometheus), `/{path:path}` (SPA fallback → `index.html`) |
 
 ## WebSocket events (12)

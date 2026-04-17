@@ -28,9 +28,11 @@ The router classifies each request into one of three tiers.
 
 | Tier | Triggers | Target models |
 |---|---|---|
-| **SIMPLE** | message length ≤ 500 chars **and** ≤ 3 turns, no code, no tool use | `gemini-2.0-flash`, `claude-3-5-haiku-20241022`, `gpt-4o-mini`, `deepseek-chat`, `mistral-small-latest`, `mixtral-8x7b-32768`, `llama-3.1-8b-instant` |
+| **SIMPLE** | message length ≤ 500 chars **and** ≤ 3 turns, no code, no tool use | Fast tier: Haiku / Flash / GPT-4o-mini / DeepSeek Chat / Mistral Small / Groq Llama / Mixtral |
 | **MODERATE** | everything else, or a user-requested model | Mind's default provider |
-| **COMPLEX** | message length ≥ 2000 chars, or ≥ 8 turns, or code detected, or tool use requested | `claude-sonnet-4-20250514`, `gemini-2.5-pro-preview-03-25`, `gpt-4o`, `grok-3`, `deepseek-reasoner`, `mistral-large-latest`, `llama-3.1-70b-versatile` |
+| **COMPLEX** | message length ≥ 2000 chars, or ≥ 8 turns, or code detected, or tool use requested | Flagship tier: Sonnet / Pro / GPT-4o / Grok / DeepSeek Reasoner / Mistral Large / Llama 70B |
+
+Concrete model IDs for each tier are defined in `src/sovyx/llm/router.py` (`select_model_for_complexity`) and priced in `src/sovyx/llm/pricing.py` — the single source of truth as new releases land.
 
 `ComplexityLevel` is a `StrEnum`:
 
@@ -125,13 +127,16 @@ flowchart TD
 ```
 
 The router tries the requested model first, then equivalent-tier models from
-other providers. Example equivalence groups:
+other providers. Equivalence groups are maintained symmetrically in
+`_get_equivalent_models` (`src/sovyx/llm/router.py`):
 
-| Tier | Equivalent models |
+| Tier | Equivalent across providers |
 |---|---|
-| Flagship | `claude-sonnet-4-20250514` ↔ `gpt-4o` ↔ `gemini-2.5-pro-preview-03-25` ↔ `grok-3` ↔ `mistral-large-latest` |
-| Fast | `claude-3-5-haiku-20241022` ↔ `gpt-4o-mini` ↔ `gemini-2.0-flash` ↔ `deepseek-chat` ↔ `mistral-small-latest` |
-| Reasoning | `claude-opus-4-20250514` ↔ `o1` ↔ `deepseek-reasoner` |
+| Flagship | Anthropic Sonnet ↔ OpenAI GPT-4o ↔ Google Gemini Pro ↔ xAI Grok ↔ Mistral Large |
+| Fast | Anthropic Haiku ↔ OpenAI mini ↔ Google Flash ↔ DeepSeek Chat ↔ Mistral Small |
+| Reasoning | Anthropic Opus ↔ OpenAI o-series ↔ DeepSeek Reasoner |
+
+Exact IDs are in `pricing.py` and rotate with provider releases.
 
 ## Circuit Breaker
 

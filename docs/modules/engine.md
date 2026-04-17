@@ -138,7 +138,7 @@ telemetry:
   enabled: false
 
 socket:
-  path: ~/.local/share/sovyx/sovyx.sock   # Windows: named pipe
+  path: ~/.sovyx/sovyx.sock              # Windows: named pipe
 ```
 
 `EngineConfig` resolves `LoggingConfig.log_file` to `data_dir/logs/sovyx.log` when unset — never hardcode log paths.

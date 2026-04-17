@@ -9,9 +9,9 @@
 
 | Suite | Tests | Notes |
 |---|---:|---|
-| Backend (`tests/`, minus `tests/smoke`) | ~7 820 | Runs on Python 3.11 **and** 3.12; identical pass rate required. |
-| Frontend (`dashboard/src/**/*.test.ts(x)`) | 767 | jsdom, vitest. |
-| **Total** | **~8 587** | — |
+| Backend (`tests/`, minus `tests/smoke`) | ~7 960 | Runs on Python 3.11 **and** 3.12; identical pass rate required. |
+| Frontend (`dashboard/src/**/*.test.ts(x)`) | ~820 | jsdom, vitest. |
+| **Total** | **~8 780** | — |
 
 CI gate: the `Test (Python X)` jobs fail on any `^=+ .* [0-9]+ failed` in the pytest summary; `Dashboard Build` fails on any vitest failure or `tsc` diagnostic.
 

@@ -45,7 +45,7 @@ This set of files reflects **v0.16.11**.
 
 Release criteria:
 
-- Test coverage >= 95% (~8,500 tests: ~7,700 pytest, ~767 vitest).
+- Test coverage >= 95% (~8,780 tests: ~7,960 pytest, ~820 vitest).
 - Zero `ruff` errors, zero `mypy --strict` errors, zero `bandit` HIGH.
 - Multi-arch Docker build (`linux/amd64`, `linux/arm64`) green.
 - Dashboard `npx tsc -b` with zero errors.

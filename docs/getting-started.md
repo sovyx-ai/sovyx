@@ -44,7 +44,7 @@ sovyx --version
 ### 1. Initialize a mind
 
 ```bash
-sovyx init Aria
+sovyx init my-mind
 ```
 
 This creates:
@@ -53,11 +53,13 @@ This creates:
 ~/.sovyx/
 ├── system.yaml           # engine config (optional, has defaults)
 ├── logs/                 # daemon logs (JSON)
-└── aria/
+└── my-mind/
     └── mind.yaml         # mind config — personality, LLM, brain, channels
 ```
 
-You can pass any name. `sovyx init MyMind` creates `~/.sovyx/mymind/mind.yaml`.
+The name is required (1–64 chars, letters/digits/`_`/`-`, starts with a
+letter) and is lowercased for the filesystem path. `sovyx init MyMind`
+creates `~/.sovyx/mymind/mind.yaml`.
 
 ### 2. Set an API key
 
@@ -117,7 +119,7 @@ and plugin management.
 
 ### Via Telegram
 
-Add your bot token to `~/.sovyx/aria/mind.yaml`:
+Add your bot token to `~/.sovyx/my-mind/mind.yaml`:
 
 ```yaml
 channels:
@@ -151,7 +153,7 @@ machine-readable output.
 
 | Command | Does |
 |---|---|
-| `sovyx init [name]` | Create a new mind (default name: `Aria`) |
+| `sovyx init <name>` | Create a new mind (name required) |
 | `sovyx start` | Start the daemon and dashboard |
 | `sovyx stop` | Stop the daemon |
 | `sovyx status` | Show daemon status |

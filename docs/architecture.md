@@ -2,9 +2,11 @@
 
 Sovyx is a persistent AI companion. Each message flows through a five-phase
 cognitive loop that reads from and writes to a local brain graph, calls one of
-several LLM providers based on the message complexity, and streams everything
-to a dashboard. The whole stack is local-first — SQLite is the source of
-truth, and LLM inference is the only step that can go over the network.
+ten LLM providers based on the message complexity, and streams everything to a
+dashboard. Two background cycles — periodic consolidation and a nightly dream
+phase — maintain the brain graph. The whole stack is local-first — SQLite is
+the source of truth, and LLM inference is the only step that can go over the
+network.
 
 ## Stack
 
@@ -15,7 +17,7 @@ truth, and LLM inference is the only step that can go over the network.
 | HTTP / WebSocket | FastAPI + Uvicorn |
 | Persistence | SQLite with WAL, `aiosqlite`, `sqlite-vec`, FTS5 |
 | Embeddings, STT, TTS | ONNX Runtime (E5-small-v2, Moonshine, Piper, Kokoro, Silero VAD) |
-| LLM providers | `anthropic`, `openai`, `google-genai`, `ollama` |
+| LLM providers | Anthropic, OpenAI, Google, Ollama, xAI, DeepSeek, Mistral, Together AI, Groq, Fireworks (all via `httpx`; no vendor SDKs at runtime) |
 | Observability | structlog (JSON), OpenTelemetry, Prometheus |
 | CLI | Typer + Rich over JSON-RPC on a Unix socket |
 | Dashboard | React 19 + TypeScript + Vite + Tailwind + Zustand |
@@ -233,7 +235,7 @@ src/sovyx/
 ├── bridge/          # Inbound/outbound messaging, channels
 ├── persistence/     # SQLite pool, migrations, schemas
 ├── observability/   # Logging, health, tracing, metrics
-├── llm/             # Router + 4 providers
+├── llm/             # Router + 10 providers
 ├── mind/            # MindConfig, personality
 ├── context/         # Context assembly
 ├── dashboard/       # FastAPI server + WebSocket bridge

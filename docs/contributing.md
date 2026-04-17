@@ -15,17 +15,14 @@ submodule flow, the release pipeline, and the twelve anti-patterns we track.
 - **[uv](https://docs.astral.sh/uv/)** for Python — the only supported
   workflow. `pip install` is not maintained.
 - **Node.js 20** for the dashboard.
-- **Git** with submodule support.
+- **Git**.
 
 ### Bootstrap
 
 ```bash
-# Clone with the dashboard submodule
-git clone --recurse-submodules https://github.com/sovyx-ai/sovyx.git
+# Clone — the dashboard is part of the main repo, not a submodule
+git clone https://github.com/sovyx-ai/sovyx.git
 cd sovyx
-
-# If you forgot --recurse-submodules
-git submodule update --init --recursive
 
 # Backend dev dependencies (frozen lockfile)
 uv sync --dev --frozen
@@ -40,14 +37,14 @@ uv run python -m sovyx
 ### First run
 
 ```bash
-uv run sovyx init             # create ~/.local/share/sovyx and the default mind
+uv run sovyx init my-mind     # create ~/.sovyx and the mind
 uv run sovyx start            # daemon + dashboard on 127.0.0.1:7777
 uv run sovyx logs --follow    # in another shell
 ```
 
-Data lives under `~/.local/share/sovyx/` by default. Override with
-`SOVYX_DATA_DIR`. Never hardcode paths — the `EngineConfig` model validator
-resolves log file paths to `data_dir/logs/sovyx.log`.
+Data lives under `~/.sovyx/` by default. Override with `SOVYX_DATA_DIR`.
+Never hardcode paths — the `EngineConfig` model validator resolves log file
+paths to `data_dir/logs/sovyx.log`.
 
 ---
 
@@ -81,14 +78,14 @@ uv run ruff check src/ tests/
 uv run ruff format --check src/ tests/
 uv run mypy src/                          # strict mode
 uv run bandit -r src/sovyx/ --configfile pyproject.toml
-uv run pytest tests/ --ignore=tests/smoke --timeout=30   # 7 700+ tests, coverage >= 95%
+uv run pytest tests/ --ignore=tests/smoke --timeout=30   # ~7,960 tests, coverage >= 95%
 ```
 
 ### Dashboard (from `dashboard/`)
 
 ```bash
 npx tsc -b tsconfig.app.json             # zero errors
-npx vitest run                            # 790+ tests
+npx vitest run                            # ~820 tests
 ```
 
 **If any gate fails, fix it before committing. Never skip.** The only
@@ -154,31 +151,22 @@ push.
 
 ---
 
-## Dashboard submodule
+## Dashboard
 
-`dashboard/` is a separate git repository tracked as a submodule. Changes
-always flow through two commits.
+`dashboard/` lives inside the main repo — not a submodule. Stage dashboard
+changes alongside the backend changes they relate to, in the same commit:
 
 ```bash
-# 1. Edit inside the submodule
-cd dashboard
-# ... edit src/pages/Something.tsx ...
+# Edit both sides as needed
+# ... edit src/sovyx/dashboard/routes/foo.py ...
+# ... edit dashboard/src/pages/Foo.tsx ...
 
-# 2. Commit inside the submodule first, then push
-git add src/pages/Something.tsx
-git commit -m "feat: dashboard — new Something page"
-git push origin main
-
-# 3. Back to the parent — record the new submodule SHA
-cd ..
-git add dashboard
-git commit -m "chore: bump dashboard submodule to abc1234"
+git add src/sovyx/dashboard/routes/foo.py dashboard/src/pages/Foo.tsx
+git commit -m "feat(dashboard): Foo — wire backend route + UI"
 git push origin main
 ```
 
-If the submodule pointer in the parent repo references a SHA not on
-`origin/main` of the submodule, the CI Dashboard Build job fails. Always push
-the submodule commit **before** the parent commit.
+CI builds the dashboard as part of the normal pipeline — no two-commit dance.
 
 ---
 
