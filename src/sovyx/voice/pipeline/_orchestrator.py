@@ -142,6 +142,26 @@ class VoicePipeline:
         """Whether the pipeline is active."""
         return self._running
 
+    @property
+    def vad(self) -> SileroVAD:
+        """Voice activity detector used by this pipeline."""
+        return self._vad
+
+    @property
+    def stt(self) -> STTEngine:
+        """Speech-to-text engine used by this pipeline."""
+        return self._stt
+
+    @property
+    def tts(self) -> TTSEngine:
+        """Text-to-speech engine used by this pipeline."""
+        return self._tts
+
+    @property
+    def wake_word(self) -> WakeWordDetector:
+        """Wake word detector used by this pipeline."""
+        return self._wake_word
+
     # -- Lifecycle -----------------------------------------------------------
 
     async def start(self) -> None:

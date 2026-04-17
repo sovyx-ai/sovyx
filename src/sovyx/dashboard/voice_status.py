@@ -31,6 +31,10 @@ async def get_voice_status(registry: ServiceRegistry) -> dict[str, Any]:
             "state": "not_configured",
             "latency_ms": None,
         },
+        "capture": {
+            "running": False,
+            "input_device": None,
+        },
         "stt": {
             "engine": None,
             "model": None,
@@ -58,13 +62,26 @@ async def get_voice_status(registry: ServiceRegistry) -> dict[str, Any]:
         },
     }
 
-    # Pipeline
+    # Capture (must run, or the pipeline is silent even if "started")
+    try:
+        from sovyx.voice._capture_task import AudioCaptureTask
+
+        if registry.is_registered(AudioCaptureTask):
+            capture = await registry.resolve(AudioCaptureTask)
+            status["capture"]["running"] = capture.is_running
+            status["capture"]["input_device"] = capture.input_device
+    except Exception:  # noqa: BLE001
+        logger.debug("voice_status_capture_failed")
+
+    # Pipeline — "running" requires BOTH pipeline started and capture alive.
+    # A pipeline with no mic feeding it is silent, and reporting "Running"
+    # in that case is a lie (the exact bug that motivated the wizard rewrite).
     try:
         from sovyx.voice.pipeline import VoicePipeline
 
         if registry.is_registered(VoicePipeline):
             pipeline = await registry.resolve(VoicePipeline)
-            status["pipeline"]["running"] = pipeline.is_running
+            status["pipeline"]["running"] = pipeline.is_running and status["capture"]["running"]
             status["pipeline"]["state"] = pipeline.state.name.lower()
     except Exception:  # noqa: BLE001
         logger.debug("voice_status_pipeline_failed")

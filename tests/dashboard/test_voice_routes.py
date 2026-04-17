@@ -175,6 +175,7 @@ class TestEnableVoiceCaptureWiring:
         capture.start = AsyncMock()
         pipeline = MagicMock()
         pipeline.stop = AsyncMock()
+        pipeline.config.wake_word_enabled = False
 
         from sovyx.voice.factory import VoiceBundle
 
@@ -206,12 +207,65 @@ class TestEnableVoiceCaptureWiring:
         assert resp.status_code == 200  # noqa: PLR2004
         assert resp.json()["status"] == "active"
         capture.start.assert_awaited_once()
-        # Both services registered for the status endpoint to read.
+        # Pipeline + capture + sub-components registered for status cards.
         registered = [
             call.args[0].__name__ for call in app.state.registry.register_instance.mock_calls
         ]
         assert "VoicePipeline" in registered
         assert "AudioCaptureTask" in registered
+        assert "SileroVAD" in registered
+        # STTEngine / TTSEngine are ABCs — verify the concrete register
+        # call uses the interface as the key.
+        assert "STTEngine" in registered
+        assert "TTSEngine" in registered
+        # Wake word disabled — must not be registered.
+        assert "WakeWordDetector" not in registered
+
+    def test_enable_registers_wake_word_when_enabled(self, app, client: TestClient) -> None:
+        """Wake-word-enabled pipelines also register the WakeWordDetector."""
+        fake_sd = ModuleType("sounddevice")
+        fake_sd.query_devices = MagicMock(  # type: ignore[attr-defined]
+            return_value=[
+                {"name": "mic", "max_input_channels": 1, "max_output_channels": 0},
+                {"name": "spk", "max_input_channels": 0, "max_output_channels": 2},
+            ],
+        )
+
+        capture = MagicMock()
+        capture.start = AsyncMock()
+        pipeline = MagicMock()
+        pipeline.stop = AsyncMock()
+        pipeline.config.wake_word_enabled = True
+
+        from sovyx.voice.factory import VoiceBundle
+
+        bundle = VoiceBundle(pipeline=pipeline, capture_task=capture)
+
+        with (
+            patch(
+                "sovyx.voice.model_registry.check_voice_deps",
+                return_value=(
+                    [
+                        {"module": "moonshine_voice", "package": "moonshine-voice"},
+                        {"module": "sounddevice", "package": "sounddevice"},
+                    ],
+                    [],
+                ),
+            ),
+            patch("sovyx.voice.model_registry.detect_tts_engine", return_value="piper"),
+            patch.dict(sys.modules, {"sounddevice": fake_sd}),
+            patch(
+                "sovyx.voice.factory.create_voice_pipeline",
+                new=AsyncMock(return_value=bundle),
+            ),
+        ):
+            resp = client.post("/api/voice/enable")
+
+        assert resp.status_code == 200  # noqa: PLR2004
+        registered = [
+            call.args[0].__name__ for call in app.state.registry.register_instance.mock_calls
+        ]
+        assert "WakeWordDetector" in registered
 
     def test_enable_tears_down_when_capture_start_fails(self, app, client: TestClient) -> None:
         fake_sd = ModuleType("sounddevice")
@@ -319,3 +373,8 @@ class TestDisableVoice:
         deregistered = [call.args[0].__name__ for call in app.state.registry.deregister.mock_calls]
         assert "AudioCaptureTask" in deregistered
         assert "VoicePipeline" in deregistered
+        # Sub-components deregistered too — next enable rebuilds them.
+        assert "SileroVAD" in deregistered
+        assert "STTEngine" in deregistered
+        assert "TTSEngine" in deregistered
+        assert "WakeWordDetector" in deregistered

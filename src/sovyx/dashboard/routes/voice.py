@@ -259,9 +259,20 @@ async def enable_voice(request: Request) -> JSONResponse:
     if registry is not None:
         from sovyx.voice._capture_task import AudioCaptureTask
         from sovyx.voice.pipeline._orchestrator import VoicePipeline
+        from sovyx.voice.stt import STTEngine
+        from sovyx.voice.tts_piper import TTSEngine
+        from sovyx.voice.vad import SileroVAD
+        from sovyx.voice.wake_word import WakeWordDetector
 
         registry.register_instance(VoicePipeline, bundle.pipeline)
         registry.register_instance(AudioCaptureTask, bundle.capture_task)
+        # Register each sub-component so /api/voice/status can report real
+        # engine names instead of "No engine configured".
+        registry.register_instance(SileroVAD, bundle.pipeline.vad)
+        registry.register_instance(STTEngine, bundle.pipeline.stt)
+        registry.register_instance(TTSEngine, bundle.pipeline.tts)
+        if bundle.pipeline.config.wake_word_enabled:
+            registry.register_instance(WakeWordDetector, bundle.pipeline.wake_word)
 
     # 6. Persist config
     mind_yaml_path = getattr(request.app.state, "mind_yaml_path", None)
@@ -295,6 +306,10 @@ async def disable_voice(request: Request) -> JSONResponse:
     if registry is not None:
         from sovyx.voice._capture_task import AudioCaptureTask
         from sovyx.voice.pipeline._orchestrator import VoicePipeline
+        from sovyx.voice.stt import STTEngine
+        from sovyx.voice.tts_piper import TTSEngine
+        from sovyx.voice.vad import SileroVAD
+        from sovyx.voice.wake_word import WakeWordDetector
 
         if registry.is_registered(AudioCaptureTask):
             try:
@@ -315,6 +330,12 @@ async def disable_voice(request: Request) -> JSONResponse:
                 logger.warning("voice_pipeline_stop_failed", exc_info=True)
             finally:
                 registry.deregister(VoicePipeline)
+
+        # Deregister sub-components so the next enable re-registers fresh
+        # instances bound to the new pipeline.
+        for interface in (SileroVAD, STTEngine, TTSEngine, WakeWordDetector):
+            if registry.is_registered(interface):
+                registry.deregister(interface)
 
     # Persist config
     mind_yaml_path = getattr(request.app.state, "mind_yaml_path", None)

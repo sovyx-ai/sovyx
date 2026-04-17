@@ -848,6 +848,15 @@ class TestPipelineLifecycle:
         assert pipeline.output is pipeline._output
         assert pipeline.jarvis is pipeline._jarvis
 
+    @pytest.mark.asyncio
+    async def test_component_properties_expose_instances(self) -> None:
+        """vad/stt/tts/wake_word expose the exact instances passed at construction."""
+        pipeline, refs = _make_pipeline()
+        assert pipeline.vad is refs["vad"]
+        assert pipeline.stt is refs["stt"]
+        assert pipeline.tts is refs["tts"]
+        assert pipeline.wake_word is refs["ww"]
+
 
 # ===========================================================================
 # VoicePipeline — events emitted

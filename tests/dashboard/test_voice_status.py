@@ -46,24 +46,66 @@ class TestGetVoiceStatus:
         assert status["hardware"]["tier"] is None
 
     @pytest.mark.asyncio()
-    async def test_pipeline_running_detected(self, mock_registry: MagicMock) -> None:
-        """Pipeline state is correctly read when registered."""
+    async def test_pipeline_running_requires_capture(self, mock_registry: MagicMock) -> None:
+        """Pipeline reports running only when BOTH pipeline and capture are live."""
+        from sovyx.voice._capture_task import AudioCaptureTask
         from sovyx.voice.pipeline import VoicePipeline, VoicePipelineState
 
         mock_pipeline = MagicMock(spec=VoicePipeline)
         mock_pipeline.is_running = True
         mock_pipeline.state = VoicePipelineState.IDLE
 
+        mock_capture = MagicMock(spec=AudioCaptureTask)
+        mock_capture.is_running = True
+        mock_capture.input_device = 3
+
         def is_reg(cls: type) -> bool:
-            return cls is VoicePipeline
+            return cls in (VoicePipeline, AudioCaptureTask)
+
+        async def resolve(cls: type) -> object:
+            if cls is VoicePipeline:
+                return mock_pipeline
+            return mock_capture
 
         mock_registry.is_registered = is_reg
-        mock_registry.resolve = AsyncMock(return_value=mock_pipeline)
+        mock_registry.resolve = AsyncMock(side_effect=resolve)
 
         status = await get_voice_status(mock_registry)
 
         assert status["pipeline"]["running"] is True
         assert status["pipeline"]["state"] == "idle"
+        assert status["capture"]["running"] is True
+        assert status["capture"]["input_device"] == 3  # noqa: PLR2004
+
+    @pytest.mark.asyncio()
+    async def test_pipeline_not_running_when_capture_dead(self, mock_registry: MagicMock) -> None:
+        """Pipeline started but capture stopped means the dashboard reports NOT running."""
+        from sovyx.voice._capture_task import AudioCaptureTask
+        from sovyx.voice.pipeline import VoicePipeline, VoicePipelineState
+
+        mock_pipeline = MagicMock(spec=VoicePipeline)
+        mock_pipeline.is_running = True
+        mock_pipeline.state = VoicePipelineState.IDLE
+
+        mock_capture = MagicMock(spec=AudioCaptureTask)
+        mock_capture.is_running = False  # capture dead — pipeline is silent
+        mock_capture.input_device = None
+
+        def is_reg(cls: type) -> bool:
+            return cls in (VoicePipeline, AudioCaptureTask)
+
+        async def resolve(cls: type) -> object:
+            if cls is VoicePipeline:
+                return mock_pipeline
+            return mock_capture
+
+        mock_registry.is_registered = is_reg
+        mock_registry.resolve = AsyncMock(side_effect=resolve)
+
+        status = await get_voice_status(mock_registry)
+
+        assert status["pipeline"]["running"] is False
+        assert status["capture"]["running"] is False
 
     @pytest.mark.asyncio()
     async def test_stt_engine_detected(self, mock_registry: MagicMock) -> None:
@@ -196,6 +238,7 @@ class TestGetVoiceStatus:
         status = await get_voice_status(mock_registry)
         expected_keys = {
             "pipeline",
+            "capture",
             "stt",
             "tts",
             "wake_word",
