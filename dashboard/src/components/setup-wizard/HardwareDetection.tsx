@@ -18,8 +18,12 @@ import {
   CheckCircle2Icon,
   LoaderIcon,
   ChevronDownIcon,
+  ActivityIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAudioLevelStream } from "@/hooks/use-audio-level-stream";
+import { AudioLevelMeter } from "./AudioLevelMeter";
+import { TtsTestButton } from "./TtsTestButton";
 
 interface AudioDevice {
   index: number;
@@ -140,22 +144,32 @@ function HardwareDetectionImpl({ onDetected, onDeviceChange }: HardwareDetection
 
       {/* Audio device selectors */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <DeviceSelect
-          icon={MicIcon}
-          label="Input"
-          devices={audio.input_devices}
-          selected={selectedInput}
-          onChange={handleInputChange}
-          warn={!audio.available}
-        />
-        <DeviceSelect
-          icon={Volume2Icon}
-          label="Output"
-          devices={audio.output_devices}
-          selected={selectedOutput}
-          onChange={handleOutputChange}
-          warn={!audio.available}
-        />
+        <div className="space-y-2">
+          <DeviceSelect
+            icon={MicIcon}
+            label="Input"
+            devices={audio.input_devices}
+            selected={selectedInput}
+            onChange={handleInputChange}
+            warn={!audio.available}
+          />
+          {audio.available && audio.input_devices.length > 0 && (
+            <MicTestPanel deviceId={selectedInput} />
+          )}
+        </div>
+        <div className="space-y-2">
+          <DeviceSelect
+            icon={Volume2Icon}
+            label="Output"
+            devices={audio.output_devices}
+            selected={selectedOutput}
+            onChange={handleOutputChange}
+            warn={!audio.available}
+          />
+          {audio.available && audio.output_devices.length > 0 && (
+            <TtsTestButton deviceId={selectedOutput} />
+          )}
+        </div>
       </div>
 
       {/* Tier badge */}
@@ -302,6 +316,67 @@ function DeviceSelect({
         </select>
         <ChevronDownIcon className="pointer-events-none absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 text-[var(--svx-color-text-tertiary)]" />
       </div>
+    </div>
+  );
+}
+
+/**
+ * MicTestPanel — opt-in live mic meter.
+ *
+ * The WebSocket is only opened when the user clicks "Test microphone",
+ * so we don't stream audio on every wizard mount. Stops cleanly on
+ * unmount via the hook's own teardown.
+ */
+function MicTestPanel({ deviceId }: { deviceId: number | null }) {
+  const [enabled, setEnabled] = useState(false);
+  const stream = useAudioLevelStream({ deviceId, enabled });
+
+  const statusText =
+    stream.state === "error"
+      ? stream.errorDetail ?? stream.errorCode ?? "Mic test failed"
+      : stream.state === "connecting"
+      ? "Connecting…"
+      : stream.state === "ready"
+      ? "Ready — speak to see your levels"
+      : stream.state === "streaming"
+      ? null
+      : null;
+
+  return (
+    <div className="space-y-1.5">
+      {!enabled ? (
+        <button
+          type="button"
+          onClick={() => setEnabled(true)}
+          className="flex w-full items-center justify-center gap-1.5 rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-elevated)] px-3 py-1.5 text-[11px] text-[var(--svx-color-text-secondary)] transition-colors hover:text-[var(--svx-color-text-primary)]"
+        >
+          <ActivityIcon className="size-3" />
+          Test microphone
+        </button>
+      ) : (
+        <>
+          <AudioLevelMeter level={stream.level} height={28} />
+          {statusText && (
+            <p
+              className={cn(
+                "text-[10px]",
+                stream.state === "error"
+                  ? "text-[var(--svx-color-error)]"
+                  : "text-[var(--svx-color-text-tertiary)]",
+              )}
+            >
+              {statusText}
+            </p>
+          )}
+          <button
+            type="button"
+            onClick={() => setEnabled(false)}
+            className="text-[10px] text-[var(--svx-color-text-tertiary)] hover:text-[var(--svx-color-text-primary)]"
+          >
+            Stop test
+          </button>
+        </>
+      )}
     </div>
   );
 }

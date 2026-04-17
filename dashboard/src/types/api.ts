@@ -598,3 +598,130 @@ export interface PluginStateChangedEvent {
   from_state: string;
   to_state: string;
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// Voice device test
+// ────────────────────────────────────────────────────────────────────────
+
+/** Machine-readable error taxonomy for /api/voice/test/* endpoints. */
+export type VoiceTestErrorCode =
+  | "device_not_found"
+  | "device_busy"
+  | "device_disappeared"
+  | "permission_denied"
+  | "unsupported_samplerate"
+  | "unsupported_channels"
+  | "pipeline_active"
+  | "rate_limited"
+  | "disabled"
+  | "replaced_by_newer_session"
+  | "internal_error"
+  | "invalid_request"
+  | "tts_unavailable"
+  | "job_not_found"
+  | "job_expired";
+
+export type VoiceTestFrameType = "level" | "error" | "closed" | "ready";
+
+export type VoiceTestCloseReason =
+  | "client_disconnect"
+  | "server_shutdown"
+  | "device_changed"
+  | "session_replaced"
+  | "device_error";
+
+/** WebSocket envelope — emitted once per device open. */
+export interface VoiceTestReadyFrame {
+  v: number;
+  t: "ready";
+  device_id: number | null;
+  device_name: string;
+  sample_rate: number;
+  channels: number;
+}
+
+/** WebSocket envelope — one level-meter tick. */
+export interface VoiceTestLevelFrame {
+  v: number;
+  t: "level";
+  rms_db: number;
+  peak_db: number;
+  hold_db: number;
+  clipping: boolean;
+  vad_trigger: boolean;
+}
+
+/** WebSocket envelope — structured error. */
+export interface VoiceTestErrorFrame {
+  v: number;
+  t: "error";
+  code: VoiceTestErrorCode;
+  detail: string;
+  retryable: boolean;
+}
+
+/** WebSocket envelope — always the last frame the server sends. */
+export interface VoiceTestClosedFrame {
+  v: number;
+  t: "closed";
+  reason: VoiceTestCloseReason;
+}
+
+export type VoiceTestFrame =
+  | VoiceTestReadyFrame
+  | VoiceTestLevelFrame
+  | VoiceTestErrorFrame
+  | VoiceTestClosedFrame;
+
+/** One PortAudio device entry. */
+export interface VoiceTestDeviceInfo {
+  index: number;
+  name: string;
+  is_default: boolean;
+  max_input_channels: number;
+  max_output_channels: number;
+  default_samplerate: number;
+}
+
+/** GET /api/voice/test/devices response. */
+export interface VoiceTestDevicesResponse {
+  ok: boolean;
+  protocol_version: number;
+  input_devices: VoiceTestDeviceInfo[];
+  output_devices: VoiceTestDeviceInfo[];
+}
+
+/** POST /api/voice/test/output request body. */
+export interface VoiceTestOutputRequest {
+  device_id?: number | null;
+  voice?: string | null;
+  phrase_key?: string;
+  language?: string;
+}
+
+/** POST /api/voice/test/output response. */
+export interface VoiceTestOutputJob {
+  ok: boolean;
+  job_id: string;
+  status: string;
+}
+
+/** GET /api/voice/test/output/:job_id response. */
+export interface VoiceTestOutputResult {
+  ok: boolean;
+  job_id: string;
+  status: string;
+  code?: VoiceTestErrorCode | null;
+  detail?: string | null;
+  phrase?: string | null;
+  synthesis_ms?: number | null;
+  playback_ms?: number | null;
+  peak_db?: number | null;
+}
+
+/** Shared HTTP error envelope. */
+export interface VoiceTestErrorResponse {
+  ok: false;
+  code: VoiceTestErrorCode;
+  detail: string;
+}

@@ -83,10 +83,17 @@ Every response carries `X-Request-Id`. Include it when reporting bugs.
 
 ### Voice
 
-| Method | Path                  | Description                            |
-| ------ | --------------------- | -------------------------------------- |
-| GET    | `/api/voice/status`   | Voice pipeline state and device info.  |
-| GET    | `/api/voice/models`   | Installed STT/TTS/VAD model catalogue. |
+| Method | Path                              | Description                                                  |
+| ------ | --------------------------------- | ------------------------------------------------------------ |
+| GET    | `/api/voice/status`               | Voice pipeline state and device info.                        |
+| GET    | `/api/voice/models`               | Installed STT/TTS/VAD model catalogue.                       |
+| GET    | `/api/voice/test/devices`         | Enumerate audio devices available to the setup wizard.       |
+| WS     | `/api/voice/test/input`           | Live RMS/peak/hold meter stream for mic sanity-check.        |
+| POST   | `/api/voice/test/output`          | Queue a TTS playback job on an output device.                |
+| GET    | `/api/voice/test/output/{job_id}` | Poll playback job until `done` or `error`.                   |
+
+See [`voice-device-test`](modules/voice-device-test.md) for the frame protocol,
+error taxonomy, rate-limits, and tuning knobs.
 
 ### Plugins
 

@@ -355,3 +355,113 @@ export const PluginActionResponseSchema = z.object({
   status: z.string(),
   error: z.string().optional(),
 });
+
+// ── Voice device test ──
+
+export const VoiceTestErrorCodeSchema = z.enum([
+  "device_not_found",
+  "device_busy",
+  "device_disappeared",
+  "permission_denied",
+  "unsupported_samplerate",
+  "unsupported_channels",
+  "pipeline_active",
+  "rate_limited",
+  "disabled",
+  "replaced_by_newer_session",
+  "internal_error",
+  "invalid_request",
+  "tts_unavailable",
+  "job_not_found",
+  "job_expired",
+]);
+
+export const VoiceTestFrameTypeSchema = z.enum(["level", "error", "closed", "ready"]);
+
+export const VoiceTestCloseReasonSchema = z.enum([
+  "client_disconnect",
+  "server_shutdown",
+  "device_changed",
+  "session_replaced",
+  "device_error",
+]);
+
+export const VoiceTestReadyFrameSchema = z.object({
+  v: z.number().int(),
+  t: z.literal("ready"),
+  device_id: z.number().int().nullable(),
+  device_name: z.string(),
+  sample_rate: z.number().int(),
+  channels: z.number().int(),
+});
+
+export const VoiceTestLevelFrameSchema = z.object({
+  v: z.number().int(),
+  t: z.literal("level"),
+  rms_db: z.number(),
+  peak_db: z.number(),
+  hold_db: z.number(),
+  clipping: z.boolean(),
+  vad_trigger: z.boolean(),
+});
+
+export const VoiceTestErrorFrameSchema = z.object({
+  v: z.number().int(),
+  t: z.literal("error"),
+  code: VoiceTestErrorCodeSchema,
+  detail: z.string(),
+  retryable: z.boolean(),
+});
+
+export const VoiceTestClosedFrameSchema = z.object({
+  v: z.number().int(),
+  t: z.literal("closed"),
+  reason: VoiceTestCloseReasonSchema,
+});
+
+export const VoiceTestFrameSchema = z.discriminatedUnion("t", [
+  VoiceTestReadyFrameSchema,
+  VoiceTestLevelFrameSchema,
+  VoiceTestErrorFrameSchema,
+  VoiceTestClosedFrameSchema,
+]);
+
+export const VoiceTestDeviceInfoSchema = z.object({
+  index: z.number().int(),
+  name: z.string(),
+  is_default: z.boolean(),
+  max_input_channels: z.number().int(),
+  max_output_channels: z.number().int(),
+  default_samplerate: z.number().int(),
+});
+
+export const VoiceTestDevicesResponseSchema = z.object({
+  ok: z.boolean(),
+  protocol_version: z.number().int(),
+  input_devices: z.array(VoiceTestDeviceInfoSchema),
+  output_devices: z.array(VoiceTestDeviceInfoSchema),
+});
+
+export const VoiceTestOutputJobSchema = z.object({
+  ok: z.boolean(),
+  job_id: z.string(),
+  status: z.string(),
+});
+
+export const VoiceTestOutputResultSchema = z.object({
+  ok: z.boolean(),
+  job_id: z.string(),
+  status: z.string(),
+  code: VoiceTestErrorCodeSchema.nullable().optional(),
+  detail: z.string().nullable().optional(),
+  phrase: z.string().nullable().optional(),
+  synthesis_ms: z.number().nullable().optional(),
+  playback_ms: z.number().nullable().optional(),
+  peak_db: z.number().nullable().optional(),
+});
+
+export const VoiceTestErrorResponseSchema = z.object({
+  ok: z.boolean(),
+  code: VoiceTestErrorCodeSchema,
+  detail: z.string(),
+});

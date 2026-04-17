@@ -5,6 +5,8 @@ export { TestConnectionButton } from "./TestConnectionButton";
 export { HardwareDetection } from "./HardwareDetection";
 export type { SelectedDevices } from "./HardwareDetection";
 export { VoiceSetupModal } from "./VoiceSetupModal";
+export { AudioLevelMeter } from "./AudioLevelMeter";
+export { TtsTestButton } from "./TtsTestButton";
 export type {
   SetupSchema,
   SetupField,
