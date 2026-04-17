@@ -119,6 +119,27 @@ class ServiceRegistry:
         key = _key(interface)
         return key in self._factories or key in self._instances
 
+    def deregister(self, interface: type[object]) -> bool:
+        """Remove any registration for *interface*.
+
+        Returns:
+            ``True`` if something was removed, ``False`` if the
+            interface wasn't registered. Does **not** call
+            ``shutdown()`` on the instance — the caller is expected to
+            stop the service first.
+        """
+        key = _key(interface)
+        removed = False
+        if key in self._instances:
+            del self._instances[key]
+            removed = True
+        if key in self._factories:
+            del self._factories[key]
+            removed = True
+        if key in self._init_order:
+            self._init_order.remove(key)
+        return removed
+
     async def shutdown_all(self) -> None:
         """Shutdown all services in reverse init order.
 

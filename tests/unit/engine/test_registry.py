@@ -107,6 +107,34 @@ class TestIsRegistered:
         assert reg.is_registered(DummyService) is False
 
 
+class TestDeregister:
+    """Targeted removal of a single registration."""
+
+    def test_deregister_instance_returns_true(self) -> None:
+        reg = ServiceRegistry()
+        reg.register_instance(DummyService, DummyService())
+        assert reg.deregister(DummyService) is True
+        assert reg.is_registered(DummyService) is False
+
+    def test_deregister_singleton_returns_true(self) -> None:
+        reg = ServiceRegistry()
+        reg.register_singleton(DummyService, DummyService)
+        assert reg.deregister(DummyService) is True
+        assert reg.is_registered(DummyService) is False
+
+    def test_deregister_unknown_returns_false(self) -> None:
+        reg = ServiceRegistry()
+        assert reg.deregister(DummyService) is False
+
+    def test_deregister_clears_init_order(self) -> None:
+        reg = ServiceRegistry()
+        reg.register_instance(DummyService, DummyService())
+        reg.deregister(DummyService)
+        reg.register_instance(DummyService, DummyService(value=13))
+        # Re-registering after deregister leaves a single init order entry.
+        assert len(reg._init_order) == 1  # noqa: SLF001
+
+
 class TestShutdown:
     """Shutdown in reverse order."""
 

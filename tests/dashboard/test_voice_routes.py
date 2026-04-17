@@ -159,6 +159,104 @@ class TestEnableVoice:
         assert resp.json()["status"] == "already_active"
 
 
+class TestEnableVoiceCaptureWiring:
+    """Enable happy path starts the capture task and registers both services."""
+
+    def test_enable_starts_capture_and_registers_bundle(self, app, client: TestClient) -> None:
+        fake_sd = ModuleType("sounddevice")
+        fake_sd.query_devices = MagicMock(  # type: ignore[attr-defined]
+            return_value=[
+                {"name": "mic", "max_input_channels": 1, "max_output_channels": 0},
+                {"name": "spk", "max_input_channels": 0, "max_output_channels": 2},
+            ],
+        )
+
+        capture = MagicMock()
+        capture.start = AsyncMock()
+        pipeline = MagicMock()
+        pipeline.stop = AsyncMock()
+
+        from sovyx.voice.factory import VoiceBundle
+
+        bundle = VoiceBundle(pipeline=pipeline, capture_task=capture)
+
+        with (
+            patch(
+                "sovyx.voice.model_registry.check_voice_deps",
+                return_value=(
+                    [
+                        {"module": "moonshine_voice", "package": "moonshine-voice"},
+                        {"module": "sounddevice", "package": "sounddevice"},
+                    ],
+                    [],
+                ),
+            ),
+            patch("sovyx.voice.model_registry.detect_tts_engine", return_value="piper"),
+            patch.dict(sys.modules, {"sounddevice": fake_sd}),
+            patch(
+                "sovyx.voice.factory.create_voice_pipeline",
+                new=AsyncMock(return_value=bundle),
+            ),
+        ):
+            resp = client.post(
+                "/api/voice/enable",
+                json={"input_device": 1, "output_device": 2},
+            )
+
+        assert resp.status_code == 200  # noqa: PLR2004
+        assert resp.json()["status"] == "active"
+        capture.start.assert_awaited_once()
+        # Both services registered for the status endpoint to read.
+        registered = [
+            call.args[0].__name__ for call in app.state.registry.register_instance.mock_calls
+        ]
+        assert "VoicePipeline" in registered
+        assert "AudioCaptureTask" in registered
+
+    def test_enable_tears_down_when_capture_start_fails(self, app, client: TestClient) -> None:
+        fake_sd = ModuleType("sounddevice")
+        fake_sd.query_devices = MagicMock(  # type: ignore[attr-defined]
+            return_value=[
+                {"name": "mic", "max_input_channels": 1, "max_output_channels": 0},
+                {"name": "spk", "max_input_channels": 0, "max_output_channels": 2},
+            ],
+        )
+
+        capture = MagicMock()
+        capture.start = AsyncMock(side_effect=RuntimeError("device busy"))
+        pipeline = MagicMock()
+        pipeline.stop = AsyncMock()
+
+        from sovyx.voice.factory import VoiceBundle
+
+        bundle = VoiceBundle(pipeline=pipeline, capture_task=capture)
+
+        with (
+            patch(
+                "sovyx.voice.model_registry.check_voice_deps",
+                return_value=(
+                    [
+                        {"module": "moonshine_voice", "package": "moonshine-voice"},
+                        {"module": "sounddevice", "package": "sounddevice"},
+                    ],
+                    [],
+                ),
+            ),
+            patch("sovyx.voice.model_registry.detect_tts_engine", return_value="piper"),
+            patch.dict(sys.modules, {"sounddevice": fake_sd}),
+            patch(
+                "sovyx.voice.factory.create_voice_pipeline",
+                new=AsyncMock(return_value=bundle),
+            ),
+        ):
+            resp = client.post("/api/voice/enable")
+
+        assert resp.status_code == 500  # noqa: PLR2004
+        pipeline.stop.assert_awaited_once()
+        # Nothing got registered when capture failed to start.
+        app.state.registry.register_instance.assert_not_called()
+
+
 class TestDisableVoice:
     """POST /api/voice/disable."""
 
@@ -187,4 +285,37 @@ class TestDisableVoice:
 
         resp = client.post("/api/voice/disable")
         assert resp.status_code == 200  # noqa: PLR2004
+        mock_pipeline.stop.assert_awaited()
+
+    def test_disable_stops_capture_and_deregisters(
+        self, app, client: TestClient, tmp_path
+    ) -> None:
+        mind_yaml = tmp_path / "mind.yaml"
+        mind_yaml.write_text("voice:\n  enabled: true\n")
+        app.state.mind_yaml_path = str(mind_yaml)
+
+        mock_capture = MagicMock()
+        mock_capture.stop = AsyncMock()
+        mock_pipeline = MagicMock()
+        mock_pipeline.stop = AsyncMock()
+
+        from sovyx.voice._capture_task import AudioCaptureTask
+        from sovyx.voice.pipeline._orchestrator import VoicePipeline
+
+        def resolve(cls):  # type: ignore[no-untyped-def]
+            if cls is AudioCaptureTask:
+                return mock_capture
+            if cls is VoicePipeline:
+                return mock_pipeline
+            return MagicMock()
+
+        app.state.registry.is_registered.return_value = True
+        app.state.registry.resolve = AsyncMock(side_effect=resolve)
+
+        resp = client.post("/api/voice/disable")
+        assert resp.status_code == 200  # noqa: PLR2004
+        mock_capture.stop.assert_awaited_once()
         mock_pipeline.stop.assert_awaited_once()
+        deregistered = [call.args[0].__name__ for call in app.state.registry.deregister.mock_calls]
+        assert "AudioCaptureTask" in deregistered
+        assert "VoicePipeline" in deregistered

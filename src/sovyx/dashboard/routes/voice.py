@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
@@ -146,8 +147,10 @@ async def enable_voice(request: Request) -> JSONResponse:
         body = {}
     if not isinstance(body, dict):
         body = {}
-    input_device: int | None = body.get("input_device")
-    output_device: int | None = body.get("output_device")
+    raw_input = body.get("input_device")
+    raw_output = body.get("output_device")
+    input_device: int | None = raw_input if isinstance(raw_input, int) else None
+    output_device: int | None = raw_output if isinstance(raw_output, int) else None
 
     # 1. Check deps
     from sovyx.voice.model_registry import check_voice_deps, detect_tts_engine
@@ -216,10 +219,12 @@ async def enable_voice(request: Request) -> JSONResponse:
             event_bus = await registry.resolve(EventBus)
 
     try:
-        pipeline = await create_voice_pipeline(
+        bundle = await create_voice_pipeline(
             event_bus=event_bus,
             wake_word_enabled=False,
             mind_id=getattr(request.app.state, "mind_id", "default"),
+            input_device=input_device,
+            output_device=output_device,
         )
     except VoiceFactoryError as exc:
         return JSONResponse(
@@ -237,11 +242,26 @@ async def enable_voice(request: Request) -> JSONResponse:
             status_code=500,
         )
 
-    # 5. Register
+    # 5. Start capture + register. Capture start is the step that can
+    # actually fail with a device error — if it does, tear the pipeline
+    # down so we don't leave a half-wired registry.
+    try:
+        await bundle.capture_task.start()
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("voice_capture_start_failed")
+        with contextlib.suppress(Exception):
+            await bundle.pipeline.stop()
+        return JSONResponse(
+            {"ok": False, "error": f"Audio capture failed to start: {exc}"},
+            status_code=500,
+        )
+
     if registry is not None:
+        from sovyx.voice._capture_task import AudioCaptureTask
         from sovyx.voice.pipeline._orchestrator import VoicePipeline
 
-        registry.register_instance(VoicePipeline, pipeline)
+        registry.register_instance(VoicePipeline, bundle.pipeline)
+        registry.register_instance(AudioCaptureTask, bundle.capture_task)
 
     # 6. Persist config
     mind_yaml_path = getattr(request.app.state, "mind_yaml_path", None)
@@ -264,11 +284,27 @@ async def enable_voice(request: Request) -> JSONResponse:
 
 @router.post("/disable")
 async def disable_voice(request: Request) -> JSONResponse:
-    """Disable the voice pipeline (graceful shutdown)."""
-    # Stop pipeline if running
+    """Disable the voice pipeline (graceful shutdown).
+
+    Order of operations:
+        1. Stop the audio capture task (closes mic stream).
+        2. Stop the pipeline (drains TTS, resets state).
+        3. Deregister both so the next enable creates fresh instances.
+    """
     registry = getattr(request.app.state, "registry", None)
     if registry is not None:
+        from sovyx.voice._capture_task import AudioCaptureTask
         from sovyx.voice.pipeline._orchestrator import VoicePipeline
+
+        if registry.is_registered(AudioCaptureTask):
+            try:
+                capture = await registry.resolve(AudioCaptureTask)
+                await capture.stop()
+                logger.info("voice_capture_stopped")
+            except Exception:  # noqa: BLE001
+                logger.warning("voice_capture_stop_failed", exc_info=True)
+            finally:
+                registry.deregister(AudioCaptureTask)
 
         if registry.is_registered(VoicePipeline):
             try:
@@ -277,6 +313,8 @@ async def disable_voice(request: Request) -> JSONResponse:
                 logger.info("voice_pipeline_stopped")
             except Exception:  # noqa: BLE001
                 logger.warning("voice_pipeline_stop_failed", exc_info=True)
+            finally:
+                registry.deregister(VoicePipeline)
 
     # Persist config
     mind_yaml_path = getattr(request.app.state, "mind_yaml_path", None)

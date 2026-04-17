@@ -1,14 +1,16 @@
 """Voice pipeline factory -- instantiate all components for hot-enable.
 
 Creates SileroVAD, MoonshineSTT, TTS (Piper or Kokoro fallback),
-WakeWordDetector, and VoicePipeline in a single async call.
-All ONNX loads wrapped in to_thread.
+WakeWordDetector, VoicePipeline, and the AudioCaptureTask that feeds
+the pipeline in a single async call. All ONNX loads wrapped in
+``asyncio.to_thread``.
 """
 
 from __future__ import annotations
 
 import asyncio
 import sys
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from sovyx.observability.logging import get_logger
@@ -26,6 +28,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from sovyx.engine.events import EventBus
+    from sovyx.voice._capture_task import AudioCaptureTask
     from sovyx.voice.pipeline._orchestrator import VoicePipeline
 
 logger = get_logger(__name__)
@@ -39,6 +42,19 @@ class VoiceFactoryError(Exception):
         self.missing_models = missing_models or []
 
 
+@dataclass(frozen=True)
+class VoiceBundle:
+    """Result of :func:`create_voice_pipeline`.
+
+    Callers own both objects — the pipeline must be registered in the
+    service registry and the capture task must be started to actually
+    listen to the microphone.
+    """
+
+    pipeline: VoicePipeline
+    capture_task: AudioCaptureTask
+
+
 async def create_voice_pipeline(
     *,
     event_bus: EventBus | None = None,
@@ -47,7 +63,9 @@ async def create_voice_pipeline(
     language: str = "en",
     wake_word_enabled: bool = False,
     mind_id: str = "default",
-) -> VoicePipeline:
+    input_device: int | str | None = None,
+    output_device: int | str | None = None,  # noqa: ARG001 — reserved for future TTS routing
+) -> VoiceBundle:
     """Create a fully initialized VoicePipeline with all components.
 
     All ONNX model loads are wrapped in ``asyncio.to_thread`` to avoid
@@ -60,9 +78,15 @@ async def create_voice_pipeline(
         language: STT language code.
         wake_word_enabled: Whether to listen for wake word.
         mind_id: Mind identifier for pipeline config.
+        input_device: PortAudio input device index/name for the
+            microphone capture task. ``None`` = OS default.
+        output_device: Reserved for TTS playback routing. Persisted
+            via ``mind.yaml`` for future use.
 
     Returns:
-        Running VoicePipeline.
+        A :class:`VoiceBundle` with the pipeline (already started) and
+        the capture task (not yet started — caller starts it after
+        registering both in the service registry).
 
     Raises:
         VoiceFactoryError: If required components can't be created.
@@ -117,6 +141,12 @@ async def create_voice_pipeline(
         event_bus=event_bus,
         on_perception=on_perception,
     )
+
+    # ── 6. Capture task (not started yet) ────────────────────
+    from sovyx.voice._capture_task import AudioCaptureTask
+
+    capture_task = AudioCaptureTask(pipeline, input_device=input_device)
+
     await pipeline.start()
 
     logger.info(
@@ -125,8 +155,9 @@ async def create_voice_pipeline(
         tts=tts_engine,
         vad="silero-v5",
         mind_id=mind_id,
+        input_device=input_device if input_device is not None else "default",
     )
-    return pipeline
+    return VoiceBundle(pipeline=pipeline, capture_task=capture_task)
 
 
 # ── Component factories (sync — called via to_thread) ────────────────
@@ -138,7 +169,7 @@ def _create_vad(model_path: Path) -> Any:  # noqa: ANN401
     return SileroVAD(model_path=model_path)
 
 
-def _create_stt(language: str) -> Any:  # noqa: ANN401
+def _create_stt(language: str) -> Any:  # noqa: ANN401, ARG001
     from sovyx.voice.stt import MoonshineSTT
 
     engine = MoonshineSTT()

@@ -137,6 +137,8 @@ class VoiceTuningConfig(BaseModel):
     auto_select_min_gpu_vram_mb: int = 4_000
     auto_select_high_ram_threshold_mb: int = 16_000
     auto_select_low_ram_threshold_mb: int = 2_048
+    capture_reconnect_delay_seconds: float = 2.0
+    capture_queue_maxsize: int = 256
 
 
 class LLMTuningConfig(BaseModel):
