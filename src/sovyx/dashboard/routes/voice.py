@@ -69,19 +69,20 @@ async def hardware_detect(request: Request) -> JSONResponse:
     input_devices: list[str] = []
     output_devices: list[str] = []
     try:
-        import sounddevice as sd
+        import sounddevice as sd  # noqa: PLC0415
 
         devices = sd.query_devices()
-        if isinstance(devices, list):
-            for d in devices:
-                if isinstance(d, dict):
-                    if d.get("max_input_channels", 0) > 0:
-                        input_devices.append(str(d.get("name", "unknown")))
-                    if d.get("max_output_channels", 0) > 0:
-                        output_devices.append(str(d.get("name", "unknown")))
+        for d in devices:
+            if isinstance(d, dict):
+                if d.get("max_input_channels", 0) > 0:
+                    input_devices.append(str(d.get("name", "unknown")))
+                if d.get("max_output_channels", 0) > 0:
+                    output_devices.append(str(d.get("name", "unknown")))
         audio_available = bool(input_devices and output_devices)
+    except ImportError:
+        logger.debug("sounddevice_not_installed")
     except Exception:  # noqa: BLE001
-        pass
+        logger.warning("audio_device_detection_failed", exc_info=True)
 
     # Recommended models for detected tier
     tier_name = hw.tier.name if hasattr(hw, "tier") else "DESKTOP_CPU"
@@ -162,19 +163,16 @@ async def enable_voice(request: Request) -> JSONResponse:
     # 2. Check audio
     audio_ok = False
     try:
-        import sounddevice as sd
+        import sounddevice as sd  # noqa: PLC0415
 
         devices = sd.query_devices()
-        if isinstance(devices, list):
-            has_in = any(
-                d.get("max_input_channels", 0) > 0 for d in devices if isinstance(d, dict)
-            )
-            has_out = any(
-                d.get("max_output_channels", 0) > 0 for d in devices if isinstance(d, dict)
-            )
-            audio_ok = has_in and has_out
-    except Exception:  # noqa: BLE001
+        has_in = any(d.get("max_input_channels", 0) > 0 for d in devices if isinstance(d, dict))
+        has_out = any(d.get("max_output_channels", 0) > 0 for d in devices if isinstance(d, dict))
+        audio_ok = has_in and has_out
+    except ImportError:
         pass
+    except Exception:  # noqa: BLE001
+        logger.warning("audio_device_check_failed", exc_info=True)
 
     if not audio_ok:
         return JSONResponse(
