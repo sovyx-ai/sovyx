@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.16.12] — 2026-04-17
+
 ### Added
 
 - **Voice device test — dashboard wiring.** The setup wizard's
@@ -23,6 +25,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
   WAV via the active Piper/Kokoro engine. OpenTelemetry metrics +
   unit tests for both paths. Configurable under
   `SOVYX_TUNING__VOICE__DEVICE_TEST__*`.
+
+### Changed
+
+- **Enterprise doc audit sweep.** Cross-checked every public doc
+  against v0.16.11 source. Reconciled test counts (real: ~7,960
+  backend + ~820 frontend = ~8,780) across root, CLAUDE, COVERAGE,
+  FAQ, roadmap, llm-router, CONTRIBUTING. `docs/architecture.md` now
+  lists all 10 LLM providers (was 4) with the correct repo layout.
+  `docs/llm-router.md` + `docs/modules/llm.md` stop hardcoding model
+  IDs and point to `src/sovyx/llm/pricing.py` as the single source of
+  truth — IDs rotate every release. `docs/modules/dashboard.md`
+  enumerates the real 21 routers under `dashboard/routes/` (old list
+  named files that don't exist) and drops the stale "submodule"
+  reference. `docs/modules/engine.md` + `docs/contributing.md` fix
+  the data-dir path `~/.local/share/sovyx` → `~/.sovyx`.
+  `docs/contributing.md` drops the dashboard-submodule flow
+  (dashboard lives in the main repo). `docs/getting-started.md`
+  replaces "Aria" default-name examples with explicit required
+  `<name>` — the CLI argument is required.
 
 ### Fixed
 
@@ -1289,7 +1310,8 @@ The v0.11 line is an enterprise hardening pass across backend, frontend, and CI 
 - 1 138 tests, ≥ 95 % coverage, mypy strict, ruff, bandit — zero errors.
 - Python 3.11 + 3.12 CI matrix.
 
-[Unreleased]: https://github.com/sovyx-ai/sovyx/compare/v0.11.9...HEAD
+[Unreleased]: https://github.com/sovyx-ai/sovyx/compare/v0.16.12...HEAD
+[0.16.12]: https://github.com/sovyx-ai/sovyx/compare/v0.16.11...v0.16.12
 [0.11.9]: https://github.com/sovyx-ai/sovyx/compare/v0.11.8...v0.11.9
 [0.11.8]: https://github.com/sovyx-ai/sovyx/compare/v0.11.7...v0.11.8
 [0.11.7]: https://github.com/sovyx-ai/sovyx/compare/v0.11.6...v0.11.7
