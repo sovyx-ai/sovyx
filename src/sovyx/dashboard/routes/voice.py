@@ -53,6 +53,106 @@ async def get_voice_models_endpoint(request: Request) -> JSONResponse:
     return JSONResponse(models)
 
 
+@router.get("/models/status")
+async def get_voice_models_disk_status(request: Request) -> JSONResponse:
+    """Return per-model disk presence + aggregate missing-size.
+
+    Drives the setup-wizard's "model installed" green check — unlike
+    :func:`get_voice_models_endpoint` (which serves the static tier
+    matrix), this endpoint stats the filesystem and reports what's
+    actually on disk.
+    """
+    from sovyx.voice.model_status import check_voice_models_status
+
+    status = await asyncio.to_thread(check_voice_models_status)
+    return JSONResponse(
+        {
+            "model_dir": status.model_dir,
+            "all_installed": status.all_installed,
+            "missing_count": status.missing_count,
+            "missing_download_mb": status.missing_download_mb,
+            "models": [
+                {
+                    "name": m.name,
+                    "category": m.category,
+                    "description": m.description,
+                    "installed": m.installed,
+                    "path": m.path,
+                    "size_mb": m.size_mb,
+                    "expected_size_mb": m.expected_size_mb,
+                    "download_available": m.download_available,
+                }
+                for m in status.models
+            ],
+        }
+    )
+
+
+def _get_model_download_tracker(request: Request) -> dict[str, object]:
+    """Lazy-init the per-app download tracker dict."""
+    tracker = getattr(request.app.state, "voice_model_download_tracker", None)
+    if tracker is None:
+        tracker = {}
+        request.app.state.voice_model_download_tracker = tracker
+    assert isinstance(tracker, dict)  # noqa: S101  # invariant: always dict[str, _DownloadEntry]
+    return tracker
+
+
+@router.post("/models/download")
+async def start_voice_models_download(request: Request) -> JSONResponse:
+    """Start a background download of all missing voice models.
+
+    Returns the task_id immediately so the UI can poll
+    ``GET /api/voice/models/download/{task_id}`` for progress. Parallel
+    clicks return the existing task — the downloader is single-flight.
+    """
+    from sovyx.voice.model_status import (
+        prune_finished,
+        start_download,
+    )
+
+    tracker = _get_model_download_tracker(request)
+    prune_finished(tracker)  # type: ignore[arg-type]
+    entry = start_download(tracker)  # type: ignore[arg-type]
+    p = entry.progress
+    return JSONResponse(
+        {
+            "task_id": p.task_id,
+            "status": p.status,
+            "total_models": p.total_models,
+            "completed_models": p.completed_models,
+            "current_model": p.current_model,
+            "error": p.error,
+        }
+    )
+
+
+@router.get("/models/download/{task_id}")
+async def get_voice_models_download_status(request: Request, task_id: str) -> JSONResponse:
+    """Poll the progress of a background download task."""
+    from sovyx.voice.model_status import prune_finished
+
+    tracker = _get_model_download_tracker(request)
+    prune_finished(tracker)  # type: ignore[arg-type]
+    entry = tracker.get(task_id)
+    if entry is None:
+        return JSONResponse(
+            {"error": "task_not_found", "detail": f"Task {task_id} not found or expired"},
+            status_code=404,
+        )
+    p = entry.progress  # type: ignore[attr-defined]
+    return JSONResponse(
+        {
+            "task_id": p.task_id,
+            "status": p.status,
+            "total_models": p.total_models,
+            "completed_models": p.completed_models,
+            "current_model": p.current_model,
+            "error": p.error,
+        }
+    )
+
+
 @router.get("/hardware-detect")
 async def hardware_detect(request: Request) -> JSONResponse:
     """Detect hardware capabilities for voice pipeline.

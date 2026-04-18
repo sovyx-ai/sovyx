@@ -732,12 +732,21 @@ class AudioOutput:
         """
         try:
             import sounddevice as sd
-
-            sd.play(audio, sample_rate, device=self._device)
-            sd.wait()
         except ImportError:
             duration = len(audio) / sample_rate
             await asyncio.sleep(duration)
+            return
+
+        # sd.play() + sd.wait() are blocking — they must run off the event
+        # loop or every other coroutine (voice pipeline, bridge, dashboard
+        # WS) stalls for the clip duration. See anti-pattern #14.
+        device = self._device
+
+        def _blocking_play() -> None:
+            sd.play(audio, sample_rate, device=device)
+            sd.wait()
+
+        await asyncio.to_thread(_blocking_play)
 
     @staticmethod
     def list_devices() -> list[dict[str, Any]]:

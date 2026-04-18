@@ -17,10 +17,17 @@
  * that explicitly so the user knows to disable voice before testing.
  */
 
-import { memo, useCallback, useRef, useState } from "react";
-import { CheckCircle2Icon, LoaderIcon, VolumeXIcon, XCircleIcon } from "lucide-react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
+import {
+  CheckCircle2Icon,
+  DownloadIcon,
+  LoaderIcon,
+  VolumeXIcon,
+  XCircleIcon,
+} from "lucide-react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { useVoiceModels } from "@/hooks/use-voice-models";
 import type {
   VoiceTestErrorCode,
   VoiceTestOutputJob,
@@ -63,7 +70,9 @@ function messageForCode(code: VoiceTestErrorCode | null): string {
     case "pipeline_active":
       return "Voice pipeline is running — disable it to run the test.";
     case "tts_unavailable":
-      return "No TTS model available. Download a voice model first.";
+      return "No TTS Python package installed. Run pip install sovyx[voice].";
+    case "models_not_downloaded":
+      return "TTS model files are not on disk. Download them to continue.";
     case "device_not_found":
       return "Output device not found.";
     case "device_busy":
@@ -158,12 +167,14 @@ function TtsTestButtonImpl({
     }
   }, [deviceId, language, voice, poll]);
 
-  // Clean up the polling flag if the component unmounts mid-test.
-  // Not a useEffect because we only need it at unmount.
-  const cancelIfRunning = useCallback(() => {
-    cancelRef.current = true;
+  // Signal the poll loop to bail if the component unmounts mid-test —
+  // otherwise the interval keeps firing, setState fires on a dead tree,
+  // and the network keeps churning through /output/{id} GETs.
+  useEffect(() => {
+    return () => {
+      cancelRef.current = true;
+    };
   }, []);
-  (onClick as unknown as { cancel?: () => void }).cancel = cancelIfRunning;
 
   const isRunning = state.kind === "running";
   return (
@@ -204,16 +215,54 @@ function TtsTestButtonImpl({
       )}
 
       {state.kind === "error" && (
-        <div
-          role="alert"
-          data-testid="tts-test-error"
-          className="flex items-center gap-2 rounded-[var(--svx-radius-md)] bg-[var(--svx-color-error)]/10 px-3 py-2 text-xs text-[var(--svx-color-error)]"
-        >
-          <XCircleIcon className="size-3.5 shrink-0" />
-          <span>{state.message}</span>
+        <div className="space-y-1.5">
+          <div
+            role="alert"
+            data-testid="tts-test-error"
+            className="flex items-center gap-2 rounded-[var(--svx-radius-md)] bg-[var(--svx-color-error)]/10 px-3 py-2 text-xs text-[var(--svx-color-error)]"
+          >
+            <XCircleIcon className="size-3.5 shrink-0" />
+            <span>{state.message}</span>
+          </div>
+          {state.code === "models_not_downloaded" && <MissingModelsCTA />}
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * MissingModelsCTA — rendered only when the server reports
+ * ``models_not_downloaded``. Isolated into its own component so the
+ * parent's hook tree doesn't fire an initial ``models/status`` GET on
+ * every Test-Speakers render (the hook lives under an error branch).
+ */
+function MissingModelsCTA() {
+  const { startDownload, downloading, download } = useVoiceModels();
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      disabled={downloading}
+      onClick={() => {
+        void startDownload();
+      }}
+      className="w-full"
+      data-testid="tts-test-download-cta"
+    >
+      {downloading ? (
+        <>
+          <LoaderIcon className="mr-2 size-3.5 animate-spin" />
+          Downloading{download?.current_model ? ` ${download.current_model}` : "…"}
+        </>
+      ) : (
+        <>
+          <DownloadIcon className="mr-2 size-3.5" />
+          Download voice models
+        </>
+      )}
+    </Button>
   );
 }
 

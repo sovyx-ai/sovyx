@@ -88,18 +88,30 @@ async def _play_audio(chunk: AudioChunk) -> None:
     This is the low-level playback function.  In production it uses
     ``sounddevice``; unit tests can patch this function.
 
+    ``sd.play`` schedules playback on PortAudio's output thread, but
+    ``sd.wait()`` blocks the caller until the audio finishes — which for
+    a typical TTS chunk is hundreds of milliseconds to several seconds.
+    Running that inside ``async def`` would stall the dashboard WebSocket,
+    voice pipeline frame loop, and every other coroutine for the whole
+    playback. Offload to a worker thread so the event loop stays
+    responsive (anti-pattern #14).
+
     Args:
         chunk: The audio chunk to play.
     """
     try:
         import sounddevice as sd
-
-        sd.play(chunk.audio, chunk.sample_rate)
-        sd.wait()
     except ImportError:
         # Headless / test environment — simulate playback duration
         if chunk.duration_ms > 0:
             await asyncio.sleep(chunk.duration_ms / 1000)
+        return
+
+    def _blocking_play() -> None:
+        sd.play(chunk.audio, chunk.sample_rate)
+        sd.wait()
+
+    await asyncio.to_thread(_blocking_play)
 
 
 # ---------------------------------------------------------------------------

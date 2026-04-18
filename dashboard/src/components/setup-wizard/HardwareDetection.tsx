@@ -7,7 +7,7 @@
  * - Recommended models with download sizes
  */
 
-import { memo, useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import {
   CpuIcon,
@@ -16,12 +16,15 @@ import {
   Volume2Icon,
   AlertTriangleIcon,
   CheckCircle2Icon,
+  CloudDownloadIcon,
+  DownloadIcon,
   LoaderIcon,
   ChevronDownIcon,
   ActivityIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAudioLevelStream } from "@/hooks/use-audio-level-stream";
+import { useVoiceModels } from "@/hooks/use-voice-models";
 import { AudioLevelMeter } from "./AudioLevelMeter";
 import { TtsTestButton } from "./TtsTestButton";
 
@@ -76,23 +79,36 @@ function HardwareDetectionImpl({ onDetected, onDeviceChange }: HardwareDetection
   const [selectedInput, setSelectedInput] = useState<number | null>(null);
   const [selectedOutput, setSelectedOutput] = useState<number | null>(null);
 
+  // Stash callbacks in refs so the fetch effect can stay `[]`-deps.
+  // Without this, callers that pass inline callbacks (the common case —
+  // see VoiceStep) change the prop identity on every render, which
+  // re-fires the effect and pounds /api/voice/hardware-detect into a
+  // 429 within seconds.
+  const onDetectedRef = useRef(onDetected);
+  const onDeviceChangeRef = useRef(onDeviceChange);
+  useEffect(() => {
+    onDetectedRef.current = onDetected;
+    onDeviceChangeRef.current = onDeviceChange;
+  }, [onDetected, onDeviceChange]);
+
   useEffect(() => {
     api
       .get<HardwareInfo>("/api/voice/hardware-detect")
       .then((data) => {
         setInfo(data);
+        setError(null);
         const defIn = findDefault(data.audio.input_devices);
         const defOut = findDefault(data.audio.output_devices);
         setSelectedInput(defIn);
         setSelectedOutput(defOut);
-        onDetected?.(data);
-        onDeviceChange?.({ input_device: defIn, output_device: defOut });
+        onDetectedRef.current?.(data);
+        onDeviceChangeRef.current?.({ input_device: defIn, output_device: defOut });
       })
       .catch((err) => {
         setError(String(err));
       })
       .finally(() => setLoading(false));
-  }, [onDetected, onDeviceChange]);
+  }, []);
 
   const handleInputChange = useCallback(
     (index: number) => {
@@ -119,7 +135,7 @@ function HardwareDetectionImpl({ onDetected, onDeviceChange }: HardwareDetection
     );
   }
 
-  if (error || !info) {
+  if (!info) {
     return (
       <div className="rounded-[var(--svx-radius-md)] bg-[var(--svx-color-error)]/10 px-4 py-3 text-xs text-[var(--svx-color-error)]">
         <AlertTriangleIcon className="mr-1.5 inline size-3.5" />
@@ -132,6 +148,15 @@ function HardwareDetectionImpl({ onDetected, onDeviceChange }: HardwareDetection
 
   return (
     <div className="space-y-4">
+      {/* Transient error — keep the wizard usable even when a later
+          refresh or adjacent call (e.g. /enable) returned 429. */}
+      {error && (
+        <div className="rounded-[var(--svx-radius-md)] bg-[var(--svx-color-error)]/10 px-3 py-2 text-[11px] text-[var(--svx-color-error)]">
+          <AlertTriangleIcon className="mr-1.5 inline size-3" />
+          {error}
+        </div>
+      )}
+
       {/* Hardware summary */}
       <div className="grid grid-cols-2 gap-3">
         <InfoChip icon={CpuIcon} label="CPU" value={`${hardware.cpu_cores} cores`} />
@@ -194,13 +219,49 @@ function HardwareDetectionImpl({ onDetected, onDeviceChange }: HardwareDetection
         </div>
       )}
 
-      {/* Recommended models */}
+      {/* Recommended models — real disk presence */}
+      <ModelsDiskStatusPanel fallbackTotalMb={total_download_mb} fallback={recommended_models} />
+    </div>
+  );
+}
+
+/**
+ * ModelsDiskStatusPanel — renders real on-disk model presence.
+ *
+ * Falls back to the static recommended list if the status endpoint
+ * fails, so the wizard still renders something useful on an offline
+ * dashboard. The green check is gated on ``installed === true``; a
+ * missing model renders a cloud icon and is enrolled into the
+ * "Download missing models" CTA at the bottom of the card.
+ */
+function ModelsDiskStatusPanel({
+  fallbackTotalMb,
+  fallback,
+}: {
+  fallbackTotalMb: number;
+  fallback: HardwareInfo["recommended_models"];
+}) {
+  const { status, statusLoading, statusError, download, downloading, startDownload } =
+    useVoiceModels();
+
+  if (statusLoading && !status) {
+    return (
+      <div className="flex items-center gap-2 rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] px-3 py-2.5 text-xs text-[var(--svx-color-text-tertiary)]">
+        <LoaderIcon className="size-3.5 animate-spin" />
+        <span>Checking installed models…</span>
+      </div>
+    );
+  }
+
+  if (statusError || !status) {
+    // Fallback: render the static tier list so the wizard isn't blank.
+    return (
       <div className="space-y-2">
         <h4 className="text-xs font-medium text-[var(--svx-color-text-secondary)]">
-          Recommended models ({total_download_mb} MB total)
+          Recommended models ({fallbackTotalMb} MB total)
         </h4>
         <div className="space-y-1.5">
-          {recommended_models.map((m) => (
+          {fallback.map((m) => (
             <div
               key={m.name}
               className="flex items-center justify-between rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] px-3 py-2"
@@ -213,20 +274,127 @@ function HardwareDetectionImpl({ onDetected, onDeviceChange }: HardwareDetection
                   {m.description}
                 </p>
               </div>
-              <div className="ml-3 flex shrink-0 items-center gap-2">
-                <span className="text-[11px] text-[var(--svx-color-text-tertiary)]">
-                  {m.size_mb} MB
-                </span>
-                {m.download_available ? (
-                  <CheckCircle2Icon className="size-3.5 text-[var(--svx-color-success)]" />
-                ) : (
-                  <span className="text-[10px] text-[var(--svx-color-warning)]">manual</span>
-                )}
-              </div>
+              <span className="ml-3 text-[11px] text-[var(--svx-color-text-tertiary)]">
+                {m.size_mb} MB
+              </span>
             </div>
           ))}
         </div>
       </div>
+    );
+  }
+
+  const progressPct =
+    download && download.total_models > 0
+      ? Math.min(100, Math.round((download.completed_models / download.total_models) * 100))
+      : 0;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <h4 className="text-xs font-medium text-[var(--svx-color-text-secondary)]">
+          Voice models
+        </h4>
+        {status.all_installed ? (
+          <span className="flex items-center gap-1 text-[10px] text-[var(--svx-color-success)]">
+            <CheckCircle2Icon className="size-3" /> All installed
+          </span>
+        ) : (
+          <span className="text-[10px] text-[var(--svx-color-warning)]">
+            {status.missing_count} missing · {status.missing_download_mb} MB
+          </span>
+        )}
+      </div>
+
+      <div className="space-y-1.5">
+        {status.models.map((m) => (
+          <div
+            key={m.name}
+            className="flex items-center justify-between rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] px-3 py-2"
+          >
+            <div className="min-w-0">
+              <span className="text-xs font-medium text-[var(--svx-color-text-primary)]">
+                {m.name}
+              </span>
+              <p className="text-[11px] text-[var(--svx-color-text-tertiary)]">
+                {m.description}
+              </p>
+            </div>
+            <div className="ml-3 flex shrink-0 items-center gap-2">
+              <span className="text-[11px] text-[var(--svx-color-text-tertiary)]">
+                {m.installed ? `${m.size_mb} MB` : `${m.expected_size_mb} MB`}
+              </span>
+              {m.installed ? (
+                <CheckCircle2Icon
+                  aria-label="installed"
+                  className="size-3.5 text-[var(--svx-color-success)]"
+                />
+              ) : m.download_available ? (
+                <CloudDownloadIcon
+                  aria-label="available to download"
+                  className="size-3.5 text-[var(--svx-color-text-tertiary)]"
+                />
+              ) : (
+                <span className="text-[10px] text-[var(--svx-color-warning)]">manual</span>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {!status.all_installed && (
+        <div className="space-y-1.5">
+          <button
+            type="button"
+            onClick={startDownload}
+            disabled={downloading}
+            className={cn(
+              "flex w-full items-center justify-center gap-2 rounded-[var(--svx-radius-md)] border px-3 py-2 text-xs font-medium transition-colors",
+              downloading
+                ? "cursor-not-allowed border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-elevated)] text-[var(--svx-color-text-tertiary)]"
+                : "border-[var(--svx-color-brand-primary)]/40 bg-[var(--svx-color-brand-primary)]/10 text-[var(--svx-color-brand-primary)] hover:bg-[var(--svx-color-brand-primary)]/20",
+            )}
+          >
+            {downloading ? (
+              <>
+                <LoaderIcon className="size-3.5 animate-spin" />
+                <span>
+                  Downloading{download?.current_model ? ` ${download.current_model}` : "…"}
+                  {" "}({download?.completed_models ?? 0}/{download?.total_models ?? 0})
+                </span>
+              </>
+            ) : (
+              <>
+                <DownloadIcon className="size-3.5" />
+                Download missing models ({status.missing_download_mb} MB)
+              </>
+            )}
+          </button>
+          {downloading && (
+            <div
+              role="progressbar"
+              aria-valuenow={progressPct}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              className="h-1 w-full overflow-hidden rounded-full bg-[var(--svx-color-bg-elevated)]"
+            >
+              <div
+                className="h-full bg-[var(--svx-color-brand-primary)] transition-[width]"
+                style={{ width: `${progressPct}%` }}
+              />
+            </div>
+          )}
+          {download?.status === "error" && (
+            <p
+              role="alert"
+              className="rounded-[var(--svx-radius-md)] bg-[var(--svx-color-error)]/10 px-3 py-1.5 text-[10px] text-[var(--svx-color-error)]"
+            >
+              <AlertTriangleIcon className="mr-1 inline size-3" />
+              {download.error ?? "Download failed"}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

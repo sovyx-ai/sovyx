@@ -35,6 +35,7 @@ import asyncio
 import contextlib
 import secrets
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
@@ -465,7 +466,21 @@ async def start_output_test(request: Request, body: TestOutputRequest) -> JSONRe
             HTTP_409_CONFLICT,
         )
 
-    tts = await _resolve_tts(request)
+    resolved = await _resolve_tts(request)
+    if isinstance(resolved, _MissingModels):
+        err_body = ErrorResponse(
+            code=ErrorCode.MODELS_NOT_DOWNLOADED,
+            detail=(
+                "TTS Python package is installed but model files are not on "
+                "disk. Download them via /api/voice/models/download."
+            ),
+            missing_models=resolved.names,
+        )
+        return JSONResponse(
+            err_body.model_dump(exclude_none=True),
+            status_code=HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    tts = resolved
     if tts is None:
         return _err_response(
             ErrorCode.TTS_UNAVAILABLE,
@@ -563,10 +578,23 @@ def _prune_expired_jobs(jobs: dict[str, _JobEntry], *, ttl_s: int) -> None:
         jobs.pop(jid, None)
 
 
+@dataclass(frozen=True, slots=True)
+class _MissingModels:
+    """Signal that TTS import works but model files are not on disk.
+
+    Surfaces to callers as :attr:`ErrorCode.MODELS_NOT_DOWNLOADED` so the
+    UI can render a "Download now" CTA instead of a generic
+    ``tts_unavailable`` dead-end.
+    """
+
+    names: list[str]
+
+
 async def _resolve_tts(
     request: Request,
-) -> Callable[[str, str | None], Awaitable[_SynthResult]] | None:
-    """Return an async ``(text, voice) -> _SynthResult`` synth, or None.
+) -> Callable[[str, str | None], Awaitable[_SynthResult]] | _MissingModels | None:
+    """Return an async ``(text, voice) -> _SynthResult`` synth, a
+    :class:`_MissingModels` marker, or ``None``.
 
     Resolution order:
 
@@ -581,6 +609,9 @@ async def _resolve_tts(
        re-initialise ONNX.
 
     Returning ``None`` surfaces as :attr:`ErrorCode.TTS_UNAVAILABLE`.
+    Returning a :class:`_MissingModels` surfaces as
+    :attr:`ErrorCode.MODELS_NOT_DOWNLOADED` with the missing names in
+    the response body.
     """
     override = getattr(request.app.state, "voice_test_tts_factory", None)
     if callable(override):
@@ -607,7 +638,7 @@ async def _resolve_tts(
 
 async def _resolve_standalone_tts(
     request: Request,
-) -> Callable[[str, str | None], Awaitable[_SynthResult]] | None:
+) -> Callable[[str, str | None], Awaitable[_SynthResult]] | _MissingModels | None:
     """Build + cache a standalone TTS engine for the wizard flow.
 
     The setup wizard is used *before* the pipeline is enabled, so the
@@ -615,12 +646,20 @@ async def _resolve_standalone_tts(
     logic (:mod:`sovyx.voice.factory._create_piper_tts` /
     ``_create_kokoro_tts``) without pulling the rest of the pipeline
     (VAD, STT, wake-word) — those are irrelevant to a one-shot TTS test.
+
+    The return type is three-valued:
+
+    - async callable  → TTS is ready to synthesise.
+    - ``_MissingModels(names)`` → Python package imports but model files
+      are absent; the UI should offer a download, not a "no TTS" error.
+    - ``None`` → neither TTS Python package is installed.
     """
     cached = getattr(request.app.state, "voice_test_cached_tts", None)
     if cached is not None:
         return cached  # type: ignore[no-any-return]
 
     from sovyx.voice.model_registry import detect_tts_engine, get_default_model_dir
+    from sovyx.voice.model_status import collect_missing_models
 
     tts_kind = await asyncio.to_thread(detect_tts_engine)
     if tts_kind == "none":
@@ -641,8 +680,14 @@ async def _resolve_standalone_tts(
             engine = PiperTTS(model_dir=model_dir / "piper")
         await engine.initialize()
     except FileNotFoundError:
-        logger.info("voice_test_tts_models_missing", tts_kind=tts_kind)
-        return None
+        missing = await asyncio.to_thread(collect_missing_models, model_dir)
+        names = [m.name for m in missing]
+        logger.info(
+            "voice_test_tts_models_missing",
+            tts_kind=tts_kind,
+            missing=names,
+        )
+        return _MissingModels(names=names)
     except Exception:  # noqa: BLE001
         logger.warning("voice_test_tts_init_failed", tts_kind=tts_kind, exc_info=True)
         return None

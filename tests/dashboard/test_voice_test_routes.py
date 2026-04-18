@@ -214,6 +214,48 @@ class TestStartOutput:
         body = resp.json()
         assert body["code"] == ErrorCode.TTS_UNAVAILABLE.value
 
+    def test_missing_models_returns_models_not_downloaded(
+        self,
+        client: TestClient,
+        app: FastAPI,
+        tmp_path,
+    ) -> None:
+        """Kokoro installed as a package but model files absent → structured 503.
+
+        Regression: the legacy behaviour returned a generic
+        ``tts_unavailable`` so the UI couldn't offer a download CTA.
+        The new contract is ``models_not_downloaded`` + a
+        ``missing_models`` list in the body.
+        """
+        # Kokoro Python package "installed" per detect_tts_engine, but
+        # the model_dir is an empty tmp — so KokoroTTS.initialize() will
+        # raise FileNotFoundError, surfacing as _MissingModels.
+        with (
+            patch(
+                "sovyx.voice.model_registry.detect_tts_engine",
+                return_value="kokoro",
+            ),
+            patch(
+                "sovyx.voice.model_registry.get_default_model_dir",
+                return_value=tmp_path,
+            ),
+            patch(
+                "sovyx.voice.model_status.get_default_model_dir",
+                return_value=tmp_path,
+            ),
+            patch("sovyx.voice.tts_kokoro.KokoroTTS") as MockKokoro,
+        ):
+            instance = MockKokoro.return_value
+            instance.initialize = AsyncMock(side_effect=FileNotFoundError("missing"))
+            resp = client.post("/api/voice/test/output", json={})
+
+        assert resp.status_code == 503  # noqa: PLR2004
+        body = resp.json()
+        assert body["code"] == ErrorCode.MODELS_NOT_DOWNLOADED.value
+        assert "missing_models" in body
+        assert isinstance(body["missing_models"], list)
+        assert len(body["missing_models"]) >= 1
+
     def test_sink_error_recorded_in_result(
         self,
         client: TestClient,

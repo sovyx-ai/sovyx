@@ -372,6 +372,7 @@ export const VoiceTestErrorCodeSchema = z.enum([
   "internal_error",
   "invalid_request",
   "tts_unavailable",
+  "models_not_downloaded",
   "job_not_found",
   "job_expired",
 ]);
@@ -464,4 +465,35 @@ export const VoiceTestErrorResponseSchema = z.object({
   ok: z.boolean(),
   code: VoiceTestErrorCodeSchema,
   detail: z.string(),
+  missing_models: z.array(z.string()).nullable().optional(),
+});
+
+// ── Voice models — disk status + background download ──
+
+export const VoiceModelDiskStatusSchema = z.object({
+  name: z.string(),
+  category: z.string(),
+  description: z.string(),
+  installed: z.boolean(),
+  path: z.string(),
+  size_mb: z.number(),
+  expected_size_mb: z.number(),
+  download_available: z.boolean(),
+});
+
+export const VoiceModelsStatusResponseSchema = z.object({
+  model_dir: z.string(),
+  all_installed: z.boolean(),
+  missing_count: z.number().int(),
+  missing_download_mb: z.number(),
+  models: z.array(VoiceModelDiskStatusSchema),
+});
+
+export const VoiceModelDownloadProgressSchema = z.object({
+  task_id: z.string(),
+  status: z.enum(["running", "done", "error"]),
+  total_models: z.number().int(),
+  completed_models: z.number().int(),
+  current_model: z.string().nullable(),
+  error: z.string().nullable(),
 });

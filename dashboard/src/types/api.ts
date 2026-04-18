@@ -618,6 +618,7 @@ export type VoiceTestErrorCode =
   | "internal_error"
   | "invalid_request"
   | "tts_unavailable"
+  | "models_not_downloaded"
   | "job_not_found"
   | "job_expired";
 
@@ -724,4 +725,42 @@ export interface VoiceTestErrorResponse {
   ok: false;
   code: VoiceTestErrorCode;
   detail: string;
+  /** Registry names the UI should offer for download. Only set when
+   * ``code === "models_not_downloaded"``. */
+  missing_models?: string[] | null;
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// Voice models — disk status + background download
+// ────────────────────────────────────────────────────────────────────────
+
+/** One model's on-disk presence as reported by /api/voice/models/status. */
+export interface VoiceModelDiskStatus {
+  name: string;
+  category: string;
+  description: string;
+  installed: boolean;
+  path: string;
+  size_mb: number;
+  expected_size_mb: number;
+  download_available: boolean;
+}
+
+export interface VoiceModelsStatusResponse {
+  model_dir: string;
+  all_installed: boolean;
+  missing_count: number;
+  missing_download_mb: number;
+  models: VoiceModelDiskStatus[];
+}
+
+export type VoiceModelDownloadStatus = "running" | "done" | "error";
+
+export interface VoiceModelDownloadProgress {
+  task_id: string;
+  status: VoiceModelDownloadStatus;
+  total_models: number;
+  completed_models: number;
+  current_model: string | null;
+  error: string | null;
 }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -10,15 +11,19 @@ from hypothesis import strategies as st
 
 from sovyx.engine.config import (
     APIConfig,
+    BrainTuningConfig,
     DatabaseConfig,
     EngineConfig,
     HardwareConfig,
     LLMDefaultsConfig,
     LLMProviderConfig,
+    LLMTuningConfig,
     LoggingConfig,
     RelayConfig,
+    SafetyTuningConfig,
     SocketConfig,
     TelemetryConfig,
+    VoiceTuningConfig,
     _deep_merge,
     _migrate_legacy_log_format,
     load_engine_config,
@@ -370,3 +375,51 @@ class TestLogFileResolution:
         yaml_file.write_text(f"log:\n  log_file: {explicit}\n")
         config = load_engine_config(config_path=yaml_file)
         assert config.log.log_file == explicit
+
+
+class TestTuningEnvOverrides:
+    """Direct instantiation of tuning configs must honour env overrides.
+
+    Subsystem modules (``voice.stt``, ``brain.learning``, ``llm.router``,
+    ``cognitive.audit_store`` etc.) capture tuning values at import time
+    with the pattern ``_CONST = _TuningCls().field``. That pattern is
+    the one documented in the CLAUDE.md anti-pattern #17 note and only
+    works if each ``*TuningConfig`` reads env vars on direct instantiation.
+
+    These tests guard against the regression where the tuning configs
+    were ``BaseModel`` (not ``BaseSettings``) and silently ignored
+    ``SOVYX_TUNING__*`` overrides — the default value always won,
+    regardless of what the operator set in the environment.
+    """
+
+    def test_voice_tuning_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SOVYX_TUNING__VOICE__TRANSCRIBE_TIMEOUT_SECONDS", "99.0")
+        assert VoiceTuningConfig().transcribe_timeout_seconds == 99.0
+
+    def test_brain_tuning_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SOVYX_TUNING__BRAIN__STAR_TOPOLOGY_K", "42")
+        assert BrainTuningConfig().star_topology_k == 42
+
+    def test_llm_tuning_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SOVYX_TUNING__LLM__SIMPLE_MAX_LENGTH", "123")
+        assert LLMTuningConfig().simple_max_length == 123
+
+    def test_safety_tuning_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SOVYX_TUNING__SAFETY__AUDIT_BUFFER_MAX", "77")
+        assert SafetyTuningConfig().audit_buffer_max == 77
+
+    def test_tuning_defaults_unchanged_without_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """No env set → defaults preserved (behaviour before the fix)."""
+        # Ensure no SOVYX_TUNING__* leaks from the caller's environment.
+        for key in list(os.environ):
+            if key.startswith("SOVYX_TUNING__"):
+                monkeypatch.delenv(key, raising=False)
+        assert VoiceTuningConfig().transcribe_timeout_seconds == 10.0
+        assert BrainTuningConfig().star_topology_k == 15
+        assert LLMTuningConfig().simple_max_length == 500
+        assert SafetyTuningConfig().audit_buffer_max == 100
+
+    def test_engine_config_tuning_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """``EngineConfig`` path still honours nested env overrides."""
+        monkeypatch.setenv("SOVYX_TUNING__VOICE__TRANSCRIBE_TIMEOUT_SECONDS", "42.0")
+        assert EngineConfig().tuning.voice.transcribe_timeout_seconds == 42.0

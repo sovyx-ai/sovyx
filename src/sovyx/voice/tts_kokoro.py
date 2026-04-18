@@ -124,8 +124,8 @@ class KokoroTTS(TTSEngine):
 
     Models:
     - ``kokoro-v1.0.onnx``: 300MB (full precision)
-    - ``kokoro-v1.0-q8.onnx``: ~80MB (quantized, minimal quality loss)
-    - ``voices-v1.0.bin``: ~15MB (all voice style vectors)
+    - ``kokoro-v1.0.int8.onnx``: ~88MB (int8 quantized, minimal quality loss)
+    - ``voices-v1.0.bin``: ~27MB (all voice style vectors)
 
     Performance:
     - ~3x real-time on Pi 5 (q8)

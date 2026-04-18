@@ -750,6 +750,65 @@ class TestAudioOutput:
             else:
                 sys.modules.pop("sounddevice", None)
 
+    @pytest.mark.asyncio
+    async def test_play_chunk_does_not_block_event_loop(self) -> None:
+        """``_play_chunk`` must delegate blocking ``sd.wait()`` to a thread.
+
+        Regression — audio.py used to call ``sd.play()`` + ``sd.wait()``
+        directly inside the ``async def``. ``sd.wait()`` blocks for the
+        full clip duration; every other coroutine (voice pipeline, bridge,
+        dashboard WS) stalled until playback finished. See CLAUDE.md
+        anti-pattern #14 and the Round 1 fix in
+        ``voice/pipeline/_output_queue.py``.
+        """
+        import threading
+
+        wait_done = threading.Event()
+
+        mock_sd = MagicMock()
+        mock_sd.play = MagicMock()
+        # Simulate a 300ms clip — blocking. If the call is NOT off the
+        # event loop, the ticker below will stall.
+        mock_sd.wait = MagicMock(
+            side_effect=lambda: wait_done.wait(timeout=1.0),
+        )
+
+        saved = sys.modules.get("sounddevice")
+        sys.modules["sounddevice"] = mock_sd
+        try:
+            out = AudioOutput()
+            audio = np.zeros(100, dtype=np.float32)
+
+            ticks = 0
+
+            async def tick() -> None:
+                nonlocal ticks
+                for _ in range(5):
+                    await asyncio.sleep(0.01)
+                    ticks += 1
+
+            play_task = asyncio.create_task(out._play_chunk(audio, 22050))
+            tick_task = asyncio.create_task(tick())
+
+            # The ticker must complete while playback is still "blocking"
+            # in its thread. If the event loop were blocked, ticks would
+            # stay at 0 and asyncio.wait would timeout.
+            await asyncio.wait_for(tick_task, timeout=0.5)
+            assert ticks == 5
+
+            # Release the fake blocking wait and let the play task finish.
+            wait_done.set()
+            await asyncio.wait_for(play_task, timeout=1.0)
+
+            mock_sd.play.assert_called_once()
+            mock_sd.wait.assert_called_once()
+        finally:
+            wait_done.set()
+            if saved is not None:
+                sys.modules["sounddevice"] = saved
+            else:
+                sys.modules.pop("sounddevice", None)
+
     def test_ducker_property(self) -> None:
         out = AudioOutput()
         assert isinstance(out.ducker, AudioDucker)

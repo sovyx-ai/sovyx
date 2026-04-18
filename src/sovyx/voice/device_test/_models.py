@@ -140,8 +140,14 @@ class TestOutputResult(BaseModel):
 
 
 class ErrorResponse(BaseModel):
-    """Shared HTTP error envelope for voice-test endpoints."""
+    """Shared HTTP error envelope for voice-test endpoints.
+
+    When ``code`` is :attr:`ErrorCode.MODELS_NOT_DOWNLOADED` the
+    ``missing_models`` field carries the registry names the UI should
+    offer for download — e.g. ``["kokoro-v1.0-int8", "kokoro-voices-v1.0"]``.
+    """
 
     ok: bool = False
     code: ErrorCode
     detail: str = Field(max_length=500)
+    missing_models: list[str] | None = None

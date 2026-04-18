@@ -51,20 +51,24 @@ export function VoiceStep({ onConfigured, onSkip }: VoiceStepProps) {
       }
     } catch (err) {
       if (err instanceof ApiError) {
-        try {
-          const body = JSON.parse(err.message) as EnableResult;
-          if (body.error === "missing_deps" && body.missing_deps) {
-            setMissingDeps({
-              deps: body.missing_deps,
-              command: body.install_command ?? "pip install sovyx[voice]",
-            });
-          } else if (typeof body.error === "string" && body.error.toLowerCase().includes("audio")) {
-            setError("No audio hardware detected. Connect a microphone and speakers.");
-          } else {
-            setError(body.error ?? "Failed to enable voice");
+        if (err.status === 429) {
+          setError("Too many requests — wait a moment and try again.");
+        } else {
+          try {
+            const body = JSON.parse(err.message) as EnableResult;
+            if (body.error === "missing_deps" && body.missing_deps) {
+              setMissingDeps({
+                deps: body.missing_deps,
+                command: body.install_command ?? "pip install sovyx[voice]",
+              });
+            } else if (typeof body.error === "string" && body.error.toLowerCase().includes("audio")) {
+              setError("No audio hardware detected. Connect a microphone and speakers.");
+            } else {
+              setError(body.error ?? "Failed to enable voice");
+            }
+          } catch {
+            setError(err.message || "Failed to enable voice pipeline");
           }
-        } catch {
-          setError(err.message || "Failed to enable voice pipeline");
         }
       } else {
         setError("Failed to enable voice pipeline");
@@ -80,6 +84,9 @@ export function VoiceStep({ onConfigured, onSkip }: VoiceStepProps) {
     setTimeout(() => setCopied(false), 2000);
   }, []);
 
+  const handleDetected = useCallback(() => setDetected(true), []);
+  const handleDeviceChange = useCallback((d: SelectedDevices) => setDevices(d), []);
+
   return (
     <div className="space-y-6">
       <div>
@@ -91,7 +98,7 @@ export function VoiceStep({ onConfigured, onSkip }: VoiceStepProps) {
         </p>
       </div>
 
-      <HardwareDetection onDetected={() => setDetected(true)} onDeviceChange={setDevices} />
+      <HardwareDetection onDetected={handleDetected} onDeviceChange={handleDeviceChange} />
 
       {/* Success state */}
       {enabled && (

@@ -374,7 +374,9 @@ class TestMoonshineSTTTranscribe:
         assert result.text == "hello world"
         assert result.language == "en"
         assert result.confidence == 0.9
-        assert result.duration_ms > 0
+        # duration_ms can be 0.0 on very fast hardware where the mocked
+        # transcribe returns sub-microsecond — only assert non-negative.
+        assert result.duration_ms >= 0
 
     @pytest.mark.asyncio
     async def test_transcribe_strips_whitespace(self) -> None:

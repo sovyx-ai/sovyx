@@ -34,7 +34,13 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      "/api": "http://localhost:7777",
+      // `ws: true` is required so dev-mode WebSocket endpoints under /api
+      // (e.g. /api/voice/test/input live meter) are upgraded correctly —
+      // without it, browsers get a stalled connection and no level frames.
+      "/api": {
+        target: "http://localhost:7777",
+        ws: true,
+      },
       "/ws": {
         target: "ws://localhost:7777",
         ws: true,

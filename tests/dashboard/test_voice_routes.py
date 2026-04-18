@@ -637,3 +637,127 @@ class TestDisableVoice:
         assert "STTEngine" in deregistered
         assert "TTSEngine" in deregistered
         assert "WakeWordDetector" in deregistered
+
+
+class TestModelsDiskStatusEndpoint:
+    """GET /api/voice/models/status — disk-truth, not static metadata."""
+
+    def test_returns_all_missing_for_empty_tmpdir(self, client: TestClient, tmp_path) -> None:
+        with patch(
+            "sovyx.voice.model_status.get_default_model_dir",
+            return_value=tmp_path,
+        ):
+            resp = client.get("/api/voice/models/status")
+
+        assert resp.status_code == 200  # noqa: PLR2004
+        data = resp.json()
+        assert data["all_installed"] is False
+        assert data["missing_count"] >= 1
+        assert isinstance(data["models"], list)
+        # Green check must NOT be reported for files that don't exist.
+        for m in data["models"]:
+            if m["name"].startswith("kokoro") or m["name"] == "silero-vad-v5":
+                assert m["installed"] is False
+
+    def test_reports_installed_kokoro_when_files_present(
+        self, client: TestClient, tmp_path
+    ) -> None:
+        (tmp_path / "kokoro").mkdir()
+        (tmp_path / "kokoro" / "kokoro-v1.0.int8.onnx").write_bytes(b"X" * 1024)
+        (tmp_path / "kokoro" / "voices-v1.0.bin").write_bytes(b"X" * 512)
+
+        with patch(
+            "sovyx.voice.model_status.get_default_model_dir",
+            return_value=tmp_path,
+        ):
+            resp = client.get("/api/voice/models/status")
+
+        data = resp.json()
+        kokoro = next(m for m in data["models"] if m["name"] == "kokoro-v1.0-int8")
+        voices = next(m for m in data["models"] if m["name"] == "kokoro-voices-v1.0")
+        assert kokoro["installed"] is True
+        assert voices["installed"] is True
+
+
+class TestModelsDownloadEndpoints:
+    """POST/GET /api/voice/models/download — background task orchestration."""
+
+    def test_start_and_poll_flow_when_all_installed(self, client: TestClient, tmp_path) -> None:
+        # Pre-populate every expected file so the endpoint returns
+        # ``status: "done"`` immediately without spawning a download.
+        (tmp_path / "silero_vad.onnx").write_bytes(b"X")
+        (tmp_path / "kokoro").mkdir()
+        (tmp_path / "kokoro" / "kokoro-v1.0.int8.onnx").write_bytes(b"X")
+        (tmp_path / "kokoro" / "voices-v1.0.bin").write_bytes(b"X")
+
+        with patch(
+            "sovyx.voice.model_status.get_default_model_dir",
+            return_value=tmp_path,
+        ):
+            post = client.post("/api/voice/models/download")
+            assert post.status_code == 200  # noqa: PLR2004
+            started = post.json()
+            assert started["status"] == "done"
+            task_id = started["task_id"]
+
+            poll = client.get(f"/api/voice/models/download/{task_id}")
+            assert poll.status_code == 200  # noqa: PLR2004
+            assert poll.json()["status"] == "done"
+
+    def test_poll_unknown_task_returns_404(self, client: TestClient) -> None:
+        resp = client.get("/api/voice/models/download/deadbeefdeadbeef")
+        assert resp.status_code == 404  # noqa: PLR2004
+        assert resp.json()["error"] == "task_not_found"
+
+    def test_download_invokes_ensure_helpers(self, client: TestClient, tmp_path) -> None:
+        """The POST endpoint drives ensure_silero_vad + ensure_kokoro_tts."""
+        silero_called = {"count": 0}
+        kokoro_called = {"count": 0}
+
+        async def fake_silero(model_dir):
+            silero_called["count"] += 1
+            return model_dir / "silero_vad.onnx"
+
+        async def fake_kokoro(model_dir):
+            kokoro_called["count"] += 1
+            return model_dir / "kokoro"
+
+        with (
+            patch(
+                "sovyx.voice.model_status.get_default_model_dir",
+                return_value=tmp_path,
+            ),
+            patch(
+                "sovyx.voice.model_status.ensure_silero_vad",
+                side_effect=fake_silero,
+            ),
+            patch(
+                "sovyx.voice.model_status.ensure_kokoro_tts",
+                side_effect=fake_kokoro,
+            ),
+        ):
+            resp = client.post("/api/voice/models/download")
+            assert resp.status_code == 200  # noqa: PLR2004
+            task_id = resp.json()["task_id"]
+
+            # Drain the background task — poll until non-running.
+            import time
+
+            deadline = time.time() + 5.0
+            final: dict = {}
+            while time.time() < deadline:
+                poll = client.get(f"/api/voice/models/download/{task_id}")
+                final = poll.json()
+                if final.get("status") != "running":
+                    break
+                time.sleep(0.05)
+
+            assert final.get("status") == "done"
+            assert silero_called["count"] == 1
+            assert kokoro_called["count"] == 1
+
+    def test_download_requires_auth(self) -> None:
+        app = create_app(token=_TOKEN)
+        c = TestClient(app)
+        resp = c.post("/api/voice/models/download")
+        assert resp.status_code == 401  # noqa: PLR2004

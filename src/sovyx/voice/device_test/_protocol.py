@@ -54,6 +54,7 @@ class ErrorCode(StrEnum):
     INTERNAL_ERROR = "internal_error"
     INVALID_REQUEST = "invalid_request"
     TTS_UNAVAILABLE = "tts_unavailable"
+    MODELS_NOT_DOWNLOADED = "models_not_downloaded"
     JOB_NOT_FOUND = "job_not_found"
     JOB_EXPIRED = "job_expired"
 

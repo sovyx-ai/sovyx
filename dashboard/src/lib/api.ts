@@ -85,12 +85,34 @@ export function clearToken(): void {
 }
 
 export class ApiError extends Error {
+  /**
+   * Parsed response body, when the server returned JSON.
+   *
+   * FastAPI error handlers return structured bodies like
+   * ``{ "code": "models_not_downloaded", "detail": "...", ... }``.
+   * Callers read ``err.body?.code`` to branch on machine-readable
+   * error codes (e.g. the TtsTestButton's "Download voice models"
+   * CTA). Left as ``null`` if the body wasn't valid JSON (e.g.
+   * plain-text 502 from a proxy).
+   */
+  public readonly body: Record<string, unknown> | null;
+
   constructor(
     public status: number,
     message: string,
   ) {
     super(message);
     this.name = "ApiError";
+    let parsed: Record<string, unknown> | null = null;
+    try {
+      const candidate: unknown = JSON.parse(message);
+      if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
+        parsed = candidate as Record<string, unknown>;
+      }
+    } catch {
+      // Not JSON — leave body as null.
+    }
+    this.body = parsed;
   }
 }
 

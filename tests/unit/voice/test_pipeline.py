@@ -10,6 +10,7 @@ Ref: SPE-010 §8, §10, §13 — full state machine + barge-in + timing.
 from __future__ import annotations
 
 import asyncio
+import threading
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1117,6 +1118,76 @@ class TestAudioOutputQueueEdgeCases:
             await _play_audio(chunk)
         mock_sd.play.assert_called_once()
         mock_sd.wait.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_play_audio_does_not_block_event_loop(self) -> None:
+        """Regression: a blocking sd.wait() MUST run in a worker thread.
+
+        Historic bug: ``_play_audio`` called ``sd.play()`` + ``sd.wait()``
+        directly from the async body, so a multi-second TTS chunk stalled
+        every other coroutine — dashboard WS frames, voice mic capture,
+        HTTP requests — for the full playback. Offload to to_thread and
+        verify a concurrent task gets to run while "playback" is active.
+        """
+        from sovyx.voice.pipeline import _play_audio
+
+        play_started = asyncio.Event()
+        release_play = threading.Event()
+        concurrent_ticks = 0
+
+        def _blocking_wait() -> None:
+            play_started.set()
+            # Block the worker thread until the async side has been able
+            # to run some other work. If the event loop was also blocked,
+            # the asyncio.Event below would never be set and we'd deadlock.
+            release_play.wait(timeout=1.0)
+
+        mock_sd = MagicMock()
+        mock_sd.play = MagicMock()
+        mock_sd.wait = MagicMock(side_effect=_blocking_wait)
+
+        async def _ticker() -> None:
+            nonlocal concurrent_ticks
+            await play_started.wait()
+            # If the event loop is pinned by sd.wait(), this body never runs.
+            for _ in range(3):
+                concurrent_ticks += 1
+                await asyncio.sleep(0)
+            release_play.set()
+
+        chunk = _audio_chunk(10)
+        with patch.dict("sys.modules", {"sounddevice": mock_sd}):
+            await asyncio.gather(_play_audio(chunk), _ticker())
+
+        assert concurrent_ticks == 3, (
+            "event loop was blocked during sd.wait(); _play_audio must use to_thread"
+        )
+
+
+class TestHandleSpeakingBargeInAsync:
+    """Regression: `_handle_speaking` MUST use the async barge-in check.
+
+    ``BargeInDetector.check_frame`` runs ONNX VAD inference synchronously.
+    Calling it from inside an ``async def`` coroutine blocks the event
+    loop on EVERY mic frame while TTS is playing — capture falls behind,
+    dashboard WS stalls, and barge-in itself is detected late. The
+    ``check_frame_async`` variant offloads to ``asyncio.to_thread``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_orchestrator_awaits_check_frame_async(self) -> None:
+        import inspect
+
+        from sovyx.voice.pipeline import VoicePipeline
+
+        src = inspect.getsource(VoicePipeline._handle_speaking)
+        # The sync variant must not be used in this hot path.
+        assert "self._barge_in.check_frame(" not in src, (
+            "`_handle_speaking` must not call the sync `check_frame` — use `check_frame_async`"
+        )
+        assert "check_frame_async" in src, (
+            "`_handle_speaking` must await `check_frame_async` to avoid blocking the event loop"
+        )
 
     @pytest.mark.asyncio
     async def test_play_audio_import_error_zero_duration(self) -> None:

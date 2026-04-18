@@ -102,13 +102,20 @@ class LLMDefaultsConfig(BaseModel):
     )
 
 
-class SafetyTuningConfig(BaseModel):
+class SafetyTuningConfig(BaseSettings):
     """Tunable thresholds for the cognitive safety subsystem.
 
     All defaults match the previously hardcoded module-level constants —
     overriding via env vars (``SOVYX_TUNING__SAFETY__*``) or
     ``system.yaml`` is purely additive (zero behaviour change at default).
+
+    Inherits from ``BaseSettings`` so that direct instantiation
+    (``SafetyTuningConfig()``) honours ``SOVYX_TUNING__SAFETY__*`` env
+    overrides — the module-level ``_CONST = _Tuning().field`` pattern
+    used by subsystem modules relies on this.
     """
+
+    model_config = SettingsConfigDict(env_prefix="SOVYX_TUNING__SAFETY__", extra="ignore")
 
     audit_flush_interval_seconds: float = 10.0
     audit_buffer_max: int = 100
@@ -116,8 +123,13 @@ class SafetyTuningConfig(BaseModel):
     notification_debounce_seconds: float = 900.0  # 15 minutes
 
 
-class BrainTuningConfig(BaseModel):
-    """Tunable thresholds for the Brain memory subsystem."""
+class BrainTuningConfig(BaseSettings):
+    """Tunable thresholds for the Brain memory subsystem.
+
+    See :class:`SafetyTuningConfig` for the ``BaseSettings`` rationale.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="SOVYX_TUNING__BRAIN__", extra="ignore")
 
     star_topology_k: int = 15
     novelty_high_similarity: float = 0.85  # >= -> novelty 0.05 (near-dup)
@@ -127,8 +139,13 @@ class BrainTuningConfig(BaseModel):
     model_download_cooldown_seconds: int = 900  # 15 minutes
 
 
-class VoiceTuningConfig(BaseModel):
-    """Tunable thresholds for the voice pipeline + STT/TTS engines."""
+class VoiceTuningConfig(BaseSettings):
+    """Tunable thresholds for the voice pipeline + STT/TTS engines.
+
+    See :class:`SafetyTuningConfig` for the ``BaseSettings`` rationale.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="SOVYX_TUNING__VOICE__", extra="ignore")
 
     transcribe_timeout_seconds: float = 10.0
     streaming_drain_seconds: float = 0.5
@@ -154,11 +171,14 @@ class VoiceTuningConfig(BaseModel):
     device_test_output_job_ttl_seconds: int = 60  # job cleanup
 
 
-class LLMTuningConfig(BaseModel):
+class LLMTuningConfig(BaseSettings):
     """Tunable thresholds for the LLM router complexity classifier.
 
     Overridable via ``SOVYX_TUNING__LLM__SIMPLE_MAX_LENGTH=300`` etc.
+    See :class:`SafetyTuningConfig` for the ``BaseSettings`` rationale.
     """
+
+    model_config = SettingsConfigDict(env_prefix="SOVYX_TUNING__LLM__", extra="ignore")
 
     simple_max_length: int = 500
     simple_max_turns: int = 3
