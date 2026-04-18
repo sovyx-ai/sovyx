@@ -63,9 +63,27 @@ export interface SelectedDevices {
   output_device: number | null;
 }
 
+/**
+ * Voice selection surfaced by the in-wizard picker. ``language`` is a
+ * catalog-canonical code (``pt-br``, ``en-us``, …) and ``voice`` is a
+ * Kokoro voice id (``pf_dora``, ``af_heart``, …) or ``null`` while the
+ * catalog is still loading.
+ */
+export interface SelectedVoice {
+  language: string | null;
+  voice: string | null;
+}
+
 interface HardwareDetectionProps {
   onDetected?: (info: HardwareInfo) => void;
   onDeviceChange?: (devices: SelectedDevices) => void;
+  /**
+   * Fired whenever the user (or the initial auto-seed) changes the
+   * voice-test language or voice. Parents that persist the selection
+   * (``VoiceStep`` → ``POST /api/voice/enable``) listen to this so the
+   * pick flows end-to-end instead of dying inside the picker.
+   */
+  onVoiceChange?: (selection: SelectedVoice) => void;
   /**
    * UI language picked earlier in onboarding (typically from the
    * personality step or ``navigator.language``). Used as the initial
@@ -83,6 +101,7 @@ function findDefault(devices: AudioDevice[]): number | null {
 function HardwareDetectionImpl({
   onDetected,
   onDeviceChange,
+  onVoiceChange,
   initialLanguage,
 }: HardwareDetectionProps) {
   const [loading, setLoading] = useState(true);
@@ -99,28 +118,45 @@ function HardwareDetectionImpl({
   const [selectedLanguage, setSelectedLanguage] = useState<string | null>(null);
   const [selectedVoice, setSelectedVoice] = useState<string | null>(null);
 
+  // Stash the voice-change callback in a ref so the seed effect stays
+  // `[catalog, initialLanguage, selectedLanguage]`-deps — parents that
+  // pass an inline callback would otherwise re-fire the effect and re-
+  // emit the seed on every render.
+  const onVoiceChangeRef = useRef(onVoiceChange);
+  useEffect(() => {
+    onVoiceChangeRef.current = onVoiceChange;
+  }, [onVoiceChange]);
+
   useEffect(() => {
     if (!catalog.catalog || selectedLanguage !== null) return;
     const canon = catalog.normaliseLanguage(initialLanguage ?? "en");
     const fallback = catalog.catalog.supported_languages[0] ?? null;
     const lang = canon ?? fallback;
     setSelectedLanguage(lang);
-    if (lang !== null) {
-      setSelectedVoice(catalog.recommendedFor(lang));
+    const recommended = lang !== null ? catalog.recommendedFor(lang) : null;
+    if (recommended !== null) {
+      setSelectedVoice(recommended);
     }
+    onVoiceChangeRef.current?.({ language: lang, voice: recommended });
   }, [catalog, initialLanguage, selectedLanguage]);
 
   const handleLanguageChange = useCallback(
     (lang: string) => {
       setSelectedLanguage(lang);
-      setSelectedVoice(catalog.recommendedFor(lang));
+      const recommended = catalog.recommendedFor(lang);
+      setSelectedVoice(recommended);
+      onVoiceChangeRef.current?.({ language: lang, voice: recommended });
     },
     [catalog],
   );
 
-  const handleVoiceChange = useCallback((voice: string) => {
-    setSelectedVoice(voice);
-  }, []);
+  const handleVoiceChange = useCallback(
+    (voice: string) => {
+      setSelectedVoice(voice);
+      onVoiceChangeRef.current?.({ language: selectedLanguage, voice });
+    },
+    [selectedLanguage],
+  );
 
   // Stash callbacks in refs so the fetch effect can stay `[]`-deps.
   // Without this, callers that pass inline callbacks (the common case —

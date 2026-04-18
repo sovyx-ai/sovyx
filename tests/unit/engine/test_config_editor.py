@@ -84,3 +84,52 @@ class TestReadSection:
     async def test_missing_file_returns_empty(self, editor: ConfigEditor, tmp_path: Path) -> None:
         result = await editor.read_section(tmp_path / "nope.yaml", "any.section")
         assert result == {}
+
+
+class TestSetScalar:
+    """ConfigEditor.set_scalar writes root scalars without mangling siblings.
+
+    ``set_scalar`` was added to support top-level ``MindConfig`` scalar
+    fields (``voice_id``, ``language``) that ``update_section`` can't
+    express — the latter always merges into a dict at the leaf.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_creates_file_if_missing(self, editor: ConfigEditor, tmp_path: Path) -> None:
+        yaml_path = tmp_path / "mind.yaml"
+        await editor.set_scalar(yaml_path, "voice_id", "pf_dora")
+        content = yaml_path.read_text()
+        assert "voice_id: pf_dora" in content
+
+    @pytest.mark.asyncio()
+    async def test_updates_existing_scalar(self, editor: ConfigEditor, tmp_path: Path) -> None:
+        yaml_path = tmp_path / "mind.yaml"
+        yaml_path.write_text("name: my-mind\nvoice_id: af_bella\nlanguage: en\n")
+        await editor.set_scalar(yaml_path, "voice_id", "pf_dora")
+        content = yaml_path.read_text()
+        assert "voice_id: pf_dora" in content
+        assert "af_bella" not in content
+        # Siblings must survive the round-trip untouched.
+        assert "name: my-mind" in content
+        assert "language: en" in content
+
+    @pytest.mark.asyncio()
+    async def test_preserves_comments(self, editor: ConfigEditor, tmp_path: Path) -> None:
+        yaml_path = tmp_path / "mind.yaml"
+        yaml_path.write_text(
+            "# Main config\nname: my-mind  # keep\nvoice_id: af_bella\n",
+        )
+        await editor.set_scalar(yaml_path, "voice_id", "pf_dora")
+        content = yaml_path.read_text()
+        assert "# Main config" in content
+        assert "# keep" in content
+        assert "voice_id: pf_dora" in content
+
+    @pytest.mark.asyncio()
+    async def test_nested_dotted_key(self, editor: ConfigEditor, tmp_path: Path) -> None:
+        yaml_path = tmp_path / "mind.yaml"
+        yaml_path.write_text("llm:\n  model: gpt-5\n")
+        await editor.set_scalar(yaml_path, "llm.streaming", True)
+        content = yaml_path.read_text()
+        assert "streaming: true" in content
+        assert "model: gpt-5" in content

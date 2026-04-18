@@ -9,7 +9,11 @@ import {
 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { HardwareDetection, type SelectedDevices } from "@/components/setup-wizard";
+import {
+  HardwareDetection,
+  type SelectedDevices,
+  type SelectedVoice,
+} from "@/components/setup-wizard";
 
 interface VoiceStepProps {
   onConfigured: () => void;
@@ -46,13 +50,24 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
     input_device: null,
     output_device: null,
   });
+  const [voiceSelection, setVoiceSelection] = useState<SelectedVoice>({
+    language: null,
+    voice: null,
+  });
 
   const handleEnable = useCallback(async () => {
     setEnabling(true);
     setMissingDeps(null);
     setError(null);
     try {
-      const result = await api.post<EnableResult>("/api/voice/enable", devices);
+      // Only send voice_id / language when the picker actually resolved —
+      // the backend validates against the catalog, so passing a stale
+      // `null` dropdown value would 400. The effective language still
+      // falls back to MindConfig on the server if we omit it here.
+      const body: Record<string, unknown> = { ...devices };
+      if (voiceSelection.voice) body.voice_id = voiceSelection.voice;
+      if (voiceSelection.language) body.language = voiceSelection.language;
+      const result = await api.post<EnableResult>("/api/voice/enable", body);
       if (result.ok) {
         setEnabled(true);
       }
@@ -83,7 +98,7 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
     } finally {
       setEnabling(false);
     }
-  }, [devices]);
+  }, [devices, voiceSelection]);
 
   const handleCopy = useCallback((cmd: string) => {
     void navigator.clipboard.writeText(cmd);
@@ -93,6 +108,7 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
 
   const handleDetected = useCallback(() => setDetected(true), []);
   const handleDeviceChange = useCallback((d: SelectedDevices) => setDevices(d), []);
+  const handleVoiceChange = useCallback((v: SelectedVoice) => setVoiceSelection(v), []);
 
   return (
     <div className="space-y-6">
@@ -108,6 +124,7 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
       <HardwareDetection
         onDetected={handleDetected}
         onDeviceChange={handleDeviceChange}
+        onVoiceChange={handleVoiceChange}
         initialLanguage={language}
       />
 

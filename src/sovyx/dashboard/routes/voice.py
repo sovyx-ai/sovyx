@@ -289,7 +289,7 @@ async def enable_voice(request: Request) -> JSONResponse:
         6. Persist to mind.yaml.
         7. Return active status.
     """
-    # 0. Parse optional device selection
+    # 0. Parse optional device selection + voice/language override
     try:
         body = await request.json()
     except (ValueError, UnicodeDecodeError):
@@ -300,6 +300,39 @@ async def enable_voice(request: Request) -> JSONResponse:
     raw_output = body.get("output_device")
     input_device: int | None = raw_input if isinstance(raw_input, int) else None
     output_device: int | None = raw_output if isinstance(raw_output, int) else None
+
+    # voice_id + language come from the wizard's VoiceTestPicker. When
+    # either is present, validate it against the catalog BEFORE we spin
+    # up any models — a bad id here would otherwise surface as an opaque
+    # ONNX error at first synthesis.
+    raw_voice = body.get("voice_id")
+    raw_language = body.get("language")
+    request_voice_id: str | None = raw_voice if isinstance(raw_voice, str) and raw_voice else None
+    request_language: str | None = (
+        raw_language if isinstance(raw_language, str) and raw_language else None
+    )
+
+    if request_voice_id is not None or request_language is not None:
+        from sovyx.voice import voice_catalog
+
+        if request_voice_id is not None and voice_catalog.voice_info(request_voice_id) is None:
+            return JSONResponse(
+                {"ok": False, "error": f"Unknown voice id: {request_voice_id}"},
+                status_code=400,
+            )
+        if request_language is not None:
+            canonical = voice_catalog.normalize_language(request_language)
+            if canonical not in voice_catalog.SUPPORTED_LANGUAGES:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": (
+                            f"Unsupported language: {request_language!r}. "
+                            f"Supported: {sorted(voice_catalog.SUPPORTED_LANGUAGES)}"
+                        ),
+                    },
+                    status_code=400,
+                )
 
     # 1. Check deps
     from sovyx.voice.model_registry import check_voice_deps, detect_tts_engine
@@ -406,9 +439,10 @@ async def enable_voice(request: Request) -> JSONResponse:
     on_perception_cb = _on_perception if cognitive_loop is not None else None
 
     # Resolve per-mind language + voice so the pipeline TTS matches the
-    # user's personality picks. Falls back to English defaults when the
-    # dashboard is in "no mind loaded" mode (e.g. first boot before
-    # onboarding writes mind.yaml).
+    # user's personality picks. Precedence: request body (wizard live
+    # pick) > MindConfig (persisted from a previous /enable) > English
+    # defaults. The dashboard-only "no mind loaded" branch keeps the
+    # pipeline bootable on a fresh install before mind.yaml exists.
     mind_language = "en"
     mind_voice_id = ""
     mind_config_obj = getattr(request.app.state, "mind_config", None)
@@ -416,12 +450,15 @@ async def enable_voice(request: Request) -> JSONResponse:
         mind_language = getattr(mind_config_obj, "language", "en") or "en"
         mind_voice_id = getattr(mind_config_obj, "voice_id", "") or ""
 
+    effective_language = request_language or mind_language
+    effective_voice_id = request_voice_id if request_voice_id is not None else mind_voice_id
+
     try:
         bundle = await create_voice_pipeline(
             event_bus=event_bus,
             on_perception=on_perception_cb,
-            language=mind_language,
-            voice_id=mind_voice_id,
+            language=effective_language,
+            voice_id=effective_voice_id,
             wake_word_enabled=False,
             mind_id=getattr(request.app.state, "mind_id", "default"),
             input_device=input_device,
@@ -498,6 +535,17 @@ async def enable_voice(request: Request) -> JSONResponse:
             registry.register_instance(VoiceCognitiveBridge, bridge_ref[0])
 
     # 6. Persist config
+    #
+    # Two writes happen here:
+    #
+    # * ``voice:`` section — legacy device metadata (kept for UI state).
+    # * top-level ``voice_id`` / ``language`` — the real MindConfig
+    #   fields consumed by the factory on next boot. Without this the
+    #   wizard's voice pick evaporates when the daemon restarts.
+    #
+    # We also update ``app.state.mind_config`` in place so the next
+    # ``/enable`` (or any route that reads ``mind_config.voice_id``) sees
+    # the new values without needing a restart.
     mind_yaml_path = getattr(request.app.state, "mind_yaml_path", None)
     if mind_yaml_path is not None:
         from pathlib import Path
@@ -512,7 +560,25 @@ async def enable_voice(request: Request) -> JSONResponse:
             voice_cfg["output_device"] = output_device
         await editor.update_section(Path(mind_yaml_path), "voice", voice_cfg)
 
-    logger.info("voice_pipeline_hot_enabled", tts=tts_engine)
+        if request_voice_id is not None:
+            await editor.set_scalar(Path(mind_yaml_path), "voice_id", request_voice_id)
+        if request_language is not None:
+            await editor.set_scalar(Path(mind_yaml_path), "language", request_language)
+
+    if mind_config_obj is not None:
+        if request_voice_id is not None:
+            with contextlib.suppress(Exception):
+                mind_config_obj.voice_id = request_voice_id
+        if request_language is not None:
+            with contextlib.suppress(Exception):
+                mind_config_obj.language = request_language
+
+    logger.info(
+        "voice_pipeline_hot_enabled",
+        tts=tts_engine,
+        language=effective_language,
+        voice_id=effective_voice_id or "<auto>",
+    )
     return JSONResponse({"ok": True, "status": "active", "tts_engine": tts_engine})
 
 

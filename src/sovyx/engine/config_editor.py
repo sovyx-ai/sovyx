@@ -75,6 +75,30 @@ class ConfigEditor:
         resolved = path.expanduser().resolve()
         return await asyncio.to_thread(self._read_section, resolved, section)
 
+    async def set_scalar(
+        self,
+        path: Path,
+        key: str,
+        value: Any,  # noqa: ANN401  -- any YAML scalar (str/int/float/bool/None)
+    ) -> None:
+        """Set a top-level (or dotted) scalar field in a YAML file.
+
+        Unlike :meth:`update_section`, this sets the *leaf* directly to
+        ``value`` rather than merging into a dict at ``leaf``. Use this
+        for pydantic scalar fields (``voice_id``, ``language``, …) that
+        live at the root of ``mind.yaml``.
+
+        Args:
+            path: Path to the YAML file.
+            key: Dotted key path (usually a bare field name for root scalars).
+            value: Scalar value to write (str / int / float / bool / None).
+        """
+        resolved = path.expanduser().resolve()
+        async with self._locks[str(resolved)]:
+            await asyncio.to_thread(self._write_scalar, resolved, key, value)
+
+        logger.info("config_scalar_updated", path=str(resolved), key=key)
+
     @staticmethod
     def _write_section(path: Path, section: str, data: dict[str, Any]) -> None:
         if path.exists():
@@ -97,6 +121,41 @@ class ConfigEditor:
             node[leaf] = {}
         for k, v in data.items():
             node[leaf][k] = v
+
+        dir_path = path.parent
+        dir_path.mkdir(parents=True, exist_ok=True)
+
+        import os
+
+        fd, tmp_path = tempfile.mkstemp(dir=str(dir_path), suffix=".yaml.tmp", prefix=".sovyx_")
+        os.close(fd)
+        tmp = Path(tmp_path)
+        try:
+            with tmp.open("w", encoding="utf-8") as f:
+                _yaml.dump(doc, f)
+            tmp.replace(path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
+
+    @staticmethod
+    def _write_scalar(path: Path, key: str, value: Any) -> None:  # noqa: ANN401
+
+        if path.exists():
+            with path.open("r", encoding="utf-8") as f:
+                doc = _yaml.load(f)
+            if doc is None:
+                doc = {}
+        else:
+            doc = {}
+
+        keys = key.split(".")
+        node = doc
+        for k in keys[:-1]:
+            if k not in node or not isinstance(node[k], dict):
+                node[k] = {}
+            node = node[k]
+        node[keys[-1]] = value
 
         dir_path = path.parent
         dir_path.mkdir(parents=True, exist_ok=True)

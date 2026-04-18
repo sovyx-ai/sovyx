@@ -264,5 +264,35 @@ describe("HardwareDetection", () => {
       ) as HTMLOptionElement[];
       expect(options.map((o) => o.value).sort()).toEqual(["pf_dora", "pm_alex"]);
     });
+
+    it("emits onVoiceChange on seed and on every dropdown change", async () => {
+      // This is the load-bearing contract for VoiceStep → /api/voice/enable.
+      // Without the callback the wizard's voice pick never reaches the
+      // backend and mind.yaml ends up with a stale voice_id.
+      stubAll();
+      const onVoiceChange = vi.fn();
+      render(
+        <HardwareDetection
+          initialLanguage="pt"
+          onVoiceChange={onVoiceChange}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(onVoiceChange).toHaveBeenCalledWith({
+          language: "pt-br",
+          voice: "pf_dora",
+        });
+      });
+
+      const languageSelect = await screen.findByLabelText(/voice-test language/i);
+      fireEvent.change(languageSelect, { target: { value: "ja" } });
+      await waitFor(() => {
+        expect(onVoiceChange).toHaveBeenLastCalledWith({
+          language: "ja",
+          voice: "jf_alpha",
+        });
+      });
+    });
   });
 });

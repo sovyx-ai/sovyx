@@ -242,6 +242,11 @@ export function useAudioLevelStream(
       if (terminal) {
         const mapped = codeFromCloseReason(ev.reason);
         if (mapped) setErrorCode(mapped);
+        // Always surface the server's close.reason when we have one —
+        // the MicTestPanel prefers ``errorDetail`` and the default
+        // "Mic test failed" copy hides anything the backend actually
+        // said (e.g. "device 7 not found", "output_device busy").
+        if (ev.reason) setErrorDetail(ev.reason);
         setState("error");
         return;
       }

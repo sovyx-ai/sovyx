@@ -115,6 +115,15 @@ async def create_voice_pipeline(
     tts_engine = detect_tts_engine()
     logger.info("voice_factory_creating_tts", engine=tts_engine)
     if tts_engine == "piper":
+        if voice_id:
+            # Piper voices are baked into the ONNX model file — a per-call
+            # voice_id has no effect, so the wizard's pick silently dies.
+            # Log it loudly so operators see the mismatch in telemetry.
+            logger.warning(
+                "piper_ignores_voice_id",
+                voice_id=voice_id,
+                reason="piper has fixed voices per model; install kokoro-onnx for catalog voices",
+            )
         tts = await asyncio.to_thread(lambda: _self._create_piper_tts(models_dir))
     elif tts_engine == "kokoro":
         await ensure_kokoro_tts(models_dir)
@@ -225,6 +234,16 @@ def _create_kokoro_tts(
         if info is not None:
             resolved_voice = info.id
             resolved_language = info.language
+        else:
+            # A voice_id that isn't in the catalog typically means the
+            # catalog was updated without migrating ``mind.yaml`` — surface
+            # it so the operator can fix the stale id rather than silently
+            # falling back to an English default.
+            logger.warning(
+                "kokoro_voice_id_not_in_catalog",
+                voice_id=voice_id,
+                fallback_language=language,
+            )
 
     if resolved_voice is None:
         canonical = voice_catalog.normalize_language(language)
@@ -237,6 +256,11 @@ def _create_kokoro_tts(
         config = KokoroConfig(voice=resolved_voice, language=resolved_language)
         return KokoroTTS(model_dir=model_dir / "kokoro", config=config)
 
+    logger.warning(
+        "kokoro_language_not_in_catalog",
+        language=language,
+        reason="using KokoroTTS hardcoded defaults",
+    )
     return KokoroTTS(model_dir=model_dir / "kokoro")
 
 

@@ -129,7 +129,9 @@ describe("TtsTestButton", () => {
       503,
       JSON.stringify({
         code: "models_not_downloaded",
-        detail: "install them",
+        // Empty ``detail`` keeps the canned code-derived message visible —
+        // we have a separate test that covers the detail-wins path.
+        detail: "",
         missing_models: ["kokoro-v1.0-int8", "kokoro-voices-v1.0"],
       }),
     );
@@ -157,6 +159,30 @@ describe("TtsTestButton", () => {
     expect(screen.getByTestId("tts-test-download-cta")).toHaveTextContent(
       /download voice models/i,
     );
+  });
+
+  it("prefers ApiError body detail over the code-derived message", async () => {
+    // Regression: before this, the catch branch only read ``body.code`` —
+    // so any device-specific detail the server attached ("Output device 7
+    // busy") was dropped on the floor and the user saw the generic canned
+    // copy. Detail must win whenever the backend supplied one.
+    const err = new ApiError(
+      500,
+      JSON.stringify({
+        code: "device_busy",
+        detail: "Output device 7 is busy: locked by another session",
+      }),
+    );
+    mockPost.mockRejectedValueOnce(err);
+
+    render(<TtsTestButton deviceId={7} />);
+    fireEvent.click(screen.getByRole("button", { name: /test speakers/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("tts-test-error")).toHaveTextContent(
+        /locked by another session/,
+      );
+    });
   });
 
   it("maps a 409 pipeline_active body into the user-facing message", async () => {

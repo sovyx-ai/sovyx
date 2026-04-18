@@ -25,7 +25,7 @@ import {
   VolumeXIcon,
   XCircleIcon,
 } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { useVoiceModels } from "@/hooks/use-voice-models";
 import type {
@@ -149,21 +149,20 @@ function TtsTestButtonImpl({
       await poll(job.job_id);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Network error";
-      // Try to pull the server's machine-readable code from the body.
+      // Try to pull the server's machine-readable code AND human-readable
+      // detail from the body. Prefer ``detail`` over the canned message
+      // whenever the backend attached one — it's the only place a device-
+      // specific error (e.g. "Output device 7 busy") actually reaches the
+      // UI, so collapsing it to messageForCode(code) would hide real info.
       let code: VoiceTestErrorCode | null = null;
-      try {
-        const body = (err as unknown as { body?: { code?: string } }).body;
-        if (body?.code) {
-          code = body.code as VoiceTestErrorCode;
-        }
-      } catch {
-        /* ignore */
+      let detail: string | null = null;
+      if (err instanceof ApiError && err.body) {
+        const raw = err.body as { code?: unknown; detail?: unknown };
+        if (typeof raw.code === "string") code = raw.code as VoiceTestErrorCode;
+        if (typeof raw.detail === "string" && raw.detail) detail = raw.detail;
       }
-      setState({
-        kind: "error",
-        code,
-        message: code ? messageForCode(code) : msg,
-      });
+      const message = detail ?? (code ? messageForCode(code) : msg);
+      setState({ kind: "error", code, message });
     }
   }, [deviceId, language, voice, poll]);
 
