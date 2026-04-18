@@ -167,6 +167,18 @@ class VoiceTuningConfig(BaseSettings):
     capture_fallback_host_apis: list[str] = Field(
         default_factory=lambda: ["Windows WASAPI", "Windows DirectSound", "Core Audio", "ALSA"],
     )
+    # WASAPI-specific opener behaviour. ``auto_convert`` lets the WASAPI
+    # backend resample + rechannel + rechannel-type transparently; critical
+    # for devices whose Windows mixer format is 2 ch float32 @ 48 kHz but
+    # sovyx asks for 1 ch int16 @ 16 kHz (e.g. Razer BlackShark V2 Pro in
+    # shared mode). Disable only to reproduce legacy behaviour for A/B.
+    capture_wasapi_auto_convert: bool = True
+    capture_wasapi_exclusive: bool = False
+    # Let the opener upgrade ``channels`` to ``device.max_input_channels``
+    # when a mono request is rejected (post-opener mixdown handled by the
+    # callback). Hardware that only exposes stereo in shared mode depends
+    # on this to pass through without auto_convert.
+    capture_allow_channel_upgrade: bool = True
 
     # Voice device test (setup-wizard meters + TTS test button).
     # Kill-switch + ballistics + rate limiting for the test endpoints.

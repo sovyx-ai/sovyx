@@ -260,8 +260,46 @@ class SoundDeviceInputSource:
 
 
 def _classify_portaudio_error(exc: BaseException) -> AudioSourceError:
-    """Map a raw PortAudio exception into a typed :class:`AudioSourceError`."""
+    """Map a raw PortAudio exception into a typed :class:`AudioSourceError`.
+
+    Windows WASAPI surfaces shared-mode mixer mismatches as
+    ``AUDCLNT_E_UNSUPPORTED_FORMAT`` (HRESULT ``0x88890008`` / decimal
+    ``-2004287480``). These hit ``PaErrorCode -9999`` (paUnanticipatedHostError)
+    so the generic PortAudio substring matchers never see them as a
+    sample-rate or channel problem. The ``AUDCLNT_*`` patterns are checked
+    first because they let the frontend render an actionable hint
+    ("change the microphone format in Windows Sound settings") instead
+    of surfacing the raw host-error string.
+    """
     msg = str(exc).lower()
+
+    # Windows WASAPI AUDCLNT_* macros (checked first — they convey richer
+    # semantics than the generic "sample rate"/"channel" substrings).
+    if "audclnt_e_unsupported_format" in msg or "0x88890008" in msg or "-2004287480" in msg:
+        return AudioSourceError(
+            ErrorCode.UNSUPPORTED_FORMAT,
+            f"WASAPI mixer format mismatch: {exc}",
+        )
+    if (
+        "audclnt_e_exclusive_mode_not_allowed" in msg
+        or "audclnt_e_device_in_use" in msg
+        or "audclnt_e_resource_not_available" in msg
+    ):
+        return AudioSourceError(
+            ErrorCode.DEVICE_BUSY,
+            f"Device is busy (another app holding it): {exc}",
+        )
+    if "audclnt_e_buffer_size" in msg or "audclnt_e_buffer_too_large" in msg:
+        return AudioSourceError(
+            ErrorCode.BUFFER_SIZE_INVALID,
+            f"Buffer size rejected by WASAPI: {exc}",
+        )
+    if "audclnt_e_endpoint_create_failed" in msg or "audclnt_e_service_not_running" in msg:
+        return AudioSourceError(
+            ErrorCode.DEVICE_NOT_FOUND,
+            f"Audio endpoint unavailable: {exc}",
+        )
+
     if "invalid device" in msg or "device unavailable" in msg:
         return AudioSourceError(
             ErrorCode.DEVICE_NOT_FOUND,

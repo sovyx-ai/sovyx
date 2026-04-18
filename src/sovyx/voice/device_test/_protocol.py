@@ -47,6 +47,8 @@ class ErrorCode(StrEnum):
     PERMISSION_DENIED = "permission_denied"
     UNSUPPORTED_SAMPLERATE = "unsupported_samplerate"
     UNSUPPORTED_CHANNELS = "unsupported_channels"
+    UNSUPPORTED_FORMAT = "unsupported_format"
+    BUFFER_SIZE_INVALID = "buffer_size_invalid"
     PIPELINE_ACTIVE = "pipeline_active"
     RATE_LIMITED = "rate_limited"
     DISABLED = "disabled"
