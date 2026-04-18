@@ -442,6 +442,12 @@ class MindConfig(BaseModel):
     id: MindId = Field(default=MindId(""))
     language: str = "en"
     voice_id: str = ""
+    # Stable mic identity persisted by the setup wizard. Together with
+    # ``voice_input_device_host_api`` this survives PortAudio index
+    # shuffles (USB replug, reboot, new audio device added) — the index
+    # in ``voice.input_device`` is kept as a legacy fallback only.
+    voice_input_device_name: str = ""
+    voice_input_device_host_api: str = ""
     timezone: str = "UTC"
     template: str = "assistant"
     user_name: str = ""

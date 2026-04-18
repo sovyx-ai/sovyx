@@ -58,6 +58,17 @@ class TestGetVoiceStatus:
         mock_capture = MagicMock(spec=AudioCaptureTask)
         mock_capture.is_running = True
         mock_capture.input_device = 3
+        # ``status_snapshot`` is the single payload ``/api/voice/status``
+        # consumes — configure it here so the mock mirrors what a real
+        # :class:`AudioCaptureTask` would return.
+        mock_capture.status_snapshot.return_value = {
+            "running": True,
+            "input_device": 3,
+            "host_api": "Windows WASAPI",
+            "sample_rate": 16_000,
+            "frames_delivered": 12,
+            "last_rms_db": -42.0,
+        }
 
         def is_reg(cls: type) -> bool:
             return cls in (VoicePipeline, AudioCaptureTask)
@@ -76,6 +87,8 @@ class TestGetVoiceStatus:
         assert status["pipeline"]["state"] == "idle"
         assert status["capture"]["running"] is True
         assert status["capture"]["input_device"] == 3  # noqa: PLR2004
+        assert status["capture"]["host_api"] == "Windows WASAPI"
+        assert status["capture"]["last_rms_db"] == -42.0  # noqa: PLR2004
 
     @pytest.mark.asyncio()
     async def test_pipeline_not_running_when_capture_dead(self, mock_registry: MagicMock) -> None:
@@ -90,6 +103,14 @@ class TestGetVoiceStatus:
         mock_capture = MagicMock(spec=AudioCaptureTask)
         mock_capture.is_running = False  # capture dead — pipeline is silent
         mock_capture.input_device = None
+        mock_capture.status_snapshot.return_value = {
+            "running": False,
+            "input_device": None,
+            "host_api": None,
+            "sample_rate": 16_000,
+            "frames_delivered": 0,
+            "last_rms_db": -120.0,
+        }
 
         def is_reg(cls: type) -> bool:
             return cls in (VoicePipeline, AudioCaptureTask)

@@ -282,65 +282,46 @@ async def list_devices(request: Request) -> JSONResponse:
 
 
 def _enumerate_devices() -> tuple[list[DeviceInfo], list[DeviceInfo]]:
-    """Run PortAudio ``query_devices`` off the event loop."""
-    try:
-        import sounddevice as sd  # noqa: PLC0415
-    except (ImportError, OSError):
-        logger.debug("voice_test_sounddevice_unavailable")
+    """Run PortAudio ``query_devices`` off the event loop.
+
+    Delegates to :mod:`sovyx.voice.device_enum` so the wizard, the
+    hardware-detect endpoint and the production capture task all agree
+    on which host-API variant to present for each logical device.
+    """
+    from sovyx.voice.device_enum import enumerate_devices, pick_preferred
+
+    entries = enumerate_devices()
+    if not entries:
         return [], []
 
-    try:
-        devices = sd.query_devices()
-        default_in_raw, default_out_raw = sd.default.device
-    except Exception:  # noqa: BLE001
-        logger.warning("voice_test_device_enum_failed", exc_info=True)
-        return [], []
+    in_preferred = pick_preferred(entries, kind="input")
+    out_preferred = pick_preferred(entries, kind="output")
 
-    default_in = _coerce_default_index(default_in_raw)
-    default_out = _coerce_default_index(default_out_raw)
-
-    input_devices: list[DeviceInfo] = []
-    output_devices: list[DeviceInfo] = []
-    for i, d in enumerate(devices):
-        if not isinstance(d, dict):
-            continue
-        name = str(d.get("name", "unknown"))
-        sr = int(d.get("default_samplerate", 0) or 0)
-        in_ch = int(d.get("max_input_channels", 0) or 0)
-        out_ch = int(d.get("max_output_channels", 0) or 0)
-        if in_ch > 0:
-            input_devices.append(
-                DeviceInfo(
-                    index=i,
-                    name=name,
-                    is_default=i == default_in,
-                    max_input_channels=in_ch,
-                    max_output_channels=out_ch,
-                    default_samplerate=sr,
-                ),
-            )
-        if out_ch > 0:
-            output_devices.append(
-                DeviceInfo(
-                    index=i,
-                    name=name,
-                    is_default=i == default_out,
-                    max_input_channels=in_ch,
-                    max_output_channels=out_ch,
-                    default_samplerate=sr,
-                ),
-            )
+    input_devices = [
+        DeviceInfo(
+            index=e.index,
+            name=e.name,
+            is_default=e.is_os_default,
+            max_input_channels=e.max_input_channels,
+            max_output_channels=e.max_output_channels,
+            default_samplerate=e.default_samplerate,
+            host_api=e.host_api_name,
+        )
+        for e in in_preferred
+    ]
+    output_devices = [
+        DeviceInfo(
+            index=e.index,
+            name=e.name,
+            is_default=e.is_os_default,
+            max_input_channels=e.max_input_channels,
+            max_output_channels=e.max_output_channels,
+            default_samplerate=e.default_samplerate,
+            host_api=e.host_api_name,
+        )
+        for e in out_preferred
+    ]
     return input_devices, output_devices
-
-
-def _coerce_default_index(raw: object) -> int:
-    """``sd.default.device`` returns a sentinel / int — normalise to int."""
-    if not isinstance(raw, (int, str)):
-        return -1
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return -1
 
 
 @router.websocket("/input")

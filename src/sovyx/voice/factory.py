@@ -65,6 +65,8 @@ async def create_voice_pipeline(
     wake_word_enabled: bool = False,
     mind_id: str = "default",
     input_device: int | str | None = None,
+    input_device_name: str | None = None,
+    input_device_host_api: str | None = None,
     output_device: int | str | None = None,  # noqa: ARG001 — reserved for future TTS routing
 ) -> VoiceBundle:
     """Create a fully initialized VoicePipeline with all components.
@@ -87,7 +89,17 @@ async def create_voice_pipeline(
         wake_word_enabled: Whether to listen for wake word.
         mind_id: Mind identifier for pipeline config.
         input_device: PortAudio input device index/name for the
-            microphone capture task. ``None`` = OS default.
+            microphone capture task. ``None`` = OS default. Used as the
+            legacy/fallback key when ``input_device_name`` is unset.
+        input_device_name: Stable device name (e.g. ``"Microfone (Razer
+            BlackShark V2 Pro)"``). Preferred over ``input_device``
+            because PortAudio indices shift between reboots / USB
+            replugs, whereas names do not.
+        input_device_host_api: Host API label (``"Windows WASAPI"`` …).
+            Used to pick the best variant when the same device is
+            exposed by multiple host APIs — see
+            :mod:`sovyx.voice.device_enum` for the "MME silent zeros"
+            failure mode this guards against.
         output_device: Reserved for TTS playback routing. Persisted
             via ``mind.yaml`` for future use.
 
@@ -162,9 +174,32 @@ async def create_voice_pipeline(
     )
 
     # ── 6. Capture task (not started yet) ────────────────────
+    # Resolve the requested device against the live PortAudio list so
+    # the capture task knows both its index AND its host API label.
+    # Preferring WASAPI here is what actually fixes the "silent mic"
+    # bug — see :mod:`sovyx.voice.device_enum` for the root-cause.
     from sovyx.voice._capture_task import AudioCaptureTask
+    from sovyx.voice.device_enum import resolve_device
 
-    capture_task = AudioCaptureTask(pipeline, input_device=input_device)
+    resolved = await asyncio.to_thread(
+        lambda: resolve_device(
+            requested_index=input_device,
+            requested_name=input_device_name,
+            requested_host_api=input_device_host_api,
+            kind="input",
+        ),
+    )
+    effective_index: int | str | None = input_device
+    effective_host_api: str | None = input_device_host_api
+    if resolved is not None:
+        effective_index = resolved.index
+        effective_host_api = resolved.host_api_name
+
+    capture_task = AudioCaptureTask(
+        pipeline,
+        input_device=effective_index,
+        host_api_name=effective_host_api,
+    )
 
     await pipeline.start()
 
@@ -174,7 +209,8 @@ async def create_voice_pipeline(
         tts=tts_engine,
         vad="silero-v5",
         mind_id=mind_id,
-        input_device=input_device if input_device is not None else "default",
+        input_device=effective_index if effective_index is not None else "default",
+        host_api=effective_host_api or "unknown",
     )
     return VoiceBundle(pipeline=pipeline, capture_task=capture_task)
 

@@ -78,6 +78,11 @@ class DeviceInfo(BaseModel):
     max_input_channels: int
     max_output_channels: int
     default_samplerate: int
+    # Host API the index points at — ``"Windows WASAPI"``, ``"MME"``, …
+    # Added to surface the MME-vs-WASAPI distinction in the wizard UI; a
+    # device can appear under multiple host APIs and only some of them
+    # work reliably (see :mod:`sovyx.voice.device_enum`).
+    host_api: str = ""
 
 
 class DevicesResponse(BaseModel):

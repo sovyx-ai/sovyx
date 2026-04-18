@@ -214,27 +214,36 @@ async def hardware_detect(request: Request) -> JSONResponse:
         logger.warning("hardware_detection_failed", error=str(exc))
         return JSONResponse({"error": f"Hardware detection failed: {exc}"}, status_code=500)
 
-    # Audio device detection (deduplicated, with OS default marker)
+    # Audio device detection — dedup by canonical name, prefer WASAPI over
+    # MME/DirectSound/WDM-KS on Windows. See device_enum.py for *why* MME
+    # gets demoted (silent-mic bug with non-native sample rates).
     audio_available = False
     input_devices: list[dict[str, object]] = []
     output_devices: list[dict[str, object]] = []
     try:
-        import sounddevice as sd  # noqa: PLC0415
+        from sovyx.voice.device_enum import enumerate_devices, pick_preferred
 
-        devices = sd.query_devices()
-        default_in, default_out = sd.default.device
-        seen_in: set[str] = set()
-        seen_out: set[str] = set()
-        for i, d in enumerate(devices):
-            if not isinstance(d, dict):
-                continue
-            name = str(d.get("name", "unknown"))
-            if d.get("max_input_channels", 0) > 0 and name not in seen_in:
-                seen_in.add(name)
-                input_devices.append({"index": i, "name": name, "is_default": i == default_in})
-            if d.get("max_output_channels", 0) > 0 and name not in seen_out:
-                seen_out.add(name)
-                output_devices.append({"index": i, "name": name, "is_default": i == default_out})
+        entries = await asyncio.to_thread(enumerate_devices)
+        in_preferred = pick_preferred(entries, kind="input")
+        out_preferred = pick_preferred(entries, kind="output")
+        input_devices = [
+            {
+                "index": e.index,
+                "name": e.name,
+                "is_default": e.is_os_default,
+                "host_api": e.host_api_name,
+            }
+            for e in in_preferred
+        ]
+        output_devices = [
+            {
+                "index": e.index,
+                "name": e.name,
+                "is_default": e.is_os_default,
+                "host_api": e.host_api_name,
+            }
+            for e in out_preferred
+        ]
         audio_available = bool(input_devices and output_devices)
     except ImportError:
         logger.debug("sounddevice_not_installed")
@@ -300,6 +309,17 @@ async def enable_voice(request: Request) -> JSONResponse:
     raw_output = body.get("output_device")
     input_device: int | None = raw_input if isinstance(raw_input, int) else None
     output_device: int | None = raw_output if isinstance(raw_output, int) else None
+
+    # Stable device identity — prefer name + host_api over index because
+    # PortAudio indices are unstable across reboots / USB replugs.
+    raw_input_name = body.get("input_device_name")
+    raw_input_host_api = body.get("input_device_host_api")
+    input_device_name: str | None = (
+        raw_input_name if isinstance(raw_input_name, str) and raw_input_name else None
+    )
+    input_device_host_api: str | None = (
+        raw_input_host_api if isinstance(raw_input_host_api, str) and raw_input_host_api else None
+    )
 
     # voice_id + language come from the wizard's VoiceTestPicker. When
     # either is present, validate it against the catalog BEFORE we spin
@@ -445,13 +465,20 @@ async def enable_voice(request: Request) -> JSONResponse:
     # pipeline bootable on a fresh install before mind.yaml exists.
     mind_language = "en"
     mind_voice_id = ""
+    mind_device_name = ""
+    mind_device_host_api = ""
     mind_config_obj = getattr(request.app.state, "mind_config", None)
     if mind_config_obj is not None:
         mind_language = getattr(mind_config_obj, "language", "en") or "en"
         mind_voice_id = getattr(mind_config_obj, "voice_id", "") or ""
+        mind_device_name = getattr(mind_config_obj, "voice_input_device_name", "") or ""
+        mind_device_host_api = getattr(mind_config_obj, "voice_input_device_host_api", "") or ""
 
     effective_language = request_language or mind_language
     effective_voice_id = request_voice_id if request_voice_id is not None else mind_voice_id
+    # Prefer stable (name, host_api) over index. Request > MindConfig > index-only.
+    effective_device_name = input_device_name or mind_device_name or None
+    effective_device_host_api = input_device_host_api or mind_device_host_api or None
 
     try:
         bundle = await create_voice_pipeline(
@@ -462,6 +489,8 @@ async def enable_voice(request: Request) -> JSONResponse:
             wake_word_enabled=False,
             mind_id=getattr(request.app.state, "mind_id", "default"),
             input_device=input_device,
+            input_device_name=effective_device_name,
+            input_device_host_api=effective_device_host_api,
             output_device=output_device,
         )
     except VoiceFactoryError as exc:
@@ -483,8 +512,39 @@ async def enable_voice(request: Request) -> JSONResponse:
     # 5. Start capture + register. Capture start is the step that can
     # actually fail with a device error — if it does, tear the pipeline
     # down so we don't leave a half-wired registry.
+    #
+    # ``start_capture_with_fallback`` catches :class:`CaptureSilenceError`
+    # (MME + non-native rate = zeros) and retries on preferred host APIs
+    # before giving up. That single helper is what turns the previous
+    # "pipeline running, mic silent, no logs" nightmare into a real
+    # error path the UI can act on.
+    from sovyx.voice._capture_task import CaptureSilenceError, start_capture_with_fallback
+
     try:
-        await bundle.capture_task.start()
+        await start_capture_with_fallback(
+            bundle.capture_task,
+            device_name=effective_device_name,
+        )
+    except CaptureSilenceError as exc:
+        logger.error(
+            "voice_capture_all_host_apis_silent",
+            device=exc.device,
+            host_api=exc.host_api,
+            observed_peak_rms_db=exc.observed_peak_rms_db,
+        )
+        with contextlib.suppress(Exception):
+            await bundle.pipeline.stop()
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "capture_silence",
+                "detail": str(exc),
+                "device": exc.device,
+                "host_api": exc.host_api,
+                "observed_peak_rms_db": exc.observed_peak_rms_db,
+            },
+            status_code=503,
+        )
     except Exception as exc:  # noqa: BLE001
         logger.exception("voice_capture_start_failed")
         with contextlib.suppress(Exception):
@@ -536,16 +596,30 @@ async def enable_voice(request: Request) -> JSONResponse:
 
     # 6. Persist config
     #
-    # Two writes happen here:
+    # Three writes happen here:
     #
     # * ``voice:`` section — legacy device metadata (kept for UI state).
     # * top-level ``voice_id`` / ``language`` — the real MindConfig
     #   fields consumed by the factory on next boot. Without this the
     #   wizard's voice pick evaporates when the daemon restarts.
+    # * top-level ``voice_input_device_name`` / ``voice_input_device_host_api``
+    #   — stable identity so a USB replug / reboot doesn't re-break the
+    #   MME-silent-mic bug the wizard just worked around. We read what
+    #   the capture task *actually* landed on (post-fallback), which may
+    #   differ from the caller's request if a sibling host API rescued
+    #   the open.
     #
     # We also update ``app.state.mind_config`` in place so the next
     # ``/enable`` (or any route that reads ``mind_config.voice_id``) sees
     # the new values without needing a restart.
+    # On a real capture task ``host_api_name`` is ``str | None``; coerce here
+    # so a mocked value can never leak into YAML / JSON serialisation.
+    captured_host_api = bundle.capture_task.host_api_name
+    persisted_host_api = (
+        captured_host_api if isinstance(captured_host_api, str) else None
+    ) or effective_device_host_api
+    persisted_device_name = effective_device_name
+
     mind_yaml_path = getattr(request.app.state, "mind_yaml_path", None)
     if mind_yaml_path is not None:
         from pathlib import Path
@@ -564,6 +638,18 @@ async def enable_voice(request: Request) -> JSONResponse:
             await editor.set_scalar(Path(mind_yaml_path), "voice_id", request_voice_id)
         if request_language is not None:
             await editor.set_scalar(Path(mind_yaml_path), "language", request_language)
+        if persisted_device_name:
+            await editor.set_scalar(
+                Path(mind_yaml_path),
+                "voice_input_device_name",
+                persisted_device_name,
+            )
+        if persisted_host_api:
+            await editor.set_scalar(
+                Path(mind_yaml_path),
+                "voice_input_device_host_api",
+                persisted_host_api,
+            )
 
     if mind_config_obj is not None:
         if request_voice_id is not None:
@@ -572,14 +658,37 @@ async def enable_voice(request: Request) -> JSONResponse:
         if request_language is not None:
             with contextlib.suppress(Exception):
                 mind_config_obj.language = request_language
+        if persisted_device_name:
+            with contextlib.suppress(Exception):
+                mind_config_obj.voice_input_device_name = persisted_device_name
+        if persisted_host_api:
+            with contextlib.suppress(Exception):
+                mind_config_obj.voice_input_device_host_api = persisted_host_api
 
+    # ``host_api_name`` is ``str | None`` on a real :class:`AudioCaptureTask`
+    # but tests pass bare ``MagicMock()`` stand-ins, so coerce to a JSON-safe
+    # type before returning — a response body is never the right place to
+    # leak a mock object into.
+    host_api_for_response = (
+        bundle.capture_task.host_api_name
+        if isinstance(bundle.capture_task.host_api_name, str)
+        else None
+    )
     logger.info(
         "voice_pipeline_hot_enabled",
         tts=tts_engine,
         language=effective_language,
         voice_id=effective_voice_id or "<auto>",
+        host_api=host_api_for_response or "unknown",
     )
-    return JSONResponse({"ok": True, "status": "active", "tts_engine": tts_engine})
+    return JSONResponse(
+        {
+            "ok": True,
+            "status": "active",
+            "tts_engine": tts_engine,
+            "host_api": host_api_for_response,
+        },
+    )
 
 
 @router.post("/disable")

@@ -68,8 +68,18 @@ interface HardwareStatus {
   ram_mb: number | null;
 }
 
+interface CaptureStatus {
+  running: boolean;
+  input_device: number | string | null;
+  host_api: string | null;
+  sample_rate: number | null;
+  frames_delivered: number;
+  last_rms_db: number | null;
+}
+
 interface VoiceStatus {
   pipeline: PipelineStatus;
+  capture?: CaptureStatus;
   stt: STTStatus;
   tts: TTSStatus;
   wake_word: WakeWordStatus;
@@ -91,6 +101,59 @@ interface VoiceModels {
   detected_tier: string | null;
   active: ModelSelection | null;
   available_tiers: Record<string, ModelSelection>;
+}
+
+/* ── VU-meter ── */
+
+/**
+ * Map dBFS RMS to a 0-100 % bar width.
+ *
+ * ``-80`` dBFS is the silence floor (matches
+ * ``capture_validation_min_rms_db``); ``0`` dBFS is clipping. Anything
+ * above ``-20`` lights up the "hot" band so the operator can spot
+ * levels the STT will clip.
+ */
+function dbToPercent(db: number | null | undefined): number {
+  if (db == null || !Number.isFinite(db)) return 0;
+  const clamped = Math.max(-80, Math.min(0, db));
+  return ((clamped + 80) / 80) * 100;
+}
+
+function VuMeter({ db }: { db: number | null | undefined }) {
+  const pct = dbToPercent(db);
+  const hot = db != null && db > -20;
+  const live = db != null && db > -80;
+  return (
+    <div className="space-y-1">
+      <div
+        role="progressbar"
+        aria-label="input level"
+        aria-valuemin={-80}
+        aria-valuemax={0}
+        aria-valuenow={db ?? -80}
+        data-testid="vu-meter"
+        className="h-2 w-full overflow-hidden rounded-full bg-[var(--svx-color-surface-secondary)]"
+      >
+        <div
+          className={`h-full transition-[width] duration-100 ${
+            hot
+              ? "bg-[var(--svx-color-status-amber)]"
+              : live
+                ? "bg-[var(--svx-color-status-green)]"
+                : "bg-[var(--svx-color-text-tertiary)]"
+          }`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <div className="flex justify-between text-xs text-[var(--svx-color-text-tertiary)]">
+        <span>−80 dB</span>
+        <span className="font-mono">
+          {db != null && Number.isFinite(db) ? `${db.toFixed(1)} dB` : "—"}
+        </span>
+        <span>0 dB</span>
+      </div>
+    </div>
+  );
 }
 
 /* ── Status dot ── */
@@ -244,6 +307,35 @@ export default function VoicePage() {
     return () => controller.abort();
   }, [fetchData]);
 
+  // While the pipeline is running, poll /api/voice/status at ~2 Hz so
+  // the VU-meter reflects live capture RMS. A fast fetch avoids the
+  // complexity of a second WS endpoint (the existing /voice/test/input
+  // stream rejects when the pipeline is active), and 500 ms is enough
+  // resolution for a human reading a level bar.
+  const captureRunning = status?.capture?.running ?? false;
+  useEffect(() => {
+    if (!captureRunning) return;
+    const controller = new AbortController();
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const s = await api.get<VoiceStatus>("/api/voice/status", {
+          signal: controller.signal,
+        });
+        if (!cancelled) setStatus(s);
+      } catch (err) {
+        if (isAbortError(err)) return;
+        // Swallow transient errors — the main fetch will surface persistent ones.
+      }
+    };
+    const id = setInterval(() => void tick(), 500);
+    return () => {
+      cancelled = true;
+      controller.abort();
+      clearInterval(id);
+    };
+  }, [captureRunning]);
+
   /* ── Loading state ── */
   if (loading && !status) {
     return (
@@ -326,6 +418,40 @@ export default function VoicePage() {
             mono
           />
         </Section>
+
+        {/* Capture — live mic RMS so silent-mic failures surface
+            immediately instead of being visible only in logs. */}
+        {status.capture && (
+          <Section icon={<MicIcon className="size-4" />} title={t("sections.capture")}>
+            <div className="flex items-center justify-between py-1.5">
+              <span className="text-sm text-[var(--svx-color-text-secondary)]">
+                {t("pipeline.state")}
+              </span>
+              <span className="flex items-center gap-2 text-sm font-medium">
+                <StatusDot active={status.capture.running} />
+                {status.capture.running ? t("pipeline.running") : t("pipeline.stopped")}
+              </span>
+            </div>
+            {status.capture.host_api && (
+              <InfoRow label={t("capture.hostApi")} value={status.capture.host_api} mono />
+            )}
+            {status.capture.input_device != null && (
+              <InfoRow
+                label={t("capture.device")}
+                value={String(status.capture.input_device)}
+                mono
+              />
+            )}
+            <InfoRow
+              label={t("capture.frames")}
+              value={String(status.capture.frames_delivered)}
+              mono
+            />
+            <div className="pt-2">
+              <VuMeter db={status.capture.last_rms_db} />
+            </div>
+          </Section>
+        )}
 
         {/* STT */}
         <Section icon={<MicIcon className="size-4" />} title={t("sections.stt")}>

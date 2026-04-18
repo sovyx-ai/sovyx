@@ -7,12 +7,18 @@
   "notConfigured": "Voice pipeline is not configured. Enable it in your Sovyx config to see status here.",
   "sections": {
     "pipeline": "Pipeline",
+    "capture": "Microphone",
     "stt": "Speech-to-Text",
     "tts": "Text-to-Speech",
     "vad": "Voice Activity Detection",
     "wakeWord": "Wake Word",
     "wyoming": "Wyoming Protocol",
     "hardware": "Hardware"
+  },
+  "capture": {
+    "hostApi": "Host API",
+    "device": "Device",
+    "frames": "Frames delivered"
   },
   "pipeline": {
     "state": "State",

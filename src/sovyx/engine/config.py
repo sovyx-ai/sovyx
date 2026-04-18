@@ -157,6 +157,17 @@ class VoiceTuningConfig(BaseSettings):
     capture_reconnect_delay_seconds: float = 2.0
     capture_queue_maxsize: int = 256
 
+    # AudioCaptureTask stream health — catches the silent-zeros failure
+    # mode where sd.InputStream opens cleanly but delivers all-zero
+    # frames (MME + unsupported rate, driver hang, privacy block). See
+    # :mod:`sovyx.voice.device_enum` for the root-cause writeup.
+    capture_validation_seconds: float = 0.6  # how long to observe frames post-open
+    capture_validation_min_rms_db: float = -80.0  # any signal above this = "alive"
+    capture_heartbeat_interval_seconds: float = 2.0  # RMS/frames log cadence
+    capture_fallback_host_apis: list[str] = Field(
+        default_factory=lambda: ["Windows WASAPI", "Windows DirectSound", "Core Audio", "ALSA"],
+    )
+
     # Voice device test (setup-wizard meters + TTS test button).
     # Kill-switch + ballistics + rate limiting for the test endpoints.
     device_test_enabled: bool = True

@@ -34,6 +34,10 @@ async def get_voice_status(registry: ServiceRegistry) -> dict[str, Any]:
         "capture": {
             "running": False,
             "input_device": None,
+            "host_api": None,
+            "sample_rate": None,
+            "frames_delivered": 0,
+            "last_rms_db": None,
         },
         "stt": {
             "engine": None,
@@ -63,13 +67,18 @@ async def get_voice_status(registry: ServiceRegistry) -> dict[str, Any]:
     }
 
     # Capture (must run, or the pipeline is silent even if "started")
+    #
+    # ``status_snapshot`` is the same payload the capture heartbeat logs
+    # emit — exposing it here lets the dashboard's VU-meter reuse the
+    # identical signal the operator sees in logs, so "panel shows audio,
+    # logs show silence" divergence is impossible.
     try:
         from sovyx.voice._capture_task import AudioCaptureTask
 
         if registry.is_registered(AudioCaptureTask):
             capture = await registry.resolve(AudioCaptureTask)
-            status["capture"]["running"] = capture.is_running
-            status["capture"]["input_device"] = capture.input_device
+            snapshot = capture.status_snapshot()
+            status["capture"].update(snapshot)
     except Exception:  # noqa: BLE001
         logger.debug("voice_status_capture_failed")
 
