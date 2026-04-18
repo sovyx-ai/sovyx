@@ -6,6 +6,7 @@ import asyncio
 import time
 from typing import TYPE_CHECKING, Any
 
+from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.engine.errors import VoiceError
 from sovyx.observability.logging import get_logger
 from sovyx.voice.jarvis import JarvisConfig, JarvisIllusion, split_at_boundaries
@@ -46,6 +47,7 @@ _MAX_RECORDING_FRAMES = 312  # ~10s max recording
 _BARGE_IN_THRESHOLD_FRAMES = 5  # ~160ms sustained speech -> barge-in
 _FILLER_DELAY_MS = 800  # Play filler if no LLM token within this
 _TEXT_MIN_WORDS = 3  # Min words before TTS synthesis
+_HEARTBEAT_INTERVAL_S = _VoiceTuning().pipeline_heartbeat_interval_seconds
 
 
 class VoicePipeline:
@@ -115,6 +117,13 @@ class VoicePipeline:
         self._first_token_event = asyncio.Event()
         self._running = False
 
+        # Observability — feed_frame updates these on every frame so
+        # _maybe_emit_heartbeat can answer "is VAD seeing real audio"
+        # without per-frame log spam. Reset after each heartbeat.
+        self._max_vad_prob_since_heartbeat: float = 0.0
+        self._vad_frames_since_heartbeat: int = 0
+        self._last_heartbeat_monotonic: float = 0.0
+
     # -- Properties ----------------------------------------------------------
 
     @property
@@ -172,6 +181,7 @@ class VoicePipeline:
         await self._jarvis.pre_cache()
         self._running = True
         self._state = VoicePipelineState.IDLE
+        self._last_heartbeat_monotonic = time.monotonic()
         logger.info(
             "VoicePipeline started",
             mind_id=self._config.mind_id,
@@ -212,6 +222,8 @@ class VoicePipeline:
         # move it to a worker thread so the dashboard / HTTP / other async
         # tasks remain responsive while VAD runs.
         vad_event = await asyncio.to_thread(self._vad.process_frame, audio_f32)
+
+        self._track_vad_for_heartbeat(vad_event.probability)
 
         if self._state == VoicePipelineState.IDLE:
             return await self._handle_idle(frame, vad_event)
@@ -344,6 +356,11 @@ class VoicePipeline:
         self._utterance_frames = [frame]
         self._silence_counter = 0
         self._recording_counter = 1
+        logger.info(
+            "voice_recording_started",
+            mind_id=self._config.mind_id,
+            wake_word_enabled=self._config.wake_word_enabled,
+        )
         await self._emit(SpeechStartedEvent(mind_id=self._config.mind_id))
         return {"state": "RECORDING", "event": "barge_in_recording"}
 
@@ -361,6 +378,13 @@ class VoicePipeline:
         utterance = np.concatenate(self._utterance_frames)
         duration_ms = len(utterance) / _SAMPLE_RATE * 1000
 
+        logger.info(
+            "voice_recording_ended",
+            mind_id=self._config.mind_id,
+            frames=self._recording_counter,
+            duration_ms=round(duration_ms, 1),
+            silence_counter=self._silence_counter,
+        )
         await self._emit(
             SpeechEndedEvent(
                 mind_id=self._config.mind_id,
@@ -391,6 +415,14 @@ class VoicePipeline:
 
         latency_ms = (time.monotonic() - start) * 1000
 
+        logger.info(
+            "voice_stt_completed",
+            mind_id=self._config.mind_id,
+            text_length=len(result.text),
+            has_text=bool(result.text.strip()),
+            language=result.language,
+            latency_ms=round(latency_ms, 1),
+        )
         await self._emit(
             TranscriptionCompletedEvent(
                 text=result.text,
@@ -408,10 +440,25 @@ class VoicePipeline:
         # Feed perception
         self._state = VoicePipelineState.THINKING
         if self._on_perception is not None:
+            logger.info(
+                "voice_perception_invoked",
+                mind_id=self._config.mind_id,
+                text_length=len(result.text),
+            )
             try:
                 await self._on_perception(result.text, self._config.mind_id)
             except Exception as exc:  # noqa: BLE001 — perception callback isolation
                 logger.error("Perception callback failed", error=str(exc))
+        else:
+            # No callback wired — transcription has nowhere to go. This
+            # is the "voice enabled but cognitive loop not registered"
+            # misconfiguration; surface it so operators see why the
+            # assistant is silent.
+            logger.warning(
+                "voice_perception_skipped_no_callback",
+                mind_id=self._config.mind_id,
+                text_length=len(result.text),
+            )
 
         return {
             "state": "THINKING",
@@ -531,6 +578,40 @@ class VoicePipeline:
             )
 
     # -- Internal helpers ----------------------------------------------------
+
+    def _track_vad_for_heartbeat(self, probability: float) -> None:
+        """Accumulate per-frame VAD stats and emit a periodic heartbeat.
+
+        Logs ``voice_pipeline_heartbeat`` every
+        ``pipeline_heartbeat_interval_seconds`` with the max probability
+        observed, frames processed, and current FSM state. The counters
+        reset after each emission so the "max" reflects the last window,
+        not the lifetime of the pipeline.
+
+        When VAD probabilities stay far below ``onset_threshold`` (0.5)
+        despite real audio (capture heartbeats show live RMS), this log
+        surfaces it without requiring per-frame debug traces. Conversely,
+        a heartbeat with ``max_vad_probability >= 0.5`` but the
+        orchestrator still in IDLE points at an FSM configuration issue
+        (onset threshold / min_onset_frames).
+        """
+        if probability > self._max_vad_prob_since_heartbeat:
+            self._max_vad_prob_since_heartbeat = probability
+        self._vad_frames_since_heartbeat += 1
+
+        now = time.monotonic()
+        if now - self._last_heartbeat_monotonic < _HEARTBEAT_INTERVAL_S:
+            return
+        logger.info(
+            "voice_pipeline_heartbeat",
+            mind_id=self._config.mind_id,
+            state=self._state.name,
+            max_vad_probability=round(self._max_vad_prob_since_heartbeat, 3),
+            frames_processed=self._vad_frames_since_heartbeat,
+        )
+        self._last_heartbeat_monotonic = now
+        self._max_vad_prob_since_heartbeat = 0.0
+        self._vad_frames_since_heartbeat = 0
 
     async def _emit(self, event: object) -> None:
         """Emit an event via the event bus (if available)."""

@@ -611,3 +611,66 @@ class TestConstruction:
         """None config should use defaults."""
         vad = _build_vad([0.1])
         assert vad.config == VADConfig()
+
+
+# ---------------------------------------------------------------------------
+# Telemetry — FSM transition logs
+# ---------------------------------------------------------------------------
+
+
+class TestStateTransitionTelemetry:
+    """``vad_state_transition`` is emitted whenever the FSM changes state.
+
+    Regression for the silent-pipeline diagnosis: before this telemetry,
+    operators had no way to tell whether VAD probabilities crossed the
+    onset threshold at all — the orchestrator would sit in IDLE forever
+    with no signal in the log.
+    """
+
+    def test_no_log_when_state_unchanged(self) -> None:
+        from sovyx.voice import vad as vad_mod
+
+        vad = _build_vad([0.1, 0.1, 0.1])
+        with patch.object(vad_mod, "logger") as mock_logger:
+            for _ in range(3):
+                vad.process_frame(_silence_frame())
+            transition_calls = [
+                c
+                for c in mock_logger.info.call_args_list
+                if c.args and c.args[0] == "vad_state_transition"
+            ]
+            assert transition_calls == []
+
+    def test_logs_silence_to_onset(self) -> None:
+        from sovyx.voice import vad as vad_mod
+
+        vad = _build_vad([0.9])
+        with patch.object(vad_mod, "logger") as mock_logger:
+            vad.process_frame(_speech_frame())
+            transition_calls = [
+                c
+                for c in mock_logger.info.call_args_list
+                if c.args and c.args[0] == "vad_state_transition"
+            ]
+            assert len(transition_calls) == 1
+            kwargs = transition_calls[0].kwargs
+            assert kwargs["from_state"] == "SILENCE"
+            assert kwargs["to_state"] == "SPEECH_ONSET"
+            assert kwargs["probability"] == 0.9  # noqa: PLR2004
+
+    def test_logs_full_onset_to_speech_sequence(self) -> None:
+        from sovyx.voice import vad as vad_mod
+
+        vad = _build_vad([0.9, 0.9, 0.9])
+        with patch.object(vad_mod, "logger") as mock_logger:
+            for _ in range(3):
+                vad.process_frame(_speech_frame())
+            transitions = [
+                (c.kwargs["from_state"], c.kwargs["to_state"])
+                for c in mock_logger.info.call_args_list
+                if c.args and c.args[0] == "vad_state_transition"
+            ]
+            assert transitions == [
+                ("SILENCE", "SPEECH_ONSET"),
+                ("SPEECH_ONSET", "SPEECH"),
+            ]

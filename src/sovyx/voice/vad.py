@@ -229,8 +229,18 @@ class SileroVAD:
         output, self._state = self._session.run(None, ort_inputs)[:2]
         probability = float(output[0][0])
 
-        # FSM transition
+        # FSM transition — log every state change so operators can see
+        # exactly when/why the orchestrator moved between silence and speech
+        # without guessing from the absence of downstream events.
+        prev_state = self._vad_state
         is_speech = self._update_state(probability)
+        if self._vad_state != prev_state:
+            logger.info(
+                "vad_state_transition",
+                from_state=prev_state.name,
+                to_state=self._vad_state.name,
+                probability=round(probability, 3),
+            )
 
         return VADEvent(
             is_speech=is_speech,

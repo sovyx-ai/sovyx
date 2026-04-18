@@ -164,6 +164,11 @@ class VoiceTuningConfig(BaseSettings):
     capture_validation_seconds: float = 0.6  # how long to observe frames post-open
     capture_validation_min_rms_db: float = -80.0  # any signal above this = "alive"
     capture_heartbeat_interval_seconds: float = 2.0  # RMS/frames log cadence
+    # VoicePipeline observability — emits ``voice_pipeline_heartbeat`` every
+    # interval with max VAD probability observed, frames processed, and the
+    # current FSM state. Essential for diagnosing "VAD never fires" scenarios
+    # where audio is captured but the orchestrator stays in IDLE.
+    pipeline_heartbeat_interval_seconds: float = 5.0
     capture_fallback_host_apis: list[str] = Field(
         default_factory=lambda: ["Windows WASAPI", "Windows DirectSound", "Core Audio", "ALSA"],
     )
