@@ -44,7 +44,7 @@ class TestAudioCaptureTaskLifecycle:
         stream = MagicMock()
         fake_sd.InputStream = MagicMock(return_value=stream)  # type: ignore[attr-defined]
 
-        task = AudioCaptureTask(pipeline, input_device=5)
+        task = AudioCaptureTask(pipeline, input_device=5, validate_on_start=False)
         try:
             await task.start()
             assert task.is_running is True
@@ -64,7 +64,7 @@ class TestAudioCaptureTaskLifecycle:
         pipeline.feed_frame = AsyncMock()
         fake_sd.InputStream = MagicMock(return_value=MagicMock())  # type: ignore[attr-defined]
 
-        task = AudioCaptureTask(pipeline)
+        task = AudioCaptureTask(pipeline, validate_on_start=False)
         try:
             await task.start()
             await task.start()  # second call must be a no-op
@@ -80,7 +80,7 @@ class TestAudioCaptureTaskLifecycle:
         stream = MagicMock()
         fake_sd.InputStream = MagicMock(return_value=stream)  # type: ignore[attr-defined]
 
-        task = AudioCaptureTask(pipeline)
+        task = AudioCaptureTask(pipeline, validate_on_start=False)
         await task.start()
         await task.stop()
         assert task.is_running is False
@@ -116,7 +116,7 @@ class TestAudioCaptureTaskFrameDelivery:
 
         fake_sd.InputStream = fake_stream_factory  # type: ignore[attr-defined]
 
-        task = AudioCaptureTask(pipeline)
+        task = AudioCaptureTask(pipeline, validate_on_start=False)
         try:
             await task.start()
             frame = np.arange(512, dtype=np.int16)
@@ -150,7 +150,7 @@ class TestAudioCaptureTaskFrameDelivery:
 
         fake_sd.InputStream = fake_stream_factory  # type: ignore[attr-defined]
 
-        task = AudioCaptureTask(pipeline)
+        task = AudioCaptureTask(pipeline, validate_on_start=False)
         # Shrink the queue to make the test fast
         task._queue = asyncio.Queue(maxsize=2)
         try:
@@ -198,7 +198,7 @@ class TestAudioCaptureTaskReconnect:
         # Shorten reconnect delay so the test doesn't wait 2s
         monkeypatch.setattr("sovyx.voice._capture_task._RECONNECT_DELAY_S", 0.0)
 
-        task = AudioCaptureTask(pipeline)
+        task = AudioCaptureTask(pipeline, validate_on_start=False)
         try:
             await task.start()
             cb = captured_callback["cb"]
