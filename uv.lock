@@ -3164,6 +3164,7 @@ dev = [
     { name = "pytest-cov" },
     { name = "pytest-timeout" },
     { name = "ruff" },
+    { name = "scipy" },
     { name = "types-psutil" },
     { name = "types-pyyaml" },
 ]
@@ -3222,6 +3223,7 @@ requires-dist = [
     { name = "rich", specifier = ">=13.7" },
     { name = "ruamel-yaml", specifier = ">=0.19.1" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.15,<0.16" },
+    { name = "scipy", marker = "extra == 'dev'", specifier = ">=1.11" },
     { name = "scipy", marker = "extra == 'voice'", specifier = ">=1.11" },
     { name = "sounddevice", marker = "extra == 'voice'", specifier = ">=0.5" },
     { name = "sqlite-vec", specifier = ">=0.1.3" },

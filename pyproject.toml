@@ -79,6 +79,7 @@ dev = [
     "bandit>=1.7",
     "types-PyYAML>=6.0",
     "types-psutil>=5.9",
+    "scipy>=1.11",
 ]
 
 [dependency-groups]
