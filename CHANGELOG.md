@@ -6,6 +6,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.16.13] — 2026-04-18
+
+### Fixed
+
+- **Voice playback no longer stalls the event loop.** `AudioOutput._play_chunk`
+  wrapped the blocking `sd.play` / `sd.wait` pair in `asyncio.to_thread`, so
+  the bridge / dashboard / pipeline coroutines keep ticking while a chunk
+  plays (anti-pattern #14). Regression covered by a threading-ticker test.
+- **`SOVYX_TUNING__*` env overrides now reach module-level constants.**
+  `SafetyTuningConfig` / `BrainTuningConfig` / `VoiceTuningConfig` /
+  `LLMTuningConfig` inherited `BaseModel` instead of `BaseSettings`, so the
+  documented `_CONST = _TuningCls().field` pattern silently ignored env
+  overrides (anti-pattern #17). 19 constants across 10 files
+  (`voice/stt.py`, `voice/stt_cloud.py`, `voice/auto_select.py`,
+  `voice/_capture_task.py`, `brain/learning.py`, `brain/_model_downloader.py`,
+  `llm/router.py`, `cognitive/audit_store.py`, `cognitive/pii_guard.py`,
+  `cognitive/safety_notifications.py`) now honour `SOVYX_TUNING__{SUBSYS}__*`.
+- **`ApiError.body` exposes structured error codes.** `src/lib/api.ts` now
+  parses the response body into `err.body`, so the setup wizard can branch
+  on codes like `models_not_downloaded` / `pipeline_active` instead of
+  regexing the message. `TtsTestButton` tests switched to real `ApiError`
+  instances — the hand-crafted shape only matched in tests, silently
+  broken in production.
+
+### Added
+
+- **Voice-model status + download flow.** New `voice.model_status` module
+  is the single source of truth for "are the Piper / Kokoro ONNX files
+  on disk"; dashboard routes expose status + download-trigger; setup
+  wizard surfaces a "Download voice models" CTA on `HardwareDetection`
+  and `TtsTestButton` error states, driven by the new
+  `use-voice-models` hook.
+
 ## [0.16.12] — 2026-04-17
 
 ### Added
