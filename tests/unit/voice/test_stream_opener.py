@@ -525,3 +525,68 @@ class TestOpenOutputStreamParity:
         # if it does resample it must still pass WasapiSettings.
         assert rate in {24_000, 48_000}
         assert extra is not None and extra.auto_convert is True
+
+
+# ---------------------------------------------------------------------------
+# Phase 8 — observability counter for each open attempt
+# ---------------------------------------------------------------------------
+
+
+class TestStreamOpenAttemptsMetric:
+    """Each ``OpenAttempt`` bumps the ``voice_stream_open_attempts`` counter.
+
+    Guarantees the counter stays low-cardinality: ``host_api`` + ``auto_convert``
+    + ``kind`` + ``result`` + ``error_code``. Device index / sample rate /
+    channels are deliberately absent from labels (cardinality would explode).
+    """
+
+    @pytest.mark.asyncio()
+    async def test_successful_input_open_records_ok_attempt(self) -> None:
+        from sovyx.voice._stream_opener import open_input_stream
+
+        sd = _fake_sd_module()
+        stream = MagicMock()
+        sd.InputStream = MagicMock(return_value=stream)  # type: ignore[attr-defined]
+        entry = _wasapi_entry(index=18, channels=1, rate=48_000)
+
+        recorded: list[dict[str, Any]] = []
+
+        class _Counter:
+            def add(self, value: int, *, attributes: dict[str, str]) -> None:
+                recorded.append({"value": value, **attributes})
+
+        class _Registry:
+            voice_stream_open_attempts = _Counter()
+
+        import sovyx.observability.metrics as metrics_mod
+
+        def fake_get_metrics() -> _Registry:
+            return _Registry()
+
+        original = metrics_mod.get_metrics
+        metrics_mod.get_metrics = fake_get_metrics  # type: ignore[assignment]
+        try:
+            _stream, _info = await open_input_stream(
+                device=entry,
+                target_rate=16_000,
+                blocksize=512,
+                callback=lambda *a, **kw: None,
+                tuning=VoiceTuningConfig(capture_wasapi_auto_convert=False),
+                sd_module=sd,
+                enumerate_fn=lambda: [entry],
+            )
+        finally:
+            metrics_mod.get_metrics = original  # type: ignore[assignment]
+
+        assert len(recorded) >= 1
+        ok_events = [r for r in recorded if r["result"] == "ok"]
+        assert len(ok_events) == 1
+        event = ok_events[0]
+        assert event["host_api"] == "Windows WASAPI"
+        assert event["kind"] == "input"
+        assert event["auto_convert"] == "false"
+        assert event["error_code"] == "none"
+        # Cardinality guard.
+        assert "device_index" not in event
+        assert "sample_rate" not in event
+        assert "channels" not in event

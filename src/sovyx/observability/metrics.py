@@ -215,6 +215,19 @@ class MetricsRegistry:
             unit="ms",
         )
 
+        # Unified stream opener — one counter increment per attempted
+        # (host_api, auto_convert, result) triple so field debugging can
+        # answer "which host API + auto_convert combination is the mic
+        # actually landing on in the wild?" without parsing logs.
+        self.voice_stream_open_attempts = meter.create_counter(
+            name="sovyx.voice.stream.open.attempts",
+            description=(
+                "Stream-opener attempts (labels: host_api, auto_convert, "
+                "kind=input|output, result=ok|silent|error, error_code)"
+            ),
+            unit="1",
+        )
+
     @contextlib.contextmanager
     def measure_latency(
         self,

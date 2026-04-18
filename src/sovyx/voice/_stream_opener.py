@@ -269,6 +269,7 @@ async def open_input_stream(
                 fallback_depth=info.fallback_depth,
                 total_attempts=len(attempts),
             )
+            _record_attempts(attempts, kind="input")
             return stream, info
 
     last = attempts[-1] if attempts else None
@@ -284,6 +285,7 @@ async def open_input_stream(
         final_code=code.value,
         detail=detail,
     )
+    _record_attempts(attempts, kind="input")
     raise StreamOpenError(code=code, detail=detail, attempts=attempts)
 
 
@@ -337,6 +339,16 @@ async def play_audio(
             device.index,
             extra,
         )
+        attempts.append(
+            OpenAttempt(
+                host_api=device.host_api_name,
+                device_index=device.index,
+                sample_rate=source_rate,
+                channels=1,
+                auto_convert=bool(extra),
+            ),
+        )
+        _record_attempts(attempts, kind="output")
         return (asyncio.get_running_loop().time() - start_monotonic) * 1000
     except Exception as exc:  # noqa: BLE001
         classified = _classify_portaudio_error(exc)
@@ -354,6 +366,7 @@ async def play_audio(
         # Only rate mismatch is recoverable by client-side resample + retry.
         # AUDCLNT_E_* / DEVICE_NOT_FOUND / PERMISSION_DENIED etc. go up.
         if classified.code != ErrorCode.UNSUPPORTED_SAMPLERATE:
+            _record_attempts(attempts, kind="output")
             raise StreamOpenError(
                 code=classified.code,
                 detail=classified.detail,
@@ -361,6 +374,7 @@ async def play_audio(
             ) from exc
         native_rate = int(device.default_samplerate)
         if native_rate <= 0 or native_rate == source_rate:
+            _record_attempts(attempts, kind="output")
             raise StreamOpenError(
                 code=classified.code,
                 detail=classified.detail,
@@ -398,11 +412,22 @@ async def play_audio(
                 error_detail=retry_classified.detail,
             ),
         )
+        _record_attempts(attempts, kind="output")
         raise StreamOpenError(
             code=retry_classified.code,
             detail=retry_classified.detail,
             attempts=attempts,
         ) from retry_exc
+    attempts.append(
+        OpenAttempt(
+            host_api=device.host_api_name,
+            device_index=device.index,
+            sample_rate=native_rate,
+            channels=1,
+            auto_convert=bool(extra),
+        ),
+    )
+    _record_attempts(attempts, kind="output")
     return (asyncio.get_running_loop().time() - start_monotonic) * 1000
 
 
@@ -654,6 +679,49 @@ def _resample_int16(
     resampled = np.interp(x_dst, x_src, audio.astype(np.float32))
     clipped = np.clip(resampled, -32_768, 32_767)
     return clipped.astype(np.int16)
+
+
+def _record_attempts(attempts: list[OpenAttempt], *, kind: str) -> None:
+    """Emit one ``voice_stream_open_attempts`` counter increment per attempt.
+
+    Labels are low-cardinality on purpose: ``host_api`` + ``auto_convert``
+    + ``kind`` + ``result`` + ``error_code`` (``"none"`` on success).
+    ``device_index`` / ``sample_rate`` / ``channels`` are deliberately
+    excluded — they'd explode cardinality without answering the "which
+    combo lands on live hardware?" question we actually have.
+    """
+    # Lazy import — observability must not pull metrics at module load
+    # time (that breaks test isolation in unit suites that build a
+    # registry per-test).
+    from sovyx.observability.metrics import get_metrics
+
+    registry = get_metrics()
+    counter = getattr(registry, "voice_stream_open_attempts", None)
+    if counter is None:
+        return
+    for attempt in attempts:
+        if attempt.error_code is None:
+            result = "ok"
+            code_label = "none"
+        elif "silent stream" in (attempt.error_detail or ""):
+            result = "silent"
+            code_label = attempt.error_code.value
+        else:
+            result = "error"
+            code_label = attempt.error_code.value
+        try:
+            counter.add(
+                1,
+                attributes={
+                    "kind": kind,
+                    "host_api": attempt.host_api,
+                    "auto_convert": str(attempt.auto_convert).lower(),
+                    "result": result,
+                    "error_code": code_label,
+                },
+            )
+        except Exception:  # noqa: BLE001 — never let metrics break the opener
+            logger.debug("voice_stream_metric_emit_failed", exc_info=True)
 
 
 __all__ = [
