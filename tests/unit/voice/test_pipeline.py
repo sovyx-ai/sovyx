@@ -10,13 +10,13 @@ Ref: SPE-010 §8, §10, §13 — full state machine + barge-in + timing.
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pytest
-from structlog.testing import capture_logs
 
 from sovyx.voice.pipeline import (
     AudioOutputQueue,
@@ -1399,50 +1399,72 @@ class TestPipelineCoverageGaps:
 # exactly where the pipeline wedges.
 
 
-def _events_of(logs: list[dict[str, Any]], event: str) -> list[dict[str, Any]]:
-    """Return captured structlog entries whose ``event`` field equals *event*."""
-    return [log for log in logs if log.get("event") == event]
+_ORCH_LOGGER = "sovyx.voice.pipeline._orchestrator"
+
+
+def _events_of(caplog: pytest.LogCaptureFixture, event: str) -> list[dict[str, Any]]:
+    """Return stdlib LogRecord payloads whose structlog ``event`` field matches.
+
+    Sovyx configures structlog with ``structlog.stdlib.LoggerFactory`` +
+    ``wrap_for_formatter`` (see ``observability/logging.setup_logging``), which
+    packages the full event_dict as the stdlib ``LogRecord.msg``. That record
+    traverses the root logger — where pytest's ``caplog`` hooks an opaque
+    handler — so every emitted event is observable here irrespective of any
+    earlier ``structlog.configure`` churn (which would orphan
+    ``capture_logs``' in-place processor mutation against cached bound-logger
+    references).
+    """
+    return [
+        r.msg
+        for r in caplog.records
+        if r.name == _ORCH_LOGGER and isinstance(r.msg, dict) and r.msg.get("event") == event
+    ]
 
 
 class TestPipelineHeartbeat:
     """``voice_pipeline_heartbeat`` surfaces VAD activity even when the FSM never fires."""
 
     @pytest.mark.asyncio
-    async def test_heartbeat_emits_with_max_probability(self) -> None:
+    async def test_heartbeat_emits_with_max_probability(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """Heartbeat captures the highest VAD probability seen in the window."""
         from sovyx.voice.pipeline import _orchestrator as orch_mod
 
+        caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
         pipeline, refs = _make_pipeline(wake_word_enabled=False, vad_speech=False)
         await pipeline.start()
 
         probs = [0.05, 0.42, 0.18]
-        with capture_logs() as logs:
-            pipeline._last_heartbeat_monotonic = 0.0
-            with patch.object(orch_mod.time, "monotonic", return_value=0.0):
-                for p in probs[:-1]:
-                    refs["vad"].process_frame.return_value = VADEvent(
-                        is_speech=False, probability=p, state=VADState.SILENCE
-                    )
-                    await pipeline.feed_frame(_silence_frame())
-            refs["vad"].process_frame.return_value = VADEvent(
-                is_speech=False, probability=probs[-1], state=VADState.SILENCE
-            )
-            with patch.object(
-                orch_mod.time, "monotonic", return_value=orch_mod._HEARTBEAT_INTERVAL_S + 1.0
-            ):
+        pipeline._last_heartbeat_monotonic = 0.0
+        with patch.object(orch_mod.time, "monotonic", return_value=0.0):
+            for p in probs[:-1]:
+                refs["vad"].process_frame.return_value = VADEvent(
+                    is_speech=False, probability=p, state=VADState.SILENCE
+                )
                 await pipeline.feed_frame(_silence_frame())
+        refs["vad"].process_frame.return_value = VADEvent(
+            is_speech=False, probability=probs[-1], state=VADState.SILENCE
+        )
+        with patch.object(
+            orch_mod.time, "monotonic", return_value=orch_mod._HEARTBEAT_INTERVAL_S + 1.0
+        ):
+            await pipeline.feed_frame(_silence_frame())
 
-        heartbeats = _events_of(logs, "voice_pipeline_heartbeat")
+        heartbeats = _events_of(caplog, "voice_pipeline_heartbeat")
         assert len(heartbeats) == 1
         assert heartbeats[0]["state"] == "IDLE"
         assert heartbeats[0]["max_vad_probability"] == pytest.approx(0.42)
         assert heartbeats[0]["frames_processed"] == 3  # noqa: PLR2004
 
     @pytest.mark.asyncio
-    async def test_heartbeat_resets_window_after_emission(self) -> None:
+    async def test_heartbeat_resets_window_after_emission(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """Counters reset after each heartbeat so max reflects the last window only."""
         from sovyx.voice.pipeline import _orchestrator as orch_mod
 
+        caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
         pipeline, refs = _make_pipeline(wake_word_enabled=False, vad_speech=False)
         await pipeline.start()
         pipeline._last_heartbeat_monotonic = 0.0
@@ -1450,21 +1472,21 @@ class TestPipelineHeartbeat:
             is_speech=False, probability=0.9, state=VADState.SILENCE
         )
 
-        with capture_logs() as logs:
-            with patch.object(
-                orch_mod.time, "monotonic", return_value=orch_mod._HEARTBEAT_INTERVAL_S + 1.0
-            ):
-                await pipeline.feed_frame(_silence_frame())
-            refs["vad"].process_frame.return_value = VADEvent(
-                is_speech=False, probability=0.05, state=VADState.SILENCE
-            )
-            with patch.object(
-                orch_mod.time, "monotonic", return_value=orch_mod._HEARTBEAT_INTERVAL_S + 1.1
-            ):
-                await pipeline.feed_frame(_silence_frame())
+        with patch.object(
+            orch_mod.time, "monotonic", return_value=orch_mod._HEARTBEAT_INTERVAL_S + 1.0
+        ):
+            await pipeline.feed_frame(_silence_frame())
+        caplog.clear()
+        refs["vad"].process_frame.return_value = VADEvent(
+            is_speech=False, probability=0.05, state=VADState.SILENCE
+        )
+        with patch.object(
+            orch_mod.time, "monotonic", return_value=orch_mod._HEARTBEAT_INTERVAL_S + 1.1
+        ):
+            await pipeline.feed_frame(_silence_frame())
 
-        heartbeats = _events_of(logs, "voice_pipeline_heartbeat")
-        assert len(heartbeats) == 1
+        heartbeats = _events_of(caplog, "voice_pipeline_heartbeat")
+        assert heartbeats == []
         assert pipeline._max_vad_prob_since_heartbeat == pytest.approx(0.05)
         assert pipeline._vad_frames_since_heartbeat == 1
 
@@ -1473,20 +1495,26 @@ class TestRecordingLifecycleLogs:
     """``voice_recording_started`` / ``voice_recording_ended`` frame the STT window."""
 
     @pytest.mark.asyncio
-    async def test_recording_started_logs_on_vad_trigger(self) -> None:
+    async def test_recording_started_logs_on_vad_trigger(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
         pipeline, _ = _make_pipeline(wake_word_enabled=False, vad_speech=True)
         await pipeline.start()
+        caplog.clear()
 
-        with capture_logs() as logs:
-            await pipeline.feed_frame(_speech_frame())
+        await pipeline.feed_frame(_speech_frame())
 
-        started = _events_of(logs, "voice_recording_started")
+        started = _events_of(caplog, "voice_recording_started")
         assert len(started) == 1
         assert started[0]["mind_id"] == "test-mind"
         assert started[0]["wake_word_enabled"] is False
 
     @pytest.mark.asyncio
-    async def test_recording_ended_logs_with_duration_and_frames(self) -> None:
+    async def test_recording_ended_logs_with_duration_and_frames(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
         pipeline, refs = _make_pipeline(wake_word_enabled=False, vad_speech=True)
         await pipeline.start()
         await pipeline.feed_frame(_speech_frame())  # → RECORDING
@@ -1494,11 +1522,11 @@ class TestRecordingLifecycleLogs:
         refs["vad"].process_frame.return_value = VADEvent(
             is_speech=False, probability=0.1, state=VADState.SILENCE
         )
-        with capture_logs() as logs:
-            for _ in range(3):
-                await pipeline.feed_frame(_silence_frame())
+        caplog.clear()
+        for _ in range(3):
+            await pipeline.feed_frame(_silence_frame())
 
-        ended = _events_of(logs, "voice_recording_ended")
+        ended = _events_of(caplog, "voice_recording_ended")
         assert len(ended) == 1
         assert ended[0]["frames"] == 4  # 1 speech + 3 silence  # noqa: PLR2004
         assert ended[0]["duration_ms"] > 0
@@ -1509,7 +1537,8 @@ class TestSTTAndPerceptionLogs:
     """``voice_stt_completed`` and ``voice_perception_invoked`` trace the cognitive handoff."""
 
     @pytest.mark.asyncio
-    async def test_stt_completed_logs_metadata(self) -> None:
+    async def test_stt_completed_logs_metadata(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
         pipeline, refs = _make_pipeline(
             wake_word_enabled=False, vad_speech=True, stt_text="olá mundo"
         )
@@ -1519,11 +1548,11 @@ class TestSTTAndPerceptionLogs:
         refs["vad"].process_frame.return_value = VADEvent(
             is_speech=False, probability=0.1, state=VADState.SILENCE
         )
-        with capture_logs() as logs:
-            for _ in range(3):
-                await pipeline.feed_frame(_silence_frame())
+        caplog.clear()
+        for _ in range(3):
+            await pipeline.feed_frame(_silence_frame())
 
-        completed = _events_of(logs, "voice_stt_completed")
+        completed = _events_of(caplog, "voice_stt_completed")
         assert len(completed) == 1
         assert completed[0]["text_length"] == len("olá mundo")
         assert completed[0]["has_text"] is True
@@ -1531,7 +1560,10 @@ class TestSTTAndPerceptionLogs:
         assert completed[0]["latency_ms"] >= 0
 
     @pytest.mark.asyncio
-    async def test_perception_invoked_logs_when_callback_wired(self) -> None:
+    async def test_perception_invoked_logs_when_callback_wired(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
         on_perception = AsyncMock()
         pipeline, refs = _make_pipeline(
             wake_word_enabled=False, vad_speech=True, on_perception=on_perception
@@ -1542,18 +1574,21 @@ class TestSTTAndPerceptionLogs:
         refs["vad"].process_frame.return_value = VADEvent(
             is_speech=False, probability=0.1, state=VADState.SILENCE
         )
-        with capture_logs() as logs:
-            for _ in range(3):
-                await pipeline.feed_frame(_silence_frame())
+        caplog.clear()
+        for _ in range(3):
+            await pipeline.feed_frame(_silence_frame())
 
-        invoked = _events_of(logs, "voice_perception_invoked")
-        skipped = _events_of(logs, "voice_perception_skipped_no_callback")
+        invoked = _events_of(caplog, "voice_perception_invoked")
+        skipped = _events_of(caplog, "voice_perception_skipped_no_callback")
         assert len(invoked) == 1
         assert skipped == []
         on_perception.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_perception_skipped_logs_when_callback_missing(self) -> None:
+    async def test_perception_skipped_logs_when_callback_missing(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.WARNING, logger=_ORCH_LOGGER)
         pipeline, refs = _make_pipeline(
             wake_word_enabled=False, vad_speech=True, on_perception=None
         )
@@ -1563,10 +1598,10 @@ class TestSTTAndPerceptionLogs:
         refs["vad"].process_frame.return_value = VADEvent(
             is_speech=False, probability=0.1, state=VADState.SILENCE
         )
-        with capture_logs() as logs:
-            for _ in range(3):
-                await pipeline.feed_frame(_silence_frame())
+        caplog.clear()
+        for _ in range(3):
+            await pipeline.feed_frame(_silence_frame())
 
-        skipped = _events_of(logs, "voice_perception_skipped_no_callback")
+        skipped = _events_of(caplog, "voice_perception_skipped_no_callback")
         assert len(skipped) == 1
         assert skipped[0]["text_length"] == len("hello world")

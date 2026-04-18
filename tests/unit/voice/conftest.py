@@ -1,37 +1,30 @@
 """Shared fixtures for voice unit tests.
 
-Provides a fresh-proxy rebinding fixture so ``structlog.testing.capture_logs``
-reliably intercepts events emitted by the ``_orchestrator`` / ``vad`` modules.
+Provides a session-scoped ``setup_logging`` invocation so structlog routes
+through the stdlib logging pipeline. Voice telemetry tests
+(``TestPipelineHeartbeat``, ``TestRecordingLifecycleLogs``,
+``TestSTTAndPerceptionLogs``, ``TestStateTransitionTelemetry``) rely on
+pytest's ``caplog`` fixture to observe structured events emitted by the
+orchestrator and VAD — and ``caplog`` intercepts stdlib ``LogRecord``
+instances, so the structlog chain must end at ``wrap_for_formatter``.
 
-Root cause addressed
---------------------
-``sovyx.observability.logging.setup_logging`` calls ``structlog.configure(...)``
-with a freshly-constructed processors list and ``cache_logger_on_first_use=True``.
-The observability test suite (``tests/unit/observability/test_logging.py``) invokes
-``setup_logging`` dozens of times, each call replacing ``_CONFIG.default_processors``
-with a new list object.
+Why this matters
+----------------
+``capture_logs`` was the first-reach capture primitive, but it relies on
+mutating the *current* ``_CONFIG.default_processors`` list in place; any
+earlier ``structlog.configure`` call (``setup_logging`` installs a **new**
+processors list on every invocation and ``tests/unit/observability`` runs
+it dozens of times before the voice suite) orphans bound-logger references
+to the previous list, and ``capture_logs`` silently yields an empty
+sequence under full-suite CI ordering. The stdlib path is immune to that
+because every ``LogRecord`` reaches the root logger regardless of which
+processor list the BoundLogger holds.
 
-Any ``structlog.BoundLoggerLazyProxy`` that was first used **before** the final
-``setup_logging`` call caches a :class:`structlog.stdlib.BoundLogger` holding a
-reference to a now-stale processor list. ``capture_logs`` mutates the *current*
-``_CONFIG.default_processors`` list, so cached loggers pointing at a previous
-list never see the capturing ``LogCapture`` processor — events continue flowing
-through the production chain, and ``capture_logs()`` yields an empty list.
-
-Why this only surfaces in CI
-----------------------------
-Locally, running only the voice subset keeps the cache coherent; the failure is
-deterministic in the full-suite CI run where observability tests execute before
-voice tests (alphabetical collection).
-
-Enterprise fix
---------------
-This fixture rebinds the module-level ``logger`` attribute of the voice modules
-to a fresh ``BoundLoggerLazyProxy`` before each test. The fresh proxy is not
-bound yet, so its first log call inside the test — whether before or inside a
-``capture_logs()`` block — binds against the *current* ``_CONFIG`` processors.
-When ``capture_logs`` mutates that list in place, the proxy's cached
-``BoundLogger`` observes the mutation, and events are captured correctly.
+Running the voice subset in isolation wouldn't hit the orphaning bug, but
+``setup_logging`` also isn't invoked in that case so structlog still uses
+its bootstrap defaults (pretty console renderer, no stdlib factory) and
+``caplog`` captures nothing. Invoking ``setup_logging`` once here makes
+the voice suite deterministic and order-independent.
 """
 
 from __future__ import annotations
@@ -39,23 +32,15 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
-import structlog
+
+from sovyx.engine.config import LoggingConfig
+from sovyx.observability.logging import setup_logging
 
 if TYPE_CHECKING:
     from collections.abc import Generator
 
 
-@pytest.fixture(autouse=True)
-def _rebind_voice_module_loggers() -> Generator[None, None, None]:
-    from sovyx.voice import vad as _vad_mod
-    from sovyx.voice.pipeline import _orchestrator as _orch_mod
-
-    orch_original = _orch_mod.logger
-    vad_original = _vad_mod.logger
-    _orch_mod.logger = structlog.get_logger(_orch_mod.__name__)
-    _vad_mod.logger = structlog.get_logger(_vad_mod.__name__)
-    try:
-        yield
-    finally:
-        _orch_mod.logger = orch_original
-        _vad_mod.logger = vad_original
+@pytest.fixture(scope="session", autouse=True)
+def _voice_structlog_stdlib_routing() -> Generator[None, None, None]:
+    setup_logging(LoggingConfig(level="DEBUG", console_format="json", log_file=None))
+    yield

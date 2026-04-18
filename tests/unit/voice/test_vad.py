@@ -5,6 +5,7 @@ Strategy: mock ONNX session to control probabilities, verify FSM transitions.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -13,7 +14,6 @@ import numpy as np
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
-from structlog.testing import capture_logs
 
 from sovyx.voice.vad import (
     SileroVAD,
@@ -22,6 +22,26 @@ from sovyx.voice.vad import (
     VADState,
     _validate_config,
 )
+
+_VAD_LOGGER = "sovyx.voice.vad"
+
+
+def _transitions_of(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
+    """Return VAD state-transition event payloads observed by ``caplog``.
+
+    See the rationale in ``tests/unit/voice/conftest.py``: Sovyx's structlog
+    chain ends at ``wrap_for_formatter`` which delivers the event_dict as the
+    stdlib ``LogRecord.msg``. Using ``caplog`` sidesteps ``capture_logs``'
+    fragility against ``structlog.configure`` churn.
+    """
+    return [
+        r.msg
+        for r in caplog.records
+        if r.name == _VAD_LOGGER
+        and isinstance(r.msg, dict)
+        and r.msg.get("event") == "vad_state_transition"
+    ]
+
 
 # ---------------------------------------------------------------------------
 # Fixtures & helpers
@@ -628,34 +648,32 @@ class TestStateTransitionTelemetry:
     with no signal in the log.
     """
 
-    def test_no_log_when_state_unchanged(self) -> None:
+    def test_no_log_when_state_unchanged(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.INFO, logger=_VAD_LOGGER)
         vad = _build_vad([0.1, 0.1, 0.1])
-        with capture_logs() as logs:
-            for _ in range(3):
-                vad.process_frame(_silence_frame())
-        transitions = [log for log in logs if log.get("event") == "vad_state_transition"]
-        assert transitions == []
+        caplog.clear()
+        for _ in range(3):
+            vad.process_frame(_silence_frame())
+        assert _transitions_of(caplog) == []
 
-    def test_logs_silence_to_onset(self) -> None:
+    def test_logs_silence_to_onset(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.INFO, logger=_VAD_LOGGER)
         vad = _build_vad([0.9])
-        with capture_logs() as logs:
-            vad.process_frame(_speech_frame())
-        transitions = [log for log in logs if log.get("event") == "vad_state_transition"]
+        caplog.clear()
+        vad.process_frame(_speech_frame())
+        transitions = _transitions_of(caplog)
         assert len(transitions) == 1
         assert transitions[0]["from_state"] == "SILENCE"
         assert transitions[0]["to_state"] == "SPEECH_ONSET"
         assert transitions[0]["probability"] == 0.9  # noqa: PLR2004
 
-    def test_logs_full_onset_to_speech_sequence(self) -> None:
+    def test_logs_full_onset_to_speech_sequence(self, caplog: pytest.LogCaptureFixture) -> None:
+        caplog.set_level(logging.INFO, logger=_VAD_LOGGER)
         vad = _build_vad([0.9, 0.9, 0.9])
-        with capture_logs() as logs:
-            for _ in range(3):
-                vad.process_frame(_speech_frame())
-        transitions = [
-            (log["from_state"], log["to_state"])
-            for log in logs
-            if log.get("event") == "vad_state_transition"
-        ]
+        caplog.clear()
+        for _ in range(3):
+            vad.process_frame(_speech_frame())
+        transitions = [(log["from_state"], log["to_state"]) for log in _transitions_of(caplog)]
         assert transitions == [
             ("SILENCE", "SPEECH_ONSET"),
             ("SPEECH_ONSET", "SPEECH"),
