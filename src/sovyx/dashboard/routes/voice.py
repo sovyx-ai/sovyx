@@ -98,6 +98,51 @@ def _get_model_download_tracker(request: Request) -> dict[str, object]:
     return tracker
 
 
+@router.get("/voices")
+async def list_voice_catalog() -> JSONResponse:
+    """List every voice the Kokoro v1.0 model exposes, grouped by language.
+
+    Drives the setup-wizard's language + voice picker. The wizard uses
+    ``recommended_per_language`` as the default pick whenever the user
+    changes language but hasn't yet picked a voice explicitly, and falls
+    back to ``by_language`` to populate the per-language voice dropdown.
+
+    The response shape is intentionally flat — no pagination, no
+    filtering — because the catalog is 54 entries total and static
+    across a release. Fetching once at wizard mount is cheap.
+    """
+    from sovyx.voice.voice_catalog import (
+        SUPPORTED_LANGUAGES,
+        all_voices,
+        recommended_voice,
+    )
+
+    by_language: dict[str, list[dict[str, str]]] = {lang: [] for lang in SUPPORTED_LANGUAGES}
+    for v in all_voices():
+        by_language[v.language].append(
+            {
+                "id": v.id,
+                "display_name": v.display_name,
+                "language": v.language,
+                "gender": v.gender,
+            },
+        )
+
+    recommended_per_language: dict[str, str] = {}
+    for lang in SUPPORTED_LANGUAGES:
+        info = recommended_voice(lang)
+        if info is not None:
+            recommended_per_language[lang] = info.id
+
+    return JSONResponse(
+        {
+            "supported_languages": sorted(SUPPORTED_LANGUAGES),
+            "by_language": by_language,
+            "recommended_per_language": recommended_per_language,
+        },
+    )
+
+
 @router.post("/models/download")
 async def start_voice_models_download(request: Request) -> JSONResponse:
     """Start a background download of all missing voice models.

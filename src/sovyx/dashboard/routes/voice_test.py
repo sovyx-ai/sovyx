@@ -91,16 +91,9 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/voice/test")
 
-# Localised default phrases. The UI normally sends the resolved phrase
-# via ``phrase_key`` but a tiny server-side fallback protects against a
-# mis-configured client.
-_DEFAULT_PHRASES: dict[str, dict[str, str]] = {
-    "default": {
-        "en": "Audio test successful. Your voice assistant is ready.",
-        "pt": "Teste de áudio bem-sucedido. Sua assistente de voz está pronta.",
-        "es": "Prueba de audio exitosa. Su asistente de voz está listo.",
-    },
-}
+# Localised default phrases live in :mod:`sovyx.voice.phrases` — imported
+# lazily below to keep voice-catalog imports off the module-import path
+# for non-voice dashboard routes.
 
 
 # ---------------------------------------------------------------------------
@@ -446,9 +439,53 @@ async def start_output_test(request: Request, body: TestOutputRequest) -> JSONRe
             HTTP_503_SERVICE_UNAVAILABLE,
         )
 
-    # Resolve + validate the test phrase.
-    phrase = _DEFAULT_PHRASES.get(body.phrase_key, _DEFAULT_PHRASES["default"])
-    text = phrase.get(body.language, phrase["en"])
+    # Resolve the voice + language pair before touching the TTS engine.
+    # Voice wins: if the caller sent a voice id in the catalog we derive
+    # the language from it, so the phrase and the audio always agree.
+    # This closes the class of bugs where the UI sent ``language="pt"``
+    # but the server played an English-baked voice model, producing
+    # Portuguese text in an English accent that nobody asked for.
+    from sovyx.voice import phrases, voice_catalog
+
+    requested_language = voice_catalog.normalize_language(body.language)
+    voice_id: str | None = body.voice
+    if voice_id:
+        catalog_entry = voice_catalog.voice_info(voice_id)
+        if catalog_entry is None:
+            return _err_response(
+                ErrorCode.INVALID_REQUEST,
+                f"Unknown voice id: {voice_id}",
+                HTTP_400_BAD_REQUEST,
+            )
+        resolved_language = catalog_entry.language
+    else:
+        recommended = voice_catalog.recommended_voice(requested_language)
+        if recommended is None:
+            return _err_response(
+                ErrorCode.INVALID_REQUEST,
+                (
+                    f"No voice available for language {body.language!r}. "
+                    f"Supported: {', '.join(voice_catalog.supported_languages())}"
+                ),
+                HTTP_400_BAD_REQUEST,
+            )
+        voice_id = recommended.id
+        resolved_language = recommended.language
+
+    text = phrases.resolve_phrase(body.phrase_key, resolved_language)
+    if text is None:
+        # Phrase missing for this (key, language) — fall back to default
+        # phrase in the same language. If even that is missing something
+        # upstream is broken; reject loudly rather than hand the user
+        # the wrong-language audio they just complained about.
+        text = phrases.resolve_phrase(phrases.DEFAULT_PHRASE_KEY, resolved_language)
+        if text is None:
+            return _err_response(
+                ErrorCode.INVALID_REQUEST,
+                f"No test phrase available for language {resolved_language!r}",
+                HTTP_400_BAD_REQUEST,
+            )
+
     if len(text) > tuning.device_test_max_phrase_chars:
         return _err_response(
             ErrorCode.INVALID_REQUEST,
@@ -509,7 +546,8 @@ async def start_output_test(request: Request, body: TestOutputRequest) -> JSONRe
             entry=entry,
             job_id=job_id,
             text=text,
-            voice=body.voice,
+            voice=voice_id,
+            language=resolved_language,
             device_id=body.device_id,
             tts=tts,
             sink=sink,
@@ -592,8 +630,8 @@ class _MissingModels:
 
 async def _resolve_tts(
     request: Request,
-) -> Callable[[str, str | None], Awaitable[_SynthResult]] | _MissingModels | None:
-    """Return an async ``(text, voice) -> _SynthResult`` synth, a
+) -> Callable[[str, str, str], Awaitable[_SynthResult]] | _MissingModels | None:
+    """Return an async ``(text, voice, language) -> _SynthResult`` synth, a
     :class:`_MissingModels` marker, or ``None``.
 
     Resolution order:
@@ -626,9 +664,18 @@ async def _resolve_tts(
 
             async def _synth_from_registry(
                 text: str,
-                voice: str | None,  # noqa: ARG001
+                voice: str,
+                language: str,
             ) -> _SynthResult:
-                chunk = await engine.synthesize(text)
+                # Kokoro-class engines can switch voice per call; Piper
+                # bakes a voice into the ONNX model so the registry
+                # engine's own voice wins. ``synthesize_with`` is
+                # optional in the :class:`TTSEngine` protocol.
+                synth_with = getattr(engine, "synthesize_with", None)
+                if callable(synth_with):
+                    chunk = await synth_with(text, voice=voice, language=language)
+                else:
+                    chunk = await engine.synthesize(text)
                 return _SynthResult(audio=chunk.audio, sample_rate=chunk.sample_rate)
 
             return _synth_from_registry
@@ -638,7 +685,7 @@ async def _resolve_tts(
 
 async def _resolve_standalone_tts(
     request: Request,
-) -> Callable[[str, str | None], Awaitable[_SynthResult]] | _MissingModels | None:
+) -> Callable[[str, str, str], Awaitable[_SynthResult]] | _MissingModels | None:
     """Build + cache a standalone TTS engine for the wizard flow.
 
     The setup wizard is used *before* the pipeline is enabled, so the
@@ -646,6 +693,14 @@ async def _resolve_standalone_tts(
     logic (:mod:`sovyx.voice.factory._create_piper_tts` /
     ``_create_kokoro_tts``) without pulling the rest of the pipeline
     (VAD, STT, wake-word) — those are irrelevant to a one-shot TTS test.
+
+    For Kokoro we build **one** engine and use
+    :meth:`KokoroTTS.synthesize_with` to pick the voice + language per
+    call — the 54-voice style vectors are all resident in the loaded
+    ``voices-v1.0.bin`` so picking a different voice is essentially
+    free. Piper bakes a voice into each ONNX model, so the standalone
+    path can only honour the engine's pre-configured voice; the wizard
+    doesn't attempt per-voice Piper switching.
 
     The return type is three-valued:
 
@@ -694,9 +749,14 @@ async def _resolve_standalone_tts(
 
     async def _synth(
         text: str,
-        voice: str | None,  # noqa: ARG001
+        voice: str,
+        language: str,
     ) -> _SynthResult:
-        chunk = await engine.synthesize(text)
+        synth_with = getattr(engine, "synthesize_with", None)
+        if callable(synth_with):
+            chunk = await synth_with(text, voice=voice, language=language)
+        else:
+            chunk = await engine.synthesize(text)
         return _SynthResult(audio=chunk.audio, sample_rate=chunk.sample_rate)
 
     request.app.state.voice_test_cached_tts = _synth
@@ -708,9 +768,10 @@ async def _run_output_job(
     entry: _JobEntry,
     job_id: str,
     text: str,
-    voice: str | None,
+    voice: str,
+    language: str,
     device_id: int | None,
-    tts: Callable[[str, str | None], Awaitable[_SynthResult]],
+    tts: Callable[[str, str, str], Awaitable[_SynthResult]],
     sink: AudioOutputSink,
 ) -> None:
     """Background task: synth → play → store result."""
@@ -719,7 +780,7 @@ async def _run_output_job(
     peak_db: float | None = None
     try:
         start = asyncio.get_running_loop().time()
-        synth = await tts(text, voice)
+        synth = await tts(text, voice, language)
         synth_ms = (asyncio.get_running_loop().time() - start) * 1000
 
         if synth.audio.size > 0:

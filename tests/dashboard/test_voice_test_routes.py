@@ -150,9 +150,12 @@ class TestStartOutput:
         # PortAudio.
         sink = FakeAudioOutputSink()
         app.state.voice_test_output_sink = sink
+        seen: dict[str, object] = {}
 
-        async def fake_tts(text: str, voice: str | None) -> object:  # noqa: ARG001
-            # 0.5 s of mid-level audio at 22.05 kHz.
+        async def fake_tts(text: str, voice: str, language: str) -> object:
+            seen["text"] = text
+            seen["voice"] = voice
+            seen["language"] = language
             audio = np.full(11_025, 5_000, dtype=np.int16)
             from sovyx.dashboard.routes.voice_test import _SynthResult
 
@@ -190,6 +193,12 @@ class TestStartOutput:
         # Sink recorded the playback.
         assert len(sink.calls) == 1
         assert sink.calls[0]["sample_rate"] == 22_050
+
+        # Default body had no voice + language="en" → catalog resolves to
+        # the American English recommended voice and the English phrase.
+        assert seen["language"] == "en-us"
+        assert isinstance(seen["voice"], str) and seen["voice"].startswith("a")
+        assert isinstance(seen["text"], str) and seen["text"]
 
     def test_pipeline_active_returns_409(self) -> None:
         app = _make_app(pipeline_active=True)
@@ -266,7 +275,7 @@ class TestStartOutput:
         )
         app.state.voice_test_output_sink = sink
 
-        async def fake_tts(text: str, voice: str | None) -> object:  # noqa: ARG001
+        async def fake_tts(text: str, voice: str, language: str) -> object:  # noqa: ARG001
             from sovyx.dashboard.routes.voice_test import _SynthResult
 
             audio = np.zeros(1024, dtype=np.int16)
@@ -301,6 +310,163 @@ class TestStartOutput:
         c = TestClient(app)
         resp = c.post("/api/voice/test/output", json={})
         assert resp.status_code == 401  # noqa: PLR2004
+
+
+# --------------------------------------------------------------------------
+# Language / voice coherence — the reason this router stopped trusting
+# ``body.language`` verbatim. See :mod:`sovyx.voice.voice_catalog`.
+# --------------------------------------------------------------------------
+
+
+class TestVoiceLanguageCoherence:
+    """Voice id + language must agree before we spend synth cycles."""
+
+    def _wire_fake_tts(
+        self,
+        app: FastAPI,
+    ) -> tuple[FakeAudioOutputSink, dict[str, object]]:
+        """Install a capturing fake synth + sink and return them."""
+        sink = FakeAudioOutputSink()
+        app.state.voice_test_output_sink = sink
+        seen: dict[str, object] = {}
+
+        async def fake_tts(text: str, voice: str, language: str) -> object:
+            seen["text"] = text
+            seen["voice"] = voice
+            seen["language"] = language
+            from sovyx.dashboard.routes.voice_test import _SynthResult
+
+            audio = np.zeros(1024, dtype=np.int16)
+            return _SynthResult(audio=audio, sample_rate=16_000)
+
+        app.state.voice_test_tts_factory = fake_tts
+        return sink, seen
+
+    def _drain(self, client: TestClient, job_id: str) -> dict[str, object]:
+        import time as _time
+
+        for _ in range(50):
+            result = client.get(f"/api/voice/test/output/{job_id}").json()
+            if result["status"] != "running":
+                return result
+            _time.sleep(0.02)
+        msg = f"job {job_id} did not finish"
+        raise AssertionError(msg)
+
+    def test_language_pt_picks_brazilian_voice_and_phrase(
+        self,
+        client: TestClient,
+        app: FastAPI,
+    ) -> None:
+        """``language=pt-BR`` without a voice → catalog recommended voice.
+
+        This is the exact bug the user hit: UI sent Portuguese, server
+        synthesised English. The fix derives both voice and phrase from
+        the normalised language.
+        """
+        _, seen = self._wire_fake_tts(app)
+        resp = client.post(
+            "/api/voice/test/output",
+            json={"language": "pt-BR"},
+        )
+        assert resp.status_code == 200  # noqa: PLR2004
+        job_id = resp.json()["job_id"]
+        result = self._drain(client, job_id)
+        assert result["status"] == "done"
+        assert seen["language"] == "pt-br"
+        # Brazilian Portuguese voice ids start with "p".
+        assert isinstance(seen["voice"], str)
+        assert seen["voice"].startswith("p")
+        # Phrase is the Portuguese translation, not the English one.
+        assert isinstance(seen["text"], str)
+        assert "asistente" not in seen["text"].lower()  # English fallback
+        assert "assistente" in seen["text"].lower()
+
+    def test_voice_overrides_language_mismatch(
+        self,
+        client: TestClient,
+        app: FastAPI,
+    ) -> None:
+        """Voice wins: catalog-known voice derives its own language.
+
+        If the UI mistakenly sends ``language=en`` but voice=``jf_alpha``
+        (Japanese), the phrase must be Japanese — the voice is the
+        source of truth because it pins the acoustic model's expected
+        language.
+        """
+        _, seen = self._wire_fake_tts(app)
+        resp = client.post(
+            "/api/voice/test/output",
+            json={"language": "en", "voice": "jf_alpha"},
+        )
+        assert resp.status_code == 200  # noqa: PLR2004
+        job_id = resp.json()["job_id"]
+        result = self._drain(client, job_id)
+        assert result["status"] == "done"
+        assert seen["voice"] == "jf_alpha"
+        assert seen["language"] == "ja"
+
+    def test_unknown_voice_id_returns_400(
+        self,
+        client: TestClient,
+    ) -> None:
+        resp = client.post(
+            "/api/voice/test/output",
+            json={"voice": "not_a_real_voice"},
+        )
+        assert resp.status_code == 400  # noqa: PLR2004
+        body = resp.json()
+        assert body["code"] == ErrorCode.INVALID_REQUEST.value
+        assert "not_a_real_voice" in body["detail"]
+
+    def test_unsupported_language_returns_400(
+        self,
+        client: TestClient,
+    ) -> None:
+        resp = client.post(
+            "/api/voice/test/output",
+            json={"language": "klingon"},
+        )
+        assert resp.status_code == 400  # noqa: PLR2004
+        body = resp.json()
+        assert body["code"] == ErrorCode.INVALID_REQUEST.value
+        # Supported-languages hint helps the UI render a diagnostic.
+        assert "Supported" in body["detail"]
+
+    @pytest.mark.parametrize(
+        ("language", "voice_prefix"),
+        [
+            ("en-us", "a"),
+            ("en-gb", "b"),
+            ("es", "e"),
+            ("fr", "f"),
+            ("hi", "h"),
+            ("it", "i"),
+            ("ja", "j"),
+            ("pt-br", "p"),
+            ("zh", "z"),
+        ],
+    )
+    def test_every_supported_language_resolves(
+        self,
+        client: TestClient,
+        app: FastAPI,
+        language: str,
+        voice_prefix: str,
+    ) -> None:
+        """Full round-trip per language — catches catalog drift early."""
+        _, seen = self._wire_fake_tts(app)
+        resp = client.post(
+            "/api/voice/test/output",
+            json={"language": language},
+        )
+        assert resp.status_code == 200, (resp.status_code, resp.json())  # noqa: PLR2004
+        job_id = resp.json()["job_id"]
+        result = self._drain(client, job_id)
+        assert result["status"] == "done"
+        assert seen["language"] == language
+        assert isinstance(seen["voice"], str)
+        assert seen["voice"].startswith(voice_prefix), seen["voice"]
 
 
 # --------------------------------------------------------------------------

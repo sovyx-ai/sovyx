@@ -262,17 +262,32 @@ class KokoroTTS(TTSEngine):
     # -- Public API --------------------------------------------------------
 
     async def synthesize(self, text: str) -> AudioChunk:
-        """Synthesize text to audio.
+        """Synthesize text with the voice and language baked into :attr:`config`.
 
         Full pipeline: text → kokoro-onnx (G2P + VITS2) → int16 PCM audio.
+        For empty text, returns an empty :class:`AudioChunk`.
+        """
+        return await self.synthesize_with(
+            text,
+            voice=self._config.voice,
+            language=self._config.language,
+            speed=self._config.speed,
+        )
 
-        For empty text, returns an empty AudioChunk.
+    async def synthesize_with(
+        self,
+        text: str,
+        *,
+        voice: str,
+        language: str,
+        speed: float | None = None,
+    ) -> AudioChunk:
+        """Synthesize ``text`` using an explicit voice and language.
 
-        Args:
-            text: The text to synthesize.
-
-        Returns:
-            AudioChunk with int16 PCM audio at 24000 Hz.
+        The underlying kokoro-onnx model accepts voice + language per call,
+        so callers can pick any of the 54 shipped voices without rebuilding
+        the ONNX session. Used by the voice-test flow to let the setup
+        wizard sample every voice in the catalog without a ~300 MB reload.
         """
         import numpy as np
 
@@ -292,15 +307,17 @@ class KokoroTTS(TTSEngine):
             msg = "KokoroTTS not initialized"
             raise RuntimeError(msg)
 
+        resolved_speed = self._config.speed if speed is None else speed
+
         # Kokoro's `create` runs G2P + ONNX VITS2 synchronously and is
         # CPU-bound (multiple seconds for a long sentence). Offload to a
         # worker thread so the event loop stays responsive.
         samples, sample_rate = await asyncio.to_thread(
             self._kokoro.create,
             text,
-            voice=self._config.voice,
-            speed=self._config.speed,
-            lang=self._config.language,
+            voice=voice,
+            speed=resolved_speed,
+            lang=language,
         )
 
         # Convert float32 → int16 PCM

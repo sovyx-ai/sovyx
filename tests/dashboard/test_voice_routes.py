@@ -761,3 +761,64 @@ class TestModelsDownloadEndpoints:
         c = TestClient(app)
         resp = c.post("/api/voice/models/download")
         assert resp.status_code == 401  # noqa: PLR2004
+
+
+class TestVoicesCatalogEndpoint:
+    """GET /api/voice/voices — static Kokoro catalog surface for the wizard."""
+
+    def test_returns_full_catalog_shape(self, client: TestClient) -> None:
+        resp = client.get("/api/voice/voices")
+        assert resp.status_code == 200  # noqa: PLR2004
+        body = resp.json()
+
+        assert set(body.keys()) == {
+            "supported_languages",
+            "by_language",
+            "recommended_per_language",
+        }
+
+    def test_supported_languages_sorted_and_non_empty(
+        self,
+        client: TestClient,
+    ) -> None:
+        body = client.get("/api/voice/voices").json()
+        langs = body["supported_languages"]
+        assert isinstance(langs, list)
+        assert langs == sorted(langs)
+        # Kokoro v1.0 ships 9 language families.
+        assert len(langs) == 9  # noqa: PLR2004
+        assert "pt-br" in langs
+        assert "en-us" in langs
+
+    def test_by_language_covers_every_supported_language(
+        self,
+        client: TestClient,
+    ) -> None:
+        body = client.get("/api/voice/voices").json()
+        by_language = body["by_language"]
+        for lang in body["supported_languages"]:
+            assert lang in by_language
+            assert by_language[lang], f"{lang} has no voices"
+            for entry in by_language[lang]:
+                assert entry["language"] == lang
+                assert entry["id"]
+                assert entry["display_name"]
+                assert entry["gender"] in {"female", "male"}
+
+    def test_recommended_per_language_points_into_catalog(
+        self,
+        client: TestClient,
+    ) -> None:
+        body = client.get("/api/voice/voices").json()
+        recs = body["recommended_per_language"]
+        by_language = body["by_language"]
+        for lang, voice_id in recs.items():
+            assert lang in by_language
+            ids = {v["id"] for v in by_language[lang]}
+            assert voice_id in ids
+
+    def test_requires_auth(self) -> None:
+        app = create_app(token=_TOKEN)
+        c = TestClient(app)
+        resp = c.get("/api/voice/voices")
+        assert resp.status_code == 401  # noqa: PLR2004
