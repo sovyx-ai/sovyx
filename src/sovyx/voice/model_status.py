@@ -18,7 +18,6 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from sovyx.engine._model_downloader import ModelDownloadError
 from sovyx.observability.logging import get_logger
 from sovyx.voice.model_registry import (
     VOICE_MODELS,
@@ -267,32 +266,39 @@ async def _run_download(
             task_id=entry.progress.task_id,
             completed=entry.progress.completed_models,
         )
-    except ModelDownloadError as exc:
-        code, retry_after = _classify_download_error(str(exc))
-        entry.progress.status = "error"
-        entry.progress.error = str(exc)
-        entry.progress.error_code = code
-        entry.progress.retry_after_seconds = retry_after
-        entry.progress.finished_at = time.monotonic()
-        logger.warning(
-            "voice_model_download_failed",
-            task_id=entry.progress.task_id,
-            error=str(exc),
-            error_code=code,
-            retry_after_seconds=retry_after,
-        )
     except Exception as exc:  # noqa: BLE001
-        entry.progress.status = "error"
-        entry.progress.error = str(exc)
-        entry.progress.error_code = "unknown"
-        entry.progress.finished_at = time.monotonic()
-        logger.warning(
-            "voice_model_download_failed",
-            task_id=entry.progress.task_id,
-            error=str(exc),
-            error_code="unknown",
-            exc_info=True,
-        )
+        # Dispatch by class name, not isinstance. Under pytest-xdist the
+        # test's ``ModelDownloadError`` can resolve to a different class
+        # object than the one this module imported — ``except
+        # ModelDownloadError`` would miss it and fall through to the
+        # generic branch, dropping the structured error_code the UI
+        # depends on. See CLAUDE.md anti-pattern #8.
+        if type(exc).__name__ == "ModelDownloadError":
+            code, retry_after = _classify_download_error(str(exc))
+            entry.progress.status = "error"
+            entry.progress.error = str(exc)
+            entry.progress.error_code = code
+            entry.progress.retry_after_seconds = retry_after
+            entry.progress.finished_at = time.monotonic()
+            logger.warning(
+                "voice_model_download_failed",
+                task_id=entry.progress.task_id,
+                error=str(exc),
+                error_code=code,
+                retry_after_seconds=retry_after,
+            )
+        else:
+            entry.progress.status = "error"
+            entry.progress.error = str(exc)
+            entry.progress.error_code = "unknown"
+            entry.progress.finished_at = time.monotonic()
+            logger.warning(
+                "voice_model_download_failed",
+                task_id=entry.progress.task_id,
+                error=str(exc),
+                error_code="unknown",
+                exc_info=True,
+            )
 
 
 def _classify_download_error(message: str) -> tuple[str, int | None]:
