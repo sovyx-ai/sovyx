@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pytest
+from structlog.testing import capture_logs
 
 from sovyx.voice.pipeline import (
     AudioOutputQueue,
@@ -1398,14 +1399,9 @@ class TestPipelineCoverageGaps:
 # exactly where the pipeline wedges.
 
 
-def _orchestrator_logger_calls(mock_logger: MagicMock, event: str) -> list[Any]:
-    """Return logger.info calls whose first positional arg equals *event*."""
-    return [c for c in mock_logger.info.call_args_list if c.args and c.args[0] == event]
-
-
-def _orchestrator_warning_calls(mock_logger: MagicMock, event: str) -> list[Any]:
-    """Return logger.warning calls whose first positional arg equals *event*."""
-    return [c for c in mock_logger.warning.call_args_list if c.args and c.args[0] == event]
+def _events_of(logs: list[dict[str, Any]], event: str) -> list[dict[str, Any]]:
+    """Return captured structlog entries whose ``event`` field equals *event*."""
+    return [log for log in logs if log.get("event") == event]
 
 
 class TestPipelineHeartbeat:
@@ -1419,12 +1415,8 @@ class TestPipelineHeartbeat:
         pipeline, refs = _make_pipeline(wake_word_enabled=False, vad_speech=False)
         await pipeline.start()
 
-        # Force three frames with known probabilities by swapping the
-        # VAD mock's return value between feed_frame calls.
         probs = [0.05, 0.42, 0.18]
-        with patch.object(orch_mod, "logger") as mock_logger:
-            # Shift wall clock past heartbeat interval so the next frame
-            # triggers a heartbeat emission.
+        with capture_logs() as logs:
             pipeline._last_heartbeat_monotonic = 0.0
             with patch.object(orch_mod.time, "monotonic", return_value=0.0):
                 for p in probs[:-1]:
@@ -1432,7 +1424,6 @@ class TestPipelineHeartbeat:
                         is_speech=False, probability=p, state=VADState.SILENCE
                     )
                     await pipeline.feed_frame(_silence_frame())
-            # Final frame lands after the interval → heartbeat emits.
             refs["vad"].process_frame.return_value = VADEvent(
                 is_speech=False, probability=probs[-1], state=VADState.SILENCE
             )
@@ -1441,12 +1432,11 @@ class TestPipelineHeartbeat:
             ):
                 await pipeline.feed_frame(_silence_frame())
 
-            calls = _orchestrator_logger_calls(mock_logger, "voice_pipeline_heartbeat")
-            assert len(calls) == 1
-            kwargs = calls[0].kwargs
-            assert kwargs["state"] == "IDLE"
-            assert kwargs["max_vad_probability"] == pytest.approx(0.42)
-            assert kwargs["frames_processed"] == 3  # noqa: PLR2004
+        heartbeats = _events_of(logs, "voice_pipeline_heartbeat")
+        assert len(heartbeats) == 1
+        assert heartbeats[0]["state"] == "IDLE"
+        assert heartbeats[0]["max_vad_probability"] == pytest.approx(0.42)
+        assert heartbeats[0]["frames_processed"] == 3  # noqa: PLR2004
 
     @pytest.mark.asyncio
     async def test_heartbeat_resets_window_after_emission(self) -> None:
@@ -1460,13 +1450,11 @@ class TestPipelineHeartbeat:
             is_speech=False, probability=0.9, state=VADState.SILENCE
         )
 
-        with patch.object(orch_mod, "logger") as mock_logger:
+        with capture_logs() as logs:
             with patch.object(
                 orch_mod.time, "monotonic", return_value=orch_mod._HEARTBEAT_INTERVAL_S + 1.0
             ):
                 await pipeline.feed_frame(_silence_frame())
-            # Immediately feed a low-probability frame — should NOT emit
-            # another heartbeat (interval not elapsed) and counters reset.
             refs["vad"].process_frame.return_value = VADEvent(
                 is_speech=False, probability=0.05, state=VADState.SILENCE
             )
@@ -1475,12 +1463,10 @@ class TestPipelineHeartbeat:
             ):
                 await pipeline.feed_frame(_silence_frame())
 
-            calls = _orchestrator_logger_calls(mock_logger, "voice_pipeline_heartbeat")
-            assert len(calls) == 1
-            # Second frame landed AFTER the reset — max should be the
-            # only prob accumulated since (0.05), not 0.9 from before.
-            assert pipeline._max_vad_prob_since_heartbeat == pytest.approx(0.05)
-            assert pipeline._vad_frames_since_heartbeat == 1
+        heartbeats = _events_of(logs, "voice_pipeline_heartbeat")
+        assert len(heartbeats) == 1
+        assert pipeline._max_vad_prob_since_heartbeat == pytest.approx(0.05)
+        assert pipeline._vad_frames_since_heartbeat == 1
 
 
 class TestRecordingLifecycleLogs:
@@ -1488,41 +1474,35 @@ class TestRecordingLifecycleLogs:
 
     @pytest.mark.asyncio
     async def test_recording_started_logs_on_vad_trigger(self) -> None:
-        from sovyx.voice.pipeline import _orchestrator as orch_mod
-
         pipeline, _ = _make_pipeline(wake_word_enabled=False, vad_speech=True)
         await pipeline.start()
 
-        with patch.object(orch_mod, "logger") as mock_logger:
+        with capture_logs() as logs:
             await pipeline.feed_frame(_speech_frame())
-            calls = _orchestrator_logger_calls(mock_logger, "voice_recording_started")
-            assert len(calls) == 1
-            assert calls[0].kwargs["mind_id"] == "test-mind"
-            assert calls[0].kwargs["wake_word_enabled"] is False
+
+        started = _events_of(logs, "voice_recording_started")
+        assert len(started) == 1
+        assert started[0]["mind_id"] == "test-mind"
+        assert started[0]["wake_word_enabled"] is False
 
     @pytest.mark.asyncio
     async def test_recording_ended_logs_with_duration_and_frames(self) -> None:
-        from sovyx.voice.pipeline import _orchestrator as orch_mod
-
         pipeline, refs = _make_pipeline(wake_word_enabled=False, vad_speech=True)
         await pipeline.start()
         await pipeline.feed_frame(_speech_frame())  # → RECORDING
 
-        # Flip VAD to silence and feed enough frames to cross
-        # silence_frames_end (3 in the test config).
         refs["vad"].process_frame.return_value = VADEvent(
             is_speech=False, probability=0.1, state=VADState.SILENCE
         )
-        with patch.object(orch_mod, "logger") as mock_logger:
+        with capture_logs() as logs:
             for _ in range(3):
                 await pipeline.feed_frame(_silence_frame())
 
-            calls = _orchestrator_logger_calls(mock_logger, "voice_recording_ended")
-            assert len(calls) == 1
-            kwargs = calls[0].kwargs
-            assert kwargs["frames"] == 4  # 1 speech + 3 silence  # noqa: PLR2004
-            assert kwargs["duration_ms"] > 0
-            assert kwargs["silence_counter"] == 3  # noqa: PLR2004
+        ended = _events_of(logs, "voice_recording_ended")
+        assert len(ended) == 1
+        assert ended[0]["frames"] == 4  # 1 speech + 3 silence  # noqa: PLR2004
+        assert ended[0]["duration_ms"] > 0
+        assert ended[0]["silence_counter"] == 3  # noqa: PLR2004
 
 
 class TestSTTAndPerceptionLogs:
@@ -1530,8 +1510,6 @@ class TestSTTAndPerceptionLogs:
 
     @pytest.mark.asyncio
     async def test_stt_completed_logs_metadata(self) -> None:
-        from sovyx.voice.pipeline import _orchestrator as orch_mod
-
         pipeline, refs = _make_pipeline(
             wake_word_enabled=False, vad_speech=True, stt_text="olá mundo"
         )
@@ -1541,22 +1519,19 @@ class TestSTTAndPerceptionLogs:
         refs["vad"].process_frame.return_value = VADEvent(
             is_speech=False, probability=0.1, state=VADState.SILENCE
         )
-        with patch.object(orch_mod, "logger") as mock_logger:
+        with capture_logs() as logs:
             for _ in range(3):
                 await pipeline.feed_frame(_silence_frame())
 
-            calls = _orchestrator_logger_calls(mock_logger, "voice_stt_completed")
-            assert len(calls) == 1
-            kwargs = calls[0].kwargs
-            assert kwargs["text_length"] == len("olá mundo")
-            assert kwargs["has_text"] is True
-            assert kwargs["language"] == "en"
-            assert kwargs["latency_ms"] >= 0
+        completed = _events_of(logs, "voice_stt_completed")
+        assert len(completed) == 1
+        assert completed[0]["text_length"] == len("olá mundo")
+        assert completed[0]["has_text"] is True
+        assert completed[0]["language"] == "en"
+        assert completed[0]["latency_ms"] >= 0
 
     @pytest.mark.asyncio
     async def test_perception_invoked_logs_when_callback_wired(self) -> None:
-        from sovyx.voice.pipeline import _orchestrator as orch_mod
-
         on_perception = AsyncMock()
         pipeline, refs = _make_pipeline(
             wake_word_enabled=False, vad_speech=True, on_perception=on_perception
@@ -1567,22 +1542,18 @@ class TestSTTAndPerceptionLogs:
         refs["vad"].process_frame.return_value = VADEvent(
             is_speech=False, probability=0.1, state=VADState.SILENCE
         )
-        with patch.object(orch_mod, "logger") as mock_logger:
+        with capture_logs() as logs:
             for _ in range(3):
                 await pipeline.feed_frame(_silence_frame())
 
-            invoked = _orchestrator_logger_calls(mock_logger, "voice_perception_invoked")
-            skipped = _orchestrator_warning_calls(
-                mock_logger, "voice_perception_skipped_no_callback"
-            )
-            assert len(invoked) == 1
-            assert skipped == []
-            on_perception.assert_awaited_once()
+        invoked = _events_of(logs, "voice_perception_invoked")
+        skipped = _events_of(logs, "voice_perception_skipped_no_callback")
+        assert len(invoked) == 1
+        assert skipped == []
+        on_perception.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_perception_skipped_logs_when_callback_missing(self) -> None:
-        from sovyx.voice.pipeline import _orchestrator as orch_mod
-
         pipeline, refs = _make_pipeline(
             wake_word_enabled=False, vad_speech=True, on_perception=None
         )
@@ -1592,12 +1563,10 @@ class TestSTTAndPerceptionLogs:
         refs["vad"].process_frame.return_value = VADEvent(
             is_speech=False, probability=0.1, state=VADState.SILENCE
         )
-        with patch.object(orch_mod, "logger") as mock_logger:
+        with capture_logs() as logs:
             for _ in range(3):
                 await pipeline.feed_frame(_silence_frame())
 
-            skipped = _orchestrator_warning_calls(
-                mock_logger, "voice_perception_skipped_no_callback"
-            )
-            assert len(skipped) == 1
-            assert skipped[0].kwargs["text_length"] == len("hello world")
+        skipped = _events_of(logs, "voice_perception_skipped_no_callback")
+        assert len(skipped) == 1
+        assert skipped[0]["text_length"] == len("hello world")

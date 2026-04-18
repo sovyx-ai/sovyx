@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
+from structlog.testing import capture_logs
 
 from sovyx.voice.vad import (
     SileroVAD,
@@ -628,49 +629,34 @@ class TestStateTransitionTelemetry:
     """
 
     def test_no_log_when_state_unchanged(self) -> None:
-        from sovyx.voice import vad as vad_mod
-
         vad = _build_vad([0.1, 0.1, 0.1])
-        with patch.object(vad_mod, "logger") as mock_logger:
+        with capture_logs() as logs:
             for _ in range(3):
                 vad.process_frame(_silence_frame())
-            transition_calls = [
-                c
-                for c in mock_logger.info.call_args_list
-                if c.args and c.args[0] == "vad_state_transition"
-            ]
-            assert transition_calls == []
+        transitions = [log for log in logs if log.get("event") == "vad_state_transition"]
+        assert transitions == []
 
     def test_logs_silence_to_onset(self) -> None:
-        from sovyx.voice import vad as vad_mod
-
         vad = _build_vad([0.9])
-        with patch.object(vad_mod, "logger") as mock_logger:
+        with capture_logs() as logs:
             vad.process_frame(_speech_frame())
-            transition_calls = [
-                c
-                for c in mock_logger.info.call_args_list
-                if c.args and c.args[0] == "vad_state_transition"
-            ]
-            assert len(transition_calls) == 1
-            kwargs = transition_calls[0].kwargs
-            assert kwargs["from_state"] == "SILENCE"
-            assert kwargs["to_state"] == "SPEECH_ONSET"
-            assert kwargs["probability"] == 0.9  # noqa: PLR2004
+        transitions = [log for log in logs if log.get("event") == "vad_state_transition"]
+        assert len(transitions) == 1
+        assert transitions[0]["from_state"] == "SILENCE"
+        assert transitions[0]["to_state"] == "SPEECH_ONSET"
+        assert transitions[0]["probability"] == 0.9  # noqa: PLR2004
 
     def test_logs_full_onset_to_speech_sequence(self) -> None:
-        from sovyx.voice import vad as vad_mod
-
         vad = _build_vad([0.9, 0.9, 0.9])
-        with patch.object(vad_mod, "logger") as mock_logger:
+        with capture_logs() as logs:
             for _ in range(3):
                 vad.process_frame(_speech_frame())
-            transitions = [
-                (c.kwargs["from_state"], c.kwargs["to_state"])
-                for c in mock_logger.info.call_args_list
-                if c.args and c.args[0] == "vad_state_transition"
-            ]
-            assert transitions == [
-                ("SILENCE", "SPEECH_ONSET"),
-                ("SPEECH_ONSET", "SPEECH"),
-            ]
+        transitions = [
+            (log["from_state"], log["to_state"])
+            for log in logs
+            if log.get("event") == "vad_state_transition"
+        ]
+        assert transitions == [
+            ("SILENCE", "SPEECH_ONSET"),
+            ("SPEECH_ONSET", "SPEECH"),
+        ]
