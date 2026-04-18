@@ -14,6 +14,13 @@ import { HardwareDetection, type SelectedDevices } from "@/components/setup-wiza
 interface VoiceStepProps {
   onConfigured: () => void;
   onSkip: () => void;
+  /**
+   * UI language chosen in the personality step (or ``navigator.language``
+   * fallback). Forwarded to HardwareDetection so the voice-test picker
+   * seeds the recommended voice in the user's language — avoids the
+   * English-default-voice coherence bug.
+   */
+  language?: string;
 }
 
 interface EnableResult {
@@ -25,7 +32,7 @@ interface EnableResult {
   tts_engine?: string;
 }
 
-export function VoiceStep({ onConfigured, onSkip }: VoiceStepProps) {
+export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
   const [detected, setDetected] = useState(false);
   const [enabling, setEnabling] = useState(false);
   const [enabled, setEnabled] = useState(false);
@@ -98,7 +105,11 @@ export function VoiceStep({ onConfigured, onSkip }: VoiceStepProps) {
         </p>
       </div>
 
-      <HardwareDetection onDetected={handleDetected} onDeviceChange={handleDeviceChange} />
+      <HardwareDetection
+        onDetected={handleDetected}
+        onDeviceChange={handleDeviceChange}
+        initialLanguage={language}
+      />
 
       {/* Success state */}
       {enabled && (

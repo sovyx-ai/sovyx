@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAudioLevelStream } from "@/hooks/use-audio-level-stream";
+import { useVoiceCatalog } from "@/hooks/use-voice-catalog";
 import { useVoiceModels } from "@/hooks/use-voice-models";
 import { AudioLevelMeter } from "./AudioLevelMeter";
 import { TtsTestButton } from "./TtsTestButton";
@@ -65,6 +66,13 @@ export interface SelectedDevices {
 interface HardwareDetectionProps {
   onDetected?: (info: HardwareInfo) => void;
   onDeviceChange?: (devices: SelectedDevices) => void;
+  /**
+   * UI language picked earlier in onboarding (typically from the
+   * personality step or ``navigator.language``). Used as the initial
+   * value for the voice-test language selector and to seed the
+   * recommended voice. If omitted the picker falls back to ``en``.
+   */
+  initialLanguage?: string;
 }
 
 function findDefault(devices: AudioDevice[]): number | null {
@@ -72,12 +80,47 @@ function findDefault(devices: AudioDevice[]): number | null {
   return def?.index ?? devices[0]?.index ?? null;
 }
 
-function HardwareDetectionImpl({ onDetected, onDeviceChange }: HardwareDetectionProps) {
+function HardwareDetectionImpl({
+  onDetected,
+  onDeviceChange,
+  initialLanguage,
+}: HardwareDetectionProps) {
   const [loading, setLoading] = useState(true);
   const [info, setInfo] = useState<HardwareInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedInput, setSelectedInput] = useState<number | null>(null);
   const [selectedOutput, setSelectedOutput] = useState<number | null>(null);
+
+  // Voice-test language + voice pickers. The catalog loads on mount;
+  // once it arrives we canonicalise the prop and set the recommended
+  // voice so the user can immediately press "Test speakers" in their
+  // own language without touching the dropdowns.
+  const catalog = useVoiceCatalog();
+  const [selectedLanguage, setSelectedLanguage] = useState<string | null>(null);
+  const [selectedVoice, setSelectedVoice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!catalog.catalog || selectedLanguage !== null) return;
+    const canon = catalog.normaliseLanguage(initialLanguage ?? "en");
+    const fallback = catalog.catalog.supported_languages[0] ?? null;
+    const lang = canon ?? fallback;
+    setSelectedLanguage(lang);
+    if (lang !== null) {
+      setSelectedVoice(catalog.recommendedFor(lang));
+    }
+  }, [catalog, initialLanguage, selectedLanguage]);
+
+  const handleLanguageChange = useCallback(
+    (lang: string) => {
+      setSelectedLanguage(lang);
+      setSelectedVoice(catalog.recommendedFor(lang));
+    },
+    [catalog],
+  );
+
+  const handleVoiceChange = useCallback((voice: string) => {
+    setSelectedVoice(voice);
+  }, []);
 
   // Stash callbacks in refs so the fetch effect can stay `[]`-deps.
   // Without this, callers that pass inline callbacks (the common case —
@@ -192,7 +235,14 @@ function HardwareDetectionImpl({ onDetected, onDeviceChange }: HardwareDetection
             warn={!audio.available}
           />
           {audio.available && audio.output_devices.length > 0 && (
-            <TtsTestButton deviceId={selectedOutput} />
+            <VoiceTestPicker
+              deviceId={selectedOutput}
+              catalog={catalog}
+              selectedLanguage={selectedLanguage}
+              selectedVoice={selectedVoice}
+              onLanguageChange={handleLanguageChange}
+              onVoiceChange={handleVoiceChange}
+            />
           )}
         </div>
       </div>
@@ -484,6 +534,110 @@ function DeviceSelect({
         </select>
         <ChevronDownIcon className="pointer-events-none absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 text-[var(--svx-color-text-tertiary)]" />
       </div>
+    </div>
+  );
+}
+
+/**
+ * VoiceTestPicker — language + voice dropdowns + Test-speakers button.
+ *
+ * Renders disabled placeholders while the catalog fetch is in flight so
+ * the layout doesn't jump when the dropdowns appear. ``selectedLanguage``
+ * is allowed to be ``null`` between mount and the first catalog success;
+ * we forward ``"en"`` to the button in that case so its post body is
+ * always schema-valid, and disable the button until the catalog arrives.
+ */
+const LANGUAGE_LABELS: Record<string, string> = {
+  "en-us": "English (US)",
+  "en-gb": "English (UK)",
+  "pt-br": "Portuguese (BR)",
+  es: "Spanish",
+  fr: "French",
+  hi: "Hindi",
+  it: "Italian",
+  ja: "Japanese",
+  zh: "Chinese",
+};
+
+function VoiceTestPicker({
+  deviceId,
+  catalog,
+  selectedLanguage,
+  selectedVoice,
+  onLanguageChange,
+  onVoiceChange,
+}: {
+  deviceId: number | null;
+  catalog: ReturnType<typeof useVoiceCatalog>;
+  selectedLanguage: string | null;
+  selectedVoice: string | null;
+  onLanguageChange: (lang: string) => void;
+  onVoiceChange: (voice: string) => void;
+}) {
+  const ready = catalog.catalog !== null && selectedLanguage !== null;
+  const voices = selectedLanguage
+    ? catalog.voicesForLanguage(selectedLanguage)
+    : [];
+  const languages = catalog.catalog?.supported_languages ?? [];
+
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-2 gap-2">
+        <div className="relative">
+          <select
+            aria-label="Voice-test language"
+            value={selectedLanguage ?? ""}
+            onChange={(e) => onLanguageChange(e.target.value)}
+            disabled={!ready}
+            className={cn(
+              "w-full cursor-pointer rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-elevated)] px-2.5 py-1.5 pr-7 text-[11px] text-[var(--svx-color-text-primary)] outline-none",
+              !ready && "cursor-not-allowed opacity-60",
+            )}
+            style={{ colorScheme: "dark" }}
+          >
+            {!ready && <option value="">Loading…</option>}
+            {languages.map((code) => (
+              <option key={code} value={code}>
+                {LANGUAGE_LABELS[code] ?? code}
+              </option>
+            ))}
+          </select>
+          <ChevronDownIcon className="pointer-events-none absolute right-2 top-1/2 size-3 -translate-y-1/2 text-[var(--svx-color-text-tertiary)]" />
+        </div>
+        <div className="relative">
+          <select
+            aria-label="Voice"
+            value={selectedVoice ?? ""}
+            onChange={(e) => onVoiceChange(e.target.value)}
+            disabled={!ready || voices.length === 0}
+            className={cn(
+              "w-full cursor-pointer rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-elevated)] px-2.5 py-1.5 pr-7 text-[11px] text-[var(--svx-color-text-primary)] outline-none",
+              (!ready || voices.length === 0) && "cursor-not-allowed opacity-60",
+            )}
+            style={{ colorScheme: "dark" }}
+          >
+            {!ready && <option value="">Loading…</option>}
+            {voices.map((v) => (
+              <option key={v.id} value={v.id}>
+                {v.display_name}
+              </option>
+            ))}
+          </select>
+          <ChevronDownIcon className="pointer-events-none absolute right-2 top-1/2 size-3 -translate-y-1/2 text-[var(--svx-color-text-tertiary)]" />
+        </div>
+      </div>
+      {catalog.error && (
+        <p className="text-[10px] text-[var(--svx-color-error)]">
+          <AlertTriangleIcon className="mr-1 inline size-3" />
+          {catalog.error}
+        </p>
+      )}
+      <TtsTestButton
+        deviceId={deviceId}
+        language={selectedLanguage ?? "en"}
+        voice={selectedVoice}
+        disabled={!ready}
+      />
     </div>
   );
 }

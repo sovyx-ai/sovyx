@@ -149,6 +149,7 @@ export default function OnboardingPage() {
 
         {step === 4 && (
           <VoiceStep
+            language={language}
             onConfigured={handleVoiceDone}
             onSkip={handleVoiceDone}
           />

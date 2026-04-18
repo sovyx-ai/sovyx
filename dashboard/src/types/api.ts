@@ -764,3 +764,16 @@ export interface VoiceModelDownloadProgress {
   current_model: string | null;
   error: string | null;
 }
+
+export interface VoiceCatalogEntry {
+  id: string;
+  display_name: string;
+  language: string;
+  gender: "female" | "male";
+}
+
+export interface VoiceCatalogResponse {
+  supported_languages: string[];
+  by_language: Record<string, VoiceCatalogEntry[]>;
+  recommended_per_language: Record<string, string>;
+}

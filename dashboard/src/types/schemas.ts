@@ -497,3 +497,16 @@ export const VoiceModelDownloadProgressSchema = z.object({
   current_model: z.string().nullable(),
   error: z.string().nullable(),
 });
+
+export const VoiceCatalogEntrySchema = z.object({
+  id: z.string(),
+  display_name: z.string(),
+  language: z.string(),
+  gender: z.enum(["female", "male"]),
+});
+
+export const VoiceCatalogResponseSchema = z.object({
+  supported_languages: z.array(z.string()),
+  by_language: z.record(z.string(), z.array(VoiceCatalogEntrySchema)),
+  recommended_per_language: z.record(z.string(), z.string()),
+});

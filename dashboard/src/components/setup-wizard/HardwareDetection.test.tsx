@@ -13,7 +13,7 @@
  *      transient 429 wiped the whole Step 4.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { useState } from "react";
 import { HardwareDetection } from "./HardwareDetection";
 
@@ -64,6 +64,28 @@ const hardwareInfo = {
   total_download_mb: 115,
 };
 
+const voiceCatalog = {
+  supported_languages: ["en-us", "pt-br", "ja"],
+  by_language: {
+    "en-us": [
+      { id: "af_heart", display_name: "Heart", language: "en-us", gender: "female" },
+      { id: "am_adam", display_name: "Adam", language: "en-us", gender: "male" },
+    ],
+    "pt-br": [
+      { id: "pf_dora", display_name: "Dora", language: "pt-br", gender: "female" },
+      { id: "pm_alex", display_name: "Alex", language: "pt-br", gender: "male" },
+    ],
+    ja: [
+      { id: "jf_alpha", display_name: "Alpha", language: "ja", gender: "female" },
+    ],
+  },
+  recommended_per_language: {
+    "en-us": "af_heart",
+    "pt-br": "pf_dora",
+    ja: "jf_alpha",
+  },
+};
+
 const modelsStatus = {
   model_dir: "/tmp",
   all_installed: true,
@@ -107,6 +129,7 @@ describe("HardwareDetection", () => {
     mockGet.mockImplementation((url: string) => {
       if (url === "/api/voice/hardware-detect") return Promise.resolve(hardwareInfo);
       if (url === "/api/voice/models/status") return Promise.resolve(modelsStatus);
+      if (url === "/api/voice/voices") return Promise.resolve(voiceCatalog);
       return Promise.reject(new Error(`unexpected GET ${url}`));
     });
 
@@ -152,7 +175,11 @@ describe("HardwareDetection", () => {
   });
 
   it("surfaces an error panel when the initial detect fetch fails", async () => {
-    mockGet.mockRejectedValueOnce(new Error("boom"));
+    mockGet.mockImplementation((url: string) => {
+      if (url === "/api/voice/hardware-detect") return Promise.reject(new Error("boom"));
+      if (url === "/api/voice/voices") return Promise.resolve(voiceCatalog);
+      return Promise.resolve({});
+    });
 
     render(<HardwareDetection />);
 
@@ -161,5 +188,81 @@ describe("HardwareDetection", () => {
     });
     // No cpu/ram chips rendered.
     expect(screen.queryByText(/cores/i)).not.toBeInTheDocument();
+  });
+
+  describe("voice test picker", () => {
+    function stubAll() {
+      mockGet.mockImplementation((url: string) => {
+        if (url === "/api/voice/hardware-detect") return Promise.resolve(hardwareInfo);
+        if (url === "/api/voice/models/status") return Promise.resolve(modelsStatus);
+        if (url === "/api/voice/voices") return Promise.resolve(voiceCatalog);
+        return Promise.reject(new Error(`unexpected GET ${url}`));
+      });
+    }
+
+    it("seeds recommended voice from initialLanguage (pt → pt-br/pf_dora)", async () => {
+      stubAll();
+
+      render(<HardwareDetection initialLanguage="pt" />);
+
+      const languageSelect = await screen.findByLabelText(/voice-test language/i);
+      const voiceSelect = await screen.findByLabelText(/^voice$/i);
+
+      await waitFor(() => {
+        expect((languageSelect as HTMLSelectElement).value).toBe("pt-br");
+        expect((voiceSelect as HTMLSelectElement).value).toBe("pf_dora");
+      });
+    });
+
+    it("falls back to en-us when initialLanguage is omitted", async () => {
+      stubAll();
+      render(<HardwareDetection />);
+
+      const languageSelect = await screen.findByLabelText(/voice-test language/i);
+      const voiceSelect = await screen.findByLabelText(/^voice$/i);
+
+      await waitFor(() => {
+        expect((languageSelect as HTMLSelectElement).value).toBe("en-us");
+        expect((voiceSelect as HTMLSelectElement).value).toBe("af_heart");
+      });
+    });
+
+    it("switching language resets the voice to that language's recommended", async () => {
+      stubAll();
+      render(<HardwareDetection initialLanguage="en" />);
+
+      const languageSelect = await screen.findByLabelText(/voice-test language/i);
+      const voiceSelect = await screen.findByLabelText(/^voice$/i);
+
+      await waitFor(() => {
+        expect((voiceSelect as HTMLSelectElement).value).toBe("af_heart");
+      });
+
+      fireEvent.change(languageSelect, { target: { value: "ja" } });
+
+      await waitFor(() => {
+        expect((voiceSelect as HTMLSelectElement).value).toBe("jf_alpha");
+      });
+      // The voice dropdown should only list Japanese voices now.
+      const options = within(voiceSelect as HTMLSelectElement).getAllByRole(
+        "option",
+      ) as HTMLOptionElement[];
+      expect(options.map((o) => o.value)).toEqual(["jf_alpha"]);
+    });
+
+    it("voice dropdown only lists voices for the selected language", async () => {
+      stubAll();
+      render(<HardwareDetection initialLanguage="pt-br" />);
+
+      const voiceSelect = await screen.findByLabelText(/^voice$/i);
+      await waitFor(() => {
+        expect((voiceSelect as HTMLSelectElement).value).toBe("pf_dora");
+      });
+
+      const options = within(voiceSelect as HTMLSelectElement).getAllByRole(
+        "option",
+      ) as HTMLOptionElement[];
+      expect(options.map((o) => o.value).sort()).toEqual(["pf_dora", "pm_alex"]);
+    });
   });
 });
