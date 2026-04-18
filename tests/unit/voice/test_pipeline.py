@@ -1108,49 +1108,62 @@ class TestAudioOutputQueueEdgeCases:
 
     @pytest.mark.asyncio
     async def test_play_audio_sounddevice_path(self) -> None:
-        """_play_audio uses sounddevice when available."""
+        """_play_audio opens an OutputStream and writes the chunk.
+
+        The pipeline output queue uses ``blocking_write_play`` (see
+        ``_stream_opener``) instead of ``sd.play`` so playback survives
+        WASAPI on threadpool workers.
+        """
         from sovyx.voice.pipeline import _play_audio
 
         chunk = _audio_chunk(10)
+        stream = MagicMock()
         mock_sd = MagicMock()
-        mock_sd.play = MagicMock()
-        mock_sd.wait = MagicMock()
+        mock_sd.OutputStream = MagicMock(return_value=stream)
+        # If anything regresses to sd.play this will fail loudly.
+        mock_sd.play = MagicMock(side_effect=AssertionError("sd.play must not be used"))
         with patch.dict("sys.modules", {"sounddevice": mock_sd}):
             await _play_audio(chunk)
-        mock_sd.play.assert_called_once()
-        mock_sd.wait.assert_called_once()
+        mock_sd.OutputStream.assert_called_once()
+        stream.start.assert_called_once()
+        stream.write.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_play_audio_does_not_block_event_loop(self) -> None:
-        """Regression: a blocking sd.wait() MUST run in a worker thread.
+        """Regression: blocking playback MUST run in a worker thread.
 
-        Historic bug: ``_play_audio`` called ``sd.play()`` + ``sd.wait()``
-        directly from the async body, so a multi-second TTS chunk stalled
-        every other coroutine — dashboard WS frames, voice mic capture,
-        HTTP requests — for the full playback. Offload to to_thread and
-        verify a concurrent task gets to run while "playback" is active.
+        Historic bug: ``_play_audio`` ran blocking playback directly
+        from the async body, so a multi-second TTS chunk stalled every
+        other coroutine — dashboard WS frames, voice mic capture, HTTP
+        requests. The fix offloads to :func:`asyncio.to_thread`. The
+        test proves the offload by having the blocking ``write()``
+        side-effect wait on a threading.Event while an async ticker
+        runs concurrently on the event loop.
         """
         from sovyx.voice.pipeline import _play_audio
 
         play_started = asyncio.Event()
         release_play = threading.Event()
         concurrent_ticks = 0
+        loop = asyncio.get_running_loop()
 
-        def _blocking_wait() -> None:
-            play_started.set()
+        def _blocking_write(_audio: object) -> None:
+            loop.call_soon_threadsafe(play_started.set)
             # Block the worker thread until the async side has been able
             # to run some other work. If the event loop was also blocked,
             # the asyncio.Event below would never be set and we'd deadlock.
             release_play.wait(timeout=1.0)
 
+        stream = MagicMock()
+        stream.write = MagicMock(side_effect=_blocking_write)
         mock_sd = MagicMock()
-        mock_sd.play = MagicMock()
-        mock_sd.wait = MagicMock(side_effect=_blocking_wait)
+        mock_sd.OutputStream = MagicMock(return_value=stream)
+        mock_sd.play = MagicMock(side_effect=AssertionError("sd.play must not be used"))
 
         async def _ticker() -> None:
             nonlocal concurrent_ticks
             await play_started.wait()
-            # If the event loop is pinned by sd.wait(), this body never runs.
+            # If the event loop is pinned by the blocking write, this body never runs.
             for _ in range(3):
                 concurrent_ticks += 1
                 await asyncio.sleep(0)
@@ -1161,7 +1174,7 @@ class TestAudioOutputQueueEdgeCases:
             await asyncio.gather(_play_audio(chunk), _ticker())
 
         assert concurrent_ticks == 3, (
-            "event loop was blocked during sd.wait(); _play_audio must use to_thread"
+            "event loop was blocked during OutputStream.write(); _play_audio must use to_thread"
         )
 
 

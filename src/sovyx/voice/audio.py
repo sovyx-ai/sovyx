@@ -727,8 +727,15 @@ class AudioOutput:
     async def _play_chunk(self, audio: np.ndarray, sample_rate: int) -> None:
         """Play a single audio chunk.
 
-        Uses ``sounddevice`` when available; falls back to sleep-based
+        Uses :func:`sovyx.voice._stream_opener.blocking_write_play`
+        (``sd.OutputStream.write`` blocking path, threadpool-safe)
+        when sounddevice is available; falls back to sleep-based
         simulation for headless / test environments.
+
+        ``sd.play`` is avoided because its callback engine needs COM
+        on the calling thread — a requirement that
+        :func:`asyncio.to_thread` workers do not satisfy on Windows +
+        WASAPI. See :func:`blocking_write_play` for the root cause.
         """
         try:
             import sounddevice as sd
@@ -737,16 +744,16 @@ class AudioOutput:
             await asyncio.sleep(duration)
             return
 
-        # sd.play() + sd.wait() are blocking — they must run off the event
-        # loop or every other coroutine (voice pipeline, bridge, dashboard
-        # WS) stalls for the clip duration. See anti-pattern #14.
+        from sovyx.voice._stream_opener import blocking_write_play
+
         device = self._device
-
-        def _blocking_play() -> None:
-            sd.play(audio, sample_rate, device=device)
-            sd.wait()
-
-        await asyncio.to_thread(_blocking_play)
+        await asyncio.to_thread(
+            blocking_write_play,
+            sd,
+            audio,
+            sample_rate,
+            device=device,
+        )
 
     @staticmethod
     def list_devices() -> list[dict[str, Any]]:

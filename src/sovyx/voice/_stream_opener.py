@@ -300,7 +300,14 @@ async def play_audio(
 ) -> float:
     """Play a one-shot int16 clip to ``device`` and return elapsed ms.
 
-    Uses ``sd.play(..., blocking=True)`` wrapped in :func:`asyncio.to_thread`.
+    Uses :func:`blocking_write_play` (``sd.OutputStream.write``, blocking
+    path) wrapped in :func:`asyncio.to_thread`. The blocking write path
+    is threadpool-safe on every Windows host API — unlike ``sd.play``,
+    which relies on a callback engine that needs COM on the calling
+    thread and therefore fails on WASAPI when invoked from an
+    :class:`asyncio.ThreadPoolExecutor` worker. See
+    :func:`blocking_write_play` for the root-cause writeup.
+
     When the target host API is WASAPI and ``capture_wasapi_auto_convert``
     is on, ``WasapiSettings(auto_convert=True)`` is passed via
     ``extra_settings`` so format mismatches with the Windows mixer are
@@ -332,12 +339,12 @@ async def play_audio(
 
     try:
         await asyncio.to_thread(
-            _blocking_play,
+            blocking_write_play,
             sd,
             audio,
             source_rate,
-            device.index,
-            extra,
+            device=device.index,
+            extra_settings=extra,
         )
         attempts.append(
             OpenAttempt(
@@ -351,7 +358,7 @@ async def play_audio(
         _record_attempts(attempts, kind="output")
         return (asyncio.get_running_loop().time() - start_monotonic) * 1000
     except Exception as exc:  # noqa: BLE001
-        classified = _classify_portaudio_error(exc)
+        classified = _classify_portaudio_error(exc, kind="output")
         attempts.append(
             OpenAttempt(
                 host_api=device.host_api_name,
@@ -392,15 +399,15 @@ async def play_audio(
     resampled = await asyncio.to_thread(_resample_int16, audio, source_rate, native_rate)
     try:
         await asyncio.to_thread(
-            _blocking_play,
+            blocking_write_play,
             sd,
             resampled,
             native_rate,
-            device.index,
-            extra,
+            device=device.index,
+            extra_settings=extra,
         )
     except Exception as retry_exc:  # noqa: BLE001
-        retry_classified = _classify_portaudio_error(retry_exc)
+        retry_classified = _classify_portaudio_error(retry_exc, kind="output")
         attempts.append(
             OpenAttempt(
                 host_api=device.host_api_name,
@@ -631,22 +638,83 @@ def _maybe_wasapi_settings(
         return None
 
 
-def _blocking_play(
+def blocking_write_play(
     sd: Any,  # noqa: ANN401
-    audio: npt.NDArray[np.int16],
+    audio: Any,  # noqa: ANN401
     sample_rate: int,
-    device_index: int,
-    extra_settings: Any | None,  # noqa: ANN401
+    *,
+    device: int | str | None = None,
+    extra_settings: Any | None = None,  # noqa: ANN401
 ) -> None:
-    """Synchronous wrapper around ``sd.play`` for :func:`asyncio.to_thread`."""
+    """Play ``audio`` synchronously via ``sd.OutputStream.write`` — threadpool-safe.
+
+    Why not ``sd.play``:
+        ``sd.play(..., blocking=True)`` is implemented on top of a
+        callback-based :class:`sd.OutputStream`. On Windows + WASAPI,
+        PortAudio's callback engine calls into the IAudioClient COM
+        interface from the stream-open path; that call requires COM to
+        be initialized (``CoInitializeEx``) on the current thread. The
+        Python main thread picks up COM incidentally (via the
+        ``sounddevice`` import / ``Pa_Initialize`` chain), but
+        :func:`asyncio.to_thread` dispatches into a
+        :class:`ThreadPoolExecutor` worker that has **no** COM — so
+        ``sd.play`` fails with ``PaErrorCode -9999`` (unanticipated host
+        error) and ``GLE=0x490`` (``ERROR_NOT_FOUND``), presenting as a
+        KS / WDM-KS proposal failure even though the elected host API
+        is WASAPI.
+
+        Opening :class:`sd.OutputStream` without a callback and writing
+        the buffer via :meth:`OutputStream.write` goes through
+        PortAudio's *blocking* WASAPI path, which handles COM
+        transitions internally. The blocking path is threadpool-safe
+        on MME, DirectSound, WDM-KS, and WASAPI uniformly.
+
+        Rule of thumb: anywhere the sovyx codebase would call
+        ``sd.play(...)`` from within :func:`asyncio.to_thread`, use
+        this helper instead. See CLAUDE.md anti-pattern #14 for the
+        general "sync CPU-bound in async" rule; this helper is a
+        Windows-specific corollary.
+
+    Args:
+        sd: The ``sounddevice`` module (injected for tests).
+        audio: 1-D (mono) or 2-D ``(frames, channels)`` PCM buffer.
+            ``dtype`` must be ``int16`` or ``float32``; the stream
+            ``dtype`` is inferred from ``audio.dtype``.
+        sample_rate: Stream sample rate in Hz.
+        device: Target device index, or ``None`` for the default.
+        extra_settings: Host-API-specific settings (e.g.
+            :class:`sd.WasapiSettings`). Dropped on ``TypeError`` from
+            older PortAudio builds that do not expose the kwarg.
+    """
+    channels = 1 if audio.ndim == 1 else int(audio.shape[1])
+    dtype = "int16" if getattr(audio.dtype, "kind", "") == "i" else "float32"
     kwargs: dict[str, Any] = {
         "samplerate": sample_rate,
-        "device": device_index,
-        "blocking": True,
+        "channels": channels,
+        "dtype": dtype,
     }
+    if device is not None:
+        kwargs["device"] = device
     if extra_settings is not None:
         kwargs["extra_settings"] = extra_settings
-    sd.play(audio, **kwargs)
+    try:
+        stream = sd.OutputStream(**kwargs)
+    except TypeError as exc:
+        # Older PortAudio wheels may reject the ``extra_settings`` kwarg.
+        # Retry without it so the caller's auto_convert fallback loop
+        # still gets a meaningful attempt.
+        if extra_settings is None or "extra_settings" not in str(exc):
+            raise
+        kwargs.pop("extra_settings", None)
+        stream = sd.OutputStream(**kwargs)
+    try:
+        stream.start()
+        stream.write(audio)
+    finally:
+        with contextlib.suppress(Exception):
+            stream.stop()
+        with contextlib.suppress(Exception):
+            stream.close()
 
 
 async def _close_stream_quiet(stream: Any) -> None:  # noqa: ANN401

@@ -491,12 +491,27 @@ class TestOpenOutputStreamParity:
         from sovyx.voice._stream_opener import play_audio
 
         sd = _fake_sd_module()
-        calls: list[tuple[int, int, Any]] = []
+        calls: list[dict[str, Any]] = []
+        written: list[int] = []
 
-        def fake_play(audio: np.ndarray, *, samplerate: int, **kw: Any) -> None:
-            calls.append((int(audio.size), samplerate, kw.get("extra_settings")))
+        def stream_factory(**kwargs: Any) -> MagicMock:
+            calls.append(dict(kwargs))
+            stream = MagicMock()
+            stream.start = MagicMock()
+            stream.write = MagicMock(side_effect=lambda buf: written.append(int(buf.size)))
+            stream.stop = MagicMock()
+            stream.close = MagicMock()
+            return stream
 
-        sd.play = fake_play  # type: ignore[attr-defined]
+        sd.OutputStream = stream_factory  # type: ignore[attr-defined]
+
+        # sd.play must not be used — it runs a callback engine that
+        # deadlocks on WASAPI threadpool workers (missing COM). Any
+        # regression that re-introduces sd.play should fail loudly.
+        def _forbid_sd_play(*_a: Any, **_kw: Any) -> None:
+            raise AssertionError("sd.play must not be called — use OutputStream.write")
+
+        sd.play = _forbid_sd_play  # type: ignore[attr-defined]
 
         speaker = DeviceEntry(
             index=15,
@@ -520,11 +535,75 @@ class TestOpenOutputStreamParity:
             enumerate_fn=lambda: [speaker],
         )
         assert len(calls) == 1
-        _size, rate, extra = calls[0]
+        kwargs = calls[0]
         # With auto_convert the opener does not need to resample client-side;
         # if it does resample it must still pass WasapiSettings.
-        assert rate in {24_000, 48_000}
+        assert kwargs["samplerate"] in {24_000, 48_000}
+        assert kwargs["device"] == 15
+        assert kwargs["channels"] == 1
+        assert kwargs["dtype"] == "int16"
+        extra = kwargs.get("extra_settings")
         assert extra is not None and extra.auto_convert is True
+        assert written == [24_000]
+
+    @pytest.mark.asyncio()
+    async def test_output_uses_output_stream_write_not_sd_play(self) -> None:
+        """Regression: ``play_audio`` must use blocking OutputStream.write.
+
+        On Windows + WASAPI, ``sd.play(..., blocking=True)`` opens a
+        callback-based OutputStream whose open path calls into
+        IAudioClient via COM — and ``asyncio.to_thread`` dispatches
+        onto a ThreadPoolExecutor worker without CoInitializeEx. That
+        combination fails with ``PaErrorCode -9999`` + ``GLE=0x490``
+        (``ERROR_NOT_FOUND``), surfacing a WDM-KS / ``KSPROPERTY_PIN_*``
+        error even though the elected host API is WASAPI.
+
+        ``blocking_write_play`` (``sd.OutputStream(...).write(audio)``)
+        uses PortAudio's blocking path, which handles COM transitions
+        internally and is threadpool-safe. This test pins the fix by
+        forbidding ``sd.play`` and asserting the OutputStream path is
+        taken instead. See the helper's docstring for the full writeup.
+        """
+        from sovyx.voice._stream_opener import play_audio
+
+        sd = _fake_sd_module()
+        opened: list[dict[str, Any]] = []
+        written: list[int] = []
+
+        def stream_factory(**kwargs: Any) -> MagicMock:
+            opened.append(dict(kwargs))
+            stream = MagicMock()
+            stream.write = MagicMock(side_effect=lambda buf: written.append(int(buf.size)))
+            return stream
+
+        sd.OutputStream = stream_factory  # type: ignore[attr-defined]
+        sd.play = MagicMock(  # type: ignore[attr-defined]
+            side_effect=AssertionError("sd.play must not be used"),
+        )
+
+        speaker = DeviceEntry(
+            index=7,
+            name="Plain Output",
+            canonical_name="plain output",
+            host_api_index=2,
+            host_api_name="MME",
+            max_input_channels=0,
+            max_output_channels=2,
+            default_samplerate=48_000,
+            is_os_default=False,
+        )
+        audio = np.ones(4_800, dtype=np.int16)
+        await play_audio(
+            audio,
+            source_rate=48_000,
+            device=speaker,
+            tuning=VoiceTuningConfig(),
+            sd_module=sd,
+            enumerate_fn=lambda: [speaker],
+        )
+        assert len(opened) == 1
+        sd.play.assert_not_called()  # type: ignore[attr-defined]
+        assert written == [4_800]
 
 
 # ---------------------------------------------------------------------------

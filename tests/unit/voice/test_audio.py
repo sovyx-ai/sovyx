@@ -752,26 +752,24 @@ class TestAudioOutput:
 
     @pytest.mark.asyncio
     async def test_play_chunk_does_not_block_event_loop(self) -> None:
-        """``_play_chunk`` must delegate blocking ``sd.wait()`` to a thread.
+        """``_play_chunk`` must delegate blocking playback to a thread.
 
-        Regression — audio.py used to call ``sd.play()`` + ``sd.wait()``
-        directly inside the ``async def``. ``sd.wait()`` blocks for the
-        full clip duration; every other coroutine (voice pipeline, bridge,
-        dashboard WS) stalled until playback finished. See CLAUDE.md
-        anti-pattern #14 and the Round 1 fix in
-        ``voice/pipeline/_output_queue.py``.
+        Regression — audio.py used to run blocking playback directly
+        inside the ``async def``. For the full clip duration, every
+        other coroutine (voice pipeline, bridge, dashboard WS) stalled.
+        See CLAUDE.md anti-pattern #14 and
+        ``voice/_stream_opener.blocking_write_play`` for the
+        threadpool-safe replacement.
         """
         import threading
 
         wait_done = threading.Event()
 
+        stream = MagicMock()
+        stream.write = MagicMock(side_effect=lambda _buf: wait_done.wait(timeout=1.0))
         mock_sd = MagicMock()
-        mock_sd.play = MagicMock()
-        # Simulate a 300ms clip — blocking. If the call is NOT off the
-        # event loop, the ticker below will stall.
-        mock_sd.wait = MagicMock(
-            side_effect=lambda: wait_done.wait(timeout=1.0),
-        )
+        mock_sd.OutputStream = MagicMock(return_value=stream)
+        mock_sd.play = MagicMock(side_effect=AssertionError("sd.play must not be used"))
 
         saved = sys.modules.get("sounddevice")
         sys.modules["sounddevice"] = mock_sd
@@ -796,12 +794,12 @@ class TestAudioOutput:
             await asyncio.wait_for(tick_task, timeout=0.5)
             assert ticks == 5
 
-            # Release the fake blocking wait and let the play task finish.
+            # Release the fake blocking write and let the play task finish.
             wait_done.set()
             await asyncio.wait_for(play_task, timeout=1.0)
 
-            mock_sd.play.assert_called_once()
-            mock_sd.wait.assert_called_once()
+            mock_sd.OutputStream.assert_called_once()
+            stream.write.assert_called_once()
         finally:
             wait_done.set()
             if saved is not None:

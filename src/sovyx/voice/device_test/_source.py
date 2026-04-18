@@ -266,7 +266,11 @@ def _resolve_input_entry(
     return defaults[0] if defaults else candidates[0]
 
 
-def _classify_portaudio_error(exc: BaseException) -> AudioSourceError:
+def _classify_portaudio_error(
+    exc: BaseException,
+    *,
+    kind: str = "input",
+) -> AudioSourceError:
     """Map a raw PortAudio exception into a typed :class:`AudioSourceError`.
 
     Windows WASAPI surfaces shared-mode mixer mismatches as
@@ -277,6 +281,12 @@ def _classify_portaudio_error(exc: BaseException) -> AudioSourceError:
     first because they let the frontend render an actionable hint
     ("change the microphone format in Windows Sound settings") instead
     of surfacing the raw host-error string.
+
+    ``kind`` controls only the generic fallback message
+    (``"Failed to open {kind} stream"``). The opener uses this to keep
+    output-path failures from surfacing as ``"Failed to open input stream"``
+    in the wizard — a cosmetic bug that made an output-side KS error look
+    like a microphone problem.
     """
     msg = str(exc).lower()
 
@@ -334,7 +344,7 @@ def _classify_portaudio_error(exc: BaseException) -> AudioSourceError:
         )
     return AudioSourceError(
         ErrorCode.INTERNAL_ERROR,
-        f"Failed to open input stream: {exc}",
+        f"Failed to open {kind} stream: {exc}",
     )
 
 

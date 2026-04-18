@@ -261,22 +261,23 @@ class TestSoundDeviceOutputSinkIntegration:
     @pytest.mark.asyncio()
     async def test_empty_audio_skips_play_entirely(self) -> None:
         sd = _fake_sd()
-        sd.play = MagicMock()  # type: ignore[attr-defined]
+        sd.OutputStream = MagicMock()  # type: ignore[attr-defined]
         audio = np.zeros(0, dtype=np.int16)
         sink = SoundDeviceOutputSink(sd_module=sd, enumerate_fn=lambda: [])
         elapsed = await sink.play(audio, sample_rate=24_000, device_id=None)
         assert elapsed == 0.0
-        sd.play.assert_not_called()  # type: ignore[attr-defined]
+        sd.OutputStream.assert_not_called()  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio()
     async def test_play_delegates_to_opener_with_resolved_entry(self) -> None:
         sd = _fake_sd()
         calls: list[dict[str, Any]] = []
 
-        def fake_play(audio: np.ndarray, **kw: Any) -> None:
-            calls.append({"size": int(audio.size), **kw})
+        def stream_factory(**kwargs: Any) -> MagicMock:
+            calls.append(dict(kwargs))
+            return MagicMock()
 
-        sd.play = fake_play  # type: ignore[attr-defined]
+        sd.OutputStream = stream_factory  # type: ignore[attr-defined]
         out_entry = DeviceEntry(
             index=15,
             name="FakeSpeaker",
@@ -300,7 +301,7 @@ class TestSoundDeviceOutputSinkIntegration:
     @pytest.mark.asyncio()
     async def test_play_raises_audio_sink_error_on_failure(self) -> None:
         sd = _fake_sd()
-        sd.play = MagicMock(  # type: ignore[attr-defined]
+        sd.OutputStream = MagicMock(  # type: ignore[attr-defined]
             side_effect=RuntimeError("Device unavailable"),
         )
         out_entry = DeviceEntry(
@@ -322,7 +323,13 @@ class TestSoundDeviceOutputSinkIntegration:
     @pytest.mark.asyncio()
     async def test_play_resolves_to_default_when_device_id_unknown(self) -> None:
         sd = _fake_sd()
-        sd.play = MagicMock()  # type: ignore[attr-defined]
+        captured: list[dict[str, Any]] = []
+
+        def stream_factory(**kwargs: Any) -> MagicMock:
+            captured.append(dict(kwargs))
+            return MagicMock()
+
+        sd.OutputStream = stream_factory  # type: ignore[attr-defined]
         default = DeviceEntry(
             index=5,
             name="DefaultSpeaker",
@@ -351,7 +358,7 @@ class TestSoundDeviceOutputSinkIntegration:
             sample_rate=44_100,
             device_id=99,  # nonexistent — falls back to OS default
         )
-        assert sd.play.call_args.kwargs["device"] == 5  # type: ignore[attr-defined]
+        assert captured and captured[0]["device"] == 5
 
 
 # --------------------------------------------------------------------------

@@ -86,15 +86,21 @@ async def _play_audio(chunk: AudioChunk) -> None:
     """Play an audio chunk via sounddevice (or simulate in test).
 
     This is the low-level playback function.  In production it uses
-    ``sounddevice``; unit tests can patch this function.
+    :func:`sovyx.voice._stream_opener.blocking_write_play` (the
+    threadpool-safe ``sd.OutputStream.write`` blocking path); unit
+    tests can patch this function.
 
-    ``sd.play`` schedules playback on PortAudio's output thread, but
-    ``sd.wait()`` blocks the caller until the audio finishes — which for
-    a typical TTS chunk is hundreds of milliseconds to several seconds.
-    Running that inside ``async def`` would stall the dashboard WebSocket,
-    voice pipeline frame loop, and every other coroutine for the whole
-    playback. Offload to a worker thread so the event loop stays
-    responsive (anti-pattern #14).
+    Playback is blocking — a typical TTS chunk takes hundreds of
+    milliseconds to several seconds. Running that inside ``async def``
+    would stall the dashboard WebSocket, voice pipeline frame loop, and
+    every other coroutine for the whole playback. Offload to a worker
+    thread so the event loop stays responsive (anti-pattern #14).
+
+    ``sd.play`` is deliberately avoided here: on Windows + WASAPI its
+    callback engine requires COM on the calling thread, which
+    :func:`asyncio.to_thread` workers do not have —
+    :func:`blocking_write_play` uses the blocking WASAPI path that
+    handles COM transitions internally.
 
     Args:
         chunk: The audio chunk to play.
@@ -107,11 +113,9 @@ async def _play_audio(chunk: AudioChunk) -> None:
             await asyncio.sleep(chunk.duration_ms / 1000)
         return
 
-    def _blocking_play() -> None:
-        sd.play(chunk.audio, chunk.sample_rate)
-        sd.wait()
+    from sovyx.voice._stream_opener import blocking_write_play
 
-    await asyncio.to_thread(_blocking_play)
+    await asyncio.to_thread(blocking_write_play, sd, chunk.audio, chunk.sample_rate)
 
 
 # ---------------------------------------------------------------------------

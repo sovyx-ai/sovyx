@@ -774,6 +774,15 @@ async def _run_output_job(
             device_id=device_id,
         )
     except AudioSinkError as exc:
+        logger.warning(
+            "voice_test_output_job_failed",
+            job_id=job_id,
+            code=exc.code.value,
+            detail=exc.detail,
+            device_id=device_id,
+            voice=voice,
+            language=language,
+        )
         entry.result = TestOutputResult(
             ok=False,
             job_id=job_id,
