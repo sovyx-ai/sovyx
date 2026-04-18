@@ -441,6 +441,7 @@ class MindConfig(BaseModel):
     name: str
     id: MindId = Field(default=MindId(""))
     language: str = "en"
+    voice_id: str = ""
     timezone: str = "UTC"
     template: str = "assistant"
     user_name: str = ""

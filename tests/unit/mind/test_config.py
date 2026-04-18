@@ -299,6 +299,16 @@ class TestMindConfig:
         with pytest.raises(ValidationError):
             MindConfig()  # type: ignore[call-arg]
 
+    def test_voice_id_defaults_to_empty(self) -> None:
+        """An unset ``voice_id`` signals "auto-pick from catalog" to the factory."""
+        m = MindConfig(name="Aria")
+        assert m.voice_id == ""
+
+    def test_voice_id_explicit(self) -> None:
+        """``voice_id`` is a free-form string — the factory validates against the catalog."""
+        m = MindConfig(name="Aria", voice_id="pf_dora")
+        assert m.voice_id == "pf_dora"
+
 
 class TestLoadMindConfig:
     """load_mind_config() — YAML loading."""

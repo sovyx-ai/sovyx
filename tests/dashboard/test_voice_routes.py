@@ -311,6 +311,111 @@ class TestEnableVoiceCaptureWiring:
         app.state.registry.register_instance.assert_not_called()
 
 
+class TestEnableVoiceLanguageCoherence:
+    """``/enable`` forwards the mind's language + voice_id into the factory.
+
+    Before Phase 3, the factory ignored MindConfig entirely and always
+    built a Kokoro engine with the hardcoded English ``af_bella``
+    default. A mind with ``language="pt"`` still spoke English in the
+    live pipeline — the setup wizard's voice test was coherent but
+    real conversation wasn't. These tests lock in that the enable
+    route reads ``request.app.state.mind_config`` and forwards both
+    fields to ``create_voice_pipeline``.
+    """
+
+    def _fake_sd_with_devices(self) -> ModuleType:
+        fake_sd = ModuleType("sounddevice")
+        fake_sd.query_devices = MagicMock(  # type: ignore[attr-defined]
+            return_value=[
+                {"name": "mic", "max_input_channels": 1, "max_output_channels": 0},
+                {"name": "spk", "max_input_channels": 0, "max_output_channels": 2},
+            ],
+        )
+        return fake_sd
+
+    def test_enable_forwards_mind_language_and_voice_id(self, app, client: TestClient) -> None:
+        """MindConfig(language='pt', voice_id='pf_dora') → factory gets both."""
+        # Stand-in for MindConfig — the route only reads ``language`` and
+        # ``voice_id`` via ``getattr``, so a duck-typed object is enough
+        # and keeps the test independent of pydantic validation churn.
+        mind_config = MagicMock()
+        mind_config.language = "pt"
+        mind_config.voice_id = "pf_dora"
+        mind_config.llm.streaming = True
+        app.state.mind_config = mind_config
+
+        capture = MagicMock()
+        capture.start = AsyncMock()
+        pipeline = MagicMock()
+        pipeline.stop = AsyncMock()
+        pipeline.config.wake_word_enabled = False
+
+        from sovyx.voice.factory import VoiceBundle
+
+        bundle = VoiceBundle(pipeline=pipeline, capture_task=capture)
+        factory_mock = AsyncMock(return_value=bundle)
+
+        with (
+            patch(
+                "sovyx.voice.model_registry.check_voice_deps",
+                return_value=(
+                    [
+                        {"module": "moonshine_voice", "package": "moonshine-voice"},
+                        {"module": "sounddevice", "package": "sounddevice"},
+                    ],
+                    [],
+                ),
+            ),
+            patch("sovyx.voice.model_registry.detect_tts_engine", return_value="piper"),
+            patch.dict(sys.modules, {"sounddevice": self._fake_sd_with_devices()}),
+            patch("sovyx.voice.factory.create_voice_pipeline", new=factory_mock),
+        ):
+            resp = client.post("/api/voice/enable")
+
+        assert resp.status_code == 200  # noqa: PLR2004
+        kwargs = factory_mock.call_args.kwargs
+        assert kwargs["language"] == "pt"
+        assert kwargs["voice_id"] == "pf_dora"
+
+    def test_enable_defaults_when_no_mind_config(self, app, client: TestClient) -> None:
+        """No mind_config on app.state → factory sees English defaults, empty voice_id."""
+        # Explicitly clear anything a previous test may have set.
+        app.state.mind_config = None
+
+        capture = MagicMock()
+        capture.start = AsyncMock()
+        pipeline = MagicMock()
+        pipeline.stop = AsyncMock()
+        pipeline.config.wake_word_enabled = False
+
+        from sovyx.voice.factory import VoiceBundle
+
+        bundle = VoiceBundle(pipeline=pipeline, capture_task=capture)
+        factory_mock = AsyncMock(return_value=bundle)
+
+        with (
+            patch(
+                "sovyx.voice.model_registry.check_voice_deps",
+                return_value=(
+                    [
+                        {"module": "moonshine_voice", "package": "moonshine-voice"},
+                        {"module": "sounddevice", "package": "sounddevice"},
+                    ],
+                    [],
+                ),
+            ),
+            patch("sovyx.voice.model_registry.detect_tts_engine", return_value="piper"),
+            patch.dict(sys.modules, {"sounddevice": self._fake_sd_with_devices()}),
+            patch("sovyx.voice.factory.create_voice_pipeline", new=factory_mock),
+        ):
+            resp = client.post("/api/voice/enable")
+
+        assert resp.status_code == 200  # noqa: PLR2004
+        kwargs = factory_mock.call_args.kwargs
+        assert kwargs["language"] == "en"
+        assert kwargs["voice_id"] == ""
+
+
 class TestEnableVoiceCognitiveWiring:
     """Enable wires VoiceCognitiveBridge when CognitiveLoop is registered."""
 

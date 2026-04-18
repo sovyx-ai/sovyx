@@ -405,10 +405,23 @@ async def enable_voice(request: Request) -> JSONResponse:
 
     on_perception_cb = _on_perception if cognitive_loop is not None else None
 
+    # Resolve per-mind language + voice so the pipeline TTS matches the
+    # user's personality picks. Falls back to English defaults when the
+    # dashboard is in "no mind loaded" mode (e.g. first boot before
+    # onboarding writes mind.yaml).
+    mind_language = "en"
+    mind_voice_id = ""
+    mind_config_obj = getattr(request.app.state, "mind_config", None)
+    if mind_config_obj is not None:
+        mind_language = getattr(mind_config_obj, "language", "en") or "en"
+        mind_voice_id = getattr(mind_config_obj, "voice_id", "") or ""
+
     try:
         bundle = await create_voice_pipeline(
             event_bus=event_bus,
             on_perception=on_perception_cb,
+            language=mind_language,
+            voice_id=mind_voice_id,
             wake_word_enabled=False,
             mind_id=getattr(request.app.state, "mind_id", "default"),
             input_device=input_device,

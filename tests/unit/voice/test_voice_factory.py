@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
-from sovyx.voice.factory import VoiceBundle, VoiceFactoryError, _create_wake_word_stub
+from sovyx.voice.factory import (
+    VoiceBundle,
+    VoiceFactoryError,
+    _create_kokoro_tts,
+    _create_wake_word_stub,
+)
 
 
 class TestVoiceFactoryError:
@@ -124,3 +131,120 @@ class TestFactoryWiresDeviceAndCapture:
             factory_mod._create_vad = original_create_vad
             factory_mod._create_stt = original_create_stt
             factory_mod._create_piper_tts = original_create_piper
+
+
+class TestCreateKokoroTtsResolution:
+    """_create_kokoro_tts resolves voice_id + language via the voice catalog.
+
+    Regression: before Phase 3, the Kokoro engine was always constructed
+    with the hardcoded ``af_bella`` default, so a mind with
+    ``language="pt"`` still spoke English through the live pipeline.
+    """
+
+    def test_explicit_voice_id_wins_over_language(self, tmp_path) -> None:
+        """voice_id in the catalog → use it + its declared language.
+
+        The catalog's language always wins: a ``pf_dora`` voice stays
+        pt-br even if the caller passed ``language="en"``. This keeps
+        the per-voice phoneme model in sync with the speaker identity.
+        """
+        import sovyx.voice.factory as factory_mod
+
+        captured: dict[str, object] = {}
+
+        class _FakeKokoro:
+            def __init__(self, *, model_dir, config=None) -> None:
+                captured["model_dir"] = model_dir
+                captured["config"] = config
+
+        with (
+            patch.object(factory_mod, "__name__", "sovyx.voice.factory"),
+            patch(
+                "sovyx.voice.tts_kokoro.KokoroTTS",
+                _FakeKokoro,
+            ),
+        ):
+            _create_kokoro_tts(tmp_path, voice_id="pf_dora", language="en")
+
+        config = captured["config"]
+        assert config is not None
+        assert config.voice == "pf_dora"
+        assert config.language == "pt-br"
+
+    def test_empty_voice_id_picks_recommended_for_pt(self, tmp_path) -> None:
+        """language="pt" without voice_id → a p-prefix (Portuguese) voice."""
+        captured: dict[str, object] = {}
+
+        class _FakeKokoro:
+            def __init__(self, *, model_dir, config=None) -> None:
+                captured["config"] = config
+
+        with patch("sovyx.voice.tts_kokoro.KokoroTTS", _FakeKokoro):
+            _create_kokoro_tts(tmp_path, voice_id="", language="pt")
+
+        config = captured["config"]
+        assert config is not None
+        # The Kokoro naming convention pins Portuguese voices to the
+        # ``p`` prefix — if this ever regresses, the coherence bug is back.
+        assert config.voice.startswith("p")
+        assert config.language == "pt-br"
+
+    def test_empty_voice_id_picks_recommended_for_ja(self, tmp_path) -> None:
+        captured: dict[str, object] = {}
+
+        class _FakeKokoro:
+            def __init__(self, *, model_dir, config=None) -> None:
+                captured["config"] = config
+
+        with patch("sovyx.voice.tts_kokoro.KokoroTTS", _FakeKokoro):
+            _create_kokoro_tts(tmp_path, voice_id="", language="ja")
+
+        config = captured["config"]
+        assert config is not None
+        assert config.voice.startswith("j")
+        assert config.language == "ja"
+
+    def test_unknown_voice_id_falls_back_to_language(self, tmp_path) -> None:
+        """A voice_id not in the catalog shouldn't crash — fall back."""
+        captured: dict[str, object] = {}
+
+        class _FakeKokoro:
+            def __init__(self, *, model_dir, config=None) -> None:
+                captured["config"] = config
+
+        with patch("sovyx.voice.tts_kokoro.KokoroTTS", _FakeKokoro):
+            _create_kokoro_tts(tmp_path, voice_id="zz_nobody", language="fr")
+
+        config = captured["config"]
+        assert config is not None
+        assert config.voice.startswith("f")
+        assert config.language == "fr"
+
+    def test_unsupported_language_uses_kokoro_defaults(self, tmp_path) -> None:
+        """An exotic language the catalog doesn't cover keeps the pipeline bootable."""
+        captured: dict[str, object] = {}
+
+        class _FakeKokoro:
+            def __init__(self, *, model_dir, config=None) -> None:
+                captured["config"] = config
+
+        with patch("sovyx.voice.tts_kokoro.KokoroTTS", _FakeKokoro):
+            _create_kokoro_tts(tmp_path, voice_id="", language="xx-yy")
+
+        # No config passed → KokoroTTS uses its hardcoded defaults.
+        assert captured["config"] is None
+
+    def test_en_defaults_to_en_us(self, tmp_path) -> None:
+        """Bare ``en`` should canonicalise to ``en-us`` (matches server aliases)."""
+        captured: dict[str, object] = {}
+
+        class _FakeKokoro:
+            def __init__(self, *, model_dir, config=None) -> None:
+                captured["config"] = config
+
+        with patch("sovyx.voice.tts_kokoro.KokoroTTS", _FakeKokoro):
+            _create_kokoro_tts(tmp_path, voice_id="", language="en")
+
+        config = captured["config"]
+        assert config is not None
+        assert config.language == "en-us"

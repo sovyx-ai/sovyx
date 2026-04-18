@@ -61,6 +61,7 @@ async def create_voice_pipeline(
     on_perception: Callable[[str, str], Awaitable[None]] | None = None,
     model_dir: Path | None = None,
     language: str = "en",
+    voice_id: str = "",
     wake_word_enabled: bool = False,
     mind_id: str = "default",
     input_device: int | str | None = None,
@@ -75,7 +76,14 @@ async def create_voice_pipeline(
         event_bus: System event bus for voice events.
         on_perception: Callback when speech is transcribed.
         model_dir: Override model cache directory.
-        language: STT language code.
+        language: STT language code (doubles as the TTS language hint
+            when ``voice_id`` is unset — the catalog's recommended voice
+            for this language is used).
+        voice_id: Kokoro voice id from the catalog (e.g. ``pf_dora``,
+            ``af_heart``). When empty, the recommended voice for
+            ``language`` is chosen — the catalog is the source of
+            truth for the language/voice mapping, so the prefix of the
+            resolved voice always matches the spoken language.
         wake_word_enabled: Whether to listen for wake word.
         mind_id: Mind identifier for pipeline config.
         input_device: PortAudio input device index/name for the
@@ -110,7 +118,9 @@ async def create_voice_pipeline(
         tts = await asyncio.to_thread(lambda: _self._create_piper_tts(models_dir))
     elif tts_engine == "kokoro":
         await ensure_kokoro_tts(models_dir)
-        tts = await asyncio.to_thread(lambda: _self._create_kokoro_tts(models_dir))
+        tts = await asyncio.to_thread(
+            lambda: _self._create_kokoro_tts(models_dir, voice_id=voice_id, language=language),
+        )
     else:
         msg = "No TTS engine available. Install piper-tts or kokoro-onnx."
         raise VoiceFactoryError(
@@ -184,8 +194,48 @@ def _create_piper_tts(model_dir: Path) -> Any:  # noqa: ANN401
     return PiperTTS(model_dir=model_dir / "piper")
 
 
-def _create_kokoro_tts(model_dir: Path) -> Any:  # noqa: ANN401
-    from sovyx.voice.tts_kokoro import KokoroTTS
+def _create_kokoro_tts(
+    model_dir: Path,
+    *,
+    voice_id: str = "",
+    language: str = "en",
+) -> Any:  # noqa: ANN401
+    """Instantiate :class:`KokoroTTS` with a catalog-resolved voice.
+
+    Resolution order:
+
+    1. If ``voice_id`` names a catalog entry, use that voice and trust
+       its declared language (voice-prefix wins — a ``pf_dora`` voice
+       stays pt-br even if the caller typoed ``language="en"``).
+    2. Otherwise, canonicalise ``language`` and pick the recommended
+       voice for it from the catalog.
+    3. If the language is unsupported, fall back to the hardcoded
+       :class:`KokoroConfig` default (``af_bella`` / ``en-us``) — keeps
+       the pipeline bootable on exotic languages the catalog doesn't
+       cover yet.
+    """
+    from sovyx.voice import voice_catalog
+    from sovyx.voice.tts_kokoro import KokoroConfig, KokoroTTS
+
+    resolved_voice: str | None = None
+    resolved_language: str | None = None
+
+    if voice_id:
+        info = voice_catalog.voice_info(voice_id)
+        if info is not None:
+            resolved_voice = info.id
+            resolved_language = info.language
+
+    if resolved_voice is None:
+        canonical = voice_catalog.normalize_language(language)
+        recommended = voice_catalog.recommended_voice(canonical)
+        if recommended is not None:
+            resolved_voice = recommended.id
+            resolved_language = recommended.language
+
+    if resolved_voice is not None and resolved_language is not None:
+        config = KokoroConfig(voice=resolved_voice, language=resolved_language)
+        return KokoroTTS(model_dir=model_dir / "kokoro", config=config)
 
     return KokoroTTS(model_dir=model_dir / "kokoro")
 
