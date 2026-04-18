@@ -136,27 +136,18 @@ class SoundDeviceInputSource:
                 # Loop closed — ignore.
                 self._loop.call_soon_threadsafe(self._enqueue, frame)
 
-        try:
-            stream = await asyncio.to_thread(
-                lambda: sd.InputStream(
-                    samplerate=self._sample_rate,
-                    channels=1,
-                    dtype="int16",
-                    blocksize=self._blocksize,
-                    device=self._device_id,
-                    callback=_callback,
-                ),
-            )
-            await asyncio.to_thread(stream.start)
-            self._stream = stream
-        except Exception as exc:  # noqa: BLE001
-            self._stream = None
-            raise _classify_portaudio_error(exc) from exc
+        stream, used_rate = await self._open_stream_with_rate_fallback(
+            sd,
+            _callback,
+            default_sr,
+        )
+        self._sample_rate = used_rate
+        self._stream = stream
 
         self._info = AudioSourceInfo(
             device_id=self._device_id,
             device_name=device_name,
-            sample_rate=self._sample_rate,
+            sample_rate=used_rate,
             channels=1,
             blocksize=self._blocksize,
         )
@@ -164,10 +155,60 @@ class SoundDeviceInputSource:
             "voice_test_input_opened",
             device_id=self._device_id,
             device_name=device_name,
-            sample_rate=self._sample_rate,
+            sample_rate=used_rate,
             default_samplerate=default_sr,
         )
         return self._info
+
+    async def _open_stream_with_rate_fallback(
+        self,
+        sd: Any,  # noqa: ANN401
+        callback: Any,  # noqa: ANN401
+        default_sr: int,
+    ) -> tuple[Any, int]:
+        """Open the input stream, retrying at the device's native rate on rejection.
+
+        Windows MME (and occasionally WASAPI in exclusive mode) refuses
+        non-native sample rates with PaErrorCode -9997. Rather than hand
+        the user a blank meter, we log the raw error at INFO, query the
+        device's ``default_samplerate`` and retry once. The RMS/peak meter
+        is rate-agnostic so the wizard still reports useful levels.
+        """
+
+        def _factory(rate: int) -> Any:  # noqa: ANN401
+            return sd.InputStream(
+                samplerate=rate,
+                channels=1,
+                dtype="int16",
+                blocksize=self._blocksize,
+                device=self._device_id,
+                callback=callback,
+            )
+
+        try:
+            stream = await asyncio.to_thread(_factory, self._sample_rate)
+            await asyncio.to_thread(stream.start)
+            return stream, self._sample_rate
+        except Exception as exc:  # noqa: BLE001
+            classified = _classify_portaudio_error(exc)
+            if classified.code != ErrorCode.UNSUPPORTED_SAMPLERATE:
+                raise classified from exc
+            if default_sr <= 0 or default_sr == self._sample_rate:
+                raise classified from exc
+            logger.info(
+                "voice_test_input_rate_fallback",
+                device_id=self._device_id,
+                requested_rate=self._sample_rate,
+                native_rate=default_sr,
+                reason=str(exc),
+            )
+
+        try:
+            stream = await asyncio.to_thread(_factory, default_sr)
+            await asyncio.to_thread(stream.start)
+            return stream, default_sr
+        except Exception as retry_exc:  # noqa: BLE001
+            raise _classify_portaudio_error(retry_exc) from retry_exc
 
     def _probe_device(self, sd: Any) -> tuple[str, int]:  # noqa: ANN401
         try:
