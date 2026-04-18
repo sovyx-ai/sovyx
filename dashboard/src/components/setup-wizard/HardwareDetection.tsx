@@ -471,16 +471,114 @@ function ModelsDiskStatusPanel({
             </div>
           )}
           {download?.status === "error" && (
-            <p
-              role="alert"
-              className="rounded-[var(--svx-radius-md)] bg-[var(--svx-color-error)]/10 px-3 py-1.5 text-[10px] text-[var(--svx-color-error)]"
-            >
-              <AlertTriangleIcon className="mr-1 inline size-3" />
-              {download.error ?? "Download failed"}
-            </p>
+            <DownloadErrorPanel
+              errorCode={download.error_code ?? "unknown"}
+              errorMessage={download.error ?? "Download failed"}
+              retryAfterSeconds={download.retry_after_seconds ?? null}
+              onRetry={startDownload}
+            />
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+const _ERROR_CODE_TITLES: Record<string, string> = {
+  cooldown: "Download blocked — recent failure cooldown active",
+  all_mirrors_exhausted: "All mirror sources are currently unreachable",
+  checksum_mismatch: "Download rejected — file integrity check failed",
+  network: "Network error during download",
+  unknown: "Download failed",
+};
+
+const _ERROR_CODE_HINTS: Record<string, string> = {
+  cooldown:
+    "We wait before retrying to avoid hammering a source that was just failing. You can force-retry below or wait for the countdown.",
+  all_mirrors_exhausted:
+    "Primary + every fallback mirror failed. Check your internet connection; if persistent, the upstream release may be offline.",
+  checksum_mismatch:
+    "The mirror served a file whose contents don't match the pinned SHA-256. The mirror is probably drift-ing — we'll try another source on retry.",
+  network: "Transient network glitch. Retry in a moment.",
+  unknown: "",
+};
+
+function _formatCountdown(seconds: number): string {
+  if (seconds <= 0) return "now";
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  if (m === 0) return `${s}s`;
+  return `${m}m ${s.toString().padStart(2, "0")}s`;
+}
+
+function DownloadErrorPanel({
+  errorCode,
+  errorMessage,
+  retryAfterSeconds,
+  onRetry,
+}: {
+  errorCode: string;
+  errorMessage: string;
+  retryAfterSeconds: number | null;
+  onRetry: () => void;
+}) {
+  const [countdown, setCountdown] = useState<number>(retryAfterSeconds ?? 0);
+
+  useEffect(() => {
+    setCountdown(retryAfterSeconds ?? 0);
+  }, [retryAfterSeconds]);
+
+  useEffect(() => {
+    if (countdown <= 0) return;
+    const id = window.setInterval(() => {
+      setCountdown((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [countdown]);
+
+  const title = _ERROR_CODE_TITLES[errorCode] ?? _ERROR_CODE_TITLES.unknown;
+  const hint = _ERROR_CODE_HINTS[errorCode] ?? "";
+  const retryDisabled = errorCode === "cooldown" && countdown > 0;
+
+  return (
+    <div
+      role="alert"
+      className="flex flex-col gap-2 rounded-[var(--svx-radius-md)] bg-[var(--svx-color-error)]/10 px-3 py-2 text-[11px] text-[var(--svx-color-error)]"
+    >
+      <div className="flex items-start gap-2">
+        <AlertTriangleIcon className="mt-0.5 size-3.5 shrink-0" />
+        <div className="flex-1">
+          <div className="font-medium">{title}</div>
+          {hint && (
+            <div className="mt-1 text-[10px] text-[var(--svx-color-error)]/80">{hint}</div>
+          )}
+          <div className="mt-1 font-mono text-[10px] text-[var(--svx-color-error)]/70">
+            {errorMessage}
+          </div>
+        </div>
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        {retryDisabled ? (
+          <span className="text-[10px] text-[var(--svx-color-error)]/80">
+            Retry available in {_formatCountdown(countdown)}
+          </span>
+        ) : (
+          <span />
+        )}
+        <button
+          type="button"
+          onClick={onRetry}
+          disabled={retryDisabled}
+          className={cn(
+            "rounded-[var(--svx-radius-md)] border px-3 py-1 text-[10px] font-medium transition",
+            retryDisabled
+              ? "cursor-not-allowed border-[var(--svx-color-border-default)] text-[var(--svx-color-text-tertiary)]"
+              : "border-[var(--svx-color-error)]/40 bg-[var(--svx-color-error)]/10 hover:bg-[var(--svx-color-error)]/20",
+          )}
+        >
+          Retry download
+        </button>
+      </div>
     </div>
   );
 }

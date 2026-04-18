@@ -180,6 +180,11 @@ class VoiceTuningConfig(BaseSettings):
     # on this to pass through without auto_convert.
     capture_allow_channel_upgrade: bool = True
 
+    # Voice model download — mirror failover + cooldown. See
+    # :class:`~sovyx.engine._model_downloader.ModelDownloader` for
+    # retry/backoff semantics. 15-min cooldown mirrors the brain tier.
+    model_download_cooldown_seconds: int = 900
+
     # Voice device test (setup-wizard meters + TTS test button).
     # Kill-switch + ballistics + rate limiting for the test endpoints.
     device_test_enabled: bool = True

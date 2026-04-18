@@ -18,6 +18,7 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from sovyx.engine._model_downloader import ModelDownloadError
 from sovyx.observability.logging import get_logger
 from sovyx.voice.model_registry import (
     VOICE_MODELS,
@@ -76,7 +77,15 @@ class VoiceModelsStatus:
 
 @dataclass(slots=True)
 class ModelDownloadProgress:
-    """Mutable progress snapshot shared between the task and GET polling."""
+    """Mutable progress snapshot shared between the task and GET polling.
+
+    ``error_code`` is a stable, low-cardinality categorical identifier
+    (``"cooldown"``, ``"all_mirrors_exhausted"``, ``"checksum_mismatch"``,
+    ``"network"``, ``"unknown"``) that the frontend maps to an i18n key.
+    The raw ``error`` string remains for diagnostic display.
+    ``retry_after_seconds`` is set when ``error_code == "cooldown"`` so
+    the UI can render a countdown without parsing the error text.
+    """
 
     task_id: str
     status: str  # "running" | "done" | "error"
@@ -86,6 +95,8 @@ class ModelDownloadProgress:
     error: str | None
     created_at: float
     finished_at: float | None = None
+    error_code: str | None = None
+    retry_after_seconds: int | None = None
 
 
 @dataclass(slots=True)
@@ -256,16 +267,63 @@ async def _run_download(
             task_id=entry.progress.task_id,
             completed=entry.progress.completed_models,
         )
-    except Exception as exc:  # noqa: BLE001
+    except ModelDownloadError as exc:
+        code, retry_after = _classify_download_error(str(exc))
         entry.progress.status = "error"
         entry.progress.error = str(exc)
+        entry.progress.error_code = code
+        entry.progress.retry_after_seconds = retry_after
         entry.progress.finished_at = time.monotonic()
         logger.warning(
             "voice_model_download_failed",
             task_id=entry.progress.task_id,
             error=str(exc),
+            error_code=code,
+            retry_after_seconds=retry_after,
+        )
+    except Exception as exc:  # noqa: BLE001
+        entry.progress.status = "error"
+        entry.progress.error = str(exc)
+        entry.progress.error_code = "unknown"
+        entry.progress.finished_at = time.monotonic()
+        logger.warning(
+            "voice_model_download_failed",
+            task_id=entry.progress.task_id,
+            error=str(exc),
+            error_code="unknown",
             exc_info=True,
         )
+
+
+def _classify_download_error(message: str) -> tuple[str, int | None]:
+    """Map a ``ModelDownloadError`` message to a categorical code.
+
+    Returns ``(error_code, retry_after_seconds)`` — ``retry_after_seconds``
+    is only populated for the cooldown case. The matching is intentionally
+    message-based (string-contains) because the shared downloader formats
+    its failure modes as three distinct phrases: "cooldown", "Checksum
+    mismatch", and "Failed to download ... across N source(s)". A richer
+    carrier would require threading the original exception up through
+    ``ensure_*`` helpers — worth doing when we add Retry-After countdown
+    per-mirror, but overkill for the three buckets the wizard needs today.
+    """
+    msg = message.lower()
+    if "cooldown" in msg or "retry in" in msg or "next retry allowed" in msg:
+        retry_after = _extract_retry_minutes(message) * 60 if "retry" in msg else None
+        return ("cooldown", retry_after)
+    if "checksum mismatch" in msg:
+        return ("checksum_mismatch", None)
+    if "across" in msg and "source" in msg:
+        return ("all_mirrors_exhausted", None)
+    return ("network", None)
+
+
+def _extract_retry_minutes(message: str) -> int:
+    """Parse ``... in 15 minutes`` → 15. Returns 0 on failure."""
+    import re  # noqa: PLC0415
+
+    match = re.search(r"(\d+)\s+minute", message)
+    return int(match.group(1)) if match else 0
 
 
 def start_download(

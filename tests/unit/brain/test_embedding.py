@@ -28,6 +28,7 @@ from sovyx.brain.embedding import (
     _is_transient,
     _write_cooldown,
 )
+from sovyx.engine._model_downloader import ModelDownloadError
 from sovyx.engine.errors import EmbeddingError
 
 # ── Check if ONNX models are available ──────────────────────────────────────
@@ -150,7 +151,7 @@ class TestModelDownloader:
         assert result == model_file
 
     async def test_ensure_model_download_fails(self, tmp_path: Path) -> None:
-        """Download fails all retries → EmbeddingError + cooldown marker."""
+        """Download fails all retries → ModelDownloadError + cooldown marker."""
         dl = ModelDownloader(tmp_path / "models")
         dl.BACKOFF_BASE = 0.001
         dl.BACKOFF_MAX = 0.01
@@ -162,7 +163,7 @@ class TestModelDownloader:
                 new_callable=AsyncMock,
                 side_effect=ConnectionError("no internet"),
             ),
-            pytest.raises(EmbeddingError, match="Failed to download"),
+            pytest.raises(ModelDownloadError, match="Failed to download"),
         ):
             await dl.ensure_model("test.onnx", "http://example.com/model")
 
@@ -177,7 +178,7 @@ class TestModelDownloader:
 
         dl = ModelDownloader(models_dir)
 
-        with pytest.raises(EmbeddingError, match="cooldown"):
+        with pytest.raises(ModelDownloadError, match="cooldown"):
             await dl.ensure_model("test.onnx", "http://example.com/model")
 
     async def test_ensure_model_retry_success(self, tmp_path: Path) -> None:
@@ -220,7 +221,7 @@ class TestModelDownloader:
 
         with (
             patch.object(dl, "_download", side_effect=mock_download),
-            pytest.raises(EmbeddingError, match="Checksum mismatch"),
+            pytest.raises(ModelDownloadError, match="Checksum mismatch"),
         ):
             await dl.ensure_model(
                 "test.onnx",
@@ -325,7 +326,7 @@ class TestMirrorFallback:
             assert mirror_attempts >= 1
 
     async def test_all_mirrors_fail(self, tmp_path: Path) -> None:
-        """All URLs fail → cooldown + EmbeddingError."""
+        """All URLs fail → cooldown + ModelDownloadError."""
         dl = ModelDownloader(tmp_path / "models")
         dl.BACKOFF_BASE = 0.001
         dl.BACKOFF_MAX = 0.01
@@ -337,7 +338,7 @@ class TestMirrorFallback:
                 new_callable=AsyncMock,
                 side_effect=ConnectionError("all down"),
             ),
-            pytest.raises(EmbeddingError, match="Failed to download"),
+            pytest.raises(ModelDownloadError, match="Failed to download"),
         ):
             await dl.ensure_model(
                 "test.onnx",
@@ -695,7 +696,7 @@ class TestDownloadAndLoad:
         transport = httpx.MockTransport(mock_handler)
 
         with patch(
-            "sovyx.brain._model_downloader.httpx.AsyncClient",
+            "sovyx.engine._model_downloader.httpx.AsyncClient",
             return_value=httpx.AsyncClient(transport=transport),
         ):
             await ModelDownloader._download("http://example.com/model.onnx", dest)
@@ -721,7 +722,7 @@ class TestDownloadAndLoad:
         transport = httpx.MockTransport(mock_handler)
 
         with patch(
-            "sovyx.brain._model_downloader.httpx.AsyncClient",
+            "sovyx.engine._model_downloader.httpx.AsyncClient",
             return_value=httpx.AsyncClient(transport=transport),
         ):
             await ModelDownloader._download(

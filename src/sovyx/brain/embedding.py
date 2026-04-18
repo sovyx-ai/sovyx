@@ -14,6 +14,7 @@ import numpy as np
 import onnxruntime as ort
 
 from sovyx.brain._model_downloader import (
+    _COOLDOWN_SECONDS,
     MAX_TOKENS,
     MODEL_DIMENSIONS,
     MODEL_FILENAME,
@@ -32,11 +33,14 @@ from sovyx.brain._model_downloader import (
     _is_transient,  # noqa: F401  (re-exported for tests / back-compat)
     _write_cooldown,  # noqa: F401  (re-exported for tests / back-compat)
 )
+from sovyx.engine._model_downloader import ModelDownloadError
 from sovyx.engine.errors import EmbeddingError
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from sovyx.engine._model_downloader import DownloadAttempt
 
 
 __all__ = [
@@ -52,7 +56,9 @@ __all__ = [
     "TOKENIZER_URLS",
     "EmbeddingEngine",
     "EmbeddingError",
+    "ModelDownloadError",
     "ModelDownloader",
+    "_COOLDOWN_SECONDS",
     "_clear_cooldown",
     "_cooldown_path",
     "_is_in_cooldown",
@@ -63,6 +69,27 @@ __all__ = [
 
 
 logger = get_logger(__name__)
+
+
+def _record_download_attempt(attempt: DownloadAttempt) -> None:
+    """Feed one mirror attempt into ``sovyx.model.download.attempts``.
+
+    Same label contract as the voice-tier hook — keeps the counter
+    homogeneous across brain + voice models so a single PromQL query
+    (``rate by (source, result)``) answers "how often do mirrors save us."
+    """
+    from sovyx.observability.metrics import get_metrics  # noqa: PLC0415
+
+    metrics = get_metrics()
+    metrics.model_download_attempts.add(
+        1,
+        {
+            "model": attempt.filename,
+            "source": attempt.source,
+            "result": attempt.result,
+            "error_type": attempt.error_type or "",
+        },
+    )
 
 
 class EmbeddingEngine:
@@ -115,7 +142,11 @@ class EmbeddingEngine:
                 return
 
             try:
-                downloader = ModelDownloader(self._model_dir)
+                downloader = ModelDownloader(
+                    self._model_dir,
+                    cooldown_seconds=_COOLDOWN_SECONDS,
+                    on_attempt=_record_download_attempt,
+                )
 
                 model_path = await downloader.ensure_model(
                     MODEL_FILENAME,
@@ -138,14 +169,16 @@ class EmbeddingEngine:
                     model_dir=str(self._model_dir),
                 )
 
-            except (EmbeddingError, OSError, RuntimeError, ImportError) as exc:
-                # EmbeddingError: download/checksum failure from the model
-                # downloader. OSError: missing/unreadable model file.
-                # RuntimeError: ONNX session construction failure (invalid
-                # graph, EP unavailable). ImportError: onnxruntime or
-                # tokenizers not installable on this platform. This is the
-                # graceful-fallback path — search still works via FTS5, so
-                # log the reason structured but don't dump a traceback.
+            except (EmbeddingError, ModelDownloadError, OSError, RuntimeError, ImportError) as exc:
+                # ModelDownloadError: download/checksum failure from the
+                # shared downloader. EmbeddingError: historical alias,
+                # still caught for back-compat. OSError: missing/unreadable
+                # model file. RuntimeError: ONNX session construction
+                # failure (invalid graph, EP unavailable). ImportError:
+                # onnxruntime or tokenizers not installable on this
+                # platform. This is the graceful-fallback path — search
+                # still works via FTS5, so log the reason structured but
+                # don't dump a traceback.
                 logger.warning(
                     "embedding_model_unavailable_fts5_fallback",
                     reason=str(exc),

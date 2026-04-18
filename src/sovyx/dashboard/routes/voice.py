@@ -168,6 +168,8 @@ async def start_voice_models_download(request: Request) -> JSONResponse:
             "completed_models": p.completed_models,
             "current_model": p.current_model,
             "error": p.error,
+            "error_code": p.error_code,
+            "retry_after_seconds": p.retry_after_seconds,
         }
     )
 
@@ -194,6 +196,8 @@ async def get_voice_models_download_status(request: Request, task_id: str) -> JS
             "completed_models": p.completed_models,
             "current_model": p.current_model,
             "error": p.error,
+            "error_code": p.error_code,
+            "retry_after_seconds": p.retry_after_seconds,
         }
     )
 

@@ -252,3 +252,112 @@ class TestVoiceModelDiskStatusContract:
             assert isinstance(m.size_mb, float)
             assert isinstance(m.expected_size_mb, float)
             assert isinstance(m.download_available, bool)
+
+
+class TestClassifyDownloadError:
+    """``_classify_download_error`` maps raw messages to stable UI codes."""
+
+    def test_cooldown_with_minutes(self) -> None:
+        code, retry_after = model_status._classify_download_error(
+            "Download of silero_vad.onnx is in cooldown after recent failure. "
+            "Retry in up to 15 minutes."
+        )
+        assert code == "cooldown"
+        assert retry_after == 900  # 15 minutes  # noqa: PLR2004
+
+    def test_all_mirrors_exhausted(self) -> None:
+        code, retry_after = model_status._classify_download_error(
+            "Failed to download silero_vad.onnx after 15 attempts across 3 source(s). "
+            "Next retry allowed in 15 minutes."
+        )
+        # Message contains both "cooldown"/"retry in" phrasing AND "across
+        # ... source(s)" — classifier picks cooldown because the retry-in
+        # phrase is the most actionable signal for the UI (show countdown).
+        assert code == "cooldown"
+        assert retry_after == 900  # noqa: PLR2004
+
+    def test_all_mirrors_exhausted_no_cooldown_phrase(self) -> None:
+        code, retry_after = model_status._classify_download_error(
+            "Failed to download x.onnx after 5 attempts across 2 source(s)."
+        )
+        assert code == "all_mirrors_exhausted"
+        assert retry_after is None
+
+    def test_checksum_mismatch(self) -> None:
+        code, retry_after = model_status._classify_download_error(
+            "Checksum mismatch for silero_vad.onnx (expected abc...)"
+        )
+        assert code == "checksum_mismatch"
+        assert retry_after is None
+
+    def test_generic_network(self) -> None:
+        code, retry_after = model_status._classify_download_error("random junk")
+        assert code == "network"
+        assert retry_after is None
+
+
+class TestRunDownloadErrorSurface:
+    """``_run_download`` populates ``error_code`` for ``ModelDownloadError``."""
+
+    async def test_download_error_sets_error_code(self, tmp_path: Path) -> None:
+        from sovyx.engine._model_downloader import ModelDownloadError
+        from sovyx.voice.model_registry import VOICE_MODELS as _VM
+
+        entry = _DownloadEntry(
+            progress=ModelDownloadProgress(
+                task_id="t",
+                status="running",
+                total_models=1,
+                completed_models=0,
+                current_model=None,
+                error=None,
+                created_at=0.0,
+            )
+        )
+
+        async def boom(*_a: object, **_k: object) -> Path:
+            msg = (
+                "Failed to download silero_vad.onnx after 15 attempts "
+                "across 3 source(s). Next retry allowed in 15 minutes."
+            )
+            raise ModelDownloadError(msg)
+
+        from unittest.mock import patch
+
+        silero = _VM["silero-vad-v5"]
+        with patch.object(model_status, "ensure_silero_vad", side_effect=boom):
+            await model_status._run_download(entry, tmp_path, [silero])
+
+        assert entry.progress.status == "error"
+        assert entry.progress.error_code == "cooldown"
+        assert entry.progress.retry_after_seconds == 900  # noqa: PLR2004
+        assert "Failed to download" in (entry.progress.error or "")
+
+    async def test_unknown_error_maps_to_unknown(self, tmp_path: Path) -> None:
+        from sovyx.voice.model_registry import VOICE_MODELS as _VM
+
+        entry = _DownloadEntry(
+            progress=ModelDownloadProgress(
+                task_id="t",
+                status="running",
+                total_models=1,
+                completed_models=0,
+                current_model=None,
+                error=None,
+                created_at=0.0,
+            )
+        )
+
+        async def boom(*_a: object, **_k: object) -> Path:
+            msg = "unexpected ValueError"
+            raise ValueError(msg)
+
+        from unittest.mock import patch
+
+        silero = _VM["silero-vad-v5"]
+        with patch.object(model_status, "ensure_silero_vad", side_effect=boom):
+            await model_status._run_download(entry, tmp_path, [silero])
+
+        assert entry.progress.status == "error"
+        assert entry.progress.error_code == "unknown"
+        assert entry.progress.retry_after_seconds is None

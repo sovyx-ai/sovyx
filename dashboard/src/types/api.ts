@@ -758,6 +758,13 @@ export interface VoiceModelsStatusResponse {
 
 export type VoiceModelDownloadStatus = "running" | "done" | "error";
 
+export type VoiceModelDownloadErrorCode =
+  | "cooldown"
+  | "all_mirrors_exhausted"
+  | "checksum_mismatch"
+  | "network"
+  | "unknown";
+
 export interface VoiceModelDownloadProgress {
   task_id: string;
   status: VoiceModelDownloadStatus;
@@ -765,6 +772,8 @@ export interface VoiceModelDownloadProgress {
   completed_models: number;
   current_model: string | null;
   error: string | null;
+  error_code?: VoiceModelDownloadErrorCode | null;
+  retry_after_seconds?: number | null;
 }
 
 export interface VoiceCatalogEntry {

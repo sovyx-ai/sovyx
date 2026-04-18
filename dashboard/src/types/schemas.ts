@@ -498,6 +498,17 @@ export const VoiceModelDownloadProgressSchema = z.object({
   completed_models: z.number().int(),
   current_model: z.string().nullable(),
   error: z.string().nullable(),
+  error_code: z
+    .enum([
+      "cooldown",
+      "all_mirrors_exhausted",
+      "checksum_mismatch",
+      "network",
+      "unknown",
+    ])
+    .nullable()
+    .optional(),
+  retry_after_seconds: z.number().int().nullable().optional(),
 });
 
 export const VoiceCatalogEntrySchema = z.object({

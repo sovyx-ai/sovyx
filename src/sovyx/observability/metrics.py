@@ -228,6 +228,24 @@ class MetricsRegistry:
             unit="1",
         )
 
+        # ── Model downloader telemetry ──────────────────────────────
+        # Answers: "did the primary URL fail often enough that our
+        # mirrors were actually useful?" and "how often are users
+        # hitting cooldowns / checksum drift?" without log scraping.
+        # Labels are intentionally low-cardinality:
+        #   - model: silero_vad.onnx, e5-small-v2.onnx, kokoro-v1.0.int8.onnx, ...
+        #   - source: primary | mirror-1 | mirror-2 | ...
+        #   - result: ok | transient | permanent
+        #   - error_type: exception class name (HTTPStatusError, ChecksumMismatch, ...)
+        self.model_download_attempts = meter.create_counter(
+            name="sovyx.model.download.attempts",
+            description=(
+                "Model download attempts (labels: model, source=primary|mirror-N, "
+                "result=ok|transient|permanent, error_type)"
+            ),
+            unit="1",
+        )
+
     @contextlib.contextmanager
     def measure_latency(
         self,
