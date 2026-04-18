@@ -513,18 +513,15 @@ async def enable_voice(request: Request) -> JSONResponse:
     # actually fail with a device error — if it does, tear the pipeline
     # down so we don't leave a half-wired registry.
     #
-    # ``start_capture_with_fallback`` catches :class:`CaptureSilenceError`
-    # (MME + non-native rate = zeros) and retries on preferred host APIs
-    # before giving up. That single helper is what turns the previous
-    # "pipeline running, mic silent, no logs" nightmare into a real
-    # error path the UI can act on.
-    from sovyx.voice._capture_task import CaptureSilenceError, start_capture_with_fallback
+    # The unified :mod:`sovyx.voice._stream_opener` pyramid walks every
+    # host-API sibling of the selected device automatically, so a silent
+    # MME variant falls through to WASAPI (or DirectSound) without any
+    # caller-side retry bookkeeping. ``CaptureSilenceError`` is only
+    # raised when *every* viable variant delivered zeros.
+    from sovyx.voice._capture_task import CaptureSilenceError
 
     try:
-        await start_capture_with_fallback(
-            bundle.capture_task,
-            device_name=effective_device_name,
-        )
+        await bundle.capture_task.start()
     except CaptureSilenceError as exc:
         logger.error(
             "voice_capture_all_host_apis_silent",

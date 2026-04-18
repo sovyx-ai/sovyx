@@ -3,10 +3,13 @@
 The :class:`~sovyx.voice.pipeline.VoicePipeline` is push-based — frames
 must be delivered via ``pipeline.feed_frame()``. This module owns the
 microphone side: opens a ``sounddevice.InputStream`` on the selected
-input device, pulls int16 frames from its callback into an asyncio
-queue, and dispatches each frame into the pipeline from a consumer
-task. On device disconnection the stream is closed, the task waits for
-``capture_reconnect_delay_seconds``, and retries from scratch.
+input device (through the unified :mod:`sovyx.voice._stream_opener`
+pyramid), pulls int16 frames from its callback into an asyncio queue,
+and dispatches each frame into the pipeline from a consumer task. On
+device disconnection the stream is closed, the task waits for
+``capture_reconnect_delay_seconds``, and retries from scratch — again
+through the opener, so reconnect inherits host-API × rate × channels
+fallback for free.
 
 Lifecycle (owned by the hot-enable endpoint)::
 
@@ -21,13 +24,13 @@ Post-open validation
 ``sd.InputStream`` on Windows happily opens a broken configuration
 (MME + 16 kHz on a 48 kHz Razer driver, privacy-blocked mic, etc.) and
 then delivers **all-zero frames** without raising. The pipeline looks
-"running" but is deaf. :meth:`AudioCaptureTask.start` now samples ~600
-ms of audio after opening the stream and raises
-:class:`CaptureSilenceError` if the peak RMS never crosses
-``capture_validation_min_rms_db``. The :func:`sovyx.voice.factory.create_voice_pipeline`
-caller catches that and auto-retries the same device on the next
-preferred host API (WASAPI → DirectSound → …) so the user does not need
-to re-run the wizard.
+"running" but is deaf. :meth:`AudioCaptureTask.start` hands a
+``validate_fn`` to :func:`sovyx.voice._stream_opener.open_input_stream`,
+which samples ~600 ms of audio after opening each variant and rejects
+it when the peak RMS never crosses ``capture_validation_min_rms_db``.
+The opener walks the full pyramid automatically, so silent variants
+are replaced by their host-API siblings without any caller-side
+bookkeeping.
 
 Without this task the pipeline is silent: frames never arrive and VAD
 never fires. See CLAUDE.md §anti-pattern #14 — ONNX inference is run on
@@ -40,16 +43,22 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import math
+import re
 import time
 from typing import TYPE_CHECKING, Any
 
 from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.observability.logging import get_logger
+from sovyx.voice._stream_opener import _import_sounddevice
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import numpy as np
     import numpy.typing as npt
 
+    from sovyx.engine.config import VoiceTuningConfig
+    from sovyx.voice.device_enum import DeviceEntry
     from sovyx.voice.pipeline._orchestrator import VoicePipeline
 
 logger = get_logger(__name__)
@@ -141,6 +150,9 @@ class AudioCaptureTask:
         blocksize: int = _FRAME_SAMPLES,
         host_api_name: str | None = None,
         validate_on_start: bool = True,
+        tuning: VoiceTuningConfig | None = None,
+        sd_module: Any | None = None,  # noqa: ANN401 — DI for tests
+        enumerate_fn: Callable[[], list[DeviceEntry]] | None = None,
     ) -> None:
         self._pipeline = pipeline
         self._input_device = input_device
@@ -148,6 +160,9 @@ class AudioCaptureTask:
         self._blocksize = blocksize
         self._host_api_name = host_api_name
         self._validate_on_start = validate_on_start
+        self._tuning = tuning
+        self._sd_module = sd_module
+        self._enumerate_fn = enumerate_fn
         self._queue: asyncio.Queue[npt.NDArray[np.int16]] = asyncio.Queue(maxsize=_QUEUE_MAXSIZE)
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stream: Any = None
@@ -204,45 +219,57 @@ class AudioCaptureTask:
     async def start(self) -> None:
         """Open the input stream, validate it, and spawn the consumer task.
 
+        Delegates stream construction to
+        :func:`sovyx.voice._stream_opener.open_input_stream`, which walks
+        the full host-API × auto_convert × channels × rate pyramid and
+        optionally validates each opened stream for silence via
+        ``validate_fn``. When every viable variant delivers only zeros,
+        :class:`CaptureSilenceError` is raised so callers (notably
+        :func:`sovyx.voice.factory.create_voice_pipeline`) can surface a
+        precise error payload to the UI.
+
         Idempotent — a second call while running is a no-op.
 
         Raises:
-            CaptureSilenceError: If ``validate_on_start`` is True and the
-                first ~600 ms of audio contains only silence. Callers
-                (notably :func:`sovyx.voice.factory.create_voice_pipeline`)
-                can catch this to retry on a different host API.
+            CaptureSilenceError: Every pyramid variant opened cleanly
+                but delivered only silence.
+            RuntimeError: Every pyramid variant failed with a
+                non-silence PortAudio error (device busy, permission,
+                AUDCLNT_E_*). ``.code`` carries the classified
+                :class:`ErrorCode`.
         """
         if self._running:
             return
-        self._loop = asyncio.get_running_loop()
-        await asyncio.to_thread(self._open_stream)
 
-        if self._validate_on_start:
-            try:
-                observed_db = await self._validate_stream()
-            except BaseException:
-                await asyncio.to_thread(self._close_stream)
-                raise
-            if observed_db < _VALIDATION_MIN_RMS_DB:
-                await asyncio.to_thread(self._close_stream)
-                msg = (
-                    f"Input stream opened on device={self._input_device!r} "
-                    f"(host_api={self._host_api_name!r}) but delivered only silence "
-                    f"(peak RMS {observed_db:.1f} dBFS < threshold "
-                    f"{_VALIDATION_MIN_RMS_DB:.1f} dBFS)."
-                )
-                raise CaptureSilenceError(
-                    msg,
-                    device=self._input_device,
-                    host_api=self._host_api_name,
-                    observed_peak_rms_db=observed_db,
-                )
-            logger.info(
-                "audio_capture_validated",
-                device=self._input_device,
-                host_api=self._host_api_name,
-                peak_rms_db=round(observed_db, 1),
+        from sovyx.voice._stream_opener import StreamOpenError, open_input_stream
+
+        self._loop = asyncio.get_running_loop()
+        tuning = self._tuning if self._tuning is not None else _VoiceTuning()
+        entry = _resolve_input_entry(
+            input_device=self._input_device,
+            enumerate_fn=self._enumerate_fn,
+            host_api_name=self._host_api_name,
+        )
+        validate_fn = self._validate_stream_from_queue if self._validate_on_start else None
+
+        try:
+            stream, info = await open_input_stream(
+                device=entry,
+                target_rate=self._sample_rate,
+                blocksize=self._blocksize,
+                callback=self._audio_callback,
+                tuning=tuning,
+                sd_module=self._sd_module,
+                enumerate_fn=self._enumerate_fn,
+                validate_fn=validate_fn,
             )
+        except StreamOpenError as exc:
+            self._raise_classified_open_error(exc, entry)
+
+        self._stream = stream
+        self._sample_rate = info.sample_rate
+        self._input_device = info.device_index
+        self._host_api_name = info.host_api
 
         self._running = True
         self._last_heartbeat_monotonic = time.monotonic()
@@ -252,8 +279,68 @@ class AudioCaptureTask:
             device=self._input_device if self._input_device is not None else "default",
             host_api=self._host_api_name,
             sample_rate=self._sample_rate,
+            channels=info.channels,
+            auto_convert=info.auto_convert_used,
+            fallback_depth=info.fallback_depth,
             blocksize=self._blocksize,
         )
+
+    async def _validate_stream_from_queue(
+        self,
+        _stream: Any,  # noqa: ANN401 — provided by opener, not used here
+        *,
+        device_index: int,  # noqa: ARG002
+    ) -> float:
+        """Drain ``_VALIDATION_S`` seconds of callback output and return peak dBFS.
+
+        The opener supplies the active stream plus its effective device
+        index; this function reads frames off ``self._queue`` (populated
+        by the PortAudio callback we installed) and short-circuits as
+        soon as the peak RMS crosses ``capture_validation_min_rms_db``.
+        """
+        return await self._validate_stream()
+
+    def _raise_classified_open_error(
+        self,
+        exc: Any,  # noqa: ANN401 — StreamOpenError, typed lazily
+        entry: DeviceEntry,
+    ) -> None:
+        """Map a :class:`StreamOpenError` to the public exception API.
+
+        When every pyramid attempt produced a silent stream, raise
+        :class:`CaptureSilenceError` so the existing dashboard route
+        catches it and renders the wizard silence UX. Otherwise re-raise
+        a :class:`RuntimeError` carrying ``.code`` + ``.attempts`` so
+        operators see precisely which combinations were tried.
+        """
+        attempts = list(getattr(exc, "attempts", []))
+        all_silent = bool(attempts) and all(
+            "silent stream" in (a.error_detail or "") for a in attempts
+        )
+        if all_silent:
+            worst = min(
+                (
+                    _extract_peak_db(a.error_detail)
+                    for a in attempts
+                    if "silent stream" in (a.error_detail or "")
+                ),
+                default=_RMS_FLOOR_DB,
+            )
+            msg = (
+                f"Input stream opened on device={entry.index!r} "
+                f"(host_api={entry.host_api_name!r}) but every variant delivered only silence "
+                f"(peak RMS {worst:.1f} dBFS < threshold {_VALIDATION_MIN_RMS_DB:.1f} dBFS)."
+            )
+            raise CaptureSilenceError(
+                msg,
+                device=entry.index,
+                host_api=entry.host_api_name,
+                observed_peak_rms_db=worst,
+            ) from exc
+        runtime = RuntimeError(str(exc))
+        runtime.code = getattr(exc, "code", None)  # type: ignore[attr-defined]
+        runtime.attempts = attempts  # type: ignore[attr-defined]
+        raise runtime from exc
 
     async def stop(self) -> None:
         """Cancel the consumer task and close the stream."""
@@ -297,19 +384,38 @@ class AudioCaptureTask:
 
     # -- Internals ------------------------------------------------------------
 
-    def _open_stream(self) -> None:
-        """Open a fresh ``sd.InputStream`` (runs in a worker thread)."""
-        import sounddevice as sd
+    async def _reopen_stream_after_device_error(self) -> None:
+        """Reopen the stream after a ``sd.PortAudioError`` in the consume loop.
 
-        self._stream = sd.InputStream(
-            samplerate=self._sample_rate,
-            channels=1,
-            dtype="int16",
-            blocksize=self._blocksize,
-            device=self._input_device,
-            callback=self._audio_callback,
+        Uses the same unified opener as :meth:`start` so reconnect after
+        a USB-headset yank inherits host-API × auto_convert × channels
+        fallback automatically.
+        """
+        from sovyx.voice._stream_opener import StreamOpenError, open_input_stream
+
+        tuning = self._tuning if self._tuning is not None else _VoiceTuning()
+        entry = _resolve_input_entry(
+            input_device=self._input_device,
+            enumerate_fn=self._enumerate_fn,
+            host_api_name=self._host_api_name,
         )
-        self._stream.start()
+        try:
+            stream, info = await open_input_stream(
+                device=entry,
+                target_rate=self._sample_rate,
+                blocksize=self._blocksize,
+                callback=self._audio_callback,
+                tuning=tuning,
+                sd_module=self._sd_module,
+                enumerate_fn=self._enumerate_fn,
+                validate_fn=None,  # reconnect path skips validation
+            )
+        except StreamOpenError as exc:
+            raise RuntimeError(str(exc)) from exc
+        self._stream = stream
+        self._sample_rate = info.sample_rate
+        self._input_device = info.device_index
+        self._host_api_name = info.host_api
 
     def _close_stream(self) -> None:
         """Stop and close the stream — tolerant of already-closed streams."""
@@ -358,14 +464,15 @@ class AudioCaptureTask:
         """Pull frames off the queue and feed them to the pipeline.
 
         On ``sd.PortAudioError`` (device unplugged, driver reset) we
-        close the stream, sleep briefly, and reopen — so a user
-        yanking a USB headset does not wedge the pipeline.
+        close the stream, sleep briefly, and reopen through the unified
+        opener — so a user yanking a USB headset does not wedge the
+        pipeline.
 
         Emits an ``audio_capture_heartbeat`` log every
         ``capture_heartbeat_interval_seconds`` so operators can confirm
         (a) frames are arriving, (b) the mic is not stuck at silence.
         """
-        import sounddevice as sd
+        sd = self._sd_module if self._sd_module is not None else _import_sounddevice()
 
         while self._running:
             try:
@@ -392,7 +499,7 @@ class AudioCaptureTask:
                 if not self._running:
                     return
                 try:
-                    await asyncio.to_thread(self._open_stream)
+                    await self._reopen_stream_after_device_error()
                     logger.info("audio_capture_device_reconnected")
                 except Exception as reopen_exc:  # noqa: BLE001
                     logger.error(
@@ -403,21 +510,6 @@ class AudioCaptureTask:
                 # A single bad frame must not kill the loop. Log with
                 # traceback so persistent upstream errors surface.
                 logger.exception("audio_capture_feed_failed")
-
-    # -- Swap-in for fallback -------------------------------------------------
-
-    def _swap_device(self, *, device: int | str | None, host_api: str | None) -> None:
-        """Re-target the task at a different device *before* start.
-
-        Used by :func:`start_capture_with_fallback` after the first
-        :class:`CaptureSilenceError` — the task is still unstarted at
-        that point, so mutating the device fields is safe.
-        """
-        if self._running:
-            msg = "cannot swap device on a running capture task"
-            raise RuntimeError(msg)
-        self._input_device = device
-        self._host_api_name = host_api
 
     def _maybe_emit_heartbeat(self) -> None:
         """Log a periodic RMS/frame-count heartbeat.
@@ -443,110 +535,76 @@ class AudioCaptureTask:
         self._silent_frames_since_heartbeat = 0
 
 
-async def start_capture_with_fallback(
-    task: AudioCaptureTask,
-    *,
-    device_name: str | None = None,
-) -> None:
-    """Start ``task``, falling back to adjacent host APIs on silence.
+_PEAK_DB_RE = re.compile(r"peak\s+(-?\d+(?:\.\d+)?)\s*dBFS", re.IGNORECASE)
 
-    The real-world failure mode on Windows is MME + non-native sample
-    rate + USB gaming headset = silent zeros. Rather than surface an
-    opaque ``CaptureSilenceError`` to the dashboard, this helper:
 
-    1. Starts the task as configured.
-    2. If it raises :class:`CaptureSilenceError`, looks up the same
-       canonical device name in :mod:`sovyx.voice.device_enum`, walks
-       through variants on other host APIs in preference order, and
-       retries. Already-tried ``(name, host_api)`` pairs are skipped.
-    3. Gives up only after every viable variant has delivered silence.
+def _extract_peak_db(detail: str | None) -> float:
+    """Parse ``peak -XX.X dBFS`` out of an opener silence-attempt detail.
 
-    Args:
-        task: Freshly-constructed :class:`AudioCaptureTask` (not yet
-            started).
-        device_name: Stable device name to use for fallback resolution.
-            When ``None``, the current ``task.input_device`` is resolved
-            against the live PortAudio list to derive the canonical
-            name — so a caller that only has an index still gets
-            fallback behaviour.
-
-    Raises:
-        CaptureSilenceError: When every variant fails. Carries the
-            original silence details so the dashboard can surface a
-            precise error payload.
+    The opener formats silence attempts as
+    ``"silent stream (peak -96.0 dBFS < threshold -80.0 dBFS)"``.
+    Returns :data:`_RMS_FLOOR_DB` when the pattern is absent so callers
+    can still aggregate a worst-case peak across attempts.
     """
-    from sovyx.voice.device_enum import (
-        _canonicalise,
-        _host_api_rank,
-        enumerate_devices,
-    )
-
-    first_error: CaptureSilenceError | None = None
-    first_host_api: str | None = task.host_api_name
-    first_index: int | str | None = task.input_device
-
+    if not detail:
+        return _RMS_FLOOR_DB
+    match = _PEAK_DB_RE.search(detail)
+    if match is None:
+        return _RMS_FLOOR_DB
     try:
-        await task.start()
-        return
-    except CaptureSilenceError as exc:
-        first_error = exc
-        logger.warning(
-            "audio_capture_silence_detected",
-            device=exc.device,
-            host_api=exc.host_api,
-            observed_peak_rms_db=exc.observed_peak_rms_db,
-        )
+        return float(match.group(1))
+    except ValueError:
+        return _RMS_FLOOR_DB
 
-    entries = await asyncio.to_thread(enumerate_devices)
-    if not entries:
-        raise first_error
 
-    canonical = _canonicalise(device_name) if device_name else None
-    if canonical is None:
-        # Derive the canonical name from whatever device was just tried so
-        # we can look up its host-API siblings.
-        if isinstance(first_index, int):
-            for e in entries:
-                if e.index == first_index:
-                    canonical = e.canonical_name
-                    break
-        elif isinstance(first_index, str):
-            canonical = _canonicalise(first_index)
+def _resolve_input_entry(
+    *,
+    input_device: int | str | None,
+    enumerate_fn: Callable[[], list[DeviceEntry]] | None,
+    host_api_name: str | None,
+) -> DeviceEntry:
+    """Resolve a capture-task input selector to a live :class:`DeviceEntry`.
 
-    if canonical is None:
-        raise first_error
+    Matching order:
 
-    tried: set[tuple[str, str]] = {(canonical, first_host_api or "")}
+    1. Exact PortAudio index (``int``) when provided.
+    2. Canonical device name (``str``) optionally refined by
+       ``host_api_name`` — lets the wizard persist a stable identifier
+       across reboots where indices shuffle.
+    3. First OS-default input, or the first available input entry.
 
-    siblings = [e for e in entries if e.canonical_name == canonical and e.max_input_channels > 0]
-    siblings.sort(key=lambda e: (_host_api_rank(e.host_api_name), e.index))
+    Raises :class:`RuntimeError` when the host exposes no input devices
+    at all so :meth:`AudioCaptureTask.start` can fail loudly instead of
+    silently opening the OS default.
+    """
+    if enumerate_fn is not None:
+        entries = enumerate_fn()
+    else:
+        from sovyx.voice.device_enum import enumerate_devices
 
-    for variant in siblings:
-        key = (variant.canonical_name, variant.host_api_name)
-        if key in tried:
-            continue
-        logger.info(
-            "audio_capture_fallback_retry",
-            name=variant.name,
-            host_api=variant.host_api_name,
-            index=variant.index,
-        )
-        task._swap_device(device=variant.index, host_api=variant.host_api_name)  # noqa: SLF001
-        tried.add(key)
-        try:
-            await task.start()
-            logger.info(
-                "audio_capture_fallback_succeeded",
-                host_api=variant.host_api_name,
-            )
-            return
-        except CaptureSilenceError as exc:
-            first_error = exc
-            logger.warning(
-                "audio_capture_fallback_silent",
-                host_api=variant.host_api_name,
-                observed_peak_rms_db=exc.observed_peak_rms_db,
-            )
-            continue
+        entries = enumerate_devices()
 
-    raise first_error
+    candidates = [e for e in entries if e.max_input_channels > 0]
+    if not candidates:
+        msg = "No audio input devices available"
+        raise RuntimeError(msg)
+
+    if isinstance(input_device, int):
+        for entry in candidates:
+            if entry.index == input_device:
+                return entry
+
+    if isinstance(input_device, str) and input_device:
+        from sovyx.voice.device_enum import _canonicalise
+
+        canonical = _canonicalise(input_device)
+        matches = [e for e in candidates if e.canonical_name == canonical]
+        if host_api_name:
+            for entry in matches:
+                if entry.host_api_name == host_api_name:
+                    return entry
+        if matches:
+            return matches[0]
+
+    defaults = [e for e in candidates if e.is_os_default]
+    return defaults[0] if defaults else candidates[0]
