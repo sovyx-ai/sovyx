@@ -7,16 +7,20 @@ written, without monkeypatching ``sounddevice``.
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from sovyx.observability.logging import get_logger
 from sovyx.voice.device_test._protocol import ErrorCode
-from sovyx.voice.device_test._source import AudioSourceError, _classify_portaudio_error
+from sovyx.voice.device_test._source import AudioSourceError
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import numpy as np
     import numpy.typing as npt
+
+    from sovyx.engine.config import VoiceTuningConfig
+    from sovyx.voice.device_enum import DeviceEntry
 
 logger = get_logger(__name__)
 
@@ -41,15 +45,26 @@ class AudioOutputSink(Protocol):
 
 
 class SoundDeviceOutputSink:
-    """Live PortAudio playback via :class:`sounddevice.OutputStream`.
+    """Live PortAudio playback delegating to :func:`_stream_opener.play_audio`.
 
-    Kokoro synthesises at 24 kHz. Many Windows output devices — especially
-    the MME variant of USB headsets and speakers — refuse non-native rates
-    and PortAudio surfaces ``Invalid sample rate [PaErrorCode -9997]``. We
-    catch the first failure, query the device's native rate, resample the
-    int16 buffer with linear interpolation (quality is not critical for a
-    one-shot test phrase) and retry once.
+    Kokoro synthesises at 24 kHz; many Windows output devices — especially
+    the MME variant of USB headsets — refuse non-native rates. The opener
+    handles rate + channel + WASAPI auto_convert fallback centrally, so
+    this sink is a thin wrapper that (a) resolves ``device_id`` to a
+    :class:`DeviceEntry` and (b) maps :class:`StreamOpenError` to the
+    sink's public :class:`AudioSinkError` type.
     """
+
+    def __init__(
+        self,
+        *,
+        tuning: VoiceTuningConfig | None = None,
+        sd_module: Any | None = None,  # noqa: ANN401 — DI for tests
+        enumerate_fn: Callable[[], list[DeviceEntry]] | None = None,
+    ) -> None:
+        self._tuning = tuning
+        self._sd_module = sd_module
+        self._enumerate_fn = enumerate_fn
 
     async def play(
         self,
@@ -58,69 +73,33 @@ class SoundDeviceOutputSink:
         sample_rate: int,
         device_id: int | None,
     ) -> float:
-        try:
-            import sounddevice as sd
-        except OSError as exc:
-            raise AudioSinkError(
-                ErrorCode.INTERNAL_ERROR,
-                f"PortAudio unavailable: {exc}",
-            ) from exc
+        from sovyx.voice._stream_opener import StreamOpenError, play_audio
 
         if audio.size == 0:
             return 0.0
 
-        start = asyncio.get_running_loop().time()
+        tuning = self._tuning if self._tuning is not None else _default_tuning()
+        entry = _resolve_output_entry(
+            device_id=device_id,
+            enumerate_fn=self._enumerate_fn,
+        )
+
         try:
-            await asyncio.to_thread(
-                _blocking_play,
-                sd,
+            elapsed_ms = await play_audio(
                 audio,
-                sample_rate,
-                device_id,
+                source_rate=sample_rate,
+                device=entry,
+                tuning=tuning,
+                sd_module=self._sd_module,
             )
-        except AudioSinkError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            classified = _classify_portaudio_error(exc)
-            if classified.code != ErrorCode.UNSUPPORTED_SAMPLERATE:
-                raise AudioSinkError(classified.code, classified.detail) from exc
-            # Rate rejected — query the device's native rate and resample.
-            native_rate = await asyncio.to_thread(_query_output_rate, sd, device_id)
-            if native_rate <= 0 or native_rate == sample_rate:
-                raise AudioSinkError(classified.code, classified.detail) from exc
-            logger.info(
-                "voice_test_output_resample_fallback",
-                device_id=device_id,
-                requested_rate=sample_rate,
-                native_rate=native_rate,
-                reason=str(exc),
-            )
-            resampled = await asyncio.to_thread(
-                _resample_int16,
-                audio,
-                sample_rate,
-                native_rate,
-            )
-            try:
-                await asyncio.to_thread(
-                    _blocking_play,
-                    sd,
-                    resampled,
-                    native_rate,
-                    device_id,
-                )
-            except AudioSinkError:
-                raise
-            except Exception as retry_exc:  # noqa: BLE001
-                retry_classified = _classify_portaudio_error(retry_exc)
-                raise AudioSinkError(
-                    retry_classified.code,
-                    retry_classified.detail,
-                ) from retry_exc
-        elapsed_ms = (asyncio.get_running_loop().time() - start) * 1000
+        except StreamOpenError as exc:
+            raise AudioSinkError(exc.code, exc.detail) from exc
+
         logger.info(
             "voice_test_output_played",
             device_id=device_id,
+            device_name=entry.name,
+            host_api=entry.host_api_name,
             sample_rate=sample_rate,
             samples=int(audio.size),
             elapsed_ms=round(elapsed_ms, 1),
@@ -128,27 +107,39 @@ class SoundDeviceOutputSink:
         return elapsed_ms
 
 
-def _blocking_play(
-    sd: Any,  # noqa: ANN401
-    audio: npt.NDArray[np.int16],
-    sample_rate: int,
+def _default_tuning() -> VoiceTuningConfig:
+    from sovyx.engine.config import VoiceTuningConfig
+
+    return VoiceTuningConfig()
+
+
+def _resolve_output_entry(
+    *,
     device_id: int | None,
-) -> None:
-    sd.play(audio, samplerate=sample_rate, device=device_id, blocking=True)
+    enumerate_fn: Callable[[], list[DeviceEntry]] | None,
+) -> DeviceEntry:
+    """Resolve an output ``device_id`` to a live :class:`DeviceEntry`."""
+    if enumerate_fn is not None:
+        entries = enumerate_fn()
+    else:
+        from sovyx.voice.device_enum import enumerate_devices
 
+        entries = enumerate_devices()
 
-def _query_output_rate(sd: Any, device_id: int | None) -> int:  # noqa: ANN401
-    """Return the device's native ``default_samplerate`` or 0 on failure."""
-    try:
-        info = sd.query_devices(device_id, "output")
-    except Exception:  # noqa: BLE001
-        return 0
-    if not isinstance(info, dict):
-        return 0
-    try:
-        return int(info.get("default_samplerate", 0) or 0)
-    except (TypeError, ValueError):
-        return 0
+    candidates = [e for e in entries if e.max_output_channels > 0]
+    if not candidates:
+        raise AudioSinkError(
+            ErrorCode.DEVICE_NOT_FOUND,
+            "No audio output devices available",
+        )
+
+    if device_id is not None:
+        for entry in candidates:
+            if entry.index == device_id:
+                return entry
+
+    defaults = [e for e in candidates if e.is_os_default]
+    return defaults[0] if defaults else candidates[0]
 
 
 def _resample_int16(

@@ -1,21 +1,23 @@
-"""Tests for :mod:`sovyx.voice.device_test._source` and ``_sink`` — fakes + classifier."""
+"""Tests for :mod:`sovyx.voice.device_test._source` and ``_sink` — fakes + classifier."""
 
 from __future__ import annotations
 
 import asyncio
-import sys
 from types import ModuleType
-from unittest.mock import MagicMock, patch
+from typing import Any
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
+from sovyx.engine.config import VoiceTuningConfig
+from sovyx.voice._stream_opener import _resample_int16
+from sovyx.voice.device_enum import DeviceEntry
 from sovyx.voice.device_test._protocol import ErrorCode
 from sovyx.voice.device_test._sink import (
     AudioSinkError,
     FakeAudioOutputSink,
     SoundDeviceOutputSink,
-    _resample_int16,
 )
 from sovyx.voice.device_test._source import (
     AudioSourceError,
@@ -24,6 +26,47 @@ from sovyx.voice.device_test._source import (
     SoundDeviceInputSource,
     _classify_portaudio_error,
 )
+
+
+def _wasapi_input_entry(
+    *,
+    index: int = 18,
+    channels: int = 1,
+    rate: int = 48_000,
+    name: str = "FakeMic",
+) -> DeviceEntry:
+    return DeviceEntry(
+        index=index,
+        name=name,
+        canonical_name=name.lower(),
+        host_api_index=3,
+        host_api_name="Windows WASAPI",
+        max_input_channels=channels,
+        max_output_channels=0,
+        default_samplerate=rate,
+        is_os_default=True,
+    )
+
+
+def _fake_sd() -> ModuleType:
+    module = ModuleType("sounddevice")
+
+    class _FakePortAudioError(Exception):
+        pass
+
+    class _FakeWasapiSettings:
+        def __init__(self, *, auto_convert: bool = False, exclusive: bool = False) -> None:
+            self.auto_convert = auto_convert
+            self.exclusive = exclusive
+
+    module.PortAudioError = _FakePortAudioError  # type: ignore[attr-defined]
+    module.WasapiSettings = _FakeWasapiSettings  # type: ignore[attr-defined]
+    module.InputStream = MagicMock()  # type: ignore[attr-defined]
+    module.OutputStream = MagicMock()  # type: ignore[attr-defined]
+    module.play = MagicMock()  # type: ignore[attr-defined]
+    module.query_devices = MagicMock()  # type: ignore[attr-defined]
+    return module
+
 
 # --------------------------------------------------------------------------
 # FakeAudioInputSource
@@ -203,169 +246,209 @@ class TestResampleInt16:
 
 
 # --------------------------------------------------------------------------
-# SoundDeviceOutputSink — rate fallback on Invalid sample rate
+# SoundDeviceOutputSink — integration with _stream_opener.play_audio
 # --------------------------------------------------------------------------
 
 
-def _fake_sounddevice() -> ModuleType:
-    module = ModuleType("sounddevice")
+class TestSoundDeviceOutputSinkIntegration:
+    """The sink delegates to ``_stream_opener.play_audio`` under the hood.
 
-    class _FakePortAudioError(Exception):
-        pass
-
-    module.PortAudioError = _FakePortAudioError  # type: ignore[attr-defined]
-    module.InputStream = MagicMock()  # type: ignore[attr-defined]
-    module.play = MagicMock()  # type: ignore[attr-defined]
-    module.query_devices = MagicMock()  # type: ignore[attr-defined]
-    return module
-
-
-@pytest.fixture()
-def fake_sd() -> ModuleType:
-    fake = _fake_sounddevice()
-    with patch.dict(sys.modules, {"sounddevice": fake}):
-        yield fake
-
-
-class TestSoundDeviceOutputSinkRateFallback:
-    """Windows MME devices reject non-native rates — sink must resample and retry."""
+    The pyramid's rate/channels/auto_convert fallback logic is unit-tested
+    in ``test_stream_opener.py``; here we only verify the wiring (device
+    resolution + error propagation + empty-audio short-circuit).
+    """
 
     @pytest.mark.asyncio()
-    async def test_first_open_fail_triggers_resample_and_retry(
-        self,
-        fake_sd: ModuleType,
-    ) -> None:
-        fake_sd.query_devices = MagicMock(  # type: ignore[attr-defined]
-            return_value={"default_samplerate": 48_000.0},
-        )
-        calls: list[tuple[int, int]] = []
-
-        def fake_play(audio: np.ndarray, *, samplerate: int, **_: object) -> None:
-            calls.append((int(audio.size), samplerate))
-            if len(calls) == 1:
-                raise RuntimeError(
-                    "Error opening OutputStream: Invalid sample rate [PaErrorCode -9997]",
-                )
-
-        fake_sd.play = fake_play  # type: ignore[attr-defined]
-
-        audio = np.ones(24_000, dtype=np.int16)  # 1 s at 24 kHz
-        sink = SoundDeviceOutputSink()
-        elapsed_ms = await sink.play(audio, sample_rate=24_000, device_id=7)
-        assert elapsed_ms >= 0.0
-        assert len(calls) == 2  # noqa: PLR2004
-        first_size, first_rate = calls[0]
-        retry_size, retry_rate = calls[1]
-        assert first_rate == 24_000
-        assert first_size == 24_000
-        # Retry runs at the device's native rate with a resampled buffer (2x).
-        assert retry_rate == 48_000
-        assert retry_size == 48_000
-
-    @pytest.mark.asyncio()
-    async def test_non_rate_error_raises_without_retry(
-        self,
-        fake_sd: ModuleType,
-    ) -> None:
-        fake_sd.play = MagicMock(  # type: ignore[attr-defined]
-            side_effect=RuntimeError("Device unavailable"),
-        )
-        audio = np.ones(100, dtype=np.int16)
-        sink = SoundDeviceOutputSink()
-        with pytest.raises(AudioSinkError) as exc_info:
-            await sink.play(audio, sample_rate=24_000, device_id=7)
-        assert exc_info.value.code == ErrorCode.DEVICE_NOT_FOUND
-        assert fake_sd.play.call_count == 1  # type: ignore[attr-defined]
-
-    @pytest.mark.asyncio()
-    async def test_empty_audio_skips_play_entirely(self, fake_sd: ModuleType) -> None:
-        fake_sd.play = MagicMock()  # type: ignore[attr-defined]
+    async def test_empty_audio_skips_play_entirely(self) -> None:
+        sd = _fake_sd()
+        sd.play = MagicMock()  # type: ignore[attr-defined]
         audio = np.zeros(0, dtype=np.int16)
-        sink = SoundDeviceOutputSink()
+        sink = SoundDeviceOutputSink(sd_module=sd, enumerate_fn=lambda: [])
         elapsed = await sink.play(audio, sample_rate=24_000, device_id=None)
         assert elapsed == 0.0
-        fake_sd.play.assert_not_called()  # type: ignore[attr-defined]
+        sd.play.assert_not_called()  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio()
-    async def test_retry_also_fails_surfaces_classified_error(
-        self,
-        fake_sd: ModuleType,
-    ) -> None:
-        fake_sd.query_devices = MagicMock(  # type: ignore[attr-defined]
-            return_value={"default_samplerate": 48_000.0},
+    async def test_play_delegates_to_opener_with_resolved_entry(self) -> None:
+        sd = _fake_sd()
+        calls: list[dict[str, Any]] = []
+
+        def fake_play(audio: np.ndarray, **kw: Any) -> None:
+            calls.append({"size": int(audio.size), **kw})
+
+        sd.play = fake_play  # type: ignore[attr-defined]
+        out_entry = DeviceEntry(
+            index=15,
+            name="FakeSpeaker",
+            canonical_name="fakespeaker",
+            host_api_index=3,
+            host_api_name="Windows WASAPI",
+            max_input_channels=0,
+            max_output_channels=2,
+            default_samplerate=48_000,
+            is_os_default=True,
         )
-        fake_sd.play = MagicMock(  # type: ignore[attr-defined]
-            side_effect=RuntimeError("Invalid sample rate"),
+        sink = SoundDeviceOutputSink(sd_module=sd, enumerate_fn=lambda: [out_entry])
+        audio = np.ones(24_000, dtype=np.int16)
+        elapsed = await sink.play(audio, sample_rate=24_000, device_id=15)
+        assert elapsed >= 0.0
+        assert len(calls) == 1
+        assert calls[0]["device"] == 15
+        # WASAPI + default tuning means auto_convert is on and extra_settings is set.
+        assert calls[0].get("extra_settings") is not None
+
+    @pytest.mark.asyncio()
+    async def test_play_raises_audio_sink_error_on_failure(self) -> None:
+        sd = _fake_sd()
+        sd.play = MagicMock(  # type: ignore[attr-defined]
+            side_effect=RuntimeError("Device unavailable"),
         )
-        audio = np.ones(100, dtype=np.int16)
-        sink = SoundDeviceOutputSink()
+        out_entry = DeviceEntry(
+            index=15,
+            name="FakeSpeaker",
+            canonical_name="fakespeaker",
+            host_api_index=3,
+            host_api_name="Windows WASAPI",
+            max_input_channels=0,
+            max_output_channels=2,
+            default_samplerate=48_000,
+            is_os_default=True,
+        )
+        sink = SoundDeviceOutputSink(sd_module=sd, enumerate_fn=lambda: [out_entry])
         with pytest.raises(AudioSinkError) as exc_info:
-            await sink.play(audio, sample_rate=24_000, device_id=7)
-        assert exc_info.value.code == ErrorCode.UNSUPPORTED_SAMPLERATE
-
-
-# --------------------------------------------------------------------------
-# SoundDeviceInputSource — rate fallback on Invalid sample rate
-# --------------------------------------------------------------------------
-
-
-class TestSoundDeviceInputSourceRateFallback:
-    """Same class of bug on the input side: retry at the device's native rate."""
+            await sink.play(np.ones(100, dtype=np.int16), sample_rate=24_000, device_id=15)
+        assert exc_info.value.code == ErrorCode.DEVICE_NOT_FOUND
 
     @pytest.mark.asyncio()
-    async def test_open_falls_back_to_native_rate_on_unsupported(
-        self,
-        fake_sd: ModuleType,
-    ) -> None:
-        fake_sd.query_devices = MagicMock(  # type: ignore[attr-defined]
-            return_value={"name": "FakeMic", "default_samplerate": 48_000.0},
+    async def test_play_resolves_to_default_when_device_id_unknown(self) -> None:
+        sd = _fake_sd()
+        sd.play = MagicMock()  # type: ignore[attr-defined]
+        default = DeviceEntry(
+            index=5,
+            name="DefaultSpeaker",
+            canonical_name="defaultspeaker",
+            host_api_index=1,
+            host_api_name="Windows DirectSound",
+            max_input_channels=0,
+            max_output_channels=2,
+            default_samplerate=44_100,
+            is_os_default=True,
         )
-        attempts: list[int] = []
+        other = DeviceEntry(
+            index=9,
+            name="Other",
+            canonical_name="other",
+            host_api_index=1,
+            host_api_name="Windows DirectSound",
+            max_input_channels=0,
+            max_output_channels=2,
+            default_samplerate=44_100,
+            is_os_default=False,
+        )
+        sink = SoundDeviceOutputSink(sd_module=sd, enumerate_fn=lambda: [default, other])
+        await sink.play(
+            np.ones(100, dtype=np.int16),
+            sample_rate=44_100,
+            device_id=99,  # nonexistent — falls back to OS default
+        )
+        assert sd.play.call_args.kwargs["device"] == 5  # type: ignore[attr-defined]
 
-        def fake_stream_factory(*, samplerate: int, **_: object) -> MagicMock:
-            attempts.append(samplerate)
-            if samplerate == 16_000:
-                raise RuntimeError("Invalid sample rate [PaErrorCode -9997]")
+
+# --------------------------------------------------------------------------
+# SoundDeviceInputSource — integration with _stream_opener.open_input_stream
+# --------------------------------------------------------------------------
+
+
+class TestSoundDeviceInputSourceIntegration:
+    """The source delegates to ``_stream_opener.open_input_stream`` under the hood."""
+
+    @pytest.mark.asyncio()
+    async def test_open_resolves_device_and_delegates_to_opener(self) -> None:
+        sd = _fake_sd()
+        captured: list[dict[str, Any]] = []
+
+        def stream_factory(**kwargs: Any) -> MagicMock:
+            captured.append(kwargs)
             stream = MagicMock()
             stream.start = MagicMock()
             return stream
 
-        fake_sd.InputStream = fake_stream_factory  # type: ignore[attr-defined]
+        sd.InputStream = stream_factory  # type: ignore[attr-defined]
 
-        src = SoundDeviceInputSource(device_id=18, sample_rate=16_000)
-        info = await src.open()
-        assert info.sample_rate == 48_000  # noqa: PLR2004
-        assert attempts == [16_000, 48_000]
-        await src.close()
-
-    @pytest.mark.asyncio()
-    async def test_open_uses_requested_rate_when_device_accepts(
-        self,
-        fake_sd: ModuleType,
-    ) -> None:
-        fake_sd.query_devices = MagicMock(  # type: ignore[attr-defined]
-            return_value={"name": "FakeMic", "default_samplerate": 48_000.0},
+        entry = _wasapi_input_entry(index=18, channels=1, rate=48_000)
+        src = SoundDeviceInputSource(
+            device_id=18,
+            sample_rate=16_000,
+            tuning=VoiceTuningConfig(capture_wasapi_auto_convert=False),
+            sd_module=sd,
+            enumerate_fn=lambda: [entry],
         )
-        fake_sd.InputStream = MagicMock(return_value=MagicMock())  # type: ignore[attr-defined]
-        src = SoundDeviceInputSource(device_id=18, sample_rate=16_000)
         info = await src.open()
+        assert isinstance(info, AudioSourceInfo)
+        assert info.device_id == 18  # noqa: PLR2004
+        assert info.device_name == "FakeMic"
         assert info.sample_rate == 16_000  # noqa: PLR2004
-        assert fake_sd.InputStream.call_count == 1  # type: ignore[attr-defined]
+        assert info.channels == 1
+        assert len(captured) == 1
+        assert captured[0]["device"] == 18  # noqa: PLR2004
         await src.close()
 
     @pytest.mark.asyncio()
-    async def test_non_rate_error_raises_without_retry(
-        self,
-        fake_sd: ModuleType,
-    ) -> None:
-        fake_sd.query_devices = MagicMock(  # type: ignore[attr-defined]
-            return_value={"name": "FakeMic", "default_samplerate": 48_000.0},
+    async def test_open_raises_when_no_input_devices_available(self) -> None:
+        sd = _fake_sd()
+        src = SoundDeviceInputSource(
+            device_id=None,
+            sample_rate=16_000,
+            sd_module=sd,
+            enumerate_fn=lambda: [],
         )
-        fake_sd.InputStream = MagicMock(  # type: ignore[attr-defined]
-            side_effect=RuntimeError("Device unavailable"),
-        )
-        src = SoundDeviceInputSource(device_id=18, sample_rate=16_000)
         with pytest.raises(AudioSourceError) as exc_info:
             await src.open()
         assert exc_info.value.code == ErrorCode.DEVICE_NOT_FOUND
-        assert fake_sd.InputStream.call_count == 1  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio()
+    async def test_open_maps_stream_open_error_to_audio_source_error(self) -> None:
+        sd = _fake_sd()
+        sd.InputStream = MagicMock(  # type: ignore[attr-defined]
+            side_effect=RuntimeError("Unanticipated host error: 'AUDCLNT_E_UNSUPPORTED_FORMAT'"),
+        )
+        entry = _wasapi_input_entry(index=18, channels=1, rate=48_000)
+        src = SoundDeviceInputSource(
+            device_id=18,
+            sample_rate=16_000,
+            tuning=VoiceTuningConfig(capture_wasapi_auto_convert=False),
+            sd_module=sd,
+            enumerate_fn=lambda: [entry],
+        )
+        with pytest.raises(AudioSourceError) as exc_info:
+            await src.open()
+        assert exc_info.value.code == ErrorCode.UNSUPPORTED_FORMAT
+
+    @pytest.mark.asyncio()
+    async def test_open_falls_back_to_os_default_for_unknown_device_id(self) -> None:
+        sd = _fake_sd()
+        sd.InputStream = MagicMock(return_value=MagicMock())  # type: ignore[attr-defined]
+        default = _wasapi_input_entry(index=5, channels=1, rate=48_000, name="Default")
+        other = _wasapi_input_entry(index=9, channels=1, rate=48_000, name="Other")
+        # Only the first is OS default — the other is not.
+        other_entry = DeviceEntry(
+            index=9,
+            name="Other",
+            canonical_name="other",
+            host_api_index=other.host_api_index,
+            host_api_name=other.host_api_name,
+            max_input_channels=1,
+            max_output_channels=0,
+            default_samplerate=48_000,
+            is_os_default=False,
+        )
+        src = SoundDeviceInputSource(
+            device_id=99,  # nonexistent
+            sample_rate=16_000,
+            tuning=VoiceTuningConfig(capture_wasapi_auto_convert=False),
+            sd_module=sd,
+            enumerate_fn=lambda: [default, other_entry],
+        )
+        info = await src.open()
+        assert info.device_name == "Default"
+        await src.close()

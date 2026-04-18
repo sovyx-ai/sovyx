@@ -22,10 +22,13 @@ from sovyx.observability.logging import get_logger
 from sovyx.voice.device_test._protocol import ErrorCode
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Callable
 
     import numpy as np
     import numpy.typing as npt
+
+    from sovyx.engine.config import VoiceTuningConfig
+    from sovyx.voice.device_enum import DeviceEntry
 
 logger = get_logger(__name__)
 
@@ -80,10 +83,16 @@ _DEFAULT_QUEUE_MAXSIZE = 32
 class SoundDeviceInputSource:
     """Live PortAudio microphone stream.
 
-    Follows the same pattern as
-    :class:`sovyx.voice._capture_task.AudioCaptureTask`: the PortAudio
-    thread pushes frames onto an asyncio queue via
-    :meth:`asyncio.loop.call_soon_threadsafe` and :meth:`frames` drains it.
+    Delegates stream construction to :func:`sovyx.voice._stream_opener.open_input_stream`
+    so the full host-API × auto_convert × channels × rate pyramid is tried
+    before giving up. The callback pushes mono frames onto an asyncio queue
+    via :meth:`asyncio.loop.call_soon_threadsafe` and :meth:`frames` drains
+    it — same pattern as :class:`sovyx.voice._capture_task.AudioCaptureTask`.
+
+    Device resolution (``device_id`` → :class:`DeviceEntry`) happens inside
+    :meth:`open` to preserve the existing call-sites that pass only an
+    integer index. Phase 3 will lift this to the WebSocket route edge so
+    telemetry can observe it earlier.
     """
 
     def __init__(
@@ -93,6 +102,9 @@ class SoundDeviceInputSource:
         sample_rate: int = _DEFAULT_SAMPLE_RATE,
         blocksize: int = _DEFAULT_BLOCKSIZE,
         queue_maxsize: int = _DEFAULT_QUEUE_MAXSIZE,
+        tuning: VoiceTuningConfig | None = None,
+        sd_module: Any | None = None,  # noqa: ANN401 — DI for tests
+        enumerate_fn: Callable[[], list[DeviceEntry]] | None = None,
     ) -> None:
         self._device_id = device_id
         self._sample_rate = sample_rate
@@ -100,24 +112,23 @@ class SoundDeviceInputSource:
         self._queue: asyncio.Queue[npt.NDArray[np.int16]] = asyncio.Queue(
             maxsize=queue_maxsize,
         )
+        self._tuning = tuning
+        self._sd_module = sd_module
+        self._enumerate_fn = enumerate_fn
         self._stream: Any | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._closed = threading.Event()
         self._info: AudioSourceInfo | None = None
 
     async def open(self) -> AudioSourceInfo:
-        try:
-            import sounddevice as sd
-        except OSError as exc:
-            raise AudioSourceError(
-                ErrorCode.INTERNAL_ERROR,
-                f"PortAudio unavailable: {exc}",
-            ) from exc
+        from sovyx.voice._stream_opener import StreamOpenError, open_input_stream
 
+        tuning = self._tuning if self._tuning is not None else _default_tuning()
         self._loop = asyncio.get_running_loop()
-        device_name, default_sr = await asyncio.to_thread(
-            self._probe_device,
-            sd,
+
+        entry = _resolve_input_entry(
+            device_id=self._device_id,
+            enumerate_fn=self._enumerate_fn,
         )
 
         def _callback(
@@ -136,91 +147,40 @@ class SoundDeviceInputSource:
                 # Loop closed — ignore.
                 self._loop.call_soon_threadsafe(self._enqueue, frame)
 
-        stream, used_rate = await self._open_stream_with_rate_fallback(
-            sd,
-            _callback,
-            default_sr,
-        )
-        self._sample_rate = used_rate
+        try:
+            stream, info = await open_input_stream(
+                device=entry,
+                target_rate=self._sample_rate,
+                blocksize=self._blocksize,
+                callback=_callback,
+                tuning=tuning,
+                sd_module=self._sd_module,
+                enumerate_fn=self._enumerate_fn,
+            )
+        except StreamOpenError as exc:
+            raise AudioSourceError(exc.code, exc.detail) from exc
+
         self._stream = stream
+        self._sample_rate = info.sample_rate
 
         self._info = AudioSourceInfo(
             device_id=self._device_id,
-            device_name=device_name,
-            sample_rate=used_rate,
-            channels=1,
+            device_name=entry.name,
+            sample_rate=info.sample_rate,
+            channels=info.channels,
             blocksize=self._blocksize,
         )
         logger.info(
             "voice_test_input_opened",
             device_id=self._device_id,
-            device_name=device_name,
-            sample_rate=used_rate,
-            default_samplerate=default_sr,
+            device_name=entry.name,
+            sample_rate=info.sample_rate,
+            channels=info.channels,
+            host_api=info.host_api,
+            auto_convert=info.auto_convert_used,
+            fallback_depth=info.fallback_depth,
         )
         return self._info
-
-    async def _open_stream_with_rate_fallback(
-        self,
-        sd: Any,  # noqa: ANN401
-        callback: Any,  # noqa: ANN401
-        default_sr: int,
-    ) -> tuple[Any, int]:
-        """Open the input stream, retrying at the device's native rate on rejection.
-
-        Windows MME (and occasionally WASAPI in exclusive mode) refuses
-        non-native sample rates with PaErrorCode -9997. Rather than hand
-        the user a blank meter, we log the raw error at INFO, query the
-        device's ``default_samplerate`` and retry once. The RMS/peak meter
-        is rate-agnostic so the wizard still reports useful levels.
-        """
-
-        def _factory(rate: int) -> Any:  # noqa: ANN401
-            return sd.InputStream(
-                samplerate=rate,
-                channels=1,
-                dtype="int16",
-                blocksize=self._blocksize,
-                device=self._device_id,
-                callback=callback,
-            )
-
-        try:
-            stream = await asyncio.to_thread(_factory, self._sample_rate)
-            await asyncio.to_thread(stream.start)
-            return stream, self._sample_rate
-        except Exception as exc:  # noqa: BLE001
-            classified = _classify_portaudio_error(exc)
-            if classified.code != ErrorCode.UNSUPPORTED_SAMPLERATE:
-                raise classified from exc
-            if default_sr <= 0 or default_sr == self._sample_rate:
-                raise classified from exc
-            logger.info(
-                "voice_test_input_rate_fallback",
-                device_id=self._device_id,
-                requested_rate=self._sample_rate,
-                native_rate=default_sr,
-                reason=str(exc),
-            )
-
-        try:
-            stream = await asyncio.to_thread(_factory, default_sr)
-            await asyncio.to_thread(stream.start)
-            return stream, default_sr
-        except Exception as retry_exc:  # noqa: BLE001
-            raise _classify_portaudio_error(retry_exc) from retry_exc
-
-    def _probe_device(self, sd: Any) -> tuple[str, int]:  # noqa: ANN401
-        try:
-            info = sd.query_devices(self._device_id, "input")
-        except (ValueError, OSError) as exc:
-            raise AudioSourceError(
-                ErrorCode.DEVICE_NOT_FOUND,
-                f"Input device not found: {exc}",
-            ) from exc
-        name = str(info.get("name", "unknown")) if isinstance(info, dict) else "unknown"
-        default_sr = int(info.get("default_samplerate", 0)) if isinstance(info, dict) else 0
-        return name, default_sr
 
     def _enqueue(self, frame: npt.NDArray[np.int16]) -> None:
         # Drop oldest on overflow — we stream levels, not audio.
@@ -257,6 +217,53 @@ class SoundDeviceInputSource:
                     break
                 continue
             yield frame
+
+
+def _default_tuning() -> VoiceTuningConfig:
+    """Construct a default :class:`VoiceTuningConfig` on demand.
+
+    Imported lazily to avoid a pydantic-settings load on module import
+    (keeps ``from sovyx.voice.device_test import SoundDeviceInputSource``
+    cheap for dashboard routes that only occasionally open a stream).
+    """
+    from sovyx.engine.config import VoiceTuningConfig
+
+    return VoiceTuningConfig()
+
+
+def _resolve_input_entry(
+    *,
+    device_id: int | None,
+    enumerate_fn: Callable[[], list[DeviceEntry]] | None,
+) -> DeviceEntry:
+    """Resolve an input ``device_id`` to a live :class:`DeviceEntry`.
+
+    When ``device_id`` does not match any live entry we fall back to the
+    OS default input so the wizard keeps working after a device is
+    unplugged mid-session. Raises :class:`AudioSourceError` when the host
+    has no input devices at all.
+    """
+    if enumerate_fn is not None:
+        entries = enumerate_fn()
+    else:
+        from sovyx.voice.device_enum import enumerate_devices
+
+        entries = enumerate_devices()
+
+    candidates = [e for e in entries if e.max_input_channels > 0]
+    if not candidates:
+        raise AudioSourceError(
+            ErrorCode.DEVICE_NOT_FOUND,
+            "No audio input devices available",
+        )
+
+    if device_id is not None:
+        for entry in candidates:
+            if entry.index == device_id:
+                return entry
+
+    defaults = [e for e in candidates if e.is_os_default]
+    return defaults[0] if defaults else candidates[0]
 
 
 def _classify_portaudio_error(exc: BaseException) -> AudioSourceError:

@@ -326,6 +326,7 @@ async def play_audio(
 
     start_monotonic = asyncio.get_running_loop().time()
     extra = _maybe_wasapi_settings(sd, device, tuning)
+    attempts: list[OpenAttempt] = []
 
     try:
         await asyncio.to_thread(
@@ -336,25 +337,73 @@ async def play_audio(
             device.index,
             extra,
         )
+        return (asyncio.get_running_loop().time() - start_monotonic) * 1000
     except Exception as exc:  # noqa: BLE001
         classified = _classify_portaudio_error(exc)
+        attempts.append(
+            OpenAttempt(
+                host_api=device.host_api_name,
+                device_index=device.index,
+                sample_rate=source_rate,
+                channels=1,
+                auto_convert=bool(extra),
+                error_code=classified.code,
+                error_detail=classified.detail,
+            ),
+        )
+        # Only rate mismatch is recoverable by client-side resample + retry.
+        # AUDCLNT_E_* / DEVICE_NOT_FOUND / PERMISSION_DENIED etc. go up.
+        if classified.code != ErrorCode.UNSUPPORTED_SAMPLERATE:
+            raise StreamOpenError(
+                code=classified.code,
+                detail=classified.detail,
+                attempts=attempts,
+            ) from exc
+        native_rate = int(device.default_samplerate)
+        if native_rate <= 0 or native_rate == source_rate:
+            raise StreamOpenError(
+                code=classified.code,
+                detail=classified.detail,
+                attempts=attempts,
+            ) from exc
+        logger.info(
+            "voice_stream_output_resample_fallback",
+            device_index=device.index,
+            host_api=device.host_api_name,
+            requested_rate=source_rate,
+            native_rate=native_rate,
+            reason=str(exc),
+        )
+
+    resampled = await asyncio.to_thread(_resample_int16, audio, source_rate, native_rate)
+    try:
+        await asyncio.to_thread(
+            _blocking_play,
+            sd,
+            resampled,
+            native_rate,
+            device.index,
+            extra,
+        )
+    except Exception as retry_exc:  # noqa: BLE001
+        retry_classified = _classify_portaudio_error(retry_exc)
+        attempts.append(
+            OpenAttempt(
+                host_api=device.host_api_name,
+                device_index=device.index,
+                sample_rate=native_rate,
+                channels=1,
+                auto_convert=bool(extra),
+                error_code=retry_classified.code,
+                error_detail=retry_classified.detail,
+            ),
+        )
         raise StreamOpenError(
-            code=classified.code,
-            detail=classified.detail,
-            attempts=[
-                OpenAttempt(
-                    host_api=device.host_api_name,
-                    device_index=device.index,
-                    sample_rate=source_rate,
-                    channels=1,
-                    auto_convert=bool(extra),
-                    error_code=classified.code,
-                    error_detail=classified.detail,
-                ),
-            ],
-        ) from exc
-    elapsed_ms = (asyncio.get_running_loop().time() - start_monotonic) * 1000
-    return elapsed_ms
+            code=retry_classified.code,
+            detail=retry_classified.detail,
+            attempts=attempts,
+        ) from retry_exc
+    return (asyncio.get_running_loop().time() - start_monotonic) * 1000
 
 
 # ---------------------------------------------------------------------------
@@ -581,6 +630,30 @@ async def _close_stream_quiet(stream: Any) -> None:  # noqa: ANN401
         await asyncio.to_thread(stream.stop)
     with contextlib.suppress(Exception):
         await asyncio.to_thread(stream.close)
+
+
+def _resample_int16(
+    audio: npt.NDArray[np.int16],
+    src_rate: int,
+    dst_rate: int,
+) -> npt.NDArray[np.int16]:
+    """Linear-interpolation resample of a mono int16 buffer.
+
+    Used by :func:`play_audio` when a non-WASAPI device rejects the
+    synthesis rate. Linear interpolation is adequate for the wizard's
+    one-shot test phrase — quality is not critical.
+    """
+    import numpy as np  # noqa: PLC0415
+
+    if src_rate == dst_rate or audio.size == 0:
+        return audio
+    src_len = int(audio.size)
+    dst_len = max(1, int(round(src_len * dst_rate / src_rate)))
+    x_src = np.linspace(0.0, 1.0, num=src_len, endpoint=False, dtype=np.float64)
+    x_dst = np.linspace(0.0, 1.0, num=dst_len, endpoint=False, dtype=np.float64)
+    resampled = np.interp(x_dst, x_src, audio.astype(np.float32))
+    clipped = np.clip(resampled, -32_768, 32_767)
+    return clipped.astype(np.int16)
 
 
 __all__ = [

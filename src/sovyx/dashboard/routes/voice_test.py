@@ -359,6 +359,7 @@ async def websocket_input_meter(
     source = SoundDeviceInputSource(
         device_id=device_id,
         sample_rate=sample_rate,
+        tuning=tuning,
     )
     session = TestSession(
         session_id=session_id,
@@ -513,14 +514,11 @@ async def start_output_test(request: Request, body: TestOutputRequest) -> JSONRe
     entry = _JobEntry()
     jobs[job_id] = entry
 
-    sink: AudioOutputSink = (
-        getattr(
-            request.app.state,
-            "voice_test_output_sink",
-            None,
-        )
-        or SoundDeviceOutputSink()
-    )
+    sink: AudioOutputSink = getattr(
+        request.app.state,
+        "voice_test_output_sink",
+        None,
+    ) or SoundDeviceOutputSink(tuning=tuning)
 
     entry.task = asyncio.create_task(
         _run_output_job(
