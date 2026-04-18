@@ -79,6 +79,14 @@ function messageForCode(code: VoiceTestErrorCode | null): string {
       return "Output device is in use by another app.";
     case "permission_denied":
       return "Permission denied for output device.";
+    case "unsupported_samplerate":
+      return "This device rejected the synthesis sample rate.";
+    case "unsupported_channels":
+      return "This device rejected the requested channel layout.";
+    case "unsupported_format":
+      return "Windows mixer format conflict — change the device format in Windows Sound settings.";
+    case "buffer_size_invalid":
+      return "Device buffer size rejected — try a different device or restart the audio service.";
     case "invalid_request":
       return "Request rejected by the server.";
     default:

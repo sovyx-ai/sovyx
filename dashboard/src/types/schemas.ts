@@ -365,6 +365,8 @@ export const VoiceTestErrorCodeSchema = z.enum([
   "permission_denied",
   "unsupported_samplerate",
   "unsupported_channels",
+  "unsupported_format",
+  "buffer_size_invalid",
   "pipeline_active",
   "rate_limited",
   "disabled",

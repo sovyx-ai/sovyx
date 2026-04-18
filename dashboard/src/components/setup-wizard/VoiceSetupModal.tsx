@@ -14,6 +14,7 @@ import { useCallback, useState } from "react";
 import { toast } from "sonner";
 import {
   MicIcon,
+  MicOffIcon,
   LoaderIcon,
   CopyIcon,
   CheckIcon,
@@ -43,10 +44,21 @@ interface EnableResponse {
   ok: boolean;
   status?: string;
   error?: string;
+  detail?: string;
+  device?: number | string | null;
+  host_api?: string | null;
+  observed_peak_rms_db?: number;
   missing_deps?: MissingDep[];
   missing_models?: Array<{ name: string; install_command: string }>;
   install_command?: string;
   tts_engine?: string;
+}
+
+interface CaptureSilenceInfo {
+  detail: string;
+  device: number | string | null;
+  hostApi: string | null;
+  observedPeakRmsDb: number;
 }
 
 interface VoiceSetupModalProps {
@@ -63,6 +75,7 @@ export function VoiceSetupModal({ trigger, onEnabled }: VoiceSetupModalProps) {
     command: string;
   } | null>(null);
   const [audioError, setAudioError] = useState(false);
+  const [silenceInfo, setSilenceInfo] = useState<CaptureSilenceInfo | null>(null);
   const [enableError, setEnableError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [devices, setDevices] = useState<SelectedDevices>({
@@ -78,6 +91,7 @@ export function VoiceSetupModal({ trigger, onEnabled }: VoiceSetupModalProps) {
     setEnabling(true);
     setDepsIssue(null);
     setAudioError(false);
+    setSilenceInfo(null);
     setEnableError(null);
 
     try {
@@ -97,6 +111,16 @@ export function VoiceSetupModal({ trigger, onEnabled }: VoiceSetupModalProps) {
             setDepsIssue({
               missing: body.missing_deps,
               command: body.install_command ?? "pip install sovyx[voice]",
+            });
+          } else if (body.error === "capture_silence") {
+            setSilenceInfo({
+              detail: body.detail ?? "Microphone delivered only silence.",
+              device: body.device ?? null,
+              hostApi: body.host_api ?? null,
+              observedPeakRmsDb:
+                typeof body.observed_peak_rms_db === "number"
+                  ? body.observed_peak_rms_db
+                  : Number.NEGATIVE_INFINITY,
             });
           } else if (
             typeof body.error === "string" &&
@@ -217,8 +241,55 @@ export function VoiceSetupModal({ trigger, onEnabled }: VoiceSetupModalProps) {
             </div>
           )}
 
+          {/* Capture silence panel — backend tried every host-API variant
+              and every one delivered zeros. Surfaces host_api + observed
+              RMS so the user has actionable diagnostic data. */}
+          {silenceInfo && (
+            <div className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-error)]/40 bg-[var(--svx-color-error)]/5 p-4 space-y-3">
+              <div className="flex items-center gap-2 text-xs font-medium text-[var(--svx-color-text-primary)]">
+                <MicOffIcon className="size-4 text-[var(--svx-color-error)]" />
+                Microphone Delivered Only Silence
+              </div>
+              <p className="text-xs text-[var(--svx-color-text-secondary)] leading-relaxed">
+                The selected microphone opened successfully but produced no
+                audible signal on any host API. This usually means the mic is
+                muted in Windows privacy settings, held exclusively by another
+                app, or physically disconnected.
+              </p>
+              <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px] font-mono text-[var(--svx-color-text-tertiary)]">
+                {silenceInfo.hostApi && (
+                  <>
+                    <dt>Host API</dt>
+                    <dd className="text-[var(--svx-color-text-secondary)]">
+                      {silenceInfo.hostApi}
+                    </dd>
+                  </>
+                )}
+                {silenceInfo.device !== null && (
+                  <>
+                    <dt>Device</dt>
+                    <dd className="text-[var(--svx-color-text-secondary)]">
+                      {String(silenceInfo.device)}
+                    </dd>
+                  </>
+                )}
+                {Number.isFinite(silenceInfo.observedPeakRmsDb) && (
+                  <>
+                    <dt>Peak RMS</dt>
+                    <dd className="text-[var(--svx-color-text-secondary)]">
+                      {silenceInfo.observedPeakRmsDb.toFixed(1)} dBFS
+                    </dd>
+                  </>
+                )}
+              </dl>
+              <p className="text-[11px] text-[var(--svx-color-text-tertiary)]">
+                Fix the mic and click Enable Voice again.
+              </p>
+            </div>
+          )}
+
           {/* Generic error */}
-          {enableError && !depsIssue && !audioError && (
+          {enableError && !depsIssue && !audioError && !silenceInfo && (
             <div className="flex items-center gap-2 rounded-[var(--svx-radius-md)] bg-[var(--svx-color-error)]/10 px-3 py-2.5 text-xs text-[var(--svx-color-error)]">
               <XCircleIcon className="size-3.5 shrink-0" />
               <span>{enableError}</span>
