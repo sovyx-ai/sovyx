@@ -49,6 +49,7 @@ from typing import TYPE_CHECKING, Any
 
 from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.observability.logging import get_logger
+from sovyx.voice._frame_normalizer import FrameNormalizer
 from sovyx.voice._stream_opener import _import_sounddevice
 
 if TYPE_CHECKING:
@@ -168,6 +169,7 @@ class AudioCaptureTask:
         self._stream: Any = None
         self._consumer: asyncio.Task[None] | None = None
         self._running = False
+        self._normalizer: FrameNormalizer | None = None
 
         # Telemetry — populated by the consumer loop.
         self._last_rms_db: float = _RMS_FLOOR_DB
@@ -271,6 +273,19 @@ class AudioCaptureTask:
         self._input_device = info.device_index
         self._host_api_name = info.host_api
 
+        self._normalizer = FrameNormalizer(
+            source_rate=info.sample_rate,
+            source_channels=info.channels,
+        )
+        if not self._normalizer.is_passthrough:
+            logger.info(
+                "audio_capture_resample_active",
+                source_rate=info.sample_rate,
+                source_channels=info.channels,
+                target_rate=self._normalizer.target_rate,
+                target_window=self._normalizer.target_window,
+            )
+
         self._running = True
         self._last_heartbeat_monotonic = time.monotonic()
         self._consumer = asyncio.create_task(self._consume_loop(), name="audio-capture-consumer")
@@ -283,6 +298,7 @@ class AudioCaptureTask:
             auto_convert=info.auto_convert_used,
             fallback_depth=info.fallback_depth,
             blocksize=self._blocksize,
+            normalizer_active=not self._normalizer.is_passthrough,
         )
 
     async def _validate_stream_from_queue(
@@ -293,10 +309,23 @@ class AudioCaptureTask:
     ) -> float:
         """Drain ``_VALIDATION_S`` seconds of callback output and return peak dBFS.
 
-        The opener supplies the active stream plus its effective device
-        index; this function reads frames off ``self._queue`` (populated
-        by the PortAudio callback we installed) and short-circuits as
-        soon as the peak RMS crosses ``capture_validation_min_rms_db``.
+        Two validation modes (controlled by
+        :attr:`VoiceTuningConfig.capture_validation_require_signal`):
+
+        * **Presence-only (default)**: accepts as soon as
+          :attr:`~VoiceTuningConfig.capture_validation_min_frames` frames
+          have arrived. Returns ``0.0`` dBFS (well above any threshold)
+          so the opener treats the variant as valid regardless of
+          ambient signal level. This is the right default for production
+          capture: a silent user shouldn't invalidate a perfectly good
+          audio path.
+        * **Signal-gated (opt-in)**: measures peak RMS and requires it
+          to cross ``capture_validation_min_rms_db``. Reserved for the
+          setup-wizard and explicit diagnostic flows where the user is
+          actively making noise.
+
+        The queue is drained first so stale frames from a previously
+        rejected pyramid variant do not leak into the current measurement.
         """
         return await self._validate_stream()
 
@@ -361,25 +390,52 @@ class AudioCaptureTask:
     async def _validate_stream(self) -> float:
         """Observe the freshly-opened stream for up to ``_VALIDATION_S`` seconds.
 
-        Reads frames off the queue (populated by the PortAudio callback
-        from a worker thread) and returns the peak per-frame RMS in
-        dBFS. Short-circuits as soon as the peak crosses the silence
-        threshold — a live mic typically registers >-60 dBFS within a
-        few frames of background noise, so the full ~600 ms budget only
-        applies when the stream is truly dead.
+        Drains any residual frames left over from a previous pyramid
+        variant, then observes the fresh callback for up to
+        ``capture_validation_seconds``. Behaviour branches on
+        :attr:`VoiceTuningConfig.capture_validation_require_signal`:
+
+        * When ``False`` (default): returns ``0.0`` dBFS as soon as
+          :attr:`~VoiceTuningConfig.capture_validation_min_frames` frames
+          have arrived — proving the PortAudio callback is live without
+          demanding the user speak. If the stream is truly dead (callback
+          never fires), the deadline expires and the floor value is
+          returned, which trips the opener's silence fallback.
+        * When ``True``: measures the peak per-frame RMS and short-circuits
+          the moment it crosses ``capture_validation_min_rms_db``. Retains
+          the legacy diagnostic semantics used by the setup-wizard.
         """
-        deadline = time.monotonic() + _VALIDATION_S
+        # Drain stale frames from any previously rejected variant — the
+        # queue is shared across pyramid iterations.
+        while not self._queue.empty():
+            with contextlib.suppress(asyncio.QueueEmpty):
+                self._queue.get_nowait()
+
+        tuning = self._tuning if self._tuning is not None else _VoiceTuning()
+        require_signal = tuning.capture_validation_require_signal
+        min_frames = max(1, tuning.capture_validation_min_frames)
+        min_rms_db = tuning.capture_validation_min_rms_db
+        deadline = time.monotonic() + tuning.capture_validation_seconds
+
         peak_db = _RMS_FLOOR_DB
+        frames_seen = 0
         while time.monotonic() < deadline:
             timeout = max(deadline - time.monotonic(), 0.05)
             try:
                 frame = await asyncio.wait_for(self._queue.get(), timeout=timeout)
             except TimeoutError:
                 break
+            frames_seen += 1
             db = _rms_db_int16(frame)
             peak_db = max(peak_db, db)
-            if peak_db >= _VALIDATION_MIN_RMS_DB:
-                return peak_db
+            if require_signal:
+                if peak_db >= min_rms_db:
+                    return peak_db
+            elif frames_seen >= min_frames:
+                # Callback is alive — return a value far above any threshold
+                # so the opener accepts this variant irrespective of the
+                # ambient signal level.
+                return 0.0
         return peak_db
 
     # -- Internals ------------------------------------------------------------
@@ -416,6 +472,10 @@ class AudioCaptureTask:
         self._sample_rate = info.sample_rate
         self._input_device = info.device_index
         self._host_api_name = info.host_api
+        self._normalizer = FrameNormalizer(
+            source_rate=info.sample_rate,
+            source_channels=info.channels,
+        )
 
     def _close_stream(self) -> None:
         """Stop and close the stream — tolerant of already-closed streams."""
@@ -438,20 +498,23 @@ class AudioCaptureTask:
     ) -> None:
         """PortAudio callback — runs in the audio thread.
 
-        Extracts the mono channel and hands the frame to the asyncio
-        loop. Drops frames when the queue is saturated rather than
-        blocking the audio thread, which would cause device underruns.
+        Hands the raw block (any shape, any sample rate that the opener
+        negotiated) to the asyncio loop. Downmix + resample + rewindow
+        happen on the consumer side via :class:`FrameNormalizer`, which
+        is not thread-safe and therefore cannot be touched here. Drops
+        frames when the queue is saturated rather than blocking the
+        audio thread, which would cause device underruns.
         """
         if status:
             # CallbackFlags: input overflow/underflow. Log but keep going.
             logger.debug("audio_callback_status", status=str(status))
-        mono = indata[:, 0].copy() if indata.ndim > 1 else indata.copy()
+        block = indata.copy()
         loop = self._loop
         if loop is None:
             return
         # Loop may be closed mid-shutdown — swallow that and move on.
         with contextlib.suppress(RuntimeError):
-            loop.call_soon_threadsafe(self._enqueue, mono)
+            loop.call_soon_threadsafe(self._enqueue, block)
 
     def _enqueue(self, frame: npt.NDArray[np.int16]) -> None:
         """Enqueue a frame; drop the oldest on overflow."""
@@ -476,14 +539,16 @@ class AudioCaptureTask:
 
         while self._running:
             try:
-                frame = await self._queue.get()
-                rms_db = _rms_db_int16(frame)
-                self._last_rms_db = rms_db
-                self._frames_delivered += 1
-                self._frames_since_heartbeat += 1
-                if rms_db < _VALIDATION_MIN_RMS_DB:
-                    self._silent_frames_since_heartbeat += 1
-                await self._pipeline.feed_frame(frame)
+                block = await self._queue.get()
+                windows = self._normalizer.push(block) if self._normalizer is not None else [block]
+                for window in windows:
+                    rms_db = _rms_db_int16(window)
+                    self._last_rms_db = rms_db
+                    self._frames_delivered += 1
+                    self._frames_since_heartbeat += 1
+                    if rms_db < _VALIDATION_MIN_RMS_DB:
+                        self._silent_frames_since_heartbeat += 1
+                    await self._pipeline.feed_frame(window)
                 self._maybe_emit_heartbeat()
             except asyncio.CancelledError:
                 raise
@@ -521,6 +586,7 @@ class AudioCaptureTask:
         now = time.monotonic()
         if now - self._last_heartbeat_monotonic < _HEARTBEAT_INTERVAL_S:
             return
+        normalizer = self._normalizer
         logger.info(
             "audio_capture_heartbeat",
             device=self._input_device,
@@ -529,6 +595,9 @@ class AudioCaptureTask:
             frames_since_last=self._frames_since_heartbeat,
             silent_frames=self._silent_frames_since_heartbeat,
             last_rms_db=round(self._last_rms_db, 1),
+            source_rate=normalizer.source_rate if normalizer is not None else None,
+            source_channels=normalizer.source_channels if normalizer is not None else None,
+            normalizer_active=(not normalizer.is_passthrough if normalizer is not None else False),
         )
         self._last_heartbeat_monotonic = now
         self._frames_since_heartbeat = 0

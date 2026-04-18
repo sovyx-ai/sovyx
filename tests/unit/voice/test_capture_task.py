@@ -368,3 +368,212 @@ class TestAudioCaptureTaskReconnect:
             assert len(streams) >= 2, "reconnect should have opened a fresh stream"  # noqa: PLR2004
         finally:
             await task.stop()
+
+
+class TestCaptureEndToEndFrameNormalisation:
+    """The end-to-end capture path resamples + downmixes + rewindows correctly.
+
+    Regression for the silent-VAD bug: PortAudio delivered 48 kHz stereo
+    blocks (WASAPI shared mode) and the capture task forwarded them
+    unchanged. VAD (expects 16 kHz mono 512) silently rejected every
+    frame. This test drives a 48 kHz / 2 ch callback and asserts the
+    pipeline sees only ``(512,) int16`` frames at 16 kHz rate.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_48k_stereo_callback_reaches_pipeline_as_16k_mono_512(self) -> None:
+        pipeline = MagicMock()
+        delivered: list[np.ndarray] = []
+
+        async def capture(frame: np.ndarray) -> dict[str, str]:
+            delivered.append(frame)
+            return {"state": "IDLE"}
+
+        pipeline.feed_frame = capture
+
+        captured: dict[str, Any] = {}
+
+        sd = _fake_sd()
+
+        # Model a Windows shared-mode mic whose mixer format is fixed at
+        # 48 kHz / 2 ch. Any pyramid attempt for a different (rate, ch)
+        # combo fails with PortAudioError, forcing the opener down to the
+        # native variant — exactly the path that triggers resampling.
+        def stream_factory(**kwargs: Any) -> MagicMock:
+            if kwargs["samplerate"] != 48_000 or kwargs["channels"] != 2:  # noqa: PLR2004
+                raise sd.PortAudioError(  # type: ignore[attr-defined]
+                    "Invalid sample rate or channel count for this device",
+                )
+            captured["cb"] = kwargs["callback"]
+            captured["samplerate"] = kwargs["samplerate"]
+            captured["channels"] = kwargs["channels"]
+            return MagicMock()
+
+        sd.InputStream = stream_factory  # type: ignore[attr-defined]
+        entry = _input_entry(index=5, rate=48_000, channels=2)
+
+        task = AudioCaptureTask(
+            pipeline,
+            input_device=5,
+            validate_on_start=False,
+            tuning=VoiceTuningConfig(
+                capture_wasapi_auto_convert=False,
+                capture_allow_channel_upgrade=True,
+            ),
+            sd_module=sd,
+            enumerate_fn=lambda: [entry],
+        )
+        try:
+            await task.start()
+            assert captured["samplerate"] == 48_000  # noqa: PLR2004
+            assert captured["channels"] == 2  # noqa: PLR2004
+
+            cb = captured["cb"]
+            # 48 kHz / 2 ch block of 1536 samples = 32 ms → after resampling
+            # to 16 kHz yields 512 samples → exactly one pipeline frame.
+            t = np.linspace(0, 0.032, 1536, endpoint=False, dtype=np.float64)
+            tone = (np.sin(2 * np.pi * 440 * t) * 10_000).astype(np.int16)
+            stereo = np.column_stack([tone, tone])
+            for _ in range(4):
+                cb(stereo, 1536, None, None)
+                await asyncio.sleep(0)
+            for _ in range(20):
+                await asyncio.sleep(0)
+                if delivered:
+                    break
+
+            assert delivered, "at least one normalised frame must reach feed_frame"
+            for frame in delivered:
+                assert frame.shape == (512,), f"expected (512,) got {frame.shape}"
+                assert frame.dtype == np.int16
+        finally:
+            await task.stop()
+
+
+class TestSilenceValidatorModes:
+    """``_validate_stream`` branches between presence-only and signal-gated."""
+
+    @pytest.mark.asyncio()
+    async def test_presence_mode_accepts_quiet_frames(self) -> None:
+        """Default: any frames arriving = liveness, regardless of RMS level.
+
+        Frames must arrive *after* validation starts so the drain step
+        does not swallow them — simulating the PortAudio callback firing
+        on schedule while the user is quiet.
+        """
+        task = AudioCaptureTask(
+            MagicMock(),
+            tuning=VoiceTuningConfig(
+                capture_validation_require_signal=False,
+                capture_validation_min_frames=2,
+                capture_validation_seconds=0.5,
+            ),
+        )
+        task._loop = asyncio.get_running_loop()  # noqa: SLF001
+
+        async def feeder() -> None:
+            silent = np.zeros(512, dtype=np.int16)
+            for _ in range(3):
+                await asyncio.sleep(0.02)
+                await task._queue.put(silent)  # noqa: SLF001
+
+        feeder_task = asyncio.create_task(feeder())
+        try:
+            peak_db = await task._validate_stream()  # noqa: SLF001
+        finally:
+            await feeder_task
+
+        assert peak_db == 0.0  # presence-mode sentinel
+
+    @pytest.mark.asyncio()
+    async def test_presence_mode_returns_floor_when_no_frames(self) -> None:
+        """No callback activity for the full window = floor RMS => opener rejects."""
+        task = AudioCaptureTask(
+            MagicMock(),
+            tuning=VoiceTuningConfig(
+                capture_validation_require_signal=False,
+                capture_validation_min_frames=1,
+                capture_validation_seconds=0.15,
+            ),
+        )
+        task._loop = asyncio.get_running_loop()  # noqa: SLF001
+
+        peak_db = await task._validate_stream()  # noqa: SLF001
+
+        assert peak_db < -100.0  # floor
+
+    @pytest.mark.asyncio()
+    async def test_signal_mode_rejects_silent_frames(self) -> None:
+        """Opt-in signal mode still gates on capture_validation_min_rms_db."""
+        task = AudioCaptureTask(
+            MagicMock(),
+            tuning=VoiceTuningConfig(
+                capture_validation_require_signal=True,
+                capture_validation_min_rms_db=-80.0,
+                capture_validation_seconds=0.2,
+            ),
+        )
+        task._loop = asyncio.get_running_loop()  # noqa: SLF001
+
+        async def feeder() -> None:
+            silent = np.zeros(512, dtype=np.int16)
+            for _ in range(5):
+                await asyncio.sleep(0.01)
+                await task._queue.put(silent)  # noqa: SLF001
+
+        feeder_task = asyncio.create_task(feeder())
+        try:
+            peak_db = await task._validate_stream()  # noqa: SLF001
+        finally:
+            await feeder_task
+
+        assert peak_db < -80.0
+
+    @pytest.mark.asyncio()
+    async def test_signal_mode_accepts_loud_frames(self) -> None:
+        """Opt-in signal mode accepts when RMS crosses the threshold."""
+        task = AudioCaptureTask(
+            MagicMock(),
+            tuning=VoiceTuningConfig(
+                capture_validation_require_signal=True,
+                capture_validation_min_rms_db=-40.0,
+                capture_validation_seconds=0.5,
+            ),
+        )
+        task._loop = asyncio.get_running_loop()  # noqa: SLF001
+
+        async def feeder() -> None:
+            # Constant-amplitude signal at ~-10 dBFS — well above the threshold.
+            samples = (np.ones(512, dtype=np.int16) * 10_000).astype(np.int16)
+            await asyncio.sleep(0.01)
+            await task._queue.put(samples)  # noqa: SLF001
+
+        feeder_task = asyncio.create_task(feeder())
+        try:
+            peak_db = await task._validate_stream()  # noqa: SLF001
+        finally:
+            await feeder_task
+
+        assert peak_db >= -40.0
+
+    @pytest.mark.asyncio()
+    async def test_drains_stale_frames_before_measuring(self) -> None:
+        """Frames from a rejected pyramid variant must not count toward this validation."""
+        task = AudioCaptureTask(
+            MagicMock(),
+            tuning=VoiceTuningConfig(
+                capture_validation_require_signal=False,
+                capture_validation_min_frames=2,
+                capture_validation_seconds=0.15,
+            ),
+        )
+        task._loop = asyncio.get_running_loop()  # noqa: SLF001
+        # Stale frame from a previous rejected variant.
+        stale = np.zeros(512, dtype=np.int16)
+        await task._queue.put(stale)  # noqa: SLF001
+
+        # No new frames will arrive; drain should wipe the stale one,
+        # leaving the validator without any frames seen ⇒ floor RMS.
+        peak_db = await task._validate_stream()  # noqa: SLF001
+
+        assert peak_db < -100.0

@@ -48,6 +48,8 @@ _BARGE_IN_THRESHOLD_FRAMES = 5  # ~160ms sustained speech -> barge-in
 _FILLER_DELAY_MS = 800  # Play filler if no LLM token within this
 _TEXT_MIN_WORDS = 3  # Min words before TTS synthesis
 _HEARTBEAT_INTERVAL_S = _VoiceTuning().pipeline_heartbeat_interval_seconds
+_DEAF_MIN_FRAMES = _VoiceTuning().pipeline_deaf_min_frames
+_DEAF_VAD_MAX_THRESHOLD = _VoiceTuning().pipeline_deaf_vad_max_threshold
 
 
 class VoicePipeline:
@@ -609,6 +611,25 @@ class VoicePipeline:
             max_vad_probability=round(self._max_vad_prob_since_heartbeat, 3),
             frames_processed=self._vad_frames_since_heartbeat,
         )
+        if (
+            self._vad_frames_since_heartbeat >= _DEAF_MIN_FRAMES
+            and self._max_vad_prob_since_heartbeat < _DEAF_VAD_MAX_THRESHOLD
+        ):
+            # Audio is arriving but VAD is stuck near zero — this is the
+            # canonical fingerprint of "frames are not 16 kHz mono".
+            logger.warning(
+                "voice_pipeline_deaf_warning",
+                mind_id=self._config.mind_id,
+                state=self._state.name,
+                max_vad_probability=round(self._max_vad_prob_since_heartbeat, 3),
+                frames_processed=self._vad_frames_since_heartbeat,
+                vad_max_threshold=_DEAF_VAD_MAX_THRESHOLD,
+                hint=(
+                    "Orchestrator received frames but VAD probability stayed "
+                    "below threshold — check FrameNormalizer source_rate/channels "
+                    "and audio_capture_resample_active logs."
+                ),
+            )
         self._last_heartbeat_monotonic = now
         self._max_vad_prob_since_heartbeat = 0.0
         self._vad_frames_since_heartbeat = 0

@@ -121,7 +121,22 @@ async def create_voice_pipeline(
 
     # ── 2. MoonshineSTT (auto-download via HF Hub) ───────────
     logger.info("voice_factory_creating_stt", language=language)
-    stt = await asyncio.to_thread(lambda: _self._create_stt(language))
+    stt = _self._create_stt(language)
+    # The constructor only allocates the engine struct; the ONNX session +
+    # HF Hub download happen in initialize(). Calling it here guarantees
+    # STTState.READY before the pipeline starts consuming speech events —
+    # otherwise the first VAD-triggered transcribe() raises
+    # ``RuntimeError("STT not initialized")`` and the utterance is lost.
+    await stt.initialize()
+    if getattr(stt, "state", None) is not None:
+        from sovyx.voice.stt import STTState
+
+        if stt.state != STTState.READY:
+            msg = (
+                "MoonshineSTT.initialize() returned but state is "
+                f"{stt.state!r} — expected STTState.READY."
+            )
+            raise VoiceFactoryError(msg)
 
     # ── 3. TTS (Piper > Kokoro > error) ──────────────────────
     tts_engine = detect_tts_engine()
@@ -225,12 +240,16 @@ def _create_vad(model_path: Path) -> Any:  # noqa: ANN401
 
 
 def _create_stt(language: str) -> Any:  # noqa: ANN401, ARG001
+    """Construct an uninitialized :class:`MoonshineSTT`.
+
+    The factory calls ``await engine.initialize()`` right after; the
+    split exists so :func:`create_voice_pipeline` can keep the sync
+    construction trivially test-patchable while the async model load
+    stays on the factory's control-flow path.
+    """
     from sovyx.voice.stt import MoonshineSTT
 
-    engine = MoonshineSTT()
-    # MoonshineSTT.initialize() downloads model on first call
-    # We call it here so the download happens during factory, not first use
-    return engine
+    return MoonshineSTT()
 
 
 def _create_piper_tts(model_dir: Path) -> Any:  # noqa: ANN401

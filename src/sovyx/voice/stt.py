@@ -12,7 +12,7 @@ import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import IntEnum, auto
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sovyx.observability.logging import get_logger
 
@@ -218,7 +218,11 @@ class MoonshineSTT(STTEngine):
     async def initialize(self) -> None:
         """Download model if needed and create transcriber.
 
-        Safe to call multiple times; only initializes once.
+        Safe to call multiple times; only initializes once. Model
+        download + ONNX session construction are CPU/IO-bound and run
+        inside :func:`asyncio.to_thread` so the factory's async call
+        site does not stall the event loop — see CLAUDE.md anti-pattern
+        #14 for the general rule.
         """
         if self._state in (STTState.READY, STTState.TRANSCRIBING):
             return
@@ -227,25 +231,27 @@ class MoonshineSTT(STTEngine):
             msg = "Cannot initialize a closed STT engine"
             raise RuntimeError(msg)
 
-        from moonshine_voice import (
-            Transcriber,
-            get_model_for_language,
-        )
-
         logger.info(
             "Initializing MoonshineSTT",
             language=self._config.language,
             model_size=self._config.model_size,
         )
 
-        model_path, model_arch = get_model_for_language(
-            self._config.language,
-        )
+        def _load_transcriber() -> Any:  # noqa: ANN401
+            from moonshine_voice import (
+                Transcriber,
+                get_model_for_language,
+            )
 
-        self._transcriber = Transcriber(
-            model_path=model_path,
-            model_arch=model_arch,
-        )
+            model_path, model_arch = get_model_for_language(
+                self._config.language,
+            )
+            return Transcriber(
+                model_path=model_path,
+                model_arch=model_arch,
+            )
+
+        self._transcriber = await asyncio.to_thread(_load_transcriber)
         self._state = STTState.READY
 
         spec = _MODEL_SPECS[self._config.model_size]

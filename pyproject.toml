@@ -66,6 +66,7 @@ voice = [
     "piper-tts>=1.4",
     "sounddevice>=0.5",
     "kokoro-onnx>=0.4",
+    "scipy>=1.11",
 ]
 dev = [
     "pytest>=8.0",
@@ -136,6 +137,7 @@ module = [
     "moonshine_voice.*",
     "sounddevice.*",
     "kokoro_onnx.*",
+    "scipy.*",
     "tokenizers.*",
     "watchdog.*",
     "ddgs.*",

@@ -41,6 +41,99 @@ class TestCreateWakeWordStub:
         assert result.detected is False
 
 
+class TestFactoryInitializesSTT:
+    """Regression: MoonshineSTT.initialize() is called during pipeline factory.
+
+    Before this was wired up, :func:`create_voice_pipeline` constructed
+    a :class:`MoonshineSTT` but left it in ``STTState.UNINITIALIZED`` —
+    every VAD-triggered transcribe() then raised ``RuntimeError("STT not
+    initialized")`` and the utterance was silently dropped. This test
+    guards the factory contract so the regression cannot recur.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_initialize_called_before_pipeline_start(self, tmp_path) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        vad_file = tmp_path / "silero_vad.onnx"
+        vad_file.write_bytes(b"fake")
+
+        import sovyx.voice.factory as factory_mod
+
+        fake_pipeline = MagicMock()
+        fake_pipeline.start = AsyncMock()
+
+        fake_stt = MagicMock()
+        fake_stt.initialize = AsyncMock()
+        fake_stt.state = None  # skip STTState.READY assertion branch
+
+        original_create_vad = factory_mod._create_vad
+        original_create_stt = factory_mod._create_stt
+        original_create_piper = factory_mod._create_piper_tts
+        factory_mod._create_vad = lambda *a, **kw: MagicMock()
+        factory_mod._create_stt = lambda *a, **kw: fake_stt
+        factory_mod._create_piper_tts = lambda *a, **kw: MagicMock()
+
+        try:
+            with (
+                patch.object(
+                    factory_mod, "ensure_silero_vad", new=AsyncMock(return_value=vad_file)
+                ),
+                patch.object(factory_mod, "detect_tts_engine", return_value="piper"),
+                patch("sovyx.voice.device_enum.resolve_device", return_value=None),
+                patch(
+                    "sovyx.voice.pipeline._orchestrator.VoicePipeline",
+                    return_value=fake_pipeline,
+                ),
+            ):
+                await factory_mod.create_voice_pipeline(model_dir=tmp_path)
+
+            fake_stt.initialize.assert_awaited_once()
+        finally:
+            factory_mod._create_vad = original_create_vad
+            factory_mod._create_stt = original_create_stt
+            factory_mod._create_piper_tts = original_create_piper
+
+    @pytest.mark.asyncio()
+    async def test_not_ready_state_raises_voice_factory_error(self, tmp_path) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from sovyx.voice.stt import STTState
+
+        vad_file = tmp_path / "silero_vad.onnx"
+        vad_file.write_bytes(b"fake")
+
+        import sovyx.voice.factory as factory_mod
+
+        fake_stt = MagicMock()
+        fake_stt.initialize = AsyncMock()
+        fake_stt.state = STTState.UNINITIALIZED  # pretend initialize failed silently
+
+        original_create_vad = factory_mod._create_vad
+        original_create_stt = factory_mod._create_stt
+        original_create_piper = factory_mod._create_piper_tts
+        factory_mod._create_vad = lambda *a, **kw: MagicMock()
+        factory_mod._create_stt = lambda *a, **kw: fake_stt
+        factory_mod._create_piper_tts = lambda *a, **kw: MagicMock()
+
+        try:
+            with (
+                patch.object(
+                    factory_mod, "ensure_silero_vad", new=AsyncMock(return_value=vad_file)
+                ),
+                patch.object(factory_mod, "detect_tts_engine", return_value="piper"),
+                patch("sovyx.voice.device_enum.resolve_device", return_value=None),
+                pytest.raises(Exception) as exc_info,
+            ):
+                await factory_mod.create_voice_pipeline(model_dir=tmp_path)
+            assert type(exc_info.value).__name__ == "VoiceFactoryError"
+            assert "STTState.READY" in str(exc_info.value)
+        finally:
+            factory_mod._create_vad = original_create_vad
+            factory_mod._create_stt = original_create_stt
+            factory_mod._create_piper_tts = original_create_piper
+
+
 class TestFactoryContract:
     """Verify factory raises VoiceFactoryError when no TTS available."""
 
@@ -57,7 +150,10 @@ class TestFactoryContract:
         original_create_stt = factory_mod._create_stt
 
         factory_mod._create_vad = lambda *a, **kw: MagicMock()
-        factory_mod._create_stt = lambda *a, **kw: MagicMock()
+        fake_stt = MagicMock()
+        fake_stt.initialize = AsyncMock()
+        fake_stt.state = None  # skip STTState.READY assertion branch
+        factory_mod._create_stt = lambda *a, **kw: fake_stt
         try:
             with (
                 patch.object(
@@ -105,7 +201,10 @@ class TestFactoryWiresDeviceAndCapture:
         original_create_stt = factory_mod._create_stt
         original_create_piper = factory_mod._create_piper_tts
         factory_mod._create_vad = lambda *a, **kw: MagicMock()
-        factory_mod._create_stt = lambda *a, **kw: MagicMock()
+        fake_stt = MagicMock()
+        fake_stt.initialize = AsyncMock()
+        fake_stt.state = None  # skip STTState.READY assertion branch
+        factory_mod._create_stt = lambda *a, **kw: fake_stt
         factory_mod._create_piper_tts = lambda *a, **kw: MagicMock()
 
         try:
@@ -114,6 +213,7 @@ class TestFactoryWiresDeviceAndCapture:
                     factory_mod, "ensure_silero_vad", new=AsyncMock(return_value=vad_file)
                 ),
                 patch.object(factory_mod, "detect_tts_engine", return_value="piper"),
+                patch("sovyx.voice.device_enum.resolve_device", return_value=None),
                 patch(
                     "sovyx.voice.pipeline._orchestrator.VoicePipeline",
                     return_value=fake_pipeline,

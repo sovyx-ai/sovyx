@@ -163,12 +163,34 @@ class VoiceTuningConfig(BaseSettings):
     # :mod:`sovyx.voice.device_enum` for the root-cause writeup.
     capture_validation_seconds: float = 0.6  # how long to observe frames post-open
     capture_validation_min_rms_db: float = -80.0  # any signal above this = "alive"
+    # Default validator only checks *frame presence* — proving the PortAudio
+    # callback is firing. Set True to also require RMS above
+    # ``capture_validation_min_rms_db`` (setup-wizard / diagnostic mode).
+    # Rationale: a user who is silent at boot has legitimately quiet input
+    # and a pure-RMS gate rejects perfectly good variants, sending the
+    # opener into its worst fallback (e.g. 48 kHz / 2 ch / auto_convert=False).
+    capture_validation_require_signal: bool = False
+    # Minimum number of callback-delivered frames required for the default
+    # presence-mode validator to accept a variant. Three frames at 512
+    # samples / 16 kHz = ~96 ms of real callback activity.
+    capture_validation_min_frames: int = 3
     capture_heartbeat_interval_seconds: float = 2.0  # RMS/frames log cadence
     # VoicePipeline observability — emits ``voice_pipeline_heartbeat`` every
     # interval with max VAD probability observed, frames processed, and the
     # current FSM state. Essential for diagnosing "VAD never fires" scenarios
     # where audio is captured but the orchestrator stays in IDLE.
     pipeline_heartbeat_interval_seconds: float = 5.0
+    # Deaf-pipeline heuristic: if the orchestrator has processed at
+    # least ``pipeline_deaf_min_frames`` frames in the current heartbeat
+    # window and the max observed VAD probability never crossed
+    # ``pipeline_deaf_vad_max_threshold``, emit
+    # ``voice_pipeline_deaf_warning``. This surfaces the class of bug
+    # where audio is captured (``audio_capture_heartbeat`` shows real
+    # RMS) but VAD silently rejects every frame — typically because the
+    # frames reaching :meth:`VoicePipeline.feed_frame` are not 16 kHz
+    # mono (FrameNormalizer misconfigured / bypassed).
+    pipeline_deaf_min_frames: int = 150  # ~4.8 s at 32 ms/frame
+    pipeline_deaf_vad_max_threshold: float = 0.05
     capture_fallback_host_apis: list[str] = Field(
         default_factory=lambda: ["Windows WASAPI", "Windows DirectSound", "Core Audio", "ALSA"],
     )
