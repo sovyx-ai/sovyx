@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
@@ -32,16 +33,28 @@ if TYPE_CHECKING:
 _TOKEN = "test-token-voice-health"
 
 
+def _current_platform_key() -> str:
+    if sys.platform.startswith("win"):
+        return "win32"
+    if sys.platform == "darwin":
+        return "darwin"
+    return "linux"
+
+
+_PLATFORM_KEY = _current_platform_key()
+_HOST_API = {"win32": "WASAPI", "linux": "ALSA", "darwin": "CoreAudio"}[_PLATFORM_KEY]
+
+
 def _make_combo() -> Combo:
     return Combo(
-        host_api="WASAPI",
+        host_api=_HOST_API,
         sample_rate=16_000,
         channels=1,
         sample_format="int16",
         exclusive=True,
         auto_convert=False,
         frames_per_buffer=480,
-        platform_key="win32",
+        platform_key=_PLATFORM_KEY,
     )
 
 
@@ -212,7 +225,7 @@ class TestReprobe:
             "device_index": 3,
             "mode": "cold",
             "combo": {
-                "host_api": "WASAPI",
+                "host_api": _HOST_API,
                 "sample_rate": 16_000,
                 "channels": 1,
                 "sample_format": "int16",
@@ -332,7 +345,7 @@ class TestReprobe:
                 "device_index": 0,
                 "mode": "cold",
                 "combo": {
-                    "host_api": "WASAPI",
+                    "host_api": _HOST_API,
                     "sample_rate": 9_999,  # not in ALLOWED_SAMPLE_RATES
                     "channels": 1,
                     "sample_format": "int16",
@@ -484,7 +497,7 @@ class TestPin:
             "endpoint_guid": "EP-PIN",
             "device_friendly_name": "Pinned Device",
             "combo": {
-                "host_api": "WASAPI",
+                "host_api": _HOST_API,
                 "sample_rate": 16_000,
                 "channels": 1,
                 "sample_format": "int16",
@@ -511,7 +524,7 @@ class TestPin:
             "endpoint_guid": "EP-X",
             "device_friendly_name": "X",
             "combo": {
-                "host_api": "WASAPI",
+                "host_api": _HOST_API,
                 "sample_rate": 16_000,
                 "channels": 1,
                 "sample_format": "int16",
@@ -529,7 +542,7 @@ class TestPin:
             "endpoint_guid": "EP-Y",
             "device_friendly_name": "Y",
             "combo": {
-                "host_api": "WASAPI",
+                "host_api": _HOST_API,
                 "sample_rate": 7_777,  # invalid
                 "channels": 1,
                 "sample_format": "int16",

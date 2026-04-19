@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,21 @@ from sovyx.voice.health.contract import (
 # ── Fixtures ─────────────────────────────────────────────────────────────
 
 
+def _current_platform_key() -> str:
+    if sys.platform.startswith("win"):
+        return "win32"
+    if sys.platform == "darwin":
+        return "darwin"
+    return "linux"
+
+
+_PLATFORM_KEY = _current_platform_key()
+_HOST_API = {"win32": "WASAPI", "linux": "ALSA", "darwin": "CoreAudio"}[_PLATFORM_KEY]
+# A host_api valid on some other platform — used to exercise the sanity
+# drop path ("this entry was recorded on a different OS").
+_INVALID_HOST_API = "PulseAudio" if _PLATFORM_KEY == "win32" else "WASAPI"
+
+
 _NOW = datetime(2026, 4, 19, 12, 0, 0, tzinfo=UTC)
 
 
@@ -57,14 +73,14 @@ def _clock_factory(now: datetime = _NOW) -> Any:
 
 def _good_combo() -> Combo:
     return Combo(
-        host_api="WASAPI",
+        host_api=_HOST_API,
         sample_rate=48000,
         channels=1,
         sample_format="int16",
         exclusive=False,
         auto_convert=False,
         frames_per_buffer=480,
-        platform_key="win32",
+        platform_key=_PLATFORM_KEY,
     )
 
 
@@ -147,7 +163,7 @@ class TestHelpers:
     def test_combo_to_dict_roundtrip(self) -> None:
         c = _good_combo()
         d = _combo_to_dict(c)
-        assert d["host_api"] == "WASAPI"
+        assert d["host_api"] == _HOST_API
         assert d["sample_rate"] == 48000
         assert d["exclusive"] is False
 
@@ -188,7 +204,7 @@ class TestHelpers:
         assert d["validation_mode"] == "warm"
         assert d["last_boot_diagnosis"] == "healthy"
         assert d["detected_apos_at_validation"] == ["VocaEffectPack"]
-        assert d["winning_combo"]["host_api"] == "WASAPI"
+        assert d["winning_combo"]["host_api"] == _HOST_API
 
 
 class TestSanityError:
@@ -215,7 +231,7 @@ class TestWriteReadRoundtrip:
         assert rep.entries_dropped == 0
         entry = store2.get("{guid-A}")
         assert entry is not None
-        assert entry.winning_combo.host_api == "WASAPI"
+        assert entry.winning_combo.host_api == _HOST_API
         assert entry.boots_validated == 1
         assert len(entry.probe_history) == 1
 
@@ -329,7 +345,7 @@ class TestRule4Migration:
                             "device_friendly_name": "Mic",
                             "device_interface_name": "USB",
                             "winning_combo": {
-                                "host_api": "WASAPI",
+                                "host_api": _HOST_API,
                                 "sample_rate": 48000,
                                 "channels": 1,
                             },
@@ -542,7 +558,10 @@ class TestRule12SanityFailed:
                 lambda e: e["winning_combo"].__setitem__("sample_format", "u8"),
                 "sample_format",
             ),
-            (lambda e: e["winning_combo"].__setitem__("host_api", "PulseAudio"), "host_api"),
+            (
+                lambda e: e["winning_combo"].__setitem__("host_api", _INVALID_HOST_API),
+                "host_api",
+            ),
             (
                 lambda e: e["winning_combo"].__setitem__("frames_per_buffer", 20),
                 "frames_per_buffer",
@@ -884,14 +903,14 @@ _formats = ["int16", "int24", "float32"]
 @st.composite
 def _combos(draw: st.DrawFn) -> Combo:
     return Combo(
-        host_api="WASAPI",
+        host_api=_HOST_API,
         sample_rate=draw(st.sampled_from(_sample_rates)),
         channels=draw(st.integers(min_value=1, max_value=8)),
         sample_format=draw(st.sampled_from(_formats)),
         exclusive=draw(st.booleans()),
         auto_convert=draw(st.booleans()),
         frames_per_buffer=draw(st.sampled_from([64, 128, 256, 480, 1024, 4096, 8192])),
-        platform_key="win32",
+        platform_key=_PLATFORM_KEY,
     )
 
 

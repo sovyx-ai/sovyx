@@ -9,6 +9,7 @@ downgrade guard.
 from __future__ import annotations
 
 import json
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,18 @@ from sovyx.voice.health.capture_overrides import (
 from sovyx.voice.health.contract import Combo, OverrideEntry
 
 # ── Fixtures ─────────────────────────────────────────────────────────────
+
+
+def _current_platform_key() -> str:
+    if sys.platform.startswith("win"):
+        return "win32"
+    if sys.platform == "darwin":
+        return "darwin"
+    return "linux"
+
+
+_PLATFORM_KEY = _current_platform_key()
+_HOST_API = {"win32": "WASAPI", "linux": "ALSA", "darwin": "CoreAudio"}[_PLATFORM_KEY]
 
 
 _NOW = datetime(2026, 4, 19, 12, 0, 0, tzinfo=UTC)
@@ -42,7 +55,7 @@ def _clock(now: datetime = _NOW) -> Any:
 
 def _combo(
     *,
-    host_api: str = "WASAPI",
+    host_api: str = _HOST_API,
     sample_rate: int = 48_000,
     channels: int = 1,
     sample_format: str = "int16",
@@ -57,7 +70,7 @@ def _combo(
         exclusive=exclusive,
         auto_convert=False,
         frames_per_buffer=frames_per_buffer,
-        platform_key="win32",
+        platform_key=_PLATFORM_KEY,
     )
 
 
@@ -99,7 +112,7 @@ class TestPin:
         # Same instance (warm state).
         got = store.get("{guid-A}")
         assert got is not None
-        assert got.host_api == "WASAPI"
+        assert got.host_api == _HOST_API
         assert got.sample_rate == 48_000
         entry = store.get_entry("{guid-A}")
         assert entry is not None
@@ -355,7 +368,7 @@ def _write_overrides(tmp_path: Path, overrides: dict[str, Any]) -> Path:
 
 def _valid_combo_dict(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
-        "host_api": "WASAPI",
+        "host_api": _HOST_API,
         "sample_rate": 48_000,
         "channels": 1,
         "sample_format": "int16",
@@ -458,7 +471,7 @@ class TestSerializedShape:
         row = raw["overrides"]["{guid-A}"]
         assert row["pinned_by"] == "user"
         assert row["pinned_combo"]["sample_rate"] == 48_000
-        assert row["pinned_combo"]["host_api"] == "WASAPI"
+        assert row["pinned_combo"]["host_api"] == _HOST_API
 
     def test_write_preserves_deterministic_ordering(self, tmp_path: Path) -> None:
         store = _store(tmp_path)
