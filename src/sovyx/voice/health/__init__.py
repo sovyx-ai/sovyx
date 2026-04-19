@@ -22,6 +22,8 @@ and may move between releases.
 
 from __future__ import annotations
 
+from sovyx.voice.health.capture_overrides import CaptureOverrides
+from sovyx.voice.health.combo_store import ComboStore
 from sovyx.voice.health.contract import (
     ALLOWED_FORMATS,
     ALLOWED_HOST_APIS_BY_PLATFORM,
@@ -45,9 +47,11 @@ __all__ = [
     "ALLOWED_HOST_APIS_BY_PLATFORM",
     "ALLOWED_SAMPLE_RATES",
     "AudioSubsystemFingerprint",
+    "CaptureOverrides",
     "CascadeResult",
     "Combo",
     "ComboEntry",
+    "ComboStore",
     "ComboStoreStats",
     "Diagnosis",
     "LoadReport",
