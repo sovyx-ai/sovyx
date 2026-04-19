@@ -284,6 +284,29 @@ class VoiceTuningConfig(BaseSettings):
     # interruption for the user.
     watchdog_audio_service_poll_s: float = 2.0
 
+    # §4.4.6 self-feedback isolation. When OS echo-cancel is bypassed
+    # (cascade attempts 1-4 Windows, 1-2 Linux) TTS playback leaks into
+    # the mic and can trigger our own wake-word. Three layers:
+    #   - (a) half-duplex gate: wake-word inference only runs in IDLE;
+    #         barge-in requires 5 sustained frames. Structural, always on.
+    #   - (b) mic ducking: during TTS playback apply attenuation to the
+    #         mic stream before it reaches VAD; released within
+    #         ``self_feedback_duck_release_ms`` of TTS-end.
+    #   - (c) spectral self-cancel: deferred to Sprint 4.
+    # ``gate+duck`` is the default because (a) alone cannot stop a
+    # loud TTS from tripping the VAD threshold repeatedly.
+    self_feedback_isolation_mode: Literal["off", "gate-only", "gate+duck"] = "gate+duck"
+    # Attenuation applied to the mic stream while TTS is playing. Must
+    # be <= 0 (the normalizer stage is an attenuator, never an
+    # amplifier). -18 dB is the ADR-recommended default — aggressive
+    # enough to suppress leak, gentle enough that a genuine barge-in
+    # spike (≥ +6 dB above leak level) still trips VAD.
+    self_feedback_duck_gain_db: float = -18.0
+    # Soft-release window for the duck. The FrameNormalizer ramps gain
+    # back to unity over roughly this duration after TTS-end to avoid
+    # a pop at the step edge. Tracks ``ducking_ramp_ms`` downstream.
+    self_feedback_duck_release_ms: float = 50.0
+
     # Voice device test (setup-wizard meters + TTS test button).
     # Kill-switch + ballistics + rate limiting for the test endpoints.
     device_test_enabled: bool = True

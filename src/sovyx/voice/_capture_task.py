@@ -228,6 +228,28 @@ class AudioCaptureTask:
             "last_rms_db": round(self._last_rms_db, 1),
         }
 
+    def apply_mic_ducking_db(self, gain_db: float) -> None:
+        """Forward a self-feedback duck gain target to the normalizer.
+
+        Thin adapter invoked by
+        :class:`~sovyx.voice.health.SelfFeedbackGate` when TTS starts /
+        ends (ADR §4.4.6.b). Before the capture stream opens, the
+        normalizer is ``None`` — in that window the call is silently
+        dropped: the gate will re-engage on the next utterance once
+        the normalizer exists, which matches the ducking contract
+        (attenuation is per-TTS-session, not persistent state).
+
+        Args:
+            gain_db: Target attenuation in dB. Must be ``<= 0``. The
+                underlying :class:`FrameNormalizer` raises ``ValueError``
+                on positive gains; we propagate that up so a programming
+                error surfaces during testing, not silently in prod.
+        """
+        normalizer = self._normalizer
+        if normalizer is None:
+            return
+        normalizer.set_ducking_gain_db(gain_db)
+
     # -- Lifecycle ------------------------------------------------------------
 
     async def start(self) -> None:

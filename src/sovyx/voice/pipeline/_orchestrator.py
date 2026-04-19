@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     import numpy.typing as npt
 
     from sovyx.engine.events import EventBus
+    from sovyx.voice.health._self_feedback import SelfFeedbackGate
     from sovyx.voice.stt import STTEngine
     from sovyx.voice.tts_piper import TTSEngine
     from sovyx.voice.vad import SileroVAD, VADEvent
@@ -100,6 +101,7 @@ class VoicePipeline:
         voice_clarity_active: bool = False,
         auto_bypass_enabled: bool = False,
         auto_bypass_threshold: int = _DEAF_WARNINGS_BEFORE_EXCLUSIVE_RETRY,
+        self_feedback_gate: SelfFeedbackGate | None = None,
     ) -> None:
         validate_config(config)
         self._config = config
@@ -136,6 +138,15 @@ class VoicePipeline:
         # operator believing the auto-fix worked.
         self._post_bypass_deaf_warnings = 0
         self._post_bypass_ineffective_emitted = False
+
+        # Self-feedback isolation (ADR §4.4.6). Structural half-duplex
+        # gating is encoded directly in the state machine (wake-word
+        # only runs in IDLE, barge-in only in SPEAKING with a 5-frame
+        # sustained threshold); this optional component adds mic
+        # ducking around TTS. ``None`` means the factory didn't wire
+        # a gate (tests, push-to-talk fallback) — the pipeline still
+        # works, it just lacks the ducking layer.
+        self._self_feedback_gate = self_feedback_gate
 
         # State
         self._state = VoicePipelineState.IDLE
@@ -237,6 +248,10 @@ class VoicePipeline:
         self._output.interrupt()
         self._state = VoicePipelineState.IDLE
         self._utterance_frames.clear()
+        if self._self_feedback_gate is not None:
+            # Release the duck so a mid-TTS stop doesn't leave the
+            # capture normalizer attenuated for the next session.
+            self._self_feedback_gate.on_tts_end()
         logger.info("VoicePipeline stopped", mind_id=self._config.mind_id)
 
     # -- Frame processing (main loop) ----------------------------------------
@@ -375,6 +390,8 @@ class VoicePipeline:
         ):
             self._output.interrupt()
             self._cancel_filler()
+            if self._self_feedback_gate is not None:
+                self._self_feedback_gate.on_tts_end()
             await self._emit(BargeInEvent(mind_id=self._config.mind_id))
             logger.info("Barge-in detected", mind_id=self._config.mind_id)
             return await self._transition_to_recording(frame)
@@ -382,6 +399,8 @@ class VoicePipeline:
         if not self._output.is_playing:
             # Playback finished
             self._state = VoicePipelineState.IDLE
+            if self._self_feedback_gate is not None:
+                self._self_feedback_gate.on_tts_end()
             await self._emit(TTSCompletedEvent(mind_id=self._config.mind_id))
             return {"state": "IDLE", "event": "tts_completed"}
 
@@ -519,6 +538,8 @@ class VoicePipeline:
             text: Text to speak.
         """
         self._state = VoicePipelineState.SPEAKING
+        if self._self_feedback_gate is not None:
+            self._self_feedback_gate.on_tts_start()
         await self._emit(TTSStartedEvent(mind_id=self._config.mind_id))
 
         try:
@@ -538,6 +559,8 @@ class VoicePipeline:
             )
         finally:
             self._state = VoicePipelineState.IDLE
+            if self._self_feedback_gate is not None:
+                self._self_feedback_gate.on_tts_end()
             await self._emit(TTSCompletedEvent(mind_id=self._config.mind_id))
 
     async def stream_text(self, text_chunk: str) -> None:
@@ -551,6 +574,8 @@ class VoicePipeline:
         """
         if self._state != VoicePipelineState.SPEAKING:
             self._state = VoicePipelineState.SPEAKING
+            if self._self_feedback_gate is not None:
+                self._self_feedback_gate.on_tts_start()
             await self._emit(TTSStartedEvent(mind_id=self._config.mind_id))
 
         # Cancel filler if still pending
@@ -602,6 +627,8 @@ class VoicePipeline:
         await self._output.drain()
 
         self._state = VoicePipelineState.IDLE
+        if self._self_feedback_gate is not None:
+            self._self_feedback_gate.on_tts_end()
         await self._emit(TTSCompletedEvent(mind_id=self._config.mind_id))
 
     async def start_thinking(self) -> None:

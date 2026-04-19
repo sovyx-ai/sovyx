@@ -1890,3 +1890,129 @@ class TestVoiceClarityAutoBypass:
             await pipeline.feed_frame(_silence_frame())
         assert pipeline._post_bypass_deaf_warnings == 0
         assert pipeline._post_bypass_ineffective_emitted is False
+
+
+# ===========================================================================
+# VoicePipeline — self-feedback gate wiring (ADR §4.4.6)
+# ===========================================================================
+
+
+class _RecordingGate:
+    """Test double mirroring :class:`SelfFeedbackGate` transitions.
+
+    The real gate applies duck via an external callback; for pipeline
+    wiring tests we just need to assert that ``on_tts_start`` and
+    ``on_tts_end`` fire at the expected state transitions. Keeping this
+    separate from the real class verifies we call the documented
+    protocol, not an implementation detail.
+    """
+
+    def __init__(self) -> None:
+        self.events: list[str] = []
+
+    def on_tts_start(self) -> None:
+        self.events.append("start")
+
+    def on_tts_end(self) -> None:
+        self.events.append("end")
+
+
+class TestPipelineSelfFeedbackGate:
+    """Pipeline invokes the gate on every SPEAKING entry and exit."""
+
+    def _make_pipeline_with_gate(
+        self, gate: _RecordingGate
+    ) -> tuple[VoicePipeline, dict[str, Any]]:
+        pipeline, refs = _make_pipeline()
+        pipeline._self_feedback_gate = gate  # type: ignore[assignment]
+        return pipeline, refs
+
+    @pytest.mark.asyncio
+    async def test_speak_engages_and_releases(self) -> None:
+        gate = _RecordingGate()
+        pipeline, _ = self._make_pipeline_with_gate(gate)
+        await pipeline.start()
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
+            await pipeline.speak("Hello there!")
+        assert gate.events == ["start", "end"]
+
+    @pytest.mark.asyncio
+    async def test_speak_releases_even_on_tts_error(self) -> None:
+        gate = _RecordingGate()
+        pipeline, refs = self._make_pipeline_with_gate(gate)
+        refs["tts"].synthesize.side_effect = RuntimeError("TTS crash")
+        await pipeline.start()
+        await pipeline.speak("fail")
+        assert gate.events == ["start", "end"]
+
+    @pytest.mark.asyncio
+    async def test_stream_text_engages_once_per_session(self) -> None:
+        gate = _RecordingGate()
+        pipeline, _ = self._make_pipeline_with_gate(gate)
+        await pipeline.start()
+        # Two chunks that both leave the pipeline in SPEAKING; the gate
+        # should see exactly one rising edge (the SelfFeedbackGate
+        # itself debounces, but we also verify the pipeline only
+        # signals once per session).
+        await pipeline.stream_text("First sentence here. Second")
+        await pipeline.stream_text(" sentence here. Third")
+        assert gate.events == ["start"]
+
+    @pytest.mark.asyncio
+    async def test_flush_stream_releases(self) -> None:
+        gate = _RecordingGate()
+        pipeline, _ = self._make_pipeline_with_gate(gate)
+        await pipeline.start()
+        await pipeline.stream_text("Remaining text")
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
+            await pipeline.flush_stream()
+        assert gate.events == ["start", "end"]
+
+    @pytest.mark.asyncio
+    async def test_barge_in_releases_gate(self) -> None:
+        gate = _RecordingGate()
+        pipeline, _ = _make_pipeline(vad_speech=True, barge_in_enabled=True)
+        pipeline._self_feedback_gate = gate  # type: ignore[assignment]
+        await pipeline.start()
+        pipeline._state = VoicePipelineState.SPEAKING
+        pipeline._output._playing = True
+
+        result = await pipeline.feed_frame(_speech_frame())
+        assert result["state"] == "RECORDING"
+        assert gate.events == ["end"]
+
+    @pytest.mark.asyncio
+    async def test_natural_speaking_end_releases_gate(self) -> None:
+        gate = _RecordingGate()
+        pipeline, _ = _make_pipeline(vad_speech=False)
+        pipeline._self_feedback_gate = gate  # type: ignore[assignment]
+        await pipeline.start()
+        pipeline._state = VoicePipelineState.SPEAKING
+        # output._playing is False by default → playback already finished
+
+        result = await pipeline.feed_frame(_silence_frame())
+        assert result["state"] == "IDLE"
+        assert gate.events == ["end"]
+
+    @pytest.mark.asyncio
+    async def test_stop_releases_mid_tts(self) -> None:
+        """Mid-utterance ``stop()`` must release the duck so the next
+        session doesn't boot with a ducked mic."""
+        gate = _RecordingGate()
+        pipeline, _ = _make_pipeline()
+        pipeline._self_feedback_gate = gate  # type: ignore[assignment]
+        await pipeline.start()
+        pipeline._state = VoicePipelineState.SPEAKING
+        await pipeline.stop()
+        assert gate.events == ["end"]
+
+    @pytest.mark.asyncio
+    async def test_pipeline_tolerates_absent_gate(self) -> None:
+        """No gate wired is the legitimate fallback (tests, push-to-talk)."""
+        pipeline, _ = _make_pipeline()
+        # Sanity: default ctor leaves the gate unset.
+        assert pipeline._self_feedback_gate is None
+        await pipeline.start()
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
+            await pipeline.speak("hello")
+        assert pipeline.state == VoicePipelineState.IDLE

@@ -38,6 +38,7 @@ from sovyx.voice.health._default_device import (
 )
 from sovyx.voice.health._hotplug import HotplugListener, NoopHotplugListener
 from sovyx.voice.health._power import NoopPowerEventListener, PowerEventListener
+from sovyx.voice.health._self_feedback import SelfFeedbackGate, SelfFeedbackMode
 from sovyx.voice.health.capture_overrides import CaptureOverrides
 from sovyx.voice.health.cascade import (
     LINUX_CASCADE,
@@ -116,6 +117,8 @@ __all__ = [
     "ProbeMode",
     "ProbeResult",
     "RemediationHint",
+    "SelfFeedbackGate",
+    "SelfFeedbackMode",
     "VoiceCaptureWatchdog",
     "WINDOWS_CASCADE",
     "WatchdogState",

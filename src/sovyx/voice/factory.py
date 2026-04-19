@@ -241,6 +241,28 @@ async def create_voice_pipeline(
             return
         await task.request_exclusive_restart()
 
+    # §4.4.6 self-feedback ducking — build the gate with a late-bound
+    # apply_duck closure that targets whichever capture task ends up in
+    # the holder. The capture task exposes
+    # :meth:`apply_mic_ducking_db` which forwards to its
+    # ``FrameNormalizer`` when present. Before the stream opens the
+    # normalizer is None and the forward is a no-op — acceptable because
+    # ducking is per-TTS-session, not persistent.
+    from sovyx.voice.health import SelfFeedbackGate, SelfFeedbackMode
+
+    def _apply_duck(gain_db: float) -> None:
+        task = capture_holder.get("task")
+        if task is None:
+            return
+        task.apply_mic_ducking_db(gain_db)
+
+    self_feedback_gate = SelfFeedbackGate(
+        mode=SelfFeedbackMode(tuning.self_feedback_isolation_mode),
+        apply_duck=_apply_duck,
+        duck_gain_db=tuning.self_feedback_duck_gain_db,
+        release_ms=tuning.self_feedback_duck_release_ms,
+    )
+
     pipeline = VoicePipeline(
         config=config,
         vad=vad,
@@ -253,6 +275,7 @@ async def create_voice_pipeline(
         voice_clarity_active=voice_clarity_active,
         auto_bypass_enabled=tuning.voice_clarity_autofix,
         auto_bypass_threshold=tuning.deaf_warnings_before_exclusive_retry,
+        self_feedback_gate=self_feedback_gate,
     )
 
     capture_task = AudioCaptureTask(
