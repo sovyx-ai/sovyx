@@ -304,6 +304,93 @@ def _is_windows() -> bool:
     return _sys.platform == "win32"
 
 
+@router.post("/capture-exclusive")
+async def set_capture_exclusive(request: Request) -> JSONResponse:
+    """Persist + hot-apply the WASAPI-exclusive capture flag.
+
+    Body: ``{"enabled": bool}`` (default ``True``).
+
+    Flow:
+        1. Persist ``tuning.voice.capture_wasapi_exclusive`` to
+           ``system.yaml`` via :class:`ConfigEditor` so the choice
+           survives restart.
+        2. Mutate the in-memory ``EngineConfig`` so any code path that
+           reads the live config sees the new value immediately.
+        3. If ``enabled=True`` and a capture task is running, call
+           :meth:`AudioCaptureTask.request_exclusive_restart` to
+           re-open the mic in exclusive mode *without* a full pipeline
+           restart — same code path the auto-bypass uses.
+        4. If ``enabled=False`` while the pipeline is running, we
+           persist but do not tear down the current stream (that
+           requires a full pipeline restart). The response reports
+           ``applied_immediately=False`` so the UI can prompt the user.
+
+    Returns:
+        ``{"ok": True, "enabled": bool, "persisted": bool,
+        "applied_immediately": bool}``.
+    """
+    try:
+        body = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    enabled = bool(body.get("enabled", True))
+
+    # 1. Persist to system.yaml
+    persisted = False
+    config_path = getattr(request.app.state, "config_path", None)
+    if config_path is not None:
+        from pathlib import Path
+
+        from sovyx.engine.config_editor import ConfigEditor
+
+        try:
+            editor = ConfigEditor()
+            await editor.update_section(
+                Path(config_path),
+                "tuning.voice",
+                {"capture_wasapi_exclusive": enabled},
+            )
+            persisted = True
+        except Exception:  # noqa: BLE001
+            logger.warning("capture_exclusive_persist_failed", exc_info=True)
+
+    # 2. Hot-update in-memory config so live readers see the change.
+    engine_config = getattr(request.app.state, "engine_config", None)
+    if engine_config is not None:
+        with contextlib.suppress(Exception):
+            engine_config.tuning.voice.capture_wasapi_exclusive = enabled
+
+    # 3. Apply immediately if enabling and pipeline is running.
+    applied_immediately = False
+    if enabled:
+        registry = getattr(request.app.state, "registry", None)
+        if registry is not None:
+            with contextlib.suppress(Exception):
+                from sovyx.voice._capture_task import AudioCaptureTask
+
+                if registry.is_registered(AudioCaptureTask):
+                    capture = await registry.resolve(AudioCaptureTask)
+                    await capture.request_exclusive_restart()
+                    applied_immediately = True
+
+    logger.info(
+        "capture_exclusive_updated",
+        enabled=enabled,
+        persisted=persisted,
+        applied_immediately=applied_immediately,
+    )
+    return JSONResponse(
+        {
+            "ok": True,
+            "enabled": enabled,
+            "persisted": persisted,
+            "applied_immediately": applied_immediately,
+        }
+    )
+
+
 @router.get("/hardware-detect")
 async def hardware_detect(request: Request) -> JSONResponse:
     """Detect hardware capabilities for voice pipeline.

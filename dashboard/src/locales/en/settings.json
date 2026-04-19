@@ -175,6 +175,22 @@
     "consolidation": "Consolidation",
     "consolidationValue": "Every {{hours}}h"
   },
+  "voiceClarity": {
+    "title": "Microphone input quality",
+    "alertTitle": "Windows Voice Clarity detected",
+    "alertBody": "Windows is running a noise-suppression APO on \"{{device}}\" that can block speech detection. Enable WASAPI exclusive mode to bypass it.",
+    "enableExclusive": "Enable exclusive mode",
+    "disableExclusive": "Disable exclusive mode",
+    "alreadyExclusive": "Exclusive mode is active — APO chain bypassed.",
+    "checking": "Checking microphone...",
+    "noIssues": "No capture-APO issues detected on this system.",
+    "enableSuccess": "Exclusive mode enabled and applied immediately.",
+    "enableSuccessRestart": "Exclusive mode saved. Restart the pipeline to apply.",
+    "disableSuccess": "Exclusive mode disabled. Restart to return to shared mode.",
+    "failed": "Could not update capture mode: {{error}}",
+    "knownApos": "Detected APOs: {{list}}",
+    "activeDevice": "Active microphone: {{device}}"
+  },
   "exportImport": {
     "title": "Export / Import",
     "description": "Download or restore your mind data. Your data, your sovereignty.",

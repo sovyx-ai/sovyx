@@ -1205,3 +1205,133 @@ class TestCaptureDiagnostics:
         c = TestClient(app)
         resp = c.get("/api/voice/capture-diagnostics")
         assert resp.status_code == 401  # noqa: PLR2004
+
+
+class TestCaptureExclusivePost:
+    """POST /api/voice/capture-exclusive — persist + hot-apply."""
+
+    def test_persists_to_system_yaml(self, app, tmp_path) -> None:
+        """Sets the value on the in-memory config and writes system.yaml."""
+        from unittest.mock import AsyncMock as _AsyncMock
+
+        config_path = tmp_path / "system.yaml"
+        config_path.write_text("")
+        app.state.config_path = str(config_path)
+
+        mock_engine_config = MagicMock()
+        mock_engine_config.tuning.voice.capture_wasapi_exclusive = False
+        app.state.engine_config = mock_engine_config
+
+        mock_editor = MagicMock()
+        mock_editor.update_section = _AsyncMock()
+
+        c = TestClient(app, headers={"Authorization": f"Bearer {_TOKEN}"})
+        with patch(
+            "sovyx.engine.config_editor.ConfigEditor",
+            return_value=mock_editor,
+        ):
+            resp = c.post(
+                "/api/voice/capture-exclusive",
+                json={"enabled": True},
+            )
+        assert resp.status_code == 200  # noqa: PLR2004
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["enabled"] is True
+        assert data["persisted"] is True
+        assert data["applied_immediately"] is False
+
+        mock_editor.update_section.assert_awaited_once()
+        args = mock_editor.update_section.await_args
+        assert args.args[1] == "tuning.voice"
+        assert args.args[2] == {"capture_wasapi_exclusive": True}
+        assert mock_engine_config.tuning.voice.capture_wasapi_exclusive is True
+
+    def test_triggers_exclusive_restart_when_pipeline_running(self, app, tmp_path) -> None:
+        """When a capture task is registered, enable=True hot-applies it."""
+        from sovyx.voice._capture_task import AudioCaptureTask
+
+        config_path = tmp_path / "system.yaml"
+        config_path.write_text("")
+        app.state.config_path = str(config_path)
+        app.state.engine_config = MagicMock()
+
+        fake_capture = MagicMock()
+        fake_capture.request_exclusive_restart = AsyncMock()
+
+        registry = app.state.registry
+        registry.is_registered = MagicMock(
+            side_effect=lambda iface: iface is AudioCaptureTask,
+        )
+        registry.resolve = AsyncMock(return_value=fake_capture)
+
+        mock_editor = MagicMock()
+        mock_editor.update_section = AsyncMock()
+
+        c = TestClient(app, headers={"Authorization": f"Bearer {_TOKEN}"})
+        with patch(
+            "sovyx.engine.config_editor.ConfigEditor",
+            return_value=mock_editor,
+        ):
+            resp = c.post(
+                "/api/voice/capture-exclusive",
+                json={"enabled": True},
+            )
+        assert resp.status_code == 200  # noqa: PLR2004
+        data = resp.json()
+        assert data["applied_immediately"] is True
+        fake_capture.request_exclusive_restart.assert_awaited_once()
+
+    def test_disable_does_not_call_exclusive_restart(self, app, tmp_path) -> None:
+        """enabled=False persists but never calls exclusive restart."""
+        from sovyx.voice._capture_task import AudioCaptureTask
+
+        config_path = tmp_path / "system.yaml"
+        config_path.write_text("")
+        app.state.config_path = str(config_path)
+        app.state.engine_config = MagicMock()
+
+        fake_capture = MagicMock()
+        fake_capture.request_exclusive_restart = AsyncMock()
+
+        registry = app.state.registry
+        registry.is_registered = MagicMock(
+            side_effect=lambda iface: iface is AudioCaptureTask,
+        )
+        registry.resolve = AsyncMock(return_value=fake_capture)
+
+        mock_editor = MagicMock()
+        mock_editor.update_section = AsyncMock()
+
+        c = TestClient(app, headers={"Authorization": f"Bearer {_TOKEN}"})
+        with patch(
+            "sovyx.engine.config_editor.ConfigEditor",
+            return_value=mock_editor,
+        ):
+            resp = c.post(
+                "/api/voice/capture-exclusive",
+                json={"enabled": False},
+            )
+        assert resp.status_code == 200  # noqa: PLR2004
+        data = resp.json()
+        assert data["enabled"] is False
+        assert data["applied_immediately"] is False
+        fake_capture.request_exclusive_restart.assert_not_called()
+
+    def test_ok_even_without_config_path(self, app) -> None:
+        """Missing config_path is a soft-fail — persisted=false, still ok."""
+        app.state.config_path = None
+        app.state.engine_config = None
+
+        c = TestClient(app, headers={"Authorization": f"Bearer {_TOKEN}"})
+        resp = c.post("/api/voice/capture-exclusive", json={"enabled": True})
+        assert resp.status_code == 200  # noqa: PLR2004
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["persisted"] is False
+
+    def test_requires_auth(self) -> None:
+        app = create_app(token=_TOKEN)
+        c = TestClient(app)
+        resp = c.post("/api/voice/capture-exclusive", json={"enabled": True})
+        assert resp.status_code == 401  # noqa: PLR2004

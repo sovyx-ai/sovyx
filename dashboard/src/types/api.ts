@@ -788,3 +788,39 @@ export interface VoiceCatalogResponse {
   by_language: Record<string, VoiceCatalogEntry[]>;
   recommended_per_language: Record<string, string>;
 }
+
+// ── Voice capture APO diagnostics ──
+
+export interface CaptureApoEndpoint {
+  endpoint_id: string;
+  endpoint_name: string;
+  enumerator: string;
+  fx_binding_count: number;
+  known_apos: string[];
+  raw_clsids: string[];
+  voice_clarity_active: boolean;
+  is_active_device: boolean;
+}
+
+export interface CaptureDiagnosticsResponse {
+  platform_supported: boolean;
+  active_device_name: string | null;
+  active_endpoint: {
+    endpoint_id: string;
+    endpoint_name: string;
+    known_apos: string[];
+    voice_clarity_active: boolean;
+  } | null;
+  voice_clarity_active: boolean;
+  any_voice_clarity_active: boolean;
+  endpoints: CaptureApoEndpoint[];
+  fix_suggestion: string | null;
+  error?: string;
+}
+
+export interface CaptureExclusiveResponse {
+  ok: boolean;
+  enabled: boolean;
+  persisted: boolean;
+  applied_immediately: boolean;
+}

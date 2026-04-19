@@ -523,3 +523,41 @@ export const VoiceCatalogResponseSchema = z.object({
   by_language: z.record(z.string(), z.array(VoiceCatalogEntrySchema)),
   recommended_per_language: z.record(z.string(), z.string()),
 });
+
+// ── Voice capture APO diagnostics ──
+
+export const CaptureApoEndpointSchema = z.object({
+  endpoint_id: z.string(),
+  endpoint_name: z.string(),
+  enumerator: z.string(),
+  fx_binding_count: z.number().int(),
+  known_apos: z.array(z.string()),
+  raw_clsids: z.array(z.string()),
+  voice_clarity_active: z.boolean(),
+  is_active_device: z.boolean(),
+});
+
+export const CaptureDiagnosticsResponseSchema = z.object({
+  platform_supported: z.boolean(),
+  active_device_name: z.string().nullable(),
+  active_endpoint: z
+    .object({
+      endpoint_id: z.string(),
+      endpoint_name: z.string(),
+      known_apos: z.array(z.string()),
+      voice_clarity_active: z.boolean(),
+    })
+    .nullable(),
+  voice_clarity_active: z.boolean(),
+  any_voice_clarity_active: z.boolean(),
+  endpoints: z.array(CaptureApoEndpointSchema),
+  fix_suggestion: z.string().nullable(),
+  error: z.string().optional(),
+});
+
+export const CaptureExclusiveResponseSchema = z.object({
+  ok: z.boolean(),
+  enabled: z.boolean(),
+  persisted: z.boolean(),
+  applied_immediately: z.boolean(),
+});

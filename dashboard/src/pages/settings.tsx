@@ -38,6 +38,7 @@ import { useDashboardStore } from "@/stores/dashboard";
 import { api, isAbortError } from "@/lib/api";
 import { toast } from "sonner";
 import { ExportImportSection } from "@/components/settings/export-import";
+import { VoiceClarityCard } from "@/components/settings/voice-clarity-card";
 import { ErrorBoundary } from "@/components/error-boundary";
 import type {
   Settings,
@@ -801,6 +802,11 @@ export default function SettingsPage() {
           </p>
         </section>
       )}
+
+      {/* ── Voice Clarity / capture APO bypass ── */}
+      <ErrorBoundary name="section.settings.voiceClarity" variant="section">
+        <VoiceClarityCard />
+      </ErrorBoundary>
 
       {/* ── Export / Import ── */}
       <ErrorBoundary name="section.settings.exportImport" variant="section">
