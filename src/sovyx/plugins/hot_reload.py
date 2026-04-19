@@ -201,12 +201,22 @@ class PluginFileWatcher:
 
 
 def _clear_module_cache(module_name: str) -> int:
-    """Clear all modules matching a prefix from sys.modules.
+    """Clear ``module_name`` and its strict submodules from :data:`sys.modules`.
+
+    Only evicts entries that match ``module_name`` exactly or are
+    descendants of it (``"{module_name}.*"``). Splitting on the first
+    dotted segment would nuke every sibling package — e.g. reloading
+    ``sovyx.plugins.official.calculator`` would also drop
+    ``sovyx.voice.health.*``, and subsequent re-imports would hand out
+    fresh module objects that diverge from callers who already captured
+    the originals (bleeding cross-test pollution into the rest of the
+    suite).
 
     Returns number of modules cleared.
     """
-    prefix = module_name.split(".")[0]
-    to_remove = [key for key in sys.modules if key == module_name or key.startswith(f"{prefix}.")]
+    to_remove = [
+        key for key in sys.modules if key == module_name or key.startswith(f"{module_name}.")
+    ]
     for key in to_remove:
         del sys.modules[key]
     return len(to_remove)

@@ -359,3 +359,36 @@ def test_clear_module_cache_only_prefix() -> None:
     assert other in sys.modules
     # Cleanup
     del sys.modules[other]
+
+
+def test_clear_module_cache_does_not_evict_sibling_packages() -> None:
+    """Regression: clearing ``pkg.a.b`` must not touch sibling ``pkg.c``.
+
+    A prior implementation used ``module_name.split(".")[0]`` as the prefix,
+    which nuked every sibling under the top-level package — reloading a
+    plugin would silently evict ``sovyx.voice.health.*`` and friends from
+    ``sys.modules``, poisoning the rest of the test suite with fresh module
+    objects that diverged from callers' captured references.
+    """
+    root = "sovyx_regression_sibling"
+    target = f"{root}.plugins.calculator"
+    target_child = f"{target}.inner"
+    sibling_top = f"{root}.voice"
+    sibling_nested = f"{root}.voice.health"
+    unrelated = "totally_other_pkg.thing"
+
+    for mod in (target, target_child, sibling_top, sibling_nested, unrelated):
+        sys.modules[mod] = MagicMock()  # type: ignore[assignment]
+
+    try:
+        count = _clear_module_cache(target)
+
+        assert count == 2
+        assert target not in sys.modules
+        assert target_child not in sys.modules
+        assert sibling_top in sys.modules
+        assert sibling_nested in sys.modules
+        assert unrelated in sys.modules
+    finally:
+        for mod in (sibling_top, sibling_nested, unrelated):
+            sys.modules.pop(mod, None)
