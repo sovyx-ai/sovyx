@@ -344,6 +344,86 @@ class TestReprobe:
         )
         assert resp.status_code == 409  # noqa: PLR2004
 
+    def test_device_index_omitted_resolves_from_friendly_name(
+        self,
+        client: TestClient,
+        data_dir: Path,
+    ) -> None:
+        """Dashboard reprobe sends no ``device_index``; backend must resolve
+        it from the ComboEntry's friendly name via PortAudio (Bug 001)."""
+        _seed_combo_store(data_dir, endpoint_guid="EP-RESOLVE")
+        probe_mock = AsyncMock(return_value=_canned_probe_result())
+        resolver = MagicMock(return_value=7)
+        with (
+            patch("sovyx.dashboard.routes.voice_health.probe", probe_mock),
+            patch(
+                "sovyx.dashboard.routes.voice_health._lookup_device_index_by_name",
+                resolver,
+            ),
+        ):
+            resp = client.post(
+                "/api/voice/health/reprobe",
+                json={"endpoint_guid": "EP-RESOLVE", "mode": "cold"},
+            )
+        assert resp.status_code == 200  # noqa: PLR2004
+        resolver.assert_called_once_with("Test Mic")
+        assert probe_mock.await_args.kwargs["device_index"] == 7  # noqa: PLR2004
+
+    def test_device_index_omitted_and_no_match_returns_503(
+        self,
+        client: TestClient,
+        data_dir: Path,
+    ) -> None:
+        _seed_combo_store(data_dir, endpoint_guid="EP-UNPLUG")
+        probe_mock = AsyncMock(return_value=_canned_probe_result())
+        with (
+            patch("sovyx.dashboard.routes.voice_health.probe", probe_mock),
+            patch(
+                "sovyx.dashboard.routes.voice_health._lookup_device_index_by_name",
+                MagicMock(return_value=None),
+            ),
+        ):
+            resp = client.post(
+                "/api/voice/health/reprobe",
+                json={"endpoint_guid": "EP-UNPLUG", "mode": "cold"},
+            )
+        assert resp.status_code == 503  # noqa: PLR2004
+        probe_mock.assert_not_awaited()
+
+    def test_infinite_rms_db_does_not_500(
+        self,
+        client: TestClient,
+        data_dir: Path,
+    ) -> None:
+        """Muted mic / stream-open failure returns ``rms_db=-inf`` — the
+        route must clamp it to a JSON-serialisable value (Bug 005)."""
+        _seed_combo_store(data_dir, endpoint_guid="EP-MUTED")
+        muted_result = ProbeResult(
+            diagnosis=Diagnosis.MUTED,
+            mode=ProbeMode.WARM,
+            combo=_make_combo(),
+            vad_max_prob=None,
+            vad_mean_prob=None,
+            rms_db=float("-inf"),
+            callbacks_fired=0,
+            duration_ms=0,
+            error=None,
+        )
+        probe_mock = AsyncMock(return_value=muted_result)
+        with patch("sovyx.dashboard.routes.voice_health.probe", probe_mock):
+            resp = client.post(
+                "/api/voice/health/reprobe",
+                json={
+                    "endpoint_guid": "EP-MUTED",
+                    "device_index": 0,
+                    "mode": "cold",
+                },
+            )
+        assert resp.status_code == 200  # noqa: PLR2004
+        payload = resp.json()
+        assert payload["result"]["diagnosis"] == Diagnosis.MUTED.value
+        assert payload["result"]["rms_db"] == -90.0  # noqa: PLR2004 — clamped
+
     def test_duration_out_of_range_is_422(self, client: TestClient) -> None:
         resp = client.post(
             "/api/voice/health/reprobe",

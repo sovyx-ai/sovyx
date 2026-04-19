@@ -19,6 +19,7 @@ watchdog exposes a subscribable diagnosis-update source.
 from __future__ import annotations
 
 import asyncio
+import math
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -62,6 +63,34 @@ router = APIRouter(
     dependencies=[Depends(verify_token)],
     tags=["voice-health"],
 )
+
+
+# ── JSON-safe float clamps ──────────────────────────────────────────────
+# Probe paths legitimately emit ``float('-inf')`` (muted mics, stream-open
+# failures, hard-timeouts) and could in principle emit ``nan`` from a
+# degenerate VAD run. Starlette's ``JSONResponse.render()`` calls
+# ``json.dumps(..., allow_nan=False)`` which raises ``ValueError`` on any
+# non-finite float — every reprobe of a muted mic would otherwise return
+# HTTP 500 instead of the MUTED diagnosis the panel exists to surface.
+
+_RMS_DB_MIN = -90.0
+_RMS_DB_MAX = 0.0
+
+
+def _safe_rms_db(value: float) -> float:
+    """Clamp ``rms_db`` to a JSON-serialisable finite range."""
+    if not math.isfinite(value):
+        return _RMS_DB_MIN
+    return max(_RMS_DB_MIN, min(_RMS_DB_MAX, value))
+
+
+def _safe_prob(value: float | None) -> float | None:
+    """Clamp a 0-1 probability; return ``None`` for non-finite values."""
+    if value is None:
+        return None
+    if not math.isfinite(value):
+        return None
+    return max(0.0, min(1.0, value))
 
 
 # ── Pydantic models ─────────────────────────────────────────────────────
@@ -143,9 +172,9 @@ class ProbeResultModel(BaseModel):
             diagnosis=result.diagnosis.value,
             mode=result.mode.value,
             combo=ComboModel.from_domain(result.combo),
-            vad_max_prob=result.vad_max_prob,
-            vad_mean_prob=result.vad_mean_prob,
-            rms_db=result.rms_db,
+            vad_max_prob=_safe_prob(result.vad_max_prob),
+            vad_mean_prob=_safe_prob(result.vad_mean_prob),
+            rms_db=_safe_rms_db(result.rms_db),
             callbacks_fired=result.callbacks_fired,
             duration_ms=result.duration_ms,
             error=result.error,
@@ -190,9 +219,9 @@ class ComboEntryModel(BaseModel):
             winning_combo=ComboModel.from_domain(entry.winning_combo),
             validated_at=entry.validated_at,
             validation_mode=entry.validation_mode.value,
-            vad_max_prob_at_validation=entry.vad_max_prob_at_validation,
-            vad_mean_prob_at_validation=entry.vad_mean_prob_at_validation,
-            rms_db_at_validation=entry.rms_db_at_validation,
+            vad_max_prob_at_validation=_safe_prob(entry.vad_max_prob_at_validation),
+            vad_mean_prob_at_validation=_safe_prob(entry.vad_mean_prob_at_validation),
+            rms_db_at_validation=_safe_rms_db(entry.rms_db_at_validation),
             probe_duration_ms=entry.probe_duration_ms,
             detected_apos_at_validation=list(entry.detected_apos_at_validation),
             cascade_attempts_before_success=entry.cascade_attempts_before_success,
@@ -204,8 +233,8 @@ class ComboEntryModel(BaseModel):
                     ts=h.ts,
                     mode=h.mode.value,
                     diagnosis=h.diagnosis.value,
-                    vad_max_prob=h.vad_max_prob,
-                    rms_db=h.rms_db,
+                    vad_max_prob=_safe_prob(h.vad_max_prob),
+                    rms_db=_safe_rms_db(h.rms_db),
                     duration_ms=h.duration_ms,
                 )
                 for h in entry.probe_history
@@ -244,7 +273,11 @@ class HealthSnapshotResponse(BaseModel):
 
 class ReprobeRequest(BaseModel):
     endpoint_guid: str = Field(min_length=1)
-    device_index: int = Field(ge=0)
+    # PortAudio indices rotate across reboots / hot-plugs; the ComboStore
+    # only persists the stable endpoint GUID. Callers that *know* the
+    # current numeric index may pass it, otherwise the handler resolves
+    # it server-side from the ComboEntry's friendly name.
+    device_index: int | None = Field(default=None, ge=0)
     mode: Literal["cold", "warm"] = "warm"
     combo: ComboModel | None = None
     duration_ms: int | None = Field(default=None, ge=100, le=10_000)
@@ -347,6 +380,66 @@ def _combo_from_entry(
     return None
 
 
+def _lookup_device_index_by_name(friendly_name: str) -> int | None:
+    """Find the current PortAudio input index whose name matches.
+
+    Endpoint GUIDs (Windows MMDevice ids, ALSA hw: ids, CoreAudio uids)
+    are OS-level identifiers that PortAudio's host-API layer exposes as
+    a rotating integer ``device`` index. The ComboStore intentionally
+    does not persist the numeric index — it would go stale after any
+    hot-plug — so the reprobe handler resolves it from the stored
+    ``device_friendly_name`` at call time.
+
+    Returns ``None`` when no input device matches, or when
+    ``sounddevice`` cannot be imported (no PortAudio available, e.g.
+    in headless CI containers).
+    """
+    if not friendly_name:
+        return None
+    try:
+        import sounddevice as sd
+    except (ImportError, OSError):
+        return None
+    try:
+        devices = sd.query_devices()
+    except Exception:  # noqa: BLE001 — PortAudio hiccup must not 500 the route
+        return None
+    needle = friendly_name.strip().lower()
+    for idx, dev in enumerate(devices):
+        name = str(dev.get("name", "")).strip().lower()
+        input_channels = int(dev.get("max_input_channels", 0) or 0)
+        if input_channels > 0 and name == needle:
+            return idx
+    return None
+
+
+async def _resolve_device_index(
+    store: ComboStore,
+    overrides: CaptureOverrides,
+    endpoint_guid: str,
+) -> int | None:
+    """Resolve a stable endpoint GUID to a current PortAudio input index.
+
+    Preference order for the friendly name used in the lookup:
+
+    1. Pinned override (most intentional; user explicitly pinned it).
+    2. ComboStore entry (last-known-good).
+    """
+    friendly_name = ""
+    pinned = overrides.get(endpoint_guid)
+    if pinned is not None:
+        override_entry = overrides.get_entry(endpoint_guid)
+        if override_entry is not None:
+            friendly_name = override_entry.device_friendly_name
+    if not friendly_name:
+        entry = store.get(endpoint_guid)
+        if entry is not None:
+            friendly_name = entry.device_friendly_name
+    if not friendly_name:
+        return None
+    return await asyncio.to_thread(_lookup_device_index_by_name, friendly_name)
+
+
 # ── Endpoints ───────────────────────────────────────────────────────────
 
 
@@ -419,6 +512,19 @@ async def post_voice_reprobe(
                 ),
             )
 
+    device_index = body.device_index
+    if device_index is None:
+        device_index = await _resolve_device_index(store, overrides, body.endpoint_guid)
+    if device_index is None:
+        raise HTTPException(
+            status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                f"Could not resolve a PortAudio input index for endpoint "
+                f"{body.endpoint_guid!r} — the device may be unplugged or "
+                "the audio subsystem is unavailable."
+            ),
+        )
+
     mode = ProbeMode.WARM if body.mode == "warm" else ProbeMode.COLD
     vad = None
     if mode is ProbeMode.WARM:
@@ -437,7 +543,7 @@ async def post_voice_reprobe(
         result = await probe(
             combo=combo,
             mode=mode,
-            device_index=body.device_index,
+            device_index=device_index,
             duration_ms=body.duration_ms,
             vad=vad,
         )

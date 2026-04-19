@@ -230,7 +230,7 @@ describe("VoiceHealthPage", () => {
     expect(warmBtn).not.toBeDisabled();
   });
 
-  it("dispatches a cold re-probe with device_index=-1 + the stored combo", async () => {
+  it("dispatches a cold re-probe without a device_index so the backend resolves it", async () => {
     setStore({
       combo_store: [makeCombo()],
       overrides: [],
@@ -240,14 +240,15 @@ describe("VoiceHealthPage", () => {
     render(<VoiceHealthPage />);
     fireEvent.click(screen.getByTestId("btn-reprobe-cold-EP-A"));
     await waitFor(() => expect(mockReprobe).toHaveBeenCalledTimes(1));
-    expect(mockReprobe).toHaveBeenCalledWith(
+    const call = mockReprobe.mock.calls[0][0];
+    expect(call).toEqual(
       expect.objectContaining({
         endpoint_guid: "EP-A",
-        device_index: -1,
         mode: "cold",
         combo: expect.objectContaining({ host_api: "WASAPI", exclusive: true }),
       }),
     );
+    expect(call).not.toHaveProperty("device_index");
   });
 
   it("dispatches a warm re-probe when the pipeline is running", async () => {

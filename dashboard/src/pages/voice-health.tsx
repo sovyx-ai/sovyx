@@ -465,11 +465,10 @@ export default function VoiceHealthPage() {
     mode: "cold" | "warm",
   ) => {
     // ComboStore entries don't persist the numeric device index (it rotates
-    // across reboots). Backend resolves the index from endpoint_guid when
-    // device_index === -1 — see routes/voice_health.py.
+    // across reboots). Omit it and the backend resolves from the stored
+    // friendly name via PortAudio — see routes/voice_health.py.
     await reprobe({
       endpoint_guid: entry.endpoint_guid,
-      device_index: -1,
       mode,
       combo: entry.winning_combo,
     });

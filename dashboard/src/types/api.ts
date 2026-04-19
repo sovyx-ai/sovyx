@@ -933,7 +933,8 @@ export interface VoiceHealthSnapshotResponse {
 /** POST /api/voice/health/reprobe request body. */
 export interface VoiceHealthReprobeRequest {
   endpoint_guid: string;
-  device_index: number;
+  /** Optional — backend resolves from endpoint_guid when omitted. */
+  device_index?: number;
   mode: VoiceHealthProbeMode;
   combo?: VoiceHealthCombo;
   duration_ms?: number;
