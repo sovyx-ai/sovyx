@@ -264,6 +264,7 @@ class TestRecordProbeDiagnosisAndDuration:
             exclusive=False,
             auto_convert=False,
             frames_per_buffer=512,
+            platform_key="win32",
         )
         result = ProbeResult(
             diagnosis=Diagnosis.NO_SIGNAL,
