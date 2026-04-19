@@ -89,8 +89,8 @@ class TestDoctor:
 
     def test_doctor_offline(self, tmp_path: Path) -> None:
         with (
-            patch("sovyx.cli.main._get_client") as mock_client,
-            patch("sovyx.cli.main.Path.home", return_value=tmp_path),
+            patch("sovyx.cli.commands.doctor.DaemonClient") as mock_client,
+            patch("sovyx.cli.commands.doctor.Path.home", return_value=tmp_path),
         ):
             mock_client.return_value.is_daemon_running.return_value = False
             result = runner.invoke(app, ["doctor"])
@@ -100,8 +100,8 @@ class TestDoctor:
 
     def test_doctor_offline_json(self, tmp_path: Path) -> None:
         with (
-            patch("sovyx.cli.main._get_client") as mock_client,
-            patch("sovyx.cli.main.Path.home", return_value=tmp_path),
+            patch("sovyx.cli.commands.doctor.DaemonClient") as mock_client,
+            patch("sovyx.cli.commands.doctor.Path.home", return_value=tmp_path),
         ):
             mock_client.return_value.is_daemon_running.return_value = False
             result = runner.invoke(app, ["doctor", "--json"])
