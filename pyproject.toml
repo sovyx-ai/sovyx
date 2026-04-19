@@ -149,6 +149,18 @@ module = [
 ]
 ignore_missing_imports = true
 
+# Windows-only modules that touch winreg / ctypes.WINFUNCTYPE.
+# These attributes don't exist on Linux, so mypy on CI flags attr-defined.
+# Runtime is guarded by `try: import winreg` / `sys.platform == "win32"` checks.
+[[tool.mypy.overrides]]
+module = [
+    "sovyx.voice.health._fingerprint",
+    "sovyx.voice.health._power_win",
+    "sovyx.voice.health._hotplug_win",
+]
+disable_error_code = ["attr-defined"]
+warn_unused_ignores = false
+
 [tool.ruff]
 target-version = "py311"
 line-length = 99
