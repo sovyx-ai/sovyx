@@ -227,7 +227,42 @@ async def create_voice_pipeline(
         input_device=effective_index if effective_index is not None else "default",
         host_api=effective_host_api or "unknown",
     )
+    _emit_capture_apo_detection(resolved_name=resolved.name if resolved is not None else None)
     return VoiceBundle(pipeline=pipeline, capture_task=capture_task)
+
+
+def _emit_capture_apo_detection(*, resolved_name: str | None) -> None:
+    """Log ``voice_apo_detected`` once per pipeline boot.
+
+    Non-fatal and best-effort: if the registry walk fails for any
+    reason, we swallow the error so a misconfigured Windows install
+    never blocks pipeline startup. On non-Windows platforms the
+    detector returns an empty list and this function is a no-op.
+    """
+    from sovyx.voice._apo_detector import detect_capture_apos, find_endpoint_report
+
+    try:
+        reports = detect_capture_apos()
+    except Exception:  # noqa: BLE001 — detector must never break startup
+        logger.debug("voice_apo_detection_failed", exc_info=True)
+        return
+
+    active = find_endpoint_report(reports, device_name=resolved_name)
+    if active is not None:
+        logger.info(
+            "voice_apo_detected",
+            endpoint=active.endpoint_name,
+            enumerator=active.enumerator,
+            known_apos=active.known_apos,
+            fx_binding_count=active.fx_binding_count,
+            voice_clarity_active=active.voice_clarity_active,
+        )
+    elif reports:
+        logger.debug(
+            "voice_apo_detected_no_match",
+            endpoint_count=len(reports),
+            resolved_name=resolved_name,
+        )
 
 
 # ── Component factories (sync — called via to_thread) ────────────────
