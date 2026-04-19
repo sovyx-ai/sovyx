@@ -41,6 +41,7 @@ from sovyx.voice.health.contract import (
     ProbeResult,
     RemediationHint,
 )
+from sovyx.voice.health.probe import probe
 
 __all__ = [
     "ALLOWED_FORMATS",
@@ -60,4 +61,5 @@ __all__ = [
     "ProbeMode",
     "ProbeResult",
     "RemediationHint",
+    "probe",
 ]
