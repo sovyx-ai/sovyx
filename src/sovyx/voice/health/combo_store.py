@@ -35,6 +35,7 @@ from sovyx.voice.health._fingerprint import (
     compute_audio_subsystem_fingerprint,
     compute_endpoint_fxproperties_sha,
 )
+from sovyx.voice.health._metrics import record_combo_store_invalidation
 from sovyx.voice.health.contract import (
     ALLOWED_FORMATS,
     ALLOWED_HOST_APIS_BY_PLATFORM,
@@ -504,6 +505,7 @@ class ComboStore:
                 self._stats.invalidations_by_reason.get(reason, 0) + 1
             )
             self._write_atomic()
+        record_combo_store_invalidation(reason=reason)
 
     def invalidate_all(self) -> None:
         self._ensure_loaded()

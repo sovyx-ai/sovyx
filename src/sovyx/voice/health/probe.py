@@ -51,6 +51,7 @@ from typing import TYPE_CHECKING, Any
 from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.observability.logging import get_logger
 from sovyx.voice._frame_normalizer import FrameNormalizer
+from sovyx.voice.health._metrics import record_probe_result
 from sovyx.voice.health.contract import (
     Combo,
     Diagnosis,
@@ -266,7 +267,7 @@ async def probe(
     )
 
     try:
-        return await asyncio.wait_for(
+        result = await asyncio.wait_for(
             _run_probe(
                 combo=combo,
                 mode=mode,
@@ -283,10 +284,11 @@ async def probe(
         logger.warning(
             "voice_probe_hard_timeout",
             mode=str(mode),
+            host_api=combo.host_api,
             combo=_combo_tag(combo),
             timeout_s=hard_timeout_s,
         )
-        return ProbeResult(
+        result = ProbeResult(
             diagnosis=Diagnosis.DRIVER_ERROR,
             mode=mode,
             combo=combo,
@@ -297,6 +299,12 @@ async def probe(
             duration_ms=int(hard_timeout_s * 1000),
             error=f"probe exceeded {hard_timeout_s:.1f}s hard timeout",
         )
+    # Emit §5.8 probe metrics once per public invocation. The inner
+    # _run_probe may early-return multiple ProbeResult instances; gathering
+    # the recording here guarantees exactly one diagnosis + one duration
+    # sample per probe() call.
+    record_probe_result(result)
+    return result
 
 
 async def _run_probe(

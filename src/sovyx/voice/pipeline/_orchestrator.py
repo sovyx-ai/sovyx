@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.engine.errors import VoiceError
 from sovyx.observability.logging import get_logger
+from sovyx.voice.health._metrics import record_time_to_first_utterance
 from sovyx.voice.jarvis import JarvisConfig, JarvisIllusion, split_at_boundaries
 from sovyx.voice.pipeline._barge_in import BargeInDetector
 from sovyx.voice.pipeline._config import VoicePipelineConfig, validate_config
@@ -177,6 +178,12 @@ class VoicePipeline:
         self._vad_frames_since_heartbeat: int = 0
         self._last_heartbeat_monotonic: float = 0.0
 
+        # §5.14 KPI — time-to-first-utterance. Wall-clock captured at
+        # WakeWordDetectedEvent emission, measured at SpeechStartedEvent
+        # emission. Only the wake-word path contributes (barge-in uses a
+        # different SpeechStartedEvent site in _transition_to_recording).
+        self._wake_detected_monotonic: float | None = None
+
     # -- Properties ----------------------------------------------------------
 
     @property
@@ -321,6 +328,7 @@ class VoicePipeline:
 
         if ww_event.detected:
             self._state = VoicePipelineState.WAKE_DETECTED
+            self._wake_detected_monotonic = time.monotonic()
             await self._emit(WakeWordDetectedEvent(mind_id=self._config.mind_id))
             logger.info("Wake word detected", mind_id=self._config.mind_id)
 
@@ -329,6 +337,10 @@ class VoicePipeline:
                 await self._jarvis.play_beep(self._output)
 
             await self._emit(SpeechStartedEvent(mind_id=self._config.mind_id))
+            if self._wake_detected_monotonic is not None:
+                ttfu_ms = (time.monotonic() - self._wake_detected_monotonic) * 1000.0
+                record_time_to_first_utterance(duration_ms=ttfu_ms)
+                self._wake_detected_monotonic = None
             self._utterance_frames.clear()
             self._silence_counter = 0
             self._recording_counter = 0

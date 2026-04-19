@@ -69,6 +69,7 @@ from sovyx.voice.health._default_device import (
     NoopDefaultDeviceWatcher,
 )
 from sovyx.voice.health._hotplug import HotplugListener, NoopHotplugListener
+from sovyx.voice.health._metrics import record_recovery_attempt
 from sovyx.voice.health._power import NoopPowerEventListener, PowerEventListener
 from sovyx.voice.health.contract import (
     AudioServiceEvent,
@@ -346,6 +347,7 @@ class VoiceCaptureWatchdog:
                 return
             self._state = WatchdogState.BACKOFF
             self._pending = asyncio.create_task(self._backoff_chain())
+            record_recovery_attempt(trigger="deaf_backoff")
             logger.info(
                 "voice_watchdog_backoff_scheduled",
                 endpoint=self._endpoint,
@@ -450,6 +452,7 @@ class VoiceCaptureWatchdog:
                         endpoint=self._endpoint,
                         exc_info=True,
                     )
+        record_recovery_attempt(trigger="hotplug")
         try:
             await self._re_cascade(self._endpoint)
         except Exception:  # noqa: BLE001
@@ -467,6 +470,7 @@ class VoiceCaptureWatchdog:
             added_interface=event.device_interface_name,
             added_friendly=event.device_friendly_name,
         )
+        record_recovery_attempt(trigger="hotplug")
         try:
             result = await self._re_cascade(self._endpoint)
         except Exception:  # noqa: BLE001
@@ -515,6 +519,7 @@ class VoiceCaptureWatchdog:
                         endpoint=self._endpoint,
                         exc_info=True,
                     )
+        record_recovery_attempt(trigger="default_change")
         try:
             await self._re_cascade(self._endpoint)
         except Exception:  # noqa: BLE001
@@ -558,6 +563,7 @@ class VoiceCaptureWatchdog:
             await asyncio.sleep(self._resume_settle_s)
         except asyncio.CancelledError:
             raise
+        record_recovery_attempt(trigger="power")
         try:
             result = await self._re_cascade(self._endpoint)
         except asyncio.CancelledError:
@@ -630,6 +636,7 @@ class VoiceCaptureWatchdog:
             # First observation is UP — baseline seeded, nothing to do.
             return
         logger.info("voice_audio_service_up", endpoint=self._endpoint)
+        record_recovery_attempt(trigger="audio_service")
         try:
             result = await self._re_cascade(self._endpoint)
         except asyncio.CancelledError:

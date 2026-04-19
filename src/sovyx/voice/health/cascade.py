@@ -44,6 +44,10 @@ from typing import TYPE_CHECKING, Protocol
 from sovyx.engine._lock_dict import LRULockDict
 from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.observability.logging import get_logger
+from sovyx.voice.health._metrics import (
+    record_cascade_attempt,
+    record_combo_store_hit,
+)
 from sovyx.voice.health.contract import (
     CascadeResult,
     Combo,
@@ -397,6 +401,12 @@ async def _run_cascade_locked(
         )
         attempts.append(result)
         attempts_count += 1
+        record_cascade_attempt(
+            platform=platform_key,
+            host_api=pinned.host_api,
+            success=result.diagnosis is Diagnosis.HEALTHY,
+            source="pinned",
+        )
         if result.diagnosis is Diagnosis.HEALTHY:
             return _make_result(
                 endpoint_guid=endpoint_guid,
@@ -410,11 +420,18 @@ async def _run_cascade_locked(
         logger.warning(
             "voice_cascade_pinned_failed",
             endpoint=endpoint_guid,
+            host_api=pinned.host_api,
+            combo=_combo_tag(pinned),
             diagnosis=str(result.diagnosis),
         )
 
     # 2. ComboStore fast path.
     store_combo = _lookup_store(combo_store, endpoint_guid)
+    if store_combo is None:
+        record_combo_store_hit(
+            endpoint_class=device_class or "unknown",
+            result="miss",
+        )
     if store_combo is not None:
         if clock() >= deadline:
             return _make_result(
@@ -439,7 +456,18 @@ async def _run_cascade_locked(
             attempt_budget_s=attempt_budget_s,
         )
         attempts.append(result)
-        if result.diagnosis is Diagnosis.HEALTHY:
+        success = result.diagnosis is Diagnosis.HEALTHY
+        record_cascade_attempt(
+            platform=platform_key,
+            host_api=store_combo.host_api,
+            success=success,
+            source="store",
+        )
+        record_combo_store_hit(
+            endpoint_class=device_class or "unknown",
+            result="hit" if success else "needs_revalidation",
+        )
+        if success:
             # Fast-path hit: do NOT re-record (combo already in store).
             return _make_result(
                 endpoint_guid=endpoint_guid,
@@ -452,11 +480,15 @@ async def _run_cascade_locked(
             )
         # Invalidate the stale store entry so the next boot runs the
         # full cascade fresh rather than re-probing the known-bad combo.
+        # The metric is emitted inside ``ComboStore.invalidate`` — single
+        # source of truth for every invalidation path.
         if combo_store is not None:
             combo_store.invalidate(endpoint_guid, reason="fast_path_probe_failed")
             logger.warning(
                 "voice_cascade_store_invalidated",
                 endpoint=endpoint_guid,
+                host_api=store_combo.host_api,
+                combo=_combo_tag(store_combo),
                 diagnosis=str(result.diagnosis),
             )
 
@@ -505,6 +537,12 @@ async def _run_cascade_locked(
             attempt_budget_s=attempt_budget_s,
         )
         attempts.append(result)
+        record_cascade_attempt(
+            platform=platform_key,
+            host_api=combo.host_api,
+            success=result.diagnosis is Diagnosis.HEALTHY,
+            source="cascade",
+        )
         if result.diagnosis is Diagnosis.HEALTHY:
             _record_winner(
                 combo_store=combo_store,
@@ -651,6 +689,7 @@ async def _try_combo(
     except Exception as exc:
         logger.error(
             "voice_cascade_probe_raised",
+            host_api=combo.host_api,
             combo=_combo_tag(combo),
             error=repr(exc),
             exc_info=True,

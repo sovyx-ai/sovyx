@@ -246,6 +246,78 @@ class MetricsRegistry:
             unit="1",
         )
 
+        # ── Voice Capture Health Lifecycle (ADR §5.8) ──────────────
+        # Stable metric names — see docs-internal/ADR-voice-capture-health-lifecycle.md.
+        # Labels are kept low-cardinality so Prometheus series counts stay bounded
+        # even in long-running daemons with many hot-plug events.
+        self.voice_health_cascade_attempts = meter.create_counter(
+            name="sovyx.voice.health.cascade.attempts",
+            description=(
+                "Cascade attempts against an endpoint (labels: platform, "
+                "host_api, success=true|false, source=pinned|store|cascade)"
+            ),
+            unit="1",
+        )
+        self.voice_health_combo_store_hits = meter.create_counter(
+            name="sovyx.voice.health.combo_store.hits",
+            description=(
+                "ComboStore fast-path resolutions (labels: endpoint_class, "
+                "result=hit|miss|needs_revalidation)"
+            ),
+            unit="1",
+        )
+        self.voice_health_combo_store_invalidations = meter.create_counter(
+            name="sovyx.voice.health.combo_store.invalidations",
+            description="ComboStore invalidations (labels: reason — §4.1 rule tags)",
+            unit="1",
+        )
+        self.voice_health_probe_diagnosis = meter.create_counter(
+            name="sovyx.voice.health.probe.diagnosis",
+            description=(
+                "Probe outcomes (labels: diagnosis — Diagnosis enum value, mode=cold|warm)"
+            ),
+            unit="1",
+        )
+        self.voice_health_probe_duration = meter.create_histogram(
+            name="sovyx.voice.health.probe.duration",
+            description="Probe wall-clock duration (label: mode=cold|warm)",
+            unit="ms",
+        )
+        self.voice_health_preflight_failures = meter.create_counter(
+            name="sovyx.voice.health.preflight.failures",
+            description=(
+                "Pre-flight step failures (labels: step — PreflightStep value, "
+                "code — PreflightStepCode value)"
+            ),
+            unit="1",
+        )
+        self.voice_health_recovery_attempts = meter.create_counter(
+            name="sovyx.voice.health.recovery.attempts",
+            description=(
+                "Watchdog recovery triggers (labels: trigger=deaf_backoff|"
+                "hotplug|default_change|power|audio_service)"
+            ),
+            unit="1",
+        )
+        self.voice_health_self_feedback_blocks = meter.create_counter(
+            name="sovyx.voice.health.self_feedback.blocks",
+            description=("Self-feedback isolation blocks (label: layer=gate|duck|spectral)"),
+            unit="1",
+        )
+        self.voice_health_active_endpoint_changes = meter.create_counter(
+            name="sovyx.voice.health.active_endpoint.changes",
+            description=("Active endpoint swaps (label: reason=hotplug|default|manual|recovery)"),
+            unit="1",
+        )
+        self.voice_health_time_to_first_utterance = meter.create_histogram(
+            name="sovyx.voice.health.time_to_first_utterance",
+            description=(
+                "User-perceived KPI — latency from WakeWordDetectedEvent to "
+                "SpeechStartedEvent. ADR §5.14 target p95 ≤ 200 ms."
+            ),
+            unit="ms",
+        )
+
     @contextlib.contextmanager
     def measure_latency(
         self,

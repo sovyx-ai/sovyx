@@ -50,6 +50,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 import numpy as np
 
 from sovyx.observability.logging import get_logger
+from sovyx.voice.health._metrics import record_preflight_failure
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -247,6 +248,7 @@ async def run_preflight(
             duration_ms=round(outcome.duration_ms, 1),
         )
         if not outcome.passed:
+            record_preflight_failure(step=outcome.name, code=outcome.code.value)
             if first_failure is None:
                 first_failure = outcome
                 logger.error(

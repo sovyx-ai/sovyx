@@ -43,6 +43,7 @@ from typing import TYPE_CHECKING
 
 from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.observability.logging import get_logger
+from sovyx.voice.health._metrics import record_self_feedback_block
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -160,6 +161,9 @@ class SelfFeedbackGate:
             return
         self._active = True
         self._apply_mode_duck(self._duck_gain_db, phase="engage")
+        record_self_feedback_block(layer="gate")
+        if self._mode is SelfFeedbackMode.GATE_DUCK and self._apply_duck is not None:
+            record_self_feedback_block(layer="duck")
         logger.info(
             "voice_self_feedback_gate_engaged",
             mode=self._mode.value,
