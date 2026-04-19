@@ -42,6 +42,7 @@ import time
 from typing import TYPE_CHECKING, Protocol
 
 from sovyx.engine._lock_dict import LRULockDict
+from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.observability.logging import get_logger
 from sovyx.voice.health.contract import (
     CascadeResult,
@@ -63,25 +64,29 @@ logger = get_logger(__name__)
 
 # ── Cascade tuning defaults ─────────────────────────────────────────────
 #
-# Constants live here for Sprint 1 self-containment; Task #14 moves them
-# to :class:`VoiceTuningConfig` so ``SOVYX_TUNING__VOICE__CASCADE_*``
-# env overrides work end-to-end.
+# Sourced from :class:`VoiceTuningConfig` so every knob is overridable via
+# ``SOVYX_TUNING__VOICE__CASCADE_*`` env vars. CLAUDE.md anti-pattern #17.
 
-_DEFAULT_TOTAL_BUDGET_S = 30.0
+_DEFAULT_TOTAL_BUDGET_S = _VoiceTuning().cascade_total_budget_s
 """Total cascade wall-clock budget. ADR §5.6."""
 
-_DEFAULT_ATTEMPT_BUDGET_S = 5.0
+_DEFAULT_ATTEMPT_BUDGET_S = _VoiceTuning().cascade_attempt_budget_s
 """Per-attempt budget passed to the probe's ``hard_timeout_s``. ADR §5.6."""
 
-_DEFAULT_WIZARD_TOTAL_BUDGET_S = 45.0
+_DEFAULT_WIZARD_TOTAL_BUDGET_S = _VoiceTuning().cascade_wizard_total_budget_s
 """Wizard user-facing budget. ADR §5.6 — a human is watching."""
 
-_LIFECYCLE_LOCK_MAX = 64
+_LIFECYCLE_LOCK_MAX = _VoiceTuning().cascade_lifecycle_lock_max
 """Max concurrent endpoints tracked by the lifecycle lock dict."""
 
 _VOICE_CLARITY_AUTOFIX_FIRST_ATTEMPT = 5
 """When ``voice_clarity_autofix=False``, skip indices 0..4 (exclusive + WDM-KS)
-and start at attempt 5 (shared best-effort). ADR §5.11/§5.12."""
+and start at attempt 5 (shared best-effort). ADR §5.11/§5.12.
+
+This is a cascade-table index, not a tuning knob — changing it requires
+re-ordering the :data:`WINDOWS_CASCADE` tuple. It belongs here, not in
+:class:`VoiceTuningConfig`.
+"""
 
 
 # ── Platform cascade tables ─────────────────────────────────────────────

@@ -225,6 +225,31 @@ class VoiceTuningConfig(BaseSettings):
     # retry/backoff semantics. 15-min cooldown mirrors the brain tier.
     model_download_cooldown_seconds: int = 900
 
+    # ── Voice Capture Health Lifecycle (VCHL) — see ADR-voice-capture-health-lifecycle.md.
+    # Probe thresholds (ADR §4.3). Hard timeout per probe is 5 s — anything
+    # longer blocks the cascade behind a misbehaving driver.
+    probe_cold_duration_ms: int = 1_500
+    probe_warm_duration_ms: int = 3_000
+    probe_warmup_discard_ms: int = 200
+    probe_hard_timeout_s: float = 5.0
+    probe_rms_db_no_signal: float = -70.0  # below this → Diagnosis.NO_SIGNAL
+    probe_rms_db_low_signal: float = -55.0  # between no_signal and low → LOW_SIGNAL
+    # Above this healthy-RMS threshold a dead VAD is diagnosed as APO-corrupted;
+    # between this ceiling and the healthy floor it's VAD_INSENSITIVE (gain
+    # too low, speaker too far). See ADR §4.3 diagnosis table.
+    probe_vad_apo_degraded_ceiling: float = 0.05
+    probe_vad_healthy_floor: float = 0.5
+    # Cascade budgets (ADR §5.6). Total = 8 attempts × ~3 s;
+    # per-attempt = one probe's hard timeout. Wizard budget is higher
+    # because a human is watching and can tolerate a slower cascade.
+    cascade_total_budget_s: float = 30.0
+    cascade_attempt_budget_s: float = 5.0
+    cascade_wizard_total_budget_s: float = 45.0
+    # Upper bound on concurrent endpoints tracked by the lifecycle-lock
+    # LRULockDict (ADR §5.5). 64 is generous — rigs with that many active
+    # capture endpoints are exceedingly rare.
+    cascade_lifecycle_lock_max: int = 64
+
     # Voice device test (setup-wizard meters + TTS test button).
     # Kill-switch + ballistics + rate limiting for the test endpoints.
     device_test_enabled: bool = True

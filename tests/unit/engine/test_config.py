@@ -423,3 +423,63 @@ class TestTuningEnvOverrides:
         """``EngineConfig`` path still honours nested env overrides."""
         monkeypatch.setenv("SOVYX_TUNING__VOICE__TRANSCRIBE_TIMEOUT_SECONDS", "42.0")
         assert EngineConfig().tuning.voice.transcribe_timeout_seconds == 42.0
+
+    def test_vchl_probe_defaults_match_adr(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """ADR §4.3 diagnosis-table thresholds are the defaults the probe reads."""
+        for key in list(os.environ):
+            if key.startswith("SOVYX_TUNING__VOICE__"):
+                monkeypatch.delenv(key, raising=False)
+        cfg = VoiceTuningConfig()
+        assert cfg.probe_cold_duration_ms == 1_500
+        assert cfg.probe_warm_duration_ms == 3_000
+        assert cfg.probe_warmup_discard_ms == 200
+        assert cfg.probe_hard_timeout_s == 5.0
+        assert cfg.probe_rms_db_no_signal == -70.0
+        assert cfg.probe_rms_db_low_signal == -55.0
+        assert cfg.probe_vad_apo_degraded_ceiling == 0.05
+        assert cfg.probe_vad_healthy_floor == 0.5
+
+    def test_vchl_cascade_defaults_match_adr(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """ADR §5.5 + §5.6 budget + lock-dict capacity defaults."""
+        for key in list(os.environ):
+            if key.startswith("SOVYX_TUNING__VOICE__"):
+                monkeypatch.delenv(key, raising=False)
+        cfg = VoiceTuningConfig()
+        assert cfg.cascade_total_budget_s == 30.0
+        assert cfg.cascade_attempt_budget_s == 5.0
+        assert cfg.cascade_wizard_total_budget_s == 45.0
+        assert cfg.cascade_lifecycle_lock_max == 64
+
+    def test_vchl_probe_env_overrides(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Every VCHL probe field accepts a ``SOVYX_TUNING__VOICE__PROBE_*`` override."""
+        monkeypatch.setenv("SOVYX_TUNING__VOICE__PROBE_COLD_DURATION_MS", "2500")
+        monkeypatch.setenv("SOVYX_TUNING__VOICE__PROBE_WARM_DURATION_MS", "4500")
+        monkeypatch.setenv("SOVYX_TUNING__VOICE__PROBE_WARMUP_DISCARD_MS", "333")
+        monkeypatch.setenv("SOVYX_TUNING__VOICE__PROBE_HARD_TIMEOUT_S", "7.5")
+        monkeypatch.setenv("SOVYX_TUNING__VOICE__PROBE_RMS_DB_NO_SIGNAL", "-65.5")
+        monkeypatch.setenv("SOVYX_TUNING__VOICE__PROBE_RMS_DB_LOW_SIGNAL", "-50.0")
+        monkeypatch.setenv("SOVYX_TUNING__VOICE__PROBE_VAD_APO_DEGRADED_CEILING", "0.08")
+        monkeypatch.setenv("SOVYX_TUNING__VOICE__PROBE_VAD_HEALTHY_FLOOR", "0.6")
+
+        cfg = VoiceTuningConfig()
+        assert cfg.probe_cold_duration_ms == 2_500
+        assert cfg.probe_warm_duration_ms == 4_500
+        assert cfg.probe_warmup_discard_ms == 333
+        assert cfg.probe_hard_timeout_s == 7.5
+        assert cfg.probe_rms_db_no_signal == -65.5
+        assert cfg.probe_rms_db_low_signal == -50.0
+        assert cfg.probe_vad_apo_degraded_ceiling == 0.08
+        assert cfg.probe_vad_healthy_floor == 0.6
+
+    def test_vchl_cascade_env_overrides(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Every VCHL cascade field accepts a ``SOVYX_TUNING__VOICE__CASCADE_*`` override."""
+        monkeypatch.setenv("SOVYX_TUNING__VOICE__CASCADE_TOTAL_BUDGET_S", "60.0")
+        monkeypatch.setenv("SOVYX_TUNING__VOICE__CASCADE_ATTEMPT_BUDGET_S", "3.0")
+        monkeypatch.setenv("SOVYX_TUNING__VOICE__CASCADE_WIZARD_TOTAL_BUDGET_S", "90.0")
+        monkeypatch.setenv("SOVYX_TUNING__VOICE__CASCADE_LIFECYCLE_LOCK_MAX", "128")
+
+        cfg = VoiceTuningConfig()
+        assert cfg.cascade_total_budget_s == 60.0
+        assert cfg.cascade_attempt_budget_s == 3.0
+        assert cfg.cascade_wizard_total_budget_s == 90.0
+        assert cfg.cascade_lifecycle_lock_max == 128

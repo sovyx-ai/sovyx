@@ -48,6 +48,7 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any
 
+from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.observability.logging import get_logger
 from sovyx.voice._frame_normalizer import FrameNormalizer
 from sovyx.voice.health.contract import (
@@ -69,31 +70,31 @@ logger = get_logger(__name__)
 
 # ── Probe tuning defaults ───────────────────────────────────────────────
 #
-# All thresholds will move to :class:`VoiceTuningConfig` in Task #14;
-# constants here keep Task #12 self-contained and reviewable in isolation.
+# Sourced from :class:`VoiceTuningConfig` so every knob is overridable via
+# ``SOVYX_TUNING__VOICE__PROBE_*`` env vars. CLAUDE.md anti-pattern #17.
 
-_DEFAULT_COLD_DURATION_MS = 1_500
-"""Cold probe target duration. ADR §4.3 default."""
+_DEFAULT_COLD_DURATION_MS = _VoiceTuning().probe_cold_duration_ms
+"""Cold probe target duration. ADR §4.3."""
 
-_DEFAULT_WARM_DURATION_MS = 3_000
-"""Warm probe target duration. ADR §4.3 default."""
+_DEFAULT_WARM_DURATION_MS = _VoiceTuning().probe_warm_duration_ms
+"""Warm probe target duration. ADR §4.3."""
 
-_WARMUP_DISCARD_MS = 200
+_WARMUP_DISCARD_MS = _VoiceTuning().probe_warmup_discard_ms
 """Audio discarded at the start of every probe (VAD warmup + driver settle)."""
 
-_HARD_TIMEOUT_S = 5.0
+_HARD_TIMEOUT_S = _VoiceTuning().probe_hard_timeout_s
 """Hard wall-clock ceiling per probe (ADR §4.3)."""
 
-_RMS_DB_NO_SIGNAL_CEILING = -70.0
+_RMS_DB_NO_SIGNAL_CEILING = _VoiceTuning().probe_rms_db_no_signal
 """Below this dBFS, warm-probe diagnosis is :attr:`Diagnosis.NO_SIGNAL`."""
 
-_RMS_DB_LOW_SIGNAL_CEILING = -55.0
-"""Between ``-70`` and ``-55`` dBFS, diagnosis is :attr:`Diagnosis.LOW_SIGNAL`."""
+_RMS_DB_LOW_SIGNAL_CEILING = _VoiceTuning().probe_rms_db_low_signal
+"""Between no_signal and low-signal, diagnosis is :attr:`Diagnosis.LOW_SIGNAL`."""
 
-_VAD_APO_DEGRADED_CEILING = 0.05
+_VAD_APO_DEGRADED_CEILING = _VoiceTuning().probe_vad_apo_degraded_ceiling
 """Max VAD probability below which a healthy-RMS signal is diagnosed as APO-corrupted."""
 
-_VAD_HEALTHY_FLOOR = 0.5
+_VAD_HEALTHY_FLOOR = _VoiceTuning().probe_vad_healthy_floor
 """Max VAD probability above which the warm probe is :attr:`Diagnosis.HEALTHY`."""
 
 _TARGET_PIPELINE_RATE = 16_000
