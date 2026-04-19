@@ -202,6 +202,108 @@ async def get_voice_models_download_status(request: Request, task_id: str) -> JS
     )
 
 
+@router.get("/capture-diagnostics")
+async def capture_diagnostics(request: Request) -> JSONResponse:
+    """Report the Windows capture-APO chain attached to the active mic.
+
+    Surfaces the same data that powers the pipeline's auto-bypass logic:
+    every active capture endpoint, its friendly name, the list of known
+    APOs loaded by the Windows audio engine, and a single
+    ``voice_clarity_active`` bit per endpoint. The setup wizard and the
+    "voice not hearing me" troubleshooting panel call this to decide
+    whether to offer the "enable WASAPI exclusive" action.
+
+    On non-Windows platforms the underlying detector returns an empty
+    list, so ``endpoints`` is ``[]`` and ``voice_clarity_active`` is
+    ``False`` — the endpoint is safe to call unconditionally.
+
+    The response also echoes the currently-resolved input device name
+    (from an already-running pipeline, when one is registered) so the
+    UI can highlight the *active* endpoint without re-running device
+    resolution from the frontend.
+    """
+    from sovyx.voice._apo_detector import detect_capture_apos, find_endpoint_report
+
+    try:
+        reports = await asyncio.to_thread(detect_capture_apos)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("voice_apo_detection_failed", error=str(exc))
+        return JSONResponse(
+            {
+                "error": f"Capture-APO scan failed: {exc}",
+                "endpoints": [],
+                "voice_clarity_active": False,
+            }
+        )
+
+    # Prefer the device name from the running capture task; fall back to
+    # the mind.yaml-persisted name so diagnostics still work before enable.
+    active_device_name: str | None = None
+    registry = getattr(request.app.state, "registry", None)
+    if registry is not None:
+        with contextlib.suppress(Exception):
+            from sovyx.voice._capture_task import AudioCaptureTask
+
+            if registry.is_registered(AudioCaptureTask):
+                capture = await registry.resolve(AudioCaptureTask)
+                active_device_name = getattr(capture, "input_device_name", None)
+
+    active_report = find_endpoint_report(reports, device_name=active_device_name)
+
+    endpoints = [
+        {
+            "endpoint_id": r.endpoint_id,
+            "endpoint_name": r.endpoint_name,
+            "enumerator": r.enumerator,
+            "fx_binding_count": r.fx_binding_count,
+            "known_apos": list(r.known_apos),
+            "raw_clsids": list(r.raw_clsids),
+            "voice_clarity_active": r.voice_clarity_active,
+            "is_active_device": active_report is not None
+            and r.endpoint_id == active_report.endpoint_id,
+        }
+        for r in reports
+    ]
+
+    any_clarity = any(r.voice_clarity_active for r in reports)
+    active_clarity = bool(active_report is not None and active_report.voice_clarity_active)
+
+    return JSONResponse(
+        {
+            "platform_supported": bool(reports) or _is_windows(),
+            "active_device_name": active_device_name,
+            "active_endpoint": (
+                {
+                    "endpoint_id": active_report.endpoint_id,
+                    "endpoint_name": active_report.endpoint_name,
+                    "known_apos": list(active_report.known_apos),
+                    "voice_clarity_active": active_report.voice_clarity_active,
+                }
+                if active_report is not None
+                else None
+            ),
+            "voice_clarity_active": active_clarity,
+            "any_voice_clarity_active": any_clarity,
+            "endpoints": endpoints,
+            "fix_suggestion": (
+                "Open the mic in WASAPI exclusive mode to bypass the APO chain. "
+                "Set SOVYX_TUNING__VOICE__CAPTURE_WASAPI_EXCLUSIVE=true, or leave "
+                "voice_clarity_autofix enabled (default) and Sovyx will switch "
+                "automatically after the pipeline goes deaf."
+            )
+            if active_clarity
+            else None,
+        }
+    )
+
+
+def _is_windows() -> bool:
+    """Return True when running on Windows (module-level for patchability)."""
+    import sys as _sys
+
+    return _sys.platform == "win32"
+
+
 @router.get("/hardware-detect")
 async def hardware_detect(request: Request) -> JSONResponse:
     """Detect hardware capabilities for voice pipeline.

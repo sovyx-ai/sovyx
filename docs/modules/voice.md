@@ -216,6 +216,56 @@ voice:
     voice: en_US-amy-medium
 ```
 
+## Windows Voice Clarity / capture APO handling
+
+Since early 2026, Windows Update ships the *Voice Clarity* package
+(`VocaEffectPack` / `voiceclarityep`) as a per-endpoint capture APO.
+On a significant fraction of hardware the post-APO signal keeps
+plausible RMS but Silero v5 never crosses `0.01` speech probability —
+the pipeline looks healthy yet silently stays in IDLE.
+
+Sovyx handles this automatically:
+
+1. At startup, `sovyx.voice._apo_detector.detect_capture_apos()` walks
+   `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\
+   Capture\*\FxProperties` and classifies each active endpoint. The
+   result lands in the structured log event `voice_apo_detected`.
+2. The orchestrator tracks consecutive "deaf" heartbeats (VAD peak
+   below `_DEAF_VAD_MAX_THRESHOLD`). After
+   `tuning.voice.deaf_warnings_before_exclusive_retry` (default **2**)
+   consecutive warnings *and* `voice_clarity_active=True` *and*
+   `tuning.voice.voice_clarity_autofix=True` (default), Sovyx closes
+   the stream and reopens it with `capture_wasapi_exclusive=true` —
+   exclusive mode bypasses the entire APO chain. The decision is
+   one-shot (latched) to avoid oscillation.
+3. If the exclusive open fails (device busy, not granted), capture
+   falls back to shared mode so the pipeline stays alive, and the
+   dashboard banner guides the user through the manual fix
+   ("Voice isolation" toggle in Windows Sound settings).
+
+Operators can disable the autofix and pin exclusive mode permanently:
+
+```bash
+# Never auto-bypass; leave mic in shared mode
+SOVYX_TUNING__VOICE__VOICE_CLARITY_AUTOFIX=false
+
+# Always open in exclusive mode (no APO, ever)
+SOVYX_TUNING__VOICE__CAPTURE_WASAPI_EXCLUSIVE=true
+
+# Trigger earlier (after 1 deaf heartbeat instead of 2)
+SOVYX_TUNING__VOICE__DEAF_WARNINGS_BEFORE_EXCLUSIVE_RETRY=1
+```
+
+Diagnostics surfaces:
+
+- **CLI**: `sovyx doctor` runs the `voice_capture_apo` check and
+  WARNs with the fix command when Voice Clarity is active on any
+  endpoint.
+- **Dashboard**: `GET /api/voice/capture-diagnostics` returns the
+  full per-endpoint APO list + an `active_endpoint` summary +
+  `voice_clarity_active` flag. The setup wizard renders a one-click
+  "enable exclusive mode" card when the bit is set.
+
 ## Roadmap
 
 - **Speaker recognition** (ECAPA-TDNN) — enrollment, verification, multi-user voice auth.

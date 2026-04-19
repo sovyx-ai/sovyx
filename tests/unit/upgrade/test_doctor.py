@@ -30,6 +30,7 @@ from sovyx.upgrade.doctor import (
     _check_port_available,
     _check_python_version,
     _check_schema_version,
+    _check_voice_capture_apo,
 )
 
 # ── Fixtures ──────────────────────────────────────────────────────────
@@ -658,7 +659,7 @@ class TestDoctor:
         doc = Doctor(data_dir=data_dir, config_path=config_path)
         report = await doc.run_all()
         assert isinstance(report, DiagnosticReport)
-        assert len(report.results) == 11  # noqa: PLR2004
+        assert len(report.results) == 12  # noqa: PLR2004
         assert report.passed > 0
 
     @pytest.mark.asyncio()
@@ -679,6 +680,7 @@ class TestDoctor:
             "python_version",
             "dependency_versions",
             "data_dir_writable",
+            "voice_capture_apo",
         }
         assert check_names == expected
 
@@ -699,7 +701,7 @@ class TestDoctor:
     def test_list_checks(self, data_dir: Path) -> None:
         doc = Doctor(data_dir=data_dir)
         checks = doc.list_checks()
-        assert len(checks) == 11  # noqa: PLR2004
+        assert len(checks) == 12  # noqa: PLR2004
         # Should be sorted
         assert checks == sorted(checks)
         assert "db_integrity" in checks
@@ -714,7 +716,7 @@ class TestDoctor:
         parsed = json.loads(j)
         assert isinstance(parsed["healthy"], bool)
         assert isinstance(parsed["results"], list)
-        assert len(parsed["results"]) == 11  # noqa: PLR2004
+        assert len(parsed["results"]) == 12  # noqa: PLR2004
         for r in parsed["results"]:
             assert "check" in r
             assert "status" in r
@@ -815,3 +817,115 @@ class TestExceptionPaths:
             mock_sock.return_value = mock_instance
             result = _check_port_available(7777)
         assert result.status == DiagnosticStatus.FAIL
+
+
+# ── Voice capture APO check ───────────────────────────────────────────
+
+
+class TestVoiceCaptureApoCheck:
+    """Cover the Windows Voice Clarity detector integration."""
+
+    def test_non_windows_passes(self) -> None:
+        """Non-Windows platforms skip the check and return PASS."""
+        with patch.object(_doctor_mod, "sys") as mock_sys:
+            mock_sys.platform = "linux"
+            result = _check_voice_capture_apo()
+        assert result.status == DiagnosticStatus.PASS
+        assert result.check == "voice_capture_apo"
+        assert "Windows" in result.message
+
+    def test_no_endpoints_passes(self) -> None:
+        """Empty report (common on non-Windows CI) is a PASS."""
+        with (
+            patch.object(_doctor_mod, "sys") as mock_sys,
+            patch(
+                "sovyx.voice._apo_detector.detect_capture_apos",
+                return_value=[],
+            ),
+        ):
+            mock_sys.platform = "win32"
+            result = _check_voice_capture_apo()
+        assert result.status == DiagnosticStatus.PASS
+        assert result.details is not None
+        assert result.details["endpoints"] == []
+
+    def test_voice_clarity_active_warns(self) -> None:
+        """Active Voice Clarity on any endpoint yields WARN with fix."""
+        from sovyx.voice._apo_detector import CaptureApoReport
+
+        rep = CaptureApoReport(
+            endpoint_id="{endpoint-guid}",
+            endpoint_name="Microfone (Razer BlackShark V2 Pro)",
+            enumerator="USB",
+            fx_binding_count=3,
+            known_apos=["Windows Voice Clarity"],
+            raw_clsids=["{CF1DDA2C-3B93-4EFE-8AA9-DEB6F8D4FDF1}"],
+            voice_clarity_active=True,
+        )
+        with (
+            patch.object(_doctor_mod, "sys") as mock_sys,
+            patch(
+                "sovyx.voice._apo_detector.detect_capture_apos",
+                return_value=[rep],
+            ),
+        ):
+            mock_sys.platform = "win32"
+            result = _check_voice_capture_apo()
+        assert result.status == DiagnosticStatus.WARN
+        assert "Razer BlackShark" in result.message
+        assert result.fix_suggestion is not None
+        assert "CAPTURE_WASAPI_EXCLUSIVE" in result.fix_suggestion
+        assert result.details is not None
+        assert result.details["affected"] == ["Microfone (Razer BlackShark V2 Pro)"]
+
+    def test_inactive_voice_clarity_passes(self) -> None:
+        """APOs present but Voice Clarity inactive → PASS."""
+        from sovyx.voice._apo_detector import CaptureApoReport
+
+        rep = CaptureApoReport(
+            endpoint_id="{other}",
+            endpoint_name="Built-in Microphone",
+            enumerator="MMDevAPI",
+            fx_binding_count=2,
+            known_apos=["MS Voice Focus"],
+            raw_clsids=[],
+            voice_clarity_active=False,
+        )
+        with (
+            patch.object(_doctor_mod, "sys") as mock_sys,
+            patch(
+                "sovyx.voice._apo_detector.detect_capture_apos",
+                return_value=[rep],
+            ),
+        ):
+            mock_sys.platform = "win32"
+            result = _check_voice_capture_apo()
+        assert result.status == DiagnosticStatus.PASS
+        assert result.details is not None
+        assert len(result.details["endpoints"]) == 1
+
+    def test_detector_exception_warns(self) -> None:
+        """Registry walk failure is a WARN, not a hard FAIL."""
+        with (
+            patch.object(_doctor_mod, "sys") as mock_sys,
+            patch(
+                "sovyx.voice._apo_detector.detect_capture_apos",
+                side_effect=RuntimeError("registry locked"),
+            ),
+        ):
+            mock_sys.platform = "win32"
+            result = _check_voice_capture_apo()
+        assert result.status == DiagnosticStatus.WARN
+        assert "registry locked" in result.message
+
+    @pytest.mark.asyncio()
+    async def test_run_check_voice_capture_apo(self, data_dir: Path) -> None:
+        """The Doctor exposes voice_capture_apo via run_check()."""
+        doc = Doctor(data_dir=data_dir)
+        result = await doc.run_check("voice_capture_apo")
+        assert result.check == "voice_capture_apo"
+        # Status is platform-dependent: PASS on non-Windows CI.
+        assert result.status in {
+            DiagnosticStatus.PASS,
+            DiagnosticStatus.WARN,
+        }

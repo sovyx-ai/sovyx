@@ -173,6 +173,31 @@ Three paths:
 2. **Contribute code** — time and expertise are the scarcest resources.
    See `contributing.md`.
 
+## Sovyx doesn't hear me on Windows even though the mic works in other apps — why?
+
+Almost always Windows Voice Clarity (`VocaEffectPack` /
+`voiceclarityep`), a noise-suppression APO that Windows Update
+installs per-endpoint in early 2026. It applies ML processing
+*before* any user-space app sees a frame; on many headsets the
+post-processed signal is unusable for VAD even though the waveform
+still looks plausible.
+
+Sovyx auto-detects this at startup (`voice_apo_detected` log event)
+and bypasses the APO by reopening the mic in WASAPI exclusive mode
+after 2 consecutive "deaf" heartbeats. If you want to force the fix
+upfront, set:
+
+```bash
+SOVYX_TUNING__VOICE__CAPTURE_WASAPI_EXCLUSIVE=true
+```
+
+Or disable "Voice isolation" / "Voice Clarity" in Windows Sound
+settings → Device properties → Advanced. See
+`docs/modules/voice.md` for the full detection and bypass flow.
+
+Run `sovyx doctor` — the `voice_capture_apo` check reports which
+endpoints are affected and names the fix.
+
 ## Where do I report bugs?
 
 GitHub Issues. Include a minimal reproduction, the expected and actual

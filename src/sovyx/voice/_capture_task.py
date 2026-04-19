@@ -170,6 +170,7 @@ class AudioCaptureTask:
         self._consumer: asyncio.Task[None] | None = None
         self._running = False
         self._normalizer: FrameNormalizer | None = None
+        self._resolved_device_name: str | None = None
 
         # Telemetry — populated by the consumer loop.
         self._last_rms_db: float = _RMS_FLOOR_DB
@@ -189,6 +190,17 @@ class AudioCaptureTask:
     def input_device(self) -> int | str | None:
         """Selected PortAudio input device (``None`` = OS default)."""
         return self._input_device
+
+    @property
+    def input_device_name(self) -> str | None:
+        """Resolved PortAudio device name for the active stream.
+
+        Populated during :meth:`start` from the enumerated
+        :class:`DeviceEntry`. Remains ``None`` until the stream opens
+        successfully, so callers (dashboard diagnostics) can distinguish
+        "not yet started" from "OS default" safely.
+        """
+        return self._resolved_device_name
 
     @property
     def host_api_name(self) -> str | None:
@@ -272,6 +284,7 @@ class AudioCaptureTask:
         self._sample_rate = info.sample_rate
         self._input_device = info.device_index
         self._host_api_name = info.host_api
+        self._resolved_device_name = entry.name if entry is not None else None
 
         self._normalizer = FrameNormalizer(
             source_rate=info.sample_rate,
@@ -517,6 +530,8 @@ class AudioCaptureTask:
         self._sample_rate = info.sample_rate
         self._input_device = info.device_index
         self._host_api_name = info.host_api
+        if entry is not None:
+            self._resolved_device_name = entry.name
         self._normalizer = FrameNormalizer(
             source_rate=info.sample_rate,
             source_channels=info.channels,
@@ -562,6 +577,8 @@ class AudioCaptureTask:
         self._sample_rate = info.sample_rate
         self._input_device = info.device_index
         self._host_api_name = info.host_api
+        if entry is not None:
+            self._resolved_device_name = entry.name
         self._normalizer = FrameNormalizer(
             source_rate=info.sample_rate,
             source_channels=info.channels,

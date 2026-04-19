@@ -668,6 +668,80 @@ def _check_dependency_versions() -> DiagnosticResult:
     )
 
 
+def _check_voice_capture_apo() -> DiagnosticResult:
+    """Scan the Windows capture-APO chain for the Voice Clarity package.
+
+    Windows Voice Clarity (``VocaEffectPack`` / ``voiceclarityep``) began
+    shipping via Windows Update in early 2026 and destroys the signal
+    for downstream VAD on a significant fraction of hardware. When
+    detected, the doctor surfaces the condition as ``WARN`` and points
+    the operator at the durable fix — enabling
+    ``capture_wasapi_exclusive`` (which the orchestrator also flips
+    automatically via ``voice_clarity_autofix=True``).
+
+    Always returns ``PASS`` on non-Windows platforms.
+
+    Returns:
+        Diagnostic result for the capture-APO chain.
+    """
+    check_name = "voice_capture_apo"
+    if sys.platform != "win32":
+        return DiagnosticResult(
+            check=check_name,
+            status=DiagnosticStatus.PASS,
+            message="Capture APOs only apply on Windows — skipped.",
+            details={"platform": sys.platform},
+        )
+    try:
+        from sovyx.voice._apo_detector import detect_capture_apos
+
+        reports = detect_capture_apos()
+    except Exception as exc:  # noqa: BLE001
+        return DiagnosticResult(
+            check=check_name,
+            status=DiagnosticStatus.WARN,
+            message=f"Capture-APO scan failed: {exc}",
+            fix_suggestion="Ensure the HKLM MMDevices registry key is readable.",
+        )
+
+    endpoints = [
+        {
+            "endpoint_name": r.endpoint_name,
+            "enumerator": r.enumerator,
+            "known_apos": list(r.known_apos),
+            "voice_clarity_active": r.voice_clarity_active,
+            "fx_binding_count": r.fx_binding_count,
+        }
+        for r in reports
+    ]
+    affected = [r.endpoint_name or r.endpoint_id for r in reports if r.voice_clarity_active]
+
+    if affected:
+        names = ", ".join(affected)
+        return DiagnosticResult(
+            check=check_name,
+            status=DiagnosticStatus.WARN,
+            message=(
+                f"Windows Voice Clarity APO active on: {names}. "
+                "Post-APO signal frequently blocks VAD."
+            ),
+            fix_suggestion=(
+                "Set SOVYX_TUNING__VOICE__CAPTURE_WASAPI_EXCLUSIVE=true "
+                "(or leave voice_clarity_autofix=true — default) so Sovyx "
+                "opens the mic in WASAPI exclusive mode and bypasses the APO "
+                "chain. Alternatively, disable 'Voice isolation' / 'Voice "
+                "Clarity' in Windows Sound settings for the affected device."
+            ),
+            details={"endpoints": endpoints, "affected": affected},
+        )
+    return DiagnosticResult(
+        check=check_name,
+        status=DiagnosticStatus.PASS,
+        message=f"No Voice Clarity APO detected across {len(reports)} active endpoint(s).",
+        details={"endpoints": endpoints},
+    )
+
+
 def _check_data_dir_writable(data_dir: Path) -> DiagnosticResult:
     """Check that the data directory exists and is writable.
 
@@ -712,8 +786,9 @@ def _check_data_dir_writable(data_dir: Path) -> DiagnosticResult:
 class Doctor:
     """Comprehensive diagnostic suite for Sovyx installations.
 
-    Runs 11 checks covering database, configuration, system resources,
-    and dependencies. Results are aggregated into a :class:`DiagnosticReport`.
+    Runs 12 checks covering database, configuration, system resources,
+    dependencies, and Windows capture-APO health. Results are aggregated
+    into a :class:`DiagnosticReport`.
 
     Args:
         data_dir: Sovyx data directory (default: ``~/.sovyx``).
@@ -776,6 +851,7 @@ class Doctor:
         results.append(_check_python_version())
         results.append(_check_dependency_versions())
         results.append(_check_data_dir_writable(self._data_dir))
+        results.append(_check_voice_capture_apo())
 
         report = DiagnosticReport(results=tuple(results))
         logger.info(
@@ -848,6 +924,9 @@ class Doctor:
         async def _data_dir_writable() -> DiagnosticResult:
             return _check_data_dir_writable(self._data_dir)
 
+        async def _voice_capture_apo() -> DiagnosticResult:
+            return _check_voice_capture_apo()
+
         return {
             "brain_consistency": lambda: _check_brain_consistency(self._db_path),
             "config_valid": _config_valid,
@@ -860,4 +939,5 @@ class Doctor:
             "port_available": _port_available,
             "python_version": _python_version,
             "schema_version_valid": lambda: _check_schema_version(self._db_path),
+            "voice_capture_apo": _voice_capture_apo,
         }

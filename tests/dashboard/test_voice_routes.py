@@ -1094,3 +1094,114 @@ class TestVoicesCatalogEndpoint:
         c = TestClient(app)
         resp = c.get("/api/voice/voices")
         assert resp.status_code == 401  # noqa: PLR2004
+
+
+class TestCaptureDiagnostics:
+    """GET /api/voice/capture-diagnostics — Voice Clarity APO surface."""
+
+    def test_empty_on_non_windows(self, client: TestClient) -> None:
+        """Non-Windows hosts return an empty endpoint list, no error."""
+        with patch(
+            "sovyx.voice._apo_detector.detect_capture_apos",
+            return_value=[],
+        ):
+            resp = client.get("/api/voice/capture-diagnostics")
+        assert resp.status_code == 200  # noqa: PLR2004
+        data = resp.json()
+        assert data["endpoints"] == []
+        assert data["voice_clarity_active"] is False
+        assert data["any_voice_clarity_active"] is False
+        assert data["active_endpoint"] is None
+        assert data["fix_suggestion"] is None
+
+    def test_reports_voice_clarity_active(self, client: TestClient) -> None:
+        """Clarity-on-active-device flips the top-level flag + suggestion."""
+        from sovyx.voice._apo_detector import CaptureApoReport
+
+        rep_active = CaptureApoReport(
+            endpoint_id="{active}",
+            endpoint_name="Microfone (Razer BlackShark V2 Pro)",
+            enumerator="USB",
+            fx_binding_count=4,
+            known_apos=["Windows Voice Clarity"],
+            raw_clsids=["{CF1DDA2C-3B93-4EFE-8AA9-DEB6F8D4FDF1}"],
+            voice_clarity_active=True,
+        )
+        rep_inactive = CaptureApoReport(
+            endpoint_id="{other}",
+            endpoint_name="Built-in Microphone",
+            enumerator="MMDevAPI",
+            fx_binding_count=1,
+            known_apos=[],
+            raw_clsids=[],
+            voice_clarity_active=False,
+        )
+        with patch(
+            "sovyx.voice._apo_detector.detect_capture_apos",
+            return_value=[rep_active, rep_inactive],
+        ):
+            resp = client.get("/api/voice/capture-diagnostics")
+        assert resp.status_code == 200  # noqa: PLR2004
+        data = resp.json()
+        assert data["any_voice_clarity_active"] is True
+        assert len(data["endpoints"]) == 2  # noqa: PLR2004
+        # No running capture task in this fixture → no device resolution.
+        assert data["active_endpoint"] is None
+        assert data["voice_clarity_active"] is False
+
+    def test_active_endpoint_matched_via_capture_task(self, app) -> None:
+        """When an AudioCaptureTask is registered, its device name drives matching."""
+        from sovyx.voice._apo_detector import CaptureApoReport
+        from sovyx.voice._capture_task import AudioCaptureTask
+
+        rep = CaptureApoReport(
+            endpoint_id="{active}",
+            endpoint_name="Microfone (Razer BlackShark V2 Pro)",
+            enumerator="USB",
+            fx_binding_count=4,
+            known_apos=["Windows Voice Clarity"],
+            raw_clsids=[],
+            voice_clarity_active=True,
+        )
+        fake_capture = MagicMock()
+        fake_capture.input_device_name = "Microfone (Razer BlackShark V2 Pro)"
+
+        registry = app.state.registry
+        registry.is_registered = MagicMock(
+            side_effect=lambda iface: iface is AudioCaptureTask,
+        )
+        registry.resolve = AsyncMock(return_value=fake_capture)
+
+        c = TestClient(app, headers={"Authorization": f"Bearer {_TOKEN}"})
+        with patch(
+            "sovyx.voice._apo_detector.detect_capture_apos",
+            return_value=[rep],
+        ):
+            resp = c.get("/api/voice/capture-diagnostics")
+        assert resp.status_code == 200  # noqa: PLR2004
+        data = resp.json()
+        assert data["active_device_name"] == "Microfone (Razer BlackShark V2 Pro)"
+        assert data["voice_clarity_active"] is True
+        assert data["active_endpoint"] is not None
+        assert data["active_endpoint"]["endpoint_id"] == "{active}"
+        assert data["fix_suggestion"] is not None
+        assert data["endpoints"][0]["is_active_device"] is True
+
+    def test_detector_exception_returns_safe_payload(self, client: TestClient) -> None:
+        """A detector crash must not 500 — dashboard shows an empty card."""
+        with patch(
+            "sovyx.voice._apo_detector.detect_capture_apos",
+            side_effect=RuntimeError("registry unavailable"),
+        ):
+            resp = client.get("/api/voice/capture-diagnostics")
+        assert resp.status_code == 200  # noqa: PLR2004
+        data = resp.json()
+        assert data["endpoints"] == []
+        assert data["voice_clarity_active"] is False
+        assert "registry unavailable" in data["error"]
+
+    def test_requires_auth(self) -> None:
+        app = create_app(token=_TOKEN)
+        c = TestClient(app)
+        resp = c.get("/api/voice/capture-diagnostics")
+        assert resp.status_code == 401  # noqa: PLR2004
