@@ -67,6 +67,45 @@ class ProbeMode(StrEnum):
     WARM = "warm"
 
 
+class HotplugEventKind(StrEnum):
+    """Classification of an OS-level audio-device hot-plug notification.
+
+    The watchdog (:mod:`~sovyx.voice.health.watchdog`) translates every
+    platform-specific event (``WM_DEVICECHANGE`` on Windows,
+    ``udev`` on Linux, ``kAudioHardwarePropertyDevices`` on macOS) into
+    one of these kinds so downstream logic stays platform-agnostic.
+
+    :attr:`DEFAULT_DEVICE_CHANGED` is emitted by Sprint 2 Task #18 — the
+    constant lives here so the enum is complete from the start and the
+    watchdog's ``on_hotplug`` handler doesn't need a value-update when
+    the default-change listener lands.
+    """
+
+    DEVICE_ADDED = "device_added"
+    DEVICE_REMOVED = "device_removed"
+    DEFAULT_DEVICE_CHANGED = "default_device_changed"
+
+
+class WatchdogState(StrEnum):
+    """§4.4.1 lifecycle states exposed by :class:`VoiceCaptureWatchdog`.
+
+    * :attr:`IDLE` — baseline; no degradation observed. Hot-plug adds
+      are ignored, removes of the active endpoint still trigger a
+      re-cascade.
+    * :attr:`BACKOFF` — one or more warm re-probes are scheduled after
+      a call to :meth:`VoiceCaptureWatchdog.report_deafness`. The
+      endpoint transitions back to :attr:`IDLE` on the first HEALTHY
+      re-probe.
+    * :attr:`DEGRADED` — the backoff schedule exhausted without a
+      HEALTHY probe. The pipeline runs in push-to-talk-only mode until
+      the user reboots or a new viable device hot-plugs in.
+    """
+
+    IDLE = "idle"
+    BACKOFF = "backoff"
+    DEGRADED = "degraded"
+
+
 # ── Validation tables (immutable) ───────────────────────────────────────
 
 
@@ -364,6 +403,30 @@ class OverrideEntry:
     pinned_at: str
     pinned_by: str  # "user" | "wizard" | "cli"
     reason: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class HotplugEvent:
+    """Platform-agnostic view of one audio-device hot-plug notification.
+
+    Populated by :mod:`~sovyx.voice.health._hotplug_win` /
+    :mod:`~sovyx.voice.health._hotplug_linux` /
+    :mod:`~sovyx.voice.health._hotplug_mac`; consumed by
+    :class:`~sovyx.voice.health.watchdog.VoiceCaptureWatchdog`.
+
+    :attr:`endpoint_guid` mirrors the GUID the cascade uses as its
+    :class:`ComboStore` key. It is best-effort: some OS events report a
+    device path or an interface name only, in which case this field is
+    ``None`` and the watchdog compares :attr:`device_friendly_name`
+    against the active endpoint's friendly name instead. When both
+    fields are empty the watchdog treats the event as a generic
+    add/remove signal (no endpoint-scoped action).
+    """
+
+    kind: HotplugEventKind
+    endpoint_guid: str | None = None
+    device_friendly_name: str | None = None
+    device_interface_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

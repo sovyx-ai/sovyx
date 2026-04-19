@@ -250,6 +250,20 @@ class VoiceTuningConfig(BaseSettings):
     # capture endpoints are exceedingly rare.
     cascade_lifecycle_lock_max: int = 64
 
+    # L4 runtime resilience (ADR §4.4, Sprint 2). Master kill-switch that
+    # disables the whole watchdog + hot-plug + power + default-change
+    # listener surface while preserving L0–L3 (cascade + ComboStore +
+    # pre-flight still work). See ADR §7 rollback path.
+    runtime_resilience_enabled: bool = True
+    # §4.4.1 exponential-backoff schedule for warm re-probes on sustained
+    # deafness. Defaults are the ADR commitment (+10 s, +30 s, +90 s, max
+    # 3 attempts per session). On exhaustion the watchdog emits
+    # ``voice_capture_permanently_degraded`` and drops to push-to-talk.
+    watchdog_backoff_schedule_s: list[float] = Field(
+        default_factory=lambda: [10.0, 30.0, 90.0],
+    )
+    watchdog_max_attempts: int = 3
+
     # Voice device test (setup-wizard meters + TTS test button).
     # Kill-switch + ballistics + rate limiting for the test endpoints.
     device_test_enabled: bool = True

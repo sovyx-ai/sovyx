@@ -329,7 +329,9 @@ async def run_cascade(
             try every combo rather than short-circuit on first HEALTHY.
         clock: Monotonic clock. Swappable for deterministic tests.
     """
-    locks = lifecycle_locks or _default_locks()
+    # `or` treats an empty `LRULockDict` as falsy (``__len__ == 0``) and
+    # silently drops the caller's shared lock — use an identity check.
+    locks = lifecycle_locks if lifecycle_locks is not None else _default_locks()
     lock = locks[endpoint_guid]
 
     async with lock:

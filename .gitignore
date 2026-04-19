@@ -84,3 +84,8 @@ docs-internal/
 
 # Claude Code local runtime state (scheduled task locks, etc.)
 .claude/
+
+# Local diagnostic/test scripts (not part of the project)
+/mic_test.py
+/sovyx-*.ps1
+/voice-diag.ps1
