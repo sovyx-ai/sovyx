@@ -53,6 +53,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from sovyx.observability.metrics import get_metrics
+from sovyx.voice.health._telemetry import (
+    record_cascade_outcome as _record_cascade_outcome_telemetry,
+)
 
 if TYPE_CHECKING:
     from sovyx.voice.health.contract import (
@@ -118,6 +121,14 @@ def record_cascade_attempt(
             "success": "true" if success else "false",
             "source": source,
         },
+    )
+    # L9 (ADR §4.9): forward to the anonymous opt-in rollup. The
+    # telemetry facade is a no-op when ``EngineConfig.telemetry.enabled``
+    # is False so this stays free on the hot path.
+    _record_cascade_outcome_telemetry(
+        platform=platform,
+        host_api=host_api,
+        success=success,
     )
 
 
