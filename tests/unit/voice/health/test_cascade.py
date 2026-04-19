@@ -564,7 +564,10 @@ class TestPlatformAndOverrides:
     @pytest.mark.asyncio()
     async def test_empty_platform_cascade_returns_none(self) -> None:
         probe = _FakeProbe(plan=[(_match_all, Diagnosis.HEALTHY)])
-        result = await _run(probe_fn=probe, platform_key="linux")
+        # Use an unknown platform so the cascade lookup returns () and
+        # the whole run is a no-op. Linux and macOS are populated in
+        # Tasks #27 / #28.
+        result = await _run(probe_fn=probe, platform_key="sunos")
 
         assert result.source == "none"  # type: ignore[attr-defined]
         assert result.attempts_count == 0  # type: ignore[attr-defined]
@@ -641,6 +644,58 @@ class TestWindowsCascadeTable:
     def test_all_win32_platform_key(self) -> None:
         for combo in WINDOWS_CASCADE:
             assert combo.platform_key == "win32"
+
+
+class TestLinuxCascadeTable:
+    """Linux cascade ordering rationale — ADR §4.2."""
+
+    def test_six_attempts(self) -> None:
+        from sovyx.voice.health.cascade import LINUX_CASCADE
+
+        assert len(LINUX_CASCADE) == 6
+
+    def test_first_two_are_alsa_exclusive(self) -> None:
+        from sovyx.voice.health.cascade import LINUX_CASCADE
+
+        for combo in LINUX_CASCADE[:2]:
+            assert combo.host_api == "ALSA"
+            assert combo.exclusive is True
+            assert combo.auto_convert is False
+
+    def test_attempt_two_is_jack_float32(self) -> None:
+        from sovyx.voice.health.cascade import LINUX_CASCADE
+
+        combo = LINUX_CASCADE[2]
+        assert combo.host_api == "JACK"
+        assert combo.sample_format == "float32"
+
+    def test_attempts_three_and_four_are_pipewire_autoconvert(self) -> None:
+        from sovyx.voice.health.cascade import LINUX_CASCADE
+
+        for combo in LINUX_CASCADE[3:5]:
+            assert combo.host_api == "PipeWire"
+            assert combo.auto_convert is True
+
+    def test_last_is_pulseaudio_shared(self) -> None:
+        from sovyx.voice.health.cascade import LINUX_CASCADE
+
+        combo = LINUX_CASCADE[5]
+        assert combo.host_api == "PulseAudio"
+        assert combo.exclusive is False
+
+    def test_all_linux_platform_key(self) -> None:
+        from sovyx.voice.health.cascade import LINUX_CASCADE
+
+        for combo in LINUX_CASCADE:
+            assert combo.platform_key == "linux"
+
+    def test_platform_dispatch(self) -> None:
+        from sovyx.voice.health.cascade import (
+            LINUX_CASCADE,
+            _platform_cascade,
+        )
+
+        assert _platform_cascade("linux") == LINUX_CASCADE
 
 
 # ---------------------------------------------------------------------------

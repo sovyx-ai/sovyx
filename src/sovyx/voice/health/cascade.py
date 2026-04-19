@@ -205,8 +205,105 @@ Ordering rationale (ADR §4.2):
   hardware. Signal still flows but resampler-rich and lossy.
 """
 
-LINUX_CASCADE: tuple[Combo, ...] = ()
-"""Linux cascade — populated in Task #27 (S4.1). Empty on Sprint 1."""
+
+def _linux_cascade() -> tuple[Combo, ...]:
+    """Build the Linux cascade per ADR §4.2.
+
+    Ordering rationale:
+
+    * Attempts 0-1: ALSA direct (``hw:``, ``exclusive=True``) bypasses
+      every user-space mixing layer — PulseAudio, PipeWire, or any
+      ``module-echo-cancel`` / ``filter-chain`` stage. On distros where
+      WebRTC-AEC is the default capture path this is the only way to
+      get a raw mic signal to Silero VAD.
+    * Attempt 2: JACK — low-latency pro-audio path, typically no AEC
+      inline. Only reachable when the user has ``jackd`` / ``pipewire-jack``
+      running; falls through silently otherwise.
+    * Attempts 3-4: PipeWire native — modern distro default. Shared access
+      through the session manager; ``auto_convert=True`` asks the server
+      to resample transparently so we don't depend on the node's native rate.
+    * Attempt 5: PulseAudio shared — last-resort fallback for systems
+      still running the legacy daemon. Almost always lossy (8 kHz
+      auto-resample on laptops) but signal still flows.
+    """
+    lnx = "linux"
+    return (
+        Combo(
+            host_api="ALSA",
+            sample_rate=16_000,
+            channels=1,
+            sample_format="int16",
+            exclusive=True,
+            auto_convert=False,
+            frames_per_buffer=480,
+            platform_key=lnx,
+        ),
+        Combo(
+            host_api="ALSA",
+            sample_rate=48_000,
+            channels=1,
+            sample_format="int16",
+            exclusive=True,
+            auto_convert=False,
+            frames_per_buffer=480,
+            platform_key=lnx,
+        ),
+        Combo(
+            host_api="JACK",
+            sample_rate=48_000,
+            channels=1,
+            sample_format="float32",
+            exclusive=False,
+            auto_convert=False,
+            frames_per_buffer=480,
+            platform_key=lnx,
+        ),
+        Combo(
+            host_api="PipeWire",
+            sample_rate=16_000,
+            channels=1,
+            sample_format="int16",
+            exclusive=False,
+            auto_convert=True,
+            frames_per_buffer=480,
+            platform_key=lnx,
+        ),
+        Combo(
+            host_api="PipeWire",
+            sample_rate=48_000,
+            channels=1,
+            sample_format="int16",
+            exclusive=False,
+            auto_convert=True,
+            frames_per_buffer=480,
+            platform_key=lnx,
+        ),
+        Combo(
+            host_api="PulseAudio",
+            sample_rate=16_000,
+            channels=1,
+            sample_format="int16",
+            exclusive=False,
+            auto_convert=True,
+            frames_per_buffer=480,
+            platform_key=lnx,
+        ),
+    )
+
+
+LINUX_CASCADE: tuple[Combo, ...] = _linux_cascade()
+"""Linux 6-attempt cascade. ALSA direct → JACK → PipeWire → PulseAudio.
+
+Ordering rationale (ADR §4.2): ALSA ``hw:`` bypasses every user-space
+APO (``module-echo-cancel``, PipeWire ``filter-chain``); JACK is the
+pro-audio escape hatch; PipeWire is the modern shared default;
+PulseAudio is the legacy last-resort.
+
+The ``exclusive`` flag on Linux is interpreted by the stream opener as
+"request direct ``hw:`` access" rather than mixed plughw/pulse access.
+``auto_convert`` signals "let the server resample/rechannel" on the
+mixing-layer entries.
+"""
 
 MACOS_CASCADE: tuple[Combo, ...] = ()
 """macOS cascade — populated in Task #28 (S4.2). Empty on Sprint 1."""
