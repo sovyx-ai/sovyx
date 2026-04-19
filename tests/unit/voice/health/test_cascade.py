@@ -698,6 +698,63 @@ class TestLinuxCascadeTable:
         assert _platform_cascade("linux") == LINUX_CASCADE
 
 
+class TestMacosCascadeTable:
+    """macOS cascade ordering rationale — ADR §4.2."""
+
+    def test_four_attempts(self) -> None:
+        from sovyx.voice.health.cascade import MACOS_CASCADE
+
+        assert len(MACOS_CASCADE) == 4
+
+    def test_all_coreaudio(self) -> None:
+        from sovyx.voice.health.cascade import MACOS_CASCADE
+
+        for combo in MACOS_CASCADE:
+            assert combo.host_api == "CoreAudio"
+            # macOS HAL inputs have no exclusive/shared distinction.
+            assert combo.exclusive is False
+
+    def test_first_is_48k_int16(self) -> None:
+        from sovyx.voice.health.cascade import MACOS_CASCADE
+
+        assert MACOS_CASCADE[0].sample_rate == 48_000
+        assert MACOS_CASCADE[0].sample_format == "int16"
+
+    def test_second_is_48k_float32(self) -> None:
+        from sovyx.voice.health.cascade import MACOS_CASCADE
+
+        assert MACOS_CASCADE[1].sample_rate == 48_000
+        assert MACOS_CASCADE[1].sample_format == "float32"
+
+    def test_third_is_441k_auto_convert(self) -> None:
+        from sovyx.voice.health.cascade import MACOS_CASCADE
+
+        combo = MACOS_CASCADE[2]
+        assert combo.sample_rate == 44_100
+        assert combo.auto_convert is True
+
+    def test_fourth_is_16k_narrow_band(self) -> None:
+        from sovyx.voice.health.cascade import MACOS_CASCADE
+
+        combo = MACOS_CASCADE[3]
+        assert combo.sample_rate == 16_000
+        assert combo.auto_convert is False
+
+    def test_all_darwin_platform_key(self) -> None:
+        from sovyx.voice.health.cascade import MACOS_CASCADE
+
+        for combo in MACOS_CASCADE:
+            assert combo.platform_key == "darwin"
+
+    def test_platform_dispatch(self) -> None:
+        from sovyx.voice.health.cascade import (
+            MACOS_CASCADE,
+            _platform_cascade,
+        )
+
+        assert _platform_cascade("darwin") == MACOS_CASCADE
+
+
 # ---------------------------------------------------------------------------
 # Probe kwargs forwarding
 # ---------------------------------------------------------------------------

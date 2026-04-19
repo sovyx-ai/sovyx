@@ -305,8 +305,91 @@ The ``exclusive`` flag on Linux is interpreted by the stream opener as
 mixing-layer entries.
 """
 
-MACOS_CASCADE: tuple[Combo, ...] = ()
-"""macOS cascade — populated in Task #28 (S4.2). Empty on Sprint 1."""
+
+def _macos_cascade() -> tuple[Combo, ...]:
+    """Build the macOS cascade per ADR §4.2.
+
+    Ordering rationale:
+
+    * Attempt 0: 48 kHz int16 — native mixer rate on every modern
+      macOS build (CoreAudio mixes at 48 kHz internally since macOS 10.9).
+      The system doesn't insert voice-processing on a plain HAL input
+      unit, so PortAudio's default CoreAudio path is already bypass-clean.
+    * Attempt 1: 48 kHz float32 — Apple-silicon Macs and AirPods in
+      A2DP-sink mode default to floating-point. Same buffer size, so
+      the fallback is cheap.
+    * Attempt 2: 44.1 kHz int16 — legacy USB interfaces (Focusrite
+      Scarlett 1st-gen, older Presonus) lock to 44.1 kHz; stream opener
+      falls through to this rate before giving up.
+    * Attempt 3: 16 kHz int16 — last-resort narrow-band that matches
+      Bluetooth SCO/HFP's native rate. Only used when the HFP guard
+      (:mod:`sovyx.voice._hfp_guard`) has cleared the endpoint — we
+      never *intentionally* open HFP because the compression kills VAD.
+
+    macOS has no APO-chain to bypass (voice-processing is opt-in via
+    ``kAUVoiceIOProperty_BypassVoiceProcessing``; PortAudio never opts
+    in), so the cascade is purely a sample-rate / format fallback ladder
+    rather than a "try exclusive first" sequence.
+    """
+    mac = "darwin"
+    return (
+        Combo(
+            host_api="CoreAudio",
+            sample_rate=48_000,
+            channels=1,
+            sample_format="int16",
+            exclusive=False,
+            auto_convert=False,
+            frames_per_buffer=480,
+            platform_key=mac,
+        ),
+        Combo(
+            host_api="CoreAudio",
+            sample_rate=48_000,
+            channels=1,
+            sample_format="float32",
+            exclusive=False,
+            auto_convert=False,
+            frames_per_buffer=480,
+            platform_key=mac,
+        ),
+        Combo(
+            host_api="CoreAudio",
+            sample_rate=44_100,
+            channels=1,
+            sample_format="int16",
+            exclusive=False,
+            auto_convert=True,
+            frames_per_buffer=441,
+            platform_key=mac,
+        ),
+        Combo(
+            host_api="CoreAudio",
+            sample_rate=16_000,
+            channels=1,
+            sample_format="int16",
+            exclusive=False,
+            auto_convert=False,
+            frames_per_buffer=480,
+            platform_key=mac,
+        ),
+    )
+
+
+MACOS_CASCADE: tuple[Combo, ...] = _macos_cascade()
+"""macOS 4-attempt cascade. Native-rate CoreAudio with format fallbacks.
+
+Ordering rationale (ADR §4.2): CoreAudio at 48 kHz int16 → 48 kHz
+float32 → 44.1 kHz int16 → 16 kHz int16. No exclusive/shared
+distinction on macOS — HAL input units are single-client by default —
+so the ``exclusive`` flag is always ``False``. ``auto_convert`` is set
+only on the 44.1 kHz entry because that rate requires a sample-rate
+converter to reach the 16 kHz VAD pipeline downstream.
+
+The 16 kHz attempt exists for HFP/SCO interop; the stream opener must
+pair it with the :mod:`sovyx.voice._hfp_guard` check to avoid
+silently accepting the 8 kHz Bluetooth SCO compression on headset mics.
+"""
 
 
 _PLATFORM_CASCADES: dict[str, tuple[Combo, ...]] = {
