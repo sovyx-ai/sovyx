@@ -72,6 +72,19 @@ from sovyx.voice.health.contract import (
     RemediationHint,
     WatchdogState,
 )
+from sovyx.voice.health.preflight import (
+    PreflightCheck,
+    PreflightReport,
+    PreflightStep,
+    PreflightStepCode,
+    PreflightStepSpec,
+    check_portaudio,
+    check_tts_synthesize,
+    check_wake_word_smoke,
+    current_platform_key,
+    default_step_names,
+    run_preflight,
+)
 from sovyx.voice.health.probe import probe
 from sovyx.voice.health.watchdog import (
     VoiceCaptureWatchdog,
@@ -112,6 +125,11 @@ __all__ = [
     "PowerEvent",
     "PowerEventKind",
     "PowerEventListener",
+    "PreflightCheck",
+    "PreflightReport",
+    "PreflightStep",
+    "PreflightStepCode",
+    "PreflightStepSpec",
     "ProbeCallable",
     "ProbeHistoryEntry",
     "ProbeMode",
@@ -126,6 +144,12 @@ __all__ = [
     "build_platform_default_device_watcher",
     "build_platform_hotplug_listener",
     "build_platform_power_listener",
+    "check_portaudio",
+    "check_tts_synthesize",
+    "check_wake_word_smoke",
+    "current_platform_key",
+    "default_step_names",
     "probe",
     "run_cascade",
+    "run_preflight",
 ]
