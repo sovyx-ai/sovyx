@@ -93,6 +93,13 @@ from sovyx.voice.health.watchdog import (
     build_platform_hotplug_listener,
     build_platform_power_listener,
 )
+from sovyx.voice.health.wizard import (
+    CascadeFn,
+    ProbeFn,
+    VoiceSetupWizard,
+    WizardOutcome,
+    WizardReport,
+)
 
 __all__ = [
     "ALLOWED_FORMATS",
@@ -103,6 +110,7 @@ __all__ = [
     "AudioServiceMonitor",
     "AudioSubsystemFingerprint",
     "CaptureOverrides",
+    "CascadeFn",
     "CascadeResult",
     "Combo",
     "ComboEntry",
@@ -131,6 +139,7 @@ __all__ = [
     "PreflightStepCode",
     "PreflightStepSpec",
     "ProbeCallable",
+    "ProbeFn",
     "ProbeHistoryEntry",
     "ProbeMode",
     "ProbeResult",
@@ -138,8 +147,11 @@ __all__ = [
     "SelfFeedbackGate",
     "SelfFeedbackMode",
     "VoiceCaptureWatchdog",
+    "VoiceSetupWizard",
     "WINDOWS_CASCADE",
     "WatchdogState",
+    "WizardOutcome",
+    "WizardReport",
     "build_platform_audio_service_monitor",
     "build_platform_default_device_watcher",
     "build_platform_hotplug_listener",
