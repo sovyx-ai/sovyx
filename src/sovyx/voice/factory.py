@@ -27,8 +27,10 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from pathlib import Path
 
+    from sovyx.engine.config import VoiceTuningConfig
     from sovyx.engine.events import EventBus
     from sovyx.voice._capture_task import AudioCaptureTask
+    from sovyx.voice.device_enum import DeviceEntry
     from sovyx.voice.pipeline._orchestrator import VoicePipeline
 
 logger = get_logger(__name__)
@@ -60,6 +62,7 @@ async def create_voice_pipeline(
     event_bus: EventBus | None = None,
     on_perception: Callable[[str, str], Awaitable[None]] | None = None,
     model_dir: Path | None = None,
+    data_dir: Path | None = None,
     language: str = "en",
     voice_id: str = "",
     wake_word_enabled: bool = False,
@@ -78,6 +81,12 @@ async def create_voice_pipeline(
         event_bus: System event bus for voice events.
         on_perception: Callback when speech is transcribed.
         model_dir: Override model cache directory.
+        data_dir: Sovyx data directory used for the VCHL :class:`ComboStore`
+            and :class:`CaptureOverrides` files (``<data_dir>/voice/``).
+            ``None`` falls back to :attr:`EngineConfig.data_dir`. The
+            Sprint 1 boot cascade runs only when this directory resolves
+            and the device cleanly enumerated — otherwise the legacy
+            opener path drives capture unchanged (ADR §5.11).
         language: STT language code (doubles as the TTS language hint
             when ``voice_id`` is unset — the catalog's recommended voice
             for this language is used).
@@ -201,6 +210,16 @@ async def create_voice_pipeline(
 
     tuning = VoiceTuningConfig()
 
+    # ── 5b. VCHL boot cascade (§5.11 migration). Populates the
+    # ComboStore on first boot so later boots hit the fast path.
+    # Cascade winner is not used to drive AudioCaptureTask this
+    # sprint — the legacy opener still owns the capture stream.
+    await _run_vchl_boot_cascade(
+        resolved=resolved,
+        data_dir=data_dir,
+        tuning=tuning,
+    )
+
     # ── 6. Build pipeline with auto-bypass hooks ──────────────
     config = VoicePipelineConfig(
         mind_id=mind_id,
@@ -258,6 +277,54 @@ async def create_voice_pipeline(
     )
     _emit_capture_apo_detection(resolved_name=resolved.name if resolved is not None else None)
     return VoiceBundle(pipeline=pipeline, capture_task=capture_task)
+
+
+async def _run_vchl_boot_cascade(
+    *,
+    resolved: DeviceEntry | None,
+    data_dir: Path | None,
+    tuning: VoiceTuningConfig,
+) -> None:
+    """Run the VCHL cold cascade once at boot to populate :class:`ComboStore`.
+
+    ADR §5.11. Silent on any failure — the cascade is a migration
+    side-effect, never a hard gate on pipeline start. The cascade
+    winner is persisted to disk via the store; no return value is
+    needed at this sprint because the legacy opener still drives
+    :class:`AudioCaptureTask`.
+
+    ``resolved`` may be ``None`` when device resolution failed (headless
+    CI, broken host audio stack) — in that case we skip the cascade
+    entirely and let the legacy opener surface the error path when it
+    tries to open the stream.
+    """
+    if resolved is None:
+        logger.debug("voice_boot_cascade_skipped_no_resolved_device")
+        return
+
+    effective_data_dir = data_dir
+    if effective_data_dir is None:
+        try:
+            from sovyx.engine.config import EngineConfig
+
+            effective_data_dir = EngineConfig().data_dir
+        except Exception:  # noqa: BLE001 — config failure must not block boot
+            logger.debug("voice_boot_cascade_data_dir_unavailable", exc_info=True)
+            return
+
+    try:
+        from sovyx.voice._apo_detector import detect_capture_apos
+        from sovyx.voice.health._factory_integration import run_boot_cascade
+
+        apo_reports = await asyncio.to_thread(detect_capture_apos)
+        await run_boot_cascade(
+            resolved=resolved,
+            data_dir=effective_data_dir,
+            tuning=tuning,
+            apo_reports=apo_reports,
+        )
+    except Exception:  # noqa: BLE001 — cascade-side faults must never block voice enablement
+        logger.warning("voice_boot_cascade_dispatch_failed", exc_info=True)
 
 
 def _detect_voice_clarity_active(resolved_name: str | None) -> bool:

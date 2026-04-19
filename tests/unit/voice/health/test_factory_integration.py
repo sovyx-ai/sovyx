@@ -1,0 +1,459 @@
+"""Unit tests for :mod:`sovyx.voice.health._factory_integration`.
+
+Pins ADR §5.11 semantics:
+
+* Endpoint GUID derivation — Windows MMDevice GUID when an APO report
+  is available, surrogate hash otherwise.
+* :func:`run_boot_cascade` persists a HEALTHY winner to the store.
+* :func:`run_boot_cascade` swallows store / cascade exceptions so the
+  factory never aborts voice-enable on a migration side-effect.
+* Path helpers resolve to ``<data_dir>/voice/*.json`` unchanged.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+import pytest
+
+from sovyx.engine.config import VoiceTuningConfig
+from sovyx.voice.device_enum import DeviceEntry
+from sovyx.voice.health._factory_integration import (
+    derive_endpoint_guid,
+    resolve_capture_overrides_path,
+    resolve_combo_store_path,
+    run_boot_cascade,
+)
+from sovyx.voice.health.contract import (
+    CascadeResult,
+    Combo,
+    Diagnosis,
+    ProbeMode,
+    ProbeResult,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+    from pathlib import Path
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_entry(
+    *,
+    index: int = 3,
+    name: str = "Microfone (Razer BlackShark V2 Pro)",
+    host_api_name: str = "Windows WASAPI",
+) -> DeviceEntry:
+    return DeviceEntry(
+        index=index,
+        name=name,
+        canonical_name=name.strip().lower()[:30],
+        host_api_index=0,
+        host_api_name=host_api_name,
+        max_input_channels=1,
+        max_output_channels=0,
+        default_samplerate=48_000,
+        is_os_default=True,
+    )
+
+
+@dataclass
+class _FakeApoReport:
+    """Minimal shape compatible with :func:`find_endpoint_report`."""
+
+    endpoint_id: str
+    endpoint_name: str
+    device_interface_name: str = ""
+    enumerator: str = "USB"
+    fx_binding_count: int = 0
+    known_apos: list[str] = field(default_factory=list)
+    raw_clsids: list[str] = field(default_factory=list)
+    voice_clarity_active: bool = False
+
+
+@dataclass
+class _FakeStore:
+    """Stand-in for :class:`ComboStore`."""
+
+    entries: dict[str, Combo] = field(default_factory=dict)
+    record_calls: list[tuple[str, Combo]] = field(default_factory=list)
+    get_raises: bool = False
+    record_raises: bool = False
+
+    def get(self, endpoint_guid: str) -> None:
+        if self.get_raises:
+            msg = "fake store explodes"
+            raise RuntimeError(msg)
+        return None
+
+    def needs_revalidation(self, endpoint_guid: str) -> bool:  # noqa: ARG002
+        return False
+
+    def invalidate(self, endpoint_guid: str, reason: str) -> None:
+        self.entries.pop(endpoint_guid, None)
+        # no record of invalidations required by these tests
+
+    def record_winning(
+        self,
+        endpoint_guid: str,
+        *,
+        device_friendly_name: str,  # noqa: ARG002
+        device_interface_name: str,  # noqa: ARG002
+        device_class: str,  # noqa: ARG002
+        endpoint_fxproperties_sha: str,  # noqa: ARG002
+        combo: Combo,
+        probe: ProbeResult,  # noqa: ARG002
+        detected_apos: Sequence[str],  # noqa: ARG002
+        cascade_attempts_before_success: int,  # noqa: ARG002
+    ) -> None:
+        if self.record_raises:
+            msg = "fake store record explodes"
+            raise RuntimeError(msg)
+        self.entries[endpoint_guid] = combo
+        self.record_calls.append((endpoint_guid, combo))
+
+
+@dataclass
+class _FakeOverrides:
+    """Stand-in for :class:`CaptureOverrides` — no pinned combos."""
+
+    def get(self, endpoint_guid: str) -> None:  # noqa: ARG002
+        return None
+
+
+def _healthy_probe(combo: Combo, mode: ProbeMode) -> ProbeResult:
+    return ProbeResult(
+        diagnosis=Diagnosis.HEALTHY,
+        mode=mode,
+        combo=combo,
+        vad_max_prob=0.9,
+        vad_mean_prob=0.6,
+        rms_db=-25.0,
+        callbacks_fired=50,
+        duration_ms=1_500,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Path helpers
+# ---------------------------------------------------------------------------
+
+
+class TestPathHelpers:
+    """Paths live under ``data_dir/voice/`` exactly — no hidden subdirs."""
+
+    def test_combo_store_path(self, tmp_path: Path) -> None:
+        assert resolve_combo_store_path(tmp_path) == tmp_path / "voice" / "capture_combos.json"
+
+    def test_capture_overrides_path(self, tmp_path: Path) -> None:
+        assert (
+            resolve_capture_overrides_path(tmp_path)
+            == tmp_path / "voice" / "capture_overrides.json"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Endpoint GUID derivation
+# ---------------------------------------------------------------------------
+
+
+class TestDeriveEndpointGuid:
+    """GUID resolution order: MMDevice match → surrogate hash."""
+
+    def test_mmdevice_match_when_apo_report_available(self) -> None:
+        entry = _make_entry(name="Microfone (Razer BlackShark V2 Pro)")
+        report = _FakeApoReport(
+            endpoint_id="{0.0.1.00000000}.{abc-123}",
+            endpoint_name="Microfone (Razer BlackShark V2 Pro)",
+            device_interface_name="Razer BlackShark V2 Pro",
+        )
+
+        guid = derive_endpoint_guid(
+            entry,
+            apo_reports=[report],  # type: ignore[list-item]
+            platform_key="win32",
+        )
+
+        assert guid == "{0.0.1.00000000}.{abc-123}"
+
+    def test_surrogate_when_no_apo_match(self) -> None:
+        entry = _make_entry(name="Some USB Headset (Acme)")
+        # APO report exists but won't match this device.
+        report = _FakeApoReport(
+            endpoint_id="{unrelated}",
+            endpoint_name="Different Mic",
+            device_interface_name="Different Mic",
+        )
+
+        guid = derive_endpoint_guid(
+            entry,
+            apo_reports=[report],  # type: ignore[list-item]
+            platform_key="win32",
+        )
+
+        assert guid.startswith("{surrogate-")
+        assert guid.endswith("}")
+
+    def test_surrogate_when_no_apo_reports(self) -> None:
+        entry = _make_entry()
+        guid = derive_endpoint_guid(entry, apo_reports=None, platform_key="win32")
+        assert guid.startswith("{surrogate-")
+
+    def test_surrogate_stable_across_calls(self) -> None:
+        entry = _make_entry()
+        g1 = derive_endpoint_guid(entry, apo_reports=None, platform_key="linux")
+        g2 = derive_endpoint_guid(entry, apo_reports=None, platform_key="linux")
+        assert g1 == g2
+
+    def test_surrogate_differs_across_host_apis(self) -> None:
+        a = _make_entry(host_api_name="Windows WASAPI")
+        b = _make_entry(host_api_name="MME")
+        guid_a = derive_endpoint_guid(a, apo_reports=None, platform_key="win32")
+        guid_b = derive_endpoint_guid(b, apo_reports=None, platform_key="win32")
+        assert guid_a != guid_b
+
+    def test_surrogate_differs_across_platforms(self) -> None:
+        entry = _make_entry()
+        guid_win = derive_endpoint_guid(entry, apo_reports=None, platform_key="win32")
+        guid_linux = derive_endpoint_guid(entry, apo_reports=None, platform_key="linux")
+        assert guid_win != guid_linux
+
+    def test_non_windows_ignores_apo_reports(self) -> None:
+        entry = _make_entry()
+        report = _FakeApoReport(
+            endpoint_id="{would-win-on-windows}",
+            endpoint_name=entry.name,
+            device_interface_name=entry.name,
+        )
+
+        guid = derive_endpoint_guid(
+            entry,
+            apo_reports=[report],  # type: ignore[list-item]
+            platform_key="linux",
+        )
+
+        assert guid.startswith("{surrogate-")
+
+
+# ---------------------------------------------------------------------------
+# run_boot_cascade
+# ---------------------------------------------------------------------------
+
+
+class TestRunBootCascade:
+    """§5.11: cascade populates store, never blocks boot on failure."""
+
+    @pytest.mark.asyncio()
+    async def test_records_winner_to_store(self, tmp_path: Path) -> None:
+        entry = _make_entry()
+        store = _FakeStore()
+        overrides = _FakeOverrides()
+
+        async def probe(
+            *,
+            combo: Combo,
+            mode: ProbeMode,
+            device_index: int,  # noqa: ARG001
+            hard_timeout_s: float,  # noqa: ARG001
+        ) -> ProbeResult:
+            return _healthy_probe(combo, mode)
+
+        # Monkeypatch run_cascade inside the integration module to route
+        # through our fake probe. Equivalent to injecting probe_fn all
+        # the way down; the integration module only exposes the tuning
+        # knobs so we wire via the public cascade entry point.
+        from sovyx.voice.health import _factory_integration
+        from sovyx.voice.health import cascade as cascade_mod
+
+        original = cascade_mod.run_cascade
+
+        async def cascade_wrapper(**kwargs: object) -> object:
+            return await original(**{**kwargs, "probe_fn": probe})  # type: ignore[arg-type]
+
+        monkey = cascade_wrapper
+        _factory_integration.run_cascade = monkey  # type: ignore[attr-defined]
+        try:
+            result = await run_boot_cascade(
+                resolved=entry,
+                data_dir=tmp_path,
+                tuning=VoiceTuningConfig(),
+                apo_reports=None,
+                platform_key="win32",
+                combo_store=store,  # type: ignore[arg-type]
+                capture_overrides=overrides,  # type: ignore[arg-type]
+            )
+        finally:
+            _factory_integration.run_cascade = original  # type: ignore[attr-defined]
+
+        assert isinstance(result, CascadeResult)
+        assert result.winning_combo is not None
+        assert result.source == "cascade"
+        assert len(store.record_calls) == 1
+        recorded_guid, recorded_combo = store.record_calls[0]
+        assert recorded_combo == result.winning_combo
+        assert recorded_guid.startswith("{surrogate-")
+
+    @pytest.mark.asyncio()
+    async def test_returns_none_when_cascade_raises(self, tmp_path: Path) -> None:
+        entry = _make_entry()
+        store = _FakeStore()
+        overrides = _FakeOverrides()
+
+        from sovyx.voice.health import _factory_integration
+        from sovyx.voice.health import cascade as cascade_mod
+
+        original = cascade_mod.run_cascade
+
+        async def exploding_cascade(**_kwargs: object) -> object:
+            msg = "cascade-side detonation"
+            raise RuntimeError(msg)
+
+        _factory_integration.run_cascade = exploding_cascade  # type: ignore[attr-defined]
+        try:
+            result = await run_boot_cascade(
+                resolved=entry,
+                data_dir=tmp_path,
+                tuning=VoiceTuningConfig(),
+                platform_key="win32",
+                combo_store=store,  # type: ignore[arg-type]
+                capture_overrides=overrides,  # type: ignore[arg-type]
+            )
+        finally:
+            _factory_integration.run_cascade = original  # type: ignore[attr-defined]
+
+        assert result is None
+        assert store.record_calls == []
+
+    @pytest.mark.asyncio()
+    async def test_passes_detected_apos_when_available(self, tmp_path: Path) -> None:
+        entry = _make_entry(name="Microfone (Razer BlackShark V2 Pro)")
+        report = _FakeApoReport(
+            endpoint_id="{0.0.1.0000}",
+            endpoint_name=entry.name,
+            device_interface_name="Razer BlackShark V2 Pro",
+            enumerator="USB",
+            known_apos=["Windows Voice Clarity"],
+        )
+        store = _FakeStore()
+
+        captured_kwargs: dict[str, object] = {}
+
+        from sovyx.voice.health import _factory_integration
+
+        original = _factory_integration.run_cascade
+
+        async def capturing_cascade(**kwargs: object) -> CascadeResult:
+            captured_kwargs.update(kwargs)
+            return CascadeResult(
+                endpoint_guid=str(kwargs["endpoint_guid"]),
+                winning_combo=None,
+                winning_probe=None,
+                attempts=(),
+                attempts_count=0,
+                budget_exhausted=False,
+                source="none",
+            )
+
+        _factory_integration.run_cascade = capturing_cascade  # type: ignore[attr-defined]
+        try:
+            await run_boot_cascade(
+                resolved=entry,
+                data_dir=tmp_path,
+                tuning=VoiceTuningConfig(),
+                apo_reports=[report],  # type: ignore[list-item]
+                platform_key="win32",
+                combo_store=store,  # type: ignore[arg-type]
+                capture_overrides=_FakeOverrides(),  # type: ignore[arg-type]
+            )
+        finally:
+            _factory_integration.run_cascade = original  # type: ignore[attr-defined]
+
+        assert captured_kwargs["endpoint_guid"] == "{0.0.1.0000}"
+        assert captured_kwargs["detected_apos"] == ("Windows Voice Clarity",)
+        assert captured_kwargs["device_interface_name"] == "Razer BlackShark V2 Pro"
+        assert captured_kwargs["device_class"] == "USB"
+        assert captured_kwargs["mode"] is ProbeMode.COLD
+
+    @pytest.mark.asyncio()
+    async def test_respects_voice_clarity_autofix_flag(self, tmp_path: Path) -> None:
+        entry = _make_entry()
+        captured_kwargs: dict[str, object] = {}
+
+        from sovyx.voice.health import _factory_integration
+
+        original = _factory_integration.run_cascade
+
+        async def capturing_cascade(**kwargs: object) -> CascadeResult:
+            captured_kwargs.update(kwargs)
+            return CascadeResult(
+                endpoint_guid="x",
+                winning_combo=None,
+                winning_probe=None,
+                attempts=(),
+                attempts_count=0,
+                budget_exhausted=False,
+                source="none",
+            )
+
+        _factory_integration.run_cascade = capturing_cascade  # type: ignore[attr-defined]
+        try:
+            # The `voice_clarity_autofix` setting on VoiceTuningConfig
+            # must propagate to run_cascade's matching kwarg unchanged.
+            tuning = VoiceTuningConfig(voice_clarity_autofix=False)
+            await run_boot_cascade(
+                resolved=entry,
+                data_dir=tmp_path,
+                tuning=tuning,
+                platform_key="win32",
+                combo_store=_FakeStore(),  # type: ignore[arg-type]
+                capture_overrides=_FakeOverrides(),  # type: ignore[arg-type]
+            )
+        finally:
+            _factory_integration.run_cascade = original  # type: ignore[attr-defined]
+
+        assert captured_kwargs["voice_clarity_autofix"] is False
+
+    @pytest.mark.asyncio()
+    async def test_propagates_cascade_budget_from_tuning(self, tmp_path: Path) -> None:
+        captured_kwargs: dict[str, object] = {}
+
+        from sovyx.voice.health import _factory_integration
+
+        original = _factory_integration.run_cascade
+
+        async def capturing_cascade(**kwargs: object) -> CascadeResult:
+            captured_kwargs.update(kwargs)
+            return CascadeResult(
+                endpoint_guid="x",
+                winning_combo=None,
+                winning_probe=None,
+                attempts=(),
+                attempts_count=0,
+                budget_exhausted=False,
+                source="none",
+            )
+
+        _factory_integration.run_cascade = capturing_cascade  # type: ignore[attr-defined]
+        try:
+            tuning = VoiceTuningConfig(
+                cascade_total_budget_s=12.5,
+                cascade_attempt_budget_s=2.5,
+            )
+            await run_boot_cascade(
+                resolved=_make_entry(),
+                data_dir=tmp_path,
+                tuning=tuning,
+                platform_key="win32",
+                combo_store=_FakeStore(),  # type: ignore[arg-type]
+                capture_overrides=_FakeOverrides(),  # type: ignore[arg-type]
+            )
+        finally:
+            _factory_integration.run_cascade = original  # type: ignore[attr-defined]
+
+        assert captured_kwargs["total_budget_s"] == pytest.approx(12.5)
+        assert captured_kwargs["attempt_budget_s"] == pytest.approx(2.5)
