@@ -824,3 +824,145 @@ export interface CaptureExclusiveResponse {
   persisted: boolean;
   applied_immediately: boolean;
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// Voice Capture Health Lifecycle (VCHL) — L7 REST surface (ADR §4.7)
+// ────────────────────────────────────────────────────────────────────────
+
+/** Triage labels emitted by ``sovyx.voice.health.probe``. */
+export type VoiceHealthDiagnosis =
+  | "healthy"
+  | "muted"
+  | "no_signal"
+  | "low_signal"
+  | "format_mismatch"
+  | "apo_degraded"
+  | "vad_insensitive"
+  | "driver_error"
+  | "device_busy"
+  | "hot_unplugged"
+  | "self_feedback"
+  | "permission_denied"
+  | "unknown";
+
+export type VoiceHealthProbeMode = "cold" | "warm";
+
+export type VoiceHealthRemediationSeverity = "info" | "warn" | "error";
+
+export type VoiceHealthPinSource = "user" | "wizard" | "cli";
+
+/** Audio configuration tuple that opens a capture stream (wire shape). */
+export interface VoiceHealthCombo {
+  host_api: string;
+  sample_rate: number;
+  channels: number;
+  sample_format: string;
+  exclusive: boolean;
+  auto_convert: boolean;
+  frames_per_buffer: number;
+}
+
+export interface VoiceHealthRemediationHint {
+  code: string;
+  severity: VoiceHealthRemediationSeverity;
+  cli_action: string | null;
+}
+
+export interface VoiceHealthProbeHistoryEntry {
+  ts: string;
+  mode: string;
+  diagnosis: string;
+  vad_max_prob: number | null;
+  rms_db: number;
+  duration_ms: number;
+}
+
+export interface VoiceHealthProbeResult {
+  diagnosis: string;
+  mode: string;
+  combo: VoiceHealthCombo;
+  vad_max_prob: number | null;
+  vad_mean_prob: number | null;
+  rms_db: number;
+  callbacks_fired: number;
+  duration_ms: number;
+  error: string | null;
+  remediation: VoiceHealthRemediationHint | null;
+}
+
+export interface VoiceHealthComboEntry {
+  endpoint_guid: string;
+  device_friendly_name: string;
+  device_interface_name: string;
+  device_class: string;
+  endpoint_fxproperties_sha: string;
+  winning_combo: VoiceHealthCombo;
+  validated_at: string;
+  validation_mode: string;
+  vad_max_prob_at_validation: number | null;
+  vad_mean_prob_at_validation: number | null;
+  rms_db_at_validation: number;
+  probe_duration_ms: number;
+  detected_apos_at_validation: string[];
+  cascade_attempts_before_success: number;
+  boots_validated: number;
+  last_boot_validated: string;
+  last_boot_diagnosis: string;
+  probe_history: VoiceHealthProbeHistoryEntry[];
+  pinned: boolean;
+  needs_revalidation: boolean;
+}
+
+export interface VoiceHealthOverrideEntry {
+  endpoint_guid: string;
+  device_friendly_name: string;
+  pinned_combo: VoiceHealthCombo;
+  pinned_at: string;
+  pinned_by: string;
+  reason: string;
+}
+
+/** GET /api/voice/health response. */
+export interface VoiceHealthSnapshotResponse {
+  combo_store: VoiceHealthComboEntry[];
+  overrides: VoiceHealthOverrideEntry[];
+  data_dir: string;
+  voice_enabled: boolean;
+}
+
+/** POST /api/voice/health/reprobe request body. */
+export interface VoiceHealthReprobeRequest {
+  endpoint_guid: string;
+  device_index: number;
+  mode: VoiceHealthProbeMode;
+  combo?: VoiceHealthCombo;
+  duration_ms?: number;
+}
+
+export interface VoiceHealthReprobeResponse {
+  endpoint_guid: string;
+  result: VoiceHealthProbeResult;
+}
+
+export interface VoiceHealthForgetRequest {
+  endpoint_guid: string;
+  reason: string;
+}
+
+export interface VoiceHealthForgetResponse {
+  endpoint_guid: string;
+  invalidated: boolean;
+}
+
+export interface VoiceHealthPinRequest {
+  endpoint_guid: string;
+  device_friendly_name: string;
+  combo: VoiceHealthCombo;
+  source: VoiceHealthPinSource;
+  reason?: string;
+}
+
+export interface VoiceHealthPinResponse {
+  endpoint_guid: string;
+  pinned: boolean;
+}

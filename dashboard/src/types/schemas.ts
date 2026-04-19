@@ -561,3 +561,97 @@ export const CaptureExclusiveResponseSchema = z.object({
   persisted: z.boolean(),
   applied_immediately: z.boolean(),
 });
+
+// ── Voice Capture Health (L7, ADR §4.7) ──
+
+export const VoiceHealthComboSchema = z.object({
+  host_api: z.string(),
+  sample_rate: z.number().int(),
+  channels: z.number().int(),
+  sample_format: z.string(),
+  exclusive: z.boolean(),
+  auto_convert: z.boolean(),
+  frames_per_buffer: z.number().int(),
+});
+
+export const VoiceHealthRemediationHintSchema = z.object({
+  code: z.string(),
+  severity: z.enum(["info", "warn", "error"]),
+  cli_action: z.string().nullable(),
+});
+
+export const VoiceHealthProbeHistoryEntrySchema = z.object({
+  ts: z.string(),
+  mode: z.string(),
+  diagnosis: z.string(),
+  vad_max_prob: z.number().nullable(),
+  rms_db: z.number(),
+  duration_ms: z.number().int(),
+});
+
+export const VoiceHealthProbeResultSchema = z.object({
+  diagnosis: z.string(),
+  mode: z.string(),
+  combo: VoiceHealthComboSchema,
+  vad_max_prob: z.number().nullable(),
+  vad_mean_prob: z.number().nullable(),
+  rms_db: z.number(),
+  callbacks_fired: z.number().int(),
+  duration_ms: z.number().int(),
+  error: z.string().nullable(),
+  remediation: VoiceHealthRemediationHintSchema.nullable(),
+});
+
+export const VoiceHealthComboEntrySchema = z.object({
+  endpoint_guid: z.string(),
+  device_friendly_name: z.string(),
+  device_interface_name: z.string(),
+  device_class: z.string(),
+  endpoint_fxproperties_sha: z.string(),
+  winning_combo: VoiceHealthComboSchema,
+  validated_at: z.string(),
+  validation_mode: z.string(),
+  vad_max_prob_at_validation: z.number().nullable(),
+  vad_mean_prob_at_validation: z.number().nullable(),
+  rms_db_at_validation: z.number(),
+  probe_duration_ms: z.number().int(),
+  detected_apos_at_validation: z.array(z.string()),
+  cascade_attempts_before_success: z.number().int(),
+  boots_validated: z.number().int(),
+  last_boot_validated: z.string(),
+  last_boot_diagnosis: z.string(),
+  probe_history: z.array(VoiceHealthProbeHistoryEntrySchema),
+  pinned: z.boolean(),
+  needs_revalidation: z.boolean(),
+});
+
+export const VoiceHealthOverrideEntrySchema = z.object({
+  endpoint_guid: z.string(),
+  device_friendly_name: z.string(),
+  pinned_combo: VoiceHealthComboSchema,
+  pinned_at: z.string(),
+  pinned_by: z.string(),
+  reason: z.string(),
+});
+
+export const VoiceHealthSnapshotResponseSchema = z.object({
+  combo_store: z.array(VoiceHealthComboEntrySchema),
+  overrides: z.array(VoiceHealthOverrideEntrySchema),
+  data_dir: z.string(),
+  voice_enabled: z.boolean(),
+});
+
+export const VoiceHealthReprobeResponseSchema = z.object({
+  endpoint_guid: z.string(),
+  result: VoiceHealthProbeResultSchema,
+});
+
+export const VoiceHealthForgetResponseSchema = z.object({
+  endpoint_guid: z.string(),
+  invalidated: z.boolean(),
+});
+
+export const VoiceHealthPinResponseSchema = z.object({
+  endpoint_guid: z.string(),
+  pinned: z.boolean(),
+});

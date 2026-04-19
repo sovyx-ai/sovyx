@@ -23,6 +23,7 @@ const ROUTE_TITLE_KEYS: Record<string, string> = {
   "/settings": "nav.settings",
   "/about": "nav.about",
   "/voice": "nav.voice",
+  "/voice/health": "nav.voiceHealth",
 };
 
 export function AppLayout() {

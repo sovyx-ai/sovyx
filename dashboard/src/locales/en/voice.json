@@ -72,5 +72,77 @@
     "ttsQuality": "TTS Quality",
     "wake": "Wake Word",
     "vad": "VAD"
+  },
+  "health": {
+    "title": "Capture Health",
+    "subtitle": "Per-endpoint audio capture diagnosis, pinned overrides, and re-probe controls.",
+    "loading": "Loading capture health…",
+    "empty": "No validated capture endpoints yet. Run the voice setup wizard to discover one.",
+    "refresh": "Refresh",
+    "dataDir": "Data directory",
+    "voiceEnabled": "Voice pipeline active",
+    "voiceDisabled": "Voice pipeline offline",
+    "warmUnavailable": "Warm re-probe requires the voice pipeline to be running.",
+    "combo": {
+      "sectionTitle": "Known combos",
+      "sectionHint": "One row per validated audio endpoint. The stored combo reopens on boot without re-running the cascade.",
+      "friendlyName": "Device",
+      "guid": "Endpoint GUID",
+      "winningCombo": "Winning combo",
+      "validatedAt": "Last validated",
+      "boots": "Boots validated",
+      "lastDiagnosis": "Last diagnosis",
+      "needsRevalidation": "Needs re-validation",
+      "pinned": "Pinned",
+      "noEntries": "No combos stored yet."
+    },
+    "overrides": {
+      "sectionTitle": "Pinned overrides",
+      "sectionHint": "User-pinned combos that survive --reset and short-circuit the cascade.",
+      "pinnedAt": "Pinned at",
+      "pinnedBy": "By",
+      "reason": "Reason",
+      "noEntries": "No overrides pinned.",
+      "sources": {
+        "user": "User",
+        "wizard": "Wizard",
+        "cli": "CLI"
+      }
+    },
+    "actions": {
+      "reprobeCold": "Re-probe (cold)",
+      "reprobeWarm": "Re-probe (warm)",
+      "forget": "Forget",
+      "pin": "Pin combo",
+      "confirmForget": "Forget this endpoint? The next boot will re-run the cascade.",
+      "pinReason": "dashboard-pin"
+    },
+    "result": {
+      "title": "Latest re-probe",
+      "diagnosis": "Diagnosis",
+      "mode": "Mode",
+      "rms": "RMS",
+      "vadMax": "VAD max",
+      "vadMean": "VAD mean",
+      "callbacks": "PortAudio callbacks",
+      "duration": "Duration",
+      "error": "Error",
+      "remediation": "Remediation"
+    },
+    "diagnosis": {
+      "healthy": "Healthy",
+      "muted": "Muted",
+      "no_signal": "No signal",
+      "low_signal": "Low signal",
+      "format_mismatch": "Format mismatch",
+      "apo_degraded": "APO degraded",
+      "vad_insensitive": "VAD insensitive",
+      "driver_error": "Driver error",
+      "device_busy": "Device busy",
+      "hot_unplugged": "Hot-unplugged",
+      "self_feedback": "Self-feedback",
+      "permission_denied": "Permission denied",
+      "unknown": "Unknown"
+    }
   }
 }

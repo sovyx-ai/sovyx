@@ -31,6 +31,10 @@ import {
 } from "./slices/onboarding";
 import { createStatsSlice, type StatsSlice } from "./slices/stats";
 import { createPluginsSlice, type PluginsSlice } from "./slices/plugins";
+import {
+  createVoiceHealthSlice,
+  type VoiceHealthSlice,
+} from "./slices/voiceHealth";
 
 export type DashboardState = ActivitySlice &
   AuthSlice &
@@ -43,7 +47,8 @@ export type DashboardState = ActivitySlice &
   ChatSlice &
   OnboardingSlice &
   StatsSlice &
-  PluginsSlice;
+  PluginsSlice &
+  VoiceHealthSlice;
 
 export const useDashboardStore = create<DashboardState>()(
   devtools(
@@ -60,6 +65,7 @@ export const useDashboardStore = create<DashboardState>()(
       ...createOnboardingSlice(...a),
       ...createStatsSlice(...a),
       ...createPluginsSlice(...a),
+      ...createVoiceHealthSlice(...a),
     }),
     { name: "sovyx-dashboard" },
   ),
