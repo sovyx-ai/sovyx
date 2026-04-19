@@ -338,6 +338,9 @@ def create_app(config: APIConfig | None = None, *, token: str | None = None) -> 
         voice as voice_routes,
     )
     from sovyx.dashboard.routes import (
+        voice_health as voice_health_routes,
+    )
+    from sovyx.dashboard.routes import (
         voice_test as voice_test_routes,
     )
     from sovyx.dashboard.routes import (
@@ -355,6 +358,7 @@ def create_app(config: APIConfig | None = None, *, token: str | None = None) -> 
     app.include_router(emotions_routes.router)
     app.include_router(safety_routes.router)
     app.include_router(voice_routes.router)
+    app.include_router(voice_health_routes.router)
     app.include_router(voice_test_routes.router)
     app.include_router(plugins_routes.router)
     app.include_router(config_routes.router)

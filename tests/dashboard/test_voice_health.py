@@ -1,0 +1,488 @@
+"""Tests for ``/api/voice/health*`` — the L7 REST surface (ADR §4.7)."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from types import SimpleNamespace
+from typing import TYPE_CHECKING
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from starlette.testclient import TestClient
+
+from sovyx.dashboard.server import create_app
+from sovyx.voice.health import (
+    CaptureOverrides,
+    Combo,
+    ComboStore,
+    Diagnosis,
+    ProbeMode,
+    ProbeResult,
+    RemediationHint,
+)
+from sovyx.voice.health._factory_integration import (
+    resolve_capture_overrides_path,
+    resolve_combo_store_path,
+)
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
+
+_TOKEN = "test-token-voice-health"
+
+
+def _make_combo() -> Combo:
+    return Combo(
+        host_api="WASAPI",
+        sample_rate=16_000,
+        channels=1,
+        sample_format="int16",
+        exclusive=True,
+        auto_convert=False,
+        frames_per_buffer=480,
+        platform_key="win32",
+    )
+
+
+def _seed_combo_store(data_dir: Path, *, endpoint_guid: str = "EP-A") -> None:
+    """Persist one ComboEntry via the canonical ``record_winning`` path."""
+    path = resolve_combo_store_path(data_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    store = ComboStore(path)
+    store.load()
+    probe_result = ProbeResult(
+        diagnosis=Diagnosis.HEALTHY,
+        mode=ProbeMode.COLD,
+        combo=_make_combo(),
+        vad_max_prob=None,
+        vad_mean_prob=None,
+        rms_db=-32.0,
+        callbacks_fired=10,
+        duration_ms=1500,
+    )
+    store.record_winning(
+        endpoint_guid,
+        device_friendly_name="Test Mic",
+        device_interface_name=rf"\\?\SWD#MMDEVAPI#{endpoint_guid}",
+        device_class="capture",
+        endpoint_fxproperties_sha="sha-fx",
+        combo=_make_combo(),
+        probe=probe_result,
+        detected_apos=(),
+        cascade_attempts_before_success=1,
+    )
+
+
+def _seed_capture_overrides(data_dir: Path, *, endpoint_guid: str = "EP-B") -> None:
+    """Pin a combo via the canonical ``CaptureOverrides.pin`` path."""
+    path = resolve_capture_overrides_path(data_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    overrides = CaptureOverrides(path)
+    overrides.load()
+    overrides.pin(
+        endpoint_guid,
+        device_friendly_name="Pinned Mic",
+        combo=_make_combo(),
+        source="user",
+        reason="test-seed",
+    )
+
+
+def _canned_probe_result(
+    diagnosis: Diagnosis = Diagnosis.HEALTHY,
+) -> ProbeResult:
+    return ProbeResult(
+        diagnosis=diagnosis,
+        mode=ProbeMode.COLD,
+        combo=_make_combo(),
+        vad_max_prob=None,
+        vad_mean_prob=None,
+        rms_db=-30.0,
+        callbacks_fired=10,
+        duration_ms=1500,
+        error=None,
+        remediation=RemediationHint(code="remediation.ok", severity="info"),
+    )
+
+
+@pytest.fixture()
+def data_dir(tmp_path: Path) -> Path:
+    return tmp_path
+
+
+@pytest.fixture()
+def app(data_dir: Path) -> FastAPI:
+    application = create_app(token=_TOKEN)
+    registry = MagicMock()
+    registry.is_registered.return_value = False
+    registry.resolve = AsyncMock()
+    application.state.registry = registry
+    application.state.engine_config = SimpleNamespace(
+        database=SimpleNamespace(data_dir=data_dir),
+    )
+    return application
+
+
+@pytest.fixture()
+def client(app: FastAPI) -> TestClient:
+    return TestClient(app, headers={"Authorization": f"Bearer {_TOKEN}"})
+
+
+class TestAuth:
+    """All endpoints require the Bearer token."""
+
+    @pytest.mark.parametrize(
+        ("method", "path"),
+        [
+            ("GET", "/api/voice/health"),
+            ("POST", "/api/voice/health/reprobe"),
+            ("POST", "/api/voice/health/forget"),
+            ("POST", "/api/voice/health/pin"),
+        ],
+    )
+    def test_requires_bearer_token(
+        self,
+        app: FastAPI,
+        method: str,
+        path: str,
+    ) -> None:
+        unauth = TestClient(app)
+        resp = unauth.request(method, path, json={})
+        assert resp.status_code == 401  # noqa: PLR2004
+
+
+class TestGetSnapshot:
+    """GET /api/voice/health."""
+
+    def test_empty_snapshot(self, client: TestClient, data_dir: Path) -> None:
+        resp = client.get("/api/voice/health")
+        assert resp.status_code == 200  # noqa: PLR2004
+        body = resp.json()
+        assert body["combo_store"] == []
+        assert body["overrides"] == []
+        assert body["voice_enabled"] is False
+        assert body["data_dir"] == str(data_dir)
+
+    def test_returns_store_entries(self, client: TestClient, data_dir: Path) -> None:
+        _seed_combo_store(data_dir, endpoint_guid="EP-SEED")
+        resp = client.get("/api/voice/health")
+        assert resp.status_code == 200  # noqa: PLR2004
+        body = resp.json()
+        assert len(body["combo_store"]) == 1
+        entry = body["combo_store"][0]
+        assert entry["endpoint_guid"] == "EP-SEED"
+        assert entry["winning_combo"]["sample_rate"] == 16_000  # noqa: PLR2004
+        assert entry["pinned"] is False
+
+    def test_returns_override_entries(
+        self,
+        client: TestClient,
+        data_dir: Path,
+    ) -> None:
+        _seed_capture_overrides(data_dir, endpoint_guid="EP-OVR")
+        resp = client.get("/api/voice/health")
+        assert resp.status_code == 200  # noqa: PLR2004
+        body = resp.json()
+        assert len(body["overrides"]) == 1
+        assert body["overrides"][0]["endpoint_guid"] == "EP-OVR"
+        assert body["overrides"][0]["pinned_by"] == "user"
+
+    def test_voice_enabled_when_capture_task_registered(
+        self,
+        app: FastAPI,
+        client: TestClient,
+    ) -> None:
+        app.state.registry.is_registered.return_value = True
+        resp = client.get("/api/voice/health")
+        assert resp.status_code == 200  # noqa: PLR2004
+        assert resp.json()["voice_enabled"] is True
+
+
+class TestReprobe:
+    """POST /api/voice/health/reprobe."""
+
+    def test_cold_with_explicit_combo_runs_probe(
+        self,
+        client: TestClient,
+    ) -> None:
+        probe_mock = AsyncMock(return_value=_canned_probe_result())
+        body = {
+            "endpoint_guid": "EP-X",
+            "device_index": 3,
+            "mode": "cold",
+            "combo": {
+                "host_api": "WASAPI",
+                "sample_rate": 16_000,
+                "channels": 1,
+                "sample_format": "int16",
+                "exclusive": True,
+                "auto_convert": False,
+                "frames_per_buffer": 480,
+            },
+        }
+        with patch("sovyx.dashboard.routes.voice_health.probe", probe_mock):
+            resp = client.post("/api/voice/health/reprobe", json=body)
+        assert resp.status_code == 200  # noqa: PLR2004
+        payload = resp.json()
+        assert payload["endpoint_guid"] == "EP-X"
+        assert payload["result"]["diagnosis"] == Diagnosis.HEALTHY.value
+        probe_mock.assert_awaited_once()
+        kwargs = probe_mock.await_args.kwargs
+        assert kwargs["mode"] is ProbeMode.COLD
+        assert kwargs["device_index"] == 3  # noqa: PLR2004
+        assert kwargs["vad"] is None
+
+    def test_cold_without_combo_and_no_history_returns_404(
+        self,
+        client: TestClient,
+    ) -> None:
+        resp = client.post(
+            "/api/voice/health/reprobe",
+            json={"endpoint_guid": "EP-NONE", "device_index": 0, "mode": "cold"},
+        )
+        assert resp.status_code == 404  # noqa: PLR2004
+
+    def test_cold_without_combo_uses_stored_entry(
+        self,
+        client: TestClient,
+        data_dir: Path,
+    ) -> None:
+        _seed_combo_store(data_dir, endpoint_guid="EP-HIST")
+        probe_mock = AsyncMock(return_value=_canned_probe_result())
+        with patch("sovyx.dashboard.routes.voice_health.probe", probe_mock):
+            resp = client.post(
+                "/api/voice/health/reprobe",
+                json={
+                    "endpoint_guid": "EP-HIST",
+                    "device_index": 0,
+                    "mode": "cold",
+                },
+            )
+        assert resp.status_code == 200  # noqa: PLR2004
+        combo_arg = probe_mock.await_args.kwargs["combo"]
+        assert combo_arg.sample_rate == 16_000  # noqa: PLR2004
+
+    def test_warm_without_registered_vad_returns_409(
+        self,
+        app: FastAPI,
+        client: TestClient,
+        data_dir: Path,
+    ) -> None:
+        _seed_combo_store(data_dir, endpoint_guid="EP-WARM")
+        app.state.registry.is_registered.return_value = False
+        resp = client.post(
+            "/api/voice/health/reprobe",
+            json={
+                "endpoint_guid": "EP-WARM",
+                "device_index": 0,
+                "mode": "warm",
+            },
+        )
+        assert resp.status_code == 409  # noqa: PLR2004
+
+    def test_warm_with_registered_vad_runs_probe(
+        self,
+        app: FastAPI,
+        client: TestClient,
+        data_dir: Path,
+    ) -> None:
+        _seed_combo_store(data_dir, endpoint_guid="EP-WARM-OK")
+        fake_vad = MagicMock(name="SileroVAD")
+        app.state.registry.is_registered.return_value = True
+        app.state.registry.resolve = AsyncMock(return_value=fake_vad)
+        probe_mock = AsyncMock(return_value=_canned_probe_result())
+        with patch("sovyx.dashboard.routes.voice_health.probe", probe_mock):
+            resp = client.post(
+                "/api/voice/health/reprobe",
+                json={
+                    "endpoint_guid": "EP-WARM-OK",
+                    "device_index": 0,
+                    "mode": "warm",
+                },
+            )
+        assert resp.status_code == 200  # noqa: PLR2004
+        kwargs = probe_mock.await_args.kwargs
+        assert kwargs["mode"] is ProbeMode.WARM
+        assert kwargs["vad"] is fake_vad
+
+    def test_probe_raises_returns_503(
+        self,
+        client: TestClient,
+        data_dir: Path,
+    ) -> None:
+        _seed_combo_store(data_dir, endpoint_guid="EP-BOOM")
+        probe_mock = AsyncMock(side_effect=RuntimeError("portaudio down"))
+        with patch("sovyx.dashboard.routes.voice_health.probe", probe_mock):
+            resp = client.post(
+                "/api/voice/health/reprobe",
+                json={
+                    "endpoint_guid": "EP-BOOM",
+                    "device_index": 0,
+                    "mode": "cold",
+                },
+            )
+        assert resp.status_code == 503  # noqa: PLR2004
+
+    def test_invalid_combo_returns_409(self, client: TestClient) -> None:
+        resp = client.post(
+            "/api/voice/health/reprobe",
+            json={
+                "endpoint_guid": "EP-BAD",
+                "device_index": 0,
+                "mode": "cold",
+                "combo": {
+                    "host_api": "WASAPI",
+                    "sample_rate": 9_999,  # not in ALLOWED_SAMPLE_RATES
+                    "channels": 1,
+                    "sample_format": "int16",
+                    "exclusive": True,
+                    "auto_convert": False,
+                    "frames_per_buffer": 480,
+                },
+            },
+        )
+        assert resp.status_code == 409  # noqa: PLR2004
+
+    def test_duration_out_of_range_is_422(self, client: TestClient) -> None:
+        resp = client.post(
+            "/api/voice/health/reprobe",
+            json={
+                "endpoint_guid": "EP",
+                "device_index": 0,
+                "mode": "cold",
+                "duration_ms": 99,  # below Field(ge=100)
+            },
+        )
+        assert resp.status_code == 422  # noqa: PLR2004
+
+
+class TestForget:
+    """POST /api/voice/health/forget."""
+
+    def test_absent_endpoint_returns_invalidated_false(
+        self,
+        client: TestClient,
+    ) -> None:
+        resp = client.post(
+            "/api/voice/health/forget",
+            json={"endpoint_guid": "EP-ABSENT", "reason": "test"},
+        )
+        assert resp.status_code == 200  # noqa: PLR2004
+        body = resp.json()
+        assert body["endpoint_guid"] == "EP-ABSENT"
+        assert body["invalidated"] is False
+
+    def test_present_endpoint_returns_invalidated_true(
+        self,
+        client: TestClient,
+        data_dir: Path,
+    ) -> None:
+        _seed_combo_store(data_dir, endpoint_guid="EP-KILL")
+        resp = client.post(
+            "/api/voice/health/forget",
+            json={"endpoint_guid": "EP-KILL", "reason": "rotate"},
+        )
+        assert resp.status_code == 200  # noqa: PLR2004
+        assert resp.json()["invalidated"] is True
+
+        # `ComboStore.invalidate` drops the entry outright — a fresh load sees none.
+        fresh = ComboStore(resolve_combo_store_path(data_dir))
+        fresh.load()
+        assert fresh.get("EP-KILL") is None
+
+
+class TestPin:
+    """POST /api/voice/health/pin."""
+
+    def test_happy_path_writes_override(
+        self,
+        client: TestClient,
+        data_dir: Path,
+    ) -> None:
+        body = {
+            "endpoint_guid": "EP-PIN",
+            "device_friendly_name": "Pinned Device",
+            "combo": {
+                "host_api": "WASAPI",
+                "sample_rate": 16_000,
+                "channels": 1,
+                "sample_format": "int16",
+                "exclusive": True,
+                "auto_convert": False,
+                "frames_per_buffer": 480,
+            },
+            "source": "user",
+            "reason": "dashboard-pin",
+        }
+        resp = client.post("/api/voice/health/pin", json=body)
+        assert resp.status_code == 200  # noqa: PLR2004
+        assert resp.json() == {"endpoint_guid": "EP-PIN", "pinned": True}
+
+        # The file really exists on disk with the expected content.
+        overrides_path = resolve_capture_overrides_path(data_dir)
+        assert overrides_path.exists()
+        data = json.loads(overrides_path.read_text(encoding="utf-8"))
+        assert list(data["overrides"].keys()) == ["EP-PIN"]
+        assert data["overrides"]["EP-PIN"]["pinned_by"] == "user"
+
+    def test_invalid_source_is_422(self, client: TestClient) -> None:
+        body = {
+            "endpoint_guid": "EP-X",
+            "device_friendly_name": "X",
+            "combo": {
+                "host_api": "WASAPI",
+                "sample_rate": 16_000,
+                "channels": 1,
+                "sample_format": "int16",
+                "exclusive": True,
+                "auto_convert": False,
+                "frames_per_buffer": 480,
+            },
+            "source": "malicious-actor",  # not in Literal
+        }
+        resp = client.post("/api/voice/health/pin", json=body)
+        assert resp.status_code == 422  # noqa: PLR2004
+
+    def test_invalid_combo_is_409(self, client: TestClient) -> None:
+        body = {
+            "endpoint_guid": "EP-Y",
+            "device_friendly_name": "Y",
+            "combo": {
+                "host_api": "WASAPI",
+                "sample_rate": 7_777,  # invalid
+                "channels": 1,
+                "sample_format": "int16",
+                "exclusive": True,
+                "auto_convert": False,
+                "frames_per_buffer": 480,
+            },
+            "source": "user",
+        }
+        resp = client.post("/api/voice/health/pin", json=body)
+        assert resp.status_code == 409  # noqa: PLR2004
+
+
+class TestDataDirFallback:
+    """When ``engine_config`` is absent, fall back to ``~/.sovyx``."""
+
+    def test_no_engine_config_uses_home_default(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        application = create_app(token=_TOKEN)
+        application.state.registry = MagicMock()
+        application.state.registry.is_registered.return_value = False
+        # No engine_config attribute at all.
+        with patch(
+            "sovyx.dashboard.routes.voice_health.Path.home",
+            return_value=tmp_path,
+        ):
+            client = TestClient(
+                application,
+                headers={"Authorization": f"Bearer {_TOKEN}"},
+            )
+            resp = client.get("/api/voice/health")
+        assert resp.status_code == 200  # noqa: PLR2004
+        body = resp.json()
+        assert body["data_dir"] == str(tmp_path / ".sovyx")
