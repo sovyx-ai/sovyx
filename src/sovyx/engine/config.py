@@ -191,6 +191,19 @@ class VoiceTuningConfig(BaseSettings):
     # mono (FrameNormalizer misconfigured / bypassed).
     pipeline_deaf_min_frames: int = 150  # ~4.8 s at 32 ms/frame
     pipeline_deaf_vad_max_threshold: float = 0.05
+    # Auto-bypass: when the deaf heuristic fires ``N`` heartbeats in a row
+    # on an endpoint the :mod:`sovyx.voice._apo_detector` flagged as
+    # running Windows Voice Clarity (``voice_clarity_active=True``), the
+    # orchestrator asks the capture task to reopen the stream in WASAPI
+    # exclusive mode — the only reliable client-side bypass for
+    # ``VocaEffectPack`` / ``voiceclarityep`` since early 2026.
+    # ``voice_clarity_autofix`` is a master kill-switch — set to ``False``
+    # (or ``SOVYX_TUNING__VOICE__VOICE_CLARITY_AUTOFIX=false``) to keep
+    # the detector running (it still emits ``voice_apo_detected``) but
+    # never auto-retry. The retry attempt is one-shot per pipeline
+    # session: if exclusive also fails, we do not oscillate.
+    voice_clarity_autofix: bool = True
+    deaf_warnings_before_exclusive_retry: int = 2
     capture_fallback_host_apis: list[str] = Field(
         default_factory=lambda: ["Windows WASAPI", "Windows DirectSound", "Core Audio", "ALSA"],
     )

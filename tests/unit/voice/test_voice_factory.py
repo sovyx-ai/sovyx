@@ -348,3 +348,146 @@ class TestCreateKokoroTtsResolution:
         config = captured["config"]
         assert config is not None
         assert config.language == "en-us"
+
+
+class TestVoiceClarityAutoBypassWiring:
+    """``create_voice_pipeline`` threads the APO detector into the orchestrator.
+
+    The factory must:
+
+    * Resolve ``voice_clarity_active`` via :func:`_detect_voice_clarity_active`
+      **before** constructing the pipeline (so the orchestrator knows
+      whether to arm auto-bypass on the very first deaf heartbeat).
+    * Wire an ``on_capture_bypass_requested`` callback that, when
+      invoked, calls ``capture_task.request_exclusive_restart()`` —
+      the late-binding closure must resolve to the right task even
+      though it's constructed *after* the pipeline.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_voice_clarity_active_threaded_into_pipeline(self, tmp_path) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        vad_file = tmp_path / "silero_vad.onnx"
+        vad_file.write_bytes(b"fake")
+
+        import sovyx.voice.factory as factory_mod
+
+        fake_pipeline = MagicMock()
+        fake_pipeline.start = AsyncMock()
+
+        original_create_vad = factory_mod._create_vad
+        original_create_stt = factory_mod._create_stt
+        original_create_piper = factory_mod._create_piper_tts
+        factory_mod._create_vad = lambda *a, **kw: MagicMock()
+        fake_stt = MagicMock()
+        fake_stt.initialize = AsyncMock()
+        fake_stt.state = None
+        factory_mod._create_stt = lambda *a, **kw: fake_stt
+        factory_mod._create_piper_tts = lambda *a, **kw: MagicMock()
+
+        captured_kwargs: dict[str, object] = {}
+
+        def _capture_pipeline(**kwargs: object) -> object:
+            captured_kwargs.update(kwargs)
+            return fake_pipeline
+
+        try:
+            with (
+                patch.object(
+                    factory_mod, "ensure_silero_vad", new=AsyncMock(return_value=vad_file)
+                ),
+                patch.object(factory_mod, "detect_tts_engine", return_value="piper"),
+                patch("sovyx.voice.device_enum.resolve_device", return_value=None),
+                patch.object(factory_mod, "_detect_voice_clarity_active", return_value=True),
+                patch(
+                    "sovyx.voice.pipeline._orchestrator.VoicePipeline",
+                    side_effect=_capture_pipeline,
+                ),
+            ):
+                await factory_mod.create_voice_pipeline(model_dir=tmp_path)
+
+            assert captured_kwargs["voice_clarity_active"] is True
+            # ``auto_bypass_enabled`` defaults to the tuning flag (True).
+            assert captured_kwargs["auto_bypass_enabled"] is True
+            # The callback must be awaitable — late binding via closure.
+            callback = captured_kwargs["on_capture_bypass_requested"]
+            assert callable(callback)
+        finally:
+            factory_mod._create_vad = original_create_vad
+            factory_mod._create_stt = original_create_stt
+            factory_mod._create_piper_tts = original_create_piper
+
+    @pytest.mark.asyncio()
+    async def test_bypass_callback_reaches_capture_task(self, tmp_path) -> None:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        vad_file = tmp_path / "silero_vad.onnx"
+        vad_file.write_bytes(b"fake")
+
+        import sovyx.voice.factory as factory_mod
+
+        fake_pipeline = MagicMock()
+        fake_pipeline.start = AsyncMock()
+
+        original_create_vad = factory_mod._create_vad
+        original_create_stt = factory_mod._create_stt
+        original_create_piper = factory_mod._create_piper_tts
+        factory_mod._create_vad = lambda *a, **kw: MagicMock()
+        fake_stt = MagicMock()
+        fake_stt.initialize = AsyncMock()
+        fake_stt.state = None
+        factory_mod._create_stt = lambda *a, **kw: fake_stt
+        factory_mod._create_piper_tts = lambda *a, **kw: MagicMock()
+
+        captured_kwargs: dict[str, object] = {}
+
+        def _capture_pipeline(**kwargs: object) -> object:
+            captured_kwargs.update(kwargs)
+            return fake_pipeline
+
+        try:
+            with (
+                patch.object(
+                    factory_mod, "ensure_silero_vad", new=AsyncMock(return_value=vad_file)
+                ),
+                patch.object(factory_mod, "detect_tts_engine", return_value="piper"),
+                patch("sovyx.voice.device_enum.resolve_device", return_value=None),
+                patch.object(factory_mod, "_detect_voice_clarity_active", return_value=True),
+                patch(
+                    "sovyx.voice.pipeline._orchestrator.VoicePipeline",
+                    side_effect=_capture_pipeline,
+                ),
+            ):
+                bundle = await factory_mod.create_voice_pipeline(model_dir=tmp_path)
+
+            # Swap the real capture task for a spy and invoke the callback —
+            # must delegate to ``request_exclusive_restart`` on the active task.
+            spy = MagicMock()
+            spy.request_exclusive_restart = AsyncMock()
+            bundle.capture_task.request_exclusive_restart = spy.request_exclusive_restart
+
+            callback = captured_kwargs["on_capture_bypass_requested"]
+            await callback()  # type: ignore[misc]
+
+            spy.request_exclusive_restart.assert_awaited_once()
+        finally:
+            factory_mod._create_vad = original_create_vad
+            factory_mod._create_stt = original_create_stt
+            factory_mod._create_piper_tts = original_create_piper
+
+    def test_detect_voice_clarity_active_swallows_detector_errors(self) -> None:
+        """Detector failures must never break pipeline startup.
+
+        Users on locked-down Windows installs hit registry ACLs that
+        the detector cannot read. The factory must still boot — just
+        with auto-bypass disabled (opt-in on failure).
+        """
+        import sovyx.voice.factory as factory_mod
+
+        with patch(
+            "sovyx.voice._apo_detector.detect_capture_apos",
+            side_effect=PermissionError("registry ACL"),
+        ):
+            active = factory_mod._detect_voice_clarity_active("FakeMic")
+        assert active is False

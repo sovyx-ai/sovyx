@@ -169,32 +169,16 @@ async def create_voice_pipeline(
     # ── 4. WakeWord (optional — skip if model absent) ────────
     wake = await asyncio.to_thread(_self._create_wake_word_stub)
 
-    # ── 5. Build pipeline ────────────────────────────────────
-    from sovyx.voice.pipeline._config import VoicePipelineConfig
-    from sovyx.voice.pipeline._orchestrator import VoicePipeline
-
-    config = VoicePipelineConfig(
-        mind_id=mind_id,
-        wake_word_enabled=wake_word_enabled,
-    )
-
-    pipeline = VoicePipeline(
-        config=config,
-        vad=vad,
-        wake_word=wake,
-        stt=stt,
-        tts=tts,
-        event_bus=event_bus,
-        on_perception=on_perception,
-    )
-
-    # ── 6. Capture task (not started yet) ────────────────────
-    # Resolve the requested device against the live PortAudio list so
-    # the capture task knows both its index AND its host API label.
-    # Preferring WASAPI here is what actually fixes the "silent mic"
-    # bug — see :mod:`sovyx.voice.device_enum` for the root-cause.
+    # ── 5. Resolve device + detect capture APOs BEFORE the pipeline ──
+    # The detector result (``voice_clarity_active``) is threaded into
+    # the orchestrator so the deaf-warning path can decide whether to
+    # auto-trigger WASAPI exclusive mode. Resolving the device first
+    # lets the detector match by canonical device name.
+    from sovyx.engine.config import VoiceTuningConfig
     from sovyx.voice._capture_task import AudioCaptureTask
     from sovyx.voice.device_enum import resolve_device
+    from sovyx.voice.pipeline._config import VoicePipelineConfig
+    from sovyx.voice.pipeline._orchestrator import VoicePipeline
 
     resolved = await asyncio.to_thread(
         lambda: resolve_device(
@@ -210,11 +194,54 @@ async def create_voice_pipeline(
         effective_index = resolved.index
         effective_host_api = resolved.host_api_name
 
+    voice_clarity_active = await asyncio.to_thread(
+        _detect_voice_clarity_active,
+        resolved.name if resolved is not None else None,
+    )
+
+    tuning = VoiceTuningConfig()
+
+    # ── 6. Build pipeline with auto-bypass hooks ──────────────
+    config = VoicePipelineConfig(
+        mind_id=mind_id,
+        wake_word_enabled=wake_word_enabled,
+    )
+
+    # The bypass callback needs to call ``capture_task.request_exclusive_restart()``
+    # but capture_task is built after the pipeline. Use a one-slot holder
+    # that the closure reads at invocation time (late binding) rather than
+    # a setter API on VoicePipeline — keeps the public surface small and
+    # the dependency direction clean (pipeline does not know about
+    # AudioCaptureTask type).
+    capture_holder: dict[str, AudioCaptureTask] = {}
+
+    async def _bypass_callback() -> None:
+        task = capture_holder.get("task")
+        if task is None:
+            logger.debug("voice_apo_bypass_callback_no_capture_task")
+            return
+        await task.request_exclusive_restart()
+
+    pipeline = VoicePipeline(
+        config=config,
+        vad=vad,
+        wake_word=wake,
+        stt=stt,
+        tts=tts,
+        event_bus=event_bus,
+        on_perception=on_perception,
+        on_capture_bypass_requested=_bypass_callback,
+        voice_clarity_active=voice_clarity_active,
+        auto_bypass_enabled=tuning.voice_clarity_autofix,
+        auto_bypass_threshold=tuning.deaf_warnings_before_exclusive_retry,
+    )
+
     capture_task = AudioCaptureTask(
         pipeline,
         input_device=effective_index,
         host_api_name=effective_host_api,
     )
+    capture_holder["task"] = capture_task
 
     await pipeline.start()
 
@@ -226,9 +253,29 @@ async def create_voice_pipeline(
         mind_id=mind_id,
         input_device=effective_index if effective_index is not None else "default",
         host_api=effective_host_api or "unknown",
+        voice_clarity_active=voice_clarity_active,
+        auto_bypass_enabled=tuning.voice_clarity_autofix,
     )
     _emit_capture_apo_detection(resolved_name=resolved.name if resolved is not None else None)
     return VoiceBundle(pipeline=pipeline, capture_task=capture_task)
+
+
+def _detect_voice_clarity_active(resolved_name: str | None) -> bool:
+    """Return True when the active endpoint has a known Voice Clarity APO.
+
+    Small synchronous helper so the async factory can offload the
+    registry walk to ``asyncio.to_thread`` without duplicating error
+    handling. Never raises — a broken registry read falls back to
+    ``False`` (auto-bypass stays opt-in on failure).
+    """
+    try:
+        from sovyx.voice._apo_detector import detect_capture_apos, find_endpoint_report
+
+        report = find_endpoint_report(detect_capture_apos(), device_name=resolved_name)
+    except Exception:  # noqa: BLE001 — detector must never break startup
+        logger.debug("voice_clarity_detection_failed", exc_info=True)
+        return False
+    return bool(report is not None and report.voice_clarity_active)
 
 
 def _emit_capture_apo_detection(*, resolved_name: str | None) -> None:

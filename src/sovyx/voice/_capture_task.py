@@ -440,6 +440,96 @@ class AudioCaptureTask:
 
     # -- Internals ------------------------------------------------------------
 
+    async def request_exclusive_restart(self) -> None:
+        """Re-open the capture stream in WASAPI exclusive mode.
+
+        Called by the orchestrator when it decides that a capture-side
+        APO (Windows Voice Clarity / VocaEffectPack) is destroying the
+        microphone signal — exclusive mode bypasses the entire APO chain
+        by talking to the IAudioClient directly. The current stream is
+        torn down first; on failure the method logs and returns without
+        raising so a single heartbeat loop iteration does not crash the
+        pipeline.
+
+        Idempotent — safe to call while stopped; in that case it is a
+        no-op. The orchestrator already latches the request so the
+        callback fires at most once per session.
+        """
+        if not self._running:
+            logger.debug("audio_capture_exclusive_restart_skipped_not_running")
+            return
+
+        from sovyx.voice._stream_opener import StreamOpenError, open_input_stream
+
+        base_tuning = self._tuning if self._tuning is not None else _VoiceTuning()
+        exclusive_tuning = base_tuning.model_copy(update={"capture_wasapi_exclusive": True})
+        entry = _resolve_input_entry(
+            input_device=self._input_device,
+            enumerate_fn=self._enumerate_fn,
+            host_api_name=self._host_api_name,
+        )
+        logger.warning(
+            "audio_capture_exclusive_restart_begin",
+            device=self._input_device,
+            host_api=self._host_api_name,
+        )
+
+        # Tear down the existing stream on the PortAudio thread before
+        # we try to grab the device exclusively — otherwise WASAPI
+        # returns AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED on our own stream.
+        await asyncio.to_thread(self._close_stream)
+        # Clear any residual frames from the shared-mode callback.
+        while not self._queue.empty():
+            with contextlib.suppress(asyncio.QueueEmpty):
+                self._queue.get_nowait()
+
+        try:
+            stream, info = await open_input_stream(
+                device=entry,
+                target_rate=self._sample_rate,
+                blocksize=self._blocksize,
+                callback=self._audio_callback,
+                tuning=exclusive_tuning,
+                sd_module=self._sd_module,
+                enumerate_fn=self._enumerate_fn,
+                validate_fn=None,
+            )
+        except StreamOpenError as exc:
+            logger.error(
+                "audio_capture_exclusive_restart_failed",
+                error=str(exc),
+                device=self._input_device,
+                host_api=self._host_api_name,
+            )
+            # Fall back to shared mode so the pipeline keeps running
+            # (deaf, but alive — the dashboard banner will still guide
+            # the user through the manual APO-disable path).
+            try:
+                await self._reopen_stream_after_device_error()
+            except Exception as fallback_exc:  # noqa: BLE001
+                logger.error(
+                    "audio_capture_exclusive_fallback_failed",
+                    error=str(fallback_exc),
+                )
+            return
+
+        self._stream = stream
+        self._sample_rate = info.sample_rate
+        self._input_device = info.device_index
+        self._host_api_name = info.host_api
+        self._normalizer = FrameNormalizer(
+            source_rate=info.sample_rate,
+            source_channels=info.channels,
+        )
+        logger.warning(
+            "audio_capture_exclusive_restart_ok",
+            device=self._input_device,
+            host_api=self._host_api_name,
+            sample_rate=self._sample_rate,
+            channels=info.channels,
+            exclusive_used=info.exclusive_used,
+        )
+
     async def _reopen_stream_after_device_error(self) -> None:
         """Reopen the stream after a ``sd.PortAudioError`` in the consume loop.
 

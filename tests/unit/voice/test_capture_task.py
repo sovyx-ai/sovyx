@@ -577,3 +577,112 @@ class TestSilenceValidatorModes:
         peak_db = await task._validate_stream()  # noqa: SLF001
 
         assert peak_db < -100.0
+
+
+class TestExclusiveRestart:
+    """``request_exclusive_restart`` tears down + re-opens with exclusive=True.
+
+    Regression for the Razer BlackShark V2 Pro + Windows Voice Clarity
+    (VocaEffectPack) scenario — shared mode delivers a normalized signal
+    that has been DSP'd to silence by the capture APO, so the deaf
+    orchestrator asks us to re-open in WASAPI exclusive. Exclusive mode
+    bypasses the entire APO chain at the IAudioClient level.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_restart_tears_down_and_reopens_with_exclusive_settings(self) -> None:
+        pipeline = MagicMock()
+        pipeline.feed_frame = AsyncMock()
+
+        streams: list[MagicMock] = []
+        stream_kwargs: list[dict[str, Any]] = []
+
+        def stream_factory(**kwargs: Any) -> MagicMock:
+            stream = MagicMock()
+            streams.append(stream)
+            stream_kwargs.append(kwargs)
+            return stream
+
+        sd = _fake_sd()
+        sd.InputStream = stream_factory  # type: ignore[attr-defined]
+        entry = _input_entry(index=5, rate=16_000, host_api="Windows WASAPI")
+
+        task = AudioCaptureTask(
+            pipeline,
+            input_device=5,
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [entry],
+        )
+        try:
+            await task.start()
+            initial_stream = streams[0]
+
+            await task.request_exclusive_restart()
+
+            assert len(streams) >= 2  # noqa: PLR2004
+            initial_stream.stop.assert_called()
+            initial_stream.close.assert_called()
+            # Extract the first kwargs dict whose extra_settings carries
+            # exclusive=True — that's the restart call.
+            exclusive_calls = [
+                kw for kw in stream_kwargs if getattr(kw.get("extra_settings"), "exclusive", False)
+            ]
+            assert len(exclusive_calls) == 1
+            assert exclusive_calls[0]["device"] == 5  # noqa: PLR2004
+        finally:
+            await task.stop()
+
+    @pytest.mark.asyncio()
+    async def test_restart_noop_when_not_running(self) -> None:
+        task = AudioCaptureTask(MagicMock())
+        # Must not raise or try to tear down anything.
+        await task.request_exclusive_restart()
+        assert task.is_running is False
+
+    @pytest.mark.asyncio()
+    async def test_restart_failure_falls_back_to_shared(self) -> None:
+        """If exclusive open fails, we must keep running in shared mode.
+
+        Staying deaf is better than going *down* — the user still has
+        the dashboard banner + CLI doctor to guide them through manual
+        APO disable.
+        """
+        pipeline = MagicMock()
+        pipeline.feed_frame = AsyncMock()
+
+        streams: list[MagicMock] = []
+        attempt: dict[str, int] = {"n": 0}
+
+        def stream_factory(**kwargs: Any) -> MagicMock:  # noqa: ARG001
+            attempt["n"] += 1
+            # First call = shared start (ok).
+            # Second call = exclusive attempt (fail — simulate APO conflict).
+            # Third call = shared fallback (ok).
+            if attempt["n"] == 2:  # noqa: PLR2004
+                raise sd.PortAudioError("exclusive denied")  # type: ignore[attr-defined]
+            stream = MagicMock()
+            streams.append(stream)
+            return stream
+
+        sd = _fake_sd()
+        sd.InputStream = stream_factory  # type: ignore[attr-defined]
+        entry = _input_entry(index=5, rate=16_000, host_api="Windows WASAPI")
+
+        task = AudioCaptureTask(
+            pipeline,
+            input_device=5,
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [entry],
+        )
+        try:
+            await task.start()
+            await task.request_exclusive_restart()
+            # Should have retried in shared mode — at least 2 successful streams.
+            assert len(streams) >= 2  # noqa: PLR2004
+            assert task.is_running is True
+        finally:
+            await task.stop()

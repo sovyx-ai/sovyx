@@ -50,6 +50,7 @@ _TEXT_MIN_WORDS = 3  # Min words before TTS synthesis
 _HEARTBEAT_INTERVAL_S = _VoiceTuning().pipeline_heartbeat_interval_seconds
 _DEAF_MIN_FRAMES = _VoiceTuning().pipeline_deaf_min_frames
 _DEAF_VAD_MAX_THRESHOLD = _VoiceTuning().pipeline_deaf_vad_max_threshold
+_DEAF_WARNINGS_BEFORE_EXCLUSIVE_RETRY = _VoiceTuning().deaf_warnings_before_exclusive_retry
 
 
 class VoicePipeline:
@@ -87,6 +88,11 @@ class VoicePipeline:
         tts: TTSEngine,
         event_bus: EventBus | None = None,
         on_perception: Callable[[str, str], Awaitable[None]] | None = None,
+        on_capture_bypass_requested: Callable[[], Awaitable[None]] | None = None,
+        *,
+        voice_clarity_active: bool = False,
+        auto_bypass_enabled: bool = False,
+        auto_bypass_threshold: int = _DEAF_WARNINGS_BEFORE_EXCLUSIVE_RETRY,
     ) -> None:
         validate_config(config)
         self._config = config
@@ -96,6 +102,22 @@ class VoicePipeline:
         self._tts = tts
         self._event_bus = event_bus
         self._on_perception = on_perception
+        self._on_capture_bypass_requested = on_capture_bypass_requested
+
+        # Voice Clarity auto-bypass context. The factory resolves
+        # ``voice_clarity_active`` from :mod:`sovyx.voice._apo_detector`
+        # at pipeline creation; we cache it so the deaf-warning hook
+        # can decide *fast* without re-reading the registry every
+        # heartbeat. ``auto_bypass_enabled`` is the master kill switch
+        # (``VoiceTuningConfig.voice_clarity_autofix``). ``_bypass_requested``
+        # is the one-shot latch — after we ask the capture task to
+        # re-open in exclusive mode (success or failure), we do not
+        # ask again in this session to prevent oscillation.
+        self._voice_clarity_active = voice_clarity_active
+        self._auto_bypass_enabled = auto_bypass_enabled
+        self._auto_bypass_threshold = max(1, auto_bypass_threshold)
+        self._bypass_requested = False
+        self._deaf_warnings_consecutive = 0
 
         # State
         self._state = VoicePipelineState.IDLE
@@ -611,12 +633,16 @@ class VoicePipeline:
             max_vad_probability=round(self._max_vad_prob_since_heartbeat, 3),
             frames_processed=self._vad_frames_since_heartbeat,
         )
-        if (
+        is_deaf = (
             self._vad_frames_since_heartbeat >= _DEAF_MIN_FRAMES
             and self._max_vad_prob_since_heartbeat < _DEAF_VAD_MAX_THRESHOLD
-        ):
+        )
+        if is_deaf:
             # Audio is arriving but VAD is stuck near zero — this is the
-            # canonical fingerprint of "frames are not 16 kHz mono".
+            # canonical fingerprint of "frames are not 16 kHz mono" *or*
+            # a capture APO (e.g. Windows Voice Clarity / VocaEffectPack)
+            # zeroing out the signal before it reaches the engine.
+            self._deaf_warnings_consecutive += 1
             logger.warning(
                 "voice_pipeline_deaf_warning",
                 mind_id=self._config.mind_id,
@@ -624,15 +650,86 @@ class VoicePipeline:
                 max_vad_probability=round(self._max_vad_prob_since_heartbeat, 3),
                 frames_processed=self._vad_frames_since_heartbeat,
                 vad_max_threshold=_DEAF_VAD_MAX_THRESHOLD,
+                consecutive_deaf_warnings=self._deaf_warnings_consecutive,
+                voice_clarity_active=self._voice_clarity_active,
                 hint=(
                     "Orchestrator received frames but VAD probability stayed "
                     "below threshold — check FrameNormalizer source_rate/channels "
                     "and audio_capture_resample_active logs."
                 ),
             )
+            self._maybe_request_capture_bypass()
+        else:
+            # Reset the consecutive counter so a single healthy heartbeat
+            # between two deaf ones does not trigger the auto-bypass.
+            self._deaf_warnings_consecutive = 0
         self._last_heartbeat_monotonic = now
         self._max_vad_prob_since_heartbeat = 0.0
         self._vad_frames_since_heartbeat = 0
+
+    def _maybe_request_capture_bypass(self) -> None:
+        """Trigger Voice Clarity auto-bypass if the conditions are met.
+
+        Called from the heartbeat path after a deaf warning is logged.
+        All four guards must hold:
+
+        * ``auto_bypass_enabled`` — master kill switch (tuning flag).
+        * ``voice_clarity_active`` — detector confirmed a capture APO on
+          the active endpoint (usually VocaEffectPack / Voice Clarity).
+        * ``not _bypass_requested`` — one-shot latch per session.
+        * ``_deaf_warnings_consecutive >= _auto_bypass_threshold`` —
+          require multiple back-to-back deaf heartbeats so a single
+          transient (e.g. device switch) does not flip us to exclusive.
+
+        The callback (``on_capture_bypass_requested``) re-opens the
+        capture stream in WASAPI exclusive mode, which bypasses the
+        entire APO chain and restores a clean signal to the pipeline.
+        """
+        if not self._auto_bypass_enabled:
+            return
+        if not self._voice_clarity_active:
+            return
+        if self._bypass_requested:
+            return
+        if self._deaf_warnings_consecutive < self._auto_bypass_threshold:
+            return
+        if self._on_capture_bypass_requested is None:
+            return
+
+        self._bypass_requested = True
+        logger.warning(
+            "voice_apo_bypass_activated",
+            mind_id=self._config.mind_id,
+            reason="voice_clarity_deaf_pipeline",
+            consecutive_deaf_warnings=self._deaf_warnings_consecutive,
+            threshold=self._auto_bypass_threshold,
+            action="reopen_capture_wasapi_exclusive",
+        )
+        # Schedule the restart on the running loop — we must not await
+        # here because this helper runs on the per-frame hot path.
+        asyncio.create_task(self._invoke_bypass_callback())
+
+    async def _invoke_bypass_callback(self) -> None:
+        """Invoke the capture-bypass callback with full error isolation.
+
+        A failure here must never crash the pipeline — if the exclusive
+        re-open does not work we stay in shared mode (the latch is
+        already set so we will not retry), log the failure, and let the
+        user fall back to the manual APO-disable guidance in the
+        dashboard / CLI doctor output.
+        """
+        callback = self._on_capture_bypass_requested
+        if callback is None:
+            return
+        try:
+            await callback()
+        except Exception as exc:  # noqa: BLE001 — callback is user-supplied; we intentionally shield the pipeline from any failure mode
+            logger.error(
+                "voice_apo_bypass_failed",
+                mind_id=self._config.mind_id,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
 
     async def _emit(self, event: object) -> None:
         """Emit an event via the event bus (if available)."""
