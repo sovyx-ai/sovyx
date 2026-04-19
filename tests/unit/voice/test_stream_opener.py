@@ -669,3 +669,268 @@ class TestStreamOpenAttemptsMetric:
         assert "device_index" not in event
         assert "sample_rate" not in event
         assert "channels" not in event
+
+
+# ---------------------------------------------------------------------------
+# WASAPI exclusive mode — bypasses the Windows APO chain (Voice Clarity etc.)
+# ---------------------------------------------------------------------------
+
+
+class TestWasapiExclusiveMode:
+    """Exclusive-mode capture bypasses every system-wide APO (Voice Clarity,
+    AGC, Voice Isolation, VocaEffectPack, ...) — the only durable fix for
+    the "mic captures audio but VAD never fires" bug class on Windows 11.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_exclusive_flag_sets_wasapi_settings_exclusive_true(self) -> None:
+        """When ``capture_wasapi_exclusive=True``, WasapiSettings.exclusive is set."""
+        from sovyx.voice._stream_opener import open_input_stream
+
+        sd = _fake_sd_module()
+        captured: list[dict[str, Any]] = []
+
+        def stream_factory(**kwargs: Any) -> MagicMock:
+            captured.append(kwargs)
+            stream = MagicMock()
+            stream.start = MagicMock()
+            return stream
+
+        sd.InputStream = stream_factory  # type: ignore[attr-defined]
+
+        tuning = VoiceTuningConfig(capture_wasapi_exclusive=True)
+        _stream, info = await open_input_stream(
+            device=_wasapi_entry(channels=2, rate=48_000),
+            target_rate=16_000,
+            blocksize=512,
+            callback=lambda *_, **__: None,
+            tuning=tuning,
+            sd_module=sd,
+            enumerate_fn=lambda: [_wasapi_entry(channels=2, rate=48_000)],
+            validate_fn=None,
+        )
+        settings = captured[0]["extra_settings"]
+        assert settings is not None
+        assert settings.exclusive is True
+        assert info.exclusive_used is True
+
+    @pytest.mark.asyncio()
+    async def test_exclusive_off_by_default_never_sets_exclusive_flag(self) -> None:
+        """Zero-regression guarantee: default config never enables exclusive."""
+        from sovyx.voice._stream_opener import open_input_stream
+
+        sd = _fake_sd_module()
+        captured: list[dict[str, Any]] = []
+
+        def stream_factory(**kwargs: Any) -> MagicMock:
+            captured.append(kwargs)
+            return MagicMock()
+
+        sd.InputStream = stream_factory  # type: ignore[attr-defined]
+
+        _stream, info = await open_input_stream(
+            device=_wasapi_entry(channels=1, rate=16_000),
+            target_rate=16_000,
+            blocksize=512,
+            callback=lambda *_, **__: None,
+            tuning=VoiceTuningConfig(),
+            sd_module=sd,
+            enumerate_fn=lambda: [_wasapi_entry(channels=1, rate=16_000)],
+            validate_fn=None,
+        )
+        for kwargs in captured:
+            settings = kwargs.get("extra_settings")
+            if settings is not None:
+                assert settings.exclusive is False
+        assert info.exclusive_used is False
+
+    @pytest.mark.asyncio()
+    async def test_non_wasapi_ignores_exclusive_flag(self) -> None:
+        """Exclusive is WASAPI-only — DirectSound/MME must never see it."""
+        from sovyx.voice._stream_opener import open_input_stream
+
+        sd = _fake_sd_module()
+        captured: list[dict[str, Any]] = []
+
+        def stream_factory(**kwargs: Any) -> MagicMock:
+            captured.append(kwargs)
+            return MagicMock()
+
+        sd.InputStream = stream_factory  # type: ignore[attr-defined]
+
+        tuning = VoiceTuningConfig(capture_wasapi_exclusive=True)
+        _stream, info = await open_input_stream(
+            device=_directsound_entry(channels=1, rate=44_100),
+            target_rate=16_000,
+            blocksize=512,
+            callback=lambda *_, **__: None,
+            tuning=tuning,
+            sd_module=sd,
+            enumerate_fn=lambda: [_directsound_entry(channels=1, rate=44_100)],
+            validate_fn=None,
+        )
+        assert captured[0].get("extra_settings") is None
+        assert info.exclusive_used is False
+
+    @pytest.mark.asyncio()
+    async def test_exclusive_denied_falls_back_to_shared(self) -> None:
+        """``AUDCLNT_E_DEVICE_IN_USE`` on exclusive → opener switches to shared."""
+        from sovyx.voice._stream_opener import open_input_stream
+
+        sd = _fake_sd_module()
+        attempts_seen: list[bool] = []  # True=exclusive was on this attempt
+
+        def stream_factory(**kwargs: Any) -> MagicMock:
+            extra = kwargs.get("extra_settings")
+            is_excl = bool(extra and getattr(extra, "exclusive", False))
+            attempts_seen.append(is_excl)
+            if is_excl:
+                raise RuntimeError("'AUDCLNT_E_DEVICE_IN_USE'")
+            stream = MagicMock()
+            stream.start = MagicMock()
+            return stream
+
+        sd.InputStream = stream_factory  # type: ignore[attr-defined]
+
+        tuning = VoiceTuningConfig(capture_wasapi_exclusive=True)
+        _stream, info = await open_input_stream(
+            device=_wasapi_entry(channels=1, rate=16_000),
+            target_rate=16_000,
+            blocksize=512,
+            callback=lambda *_, **__: None,
+            tuning=tuning,
+            sd_module=sd,
+            enumerate_fn=lambda: [_wasapi_entry(channels=1, rate=16_000)],
+            validate_fn=None,
+        )
+        assert True in attempts_seen, "opener must have tried exclusive first"
+        assert False in attempts_seen, "opener must have fallen back to shared"
+        assert info.exclusive_used is False
+        failed_excl = [a for a in info.attempts if a.exclusive and a.error_code is not None]
+        assert len(failed_excl) >= 1
+
+    @pytest.mark.asyncio()
+    async def test_exclusive_policy_denied_emits_policy_event(self, caplog: Any) -> None:
+        """``AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED`` is flagged distinctly from
+        device-busy so operators don't chase a phantom "other app holding mic".
+        """
+        import logging
+
+        from sovyx.voice._stream_opener import open_input_stream
+
+        sd = _fake_sd_module()
+
+        def stream_factory(**kwargs: Any) -> MagicMock:
+            extra = kwargs.get("extra_settings")
+            if extra and getattr(extra, "exclusive", False):
+                raise RuntimeError("'AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED'")
+            stream = MagicMock()
+            stream.start = MagicMock()
+            return stream
+
+        sd.InputStream = stream_factory  # type: ignore[attr-defined]
+
+        tuning = VoiceTuningConfig(capture_wasapi_exclusive=True)
+        with caplog.at_level(logging.WARNING, logger="sovyx.voice._stream_opener"):
+            await open_input_stream(
+                device=_wasapi_entry(channels=1, rate=16_000),
+                target_rate=16_000,
+                blocksize=512,
+                callback=lambda *_, **__: None,
+                tuning=tuning,
+                sd_module=sd,
+                enumerate_fn=lambda: [_wasapi_entry(channels=1, rate=16_000)],
+                validate_fn=None,
+            )
+        events = [rec.message for rec in caplog.records]
+        assert any("voice_stream_exclusive_mode_fallback" in e for e in events)
+        assert any("voice_exclusive_mode_disabled_by_policy" in e for e in events)
+
+    @pytest.mark.asyncio()
+    async def test_exclusive_success_emits_opened_event(self, caplog: Any) -> None:
+        """Successful exclusive open emits the dedicated ``_opened`` event."""
+        import logging
+
+        from sovyx.voice._stream_opener import open_input_stream
+
+        sd = _fake_sd_module()
+        sd.InputStream = MagicMock(return_value=MagicMock())  # type: ignore[attr-defined]
+
+        tuning = VoiceTuningConfig(capture_wasapi_exclusive=True)
+        with caplog.at_level(logging.INFO, logger="sovyx.voice._stream_opener"):
+            _stream, info = await open_input_stream(
+                device=_wasapi_entry(channels=1, rate=16_000),
+                target_rate=16_000,
+                blocksize=512,
+                callback=lambda *_, **__: None,
+                tuning=tuning,
+                sd_module=sd,
+                enumerate_fn=lambda: [_wasapi_entry(channels=1, rate=16_000)],
+                validate_fn=None,
+            )
+        assert info.exclusive_used is True
+        events = [rec.message for rec in caplog.records]
+        assert any("voice_stream_exclusive_mode_opened" in e for e in events)
+
+    @pytest.mark.asyncio()
+    async def test_old_portaudio_rejects_exclusive_kwarg_opens_shared(self) -> None:
+        """If WasapiSettings(**kwargs) raises TypeError, combo is silently dropped."""
+        from sovyx.voice._stream_opener import open_input_stream
+
+        sd = _fake_sd_module()
+
+        class _OldWasapiSettings:
+            def __init__(self, *, auto_convert: bool = False) -> None:
+                self.auto_convert = auto_convert
+                self.exclusive = False
+
+        sd.WasapiSettings = _OldWasapiSettings  # type: ignore[attr-defined]
+
+        captured: list[dict[str, Any]] = []
+
+        def stream_factory(**kwargs: Any) -> MagicMock:
+            captured.append(kwargs)
+            return MagicMock()
+
+        sd.InputStream = stream_factory  # type: ignore[attr-defined]
+
+        tuning = VoiceTuningConfig(capture_wasapi_exclusive=True)
+        _stream, info = await open_input_stream(
+            device=_wasapi_entry(channels=1, rate=16_000),
+            target_rate=16_000,
+            blocksize=512,
+            callback=lambda *_, **__: None,
+            tuning=tuning,
+            sd_module=sd,
+            enumerate_fn=lambda: [_wasapi_entry(channels=1, rate=16_000)],
+            validate_fn=None,
+        )
+        # Old WasapiSettings that rejects ``exclusive`` falls through to a
+        # shared-mode attempt on the next combo iteration.
+        assert info.exclusive_used is False
+        for kwargs in captured:
+            extra = kwargs.get("extra_settings")
+            if extra is not None:
+                assert getattr(extra, "exclusive", False) is False
+
+    def test_open_attempt_exposes_exclusive_field(self) -> None:
+        """``OpenAttempt`` must carry an ``exclusive`` flag for fallback tracking."""
+        from sovyx.voice._stream_opener import OpenAttempt
+
+        attempt = OpenAttempt(
+            host_api="Windows WASAPI",
+            device_index=18,
+            sample_rate=16_000,
+            channels=1,
+            auto_convert=True,
+            exclusive=True,
+        )
+        assert attempt.exclusive is True
+        default = OpenAttempt(
+            host_api="MME",
+            device_index=1,
+            sample_rate=44_100,
+            channels=1,
+            auto_convert=False,
+        )
+        assert default.exclusive is False

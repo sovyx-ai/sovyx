@@ -86,6 +86,10 @@ class OpenAttempt:
         sample_rate: Rate passed to the stream constructor.
         channels: Channel count passed to the stream constructor.
         auto_convert: Whether ``WasapiSettings(auto_convert=True)`` was set.
+        exclusive: Whether ``WasapiSettings(exclusive=True)`` was set —
+            bypasses the Windows audio engine (and therefore every
+            system-wide APO such as Voice Clarity, AGC, Voice Isolation).
+            Always ``False`` on non-WASAPI host APIs.
         error_code: ``None`` on success, otherwise the classified
             :class:`ErrorCode` for the raised exception.
         error_detail: Raw exception message (best-effort English) or
@@ -97,6 +101,7 @@ class OpenAttempt:
     sample_rate: int
     channels: int
     auto_convert: bool
+    exclusive: bool = False
     error_code: ErrorCode | None = None
     error_detail: str = ""
 
@@ -116,6 +121,7 @@ class StreamInfo:
     channels: int
     dtype: str
     auto_convert_used: bool
+    exclusive_used: bool = False
     fallback_depth: int = 0
     attempts: tuple[OpenAttempt, ...] = field(default_factory=tuple)
 
@@ -249,13 +255,19 @@ async def open_input_stream(
                     )
                     continue
 
+            # The winning attempt is whatever ``_try_open_input`` just appended —
+            # its ``auto_convert`` / ``exclusive`` fields are the *effective*
+            # values (accounting for WasapiSettings being dropped on older
+            # PortAudio builds), not the combo's nominal request.
+            winning = attempts[-1]
             info = StreamInfo(
                 host_api=entry.host_api_name,
                 device_index=entry.index,
                 sample_rate=combo.sample_rate,
                 channels=combo.channels,
                 dtype=dtype,
-                auto_convert_used=combo.auto_convert,
+                auto_convert_used=winning.auto_convert,
+                exclusive_used=winning.exclusive,
                 fallback_depth=depth if len(attempts) == 1 else len(attempts) - 1,
                 attempts=tuple(attempts),
             )
@@ -266,9 +278,11 @@ async def open_input_stream(
                 sample_rate=info.sample_rate,
                 channels=info.channels,
                 auto_convert=info.auto_convert_used,
+                exclusive=info.exclusive_used,
                 fallback_depth=info.fallback_depth,
                 total_attempts=len(attempts),
             )
+            _emit_exclusive_mode_events(info, attempts)
             _record_attempts(attempts, kind="input")
             return stream, info
 
@@ -448,6 +462,7 @@ class _Combo:
     sample_rate: int
     channels: int
     auto_convert: bool
+    exclusive: bool = False
 
 
 def _import_sounddevice() -> Any:  # noqa: ANN401
@@ -502,7 +517,28 @@ def _input_combos(
     target_rate: int,
     tuning: VoiceTuningConfig,
 ) -> list[_Combo]:
-    """Enumerate (rate, channels, auto_convert) combos for a single device."""
+    """Enumerate (exclusive, auto_convert, channels, rate) combos for a device.
+
+    Ordering rationale — exclusive *first* when the tuning flag is on:
+        Exclusive mode bypasses the Windows audio engine entirely,
+        sidestepping every system-wide capture APO (Voice Clarity,
+        AGC, AEC, Noise Suppression, Voice Isolation, Voice Focus,
+        3rd-party packs such as VocaEffectPack). That is the *whole
+        point* of the flag — if a user (or the auto-bypass heuristic)
+        turned it on, they want the APO chain out of the way. Trying
+        shared mode first would silently keep the problematic chain.
+
+        Inside exclusive, we still iterate auto_convert — the kwarg is
+        a no-op under exclusive per the PortAudio/sounddevice docs, but
+        enumerating both keeps the state-space contiguous with shared
+        mode and simplifies the downstream fallback tracker.
+
+        When all exclusive combos fail (device held by another app,
+        driver rejects the requested format in exclusive, or Windows
+        policy denies exclusive access), the opener iterates into
+        shared combos — preserving the pre-existing behaviour as a
+        safety net.
+    """
     rates = list(dict.fromkeys([target_rate, entry.default_samplerate]))
     rates = [r for r in rates if r > 0]
 
@@ -513,12 +549,21 @@ def _input_combos(
 
     is_wasapi = entry.host_api_name == _WASAPI_HOST_API
     ac_opts = [True, False] if is_wasapi and tuning.capture_wasapi_auto_convert else [False]
+    excl_opts = [True, False] if is_wasapi and tuning.capture_wasapi_exclusive else [False]
 
     combos: list[_Combo] = []
-    for ac in ac_opts:
-        for ch in channel_opts:
-            for rate in rates:
-                combos.append(_Combo(sample_rate=rate, channels=ch, auto_convert=ac))
+    for excl in excl_opts:
+        for ac in ac_opts:
+            for ch in channel_opts:
+                for rate in rates:
+                    combos.append(
+                        _Combo(
+                            sample_rate=rate,
+                            channels=ch,
+                            auto_convert=ac,
+                            exclusive=excl,
+                        ),
+                    )
     return combos
 
 
@@ -531,7 +576,17 @@ async def _try_open_input(
     dtype: str,
     callback: Callable[..., None],
 ) -> tuple[Any, OpenAttempt]:
-    """Attempt a single ``sd.InputStream`` construction + ``start()``."""
+    """Attempt a single ``sd.InputStream`` construction + ``start()``.
+
+    The ``auto_convert`` / ``exclusive`` flags recorded on the returned
+    :class:`OpenAttempt` reflect what was *effectively* applied — not
+    what the combo asked for. When :func:`_build_wasapi_settings`
+    returns ``None`` (old PortAudio rejecting the kwargs, non-WASAPI
+    host API, ...) the effective values collapse to ``False`` so the
+    fallback tracker doesn't see a phantom exclusive attempt and the
+    ``voice_stream_exclusive_mode_opened`` event does not fire when
+    exclusive was never actually engaged.
+    """
     kwargs: dict[str, Any] = {
         "samplerate": combo.sample_rate,
         "channels": combo.channels,
@@ -544,6 +599,9 @@ async def _try_open_input(
     if extra is not None:
         kwargs["extra_settings"] = extra
 
+    eff_auto_convert = combo.auto_convert if extra is not None else False
+    eff_exclusive = combo.exclusive if extra is not None else False
+
     try:
         stream = await asyncio.to_thread(lambda: sd.InputStream(**kwargs))
         await asyncio.to_thread(stream.start)
@@ -552,7 +610,11 @@ async def _try_open_input(
         # ``extra_settings`` itself may be rejected on older PortAudio
         # builds with ``TypeError: unexpected keyword argument``. Retry
         # once without it so the outer loop gets a chance to iterate.
-        if combo.auto_convert and isinstance(exc, TypeError) and "extra_settings" in str(exc):
+        if (
+            (combo.auto_convert or combo.exclusive)
+            and isinstance(exc, TypeError)
+            and "extra_settings" in str(exc)
+        ):
             try:
                 kwargs.pop("extra_settings", None)
                 stream = await asyncio.to_thread(lambda: sd.InputStream(**kwargs))
@@ -565,6 +627,7 @@ async def _try_open_input(
                     sample_rate=combo.sample_rate,
                     channels=combo.channels,
                     auto_convert=False,
+                    exclusive=False,
                     error_code=classified.code,
                     error_detail=classified.detail,
                 )
@@ -574,13 +637,15 @@ async def _try_open_input(
                 sample_rate=combo.sample_rate,
                 channels=combo.channels,
                 auto_convert=False,
+                exclusive=False,
             )
         return None, OpenAttempt(
             host_api=entry.host_api_name,
             device_index=entry.index,
             sample_rate=combo.sample_rate,
             channels=combo.channels,
-            auto_convert=combo.auto_convert,
+            auto_convert=eff_auto_convert,
+            exclusive=eff_exclusive,
             error_code=classified.code,
             error_detail=classified.detail,
         )
@@ -589,7 +654,8 @@ async def _try_open_input(
         device_index=entry.index,
         sample_rate=combo.sample_rate,
         channels=combo.channels,
-        auto_convert=combo.auto_convert,
+        auto_convert=eff_auto_convert,
+        exclusive=eff_exclusive,
     )
 
 
@@ -600,21 +666,30 @@ def _build_wasapi_settings(
 ) -> Any | None:  # noqa: ANN401
     """Return a :class:`WasapiSettings` instance or ``None`` when not applicable.
 
-    The platform guard is defensive: the caller already decides via
-    ``_input_combos`` whether auto_convert is in play. This function
-    returns ``None`` when we either (a) are not on Windows/WASAPI or
-    (b) the sounddevice build does not expose :class:`WasapiSettings`
-    (old PortAudio wheels).
+    The platform guard is defensive: ``_input_combos`` already decides
+    which flag permutations to try. This function returns ``None`` when
+    we either (a) are not on Windows/WASAPI, (b) the sounddevice build
+    does not expose :class:`WasapiSettings` (old PortAudio wheels), (c)
+    the combo asks for neither auto_convert nor exclusive (WASAPI
+    default, no extra settings needed), or (d) the installed
+    :class:`WasapiSettings` rejects the ``exclusive`` kwarg (even older
+    PortAudio wheels) — the opener falls through to ``combo.exclusive=False``
+    variants on its next iteration.
     """
     if entry.host_api_name != _WASAPI_HOST_API:
         return None
-    if not combo.auto_convert:
+    if not combo.auto_convert and not combo.exclusive:
         return None
     cls = getattr(sd, "WasapiSettings", None)
     if cls is None:
         return None
+    kwargs: dict[str, Any] = {}
+    if combo.auto_convert:
+        kwargs["auto_convert"] = True
+    if combo.exclusive:
+        kwargs["exclusive"] = True
     try:
-        return cls(auto_convert=True)
+        return cls(**kwargs)
     except TypeError:
         return None
 
@@ -747,6 +822,71 @@ def _resample_int16(
     resampled = np.interp(x_dst, x_src, audio.astype(np.float32))
     clipped = np.clip(resampled, -32_768, 32_767)
     return clipped.astype(np.int16)
+
+
+def _emit_exclusive_mode_events(
+    info: StreamInfo,
+    attempts: list[OpenAttempt],
+) -> None:
+    """Surface the three exclusive-mode lifecycle signals.
+
+    - ``voice_stream_exclusive_mode_opened``: the stream that actually
+      opened is running in WASAPI exclusive mode. Downstream consumers
+      (orchestrator, dashboard) use this to confirm the APO chain has
+      been bypassed.
+
+    - ``voice_stream_exclusive_mode_fallback``: at least one exclusive
+      attempt failed and the opener dropped into shared mode. ``reason``
+      carries the classified error code of the *first* exclusive
+      failure — that is the actionable signal operators need
+      (``device_busy`` vs ``unsupported_format`` vs ``internal_error``).
+
+    - ``voice_exclusive_mode_disabled_by_policy``: a Windows group
+      policy / audio-endpoint setting denied exclusive access
+      (``AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED``). This is rarer than
+      device-busy and deserves its own event so operators don't chase
+      a phantom "other app is holding the mic" diagnosis.
+    """
+    if info.exclusive_used:
+        logger.info(
+            "voice_stream_exclusive_mode_opened",
+            host_api=info.host_api,
+            device_index=info.device_index,
+            sample_rate=info.sample_rate,
+            channels=info.channels,
+            auto_convert=info.auto_convert_used,
+        )
+        return
+
+    first_exclusive_failure: OpenAttempt | None = None
+    for attempt in attempts:
+        if attempt.exclusive and attempt.error_code is not None:
+            first_exclusive_failure = attempt
+            break
+
+    if first_exclusive_failure is None:
+        return
+
+    code = first_exclusive_failure.error_code
+    reason = code.value if code else "unknown"
+    detail_lc = (first_exclusive_failure.error_detail or "").lower()
+    policy_denied = "exclusive_mode_not_allowed" in detail_lc
+
+    logger.warning(
+        "voice_stream_exclusive_mode_fallback",
+        host_api=info.host_api,
+        device_index=info.device_index,
+        reason=reason,
+        policy_denied=policy_denied,
+        detail=first_exclusive_failure.error_detail,
+    )
+    if policy_denied:
+        logger.warning(
+            "voice_exclusive_mode_disabled_by_policy",
+            host_api=info.host_api,
+            device_index=info.device_index,
+            detail=first_exclusive_failure.error_detail,
+        )
 
 
 def _record_attempts(attempts: list[OpenAttempt], *, kind: str) -> None:
