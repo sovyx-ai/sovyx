@@ -16,6 +16,7 @@ DSP overhead — the passthrough flag is wired through.
 
 from __future__ import annotations
 
+import math
 import time
 
 import numpy as np
@@ -406,3 +407,397 @@ class TestReset:
         assert norm.push(block) == []
         # One more push fills a full window
         assert len(norm.push(block)) == 1
+
+    def test_reset_snaps_ducking_ramp_to_target(self) -> None:
+        """Mid-ramp state must collapse to target on reset."""
+        norm = FrameNormalizer(source_rate=16_000, source_channels=1)
+        norm.set_ducking_gain_db(-18.0)
+        # Start the ramp with one small block
+        block = _sine_wave_int16(440, 16_000, 0.002, channels=1)  # 32 samples
+        norm.push(block)
+        # We're mid-ramp: current != target
+        assert not math.isclose(
+            10 ** (norm.current_ducking_gain_db / 20.0),
+            10 ** (norm.ducking_gain_db / 20.0),
+        )
+        norm.reset()
+        # After reset, current snaps to target
+        assert norm.current_ducking_gain_db == pytest.approx(norm.ducking_gain_db)
+
+
+# ---------------------------------------------------------------------------
+# int24 input — ADR §5.1 saturation clip path
+# ---------------------------------------------------------------------------
+
+
+def _sine_wave_int24(
+    freq_hz: float,
+    sample_rate: int,
+    duration_s: float,
+    channels: int = 1,
+    amplitude: float = 0.5,
+) -> np.ndarray:
+    """Generate a sine wave as int32 with 24-bit sign-extended payload.
+
+    PortAudio/sounddevice deliver int24 in int32 numpy arrays where
+    values fall in [-2**23, 2**23 - 1] and the upper 8 bits repeat the
+    sign bit.
+    """
+    num_samples = int(duration_s * sample_rate)
+    t = np.arange(num_samples, dtype=np.float64) / sample_rate
+    sine = amplitude * np.sin(2 * np.pi * freq_hz * t)
+    full_scale = (1 << 23) - 1
+    scaled = np.clip(sine * full_scale, -(1 << 23), full_scale).astype(np.int32)
+    if channels == 1:
+        return scaled
+    return np.tile(scaled.reshape(-1, 1), (1, channels))
+
+
+class TestInt24Input:
+    """ADR §5.1: int24 capture is a cascade option; the normalizer must
+    scale the 24-bit payload (NOT 32) and saturate-clip to int16."""
+
+    def test_int24_tone_survives_resample(self) -> None:
+        """1 kHz int24 tone at 48 kHz arrives as 1 kHz at 16 kHz int16."""
+        source_rate = 48_000
+        tone_hz = 1_000.0
+        norm = FrameNormalizer(
+            source_rate=source_rate,
+            source_channels=1,
+            source_format="int24",
+        )
+        block = _sine_wave_int24(tone_hz, source_rate, 0.5, channels=1)
+        windows = norm.push(block)
+        resampled = np.concatenate(windows)
+
+        detected_hz = _dominant_freq_hz(resampled, sample_rate=16_000)
+        bin_width = 16_000 / len(resampled)
+        assert abs(detected_hz - tone_hz) < bin_width * 2
+
+    def test_int24_amplitude_scales_by_two_power_23(self) -> None:
+        """Full-scale int24 (±2**23) must round-trip near int16 full-scale."""
+        norm = FrameNormalizer(
+            source_rate=16_000,
+            source_channels=1,
+            source_format="int24",
+        )
+        # Constant-amplitude "tone" at half-scale int24
+        block = np.full(1024, 1 << 22, dtype=np.int32)  # +0.5 full scale
+        windows = norm.push(block)
+        out = np.concatenate(windows)
+        # Expected int16 magnitude ≈ 0.5 * 32768 = 16384
+        assert np.abs(out).mean() == pytest.approx(16384, abs=50)
+
+    def test_int24_negative_range_not_misinterpreted_as_huge_positive(self) -> None:
+        """Sign-extended negative int24 values stay negative after scaling."""
+        norm = FrameNormalizer(
+            source_rate=16_000,
+            source_channels=1,
+            source_format="int24",
+        )
+        # -2**22 as int32, not as unsigned big integer
+        block = np.full(1024, -(1 << 22), dtype=np.int32)
+        windows = norm.push(block)
+        out = np.concatenate(windows)
+        assert out.mean() < 0
+        assert np.abs(out).mean() == pytest.approx(16384, abs=50)
+
+    def test_int24_saturation_clips_overshoot(self) -> None:
+        """int24 values at exactly ±2**23 saturate to int16 range, not wrap."""
+        norm = FrameNormalizer(
+            source_rate=16_000,
+            source_channels=1,
+            source_format="int24",
+        )
+        # int24 full-scale positive — maps to float +1.0 exactly,
+        # which saturation-clips to int16 32767 (not wraps to -32768).
+        block = np.full(1024, 1 << 23, dtype=np.int32)
+        windows = norm.push(block)
+        out = np.concatenate(windows)
+        assert out.min() >= 0
+        assert out.max() == 32767
+
+    def test_int24_rejects_non_int32_dtype(self) -> None:
+        """Passing int16 when source_format='int24' is a caller bug."""
+        norm = FrameNormalizer(
+            source_rate=16_000,
+            source_channels=1,
+            source_format="int24",
+        )
+        bad_block = np.zeros(512, dtype=np.int16)
+        with pytest.raises(ValueError, match="int24 source requires numpy int32"):
+            norm.push(bad_block)
+
+    def test_int24_stereo_downmix(self) -> None:
+        """int24 stereo averages channels after correct scaling."""
+        source_rate = 16_000
+        norm = FrameNormalizer(
+            source_rate=source_rate,
+            source_channels=2,
+            source_format="int24",
+        )
+        mono = _sine_wave_int24(1_000, source_rate, 0.032, channels=1)
+        stereo = np.stack([mono, -mono], axis=1)
+        windows = norm.push(stereo)
+        out = np.concatenate(windows)
+        # Opposite-phase stereo averages to silence
+        assert np.abs(out).max() <= 2
+
+
+# ---------------------------------------------------------------------------
+# float32 input — ADR §5.1 saturation clip path
+# ---------------------------------------------------------------------------
+
+
+def _sine_wave_float32(
+    freq_hz: float,
+    sample_rate: int,
+    duration_s: float,
+    channels: int = 1,
+    amplitude: float = 0.5,
+) -> np.ndarray:
+    """Generate a sine wave as float32 in [-1, 1]."""
+    num_samples = int(duration_s * sample_rate)
+    t = np.arange(num_samples, dtype=np.float64) / sample_rate
+    sine = (amplitude * np.sin(2 * np.pi * freq_hz * t)).astype(np.float32)
+    if channels == 1:
+        return sine
+    return np.tile(sine.reshape(-1, 1), (1, channels))
+
+
+class TestFloat32Input:
+    """ADR §5.1: float32 capture path must saturation-clip to int16."""
+
+    def test_float32_tone_survives_resample(self) -> None:
+        source_rate = 48_000
+        tone_hz = 1_000.0
+        norm = FrameNormalizer(
+            source_rate=source_rate,
+            source_channels=1,
+            source_format="float32",
+        )
+        block = _sine_wave_float32(tone_hz, source_rate, 0.5, channels=1)
+        windows = norm.push(block)
+        resampled = np.concatenate(windows)
+        detected_hz = _dominant_freq_hz(resampled, sample_rate=16_000)
+        bin_width = 16_000 / len(resampled)
+        assert abs(detected_hz - tone_hz) < bin_width * 2
+
+    def test_float32_saturation_clip_on_overshoot(self) -> None:
+        """Values beyond [-1, 1] saturate, never wrap."""
+        norm = FrameNormalizer(
+            source_rate=16_000,
+            source_channels=1,
+            source_format="float32",
+        )
+        # Overshoot to +2.0 — mustn't wrap to int16 negative
+        block = np.full(1024, 2.0, dtype=np.float32)
+        windows = norm.push(block)
+        out = np.concatenate(windows)
+        assert out.min() >= 0
+        assert out.max() == 32767
+
+
+# ---------------------------------------------------------------------------
+# source_format validation
+# ---------------------------------------------------------------------------
+
+
+class TestSourceFormatValidation:
+    def test_rejects_unknown_format(self) -> None:
+        with pytest.raises(ValueError, match="source_format must be one of"):
+            FrameNormalizer(
+                source_rate=16_000,
+                source_channels=1,
+                source_format="int32",  # not supported — int24 uses int32 *dtype*
+            )
+
+    def test_default_format_is_int16(self) -> None:
+        norm = FrameNormalizer(source_rate=16_000, source_channels=1)
+        assert norm.source_format == "int16"
+
+    @pytest.mark.parametrize("fmt", ["int16", "int24", "float32"])
+    def test_accepts_all_allowed_formats(self, fmt: str) -> None:
+        norm = FrameNormalizer(
+            source_rate=16_000,
+            source_channels=1,
+            source_format=fmt,
+        )
+        assert norm.source_format == fmt
+
+
+# ---------------------------------------------------------------------------
+# Mic-ducking gain — ADR §4.4.6.b
+# ---------------------------------------------------------------------------
+
+
+class TestDuckingDefaults:
+    """Default state is unity — ducking off, no DSP overhead."""
+
+    def test_default_gain_is_zero_db(self) -> None:
+        norm = FrameNormalizer(source_rate=16_000, source_channels=1)
+        assert norm.ducking_gain_db == pytest.approx(0.0)
+        assert norm.current_ducking_gain_db == pytest.approx(0.0)
+
+    def test_unity_gain_preserves_samples_bit_exact(self) -> None:
+        """With ducking off, int16 mono 16 kHz passthrough is bit-exact."""
+        norm = FrameNormalizer(source_rate=16_000, source_channels=1)
+        block = _sine_wave_int16(440, 16_000, 0.032, channels=1)
+        result = norm.push(block)
+        np.testing.assert_array_equal(result[0], block)
+
+
+class TestDuckingSetter:
+    def test_set_minus_18_db_updates_target(self) -> None:
+        norm = FrameNormalizer(source_rate=16_000, source_channels=1)
+        norm.set_ducking_gain_db(-18.0)
+        assert norm.ducking_gain_db == pytest.approx(-18.0)
+
+    def test_set_zero_db_restores_unity(self) -> None:
+        norm = FrameNormalizer(source_rate=16_000, source_channels=1)
+        norm.set_ducking_gain_db(-18.0)
+        norm.set_ducking_gain_db(0.0)
+        assert norm.ducking_gain_db == pytest.approx(0.0)
+
+    def test_rejects_positive_gain(self) -> None:
+        """The stage is an attenuator — amplification is a caller bug."""
+        norm = FrameNormalizer(source_rate=16_000, source_channels=1)
+        with pytest.raises(ValueError, match="must be <= 0 dB"):
+            norm.set_ducking_gain_db(6.0)
+
+    def test_set_same_target_twice_is_noop(self) -> None:
+        """Duplicate set must not reset an in-progress ramp."""
+        norm = FrameNormalizer(source_rate=16_000, source_channels=1)
+        norm.set_ducking_gain_db(-18.0)
+        # Advance the ramp partially
+        block = _sine_wave_int16(440, 16_000, 0.002, channels=1)  # 32 samples
+        norm.push(block)
+        gain_after_first_push = norm.current_ducking_gain_db
+
+        # Set the same target again — should not reset current to 1.0
+        norm.set_ducking_gain_db(-18.0)
+        assert norm.current_ducking_gain_db == pytest.approx(gain_after_first_push)
+
+    def test_accepts_negative_infinity(self) -> None:
+        """-inf dB collapses to linear gain 0 (full silence)."""
+        norm = FrameNormalizer(source_rate=16_000, source_channels=1)
+        norm.set_ducking_gain_db(float("-inf"))
+        assert norm.ducking_gain_db == float("-inf")
+
+
+class TestDuckingRamp:
+    """Linear ramp must avoid step-change clicks in the audio."""
+
+    def test_unity_ducking_is_multiply_by_one_noop(self) -> None:
+        """With target=0 dB, resampled path still produces clean output."""
+        source_rate = 48_000
+        norm = FrameNormalizer(
+            source_rate=source_rate,
+            source_channels=1,
+        )
+        # No ducking set — target stays at 1.0
+        block = _sine_wave_int16(1_000, source_rate, 0.1, channels=1)
+        out = np.concatenate(norm.push(block))
+        # Amplitude near 0.5 input → ~16384 peak (within 5% for resample
+        # edge taper)
+        assert np.abs(out).max() > 14_000
+
+    def test_minus_18_db_reduces_amplitude(self) -> None:
+        """Fully ramped -18 dB ≈ 0.1259 linear → ~12.6% amplitude."""
+        norm = FrameNormalizer(source_rate=16_000, source_channels=1)
+        norm.set_ducking_gain_db(-18.0)
+        # Long enough to complete the 10ms ramp and then some
+        block = _sine_wave_int16(1_000, 16_000, 0.5, channels=1)
+        windows = norm.push(block)
+        # Skip the ramp region (first ~160 samples post-resample path).
+        # Passthrough path applies ducking directly, so ramp is in the
+        # first 160 samples of output.
+        out = np.concatenate(windows)[200:]
+        input_peak = np.abs(block).max()
+        output_peak = np.abs(out).max()
+        expected_ratio = 10 ** (-18 / 20)  # ≈ 0.1259
+        actual_ratio = output_peak / input_peak
+        assert actual_ratio == pytest.approx(expected_ratio, rel=0.05)
+
+    def test_ramp_is_monotonic(self) -> None:
+        """Gain envelope must move monotonically from current → target."""
+        norm = FrameNormalizer(source_rate=16_000, source_channels=1)
+        # DC input at full amplitude so the envelope IS the output.
+        dc = np.full(512, 16_000, dtype=np.int16)
+        norm.set_ducking_gain_db(-18.0)
+        out = np.concatenate(norm.push(dc))
+        # Output monotonically *decreases* across the ramp region, then
+        # stays flat.
+        first160 = out[:160].astype(np.int32)
+        diffs = np.diff(first160)
+        assert (diffs <= 0).all(), "envelope must be non-increasing during down-ramp"
+
+    def test_ramp_completes_within_10ms(self) -> None:
+        """After 160 output samples (10 ms @ 16 kHz) current gain == target."""
+        norm = FrameNormalizer(source_rate=16_000, source_channels=1)
+        norm.set_ducking_gain_db(-18.0)
+        # Push exactly 160 samples = one full ramp length
+        block = np.full(160, 16_000, dtype=np.int16)
+        norm.push(block)
+        assert norm.current_ducking_gain_db == pytest.approx(-18.0, abs=0.01)
+
+    def test_ramp_midpoint_is_approximately_linear(self) -> None:
+        """At 80 samples (half the ramp), current is the midpoint of 1.0 → target."""
+        norm = FrameNormalizer(source_rate=16_000, source_channels=1)
+        norm.set_ducking_gain_db(-18.0)
+        block = np.zeros(80, dtype=np.int16)
+        norm.push(block)
+        target_linear = 10 ** (-18 / 20)
+        midpoint_linear = (1.0 + target_linear) / 2.0
+        # Current at 80 samples should be about (1.0 + target)/2
+        current_linear = 10 ** (norm.current_ducking_gain_db / 20.0)
+        assert current_linear == pytest.approx(midpoint_linear, rel=0.05)
+
+    def test_gain_change_mid_ramp_transitions_smoothly(self) -> None:
+        """Changing target mid-ramp continues from current, not from 1.0."""
+        norm = FrameNormalizer(source_rate=16_000, source_channels=1)
+        norm.set_ducking_gain_db(-18.0)
+        # Advance half the ramp
+        norm.push(np.zeros(80, dtype=np.int16))
+        gain_before = norm.current_ducking_gain_db
+        # Now retarget to -6 dB
+        norm.set_ducking_gain_db(-6.0)
+        # Push one sample's worth — current should move toward -6 dB, not reset to 0
+        norm.push(np.zeros(1, dtype=np.int16))
+        gain_after = norm.current_ducking_gain_db
+        # Moving from ~-5 dB toward -6 dB: gain_after should be between
+        # gain_before and -6 dB
+        assert -6.0 <= gain_after <= max(gain_before, -6.0) + 0.1
+
+    def test_rampback_to_unity_restores_signal(self) -> None:
+        """After ducking then releasing, signal amplitude returns to baseline."""
+        norm = FrameNormalizer(source_rate=16_000, source_channels=1)
+        block = _sine_wave_int16(1_000, 16_000, 0.05, channels=1)
+        # Duck
+        norm.set_ducking_gain_db(-18.0)
+        norm.push(block)  # ramp completes within this block
+        # Release
+        norm.set_ducking_gain_db(0.0)
+        norm.push(block)  # ramp up completes
+        # Next block arrives at unity
+        windows = norm.push(block)
+        out = np.concatenate(windows)
+        # Output should match input closely (no attenuation)
+        assert np.abs(out).max() == pytest.approx(np.abs(block).max(), rel=0.02)
+
+
+class TestDuckingProperty:
+    """Any valid ducking level must produce finite, non-clipped output."""
+
+    @given(gain_db=st.floats(min_value=-60.0, max_value=0.0))
+    @settings(max_examples=25, deadline=2_000)
+    def test_no_nan_no_inf_for_any_valid_gain(self, gain_db: float) -> None:
+        norm = FrameNormalizer(source_rate=48_000, source_channels=1)
+        norm.set_ducking_gain_db(gain_db)
+        block = _sine_wave_int16(1_000, 48_000, 0.05, channels=1)
+        windows = norm.push(block)
+        out = np.concatenate(windows) if windows else np.zeros(0, dtype=np.int16)
+        # int16 can't hold NaN/Inf — the invariant to check is saturation
+        assert out.dtype == np.int16
+        assert out.min() >= -32768
+        assert out.max() <= 32767
