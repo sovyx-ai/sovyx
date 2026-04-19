@@ -27,7 +27,17 @@ and may move between releases.
 
 from __future__ import annotations
 
+from sovyx.voice.health._audio_service import (
+    AudioServiceMonitor,
+    NoopAudioServiceMonitor,
+)
+from sovyx.voice.health._default_device import (
+    DefaultDeviceWatcher,
+    NoopDefaultDeviceWatcher,
+    PollingDefaultDeviceWatcher,
+)
 from sovyx.voice.health._hotplug import HotplugListener, NoopHotplugListener
+from sovyx.voice.health._power import NoopPowerEventListener, PowerEventListener
 from sovyx.voice.health.capture_overrides import CaptureOverrides
 from sovyx.voice.health.cascade import (
     LINUX_CASCADE,
@@ -41,6 +51,8 @@ from sovyx.voice.health.contract import (
     ALLOWED_FORMATS,
     ALLOWED_HOST_APIS_BY_PLATFORM,
     ALLOWED_SAMPLE_RATES,
+    AudioServiceEvent,
+    AudioServiceEventKind,
     AudioSubsystemFingerprint,
     CascadeResult,
     Combo,
@@ -51,6 +63,8 @@ from sovyx.voice.health.contract import (
     HotplugEventKind,
     LoadReport,
     OverrideEntry,
+    PowerEvent,
+    PowerEventKind,
     ProbeHistoryEntry,
     ProbeMode,
     ProbeResult,
@@ -60,13 +74,19 @@ from sovyx.voice.health.contract import (
 from sovyx.voice.health.probe import probe
 from sovyx.voice.health.watchdog import (
     VoiceCaptureWatchdog,
+    build_platform_audio_service_monitor,
+    build_platform_default_device_watcher,
     build_platform_hotplug_listener,
+    build_platform_power_listener,
 )
 
 __all__ = [
     "ALLOWED_FORMATS",
     "ALLOWED_HOST_APIS_BY_PLATFORM",
     "ALLOWED_SAMPLE_RATES",
+    "AudioServiceEvent",
+    "AudioServiceEventKind",
+    "AudioServiceMonitor",
     "AudioSubsystemFingerprint",
     "CaptureOverrides",
     "CascadeResult",
@@ -74,6 +94,7 @@ __all__ = [
     "ComboEntry",
     "ComboStore",
     "ComboStoreStats",
+    "DefaultDeviceWatcher",
     "Diagnosis",
     "HotplugEvent",
     "HotplugEventKind",
@@ -81,8 +102,15 @@ __all__ = [
     "LINUX_CASCADE",
     "LoadReport",
     "MACOS_CASCADE",
+    "NoopAudioServiceMonitor",
+    "NoopDefaultDeviceWatcher",
     "NoopHotplugListener",
+    "NoopPowerEventListener",
     "OverrideEntry",
+    "PollingDefaultDeviceWatcher",
+    "PowerEvent",
+    "PowerEventKind",
+    "PowerEventListener",
     "ProbeCallable",
     "ProbeHistoryEntry",
     "ProbeMode",
@@ -91,7 +119,10 @@ __all__ = [
     "VoiceCaptureWatchdog",
     "WINDOWS_CASCADE",
     "WatchdogState",
+    "build_platform_audio_service_monitor",
+    "build_platform_default_device_watcher",
     "build_platform_hotplug_listener",
+    "build_platform_power_listener",
     "probe",
     "run_cascade",
 ]

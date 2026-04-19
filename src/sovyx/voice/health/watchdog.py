@@ -19,17 +19,35 @@ ADR §4.4 sub-components that land this sprint:
   On add: no-op unless the endpoint is currently ``DEGRADED``, in
   which case a re-cascade tries the freshly attached device.
 
+* **§4.4.3 Default-device watcher.** An optional
+  :class:`~sovyx.voice.health._default_device.DefaultDeviceWatcher`
+  (polling ``sounddevice`` on every platform for Sprint 2; native
+  ``IMMNotificationClient`` / PipeWire paths land in Sprint 4). When
+  the OS-level default-input changes the watchdog treats it as an
+  explicit user intent to switch endpoints — invalidate the prior
+  endpoint's :class:`ComboStore` row and cascade on the new default.
+
+* **§4.4.4 Power events.** An optional
+  :class:`~sovyx.voice.health._power.PowerEventListener` (Windows
+  ``WM_POWERBROADCAST`` in Sprint 2). On ``SUSPEND`` the watchdog
+  cancels any pending re-probe chain and marks state DEGRADED so no
+  probe fires while the machine sleeps. On ``RESUME`` it waits
+  ``watchdog_resume_settle_s`` (defaults to 2 s — USB/BT stacks take
+  time to re-enumerate) and re-cascades from scratch.
+
+* **§4.4.5 Audio-service crash.** An optional
+  :class:`~sovyx.voice.health._audio_service.AudioServiceMonitor`
+  (Windows ``sc query audiosrv`` in Sprint 2). On ``DOWN`` the watchdog
+  stalls — probes cannot succeed while the service is stopped — until
+  ``UP`` lands or ``watchdog_audio_service_restart_timeout_s`` elapses,
+  at which point it emits ``voice_audio_service_down`` and goes
+  DEGRADED. On ``UP`` after a prior DOWN it re-cascades.
+
 The watchdog shares the cascade's lifecycle lock (ADR §5.5) so
 hot-plug-driven re-cascades cannot race with in-flight :func:`run_cascade`
 calls. Callers inject the same :class:`~sovyx.engine._lock_dict.LRULockDict`
 that :func:`~sovyx.voice.health.cascade.run_cascade` uses to guarantee
 serialisation across both code paths.
-
-Subsequent Sprint 2 tasks (#18 default-device-change, #19 power, #19
-audio-service crash, #20 self-feedback isolation) extend this module
-without changing the public constructor surface — they hang new
-internal coroutines off :meth:`VoiceCaptureWatchdog.start` and new
-handlers off :meth:`_on_hotplug`.
 """
 
 from __future__ import annotations
@@ -42,12 +60,25 @@ from typing import TYPE_CHECKING
 from sovyx.engine._lock_dict import LRULockDict
 from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.observability.logging import get_logger
+from sovyx.voice.health._audio_service import (
+    AudioServiceMonitor,
+    NoopAudioServiceMonitor,
+)
+from sovyx.voice.health._default_device import (
+    DefaultDeviceWatcher,
+    NoopDefaultDeviceWatcher,
+)
 from sovyx.voice.health._hotplug import HotplugListener, NoopHotplugListener
+from sovyx.voice.health._power import NoopPowerEventListener, PowerEventListener
 from sovyx.voice.health.contract import (
+    AudioServiceEvent,
+    AudioServiceEventKind,
     CascadeResult,
     Diagnosis,
     HotplugEvent,
     HotplugEventKind,
+    PowerEvent,
+    PowerEventKind,
     ProbeResult,
     WatchdogState,
 )
@@ -70,6 +101,12 @@ _DEFAULT_MAX_ATTEMPTS = _VoiceTuning().watchdog_max_attempts
 
 _DEFAULT_LIFECYCLE_LOCK_MAX = _VoiceTuning().cascade_lifecycle_lock_max
 """Max concurrent endpoints tracked by the shared lifecycle lock."""
+
+_DEFAULT_RESUME_SETTLE_S = _VoiceTuning().watchdog_resume_settle_s
+"""§4.4.4 settle delay after ``RESUME`` before re-cascade."""
+
+_DEFAULT_AUDIO_SERVICE_RESTART_TIMEOUT_S = _VoiceTuning().watchdog_audio_service_restart_timeout_s
+"""§4.4.5 ceiling — when ``audiosrv`` stays DOWN past this, go DEGRADED."""
 
 
 def build_platform_hotplug_listener(
@@ -161,6 +198,8 @@ class VoiceCaptureWatchdog:
         lifecycle_locks: LRULockDict[str] | None = None,
         schedule_s: tuple[float, ...] | None = None,
         max_attempts: int | None = None,
+        resume_settle_s: float | None = None,
+        audio_service_restart_timeout_s: float | None = None,
     ) -> None:
         if not active_endpoint_guid:
             msg = "active_endpoint_guid must be a non-empty string"
@@ -183,9 +222,26 @@ class VoiceCaptureWatchdog:
         # Trim schedule to max_attempts so a tuning change like
         # ``max_attempts=1`` doesn't still produce three ticks.
         self._schedule: tuple[float, ...] = schedule[: self._max_attempts]
+        self._resume_settle_s = (
+            resume_settle_s if resume_settle_s is not None else _DEFAULT_RESUME_SETTLE_S
+        )
+        self._audio_restart_timeout_s = (
+            audio_service_restart_timeout_s
+            if audio_service_restart_timeout_s is not None
+            else _DEFAULT_AUDIO_SERVICE_RESTART_TIMEOUT_S
+        )
         self._state: WatchdogState = WatchdogState.IDLE
         self._pending: asyncio.Task[None] | None = None
         self._hotplug: HotplugListener | None = None
+        self._power: PowerEventListener | None = None
+        self._audio_service: AudioServiceMonitor | None = None
+        self._default_device: DefaultDeviceWatcher | None = None
+        # §4.4.5 gating: while the audio service is DOWN, new probes/cascades
+        # can't succeed. We park them on an ``asyncio.Event`` set to DOWN and
+        # release once an UP event lands.
+        self._audio_service_up = asyncio.Event()
+        self._audio_service_up.set()
+        self._audio_service_down_waiter: asyncio.Task[None] | None = None
         self._started = False
 
     # ── Lifecycle ────────────────────────────────────────────────────────
@@ -198,22 +254,48 @@ class VoiceCaptureWatchdog:
     def active_endpoint_guid(self) -> str:
         return self._endpoint
 
-    async def start(self, hotplug: HotplugListener) -> None:
-        """Install the hot-plug subscription and begin watching."""
+    async def start(
+        self,
+        hotplug: HotplugListener,
+        *,
+        power: PowerEventListener | None = None,
+        audio_service: AudioServiceMonitor | None = None,
+        default_device: DefaultDeviceWatcher | None = None,
+    ) -> None:
+        """Install OS subscriptions and begin watching.
+
+        The hot-plug listener is mandatory (Sprint 1 contract); the
+        other three are optional so the caller can opt into each
+        §4.4.x surface independently. Missing listeners default to
+        their Noop variants so the public API stays the same whether
+        a surface is on or off.
+        """
         if self._started:
             return
         self._hotplug = hotplug
         await hotplug.start(self._on_hotplug)
+        if power is not None:
+            self._power = power
+            await power.start(self._on_power_event)
+        if audio_service is not None:
+            self._audio_service = audio_service
+            await audio_service.start(self._on_audio_service_event)
+        if default_device is not None:
+            self._default_device = default_device
+            await default_device.start(self._on_hotplug)
         self._started = True
         logger.info(
             "voice_watchdog_started",
             endpoint=self._endpoint,
             schedule_s=list(self._schedule),
             max_attempts=self._max_attempts,
+            power_enabled=power is not None,
+            audio_service_enabled=audio_service is not None,
+            default_device_enabled=default_device is not None,
         )
 
     async def stop(self) -> None:
-        """Cancel any pending re-probe chain and stop the hot-plug listener."""
+        """Cancel every pending task and tear down OS subscriptions."""
         self._started = False
         pending = self._pending
         self._pending = None
@@ -221,10 +303,28 @@ class VoiceCaptureWatchdog:
             pending.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await pending
+        waiter = self._audio_service_down_waiter
+        self._audio_service_down_waiter = None
+        if waiter is not None and not waiter.done():
+            waiter.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await waiter
         hotplug = self._hotplug
         self._hotplug = None
         if hotplug is not None:
             await hotplug.stop()
+        power = self._power
+        self._power = None
+        if power is not None:
+            await power.stop()
+        audio_service = self._audio_service
+        self._audio_service = None
+        if audio_service is not None:
+            await audio_service.stop()
+        default_device = self._default_device
+        self._default_device = None
+        if default_device is not None:
+            await default_device.stop()
 
     # ── §4.4.1 Exponential-backoff re-probe ──────────────────────────────
 
@@ -300,6 +400,9 @@ class VoiceCaptureWatchdog:
 
     async def _on_hotplug(self, event: HotplugEvent) -> None:
         if not self._started:
+            return
+        if event.kind == HotplugEventKind.DEFAULT_DEVICE_CHANGED:
+            await self._handle_default_device_change(event)
             return
         is_active = self._event_matches_active(event)
         if event.kind == HotplugEventKind.DEVICE_REMOVED and is_active:
@@ -382,8 +485,258 @@ class VoiceCaptureWatchdog:
                 source=result.source,
             )
 
+    # ── §4.4.3 Default-device change ─────────────────────────────────────
+
+    async def _handle_default_device_change(self, event: HotplugEvent) -> None:
+        """User flipped the default mic — invalidate prior endpoint + re-cascade.
+
+        The watchdog does not (yet) switch its own ``active_endpoint_guid``;
+        the pipeline orchestrator reacts to the ``voice_default_device_changed``
+        log entry and re-constructs a fresh watchdog for the new endpoint.
+        Invalidating the combo store for the previous endpoint here prevents
+        a stale winning_combo from hijacking the next cascade.
+        """
+        logger.info(
+            "voice_default_device_changed_reacted",
+            previous_endpoint=self._endpoint,
+            new_friendly=event.device_friendly_name,
+        )
+        if self._combo_store is not None:
+            lock = self._locks[self._endpoint]
+            async with lock:
+                try:
+                    self._combo_store.invalidate(
+                        self._endpoint,
+                        reason="default-device-changed",
+                    )
+                except Exception:  # noqa: BLE001 — store failures must not block re-cascade
+                    logger.warning(
+                        "voice_watchdog_combo_invalidate_failed",
+                        endpoint=self._endpoint,
+                        exc_info=True,
+                    )
+        try:
+            await self._re_cascade(self._endpoint)
+        except Exception:  # noqa: BLE001
+            logger.error(
+                "voice_watchdog_recascade_raised",
+                endpoint=self._endpoint,
+                trigger="default_device_changed",
+                exc_info=True,
+            )
+
+    # ── §4.4.4 Power events ──────────────────────────────────────────────
+
+    async def _on_power_event(self, event: PowerEvent) -> None:
+        if not self._started:
+            return
+        if event.kind == PowerEventKind.SUSPEND:
+            await self._handle_suspend()
+            return
+        if event.kind == PowerEventKind.RESUME:
+            await self._handle_resume()
+
+    async def _handle_suspend(self) -> None:
+        logger.info("voice_watchdog_suspend", endpoint=self._endpoint)
+        pending = self._pending
+        self._pending = None
+        if pending is not None and not pending.done():
+            pending.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await pending
+        # Any probe/cascade that races through suspend will just fail; we
+        # simply want to make sure no new re-probe chain fires until resume.
+        self._state = WatchdogState.BACKOFF
+
+    async def _handle_resume(self) -> None:
+        logger.info(
+            "voice_watchdog_resume",
+            endpoint=self._endpoint,
+            settle_s=self._resume_settle_s,
+        )
+        try:
+            await asyncio.sleep(self._resume_settle_s)
+        except asyncio.CancelledError:
+            raise
+        try:
+            result = await self._re_cascade(self._endpoint)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.error(
+                "voice_watchdog_recascade_raised",
+                endpoint=self._endpoint,
+                trigger="resume",
+                exc_info=True,
+            )
+            return
+        self._state = (
+            WatchdogState.IDLE if result.winning_combo is not None else WatchdogState.DEGRADED
+        )
+
+    # ── §4.4.5 Audio-service crash ───────────────────────────────────────
+
+    async def _on_audio_service_event(self, event: AudioServiceEvent) -> None:
+        if not self._started:
+            return
+        if event.kind == AudioServiceEventKind.DOWN:
+            await self._handle_audio_service_down()
+            return
+        if event.kind == AudioServiceEventKind.UP:
+            await self._handle_audio_service_up()
+
+    async def _handle_audio_service_down(self) -> None:
+        logger.warning(
+            "voice_audio_service_down",
+            endpoint=self._endpoint,
+            restart_timeout_s=self._audio_restart_timeout_s,
+        )
+        self._audio_service_up.clear()
+        pending = self._pending
+        self._pending = None
+        if pending is not None and not pending.done():
+            pending.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await pending
+        waiter = self._audio_service_down_waiter
+        if waiter is not None and not waiter.done():
+            waiter.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await waiter
+        self._audio_service_down_waiter = asyncio.create_task(
+            self._await_audio_service_restart(),
+        )
+
+    async def _await_audio_service_restart(self) -> None:
+        try:
+            await asyncio.wait_for(
+                self._audio_service_up.wait(),
+                timeout=self._audio_restart_timeout_s,
+            )
+        except TimeoutError:
+            self._state = WatchdogState.DEGRADED
+            logger.error(
+                "voice_audio_service_restart_timeout",
+                endpoint=self._endpoint,
+                waited_s=self._audio_restart_timeout_s,
+            )
+        except asyncio.CancelledError:
+            raise
+
+    async def _handle_audio_service_up(self) -> None:
+        was_down = not self._audio_service_up.is_set()
+        self._audio_service_up.set()
+        if not was_down:
+            # First observation is UP — baseline seeded, nothing to do.
+            return
+        logger.info("voice_audio_service_up", endpoint=self._endpoint)
+        try:
+            result = await self._re_cascade(self._endpoint)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.error(
+                "voice_watchdog_recascade_raised",
+                endpoint=self._endpoint,
+                trigger="audio_service_up",
+                exc_info=True,
+            )
+            return
+        self._state = (
+            WatchdogState.IDLE if result.winning_combo is not None else WatchdogState.DEGRADED
+        )
+
+
+def build_platform_power_listener(
+    *,
+    platform_key: str | None = None,
+    runtime_resilience_enabled: bool | None = None,
+) -> PowerEventListener:
+    """Return the power-event listener the current platform + config support.
+
+    Mirrors :func:`build_platform_hotplug_listener`: rollback kill-switch,
+    Windows backend in Sprint 2, Linux / macOS Noop until Sprint 4.
+    """
+    if runtime_resilience_enabled is None:
+        runtime_resilience_enabled = _VoiceTuning().runtime_resilience_enabled
+    if not runtime_resilience_enabled:
+        return NoopPowerEventListener(reason="runtime_resilience_enabled=False")
+    plat = platform_key or sys.platform
+    if plat == "win32":
+        from sovyx.voice.health._power_win import build_windows_power_listener
+
+        return build_windows_power_listener()
+    logger.info(
+        "voice_power_listener_unavailable",
+        platform=plat,
+        reason="sprint4_backend_pending",
+    )
+    return NoopPowerEventListener(reason=f"no backend for platform {plat!r}")
+
+
+def build_platform_audio_service_monitor(
+    *,
+    platform_key: str | None = None,
+    runtime_resilience_enabled: bool | None = None,
+) -> AudioServiceMonitor:
+    """Return the audio-service monitor the current platform + config support.
+
+    macOS always returns :class:`NoopAudioServiceMonitor` because
+    ``coreaudiod`` is managed by launchd and effectively always respawns.
+    Linux Noop until Sprint 4 (``systemctl is-active pipewire.service``).
+    """
+    if runtime_resilience_enabled is None:
+        runtime_resilience_enabled = _VoiceTuning().runtime_resilience_enabled
+    if not runtime_resilience_enabled:
+        return NoopAudioServiceMonitor(reason="runtime_resilience_enabled=False")
+    plat = platform_key or sys.platform
+    if plat == "win32":
+        from sovyx.voice.health._audio_service_win import (
+            build_windows_audio_service_monitor,
+        )
+
+        return build_windows_audio_service_monitor()
+    if plat == "darwin":
+        return NoopAudioServiceMonitor(reason="coreaudiod respawns via launchd")
+    logger.info(
+        "voice_audio_service_monitor_unavailable",
+        platform=plat,
+        reason="sprint4_backend_pending",
+    )
+    return NoopAudioServiceMonitor(reason=f"no backend for platform {plat!r}")
+
+
+def build_platform_default_device_watcher(
+    *,
+    query_default: Callable[[], object] | None = None,
+    platform_key: str | None = None,
+    runtime_resilience_enabled: bool | None = None,
+) -> DefaultDeviceWatcher:
+    """Return a polling default-device watcher, or Noop when disabled.
+
+    Sprint 2 uses the same :class:`PollingDefaultDeviceWatcher` on every
+    platform; native notification paths land in Sprint 4. Callers must
+    supply a ``query_default`` that returns a stable identifier of the
+    current default input (e.g. ``sounddevice.query_devices`` index + name).
+    When ``query_default`` is ``None`` the factory returns Noop so the
+    watchdog can still boot in environments without PortAudio.
+    """
+    if runtime_resilience_enabled is None:
+        runtime_resilience_enabled = _VoiceTuning().runtime_resilience_enabled
+    if not runtime_resilience_enabled:
+        return NoopDefaultDeviceWatcher(reason="runtime_resilience_enabled=False")
+    del platform_key  # reserved for Sprint 4 native overrides
+    if query_default is None:
+        return NoopDefaultDeviceWatcher(reason="no query_default supplied")
+    from sovyx.voice.health._default_device import PollingDefaultDeviceWatcher
+
+    return PollingDefaultDeviceWatcher(query_default=query_default)
+
 
 __all__ = [
     "VoiceCaptureWatchdog",
+    "build_platform_audio_service_monitor",
+    "build_platform_default_device_watcher",
     "build_platform_hotplug_listener",
+    "build_platform_power_listener",
 ]

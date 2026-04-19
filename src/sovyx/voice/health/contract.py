@@ -86,6 +86,51 @@ class HotplugEventKind(StrEnum):
     DEFAULT_DEVICE_CHANGED = "default_device_changed"
 
 
+class PowerEventKind(StrEnum):
+    """OS-level power-management events observed by the watchdog.
+
+    ADR §4.4.4. Sleep invalidates PortAudio sessions and may re-enumerate
+    devices in a different order on resume; the pipeline must checkpoint
+    on suspend and re-cascade on resume.
+
+    Platform mapping:
+
+    * Windows — ``WM_POWERBROADCAST``: ``PBT_APMSUSPEND`` →
+      :attr:`SUSPEND`, ``PBT_APMRESUMEAUTOMATIC`` → :attr:`RESUME`.
+    * Linux — ``org.freedesktop.login1`` D-Bus ``PrepareForSleep``
+      (``True`` → suspend, ``False`` → resume). Landed in Sprint 4.
+    * macOS — ``IORegisterForSystemPower`` callbacks. Landed in Sprint 4.
+    """
+
+    SUSPEND = "suspend"
+    RESUME = "resume"
+
+
+class AudioServiceEventKind(StrEnum):
+    """Audio-subsystem service lifecycle events observed by the watchdog.
+
+    ADR §4.4.5. Windows ``audiosrv`` can die (driver crash, Windows
+    Update, user-initiated ``net stop``); when it restarts, PortAudio
+    streams that were open beforehand are permanently broken. The
+    watchdog reacts by stalling probes until :attr:`UP`, then triggers a
+    re-cascade.
+
+    Platform mapping:
+
+    * Windows — poll ``Get-Service audiosrv`` equivalent via ``sc query``
+      or ``pywin32``. :attr:`DOWN` is surfaced on transition Running→Stopped
+      (or on repeated PaHostError patterns that imply the service died).
+      :attr:`UP` fires once the service is Running again.
+    * Linux — Sprint 4 (``systemctl is-active pipewire.service`` +
+      ``pulseaudio.service`` when applicable).
+    * macOS — macOS ``coreaudiod`` is managed by launchd and generally
+      respawns; this listener is effectively a Noop on darwin.
+    """
+
+    DOWN = "down"
+    UP = "up"
+
+
 class WatchdogState(StrEnum):
     """§4.4.1 lifecycle states exposed by :class:`VoiceCaptureWatchdog`.
 
@@ -427,6 +472,29 @@ class HotplugEvent:
     endpoint_guid: str | None = None
     device_friendly_name: str | None = None
     device_interface_name: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PowerEvent:
+    """Platform-agnostic view of one OS power-management notification.
+
+    ADR §4.4.4. Emitted by :class:`~sovyx.voice.health._power.PowerEventListener`
+    and consumed by :meth:`~sovyx.voice.health.watchdog.VoiceCaptureWatchdog.on_power_event`.
+    """
+
+    kind: PowerEventKind
+
+
+@dataclass(frozen=True, slots=True)
+class AudioServiceEvent:
+    """Platform-agnostic view of one audio-service lifecycle transition.
+
+    ADR §4.4.5. Emitted by
+    :class:`~sovyx.voice.health._audio_service.AudioServiceMonitor` and
+    consumed by :meth:`~sovyx.voice.health.watchdog.VoiceCaptureWatchdog.on_audio_service_event`.
+    """
+
+    kind: AudioServiceEventKind
 
 
 @dataclass(frozen=True, slots=True)

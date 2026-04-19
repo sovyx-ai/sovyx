@@ -263,6 +263,26 @@ class VoiceTuningConfig(BaseSettings):
         default_factory=lambda: [10.0, 30.0, 90.0],
     )
     watchdog_max_attempts: int = 3
+    # §4.4.4 power-event settle window. After PBT_APMRESUMEAUTOMATIC (or
+    # its Linux/macOS equivalents) the watchdog waits this long before
+    # re-cascading — USB hubs and BT audio stacks routinely take 1-2 s to
+    # re-enumerate after resume. 2.0 s mirrors the ADR commitment.
+    watchdog_resume_settle_s: float = 2.0
+    # §4.4.5 audio-service crash recovery ceiling. When ``audiosrv``
+    # (Windows) or its equivalents transition to Stopped, the watchdog
+    # waits up to this many seconds for the service to come back before
+    # emitting ``voice_audio_service_down`` (ERROR) and going DEGRADED.
+    watchdog_audio_service_restart_timeout_s: float = 30.0
+    # §4.4.3 default-device poll interval. Platforms without a native
+    # notification path (and the Windows fallback when IMM registration
+    # fails) poll ``sounddevice`` at this cadence to notice the user
+    # changing the default mic in the Sound Settings panel.
+    watchdog_default_device_poll_s: float = 5.0
+    # §4.4.5 audio-service poll interval. Between polls the monitor
+    # sleeps this long before querying the service state again. Tighter
+    # than default-device polling because ``audiosrv`` death is a P0
+    # interruption for the user.
+    watchdog_audio_service_poll_s: float = 2.0
 
     # Voice device test (setup-wizard meters + TTS test button).
     # Kill-switch + ballistics + rate limiting for the test endpoints.
