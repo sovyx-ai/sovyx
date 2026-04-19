@@ -706,7 +706,9 @@ def _check_voice_capture_apo() -> DiagnosticResult:
 
     endpoints = [
         {
+            "endpoint_id": r.endpoint_id,
             "endpoint_name": r.endpoint_name,
+            "device_interface_name": r.device_interface_name,
             "enumerator": r.enumerator,
             "known_apos": list(r.known_apos),
             "voice_clarity_active": r.voice_clarity_active,

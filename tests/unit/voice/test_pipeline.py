@@ -1822,3 +1822,71 @@ class TestVoiceClarityAutoBypass:
         # Must not raise or log ``voice_apo_bypass_activated``.
         await self._drive_deaf_heartbeat(pipeline)
         assert pipeline._bypass_requested is False
+
+    @pytest.mark.asyncio
+    async def test_post_bypass_deaf_emits_ineffective_once(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """When deaf heartbeats persist after the bypass, emit ineffective ONCE.
+
+        Models the case where WASAPI exclusive opens cleanly but the
+        signal is still dead — firmware DSP, broken capture element,
+        or a non-Voice-Clarity APO not in the catalog. The orchestrator
+        must surface that with a single ``voice_apo_bypass_ineffective``
+        ERROR so the dashboard / doctor can switch their messaging from
+        "auto-fix in progress" to "auto-fix could not recover signal".
+        """
+        caplog.set_level(logging.ERROR, logger=_ORCH_LOGGER)
+        callback = AsyncMock()
+        pipeline = self._deaf_pipeline(
+            voice_clarity_active=True, auto_bypass_enabled=True, callback=callback, threshold=1
+        )
+        await pipeline.start()
+
+        # Heartbeat #1 — fires the bypass.
+        await self._drive_deaf_heartbeat(pipeline)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert pipeline._bypass_requested is True
+        assert _events_of(caplog, "voice_apo_bypass_ineffective") == []
+
+        # Heartbeats #2-#5 — bypass already fired; deaf persists; one ineffective event.
+        for _ in range(4):
+            await self._drive_deaf_heartbeat(pipeline)
+
+        ineffective = _events_of(caplog, "voice_apo_bypass_ineffective")
+        assert len(ineffective) == 1
+        assert ineffective[0]["voice_clarity_active"] is True
+        assert ineffective[0]["consecutive_post_bypass_deaf"] >= 2  # noqa: PLR2004
+
+    @pytest.mark.asyncio
+    async def test_post_bypass_healthy_heartbeat_resets_ineffective_counter(self) -> None:
+        """A single healthy heartbeat after the bypass means it worked.
+
+        The post-bypass deaf counter must reset so a transient deafness
+        later (user yanks the headset, brief driver hiccup) does not
+        emit a false ``voice_apo_bypass_ineffective``.
+        """
+        callback = AsyncMock()
+        pipeline = self._deaf_pipeline(
+            voice_clarity_active=True, auto_bypass_enabled=True, callback=callback, threshold=1
+        )
+        await pipeline.start()
+
+        # Bypass fires.
+        await self._drive_deaf_heartbeat(pipeline)
+        await asyncio.sleep(0)
+        assert pipeline._bypass_requested is True
+
+        # Healthy heartbeat — bypass worked.
+        from sovyx.voice.pipeline import _orchestrator as orch_mod
+
+        pipeline._last_heartbeat_monotonic = 0.0
+        pipeline._vad_frames_since_heartbeat = orch_mod._DEAF_MIN_FRAMES
+        pipeline._max_vad_prob_since_heartbeat = 0.9
+        with patch.object(
+            orch_mod.time, "monotonic", return_value=orch_mod._HEARTBEAT_INTERVAL_S + 1.0
+        ):
+            await pipeline.feed_frame(_silence_frame())
+        assert pipeline._post_bypass_deaf_warnings == 0
+        assert pipeline._post_bypass_ineffective_emitted is False

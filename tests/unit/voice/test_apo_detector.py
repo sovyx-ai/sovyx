@@ -13,6 +13,18 @@ registry. Two mock shapes matter:
    missing, endpoint missing, FxProperties missing) must collapse to a
    best-effort empty list. The production code guarantees this because
    the startup path must survive a misconfigured Windows install.
+
+Regression context
+==================
+
+Before the 2026-04 fix this module read the wrong PKEY slots:
+``{a45c254e-...},2`` (DeviceDesc) was being treated as the friendly
+name, and ``{b3f8fa53-...},6`` (DeviceInterface_FriendlyName) was being
+treated as the enumerator. On a system with multiple USB mics every
+endpoint reported ``endpoint_name="Microfone"``, the substring matcher
+in :func:`find_endpoint_report` then collided across endpoints, and the
+detector returned the wrong report for the active device. Tests below
+exercise the corrected slots and the strict matcher.
 """
 
 from __future__ import annotations
@@ -31,6 +43,12 @@ from sovyx.voice._apo_detector import (
 # ---------------------------------------------------------------------------
 # Fake winreg
 # ---------------------------------------------------------------------------
+
+
+_PKEY_DESC = "{a45c254e-df1c-4efd-8020-67d146a850e0},2"
+_PKEY_FRIENDLY = "{a45c254e-df1c-4efd-8020-67d146a850e0},14"
+_PKEY_ENUMERATOR = "{a45c254e-df1c-4efd-8020-67d146a850e0},24"
+_PKEY_DEVICE_INTERFACE = "{b3f8fa53-0004-438e-9003-51a46e139bfc},6"
 
 
 class _FakeKey:
@@ -105,17 +123,23 @@ def _mmdevices_tree(endpoints: dict[str, dict[str, Any]]) -> _FakeKey:
     dict with keys:
 
     - ``state`` (int, required): DeviceState value (1 = active).
-    - ``friendly`` (str, optional): PKEY_Device_FriendlyName.
-    - ``enumerator`` (str, optional): PKEY_Device_EnumeratorName.
+    - ``friendly`` (str, optional): PKEY_Device_FriendlyName (PID 14).
+    - ``desc`` (str, optional): PKEY_DeviceDesc (PID 2) — fallback only.
+    - ``enumerator`` (str, optional): PKEY_Device_EnumeratorName (PID 24).
+    - ``device_interface`` (str, optional): PKEY_DeviceInterface_FriendlyName.
     - ``fx`` (list[Any], optional): ordered FxProperties values.
     """
     capture = _FakeKey(subkeys={})
     for endpoint_id, spec in endpoints.items():
         props_values: dict[str, Any] = {}
         if "friendly" in spec:
-            props_values["{a45c254e-df1c-4efd-8020-67d146a850e0},2"] = spec["friendly"]
+            props_values[_PKEY_FRIENDLY] = spec["friendly"]
+        if "desc" in spec:
+            props_values[_PKEY_DESC] = spec["desc"]
         if "enumerator" in spec:
-            props_values["{b3f8fa53-0004-438e-9003-51a46e139bfc},6"] = spec["enumerator"]
+            props_values[_PKEY_ENUMERATOR] = spec["enumerator"]
+        if "device_interface" in spec:
+            props_values[_PKEY_DEVICE_INTERFACE] = spec["device_interface"]
         properties_key = _FakeKey(values=props_values)
 
         fx_values: dict[str, Any] = {}
@@ -194,6 +218,7 @@ class TestVoiceClarityDetection:
                     "state": 1,
                     "friendly": "Microfone (Razer BlackShark V2 Pro)",
                     "enumerator": "USB",
+                    "device_interface": "Razer BlackShark V2 Pro",
                     "fx": [
                         "SWD\\DRIVERENUM\\{96bedf2c-18cb-4a15-b821-5e95ed0fea61}"
                         "#VocaEffectPack&1&2232a730&0",
@@ -207,6 +232,7 @@ class TestVoiceClarityDetection:
         rep = reports[0]
         assert rep.endpoint_name == "Microfone (Razer BlackShark V2 Pro)"
         assert rep.enumerator == "USB"
+        assert rep.device_interface_name == "Razer BlackShark V2 Pro"
         assert rep.voice_clarity_active is True
         assert "Windows Voice Clarity" in rep.known_apos
         # The KSCATEGORY_AUDIO_PROCESSING_OBJECT GUID should also surface.
@@ -310,6 +336,72 @@ class TestVoiceClarityDetection:
 
 
 # ---------------------------------------------------------------------------
+# PKEY slot correctness — regression for the 2026-04 mismatch bug
+# ---------------------------------------------------------------------------
+
+
+class TestPkeySlotCorrectness:
+    """The detector must read the *documented* PKEY slots, not adjacent ones.
+
+    Before the fix, ``endpoint_name`` was sourced from PKEY_DeviceDesc
+    (PID 2) which collapses to ``"Microfone"`` on every USB mic in
+    pt-BR Windows, and ``enumerator`` was sourced from
+    PKEY_DeviceInterface_FriendlyName (PID 6 of the device-interface
+    GUID), which is not an enumerator at all. These tests pin the
+    correct slots so the bug cannot silently regress.
+    """
+
+    def test_endpoint_name_comes_from_pid_14_not_pid_2(self) -> None:
+        """PKEY_Device_FriendlyName lives at PID 14; PID 2 is DeviceDesc."""
+        tree = _mmdevices_tree(
+            {
+                "{ep}": {
+                    "state": 1,
+                    "friendly": "Microfone (Razer BlackShark V2 Pro)",
+                    "desc": "Microfone",  # PID 2 — must be ignored when 14 present
+                    "enumerator": "USB",
+                },
+            }
+        )
+        with patch.object(sys, "platform", "win32"), _with_fake_winreg(_make_winreg_mock(tree)):
+            reports = detect_capture_apos()
+        assert reports[0].endpoint_name == "Microfone (Razer BlackShark V2 Pro)"
+
+    def test_enumerator_is_pid_24_not_device_interface_name(self) -> None:
+        """PKEY_Device_EnumeratorName is PID 24, not PID 6 of the iface GUID."""
+        tree = _mmdevices_tree(
+            {
+                "{ep}": {
+                    "state": 1,
+                    "friendly": "Mic",
+                    "enumerator": "USB",
+                    "device_interface": "Razer BlackShark V2 Pro",
+                },
+            }
+        )
+        with patch.object(sys, "platform", "win32"), _with_fake_winreg(_make_winreg_mock(tree)):
+            reports = detect_capture_apos()
+        rep = reports[0]
+        assert rep.enumerator == "USB"
+        assert rep.device_interface_name == "Razer BlackShark V2 Pro"
+
+    def test_endpoint_name_falls_back_to_desc_when_friendly_missing(self) -> None:
+        """OEM installs sometimes only populate PKEY_DeviceDesc."""
+        tree = _mmdevices_tree(
+            {
+                "{ep}": {
+                    "state": 1,
+                    "desc": "Microfone",  # only PID 2 present
+                    "enumerator": "USB",
+                },
+            }
+        )
+        with patch.object(sys, "platform", "win32"), _with_fake_winreg(_make_winreg_mock(tree)):
+            reports = detect_capture_apos()
+        assert reports[0].endpoint_name == "Microfone"
+
+
+# ---------------------------------------------------------------------------
 # Failure isolation
 # ---------------------------------------------------------------------------
 
@@ -360,19 +452,31 @@ class TestFindEndpointReport:
     def _reports(self) -> list[CaptureApoReport]:
         return [
             CaptureApoReport(
-                endpoint_id="{ep-1}",
+                endpoint_id="{ep-razer}",
                 endpoint_name="Microfone (Razer BlackShark V2 Pro)",
                 enumerator="USB",
                 fx_binding_count=3,
+                device_interface_name="Razer BlackShark V2 Pro",
                 known_apos=["Windows Voice Clarity"],
                 raw_clsids=[],
                 voice_clarity_active=True,
             ),
             CaptureApoReport(
-                endpoint_id="{ep-2}",
+                endpoint_id="{ep-c922}",
+                endpoint_name="Microfone (C922 Pro Stream Webcam)",
+                enumerator="USB",
+                fx_binding_count=3,
+                device_interface_name="C922 Pro Stream Webcam",
+                known_apos=["Windows Voice Clarity"],
+                raw_clsids=[],
+                voice_clarity_active=True,
+            ),
+            CaptureApoReport(
+                endpoint_id="{ep-defcomms}",
                 endpoint_name="Default Communications Microphone",
                 enumerator="MMDevAPI",
                 fx_binding_count=0,
+                device_interface_name="",
                 known_apos=[],
                 raw_clsids=[],
                 voice_clarity_active=False,
@@ -385,7 +489,16 @@ class TestFindEndpointReport:
             device_name="Microfone (Razer BlackShark V2 Pro)",
         )
         assert out is not None
-        assert out.endpoint_id == "{ep-1}"
+        assert out.endpoint_id == "{ep-razer}"
+
+    def test_match_by_device_interface_name(self) -> None:
+        """When PortAudio name carries the vendor string, the iface field wins."""
+        out = find_endpoint_report(
+            self._reports(),
+            device_name="Razer BlackShark V2 Pro (Microfone)",
+        )
+        assert out is not None
+        assert out.endpoint_id == "{ep-razer}"
 
     def test_truncated_portaudio_mme_name_still_matches(self) -> None:
         """MME device names are capped at 31 chars — matching must be tolerant."""
@@ -394,16 +507,51 @@ class TestFindEndpointReport:
             device_name="Microfone (Razer BlackShark V2 ",
         )
         assert out is not None
-        assert out.endpoint_id == "{ep-1}"
+        assert out.endpoint_id == "{ep-razer}"
+
+    def test_endpoint_id_exact_match_overrides_name(self) -> None:
+        """Caller-supplied endpoint_id is the strongest signal."""
+        out = find_endpoint_report(
+            self._reports(),
+            device_name="Microfone (Razer BlackShark V2 Pro)",
+            endpoint_id="{ep-c922}",
+        )
+        assert out is not None
+        assert out.endpoint_id == "{ep-c922}"
+
+    def test_bare_device_class_word_does_not_collide(self) -> None:
+        """Regression: bare "Microfone" must NOT match every "Microfone (X)" mic.
+
+        This is the bug that masked Voice Clarity on the active headset:
+        the old substring matcher returned the first endpoint whose
+        friendly name started with "Microfone", regardless of which mic
+        was actually in use. The strict matcher requires a distinctive
+        token past the device-class prefix.
+        """
+        out = find_endpoint_report(self._reports(), device_name="Microfone")
+        assert out is None
 
     def test_no_match_returns_none(self) -> None:
         assert find_endpoint_report(self._reports(), device_name="Bluetooth Headset Mic") is None
 
-    def test_none_device_name_returns_none(self) -> None:
+    def test_none_device_name_with_endpoint_id_still_works(self) -> None:
+        out = find_endpoint_report(
+            self._reports(),
+            device_name=None,
+            endpoint_id="{ep-razer}",
+        )
+        assert out is not None
+        assert out.endpoint_id == "{ep-razer}"
+
+    def test_none_device_name_no_endpoint_id_returns_none(self) -> None:
         assert find_endpoint_report(self._reports(), device_name=None) is None
 
     def test_empty_reports_returns_none(self) -> None:
         assert find_endpoint_report([], device_name="whatever") is None
+
+    def test_too_short_device_name_returns_none(self) -> None:
+        """A 3-char needle is too generic to disambiguate anything."""
+        assert find_endpoint_report(self._reports(), device_name="Mic") is None
 
 
 # ---------------------------------------------------------------------------
@@ -425,6 +573,7 @@ class TestFactoryEmitsApoDetectionEvent:
                 endpoint_name="Microfone (Razer BlackShark V2 Pro)",
                 enumerator="USB",
                 fx_binding_count=3,
+                device_interface_name="Razer BlackShark V2 Pro",
                 known_apos=["Windows Voice Clarity"],
                 raw_clsids=[],
                 voice_clarity_active=True,
@@ -480,6 +629,7 @@ class TestCatalogInvariants:
         assert rep.known_apos == []
         assert rep.raw_clsids == []
         assert rep.voice_clarity_active is False
+        assert rep.device_interface_name == ""
 
 
 # Unused import guard — SimpleNamespace imported for future test utilities.

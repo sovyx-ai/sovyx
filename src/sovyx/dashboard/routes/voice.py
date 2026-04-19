@@ -254,6 +254,7 @@ async def capture_diagnostics(request: Request) -> JSONResponse:
         {
             "endpoint_id": r.endpoint_id,
             "endpoint_name": r.endpoint_name,
+            "device_interface_name": r.device_interface_name,
             "enumerator": r.enumerator,
             "fx_binding_count": r.fx_binding_count,
             "known_apos": list(r.known_apos),
@@ -276,6 +277,7 @@ async def capture_diagnostics(request: Request) -> JSONResponse:
                 {
                     "endpoint_id": active_report.endpoint_id,
                     "endpoint_name": active_report.endpoint_name,
+                    "device_interface_name": active_report.device_interface_name,
                     "known_apos": list(active_report.known_apos),
                     "voice_clarity_active": active_report.voice_clarity_active,
                 }

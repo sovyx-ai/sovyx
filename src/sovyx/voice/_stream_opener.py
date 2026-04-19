@@ -113,6 +113,18 @@ class StreamInfo:
     Emitted by :func:`open_input_stream` so callers (meter, capture
     task, telemetry) all see the *effective* configuration — not the
     originally requested one.
+
+    On ``exclusive_used``: PortAudio's WASAPI implementation does **not**
+    silently downgrade an exclusive request to shared mode. If the
+    device, the format, or system policy refuses exclusive access,
+    ``IAudioClient::Initialize`` returns ``AUDCLNT_E_*`` and the
+    sounddevice constructor raises — the opener catches that, records
+    the attempt as failed, and tries the next combo. So
+    ``exclusive_used=True`` here means PortAudio confirmed exclusive
+    engagement at open time; it does not mean "we asked nicely". When
+    :func:`_build_wasapi_settings` cannot construct a usable
+    :class:`WasapiSettings` (old PortAudio, non-WASAPI host API), the
+    value collapses to ``False`` rather than reporting a phantom request.
     """
 
     host_api: str

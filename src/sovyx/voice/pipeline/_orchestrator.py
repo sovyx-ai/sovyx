@@ -51,6 +51,13 @@ _HEARTBEAT_INTERVAL_S = _VoiceTuning().pipeline_heartbeat_interval_seconds
 _DEAF_MIN_FRAMES = _VoiceTuning().pipeline_deaf_min_frames
 _DEAF_VAD_MAX_THRESHOLD = _VoiceTuning().pipeline_deaf_vad_max_threshold
 _DEAF_WARNINGS_BEFORE_EXCLUSIVE_RETRY = _VoiceTuning().deaf_warnings_before_exclusive_retry
+# How many deaf heartbeats to tolerate *after* the exclusive-mode bypass
+# was requested before declaring the bypass ineffective. Two heartbeats
+# (~ 2 × heartbeat interval) is enough to absorb the device close/reopen
+# round-trip without false-positiving — but short enough that operators
+# learn fast when even WASAPI exclusive cannot recover the signal
+# (firmware-level DSP, fixed-format virtual cable, broken element, ...).
+_POST_BYPASS_DEAF_WARNINGS_BEFORE_INEFFECTIVE = 2
 
 
 class VoicePipeline:
@@ -118,6 +125,17 @@ class VoicePipeline:
         self._auto_bypass_threshold = max(1, auto_bypass_threshold)
         self._bypass_requested = False
         self._deaf_warnings_consecutive = 0
+        # Post-bypass observability. When the orchestrator has already
+        # asked the capture task to re-open in WASAPI exclusive mode and
+        # we *still* see deaf heartbeats, the APO chain was not the (only)
+        # cause — exclusive mode bypassed it but the post-driver signal
+        # is still unusable for VAD. Emit a single
+        # ``voice_apo_bypass_ineffective`` warning so the dashboard /
+        # doctor can surface the actionable next step (manual disable in
+        # Sound settings, swap mic, check firmware) instead of leaving the
+        # operator believing the auto-fix worked.
+        self._post_bypass_deaf_warnings = 0
+        self._post_bypass_ineffective_emitted = False
 
         # State
         self._state = VoicePipelineState.IDLE
@@ -659,10 +677,19 @@ class VoicePipeline:
                 ),
             )
             self._maybe_request_capture_bypass()
+            if self._bypass_requested:
+                self._post_bypass_deaf_warnings += 1
+                self._maybe_emit_bypass_ineffective()
         else:
             # Reset the consecutive counter so a single healthy heartbeat
             # between two deaf ones does not trigger the auto-bypass.
             self._deaf_warnings_consecutive = 0
+            if self._bypass_requested:
+                # A healthy heartbeat after the bypass means exclusive mode
+                # restored the signal — clear the post-bypass counter so
+                # transient deafness later (e.g. user yanking the headset)
+                # is not erroneously reported as ineffective bypass.
+                self._post_bypass_deaf_warnings = 0
         self._last_heartbeat_monotonic = now
         self._max_vad_prob_since_heartbeat = 0.0
         self._vad_frames_since_heartbeat = 0
@@ -708,6 +735,39 @@ class VoicePipeline:
         # Schedule the restart on the running loop — we must not await
         # here because this helper runs on the per-frame hot path.
         asyncio.create_task(self._invoke_bypass_callback())
+
+    def _maybe_emit_bypass_ineffective(self) -> None:
+        """Emit ``voice_apo_bypass_ineffective`` once when exclusive mode didn't help.
+
+        Called after every deaf heartbeat that happens *after* the
+        bypass was requested. The emission is one-shot per session — we
+        only need to tell the operator once that "exclusive mode opened
+        but the signal is still dead". Repeated warnings would be noise
+        on top of the per-heartbeat ``voice_pipeline_deaf_warning``.
+
+        The dashboard's capture-diagnostics panel watches for this event
+        to switch its messaging from "auto-fix in progress" to "auto-fix
+        could not recover the signal — see manual remediation steps".
+        """
+        if self._post_bypass_ineffective_emitted:
+            return
+        if self._post_bypass_deaf_warnings < _POST_BYPASS_DEAF_WARNINGS_BEFORE_INEFFECTIVE:
+            return
+        self._post_bypass_ineffective_emitted = True
+        logger.error(
+            "voice_apo_bypass_ineffective",
+            mind_id=self._config.mind_id,
+            consecutive_post_bypass_deaf=self._post_bypass_deaf_warnings,
+            voice_clarity_active=self._voice_clarity_active,
+            hint=(
+                "WASAPI exclusive re-open completed but VAD is still deaf. "
+                "Likely causes: firmware-level DSP on the mic, a virtual "
+                "audio cable with a fixed format, a damaged capture element, "
+                "or a non-Voice-Clarity APO not in the detector catalog. "
+                "Try manually disabling all enhancements in Windows Sound "
+                "settings for the affected device, or switch capture device."
+            ),
+        )
 
     async def _invoke_bypass_callback(self) -> None:
         """Invoke the capture-bypass callback with full error isolation.

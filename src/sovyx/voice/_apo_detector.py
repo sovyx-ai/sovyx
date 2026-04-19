@@ -69,8 +69,21 @@ _CAPTURE_ROOT = r"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capt
 
 
 # PKEY_* registry keys (property-store GUID + PID).
-_PKEY_DEVICE_FRIENDLY_NAME = "{a45c254e-df1c-4efd-8020-67d146a850e0},2"
-_PKEY_ENUMERATOR_NAME = "{b3f8fa53-0004-438e-9003-51a46e139bfc},6"
+#
+# History: prior to the 2026-04 fix this module read PID 2 (DeviceDesc,
+# "Microfone") as the friendly name and PID 6 of the device-interface
+# GUID (DeviceInterface_FriendlyName) as the "enumerator". Both were
+# wrong: DeviceDesc collides across every USB mic on the system (so the
+# substring matcher in ``find_endpoint_report`` would happily return the
+# C922's report when asked about the Razer headset), and the PID-6
+# value isn't an enumerator name at all. The constants below now point
+# at the documented PKEY_* slots used by the Windows audio stack.
+_PROPS_FMTID = "{a45c254e-df1c-4efd-8020-67d146a850e0}"
+_DEV_IFACE_FMTID = "{b3f8fa53-0004-438e-9003-51a46e139bfc}"
+_PKEY_DEVICE_FRIENDLY_NAME = f"{_PROPS_FMTID},14"
+_PKEY_DEVICE_DESC = f"{_PROPS_FMTID},2"
+_PKEY_ENUMERATOR_NAME = f"{_PROPS_FMTID},24"
+_PKEY_DEVICE_INTERFACE_NAME = f"{_DEV_IFACE_FMTID},6"
 _DEVICE_STATE_ACTIVE = 1
 
 
@@ -123,7 +136,13 @@ class CaptureApoReport:
         endpoint_id: The MMDevices endpoint GUID (registry subkey name).
         endpoint_name: The PKEY_Device_FriendlyName property — what the
             user sees in Sound settings (e.g. ``"Microfone (Razer
-            BlackShark V2 Pro)"``).
+            BlackShark V2 Pro)"``). Falls back to PKEY_DeviceDesc when
+            the friendly name is absent (rare, but observed on some OEM
+            installs).
+        device_interface_name: The PKEY_DeviceInterface_FriendlyName
+            (e.g. ``"Razer BlackShark V2 Pro"``) — typically the most
+            distinctive, vendor-supplied string for a USB endpoint and
+            our preferred matching key against PortAudio device names.
         enumerator: The PKEY_Device_EnumeratorName (``USB``, ``BTHENUM``,
             ``MMDevAPI``, ``SWD``, ...). Useful for correlating with the
             PortAudio device host API.
@@ -144,6 +163,7 @@ class CaptureApoReport:
     endpoint_name: str
     enumerator: str
     fx_binding_count: int
+    device_interface_name: str = ""
     known_apos: list[str] = field(default_factory=list)
     raw_clsids: list[str] = field(default_factory=list)
     voice_clarity_active: bool = False
@@ -205,27 +225,87 @@ def find_endpoint_report(
     reports: list[CaptureApoReport],
     *,
     device_name: str | None,
+    endpoint_id: str | None = None,
 ) -> CaptureApoReport | None:
-    """Pick the report whose friendly name matches the active device.
+    """Pick the report that corresponds to the active capture device.
 
-    PortAudio device names and MMDevices friendly names usually align
-    (both ultimately come from ``PKEY_Device_FriendlyName``) but MME
-    truncates to 31 chars and WASAPI adds a suffix. We match by
-    substring in *both directions* so the lookup is robust to either
-    side being a prefix.
+    Resolution order, strongest signal first:
+
+    1. **Endpoint GUID exact match.** When the caller can supply the
+       MMDevices ``{guid}`` directly (e.g. from PortAudio's WASAPI
+       extra info), this is unambiguous.
+    2. **Device-interface name match.** ``PKEY_DeviceInterface_FriendlyName``
+       carries the vendor-supplied string (``"Razer BlackShark V2 Pro"``)
+       which is reliably distinctive across endpoints. We require both
+       directions of substring containment AND a minimum needle length
+       so that a generic prefix like ``"Microfone"`` cannot promiscuously
+       match every USB mic on the system.
+    3. **Endpoint friendly-name match** with the same strict containment
+       rule, as a final fallback.
+
+    The previous implementation matched any substring overlap on the
+    friendly name; on systems where every USB mic is exposed as
+    ``"Microfone (...)"`` (Windows pt-BR, common configuration) the
+    first endpoint always won, regardless of which device was actually
+    in use. That bug masked Voice Clarity APO detection on the active
+    headset and is the reason the strict matcher exists.
     """
-    if not reports or not device_name:
+    if not reports:
+        return None
+
+    if endpoint_id:
+        ep_needle = endpoint_id.strip().lower()
+        if ep_needle:
+            for rep in reports:
+                if rep.endpoint_id.strip().lower() == ep_needle:
+                    return rep
+
+    if not device_name:
         return None
     needle = device_name.strip().lower()
-    if not needle:
+    if len(needle) < 4:
         return None
+
+    for rep in reports:
+        hay = rep.device_interface_name.strip().lower()
+        if hay and _strict_name_match(needle, hay):
+            return rep
+
     for rep in reports:
         hay = rep.endpoint_name.strip().lower()
-        if not hay:
-            continue
-        if needle in hay or hay in needle:
+        if hay and _strict_name_match(needle, hay):
             return rep
+
     return None
+
+
+def _strict_name_match(needle: str, hay: str) -> bool:
+    """Return ``True`` when ``needle`` and ``hay`` plausibly name the same device.
+
+    Both strings must be at least 4 chars and the shorter of the two
+    must be at least 6 chars (or the entire opposite string) to count.
+    This rejects degenerate matches like ``"Microfone"`` (9 chars but
+    not distinctive) being absorbed by every ``"Microfone (X)"`` value.
+    """
+    if not needle or not hay:
+        return False
+    if needle == hay:
+        return True
+    short, long_ = (needle, hay) if len(needle) <= len(hay) else (hay, needle)
+    if len(short) < 6:
+        return False
+    if short not in long_:
+        return False
+    # Reject prefix-only collisions like bare "microfone" ⊂ "microfone (...)".
+    # Require the short string to carry a distinctive token *past* a leading
+    # generic device-class word. If the short string is itself a single
+    # device-class word ("microfone", "microphone", "line in", ...) we
+    # bail out and let the caller fall back to endpoint_id matching.
+    if " " not in short and "(" not in short:
+        return False
+    distinctive = short.split(" ", 1)[-1] if " " in short else short.split("(", 1)[-1]
+    distinctive = distinctive.strip(" ()")
+    return len(distinctive) >= 4 and distinctive in long_
 
 
 def _read_endpoint(winreg_mod: object, root: object, endpoint_id: str) -> CaptureApoReport | None:
@@ -246,7 +326,13 @@ def _read_endpoint(winreg_mod: object, root: object, endpoint_id: str) -> Captur
             return None
 
         friendly = _read_property(wr, ep, "Properties", _PKEY_DEVICE_FRIENDLY_NAME)
+        if not friendly:
+            # OEM installs occasionally omit PKEY_Device_FriendlyName and only
+            # populate PKEY_DeviceDesc ("Microfone"). It's a worse string for
+            # disambiguation but better than empty.
+            friendly = _read_property(wr, ep, "Properties", _PKEY_DEVICE_DESC)
         enumerator = _read_property(wr, ep, "Properties", _PKEY_ENUMERATOR_NAME)
+        device_iface = _read_property(wr, ep, "Properties", _PKEY_DEVICE_INTERFACE_NAME)
         fx_values = _read_fx_properties(wr, ep)
 
         known: list[str] = []
@@ -276,6 +362,7 @@ def _read_endpoint(winreg_mod: object, root: object, endpoint_id: str) -> Captur
             endpoint_name=str(friendly or ""),
             enumerator=str(enumerator or ""),
             fx_binding_count=len(fx_values),
+            device_interface_name=str(device_iface or ""),
             known_apos=known,
             raw_clsids=raw_clsids,
             voice_clarity_active=voice_clarity,
