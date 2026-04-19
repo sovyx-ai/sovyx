@@ -23,6 +23,13 @@ and may move between releases.
 from __future__ import annotations
 
 from sovyx.voice.health.capture_overrides import CaptureOverrides
+from sovyx.voice.health.cascade import (
+    LINUX_CASCADE,
+    MACOS_CASCADE,
+    WINDOWS_CASCADE,
+    ProbeCallable,
+    run_cascade,
+)
 from sovyx.voice.health.combo_store import ComboStore
 from sovyx.voice.health.contract import (
     ALLOWED_FORMATS,
@@ -55,11 +62,16 @@ __all__ = [
     "ComboStore",
     "ComboStoreStats",
     "Diagnosis",
+    "LINUX_CASCADE",
     "LoadReport",
+    "MACOS_CASCADE",
     "OverrideEntry",
+    "ProbeCallable",
     "ProbeHistoryEntry",
     "ProbeMode",
     "ProbeResult",
     "RemediationHint",
+    "WINDOWS_CASCADE",
     "probe",
+    "run_cascade",
 ]
