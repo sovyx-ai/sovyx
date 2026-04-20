@@ -91,6 +91,12 @@ if TYPE_CHECKING:
     from sovyx.observability.pii import (
         PIIRedactor as PIIRedactor,
     )
+    from sovyx.observability.ringbuffer import (
+        RingBufferHandler as RingBufferHandler,
+    )
+    from sovyx.observability.ringbuffer import (
+        install_crash_hooks as install_crash_hooks,
+    )
     from sovyx.observability.sampling import (
         SamplingProcessor as SamplingProcessor,
     )
@@ -175,6 +181,7 @@ _SUBMODULE_MAP: dict[str, tuple[str, ...]] = {
     ),
     "sovyx.observability.envelope": ("EnvelopeProcessor",),
     "sovyx.observability.pii": ("PIIRedactor",),
+    "sovyx.observability.ringbuffer": ("RingBufferHandler", "install_crash_hooks"),
     "sovyx.observability.sampling": ("SamplingProcessor",),
     "sovyx.observability.schema": (
         "ENVELOPE_FIELDS",
@@ -231,6 +238,7 @@ __all__ = [
     "LogEntry",
     "MetricsRegistry",
     "PIIRedactor",
+    "RingBufferHandler",
     "SLODefinition",
     "SamplingProcessor",
     "SLOMonitor",
@@ -250,6 +258,7 @@ __all__ = [
     "get_metrics",
     "get_request_context",
     "get_tracer",
+    "install_crash_hooks",
     "setup_logging",
     "setup_metrics",
     "setup_tracing",
