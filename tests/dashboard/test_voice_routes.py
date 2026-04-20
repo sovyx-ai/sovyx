@@ -370,6 +370,81 @@ class TestEnableVoiceCaptureWiring:
         # writes and no pipeline tear-down.
         app.state.registry.register_instance.assert_not_called()
 
+    def test_enable_closes_live_voice_test_sessions_before_factory(
+        self, app, client: TestClient
+    ) -> None:
+        """v0.20.2 / Bug B — /enable must release the browser meter's mic.
+
+        A live voice_test session holds PortAudio open on the capture
+        endpoint; if /enable calls into the factory while that session
+        is running, every cascade probe fails with DEVICE_BUSY. The
+        route closes + waits for every voice_test session BEFORE
+        invoking ``create_voice_pipeline``.
+        """
+        from sovyx.voice.device_test import CloseReason, SessionRegistry
+
+        registry_spy = SessionRegistry(max_per_token=1, force_close_grace_s=0.05)
+        app.state.voice_test_registry = registry_spy
+
+        fake_sd = ModuleType("sounddevice")
+        fake_sd.query_devices = MagicMock(  # type: ignore[attr-defined]
+            return_value=[
+                {"name": "mic", "max_input_channels": 1, "max_output_channels": 0},
+                {"name": "spk", "max_input_channels": 0, "max_output_channels": 2},
+            ],
+        )
+
+        capture = MagicMock()
+        capture.start = AsyncMock()
+        pipeline = MagicMock()
+        pipeline.stop = AsyncMock()
+        pipeline.config.wake_word_enabled = False
+
+        from sovyx.voice.factory import VoiceBundle
+
+        bundle = VoiceBundle(pipeline=pipeline, capture_task=capture)
+
+        call_order: list[str] = []
+        close_all_kwargs: dict[str, object] = {}
+
+        async def _tracked_close_all(*, reason: CloseReason = CloseReason.SERVER_SHUTDOWN) -> None:
+            call_order.append("close_all")
+            close_all_kwargs["reason"] = reason
+
+        async def _tracked_factory(*args: object, **kwargs: object) -> VoiceBundle:
+            call_order.append("factory")
+            return bundle
+
+        registry_spy.close_all = _tracked_close_all  # type: ignore[method-assign]
+
+        with (
+            patch(
+                "sovyx.voice.model_registry.check_voice_deps",
+                return_value=(
+                    [
+                        {"module": "moonshine_voice", "package": "moonshine-voice"},
+                        {"module": "sounddevice", "package": "sounddevice"},
+                    ],
+                    [],
+                ),
+            ),
+            patch("sovyx.voice.model_registry.detect_tts_engine", return_value="piper"),
+            patch.dict(sys.modules, {"sounddevice": fake_sd}),
+            patch(
+                "sovyx.voice.factory.create_voice_pipeline",
+                new=AsyncMock(side_effect=_tracked_factory),
+            ),
+        ):
+            resp = client.post("/api/voice/enable")
+
+        assert resp.status_code == 200  # noqa: PLR2004
+        # Invariant: close_all happens BEFORE create_voice_pipeline.
+        # If ordering slips, the factory probes the mic while the old
+        # voice_test session still owns the PortAudio endpoint, and
+        # every cascade probe hits DEVICE_BUSY.
+        assert call_order == ["close_all", "factory"]
+        assert close_all_kwargs == {"reason": CloseReason.SERVER_SHUTDOWN}
+
 
 class TestEnableVoiceLanguageCoherence:
     """``/enable`` forwards the mind's language + voice_id into the factory.

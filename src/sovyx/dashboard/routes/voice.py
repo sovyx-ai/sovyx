@@ -605,6 +605,19 @@ async def enable_voice(request: Request) -> JSONResponse:
         if registry.is_registered(VoicePipeline):
             return JSONResponse({"ok": True, "status": "already_active"})
 
+    # 3.5 v0.20.2 / Bug B — close + wait for any live voice_test meter
+    # sessions BEFORE the factory probes the mic. Without this the old
+    # session keeps PortAudio open on the capture endpoint and the
+    # cascade probes inside create_voice_pipeline fail with
+    # ``DEVICE_BUSY`` while the browser meter is still streaming.
+    voice_test_registry = getattr(request.app.state, "voice_test_registry", None)
+    if voice_test_registry is not None:
+        from sovyx.voice.device_test import CloseReason, SessionRegistry
+
+        if isinstance(voice_test_registry, SessionRegistry):
+            with contextlib.suppress(Exception):
+                await voice_test_registry.close_all(reason=CloseReason.SERVER_SHUTDOWN)
+
     # 4. Create pipeline
     from sovyx.voice.factory import VoiceFactoryError, create_voice_pipeline
 

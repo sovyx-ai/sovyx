@@ -333,6 +333,13 @@ class VoiceTuningConfig(BaseSettings):
     device_test_max_sessions_per_token: int = 1  # singleton per user
     device_test_max_phrase_chars: int = 200  # TTS test phrase cap
     device_test_output_job_ttl_seconds: int = 60  # job cleanup
+    # v0.20.2 / Bug B — session lifecycle hard caps. Browser tabs that
+    # freeze, get minimised, or have a dead WS peer cannot hold the mic
+    # indefinitely; these caps guarantee the capture endpoint is released
+    # for the production voice pipeline within a bounded time.
+    device_test_max_lifetime_s: float = 300.0  # 5 min absolute session cap
+    device_test_peer_alive_timeout_s: float = 10.0  # no-send watchdog
+    device_test_force_close_grace_s: float = 2.0  # stop→close grace window
 
 
 class LLMTuningConfig(BaseSettings):

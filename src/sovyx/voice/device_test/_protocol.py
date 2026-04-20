@@ -62,10 +62,32 @@ class ErrorCode(StrEnum):
 
 
 class CloseReason(StrEnum):
-    """Reason labels for :class:`ClosedFrame`."""
+    """Reason labels for :class:`ClosedFrame`.
+
+    Members:
+        CLIENT_DISCONNECT: WebSocket peer closed normally.
+        SERVER_SHUTDOWN: Server-initiated close (process shutdown, global
+            close-all on pipeline-enable).
+        DEVICE_CHANGED: Device configuration changed mid-session.
+        SESSION_REPLACED: Newer session from the same auth token bumped
+            this one.
+        DEVICE_ERROR: PortAudio / source raised; see adjacent ErrorFrame.
+        MAX_LIFETIME: v0.20.2 / Bug B — the session exceeded
+            :attr:`VoiceTuningConfig.device_test_max_lifetime_s`. Browser
+            tabs that freeze / get minimised can keep a WS open but stop
+            reading frames; the hard cap releases the mic for the real
+            voice pipeline instead of leaking forever.
+        PEER_DEAD: v0.20.2 / Bug B — no successful send for
+            :attr:`VoiceTuningConfig.device_test_peer_alive_timeout_s`
+            seconds. The WS claims to be open but the peer is not
+            receiving (backgrounded tab, frozen browser, network path
+            gone silent). Close to release the audio device.
+    """
 
     CLIENT_DISCONNECT = "client_disconnect"
     SERVER_SHUTDOWN = "server_shutdown"
     DEVICE_CHANGED = "device_changed"
     SESSION_REPLACED = "session_replaced"
     DEVICE_ERROR = "device_error"
+    MAX_LIFETIME = "max_lifetime"
+    PEER_DEAD = "peer_dead"

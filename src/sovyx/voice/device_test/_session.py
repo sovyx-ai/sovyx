@@ -40,13 +40,32 @@ logger = get_logger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class SessionConfig:
-    """Runtime knobs derived from :class:`VoiceTuningConfig`."""
+    """Runtime knobs derived from :class:`VoiceTuningConfig`.
+
+    Attributes:
+        frame_rate_hz / peak_hold_ms / peak_decay_db_per_sec /
+            vad_trigger_db / clipping_db: meter ballistics.
+        max_lifetime_s: v0.20.2 / Bug B — hard cap on total session
+            wall-clock duration. ``0`` disables.
+        peer_alive_timeout_s: v0.20.2 / Bug B — if the sender cannot
+            deliver a frame for this many seconds (typically because the
+            peer tab is frozen / backgrounded / the WS path is dead) the
+            session closes with :attr:`CloseReason.PEER_DEAD`. ``0``
+            disables.
+        force_close_grace_s: v0.20.2 / Bug B — after :meth:`stop` is
+            called, wait this long for :meth:`run` to finalize before
+            :meth:`force_close` kicks the source shut directly. ``0``
+            means no grace (force-close immediately on stop).
+    """
 
     frame_rate_hz: int
     peak_hold_ms: int
     peak_decay_db_per_sec: float
     vad_trigger_db: float
     clipping_db: float
+    max_lifetime_s: float = 300.0
+    peer_alive_timeout_s: float = 10.0
+    force_close_grace_s: float = 2.0
 
 
 class WSSender:
@@ -97,19 +116,77 @@ class TestSession:
         )
         self._loop = loop or asyncio.get_event_loop()
         self._stop_event = asyncio.Event()
+        # v0.20.2 / Bug B — signalled after :meth:`_finalize` finishes,
+        # so :meth:`wait_closed` can synchronise on actual source
+        # release. The plain ``self._closed`` flag is not awaitable and
+        # flips earlier (inside finalize) than the source-close path
+        # the caller actually needs to wait for.
+        self._closed_event = asyncio.Event()
         self._closed = False
+        self._started = False
+        self._stop_reason: CloseReason | None = None
 
     @property
     def session_id(self) -> str:
         return self._session_id
 
     async def stop(self, reason: CloseReason = CloseReason.SERVER_SHUTDOWN) -> None:
-        """Request the :meth:`run` loop to drain and exit gracefully."""
-        self._stop_reason = reason
+        """Request the :meth:`run` loop to drain and exit gracefully.
+
+        Idempotent — subsequent calls keep the original reason so a
+        concurrent max-lifetime timer doesn't overwrite a caller's
+        explicit ``SESSION_REPLACED`` label.
+        """
+        if self._stop_reason is None:
+            self._stop_reason = reason
         self._stop_event.set()
+
+    async def wait_closed(self, timeout: float | None = None) -> bool:
+        """Wait for :meth:`_finalize` to finish releasing the source.
+
+        v0.20.2 / Bug B. Returns ``True`` if the session closed within
+        ``timeout`` (or was already closed), ``False`` on timeout. The
+        registry awaits this before handing the mic to a new session so
+        PortAudio does not get two concurrent owners on the same
+        endpoint — the classic cause of the "voice_test holds the mic
+        across /api/voice/enable" class of failures.
+        """
+        if self._closed_event.is_set():
+            return True
+        try:
+            await asyncio.wait_for(self._closed_event.wait(), timeout=timeout)
+        except TimeoutError:
+            return False
+        return True
+
+    async def force_close(self) -> None:
+        """Release the audio source synchronously from an outside caller.
+
+        v0.20.2 / Bug B. Used after :meth:`wait_closed` times out — the
+        :meth:`run` coroutine is stuck (frozen peer, slow WS drain,
+        PortAudio hang) and the mic must be freed NOW so the production
+        pipeline can open it. Subsequent close calls from :meth:`run`
+        become no-ops via the idempotent ``_closed`` flag in
+        :meth:`_finalize`.
+
+        Idempotent and safe to call even when the source never opened.
+        """
+        if self._closed:
+            # :meth:`run` already finalized — nothing to force.
+            self._closed_event.set()
+            return
+        self._closed = True
+        await self._safe_close_source()
+        self._closed_event.set()
+        logger.warning(
+            "voice_test_session_force_closed",
+            session_id=self._session_id,
+            stop_reason=(self._stop_reason.value if self._stop_reason else None),
+        )
 
     async def run(self) -> None:
         """Open the device and stream meter frames until stopped."""
+        self._started = True
         reason = CloseReason.CLIENT_DISCONNECT
         try:
             info = await self._source.open()
@@ -157,20 +234,48 @@ class TestSession:
 
     async def _stream_levels(self) -> CloseReason:
         frame_interval = 1.0 / self._config.frame_rate_hz
-        last_emit = self._loop.time()
+        open_ts = self._loop.time()
+        last_emit = open_ts
+        # v0.20.2 / Bug B — track the last *successful* send so we can
+        # detect a frozen / backgrounded peer that leaves the WS half-
+        # open. Seeded to open_ts so a peer that never reads anything
+        # still trips the watchdog after peer_alive_timeout_s.
+        last_successful_send = open_ts
         explicit_reason: CloseReason | None = None
 
         stop_task = asyncio.create_task(self._stop_event.wait())
         try:
             async for audio_frame in self._source.frames():
                 if self._stop_event.is_set():
-                    explicit_reason = getattr(
-                        self,
-                        "_stop_reason",
-                        CloseReason.SERVER_SHUTDOWN,
-                    )
+                    explicit_reason = self._stop_reason or CloseReason.SERVER_SHUTDOWN
                     break
                 now = self._loop.time()
+                # Max-lifetime cap: browser tabs left open for hours
+                # must not hold the mic forever.
+                if (
+                    self._config.max_lifetime_s > 0
+                    and (now - open_ts) >= self._config.max_lifetime_s
+                ):
+                    explicit_reason = CloseReason.MAX_LIFETIME
+                    logger.info(
+                        "voice_test_session_max_lifetime",
+                        session_id=self._session_id,
+                        lifetime_s=round(now - open_ts, 2),
+                    )
+                    break
+                # Peer-aliveness watchdog: if we cannot push a frame for
+                # peer_alive_timeout_s, the peer is effectively dead.
+                if (
+                    self._config.peer_alive_timeout_s > 0
+                    and (now - last_successful_send) >= self._config.peer_alive_timeout_s
+                ):
+                    explicit_reason = CloseReason.PEER_DEAD
+                    logger.info(
+                        "voice_test_session_peer_dead",
+                        session_id=self._session_id,
+                        silent_s=round(now - last_successful_send, 2),
+                    )
+                    break
                 reading = self._meter.process(audio_frame, clock_s=now)
                 if now - last_emit < frame_interval:
                     # Under-sample: drop frames to maintain target rate.
@@ -188,6 +293,7 @@ class TestSession:
                 except Exception:  # noqa: BLE001
                     # Client went away.
                     return CloseReason.CLIENT_DISCONNECT
+                last_successful_send = self._loop.time()
         finally:
             stop_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -213,19 +319,28 @@ class TestSession:
 
     async def _finalize(self, reason: CloseReason) -> None:
         if self._closed:
+            # Another caller (force_close) already released resources —
+            # still signal the event in case run finalized after force.
+            self._closed_event.set()
             return
         self._closed = True
-        await self._safe_close_source()
-        with contextlib.suppress(Exception):
-            await self._sender.send_json(ClosedFrame(reason=reason).model_dump())
-        close_code = _close_code_for_reason(reason)
-        with contextlib.suppress(Exception):
-            await self._sender.close(close_code, reason.value)
-        logger.info(
-            "voice_test_session_closed",
-            session_id=self._session_id,
-            reason=reason.value,
-        )
+        try:
+            await self._safe_close_source()
+            with contextlib.suppress(Exception):
+                await self._sender.send_json(ClosedFrame(reason=reason).model_dump())
+            close_code = _close_code_for_reason(reason)
+            with contextlib.suppress(Exception):
+                await self._sender.close(close_code, reason.value)
+            logger.info(
+                "voice_test_session_closed",
+                session_id=self._session_id,
+                reason=reason.value,
+            )
+        finally:
+            # v0.20.2 / Bug B — unblock wait_closed() regardless of
+            # sender errors. The registry's hand-off to a new session
+            # cannot deadlock on a broken WebSocket send.
+            self._closed_event.set()
 
     async def _safe_close_source(self) -> None:
         try:
@@ -244,7 +359,12 @@ def _round(value: float) -> float:
 
 
 def _close_code_for_reason(reason: CloseReason) -> int:
-    """Map internal :class:`CloseReason` to WS close codes."""
+    """Map internal :class:`CloseReason` to WS close codes.
+
+    MAX_LIFETIME + PEER_DEAD use 1000 (normal closure) — the server is
+    the one initiating the close for hygiene, not signalling an
+    application-level error that clients should retry against.
+    """
     from sovyx.voice.device_test._protocol import (
         WS_CLOSE_DEVICE_ERROR,
         WS_CLOSE_REPLACED,
@@ -269,13 +389,25 @@ class SessionRegistry:
     a token that already has one causes the older session to receive a
     :class:`ClosedFrame` with reason ``session_replaced`` before being
     dropped. This prevents runaway meter sessions from idle browser tabs.
+
+    v0.20.2 / Bug B — :meth:`register` and :meth:`close_all` now await
+    :meth:`TestSession.wait_closed` after :meth:`TestSession.stop` so
+    the mic is actually released before the hand-off completes. On
+    timeout, :meth:`TestSession.force_close` releases the source
+    directly. ``force_close_grace_s`` tunes the wait.
     """
 
-    def __init__(self, *, max_per_token: int = 1) -> None:
+    def __init__(
+        self,
+        *,
+        max_per_token: int = 1,
+        force_close_grace_s: float = 2.0,
+    ) -> None:
         if max_per_token <= 0:
             msg = "max_per_token must be > 0"
             raise ValueError(msg)
         self._max = max_per_token
+        self._force_close_grace_s = force_close_grace_s
         self._sessions: dict[str, list[TestSession]] = {}
         self._locks: LRULockDict[str] = LRULockDict(maxsize=2_048)
 
@@ -286,20 +418,28 @@ class SessionRegistry:
     ) -> list[TestSession]:
         """Register a new session, returning the list of superseded sessions.
 
-        The caller is expected to call :meth:`TestSession.stop` on every
-        returned session (with reason ``SESSION_REPLACED``) before
-        awaiting :meth:`TestSession.run` on the new one.
+        Pre-v0.20.2 the caller was responsible for stopping superseded
+        sessions. v0.20.2 / Bug B — the registry itself now stops +
+        waits + force-closes superseded sessions BEFORE returning, so
+        the caller can safely open PortAudio on the same endpoint
+        without racing the old session's source. Returned list is kept
+        for telemetry / logging only — every session in it is already
+        fully closed by the time it's returned.
         """
         async with self._locks[token_key]:
             active = self._sessions.setdefault(token_key, [])
-            to_evict = active[: -self._max] if len(active) >= self._max else []
-            # Always keep only the last (max - 1) + new one after register.
+            to_evict: list[TestSession] = []
             if len(active) >= self._max:
                 to_evict = active[: len(active) - (self._max - 1)]
                 active = [s for s in active if s not in to_evict]
             active.append(session)
             self._sessions[token_key] = active
-            return to_evict
+
+        # Stop + wait_closed + force_close OUTSIDE the lock so a stuck
+        # source cannot block other tokens' registrations.
+        if to_evict:
+            await self._stop_and_wait(to_evict, reason=CloseReason.SESSION_REPLACED)
+        return to_evict
 
     async def unregister(self, token_key: str, session: TestSession) -> None:
         async with self._locks[token_key]:
@@ -314,16 +454,54 @@ class SessionRegistry:
         async with self._locks[token_key]:
             return len(self._sessions.get(token_key, []))
 
-    async def close_all(self) -> None:
-        """Shut down every session (server shutdown hook)."""
+    async def close_all(self, *, reason: CloseReason = CloseReason.SERVER_SHUTDOWN) -> None:
+        """Shut down every session and wait for each to release its source.
+
+        Used as a server-shutdown hook AND as a pre-enable hook from
+        ``/api/voice/enable`` so the production pipeline can open the
+        mic without fighting a live meter session (v0.20.2 / Bug B).
+        """
         all_sessions: list[TestSession] = []
-        # Snapshot without holding locks while we stop.
+        # Snapshot under locks, then release locks before stopping.
         for token_key in list(self._sessions.keys()):
             async with self._locks[token_key]:
                 all_sessions.extend(self._sessions.get(token_key, []))
-        for sess in all_sessions:
+        if all_sessions:
+            await self._stop_and_wait(all_sessions, reason=reason)
+
+    async def _stop_and_wait(
+        self,
+        sessions: list[TestSession],
+        *,
+        reason: CloseReason,
+    ) -> None:
+        """Stop each session, await its close, force-close on timeout.
+
+        Runs per-session sequentially on purpose: PortAudio driver
+        cleanup on Windows is not reentrant-safe across concurrent
+        close() calls on different streams sharing the same endpoint.
+        The wait_closed timeout is small (grace window) so N stuck
+        sessions still release within ~N × grace_s worst-case.
+
+        Sessions whose :meth:`TestSession.run` was never invoked
+        (e.g. registered but never scheduled) skip the wait entirely
+        and jump to :meth:`TestSession.force_close` — there is no run
+        loop to finalize, so waiting would just burn the grace window.
+        """
+        for sess in sessions:
             with contextlib.suppress(Exception):
-                await sess.stop(CloseReason.SERVER_SHUTDOWN)
+                await sess.stop(reason)
+            if not sess._started:
+                with contextlib.suppress(Exception):
+                    await sess.force_close()
+                continue
+            released = await sess.wait_closed(timeout=self._force_close_grace_s)
+            if not released:
+                # Stuck run loop (frozen sender, unresponsive PortAudio).
+                # Kick the source shut directly so the next caller can
+                # open the mic.
+                with contextlib.suppress(Exception):
+                    await sess.force_close()
 
 
 def new_session_id() -> str:

@@ -57,7 +57,6 @@ from sovyx.voice.device_test import (
     WS_CLOSE_RATE_LIMITED,
     WS_CLOSE_UNAUTHORIZED,
     AudioSinkError,
-    CloseReason,
     DeviceInfo,
     DevicesResponse,
     ErrorCode,
@@ -140,7 +139,10 @@ def _get_session_registry(request_or_ws: Request | WebSocket) -> SessionRegistry
     if isinstance(existing, SessionRegistry):
         return existing
     tuning = _get_tuning(request_or_ws)
-    reg = SessionRegistry(max_per_token=tuning.device_test_max_sessions_per_token)
+    reg = SessionRegistry(
+        max_per_token=tuning.device_test_max_sessions_per_token,
+        force_close_grace_s=tuning.device_test_force_close_grace_s,
+    )
     request_or_ws.app.state.voice_test_registry = reg
     return reg
 
@@ -371,17 +373,17 @@ async def websocket_input_meter(
             peak_decay_db_per_sec=tuning.device_test_peak_decay_db_per_sec,
             vad_trigger_db=tuning.device_test_vad_trigger_db,
             clipping_db=tuning.device_test_clipping_db,
+            max_lifetime_s=tuning.device_test_max_lifetime_s,
+            peer_alive_timeout_s=tuning.device_test_peer_alive_timeout_s,
+            force_close_grace_s=tuning.device_test_force_close_grace_s,
         ),
     )
 
     registry = _get_session_registry(websocket)
-    superseded = await registry.register(token_key, session)
-    for old in superseded:
-        with contextlib.suppress(Exception):
-            await old.stop(CloseReason.SESSION_REPLACED)
-        # Give the old session a chance to emit its ClosedFrame before we
-        # start pumping new frames on the same token.
-        await asyncio.sleep(0)
+    # v0.20.2 / Bug B — the registry now stops + wait_closed + force_close
+    # any superseded sessions INSIDE register() before returning, so by
+    # the time we call session.run() the mic is guaranteed free.
+    await registry.register(token_key, session)
 
     logger.info(
         "voice_test_session_opened",
