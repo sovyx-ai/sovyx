@@ -69,8 +69,12 @@ from sovyx.voice.health._default_device import (
     NoopDefaultDeviceWatcher,
 )
 from sovyx.voice.health._hotplug import HotplugListener, NoopHotplugListener
-from sovyx.voice.health._metrics import record_recovery_attempt
+from sovyx.voice.health._metrics import (
+    record_kernel_invalidated_event,
+    record_recovery_attempt,
+)
 from sovyx.voice.health._power import NoopPowerEventListener, PowerEventListener
+from sovyx.voice.health._quarantine import EndpointQuarantine, get_default_quarantine
 from sovyx.voice.health.contract import (
     AudioServiceEvent,
     AudioServiceEventKind,
@@ -201,6 +205,7 @@ class VoiceCaptureWatchdog:
         max_attempts: int | None = None,
         resume_settle_s: float | None = None,
         audio_service_restart_timeout_s: float | None = None,
+        quarantine: EndpointQuarantine | None = None,
     ) -> None:
         if not active_endpoint_guid:
             msg = "active_endpoint_guid must be a non-empty string"
@@ -243,6 +248,12 @@ class VoiceCaptureWatchdog:
         self._audio_service_up = asyncio.Event()
         self._audio_service_up.set()
         self._audio_service_down_waiter: asyncio.Task[None] | None = None
+        # §4.4.7 — the quarantine store is shared across the cascade,
+        # the watchdog (hot-plug clear), and the recheck loop. Default
+        # to the process singleton so callers don't have to thread it.
+        self._quarantine: EndpointQuarantine = (
+            quarantine if quarantine is not None else get_default_quarantine()
+        )
         self._started = False
 
     # ── Lifecycle ────────────────────────────────────────────────────────
@@ -403,6 +414,14 @@ class VoiceCaptureWatchdog:
     async def _on_hotplug(self, event: HotplugEvent) -> None:
         if not self._started:
             return
+        # §4.4.7 — a USB replug or driver reload is the canonical cure for
+        # a kernel-invalidated endpoint. Clear quarantine on either kind
+        # of event regardless of whether it targets the active endpoint:
+        # the quarantine spans every endpoint we've ever failed-over from,
+        # so an event for one of those non-active GUIDs must still clear
+        # it so the next factory boot can pick that endpoint again.
+        if event.kind in {HotplugEventKind.DEVICE_REMOVED, HotplugEventKind.DEVICE_ADDED}:
+            self._maybe_clear_quarantine_on_hotplug(event)
         if event.kind == HotplugEventKind.DEFAULT_DEVICE_CHANGED:
             await self._handle_default_device_change(event)
             return
@@ -421,6 +440,74 @@ class VoiceCaptureWatchdog:
             matches_active=is_active,
             state=self._state.value,
         )
+
+    def _maybe_clear_quarantine_on_hotplug(self, event: HotplugEvent) -> None:
+        """Clear quarantine for the event's endpoint when applicable.
+
+        Three resolution rules, in order:
+
+        1. Direct GUID match — every backend (Windows ``IMMNotificationClient``,
+           Linux ``udev``, macOS ``IOAudio``) tries to populate
+           ``endpoint_guid``. When present and the GUID is quarantined,
+           clear it.
+        2. Friendly-name match — Linux ``udev`` events typically lack a
+           GUID but report a stable interface name. We scan the live
+           snapshot for the first entry whose ``device_friendly_name``
+           or ``device_interface_name`` matches the event's labels.
+        3. Otherwise no-op — a generic add/remove with no identifying
+           fields cannot safely clear any specific entry.
+        """
+        guid = event.endpoint_guid
+        if guid and self._quarantine.is_quarantined(guid):
+            entry = self._quarantine.get(guid)
+            if self._quarantine.clear(guid, reason="hotplug_clear"):
+                record_kernel_invalidated_event(
+                    platform=self._platform_key_for_metric(),
+                    host_api=entry.host_api if entry is not None else "unknown",
+                    action="hotplug_clear",
+                )
+                logger.info(
+                    "voice_kernel_invalidated_hotplug_clear",
+                    endpoint=guid,
+                    kind=event.kind.value,
+                )
+            return
+        friendly = event.device_friendly_name
+        interface = event.device_interface_name
+        if not friendly and not interface:
+            return
+        for entry in self._quarantine.snapshot():
+            label_match = bool(
+                (friendly and entry.device_friendly_name == friendly)
+                or (interface and entry.device_interface_name == interface),
+            )
+            if not label_match:
+                continue
+            if self._quarantine.clear(entry.endpoint_guid, reason="hotplug_clear"):
+                record_kernel_invalidated_event(
+                    platform=self._platform_key_for_metric(),
+                    host_api=entry.host_api or "unknown",
+                    action="hotplug_clear",
+                )
+                logger.info(
+                    "voice_kernel_invalidated_hotplug_clear",
+                    endpoint=entry.endpoint_guid,
+                    kind=event.kind.value,
+                    matched_by="friendly_name" if friendly else "interface_name",
+                )
+            # Stop after the first match — duplicate friendly names are
+            # vanishingly rare and clearing every match would mask any
+            # ambiguity in operator-facing logs.
+            return
+
+    def _platform_key_for_metric(self) -> str:
+        """Resolve the platform tag used in §4.4.7 telemetry labels."""
+        plat = sys.platform
+        if plat.startswith("win"):
+            return "win32"
+        if plat == "darwin":
+            return "darwin"
+        return "linux"
 
     def _event_matches_active(self, event: HotplugEvent) -> bool:
         return bool(

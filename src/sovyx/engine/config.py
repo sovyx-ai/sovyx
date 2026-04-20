@@ -307,6 +307,20 @@ class VoiceTuningConfig(BaseSettings):
     # a pop at the step edge. Tracks ``ducking_ramp_ms`` downstream.
     self_feedback_duck_release_ms: float = 50.0
 
+    # §4.4.7 kernel-invalidated endpoint quarantine — see
+    # :class:`~sovyx.voice.health._quarantine.EndpointQuarantine`.
+    # When a probe returns :attr:`~sovyx.voice.health.contract.Diagnosis.KERNEL_INVALIDATED`
+    # (USB-stack-timeout-driven IAudioClient invalidated state, Windows
+    # LiveKernelEvent 0x1cc class), no user-mode cure exists. The cascade
+    # short-circuits, adds the endpoint to an in-memory quarantine, and
+    # :mod:`sovyx.voice.health._factory_integration` falls over to the
+    # next viable :class:`DeviceEntry`. Quarantine clears on hot-plug
+    # remove+readd or after ``kernel_invalidated_recheck_interval_s`` so
+    # a reboot-cured endpoint is retried without operator action.
+    kernel_invalidated_failover_enabled: bool = True
+    kernel_invalidated_quarantine_s: float = 3_600.0  # 1 h wall clock
+    kernel_invalidated_recheck_interval_s: float = 300.0  # 5 min
+
     # Voice device test (setup-wizard meters + TTS test button).
     # Kill-switch + ballistics + rate limiting for the test endpoints.
     device_test_enabled: bool = True

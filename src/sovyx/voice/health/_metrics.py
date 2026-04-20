@@ -80,6 +80,7 @@ METRIC_RECOVERY_ATTEMPTS = "sovyx.voice.health.recovery.attempts"
 METRIC_SELF_FEEDBACK_BLOCKS = "sovyx.voice.health.self_feedback.blocks"
 METRIC_ACTIVE_ENDPOINT_CHANGES = "sovyx.voice.health.active_endpoint.changes"
 METRIC_TIME_TO_FIRST_UTTERANCE = "sovyx.voice.health.time_to_first_utterance"
+METRIC_KERNEL_INVALIDATED_EVENTS = "sovyx.voice.health.kernel_invalidated.events"
 
 
 # ── Label enums (closed sets for low-cardinality guarantees) ─────────────
@@ -227,6 +228,39 @@ def record_active_endpoint_change(*, reason: EndpointChangeReason) -> None:
     )
 
 
+def record_kernel_invalidated_event(
+    *,
+    platform: str,
+    host_api: str,
+    action: str,
+) -> None:
+    """Record a §4.4.7 kernel-invalidated lifecycle event.
+
+    Args:
+        platform: ``"win32"`` | ``"linux"`` | ``"darwin"``.
+        host_api: Host API of the probe that hit the invalidated state.
+            ``"unknown"`` when the event is not bound to a single combo
+            (recheck loops, hot-plug clears).
+        action: ``"quarantine"`` on initial add, ``"failover"`` when
+            :mod:`sovyx.voice.health._factory_integration` picks a
+            different endpoint, ``"recheck_recovered"`` when a periodic
+            retry comes back healthy, ``"recheck_still_invalid"`` when
+            the retry is still stuck, ``"hotplug_clear"`` when a replug
+            clears quarantine.
+    """
+    counter = getattr(get_metrics(), "voice_health_kernel_invalidated_events", None)
+    if counter is None:
+        return
+    counter.add(
+        1,
+        attributes={
+            "platform": platform or "unknown",
+            "host_api": host_api or "unknown",
+            "action": action,
+        },
+    )
+
+
 def record_time_to_first_utterance(*, duration_ms: float) -> None:
     """Record the user-perceived KPI (ADR §5.14).
 
@@ -246,11 +280,13 @@ __all__ = [
     "METRIC_PROBE_DURATION",
     "METRIC_RECOVERY_ATTEMPTS",
     "METRIC_SELF_FEEDBACK_BLOCKS",
+    "METRIC_KERNEL_INVALIDATED_EVENTS",
     "METRIC_TIME_TO_FIRST_UTTERANCE",
     "record_active_endpoint_change",
     "record_cascade_attempt",
     "record_combo_store_hit",
     "record_combo_store_invalidation",
+    "record_kernel_invalidated_event",
     "record_preflight_failure",
     "record_probe_diagnosis",
     "record_probe_duration",

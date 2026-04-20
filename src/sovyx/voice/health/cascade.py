@@ -47,6 +47,11 @@ from sovyx.observability.logging import get_logger
 from sovyx.voice.health._metrics import (
     record_cascade_attempt,
     record_combo_store_hit,
+    record_kernel_invalidated_event,
+)
+from sovyx.voice.health._quarantine import (
+    EndpointQuarantine,
+    get_default_quarantine,
 )
 from sovyx.voice.health.contract import (
     CascadeResult,
@@ -464,6 +469,8 @@ async def run_cascade(
     voice_clarity_autofix: bool = True,
     cascade_override: Sequence[Combo] | None = None,
     clock: Callable[[], float] = time.monotonic,
+    quarantine: EndpointQuarantine | None = None,
+    kernel_invalidated_failover_enabled: bool | None = None,
 ) -> CascadeResult:
     """Run the L2 cascade for ``endpoint_guid`` and return the outcome.
 
@@ -512,11 +519,36 @@ async def run_cascade(
             Mainly for ``--aggressive`` mode where the caller wants to
             try every combo rather than short-circuit on first HEALTHY.
         clock: Monotonic clock. Swappable for deterministic tests.
+        quarantine: §4.4.7 kernel-invalidated quarantine store. When
+            ``None`` the process-wide default (via
+            :func:`~sovyx.voice.health._quarantine.get_default_quarantine`)
+            is used if the kill-switch is on, otherwise quarantine is
+            skipped. Tests pass a fresh :class:`EndpointQuarantine` to
+            avoid cross-test state bleed.
+        kernel_invalidated_failover_enabled: Master toggle for the
+            quarantine behaviour. ``None`` resolves to
+            :attr:`VoiceTuningConfig.kernel_invalidated_failover_enabled`
+            at call time. When ``False``, KERNEL_INVALIDATED results
+            fall through to the next cascade combo as normal — preserves
+            the pre-§4.4.7 behaviour for operators who want to opt out.
     """
     # `or` treats an empty `LRULockDict` as falsy (``__len__ == 0``) and
     # silently drops the caller's shared lock — use an identity check.
     locks = lifecycle_locks if lifecycle_locks is not None else _default_locks()
     lock = locks[endpoint_guid]
+
+    resolved_failover = (
+        _VoiceTuning().kernel_invalidated_failover_enabled
+        if kernel_invalidated_failover_enabled is None
+        else kernel_invalidated_failover_enabled
+    )
+    resolved_quarantine: EndpointQuarantine | None
+    if quarantine is not None:
+        resolved_quarantine = quarantine
+    elif resolved_failover:
+        resolved_quarantine = get_default_quarantine()
+    else:
+        resolved_quarantine = None
 
     async with lock:
         return await _run_cascade_locked(
@@ -537,6 +569,7 @@ async def run_cascade(
             voice_clarity_autofix=voice_clarity_autofix,
             cascade_override=cascade_override,
             clock=clock,
+            quarantine=resolved_quarantine,
         )
 
 
@@ -559,10 +592,33 @@ async def _run_cascade_locked(
     voice_clarity_autofix: bool,
     cascade_override: Sequence[Combo] | None,
     clock: Callable[[], float],
+    quarantine: EndpointQuarantine | None,
 ) -> CascadeResult:
     deadline = clock() + total_budget_s
     attempts: list[ProbeResult] = []
     attempts_count = 0
+
+    # §4.4.7 short-circuit: a previously quarantined endpoint is known
+    # to be in a kernel-invalidated state that no user-mode path can
+    # cure. Skip every attempt — the factory integration layer will
+    # fail-over to the next viable :class:`DeviceEntry` and the
+    # watchdog recheck loop retries after the quarantine TTL.
+    if quarantine is not None and quarantine.is_quarantined(endpoint_guid):
+        logger.warning(
+            "voice_cascade_skipped_quarantined",
+            endpoint=endpoint_guid,
+            friendly_name=device_friendly_name,
+            reason="kernel_invalidated",
+        )
+        return _make_result(
+            endpoint_guid=endpoint_guid,
+            winning_combo=None,
+            winning_probe=None,
+            attempts=attempts,
+            attempts_count=attempts_count,
+            budget_exhausted=False,
+            source="quarantined",
+        )
 
     # 1. Pinned override.
     pinned = _lookup_override(capture_overrides, endpoint_guid, platform_key)
@@ -596,6 +652,34 @@ async def _run_cascade_locked(
                 attempts_count=0,
                 budget_exhausted=False,
                 source="pinned",
+            )
+        # §4.4.7 — kernel-invalidated state. Every host API will fail
+        # equally; trying the ComboStore or the cascade loop just wastes
+        # the user's time. Quarantine + short-circuit.
+        if result.diagnosis is Diagnosis.KERNEL_INVALIDATED and _quarantine_endpoint(
+            quarantine=quarantine,
+            endpoint_guid=endpoint_guid,
+            device_friendly_name=device_friendly_name,
+            device_interface_name=device_interface_name,
+            host_api=pinned.host_api,
+            platform_key=platform_key,
+            reason="probe_pinned",
+        ):
+            logger.warning(
+                "voice_cascade_kernel_invalidated",
+                endpoint=endpoint_guid,
+                friendly_name=device_friendly_name,
+                host_api=pinned.host_api,
+                source="pinned",
+            )
+            return _make_result(
+                endpoint_guid=endpoint_guid,
+                winning_combo=None,
+                winning_probe=None,
+                attempts=attempts,
+                attempts_count=attempts_count,
+                budget_exhausted=False,
+                source="quarantined",
             )
         logger.warning(
             "voice_cascade_pinned_failed",
@@ -657,6 +741,36 @@ async def _run_cascade_locked(
                 attempts_count=0,
                 budget_exhausted=False,
                 source="store",
+            )
+        # §4.4.7 — kernel-invalidated state observed on the fast path.
+        # Invalidate the (now misleading) store entry too, then quarantine
+        # the endpoint and short-circuit the rest of the cascade.
+        if result.diagnosis is Diagnosis.KERNEL_INVALIDATED and _quarantine_endpoint(
+            quarantine=quarantine,
+            endpoint_guid=endpoint_guid,
+            device_friendly_name=device_friendly_name,
+            device_interface_name=device_interface_name,
+            host_api=store_combo.host_api,
+            platform_key=platform_key,
+            reason="probe_store",
+        ):
+            if combo_store is not None:
+                combo_store.invalidate(endpoint_guid, reason="kernel_invalidated")
+            logger.warning(
+                "voice_cascade_kernel_invalidated",
+                endpoint=endpoint_guid,
+                friendly_name=device_friendly_name,
+                host_api=store_combo.host_api,
+                source="store",
+            )
+            return _make_result(
+                endpoint_guid=endpoint_guid,
+                winning_combo=None,
+                winning_probe=None,
+                attempts=attempts,
+                attempts_count=attempts_count,
+                budget_exhausted=False,
+                source="quarantined",
             )
         # Invalidate the stale store entry so the next boot runs the
         # full cascade fresh rather than re-probing the known-bad combo.
@@ -723,6 +837,37 @@ async def _run_cascade_locked(
             success=result.diagnosis is Diagnosis.HEALTHY,
             source="cascade",
         )
+        # §4.4.7 — kernel-invalidated state. Every remaining host API in
+        # the cascade table will fail identically because the failure is
+        # at IAudioClient::Initialize, upstream of the host-API layer.
+        # Quarantine + break the loop instead of burning the per-attempt
+        # budget on combos we already know will fail.
+        if result.diagnosis is Diagnosis.KERNEL_INVALIDATED and _quarantine_endpoint(
+            quarantine=quarantine,
+            endpoint_guid=endpoint_guid,
+            device_friendly_name=device_friendly_name,
+            device_interface_name=device_interface_name,
+            host_api=combo.host_api,
+            platform_key=platform_key,
+            reason="probe_cascade",
+        ):
+            logger.warning(
+                "voice_cascade_kernel_invalidated",
+                endpoint=endpoint_guid,
+                friendly_name=device_friendly_name,
+                host_api=combo.host_api,
+                source="cascade",
+                attempt=idx,
+            )
+            return _make_result(
+                endpoint_guid=endpoint_guid,
+                winning_combo=None,
+                winning_probe=None,
+                attempts=attempts,
+                attempts_count=attempts_count,
+                budget_exhausted=False,
+                source="quarantined",
+            )
         if result.diagnosis is Diagnosis.HEALTHY:
             _record_winner(
                 combo_store=combo_store,
@@ -783,6 +928,45 @@ def _default_locks() -> LRULockDict[str]:
 
 def _platform_cascade(platform_key: str) -> tuple[Combo, ...]:
     return _PLATFORM_CASCADES.get(platform_key, ())
+
+
+def _quarantine_endpoint(
+    *,
+    quarantine: EndpointQuarantine | None,
+    endpoint_guid: str,
+    device_friendly_name: str,
+    device_interface_name: str,
+    host_api: str,
+    platform_key: str,
+    reason: str,
+) -> bool:
+    """Add ``endpoint_guid`` to the §4.4.7 quarantine and emit the L4 metric.
+
+    Returns ``True`` when the endpoint was registered (caller short-circuits
+    the cascade and returns ``source="quarantined"``); ``False`` when no
+    quarantine store is configured (operator opted out via
+    :attr:`VoiceTuningConfig.kernel_invalidated_failover_enabled` ``=False``).
+
+    Centralising this lets the cascade's three probe sites — pinned override,
+    ComboStore fast path, and platform cascade loop — all register quarantine
+    entries through one consistent path so the metric / log surface stays
+    uniform.
+    """
+    if quarantine is None:
+        return False
+    quarantine.add(
+        endpoint_guid=endpoint_guid,
+        device_friendly_name=device_friendly_name,
+        device_interface_name=device_interface_name,
+        host_api=host_api or "unknown",
+        reason=reason,
+    )
+    record_kernel_invalidated_event(
+        platform=platform_key,
+        host_api=host_api or "unknown",
+        action="quarantine",
+    )
+    return True
 
 
 def _lookup_override(

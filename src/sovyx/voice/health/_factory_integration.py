@@ -32,12 +32,14 @@ import sys
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
+from sovyx.voice.health._quarantine import EndpointQuarantine, get_default_quarantine
 from sovyx.voice.health.capture_overrides import CaptureOverrides
 from sovyx.voice.health.cascade import run_cascade
 from sovyx.voice.health.combo_store import ComboStore
 from sovyx.voice.health.contract import CascadeResult, ProbeMode
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
     from pathlib import Path
 
     from sovyx.engine.config import VoiceTuningConfig
@@ -122,6 +124,7 @@ async def run_boot_cascade(
     platform_key: str | None = None,
     combo_store: ComboStore | None = None,
     capture_overrides: CaptureOverrides | None = None,
+    quarantine: EndpointQuarantine | None = None,
 ) -> CascadeResult | None:
     """Run the cold cascade once at boot, populating :class:`ComboStore`.
 
@@ -155,6 +158,12 @@ async def run_boot_cascade(
         capture_overrides: DI hook for tests. Production callers pass
             ``None`` and the overrides file is constructed from
             ``data_dir``.
+        quarantine: §4.4.7 endpoint quarantine store. ``None`` falls back
+            to :func:`~sovyx.voice.health._quarantine.get_default_quarantine`
+            (subject to
+            :attr:`VoiceTuningConfig.kernel_invalidated_failover_enabled`).
+            Tests pass a fresh :class:`EndpointQuarantine` to avoid
+            cross-test state bleed.
     """
     plat = platform_key or sys.platform
 
@@ -211,6 +220,8 @@ async def run_boot_cascade(
             total_budget_s=tuning.cascade_total_budget_s,
             attempt_budget_s=tuning.cascade_attempt_budget_s,
             voice_clarity_autofix=tuning.voice_clarity_autofix,
+            quarantine=quarantine,
+            kernel_invalidated_failover_enabled=tuning.kernel_invalidated_failover_enabled,
         )
     except Exception:  # noqa: BLE001 — cascade crash must never block the pipeline (ADR §5.11)
         logger.error(
@@ -232,9 +243,76 @@ async def run_boot_cascade(
     return result
 
 
+def select_alternative_endpoint(
+    *,
+    kind: str = "input",
+    apo_reports: list[CaptureApoReport] | None = None,
+    platform_key: str | None = None,
+    exclude_endpoint_guids: Iterable[str] = (),
+    quarantine: EndpointQuarantine | None = None,
+) -> DeviceEntry | None:
+    """Pick a non-quarantined alternative ``DeviceEntry`` for fail-over.
+
+    ADR §4.4.7. After the boot cascade returns ``source="quarantined"``
+    for the OS-default capture endpoint, the factory needs a next-best
+    device so the pipeline can still come up. Resolution order:
+
+    1. Any non-excluded, non-quarantined input device that the OS marks
+       as default. (``is_os_default`` survives even after dedup, so a
+       USB headset that's the OS default beats the laptop array mic.)
+    2. Otherwise the host-API-preferred candidate per
+       :func:`~sovyx.voice.device_enum.pick_preferred`.
+
+    Args:
+        kind: ``"input"`` for capture, ``"output"`` for playback. The
+            quarantine is capture-only today, but the helper accepts
+            ``kind`` so the playback factory can reuse the skeleton.
+        apo_reports: Pre-computed capture-APO reports (Windows only).
+            Forwarded to :func:`derive_endpoint_guid` so we resolve
+            real MMDevice GUIDs rather than surrogates whenever possible.
+        platform_key: Override the runtime platform (tests).
+        exclude_endpoint_guids: Endpoint GUIDs to skip on top of the
+            quarantine — typically the GUID of the device that just
+            got quarantined in this same boot, to keep the fail-over
+            decision deterministic.
+        quarantine: §4.4.7 store. ``None`` falls back to the process
+            singleton.
+
+    Returns ``None`` when no viable alternative exists (every device
+    quarantined, or no input devices at all). Caller treats that as
+    "boot in degraded mode and surface a wizard prompt".
+    """
+    from sovyx.voice.device_enum import enumerate_devices, pick_preferred
+
+    plat = platform_key or sys.platform
+    entries = enumerate_devices()
+    if not entries:
+        return None
+    q = quarantine if quarantine is not None else get_default_quarantine()
+    excluded = set(exclude_endpoint_guids)
+
+    def _is_skippable(entry: DeviceEntry) -> bool:
+        guid = derive_endpoint_guid(
+            entry,
+            apo_reports=apo_reports,
+            platform_key=plat,
+        )
+        return guid in excluded or q.is_quarantined(guid)
+
+    candidates = [e for e in entries if not _is_skippable(e)]
+    preferred = pick_preferred(candidates, kind=kind)
+    if not preferred:
+        return None
+    defaults = [e for e in preferred if e.is_os_default]
+    if defaults:
+        return defaults[0]
+    return preferred[0]
+
+
 __all__ = [
     "derive_endpoint_guid",
     "resolve_capture_overrides_path",
     "resolve_combo_store_path",
     "run_boot_cascade",
+    "select_alternative_endpoint",
 ]

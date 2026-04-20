@@ -744,6 +744,72 @@ def _check_voice_capture_apo() -> DiagnosticResult:
     )
 
 
+def _check_voice_kernel_invalidated() -> DiagnosticResult:
+    """Surface §4.4.7 quarantine state to operators.
+
+    The §4.4.7 cure path is *physical* — the user must replug the USB
+    cable or reboot. Doctor's job is to (a) confirm the condition, (b)
+    name the affected endpoint(s), (c) tell the operator what to do.
+    A populated quarantine is reported as ``WARN``: sovyx is operating,
+    just not on the user's first-choice mic.
+
+    Returns ``PASS`` when the quarantine is empty (the happy path).
+    """
+    check_name = "voice_capture_kernel_invalidated"
+    try:
+        from sovyx.voice.health import get_default_quarantine
+
+        snapshot = get_default_quarantine().snapshot()
+    except Exception as exc:  # noqa: BLE001
+        return DiagnosticResult(
+            check=check_name,
+            status=DiagnosticStatus.WARN,
+            message=f"Quarantine snapshot failed: {exc}",
+            fix_suggestion=(
+                "Voice subsystem may not be initialised. Start the daemon and "
+                "re-run 'sovyx doctor voice_capture_kernel_invalidated'."
+            ),
+        )
+    if not snapshot:
+        return DiagnosticResult(
+            check=check_name,
+            status=DiagnosticStatus.PASS,
+            message="No capture endpoints in kernel-invalidated quarantine.",
+            details={"quarantined_count": 0},
+        )
+
+    affected = [e.device_friendly_name or e.endpoint_guid for e in snapshot]
+    names = ", ".join(affected)
+    return DiagnosticResult(
+        check=check_name,
+        status=DiagnosticStatus.WARN,
+        message=(
+            f"{len(snapshot)} capture endpoint(s) in kernel-invalidated "
+            f"quarantine: {names}. The IAudioClient is stuck — sovyx has "
+            "failed-over to an alternative mic."
+        ),
+        fix_suggestion=(
+            "Physically unplug the affected device for 5 s and replug it. "
+            "If the device is built-in (laptop array), reboot the machine. "
+            "Sovyx auto-clears quarantine on hot-plug events; the next "
+            "boot will re-cascade onto the recovered endpoint."
+        ),
+        details={
+            "quarantined_count": len(snapshot),
+            "endpoints": [
+                {
+                    "endpoint_guid": e.endpoint_guid,
+                    "device_friendly_name": e.device_friendly_name,
+                    "device_interface_name": e.device_interface_name,
+                    "host_api": e.host_api,
+                    "reason": e.reason,
+                }
+                for e in snapshot
+            ],
+        },
+    )
+
+
 def _check_data_dir_writable(data_dir: Path) -> DiagnosticResult:
     """Check that the data directory exists and is writable.
 
@@ -854,6 +920,7 @@ class Doctor:
         results.append(_check_dependency_versions())
         results.append(_check_data_dir_writable(self._data_dir))
         results.append(_check_voice_capture_apo())
+        results.append(_check_voice_kernel_invalidated())
 
         report = DiagnosticReport(results=tuple(results))
         logger.info(
@@ -929,6 +996,9 @@ class Doctor:
         async def _voice_capture_apo() -> DiagnosticResult:
             return _check_voice_capture_apo()
 
+        async def _voice_capture_kernel_invalidated() -> DiagnosticResult:
+            return _check_voice_kernel_invalidated()
+
         return {
             "brain_consistency": lambda: _check_brain_consistency(self._db_path),
             "config_valid": _config_valid,
@@ -942,4 +1012,5 @@ class Doctor:
             "python_version": _python_version,
             "schema_version_valid": lambda: _check_schema_version(self._db_path),
             "voice_capture_apo": _voice_capture_apo,
+            "voice_capture_kernel_invalidated": _voice_capture_kernel_invalidated,
         }

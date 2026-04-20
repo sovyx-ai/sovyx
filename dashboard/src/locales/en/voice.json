@@ -142,7 +142,27 @@
       "hot_unplugged": "Hot-unplugged",
       "self_feedback": "Self-feedback",
       "permission_denied": "Permission denied",
+      "kernel_invalidated": "Kernel-invalidated",
       "unknown": "Unknown"
+    },
+    "quarantine": {
+      "sectionTitle": "Quarantined endpoints",
+      "sectionHint": "§4.4.7: capture endpoints whose kernel-side audio client is in an invalidated state. Sovyx stops probing them until a physical replug or a periodic recheck recovers the device.",
+      "count_one": "{{count}} endpoint quarantined",
+      "count_other": "{{count}} endpoints quarantined",
+      "noEntries": "No endpoints in kernel-invalidated quarantine.",
+      "device": "Device",
+      "hostApi": "Host API",
+      "reason": "Reason",
+      "addedAt": "Quarantined for",
+      "expiresIn": "Recheck in",
+      "secondsShort": "{{seconds}}s",
+      "remediation": {
+        "title": "How to recover",
+        "replug": "Physically unplug the device for 5 seconds, then replug it. Sovyx reacts to the OS hot-plug event and clears the quarantine automatically.",
+        "reboot": "If replugging does not clear the state, reboot Windows — a driver / audio-stack upgrade is required to re-arm the audio endpoint.",
+        "watchdog": "Meanwhile, Sovyx fails over to the next viable capture device and re-checks the quarantined endpoint every few minutes."
+      }
     }
   }
 }

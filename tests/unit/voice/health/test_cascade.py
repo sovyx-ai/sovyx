@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from sovyx.engine._lock_dict import LRULockDict
+from sovyx.voice.health._quarantine import EndpointQuarantine
 from sovyx.voice.health.cascade import (
     WINDOWS_CASCADE,
     run_cascade,
@@ -773,3 +774,156 @@ class TestProbeKwargsForwarding:
 def _assert_coro(x: Awaitable[object]) -> None:
     """Sanity: type of asyncio.gather return values."""
     assert asyncio.iscoroutine(x) or asyncio.isfuture(x)
+
+
+# ---------------------------------------------------------------------------
+# §4.4.7 KERNEL_INVALIDATED — quarantine interception sites
+# ---------------------------------------------------------------------------
+
+
+def _fresh_quarantine() -> EndpointQuarantine:
+    """Process-local quarantine store so tests don't share singleton state."""
+    return EndpointQuarantine(quarantine_s=300.0, maxsize=16)
+
+
+class TestQuarantineShortCircuit:
+    """A pre-quarantined endpoint never runs any probe."""
+
+    @pytest.mark.asyncio()
+    async def test_quarantined_endpoint_returns_immediately(self) -> None:
+        quarantine = _fresh_quarantine()
+        quarantine.add(endpoint_guid="test-endpoint")
+        probe = _FakeProbe(plan=[(_match_all, Diagnosis.HEALTHY)])
+
+        result = await _run(probe_fn=probe, quarantine=quarantine)
+
+        assert result.source == "quarantined"  # type: ignore[attr-defined]
+        assert result.winning_combo is None  # type: ignore[attr-defined]
+        # Short-circuit path never calls the probe.
+        assert probe.calls == []
+
+
+class TestQuarantineAtPinnedSite:
+    """KERNEL_INVALIDATED on the pinned override path registers quarantine."""
+
+    @pytest.mark.asyncio()
+    async def test_pinned_kernel_invalidated_quarantines_and_short_circuits(
+        self,
+    ) -> None:
+        pinned = _win_combo(host_api="WASAPI")
+        overrides = _FakeOverrides()
+        overrides.pins["test-endpoint"] = pinned
+        store = _FakeComboStore()
+        store.entries["test-endpoint"] = _win_combo(host_api="DirectSound")
+        probe = _FakeProbe(plan=[(_match_all, Diagnosis.KERNEL_INVALIDATED)])
+        quarantine = _fresh_quarantine()
+
+        result = await _run(
+            probe_fn=probe,
+            combo_store=store,
+            capture_overrides=overrides,
+            quarantine=quarantine,
+        )
+
+        assert result.source == "quarantined"  # type: ignore[attr-defined]
+        assert result.winning_combo is None  # type: ignore[attr-defined]
+        # Pinned was probed once; ComboStore + cascade NOT probed.
+        assert len(probe.calls) == 1
+        assert probe.calls[0].combo == pinned
+        # Endpoint is now quarantined.
+        assert quarantine.is_quarantined("test-endpoint")
+
+
+class TestQuarantineAtStoreSite:
+    """KERNEL_INVALIDATED on the ComboStore fast path registers quarantine."""
+
+    @pytest.mark.asyncio()
+    async def test_store_kernel_invalidated_quarantines_and_invalidates_store(
+        self,
+    ) -> None:
+        store = _FakeComboStore()
+        store_combo = _win_combo(host_api="WASAPI")
+        store.entries["test-endpoint"] = store_combo
+        probe = _FakeProbe(plan=[(_match_all, Diagnosis.KERNEL_INVALIDATED)])
+        quarantine = _fresh_quarantine()
+
+        result = await _run(probe_fn=probe, combo_store=store, quarantine=quarantine)
+
+        assert result.source == "quarantined"  # type: ignore[attr-defined]
+        # Store entry was invalidated with kernel_invalidated reason.
+        assert ("test-endpoint", "kernel_invalidated") in store.invalidate_calls
+        # Endpoint is quarantined.
+        assert quarantine.is_quarantined("test-endpoint")
+        # Only the store combo was probed; no cascade fallthrough.
+        assert len(probe.calls) == 1
+        assert probe.calls[0].combo == store_combo
+
+
+class TestQuarantineAtCascadeSite:
+    """KERNEL_INVALIDATED during the cascade loop aborts + quarantines."""
+
+    @pytest.mark.asyncio()
+    async def test_cascade_kernel_invalidated_aborts_remaining_combos(self) -> None:
+        # No store, no pinned — cascade runs from attempt 0.
+        probe = _FakeProbe(plan=[(_match_all, Diagnosis.KERNEL_INVALIDATED)])
+        quarantine = _fresh_quarantine()
+
+        result = await _run(probe_fn=probe, quarantine=quarantine)
+
+        assert result.source == "quarantined"  # type: ignore[attr-defined]
+        # Exactly one cascade attempt was made (the first); the loop bailed
+        # before trying every remaining host API.
+        assert len(probe.calls) == 1
+        assert len(probe.calls) < len(WINDOWS_CASCADE)
+        assert quarantine.is_quarantined("test-endpoint")
+
+
+class TestQuarantineKillSwitch:
+    """``kernel_invalidated_failover_enabled=False`` disables default quarantine.
+
+    When the kill-switch is off AND the caller doesn't pass an explicit
+    ``quarantine`` store, the cascade resolves to ``None`` — so a
+    KERNEL_INVALIDATED observation falls through to the next cascade
+    combo as normal (pre-§4.4.7 behaviour).
+
+    Passing an explicit ``quarantine`` kwarg bypasses the kill-switch
+    because the caller has already opted in to the quarantine semantics.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_kill_switch_falls_through_when_no_explicit_store(self) -> None:
+        # First combo kernel-invalidated, second HEALTHY — with failover
+        # disabled and no explicit quarantine, the cascade must continue.
+        probe = _FakeProbe(
+            plan=[
+                (lambda c: c.host_api == "WASAPI" and c.exclusive, Diagnosis.KERNEL_INVALIDATED),
+                (lambda c: c.host_api == "WASAPI" and not c.exclusive, Diagnosis.HEALTHY),
+            ],
+        )
+
+        result = await _run(
+            probe_fn=probe,
+            quarantine=None,
+            kernel_invalidated_failover_enabled=False,
+        )
+
+        # Fallthrough behaviour: cascade eventually finds a HEALTHY combo.
+        assert result.source == "cascade"  # type: ignore[attr-defined]
+        assert result.winning_combo is not None  # type: ignore[attr-defined]
+        assert result.source != "quarantined"  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio()
+    async def test_explicit_store_overrides_kill_switch(self) -> None:
+        # Caller passes an explicit store + kill-switch=False. The explicit
+        # store wins — quarantine still registers and short-circuits.
+        probe = _FakeProbe(plan=[(_match_all, Diagnosis.KERNEL_INVALIDATED)])
+        quarantine = _fresh_quarantine()
+
+        result = await _run(
+            probe_fn=probe,
+            quarantine=quarantine,
+            kernel_invalidated_failover_enabled=False,
+        )
+
+        assert result.source == "quarantined"  # type: ignore[attr-defined]
+        assert quarantine.is_quarantined("test-endpoint")

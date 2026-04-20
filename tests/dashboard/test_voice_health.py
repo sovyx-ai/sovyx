@@ -18,6 +18,7 @@ from sovyx.voice.health import (
     Combo,
     ComboStore,
     Diagnosis,
+    EndpointQuarantine,
     ProbeMode,
     ProbeResult,
     RemediationHint,
@@ -579,3 +580,69 @@ class TestDataDirFallback:
         assert resp.status_code == 200  # noqa: PLR2004
         body = resp.json()
         assert body["data_dir"] == str(tmp_path / ".sovyx")
+
+
+class TestQuarantineEndpoint:
+    """GET /api/voice/health/quarantine — §4.4.7 kernel-invalidated surface."""
+
+    def test_requires_bearer_token(self, app: FastAPI) -> None:
+        unauth = TestClient(app)
+        resp = unauth.get("/api/voice/health/quarantine")
+        assert resp.status_code == 401  # noqa: PLR2004
+
+    def test_empty_snapshot_returns_empty_entries(self, app: FastAPI, client: TestClient) -> None:
+        # Inject a fresh quarantine so singleton state doesn't bleed in.
+        app.state.quarantine = EndpointQuarantine(quarantine_s=60.0, maxsize=8)
+        resp = client.get("/api/voice/health/quarantine")
+        assert resp.status_code == 200  # noqa: PLR2004
+        body = resp.json()
+        assert body == {"entries": [], "count": 0}
+
+    def test_populated_snapshot_returns_entries(self, app: FastAPI, client: TestClient) -> None:
+        q = EndpointQuarantine(quarantine_s=60.0, maxsize=8)
+        q.add(
+            endpoint_guid="{GUID-1}",
+            device_friendly_name="Razer BlackShark V2 Pro",
+            device_interface_name=r"\\?\USB#VID_1532",
+            host_api="Windows WASAPI",
+            reason="probe",
+        )
+        app.state.quarantine = q
+
+        resp = client.get("/api/voice/health/quarantine")
+        assert resp.status_code == 200  # noqa: PLR2004
+        body = resp.json()
+        assert body["count"] == 1
+        entry = body["entries"][0]
+        assert entry["endpoint_guid"] == "{GUID-1}"
+        assert entry["device_friendly_name"] == "Razer BlackShark V2 Pro"
+        assert entry["device_interface_name"] == r"\\?\USB#VID_1532"
+        assert entry["host_api"] == "Windows WASAPI"
+        assert entry["reason"] == "probe"
+        # seconds_until_expiry is clamped to non-negative and ≤ quarantine_s.
+        assert 0.0 <= entry["seconds_until_expiry"] <= 60.0  # noqa: PLR2004
+
+    def test_quarantine_count_on_health_snapshot(self, app: FastAPI, client: TestClient) -> None:
+        q = EndpointQuarantine(quarantine_s=60.0, maxsize=8)
+        q.add(endpoint_guid="{G-A}", host_api="WASAPI")
+        q.add(endpoint_guid="{G-B}", host_api="WASAPI")
+        app.state.quarantine = q
+
+        resp = client.get("/api/voice/health")
+        assert resp.status_code == 200  # noqa: PLR2004
+        body = resp.json()
+        assert body["quarantine_count"] == 2  # noqa: PLR2004
+
+    def test_app_state_quarantine_overrides_singleton(
+        self, app: FastAPI, client: TestClient
+    ) -> None:
+        # Set a sentinel store on app.state. Reading the endpoint must
+        # surface that store, not the process-wide singleton.
+        fresh = EndpointQuarantine(quarantine_s=60.0, maxsize=4)
+        fresh.add(endpoint_guid="{SENTINEL}", host_api="WASAPI")
+        app.state.quarantine = fresh
+
+        resp = client.get("/api/voice/health/quarantine")
+        body = resp.json()
+        guids = [e["endpoint_guid"] for e in body["entries"]]
+        assert "{SENTINEL}" in guids

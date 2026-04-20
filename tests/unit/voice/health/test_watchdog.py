@@ -23,6 +23,7 @@ from sovyx.voice.health._default_device import (
 )
 from sovyx.voice.health._hotplug import NoopHotplugListener
 from sovyx.voice.health._power import NoopPowerEventListener
+from sovyx.voice.health._quarantine import EndpointQuarantine
 from sovyx.voice.health.contract import (
     AudioServiceEvent,
     AudioServiceEventKind,
@@ -1021,3 +1022,148 @@ class TestPlatformDefaultDeviceFactory:
             runtime_resilience_enabled=True,
         )
         assert isinstance(watcher, PollingDefaultDeviceWatcher)
+
+
+# ---------------------------------------------------------------------------
+# §4.4.7 — Hot-plug clears kernel-invalidated quarantine
+# ---------------------------------------------------------------------------
+
+
+_QUAR_GUID = "{AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE}"
+_QUAR_FRIENDLY = "Razer BlackShark V2 Pro"
+_QUAR_INTERFACE = r"\\?\USB#VID_1532#Pro"
+
+
+def _make_watchdog_with_quarantine(
+    quarantine: EndpointQuarantine,
+) -> tuple[VoiceCaptureWatchdog, _FakeHotplug]:
+    rp = _ReProbeRecorder(diagnoses=[Diagnosis.HEALTHY])
+    rc = _ReCascadeRecorder(outcomes=[True])
+    wd = VoiceCaptureWatchdog(
+        active_endpoint_guid=_ENDPOINT,  # different from the quarantined GUID
+        re_probe=rp,
+        re_cascade=rc,
+        active_endpoint_friendly_name=_FRIENDLY,
+        quarantine=quarantine,
+    )
+    return wd, _FakeHotplug()
+
+
+class TestHotplugClearsQuarantine:
+    """_on_hotplug + _maybe_clear_quarantine_on_hotplug."""
+
+    @pytest.mark.asyncio()
+    async def test_device_removed_with_guid_match_clears_quarantine(self) -> None:
+        q = EndpointQuarantine(quarantine_s=300.0, maxsize=8)
+        q.add(
+            endpoint_guid=_QUAR_GUID,
+            device_friendly_name=_QUAR_FRIENDLY,
+            host_api="Windows WASAPI",
+        )
+        wd, listener = _make_watchdog_with_quarantine(q)
+        await wd.start(listener)
+        await listener.fire(
+            HotplugEvent(kind=HotplugEventKind.DEVICE_REMOVED, endpoint_guid=_QUAR_GUID),
+        )
+        assert not q.is_quarantined(_QUAR_GUID)
+
+    @pytest.mark.asyncio()
+    async def test_device_added_with_guid_match_clears_quarantine(self) -> None:
+        q = EndpointQuarantine(quarantine_s=300.0, maxsize=8)
+        q.add(endpoint_guid=_QUAR_GUID, host_api="Windows WASAPI")
+        wd, listener = _make_watchdog_with_quarantine(q)
+        await wd.start(listener)
+        await listener.fire(
+            HotplugEvent(kind=HotplugEventKind.DEVICE_ADDED, endpoint_guid=_QUAR_GUID),
+        )
+        assert not q.is_quarantined(_QUAR_GUID)
+
+    @pytest.mark.asyncio()
+    async def test_friendly_name_fallback_clears_quarantine(self) -> None:
+        q = EndpointQuarantine(quarantine_s=300.0, maxsize=8)
+        q.add(
+            endpoint_guid=_QUAR_GUID,
+            device_friendly_name=_QUAR_FRIENDLY,
+            host_api="ALSA",
+        )
+        wd, listener = _make_watchdog_with_quarantine(q)
+        await wd.start(listener)
+        # No GUID in the event — only a friendly name.
+        await listener.fire(
+            HotplugEvent(
+                kind=HotplugEventKind.DEVICE_REMOVED,
+                endpoint_guid=None,
+                device_friendly_name=_QUAR_FRIENDLY,
+            ),
+        )
+        assert not q.is_quarantined(_QUAR_GUID)
+
+    @pytest.mark.asyncio()
+    async def test_interface_name_fallback_clears_quarantine(self) -> None:
+        q = EndpointQuarantine(quarantine_s=300.0, maxsize=8)
+        q.add(
+            endpoint_guid=_QUAR_GUID,
+            device_interface_name=_QUAR_INTERFACE,
+            host_api="WASAPI",
+        )
+        wd, listener = _make_watchdog_with_quarantine(q)
+        await wd.start(listener)
+        await listener.fire(
+            HotplugEvent(
+                kind=HotplugEventKind.DEVICE_ADDED,
+                endpoint_guid=None,
+                device_friendly_name=None,
+                device_interface_name=_QUAR_INTERFACE,
+            ),
+        )
+        assert not q.is_quarantined(_QUAR_GUID)
+
+    @pytest.mark.asyncio()
+    async def test_no_match_leaves_quarantine_intact(self) -> None:
+        q = EndpointQuarantine(quarantine_s=300.0, maxsize=8)
+        q.add(
+            endpoint_guid=_QUAR_GUID,
+            device_friendly_name=_QUAR_FRIENDLY,
+            host_api="WASAPI",
+        )
+        wd, listener = _make_watchdog_with_quarantine(q)
+        await wd.start(listener)
+        await listener.fire(
+            HotplugEvent(
+                kind=HotplugEventKind.DEVICE_REMOVED,
+                endpoint_guid="{SOME-OTHER-GUID}",
+                device_friendly_name="Some Other Mic",
+            ),
+        )
+        assert q.is_quarantined(_QUAR_GUID)
+
+    @pytest.mark.asyncio()
+    async def test_default_device_changed_does_not_call_clear(self) -> None:
+        q = EndpointQuarantine(quarantine_s=300.0, maxsize=8)
+        q.add(endpoint_guid=_QUAR_GUID, host_api="WASAPI")
+        wd, listener = _make_watchdog_with_quarantine(q)
+        await wd.start(listener)
+        await listener.fire(
+            HotplugEvent(
+                kind=HotplugEventKind.DEFAULT_DEVICE_CHANGED,
+                endpoint_guid=_QUAR_GUID,
+            ),
+        )
+        # Quarantine intact — DEFAULT_DEVICE_CHANGED is not a replug signal.
+        assert q.is_quarantined(_QUAR_GUID)
+
+    @pytest.mark.asyncio()
+    async def test_empty_labels_noop(self) -> None:
+        q = EndpointQuarantine(quarantine_s=300.0, maxsize=8)
+        q.add(endpoint_guid=_QUAR_GUID, host_api="WASAPI")
+        wd, listener = _make_watchdog_with_quarantine(q)
+        await wd.start(listener)
+        await listener.fire(
+            HotplugEvent(
+                kind=HotplugEventKind.DEVICE_REMOVED,
+                endpoint_guid=None,
+                device_friendly_name=None,
+                device_interface_name=None,
+            ),
+        )
+        assert q.is_quarantined(_QUAR_GUID)

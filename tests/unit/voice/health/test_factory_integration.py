@@ -24,7 +24,9 @@ from sovyx.voice.health._factory_integration import (
     resolve_capture_overrides_path,
     resolve_combo_store_path,
     run_boot_cascade,
+    select_alternative_endpoint,
 )
+from sovyx.voice.health._quarantine import EndpointQuarantine
 from sovyx.voice.health.contract import (
     CascadeResult,
     Combo,
@@ -457,3 +459,163 @@ class TestRunBootCascade:
 
         assert captured_kwargs["total_budget_s"] == pytest.approx(12.5)
         assert captured_kwargs["attempt_budget_s"] == pytest.approx(2.5)
+
+    @pytest.mark.asyncio()
+    async def test_forwards_quarantine_kwarg_to_run_cascade(self, tmp_path: Path) -> None:
+        captured_kwargs: dict[str, object] = {}
+
+        from sovyx.voice.health import _factory_integration
+
+        original = _factory_integration.run_cascade
+
+        async def capturing_cascade(**kwargs: object) -> CascadeResult:
+            captured_kwargs.update(kwargs)
+            return CascadeResult(
+                endpoint_guid="x",
+                winning_combo=None,
+                winning_probe=None,
+                attempts=(),
+                attempts_count=0,
+                budget_exhausted=False,
+                source="none",
+            )
+
+        _factory_integration.run_cascade = capturing_cascade  # type: ignore[attr-defined]
+        q = EndpointQuarantine(quarantine_s=300.0, maxsize=8)
+        try:
+            await run_boot_cascade(
+                resolved=_make_entry(),
+                data_dir=tmp_path,
+                tuning=VoiceTuningConfig(),
+                platform_key="win32",
+                combo_store=_FakeStore(),  # type: ignore[arg-type]
+                capture_overrides=_FakeOverrides(),  # type: ignore[arg-type]
+                quarantine=q,
+            )
+        finally:
+            _factory_integration.run_cascade = original  # type: ignore[attr-defined]
+
+        assert captured_kwargs["quarantine"] is q
+        # kill-switch follows the tuning config.
+        assert captured_kwargs["kernel_invalidated_failover_enabled"] is True
+
+
+# ---------------------------------------------------------------------------
+# §4.4.7 select_alternative_endpoint — fail-over picker
+# ---------------------------------------------------------------------------
+
+
+def _input_entry(
+    *,
+    index: int,
+    name: str,
+    host_api_name: str = "Windows WASAPI",
+    is_default: bool = False,
+) -> DeviceEntry:
+    return DeviceEntry(
+        index=index,
+        name=name,
+        canonical_name=name.strip().lower()[:30],
+        host_api_index=0,
+        host_api_name=host_api_name,
+        max_input_channels=1,
+        max_output_channels=0,
+        default_samplerate=48_000,
+        is_os_default=is_default,
+    )
+
+
+class TestSelectAlternativeEndpoint:
+    """§4.4.7 fail-over: filter quarantined + excluded devices."""
+
+    def test_returns_none_when_no_devices(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from sovyx.voice import device_enum
+
+        monkeypatch.setattr(device_enum, "enumerate_devices", lambda: [])
+        q = EndpointQuarantine(quarantine_s=300.0, maxsize=8)
+        assert select_alternative_endpoint(quarantine=q, platform_key="win32") is None
+
+    def test_excludes_quarantined_endpoint(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from sovyx.voice import device_enum
+
+        bad = _input_entry(index=0, name="Bad Mic")
+        good = _input_entry(index=1, name="Good Mic")
+        monkeypatch.setattr(device_enum, "enumerate_devices", lambda: [bad, good])
+
+        q = EndpointQuarantine(quarantine_s=300.0, maxsize=8)
+        bad_guid = derive_endpoint_guid(bad, apo_reports=None, platform_key="win32")
+        q.add(endpoint_guid=bad_guid)
+
+        result = select_alternative_endpoint(quarantine=q, platform_key="win32")
+        assert result is not None
+        assert result.name == "Good Mic"
+
+    def test_excludes_excluded_guids(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from sovyx.voice import device_enum
+
+        skip = _input_entry(index=0, name="Skip Me")
+        keep = _input_entry(index=1, name="Keep Me")
+        monkeypatch.setattr(device_enum, "enumerate_devices", lambda: [skip, keep])
+
+        q = EndpointQuarantine(quarantine_s=300.0, maxsize=8)
+        skip_guid = derive_endpoint_guid(skip, apo_reports=None, platform_key="win32")
+
+        result = select_alternative_endpoint(
+            quarantine=q,
+            platform_key="win32",
+            exclude_endpoint_guids=(skip_guid,),
+        )
+        assert result is not None
+        assert result.name == "Keep Me"
+
+    def test_prefers_os_default_among_candidates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from sovyx.voice import device_enum
+
+        non_default = _input_entry(index=0, name="Other Mic", is_default=False)
+        default = _input_entry(index=1, name="Default Mic", is_default=True)
+        # pick_preferred de-dups by canonical_name; give distinct names.
+        monkeypatch.setattr(
+            device_enum,
+            "enumerate_devices",
+            lambda: [non_default, default],
+        )
+        q = EndpointQuarantine(quarantine_s=300.0, maxsize=8)
+        result = select_alternative_endpoint(quarantine=q, platform_key="win32")
+        assert result is not None
+        assert result.name == "Default Mic"
+
+    def test_returns_none_when_all_skippable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from sovyx.voice import device_enum
+
+        a = _input_entry(index=0, name="Mic A")
+        b = _input_entry(index=1, name="Mic B")
+        monkeypatch.setattr(device_enum, "enumerate_devices", lambda: [a, b])
+
+        q = EndpointQuarantine(quarantine_s=300.0, maxsize=8)
+        for dev in (a, b):
+            q.add(
+                endpoint_guid=derive_endpoint_guid(
+                    dev,
+                    apo_reports=None,
+                    platform_key="win32",
+                ),
+            )
+
+        assert select_alternative_endpoint(quarantine=q, platform_key="win32") is None
+
+    def test_default_quarantine_used_when_not_supplied(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from sovyx.voice import device_enum
+        from sovyx.voice.health import _quarantine
+
+        good = _input_entry(index=0, name="Only Mic")
+        monkeypatch.setattr(device_enum, "enumerate_devices", lambda: [good])
+
+        _quarantine.reset_default_quarantine()
+        try:
+            result = select_alternative_endpoint(platform_key="win32")
+            assert result is not None
+            assert result.name == "Only Mic"
+        finally:
+            _quarantine.reset_default_quarantine()

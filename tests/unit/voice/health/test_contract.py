@@ -55,7 +55,7 @@ class TestDiagnosisEnum:
         assert Diagnosis.MUTED == "muted"
         assert Diagnosis.NO_SIGNAL.value == "no_signal"
 
-    def test_all_thirteen_values_present(self) -> None:
+    def test_all_fourteen_values_present(self) -> None:
         expected = {
             "healthy",
             "muted",
@@ -69,6 +69,7 @@ class TestDiagnosisEnum:
             "hot_unplugged",
             "self_feedback",
             "permission_denied",
+            "kernel_invalidated",
             "unknown",
         }
         assert {d.value for d in Diagnosis} == expected

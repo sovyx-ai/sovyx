@@ -128,6 +128,22 @@ _FORMAT_MISMATCH_KEYWORDS = (
     "invalid number of channels",
     "unsupported",
 )
+# Kernel-invalidated IAudioClient state — see ADR §4.4.7 + the
+# forensic report in ``docs-internal/voice-capture-kernel-invalidated.md``.
+# PortAudio surfaces this as ``paInvalidDevice`` (-9996) because
+# ``IAudioClient::Initialize`` returns one of the AUDCLNT_E_DEVICE_*
+# HRESULTs, and sounddevice re-wraps that as "Invalid device". The PnP
+# layer still reports the endpoint as healthy (ConfigManagerErrorCode=0),
+# so this is *not* a hot-unplug — it's a stuck audio engine that no
+# user-mode call can revive. Cure is physical (replug / reboot). We
+# match both the text form and the numeric error code so we're
+# resilient to sounddevice message format drift.
+_KERNEL_INVALIDATED_KEYWORDS = (
+    "invalid device",
+    "paerrorcode -9996",
+    "pa_invalid_device",
+    "audclnt_e_device_invalidated",
+)
 
 
 SoundDeviceModule = Any
@@ -154,6 +170,14 @@ def _classify_open_error(exc: BaseException) -> Diagnosis:
     fall back to :attr:`Diagnosis.DRIVER_ERROR` for anything we don't
     recognise (still actionable — the cascade treats DRIVER_ERROR as a
     retry-with-different-combo signal).
+
+    Ordering rationale — kernel_invalidated checked *after* the
+    format-mismatch set so an "invalid sample rate" message (which
+    contains the token ``"invalid"``) doesn't false-positive as a
+    kernel invalidation. The ``_KERNEL_INVALIDATED_KEYWORDS`` strings
+    are narrower than their format counterparts; none of them overlap
+    with the format-mismatch tokens, but the priority still matters
+    if a future message gains a compound phrase.
     """
     msg = str(exc).lower()
     if any(keyword in msg for keyword in _PERMISSION_KEYWORDS):
@@ -162,6 +186,8 @@ def _classify_open_error(exc: BaseException) -> Diagnosis:
         return Diagnosis.DEVICE_BUSY
     if any(keyword in msg for keyword in _FORMAT_MISMATCH_KEYWORDS):
         return Diagnosis.FORMAT_MISMATCH
+    if any(keyword in msg for keyword in _KERNEL_INVALIDATED_KEYWORDS):
+        return Diagnosis.KERNEL_INVALIDATED
     return Diagnosis.DRIVER_ERROR
 
 
@@ -447,11 +473,19 @@ def _open_input_stream(
 ) -> InputStreamLike:
     """Construct and return an ``sd.InputStream`` matching ``combo``.
 
-    Exclusive-mode WASAPI requires an ``extra_settings`` object. The
-    ``sd_module`` has to expose ``WasapiSettings``; if it doesn't (e.g.
-    a minimal fake), we fall back to a no-extra-settings open, which is
-    fine for tests because they exercise the classification and
-    analysis paths, not WASAPI exclusivity negotiation.
+    Mirrors :func:`sovyx.voice._stream_opener._build_wasapi_settings` so
+    both the capture-task opener and the health probe honour the full
+    ``(auto_convert, exclusive)`` combo surface. Before this was fixed
+    the probe only applied ``exclusive`` — a probe of
+    ``Combo(auto_convert=True, exclusive=False)`` silently opened
+    without the auto-convert flag, which made the cascade's WASAPI
+    auto-convert combos indistinguishable from the default shared open
+    and polluted telemetry with false-positive HEALTHY rows.
+
+    The ``sd_module`` has to expose ``WasapiSettings`` for any Windows
+    WASAPI combo to take effect; if it doesn't (e.g. a minimal test
+    fake), we fall back to a no-extra-settings open so non-WASAPI
+    diagnosis paths still exercise the classification + analysis code.
     """
     kwargs: dict[str, Any] = {
         "device": device_index,
@@ -462,11 +496,50 @@ def _open_input_stream(
         "callback": callback,
     }
 
-    if combo.exclusive and hasattr(sd, "WasapiSettings"):
-        with contextlib.suppress(Exception):
-            kwargs["extra_settings"] = sd.WasapiSettings(exclusive=True)
+    extra = _build_probe_wasapi_settings(sd, combo)
+    if extra is not None:
+        kwargs["extra_settings"] = extra
 
     return sd.InputStream(**kwargs)
+
+
+def _build_probe_wasapi_settings(
+    sd: SoundDeviceModule,
+    combo: Combo,
+) -> Any | None:  # noqa: ANN401 — WasapiSettings instance, lazily typed
+    """Return a :class:`sd.WasapiSettings` matching ``combo`` or ``None``.
+
+    Returns ``None`` when:
+        * the combo is on a non-WASAPI host API (the host-API guard
+          is defensive — the cascade table never emits a non-WASAPI
+          combo with either flag set, but a hand-built test combo
+          could),
+        * the combo asks for neither ``auto_convert`` nor ``exclusive``
+          (plain shared-mode open — no extra settings required),
+        * the sounddevice build doesn't expose ``WasapiSettings``
+          (older PortAudio wheels), or
+        * the constructor rejects the kwarg set (``TypeError`` on
+          wheels that don't know ``exclusive=``).
+
+    Keeping this helper local to the probe avoids coupling the VCHL
+    layer to the capture-task opener's internal ``_Combo`` dataclass.
+    """
+    if combo.host_api not in {"WASAPI", "Windows WASAPI"}:
+        return None
+    if not combo.auto_convert and not combo.exclusive:
+        return None
+    cls = getattr(sd, "WasapiSettings", None)
+    if cls is None:
+        return None
+    kwargs: dict[str, Any] = {}
+    if combo.auto_convert:
+        kwargs["auto_convert"] = True
+    if combo.exclusive:
+        kwargs["exclusive"] = True
+    try:
+        return cls(**kwargs)
+    except TypeError:
+        return None
 
 
 def _load_sounddevice() -> SoundDeviceModule:

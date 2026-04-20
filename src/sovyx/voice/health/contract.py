@@ -48,6 +48,15 @@ class Diagnosis(StrEnum):
     HOT_UNPLUGGED = "hot_unplugged"
     SELF_FEEDBACK = "self_feedback"
     PERMISSION_DENIED = "permission_denied"
+    # Kernel-side IAudioClient invalidated state: device enumerates as
+    # healthy (PnP status=OK, ConfigManager=0) but every host API returns
+    # paInvalidDevice (-9996) on stream open because the IMMDevice's
+    # internal ``IAudioClient::Initialize`` path is stuck. Triggered by
+    # USB resource timeouts (LiveKernelEvent 0x1cc), driver hot-swaps,
+    # or mid-stream PnP churn. No user-mode cure exists — sovyx must
+    # quarantine the endpoint and fail-over to the next available
+    # capture device. Cure is physical: replug or reboot.
+    KERNEL_INVALIDATED = "kernel_invalidated"
     UNKNOWN = "unknown"
 
 
@@ -518,7 +527,10 @@ class CascadeResult:
         budget_exhausted: ``True`` when the total wall-clock budget ran
             out before a winner emerged.
         source: Where the winning combo came from —
-            ``"pinned"`` / ``"store"`` / ``"cascade"`` / ``"none"``.
+            ``"pinned"`` / ``"store"`` / ``"cascade"`` / ``"none"`` /
+            ``"quarantined"``. ``"quarantined"`` means the endpoint is in
+            the §4.4.7 kernel-invalidated quarantine and no probe ran;
+            callers should fail-over to the next viable endpoint.
         endpoint_guid: GUID of the endpoint the cascade ran on (echoed
             for caller convenience).
     """
@@ -529,7 +541,7 @@ class CascadeResult:
     attempts: tuple[ProbeResult, ...]
     attempts_count: int
     budget_exhausted: bool
-    source: str  # "pinned" | "store" | "cascade" | "none"
+    source: str  # "pinned" | "store" | "cascade" | "none" | "quarantined"
 
 
 @dataclass(frozen=True, slots=True)

@@ -32,7 +32,7 @@ import numpy as np
 import pytest
 
 from sovyx.voice.health.contract import Combo, Diagnosis, ProbeMode
-from sovyx.voice.health.probe import probe
+from sovyx.voice.health.probe import _classify_open_error, probe
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -788,3 +788,67 @@ class TestEventLoopCooperation:
 
         assert len(ticks) == 5  # ticker completed alongside the probe
         assert result.diagnosis is Diagnosis.NO_SIGNAL
+
+
+# ---------------------------------------------------------------------------
+# Open-error classifier — §4.4.7 kernel-invalidated triage
+# ---------------------------------------------------------------------------
+
+
+class TestClassifyOpenError:
+    """``_classify_open_error`` maps exception text to Diagnosis values.
+
+    Priority order (per probe.py docstring):
+        PERMISSION_DENIED > DEVICE_BUSY > FORMAT_MISMATCH >
+        KERNEL_INVALIDATED > DRIVER_ERROR (fallback).
+    """
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Invalid device",
+            "invalid device",
+            "INVALID DEVICE",
+            "PaErrorCode -9996",
+            "paerrorcode -9996",
+            "PA_INVALID_DEVICE",
+            "AUDCLNT_E_DEVICE_INVALIDATED",
+            "wrapped: AUDCLNT_E_DEVICE_INVALIDATED (hex 0x88890004)",
+        ],
+    )
+    def test_kernel_invalidated_keywords_all_classify(self, text: str) -> None:
+        assert _classify_open_error(RuntimeError(text)) is Diagnosis.KERNEL_INVALIDATED
+
+    def test_format_mismatch_wins_over_kernel_invalidated(self) -> None:
+        # "invalid sample rate" contains the tokens "invalid" and
+        # "sample rate"; format-mismatch set matches first, so the result
+        # must be FORMAT_MISMATCH rather than KERNEL_INVALIDATED (because
+        # "invalid device" is absent).
+        assert (
+            _classify_open_error(RuntimeError("invalid sample rate")) is Diagnosis.FORMAT_MISMATCH
+        )
+
+    def test_device_busy_wins_over_kernel_invalidated(self) -> None:
+        # "device unavailable" matches busy; even a concurrent
+        # "invalid device" substring must not override.
+        assert (
+            _classify_open_error(RuntimeError("device unavailable — invalid device"))
+            is Diagnosis.DEVICE_BUSY
+        )
+
+    def test_permission_wins_over_all(self) -> None:
+        assert (
+            _classify_open_error(
+                RuntimeError("permission denied opening invalid device"),
+            )
+            is Diagnosis.PERMISSION_DENIED
+        )
+
+    def test_unrecognised_falls_back_to_driver_error(self) -> None:
+        assert (
+            _classify_open_error(RuntimeError("something weird happened"))
+            is Diagnosis.DRIVER_ERROR
+        )
+
+    def test_empty_message_falls_back_to_driver_error(self) -> None:
+        assert _classify_open_error(RuntimeError("")) is Diagnosis.DRIVER_ERROR

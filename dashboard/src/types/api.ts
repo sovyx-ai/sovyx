@@ -843,6 +843,7 @@ export type VoiceHealthDiagnosis =
   | "hot_unplugged"
   | "self_feedback"
   | "permission_denied"
+  | "kernel_invalidated"
   | "unknown";
 
 export type VoiceHealthProbeMode = "cold" | "warm";
@@ -926,8 +927,32 @@ export interface VoiceHealthOverrideEntry {
 export interface VoiceHealthSnapshotResponse {
   combo_store: VoiceHealthComboEntry[];
   overrides: VoiceHealthOverrideEntry[];
+  quarantine_count: number;
   data_dir: string;
   voice_enabled: boolean;
+}
+
+/**
+ * One endpoint in the §4.4.7 kernel-invalidated quarantine.
+ *
+ * Mirrors `sovyx.voice.health._quarantine.QuarantineEntry` + the derived
+ * `seconds_until_expiry` field computed on read.
+ */
+export interface VoiceHealthQuarantineEntry {
+  endpoint_guid: string;
+  device_friendly_name: string;
+  device_interface_name: string;
+  host_api: string;
+  added_at_monotonic: number;
+  expires_at_monotonic: number;
+  seconds_until_expiry: number;
+  reason: string;
+}
+
+/** GET /api/voice/health/quarantine response. */
+export interface VoiceHealthQuarantineSnapshotResponse {
+  entries: VoiceHealthQuarantineEntry[];
+  count: number;
 }
 
 /** POST /api/voice/health/reprobe request body. */

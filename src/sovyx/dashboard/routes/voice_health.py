@@ -40,10 +40,13 @@ from sovyx.voice.health import (
     ComboEntry,
     ComboStore,
     Diagnosis,
+    EndpointQuarantine,
     OverrideEntry,
     ProbeMode,
     ProbeResult,
+    QuarantineEntry,
     RemediationHint,
+    get_default_quarantine,
     probe,
 )
 from sovyx.voice.health._factory_integration import (
@@ -264,9 +267,48 @@ class OverrideEntryModel(BaseModel):
         )
 
 
+class QuarantineEntryModel(BaseModel):
+    """Wire shape of :class:`~sovyx.voice.health._quarantine.QuarantineEntry`.
+
+    Surfaces §4.4.7 kernel-invalidated quarantine to the dashboard so
+    operators can see which capture endpoints sovyx has stopped probing
+    and why.
+    """
+
+    endpoint_guid: str
+    device_friendly_name: str
+    device_interface_name: str
+    host_api: str
+    added_at_monotonic: float
+    expires_at_monotonic: float
+    seconds_until_expiry: float
+    reason: str
+
+    @classmethod
+    def from_domain(cls, entry: QuarantineEntry, *, now_monotonic: float) -> QuarantineEntryModel:
+        return cls(
+            endpoint_guid=entry.endpoint_guid,
+            device_friendly_name=entry.device_friendly_name,
+            device_interface_name=entry.device_interface_name,
+            host_api=entry.host_api,
+            added_at_monotonic=entry.added_at_monotonic,
+            expires_at_monotonic=entry.expires_at_monotonic,
+            seconds_until_expiry=max(0.0, entry.expires_at_monotonic - now_monotonic),
+            reason=entry.reason,
+        )
+
+
+class QuarantineSnapshotResponse(BaseModel):
+    """Snapshot of every endpoint currently in §4.4.7 quarantine."""
+
+    entries: list[QuarantineEntryModel]
+    count: int
+
+
 class HealthSnapshotResponse(BaseModel):
     combo_store: list[ComboEntryModel]
     overrides: list[OverrideEntryModel]
+    quarantine_count: int
     data_dir: str
     voice_enabled: bool
 
@@ -334,6 +376,20 @@ async def _load_capture_overrides(data_dir: Path) -> CaptureOverrides:
     overrides = CaptureOverrides(resolve_capture_overrides_path(data_dir))
     await asyncio.to_thread(overrides.load)
     return overrides
+
+
+def _resolve_quarantine(request: Request) -> EndpointQuarantine:
+    """Return the active §4.4.7 quarantine — registry-injected or singleton.
+
+    Tests pass a fresh :class:`EndpointQuarantine` via ``app.state.quarantine``
+    so cases don't bleed quarantine entries into each other. Production
+    code falls through to the process-wide singleton so the dashboard sees
+    the same store the cascade and watchdog mutate.
+    """
+    state_q: EndpointQuarantine | None = getattr(request.app.state, "quarantine", None)
+    if state_q is not None:
+        return state_q
+    return get_default_quarantine()
 
 
 def _voice_enabled(request: Request) -> bool:
@@ -457,11 +513,35 @@ async def get_voice_health(request: Request) -> HealthSnapshotResponse:
             detail=f"Failed to read voice health state: {exc}",
         ) from exc
 
+    quarantine = _resolve_quarantine(request)
     return HealthSnapshotResponse(
         combo_store=[ComboEntryModel.from_domain(e) for e in store.entries()],
         overrides=[OverrideEntryModel.from_domain(e) for e in overrides.entries()],
+        quarantine_count=len(quarantine),
         data_dir=str(data_dir),
         voice_enabled=_voice_enabled(request),
+    )
+
+
+@router.get("/quarantine", response_model=QuarantineSnapshotResponse)
+async def get_voice_health_quarantine(request: Request) -> QuarantineSnapshotResponse:
+    """Return the §4.4.7 kernel-invalidated quarantine snapshot.
+
+    Each entry is an endpoint that the cascade has stopped probing because
+    its IAudioClient is in an invalidated state. Operators can use this to:
+
+    * confirm that sovyx detected the problem the user is reporting,
+    * see which endpoints have been auto-failed-over,
+    * decide whether to suggest a USB replug or a reboot.
+    """
+    import time as _time
+
+    quarantine = _resolve_quarantine(request)
+    now = _time.monotonic()
+    snapshot = quarantine.snapshot()
+    return QuarantineSnapshotResponse(
+        entries=[QuarantineEntryModel.from_domain(e, now_monotonic=now) for e in snapshot],
+        count=len(snapshot),
     )
 
 
@@ -673,6 +753,8 @@ __all__ = [
     "PinRequest",
     "PinResponse",
     "ProbeResultModel",
+    "QuarantineEntryModel",
+    "QuarantineSnapshotResponse",
     "ReprobeRequest",
     "ReprobeResponse",
     "router",

@@ -31,6 +31,7 @@ from sovyx.upgrade.doctor import (
     _check_python_version,
     _check_schema_version,
     _check_voice_capture_apo,
+    _check_voice_kernel_invalidated,
 )
 
 # ── Fixtures ──────────────────────────────────────────────────────────
@@ -659,7 +660,7 @@ class TestDoctor:
         doc = Doctor(data_dir=data_dir, config_path=config_path)
         report = await doc.run_all()
         assert isinstance(report, DiagnosticReport)
-        assert len(report.results) == 12  # noqa: PLR2004
+        assert len(report.results) == 13  # noqa: PLR2004
         assert report.passed > 0
 
     @pytest.mark.asyncio()
@@ -681,6 +682,7 @@ class TestDoctor:
             "dependency_versions",
             "data_dir_writable",
             "voice_capture_apo",
+            "voice_capture_kernel_invalidated",
         }
         assert check_names == expected
 
@@ -701,7 +703,7 @@ class TestDoctor:
     def test_list_checks(self, data_dir: Path) -> None:
         doc = Doctor(data_dir=data_dir)
         checks = doc.list_checks()
-        assert len(checks) == 12  # noqa: PLR2004
+        assert len(checks) == 13  # noqa: PLR2004
         # Should be sorted
         assert checks == sorted(checks)
         assert "db_integrity" in checks
@@ -716,7 +718,7 @@ class TestDoctor:
         parsed = json.loads(j)
         assert isinstance(parsed["healthy"], bool)
         assert isinstance(parsed["results"], list)
-        assert len(parsed["results"]) == 12  # noqa: PLR2004
+        assert len(parsed["results"]) == 13  # noqa: PLR2004
         for r in parsed["results"]:
             assert "check" in r
             assert "status" in r
@@ -929,3 +931,112 @@ class TestVoiceCaptureApoCheck:
             DiagnosticStatus.PASS,
             DiagnosticStatus.WARN,
         }
+
+
+# ── Voice kernel-invalidated quarantine check ─────────────────────────
+
+
+class TestKernelInvalidatedCheck:
+    """Cover §4.4.7 quarantine surface in ``sovyx doctor``."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_singleton(self) -> None:
+        """Isolate tests from the process-wide quarantine singleton."""
+        from sovyx.voice.health import reset_default_quarantine
+
+        reset_default_quarantine()
+        yield
+        reset_default_quarantine()
+
+    def test_empty_quarantine_passes(self) -> None:
+        """No quarantined endpoints → PASS with zero count."""
+        result = _check_voice_kernel_invalidated()
+        assert result.status == DiagnosticStatus.PASS
+        assert result.check == "voice_capture_kernel_invalidated"
+        assert result.details is not None
+        assert result.details["quarantined_count"] == 0
+        assert result.fix_suggestion is None
+
+    def test_populated_quarantine_warns(self) -> None:
+        """Quarantined endpoint → WARN with endpoint detail + replug fix."""
+        from sovyx.voice.health import get_default_quarantine
+
+        q = get_default_quarantine(quarantine_s=60.0)
+        q.add(
+            endpoint_guid="{razer-guid}",
+            device_friendly_name="Microfone (Razer BlackShark V2 Pro)",
+            device_interface_name=r"\\?\USB#VID_1532&PID_0529",
+            host_api="Windows WASAPI",
+            reason="probe",
+        )
+
+        result = _check_voice_kernel_invalidated()
+
+        assert result.status == DiagnosticStatus.WARN
+        assert result.check == "voice_capture_kernel_invalidated"
+        assert "Razer BlackShark" in result.message
+        assert "kernel-invalidated" in result.message
+        assert result.fix_suggestion is not None
+        assert "unplug" in result.fix_suggestion.lower()
+        assert "reboot" in result.fix_suggestion.lower()
+        assert result.details is not None
+        assert result.details["quarantined_count"] == 1
+        endpoints = result.details["endpoints"]
+        assert len(endpoints) == 1
+        assert endpoints[0]["endpoint_guid"] == "{razer-guid}"
+        assert endpoints[0]["device_friendly_name"] == ("Microfone (Razer BlackShark V2 Pro)")
+        assert endpoints[0]["host_api"] == "Windows WASAPI"
+        assert endpoints[0]["reason"] == "probe"
+
+    def test_populated_falls_back_to_guid_when_no_friendly_name(self) -> None:
+        """Missing friendly name → the GUID appears in the message."""
+        from sovyx.voice.health import get_default_quarantine
+
+        q = get_default_quarantine(quarantine_s=60.0)
+        q.add(endpoint_guid="{anon-guid}", reason="watchdog_recheck")
+
+        result = _check_voice_kernel_invalidated()
+        assert result.status == DiagnosticStatus.WARN
+        assert "{anon-guid}" in result.message
+
+    def test_snapshot_exception_warns_with_daemon_hint(self) -> None:
+        """A raising ``snapshot()`` → WARN with start-the-daemon hint."""
+        with patch(
+            "sovyx.voice.health.get_default_quarantine",
+            side_effect=RuntimeError("voice subsystem offline"),
+        ):
+            result = _check_voice_kernel_invalidated()
+
+        assert result.status == DiagnosticStatus.WARN
+        assert result.check == "voice_capture_kernel_invalidated"
+        assert "voice subsystem offline" in result.message
+        assert result.fix_suggestion is not None
+        assert "daemon" in result.fix_suggestion.lower()
+
+    @pytest.mark.asyncio()
+    async def test_run_check_dispatch(self, data_dir: Path) -> None:
+        """``Doctor.run_check`` exposes the kernel_invalidated check."""
+        doc = Doctor(data_dir=data_dir)
+        result = await doc.run_check("voice_capture_kernel_invalidated")
+        assert result.check == "voice_capture_kernel_invalidated"
+        assert result.status == DiagnosticStatus.PASS
+        assert result.details is not None
+        assert result.details["quarantined_count"] == 0
+
+    @pytest.mark.asyncio()
+    async def test_run_check_dispatch_warns_when_populated(self, data_dir: Path) -> None:
+        """``run_check`` returns WARN when the singleton has entries."""
+        from sovyx.voice.health import get_default_quarantine
+
+        get_default_quarantine(quarantine_s=60.0).add(
+            endpoint_guid="{stuck}",
+            device_friendly_name="Stuck Mic",
+            host_api="Windows WASAPI",
+        )
+
+        doc = Doctor(data_dir=data_dir)
+        result = await doc.run_check("voice_capture_kernel_invalidated")
+
+        assert result.status == DiagnosticStatus.WARN
+        assert result.details is not None
+        assert result.details["quarantined_count"] == 1

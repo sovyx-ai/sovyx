@@ -309,6 +309,15 @@ class MetricsRegistry:
             description=("Active endpoint swaps (label: reason=hotplug|default|manual|recovery)"),
             unit="1",
         )
+        self.voice_health_kernel_invalidated_events = meter.create_counter(
+            name="sovyx.voice.health.kernel_invalidated.events",
+            description=(
+                "Kernel-side IAudioClient invalidation events detected by "
+                "the probe (labels: platform, host_api, action=quarantine|"
+                "failover|recheck_recovered|recheck_still_invalid)"
+            ),
+            unit="1",
+        )
         self.voice_health_time_to_first_utterance = meter.create_histogram(
             name="sovyx.voice.health.time_to_first_utterance",
             description=(

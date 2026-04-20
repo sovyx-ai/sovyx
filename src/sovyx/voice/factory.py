@@ -203,21 +203,34 @@ async def create_voice_pipeline(
         effective_index = resolved.index
         effective_host_api = resolved.host_api_name
 
-    voice_clarity_active = await asyncio.to_thread(
-        _detect_voice_clarity_active,
-        resolved.name if resolved is not None else None,
-    )
-
     tuning = VoiceTuningConfig()
 
     # ── 5b. VCHL boot cascade (§5.11 migration). Populates the
     # ComboStore on first boot so later boots hit the fast path.
     # Cascade winner is not used to drive AudioCaptureTask this
     # sprint — the legacy opener still owns the capture stream.
-    await _run_vchl_boot_cascade(
+    #
+    # §4.4.7 — when the cold cascade detects a kernel-invalidated
+    # endpoint, the helper picks an alternative ``DeviceEntry`` and
+    # re-runs the cascade so the pipeline can boot on a viable mic.
+    # The returned ``resolved`` reflects that fail-over.
+    resolved = await _run_vchl_boot_cascade(
         resolved=resolved,
         data_dir=data_dir,
         tuning=tuning,
+    )
+    if resolved is not None:
+        effective_index = resolved.index
+        effective_host_api = resolved.host_api_name
+
+    # §4.4.7 fail-over may have rebound ``resolved`` to a different mic —
+    # the VoiceClarity APO detection must target the device the pipeline
+    # will actually capture from, otherwise auto-bypass arms on the wrong
+    # endpoint and ``voice_pipeline_created`` disagrees with
+    # ``voice_apo_detected``.
+    voice_clarity_active = await asyncio.to_thread(
+        _detect_voice_clarity_active,
+        resolved.name if resolved is not None else None,
     )
 
     # ── 6. Build pipeline with auto-bypass hooks ──────────────
@@ -307,23 +320,30 @@ async def _run_vchl_boot_cascade(
     resolved: DeviceEntry | None,
     data_dir: Path | None,
     tuning: VoiceTuningConfig,
-) -> None:
+) -> DeviceEntry | None:
     """Run the VCHL cold cascade once at boot to populate :class:`ComboStore`.
 
-    ADR §5.11. Silent on any failure — the cascade is a migration
-    side-effect, never a hard gate on pipeline start. The cascade
-    winner is persisted to disk via the store; no return value is
-    needed at this sprint because the legacy opener still drives
-    :class:`AudioCaptureTask`.
+    ADR §5.11 + §4.4.7. The cascade is a migration side-effect (populates
+    :class:`ComboStore`) *and* a fail-over signal: when the cold cascade
+    diagnoses the endpoint as :attr:`Diagnosis.KERNEL_INVALIDATED`, the
+    cascade short-circuits with ``source="quarantined"`` and we fail-over
+    to the next-best capture endpoint via
+    :func:`select_alternative_endpoint`, then re-run the cascade once
+    against the alternative.
 
-    ``resolved`` may be ``None`` when device resolution failed (headless
-    CI, broken host audio stack) — in that case we skip the cascade
-    entirely and let the legacy opener surface the error path when it
-    tries to open the stream.
+    Returns the :class:`DeviceEntry` that should drive the pipeline — the
+    same one passed in for the happy path, or the fail-over device when
+    the original was quarantined. Returns ``None`` only when ``resolved``
+    was ``None`` to begin with (headless CI, broken audio stack) so the
+    legacy opener surfaces the error path naturally.
+
+    Silent on any unexpected failure — a corrupt :class:`ComboStore`,
+    a transient ``OSError`` on ``data_dir``, or a probe-side bug must
+    never block the voice pipeline from starting.
     """
     if resolved is None:
         logger.debug("voice_boot_cascade_skipped_no_resolved_device")
-        return
+        return None
 
     effective_data_dir = data_dir
     if effective_data_dir is None:
@@ -333,21 +353,69 @@ async def _run_vchl_boot_cascade(
             effective_data_dir = EngineConfig().data_dir
         except Exception:  # noqa: BLE001 — config failure must not block boot
             logger.debug("voice_boot_cascade_data_dir_unavailable", exc_info=True)
-            return
+            return resolved
 
     try:
         from sovyx.voice._apo_detector import detect_capture_apos
-        from sovyx.voice.health._factory_integration import run_boot_cascade
+        from sovyx.voice.health import current_platform_key
+        from sovyx.voice.health._factory_integration import (
+            derive_endpoint_guid,
+            run_boot_cascade,
+            select_alternative_endpoint,
+        )
+        from sovyx.voice.health._metrics import record_kernel_invalidated_event
 
         apo_reports = await asyncio.to_thread(detect_capture_apos)
-        await run_boot_cascade(
+        result = await run_boot_cascade(
             resolved=resolved,
             data_dir=effective_data_dir,
             tuning=tuning,
             apo_reports=apo_reports,
         )
+        # §4.4.7 fail-over — the original endpoint is in kernel-invalidated
+        # state; the quarantine entry is already recorded inside the
+        # cascade. Pick an alternative endpoint and re-run once.
+        if (
+            result is not None
+            and result.source == "quarantined"
+            and tuning.kernel_invalidated_failover_enabled
+        ):
+            original_guid = derive_endpoint_guid(resolved, apo_reports=apo_reports)
+            alternative = select_alternative_endpoint(
+                kind="input",
+                apo_reports=apo_reports,
+                exclude_endpoint_guids=(original_guid,),
+            )
+            if alternative is None:
+                logger.error(
+                    "voice_boot_cascade_no_alternative_endpoint",
+                    quarantined_endpoint=original_guid,
+                    quarantined_friendly_name=resolved.name,
+                )
+                return resolved
+            logger.warning(
+                "voice_boot_cascade_failover",
+                from_endpoint=original_guid,
+                from_friendly_name=resolved.name,
+                to_friendly_name=alternative.name,
+                to_host_api=alternative.host_api_name,
+            )
+            record_kernel_invalidated_event(
+                platform=current_platform_key(),
+                host_api=alternative.host_api_name or "unknown",
+                action="failover",
+            )
+            await run_boot_cascade(
+                resolved=alternative,
+                data_dir=effective_data_dir,
+                tuning=tuning,
+                apo_reports=apo_reports,
+            )
+            return alternative
     except Exception:  # noqa: BLE001 — cascade-side faults must never block voice enablement
         logger.warning("voice_boot_cascade_dispatch_failed", exc_info=True)
+        return resolved
+    return resolved
 
 
 def _detect_voice_clarity_active(resolved_name: str | None) -> bool:

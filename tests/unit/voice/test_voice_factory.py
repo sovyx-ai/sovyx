@@ -491,3 +491,247 @@ class TestVoiceClarityAutoBypassWiring:
         ):
             active = factory_mod._detect_voice_clarity_active("FakeMic")
         assert active is False
+
+
+class TestKernelInvalidatedFailoverEmits:
+    """§4.4.7 fail-over must emit the ``action="failover"`` telemetry.
+
+    Dashboards and SRE alerts discriminate successful fail-over
+    (``action="failover"``) from "no alternative endpoint" via the
+    kernel-invalidated counter. If the fail-over site forgets to emit,
+    ``{action="failover"}`` reports zero forever even when users are
+    being saved by it.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_failover_emits_metric_with_alternative_host_api(self, tmp_path) -> None:
+        from dataclasses import dataclass
+        from unittest.mock import AsyncMock, MagicMock
+
+        import sovyx.voice.factory as factory_mod
+        from sovyx.voice.device_enum import DeviceEntry
+
+        @dataclass
+        class _Result:
+            source: str
+
+        original = DeviceEntry(
+            index=3,
+            name="Mic A (stuck)",
+            canonical_name="mic a (stuck)",
+            host_api_index=0,
+            host_api_name="Windows WASAPI",
+            max_input_channels=1,
+            max_output_channels=0,
+            default_samplerate=48000,
+            is_os_default=True,
+        )
+        alternative = DeviceEntry(
+            index=5,
+            name="Mic B (healthy)",
+            canonical_name="mic b (healthy)",
+            host_api_index=0,
+            host_api_name="Windows DirectSound",
+            max_input_channels=1,
+            max_output_channels=0,
+            default_samplerate=48000,
+            is_os_default=False,
+        )
+
+        tuning = MagicMock()
+        tuning.kernel_invalidated_failover_enabled = True
+
+        run_cascade = AsyncMock(return_value=_Result(source="quarantined"))
+        record = MagicMock()
+
+        with (
+            patch(
+                "sovyx.voice._apo_detector.detect_capture_apos",
+                return_value=[],
+            ),
+            patch(
+                "sovyx.voice.health._factory_integration.run_boot_cascade",
+                new=run_cascade,
+            ),
+            patch(
+                "sovyx.voice.health._factory_integration.derive_endpoint_guid",
+                return_value="{guid-A}",
+            ),
+            patch(
+                "sovyx.voice.health._factory_integration.select_alternative_endpoint",
+                return_value=alternative,
+            ),
+            patch(
+                "sovyx.voice.health._metrics.record_kernel_invalidated_event",
+                new=record,
+            ),
+        ):
+            out = await factory_mod._run_vchl_boot_cascade(
+                resolved=original, data_dir=tmp_path, tuning=tuning
+            )
+
+        assert out is alternative
+        record.assert_called_once()
+        kwargs = record.call_args.kwargs
+        assert kwargs["action"] == "failover"
+        assert kwargs["host_api"] == "Windows DirectSound"
+        assert kwargs["platform"]
+
+    @pytest.mark.asyncio()
+    async def test_no_alternative_does_not_emit_failover(self, tmp_path) -> None:
+        from dataclasses import dataclass
+        from unittest.mock import AsyncMock, MagicMock
+
+        import sovyx.voice.factory as factory_mod
+        from sovyx.voice.device_enum import DeviceEntry
+
+        @dataclass
+        class _Result:
+            source: str
+
+        original = DeviceEntry(
+            index=3,
+            name="Mic A",
+            canonical_name="mic a",
+            host_api_index=0,
+            host_api_name="Windows WASAPI",
+            max_input_channels=1,
+            max_output_channels=0,
+            default_samplerate=48000,
+            is_os_default=True,
+        )
+        tuning = MagicMock()
+        tuning.kernel_invalidated_failover_enabled = True
+        record = MagicMock()
+
+        with (
+            patch(
+                "sovyx.voice._apo_detector.detect_capture_apos",
+                return_value=[],
+            ),
+            patch(
+                "sovyx.voice.health._factory_integration.run_boot_cascade",
+                new=AsyncMock(return_value=_Result(source="quarantined")),
+            ),
+            patch(
+                "sovyx.voice.health._factory_integration.derive_endpoint_guid",
+                return_value="{guid-A}",
+            ),
+            patch(
+                "sovyx.voice.health._factory_integration.select_alternative_endpoint",
+                return_value=None,
+            ),
+            patch(
+                "sovyx.voice.health._metrics.record_kernel_invalidated_event",
+                new=record,
+            ),
+        ):
+            out = await factory_mod._run_vchl_boot_cascade(
+                resolved=original, data_dir=tmp_path, tuning=tuning
+            )
+
+        assert out is original
+        record.assert_not_called()
+
+
+class TestVoiceClarityRecomputedAfterFailover:
+    """Bug_006 regression: APO detection targets the post-cascade device.
+
+    The VoiceClarity APO lives per-endpoint. When §4.4.7 fail-over
+    rebinds ``resolved`` to a different mic, the detector must run
+    against that new name — otherwise ``voice_pipeline_created``
+    advertises ``voice_clarity_active`` for the wrong device and
+    auto-bypass arms on a mic whose APO state was never probed.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_detector_receives_post_cascade_device_name(self, tmp_path) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+        from unittest.mock import patch as _patch
+
+        import sovyx.voice.factory as factory_mod
+        from sovyx.voice.device_enum import DeviceEntry
+
+        vad_file = tmp_path / "silero_vad.onnx"
+        vad_file.write_bytes(b"fake")
+
+        original = DeviceEntry(
+            index=3,
+            name="Original Mic",
+            canonical_name="original mic",
+            host_api_index=0,
+            host_api_name="Windows WASAPI",
+            max_input_channels=1,
+            max_output_channels=0,
+            default_samplerate=48000,
+            is_os_default=True,
+        )
+        replacement = DeviceEntry(
+            index=7,
+            name="Replacement Mic",
+            canonical_name="replacement mic",
+            host_api_index=0,
+            host_api_name="Windows DirectSound",
+            max_input_channels=1,
+            max_output_channels=0,
+            default_samplerate=48000,
+            is_os_default=False,
+        )
+
+        fake_pipeline = MagicMock()
+        fake_pipeline.start = AsyncMock()
+
+        detector_calls: list[str | None] = []
+
+        def _detector(name: str | None) -> bool:
+            detector_calls.append(name)
+            return False
+
+        captured_kwargs: dict[str, object] = {}
+
+        def _capture_pipeline(**kwargs: object) -> object:
+            captured_kwargs.update(kwargs)
+            return fake_pipeline
+
+        original_create_vad = factory_mod._create_vad
+        original_create_stt = factory_mod._create_stt
+        original_create_piper = factory_mod._create_piper_tts
+        factory_mod._create_vad = lambda *a, **kw: MagicMock()
+        fake_stt = MagicMock()
+        fake_stt.initialize = AsyncMock()
+        fake_stt.state = None
+        factory_mod._create_stt = lambda *a, **kw: fake_stt
+        factory_mod._create_piper_tts = lambda *a, **kw: MagicMock()
+
+        try:
+            with (
+                _patch.object(
+                    factory_mod, "ensure_silero_vad", new=AsyncMock(return_value=vad_file)
+                ),
+                _patch.object(factory_mod, "detect_tts_engine", return_value="piper"),
+                _patch(
+                    "sovyx.voice.device_enum.resolve_device",
+                    return_value=original,
+                ),
+                _patch.object(factory_mod, "_detect_voice_clarity_active", side_effect=_detector),
+                _patch.object(
+                    factory_mod,
+                    "_run_vchl_boot_cascade",
+                    new=AsyncMock(return_value=replacement),
+                ),
+                _patch(
+                    "sovyx.voice.pipeline._orchestrator.VoicePipeline",
+                    side_effect=_capture_pipeline,
+                ),
+            ):
+                await factory_mod.create_voice_pipeline(model_dir=tmp_path)
+
+            assert detector_calls, "detector never called"
+            assert detector_calls[-1] == "Replacement Mic", (
+                f"detector saw {detector_calls!r} — last call must target the "
+                "post-cascade (fail-over) device, not the original."
+            )
+        finally:
+            factory_mod._create_vad = original_create_vad
+            factory_mod._create_stt = original_create_stt
+            factory_mod._create_piper_tts = original_create_piper

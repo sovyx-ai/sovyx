@@ -637,8 +637,25 @@ export const VoiceHealthOverrideEntrySchema = z.object({
 export const VoiceHealthSnapshotResponseSchema = z.object({
   combo_store: z.array(VoiceHealthComboEntrySchema),
   overrides: z.array(VoiceHealthOverrideEntrySchema),
+  quarantine_count: z.number().int(),
   data_dir: z.string(),
   voice_enabled: z.boolean(),
+});
+
+export const VoiceHealthQuarantineEntrySchema = z.object({
+  endpoint_guid: z.string(),
+  device_friendly_name: z.string(),
+  device_interface_name: z.string(),
+  host_api: z.string(),
+  added_at_monotonic: z.number(),
+  expires_at_monotonic: z.number(),
+  seconds_until_expiry: z.number(),
+  reason: z.string(),
+});
+
+export const VoiceHealthQuarantineSnapshotResponseSchema = z.object({
+  entries: z.array(VoiceHealthQuarantineEntrySchema),
+  count: z.number().int(),
 });
 
 export const VoiceHealthReprobeResponseSchema = z.object({

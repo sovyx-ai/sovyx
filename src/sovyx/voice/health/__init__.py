@@ -37,7 +37,17 @@ from sovyx.voice.health._default_device import (
     PollingDefaultDeviceWatcher,
 )
 from sovyx.voice.health._hotplug import HotplugListener, NoopHotplugListener
+from sovyx.voice.health._kernel_invalidated_recheck import (
+    KernelInvalidatedRechecker,
+    RecheckProbeCallable,
+)
 from sovyx.voice.health._power import NoopPowerEventListener, PowerEventListener
+from sovyx.voice.health._quarantine import (
+    EndpointQuarantine,
+    QuarantineEntry,
+    get_default_quarantine,
+    reset_default_quarantine,
+)
 from sovyx.voice.health._self_feedback import SelfFeedbackGate, SelfFeedbackMode
 from sovyx.voice.health.capture_overrides import CaptureOverrides
 from sovyx.voice.health.cascade import (
@@ -118,9 +128,11 @@ __all__ = [
     "ComboStoreStats",
     "DefaultDeviceWatcher",
     "Diagnosis",
+    "EndpointQuarantine",
     "HotplugEvent",
     "HotplugEventKind",
     "HotplugListener",
+    "KernelInvalidatedRechecker",
     "LINUX_CASCADE",
     "LoadReport",
     "MACOS_CASCADE",
@@ -143,6 +155,8 @@ __all__ = [
     "ProbeHistoryEntry",
     "ProbeMode",
     "ProbeResult",
+    "QuarantineEntry",
+    "RecheckProbeCallable",
     "RemediationHint",
     "SelfFeedbackGate",
     "SelfFeedbackMode",
@@ -161,7 +175,9 @@ __all__ = [
     "check_wake_word_smoke",
     "current_platform_key",
     "default_step_names",
+    "get_default_quarantine",
     "probe",
+    "reset_default_quarantine",
     "run_cascade",
     "run_preflight",
 ]
