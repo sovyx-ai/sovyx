@@ -27,6 +27,7 @@ from sovyx.voice.health._metrics import (
     METRIC_PREFLIGHT_FAILURES,
     METRIC_PROBE_DIAGNOSIS,
     METRIC_PROBE_DURATION,
+    METRIC_PROBE_START_TIME_ERRORS,
     METRIC_RECOVERY_ATTEMPTS,
     METRIC_SELF_FEEDBACK_BLOCKS,
     METRIC_TIME_TO_FIRST_UTTERANCE,
@@ -40,6 +41,7 @@ from sovyx.voice.health._metrics import (
     record_probe_result,
     record_recovery_attempt,
     record_self_feedback_block,
+    record_start_time_error,
     record_time_to_first_utterance,
 )
 from sovyx.voice.health.contract import Combo, Diagnosis, ProbeMode, ProbeResult
@@ -114,6 +116,12 @@ class TestStableNameContract:
 
     def test_time_to_first_utterance_name(self) -> None:
         assert METRIC_TIME_TO_FIRST_UTTERANCE == "sovyx.voice.health.time_to_first_utterance"
+
+    def test_probe_start_time_errors_name(self) -> None:
+        # v0.20.2 §4.4.7 / Bug A — must live under the established
+        # ``sovyx.voice.health.*`` namespace so existing Grafana panels
+        # can fold it into the same VCHL boards.
+        assert METRIC_PROBE_START_TIME_ERRORS == "sovyx.voice.health.probe.start_time_errors"
 
 
 # ── Record helpers ────────────────────────────────────────────────────────
@@ -360,6 +368,68 @@ class TestRecordTimeToFirstUtterance:
         assert dp["attributes"] == {}
 
 
+class TestRecordStartTimeError:
+    """v0.20.2 Phase 1 / Bug A — probe stream.start() failure counter."""
+
+    def test_emits_with_diagnosis_host_api_platform(
+        self,
+        registry: MetricsRegistry,
+        reader: InMemoryMetricReader,
+    ) -> None:
+        record_start_time_error(
+            diagnosis=Diagnosis.KERNEL_INVALIDATED,
+            host_api="WASAPI",
+            platform="win32",
+        )
+        metric = _find(_collect(reader), METRIC_PROBE_START_TIME_ERRORS)
+        assert metric is not None
+        assert len(metric["data_points"]) == 1
+        attrs = metric["data_points"][0]["attributes"]
+        assert attrs == {
+            "diagnosis": "kernel_invalidated",
+            "host_api": "WASAPI",
+            "platform": "win32",
+        }
+        assert metric["data_points"][0]["value"] == 1
+
+    def test_missing_host_api_defaults_to_unknown(
+        self,
+        registry: MetricsRegistry,
+        reader: InMemoryMetricReader,
+    ) -> None:
+        record_start_time_error(
+            diagnosis=Diagnosis.DEVICE_BUSY,
+            host_api="",
+            platform="win32",
+        )
+        metric = _find(_collect(reader), METRIC_PROBE_START_TIME_ERRORS)
+        assert metric is not None
+        assert metric["data_points"][0]["attributes"]["host_api"] == "unknown"
+
+    def test_distinct_diagnoses_produce_distinct_series(
+        self,
+        registry: MetricsRegistry,
+        reader: InMemoryMetricReader,
+    ) -> None:
+        record_start_time_error(
+            diagnosis=Diagnosis.KERNEL_INVALIDATED,
+            host_api="WASAPI",
+            platform="win32",
+        )
+        record_start_time_error(
+            diagnosis=Diagnosis.DEVICE_BUSY,
+            host_api="WASAPI",
+            platform="win32",
+        )
+        metric = _find(_collect(reader), METRIC_PROBE_START_TIME_ERRORS)
+        assert metric is not None
+        diagnoses = {dp["attributes"]["diagnosis"] for dp in metric["data_points"]}
+        assert diagnoses == {
+            "kernel_invalidated",
+            "device_busy",
+        }
+
+
 # ── Graceful no-op when metrics are torn down ─────────────────────────────
 
 
@@ -377,4 +447,9 @@ class TestNoOpSafety:
         record_recovery_attempt(trigger="deaf_backoff")
         record_self_feedback_block(layer="gate")
         record_active_endpoint_change(reason="hotplug")
+        record_start_time_error(
+            diagnosis=Diagnosis.KERNEL_INVALIDATED,
+            host_api="WASAPI",
+            platform="win32",
+        )
         record_time_to_first_utterance(duration_ms=200.0)

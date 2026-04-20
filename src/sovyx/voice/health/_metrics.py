@@ -81,7 +81,7 @@ METRIC_SELF_FEEDBACK_BLOCKS = "sovyx.voice.health.self_feedback.blocks"
 METRIC_ACTIVE_ENDPOINT_CHANGES = "sovyx.voice.health.active_endpoint.changes"
 METRIC_TIME_TO_FIRST_UTTERANCE = "sovyx.voice.health.time_to_first_utterance"
 METRIC_KERNEL_INVALIDATED_EVENTS = "sovyx.voice.health.kernel_invalidated.events"
-METRIC_PROBE_START_TIME_ERRORS = "sovyx.voice.probe.start_time_errors"
+METRIC_PROBE_START_TIME_ERRORS = "sovyx.voice.health.probe.start_time_errors"
 
 
 # ── Label enums (closed sets for low-cardinality guarantees) ─────────────
@@ -283,7 +283,7 @@ def record_start_time_error(
         host_api: ``"WASAPI"`` | ``"WDM-KS"`` | ``"MME"`` | etc.
         platform: ``"win32"`` | ``"linux"`` | ``"darwin"``.
     """
-    counter = getattr(get_metrics(), "voice_probe_start_time_errors", None)
+    counter = getattr(get_metrics(), "voice_health_probe_start_time_errors", None)
     if counter is None:
         return
     counter.add(

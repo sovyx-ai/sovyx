@@ -1030,8 +1030,8 @@ class TestStartTimeErrorClassification:
 
     @pytest.mark.asyncio()
     async def test_start_time_error_records_telemetry_counter(self) -> None:
-        # The new ``sovyx.voice.probe.start_time_errors`` counter must
-        # fire on classified start failures — this is the regression
+        # The new ``sovyx.voice.health.probe.start_time_errors`` counter
+        # must fire on classified start failures — this is the regression
         # signal that tells us Bug A has recurred.
         from unittest.mock import patch
 
@@ -1057,9 +1057,13 @@ class TestStartTimeErrorClassification:
 
 
 class TestClassifyOpenErrorPriority:
-    """Hypothesis-driven: priority ordering holds for every keyword combination.
+    """Pin the ``_classify_open_error`` priority chain.
 
-    PERMISSION > DEVICE_BUSY > FORMAT_MISMATCH > KERNEL_INVALIDATED > DRIVER_ERROR.
+    Ordering: PERMISSION > DEVICE_BUSY > FORMAT_MISMATCH >
+    KERNEL_INVALIDATED > DRIVER_ERROR. The matrix below cross-checks
+    that compound messages always resolve to the highest-priority
+    matching diagnosis (so a "permission denied; format mismatch"
+    message classifies as PERMISSION_DENIED, never FORMAT_MISMATCH).
     """
 
     @staticmethod

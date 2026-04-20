@@ -318,8 +318,8 @@ class MetricsRegistry:
             ),
             unit="1",
         )
-        self.voice_probe_start_time_errors = meter.create_counter(
-            name="sovyx.voice.probe.start_time_errors",
+        self.voice_health_probe_start_time_errors = meter.create_counter(
+            name="sovyx.voice.health.probe.start_time_errors",
             description=(
                 "Probe stream.start() failures classified into Diagnosis "
                 "values (labels: diagnosis, host_api, platform). Before "

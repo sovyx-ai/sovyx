@@ -1065,7 +1065,17 @@ async def _try_combo(
         # probe-side bug re-introduces a leak (e.g. a kernel-invalidated
         # error escaping a new analysis phase), rather than silently
         # coarsening into DRIVER_ERROR.
-        diagnosis = _classify_open_error(exc)
+        #
+        # Gate the classifier on OSError (PortAudio surfaces failures as
+        # ``sd.PortAudioError(OSError)``) so an unrelated coding-bug
+        # ``TypeError("... format ...")`` or ``AttributeError`` whose
+        # message accidentally contains a keyword like "format" / "in use"
+        # / "access" cannot be misclassified as a structured Diagnosis.
+        # Non-OSError stays DRIVER_ERROR — the original cascade contract.
+        if isinstance(exc, OSError):
+            diagnosis = _classify_open_error(exc)
+        else:
+            diagnosis = Diagnosis.DRIVER_ERROR
         logger.error(
             "voice_cascade_probe_raised",
             host_api=combo.host_api,

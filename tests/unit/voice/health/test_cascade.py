@@ -63,6 +63,7 @@ class _FakeProbe:
     calls: list[_ProbeCall] = field(default_factory=list)
     sleep_per_call_s: float = 0.0
     raise_on: Callable[[Combo], bool] | None = None
+    raise_exc: BaseException | None = None
 
     async def __call__(
         self,
@@ -83,6 +84,8 @@ class _FakeProbe:
         if self.sleep_per_call_s > 0.0:
             await asyncio.sleep(self.sleep_per_call_s)
         if self.raise_on is not None and self.raise_on(combo):
+            if self.raise_exc is not None:
+                raise self.raise_exc
             msg = "test-side probe failure"
             raise RuntimeError(msg)
         diagnosis = Diagnosis.DRIVER_ERROR
@@ -552,6 +555,64 @@ class TestDefensiveCatches:
         assert result.source == "none"  # type: ignore[attr-defined]
         assert any(
             a.diagnosis is Diagnosis.DRIVER_ERROR and a.error is not None  # type: ignore[attr-defined]
+            for a in result.attempts  # type: ignore[attr-defined]
+        )
+
+    @pytest.mark.asyncio()
+    async def test_oserror_with_kernel_invalidated_message_classifies(self) -> None:
+        """Cascade-layer defense-in-depth: a probe-leaked OSError carrying
+        an AUDCLNT_E_DEVICE_INVALIDATED message must surface as
+        :attr:`Diagnosis.KERNEL_INVALIDATED`, not coarsen to DRIVER_ERROR.
+        Belt-and-braces for a future regression where the probe stops
+        catching kernel-invalidation in a new analysis stage.
+        """
+        probe = _FakeProbe(
+            plan=[(_match_all, Diagnosis.HEALTHY)],
+            raise_on=lambda c: c.host_api == "WASAPI" and c.exclusive,
+            raise_exc=OSError("AUDCLNT_E_DEVICE_INVALIDATED 0x88890004"),
+        )
+
+        # Process-local quarantine so this test doesn't pollute the
+        # default singleton — KERNEL_INVALIDATED triggers quarantine
+        # registration and would short-circuit subsequent tests.
+        result = await _run(probe_fn=probe, quarantine=_fresh_quarantine())
+
+        kernel_attempts = [
+            a
+            for a in result.attempts  # type: ignore[attr-defined]
+            if a.diagnosis is Diagnosis.KERNEL_INVALIDATED
+        ]
+        assert kernel_attempts, [a.diagnosis for a in result.attempts]  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio()
+    async def test_non_oserror_typeerror_does_not_misclassify_as_format(self) -> None:
+        """Coding-bug ``TypeError`` whose message accidentally contains
+        keywords ("format", "in use", "access") must NOT trigger the
+        cascade classifier — it stays DRIVER_ERROR. Otherwise the
+        cascade would silently treat a numpy/test-config bug as a
+        FORMAT_MISMATCH and skip to the next sample-rate combo, masking
+        the real defect.
+        """
+        probe = _FakeProbe(
+            plan=[(_match_all, Diagnosis.HEALTHY)],
+            raise_on=lambda c: c.host_api == "WASAPI" and c.exclusive,
+            raise_exc=TypeError("cannot convert NoneType to format string"),
+        )
+
+        result = await _run(probe_fn=probe, quarantine=_fresh_quarantine())
+
+        # No attempt may carry FORMAT_MISMATCH from the cascade catch —
+        # they all coarsen to DRIVER_ERROR.
+        format_misclassified = [
+            a
+            for a in result.attempts  # type: ignore[attr-defined]
+            if a.diagnosis is Diagnosis.FORMAT_MISMATCH
+        ]
+        assert format_misclassified == [], [a.diagnosis for a in result.attempts]  # type: ignore[attr-defined]
+        # And at least one DRIVER_ERROR attempt is present (cascade path
+        # ran with the gated classifier).
+        assert any(
+            a.diagnosis is Diagnosis.DRIVER_ERROR  # type: ignore[attr-defined]
             for a in result.attempts  # type: ignore[attr-defined]
         )
 
