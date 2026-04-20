@@ -85,6 +85,9 @@ if TYPE_CHECKING:
     from sovyx.observability.pii import (
         PIIRedactor as PIIRedactor,
     )
+    from sovyx.observability.sampling import (
+        SamplingProcessor as SamplingProcessor,
+    )
     from sovyx.observability.schema import (
         ENVELOPE_FIELDS as ENVELOPE_FIELDS,
     )
@@ -165,6 +168,7 @@ _SUBMODULE_MAP: dict[str, tuple[str, ...]] = {
     ),
     "sovyx.observability.envelope": ("EnvelopeProcessor",),
     "sovyx.observability.pii": ("PIIRedactor",),
+    "sovyx.observability.sampling": ("SamplingProcessor",),
     "sovyx.observability.schema": (
         "ENVELOPE_FIELDS",
         "KNOWN_EVENTS",
@@ -219,6 +223,7 @@ __all__ = [
     "MetricsRegistry",
     "PIIRedactor",
     "SLODefinition",
+    "SamplingProcessor",
     "SLOMonitor",
     "SLOReport",
     "SLOStatus",
