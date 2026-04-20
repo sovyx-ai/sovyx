@@ -17,6 +17,8 @@ thread-safe and asyncio-safe.
 
 from __future__ import annotations
 
+import contextlib
+import json
 import logging
 import logging.handlers
 import sys
@@ -27,10 +29,17 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from sovyx.observability.async_handler import AsyncQueueHandler, BackgroundLogWriter
+from sovyx.observability.envelope import EnvelopeProcessor
+from sovyx.observability.pii import PIIRedactor
+from sovyx.observability.ringbuffer import RingBufferHandler, install_crash_hooks
+from sovyx.observability.sampling import SamplingProcessor
+
 if TYPE_CHECKING:
     from collections.abc import Generator, MutableMapping
+    from pathlib import Path
 
-    from sovyx.engine.config import LoggingConfig
+    from sovyx.engine.config import LoggingConfig, ObservabilityConfig
 
 # ── Request Context (via structlog.contextvars) ─────────────────────────────
 
@@ -192,9 +201,17 @@ class SecretMasker:
 
 _setup_lock = threading.Lock()
 _setup_done = False
+_async_writer: BackgroundLogWriter | None = None
+_data_dir: Path | None = None
+_RUNTIME_OVERRIDE_FILENAME = "runtime_log_overrides.json"
 
 
-def setup_logging(config: LoggingConfig) -> None:
+def setup_logging(
+    config: LoggingConfig,
+    obs_config: ObservabilityConfig | None = None,
+    *,
+    data_dir: Path | None = None,
+) -> None:
     """Configure structlog for the entire application.
 
     This function is **idempotent and thread-safe**.  Multiple calls
@@ -204,12 +221,25 @@ def setup_logging(config: LoggingConfig) -> None:
 
     Args:
         config: Logging configuration (level, console_format, log_file).
+        obs_config: Optional observability configuration that turns on
+            envelope injection, PII redaction, sampling, the async file
+            writer and the in-memory crash ring buffer. ``None``
+            preserves the legacy single-handler behaviour for back-compat
+            with tests that pre-date the observability subsystem.
+        data_dir: Optional resolved data directory used to locate the
+            persisted runtime-level overrides file. When ``None``,
+            ``runtime_set_level(persist=True)`` becomes a no-op.
 
     Effects:
         - Configures structlog globally with shared processors.
         - Sets stdlib logging level.
         - Installs a ``StreamHandler`` (console) with the chosen renderer.
-        - Optionally installs a ``RotatingFileHandler`` (always JSON).
+        - When ``log_file`` is set: installs a ``RotatingFileHandler``
+          (always JSON), wrapped in :class:`AsyncQueueHandler` +
+          :class:`BackgroundLogWriter` if ``obs_config.features.async_queue``.
+        - When ``obs_config`` is set: installs a :class:`RingBufferHandler`
+          and wires :func:`install_crash_hooks` if a crash dump path
+          is configured.
 
     Processor chain (in order):
         1. ``merge_contextvars`` — inject request-scoped context
@@ -217,27 +247,41 @@ def setup_logging(config: LoggingConfig) -> None:
         3. ``add_logger_name`` — add ``logger`` field
         4. ``TimeStamper`` — ISO-8601 timestamp
         5. ``StackInfoRenderer`` — optional stack trace
-        6. ``SecretMasker`` — redact sensitive values
-        7. Renderer (JSON or console, per handler)
+        6. :class:`EnvelopeProcessor` — schema_version, process_id,
+           host, sovyx_version (only when ``obs_config`` is given)
+        7. :class:`SecretMasker` — redact sensitive values
+        8. :class:`PIIRedactor` — gated by ``features.pii_redaction``
+        9. :class:`SamplingProcessor` — keep-every-N for hot events
+        10. Renderer (JSON or console, per handler)
 
     Idempotency guarantee:
-        After each call, the root logger has exactly **1 StreamHandler**
-        and **0 or 1 RotatingFileHandler** (depending on ``log_file``).
-        No handler accumulation, no file descriptor leaks.
+        After each call, the root logger has exactly **1 StreamHandler**,
+        **0 or 1** file/async handler (per ``log_file``) and **0 or 1**
+        :class:`RingBufferHandler` (per ``obs_config``). No handler
+        accumulation, no file descriptor leaks. Any previously running
+        :class:`BackgroundLogWriter` is drained and stopped before the
+        new pipeline is wired in.
     """
     with _setup_lock:
-        _setup_logging_locked(config)
+        _setup_logging_locked(config, obs_config, data_dir)
 
 
-def _setup_logging_locked(config: LoggingConfig) -> None:
+def _setup_logging_locked(
+    config: LoggingConfig,
+    obs_config: ObservabilityConfig | None,
+    data_dir: Path | None,
+) -> None:
     """Inner setup — called under ``_setup_lock``. Not part of public API."""
-    global _setup_done  # noqa: PLW0603
+    global _setup_done, _async_writer, _data_dir  # noqa: PLW0603
 
     root_logger = logging.getLogger()
 
-    # ── Teardown: close file handlers, clear all handlers ──
-    # Close RotatingFileHandlers explicitly to release file descriptors.
-    # Then clear the handler list entirely to prevent accumulation.
+    # ── Teardown ──
+    # Stop any background log writer first so the old async queue is
+    # drained before we tear down its file handler downstream.
+    if _async_writer is not None:
+        _async_writer.drain_and_stop(timeout=2.0)
+        _async_writer = None
     for handler in list(root_logger.handlers):
         if isinstance(handler, logging.handlers.RotatingFileHandler):
             handler.close()
@@ -247,6 +291,8 @@ def _setup_logging_locked(config: LoggingConfig) -> None:
     if _setup_done:
         structlog.reset_defaults()
 
+    _data_dir = data_dir
+
     # ── Shared processor chain ──
     shared_processors: list[structlog.types.Processor] = [
         structlog.contextvars.merge_contextvars,
@@ -254,8 +300,17 @@ def _setup_logging_locked(config: LoggingConfig) -> None:
         structlog.stdlib.add_logger_name,
         structlog.processors.TimeStamper(fmt="iso"),
         structlog.processors.StackInfoRenderer(),
-        SecretMasker(),
     ]
+    if obs_config is not None:
+        shared_processors.append(EnvelopeProcessor())
+    shared_processors.append(SecretMasker())
+    if obs_config is not None:
+        if obs_config.features.pii_redaction:
+            shared_processors.append(PIIRedactor(obs_config.pii))
+        # SamplingProcessor is always installed when obs_config is set;
+        # it only drops events that are explicitly registered for
+        # rate-limiting (see _SAMPLED_EVENTS in observability.sampling).
+        shared_processors.append(SamplingProcessor(obs_config.sampling))
 
     # ── Console renderer ──
     if config.console_format == "json":
@@ -294,14 +349,37 @@ def _setup_logging_locked(config: LoggingConfig) -> None:
                 structlog.processors.JSONRenderer(),
             ],
         )
+        max_bytes = obs_config.file_max_bytes if obs_config is not None else 10 * 1024 * 1024
+        backup_count = obs_config.file_backup_count if obs_config is not None else 3
         file_handler = logging.handlers.RotatingFileHandler(
             config.log_file,
-            maxBytes=10 * 1024 * 1024,  # 10 MB
-            backupCount=3,
+            maxBytes=max_bytes,
+            backupCount=backup_count,
             encoding="utf-8",
         )
         file_handler.setFormatter(json_formatter)
-        root_logger.addHandler(file_handler)
+        if obs_config is not None and obs_config.features.async_queue:
+            async_handler = AsyncQueueHandler(maxsize=obs_config.async_queue_size)
+            writer = BackgroundLogWriter(async_handler, [file_handler])
+            writer.start()
+            _async_writer = writer
+            root_logger.addHandler(async_handler)
+        else:
+            root_logger.addHandler(file_handler)
+
+    # ── Ring buffer + crash dump hooks ──
+    if obs_config is not None:
+        ring_handler = RingBufferHandler(capacity=obs_config.ring_buffer_size)
+        ring_formatter = structlog.stdlib.ProcessorFormatter(
+            processors=[
+                structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+                structlog.processors.JSONRenderer(),
+            ],
+        )
+        ring_handler.setFormatter(ring_formatter)
+        root_logger.addHandler(ring_handler)
+        if obs_config.crash_dump_path is not None:
+            install_crash_hooks(ring_handler, obs_config.crash_dump_path)
 
     # ── Suppress noisy third-party loggers ──
     # httpx/httpcore emit INFO-level "HTTP Request: GET ..." lines that
@@ -311,6 +389,95 @@ def _setup_logging_locked(config: LoggingConfig) -> None:
         logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
     _setup_done = True
+
+    # Re-apply persisted runtime overrides so an investigation that
+    # outlives a daemon restart keeps its temporary log levels.
+    _load_runtime_overrides()
+
+
+def runtime_set_level(logger_name: str, level: str, *, persist: bool = False) -> None:
+    """Change *logger_name*'s level at runtime without restarting.
+
+    Args:
+        logger_name: Dotted logger name (``""`` for the root logger).
+        level: Standard level name (``DEBUG``/``INFO``/``WARNING``/...).
+        persist: When True, write the override to
+            ``<data_dir>/runtime_log_overrides.json`` so subsequent
+            ``setup_logging()`` calls re-apply it. No-op when
+            ``data_dir`` was not supplied to ``setup_logging``.
+    """
+    logging.getLogger(logger_name).setLevel(level)
+    if persist:
+        _persist_override(logger_name, level)
+
+
+def runtime_get_level(logger_name: str) -> str:
+    """Return the *effective* level for *logger_name* (resolving inheritance)."""
+    return logging.getLevelName(logging.getLogger(logger_name).getEffectiveLevel())
+
+
+def _override_path() -> Path | None:
+    """Resolve the persisted-override path against the current data_dir."""
+    if _data_dir is None:
+        return None
+    return _data_dir / _RUNTIME_OVERRIDE_FILENAME
+
+
+def _persist_override(logger_name: str, level: str) -> None:
+    """Atomically merge ``{logger_name: level}`` into the override file."""
+    path = _override_path()
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    current: dict[str, str] = {}
+    if path.exists():
+        with contextlib.suppress(OSError, json.JSONDecodeError):
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                current = {str(k): str(v) for k, v in loaded.items()}
+    current[logger_name] = level
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(current, indent=2, sort_keys=True), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _load_runtime_overrides() -> None:
+    """Re-apply persisted overrides on boot. Best-effort; bad entries are ignored."""
+    path = _override_path()
+    if path is None or not path.exists():
+        return
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(data, dict):
+        return
+    for logger_name, level in data.items():
+        if isinstance(logger_name, str) and isinstance(level, str):
+            with contextlib.suppress(ValueError):
+                logging.getLogger(logger_name).setLevel(level)
+
+
+def shutdown_logging(timeout: float = 5.0) -> None:
+    """Drain the async queue, flush handlers, release file descriptors.
+
+    Idempotent — safe to call multiple times. If the background writer
+    cannot drain within *timeout* seconds, the daemon thread is left
+    behind (it is a daemon and will exit with the process); the call
+    never blocks the process from exiting.
+    """
+    global _async_writer  # noqa: PLW0603
+    if _async_writer is not None:
+        _async_writer.drain_and_stop(timeout=timeout)
+        _async_writer = None
+    root = logging.getLogger()
+    for handler in list(root.handlers):
+        with contextlib.suppress(Exception):
+            handler.flush()
+        if isinstance(handler, logging.handlers.RotatingFileHandler | RingBufferHandler):
+            with contextlib.suppress(Exception):
+                handler.close()
+        root.removeHandler(handler)
 
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:

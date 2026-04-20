@@ -63,6 +63,21 @@ class AsyncQueueHandler(logging.handlers.QueueHandler):
         except queue.Full:
             self._dropped += 1
 
+    def prepare(self, record: logging.LogRecord) -> logging.LogRecord:
+        """Hand the unformatted record to the writer thread.
+
+        The default :meth:`logging.handlers.QueueHandler.prepare`
+        eagerly formats the record so the queue contains plain
+        strings — fine for ``%``-style stdlib logging, but disastrous
+        with structlog's :class:`structlog.stdlib.ProcessorFormatter`
+        which expects ``record.msg`` to be the original ``event_dict``.
+        Pre-formatting on the producer thread also defeats the whole
+        point of off-loading IO. We skip prepare entirely and let the
+        downstream handlers in :class:`BackgroundLogWriter` format
+        on the drain thread.
+        """
+        return record
+
     def dropped_count(self) -> int:
         """Return cumulative count of records dropped due to a full queue."""
         return self._dropped

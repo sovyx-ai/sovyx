@@ -71,7 +71,16 @@ if TYPE_CHECKING:
         get_request_context as get_request_context,
     )
     from sovyx.observability.logging import (
+        runtime_get_level as runtime_get_level,
+    )
+    from sovyx.observability.logging import (
+        runtime_set_level as runtime_set_level,
+    )
+    from sovyx.observability.logging import (
         setup_logging as setup_logging,
+    )
+    from sovyx.observability.logging import (
+        shutdown_logging as shutdown_logging,
     )
     from sovyx.observability.metrics import (
         MetricsRegistry as MetricsRegistry,
@@ -170,7 +179,10 @@ _SUBMODULE_MAP: dict[str, tuple[str, ...]] = {
         "clear_request_context",
         "get_logger",
         "get_request_context",
+        "runtime_get_level",
+        "runtime_set_level",
         "setup_logging",
+        "shutdown_logging",
     ),
     "sovyx.observability.metrics": (
         "MetricsRegistry",
@@ -259,9 +271,12 @@ __all__ = [
     "get_request_context",
     "get_tracer",
     "install_crash_hooks",
+    "runtime_get_level",
+    "runtime_set_level",
     "setup_logging",
     "setup_metrics",
     "setup_tracing",
+    "shutdown_logging",
     "teardown_metrics",
     "teardown_tracing",
     "validate_entry",
