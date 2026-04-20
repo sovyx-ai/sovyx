@@ -318,6 +318,16 @@ class MetricsRegistry:
             ),
             unit="1",
         )
+        self.voice_probe_start_time_errors = meter.create_counter(
+            name="sovyx.voice.probe.start_time_errors",
+            description=(
+                "Probe stream.start() failures classified into Diagnosis "
+                "values (labels: diagnosis, host_api, platform). Before "
+                "v0.20.2 these bypassed the probe classifier and appeared "
+                "as generic DRIVER_ERROR in cascade logs."
+            ),
+            unit="1",
+        )
         self.voice_health_time_to_first_utterance = meter.create_histogram(
             name="sovyx.voice.health.time_to_first_utterance",
             description=(

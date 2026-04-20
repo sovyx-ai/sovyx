@@ -48,6 +48,7 @@ from sovyx.voice.health._metrics import (
     record_cascade_attempt,
     record_combo_store_hit,
     record_kernel_invalidated_event,
+    record_probe_result,
 )
 from sovyx.voice.health._quarantine import (
     EndpointQuarantine,
@@ -60,7 +61,12 @@ from sovyx.voice.health.contract import (
     ProbeMode,
     ProbeResult,
 )
-from sovyx.voice.health.probe import probe as _default_probe
+from sovyx.voice.health.probe import (
+    _classify_open_error,
+)
+from sovyx.voice.health.probe import (
+    probe as _default_probe,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -1051,15 +1057,25 @@ async def _try_combo(
     except asyncio.CancelledError:
         raise
     except Exception as exc:
+        # Belt-and-braces: after v0.20.2 Phase 1, the probe classifies
+        # stream.start() failures internally, so this path should only
+        # fire for genuine probe-side bugs (numpy errors in analysis,
+        # test misconfiguration). Still, running the classifier on the
+        # raised exception recovers the correct Diagnosis when a future
+        # probe-side bug re-introduces a leak (e.g. a kernel-invalidated
+        # error escaping a new analysis phase), rather than silently
+        # coarsening into DRIVER_ERROR.
+        diagnosis = _classify_open_error(exc)
         logger.error(
             "voice_cascade_probe_raised",
             host_api=combo.host_api,
             combo=_combo_tag(combo),
+            diagnosis=str(diagnosis),
             error=repr(exc),
             exc_info=True,
         )
-        return ProbeResult(
-            diagnosis=Diagnosis.DRIVER_ERROR,
+        synthetic = ProbeResult(
+            diagnosis=diagnosis,
             mode=mode,
             combo=combo,
             vad_max_prob=None,
@@ -1069,6 +1085,10 @@ async def _try_combo(
             duration_ms=0,
             error=f"probe raised: {exc!r}",
         )
+        # Also emit the probe-result telemetry so synthetic results
+        # appear in the same dashboards as first-class probe outcomes.
+        record_probe_result(synthetic)
+        return synthetic
 
 
 def _record_winner(

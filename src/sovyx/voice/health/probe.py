@@ -44,6 +44,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import math
+import sys
 import threading
 import time
 from typing import TYPE_CHECKING, Any
@@ -51,7 +52,7 @@ from typing import TYPE_CHECKING, Any
 from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.observability.logging import get_logger
 from sovyx.voice._frame_normalizer import FrameNormalizer
-from sovyx.voice.health._metrics import record_probe_result
+from sovyx.voice.health._metrics import record_probe_result, record_start_time_error
 from sovyx.voice.health.contract import (
     Combo,
     Diagnosis,
@@ -116,7 +117,21 @@ payload (the scaling the FrameNormalizer expects).
 # Keywords mapped to the ADR's open-error diagnoses. Matching is done
 # case-insensitively against the exception message after classification
 # attempts via the exception type.
-_DEVICE_BUSY_KEYWORDS = ("device unavailable", "busy", "exclusive", "in use")
+#
+# AUDCLNT_E_DEVICE_IN_USE / 0x8889000a / -2004287478 belongs to the
+# busy family: another process (or our own voice-test session) is
+# holding the endpoint in exclusive mode. Recovery is wait-and-retry
+# or close the competing owner — NOT the §4.4.7 fail-over path
+# (quarantining a busy device would falsely mark healthy hardware).
+_DEVICE_BUSY_KEYWORDS = (
+    "device unavailable",
+    "busy",
+    "exclusive",
+    "in use",
+    "audclnt_e_device_in_use",
+    "0x8889000a",
+    "-2004287478",
+)
 _PERMISSION_KEYWORDS = ("permission", "denied", "access", "not authoriz")
 _FORMAT_MISMATCH_KEYWORDS = (
     "invalid sample rate",
@@ -136,13 +151,15 @@ _FORMAT_MISMATCH_KEYWORDS = (
 # layer still reports the endpoint as healthy (ConfigManagerErrorCode=0),
 # so this is *not* a hot-unplug — it's a stuck audio engine that no
 # user-mode call can revive. Cure is physical (replug / reboot). We
-# match both the text form and the numeric error code so we're
-# resilient to sounddevice message format drift.
+# match text, hex and signed-decimal forms so we're resilient to
+# sounddevice message format drift.
 _KERNEL_INVALIDATED_KEYWORDS = (
     "invalid device",
     "paerrorcode -9996",
     "pa_invalid_device",
     "audclnt_e_device_invalidated",
+    "0x88890004",
+    "-2004287484",
 )
 
 
@@ -408,15 +425,55 @@ async def _run_probe(
         )
 
     wall_start = time.monotonic()
+    start_time_error: BaseException | None = None
     try:
-        await asyncio.to_thread(stream.start)
-        await asyncio.sleep(duration_ms / 1000.0)
+        try:
+            await asyncio.to_thread(stream.start)
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:  # noqa: BLE001 — translate into Diagnosis (ADR §4.4.7)
+            # Stream.start() can raise PortAudio errors AFTER a successful
+            # open — notably AUDCLNT_E_DEVICE_INVALIDATED (kernel-side
+            # IAudioClient stuck) and AUDCLNT_E_DEVICE_IN_USE (another
+            # owner holds the device). Before this branch the exception
+            # propagated up to cascade._try_combo and became a generic
+            # DRIVER_ERROR, disarming the §4.4.7 fail-over. Classifying
+            # here restores the Diagnosis → fail-over chain.
+            start_time_error = exc
+        else:
+            await asyncio.sleep(duration_ms / 1000.0)
     finally:
         # stop() / close() must not mask a probe-time exception.
         with contextlib.suppress(Exception):
             await asyncio.to_thread(stream.stop)
         with contextlib.suppress(Exception):
             await asyncio.to_thread(stream.close)
+
+    if start_time_error is not None:
+        diagnosis = _classify_open_error(start_time_error)
+        logger.info(
+            "voice_probe_start_failed",
+            mode=str(mode),
+            combo=_combo_tag(combo),
+            diagnosis=str(diagnosis),
+            error=str(start_time_error),
+        )
+        record_start_time_error(
+            diagnosis=diagnosis,
+            host_api=combo.host_api,
+            platform=sys.platform,
+        )
+        return ProbeResult(
+            diagnosis=diagnosis,
+            mode=mode,
+            combo=combo,
+            vad_max_prob=None,
+            vad_mean_prob=None,
+            rms_db=float("-inf"),
+            callbacks_fired=0,
+            duration_ms=int((time.monotonic() - wall_start) * 1000),
+            error=str(start_time_error),
+        )
 
     elapsed_ms = int((time.monotonic() - wall_start) * 1000)
 

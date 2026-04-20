@@ -81,6 +81,7 @@ METRIC_SELF_FEEDBACK_BLOCKS = "sovyx.voice.health.self_feedback.blocks"
 METRIC_ACTIVE_ENDPOINT_CHANGES = "sovyx.voice.health.active_endpoint.changes"
 METRIC_TIME_TO_FIRST_UTTERANCE = "sovyx.voice.health.time_to_first_utterance"
 METRIC_KERNEL_INVALIDATED_EVENTS = "sovyx.voice.health.kernel_invalidated.events"
+METRIC_PROBE_START_TIME_ERRORS = "sovyx.voice.probe.start_time_errors"
 
 
 # ── Label enums (closed sets for low-cardinality guarantees) ─────────────
@@ -261,6 +262,40 @@ def record_kernel_invalidated_event(
     )
 
 
+def record_start_time_error(
+    *,
+    diagnosis: Diagnosis | str,
+    host_api: str,
+    platform: str,
+) -> None:
+    """Record a probe ``stream.start()`` failure after a successful open.
+
+    Before v0.20.2, start-time PortAudio errors (notably
+    ``AUDCLNT_E_DEVICE_INVALIDATED`` and ``AUDCLNT_E_DEVICE_IN_USE``)
+    propagated out of ``_run_probe`` and were synthesised into a
+    generic ``DRIVER_ERROR`` at the cascade layer — fully bypassing the
+    §4.4.7 fail-over decision. This counter is the telemetry signal we
+    need to detect regressions of that gap.
+
+    Args:
+        diagnosis: The :class:`Diagnosis` the open-error classifier
+            produced. Low-cardinality (closed enum).
+        host_api: ``"WASAPI"`` | ``"WDM-KS"`` | ``"MME"`` | etc.
+        platform: ``"win32"`` | ``"linux"`` | ``"darwin"``.
+    """
+    counter = getattr(get_metrics(), "voice_probe_start_time_errors", None)
+    if counter is None:
+        return
+    counter.add(
+        1,
+        attributes={
+            "diagnosis": str(diagnosis),
+            "host_api": host_api or "unknown",
+            "platform": platform or "unknown",
+        },
+    )
+
+
 def record_time_to_first_utterance(*, duration_ms: float) -> None:
     """Record the user-perceived KPI (ADR §5.14).
 
@@ -281,6 +316,7 @@ __all__ = [
     "METRIC_RECOVERY_ATTEMPTS",
     "METRIC_SELF_FEEDBACK_BLOCKS",
     "METRIC_KERNEL_INVALIDATED_EVENTS",
+    "METRIC_PROBE_START_TIME_ERRORS",
     "METRIC_TIME_TO_FIRST_UTTERANCE",
     "record_active_endpoint_change",
     "record_cascade_attempt",
@@ -293,5 +329,6 @@ __all__ = [
     "record_probe_result",
     "record_recovery_attempt",
     "record_self_feedback_block",
+    "record_start_time_error",
     "record_time_to_first_utterance",
 ]

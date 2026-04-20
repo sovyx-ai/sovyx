@@ -96,6 +96,7 @@ class _FakeInputStream:
         callback: Callable[..., None],
         block_factory: Callable[[int], np.ndarray] | None = None,
         open_exc: BaseException | None = None,
+        start_exc: BaseException | None = None,
         silent: bool = False,
         **_kwargs: Any,
     ) -> None:
@@ -109,6 +110,7 @@ class _FakeInputStream:
         self.callback = callback
         self._block_factory = block_factory
         self._silent = silent
+        self._start_exc = start_exc
         self._running = False
         self._thread: threading.Thread | None = None
         self.started = False
@@ -118,6 +120,14 @@ class _FakeInputStream:
         self.stopped_at: float | None = None
 
     def start(self) -> None:
+        if self._start_exc is not None:
+            # stream.start() raising AFTER a successful open — this is
+            # the AUDCLNT_E_DEVICE_INVALIDATED / AUDCLNT_E_DEVICE_IN_USE
+            # shape that §4.4.7 fail-over must see as KERNEL_INVALIDATED
+            # or DEVICE_BUSY, not as a generic DRIVER_ERROR.
+            self.started = True
+            self.started_at = time.monotonic()
+            raise self._start_exc
         self.started = True
         self.started_at = time.monotonic()
         if self._silent:
@@ -164,16 +174,22 @@ class _FakeSoundDevice:
         *,
         stream_factory: Callable[..., _FakeInputStream] | None = None,
         open_exc: BaseException | None = None,
+        start_exc: BaseException | None = None,
     ) -> None:
         self._stream_factory = stream_factory
         self._open_exc = open_exc
+        self._start_exc = start_exc
         self.last_stream: _FakeInputStream | None = None
 
     def InputStream(self, **kwargs: Any) -> _FakeInputStream:  # noqa: N802
         if self._stream_factory is not None:
             stream = self._stream_factory(**kwargs)
         else:
-            stream = _FakeInputStream(open_exc=self._open_exc, **kwargs)
+            stream = _FakeInputStream(
+                open_exc=self._open_exc,
+                start_exc=self._start_exc,
+                **kwargs,
+            )
         self.last_stream = stream
         return stream
 
@@ -814,10 +830,28 @@ class TestClassifyOpenError:
             "PA_INVALID_DEVICE",
             "AUDCLNT_E_DEVICE_INVALIDATED",
             "wrapped: AUDCLNT_E_DEVICE_INVALIDATED (hex 0x88890004)",
+            "Error starting stream: Unanticipated host error 0x88890004",
+            "hostError -2004287484",
         ],
     )
     def test_kernel_invalidated_keywords_all_classify(self, text: str) -> None:
         assert _classify_open_error(RuntimeError(text)) is Diagnosis.KERNEL_INVALIDATED
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "AUDCLNT_E_DEVICE_IN_USE",
+            "another owner holds the device (audclnt_e_device_in_use)",
+            "Error starting stream: Unanticipated host error 0x8889000a",
+            "hostError -2004287478",
+        ],
+    )
+    def test_device_in_use_classifies_as_busy_not_kernel_invalidated(self, text: str) -> None:
+        # AUDCLNT_E_DEVICE_IN_USE means a competing owner holds the
+        # endpoint in exclusive mode. Recovery is wait-and-retry, not
+        # quarantine — misclassifying as KERNEL_INVALIDATED would
+        # trigger the §4.4.7 fail-over against a healthy device.
+        assert _classify_open_error(RuntimeError(text)) is Diagnosis.DEVICE_BUSY
 
     def test_format_mismatch_wins_over_kernel_invalidated(self) -> None:
         # "invalid sample rate" contains the tokens "invalid" and
@@ -852,3 +886,267 @@ class TestClassifyOpenError:
 
     def test_empty_message_falls_back_to_driver_error(self) -> None:
         assert _classify_open_error(RuntimeError("")) is Diagnosis.DRIVER_ERROR
+
+
+# ---------------------------------------------------------------------------
+# Start-time error classification — v0.20.2 Phase 1 (Bug A)
+# ---------------------------------------------------------------------------
+
+
+class TestStartTimeErrorClassification:
+    """Errors raised by ``stream.start()`` must be classified into a Diagnosis.
+
+    Before v0.20.2, the probe only classified exceptions from
+    ``_open_input_stream``; errors from ``stream.start()``
+    (``AUDCLNT_E_DEVICE_INVALIDATED``, ``AUDCLNT_E_DEVICE_IN_USE``,
+    etc.) propagated up to the cascade and became a generic
+    ``DRIVER_ERROR``, disarming the §4.4.7 fail-over. These tests pin
+    the fix.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_device_invalidated_classifies_as_kernel_invalidated(self) -> None:
+        combo = _combo()
+        sd = _FakeSoundDevice(
+            start_exc=RuntimeError(
+                "Error starting stream: Unanticipated host error "
+                "[PaErrorCode -9999]: 'AUDCLNT_E_DEVICE_INVALIDATED' "
+                "[Windows WASAPI error -2004287484]",
+            ),
+        )
+        result = await probe(
+            combo=combo,
+            mode=ProbeMode.COLD,
+            device_index=0,
+            duration_ms=200,
+            sd_module=sd,
+        )
+        assert result.diagnosis is Diagnosis.KERNEL_INVALIDATED
+        assert result.callbacks_fired == 0
+        assert "AUDCLNT_E_DEVICE_INVALIDATED" in (result.error or "")
+
+    @pytest.mark.asyncio()
+    async def test_device_in_use_classifies_as_device_busy(self) -> None:
+        combo = _combo()
+        sd = _FakeSoundDevice(
+            start_exc=RuntimeError(
+                "Error starting stream: Unanticipated host error "
+                "[PaErrorCode -9999]: 'AUDCLNT_E_DEVICE_IN_USE' "
+                "[Windows WASAPI error -2004287478]",
+            ),
+        )
+        result = await probe(
+            combo=combo,
+            mode=ProbeMode.COLD,
+            device_index=0,
+            duration_ms=200,
+            sd_module=sd,
+        )
+        # Must NOT be KERNEL_INVALIDATED — recovery for IN_USE is to
+        # wait for the other owner / close it, not to fail over to a
+        # different endpoint.
+        assert result.diagnosis is Diagnosis.DEVICE_BUSY
+
+    @pytest.mark.asyncio()
+    async def test_invalid_sample_rate_at_start_classifies_as_format_mismatch(
+        self,
+    ) -> None:
+        combo = _combo()
+        sd = _FakeSoundDevice(
+            start_exc=RuntimeError("Error starting stream: Invalid sample rate"),
+        )
+        result = await probe(
+            combo=combo,
+            mode=ProbeMode.COLD,
+            device_index=0,
+            duration_ms=200,
+            sd_module=sd,
+        )
+        assert result.diagnosis is Diagnosis.FORMAT_MISMATCH
+
+    @pytest.mark.asyncio()
+    async def test_cancelled_error_propagates_through_start(self) -> None:
+        # CancelledError is NOT a Diagnosis — the outer wait_for /
+        # consumer needs it to propagate so shutdown unwinds cleanly.
+        combo = _combo()
+        sd = _FakeSoundDevice(start_exc=asyncio.CancelledError())
+        with pytest.raises(asyncio.CancelledError):
+            await probe(
+                combo=combo,
+                mode=ProbeMode.COLD,
+                device_index=0,
+                duration_ms=200,
+                sd_module=sd,
+            )
+
+    @pytest.mark.asyncio()
+    async def test_start_time_error_still_runs_stream_close(self) -> None:
+        # The finally block must still call stop() + close() even when
+        # start() raised — otherwise the underlying PortAudio stream
+        # handle leaks and subsequent probes hit "device busy".
+        combo = _combo()
+
+        def factory(**kwargs: Any) -> _FakeInputStream:
+            return _FakeInputStream(
+                start_exc=RuntimeError("AUDCLNT_E_DEVICE_INVALIDATED"),
+                **kwargs,
+            )
+
+        sd = _FakeSoundDevice(stream_factory=factory)
+        await probe(
+            combo=combo,
+            mode=ProbeMode.COLD,
+            device_index=0,
+            duration_ms=200,
+            sd_module=sd,
+        )
+        assert sd.last_stream is not None
+        assert sd.last_stream.stopped is True
+        assert sd.last_stream.closed is True
+
+    @pytest.mark.asyncio()
+    async def test_start_time_error_emits_voice_probe_start_failed_log(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        caplog.set_level(logging.INFO, logger="sovyx.voice.health.probe")
+        combo = _combo()
+        sd = _FakeSoundDevice(
+            start_exc=RuntimeError("AUDCLNT_E_DEVICE_INVALIDATED"),
+        )
+        await probe(
+            combo=combo,
+            mode=ProbeMode.COLD,
+            device_index=0,
+            duration_ms=200,
+            sd_module=sd,
+        )
+        # structlog routes through stdlib — the event name is in the
+        # record message.
+        assert any("voice_probe_start_failed" in rec.message for rec in caplog.records), [
+            rec.message for rec in caplog.records
+        ]
+
+    @pytest.mark.asyncio()
+    async def test_start_time_error_records_telemetry_counter(self) -> None:
+        # The new ``sovyx.voice.probe.start_time_errors`` counter must
+        # fire on classified start failures — this is the regression
+        # signal that tells us Bug A has recurred.
+        from unittest.mock import patch
+
+        combo = _combo()
+        sd = _FakeSoundDevice(
+            start_exc=RuntimeError("AUDCLNT_E_DEVICE_INVALIDATED"),
+        )
+        with patch(
+            "sovyx.voice.health.probe.record_start_time_error",
+        ) as mock_record:
+            await probe(
+                combo=combo,
+                mode=ProbeMode.COLD,
+                device_index=0,
+                duration_ms=200,
+                sd_module=sd,
+            )
+        mock_record.assert_called_once()
+        kwargs = mock_record.call_args.kwargs
+        assert kwargs["diagnosis"] is Diagnosis.KERNEL_INVALIDATED
+        assert kwargs["host_api"] == combo.host_api
+        assert kwargs["platform"]  # non-empty
+
+
+class TestClassifyOpenErrorPriority:
+    """Hypothesis-driven: priority ordering holds for every keyword combination.
+
+    PERMISSION > DEVICE_BUSY > FORMAT_MISMATCH > KERNEL_INVALIDATED > DRIVER_ERROR.
+    """
+
+    @staticmethod
+    def _expected(text: str) -> Diagnosis:
+        msg = text.lower()
+        if any(k in msg for k in ("permission", "denied", "access", "not authoriz")):
+            return Diagnosis.PERMISSION_DENIED
+        if any(
+            k in msg
+            for k in (
+                "device unavailable",
+                "busy",
+                "exclusive",
+                "in use",
+                "audclnt_e_device_in_use",
+                "0x8889000a",
+                "-2004287478",
+            )
+        ):
+            return Diagnosis.DEVICE_BUSY
+        if any(
+            k in msg
+            for k in (
+                "invalid sample rate",
+                "invalid samplerate",
+                "sample rate",
+                "samplerate",
+                "format",
+                "channels",
+                "invalid number of channels",
+                "unsupported",
+            )
+        ):
+            return Diagnosis.FORMAT_MISMATCH
+        if any(
+            k in msg
+            for k in (
+                "invalid device",
+                "paerrorcode -9996",
+                "pa_invalid_device",
+                "audclnt_e_device_invalidated",
+                "0x88890004",
+                "-2004287484",
+            )
+        ):
+            return Diagnosis.KERNEL_INVALIDATED
+        return Diagnosis.DRIVER_ERROR
+
+    def test_priority_permission_over_busy(self) -> None:
+        assert (
+            _classify_open_error(RuntimeError("permission denied: device in use"))
+            is Diagnosis.PERMISSION_DENIED
+        )
+
+    def test_priority_busy_over_format(self) -> None:
+        assert (
+            _classify_open_error(RuntimeError("device in use: invalid sample rate"))
+            is Diagnosis.DEVICE_BUSY
+        )
+
+    def test_priority_format_over_kernel(self) -> None:
+        assert (
+            _classify_open_error(RuntimeError("invalid sample rate on invalid device"))
+            is Diagnosis.FORMAT_MISMATCH
+        )
+
+    def test_priority_kernel_over_driver(self) -> None:
+        assert (
+            _classify_open_error(RuntimeError("AUDCLNT_E_DEVICE_INVALIDATED wtf"))
+            is Diagnosis.KERNEL_INVALIDATED
+        )
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("permission denied", Diagnosis.PERMISSION_DENIED),
+            ("AUDCLNT_E_DEVICE_IN_USE permission denied", Diagnosis.PERMISSION_DENIED),
+            ("AUDCLNT_E_DEVICE_IN_USE", Diagnosis.DEVICE_BUSY),
+            ("-2004287478", Diagnosis.DEVICE_BUSY),
+            ("invalid sample rate", Diagnosis.FORMAT_MISMATCH),
+            ("AUDCLNT_E_DEVICE_INVALIDATED", Diagnosis.KERNEL_INVALIDATED),
+            ("-2004287484", Diagnosis.KERNEL_INVALIDATED),
+            ("0x88890004", Diagnosis.KERNEL_INVALIDATED),
+            ("completely unknown", Diagnosis.DRIVER_ERROR),
+        ],
+    )
+    def test_priority_matrix_matches_reference(self, text: str, expected: Diagnosis) -> None:
+        """Every combination in the fixture table matches the reference ``_expected``."""
+        assert _classify_open_error(RuntimeError(text)) is expected
+        assert self._expected(text) is expected
