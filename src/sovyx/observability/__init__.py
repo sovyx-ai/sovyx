@@ -28,6 +28,9 @@ if TYPE_CHECKING:
     from sovyx.observability.alerts import (
         create_default_alert_manager as create_default_alert_manager,
     )
+    from sovyx.observability.envelope import (
+        EnvelopeProcessor as EnvelopeProcessor,
+    )
     from sovyx.observability.health import (
         CheckResult as CheckResult,
     )
@@ -157,6 +160,7 @@ _SUBMODULE_MAP: dict[str, tuple[str, ...]] = {
         "setup_metrics",
         "teardown_metrics",
     ),
+    "sovyx.observability.envelope": ("EnvelopeProcessor",),
     "sovyx.observability.schema": (
         "ENVELOPE_FIELDS",
         "KNOWN_EVENTS",
@@ -204,6 +208,7 @@ __all__ = [
     "AlertSeverity",
     "CheckResult",
     "CheckStatus",
+    "EnvelopeProcessor",
     "HealthCheck",
     "HealthRegistry",
     "LogEntry",
