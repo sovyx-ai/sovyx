@@ -38,12 +38,20 @@ ENVELOPE_FIELDS: frozenset[str] = frozenset(
         "process_id",
         "host",
         "sovyx_version",
+        "sequence_no",
     }
 )
 """Mandatory fields injected by the envelope processor.
 
 Any entry missing one of these is malformed and rejected by
 :func:`validate_entry`.
+
+The ``sequence_no`` field is a per-process monotonically increasing
+integer used by downstream log forwarders (§22.5) to deduplicate
+at-least-once delivery. The tuple ``(timestamp, process_id,
+sequence_no)`` is globally unique across a daemon's lifetime; a
+forwarder that retries a batch and ships the same entry twice is
+expected to drop duplicates on this tuple.
 """
 
 
@@ -84,6 +92,15 @@ class LogEntry(BaseModel):
     process_id: int = Field(..., ge=1, description="OS process id of the emitting daemon.")
     host: str = Field(..., min_length=1, description="Hostname (platform.node()).")
     sovyx_version: str = Field(..., min_length=1, description="Daemon package version.")
+    sequence_no: int = Field(
+        ...,
+        ge=0,
+        description=(
+            "Per-process monotonic counter (starts at 0). Combined with "
+            "(timestamp, process_id) yields a globally-unique key for "
+            "at-least-once dedup at the log-forwarding layer."
+        ),
+    )
 
 
 def validate_entry(entry: dict[str, Any]) -> None:
