@@ -393,6 +393,14 @@ class LifecycleManager:
             db = await self._registry.resolve(DatabaseManager)
             await db.stop()
 
+        # 8. Drain async log queue + flush handlers. Runs strictly after
+        # every other service so any shutdown-time log lines emitted by
+        # the steps above (e.g. db.stop's "database_closed") still make
+        # it to disk before the file handler closes.
+        from sovyx.observability.logging import shutdown_logging
+
+        shutdown_logging(timeout=5.0)
+
     @staticmethod
     def _notify_systemd(status: str) -> None:
         """Send sd_notify if NOTIFY_SOCKET is set.

@@ -129,12 +129,18 @@ async def bootstrap(
         # 0. EngineConfig + logging setup
         registry.register_instance(EngineConfig, engine_config)
 
-        # Setup structured logging with file handler (for dashboard log viewer).
-        # Console format controlled by config.console_format (default: "text").
-        # File handler always writes JSON (for machine parsing).
+        # Setup structured logging with envelope/PII/sampling/async/ringbuffer
+        # pipeline (Phase 1 of IMPL-OBSERVABILITY-001). EngineConfig already
+        # resolved observability.crash_dump_path against data_dir in its
+        # model validator; data_dir is forwarded so persisted runtime
+        # log-level overrides survive restarts.
         from sovyx.observability.logging import setup_logging
 
-        setup_logging(engine_config.log)
+        setup_logging(
+            engine_config.log,
+            engine_config.observability,
+            data_dir=engine_config.data_dir,
+        )
 
         # 1. EventBus
         event_bus = EventBus()
