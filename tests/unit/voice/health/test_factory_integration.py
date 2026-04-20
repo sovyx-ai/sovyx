@@ -623,6 +623,79 @@ class TestSelectAlternativeEndpoint:
         finally:
             _quarantine.reset_default_quarantine()
 
+    def test_excludes_physical_device_id_across_host_apis(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Razer BlackShark V2 Pro regression — v0.20.4.
+
+        A single physical microphone exposed by PortAudio through four
+        host APIs (MME, DirectSound, WASAPI, WDM-KS) shares one
+        ``canonical_name`` but has four distinct endpoint GUIDs. The
+        fail-over picker must reject every alias when the canonical
+        name is in ``exclude_physical_device_ids`` — otherwise the
+        factory re-cascades into the same wedged kernel driver and
+        re-triggers the Kernel-Power 41 hard reset.
+        """
+        from sovyx.voice import device_enum
+
+        wasapi_alias = _input_entry(
+            index=0, name="Razer BlackShark V2 Pro", host_api_name="Windows WASAPI"
+        )
+        mme_alias = _input_entry(index=1, name="Razer BlackShark V2 Pro", host_api_name="MME")
+        directsound_alias = _input_entry(
+            index=2, name="Razer BlackShark V2 Pro", host_api_name="Windows DirectSound"
+        )
+        other = _input_entry(index=3, name="Laptop Array Mic")
+        monkeypatch.setattr(
+            device_enum,
+            "enumerate_devices",
+            lambda: [wasapi_alias, mme_alias, directsound_alias, other],
+        )
+
+        q = EndpointQuarantine(quarantine_s=300.0, maxsize=8)
+        result = select_alternative_endpoint(
+            quarantine=q,
+            platform_key="win32",
+            exclude_physical_device_ids=(wasapi_alias.canonical_name,),
+        )
+        assert result is not None
+        assert result.name == "Laptop Array Mic"
+
+    def test_physical_quarantine_match_rejects_alias(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A live quarantine entry with ``physical_device_id`` set rejects
+        every host-API alias of that physical device — even when the
+        failing alias's own endpoint GUID is not the one being queried.
+        """
+        from sovyx.voice import device_enum
+
+        wasapi_alias = _input_entry(
+            index=0, name="Razer BlackShark V2 Pro", host_api_name="Windows WASAPI"
+        )
+        mme_alias = _input_entry(index=1, name="Razer BlackShark V2 Pro", host_api_name="MME")
+        laptop = _input_entry(index=2, name="Laptop Array Mic")
+        monkeypatch.setattr(
+            device_enum,
+            "enumerate_devices",
+            lambda: [wasapi_alias, mme_alias, laptop],
+        )
+
+        q = EndpointQuarantine(quarantine_s=300.0, maxsize=8)
+        wasapi_guid = derive_endpoint_guid(wasapi_alias, apo_reports=None, platform_key="win32")
+        q.add(
+            endpoint_guid=wasapi_guid,
+            physical_device_id=wasapi_alias.canonical_name,
+        )
+
+        # The MME alias has a different derived GUID but the same
+        # physical device identity — the picker must still reject it.
+        result = select_alternative_endpoint(quarantine=q, platform_key="win32")
+        assert result is not None
+        assert result.name == "Laptop Array Mic"
+
 
 # ---------------------------------------------------------------------------
 # CascadeBootVerdict / classify_cascade_boot_result (v0.20.2 §4.4.7 / Bug D)

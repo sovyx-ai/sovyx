@@ -126,7 +126,7 @@ def _run(
 class TestTotalBudgetExhaustion:
     @pytest.mark.asyncio()
     async def test_every_probe_slow_returns_budget_exhausted(self) -> None:
-        # Each probe sleeps 0.4 s; with 8 entries in WINDOWS_CASCADE the
+        # Each probe sleeps 0.4 s; with 6 entries in WINDOWS_CASCADE the
         # cascade can cover ~2 attempts before the 1.0 s budget runs out.
         probe = _ChaoticProbe(diagnoses=[], sleep_per_call_s=0.4)
         result = await _run(
@@ -201,18 +201,18 @@ class TestNoWinnerFallback:
     @pytest.mark.asyncio()
     async def test_all_low_signal_no_winner(self) -> None:
         probe = _ChaoticProbe(
-            diagnoses=[Diagnosis.LOW_SIGNAL] * 8,
+            diagnoses=[Diagnosis.LOW_SIGNAL] * 6,
             terminal=Diagnosis.LOW_SIGNAL,
         )
         result = await _run(probe_fn=probe)
         assert result.winning_combo is None  # type: ignore[attr-defined]
         # Cascade walked the whole table.
-        assert len(probe.calls) == 8
+        assert len(probe.calls) == 6
 
     @pytest.mark.asyncio()
     async def test_all_apo_corrupt_returns_no_winner(self) -> None:
         probe = _ChaoticProbe(
-            diagnoses=[Diagnosis.APO_DEGRADED] * 8,
+            diagnoses=[Diagnosis.APO_DEGRADED] * 6,
             terminal=Diagnosis.APO_DEGRADED,
         )
         result = await _run(probe_fn=probe)
@@ -268,8 +268,8 @@ class TestProbeException:
         probe = _ChaoticProbe(diagnoses=[], raise_after=0)
         result = await _run(probe_fn=probe)
         assert result.winning_combo is None  # type: ignore[attr-defined]
-        # All eight Windows cascade entries should have been attempted.
-        assert len(probe.calls) == 8
+        # All six default Windows cascade entries should have been attempted.
+        assert len(probe.calls) == 6
 
     @pytest.mark.asyncio()
     async def test_lock_released_after_exception_storm(self) -> None:

@@ -321,6 +321,19 @@ class VoiceTuningConfig(BaseSettings):
     kernel_invalidated_quarantine_s: float = 3_600.0  # 1 h wall clock
     kernel_invalidated_recheck_interval_s: float = 300.0  # 5 min
 
+    # Windows-only driver-watchdog pre-flight (v0.20.4, see
+    # :mod:`sovyx.voice.health._driver_watchdog_win`). When the
+    # Kernel-PnP Driver Watchdog (event IDs 900/901) has fired for the
+    # target mic's hardware ID in the last ``driver_watchdog_lookback_hours``,
+    # the cascade is downgraded to shared-mode for this boot so an
+    # exclusive-init IOCTL can never wedge the already-fragile driver
+    # into a kernel-resource hard-reset (Razer BlackShark V2 Pro
+    # 2026-04-20 post-mortem). The subprocess scan is bounded by
+    # ``driver_watchdog_scan_timeout_s`` so voice-enable never blocks
+    # past this on an unresponsive PowerShell host.
+    driver_watchdog_lookback_hours: int = 24
+    driver_watchdog_scan_timeout_s: float = 3.0
+
     # ── APO integrity + bypass strategy framework (Phase 1 — OS-agnostic).
     # Background: on Windows 11 25H2 the Microsoft "Voice Clarity" APO
     # (VocaEffectPack, CLSID {96BEDF2C-18CB-4A15-B821-5E95ED0FEA61})

@@ -54,6 +54,7 @@ from sovyx.voice.health.cascade import (
     LINUX_CASCADE,
     MACOS_CASCADE,
     WINDOWS_CASCADE,
+    WINDOWS_CASCADE_AGGRESSIVE,
     ProbeCallable,
     run_cascade,
 )
@@ -177,6 +178,7 @@ __all__ = [
     "VoiceCaptureWatchdog",
     "VoiceSetupWizard",
     "WINDOWS_CASCADE",
+    "WINDOWS_CASCADE_AGGRESSIVE",
     "WatchdogState",
     "WizardOutcome",
     "WizardReport",

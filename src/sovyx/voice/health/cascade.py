@@ -20,8 +20,9 @@ The cascade is wrapped in two safety rails:
   races. Bounded to 64 endpoints to satisfy CLAUDE.md anti-pattern #15.
 
 * **Time budget** (ADR §5.6). Total 30 s wall-clock for the whole
-  cascade (8 attempts × ~3 s each); per-attempt 5 s via the probe's
-  hard timeout. On total-budget exhaustion the cascade returns with
+  cascade (6 default attempts × ~5 s each, 8 for the opt-in aggressive
+  variant); per-attempt 5 s via the probe's hard timeout. On
+  total-budget exhaustion the cascade returns with
   ``budget_exhausted=True`` and the best attempt so far (or none).
 
 On a HEALTHY winner the cascade records the combo to the ComboStore
@@ -94,9 +95,9 @@ _DEFAULT_WIZARD_TOTAL_BUDGET_S = _VoiceTuning().cascade_wizard_total_budget_s
 _LIFECYCLE_LOCK_MAX = _VoiceTuning().cascade_lifecycle_lock_max
 """Max concurrent endpoints tracked by the lifecycle lock dict."""
 
-_VOICE_CLARITY_AUTOFIX_FIRST_ATTEMPT = 5
-"""When ``voice_clarity_autofix=False``, skip indices 0..4 (exclusive + WDM-KS)
-and start at attempt 5 (shared best-effort). ADR §5.11/§5.12.
+_VOICE_CLARITY_AUTOFIX_FIRST_ATTEMPT = 3
+"""When ``voice_clarity_autofix=False``, skip indices 0..2 (WASAPI exclusive)
+and start at attempt 3 (shared best-effort). ADR §5.11/§5.12.
 
 This is a cascade-table index, not a tuning knob — changing it requires
 re-ordering the :data:`WINDOWS_CASCADE` tuple. It belongs here, not in
@@ -108,13 +109,17 @@ re-ordering the :data:`WINDOWS_CASCADE` tuple. It belongs here, not in
 
 
 def _windows_cascade() -> tuple[Combo, ...]:
-    """Build the Windows cascade per ADR §4.2.
+    """Build the default Windows cascade.
 
-    ``sample_rate`` is nominal here — callers that need a device's
-    actual "native" rate (attempt 2) override the tuple entry at the
-    call site via ``cascade_override``. 48 kHz is the overwhelming
-    default on modern Windows hardware, so it doubles as attempt 2's
-    nominal native rate for the default cascade.
+    ``sample_rate`` is nominal — callers that need a device's actual
+    "native" rate (attempt 2) override the tuple entry at the call site
+    via ``cascade_override``. 48 kHz is the overwhelming default on
+    modern Windows hardware, so it doubles as attempt 2's nominal
+    native rate for the default cascade.
+
+    WDM-KS (kernel streaming) is intentionally *not* part of the default
+    cascade. See :func:`_windows_cascade_aggressive` for the opt-in tuple
+    that includes it and the rationale against the default.
     """
     w32 = "win32"
     return (
@@ -146,26 +151,6 @@ def _windows_cascade() -> tuple[Combo, ...]:
             exclusive=True,
             auto_convert=False,
             frames_per_buffer=960,
-            platform_key=w32,
-        ),
-        Combo(
-            host_api="WDM-KS",
-            sample_rate=16_000,
-            channels=1,
-            sample_format="int16",
-            exclusive=False,
-            auto_convert=False,
-            frames_per_buffer=480,
-            platform_key=w32,
-        ),
-        Combo(
-            host_api="WDM-KS",
-            sample_rate=48_000,
-            channels=1,
-            sample_format="int16",
-            exclusive=False,
-            auto_convert=False,
-            frames_per_buffer=480,
             platform_key=w32,
         ),
         Combo(
@@ -201,19 +186,93 @@ def _windows_cascade() -> tuple[Combo, ...]:
     )
 
 
-WINDOWS_CASCADE: tuple[Combo, ...] = _windows_cascade()
-"""Windows 8-attempt cascade. Exclusive WASAPI → WDM-KS → shared → legacy.
+def _windows_cascade_aggressive() -> tuple[Combo, ...]:
+    """Build the opt-in aggressive Windows cascade with WDM-KS.
 
-Ordering rationale (ADR §4.2):
+    Same as :func:`_windows_cascade` but with two additional WDM-KS
+    (Windows Driver Model Kernel Streaming) attempts inserted between
+    the WASAPI-exclusive trio and the shared-mode fallback chain.
+
+    WDM-KS issues IOCTLs directly to the audio miniport at kernel level.
+    On well-behaved drivers it provides another APO-bypass surface on
+    top of the WASAPI-exclusive path. On *misbehaving* drivers (notably
+    some USB-audio class drivers: Razer BlackShark V2 Pro / VID_1532 is
+    a confirmed case), an IOCTL on an endpoint whose upstream
+    ``IAudioClient::Initialize`` just failed with
+    ``AUDCLNT_E_DEVICE_INVALIDATED`` can leave the driver's event-queue
+    thread wedged. Windows then fires a kernel resource watchdog
+    (``LiveKernelEvent 0x1CC``) and hard-resets the machine
+    (``Kernel-Power 41``, ``BugcheckCode=0``, no dump).
+
+    Because WDM-KS attempts add *no* APO-bypass capability beyond what
+    WASAPI exclusive (attempts 0-2) already covers, they are off by
+    default. Callers wanting the aggressive table pass
+    ``cascade_override=WINDOWS_CASCADE_AGGRESSIVE`` to
+    :func:`run_cascade` — e.g. an opt-in aggressive wizard path for
+    operators who have verified their drivers are safe against WDM-KS.
+    """
+    base = _windows_cascade()
+    w32 = "win32"
+    kernel_streaming = (
+        Combo(
+            host_api="WDM-KS",
+            sample_rate=16_000,
+            channels=1,
+            sample_format="int16",
+            exclusive=False,
+            auto_convert=False,
+            frames_per_buffer=480,
+            platform_key=w32,
+        ),
+        Combo(
+            host_api="WDM-KS",
+            sample_rate=48_000,
+            channels=1,
+            sample_format="int16",
+            exclusive=False,
+            auto_convert=False,
+            frames_per_buffer=480,
+            platform_key=w32,
+        ),
+    )
+    # Insert kernel-streaming attempts between WASAPI-exclusive (0-2)
+    # and WASAPI-shared (3) so the aggressive table preserves the
+    # "exclusive → kernel → shared → legacy" ordering of the pre-v0.20.4
+    # default cascade.
+    return base[:3] + kernel_streaming + base[3:]
+
+
+WINDOWS_CASCADE: tuple[Combo, ...] = _windows_cascade()
+"""Default Windows 6-attempt cascade. Exclusive WASAPI → shared → legacy.
+
+Ordering rationale (ADR §4.2, updated 2026-04-20 after the Razer
+BlackShark V2 Pro / ``usbaudio`` kernel hard-reset incident — see
+:func:`_windows_cascade_aggressive` for the ``LiveKernelEvent 0x1CC``
+post-mortem):
 
 * Attempts 0-2: exclusive WASAPI bypasses the entire capture APO chain
   (Voice Clarity, OEM DSPs). Most hostile environments resolve here.
-* Attempts 3-4: WDM-KS — kernel streaming, also APO-free, available on
-  more legacy drivers.
-* Attempt 5: shared WASAPI with ``auto_convert`` — last resort before
-  giving up on APO bypass; used when ``voice_clarity_autofix=False``.
-* Attempts 6-7: DirectSound + MME — legacy fallbacks for ancient
+* Attempt 3: shared WASAPI with ``auto_convert`` — graceful fallback
+  when the driver rejects exclusive mode; used as the first attempt
+  when ``voice_clarity_autofix=False``.
+* Attempts 4-5: DirectSound + MME — legacy fallbacks for ancient
   hardware. Signal still flows but resampler-rich and lossy.
+
+WDM-KS (kernel streaming) has been **removed from the default** because
+it adds no APO-bypass capability beyond WASAPI exclusive but can lock
+up fragile USB-audio drivers into a kernel resource timeout that the
+OS resolves with an unrecoverable hard-reset. The aggressive variant is
+still available via :data:`WINDOWS_CASCADE_AGGRESSIVE`.
+"""
+
+
+WINDOWS_CASCADE_AGGRESSIVE: tuple[Combo, ...] = _windows_cascade_aggressive()
+"""Opt-in 8-attempt Windows cascade including WDM-KS.
+
+Callers that explicitly want kernel streaming in the mix (aggressive
+wizard modes, power-user diagnostic runs) pass this as
+``cascade_override`` to :func:`run_cascade`. Never used as the default
+cascade — see :func:`_windows_cascade_aggressive` for why.
 """
 
 
@@ -466,6 +525,7 @@ async def run_cascade(
     device_class: str = "",
     endpoint_fxproperties_sha: str = "",
     detected_apos: Sequence[str] = (),
+    physical_device_id: str = "",
     combo_store: ComboStore | None = None,
     capture_overrides: CaptureOverrides | None = None,
     probe_fn: ProbeCallable | None = None,
@@ -505,6 +565,14 @@ async def run_cascade(
             :meth:`ComboStore.record_winning` on a successful run so
             the store entry contains the full fingerprint for the 13
             invalidation rules.
+        physical_device_id: Canonical physical-device identity
+            (:attr:`~sovyx.voice.device_enum.DeviceEntry.canonical_name`)
+            of the microphone behind ``endpoint_guid``. Propagated into
+            the §4.4.7 quarantine entry so
+            :meth:`~sovyx.voice.health._quarantine.EndpointQuarantine.is_quarantined_physical`
+            can reject every host-API alias of the same wedged driver
+            during fail-over selection. Empty disables physical-scope
+            guarding (legacy callers).
         combo_store: Persistent fast-path store. ``None`` disables
             both fast-path lookup and the post-cascade record-winning
             side-effect.
@@ -567,6 +635,7 @@ async def run_cascade(
             device_class=device_class,
             endpoint_fxproperties_sha=endpoint_fxproperties_sha,
             detected_apos=detected_apos,
+            physical_device_id=physical_device_id,
             combo_store=combo_store,
             capture_overrides=capture_overrides,
             probe_fn=probe_fn or _default_probe,
@@ -590,6 +659,7 @@ async def _run_cascade_locked(
     device_class: str,
     endpoint_fxproperties_sha: str,
     detected_apos: Sequence[str],
+    physical_device_id: str,
     combo_store: ComboStore | None,
     capture_overrides: CaptureOverrides | None,
     probe_fn: ProbeCallable,
@@ -676,6 +746,7 @@ async def _run_cascade_locked(
             host_api=pinned.host_api,
             platform_key=platform_key,
             reason="probe_pinned",
+            physical_device_id=physical_device_id,
         ):
             logger.warning(
                 "voice_cascade_kernel_invalidated",
@@ -765,6 +836,7 @@ async def _run_cascade_locked(
             host_api=store_combo.host_api,
             platform_key=platform_key,
             reason="probe_store",
+            physical_device_id=physical_device_id,
         ):
             if combo_store is not None:
                 combo_store.invalidate(endpoint_guid, reason="kernel_invalidated")
@@ -862,6 +934,7 @@ async def _run_cascade_locked(
             host_api=combo.host_api,
             platform_key=platform_key,
             reason="probe_cascade",
+            physical_device_id=physical_device_id,
         ):
             logger.warning(
                 "voice_cascade_kernel_invalidated",
@@ -951,6 +1024,7 @@ def _quarantine_endpoint(
     host_api: str,
     platform_key: str,
     reason: str,
+    physical_device_id: str = "",
 ) -> bool:
     """Add ``endpoint_guid`` to the §4.4.7 quarantine and emit the L4 metric.
 
@@ -958,6 +1032,13 @@ def _quarantine_endpoint(
     the cascade and returns ``source="quarantined"``); ``False`` when no
     quarantine store is configured (operator opted out via
     :attr:`VoiceTuningConfig.kernel_invalidated_failover_enabled` ``=False``).
+
+    ``physical_device_id`` is the caller's best canonical-name identity
+    for the underlying microphone. When supplied, it is stored on the
+    quarantine entry so
+    :func:`~sovyx.voice.health._factory_integration.select_alternative_endpoint`
+    can reject every host-API alias of the same wedged driver during
+    fail-over, preventing the Razer-class kernel-reset failure mode.
 
     Centralising this lets the cascade's three probe sites — pinned override,
     ComboStore fast path, and platform cascade loop — all register quarantine
@@ -972,6 +1053,7 @@ def _quarantine_endpoint(
         device_interface_name=device_interface_name,
         host_api=host_api or "unknown",
         reason=reason,
+        physical_device_id=physical_device_id,
     )
     record_kernel_invalidated_event(
         platform=platform_key,
@@ -1176,6 +1258,7 @@ __all__ = [
     "LINUX_CASCADE",
     "MACOS_CASCADE",
     "WINDOWS_CASCADE",
+    "WINDOWS_CASCADE_AGGRESSIVE",
     "ProbeCallable",
     "run_cascade",
 ]

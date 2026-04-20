@@ -325,6 +325,81 @@ class TestEntryValue:
         assert entry.device_interface_name == ""
         assert entry.host_api == ""
         assert entry.reason == "probe"
+        assert entry.physical_device_id == ""
+
+
+class TestPhysicalDeviceScope:
+    """v0.20.4 physical-device-scoped quarantine (Razer regression)."""
+
+    def test_add_records_physical_device_id(self, store: EndpointQuarantine) -> None:
+        entry = store.add(
+            endpoint_guid="{WASAPI-GUID}",
+            physical_device_id="razer blackshark v2 pro",
+        )
+        assert entry.physical_device_id == "razer blackshark v2 pro"
+
+    def test_is_quarantined_physical_matches_any_alias(self, store: EndpointQuarantine) -> None:
+        # One physical device quarantined via its WASAPI alias.
+        store.add(
+            endpoint_guid="{WASAPI-GUID}",
+            physical_device_id="razer blackshark v2 pro",
+        )
+        # Every host-API alias of the same physical device matches.
+        assert store.is_quarantined_physical("razer blackshark v2 pro") is True
+        # Different physical device doesn't.
+        assert store.is_quarantined_physical("laptop array mic") is False
+
+    def test_is_quarantined_physical_empty_id_never_matches(
+        self, store: EndpointQuarantine
+    ) -> None:
+        # Even with a quarantined entry that stored an empty physical id,
+        # querying with "" must not match — an unspecified identity
+        # matches nothing.
+        store.add(endpoint_guid="{GUID}", physical_device_id="")
+        assert store.is_quarantined_physical("") is False
+
+    def test_is_quarantined_physical_skips_expired(
+        self, store: EndpointQuarantine, clock: _FakeClock
+    ) -> None:
+        store.add(
+            endpoint_guid="{GUID}",
+            physical_device_id="razer blackshark v2 pro",
+        )
+        # Entry is live.
+        assert store.is_quarantined_physical("razer blackshark v2 pro") is True
+        # Walk past the 60 s TTL — the match should lapse and the entry
+        # should be purged lazily.
+        clock.advance(120.0)
+        assert store.is_quarantined_physical("razer blackshark v2 pro") is False
+        assert store.is_quarantined("{GUID}") is False
+
+    def test_kernel_reset_regression_razer_blackshark(self, store: EndpointQuarantine) -> None:
+        """End-to-end: the Razer BlackShark V2 Pro failure mode (2026-04-20).
+
+        The real incident: WASAPI-exclusive probe against Razer Razer
+        BlackShark V2 Pro returned ``AUDCLNT_E_DEVICE_INVALIDATED`` →
+        cascade quarantined the WASAPI endpoint. Factory fail-over
+        picked the MME surrogate (different GUID, same physical mic)
+        → re-cascaded into WDM-KS → hard reset.
+
+        v0.20.4 fix: the quarantine entry carries the canonical
+        physical-device identity, and ``is_quarantined_physical``
+        lets the fail-over picker reject every alias atomically.
+        """
+        # Simulate the cascade's quarantine add after
+        # AUDCLNT_E_DEVICE_INVALIDATED on the WASAPI exclusive probe.
+        store.add(
+            endpoint_guid="{WASAPI-razer-guid}",
+            device_friendly_name="Razer BlackShark V2 Pro",
+            host_api="Windows WASAPI",
+            reason="probe_cascade",
+            physical_device_id="razer blackshark v2 pro",
+        )
+        # Before v0.20.4, the MME alias (distinct surrogate GUID) was
+        # NOT flagged and the factory would fail over into it.
+        assert store.is_quarantined("{MME-razer-surrogate}") is False
+        # After v0.20.4, the physical-scope check rejects the alias.
+        assert store.is_quarantined_physical("razer blackshark v2 pro") is True
 
     def test_equality_by_value(self, clock: _FakeClock) -> None:
         e1 = QuarantineEntry(

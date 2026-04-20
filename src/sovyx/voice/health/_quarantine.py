@@ -70,6 +70,20 @@ class QuarantineEntry:
         host_api: Host API of the *failing* probe combo (``"Windows
             WASAPI"``, ``"Windows DirectSound"``, ...). Informational —
             every host API fails equally on a kernel-invalidated endpoint.
+        physical_device_id: Normalised physical-device identity — the
+            :attr:`~sovyx.voice.device_enum.DeviceEntry.canonical_name`.
+            A single physical microphone is exposed by PortAudio through
+            up to four host APIs (MME / DirectSound / WASAPI / WDM-KS),
+            each with a distinct ``endpoint_guid``. When the kernel
+            driver for that microphone is wedged, *every* alias fails
+            identically — quarantining only one alias lets the factory
+            fail over to a "surrogate" that re-cascades into the same
+            wedged driver and can re-trigger a kernel hard-reset. Storing
+            the physical identity lets
+            :func:`~sovyx.voice.health._factory_integration.select_alternative_endpoint`
+            reject every alias in one shot. Empty string when the caller
+            did not resolve a canonical name at quarantine time (legacy
+            paths that still work against a single ``endpoint_guid``).
         added_at_monotonic: :func:`time.monotonic` value at quarantine
             time. Monotonic clock is immune to wall-clock jumps during
             daylight-savings transitions or NTP corrections.
@@ -91,6 +105,7 @@ class QuarantineEntry:
     added_at_monotonic: float
     expires_at_monotonic: float
     reason: str
+    physical_device_id: str = ""
 
 
 class EndpointQuarantine:
@@ -138,6 +153,7 @@ class EndpointQuarantine:
         device_interface_name: str = "",
         host_api: str = "",
         reason: str = "probe",
+        physical_device_id: str = "",
     ) -> QuarantineEntry:
         """Add ``endpoint_guid`` to quarantine and return the new entry.
 
@@ -145,6 +161,13 @@ class EndpointQuarantine:
         ``added_at`` resets the quarantine clock, which is desirable
         because a repeat KERNEL_INVALIDATED observation means the
         underlying condition has not cleared.
+
+        ``physical_device_id`` identifies the physical microphone (the
+        :attr:`~sovyx.voice.device_enum.DeviceEntry.canonical_name`)
+        behind the endpoint. Callers that know it pass it so
+        :meth:`is_quarantined_physical` can short-circuit a failover to
+        another host-API alias of the same wedged driver. Empty means
+        "legacy add" — only the ``endpoint_guid`` alias is guarded.
 
         Evicts the oldest entry (by insertion order) when the store is
         at capacity.
@@ -161,6 +184,7 @@ class EndpointQuarantine:
             added_at_monotonic=now,
             expires_at_monotonic=now + self._quarantine_s,
             reason=reason,
+            physical_device_id=physical_device_id,
         )
         # Pop-and-reinsert keeps ordering stable whether this is a new
         # entry or a replacement — OrderedDict would otherwise preserve
@@ -182,6 +206,7 @@ class EndpointQuarantine:
             interface_name=device_interface_name,
             host_api=host_api,
             reason=reason,
+            physical_device_id=physical_device_id,
             quarantine_s=self._quarantine_s,
         )
         return entry
@@ -246,6 +271,49 @@ class EndpointQuarantine:
             )
             return False
         return True
+
+    def is_quarantined_physical(self, physical_device_id: str) -> bool:
+        """Return ``True`` when any live entry pins ``physical_device_id``.
+
+        Physical-device scope is the fail-over safety net. When the
+        Razer USB-audio driver wedges, the OS-level endpoint GUID for
+        its WASAPI capture device may quarantine while the MME /
+        DirectSound aliases of the same physical mic are still
+        visible in PortAudio's device list — each with a distinct
+        ``endpoint_guid`` derived from
+        ``(canonical_name, host_api, platform)``. Without a physical
+        check, the factory's fail-over would happily pick an alias and
+        re-cascade into the same wedged kernel driver.
+
+        Empty ``physical_device_id`` always returns ``False`` — an
+        unspecified physical identity matches nothing. Expired entries
+        are purged lazily to avoid false positives from stale records.
+        """
+        if not physical_device_id:
+            return False
+        now = self._clock()
+        match = False
+        # Collect expired entries in a first pass so we purge after
+        # iteration completes — mutating ``_entries`` mid-loop would
+        # otherwise skip neighbours in ``OrderedDict``.
+        to_purge: list[str] = []
+        for guid, entry in self._entries.items():
+            if entry.expires_at_monotonic <= now:
+                to_purge.append(guid)
+                continue
+            if entry.physical_device_id and entry.physical_device_id == physical_device_id:
+                match = True
+                # Keep iterating so we still purge expired neighbours;
+                # ``match`` latches and wins regardless.
+        for guid in to_purge:
+            evicted = self._entries.pop(guid, None)
+            if evicted is not None:
+                logger.info(
+                    "voice_endpoint_quarantine_expired",
+                    endpoint=guid,
+                    friendly_name=evicted.device_friendly_name,
+                )
+        return match
 
     def get(self, endpoint_guid: str) -> QuarantineEntry | None:
         """Return the live entry for ``endpoint_guid`` or ``None``.

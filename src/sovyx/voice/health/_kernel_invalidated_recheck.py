@@ -218,6 +218,7 @@ class KernelInvalidatedRechecker:
                 device_interface_name=entry.device_interface_name,
                 host_api=entry.host_api,
                 reason="watchdog_recheck",
+                physical_device_id=entry.physical_device_id,
             )
             record_kernel_invalidated_event(
                 platform=result.combo.platform_key or "unknown",

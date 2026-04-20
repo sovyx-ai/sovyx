@@ -75,22 +75,36 @@ and the dashboard panel.
 
 ## Cross-platform cascade tables
 
-### Windows (`WINDOWS_CASCADE`, 8 entries)
+### Windows (`WINDOWS_CASCADE`, 6 entries — default)
 
-1. WASAPI exclusive 16 kHz mono int16
-2. WASAPI exclusive 48 kHz mono int16
-3. WASAPI exclusive 48 kHz stereo int16
-4. WDM-KS 48 kHz mono int16
-5. WASAPI shared 16 kHz mono int16 (`auto_convert=True`)
-6. WASAPI shared 48 kHz mono int16
-7. WASAPI shared 48 kHz stereo int16 (channel upgrade)
-8. MME 48 kHz mono int16 (last-resort)
+1. WASAPI exclusive 16 kHz mono int16 (480-frame)
+2. WASAPI exclusive 48 kHz mono int16 (480-frame)
+3. WASAPI exclusive 48 kHz mono int16 (960-frame)
+4. WASAPI shared 16 kHz mono int16 (`auto_convert=True`)
+5. DirectSound 16 kHz mono int16
+6. MME 16 kHz mono int16 (last-resort)
 
 Exclusive mode bypasses the entire APO chain (Windows Voice Clarity,
 device-bound effects, system-wide enhancements). The cascade is biased
 toward exclusive because we've measured Voice Clarity dropping VAD
 probability below 0.01 on otherwise-healthy hardware (early 2026
 `VocaEffectPack` rollout via Windows Update).
+
+#### WDM-KS removal (post-mortem 2026-04-20)
+
+WDM-KS (Windows Driver Model Kernel Streaming) was in the default
+cascade through v0.20.3 but was **removed in v0.20.4** after two
+reproducible hard-reset incidents on Razer BlackShark V2 Pro
+(VID_1532 / PID_0528, generic `usbaudio` driver). The kernel-streaming
+IOCTL issued against a driver whose upstream `IAudioClient::Initialize`
+had just failed with `AUDCLNT_E_DEVICE_INVALIDATED` wedged the
+driver's event-queue thread; Windows fired a kernel resource watchdog
+(`LiveKernelEvent 0x1CC`) and hard-reset (`Kernel-Power 41`,
+`BugcheckCode=0`, no dump). Because WDM-KS adds **no APO-bypass
+capability** beyond what WASAPI exclusive (attempts 0-2) already
+covers, the risk/benefit was catastrophic. The opt-in 8-entry table
+`WINDOWS_CASCADE_AGGRESSIVE` keeps WDM-KS available for operators on
+verified-safe hardware — pass it as `cascade_override` to `run_cascade`.
 
 ### Linux (`LINUX_CASCADE`, 6 entries)
 

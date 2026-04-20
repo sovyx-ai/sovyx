@@ -66,6 +66,67 @@ def resolve_capture_overrides_path(data_dir: Path) -> Path:
     return data_dir / _CAPTURE_OVERRIDES_FILENAME
 
 
+async def _autofix_after_driver_watchdog_scan(
+    *,
+    resolved_name: str,
+    device_interface_name: str,
+    lookback_hours: int,
+    timeout_s: float,
+) -> bool:
+    """Return the ``voice_clarity_autofix`` flag after the watchdog scan.
+
+    Encapsulates the Phase-3 pre-flight decision so :func:`run_boot_cascade`
+    stays focused on cascade orchestration. Any failure in the scan
+    (subprocess error, timeout, parse) falls through to ``True`` (the
+    untouched tuning default) — we never make the cascade safer *by
+    accident*; we only drop to shared-mode when we have positive
+    evidence that the driver is fragile.
+    """
+    from sovyx.voice.health._driver_watchdog_win import (
+        scan_recent_driver_watchdog_events,
+    )
+
+    scan = await scan_recent_driver_watchdog_events(
+        lookback_hours=lookback_hours,
+        timeout_s=timeout_s,
+    )
+    if not scan.scan_attempted or scan.scan_failed:
+        # No signal → trust the operator's tuning default.
+        return True
+    if not scan.any_events:
+        logger.debug(
+            "voice_driver_watchdog_preflight_clean",
+            device=resolved_name,
+            lookback_hours=lookback_hours,
+        )
+        return True
+    # Events exist — but only override when we can tie at least one to
+    # this specific device. A drift-printer watchdog should not disable
+    # APO-bypass on the USB headset.
+    targeted = scan.matches_device(device_interface_name)
+    if not targeted:
+        logger.info(
+            "voice_driver_watchdog_preflight_unrelated",
+            device=resolved_name,
+            event_count=len(scan.events),
+        )
+        return True
+    logger.warning(
+        "voice_driver_watchdog_preflight_downgrade",
+        device=resolved_name,
+        device_interface_name=device_interface_name,
+        event_count=len(scan.events),
+        lookback_hours=lookback_hours,
+        remediation=(
+            "Driver Watchdog fired for this device recently — forcing "
+            "shared-mode for this boot to avoid a kernel-resource "
+            "timeout. Replug the device or reboot after the driver "
+            "queue clears to restore exclusive-mode APO bypass."
+        ),
+    )
+    return False
+
+
 def derive_endpoint_guid(
     resolved: DeviceEntry,
     *,
@@ -206,6 +267,23 @@ async def run_boot_cascade(
             device_interface_name = report.device_interface_name
             device_class = report.enumerator
 
+    # Phase 3 — Driver Watchdog pre-flight. On Windows, when the
+    # Kernel-PnP Driver Watchdog (event IDs 900/901) has recently fired
+    # for the target device's hardware ID, the driver's event-queue
+    # thread is likely still wedged. Force shared-mode for this boot
+    # so we never issue an exclusive-init IOCTL against the unstable
+    # driver — that path is what produced the Razer BlackShark V2 Pro
+    # Kernel-Power 41 hard-reset (2026-04-20 post-mortem). The override
+    # is logged loudly so operators see what happened.
+    effective_autofix = tuning.voice_clarity_autofix
+    if plat == "win32" and tuning.voice_clarity_autofix:
+        effective_autofix = await _autofix_after_driver_watchdog_scan(
+            resolved_name=resolved.name,
+            device_interface_name=device_interface_name,
+            lookback_hours=tuning.driver_watchdog_lookback_hours,
+            timeout_s=tuning.driver_watchdog_scan_timeout_s,
+        )
+
     try:
         result = await run_cascade(
             endpoint_guid=endpoint_guid,
@@ -217,11 +295,12 @@ async def run_boot_cascade(
             device_class=device_class,
             endpoint_fxproperties_sha=endpoint_fxproperties_sha,
             detected_apos=detected_apos,
+            physical_device_id=resolved.canonical_name,
             combo_store=store,
             capture_overrides=overrides,
             total_budget_s=tuning.cascade_total_budget_s,
             attempt_budget_s=tuning.cascade_attempt_budget_s,
-            voice_clarity_autofix=tuning.voice_clarity_autofix,
+            voice_clarity_autofix=effective_autofix,
             quarantine=quarantine,
             kernel_invalidated_failover_enabled=tuning.kernel_invalidated_failover_enabled,
         )
@@ -370,6 +449,7 @@ def select_alternative_endpoint(
     apo_reports: list[CaptureApoReport] | None = None,
     platform_key: str | None = None,
     exclude_endpoint_guids: Iterable[str] = (),
+    exclude_physical_device_ids: Iterable[str] = (),
     quarantine: EndpointQuarantine | None = None,
 ) -> DeviceEntry | None:
     """Pick a non-quarantined alternative ``DeviceEntry`` for fail-over.
@@ -384,6 +464,16 @@ def select_alternative_endpoint(
     2. Otherwise the host-API-preferred candidate per
        :func:`~sovyx.voice.device_enum.pick_preferred`.
 
+    The physical-device scope (``exclude_physical_device_ids`` +
+    :meth:`~sovyx.voice.health._quarantine.EndpointQuarantine.is_quarantined_physical`)
+    is the enterprise-grade safety net added in v0.20.4 after the
+    Razer BlackShark V2 Pro kernel-reset incident: PortAudio exposes a
+    single physical microphone through up to four host APIs, each with
+    a distinct :func:`derive_endpoint_guid` surrogate. When a driver
+    wedges, *every* alias fails; without physical-scope filtering the
+    factory would fail over to a surrogate alias and re-cascade into
+    the same driver, re-triggering the kernel hard-reset.
+
     Args:
         kind: ``"input"`` for capture, ``"output"`` for playback. The
             quarantine is capture-only today, but the helper accepts
@@ -396,6 +486,12 @@ def select_alternative_endpoint(
             quarantine — typically the GUID of the device that just
             got quarantined in this same boot, to keep the fail-over
             decision deterministic.
+        exclude_physical_device_ids: Physical-device identities
+            (``DeviceEntry.canonical_name``) to skip regardless of which
+            host-API alias they are exposed through. The factory passes
+            the quarantined device's canonical name here so every MME /
+            DirectSound / WASAPI / WDM-KS surrogate of the same
+            microphone is rejected atomically.
         quarantine: §4.4.7 store. ``None`` falls back to the process
             singleton.
 
@@ -411,6 +507,7 @@ def select_alternative_endpoint(
         return None
     q = quarantine if quarantine is not None else get_default_quarantine()
     excluded = set(exclude_endpoint_guids)
+    excluded_physical = {p for p in exclude_physical_device_ids if p}
 
     def _is_skippable(entry: DeviceEntry) -> bool:
         guid = derive_endpoint_guid(
@@ -418,7 +515,16 @@ def select_alternative_endpoint(
             apo_reports=apo_reports,
             platform_key=plat,
         )
-        return guid in excluded or q.is_quarantined(guid)
+        if guid in excluded or q.is_quarantined(guid):
+            return True
+        # Physical-device scope: reject any alias whose canonical
+        # (MME-truncation-normalised) name matches a quarantined or
+        # caller-excluded physical device. See the Razer kernel-reset
+        # post-mortem in the docstring.
+        physical = entry.canonical_name
+        if physical and physical in excluded_physical:
+            return True
+        return bool(physical and q.is_quarantined_physical(physical))
 
     candidates = [e for e in entries if not _is_skippable(e)]
     preferred = pick_preferred(candidates, kind=kind)

@@ -472,6 +472,7 @@ async def _run_vchl_boot_cascade(
                 kind="input",
                 apo_reports=apo_reports,
                 exclude_endpoint_guids=(original_guid,),
+                exclude_physical_device_ids=(resolved.canonical_name,),
             )
             if alternative is None:
                 logger.error(

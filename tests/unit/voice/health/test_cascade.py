@@ -23,6 +23,7 @@ from sovyx.engine._lock_dict import LRULockDict
 from sovyx.voice.health._quarantine import EndpointQuarantine
 from sovyx.voice.health.cascade import (
     WINDOWS_CASCADE,
+    WINDOWS_CASCADE_AGGRESSIVE,
     run_cascade,
 )
 from sovyx.voice.health.contract import (
@@ -284,7 +285,7 @@ class TestPriorityOrdering:
         result = await _run(probe_fn=probe, combo_store=store)
 
         assert result.source == "cascade"  # type: ignore[attr-defined]
-        # Default cascade: exclusive attempts first, then WDM-KS, then shared.
+        # Default cascade: exclusive attempts first, then shared.
         # Our plan says "non-exclusive WASAPI wins" → should short-circuit there.
         assert result.winning_combo is not None  # type: ignore[attr-defined]
         assert result.winning_combo.host_api == "WASAPI"  # type: ignore[attr-defined]
@@ -401,7 +402,7 @@ class TestBudget:
 
 class TestVoiceClarityAutofix:
     @pytest.mark.asyncio()
-    async def test_autofix_false_skips_first_five_attempts(self) -> None:
+    async def test_autofix_false_skips_exclusive_attempts(self) -> None:
         probe = _FakeProbe(plan=[(_match_all, Diagnosis.HEALTHY)])
         result = await _run(
             probe_fn=probe,
@@ -409,8 +410,9 @@ class TestVoiceClarityAutofix:
         )
 
         assert result.source == "cascade"  # type: ignore[attr-defined]
-        # First probed combo should be index 5 (shared WASAPI auto_convert).
-        assert probe.calls[0].combo == WINDOWS_CASCADE[5]
+        # First probed combo should be index 3 (shared WASAPI auto_convert),
+        # the first non-exclusive entry of the default cascade.
+        assert probe.calls[0].combo == WINDOWS_CASCADE[3]
         assert result.attempts_count == 1  # type: ignore[attr-defined]
 
     @pytest.mark.asyncio()
@@ -421,9 +423,9 @@ class TestVoiceClarityAutofix:
             voice_clarity_autofix=False,
         )
 
-        # Only combos 5, 6, 7 (shared + DirectSound + MME) should run.
+        # Only combos 3, 4, 5 (shared WASAPI + DirectSound + MME) should run.
         assert result.attempts_count == 3  # type: ignore[attr-defined]
-        expected = [WINDOWS_CASCADE[5], WINDOWS_CASCADE[6], WINDOWS_CASCADE[7]]
+        expected = [WINDOWS_CASCADE[3], WINDOWS_CASCADE[4], WINDOWS_CASCADE[5]]
         assert [c.combo for c in probe.calls] == expected
 
 
@@ -549,9 +551,8 @@ class TestDefensiveCatches:
 
         result = await _run(probe_fn=probe)
 
-        # First two (exclusive WASAPI) raise → translated to DRIVER_ERROR.
-        # Third attempt (exclusive 48 kHz 960-frame) also raises.
-        # WDM-KS doesn't raise but also doesn't match HEALTHY predicate.
+        # First three (exclusive WASAPI) raise → translated to DRIVER_ERROR.
+        # Shared / DirectSound / MME don't raise but also don't match HEALTHY predicate.
         assert result.source == "none"  # type: ignore[attr-defined]
         assert any(
             a.diagnosis is Diagnosis.DRIVER_ERROR and a.error is not None  # type: ignore[attr-defined]
@@ -681,30 +682,88 @@ class TestPlatformAndOverrides:
 
 
 class TestWindowsCascadeTable:
-    def test_eight_attempts(self) -> None:
-        assert len(WINDOWS_CASCADE) == 8
+    """Default Windows cascade — 6 entries after WDM-KS removal.
+
+    WDM-KS was removed from the default cascade after a Kernel-Power 41
+    hard-reset incident reproduced twice on Razer BlackShark V2 Pro
+    (VID_1532/PID_0528, usbaudio driver): the kernel-streaming IOCTL
+    against a driver already flagged by Kernel-PnP Driver Watchdog
+    (events 900/901) triggered LiveKernelEvent 0x1CC and an unrecoverable
+    hard reset. WDM-KS bypasses the same APO chain as WASAPI exclusive,
+    so it added catastrophic risk with no user-visible benefit. The
+    aggressive 8-entry table (:data:`WINDOWS_CASCADE_AGGRESSIVE`)
+    remains available for opt-in power users on known-good hardware.
+    """
+
+    def test_six_attempts(self) -> None:
+        assert len(WINDOWS_CASCADE) == 6
 
     def test_first_three_are_wasapi_exclusive(self) -> None:
         for combo in WINDOWS_CASCADE[:3]:
             assert combo.host_api == "WASAPI"
             assert combo.exclusive is True
 
-    def test_attempts_three_and_four_are_wdmks(self) -> None:
-        assert WINDOWS_CASCADE[3].host_api == "WDM-KS"
-        assert WINDOWS_CASCADE[4].host_api == "WDM-KS"
+    def test_wdm_ks_not_probed_by_default(self) -> None:
+        """Regression — Razer BlackShark V2 Pro Kernel-Power 41 incident.
 
-    def test_attempt_five_is_shared_wasapi_auto_convert(self) -> None:
-        combo = WINDOWS_CASCADE[5]
+        WDM-KS kernel streaming must never appear in the default
+        Windows cascade. Shipping it caused two hard resets on the
+        user's machine (2026-04-20 07:55 and 08:00) when cascade
+        escalation triggered LiveKernelEvent 0x1CC against the
+        already-flagged usbaudio driver.
+        """
+        for combo in WINDOWS_CASCADE:
+            assert combo.host_api != "WDM-KS", (
+                f"WDM-KS must not be in default cascade (found at {WINDOWS_CASCADE.index(combo)})"
+            )
+
+    def test_attempt_three_is_shared_wasapi_auto_convert(self) -> None:
+        combo = WINDOWS_CASCADE[3]
         assert combo.host_api == "WASAPI"
         assert combo.exclusive is False
         assert combo.auto_convert is True
 
     def test_last_two_are_legacy(self) -> None:
-        assert WINDOWS_CASCADE[6].host_api == "DirectSound"
-        assert WINDOWS_CASCADE[7].host_api == "MME"
+        assert WINDOWS_CASCADE[4].host_api == "DirectSound"
+        assert WINDOWS_CASCADE[5].host_api == "MME"
 
     def test_all_win32_platform_key(self) -> None:
         for combo in WINDOWS_CASCADE:
+            assert combo.platform_key == "win32"
+
+
+class TestWindowsCascadeAggressive:
+    """Opt-in aggressive Windows cascade — 8 entries with WDM-KS.
+
+    Available via :data:`WINDOWS_CASCADE_AGGRESSIVE` for users on
+    known-good hardware (no Kernel-PnP Driver Watchdog history) who
+    want WDM-KS as an additional APO-bypass fallback. NOT the default.
+    """
+
+    def test_eight_attempts(self) -> None:
+        assert len(WINDOWS_CASCADE_AGGRESSIVE) == 8
+
+    def test_first_three_are_wasapi_exclusive(self) -> None:
+        for combo in WINDOWS_CASCADE_AGGRESSIVE[:3]:
+            assert combo.host_api == "WASAPI"
+            assert combo.exclusive is True
+
+    def test_attempts_three_and_four_are_wdmks(self) -> None:
+        assert WINDOWS_CASCADE_AGGRESSIVE[3].host_api == "WDM-KS"
+        assert WINDOWS_CASCADE_AGGRESSIVE[4].host_api == "WDM-KS"
+
+    def test_attempt_five_is_shared_wasapi_auto_convert(self) -> None:
+        combo = WINDOWS_CASCADE_AGGRESSIVE[5]
+        assert combo.host_api == "WASAPI"
+        assert combo.exclusive is False
+        assert combo.auto_convert is True
+
+    def test_last_two_are_legacy(self) -> None:
+        assert WINDOWS_CASCADE_AGGRESSIVE[6].host_api == "DirectSound"
+        assert WINDOWS_CASCADE_AGGRESSIVE[7].host_api == "MME"
+
+    def test_all_win32_platform_key(self) -> None:
+        for combo in WINDOWS_CASCADE_AGGRESSIVE:
             assert combo.platform_key == "win32"
 
 
