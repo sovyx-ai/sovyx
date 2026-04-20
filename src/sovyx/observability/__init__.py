@@ -28,6 +28,12 @@ if TYPE_CHECKING:
     from sovyx.observability.alerts import (
         create_default_alert_manager as create_default_alert_manager,
     )
+    from sovyx.observability.async_handler import (
+        AsyncQueueHandler as AsyncQueueHandler,
+    )
+    from sovyx.observability.async_handler import (
+        BackgroundLogWriter as BackgroundLogWriter,
+    )
     from sovyx.observability.envelope import (
         EnvelopeProcessor as EnvelopeProcessor,
     )
@@ -143,6 +149,7 @@ _SUBMODULE_MAP: dict[str, tuple[str, ...]] = {
         "AlertSeverity",
         "create_default_alert_manager",
     ),
+    "sovyx.observability.async_handler": ("AsyncQueueHandler", "BackgroundLogWriter"),
     "sovyx.observability.health": (
         "CheckResult",
         "CheckStatus",
@@ -214,6 +221,8 @@ __all__ = [
     "AlertManager",
     "AlertRule",
     "AlertSeverity",
+    "AsyncQueueHandler",
+    "BackgroundLogWriter",
     "CheckResult",
     "CheckStatus",
     "EnvelopeProcessor",
