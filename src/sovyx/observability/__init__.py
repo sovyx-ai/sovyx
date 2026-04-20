@@ -10,6 +10,9 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from sovyx.observability._clamp_fields import (
+        ClampFieldsProcessor as ClampFieldsProcessor,
+    )
     from sovyx.observability.alerts import (
         Alert as Alert,
     )
@@ -191,6 +194,7 @@ _SUBMODULE_MAP: dict[str, tuple[str, ...]] = {
         "setup_metrics",
         "teardown_metrics",
     ),
+    "sovyx.observability._clamp_fields": ("ClampFieldsProcessor",),
     "sovyx.observability.envelope": ("EnvelopeProcessor",),
     "sovyx.observability.pii": ("PIIRedactor",),
     "sovyx.observability.ringbuffer": ("RingBufferHandler", "install_crash_hooks"),
@@ -244,6 +248,7 @@ __all__ = [
     "BackgroundLogWriter",
     "CheckResult",
     "CheckStatus",
+    "ClampFieldsProcessor",
     "EnvelopeProcessor",
     "HealthCheck",
     "HealthRegistry",

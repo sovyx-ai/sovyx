@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from sovyx.observability._clamp_fields import ClampFieldsProcessor
 from sovyx.observability.async_handler import AsyncQueueHandler, BackgroundLogWriter
 from sovyx.observability.envelope import EnvelopeProcessor
 from sovyx.observability.pii import PIIRedactor
@@ -252,7 +253,9 @@ def setup_logging(
         7. :class:`SecretMasker` — redact sensitive values
         8. :class:`PIIRedactor` — gated by ``features.pii_redaction``
         9. :class:`SamplingProcessor` — keep-every-N for hot events
-        10. Renderer (JSON or console, per handler)
+        10. :class:`ClampFieldsProcessor` — per-field byte cap
+            (``observability.tuning.max_field_bytes``)
+        11. Renderer (JSON or console, per handler)
 
     Idempotency guarantee:
         After each call, the root logger has exactly **1 StreamHandler**,
@@ -311,6 +314,12 @@ def _setup_logging_locked(
         # it only drops events that are explicitly registered for
         # rate-limiting (see _SAMPLED_EVENTS in observability.sampling).
         shared_processors.append(SamplingProcessor(obs_config.sampling))
+        # Per-field clamp runs LAST so it measures post-redaction
+        # sizes (a fully-masked credit-card field is small, no point
+        # truncating a value that PIIRedactor already shortened).
+        # Sits before wrap_for_formatter so JSONRenderer sees clamped
+        # values, never the raw 10 MB string. See §22.1.
+        shared_processors.append(ClampFieldsProcessor(obs_config.tuning.max_field_bytes))
 
     # ── Console renderer ──
     if config.console_format == "json":

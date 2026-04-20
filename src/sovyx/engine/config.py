@@ -523,6 +523,26 @@ class ObservabilitySamplingConfig(BaseSettings):
     perf_hotpath_interval_seconds: int = 60
 
 
+class ObservabilityTuningConfig(BaseSettings):
+    """Numeric/policy tuning knobs for the observability subsystem.
+
+    Sister-config to :class:`ObservabilityFeaturesConfig` (booleans):
+    everything here is an integer/float threshold that defends a
+    runtime budget. Lifted out of the parent so per-knob env overrides
+    follow the documented ``SOVYX_OBSERVABILITY__TUNING__*`` namespace
+    instead of being mixed into the top-level ``ObservabilityConfig``
+    attributes.
+
+    See :class:`SafetyTuningConfig` for the ``BaseSettings`` rationale.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="SOVYX_OBSERVABILITY__TUNING__", extra="ignore")
+
+    max_field_bytes: int = Field(default=8 * 1024, ge=256, le=1024 * 1024)
+    max_entry_bytes: int = Field(default=64 * 1024, ge=4 * 1024, le=4 * 1024 * 1024)
+    metrics_cardinality_max_total: int = Field(default=10_000, ge=100, le=1_000_000)
+
+
 class ObservabilityConfig(BaseSettings):
     """Sovyx observability subsystem configuration.
 
@@ -545,6 +565,7 @@ class ObservabilityConfig(BaseSettings):
     features: ObservabilityFeaturesConfig = Field(default_factory=ObservabilityFeaturesConfig)
     pii: ObservabilityPIIConfig = Field(default_factory=ObservabilityPIIConfig)
     sampling: ObservabilitySamplingConfig = Field(default_factory=ObservabilitySamplingConfig)
+    tuning: ObservabilityTuningConfig = Field(default_factory=ObservabilityTuningConfig)
 
     async_queue_size: int = Field(default=65536, ge=1024, le=1048576)
     ring_buffer_size: int = Field(default=2000, ge=100, le=50000)
