@@ -463,6 +463,97 @@ class LLMTuningConfig(BaseSettings):
     complex_min_turns: int = 8
 
 
+class ObservabilityFeaturesConfig(BaseSettings):
+    """Feature flags for granular rollback of the observability subsystem.
+
+    Each flag gates a discrete capability so a regression in one phase can
+    be rolled back without disabling the entire stack. Defaults are the
+    Phase 1 baseline (async queue + PII redaction + schema validation
+    enabled; later-phase features off until their wireup lands).
+    """
+
+    model_config = SettingsConfigDict(env_prefix="SOVYX_OBSERVABILITY__FEATURES__", extra="ignore")
+
+    async_queue: bool = True
+    pii_redaction: bool = True
+    saga_propagation: bool = False
+    voice_telemetry: bool = False
+    startup_cascade: bool = False
+    plugin_introspection: bool = False
+    anomaly_detection: bool = False
+    tamper_chain: bool = False
+    schema_validation: bool = True
+
+
+class ObservabilityPIIConfig(BaseSettings):
+    """Per-field PII redaction verbosity.
+
+    Each field class can independently choose its mode:
+
+    - ``minimal``: drop the value entirely (replace with ``"[redacted]"``)
+    - ``redacted``: pattern-mask known PII inside the value (default)
+    - ``hashed``: replace with deterministic SHA-256 prefix
+      (``"sha256:abcdef…"``) so logs can correlate without exposing
+    - ``full``: emit raw value (dev-only; CI gate forbids in prod profiles)
+    """
+
+    model_config = SettingsConfigDict(env_prefix="SOVYX_OBSERVABILITY__PII__", extra="ignore")
+
+    user_messages: Literal["minimal", "redacted", "hashed", "full"] = "redacted"
+    transcripts: Literal["minimal", "redacted", "hashed", "full"] = "redacted"
+    prompts: Literal["minimal", "redacted", "hashed", "full"] = "redacted"
+    responses: Literal["minimal", "redacted", "hashed", "full"] = "redacted"
+    emails: Literal["minimal", "redacted", "hashed", "full"] = "hashed"
+    phones: Literal["minimal", "redacted", "hashed", "full"] = "hashed"
+
+
+class ObservabilitySamplingConfig(BaseSettings):
+    """Sampling rates for high-frequency log streams.
+
+    All ``*_rate`` fields are 1-in-N samplers (``rate=100`` means emit
+    one frame, drop ninety-nine). Interval fields (``*_interval_*``)
+    are wall-clock periods between snapshots.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="SOVYX_OBSERVABILITY__SAMPLING__", extra="ignore")
+
+    audio_frame_rate: int = 100
+    vad_frame_rate: int = 50
+    output_queue_depth_interval_ms: int = 1000
+    perf_hotpath_interval_seconds: int = 60
+
+
+class ObservabilityConfig(BaseSettings):
+    """Sovyx observability subsystem configuration.
+
+    Single source of truth for the structured-logging pipeline, PII
+    policy, sampling, async queue sizing, ring buffer for crash
+    forensics, log file rotation, crash dump path, and the FTS5
+    sidecar index path.
+
+    Both ``crash_dump_path`` and ``fts_index_path`` default to ``None``
+    and are resolved by ``EngineConfig`` against ``data_dir`` so a
+    custom ``SOVYX_DATA_DIR`` propagates correctly.
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="SOVYX_OBSERVABILITY__",
+        env_nested_delimiter="__",
+        extra="ignore",
+    )
+
+    features: ObservabilityFeaturesConfig = Field(default_factory=ObservabilityFeaturesConfig)
+    pii: ObservabilityPIIConfig = Field(default_factory=ObservabilityPIIConfig)
+    sampling: ObservabilitySamplingConfig = Field(default_factory=ObservabilitySamplingConfig)
+
+    async_queue_size: int = Field(default=65536, ge=1024, le=1048576)
+    ring_buffer_size: int = Field(default=2000, ge=100, le=50000)
+    file_max_bytes: int = Field(default=50 * 1024 * 1024, ge=1024 * 1024)
+    file_backup_count: int = Field(default=10, ge=1, le=100)
+    crash_dump_path: Path | None = None
+    fts_index_path: Path | None = None
+
+
 class TuningConfig(BaseModel):
     """Aggregate tuning knobs for cognitive / brain / voice / llm subsystems.
 
@@ -520,6 +611,7 @@ class EngineConfig(BaseSettings):
     api: APIConfig = Field(default_factory=APIConfig)
     socket: SocketConfig = Field(default_factory=SocketConfig)
     tuning: TuningConfig = Field(default_factory=TuningConfig)
+    observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
 
     @model_validator(mode="after")
     def resolve_log_file(self) -> EngineConfig:
@@ -535,6 +627,22 @@ class EngineConfig(BaseSettings):
         """
         if self.log.log_file is None:
             self.log.log_file = self.data_dir / "logs" / "sovyx.log"
+        return self
+
+    @model_validator(mode="after")
+    def resolve_observability_paths(self) -> EngineConfig:
+        """Resolve observability sidecar paths relative to ``data_dir``.
+
+        - ``crash_dump_path`` → ``<data_dir>/logs/sovyx.crash.jsonl``
+        - ``fts_index_path``  → ``<data_dir>/logs/sovyx.log.idx``
+
+        Explicit values (YAML, env, or override) are preserved unchanged.
+        """
+        logs_dir = self.data_dir / "logs"
+        if self.observability.crash_dump_path is None:
+            self.observability.crash_dump_path = logs_dir / "sovyx.crash.jsonl"
+        if self.observability.fts_index_path is None:
+            self.observability.fts_index_path = logs_dir / "sovyx.log.idx"
         return self
 
 
