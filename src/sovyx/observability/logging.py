@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any
 import structlog
 
 from sovyx.observability._clamp_fields import ClampFieldsProcessor
+from sovyx.observability._exception_serializer import ExceptionTreeProcessor
 from sovyx.observability.async_handler import AsyncQueueHandler, BackgroundLogWriter
 from sovyx.observability.envelope import EnvelopeProcessor
 from sovyx.observability.pii import PIIRedactor
@@ -251,11 +252,13 @@ def setup_logging(
         6. :class:`EnvelopeProcessor` — schema_version, process_id,
            host, sovyx_version (only when ``obs_config`` is given)
         7. :class:`SecretMasker` — redact sensitive values
-        8. :class:`PIIRedactor` — gated by ``features.pii_redaction``
-        9. :class:`SamplingProcessor` — keep-every-N for hot events
-        10. :class:`ClampFieldsProcessor` — per-field byte cap
+        8. :class:`ExceptionTreeProcessor` — convert ``exc_info`` into
+           a structured cause/context/group tree (PEP 654 aware)
+        9. :class:`PIIRedactor` — gated by ``features.pii_redaction``
+        10. :class:`SamplingProcessor` — keep-every-N for hot events
+        11. :class:`ClampFieldsProcessor` — per-field byte cap
             (``observability.tuning.max_field_bytes``)
-        11. Renderer (JSON or console, per handler)
+        12. Renderer (JSON or console, per handler)
 
     Idempotency guarantee:
         After each call, the root logger has exactly **1 StreamHandler**,
@@ -307,6 +310,12 @@ def _setup_logging_locked(
     if obs_config is not None:
         shared_processors.append(EnvelopeProcessor())
     shared_processors.append(SecretMasker())
+    # ExceptionTreeProcessor runs before PII/sampling/clamp so the
+    # serialized chain (exc.message, exc.cause_chain entries) flows
+    # through the same redaction + size-budget passes as any other
+    # field. Always installed — preserving cause chains is a
+    # forensics requirement, not a feature toggle.
+    shared_processors.append(ExceptionTreeProcessor())
     if obs_config is not None:
         if obs_config.features.pii_redaction:
             shared_processors.append(PIIRedactor(obs_config.pii))

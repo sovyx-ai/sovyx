@@ -13,6 +13,15 @@ if TYPE_CHECKING:
     from sovyx.observability._clamp_fields import (
         ClampFieldsProcessor as ClampFieldsProcessor,
     )
+    from sovyx.observability._exception_serializer import (
+        ExceptionTreeProcessor as ExceptionTreeProcessor,
+    )
+    from sovyx.observability._exception_serializer import (
+        build_cause_chain as build_cause_chain,
+    )
+    from sovyx.observability._exception_serializer import (
+        serialize_exception as serialize_exception,
+    )
     from sovyx.observability.alerts import (
         Alert as Alert,
     )
@@ -195,6 +204,11 @@ _SUBMODULE_MAP: dict[str, tuple[str, ...]] = {
         "teardown_metrics",
     ),
     "sovyx.observability._clamp_fields": ("ClampFieldsProcessor",),
+    "sovyx.observability._exception_serializer": (
+        "ExceptionTreeProcessor",
+        "build_cause_chain",
+        "serialize_exception",
+    ),
     "sovyx.observability.envelope": ("EnvelopeProcessor",),
     "sovyx.observability.pii": ("PIIRedactor",),
     "sovyx.observability.ringbuffer": ("RingBufferHandler", "install_crash_hooks"),
@@ -250,6 +264,7 @@ __all__ = [
     "CheckStatus",
     "ClampFieldsProcessor",
     "EnvelopeProcessor",
+    "ExceptionTreeProcessor",
     "HealthCheck",
     "HealthRegistry",
     "LogEntry",
@@ -265,6 +280,7 @@ __all__ = [
     "SovyxTracer",
     "bind_request_context",
     "bound_request_context",
+    "build_cause_chain",
     "clear_request_context",
     "collect_json",
     "create_default_alert_manager",
@@ -278,6 +294,7 @@ __all__ = [
     "install_crash_hooks",
     "runtime_get_level",
     "runtime_set_level",
+    "serialize_exception",
     "setup_logging",
     "setup_metrics",
     "setup_tracing",
