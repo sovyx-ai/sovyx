@@ -1,18 +1,30 @@
 """EnvelopeProcessor — injects mandatory envelope fields into every log entry.
 
 The envelope contract (``observability.schema.ENVELOPE_FIELDS``) requires
-every structured log entry to carry eight fields. Four of those —
+every structured log entry to carry nine fields. Four of those —
 ``timestamp``, ``level``, ``logger``, ``event`` — are added by the
 default structlog processors (``TimeStamper``, ``add_log_level``,
 ``add_logger_name``, and the call-site keyword respectively). The
-remaining four — ``schema_version``, ``process_id``, ``host``,
-``sovyx_version`` — are injected here.
+remaining five — ``schema_version``, ``process_id``, ``host``,
+``sovyx_version``, ``sequence_no`` — are injected here.
 
-Each injected field is computed once at processor construction and
-cached. Hot-path emit overhead is therefore four dict assignments per
-record (sub-microsecond), keeping the §23 performance budget intact.
+The processor also OPPORTUNISTICALLY copies four contextual ids
+(``saga_id``, ``span_id``, ``event_id``, ``cause_id``) from
+structlog's bound contextvars when present. These four are NOT in
+:data:`ENVELOPE_FIELDS` because they're scope-dependent — only entries
+emitted inside a saga/span carry them. ``merge_contextvars`` already
+populates them earlier in the processor chain; reading them here is a
+belt-and-suspenders guarantee that EnvelopeProcessor remains
+self-contained even if chain ordering changes.
 
-Aligned with docs-internal/plans/IMPL-OBSERVABILITY-001 §7 Task 1.3.
+Each cached field is computed once at processor construction. The
+hot-path emit overhead is four dict assignments + one
+:func:`itertools.count` increment + one :func:`get_contextvars` lookup
+per record (sub-microsecond), keeping the §23 performance budget
+intact.
+
+Aligned with docs-internal/plans/IMPL-OBSERVABILITY-001 §7 Task 1.3
+and §8 Task 2.2.
 """
 
 from __future__ import annotations
@@ -23,10 +35,21 @@ import platform
 from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING, Any
 
+from structlog.contextvars import get_contextvars
+
 from sovyx.observability.schema import SCHEMA_VERSION
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, MutableMapping
+
+
+# The four contextual ids EnvelopeProcessor lifts from structlog's
+# contextvars. Kept narrow on purpose — adding more ids here means
+# every log entry pays the lookup cost; only true scope-spanning ids
+# qualify (saga = top-level operation, span = sub-operation, event =
+# the EventBus dispatch currently in flight, cause = the parent of
+# the current event in a handler chain).
+_CONTEXTUAL_IDS: tuple[str, ...] = ("saga_id", "span_id", "event_id", "cause_id")
 
 
 def _resolve_sovyx_version() -> str:
@@ -86,6 +109,12 @@ class EnvelopeProcessor:
     ) -> MutableMapping[str, Any]:
         """Inject cached envelope fields + a fresh ``sequence_no``.
 
+        Also copies the contextual ids in :data:`_CONTEXTUAL_IDS` from
+        structlog's bound contextvars when missing — this is normally
+        redundant with :func:`structlog.contextvars.merge_contextvars`,
+        but the lookup is cheap and the redundancy survives processor
+        chain reordering.
+
         Existing keys win over generated defaults so a forwarded
         entry's ``host``/``process_id``/``sovyx_version``/``sequence_no``
         survive untouched. The local counter is only advanced when it
@@ -97,6 +126,12 @@ class EnvelopeProcessor:
             event_dict.setdefault(key, value)
         if "sequence_no" not in event_dict:
             event_dict["sequence_no"] = next(self._counter)
+        ctx = get_contextvars()
+        for ctx_key in _CONTEXTUAL_IDS:
+            if ctx_key not in event_dict:
+                ctx_value = ctx.get(ctx_key)
+                if ctx_value is not None:
+                    event_dict[ctx_key] = ctx_value
         return event_dict
 
 
