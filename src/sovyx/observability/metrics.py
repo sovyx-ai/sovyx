@@ -340,6 +340,54 @@ class MetricsRegistry:
             ),
             unit="1",
         )
+        self.voice_capture_shared_restart_verdicts = meter.create_counter(
+            name="sovyx.voice.capture.shared_restart.verdicts",
+            description=(
+                "request_shared_restart() outcomes classified into "
+                "SharedRestartVerdict values (labels: verdict, host_api, "
+                "platform). Symmetric twin of exclusive_restart.verdicts — "
+                "the revert path used when a PlatformBypassStrategy rolls "
+                "back an exclusive-mode bypass (APPLIED_STILL_DEAD, revert "
+                "on coordinator teardown)."
+            ),
+            unit="1",
+        )
+        self.voice_health_apo_degraded_events = meter.create_counter(
+            name="sovyx.voice.health.apo_degraded.events",
+            description=(
+                "APO-degraded endpoint lifecycle events emitted by the "
+                "CaptureIntegrityCoordinator + watchdog recheck loop "
+                "(labels: platform, action=quarantine|failover|"
+                "recheck_recovered|recheck_still_invalid|hotplug_clear). "
+                "Mirrors the kernel_invalidated.events metric but scoped "
+                "to the Windows Voice Clarity / VocaEffectPack APO cluster "
+                "and any future user-mode DSP failure mode."
+            ),
+            unit="1",
+        )
+        self.voice_health_bypass_strategy_verdicts = meter.create_counter(
+            name="sovyx.voice.health.bypass_strategy.verdicts",
+            description=(
+                "Per-strategy outcomes from CaptureIntegrityCoordinator "
+                "(labels: strategy, verdict=applied_healthy|"
+                "applied_still_dead|failed_to_apply|not_applicable, "
+                "reason). Operators read this to tell which bypass path "
+                "actually cures a given endpoint fleet-wide — feeds the "
+                "Phase 4 hardware-fingerprint catalog confidence gate."
+            ),
+            unit="1",
+        )
+        self.voice_health_capture_integrity_verdicts = meter.create_counter(
+            name="sovyx.voice.health.capture_integrity.verdicts",
+            description=(
+                "Warm integrity-probe classifications (labels: verdict="
+                "healthy|apo_degraded|driver_silent|vad_mute|inconclusive, "
+                "phase=pre_bypass|post_bypass|recheck). OS-agnostic "
+                "degradation signal derived from RMS + spectral flatness "
+                "+ energy rolloff + Silero VAD max probability."
+            ),
+            unit="1",
+        )
         self.voice_health_time_to_first_utterance = meter.create_histogram(
             name="sovyx.voice.health.time_to_first_utterance",
             description=(

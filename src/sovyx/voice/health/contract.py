@@ -17,11 +17,17 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Awaitable, Callable, Mapping
+    from datetime import datetime
     from pathlib import Path
+
+    import numpy as np
+    import numpy.typing as npt
+
+    from sovyx.voice._capture_task import ExclusiveRestartResult, SharedRestartResult
 
 
 # ── Enums ────────────────────────────────────────────────────────────────
@@ -580,16 +586,264 @@ class ComboStoreStats:
     invalidations_by_reason: dict[str, int] = field(default_factory=dict)
 
 
+# ── Capture-integrity + bypass strategy (Phase 1) ───────────────────────
+#
+# These types generalise the Windows-only Voice-Clarity auto-bypass into an
+# OS-agnostic detection layer (:class:`IntegrityVerdict` / :class:`IntegrityResult`)
+# paired with a platform-specific strategy pattern
+# (:class:`BypassVerdict` / :class:`BypassContext` / :class:`BypassOutcome`
+# + :class:`PlatformBypassStrategy` Protocol in
+# :mod:`sovyx.voice.health.bypass._strategy`).
+#
+# See ``docs-internal/plans/voice-apo-os-agnostic-fix.md`` §2.3 for the
+# derivation of each field + threshold.
+
+
+class IntegrityVerdict(StrEnum):
+    """OS-agnostic classification of a live capture stream's signal quality.
+
+    Distinct from :class:`Diagnosis` because :class:`Diagnosis` mixes
+    stream-open outcomes (``DRIVER_ERROR``, ``DEVICE_BUSY``) with signal
+    analysis. :class:`IntegrityVerdict` is pure-signal: it is only ever
+    computed against a *live* capture stream whose ring buffer already
+    carries frames.
+
+    Members:
+        HEALTHY: RMS alive, VAD responsive, spectral envelope intact.
+        APO_DEGRADED: RMS alive but VAD dead AND spectral envelope
+            flattened — capture-side DSP (Windows Voice Clarity,
+            PulseAudio ``module-echo-cancel``, CoreAudio VPIO) is
+            destroying the signal before it reaches user space.
+        DRIVER_SILENT: RMS near zero / flat DC — the driver is open but
+            not delivering audio. Distinct from APO_DEGRADED because
+            the fix is different (reopen / re-enumerate vs APO bypass).
+        VAD_MUTE: VAD dead but spectrum intact and RMS in the noise
+            floor band — user is genuinely not speaking. Re-probe
+            later; not a fault.
+        INCONCLUSIVE: Probe aborted (timeout, teardown, insufficient
+            frames in ring buffer). Caller retries.
+    """
+
+    HEALTHY = "healthy"
+    APO_DEGRADED = "apo_degraded"
+    DRIVER_SILENT = "driver_silent"
+    VAD_MUTE = "vad_mute"
+    INCONCLUSIVE = "inconclusive"
+
+
+@dataclass(frozen=True, slots=True)
+class IntegrityResult:
+    """Outcome of one :class:`CaptureIntegrityProbe` run.
+
+    Populated by :meth:`~sovyx.voice.health.capture_integrity.CaptureIntegrityProbe.probe_warm`.
+    Every field is deterministic-from-input so tests can assert exact
+    values against synthesised signals.
+
+    Args:
+        verdict: Classification label.
+        endpoint_guid: The endpoint the probe ran against — echoed so
+            coordinators don't drift if the active endpoint rebinds
+            mid-probe.
+        rms_db: RMS of the probe window in dBFS. ``-inf`` normalised to
+            ``-120.0`` for finite-JSON friendliness.
+        vad_max_prob: Peak SileroVAD speech probability across the
+            window. In ``[0.0, 1.0]``.
+        spectral_flatness: Wiener entropy of the magnitude spectrum in
+            ``[0.0, 1.0]``. White noise ≈ 1.0, pure tone ≈ 0.0,
+            clean speech ≈ 0.10–0.15, APO-destroyed speech ≈ 0.28–0.35.
+        spectral_rolloff_hz: 85 %-energy roll-off frequency in Hz.
+            Voice-Clarity's low-pass pulls this below 4 kHz; clean
+            speech sits at 6–8 kHz.
+        duration_s: Actual probe duration (may be shorter than
+            requested when the buffer had fewer frames).
+        probed_at_utc: Timestamp of probe completion.
+        raw_frames: Number of int16 samples actually analysed.
+        detail: Optional diagnostic string — set on ``INCONCLUSIVE``
+            to explain *why* (e.g. ``"ring_buffer_underrun"``).
+    """
+
+    verdict: IntegrityVerdict
+    endpoint_guid: str
+    rms_db: float
+    vad_max_prob: float
+    spectral_flatness: float
+    spectral_rolloff_hz: float
+    duration_s: float
+    probed_at_utc: datetime
+    raw_frames: int
+    detail: str = ""
+
+
+class BypassVerdict(StrEnum):
+    """Outcome of one :meth:`PlatformBypassStrategy.apply` invocation.
+
+    A strategy reports exactly one verdict per ``apply``. The
+    coordinator reads the verdict + the post-apply :class:`IntegrityResult`
+    to decide whether to stop, advance to the next strategy, or revert.
+
+    Members:
+        APPLIED_HEALTHY: Strategy applied AND the subsequent integrity
+            re-probe returned HEALTHY. Terminal success.
+        APPLIED_STILL_DEAD: Strategy applied cleanly but the re-probe
+            still classifies the signal as APO_DEGRADED / DRIVER_SILENT.
+            Coordinator advances.
+        NOT_APPLICABLE: Strategy's :meth:`probe_eligibility` returned
+            :attr:`Eligibility.applicable=False` (e.g. Windows exclusive
+            mode disabled by policy, Linux ALSA hw node not exposed).
+        FAILED_TO_APPLY: ``apply`` itself raised or the underlying
+            restart verdict reported failure. Coordinator advances.
+        REVERTED: ``apply`` succeeded but ``revert`` was called
+            subsequently (strategy B proved strictly better than A).
+    """
+
+    APPLIED_HEALTHY = "applied_healthy"
+    APPLIED_STILL_DEAD = "applied_still_dead"
+    NOT_APPLICABLE = "not_applicable"
+    FAILED_TO_APPLY = "failed_to_apply"
+    REVERTED = "reverted"
+
+
+@dataclass(frozen=True, slots=True)
+class Eligibility:
+    """Feasibility report from :meth:`PlatformBypassStrategy.probe_eligibility`.
+
+    A strategy whose eligibility check returns ``applicable=False`` is
+    skipped by the coordinator without counting toward
+    ``bypass_strategy_max_attempts`` — a non-applicable strategy is not
+    an attempt.
+
+    Args:
+        applicable: ``True`` iff the strategy's preconditions are met
+            on the current endpoint + OS + tuning configuration.
+        reason: Machine-readable reason token. Stable across minor
+            versions so dashboards can key on it. Examples:
+            ``"exclusive_mode_disabled_by_policy"``,
+            ``"not_wasapi_endpoint"``, ``"alsa_hw_node_unavailable"``,
+            ``"not_implemented_phase_3_pipewire"``.
+        estimated_cost_ms: Informational forecast of how long the
+            subsequent ``apply`` is expected to take. Used by the
+            coordinator only for telemetry, never for sequencing.
+    """
+
+    applicable: bool
+    reason: str = ""
+    estimated_cost_ms: int = 0
+
+
+@runtime_checkable
+class CaptureTaskProto(Protocol):
+    """Minimum surface :class:`CaptureIntegrityCoordinator` needs from
+    :class:`sovyx.voice._capture_task.AudioCaptureTask`.
+
+    Defined here (not in ``_capture_task``) so bypass strategies depend
+    on the abstract Protocol, not the concrete class — keeps the
+    dependency direction clean and makes testing strategies trivial
+    (fake capture task is a plain object).
+    """
+
+    @property
+    def active_device_guid(self) -> str: ...
+
+    @property
+    def active_device_name(self) -> str: ...
+
+    @property
+    def host_api_name(self) -> str | None: ...
+
+    async def request_exclusive_restart(self) -> ExclusiveRestartResult: ...
+
+    async def request_shared_restart(self) -> SharedRestartResult: ...
+
+    async def tap_recent_frames(
+        self,
+        duration_s: float,
+    ) -> npt.NDArray[np.int16]: ...
+
+    def apply_mic_ducking_db(self, gain_db: float) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class BypassContext:
+    """Per-apply context handed to a :class:`PlatformBypassStrategy`.
+
+    Pure-data; no mutable references. The coordinator rebuilds this
+    object each attempt so strategies cannot race on shared state.
+
+    Args:
+        endpoint_guid: GUID of the endpoint the coordinator is
+            operating on.
+        endpoint_friendly_name: Human-readable mic name. Used for log
+            messages and dashboards, never for logic.
+        host_api_name: PortAudio host-API label (``"Windows WASAPI"``,
+            ``"ALSA"``, ``"CoreAudio"`` …). Strategies use this for
+            their eligibility checks.
+        platform_key: Normalised ``sys.platform`` bucket (``"win32"``
+            / ``"linux"`` / ``"darwin"``). Pre-computed so tests can
+            pin the bucket without monkey-patching :mod:`sys`.
+        capture_task: :class:`CaptureTaskProto` reference — the only
+            mutating edge a strategy has into the running pipeline.
+        probe_fn: Callable that re-runs the warm integrity probe
+            against the live capture stream. Strategies invoke it
+            after ``apply`` to validate effectiveness.
+    """
+
+    endpoint_guid: str
+    endpoint_friendly_name: str
+    host_api_name: str
+    platform_key: str
+    capture_task: CaptureTaskProto
+    probe_fn: Callable[[], Awaitable[IntegrityResult]]
+
+
+@dataclass(frozen=True, slots=True)
+class BypassOutcome:
+    """Record of one full strategy attempt — emitted as a log event.
+
+    Args:
+        strategy_name: The :attr:`PlatformBypassStrategy.name` of the
+            strategy that ran.
+        attempt_index: Position in the coordinator's per-session
+            iteration (0 = first strategy tried).
+        verdict: Overall outcome.
+        integrity_before: Integrity probe result captured immediately
+            before ``apply``.
+        integrity_after: Integrity probe result captured after the
+            post-apply settle window. ``None`` iff ``verdict`` is
+            :attr:`BypassVerdict.NOT_APPLICABLE` or
+            :attr:`BypassVerdict.FAILED_TO_APPLY` (no post-apply probe
+            was possible).
+        elapsed_ms: Wall-clock time from entering ``apply`` to emitting
+            the outcome.
+        detail: Free-form diagnostic string. Populated on failure paths
+            with the classified error.
+    """
+
+    strategy_name: str
+    attempt_index: int
+    verdict: BypassVerdict
+    integrity_before: IntegrityResult
+    integrity_after: IntegrityResult | None
+    elapsed_ms: float
+    detail: str = ""
+
+
 __all__ = [
     "ALLOWED_FORMATS",
     "ALLOWED_HOST_APIS_BY_PLATFORM",
     "ALLOWED_SAMPLE_RATES",
     "AudioSubsystemFingerprint",
+    "BypassContext",
+    "BypassOutcome",
+    "BypassVerdict",
+    "CaptureTaskProto",
     "CascadeResult",
     "Combo",
     "ComboEntry",
     "ComboStoreStats",
     "Diagnosis",
+    "Eligibility",
+    "IntegrityResult",
+    "IntegrityVerdict",
     "LoadReport",
     "OverrideEntry",
     "ProbeHistoryEntry",

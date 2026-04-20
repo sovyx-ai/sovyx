@@ -350,18 +350,18 @@ class TestCreateKokoroTtsResolution:
         assert config.language == "en-us"
 
 
-class TestVoiceClarityAutoBypassWiring:
-    """``create_voice_pipeline`` threads the APO detector into the orchestrator.
+class TestDeafSignalCoordinatorWiring:
+    """``create_voice_pipeline`` wires the :class:`CaptureIntegrityCoordinator`.
 
-    The factory must:
+    Phase 1. The factory must:
 
     * Resolve ``voice_clarity_active`` via :func:`_detect_voice_clarity_active`
-      **before** constructing the pipeline (so the orchestrator knows
-      whether to arm auto-bypass on the very first deaf heartbeat).
-    * Wire an ``on_capture_bypass_requested`` callback that, when
-      invoked, calls ``capture_task.request_exclusive_restart()`` —
-      the late-binding closure must resolve to the right task even
-      though it's constructed *after* the pipeline.
+      **before** constructing the pipeline (dashboard attribution only
+      — the coordinator's integrity probe is now the authoritative gate).
+    * Wire an ``on_deaf_signal`` callback whose closure late-binds to
+      the coordinator constructed *after* the pipeline. Calling the
+      callback must delegate to
+      :meth:`CaptureIntegrityCoordinator.handle_deaf_signal`.
     """
 
     @pytest.mark.asyncio()
@@ -411,7 +411,7 @@ class TestVoiceClarityAutoBypassWiring:
             # ``auto_bypass_enabled`` defaults to the tuning flag (True).
             assert captured_kwargs["auto_bypass_enabled"] is True
             # The callback must be awaitable — late binding via closure.
-            callback = captured_kwargs["on_capture_bypass_requested"]
+            callback = captured_kwargs["on_deaf_signal"]
             assert callable(callback)
         finally:
             factory_mod._create_vad = original_create_vad
@@ -419,13 +419,14 @@ class TestVoiceClarityAutoBypassWiring:
             factory_mod._create_piper_tts = original_create_piper
 
     @pytest.mark.asyncio()
-    async def test_bypass_callback_reaches_capture_task(self, tmp_path) -> None:
+    async def test_deaf_signal_callback_delegates_to_coordinator(self, tmp_path) -> None:
         from unittest.mock import AsyncMock, MagicMock, patch
 
         vad_file = tmp_path / "silero_vad.onnx"
         vad_file.write_bytes(b"fake")
 
         import sovyx.voice.factory as factory_mod
+        import sovyx.voice.health.capture_integrity as integrity_mod
 
         fake_pipeline = MagicMock()
         fake_pipeline.start = AsyncMock()
@@ -446,6 +447,12 @@ class TestVoiceClarityAutoBypassWiring:
             captured_kwargs.update(kwargs)
             return fake_pipeline
 
+        fake_coordinator = MagicMock()
+        fake_coordinator.handle_deaf_signal = AsyncMock(return_value=[])
+
+        def _build_coordinator(**kwargs: object) -> object:  # noqa: ARG001
+            return fake_coordinator
+
         try:
             with (
                 patch.object(
@@ -458,19 +465,19 @@ class TestVoiceClarityAutoBypassWiring:
                     "sovyx.voice.pipeline._orchestrator.VoicePipeline",
                     side_effect=_capture_pipeline,
                 ),
+                patch.object(
+                    integrity_mod,
+                    "CaptureIntegrityCoordinator",
+                    side_effect=_build_coordinator,
+                ),
             ):
-                bundle = await factory_mod.create_voice_pipeline(model_dir=tmp_path)
+                await factory_mod.create_voice_pipeline(model_dir=tmp_path)
 
-            # Swap the real capture task for a spy and invoke the callback —
-            # must delegate to ``request_exclusive_restart`` on the active task.
-            spy = MagicMock()
-            spy.request_exclusive_restart = AsyncMock()
-            bundle.capture_task.request_exclusive_restart = spy.request_exclusive_restart
+            callback = captured_kwargs["on_deaf_signal"]
+            result = await callback()  # type: ignore[misc]
 
-            callback = captured_kwargs["on_capture_bypass_requested"]
-            await callback()  # type: ignore[misc]
-
-            spy.request_exclusive_restart.assert_awaited_once()
+            fake_coordinator.handle_deaf_signal.assert_awaited_once()
+            assert result == []
         finally:
             factory_mod._create_vad = original_create_vad
             factory_mod._create_stt = original_create_stt

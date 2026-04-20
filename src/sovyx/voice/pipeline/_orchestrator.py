@@ -10,6 +10,7 @@ from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.engine.errors import VoiceError
 from sovyx.observability.logging import get_logger
 from sovyx.voice.health._metrics import record_time_to_first_utterance
+from sovyx.voice.health.contract import BypassVerdict
 from sovyx.voice.jarvis import JarvisConfig, JarvisIllusion, split_at_boundaries
 from sovyx.voice.pipeline._barge_in import BargeInDetector
 from sovyx.voice.pipeline._config import VoicePipelineConfig, validate_config
@@ -27,13 +28,14 @@ from sovyx.voice.pipeline._output_queue import AudioOutputQueue
 from sovyx.voice.pipeline._state import VoicePipelineState
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Sequence
 
     import numpy as np
     import numpy.typing as npt
 
     from sovyx.engine.events import EventBus
     from sovyx.voice.health._self_feedback import SelfFeedbackGate
+    from sovyx.voice.health.contract import BypassOutcome
     from sovyx.voice.stt import STTEngine
     from sovyx.voice.tts_piper import TTSEngine
     from sovyx.voice.vad import SileroVAD, VADEvent
@@ -53,13 +55,6 @@ _HEARTBEAT_INTERVAL_S = _VoiceTuning().pipeline_heartbeat_interval_seconds
 _DEAF_MIN_FRAMES = _VoiceTuning().pipeline_deaf_min_frames
 _DEAF_VAD_MAX_THRESHOLD = _VoiceTuning().pipeline_deaf_vad_max_threshold
 _DEAF_WARNINGS_BEFORE_EXCLUSIVE_RETRY = _VoiceTuning().deaf_warnings_before_exclusive_retry
-# How many deaf heartbeats to tolerate *after* the exclusive-mode bypass
-# was requested before declaring the bypass ineffective. Two heartbeats
-# (~ 2 × heartbeat interval) is enough to absorb the device close/reopen
-# round-trip without false-positiving — but short enough that operators
-# learn fast when even WASAPI exclusive cannot recover the signal
-# (firmware-level DSP, fixed-format virtual cable, broken element, ...).
-_POST_BYPASS_DEAF_WARNINGS_BEFORE_INEFFECTIVE = 2
 
 
 class VoicePipeline:
@@ -97,7 +92,7 @@ class VoicePipeline:
         tts: TTSEngine,
         event_bus: EventBus | None = None,
         on_perception: Callable[[str, str], Awaitable[None]] | None = None,
-        on_capture_bypass_requested: Callable[[], Awaitable[None]] | None = None,
+        on_deaf_signal: Callable[[], Awaitable[Sequence[BypassOutcome]]] | None = None,
         *,
         voice_clarity_active: bool = False,
         auto_bypass_enabled: bool = False,
@@ -112,33 +107,27 @@ class VoicePipeline:
         self._tts = tts
         self._event_bus = event_bus
         self._on_perception = on_perception
-        self._on_capture_bypass_requested = on_capture_bypass_requested
+        self._on_deaf_signal = on_deaf_signal
 
-        # Voice Clarity auto-bypass context. The factory resolves
-        # ``voice_clarity_active`` from :mod:`sovyx.voice._apo_detector`
-        # at pipeline creation; we cache it so the deaf-warning hook
-        # can decide *fast* without re-reading the registry every
-        # heartbeat. ``auto_bypass_enabled`` is the master kill switch
-        # (``VoiceTuningConfig.voice_clarity_autofix``). ``_bypass_requested``
-        # is the one-shot latch — after we ask the capture task to
-        # re-open in exclusive mode (success or failure), we do not
-        # ask again in this session to prevent oscillation.
+        # Phase 1 APO-bypass context. ``voice_clarity_active`` is the
+        # boot-time hint from :mod:`sovyx.voice._apo_detector` — retained
+        # purely for logs / dashboard attribution (so operators can tell
+        # a Voice Clarity-driven bypass from a generic OS-agnostic one).
+        # ``auto_bypass_enabled`` is the master kill switch
+        # (``VoiceTuningConfig.voice_clarity_autofix``).
+        # ``auto_bypass_threshold`` is the number of back-to-back deaf
+        # heartbeats required before the orchestrator invokes
+        # ``on_deaf_signal`` — the callback delegates to the
+        # :class:`~sovyx.voice.health.capture_integrity.CaptureIntegrityCoordinator`,
+        # which owns its own ``is_resolved`` latch. Once a non-empty
+        # outcome list comes back we set :attr:`_coordinator_terminated`
+        # so subsequent deaf warnings don't re-enter the coordinator.
         self._voice_clarity_active = voice_clarity_active
         self._auto_bypass_enabled = auto_bypass_enabled
         self._auto_bypass_threshold = max(1, auto_bypass_threshold)
-        self._bypass_requested = False
         self._deaf_warnings_consecutive = 0
-        # Post-bypass observability. When the orchestrator has already
-        # asked the capture task to re-open in WASAPI exclusive mode and
-        # we *still* see deaf heartbeats, the APO chain was not the (only)
-        # cause — exclusive mode bypassed it but the post-driver signal
-        # is still unusable for VAD. Emit a single
-        # ``voice_apo_bypass_ineffective`` warning so the dashboard /
-        # doctor can surface the actionable next step (manual disable in
-        # Sound settings, swap mic, check firmware) instead of leaving the
-        # operator believing the auto-fix worked.
-        self._post_bypass_deaf_warnings = 0
-        self._post_bypass_ineffective_emitted = False
+        self._coordinator_terminated = False
+        self._coordinator_invocation_pending = False
 
         # Self-feedback isolation (ADR §4.4.6). Structural half-duplex
         # gating is encoded directly in the state machine (wake-word
@@ -715,120 +704,146 @@ class VoicePipeline:
                     "and audio_capture_resample_active logs."
                 ),
             )
-            self._maybe_request_capture_bypass()
-            if self._bypass_requested:
-                self._post_bypass_deaf_warnings += 1
-                self._maybe_emit_bypass_ineffective()
+            self._maybe_trigger_bypass_coordinator()
         else:
             # Reset the consecutive counter so a single healthy heartbeat
             # between two deaf ones does not trigger the auto-bypass.
             self._deaf_warnings_consecutive = 0
-            if self._bypass_requested:
-                # A healthy heartbeat after the bypass means exclusive mode
-                # restored the signal — clear the post-bypass counter so
-                # transient deafness later (e.g. user yanking the headset)
-                # is not erroneously reported as ineffective bypass.
-                self._post_bypass_deaf_warnings = 0
         self._last_heartbeat_monotonic = now
         self._max_vad_prob_since_heartbeat = 0.0
         self._vad_frames_since_heartbeat = 0
 
-    def _maybe_request_capture_bypass(self) -> None:
-        """Trigger Voice Clarity auto-bypass if the conditions are met.
+    def _maybe_trigger_bypass_coordinator(self) -> None:
+        """Delegate sustained deafness to the :class:`CaptureIntegrityCoordinator`.
 
         Called from the heartbeat path after a deaf warning is logged.
-        All four guards must hold:
+        The orchestrator no longer tracks its own one-shot bypass latch —
+        the coordinator owns terminal-state resolution via
+        :attr:`~sovyx.voice.health.capture_integrity.CaptureIntegrityCoordinator.is_resolved`
+        and returns an empty outcome list once resolved. We still apply
+        three guards locally:
 
         * ``auto_bypass_enabled`` — master kill switch (tuning flag).
-        * ``voice_clarity_active`` — detector confirmed a capture APO on
-          the active endpoint (usually VocaEffectPack / Voice Clarity).
-        * ``not _bypass_requested`` — one-shot latch per session.
+        * ``not _coordinator_terminated`` — once the coordinator has
+          reported a terminal outcome (APPLIED_HEALTHY or exhausted)
+          don't re-invoke it; the watchdog recheck loop handles recovery.
         * ``_deaf_warnings_consecutive >= _auto_bypass_threshold`` —
           require multiple back-to-back deaf heartbeats so a single
-          transient (e.g. device switch) does not flip us to exclusive.
+          transient (e.g. device switch) doesn't spin up the full
+          strategy iteration.
 
-        The callback (``on_capture_bypass_requested``) re-opens the
-        capture stream in WASAPI exclusive mode, which bypasses the
-        entire APO chain and restores a clean signal to the pipeline.
+        Unlike the previous implementation we no longer gate on
+        ``voice_clarity_active``: the integrity probe itself classifies
+        the signal OS-agnostically, so the coordinator is the
+        authoritative gate. ``voice_clarity_active`` survives as a
+        logging attribute for dashboard attribution.
         """
         if not self._auto_bypass_enabled:
             return
-        if not self._voice_clarity_active:
+        if self._coordinator_terminated:
             return
-        if self._bypass_requested:
+        if self._coordinator_invocation_pending:
             return
         if self._deaf_warnings_consecutive < self._auto_bypass_threshold:
             return
-        if self._on_capture_bypass_requested is None:
+        if self._on_deaf_signal is None:
             return
 
-        self._bypass_requested = True
-        logger.warning(
-            "voice_apo_bypass_activated",
-            mind_id=self._config.mind_id,
-            reason="voice_clarity_deaf_pipeline",
-            consecutive_deaf_warnings=self._deaf_warnings_consecutive,
-            threshold=self._auto_bypass_threshold,
-            action="reopen_capture_wasapi_exclusive",
-        )
-        # Schedule the restart on the running loop — we must not await
-        # here because this helper runs on the per-frame hot path.
-        asyncio.create_task(self._invoke_bypass_callback())
+        self._coordinator_invocation_pending = True
+        # Schedule the coordinator on the running loop — this helper
+        # runs on the per-frame hot path and must not block.
+        asyncio.create_task(self._invoke_deaf_signal())
 
-    def _maybe_emit_bypass_ineffective(self) -> None:
-        """Emit ``voice_apo_bypass_ineffective`` once when exclusive mode didn't help.
+    async def _invoke_deaf_signal(self) -> None:
+        """Invoke the deaf-signal callback and surface its outcomes.
 
-        Called after every deaf heartbeat that happens *after* the
-        bypass was requested. The emission is one-shot per session — we
-        only need to tell the operator once that "exclusive mode opened
-        but the signal is still dead". Repeated warnings would be noise
-        on top of the per-heartbeat ``voice_pipeline_deaf_warning``.
+        The callback returns the coordinator's
+        :class:`~sovyx.voice.health.contract.BypassOutcome` log. Empty
+        means the coordinator short-circuited (already resolved this
+        session or false alarm) — nothing to emit. A non-empty list is
+        terminal: we flip :attr:`_coordinator_terminated` so subsequent
+        deaf warnings don't re-enter the coordinator.
 
-        The dashboard's capture-diagnostics panel watches for this event
-        to switch its messaging from "auto-fix in progress" to "auto-fix
-        could not recover the signal — see manual remediation steps".
+        Telemetry contract:
+
+        * ``voice_apo_bypass_activated`` on the APPLIED_HEALTHY outcome
+          (strategy_name, attempt_index, reason carry the winning
+          mutation path — ``"exclusive_engaged"`` for the Phase 1 Windows
+          strategy, future values for new platforms).
+        * ``voice_apo_bypass_ineffective`` when the coordinator
+          exhausted every eligible strategy without recovery. The
+          coordinator quarantines the endpoint via
+          :class:`EndpointQuarantine` so the factory fails over to
+          another capture device on next boot.
         """
-        if self._post_bypass_ineffective_emitted:
-            return
-        if self._post_bypass_deaf_warnings < _POST_BYPASS_DEAF_WARNINGS_BEFORE_INEFFECTIVE:
-            return
-        self._post_bypass_ineffective_emitted = True
-        logger.error(
-            "voice_apo_bypass_ineffective",
-            mind_id=self._config.mind_id,
-            consecutive_post_bypass_deaf=self._post_bypass_deaf_warnings,
-            voice_clarity_active=self._voice_clarity_active,
-            hint=(
-                "WASAPI exclusive re-open completed but VAD is still deaf. "
-                "Likely causes: firmware-level DSP on the mic, a virtual "
-                "audio cable with a fixed format, a damaged capture element, "
-                "or a non-Voice-Clarity APO not in the detector catalog. "
-                "Try manually disabling all enhancements in Windows Sound "
-                "settings for the affected device, or switch capture device."
-            ),
-        )
-
-    async def _invoke_bypass_callback(self) -> None:
-        """Invoke the capture-bypass callback with full error isolation.
-
-        A failure here must never crash the pipeline — if the exclusive
-        re-open does not work we stay in shared mode (the latch is
-        already set so we will not retry), log the failure, and let the
-        user fall back to the manual APO-disable guidance in the
-        dashboard / CLI doctor output.
-        """
-        callback = self._on_capture_bypass_requested
+        callback = self._on_deaf_signal
         if callback is None:
+            self._coordinator_invocation_pending = False
             return
         try:
-            await callback()
-        except Exception as exc:  # noqa: BLE001 — callback is user-supplied; we intentionally shield the pipeline from any failure mode
+            outcomes = await callback()
+        except Exception as exc:  # noqa: BLE001 — callback is user-supplied; shield the pipeline
             logger.error(
                 "voice_apo_bypass_failed",
                 mind_id=self._config.mind_id,
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
+            self._coordinator_invocation_pending = False
+            return
+        finally:
+            self._coordinator_invocation_pending = False
+
+        if not outcomes:
+            # Coordinator short-circuited (false-alarm probe or prior
+            # resolution). Don't burn the terminal flag — we may still
+            # want to retry if deafness persists after a transient
+            # clear.
+            return
+
+        self._coordinator_terminated = True
+        applied_healthy = next(
+            (o for o in outcomes if o.verdict is BypassVerdict.APPLIED_HEALTHY),
+            None,
+        )
+        if applied_healthy is not None:
+            logger.warning(
+                "voice_apo_bypass_activated",
+                mind_id=self._config.mind_id,
+                strategy_name=applied_healthy.strategy_name,
+                attempt_index=applied_healthy.attempt_index,
+                reason=applied_healthy.detail,
+                voice_clarity_active=self._voice_clarity_active,
+                consecutive_deaf_warnings=self._deaf_warnings_consecutive,
+                threshold=self._auto_bypass_threshold,
+                action="capture_integrity_coordinator",
+            )
+            return
+
+        # Every strategy either failed to apply or applied-but-still-dead.
+        # The coordinator has already quarantined the endpoint; surface a
+        # single operator-facing event so the dashboard / doctor can
+        # switch their messaging to "auto-fix could not recover — see
+        # manual remediation steps".
+        logger.error(
+            "voice_apo_bypass_ineffective",
+            mind_id=self._config.mind_id,
+            attempts=len(outcomes),
+            strategies=[o.strategy_name for o in outcomes],
+            verdicts=[o.verdict.value for o in outcomes],
+            voice_clarity_active=self._voice_clarity_active,
+            hint=(
+                "CaptureIntegrityCoordinator exhausted every eligible "
+                "bypass strategy. Endpoint quarantined for apo_quarantine_s; "
+                "factory will fail over to an alternate capture device on "
+                "next boot. Likely causes: firmware-level DSP on the mic, "
+                "a virtual audio cable with a fixed format, a damaged "
+                "capture element, or an APO not yet covered by a "
+                "platform strategy. Try manually disabling all "
+                "enhancements in the OS sound settings or switch capture "
+                "device."
+            ),
+        )
 
     async def _emit(self, event: object) -> None:
         """Emit an event via the event bus (if available)."""

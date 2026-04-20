@@ -171,15 +171,50 @@ class ExclusiveRestartVerdict(StrEnum):
             :meth:`_reopen_stream_after_device_error` recovered. The
             pipeline is alive but deaf (same as before the request).
         OPEN_FAILED_NO_STREAM: Both the exclusive reopen and the
-            shared-mode fallback raised. The stream is closed; the
-            pipeline has no capture source until the next reconnect
-            cycle in :meth:`_consume_loop`.
+            shared-mode fallback raised. The stream is closed *and*
+            the consumer task has been signalled to exit
+            (``_running=False`` + consumer cancelled) — ``_consume_loop``
+            cannot self-recover from this state (it would be parked on
+            ``queue.get()`` with no callback feeding it), so upstream
+            supervisors MUST detect the dead state via the returned
+            verdict and rebuild the task.
         NOT_RUNNING: Called while the task is stopped — no-op.
     """
 
     EXCLUSIVE_ENGAGED = "exclusive_engaged"
     DOWNGRADED_TO_SHARED = "downgraded_to_shared"
     OPEN_FAILED_SHARED_FALLBACK = "open_failed_shared_fallback"
+    OPEN_FAILED_NO_STREAM = "open_failed_no_stream"
+    NOT_RUNNING = "not_running"
+
+
+class SharedRestartVerdict(StrEnum):
+    """Verdict of :meth:`AudioCaptureTask.request_shared_restart`.
+
+    Symmetric revert of :class:`ExclusiveRestartVerdict` — re-opens the
+    stream in shared mode when the APO-bypass experiment needs to be
+    rolled back (e.g. a strategy proved ineffective and the coordinator
+    wants the pipeline returned to its pre-bypass configuration before
+    trying the next strategy, or the user explicitly unpins exclusive
+    mode in the wizard).
+
+    Members:
+        SHARED_ENGAGED: Stream reopened successfully in shared mode; the
+            platform APO chain is back in the signal path. Equivalent to
+            the pre-bypass state.
+        OPEN_FAILED_NO_STREAM: The shared-mode reopen raised and no
+            stream is live. The consumer task has been signalled to
+            exit (``_running=False`` + consumer cancelled) because
+            ``_consume_loop`` cannot self-recover from this state —
+            it would be parked on ``queue.get()`` with no callback
+            feeding it. Upstream supervisors MUST detect the dead
+            state via the returned verdict and rebuild the capture
+            task (or issue an explicit
+            :meth:`request_exclusive_restart`).
+        NOT_RUNNING: Called while the task is stopped — no-op.
+    """
+
+    SHARED_ENGAGED = "shared_engaged"
     OPEN_FAILED_NO_STREAM = "open_failed_no_stream"
     NOT_RUNNING = "not_running"
 
@@ -205,6 +240,33 @@ class ExclusiveRestartResult:
     """
 
     verdict: ExclusiveRestartVerdict
+    engaged: bool
+    host_api: str | None = None
+    device: int | str | None = None
+    sample_rate: int | None = None
+    detail: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SharedRestartResult:
+    """Structured outcome of :meth:`AudioCaptureTask.request_shared_restart`.
+
+    Attributes:
+        verdict: The :class:`SharedRestartVerdict` describing what
+            happened. ``SHARED_ENGAGED`` means the revert worked and the
+            pipeline is now running on the default shared-mode pipe;
+            anything else means the stream is down.
+        engaged: Convenience flag — ``True`` iff
+            ``verdict == SHARED_ENGAGED``.
+        host_api: Host API of the resulting stream (or ``None`` when
+            :attr:`OPEN_FAILED_NO_STREAM` / :attr:`NOT_RUNNING`).
+        device: Resolved PortAudio device index of the resulting stream.
+        sample_rate: Effective sample rate of the resulting stream.
+        detail: Human-readable error / downgrade reason for logs and
+            the dashboard UI. ``None`` on a successful engagement.
+    """
+
+    verdict: SharedRestartVerdict
     engaged: bool
     host_api: str | None = None
     device: int | str | None = None
@@ -240,6 +302,34 @@ def _emit_exclusive_restart_metric(result: ExclusiveRestartResult) -> None:
         )
     except Exception:  # noqa: BLE001 — metrics must never break capture
         logger.debug("voice_capture_exclusive_restart_metric_failed", exc_info=True)
+
+
+def _emit_shared_restart_metric(result: SharedRestartResult) -> None:
+    """Record a ``voice.capture.shared_restart.verdicts`` counter event.
+
+    Symmetric twin of :func:`_emit_exclusive_restart_metric`; separate
+    counter name so dashboards can distinguish engagements from reverts
+    without parsing labels.
+    """
+    try:
+        import sys
+
+        from sovyx.observability.metrics import get_metrics
+
+        registry = get_metrics()
+        counter = getattr(registry, "voice_capture_shared_restart_verdicts", None)
+        if counter is None:
+            return
+        counter.add(
+            1,
+            attributes={
+                "verdict": result.verdict.value,
+                "host_api": result.host_api or "none",
+                "platform": sys.platform,
+            },
+        )
+    except Exception:  # noqa: BLE001 — metrics must never break capture
+        logger.debug("voice_capture_shared_restart_metric_failed", exc_info=True)
 
 
 def _rms_db_int16(frame: Any) -> float:  # noqa: ANN401 — numpy int16 array; Any keeps numpy lazy-imported
@@ -297,6 +387,7 @@ class AudioCaptureTask:
         tuning: VoiceTuningConfig | None = None,
         sd_module: Any | None = None,  # noqa: ANN401 — DI for tests
         enumerate_fn: Callable[[], list[DeviceEntry]] | None = None,
+        endpoint_guid: str | None = None,
     ) -> None:
         self._pipeline = pipeline
         self._input_device = input_device
@@ -314,6 +405,7 @@ class AudioCaptureTask:
         self._running = False
         self._normalizer: FrameNormalizer | None = None
         self._resolved_device_name: str | None = None
+        self._endpoint_guid: str = endpoint_guid or ""
 
         # Telemetry — populated by the consumer loop.
         self._last_rms_db: float = _RMS_FLOOR_DB
@@ -321,6 +413,21 @@ class AudioCaptureTask:
         self._last_heartbeat_monotonic: float = 0.0
         self._frames_since_heartbeat: int = 0
         self._silent_frames_since_heartbeat: int = 0
+
+        # Ring buffer — allocated lazily in :meth:`start` from the
+        # per-instance tuning so tests that build the task without
+        # calling start() don't pay the ~1 MB allocation cost.
+        #
+        # Thread-safety: writes happen inside ``_consume_loop`` between
+        # ``await`` points and reads from :meth:`tap_recent_frames`
+        # happen on the same event loop; the asyncio scheduler serialises
+        # them without a lock as long as neither path awaits while
+        # mutating the index fields. That invariant is asserted by the
+        # unit tests — do not add awaits inside the critical sections.
+        self._ring_buffer: npt.NDArray[np.int16] | None = None
+        self._ring_capacity: int = 0
+        self._ring_write_index: int = 0
+        self._ring_samples_written: int = 0
 
     # -- Properties -----------------------------------------------------------
 
@@ -344,6 +451,33 @@ class AudioCaptureTask:
         "not yet started" from "OS default" safely.
         """
         return self._resolved_device_name
+
+    @property
+    def active_device_name(self) -> str:
+        """Non-nullable alias of :attr:`input_device_name`.
+
+        Satisfies :class:`~sovyx.voice.health.contract.CaptureTaskProto`:
+        the bypass coordinator + strategies work with a plain ``str``
+        instead of ``str | None`` since they only run after the stream
+        is open and always need a human-readable label for logs.
+        Returns ``""`` during the pre-start window.
+        """
+        return self._resolved_device_name or ""
+
+    @property
+    def active_device_guid(self) -> str:
+        """Stable endpoint GUID for the live capture stream — see ADR §1.
+
+        Populated either from the explicit constructor ``endpoint_guid``
+        argument or derived at :meth:`start` from the resolved
+        :class:`DeviceEntry` via
+        :func:`sovyx.voice.health._factory_integration.derive_endpoint_guid`.
+        Returns ``""`` before the stream opens so callers can distinguish
+        "not yet started" from "OS default" — the bypass coordinator
+        will not call this pre-start anyway, but the Protocol requires a
+        non-nullable string return.
+        """
+        return self._endpoint_guid
 
     @property
     def host_api_name(self) -> str | None:
@@ -450,6 +584,8 @@ class AudioCaptureTask:
         self._input_device = info.device_index
         self._host_api_name = info.host_api
         self._resolved_device_name = entry.name if entry is not None else None
+        self._ensure_endpoint_guid(entry)
+        self._allocate_ring_buffer(tuning)
 
         self._normalizer = FrameNormalizer(
             source_rate=info.sample_rate,
@@ -564,6 +700,30 @@ class AudioCaptureTask:
         while not self._queue.empty():
             self._queue.get_nowait()
         logger.info("audio_capture_task_stopped")
+
+    def _signal_consumer_shutdown(self) -> None:
+        """Mark the task dead and wake the consumer so it can exit.
+
+        Used by the terminal ``OPEN_FAILED_NO_STREAM`` branches of
+        :meth:`request_exclusive_restart` and
+        :meth:`request_shared_restart` — after both open paths have
+        failed, the stream is ``None`` and the consume loop would
+        otherwise stay parked on ``queue.get()`` forever (nothing can
+        enqueue, and the ``sd.PortAudioError`` reconnect branch cannot
+        fire without a live stream). Flipping ``_running`` + cancelling
+        the consumer task unblocks it and lets upstream supervisors
+        detect the dead state by observing the task's completion and
+        the returned verdict.
+
+        Safe to call from outside the consumer task (e.g. the
+        coordinator's bypass ``apply``/``revert`` path). Idempotent —
+        a second invocation after the consumer is already done is a
+        no-op.
+        """
+        self._running = False
+        consumer = self._consumer
+        if consumer is not None and not consumer.done():
+            consumer.cancel()
 
     async def _validate_stream(self) -> float:
         """Observe the freshly-opened stream for up to ``_VALIDATION_S`` seconds.
@@ -704,6 +864,10 @@ class AudioCaptureTask:
                     "audio_capture_exclusive_fallback_failed",
                     error=str(fallback_exc),
                 )
+                # Stream is gone and no recovery path inside the task
+                # can resurrect it — unblock the consume loop so the
+                # supervisor sees a completed consumer and rebuilds.
+                self._signal_consumer_shutdown()
                 result = ExclusiveRestartResult(
                     verdict=ExclusiveRestartVerdict.OPEN_FAILED_NO_STREAM,
                     engaged=False,
@@ -737,6 +901,9 @@ class AudioCaptureTask:
             source_rate=info.sample_rate,
             source_channels=info.channels,
         )
+        # Reset the ring buffer so the bypass coordinator's post-apply
+        # integrity probe only sees frames from the reopened stream.
+        self._allocate_ring_buffer(exclusive_tuning)
         # v0.20.2 / Bug C — an opener that couldn't honour exclusive
         # (device busy, policy denied, old PortAudio) falls through to
         # shared variants of the same combo and returns a stream with
@@ -824,6 +991,244 @@ class AudioCaptureTask:
             source_rate=info.sample_rate,
             source_channels=info.channels,
         )
+        # Reset the ring buffer — stale frames from the pre-error stream
+        # would mislead any integrity probe issued immediately after the
+        # reconnect.
+        self._allocate_ring_buffer(tuning)
+
+    async def request_shared_restart(self) -> SharedRestartResult:
+        """Revert the capture stream to shared mode.
+
+        Symmetric twin of :meth:`request_exclusive_restart` — re-opens
+        the device with ``capture_wasapi_exclusive=False`` so a failed
+        APO-bypass experiment (or an explicit user unpin) restores the
+        pre-bypass state. Used by
+        :class:`sovyx.voice.health.capture_integrity.CaptureIntegrityCoordinator`
+        when a strategy evaluated STILL_DEAD or when a later strategy
+        superseded an earlier one.
+
+        Idempotent — safe to call while stopped; in that case it is a
+        no-op. All metric + log semantics mirror the exclusive path so
+        dashboards can correlate engagements and reverts one-to-one.
+
+        Returns:
+            A :class:`SharedRestartResult` describing the outcome. A
+            non-``SHARED_ENGAGED`` verdict means the pipeline has no
+            active capture until the next reconnect cycle or explicit
+            restart.
+        """
+        if not self._running:
+            logger.debug("audio_capture_shared_restart_skipped_not_running")
+            result = SharedRestartResult(
+                verdict=SharedRestartVerdict.NOT_RUNNING,
+                engaged=False,
+                detail="capture task is not running",
+            )
+            _emit_shared_restart_metric(result)
+            return result
+
+        from sovyx.voice._stream_opener import StreamOpenError, open_input_stream
+
+        base_tuning = self._tuning if self._tuning is not None else _VoiceTuning()
+        shared_tuning = base_tuning.model_copy(update={"capture_wasapi_exclusive": False})
+        entry = _resolve_input_entry(
+            input_device=self._input_device,
+            enumerate_fn=self._enumerate_fn,
+            host_api_name=self._host_api_name,
+        )
+        logger.warning(
+            "audio_capture_shared_restart_begin",
+            device=self._input_device,
+            host_api=self._host_api_name,
+        )
+
+        # Mirror request_exclusive_restart — tear down the existing
+        # stream on the PortAudio thread so the shared reopen does not
+        # race against our own exclusive handle.
+        await asyncio.to_thread(self._close_stream)
+        while not self._queue.empty():
+            with contextlib.suppress(asyncio.QueueEmpty):
+                self._queue.get_nowait()
+
+        try:
+            stream, info = await open_input_stream(
+                device=entry,
+                target_rate=self._sample_rate,
+                blocksize=self._blocksize,
+                callback=self._audio_callback,
+                tuning=shared_tuning,
+                sd_module=self._sd_module,
+                enumerate_fn=self._enumerate_fn,
+                validate_fn=None,
+            )
+        except StreamOpenError as exc:
+            logger.error(
+                "audio_capture_shared_restart_failed",
+                error=str(exc),
+                device=self._input_device,
+                host_api=self._host_api_name,
+            )
+            # Stream is gone and no recovery path inside the task can
+            # resurrect it (no callback → no frames → no PortAudioError
+            # → consume loop parked on queue.get). Unblock the loop so
+            # the supervisor sees a completed consumer and rebuilds.
+            self._signal_consumer_shutdown()
+            result = SharedRestartResult(
+                verdict=SharedRestartVerdict.OPEN_FAILED_NO_STREAM,
+                engaged=False,
+                host_api=self._host_api_name,
+                device=self._input_device,
+                detail=f"shared reopen failed: {exc}",
+            )
+            _emit_shared_restart_metric(result)
+            return result
+
+        self._stream = stream
+        self._sample_rate = info.sample_rate
+        self._input_device = info.device_index
+        self._host_api_name = info.host_api
+        if entry is not None:
+            self._resolved_device_name = entry.name
+        self._normalizer = FrameNormalizer(
+            source_rate=info.sample_rate,
+            source_channels=info.channels,
+        )
+        self._allocate_ring_buffer(shared_tuning)
+        logger.warning(
+            "audio_capture_shared_restart_ok",
+            device=self._input_device,
+            host_api=self._host_api_name,
+            sample_rate=self._sample_rate,
+            channels=info.channels,
+        )
+        result = SharedRestartResult(
+            verdict=SharedRestartVerdict.SHARED_ENGAGED,
+            engaged=True,
+            host_api=self._host_api_name,
+            device=self._input_device,
+            sample_rate=self._sample_rate,
+        )
+        _emit_shared_restart_metric(result)
+        return result
+
+    def _ensure_endpoint_guid(self, entry: DeviceEntry | None) -> None:
+        """Populate :attr:`_endpoint_guid` from ``entry`` if still unset.
+
+        Uses the same
+        :func:`~sovyx.voice.health._factory_integration.derive_endpoint_guid`
+        the cascade + ComboStore use, so the GUID the coordinator keys
+        on matches the GUID already persisted on disk. Idempotent: an
+        explicit value passed through the constructor is preserved.
+        """
+        if self._endpoint_guid:
+            return
+        if entry is None:
+            return
+        from sovyx.voice.health._factory_integration import derive_endpoint_guid
+
+        self._endpoint_guid = derive_endpoint_guid(entry)
+
+    def _allocate_ring_buffer(self, tuning: VoiceTuningConfig) -> None:
+        """Allocate (or resize) the 16 kHz-mono int16 ring buffer.
+
+        Called from :meth:`start` and from the two reopen paths
+        (:meth:`request_exclusive_restart`, :meth:`request_shared_restart`,
+        :meth:`_reopen_stream_after_device_error`) so a reopen never
+        leaks stale frames from the pre-reopen stream. The write pointer
+        is reset to zero so ``tap_recent_frames`` after the reopen only
+        returns audio from the fresh stream.
+        """
+        import numpy as np
+
+        seconds = max(0.0, float(tuning.capture_ring_buffer_seconds))
+        capacity = max(1, int(seconds * _SAMPLE_RATE))
+        self._ring_buffer = np.zeros(capacity, dtype=np.int16)
+        self._ring_capacity = capacity
+        self._ring_write_index = 0
+        self._ring_samples_written = 0
+
+    def _ring_write(self, window: npt.NDArray[np.int16]) -> None:
+        """Append a pipeline-shaped frame (16 kHz mono int16) to the ring.
+
+        Synchronous by design: runs between ``await`` points inside
+        :meth:`_consume_loop` so no lock is required against
+        :meth:`tap_recent_frames` (which is also synchronous between
+        its own awaits). Silent no-op when :meth:`_allocate_ring_buffer`
+        hasn't run yet — keeps test harnesses that drive ``feed_frame``
+        without starting the task alive.
+        """
+        buf = self._ring_buffer
+        if buf is None:
+            return
+        cap = self._ring_capacity
+        n = int(window.shape[0])
+        if n <= 0 or cap <= 0:
+            return
+        # If a single window is larger than the buffer (pathological —
+        # 33 s default holds ~1_032 blocks of 16 ms), keep only the tail.
+        if n >= cap:
+            buf[:] = window[-cap:]
+            self._ring_write_index = 0
+            self._ring_samples_written += n
+            return
+        start = self._ring_write_index
+        end = start + n
+        if end <= cap:
+            buf[start:end] = window
+        else:
+            head = cap - start
+            buf[start:cap] = window[:head]
+            buf[0 : n - head] = window[head:]
+        self._ring_write_index = (start + n) % cap
+        self._ring_samples_written += n
+
+    async def tap_recent_frames(
+        self,
+        duration_s: float,
+    ) -> npt.NDArray[np.int16]:
+        """Return the most recent ``duration_s`` seconds of 16 kHz mono int16.
+
+        The returned array is always a fresh copy — callers can hold on
+        to it after subsequent writes invalidate the ring slot. When
+        fewer frames than requested have been written (cold start, early
+        bypass attempt) the slice is truncated to what's actually
+        available; callers inspect ``.shape[0]`` to decide whether the
+        sample is large enough for their analysis.
+
+        Thread-safety: see ``__init__`` docstring — reads happen
+        synchronously against writes that also run between awaits on the
+        same event loop, so no lock is required. The async signature is
+        kept for future-proofing (Protocol contract + possible move to
+        an off-loop ring implementation).
+
+        Args:
+            duration_s: Requested snapshot duration in seconds. Clamped
+                to ``[0, capture_ring_buffer_seconds]``.
+
+        Returns:
+            An ``(N,)`` int16 array, ``N == int(duration_s * 16_000)``
+            at most, possibly shorter when the ring is not yet full.
+        """
+        import numpy as np
+
+        buf = self._ring_buffer
+        cap = self._ring_capacity
+        if buf is None or cap <= 0 or duration_s <= 0:
+            return np.zeros(0, dtype=np.int16)
+        wanted = min(cap, int(duration_s * _SAMPLE_RATE))
+        available = min(self._ring_samples_written, cap)
+        n = min(wanted, available)
+        if n <= 0:
+            return np.zeros(0, dtype=np.int16)
+        end = self._ring_write_index
+        begin = (end - n) % cap
+        if begin + n <= cap:
+            return buf[begin : begin + n].copy()
+        head = cap - begin
+        out = np.empty(n, dtype=np.int16)
+        out[:head] = buf[begin:cap]
+        out[head:] = buf[0 : n - head]
+        return out
 
     def _close_stream(self) -> None:
         """Stop and close the stream — tolerant of already-closed streams."""
@@ -896,6 +1301,12 @@ class AudioCaptureTask:
                     self._frames_since_heartbeat += 1
                     if rms_db < _VALIDATION_MIN_RMS_DB:
                         self._silent_frames_since_heartbeat += 1
+                    # Record the post-normalization frame into the ring
+                    # buffer BEFORE feeding the pipeline so the bypass
+                    # coordinator's integrity probe sees the exact
+                    # samples that VAD sees — not an upstream raw block
+                    # that the normalizer would later resample / downmix.
+                    self._ring_write(window)
                     await self._pipeline.feed_frame(window)
                 self._maybe_emit_heartbeat()
             except asyncio.CancelledError:

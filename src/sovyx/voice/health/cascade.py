@@ -604,17 +604,23 @@ async def _run_cascade_locked(
     attempts: list[ProbeResult] = []
     attempts_count = 0
 
-    # §4.4.7 short-circuit: a previously quarantined endpoint is known
-    # to be in a kernel-invalidated state that no user-mode path can
-    # cure. Skip every attempt — the factory integration layer will
-    # fail-over to the next viable :class:`DeviceEntry` and the
-    # watchdog recheck loop retries after the quarantine TTL.
+    # §4.4.7 / §4.4.8 short-circuit: a previously quarantined endpoint
+    # is known to be in a state that no *boot-time* cascade can cure —
+    # either kernel-invalidated (reason ``"probe_*"`` /
+    # ``"watchdog_recheck"`` / ``"factory_integration"``) or APO-degraded
+    # (reason ``"apo_degraded"``). Skip every attempt — the factory
+    # integration layer will fail-over to the next viable
+    # :class:`DeviceEntry` and the watchdog recheck loop retries after
+    # the quarantine TTL. The log surfaces the live entry's ``reason``
+    # token so operators can distinguish the two root causes without
+    # reading two separate events.
     if quarantine is not None and quarantine.is_quarantined(endpoint_guid):
+        entry = quarantine.get(endpoint_guid)
         logger.warning(
             "voice_cascade_skipped_quarantined",
             endpoint=endpoint_guid,
             friendly_name=device_friendly_name,
-            reason="kernel_invalidated",
+            reason=entry.reason if entry is not None else "unknown",
         )
         return _make_result(
             endpoint_guid=endpoint_guid,

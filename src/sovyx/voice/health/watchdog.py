@@ -43,6 +43,15 @@ ADR §4.4 sub-components that land this sprint:
   at which point it emits ``voice_audio_service_down`` and goes
   DEGRADED. On ``UP`` after a prior DOWN it re-cascades.
 
+* **§4.1 / Phase 1 APO-quarantine recheck.** A periodic loop
+  (``apo_quarantine_recheck_interval_s``, default 300 s) re-probes
+  every endpoint the :class:`CaptureIntegrityCoordinator` has tagged
+  ``reason="apo_degraded"``. On a HEALTHY verdict the entry is cleared
+  (``action="recheck_recovered"``) so the factory can pick it again on
+  the next boot or hotplug; otherwise the store's TTL handles eviction.
+  Kernel-invalidated entries are intentionally skipped here — their
+  cure is a physical replug, not a DSP retirement.
+
 The watchdog shares the cascade's lifecycle lock (ADR §5.5) so
 hot-plug-driven re-cascades cannot race with in-flight :func:`run_cascade`
 calls. Callers inject the same :class:`~sovyx.engine._lock_dict.LRULockDict`
@@ -70,11 +79,16 @@ from sovyx.voice.health._default_device import (
 )
 from sovyx.voice.health._hotplug import HotplugListener, NoopHotplugListener
 from sovyx.voice.health._metrics import (
+    record_apo_degraded_event,
     record_kernel_invalidated_event,
     record_recovery_attempt,
 )
 from sovyx.voice.health._power import NoopPowerEventListener, PowerEventListener
-from sovyx.voice.health._quarantine import EndpointQuarantine, get_default_quarantine
+from sovyx.voice.health._quarantine import (
+    EndpointQuarantine,
+    QuarantineEntry,
+    get_default_quarantine,
+)
 from sovyx.voice.health.contract import (
     AudioServiceEvent,
     AudioServiceEventKind,
@@ -112,6 +126,15 @@ _DEFAULT_RESUME_SETTLE_S = _VoiceTuning().watchdog_resume_settle_s
 
 _DEFAULT_AUDIO_SERVICE_RESTART_TIMEOUT_S = _VoiceTuning().watchdog_audio_service_restart_timeout_s
 """§4.4.5 ceiling — when ``audiosrv`` stays DOWN past this, go DEGRADED."""
+
+_DEFAULT_APO_RECHECK_INTERVAL_S = _VoiceTuning().apo_quarantine_recheck_interval_s
+"""§4.1 / Phase 1 — APO-quarantine recheck cadence.
+
+Zero or negative disables the recheck loop. The loop iterates the
+shared :class:`EndpointQuarantine` snapshot once per interval, re-probes
+every entry tagged ``reason="apo_degraded"``, and clears it on a
+HEALTHY verdict so the factory can pick the endpoint again on the next
+boot or hotplug."""
 
 
 def build_platform_hotplug_listener(
@@ -206,6 +229,7 @@ class VoiceCaptureWatchdog:
         resume_settle_s: float | None = None,
         audio_service_restart_timeout_s: float | None = None,
         quarantine: EndpointQuarantine | None = None,
+        apo_recheck_interval_s: float | None = None,
     ) -> None:
         if not active_endpoint_guid:
             msg = "active_endpoint_guid must be a non-empty string"
@@ -236,8 +260,14 @@ class VoiceCaptureWatchdog:
             if audio_service_restart_timeout_s is not None
             else _DEFAULT_AUDIO_SERVICE_RESTART_TIMEOUT_S
         )
+        self._apo_recheck_interval_s = (
+            apo_recheck_interval_s
+            if apo_recheck_interval_s is not None
+            else _DEFAULT_APO_RECHECK_INTERVAL_S
+        )
         self._state: WatchdogState = WatchdogState.IDLE
         self._pending: asyncio.Task[None] | None = None
+        self._apo_recheck_task: asyncio.Task[None] | None = None
         self._hotplug: HotplugListener | None = None
         self._power: PowerEventListener | None = None
         self._audio_service: AudioServiceMonitor | None = None
@@ -295,6 +325,8 @@ class VoiceCaptureWatchdog:
         if default_device is not None:
             self._default_device = default_device
             await default_device.start(self._on_hotplug)
+        if self._apo_recheck_interval_s > 0:
+            self._apo_recheck_task = asyncio.create_task(self._apo_recheck_loop())
         self._started = True
         logger.info(
             "voice_watchdog_started",
@@ -304,6 +336,7 @@ class VoiceCaptureWatchdog:
             power_enabled=power is not None,
             audio_service_enabled=audio_service is not None,
             default_device_enabled=default_device is not None,
+            apo_recheck_interval_s=self._apo_recheck_interval_s,
         )
 
     async def stop(self) -> None:
@@ -315,6 +348,12 @@ class VoiceCaptureWatchdog:
             pending.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await pending
+        recheck = self._apo_recheck_task
+        self._apo_recheck_task = None
+        if recheck is not None and not recheck.done():
+            recheck.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await recheck
         waiter = self._audio_service_down_waiter
         self._audio_service_down_waiter = None
         if waiter is not None and not waiter.done():
@@ -409,6 +448,100 @@ class VoiceCaptureWatchdog:
             attempts=self._max_attempts,
         )
 
+    # ── §4.1 / Phase 1 — APO-quarantine periodic recheck ─────────────────
+
+    async def _apo_recheck_loop(self) -> None:
+        """Periodically re-probe APO-quarantined endpoints.
+
+        The :class:`CaptureIntegrityCoordinator` quarantines an endpoint
+        with ``reason="apo_degraded"`` when every
+        :class:`PlatformBypassStrategy` candidate fails to restore a
+        HEALTHY integrity verdict. This loop gives the endpoint a chance
+        to escape quarantine without waiting for the full TTL or a
+        hotplug event — typical cure is an OS update that retires the
+        APO (``voiceclarityep`` KB roll-back, PipeWire module purge) or
+        a manual driver reinstall.
+
+        Behaviour per tick:
+
+        1. Snapshot the quarantine store and filter entries whose
+           ``reason`` is ``"apo_degraded"``. Kernel-invalidated entries
+           have their own recheck path via the backoff chain / hot-plug
+           listener and are intentionally skipped here.
+        2. Re-probe each GUID via :attr:`_re_probe` (the factory wires
+           this to a cascade-style warm probe that opens its own
+           transient capture stream, so it works on non-active
+           endpoints).
+        3. On :class:`~sovyx.voice.health.contract.Diagnosis.HEALTHY`
+           clear the quarantine and emit ``action="recheck_recovered"``.
+        4. On any other diagnosis keep the entry and emit
+           ``action="recheck_still_invalid"``. The store's own TTL
+           ultimately evicts stale entries if the interval never
+           produces a recovery.
+
+        The loop is cancellation-safe: :meth:`stop` cancels the task
+        and a raised :class:`asyncio.CancelledError` exits cleanly.
+        """
+        platform_key = self._platform_key_for_metric()
+        while self._started:
+            try:
+                await asyncio.sleep(self._apo_recheck_interval_s)
+            except asyncio.CancelledError:
+                return
+            if not self._started:
+                return
+            snapshot = tuple(
+                entry for entry in self._quarantine.snapshot() if entry.reason == "apo_degraded"
+            )
+            if not snapshot:
+                continue
+            logger.debug(
+                "voice_watchdog_apo_recheck_tick",
+                candidates=len(snapshot),
+            )
+            for entry in snapshot:
+                if not self._started:
+                    return
+                try:
+                    result = await self._re_probe(entry.endpoint_guid)
+                except asyncio.CancelledError:
+                    return
+                except Exception:  # noqa: BLE001 — one failing probe must not stop the loop
+                    logger.warning(
+                        "voice_watchdog_apo_recheck_probe_raised",
+                        endpoint=entry.endpoint_guid,
+                        friendly_name=entry.device_friendly_name,
+                        exc_info=True,
+                    )
+                    continue
+                if result.diagnosis == Diagnosis.HEALTHY:
+                    cleared = self._quarantine.clear(
+                        entry.endpoint_guid,
+                        reason="apo_recheck_recovered",
+                    )
+                    if cleared:
+                        record_apo_degraded_event(
+                            platform=platform_key,
+                            action="recheck_recovered",
+                        )
+                        logger.info(
+                            "voice_watchdog_apo_recheck_recovered",
+                            endpoint=entry.endpoint_guid,
+                            friendly_name=entry.device_friendly_name,
+                            host_api=entry.host_api,
+                        )
+                    continue
+                record_apo_degraded_event(
+                    platform=platform_key,
+                    action="recheck_still_invalid",
+                )
+                logger.debug(
+                    "voice_watchdog_apo_recheck_still_invalid",
+                    endpoint=entry.endpoint_guid,
+                    friendly_name=entry.device_friendly_name,
+                    diagnosis=result.diagnosis.value,
+                )
+
     # ── §4.4.2 Hot-plug reaction ─────────────────────────────────────────
 
     async def _on_hotplug(self, event: HotplugEvent) -> None:
@@ -461,16 +594,7 @@ class VoiceCaptureWatchdog:
         if guid and self._quarantine.is_quarantined(guid):
             entry = self._quarantine.get(guid)
             if self._quarantine.clear(guid, reason="hotplug_clear"):
-                record_kernel_invalidated_event(
-                    platform=self._platform_key_for_metric(),
-                    host_api=entry.host_api if entry is not None else "unknown",
-                    action="hotplug_clear",
-                )
-                logger.info(
-                    "voice_kernel_invalidated_hotplug_clear",
-                    endpoint=guid,
-                    kind=event.kind.value,
-                )
+                self._emit_hotplug_clear_metric(entry, event=event)
             return
         friendly = event.device_friendly_name
         interface = event.device_interface_name
@@ -484,21 +608,59 @@ class VoiceCaptureWatchdog:
             if not label_match:
                 continue
             if self._quarantine.clear(entry.endpoint_guid, reason="hotplug_clear"):
-                record_kernel_invalidated_event(
-                    platform=self._platform_key_for_metric(),
-                    host_api=entry.host_api or "unknown",
-                    action="hotplug_clear",
-                )
-                logger.info(
-                    "voice_kernel_invalidated_hotplug_clear",
-                    endpoint=entry.endpoint_guid,
-                    kind=event.kind.value,
+                self._emit_hotplug_clear_metric(
+                    entry,
+                    event=event,
                     matched_by="friendly_name" if friendly else "interface_name",
                 )
             # Stop after the first match — duplicate friendly names are
             # vanishingly rare and clearing every match would mask any
             # ambiguity in operator-facing logs.
             return
+
+    def _emit_hotplug_clear_metric(
+        self,
+        entry: QuarantineEntry | None,
+        *,
+        event: HotplugEvent,
+        matched_by: str = "endpoint_guid",
+    ) -> None:
+        """Emit the correct telemetry surface for a hotplug-clear event.
+
+        APO-degraded entries emit the :func:`record_apo_degraded_event`
+        counter so the Phase 1 APO dashboards attribute the recovery
+        path correctly. Everything else (kernel-invalidated,
+        factory-integration, probe_*) continues to emit
+        :func:`record_kernel_invalidated_event` as before — preserving
+        the pre-Phase-1 metric contract.
+        """
+        platform = self._platform_key_for_metric()
+        host_api = entry.host_api if entry is not None and entry.host_api else "unknown"
+        reason = entry.reason if entry is not None else ""
+        endpoint = entry.endpoint_guid if entry is not None else (event.endpoint_guid or "")
+        if reason == "apo_degraded":
+            record_apo_degraded_event(
+                platform=platform,
+                action="hotplug_clear",
+            )
+            logger.info(
+                "voice_apo_degraded_hotplug_clear",
+                endpoint=endpoint,
+                kind=event.kind.value,
+                matched_by=matched_by,
+            )
+            return
+        record_kernel_invalidated_event(
+            platform=platform,
+            host_api=host_api,
+            action="hotplug_clear",
+        )
+        logger.info(
+            "voice_kernel_invalidated_hotplug_clear",
+            endpoint=endpoint,
+            kind=event.kind.value,
+            matched_by=matched_by,
+        )
 
     def _platform_key_for_metric(self) -> str:
         """Resolve the platform tag used in §4.4.7 telemetry labels."""

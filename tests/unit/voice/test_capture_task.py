@@ -19,6 +19,7 @@ from sovyx.engine.config import VoiceTuningConfig
 from sovyx.voice._capture_task import (
     AudioCaptureTask,
     ExclusiveRestartVerdict,
+    SharedRestartVerdict,
     _extract_peak_db,
     _resolve_input_entry,
 )
@@ -776,9 +777,13 @@ class TestExclusiveRestart:
     async def test_restart_open_failed_no_stream(self) -> None:
         """Exclusive open AND shared fallback both fail → OPEN_FAILED_NO_STREAM.
 
-        The pipeline is left without a capture source until the next
-        reconnect cycle kicks in (not exercised here — the test just
-        verifies the verdict contract when everything fails).
+        Contract (v0.20.3 / ultrareview Bug 2): the terminal failure
+        path MUST signal the consumer to exit so the supervisor can
+        detect the dead state and rebuild. ``_consume_loop`` cannot
+        self-recover from ``_stream=None`` — it would park on
+        ``queue.get()`` forever since no callback is feeding it, and
+        the ``sd.PortAudioError`` reconnect branch only fires from
+        live-stream reads.
         """
         pipeline = MagicMock()
         pipeline.feed_frame = AsyncMock()
@@ -811,6 +816,8 @@ class TestExclusiveRestart:
         )
         try:
             await task.start()
+            consumer_before = task._consumer
+            assert consumer_before is not None
 
             result = await task.request_exclusive_restart()
 
@@ -820,8 +827,141 @@ class TestExclusiveRestart:
             assert "shared fallback" in result.detail
             # Only the initial stream opened successfully.
             assert len(streams) == 1
+            # Shutdown signalling: running flipped off + consumer cancelled
+            # so _consume_loop exits and the supervisor can detect the
+            # dead state. Without this, the loop parks on queue.get().
+            assert task.is_running is False
+            # Give the event loop one tick so the cancellation lands.
+            await asyncio.sleep(0)
+            assert consumer_before.done() is True
         finally:
-            # Task stays alive internally but has no stream — stop() still works.
+            await task.stop()
+
+    @pytest.mark.asyncio()
+    async def test_request_shared_restart_engages_shared_mode(self) -> None:
+        """Shared revert path: reopen succeeds → SHARED_ENGAGED.
+
+        Symmetric twin of the exclusive engagement path — the
+        coordinator calls this when rolling back an ineffective bypass
+        strategy so the pipeline returns to its pre-bypass state.
+        """
+        pipeline = MagicMock()
+        pipeline.feed_frame = AsyncMock()
+
+        streams: list[MagicMock] = []
+
+        def stream_factory(**kwargs: Any) -> MagicMock:  # noqa: ARG001
+            stream = MagicMock()
+            streams.append(stream)
+            return stream
+
+        sd = _fake_sd()
+        sd.InputStream = stream_factory  # type: ignore[attr-defined]
+        entry = _input_entry(index=5, rate=16_000, host_api="Windows WASAPI")
+
+        task = AudioCaptureTask(
+            pipeline,
+            input_device=5,
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [entry],
+        )
+        try:
+            await task.start()
+
+            result = await task.request_shared_restart()
+
+            assert result.verdict is SharedRestartVerdict.SHARED_ENGAGED
+            assert result.engaged is True
+            assert result.host_api == "Windows WASAPI"
+            # Two streams: initial start + shared revert.
+            assert len(streams) == 2  # noqa: PLR2004
+            assert task.is_running is True
+        finally:
+            await task.stop()
+
+    @pytest.mark.asyncio()
+    async def test_request_shared_restart_not_running(self) -> None:
+        """Calling before ``start()`` is a no-op returning NOT_RUNNING."""
+        pipeline = MagicMock()
+        pipeline.feed_frame = AsyncMock()
+        sd = _fake_sd()
+
+        task = AudioCaptureTask(
+            pipeline,
+            input_device=5,
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [_input_entry(index=5)],
+        )
+
+        result = await task.request_shared_restart()
+
+        assert result.verdict is SharedRestartVerdict.NOT_RUNNING
+        assert result.engaged is False
+
+    @pytest.mark.asyncio()
+    async def test_request_shared_restart_open_failed_signals_shutdown(self) -> None:
+        """Shared reopen fails → OPEN_FAILED_NO_STREAM + consumer signalled to exit.
+
+        Contract (v0.20.3 / ultrareview Bug 2): once ``_close_stream()``
+        has run and the replacement ``open_input_stream`` raises, the
+        consume loop is irrecoverably parked on ``queue.get()`` —
+        nothing can enqueue and the PortAudioError reconnect branch
+        cannot fire without a live stream. The terminal path MUST set
+        ``_running=False`` and cancel the consumer so upstream
+        supervisors observe the dead state and rebuild the task.
+        """
+        pipeline = MagicMock()
+        pipeline.feed_frame = AsyncMock()
+
+        streams: list[MagicMock] = []
+        attempt: dict[str, int] = {"n": 0}
+
+        def stream_factory(**kwargs: Any) -> MagicMock:  # noqa: ARG001
+            attempt["n"] += 1
+            # 1: initial start succeeds.
+            # 2+: the shared reopen and every combo in the opener's
+            #     fallback pyramid raises — no stream is recovered.
+            if attempt["n"] == 1:
+                stream = MagicMock()
+                streams.append(stream)
+                return stream
+            raise sd.PortAudioError("shared reopen failed")  # type: ignore[attr-defined]
+
+        sd = _fake_sd()
+        sd.InputStream = stream_factory  # type: ignore[attr-defined]
+        entry = _input_entry(index=5, rate=16_000, host_api="Windows WASAPI")
+
+        task = AudioCaptureTask(
+            pipeline,
+            input_device=5,
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [entry],
+        )
+        try:
+            await task.start()
+            consumer_before = task._consumer
+            assert consumer_before is not None
+
+            result = await task.request_shared_restart()
+
+            assert result.verdict is SharedRestartVerdict.OPEN_FAILED_NO_STREAM
+            assert result.engaged is False
+            assert result.detail is not None
+            assert "shared reopen failed" in result.detail
+            # Only the initial stream ever opened.
+            assert len(streams) == 1
+            # Shutdown signalling must land synchronously before the
+            # verdict is returned, so supervisors see the dead state.
+            assert task.is_running is False
+            await asyncio.sleep(0)
+            assert consumer_before.done() is True
+        finally:
             await task.stop()
 
     @pytest.mark.asyncio()

@@ -31,6 +31,8 @@ if TYPE_CHECKING:
     from sovyx.engine.events import EventBus
     from sovyx.voice._capture_task import AudioCaptureTask
     from sovyx.voice.device_enum import DeviceEntry
+    from sovyx.voice.health.bypass import PlatformBypassStrategy
+    from sovyx.voice.health.contract import BypassOutcome
     from sovyx.voice.pipeline._orchestrator import VoicePipeline
 
 logger = get_logger(__name__)
@@ -247,30 +249,30 @@ async def create_voice_pipeline(
         wake_word_enabled=wake_word_enabled,
     )
 
-    # The bypass callback needs to call ``capture_task.request_exclusive_restart()``
-    # but capture_task is built after the pipeline. Use a one-slot holder
-    # that the closure reads at invocation time (late binding) rather than
-    # a setter API on VoicePipeline — keeps the public surface small and
-    # the dependency direction clean (pipeline does not know about
-    # AudioCaptureTask type).
-    capture_holder: dict[str, AudioCaptureTask] = {}
+    # §4.1 Phase 1 — the deaf-signal callback delegates to the
+    # :class:`CaptureIntegrityCoordinator`. Both the capture task
+    # (needed for ring-buffer tap) and the coordinator (needed for
+    # ``handle_deaf_signal``) are built *after* the pipeline, so we
+    # thread them through one-slot holders that the closures resolve
+    # at invocation time. This keeps the VoicePipeline API surface
+    # small — it only sees a ``Callable[[], Awaitable[list[BypassOutcome]]]``
+    # and doesn't need to know about AudioCaptureTask or the
+    # coordinator types.
+    from sovyx.voice.health.capture_integrity import (
+        CaptureIntegrityCoordinator,
+        CaptureIntegrityProbe,
+    )
 
-    async def _bypass_callback() -> None:
-        task = capture_holder.get("task")
-        if task is None:
-            logger.debug("voice_apo_bypass_callback_no_capture_task")
-            return
-        result = await task.request_exclusive_restart()
-        # v0.20.2 / Bug C — surface the verdict so auto-bypass is not
-        # silently considered "done" when WASAPI downgraded to shared.
-        if not result.engaged:
-            logger.warning(
-                "voice_apo_bypass_not_engaged",
-                verdict=result.verdict.value,
-                host_api=result.host_api,
-                device=result.device,
-                detail=result.detail,
-            )
+    capture_holder: dict[str, AudioCaptureTask] = {}
+    coordinator_holder: dict[str, CaptureIntegrityCoordinator] = {}
+
+    async def _on_deaf_signal() -> list[BypassOutcome]:
+        coordinator = coordinator_holder.get("coordinator")
+        if coordinator is None:
+            logger.debug("voice_deaf_signal_callback_no_coordinator")
+            return []
+        outcomes = await coordinator.handle_deaf_signal()
+        return list(outcomes)
 
     # §4.4.6 self-feedback ducking — build the gate with a late-bound
     # apply_duck closure that targets whichever capture task ends up in
@@ -302,19 +304,59 @@ async def create_voice_pipeline(
         tts=tts,
         event_bus=event_bus,
         on_perception=on_perception,
-        on_capture_bypass_requested=_bypass_callback,
+        on_deaf_signal=_on_deaf_signal,
         voice_clarity_active=voice_clarity_active,
         auto_bypass_enabled=tuning.voice_clarity_autofix,
         auto_bypass_threshold=tuning.deaf_warnings_before_exclusive_retry,
         self_feedback_gate=self_feedback_gate,
     )
 
+    # Derive the endpoint GUID up-front so the coordinator + bypass
+    # strategies have a stable identifier from the first probe onward.
+    # ``AudioCaptureTask._ensure_endpoint_guid`` would otherwise populate
+    # it lazily at :meth:`start`, but the coordinator can be invoked
+    # *before* ``start()`` finishes (orchestrator queues the deaf signal
+    # on the first zero-VAD heartbeat), so we bind the GUID here. The
+    # value is ``None`` only when ``resolved`` itself is ``None`` (pre-
+    # cascade fallback, headless CI).
+    resolved_endpoint_guid: str | None = None
+    if resolved is not None:
+        from sovyx.voice.health._factory_integration import derive_endpoint_guid
+
+        try:
+            resolved_endpoint_guid = derive_endpoint_guid(resolved)
+        except Exception:  # noqa: BLE001 — GUID derivation must never block boot
+            logger.debug("voice_factory_endpoint_guid_derivation_failed", exc_info=True)
+            resolved_endpoint_guid = None
+
     capture_task = AudioCaptureTask(
         pipeline,
         input_device=effective_index,
         host_api_name=effective_host_api,
+        endpoint_guid=resolved_endpoint_guid,
     )
     capture_holder["task"] = capture_task
+
+    # Build the CaptureIntegrityCoordinator now that ``capture_task``
+    # exists. The probe requires its *own* SileroVAD instance — sharing
+    # the pipeline's VAD would cross-contaminate LSTM state between
+    # live-frame processing and probe inference (cf. CLAUDE.md anti-
+    # pattern #14 / §4.1). Strategies are platform-filtered: Phase 1
+    # ships only ``WindowsWASAPIExclusiveBypass`` on Windows; Linux +
+    # macOS coordinators start empty and the coordinator simply
+    # quarantines the endpoint on exhaustion (factory fails over).
+    probe_vad = await asyncio.to_thread(lambda: _self._create_vad(vad_path))
+    probe = CaptureIntegrityProbe(vad=probe_vad, tuning=tuning)
+    platform_key = _resolve_platform_key()
+    strategies = _build_bypass_strategies(platform_key)
+    coordinator = CaptureIntegrityCoordinator(
+        probe=probe,
+        strategies=strategies,
+        capture_task=capture_task,
+        platform_key=platform_key,
+        tuning=tuning,
+    )
+    coordinator_holder["coordinator"] = coordinator
 
     await pipeline.start()
 
@@ -328,6 +370,8 @@ async def create_voice_pipeline(
         host_api=effective_host_api or "unknown",
         voice_clarity_active=voice_clarity_active,
         auto_bypass_enabled=tuning.voice_clarity_autofix,
+        platform_key=platform_key,
+        bypass_strategies=[s.name for s in strategies],
     )
     _emit_capture_apo_detection(resolved_name=resolved.name if resolved is not None else None)
     return VoiceBundle(pipeline=pipeline, capture_task=capture_task)
@@ -644,3 +688,46 @@ def _create_wake_word_stub() -> Any:  # noqa: ANN401
             return _Event()
 
     return _NoOpWakeWord()
+
+
+# ── Phase 1 bypass-strategy wiring ───────────────────────────────────
+
+
+def _resolve_platform_key() -> str:
+    """Normalise ``sys.platform`` into the three-valued Phase 1 bucket.
+
+    Mirrors :func:`sovyx.voice.health.contract._platform_key` + the
+    existing :func:`sovyx.voice.health.current_platform_key` helper but
+    is scoped to the factory so the strategy list can be selected
+    without importing from inside a ``TYPE_CHECKING`` guard. Unknown
+    POSIX-likes fall into the ``"linux"`` bucket, which in Phase 1
+    means "no bypass strategies installed" (coordinator quarantines on
+    exhaustion and the factory fails over to the next endpoint).
+    """
+    plat = sys.platform
+    if plat.startswith("win"):
+        return "win32"
+    if plat == "darwin":
+        return "darwin"
+    return "linux"
+
+
+def _build_bypass_strategies(platform_key: str) -> list[PlatformBypassStrategy]:
+    """Return the platform-filtered strategy list for Phase 1.
+
+    Phase 1 ships a single concrete strategy —
+    :class:`~sovyx.voice.health.bypass.WindowsWASAPIExclusiveBypass` —
+    which is the definitive fix for the Windows Voice Clarity /
+    ``VocaEffectPack`` regression (CLAUDE.md anti-pattern #21). Linux
+    + macOS return an empty list: the coordinator treats an exhausted
+    strategy sequence as "no bypass available" and quarantines the
+    endpoint so the next boot / hotplug picks an alternative.
+    Phase 3 will slot ``WindowsDisableSysFx``, ``LinuxALSADirectNode``,
+    and ``MacOSVPIODisable`` into this builder — all via the same
+    :class:`PlatformBypassStrategy` Protocol.
+    """
+    if platform_key == "win32":
+        from sovyx.voice.health.bypass import WindowsWASAPIExclusiveBypass
+
+        return [WindowsWASAPIExclusiveBypass()]
+    return []

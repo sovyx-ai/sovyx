@@ -1620,16 +1620,74 @@ class TestSTTAndPerceptionLogs:
         assert skipped[0]["text_length"] == len("hello world")
 
 
-class TestVoiceClarityAutoBypass:
-    """Deaf-warning → ``voice_apo_bypass_activated`` → capture restart chain."""
+def _bypass_integrity_result(verdict_value: str) -> Any:
+    """Build a minimal :class:`IntegrityResult` for :func:`_bypass_outcome`.
+
+    The orchestrator only reads :attr:`BypassOutcome.verdict`,
+    :attr:`strategy_name`, :attr:`attempt_index`, and :attr:`detail` — but
+    :class:`BypassOutcome` is a frozen dataclass with required
+    ``integrity_before`` / ``integrity_after`` fields, so we construct
+    minimal valid :class:`IntegrityResult` instances for them.
+    """
+    from datetime import UTC, datetime
+
+    from sovyx.voice.health.contract import IntegrityResult, IntegrityVerdict
+
+    return IntegrityResult(
+        verdict=IntegrityVerdict(verdict_value),
+        endpoint_guid="test-endpoint-guid",
+        rms_db=-24.0,
+        vad_max_prob=0.5,
+        spectral_flatness=0.2,
+        spectral_rolloff_hz=5000.0,
+        duration_s=3.0,
+        probed_at_utc=datetime.now(UTC),
+        raw_frames=48_000,
+    )
+
+
+def _bypass_outcome(
+    *,
+    verdict: str,
+    strategy_name: str = "test.fake",
+    attempt_index: int = 0,
+    detail: str = "",
+) -> Any:
+    """Build a :class:`BypassOutcome` the orchestrator can introspect."""
+    from sovyx.voice.health.contract import BypassOutcome, BypassVerdict
+
+    after_verdict = "healthy" if verdict == "applied_healthy" else "apo_degraded"
+    return BypassOutcome(
+        strategy_name=strategy_name,
+        attempt_index=attempt_index,
+        verdict=BypassVerdict(verdict),
+        integrity_before=_bypass_integrity_result("apo_degraded"),
+        integrity_after=_bypass_integrity_result(after_verdict),
+        elapsed_ms=350.0,
+        detail=detail,
+    )
+
+
+class TestDeafSignalCoordinator:
+    """Sustained-deaf heartbeat → ``on_deaf_signal`` → coordinator outcomes.
+
+    The orchestrator no longer owns bypass mechanics; it detects the
+    deaf pattern, gates on the auto-bypass kill switch, and delegates
+    to a supplied callback that returns the
+    :class:`~sovyx.voice.health.contract.BypassOutcome` log from
+    :class:`CaptureIntegrityCoordinator`. Terminal latch lives here
+    (:attr:`_coordinator_terminated`) so a non-empty outcome list means
+    "don't re-enter the coordinator this session — watchdog recheck
+    handles recovery".
+    """
 
     def _deaf_pipeline(
         self,
         *,
-        voice_clarity_active: bool,
         auto_bypass_enabled: bool,
         callback: Any,
         threshold: int = 2,
+        voice_clarity_active: bool = True,
     ) -> VoicePipeline:
         config = VoicePipelineConfig(
             mind_id="test-mind",
@@ -1640,9 +1698,6 @@ class TestVoiceClarityAutoBypass:
             silence_frames_end=3,
             max_recording_frames=10,
         )
-        # A VAD that returns probability=0.0 — below the deaf threshold
-        # (0.05), so the heartbeat path always classifies the window as
-        # deaf as long as we preload the frame counter past DEAF_MIN.
         vad = _make_vad(speech=False)
         vad.process_frame.return_value = VADEvent(
             is_speech=False, probability=0.0, state=VADState.SILENCE
@@ -1655,20 +1710,20 @@ class TestVoiceClarityAutoBypass:
             tts=_make_tts(),
             event_bus=_make_event_bus(),
             on_perception=None,
-            on_capture_bypass_requested=callback,
+            on_deaf_signal=callback,
             voice_clarity_active=voice_clarity_active,
             auto_bypass_enabled=auto_bypass_enabled,
             auto_bypass_threshold=threshold,
         )
 
     async def _drive_deaf_heartbeat(self, pipeline: VoicePipeline) -> None:
-        """Force a deaf heartbeat emission on the next frame.
+        """Force one deaf-heartbeat emission on the next fed frame.
 
-        Preloads the accumulator with a high frame count and zero max
-        VAD probability so the next ``_track_vad_for_heartbeat`` invocation
-        fires the deaf-warning branch. Then advances monotonic time past
-        the heartbeat interval via :func:`patch.object` so the interval
-        gate unblocks on the next feed.
+        Preloads the accumulator with ``_DEAF_MIN_FRAMES`` and zero max
+        VAD probability so the heartbeat classifies the window as deaf,
+        then advances monotonic time past the heartbeat interval so the
+        rate gate unblocks. A single ``feed_frame`` then runs the full
+        ``_track_vad_for_heartbeat`` path.
         """
         from sovyx.voice.pipeline import _orchestrator as orch_mod
 
@@ -1681,75 +1736,62 @@ class TestVoiceClarityAutoBypass:
             await pipeline.feed_frame(_silence_frame())
 
     @pytest.mark.asyncio
-    async def test_bypass_fires_after_threshold_consecutive_deaf_warnings(
+    async def test_callback_fires_after_threshold_consecutive_deaf_warnings(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
-        caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
-        callback = AsyncMock()
-        pipeline = self._deaf_pipeline(
-            voice_clarity_active=True, auto_bypass_enabled=True, callback=callback, threshold=2
+        caplog.set_level(logging.WARNING, logger=_ORCH_LOGGER)
+        callback = AsyncMock(
+            return_value=[
+                _bypass_outcome(
+                    verdict="applied_healthy",
+                    strategy_name="win.wasapi_exclusive",
+                    detail="exclusive_engaged",
+                )
+            ]
         )
+        pipeline = self._deaf_pipeline(auto_bypass_enabled=True, callback=callback, threshold=2)
         await pipeline.start()
 
         await self._drive_deaf_heartbeat(pipeline)  # warning #1 — below threshold
-        assert _events_of(caplog, "voice_apo_bypass_activated") == []
         callback.assert_not_awaited()
 
         await self._drive_deaf_heartbeat(pipeline)  # warning #2 — threshold met
-        # Let the create_task-scheduled callback run.
+        # Let the create_task-scheduled invocation run.
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
+        callback.assert_awaited_once()
         activated = _events_of(caplog, "voice_apo_bypass_activated")
         assert len(activated) == 1
-        assert activated[0]["reason"] == "voice_clarity_deaf_pipeline"
+        assert activated[0]["strategy_name"] == "win.wasapi_exclusive"
+        assert activated[0]["action"] == "capture_integrity_coordinator"
         assert activated[0]["threshold"] == 2  # noqa: PLR2004
         assert activated[0]["consecutive_deaf_warnings"] >= 2  # noqa: PLR2004
-        callback.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_bypass_blocked_when_voice_clarity_inactive(
+    async def test_callback_blocked_when_auto_bypass_disabled(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         caplog.set_level(logging.WARNING, logger=_ORCH_LOGGER)
-        callback = AsyncMock()
-        pipeline = self._deaf_pipeline(
-            voice_clarity_active=False, auto_bypass_enabled=True, callback=callback, threshold=2
-        )
+        callback = AsyncMock(return_value=[])
+        pipeline = self._deaf_pipeline(auto_bypass_enabled=False, callback=callback, threshold=2)
         await pipeline.start()
 
         for _ in range(4):
             await self._drive_deaf_heartbeat(pipeline)
         await asyncio.sleep(0)
 
-        assert _events_of(caplog, "voice_apo_bypass_activated") == []
         callback.assert_not_awaited()
+        assert _events_of(caplog, "voice_apo_bypass_activated") == []
 
     @pytest.mark.asyncio
-    async def test_bypass_blocked_when_auto_bypass_disabled(
+    async def test_terminal_latch_after_non_empty_outcomes(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
+        """One non-empty outcome list → coordinator_terminated → single invocation."""
         caplog.set_level(logging.WARNING, logger=_ORCH_LOGGER)
-        callback = AsyncMock()
-        pipeline = self._deaf_pipeline(
-            voice_clarity_active=True, auto_bypass_enabled=False, callback=callback, threshold=2
-        )
-        await pipeline.start()
-
-        for _ in range(4):
-            await self._drive_deaf_heartbeat(pipeline)
-        await asyncio.sleep(0)
-
-        assert _events_of(caplog, "voice_apo_bypass_activated") == []
-        callback.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_bypass_latched_fires_only_once(self, caplog: pytest.LogCaptureFixture) -> None:
-        caplog.set_level(logging.WARNING, logger=_ORCH_LOGGER)
-        callback = AsyncMock()
-        pipeline = self._deaf_pipeline(
-            voice_clarity_active=True, auto_bypass_enabled=True, callback=callback, threshold=1
-        )
+        callback = AsyncMock(return_value=[_bypass_outcome(verdict="applied_healthy")])
+        pipeline = self._deaf_pipeline(auto_bypass_enabled=True, callback=callback, threshold=1)
         await pipeline.start()
 
         for _ in range(5):
@@ -1757,34 +1799,66 @@ class TestVoiceClarityAutoBypass:
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
-        activated = _events_of(caplog, "voice_apo_bypass_activated")
-        assert len(activated) == 1
         callback.assert_awaited_once()
+        assert pipeline._coordinator_terminated is True
+        assert len(_events_of(caplog, "voice_apo_bypass_activated")) == 1
 
     @pytest.mark.asyncio
-    async def test_healthy_heartbeat_resets_consecutive_counter(self) -> None:
-        callback = AsyncMock()
-        pipeline = self._deaf_pipeline(
-            voice_clarity_active=True, auto_bypass_enabled=True, callback=callback, threshold=3
-        )
+    async def test_empty_outcomes_do_not_latch_terminal(self) -> None:
+        """Empty list = coordinator short-circuit; orchestrator may re-enter later."""
+        callback = AsyncMock(return_value=[])
+        pipeline = self._deaf_pipeline(auto_bypass_enabled=True, callback=callback, threshold=1)
         await pipeline.start()
 
         await self._drive_deaf_heartbeat(pipeline)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        callback.assert_awaited_once()
+        assert pipeline._coordinator_terminated is False
+
+        # Second deaf burst: invocation-pending was cleared and the
+        # terminal latch is off, so the callback is entered again.
         await self._drive_deaf_heartbeat(pipeline)
-        assert pipeline._deaf_warnings_consecutive == 2  # noqa: PLR2004
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert callback.await_count == 2  # noqa: PLR2004
 
-        # A healthy heartbeat (VAD saw signal) must zero the counter.
-        from sovyx.voice.pipeline import _orchestrator as orch_mod
+    @pytest.mark.asyncio
+    async def test_exhausted_strategies_emits_ineffective(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.ERROR, logger=_ORCH_LOGGER)
+        callback = AsyncMock(
+            return_value=[
+                _bypass_outcome(
+                    verdict="applied_still_dead",
+                    strategy_name="win.wasapi_exclusive",
+                    attempt_index=0,
+                ),
+                _bypass_outcome(
+                    verdict="failed_to_apply",
+                    strategy_name="win.disable_sysfx",
+                    attempt_index=1,
+                ),
+            ]
+        )
+        pipeline = self._deaf_pipeline(auto_bypass_enabled=True, callback=callback, threshold=1)
+        await pipeline.start()
 
-        pipeline._last_heartbeat_monotonic = 0.0
-        pipeline._vad_frames_since_heartbeat = orch_mod._DEAF_MIN_FRAMES
-        pipeline._max_vad_prob_since_heartbeat = 0.9  # well above deaf threshold
-        with patch.object(
-            orch_mod.time, "monotonic", return_value=orch_mod._HEARTBEAT_INTERVAL_S + 1.0
-        ):
-            await pipeline.feed_frame(_silence_frame())
-        assert pipeline._deaf_warnings_consecutive == 0
-        callback.assert_not_awaited()
+        await self._drive_deaf_heartbeat(pipeline)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        ineffective = _events_of(caplog, "voice_apo_bypass_ineffective")
+        assert len(ineffective) == 1
+        assert ineffective[0]["attempts"] == 2  # noqa: PLR2004
+        assert ineffective[0]["strategies"] == [
+            "win.wasapi_exclusive",
+            "win.disable_sysfx",
+        ]
+        assert ineffective[0]["verdicts"] == ["applied_still_dead", "failed_to_apply"]
+        assert pipeline._coordinator_terminated is True
 
     @pytest.mark.asyncio
     async def test_callback_exception_does_not_crash_pipeline(
@@ -1792,19 +1866,15 @@ class TestVoiceClarityAutoBypass:
     ) -> None:
         caplog.set_level(logging.ERROR, logger=_ORCH_LOGGER)
 
-        async def failing_callback() -> None:
-            raise RuntimeError("simulated exclusive-open failure")
+        async def failing_callback() -> list[Any]:
+            raise RuntimeError("simulated coordinator failure")
 
         pipeline = self._deaf_pipeline(
-            voice_clarity_active=True,
-            auto_bypass_enabled=True,
-            callback=failing_callback,
-            threshold=1,
+            auto_bypass_enabled=True, callback=failing_callback, threshold=1
         )
         await pipeline.start()
 
         await self._drive_deaf_heartbeat(pipeline)
-        # Let the scheduled task run + propagate its internal except handler.
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
@@ -1812,84 +1882,42 @@ class TestVoiceClarityAutoBypass:
         assert len(failed) == 1
         assert failed[0]["error_type"] == "RuntimeError"
         assert "simulated" in failed[0]["error"]
+        # Exception path does NOT latch the terminal flag — transient
+        # coordinator issues (e.g. probe tap race) must not lock out
+        # future deafness bursts.
+        assert pipeline._coordinator_terminated is False
+        assert pipeline._coordinator_invocation_pending is False
 
     @pytest.mark.asyncio
-    async def test_bypass_noop_without_callback(self) -> None:
-        pipeline = self._deaf_pipeline(
-            voice_clarity_active=True, auto_bypass_enabled=True, callback=None, threshold=1
-        )
+    async def test_noop_without_callback(self) -> None:
+        pipeline = self._deaf_pipeline(auto_bypass_enabled=True, callback=None, threshold=1)
         await pipeline.start()
-        # Must not raise or log ``voice_apo_bypass_activated``.
+        # Must not raise or latch the coordinator terminal flag.
         await self._drive_deaf_heartbeat(pipeline)
-        assert pipeline._bypass_requested is False
+        assert pipeline._coordinator_terminated is False
+        assert pipeline._coordinator_invocation_pending is False
 
     @pytest.mark.asyncio
-    async def test_post_bypass_deaf_emits_ineffective_once(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        """When deaf heartbeats persist after the bypass, emit ineffective ONCE.
-
-        Models the case where WASAPI exclusive opens cleanly but the
-        signal is still dead — firmware DSP, broken capture element,
-        or a non-Voice-Clarity APO not in the catalog. The orchestrator
-        must surface that with a single ``voice_apo_bypass_ineffective``
-        ERROR so the dashboard / doctor can switch their messaging from
-        "auto-fix in progress" to "auto-fix could not recover signal".
-        """
-        caplog.set_level(logging.ERROR, logger=_ORCH_LOGGER)
-        callback = AsyncMock()
-        pipeline = self._deaf_pipeline(
-            voice_clarity_active=True, auto_bypass_enabled=True, callback=callback, threshold=1
-        )
+    async def test_healthy_heartbeat_resets_consecutive_counter(self) -> None:
+        callback = AsyncMock(return_value=[])
+        pipeline = self._deaf_pipeline(auto_bypass_enabled=True, callback=callback, threshold=3)
         await pipeline.start()
 
-        # Heartbeat #1 — fires the bypass.
         await self._drive_deaf_heartbeat(pipeline)
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
-        assert pipeline._bypass_requested is True
-        assert _events_of(caplog, "voice_apo_bypass_ineffective") == []
-
-        # Heartbeats #2-#5 — bypass already fired; deaf persists; one ineffective event.
-        for _ in range(4):
-            await self._drive_deaf_heartbeat(pipeline)
-
-        ineffective = _events_of(caplog, "voice_apo_bypass_ineffective")
-        assert len(ineffective) == 1
-        assert ineffective[0]["voice_clarity_active"] is True
-        assert ineffective[0]["consecutive_post_bypass_deaf"] >= 2  # noqa: PLR2004
-
-    @pytest.mark.asyncio
-    async def test_post_bypass_healthy_heartbeat_resets_ineffective_counter(self) -> None:
-        """A single healthy heartbeat after the bypass means it worked.
-
-        The post-bypass deaf counter must reset so a transient deafness
-        later (user yanks the headset, brief driver hiccup) does not
-        emit a false ``voice_apo_bypass_ineffective``.
-        """
-        callback = AsyncMock()
-        pipeline = self._deaf_pipeline(
-            voice_clarity_active=True, auto_bypass_enabled=True, callback=callback, threshold=1
-        )
-        await pipeline.start()
-
-        # Bypass fires.
         await self._drive_deaf_heartbeat(pipeline)
-        await asyncio.sleep(0)
-        assert pipeline._bypass_requested is True
+        assert pipeline._deaf_warnings_consecutive == 2  # noqa: PLR2004
 
-        # Healthy heartbeat — bypass worked.
         from sovyx.voice.pipeline import _orchestrator as orch_mod
 
         pipeline._last_heartbeat_monotonic = 0.0
         pipeline._vad_frames_since_heartbeat = orch_mod._DEAF_MIN_FRAMES
-        pipeline._max_vad_prob_since_heartbeat = 0.9
+        pipeline._max_vad_prob_since_heartbeat = 0.9  # above the deaf threshold
         with patch.object(
             orch_mod.time, "monotonic", return_value=orch_mod._HEARTBEAT_INTERVAL_S + 1.0
         ):
             await pipeline.feed_frame(_silence_frame())
-        assert pipeline._post_bypass_deaf_warnings == 0
-        assert pipeline._post_bypass_ineffective_emitted is False
+        assert pipeline._deaf_warnings_consecutive == 0
+        callback.assert_not_awaited()
 
 
 # ===========================================================================

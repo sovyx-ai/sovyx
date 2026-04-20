@@ -82,6 +82,9 @@ METRIC_ACTIVE_ENDPOINT_CHANGES = "sovyx.voice.health.active_endpoint.changes"
 METRIC_TIME_TO_FIRST_UTTERANCE = "sovyx.voice.health.time_to_first_utterance"
 METRIC_KERNEL_INVALIDATED_EVENTS = "sovyx.voice.health.kernel_invalidated.events"
 METRIC_PROBE_START_TIME_ERRORS = "sovyx.voice.health.probe.start_time_errors"
+METRIC_APO_DEGRADED_EVENTS = "sovyx.voice.health.apo_degraded.events"
+METRIC_BYPASS_STRATEGY_VERDICTS = "sovyx.voice.health.bypass_strategy.verdicts"
+METRIC_CAPTURE_INTEGRITY_VERDICTS = "sovyx.voice.health.capture_integrity.verdicts"
 
 
 # ── Label enums (closed sets for low-cardinality guarantees) ─────────────
@@ -262,6 +265,99 @@ def record_kernel_invalidated_event(
     )
 
 
+def record_apo_degraded_event(
+    *,
+    platform: str,
+    action: str,
+) -> None:
+    """Record an APO_DEGRADED lifecycle event (ADR §4.1 / §5.8.APO).
+
+    Mirrors :func:`record_kernel_invalidated_event` but scoped to the
+    OS-agnostic APO-cluster fail-over path (Windows Voice Clarity /
+    VocaEffectPack, Linux ``module-echo-cancel``, CoreAudio VPIO, …).
+
+    Args:
+        platform: ``"win32"`` | ``"linux"`` | ``"darwin"``.
+        action: ``"quarantine"`` on initial add,
+            ``"failover"`` when :mod:`sovyx.voice.health._factory_integration`
+            picks a different endpoint, ``"recheck_recovered"`` when the
+            watchdog APO recheck loop clears quarantine on a HEALTHY
+            re-probe, ``"recheck_still_invalid"`` when the recheck still
+            fails, ``"hotplug_clear"`` when a replug retires the entry.
+    """
+    counter = getattr(get_metrics(), "voice_health_apo_degraded_events", None)
+    if counter is None:
+        return
+    counter.add(
+        1,
+        attributes={
+            "platform": platform or "unknown",
+            "action": action,
+        },
+    )
+
+
+def record_bypass_strategy_verdict(
+    *,
+    strategy: str,
+    verdict: str,
+    reason: str = "",
+) -> None:
+    """Record one per-strategy outcome from :class:`CaptureIntegrityCoordinator`.
+
+    Args:
+        strategy: Stable strategy identifier (``"win.wasapi_exclusive"``,
+            ``"win.disable_sysfx"``, ``"linux.alsa_hw_direct"``,
+            ``"macos.coreaudio_vpio_off"``).
+        verdict: ``"applied_healthy"`` | ``"applied_still_dead"`` |
+            ``"failed_to_apply"`` | ``"not_applicable"``. Matches the
+            :class:`BypassVerdict` string values.
+        reason: Optional low-cardinality tag — eligibility rejection
+            reason (``"not_win32_platform"``) or apply-failure token
+            (``"exclusive_downgraded_to_shared"``). Empty string when
+            unset. Stable across minor versions so dashboards can
+            key on it.
+    """
+    counter = getattr(get_metrics(), "voice_health_bypass_strategy_verdicts", None)
+    if counter is None:
+        return
+    counter.add(
+        1,
+        attributes={
+            "strategy": strategy or "unknown",
+            "verdict": verdict or "unknown",
+            "reason": reason or "",
+        },
+    )
+
+
+def record_capture_integrity_verdict(
+    *,
+    verdict: str,
+    phase: str,
+) -> None:
+    """Record a :class:`CaptureIntegrityProbe` classification.
+
+    Args:
+        verdict: :class:`IntegrityVerdict` value — ``"healthy"`` |
+            ``"apo_degraded"`` | ``"driver_silent"`` | ``"vad_mute"`` |
+            ``"inconclusive"``.
+        phase: ``"pre_bypass"`` (coordinator probe before apply),
+            ``"post_bypass"`` (coordinator probe after apply + settle),
+            ``"recheck"`` (watchdog APO recheck loop). Low-cardinality.
+    """
+    counter = getattr(get_metrics(), "voice_health_capture_integrity_verdicts", None)
+    if counter is None:
+        return
+    counter.add(
+        1,
+        attributes={
+            "verdict": verdict or "unknown",
+            "phase": phase or "unknown",
+        },
+    )
+
+
 def record_start_time_error(
     *,
     diagnosis: Diagnosis | str,
@@ -317,8 +413,14 @@ __all__ = [
     "METRIC_SELF_FEEDBACK_BLOCKS",
     "METRIC_KERNEL_INVALIDATED_EVENTS",
     "METRIC_PROBE_START_TIME_ERRORS",
+    "METRIC_APO_DEGRADED_EVENTS",
+    "METRIC_BYPASS_STRATEGY_VERDICTS",
+    "METRIC_CAPTURE_INTEGRITY_VERDICTS",
     "METRIC_TIME_TO_FIRST_UTTERANCE",
     "record_active_endpoint_change",
+    "record_apo_degraded_event",
+    "record_bypass_strategy_verdict",
+    "record_capture_integrity_verdict",
     "record_cascade_attempt",
     "record_combo_store_hit",
     "record_combo_store_invalidation",

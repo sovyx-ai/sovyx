@@ -75,9 +75,13 @@ class QuarantineEntry:
             daylight-savings transitions or NTP corrections.
         expires_at_monotonic: Monotonic deadline. Entries past this are
             evicted lazily on lookup.
-        reason: Short tag describing the trigger — ``"probe"`` (normal
-            cascade path), ``"watchdog_recheck"`` (periodic retry still
-            failing), ``"factory_integration"`` (boot-time cascade).
+        reason: Short tag describing the trigger — ``"probe_pinned"`` /
+            ``"probe_store"`` / ``"probe_cascade"`` (normal cascade
+            path), ``"watchdog_recheck"`` (periodic retry still failing),
+            ``"factory_integration"`` (boot-time cascade),
+            ``"apo_degraded"`` (runtime :class:`CaptureIntegrityCoordinator`
+            exhausted every :class:`PlatformBypassStrategy` candidate).
+            Stable across minor versions so dashboards can key on it.
     """
 
     endpoint_guid: str

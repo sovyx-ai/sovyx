@@ -321,6 +321,99 @@ class VoiceTuningConfig(BaseSettings):
     kernel_invalidated_quarantine_s: float = 3_600.0  # 1 h wall clock
     kernel_invalidated_recheck_interval_s: float = 300.0  # 5 min
 
+    # ── APO integrity + bypass strategy framework (Phase 1 — OS-agnostic).
+    # Background: on Windows 11 25H2 the Microsoft "Voice Clarity" APO
+    # (VocaEffectPack, CLSID {96BEDF2C-18CB-4A15-B821-5E95ED0FEA61})
+    # is injected into every USB mic's shared-mode capture chain and
+    # destroys the spectral envelope Silero VAD relies on while
+    # preserving human audibility (RMS healthy, VAD ≈ 0). The durable
+    # fix routes around the APO chain via a per-platform bypass
+    # strategy; detection itself is OS-agnostic and lives in
+    # :class:`~sovyx.voice.health.capture_integrity.CaptureIntegrityProbe`.
+
+    # Apply the PortAudio-group endpoint matcher fallback in
+    # :mod:`sovyx.voice._apo_detector` so MME-truncated device names
+    # ("Microfone (Razer BlackShark V2 ") correlate to their WASAPI
+    # sibling's full name ("Razer BlackShark V2 Pro"). Off reverts to
+    # the strict-name-match-only matcher.
+    apo_detector_use_portaudio_group_hint: bool = True
+
+    # CaptureIntegrityProbe — warm probe that reads a snapshot of the
+    # live capture task's ring buffer (never opens a second stream) and
+    # classifies the signal by RMS + VAD max prob + spectral flatness
+    # + spectral 85%-roll-off. ``duration_s`` is the tap window size;
+    # the thresholds below define the APO_DEGRADED branch.
+    integrity_probe_duration_s: float = 3.0
+    # Wiener entropy above which a VAD-dead, RMS-alive signal is
+    # classified APO_DEGRADED. Empirical baseline: clean speech ≈
+    # 0.10–0.15, Voice-Clarity-destroyed speech ≈ 0.28–0.35.
+    integrity_spectral_flatness_apo_ceiling: float = 0.25
+    # 85 %-energy spectral roll-off ceiling (Hz). Voice Clarity's
+    # aggressive low-pass under mono resample drops this below 4 kHz;
+    # clean speech sits at 6–8 kHz for the same VAD-dead pattern.
+    integrity_spectral_rolloff_apo_ceiling_hz: int = 4_000
+    # Peak SileroVAD probability that counts as "VAD responsive". At or
+    # above this, the integrity probe short-circuits to HEALTHY — the
+    # downstream orchestrator already passed through
+    # :attr:`VADConfig.onset_threshold`, so the probe's floor is
+    # intentionally lower than onset to avoid a race between a live VAD
+    # event and an in-flight integrity snapshot.
+    integrity_vad_healthy_max_prob_floor: float = 0.30
+    # Peak SileroVAD probability that counts as "VAD destroyed". Below
+    # this, and with RMS above :attr:`integrity_apo_rms_floor_db`, the
+    # probe advances to the spectral-envelope check to distinguish
+    # APO_DEGRADED from genuine VAD_MUTE. Empirical Voice-Clarity
+    # baseline: 0.001–0.01 on a sustained hum that clean WASAPI returns
+    # as 0.3–0.9.
+    integrity_vad_dead_max_prob_ceiling: float = 0.05
+    # RMS ceiling (dBFS) below which the signal is classified
+    # DRIVER_SILENT instead of APO_DEGRADED. The driver is not
+    # delivering audio — a different remediation path (reopen /
+    # re-enumerate) applies. Sits above the ``-96 dBFS`` int16 noise
+    # floor so a privacy-muted mic or a mid-reopen window does not get
+    # misread as an APO attack.
+    integrity_driver_silent_rms_ceiling_db: float = -80.0
+    # RMS floor (dBFS) below which APO_DEGRADED is rejected. The APO
+    # attack requires an audible carrier — a user not speaking can't
+    # exhibit it. Clean speech at conversational loudness typically
+    # sits at -30 to -15 dBFS; -50 is the quietest still-voiced signal
+    # we'd expect in practice.
+    integrity_apo_rms_floor_db: float = -50.0
+
+    # APO_DEGRADED quarantine — mirrors the KERNEL_INVALIDATED
+    # precedent. When a strategy iterator exhausts without restoring
+    # integrity, the endpoint is quarantined and the factory fails
+    # over to an alternative. Periodic re-probes clear the quarantine
+    # if an OS update or driver re-install retires the APO.
+    apo_quarantine_enabled: bool = True
+    apo_quarantine_s: float = 3_600.0
+    apo_quarantine_recheck_interval_s: float = 300.0
+
+    # CaptureIntegrityCoordinator — iterates registered platform
+    # strategies in ``cost_rank`` order. Hard cap per session guards
+    # against pathological oscillation (strategy A applies, reverts,
+    # strategy B applies, reverts, ad infinitum). The post-apply
+    # settle window is the driver-side debounce before re-probing.
+    bypass_strategy_max_attempts: int = 3
+    bypass_strategy_post_apply_settle_s: float = 1.5
+
+    # Phase 4 hardware-fingerprint catalog placeholders. Disabled in
+    # Phase 1; surfaced here so the tuning contract is stable across
+    # phases. Confidence gate promotes a strategy to "first pick" only
+    # once its rolling EWMA success rate crosses the floor.
+    bypass_fingerprint_catalog_enabled: bool = False
+    bypass_fingerprint_min_confidence: float = 0.7
+
+    # AudioCaptureTask ring buffer — bounded snapshot of the most
+    # recent frames delivered by PortAudio. Fed by the capture
+    # callback, consumed by :meth:`AudioCaptureTask.tap_recent_frames`
+    # so the integrity probe can re-analyse the live signal without
+    # opening a second stream (critical on Windows: a concurrent open
+    # on an exclusive-held endpoint raises AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED).
+    # Sized for ``integrity_probe_duration_s`` + watchdog recheck
+    # window. 33 s at 16 kHz mono int16 ≈ 1 MB — bounded, acceptable.
+    capture_ring_buffer_seconds: float = 33.0
+
     # Voice device test (setup-wizard meters + TTS test button).
     # Kill-switch + ballistics + rate limiting for the test endpoints.
     device_test_enabled: bool = True
