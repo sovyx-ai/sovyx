@@ -22,6 +22,18 @@ if TYPE_CHECKING:
     from sovyx.observability._exception_serializer import (
         serialize_exception as serialize_exception,
     )
+    from sovyx.observability._fast_path import (
+        FastPathFilter as FastPathFilter,
+    )
+    from sovyx.observability._fast_path import (
+        FastPathHandler as FastPathHandler,
+    )
+    from sovyx.observability._fast_path import (
+        NonFastPathFilter as NonFastPathFilter,
+    )
+    from sovyx.observability._fast_path import (
+        is_fast_path_record as is_fast_path_record,
+    )
     from sovyx.observability.alerts import (
         Alert as Alert,
     )
@@ -209,6 +221,12 @@ _SUBMODULE_MAP: dict[str, tuple[str, ...]] = {
         "build_cause_chain",
         "serialize_exception",
     ),
+    "sovyx.observability._fast_path": (
+        "FastPathFilter",
+        "FastPathHandler",
+        "NonFastPathFilter",
+        "is_fast_path_record",
+    ),
     "sovyx.observability.envelope": ("EnvelopeProcessor",),
     "sovyx.observability.pii": ("PIIRedactor",),
     "sovyx.observability.ringbuffer": ("RingBufferHandler", "install_crash_hooks"),
@@ -265,10 +283,13 @@ __all__ = [
     "ClampFieldsProcessor",
     "EnvelopeProcessor",
     "ExceptionTreeProcessor",
+    "FastPathFilter",
+    "FastPathHandler",
     "HealthCheck",
     "HealthRegistry",
     "LogEntry",
     "MetricsRegistry",
+    "NonFastPathFilter",
     "PIIRedactor",
     "RingBufferHandler",
     "SLODefinition",
@@ -292,6 +313,7 @@ __all__ = [
     "get_request_context",
     "get_tracer",
     "install_crash_hooks",
+    "is_fast_path_record",
     "runtime_get_level",
     "runtime_set_level",
     "serialize_exception",

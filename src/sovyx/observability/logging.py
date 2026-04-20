@@ -31,6 +31,11 @@ import structlog
 
 from sovyx.observability._clamp_fields import ClampFieldsProcessor
 from sovyx.observability._exception_serializer import ExceptionTreeProcessor
+from sovyx.observability._fast_path import (
+    FastPathFilter,
+    FastPathHandler,
+    NonFastPathFilter,
+)
 from sovyx.observability.async_handler import AsyncQueueHandler, BackgroundLogWriter
 from sovyx.observability.envelope import EnvelopeProcessor
 from sovyx.observability.pii import PIIRedactor
@@ -242,6 +247,11 @@ def setup_logging(
         - When ``obs_config`` is set: installs a :class:`RingBufferHandler`
           and wires :func:`install_crash_hooks` if a crash dump path
           is configured.
+        - When ``obs_config.fast_path_file`` is set: installs a
+          :class:`FastPathHandler` ahead of the async/file path so
+          CRITICAL/security records skip the queue and ``fsync``
+          synchronously to disk; the async/file path gets a
+          :class:`NonFastPathFilter` to prevent double-emit.
 
     Processor chain (in order):
         1. ``merge_contextvars`` — inject request-scoped context
@@ -289,7 +299,7 @@ def _setup_logging_locked(
         _async_writer.drain_and_stop(timeout=2.0)
         _async_writer = None
     for handler in list(root_logger.handlers):
-        if isinstance(handler, logging.handlers.RotatingFileHandler):
+        if isinstance(handler, (logging.handlers.RotatingFileHandler, FastPathHandler)):
             handler.close()
     root_logger.handlers.clear()
 
@@ -358,6 +368,23 @@ def _setup_logging_locked(
     root_logger.addHandler(console_handler)
     root_logger.setLevel(getattr(logging, config.level))
 
+    # ── Fast-path handler (synchronous, fsync-on-emit) ──
+    # Attached BEFORE the async/file handler so a same-record run
+    # through the chain hits the fast-path first. Pair with the
+    # NonFastPathFilter on the async handler below: each record
+    # ends up in exactly one downstream file.
+    if obs_config is not None and obs_config.fast_path_file is not None:
+        fast_formatter = structlog.stdlib.ProcessorFormatter(
+            processors=[
+                structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+                structlog.processors.JSONRenderer(),
+            ],
+        )
+        fast_handler = FastPathHandler(obs_config.fast_path_file)
+        fast_handler.setFormatter(fast_formatter)
+        fast_handler.addFilter(FastPathFilter())
+        root_logger.addHandler(fast_handler)
+
     # ── File handler (RotatingFileHandler → always JSON) ──
     if config.log_file is not None:
         config.log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -376,8 +403,17 @@ def _setup_logging_locked(
             encoding="utf-8",
         )
         file_handler.setFormatter(json_formatter)
+        # Mirror of FastPathFilter: when fast-path is wired, drop
+        # those records here so they don't double-emit through the
+        # rotating file. Safe to attach unconditionally — the filter
+        # only diverts records the fast-path handler would have
+        # caught, and that handler isn't wired without obs_config.
+        if obs_config is not None and obs_config.fast_path_file is not None:
+            file_handler.addFilter(NonFastPathFilter())
         if obs_config is not None and obs_config.features.async_queue:
             async_handler = AsyncQueueHandler(maxsize=obs_config.async_queue_size)
+            if obs_config.fast_path_file is not None:
+                async_handler.addFilter(NonFastPathFilter())
             writer = BackgroundLogWriter(async_handler, [file_handler])
             writer.start()
             _async_writer = writer
@@ -492,7 +528,10 @@ def shutdown_logging(timeout: float = 5.0) -> None:
     for handler in list(root.handlers):
         with contextlib.suppress(Exception):
             handler.flush()
-        if isinstance(handler, logging.handlers.RotatingFileHandler | RingBufferHandler):
+        if isinstance(
+            handler,
+            logging.handlers.RotatingFileHandler | RingBufferHandler | FastPathHandler,
+        ):
             with contextlib.suppress(Exception):
                 handler.close()
         root.removeHandler(handler)

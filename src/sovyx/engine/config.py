@@ -573,6 +573,7 @@ class ObservabilityConfig(BaseSettings):
     file_backup_count: int = Field(default=10, ge=1, le=100)
     crash_dump_path: Path | None = None
     fts_index_path: Path | None = None
+    fast_path_file: Path | None = None
 
 
 class TuningConfig(BaseModel):
@@ -656,6 +657,7 @@ class EngineConfig(BaseSettings):
 
         - ``crash_dump_path`` → ``<data_dir>/logs/sovyx.crash.jsonl``
         - ``fts_index_path``  → ``<data_dir>/logs/sovyx.log.idx``
+        - ``fast_path_file``  → ``<data_dir>/logs/sovyx.crit.jsonl``
 
         Explicit values (YAML, env, or override) are preserved unchanged.
         """
@@ -664,6 +666,8 @@ class EngineConfig(BaseSettings):
             self.observability.crash_dump_path = logs_dir / "sovyx.crash.jsonl"
         if self.observability.fts_index_path is None:
             self.observability.fts_index_path = logs_dir / "sovyx.log.idx"
+        if self.observability.fast_path_file is None:
+            self.observability.fast_path_file = logs_dir / "sovyx.crit.jsonl"
         return self
 
 
