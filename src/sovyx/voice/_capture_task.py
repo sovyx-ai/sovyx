@@ -99,6 +99,50 @@ class CaptureSilenceError(RuntimeError):
         self.observed_peak_rms_db = observed_peak_rms_db
 
 
+class CaptureInoperativeError(RuntimeError):
+    """The boot cascade declared the capture endpoint inoperative.
+
+    Raised from :func:`sovyx.voice.factory.create_voice_pipeline` BEFORE
+    :class:`AudioCaptureTask` is constructed when the cascade exhausted
+    every viable combo (or the kernel-invalidated fail-over found no
+    alternative endpoint). Bubbling this distinct error type — instead
+    of letting the legacy opener fall through to MME shared and
+    silently boot a deaf pipeline — is the v0.20.2 §4.4.7 / Bug D fix.
+
+    The dashboard ``/api/voice/enable`` route catches this and returns
+    HTTP 503 with the structured diagnosis so the UI can surface a
+    real "no working microphone" prompt rather than a fake "capture
+    started" success.
+
+    Attributes:
+        device: PortAudio device index/name the cascade tried to validate.
+        host_api: Host API of the would-be capture endpoint
+            (``"WASAPI"`` / ``"ALSA"`` / ``"CoreAudio"`` / ...). May be
+            ``None`` when the cascade never resolved a host API.
+        reason: Stable string tag for the verdict — ``"no_winner"``
+            (cascade exhausted), ``"no_alternative_endpoint"``
+            (kernel-invalidated fail-over found nothing). Used by the
+            dashboard to localise + show a fix suggestion.
+        attempts: Total cascade attempts made before giving up. ``0``
+            when the cascade itself crashed before any probe ran.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        device: int | str | None,
+        host_api: str | None,
+        reason: str,
+        attempts: int = 0,
+    ) -> None:
+        super().__init__(message)
+        self.device = device
+        self.host_api = host_api
+        self.reason = reason
+        self.attempts = attempts
+
+
 def _rms_db_int16(frame: Any) -> float:  # noqa: ANN401 — numpy int16 array; Any keeps numpy lazy-imported
     """Compute dBFS RMS of an int16 buffer — safe for silent / empty buffers.
 

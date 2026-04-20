@@ -20,6 +20,9 @@ import pytest
 from sovyx.engine.config import VoiceTuningConfig
 from sovyx.voice.device_enum import DeviceEntry
 from sovyx.voice.health._factory_integration import (
+    CascadeBootOutcome,
+    CascadeBootVerdict,
+    classify_cascade_boot_result,
     derive_endpoint_guid,
     resolve_capture_overrides_path,
     resolve_combo_store_path,
@@ -619,3 +622,109 @@ class TestSelectAlternativeEndpoint:
             assert result.name == "Only Mic"
         finally:
             _quarantine.reset_default_quarantine()
+
+
+# ---------------------------------------------------------------------------
+# CascadeBootVerdict / classify_cascade_boot_result (v0.20.2 §4.4.7 / Bug D)
+# ---------------------------------------------------------------------------
+
+
+def _make_combo() -> Combo:
+    return Combo(
+        host_api="WASAPI",
+        sample_rate=16_000,
+        channels=1,
+        sample_format="int16",
+        exclusive=False,
+        auto_convert=False,
+        frames_per_buffer=512,
+        platform_key="win32",
+    )
+
+
+def _make_cascade_result(
+    *,
+    source: str,
+    has_winner: bool,
+    attempts_count: int = 0,
+    endpoint_guid: str = "endpoint-guid-1",
+) -> CascadeResult:
+    winning_combo = _make_combo() if has_winner else None
+    return CascadeResult(
+        endpoint_guid=endpoint_guid,
+        winning_combo=winning_combo,
+        winning_probe=None,
+        attempts=(),
+        attempts_count=attempts_count,
+        budget_exhausted=False,
+        source=source,
+    )
+
+
+class TestClassifyCascadeBootResult:
+    """Decision matrix for :func:`classify_cascade_boot_result`.
+
+    Each branch must map deterministically to a stable ``(verdict,
+    reason)`` pair — the dashboard 503 handler + UI keys depend on it.
+    """
+
+    def test_none_result_is_degraded(self) -> None:
+        outcome = classify_cascade_boot_result(None)
+        assert outcome.verdict is CascadeBootVerdict.DEGRADED
+        assert outcome.reason == "cascade_declined"
+        assert outcome.attempts == 0
+        assert outcome.result is None
+
+    def test_winner_is_healthy(self) -> None:
+        result = _make_cascade_result(source="cascade", has_winner=True, attempts_count=2)
+        outcome = classify_cascade_boot_result(result)
+        assert outcome.verdict is CascadeBootVerdict.HEALTHY
+        assert outcome.reason == "winner"
+        assert outcome.attempts == 2
+        assert outcome.result is result
+
+    def test_store_hit_is_healthy(self) -> None:
+        result = _make_cascade_result(source="store", has_winner=True)
+        outcome = classify_cascade_boot_result(result)
+        assert outcome.verdict is CascadeBootVerdict.HEALTHY
+        assert outcome.reason == "winner"
+
+    def test_pinned_hit_is_healthy(self) -> None:
+        result = _make_cascade_result(source="pinned", has_winner=True)
+        outcome = classify_cascade_boot_result(result)
+        assert outcome.verdict is CascadeBootVerdict.HEALTHY
+
+    def test_quarantined_no_winner_is_inoperative(self) -> None:
+        result = _make_cascade_result(source="quarantined", has_winner=False, attempts_count=0)
+        outcome = classify_cascade_boot_result(result)
+        assert outcome.verdict is CascadeBootVerdict.INOPERATIVE
+        assert outcome.reason == "no_alternative_endpoint"
+        assert outcome.result is result
+
+    def test_exhausted_is_inoperative(self) -> None:
+        result = _make_cascade_result(source="none", has_winner=False, attempts_count=7)
+        outcome = classify_cascade_boot_result(result)
+        assert outcome.verdict is CascadeBootVerdict.INOPERATIVE
+        assert outcome.reason == "no_winner"
+        assert outcome.attempts == 7
+
+    def test_outcome_is_frozen(self) -> None:
+        outcome = classify_cascade_boot_result(None)
+        with pytest.raises(Exception) as exc_info:
+            outcome.reason = "mutated"  # type: ignore[misc]
+        # FrozenInstanceError is a subclass of AttributeError.
+        assert type(exc_info.value).__name__ in {"FrozenInstanceError", "AttributeError"}
+
+    def test_verdict_str_value_is_stable(self) -> None:
+        # StrEnum values are the stable dashboard-facing payload.
+        assert CascadeBootVerdict.HEALTHY.value == "healthy"
+        assert CascadeBootVerdict.DEGRADED.value == "degraded"
+        assert CascadeBootVerdict.INOPERATIVE.value == "inoperative"
+
+    def test_outcome_result_reference_preserved(self) -> None:
+        # Dashboard triage reads result.attempts / result.source for logs.
+        result = _make_cascade_result(source="none", has_winner=False, attempts_count=4)
+        outcome: CascadeBootOutcome = classify_cascade_boot_result(result)
+        assert outcome.result is result
+        assert outcome.result is not None
+        assert outcome.result.source == "none"

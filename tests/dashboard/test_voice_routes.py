@@ -310,6 +310,66 @@ class TestEnableVoiceCaptureWiring:
         # Nothing got registered when capture failed to start.
         app.state.registry.register_instance.assert_not_called()
 
+    def test_enable_returns_503_when_cascade_declares_inoperative(
+        self, app, client: TestClient
+    ) -> None:
+        """v0.20.2 §4.4.7 / Bug D — CaptureInoperativeError → 503.
+
+        The factory raises ``CaptureInoperativeError`` when the VCHL
+        boot cascade exhausts every viable combo. The route must map
+        that to HTTP 503 with a structured body so the UI can show a
+        real "no working microphone" prompt instead of a generic 500.
+        """
+        fake_sd = ModuleType("sounddevice")
+        fake_sd.query_devices = MagicMock(  # type: ignore[attr-defined]
+            return_value=[
+                {"name": "mic", "max_input_channels": 1, "max_output_channels": 0},
+                {"name": "spk", "max_input_channels": 0, "max_output_channels": 2},
+            ],
+        )
+
+        from sovyx.voice._capture_task import CaptureInoperativeError
+
+        exc = CaptureInoperativeError(
+            "cascade exhausted",
+            device=3,
+            host_api="Windows WASAPI",
+            reason="no_winner",
+            attempts=5,
+        )
+
+        with (
+            patch(
+                "sovyx.voice.model_registry.check_voice_deps",
+                return_value=(
+                    [
+                        {"module": "moonshine_voice", "package": "moonshine-voice"},
+                        {"module": "sounddevice", "package": "sounddevice"},
+                    ],
+                    [],
+                ),
+            ),
+            patch("sovyx.voice.model_registry.detect_tts_engine", return_value="piper"),
+            patch.dict(sys.modules, {"sounddevice": fake_sd}),
+            patch(
+                "sovyx.voice.factory.create_voice_pipeline",
+                new=AsyncMock(side_effect=exc),
+            ),
+        ):
+            resp = client.post("/api/voice/enable")
+
+        assert resp.status_code == 503  # noqa: PLR2004
+        body = resp.json()
+        assert body["ok"] is False
+        assert body["error"] == "capture_inoperative"
+        assert body["device"] == 3  # noqa: PLR2004
+        assert body["host_api"] == "Windows WASAPI"
+        assert body["reason"] == "no_winner"
+        assert body["attempts"] == 5  # noqa: PLR2004
+        # Cascade failure happens BEFORE bundle exists, so no registry
+        # writes and no pipeline tear-down.
+        app.state.registry.register_instance.assert_not_called()
+
 
 class TestEnableVoiceLanguageCoherence:
     """``/enable`` forwards the mind's language + voice_id into the factory.

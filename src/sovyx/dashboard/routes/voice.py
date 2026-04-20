@@ -675,6 +675,8 @@ async def enable_voice(request: Request) -> JSONResponse:
     effective_device_name = input_device_name or mind_device_name or None
     effective_device_host_api = input_device_host_api or mind_device_host_api or None
 
+    from sovyx.voice._capture_task import CaptureInoperativeError
+
     try:
         bundle = await create_voice_pipeline(
             event_bus=event_bus,
@@ -696,6 +698,31 @@ async def enable_voice(request: Request) -> JSONResponse:
                 "missing_models": exc.missing_models,
             },
             status_code=400,
+        )
+    except CaptureInoperativeError as exc:
+        # v0.20.2 / Bug D — the VCHL boot cascade exhausted every viable
+        # combo (or kernel-invalidated fail-over found no alternative
+        # endpoint). Return 503 with the structured reason so the UI can
+        # show a real "no working microphone" prompt instead of the
+        # generic 500 stack-trace path.
+        logger.error(
+            "voice_enable_capture_inoperative",
+            device=exc.device,
+            host_api=exc.host_api,
+            reason=exc.reason,
+            attempts=exc.attempts,
+        )
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "capture_inoperative",
+                "detail": str(exc),
+                "device": exc.device,
+                "host_api": exc.host_api,
+                "reason": exc.reason,
+                "attempts": exc.attempts,
+            },
+            status_code=503,
         )
     except Exception as exc:  # noqa: BLE001
         logger.exception("voice_enable_failed")

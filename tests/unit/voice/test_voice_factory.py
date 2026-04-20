@@ -514,6 +514,8 @@ class TestKernelInvalidatedFailoverEmits:
         @dataclass
         class _Result:
             source: str
+            winning_combo: object | None = None
+            attempts_count: int = 0
 
         original = DeviceEntry(
             index=3,
@@ -541,7 +543,15 @@ class TestKernelInvalidatedFailoverEmits:
         tuning = MagicMock()
         tuning.kernel_invalidated_failover_enabled = True
 
-        run_cascade = AsyncMock(return_value=_Result(source="quarantined"))
+        # Failover re-cascade lands HEALTHY so the verdict gate does not
+        # short-circuit the return with CaptureInoperativeError — this
+        # test is about the telemetry emission, not Bug D.
+        run_cascade = AsyncMock(
+            side_effect=[
+                _Result(source="quarantined"),
+                _Result(source="cascade", winning_combo=object(), attempts_count=1),
+            ]
+        )
         record = MagicMock()
 
         with (
@@ -583,11 +593,14 @@ class TestKernelInvalidatedFailoverEmits:
         from unittest.mock import AsyncMock, MagicMock
 
         import sovyx.voice.factory as factory_mod
+        from sovyx.voice._capture_task import CaptureInoperativeError
         from sovyx.voice.device_enum import DeviceEntry
 
         @dataclass
         class _Result:
             source: str
+            winning_combo: object | None = None
+            attempts_count: int = 0
 
         original = DeviceEntry(
             index=3,
@@ -625,12 +638,16 @@ class TestKernelInvalidatedFailoverEmits:
                 "sovyx.voice.health._metrics.record_kernel_invalidated_event",
                 new=record,
             ),
+            pytest.raises(CaptureInoperativeError) as exc_info,
         ):
-            out = await factory_mod._run_vchl_boot_cascade(
+            await factory_mod._run_vchl_boot_cascade(
                 resolved=original, data_dir=tmp_path, tuning=tuning
             )
 
-        assert out is original
+        # v0.20.2 / Bug D — quarantined + no alternative is an INOPERATIVE
+        # verdict; the helper now refuses to boot a deaf pipeline.
+        assert exc_info.value.reason == "no_alternative_endpoint"
+        assert exc_info.value.device == original.index
         record.assert_not_called()
 
 
@@ -735,3 +752,209 @@ class TestVoiceClarityRecomputedAfterFailover:
             factory_mod._create_vad = original_create_vad
             factory_mod._create_stt = original_create_stt
             factory_mod._create_piper_tts = original_create_piper
+
+
+class TestCascadeVerdictRaisesInoperative:
+    """v0.20.2 §4.4.7 / Bug D — cascade INOPERATIVE must block the boot.
+
+    Pre-v0.20.2 ``_run_vchl_boot_cascade`` returned the original device
+    even when every viable combo failed, letting the legacy opener fall
+    through to MME shared and silently boot a deaf pipeline. The helper
+    now classifies the final cascade result and raises
+    :class:`CaptureInoperativeError` on INOPERATIVE so the dashboard
+    ``/api/voice/enable`` route can surface a proper 503.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_exhausted_cascade_raises_capture_inoperative(self, tmp_path) -> None:
+        from dataclasses import dataclass
+        from unittest.mock import AsyncMock, MagicMock
+
+        import sovyx.voice.factory as factory_mod
+        from sovyx.voice._capture_task import CaptureInoperativeError
+        from sovyx.voice.device_enum import DeviceEntry
+
+        @dataclass
+        class _Result:
+            source: str
+            winning_combo: object | None = None
+            attempts_count: int = 0
+
+        original = DeviceEntry(
+            index=4,
+            name="Dead Mic",
+            canonical_name="dead mic",
+            host_api_index=0,
+            host_api_name="Windows WASAPI",
+            max_input_channels=1,
+            max_output_channels=0,
+            default_samplerate=48000,
+            is_os_default=True,
+        )
+        tuning = MagicMock()
+        tuning.kernel_invalidated_failover_enabled = True
+
+        with (
+            patch(
+                "sovyx.voice._apo_detector.detect_capture_apos",
+                return_value=[],
+            ),
+            patch(
+                "sovyx.voice.health._factory_integration.run_boot_cascade",
+                new=AsyncMock(return_value=_Result(source="none", attempts_count=6)),
+            ),
+            pytest.raises(CaptureInoperativeError) as exc_info,
+        ):
+            await factory_mod._run_vchl_boot_cascade(
+                resolved=original, data_dir=tmp_path, tuning=tuning
+            )
+
+        assert exc_info.value.reason == "no_winner"
+        assert exc_info.value.attempts == 6
+        assert exc_info.value.device == 4
+        assert exc_info.value.host_api == "Windows WASAPI"
+
+    @pytest.mark.asyncio()
+    async def test_healthy_cascade_returns_device(self, tmp_path) -> None:
+        from dataclasses import dataclass
+        from unittest.mock import AsyncMock, MagicMock
+
+        import sovyx.voice.factory as factory_mod
+        from sovyx.voice.device_enum import DeviceEntry
+
+        @dataclass
+        class _Result:
+            source: str
+            winning_combo: object | None = None
+            attempts_count: int = 0
+
+        original = DeviceEntry(
+            index=2,
+            name="Happy Mic",
+            canonical_name="happy mic",
+            host_api_index=0,
+            host_api_name="Windows WASAPI",
+            max_input_channels=1,
+            max_output_channels=0,
+            default_samplerate=48000,
+            is_os_default=True,
+        )
+        tuning = MagicMock()
+        tuning.kernel_invalidated_failover_enabled = True
+
+        with (
+            patch(
+                "sovyx.voice._apo_detector.detect_capture_apos",
+                return_value=[],
+            ),
+            patch(
+                "sovyx.voice.health._factory_integration.run_boot_cascade",
+                new=AsyncMock(
+                    return_value=_Result(
+                        source="cascade", winning_combo=object(), attempts_count=1
+                    ),
+                ),
+            ),
+        ):
+            out = await factory_mod._run_vchl_boot_cascade(
+                resolved=original, data_dir=tmp_path, tuning=tuning
+            )
+
+        assert out is original
+
+    @pytest.mark.asyncio()
+    async def test_allow_inoperative_capture_suppresses_raise(self, tmp_path) -> None:
+        """The escape hatch preserves pre-v0.20.2 behaviour for tests.
+
+        When operators / callers explicitly opt in via
+        ``allow_inoperative_capture=True`` the helper returns the
+        original device instead of raising — useful for the legacy
+        opener path where deafness is observed downstream.
+        """
+        from dataclasses import dataclass
+        from unittest.mock import AsyncMock, MagicMock
+
+        import sovyx.voice.factory as factory_mod
+        from sovyx.voice.device_enum import DeviceEntry
+
+        @dataclass
+        class _Result:
+            source: str
+            winning_combo: object | None = None
+            attempts_count: int = 0
+
+        original = DeviceEntry(
+            index=4,
+            name="Dead Mic",
+            canonical_name="dead mic",
+            host_api_index=0,
+            host_api_name="Windows WASAPI",
+            max_input_channels=1,
+            max_output_channels=0,
+            default_samplerate=48000,
+            is_os_default=True,
+        )
+        tuning = MagicMock()
+        tuning.kernel_invalidated_failover_enabled = True
+
+        with (
+            patch(
+                "sovyx.voice._apo_detector.detect_capture_apos",
+                return_value=[],
+            ),
+            patch(
+                "sovyx.voice.health._factory_integration.run_boot_cascade",
+                new=AsyncMock(return_value=_Result(source="none", attempts_count=3)),
+            ),
+        ):
+            out = await factory_mod._run_vchl_boot_cascade(
+                resolved=original,
+                data_dir=tmp_path,
+                tuning=tuning,
+                allow_inoperative_capture=True,
+            )
+
+        assert out is original
+
+    @pytest.mark.asyncio()
+    async def test_cascade_dispatch_exception_does_not_raise(self, tmp_path) -> None:
+        """A crash inside the cascade must fall back to DEGRADED, not INOPERATIVE.
+
+        The except block swallows the exception and ``final_result``
+        stays ``None``, which classifies as DEGRADED — the helper
+        returns the original device so the legacy opener owns the path.
+        """
+        from unittest.mock import AsyncMock, MagicMock
+
+        import sovyx.voice.factory as factory_mod
+        from sovyx.voice.device_enum import DeviceEntry
+
+        original = DeviceEntry(
+            index=2,
+            name="Mic",
+            canonical_name="mic",
+            host_api_index=0,
+            host_api_name="Windows WASAPI",
+            max_input_channels=1,
+            max_output_channels=0,
+            default_samplerate=48000,
+            is_os_default=True,
+        )
+        tuning = MagicMock()
+        tuning.kernel_invalidated_failover_enabled = True
+
+        with (
+            patch(
+                "sovyx.voice._apo_detector.detect_capture_apos",
+                return_value=[],
+            ),
+            patch(
+                "sovyx.voice.health._factory_integration.run_boot_cascade",
+                new=AsyncMock(side_effect=RuntimeError("probe crashed")),
+            ),
+        ):
+            out = await factory_mod._run_vchl_boot_cascade(
+                resolved=original, data_dir=tmp_path, tuning=tuning
+            )
+
+        assert out is original

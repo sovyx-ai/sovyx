@@ -71,6 +71,7 @@ async def create_voice_pipeline(
     input_device_name: str | None = None,
     input_device_host_api: str | None = None,
     output_device: int | str | None = None,  # noqa: ARG001 — reserved for future TTS routing
+    allow_inoperative_capture: bool = False,
 ) -> VoiceBundle:
     """Create a fully initialized VoicePipeline with all components.
 
@@ -214,10 +215,17 @@ async def create_voice_pipeline(
     # endpoint, the helper picks an alternative ``DeviceEntry`` and
     # re-runs the cascade so the pipeline can boot on a viable mic.
     # The returned ``resolved`` reflects that fail-over.
+    #
+    # §4.4.7 / Bug D (v0.20.2) — when the final cascade verdict is
+    # INOPERATIVE the helper raises :class:`CaptureInoperativeError`
+    # before the AudioCaptureTask is constructed, so the caller gets
+    # a structured "no viable microphone" error instead of a silently
+    # deaf pipeline booted through the legacy MME fallback.
     resolved = await _run_vchl_boot_cascade(
         resolved=resolved,
         data_dir=data_dir,
         tuning=tuning,
+        allow_inoperative_capture=allow_inoperative_capture,
     )
     if resolved is not None:
         effective_index = resolved.index
@@ -320,6 +328,7 @@ async def _run_vchl_boot_cascade(
     resolved: DeviceEntry | None,
     data_dir: Path | None,
     tuning: VoiceTuningConfig,
+    allow_inoperative_capture: bool = False,
 ) -> DeviceEntry | None:
     """Run the VCHL cold cascade once at boot to populate :class:`ComboStore`.
 
@@ -331,6 +340,18 @@ async def _run_vchl_boot_cascade(
     :func:`select_alternative_endpoint`, then re-run the cascade once
     against the alternative.
 
+    v0.20.2 / Bug D — on the FINAL cascade result (after any §4.4.7
+    fail-over re-run) the helper classifies the outcome via
+    :func:`classify_cascade_boot_result`:
+
+    * ``HEALTHY`` / ``DEGRADED`` → return the driving :class:`DeviceEntry`.
+    * ``INOPERATIVE`` → raise :class:`CaptureInoperativeError` so the
+      factory never constructs an :class:`AudioCaptureTask` that would
+      then fall through to MME shared and boot silently deaf. The
+      ``allow_inoperative_capture`` escape hatch keeps the legacy path
+      available for tests and for operators who explicitly want the
+      pre-v0.20.2 behaviour.
+
     Returns the :class:`DeviceEntry` that should drive the pipeline — the
     same one passed in for the happy path, or the fail-over device when
     the original was quarantined. Returns ``None`` only when ``resolved``
@@ -339,7 +360,10 @@ async def _run_vchl_boot_cascade(
 
     Silent on any unexpected failure — a corrupt :class:`ComboStore`,
     a transient ``OSError`` on ``data_dir``, or a probe-side bug must
-    never block the voice pipeline from starting.
+    never block the voice pipeline from starting. The
+    :class:`CaptureInoperativeError` path is the ONE exception: it is an
+    intentional, structured signal that no viable microphone exists, and
+    must propagate unless explicitly suppressed.
     """
     if resolved is None:
         logger.debug("voice_boot_cascade_skipped_no_resolved_device")
@@ -355,6 +379,14 @@ async def _run_vchl_boot_cascade(
             logger.debug("voice_boot_cascade_data_dir_unavailable", exc_info=True)
             return resolved
 
+    from sovyx.voice._capture_task import CaptureInoperativeError
+    from sovyx.voice.health._factory_integration import (
+        CascadeBootVerdict,
+        classify_cascade_boot_result,
+    )
+
+    driving_device = resolved
+    final_result = None
     try:
         from sovyx.voice._apo_detector import detect_capture_apos
         from sovyx.voice.health import current_platform_key
@@ -372,6 +404,7 @@ async def _run_vchl_boot_cascade(
             tuning=tuning,
             apo_reports=apo_reports,
         )
+        final_result = result
         # §4.4.7 fail-over — the original endpoint is in kernel-invalidated
         # state; the quarantine entry is already recorded inside the
         # cascade. Pick an alternative endpoint and re-run once.
@@ -392,30 +425,56 @@ async def _run_vchl_boot_cascade(
                     quarantined_endpoint=original_guid,
                     quarantined_friendly_name=resolved.name,
                 )
-                return resolved
-            logger.warning(
-                "voice_boot_cascade_failover",
-                from_endpoint=original_guid,
-                from_friendly_name=resolved.name,
-                to_friendly_name=alternative.name,
-                to_host_api=alternative.host_api_name,
-            )
-            record_kernel_invalidated_event(
-                platform=current_platform_key(),
-                host_api=alternative.host_api_name or "unknown",
-                action="failover",
-            )
-            await run_boot_cascade(
-                resolved=alternative,
-                data_dir=effective_data_dir,
-                tuning=tuning,
-                apo_reports=apo_reports,
-            )
-            return alternative
+                # final_result retains source="quarantined" → INOPERATIVE
+                # verdict below will raise CaptureInoperativeError.
+            else:
+                logger.warning(
+                    "voice_boot_cascade_failover",
+                    from_endpoint=original_guid,
+                    from_friendly_name=resolved.name,
+                    to_friendly_name=alternative.name,
+                    to_host_api=alternative.host_api_name,
+                )
+                record_kernel_invalidated_event(
+                    platform=current_platform_key(),
+                    host_api=alternative.host_api_name or "unknown",
+                    action="failover",
+                )
+                alt_result = await run_boot_cascade(
+                    resolved=alternative,
+                    data_dir=effective_data_dir,
+                    tuning=tuning,
+                    apo_reports=apo_reports,
+                )
+                driving_device = alternative
+                final_result = alt_result
     except Exception:  # noqa: BLE001 — cascade-side faults must never block voice enablement
         logger.warning("voice_boot_cascade_dispatch_failed", exc_info=True)
         return resolved
-    return resolved
+
+    outcome = classify_cascade_boot_result(final_result)
+    if outcome.verdict is CascadeBootVerdict.INOPERATIVE and not allow_inoperative_capture:
+        logger.error(
+            "voice_boot_cascade_inoperative",
+            reason=outcome.reason,
+            attempts=outcome.attempts,
+            device=driving_device.index,
+            host_api=driving_device.host_api_name,
+            friendly_name=driving_device.name,
+        )
+        msg = (
+            f"Voice capture cascade declared endpoint inoperative "
+            f"(reason={outcome.reason}, attempts={outcome.attempts}). "
+            "No viable microphone path exists; refusing to boot a deaf pipeline."
+        )
+        raise CaptureInoperativeError(
+            msg,
+            device=driving_device.index,
+            host_api=driving_device.host_api_name,
+            reason=outcome.reason,
+            attempts=outcome.attempts,
+        )
+    return driving_device
 
 
 def _detect_voice_clarity_active(resolved_name: str | None) -> bool:
