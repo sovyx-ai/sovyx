@@ -14,6 +14,7 @@ from sovyx.engine.types import CognitivePhase
 from sovyx.llm.models import LLMResponse, ToolCall
 from sovyx.observability.logging import get_logger
 from sovyx.observability.metrics import MetricsRegistry, get_metrics
+from sovyx.observability.saga import trace_saga
 from sovyx.observability.tracing import SovyxTracer, get_tracer
 
 if TYPE_CHECKING:
@@ -93,11 +94,17 @@ class CognitiveLoop:
         """Stop the cognitive loop."""
         logger.info("cognitive_loop_stopped")
 
+    @trace_saga("cognitive_loop", kind="cognitive")
     async def process_request(self, request: CognitiveRequest) -> ActionResult:
         """Process a CognitiveRequest through the full loop.
 
         NEVER raises an exception — always returns ActionResult.
         State machine always resets to IDLE via finally block.
+
+        Wrapped in ``@trace_saga`` so every log emitted during the loop
+        (perceive/attend/think/act/reflect, brain calls, LLM calls,
+        plugin invokes, brain writes) shares the same ``saga_id`` and
+        the operator can reconstruct the full causal chain by filter.
         """
         tracer = get_tracer()
         metrics = get_metrics()
@@ -112,6 +119,7 @@ class CognitiveLoop:
         ):
             return await self._execute_loop(request, tracer, metrics)
 
+    @trace_saga("cognitive_loop", kind="cognitive_streaming")
     async def process_request_streaming(
         self,
         request: CognitiveRequest,
