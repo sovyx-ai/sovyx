@@ -1384,7 +1384,11 @@ class TestCaptureExclusivePost:
 
     def test_triggers_exclusive_restart_when_pipeline_running(self, app, tmp_path) -> None:
         """When a capture task is registered, enable=True hot-applies it."""
-        from sovyx.voice._capture_task import AudioCaptureTask
+        from sovyx.voice._capture_task import (
+            AudioCaptureTask,
+            ExclusiveRestartResult,
+            ExclusiveRestartVerdict,
+        )
 
         config_path = tmp_path / "system.yaml"
         config_path.write_text("")
@@ -1392,7 +1396,15 @@ class TestCaptureExclusivePost:
         app.state.engine_config = MagicMock()
 
         fake_capture = MagicMock()
-        fake_capture.request_exclusive_restart = AsyncMock()
+        fake_capture.request_exclusive_restart = AsyncMock(
+            return_value=ExclusiveRestartResult(
+                verdict=ExclusiveRestartVerdict.EXCLUSIVE_ENGAGED,
+                engaged=True,
+                host_api="Windows WASAPI",
+                device=5,
+                sample_rate=16_000,
+            ),
+        )
 
         registry = app.state.registry
         registry.is_registered = MagicMock(
@@ -1415,7 +1427,70 @@ class TestCaptureExclusivePost:
         assert resp.status_code == 200  # noqa: PLR2004
         data = resp.json()
         assert data["applied_immediately"] is True
+        assert data["verdict"] == "exclusive_engaged"
         fake_capture.request_exclusive_restart.assert_awaited_once()
+
+    def test_downgrade_to_shared_reports_not_applied(self, app, tmp_path) -> None:
+        """v0.20.2 / Bug C — WASAPI shared downgrade must surface as not applied.
+
+        If another app holds the device exclusively (or policy denies
+        exclusive access), WASAPI hands back a shared-mode stream with
+        ``exclusive_used=False``. Pre-v0.20.2 the endpoint reported
+        ``applied_immediately=True`` anyway — the UI showed a fake
+        success banner while the APO chain was still in the signal
+        path. The route now returns ``applied_immediately=False`` +
+        ``verdict="downgraded_to_shared"`` + a detail string.
+        """
+        from sovyx.voice._capture_task import (
+            AudioCaptureTask,
+            ExclusiveRestartResult,
+            ExclusiveRestartVerdict,
+        )
+
+        config_path = tmp_path / "system.yaml"
+        config_path.write_text("")
+        app.state.config_path = str(config_path)
+        app.state.engine_config = MagicMock()
+
+        fake_capture = MagicMock()
+        fake_capture.request_exclusive_restart = AsyncMock(
+            return_value=ExclusiveRestartResult(
+                verdict=ExclusiveRestartVerdict.DOWNGRADED_TO_SHARED,
+                engaged=False,
+                host_api="Windows WASAPI",
+                device=5,
+                sample_rate=16_000,
+                detail="WASAPI granted shared mode instead of exclusive",
+            ),
+        )
+
+        registry = app.state.registry
+        registry.is_registered = MagicMock(
+            side_effect=lambda iface: iface is AudioCaptureTask,
+        )
+        registry.resolve = AsyncMock(return_value=fake_capture)
+
+        mock_editor = MagicMock()
+        mock_editor.update_section = AsyncMock()
+
+        c = TestClient(app, headers={"Authorization": f"Bearer {_TOKEN}"})
+        with patch(
+            "sovyx.engine.config_editor.ConfigEditor",
+            return_value=mock_editor,
+        ):
+            resp = c.post(
+                "/api/voice/capture-exclusive",
+                json={"enabled": True},
+            )
+        assert resp.status_code == 200  # noqa: PLR2004
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["enabled"] is True
+        # The reopen ran and landed in shared mode — the APO chain is
+        # still live, so the UI must NOT tell the user the bypass took.
+        assert data["applied_immediately"] is False
+        assert data["verdict"] == "downgraded_to_shared"
+        assert "shared mode" in data["detail"]
 
     def test_disable_does_not_call_exclusive_restart(self, app, tmp_path) -> None:
         """enabled=False persists but never calls exclusive restart."""

@@ -10,13 +10,18 @@ from __future__ import annotations
 import asyncio
 from types import ModuleType
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pytest
 
 from sovyx.engine.config import VoiceTuningConfig
-from sovyx.voice._capture_task import AudioCaptureTask, _extract_peak_db, _resolve_input_entry
+from sovyx.voice._capture_task import (
+    AudioCaptureTask,
+    ExclusiveRestartVerdict,
+    _extract_peak_db,
+    _resolve_input_entry,
+)
 from sovyx.voice.device_enum import DeviceEntry
 
 
@@ -591,6 +596,7 @@ class TestExclusiveRestart:
 
     @pytest.mark.asyncio()
     async def test_restart_tears_down_and_reopens_with_exclusive_settings(self) -> None:
+        """Happy path — opener honours exclusive=True ⇒ EXCLUSIVE_ENGAGED."""
         pipeline = MagicMock()
         pipeline.feed_frame = AsyncMock()
 
@@ -619,13 +625,17 @@ class TestExclusiveRestart:
             await task.start()
             initial_stream = streams[0]
 
-            await task.request_exclusive_restart()
+            result = await task.request_exclusive_restart()
 
+            assert result.verdict is ExclusiveRestartVerdict.EXCLUSIVE_ENGAGED
+            assert result.engaged is True
+            assert result.host_api == "Windows WASAPI"
+            assert result.device == 5  # noqa: PLR2004
+            assert result.sample_rate == 16_000  # noqa: PLR2004
+            assert result.detail is None
             assert len(streams) >= 2  # noqa: PLR2004
             initial_stream.stop.assert_called()
             initial_stream.close.assert_called()
-            # Extract the first kwargs dict whose extra_settings carries
-            # exclusive=True — that's the restart call.
             exclusive_calls = [
                 kw for kw in stream_kwargs if getattr(kw.get("extra_settings"), "exclusive", False)
             ]
@@ -636,18 +646,27 @@ class TestExclusiveRestart:
 
     @pytest.mark.asyncio()
     async def test_restart_noop_when_not_running(self) -> None:
+        """Calling before ``start()`` returns NOT_RUNNING without side effects."""
         task = AudioCaptureTask(MagicMock())
-        # Must not raise or try to tear down anything.
-        await task.request_exclusive_restart()
+
+        result = await task.request_exclusive_restart()
+
+        assert result.verdict is ExclusiveRestartVerdict.NOT_RUNNING
+        assert result.engaged is False
+        assert result.detail == "capture task is not running"
         assert task.is_running is False
 
     @pytest.mark.asyncio()
-    async def test_restart_failure_falls_back_to_shared(self) -> None:
-        """If exclusive open fails, we must keep running in shared mode.
+    async def test_restart_returns_downgraded_when_wasapi_grants_shared(self) -> None:
+        """Exclusive combo fails but shared fallback succeeds within the opener.
 
-        Staying deaf is better than going *down* — the user still has
-        the dashboard banner + CLI doctor to guide them through manual
-        APO disable.
+        Scenario: another app holds the device exclusively, so the
+        ``exclusive=True`` combo raises. The opener's next combo in the
+        same call (``exclusive=False``) opens cleanly — returning a
+        stream whose ``info.exclusive_used=False``. The deaf-APO
+        condition that triggered the request is unchanged, so the
+        restart MUST surface this as DOWNGRADED_TO_SHARED, not as a
+        successful engagement.
         """
         pipeline = MagicMock()
         pipeline.feed_frame = AsyncMock()
@@ -657,9 +676,9 @@ class TestExclusiveRestart:
 
         def stream_factory(**kwargs: Any) -> MagicMock:  # noqa: ARG001
             attempt["n"] += 1
-            # First call = shared start (ok).
-            # Second call = exclusive attempt (fail — simulate APO conflict).
-            # Third call = shared fallback (ok).
+            # 1: initial shared start (ok).
+            # 2: restart's exclusive combo (fail — device held elsewhere).
+            # 3: restart's shared fallback within same opener (ok).
             if attempt["n"] == 2:  # noqa: PLR2004
                 raise sd.PortAudioError("exclusive denied")  # type: ignore[attr-defined]
             stream = MagicMock()
@@ -680,9 +699,180 @@ class TestExclusiveRestart:
         )
         try:
             await task.start()
-            await task.request_exclusive_restart()
-            # Should have retried in shared mode — at least 2 successful streams.
+
+            result = await task.request_exclusive_restart()
+
+            assert result.verdict is ExclusiveRestartVerdict.DOWNGRADED_TO_SHARED
+            assert result.engaged is False
+            assert result.host_api == "Windows WASAPI"
+            assert result.device == 5  # noqa: PLR2004
+            assert result.sample_rate == 16_000  # noqa: PLR2004
+            assert result.detail is not None
+            assert "shared mode" in result.detail
             assert len(streams) >= 2  # noqa: PLR2004
             assert task.is_running is True
+        finally:
+            await task.stop()
+
+    @pytest.mark.asyncio()
+    async def test_restart_open_failed_shared_fallback(self) -> None:
+        """Every restart combo fails, but ``_reopen_stream_after_device_error`` recovers.
+
+        Scenario: the restart's exclusive_tuning produces combos
+        ``[(excl=True), (excl=False)]`` — both raise in the opener,
+        which therefore raises ``StreamOpenError``. The except branch
+        then calls :meth:`_reopen_stream_after_device_error` (with the
+        non-exclusive base tuning — 1 combo) which opens cleanly. The
+        pipeline stays alive but deaf → OPEN_FAILED_SHARED_FALLBACK.
+        """
+        pipeline = MagicMock()
+        pipeline.feed_frame = AsyncMock()
+
+        streams: list[MagicMock] = []
+        attempt: dict[str, int] = {"n": 0}
+
+        def stream_factory(**kwargs: Any) -> MagicMock:  # noqa: ARG001
+            attempt["n"] += 1
+            # 1: initial shared start (ok).
+            # 2: restart exclusive combo (fail).
+            # 3: restart shared combo within same opener (fail — opener
+            #    raises StreamOpenError).
+            # 4: _reopen_stream_after_device_error shared combo (ok).
+            if attempt["n"] in (2, 3):
+                raise sd.PortAudioError("device denied")  # type: ignore[attr-defined]
+            stream = MagicMock()
+            streams.append(stream)
+            return stream
+
+        sd = _fake_sd()
+        sd.InputStream = stream_factory  # type: ignore[attr-defined]
+        entry = _input_entry(index=5, rate=16_000, host_api="Windows WASAPI")
+
+        task = AudioCaptureTask(
+            pipeline,
+            input_device=5,
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [entry],
+        )
+        try:
+            await task.start()
+
+            result = await task.request_exclusive_restart()
+
+            assert result.verdict is ExclusiveRestartVerdict.OPEN_FAILED_SHARED_FALLBACK
+            assert result.engaged is False
+            assert result.host_api == "Windows WASAPI"
+            assert result.detail is not None
+            assert "recovered into shared mode" in result.detail
+            # Initial + shared-fallback stream.
+            assert len(streams) == 2  # noqa: PLR2004
+            assert task.is_running is True
+        finally:
+            await task.stop()
+
+    @pytest.mark.asyncio()
+    async def test_restart_open_failed_no_stream(self) -> None:
+        """Exclusive open AND shared fallback both fail → OPEN_FAILED_NO_STREAM.
+
+        The pipeline is left without a capture source until the next
+        reconnect cycle kicks in (not exercised here — the test just
+        verifies the verdict contract when everything fails).
+        """
+        pipeline = MagicMock()
+        pipeline.feed_frame = AsyncMock()
+
+        streams: list[MagicMock] = []
+        attempt: dict[str, int] = {"n": 0}
+
+        def stream_factory(**kwargs: Any) -> MagicMock:  # noqa: ARG001
+            attempt["n"] += 1
+            # 1: initial shared start (ok).
+            # 2+: every combo from the restart opener and the shared
+            #     fallback raises — no stream is ever recovered.
+            if attempt["n"] == 1:
+                stream = MagicMock()
+                streams.append(stream)
+                return stream
+            raise sd.PortAudioError("device gone")  # type: ignore[attr-defined]
+
+        sd = _fake_sd()
+        sd.InputStream = stream_factory  # type: ignore[attr-defined]
+        entry = _input_entry(index=5, rate=16_000, host_api="Windows WASAPI")
+
+        task = AudioCaptureTask(
+            pipeline,
+            input_device=5,
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [entry],
+        )
+        try:
+            await task.start()
+
+            result = await task.request_exclusive_restart()
+
+            assert result.verdict is ExclusiveRestartVerdict.OPEN_FAILED_NO_STREAM
+            assert result.engaged is False
+            assert result.detail is not None
+            assert "shared fallback" in result.detail
+            # Only the initial stream opened successfully.
+            assert len(streams) == 1
+        finally:
+            # Task stays alive internally but has no stream — stop() still works.
+            await task.stop()
+
+    @pytest.mark.asyncio()
+    async def test_restart_emits_verdict_metric(self) -> None:
+        """Each verdict increments the ``exclusive_restart.verdicts`` counter.
+
+        The metric is load-bearing for the dashboard: without it, a
+        deploy where 100 % of restarts silently land in
+        DOWNGRADED_TO_SHARED looks identical to one where 100 % engage
+        exclusive. The counter is how we detect the bad state at scale.
+        """
+        pipeline = MagicMock()
+        pipeline.feed_frame = AsyncMock()
+
+        streams: list[MagicMock] = []
+
+        def stream_factory(**kwargs: Any) -> MagicMock:  # noqa: ARG001
+            stream = MagicMock()
+            streams.append(stream)
+            return stream
+
+        sd = _fake_sd()
+        sd.InputStream = stream_factory  # type: ignore[attr-defined]
+        entry = _input_entry(index=5, rate=16_000, host_api="Windows WASAPI")
+
+        task = AudioCaptureTask(
+            pipeline,
+            input_device=5,
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [entry],
+        )
+
+        counter = MagicMock()
+        fake_registry = MagicMock()
+        fake_registry.voice_capture_exclusive_restart_verdicts = counter
+
+        try:
+            await task.start()
+            with patch(
+                "sovyx.observability.metrics.get_metrics",
+                return_value=fake_registry,
+            ):
+                result = await task.request_exclusive_restart()
+            counter.add.assert_called_once()
+            args, kwargs = counter.add.call_args
+            assert args == (1,)
+            attrs = kwargs["attributes"]
+            assert attrs["verdict"] == result.verdict.value
+            assert attrs["host_api"] == "Windows WASAPI"
+            assert "platform" in attrs
         finally:
             await task.stop()

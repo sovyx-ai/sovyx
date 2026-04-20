@@ -45,6 +45,8 @@ import contextlib
 import math
 import re
 import time
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
@@ -141,6 +143,103 @@ class CaptureInoperativeError(RuntimeError):
         self.host_api = host_api
         self.reason = reason
         self.attempts = attempts
+
+
+class ExclusiveRestartVerdict(StrEnum):
+    """Verdict of :meth:`AudioCaptureTask.request_exclusive_restart`.
+
+    Pre-v0.20.2 the method returned ``None`` and always logged
+    ``audio_capture_exclusive_restart_ok`` when the reopen succeeded —
+    even when WASAPI silently handed back a shared-mode stream (e.g.
+    the device was held by another exclusive-mode app, or Windows
+    policy denied exclusive access). Callers could not distinguish
+    "APO bypassed" from "APO still active, we just reopened the same
+    deaf pipe". This enum makes the outcome inspectable:
+
+    Members:
+        EXCLUSIVE_ENGAGED: Stream reopened and WASAPI confirmed
+            exclusive engagement (``info.exclusive_used=True``). The
+            APO chain is bypassed — the user's mic is now reaching
+            PortAudio untouched.
+        DOWNGRADED_TO_SHARED: Stream reopened successfully, but
+            ``info.exclusive_used=False``. WASAPI returned shared
+            mode (the only combos that survived fallback were shared
+            variants) — the APO chain is still in the signal path,
+            so the deaf condition that triggered the bypass remains.
+        OPEN_FAILED_SHARED_FALLBACK: The exclusive reopen raised a
+            :class:`StreamOpenError` and the secondary shared-mode
+            :meth:`_reopen_stream_after_device_error` recovered. The
+            pipeline is alive but deaf (same as before the request).
+        OPEN_FAILED_NO_STREAM: Both the exclusive reopen and the
+            shared-mode fallback raised. The stream is closed; the
+            pipeline has no capture source until the next reconnect
+            cycle in :meth:`_consume_loop`.
+        NOT_RUNNING: Called while the task is stopped — no-op.
+    """
+
+    EXCLUSIVE_ENGAGED = "exclusive_engaged"
+    DOWNGRADED_TO_SHARED = "downgraded_to_shared"
+    OPEN_FAILED_SHARED_FALLBACK = "open_failed_shared_fallback"
+    OPEN_FAILED_NO_STREAM = "open_failed_no_stream"
+    NOT_RUNNING = "not_running"
+
+
+@dataclass(frozen=True, slots=True)
+class ExclusiveRestartResult:
+    """Structured outcome of :meth:`AudioCaptureTask.request_exclusive_restart`.
+
+    Attributes:
+        verdict: The :class:`ExclusiveRestartVerdict` describing what
+            happened. Callers should treat anything other than
+            :attr:`ExclusiveRestartVerdict.EXCLUSIVE_ENGAGED` as an
+            unsuccessful bypass — the APO chain is still in place.
+        engaged: Convenience flag — ``True`` iff
+            ``verdict == EXCLUSIVE_ENGAGED``.
+        host_api: Host API of the resulting stream (or ``None`` when
+            :attr:`OPEN_FAILED_NO_STREAM` / :attr:`NOT_RUNNING`).
+        device: Resolved PortAudio device index of the resulting
+            stream.
+        sample_rate: Effective sample rate of the resulting stream.
+        detail: Human-readable error / downgrade reason for logs and
+            the dashboard UI. ``None`` on a successful engagement.
+    """
+
+    verdict: ExclusiveRestartVerdict
+    engaged: bool
+    host_api: str | None = None
+    device: int | str | None = None
+    sample_rate: int | None = None
+    detail: str | None = None
+
+
+def _emit_exclusive_restart_metric(result: ExclusiveRestartResult) -> None:
+    """Record a ``voice.capture.exclusive_restart.verdicts`` counter event.
+
+    Lazy-imports :mod:`sovyx.observability.metrics` so module-load in
+    unit suites that swap the metrics provider still works. Failures
+    in the metrics pipeline never bubble up to the caller — instead we
+    log at DEBUG and continue, so an OTel exporter hiccup cannot break
+    the capture task's reopen path.
+    """
+    try:
+        import sys
+
+        from sovyx.observability.metrics import get_metrics
+
+        registry = get_metrics()
+        counter = getattr(registry, "voice_capture_exclusive_restart_verdicts", None)
+        if counter is None:
+            return
+        counter.add(
+            1,
+            attributes={
+                "verdict": result.verdict.value,
+                "host_api": result.host_api or "none",
+                "platform": sys.platform,
+            },
+        )
+    except Exception:  # noqa: BLE001 — metrics must never break capture
+        logger.debug("voice_capture_exclusive_restart_metric_failed", exc_info=True)
 
 
 def _rms_db_int16(frame: Any) -> float:  # noqa: ANN401 — numpy int16 array; Any keeps numpy lazy-imported
@@ -519,7 +618,7 @@ class AudioCaptureTask:
 
     # -- Internals ------------------------------------------------------------
 
-    async def request_exclusive_restart(self) -> None:
+    async def request_exclusive_restart(self) -> ExclusiveRestartResult:
         """Re-open the capture stream in WASAPI exclusive mode.
 
         Called by the orchestrator when it decides that a capture-side
@@ -533,10 +632,25 @@ class AudioCaptureTask:
         Idempotent — safe to call while stopped; in that case it is a
         no-op. The orchestrator already latches the request so the
         callback fires at most once per session.
+
+        Returns:
+            An :class:`ExclusiveRestartResult` describing whether
+            exclusive mode was actually engaged. v0.20.2 / Bug C —
+            pre-v0.20.2 this method returned ``None`` and logged
+            success whenever the reopen succeeded, even when WASAPI
+            fell back to shared mode (APO still in the signal path).
+            Callers now inspect ``result.engaged`` to distinguish a
+            real APO bypass from a cosmetic restart.
         """
         if not self._running:
             logger.debug("audio_capture_exclusive_restart_skipped_not_running")
-            return
+            result = ExclusiveRestartResult(
+                verdict=ExclusiveRestartVerdict.NOT_RUNNING,
+                engaged=False,
+                detail="capture task is not running",
+            )
+            _emit_exclusive_restart_metric(result)
+            return result
 
         from sovyx.voice._stream_opener import StreamOpenError, open_input_stream
 
@@ -590,7 +704,28 @@ class AudioCaptureTask:
                     "audio_capture_exclusive_fallback_failed",
                     error=str(fallback_exc),
                 )
-            return
+                result = ExclusiveRestartResult(
+                    verdict=ExclusiveRestartVerdict.OPEN_FAILED_NO_STREAM,
+                    engaged=False,
+                    host_api=self._host_api_name,
+                    device=self._input_device,
+                    detail=(
+                        f"exclusive open failed ({exc}); shared fallback "
+                        f"also failed ({fallback_exc})"
+                    ),
+                )
+                _emit_exclusive_restart_metric(result)
+                return result
+            result = ExclusiveRestartResult(
+                verdict=ExclusiveRestartVerdict.OPEN_FAILED_SHARED_FALLBACK,
+                engaged=False,
+                host_api=self._host_api_name,
+                device=self._input_device,
+                sample_rate=self._sample_rate,
+                detail=(f"exclusive open failed ({exc}); recovered into shared mode"),
+            )
+            _emit_exclusive_restart_metric(result)
+            return result
 
         self._stream = stream
         self._sample_rate = info.sample_rate
@@ -602,6 +737,37 @@ class AudioCaptureTask:
             source_rate=info.sample_rate,
             source_channels=info.channels,
         )
+        # v0.20.2 / Bug C — an opener that couldn't honour exclusive
+        # (device busy, policy denied, old PortAudio) falls through to
+        # shared variants of the same combo and returns a stream with
+        # ``exclusive_used=False``. The pipeline is alive but the APO
+        # chain is still in the signal path — the deaf condition that
+        # triggered the request is unchanged. Distinguish this from a
+        # real engagement so the dashboard / orchestrator / user know
+        # the bypass did not take.
+        if not info.exclusive_used:
+            logger.error(
+                "audio_capture_exclusive_restart_downgraded_to_shared",
+                device=self._input_device,
+                host_api=self._host_api_name,
+                sample_rate=self._sample_rate,
+                channels=info.channels,
+            )
+            result = ExclusiveRestartResult(
+                verdict=ExclusiveRestartVerdict.DOWNGRADED_TO_SHARED,
+                engaged=False,
+                host_api=self._host_api_name,
+                device=self._input_device,
+                sample_rate=self._sample_rate,
+                detail=(
+                    "WASAPI granted shared mode instead of exclusive — APO "
+                    "chain still in signal path. Another app may hold the "
+                    "device exclusively or Windows policy denied exclusive "
+                    "access."
+                ),
+            )
+            _emit_exclusive_restart_metric(result)
+            return result
         logger.warning(
             "audio_capture_exclusive_restart_ok",
             device=self._input_device,
@@ -610,6 +776,15 @@ class AudioCaptureTask:
             channels=info.channels,
             exclusive_used=info.exclusive_used,
         )
+        result = ExclusiveRestartResult(
+            verdict=ExclusiveRestartVerdict.EXCLUSIVE_ENGAGED,
+            engaged=True,
+            host_api=self._host_api_name,
+            device=self._input_device,
+            sample_rate=self._sample_rate,
+        )
+        _emit_exclusive_restart_metric(result)
+        return result
 
     async def _reopen_stream_after_device_error(self) -> None:
         """Reopen the stream after a ``sd.PortAudioError`` in the consume loop.

@@ -365,7 +365,16 @@ async def set_capture_exclusive(request: Request) -> JSONResponse:
             engine_config.tuning.voice.capture_wasapi_exclusive = enabled
 
     # 3. Apply immediately if enabling and pipeline is running.
+    # v0.20.2 / Bug C — ``applied_immediately`` now reflects whether
+    # WASAPI actually granted exclusive mode, not merely whether the
+    # restart code path ran. ``engaged`` and ``verdict`` let the UI
+    # surface a warning banner when the reopen landed in shared mode
+    # (device held by another app, policy denied) — in which case the
+    # APO chain is still in the signal path and the user has to close
+    # the competing app or disable the APO manually.
     applied_immediately = False
+    restart_verdict: str | None = None
+    restart_detail: str | None = None
     if enabled:
         registry = getattr(request.app.state, "registry", None)
         if registry is not None:
@@ -374,23 +383,29 @@ async def set_capture_exclusive(request: Request) -> JSONResponse:
 
                 if registry.is_registered(AudioCaptureTask):
                     capture = await registry.resolve(AudioCaptureTask)
-                    await capture.request_exclusive_restart()
-                    applied_immediately = True
+                    result = await capture.request_exclusive_restart()
+                    applied_immediately = result.engaged
+                    restart_verdict = result.verdict.value
+                    restart_detail = result.detail
 
     logger.info(
         "capture_exclusive_updated",
         enabled=enabled,
         persisted=persisted,
         applied_immediately=applied_immediately,
+        verdict=restart_verdict,
     )
-    return JSONResponse(
-        {
-            "ok": True,
-            "enabled": enabled,
-            "persisted": persisted,
-            "applied_immediately": applied_immediately,
-        }
-    )
+    response: dict[str, object] = {
+        "ok": True,
+        "enabled": enabled,
+        "persisted": persisted,
+        "applied_immediately": applied_immediately,
+    }
+    if restart_verdict is not None:
+        response["verdict"] = restart_verdict
+    if restart_detail is not None:
+        response["detail"] = restart_detail
+    return JSONResponse(response)
 
 
 @router.get("/hardware-detect")

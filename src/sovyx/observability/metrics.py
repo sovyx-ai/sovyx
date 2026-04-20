@@ -328,6 +328,18 @@ class MetricsRegistry:
             ),
             unit="1",
         )
+        self.voice_capture_exclusive_restart_verdicts = meter.create_counter(
+            name="sovyx.voice.capture.exclusive_restart.verdicts",
+            description=(
+                "request_exclusive_restart() outcomes classified into "
+                "ExclusiveRestartVerdict values (labels: verdict, host_api, "
+                "platform). v0.20.2 / Bug C — before this metric the "
+                "restart was opaque: the dashboard logged 'ok' even when "
+                "WASAPI silently downgraded the stream to shared mode "
+                "with the APO chain still active."
+            ),
+            unit="1",
+        )
         self.voice_health_time_to_first_utterance = meter.create_histogram(
             name="sovyx.voice.health.time_to_first_utterance",
             description=(

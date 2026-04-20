@@ -260,7 +260,17 @@ async def create_voice_pipeline(
         if task is None:
             logger.debug("voice_apo_bypass_callback_no_capture_task")
             return
-        await task.request_exclusive_restart()
+        result = await task.request_exclusive_restart()
+        # v0.20.2 / Bug C — surface the verdict so auto-bypass is not
+        # silently considered "done" when WASAPI downgraded to shared.
+        if not result.engaged:
+            logger.warning(
+                "voice_apo_bypass_not_engaged",
+                verdict=result.verdict.value,
+                host_api=result.host_api,
+                device=result.device,
+                detail=result.detail,
+            )
 
     # §4.4.6 self-feedback ducking — build the gate with a late-bound
     # apply_duck closure that targets whichever capture task ends up in
