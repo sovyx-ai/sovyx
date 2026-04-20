@@ -82,6 +82,9 @@ if TYPE_CHECKING:
     from sovyx.observability.metrics import (
         teardown_metrics as teardown_metrics,
     )
+    from sovyx.observability.pii import (
+        PIIRedactor as PIIRedactor,
+    )
     from sovyx.observability.schema import (
         ENVELOPE_FIELDS as ENVELOPE_FIELDS,
     )
@@ -161,6 +164,7 @@ _SUBMODULE_MAP: dict[str, tuple[str, ...]] = {
         "teardown_metrics",
     ),
     "sovyx.observability.envelope": ("EnvelopeProcessor",),
+    "sovyx.observability.pii": ("PIIRedactor",),
     "sovyx.observability.schema": (
         "ENVELOPE_FIELDS",
         "KNOWN_EVENTS",
@@ -213,6 +217,7 @@ __all__ = [
     "HealthRegistry",
     "LogEntry",
     "MetricsRegistry",
+    "PIIRedactor",
     "SLODefinition",
     "SLOMonitor",
     "SLOReport",
