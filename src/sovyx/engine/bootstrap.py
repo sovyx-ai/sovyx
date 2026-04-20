@@ -143,7 +143,9 @@ async def bootstrap(
         )
 
         # 1. EventBus
-        event_bus = EventBus()
+        event_bus = EventBus(
+            saga_propagation_enabled=engine_config.observability.features.saga_propagation,
+        )
         registry.register_instance(EventBus, event_bus)
 
         # 2. DatabaseManager

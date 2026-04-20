@@ -2,7 +2,12 @@
 
 All events are frozen dataclasses (immutable). The EventBus dispatches
 events to registered handlers with error isolation and correlation ID
-propagation.
+propagation. When constructed with ``saga_propagation_enabled=True``
+(controlled by ``observability.features.saga_propagation``), every
+handler dispatch also runs inside a ``bound_contextvars`` scope that
+binds ``cause_id=event.event_id`` and inherits the caller's
+``saga_id`` — so the handler's logs link causally back to the
+emit-site without any caller-side instrumentation.
 """
 
 from __future__ import annotations
@@ -12,9 +17,17 @@ from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from enum import IntEnum, auto
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from structlog.contextvars import bind_contextvars, reset_contextvars
+
 from sovyx.observability.logging import get_logger, set_correlation_id
+from sovyx.observability.saga import current_saga_id
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+    from contextvars import Token
 
 logger = get_logger(__name__)
 
@@ -326,8 +339,9 @@ class EventBus:
     Not persistent (in-memory only).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, saga_propagation_enabled: bool = False) -> None:
         self._handlers: dict[type[Event], list[EventHandler]] = defaultdict(list)
+        self._saga_propagation_enabled = saga_propagation_enabled
 
     def subscribe(self, event_type: type[Event], handler: EventHandler) -> None:
         """Register a handler for an event type.
@@ -357,6 +371,15 @@ class EventBus:
 
         Propagates the event's correlation_id into the handler context.
 
+        When ``saga_propagation_enabled`` is True, each handler call
+        runs inside a contextvar scope that binds
+        ``cause_id=event.event_id`` and inherits the caller's
+        ``saga_id``. This is what lets a handler's logs link causally
+        back to the emit-site without callers having to thread parent
+        ids manually. The bindings are reset between handlers so a
+        misbehaving handler can't leak its own deeper-nested ids
+        sideways into siblings.
+
         Args:
             event: The event to emit.
         """
@@ -368,7 +391,21 @@ class EventBus:
         if event.correlation_id:
             set_correlation_id(event.correlation_id)
 
+        # Snapshot the parent saga ONCE outside the loop — calling
+        # current_saga_id() inside the loop would see whatever the
+        # previous handler bound (since saga_scope inside a handler
+        # would briefly enter, then exit before the next handler).
+        # Snapshotting here keeps every sibling handler tied to the
+        # same parent saga.
+        parent_saga = current_saga_id() if self._saga_propagation_enabled else None
+
         for handler in handlers:
+            tokens: Mapping[str, Token[Any]] = {}
+            if self._saga_propagation_enabled:
+                bind_kwargs: dict[str, Any] = {"cause_id": event.event_id}
+                if parent_saga is not None:
+                    bind_kwargs["saga_id"] = parent_saga
+                tokens = bind_contextvars(**bind_kwargs)
             try:
                 await handler(event)
             except Exception:  # noqa: BLE001
@@ -379,6 +416,9 @@ class EventBus:
                     handler=getattr(handler, "__name__", str(handler)),
                     exc_info=True,
                 )
+            finally:
+                if tokens:
+                    reset_contextvars(**tokens)
 
     @property
     def handler_count(self) -> int:
