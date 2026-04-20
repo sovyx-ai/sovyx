@@ -1,91 +1,77 @@
-# Python
+# ── Python ─────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.hypothesis/
 
-# Node
+# ── Node ───────────────────────────────────────────────────────────────
 node_modules/
 
-# Virtual environments
+# ── Virtual environments ───────────────────────────────────────────────
 .venv/
 venv/
 ENV/
 
-# Distribution
+# ── Build artefacts / packaging ────────────────────────────────────────
 dist/
 build/
 *.egg-info/
 *.egg
+site/
+dashboard/coverage/
+*.tsbuildinfo
+# Dashboard build output IS tracked — needed in wheel via
+# src/sovyx/dashboard/static/. Rebuild with: cd dashboard && npm run build
 
-# IDE
+# ── IDE / editor ───────────────────────────────────────────────────────
 .idea/
 .vscode/
 *.swp
 *.swo
 *~
 
-# Environment
+# ── OS ─────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Secrets / env ──────────────────────────────────────────────────────
 .env
 .env.*
 
-# Databases
+# ── Databases / local Sovyx data ───────────────────────────────────────
 *.db
 *.db-wal
 *.db-shm
+.sovyx/
 
-# Coverage
+# ── Coverage ───────────────────────────────────────────────────────────
 htmlcov/
 .coverage
 .coverage.*
 coverage.xml
 
-# mypy
-.mypy_cache/
-
-# ruff
-.ruff_cache/
-
-# pytest
-.pytest_cache/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Models (large binaries)
+# ── Models (large binaries, fetched at runtime) ────────────────────────
 *.onnx
 *.bin
 
-# Sovyx data (local)
-.sovyx/
-.hypothesis/
--e 
-# Dashboard build output — tracked in git for PyPI distribution
-# Rebuild with: cd dashboard && npm run build
-# src/sovyx/dashboard/static/  # DO NOT ignore — needed in wheel
-dashboard/coverage/
-erebus/
-site/
-
-# Context privado (specs, patterns, decisões — NUNCA vai pro GitHub)
+# ── Internal docs / tooling output (kept local only) ───────────────────
 .context/
-# CLAUDE.md — kept in repo for Claude Code + Cursor
 .cursorrules
-
-# VPS brain dump (cópia temporária usada pela reescrita de docs — reprocessável do VPS)
-vps-brain-dump/
-
-# audit_coverage.py output — regenerable tooling artifact
 docs/_meta/
-
-# Internal design docs, audits, and planning — kept local only
 docs-internal/
+vps-brain-dump/
+erebus/
 
-# Claude Code local runtime state (scheduled task locks, etc.)
+# ── Claude Code local runtime state ────────────────────────────────────
 .claude/
 
-# Local diagnostic/test scripts (not part of the project)
+# ── Local diagnostic / forensic scripts (not shipped) ──────────────────
+/tmp/
 /mic_test.py
 /sovyx-*.ps1
 /voice-diag.ps1
+/scripts/forensic_*
