@@ -79,6 +79,21 @@ if TYPE_CHECKING:
     from sovyx.observability.metrics import (
         teardown_metrics as teardown_metrics,
     )
+    from sovyx.observability.schema import (
+        ENVELOPE_FIELDS as ENVELOPE_FIELDS,
+    )
+    from sovyx.observability.schema import (
+        KNOWN_EVENTS as KNOWN_EVENTS,
+    )
+    from sovyx.observability.schema import (
+        SCHEMA_VERSION as SCHEMA_VERSION,
+    )
+    from sovyx.observability.schema import (
+        LogEntry as LogEntry,
+    )
+    from sovyx.observability.schema import (
+        validate_entry as validate_entry,
+    )
     from sovyx.observability.slo import (
         SLODefinition as SLODefinition,
     )
@@ -142,6 +157,13 @@ _SUBMODULE_MAP: dict[str, tuple[str, ...]] = {
         "setup_metrics",
         "teardown_metrics",
     ),
+    "sovyx.observability.schema": (
+        "ENVELOPE_FIELDS",
+        "KNOWN_EVENTS",
+        "SCHEMA_VERSION",
+        "LogEntry",
+        "validate_entry",
+    ),
     "sovyx.observability.slo": (
         "SLODefinition",
         "SLOMonitor",
@@ -172,6 +194,9 @@ def __getattr__(name: str) -> object:
 
 
 __all__ = [
+    "ENVELOPE_FIELDS",
+    "KNOWN_EVENTS",
+    "SCHEMA_VERSION",
     "Alert",
     "AlertFired",
     "AlertManager",
@@ -181,6 +206,7 @@ __all__ = [
     "CheckStatus",
     "HealthCheck",
     "HealthRegistry",
+    "LogEntry",
     "MetricsRegistry",
     "SLODefinition",
     "SLOMonitor",
@@ -188,12 +214,12 @@ __all__ = [
     "SLOStatus",
     "SLOTracker",
     "SovyxTracer",
-    "create_default_alert_manager",
-    "create_default_monitor",
     "bind_request_context",
     "bound_request_context",
     "clear_request_context",
     "collect_json",
+    "create_default_alert_manager",
+    "create_default_monitor",
     "create_default_registry",
     "create_offline_registry",
     "get_logger",
@@ -205,4 +231,5 @@ __all__ = [
     "setup_tracing",
     "teardown_metrics",
     "teardown_tracing",
+    "validate_entry",
 ]
