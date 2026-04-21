@@ -143,8 +143,10 @@ def _settings_env_config(instance: BaseModel) -> tuple[str | None, str | None]:
     if not isinstance(instance, BaseSettings):
         return None, None
     cfg = type(instance).model_config
-    prefix = cfg.get("env_prefix")
-    delim = cfg.get("env_nested_delimiter") or cfg.get("env_delimiter")
+    prefix_raw = cfg.get("env_prefix")
+    delim_raw = cfg.get("env_nested_delimiter") or cfg.get("env_delimiter")
+    prefix = prefix_raw if isinstance(prefix_raw, str) else None
+    delim = delim_raw if isinstance(delim_raw, str) else None
     return (prefix, delim)
 
 

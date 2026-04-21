@@ -348,14 +348,14 @@ async def _gather_saga_rows(request: Request, saga_id: str, limit: int) -> list[
     """Return saga rows via FTS when available, else legacy file scan."""
     indexer = getattr(request.app.state, "fts_indexer", None)
     if indexer is not None:
-        rows = await indexer.search("", saga_id=saga_id, limit=limit)
-        rows.sort(key=lambda r: r.get("timestamp") or "")
+        rows: list[dict[str, object]] = await indexer.search("", saga_id=saga_id, limit=limit)
+        rows.sort(key=lambda r: str(r.get("timestamp") or ""))
         return rows
 
     from sovyx.dashboard.logs import query_saga
 
     log_file = getattr(request.app.state, "log_file", None)
-    return query_saga(log_file, saga_id, limit=limit)
+    return list(query_saga(log_file, saga_id, limit=limit))
 
 
 def _maybe_parse_content(row: dict[str, object]) -> dict[str, object]:

@@ -12,11 +12,12 @@ from __future__ import annotations
 
 import json
 import re
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypeAlias
 
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 logger = get_logger(__name__)
@@ -25,7 +26,7 @@ logger = get_logger(__name__)
 Locale = Literal["pt-BR", "en-US"]
 """Supported narrative locales. Default ``pt-BR`` matches the dashboard UI."""
 
-_TemplateFn = "Callable[[dict[str, Any]], str]"
+_TemplateFn: TypeAlias = "Callable[[dict[str, Any]], str]"
 
 
 # ── Field accessors with defensive fallbacks ────────────────────────
@@ -395,7 +396,7 @@ def build_user_journey(
             # the failure for the maintainer and emit a fallback line.
             logger.debug(
                 "narrative.render_failed",
-                event=event_name,
+                affected_event=event_name,
                 error=str(exc),
             )
             lines.append(f"{fallback_label} {event_name} (render error)]")

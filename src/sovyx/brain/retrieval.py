@@ -14,6 +14,8 @@ from sovyx.engine.errors import EmbeddingError, SearchError
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sovyx.brain.concept_repo import ConceptRepository
     from sovyx.brain.embedding import EmbeddingEngine
     from sovyx.brain.episode_repo import EpisodeRepository
@@ -195,7 +197,7 @@ class HybridRetrieval:
         started_at: float,
         limit: int,
         kind: str,
-        results: list[tuple[object, float]],
+        results: Sequence[tuple[object, float]],
         mode: str,
     ) -> None:
         """Emit ``brain.search.completed`` with latency, count, and top score."""

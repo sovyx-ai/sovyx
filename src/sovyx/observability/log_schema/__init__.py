@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 from importlib.resources import files
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from importlib.resources.abc import Traversable
@@ -36,7 +36,7 @@ def event_names() -> list[str]:
 def load(event: str) -> dict[str, Any]:
     """Load the JSON-Schema for *event*. Raises ``FileNotFoundError`` if absent."""
     resource = _resources() / f"{event}.json"
-    return json.loads(resource.read_text(encoding="utf-8"))
+    return cast("dict[str, Any]", json.loads(resource.read_text(encoding="utf-8")))
 
 
 def load_all() -> dict[str, dict[str, Any]]:

@@ -199,7 +199,7 @@ def _extract_header_keys(kwargs: dict[str, object]) -> list[str]:
         return [str(k) for k in headers]
     if hasattr(headers, "keys"):
         try:
-            return [str(k) for k in headers.keys()]  # type: ignore[union-attr]  # noqa: SIM118
+            return [str(k) for k in headers.keys()]  # noqa: SIM118
         except Exception:  # noqa: BLE001 — diagnostic helper isolation.
             return []
     return []
