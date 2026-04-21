@@ -25,7 +25,10 @@ import shutil
 from abc import ABC, abstractmethod
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from sovyx.engine.registry import ServiceRegistry
 
 # ── Data types ──────────────────────────────────────────────────────────────
 
@@ -139,6 +142,30 @@ class HealthRegistry:
         if any(r.status == CheckStatus.YELLOW for r in results):
             return CheckStatus.YELLOW
         return CheckStatus.GREEN
+
+    async def snapshot(self, timeout: float = 10.0) -> dict[str, Any]:
+        """Run every check and return a serialisable summary.
+
+        Used by the startup self-diagnosis cascade
+        (``startup.health.snapshot``) and by any caller that wants a
+        compact overview without iterating :meth:`run_all` results
+        manually. The shape is intentionally small — overall status
+        plus a per-check status/message map — so the payload stays
+        within the wire-format clamp.
+        """
+        results = await self.run_all(timeout=timeout)
+        overall = self.summary(results)
+        return {
+            "overall": overall.value,
+            "check_count": len(results),
+            "checks": {
+                r.name: {
+                    "status": r.status.value,
+                    "message": r.message,
+                }
+                for r in results
+            },
+        }
 
 
 # ── Built-in checks ────────────────────────────────────────────────────────
@@ -671,4 +698,199 @@ def create_offline_registry(
     registry.register(RAMCheck())
     registry.register(CPUCheck())
     registry.register(ModelLoadedCheck(model_dir=model_dir))
+    return registry
+
+
+def _wire_logger() -> Any:  # noqa: ANN401  # structlog BoundLogger has no public type.
+    """Lazy logger fetch — avoids the ``observability.logging`` circular import.
+
+    ``observability.logging`` imports ``observability.anomaly`` which
+    imports back into ``observability.logging``; adding an eager
+    ``from …logging import get_logger`` at module scope here would
+    break the chain. This helper is called only inside the wireup
+    helpers below (debug-only call sites), so the import happens
+    after ``logging.py`` finishes initialising.
+    """
+    from sovyx.observability.logging import get_logger  # noqa: PLC0415
+
+    return get_logger("sovyx.observability.health")
+
+
+async def create_engine_health_registry(
+    service_registry: ServiceRegistry,
+) -> HealthRegistry:
+    """Create a HealthRegistry wired to a live engine ServiceRegistry.
+
+    Registers **6 online checks** that complement the 4 offline checks
+    from :func:`create_offline_registry` (Disk, RAM, CPU, Model). The
+    ``/api/health`` route merges both tiers and deduplicates by name.
+
+    Online checks:
+        1. **Database** — SQLite write roundtrip via DatabaseManager
+        2. **Brain Index** — EmbeddingEngine loaded flag
+        3. **LLM Providers** — cloud providers from LLMRouter (Ollama
+           excluded when cloud providers are present to prevent a
+           false positive — see below).
+        4. **Channels** — connected bridge adapters (Telegram, Signal)
+        5. **Consolidation** — scheduler running flag
+        6. **Cost Budget** — daily LLM spend vs. budget
+
+    Each callback is wrapped in try/except: if a service is not
+    registered, the corresponding check receives ``None`` and returns
+    YELLOW "not configured" (safe degradation, zero crash).
+
+    **Ollama exclusion:** Ollama is always registered as a fallback
+    provider with ``is_available`` unconditionally ``True``. Including
+    it would make the LLM check permanently green even without any API
+    key configured — a false positive. When no cloud providers exist,
+    Ollama is included with a real ping so local-only installs still
+    get a meaningful signal.
+
+    Args:
+        service_registry: The engine's :class:`ServiceRegistry` —
+            already populated by ``bootstrap()`` with the live
+            DatabaseManager / BrainService / LLMRouter / BridgeManager
+            / ConsolidationScheduler / CostGuard instances.
+
+    Returns:
+        HealthRegistry with 6 online checks ready for ``run_all()``.
+    """
+    registry = HealthRegistry()
+
+    # ── 1. Database: async write test via system pool ──
+    db_write_fn: Any = None
+    try:
+        from sovyx.persistence.manager import DatabaseManager  # noqa: PLC0415
+
+        if service_registry.is_registered(DatabaseManager):
+            db_mgr = await service_registry.resolve(DatabaseManager)
+            pool = db_mgr._system_pool
+
+            async def _db_write() -> None:
+                if pool is None:
+                    msg = "System pool not initialized"
+                    raise RuntimeError(msg)  # noqa: TRY301
+                async with pool.read() as conn:
+                    await conn.execute("SELECT 1")
+
+            db_write_fn = _db_write
+    except Exception:  # noqa: BLE001
+        _wire_logger().debug("health_db_wire_failed", exc_info=True)
+
+    registry.register(DatabaseCheck(write_fn=db_write_fn))
+
+    # ── 2. Brain Index: embedding engine loaded flag ──
+    brain_loaded_fn: Any = None
+    try:
+        from sovyx.brain.service import BrainService  # noqa: PLC0415
+
+        if service_registry.is_registered(BrainService):
+            brain = await service_registry.resolve(BrainService)
+
+            def _brain_loaded() -> bool:
+                return brain._embedding._loaded
+
+            brain_loaded_fn = _brain_loaded
+    except Exception:  # noqa: BLE001
+        _wire_logger().debug("health_brain_wire_failed", exc_info=True)
+
+    registry.register(BrainIndexedCheck(is_loaded_fn=brain_loaded_fn))
+
+    # ── 3. LLM Providers: smart Ollama inclusion ──
+    llm_status_fn: Any = None
+    try:
+        from sovyx.llm.router import LLMRouter  # noqa: PLC0415
+
+        if service_registry.is_registered(LLMRouter):
+            llm_router = await service_registry.resolve(LLMRouter)
+
+            async def _llm_status() -> list[tuple[str, bool]]:
+                cloud = [p for p in llm_router._providers if p.name != "ollama"]
+                if cloud:
+                    return [(p.name, p.is_available) for p in cloud]
+                from sovyx.llm.providers.ollama import (  # noqa: PLC0415
+                    OllamaProvider,
+                )
+
+                ollama = next(
+                    (p for p in llm_router._providers if isinstance(p, OllamaProvider)),
+                    None,
+                )
+                if ollama is not None:
+                    reachable = await ollama.ping()
+                    return [("ollama", reachable)]
+                return []
+
+            llm_status_fn = _llm_status
+    except Exception:  # noqa: BLE001
+        _wire_logger().debug("health_llm_wire_failed", exc_info=True)
+
+    registry.register(LLMReachableCheck(provider_status_fn=llm_status_fn))
+
+    # ── 4. Channels: bridge adapter connection status ──
+    channel_status_fn: Any = None
+    try:
+        from sovyx.bridge.manager import BridgeManager  # noqa: PLC0415
+
+        if service_registry.is_registered(BridgeManager):
+            bridge = await service_registry.resolve(BridgeManager)
+
+            def _channel_status() -> list[tuple[str, bool]]:
+                return [
+                    (ct.value, getattr(adapter, "is_running", False))
+                    for ct, adapter in bridge._adapters.items()
+                ]
+
+            channel_status_fn = _channel_status
+    except Exception:  # noqa: BLE001
+        _wire_logger().debug("health_channel_wire_failed", exc_info=True)
+
+    registry.register(ChannelConnectedCheck(channel_status_fn=channel_status_fn))
+
+    # ── 5. Consolidation: scheduler running flag ──
+    consolidation_fn: Any = None
+    try:
+        from sovyx.brain.consolidation import (  # noqa: PLC0415
+            ConsolidationScheduler,
+        )
+
+        if service_registry.is_registered(ConsolidationScheduler):
+            scheduler = await service_registry.resolve(ConsolidationScheduler)
+
+            def _consolidation_running() -> bool:
+                return scheduler._running
+
+            consolidation_fn = _consolidation_running
+    except Exception:  # noqa: BLE001
+        _wire_logger().debug("health_consolidation_wire_failed", exc_info=True)
+
+    registry.register(ConsolidationCheck(is_running_fn=consolidation_fn))
+
+    # ── 6. Cost Budget: daily LLM spend from DashboardCounters ──
+    cost_spend_fn: Any = None
+    try:
+        from sovyx.dashboard.status import get_counters  # noqa: PLC0415
+
+        def _cost_spend() -> float:
+            _calls, cost, _tokens, _msgs = get_counters().snapshot()
+            return cost
+
+        cost_spend_fn = _cost_spend
+    except Exception:  # noqa: BLE001
+        _wire_logger().debug("health_cost_wire_failed", exc_info=True)
+
+    daily_budget = 2.0  # MindConfig.llm.budget_daily_usd default
+    try:
+        from sovyx.llm.cost import CostGuard  # noqa: PLC0415
+
+        if service_registry.is_registered(CostGuard):
+            guard = await service_registry.resolve(CostGuard)
+            daily_budget = guard._daily_budget
+    except Exception:  # noqa: BLE001
+        _wire_logger().debug("health_cost_budget_wire_failed", exc_info=True)
+
+    registry.register(
+        CostBudgetCheck(get_spend_fn=cost_spend_fn, daily_budget=daily_budget),
+    )
+
     return registry

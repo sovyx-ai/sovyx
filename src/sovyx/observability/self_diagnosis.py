@@ -271,8 +271,9 @@ async def _emit_network(config: EngineConfig) -> None:
                 }
             )
 
-    dashboard_host = getattr(config.dashboard, "host", None) if hasattr(config, "dashboard") else None
-    dashboard_port = getattr(config.dashboard, "port", None) if hasattr(config, "dashboard") else None
+    dashboard_cfg = getattr(config, "dashboard", None)
+    dashboard_host = getattr(dashboard_cfg, "host", None) if dashboard_cfg else None
+    dashboard_port = getattr(dashboard_cfg, "port", None) if dashboard_cfg else None
 
     logger.info(
         "startup.network",
@@ -385,9 +386,12 @@ async def _emit_config_provenance(config: EngineConfig) -> None:
 async def _emit_health_snapshot(registry: ServiceRegistry) -> None:
     """Emit a HealthRegistry snapshot if one is registered.
 
-    The :class:`HealthRegistry` wireup lands in Phase 11 (Task 11.5);
-    until then, this helper degrades to a "registry not present" event
-    so the cascade contract stays stable.
+    Phase 11 Task 11.5 wires :class:`HealthRegistry` as a singleton in
+    the ServiceRegistry. When the cascade runs *before* that wireup
+    (early startup ordering, or a partial bootstrap that aborted),
+    ``registry.resolve`` raises ``ServiceNotRegisteredError`` — we
+    swallow it and emit a ``registry_present=False`` payload so the
+    cascade contract stays stable.
     """
     health_registered = False
     health_summary: dict[str, Any] = {}
@@ -396,22 +400,19 @@ async def _emit_health_snapshot(registry: ServiceRegistry) -> None:
     except ImportError:
         pass
     else:
+        health_registry: HealthRegistry | None
         try:
-            health_registry = registry.resolve(HealthRegistry)
-        except Exception:  # noqa: BLE001 — registry miss is expected pre-Phase-11.
+            health_registry = await registry.resolve(HealthRegistry)
+        except Exception:  # noqa: BLE001 — registry miss is expected pre-bootstrap.
             health_registry = None
         if health_registry is not None:
             health_registered = True
             try:
-                snapshot_fn = getattr(health_registry, "snapshot", None)
-                if callable(snapshot_fn):
-                    raw = snapshot_fn()
-                    if asyncio.iscoroutine(raw):
-                        raw = await raw
-                    if isinstance(raw, dict):
-                        health_summary = raw
+                raw = await health_registry.snapshot()
             except Exception as exc:  # noqa: BLE001 — diagnostic degrades.
                 health_summary = {"error": str(exc)}
+            else:
+                health_summary = raw
 
     logger.info(
         "startup.health.snapshot",

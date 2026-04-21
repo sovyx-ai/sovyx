@@ -571,9 +571,27 @@ async def bootstrap(
             telegram = TelegramChannel(token=telegram_token, bridge_manager=bridge)
             bridge.register_channel(telegram)
 
+        # 6. HealthRegistry — wired AFTER every subsystem is registered so
+        # the live-callback factories (DatabaseManager, BrainService,
+        # LLMRouter, BridgeManager, ConsolidationScheduler, CostGuard)
+        # find their dependencies. Registered as a singleton so:
+        #   * the dashboard /api/health route resolves it via app.state,
+        #   * the startup self-diagnosis cascade can call ``snapshot()``
+        #     (Phase 11 Task 11.5 — IMPL-OBSERVABILITY-001 §16),
+        #   * future SLOMonitor + AlertManager (Phase 11.7) consume the
+        #     same instance instead of spawning their own checks.
+        from sovyx.observability.health import (
+            HealthRegistry,
+            create_engine_health_registry,
+        )
+
+        health_registry = await create_engine_health_registry(registry)
+        registry.register_instance(HealthRegistry, health_registry)
+
         logger.info(
             "bootstrap_complete",
             minds=len(mind_configs),
+            health_check_count=health_registry.check_count,
         )
         return registry
 
