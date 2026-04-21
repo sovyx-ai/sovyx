@@ -342,11 +342,20 @@ class WindowsHotplugListener:
     def _handle_device_change(self, wparam: int, lparam: int) -> None:
         if wparam == _DBT_DEVICEARRIVAL:
             kind = HotplugEventKind.DEVICE_ADDED
+            event_name = "audio.device.arrived"
         elif wparam == _DBT_DEVICEREMOVECOMPLETE:
             kind = HotplugEventKind.DEVICE_REMOVED
+            event_name = "audio.device.removed"
         else:
             return
         interface = _extract_device_name(lparam) if lparam else ""
+        logger.info(
+            event_name,
+            **{
+                "voice.platform": "win32",
+                "voice.interface_name": interface or None,
+            },
+        )
         event = HotplugEvent(
             kind=kind,
             endpoint_guid=None,

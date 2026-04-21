@@ -135,6 +135,22 @@ class WindowsAudioServiceMonitor:
                     previous_running=last_running,
                     current_running=running,
                 )
+                # The plan calls this event "audio.service.restarted" — it
+                # fires for both UP and DOWN transitions so the dashboard
+                # can render a single timeline of service flaps. The
+                # ``voice.up`` flag distinguishes the direction; the
+                # event name stays singular so saga/narrative correlation
+                # is straightforward.
+                logger.warning(
+                    "audio.service.restarted",
+                    **{
+                        "voice.service": _SERVICE_NAME,
+                        "voice.up": running,
+                        "voice.previous_running": last_running,
+                        "voice.state": state,
+                        "voice.platform": "win32",
+                    },
+                )
                 try:
                     await on_event(AudioServiceEvent(kind=kind))
                 except asyncio.CancelledError:

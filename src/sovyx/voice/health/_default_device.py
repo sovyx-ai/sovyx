@@ -158,6 +158,14 @@ class PollingDefaultDeviceWatcher:
                     previous=str(last),
                     current=str(current),
                 )
+                logger.info(
+                    "audio.device.default_changed",
+                    **{
+                        "voice.previous": str(last) if last is not None else None,
+                        "voice.current": str(current),
+                        "voice.poll_interval_s": self._interval,
+                    },
+                )
                 last = current
                 try:
                     await on_event(
