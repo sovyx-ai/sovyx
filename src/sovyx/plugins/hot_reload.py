@@ -15,6 +15,7 @@ import time
 import typing
 
 from sovyx.observability.logging import get_logger
+from sovyx.observability.tasks import spawn
 
 if typing.TYPE_CHECKING:  # pragma: no cover
     from pathlib import Path
@@ -131,8 +132,8 @@ class PluginFileWatcher:
 
         # Schedule async reload
         try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(self._reload_plugin(plugin_name))
+            asyncio.get_running_loop()
+            spawn(self._reload_plugin(plugin_name), name=f"plugin-hot-reload:{plugin_name}")
         except RuntimeError:
             # No event loop — log and skip
             logger.warning("hot_reload_no_loop", plugin=plugin_name)
