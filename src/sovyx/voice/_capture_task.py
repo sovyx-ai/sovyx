@@ -48,6 +48,7 @@ import time
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.observability.logging import get_logger
@@ -414,6 +415,14 @@ class AudioCaptureTask:
         self._frames_since_heartbeat: int = 0
         self._silent_frames_since_heartbeat: int = 0
 
+        # Per-stream lifecycle counters — reset on every successful open
+        # so ``audio.stream.closed`` reflects the activity of *that*
+        # stream, not the cumulative life of the task.
+        self._stream_id: str = ""
+        self._stream_underruns: int = 0
+        self._stream_overflows: int = 0
+        self._stream_callback_frames: int = 0
+
         # Ring buffer — allocated lazily in :meth:`start` from the
         # per-instance tuning so tests that build the task without
         # calling start() don't pay the ~1 MB allocation cost.
@@ -603,6 +612,7 @@ class AudioCaptureTask:
         self._running = True
         self._last_heartbeat_monotonic = time.monotonic()
         self._consumer = asyncio.create_task(self._consume_loop(), name="audio-capture-consumer")
+        self._emit_stream_opened(info, apo_bypass_attempted=False)
         logger.info(
             "audio_capture_task_started",
             device=self._input_device if self._input_device is not None else "default",
@@ -695,7 +705,7 @@ class AudioCaptureTask:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._consumer
             self._consumer = None
-        await asyncio.to_thread(self._close_stream)
+        await asyncio.to_thread(self._close_stream, "shutdown")
         # Drop any in-flight frames — they are stale once stopped.
         while not self._queue.empty():
             self._queue.get_nowait()
@@ -830,7 +840,7 @@ class AudioCaptureTask:
         # Tear down the existing stream on the PortAudio thread before
         # we try to grab the device exclusively — otherwise WASAPI
         # returns AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED on our own stream.
-        await asyncio.to_thread(self._close_stream)
+        await asyncio.to_thread(self._close_stream, "exclusive_restart")
         # Clear any residual frames from the shared-mode callback.
         while not self._queue.empty():
             with contextlib.suppress(asyncio.QueueEmpty):
@@ -904,6 +914,7 @@ class AudioCaptureTask:
         # Reset the ring buffer so the bypass coordinator's post-apply
         # integrity probe only sees frames from the reopened stream.
         self._allocate_ring_buffer(exclusive_tuning)
+        self._emit_stream_opened(info, apo_bypass_attempted=True)
         # v0.20.2 / Bug C — an opener that couldn't honour exclusive
         # (device busy, policy denied, old PortAudio) falls through to
         # shared variants of the same combo and returns a stream with
@@ -995,6 +1006,7 @@ class AudioCaptureTask:
         # would mislead any integrity probe issued immediately after the
         # reconnect.
         self._allocate_ring_buffer(tuning)
+        self._emit_stream_opened(info, apo_bypass_attempted=False)
 
     async def request_shared_restart(self) -> SharedRestartResult:
         """Revert the capture stream to shared mode.
@@ -1045,7 +1057,7 @@ class AudioCaptureTask:
         # Mirror request_exclusive_restart — tear down the existing
         # stream on the PortAudio thread so the shared reopen does not
         # race against our own exclusive handle.
-        await asyncio.to_thread(self._close_stream)
+        await asyncio.to_thread(self._close_stream, "shared_restart")
         while not self._queue.empty():
             with contextlib.suppress(asyncio.QueueEmpty):
                 self._queue.get_nowait()
@@ -1094,6 +1106,7 @@ class AudioCaptureTask:
             source_channels=info.channels,
         )
         self._allocate_ring_buffer(shared_tuning)
+        self._emit_stream_opened(info, apo_bypass_attempted=False)
         logger.warning(
             "audio_capture_shared_restart_ok",
             device=self._input_device,
@@ -1230,12 +1243,76 @@ class AudioCaptureTask:
         out[head:] = buf[0 : n - head]
         return out
 
-    def _close_stream(self) -> None:
-        """Stop and close the stream — tolerant of already-closed streams."""
+    def _emit_stream_opened(
+        self,
+        info: Any,  # noqa: ANN401 — StreamInfo dataclass, typed lazily
+        *,
+        apo_bypass_attempted: bool,
+    ) -> None:
+        """Generate a fresh stream_id and emit ``audio.stream.opened``.
+
+        Resets the per-stream lifecycle counters
+        (``_stream_underruns`` / ``_stream_overflows`` /
+        ``_stream_callback_frames``) so the matching
+        ``audio.stream.closed`` event reflects *this* stream only — not
+        cumulative activity from prior reopens.
+
+        ``apo_bypass_attempted`` is ``True`` only when the open was
+        triggered by :meth:`request_exclusive_restart` (the explicit
+        APO-bypass path); reverts and reconnects pass ``False``.
+        """
+        self._stream_id = uuid4().hex[:16]
+        self._stream_underruns = 0
+        self._stream_overflows = 0
+        self._stream_callback_frames = 0
+        sample_rate = int(getattr(info, "sample_rate", 0) or 0)
+        mode = "exclusive" if getattr(info, "exclusive_used", False) else "shared"
+        buffer_size_ms = (
+            int(self._blocksize * 1000 / sample_rate) if sample_rate else 0
+        )
+        logger.info(
+            "audio.stream.opened",
+            **{
+                "voice.stream_id": self._stream_id,
+                "voice.device_id": self._resolved_device_name or "default",
+                "voice.host_api": getattr(info, "host_api", None),
+                "voice.mode": mode,
+                "voice.sample_rate": sample_rate,
+                "voice.channels": int(getattr(info, "channels", 0) or 0),
+                "voice.buffer_size_ms": buffer_size_ms,
+                "voice.apo_bypass_attempted": apo_bypass_attempted,
+                "voice.fallback_depth": int(getattr(info, "fallback_depth", 0) or 0),
+                "voice.auto_convert_used": bool(getattr(info, "auto_convert_used", False)),
+            },
+        )
+
+    def _close_stream(self, reason: str = "unknown") -> None:
+        """Stop and close the stream — tolerant of already-closed streams.
+
+        Emits ``audio.stream.closed`` with the cumulative xrun counts
+        and frame total observed by the PortAudio callback for this
+        stream BEFORE tearing it down. ``reason`` is a stable tag
+        (``"shutdown"`` / ``"exclusive_restart"`` / ``"shared_restart"``
+        / ``"device_error"`` / ``"unknown"``) the dashboard uses to
+        distinguish operator-initiated tear-downs from device errors.
+        """
         stream = self._stream
         self._stream = None
         if stream is None:
             return
+        if self._stream_id:
+            logger.info(
+                "audio.stream.closed",
+                **{
+                    "voice.stream_id": self._stream_id,
+                    "voice.device_id": self._resolved_device_name or "default",
+                    "voice.reason": reason,
+                    "voice.underruns": self._stream_underruns,
+                    "voice.overflows": self._stream_overflows,
+                    "voice.frames_processed": self._stream_callback_frames,
+                },
+            )
+            self._stream_id = ""
         try:
             stream.stop()
             stream.close()
@@ -1259,8 +1336,15 @@ class AudioCaptureTask:
         audio thread, which would cause device underruns.
         """
         if status:
-            # CallbackFlags: input overflow/underflow. Log but keep going.
+            # CallbackFlags: input overflow/underflow. Track for the
+            # per-stream ``audio.stream.closed`` event so operators can
+            # correlate xruns with kernel-mixer / USB-bus pressure.
+            if getattr(status, "input_overflow", False):
+                self._stream_overflows += 1
+            if getattr(status, "input_underflow", False):
+                self._stream_underruns += 1
             logger.debug("audio_callback_status", status=str(status))
+        self._stream_callback_frames += 1
         block = indata.copy()
         loop = self._loop
         if loop is None:
@@ -1318,7 +1402,7 @@ class AudioCaptureTask:
                     device=self._input_device,
                     host_api=self._host_api_name,
                 )
-                await asyncio.to_thread(self._close_stream)
+                await asyncio.to_thread(self._close_stream, "device_error")
                 await asyncio.sleep(_RECONNECT_DELAY_S)
                 if not self._running:
                     return
