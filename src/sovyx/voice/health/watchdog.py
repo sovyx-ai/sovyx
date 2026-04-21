@@ -69,6 +69,7 @@ from typing import TYPE_CHECKING
 from sovyx.engine._lock_dict import LRULockDict
 from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.observability.logging import get_logger
+from sovyx.observability.tasks import spawn
 from sovyx.voice.health._audio_service import (
     AudioServiceMonitor,
     NoopAudioServiceMonitor,
@@ -326,7 +327,7 @@ class VoiceCaptureWatchdog:
             self._default_device = default_device
             await default_device.start(self._on_hotplug)
         if self._apo_recheck_interval_s > 0:
-            self._apo_recheck_task = asyncio.create_task(self._apo_recheck_loop())
+            self._apo_recheck_task = spawn(self._apo_recheck_loop(), name="voice-watchdog-apo-recheck")
         self._started = True
         logger.info(
             "voice_watchdog_started",
