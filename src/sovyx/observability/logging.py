@@ -411,12 +411,23 @@ def _setup_logging_locked(
         )
         max_bytes = obs_config.file_max_bytes if obs_config is not None else 10 * 1024 * 1024
         backup_count = obs_config.file_backup_count if obs_config is not None else 3
-        file_handler = logging.handlers.RotatingFileHandler(
-            config.log_file,
-            maxBytes=max_bytes,
-            backupCount=backup_count,
-            encoding="utf-8",
-        )
+        file_handler: logging.Handler
+        if obs_config is not None and obs_config.features.tamper_chain:
+            from sovyx.observability.tamper import HashChainHandler  # noqa: PLC0415
+
+            file_handler = HashChainHandler(
+                config.log_file,
+                max_bytes=max_bytes,
+                backup_count=backup_count,
+                encoding="utf-8",
+            )
+        else:
+            file_handler = logging.handlers.RotatingFileHandler(
+                config.log_file,
+                maxBytes=max_bytes,
+                backupCount=backup_count,
+                encoding="utf-8",
+            )
         file_handler.setFormatter(json_formatter)
         # Mirror of FastPathFilter: when fast-path is wired, drop
         # those records here so they don't double-emit through the
