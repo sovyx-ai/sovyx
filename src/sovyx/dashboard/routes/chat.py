@@ -15,6 +15,7 @@ from starlette.status import HTTP_503_SERVICE_UNAVAILABLE
 from sovyx.dashboard.routes._deps import verify_token
 from sovyx.observability.logging import get_logger
 from sovyx.observability.saga import async_saga_scope, trace_saga
+from sovyx.observability.tasks import spawn
 
 if TYPE_CHECKING:
     from sovyx.cognitive.act import ActionResult
@@ -260,7 +261,7 @@ async def chat_stream(request: Request) -> StreamingResponse:
                         on_phase=phase_cb,
                     )
 
-                task = asyncio.create_task(run_loop())
+                task = spawn(run_loop(), name="dashboard-chat-stream")
 
                 # Drain the event queue until the task completes
                 while not task.done():
