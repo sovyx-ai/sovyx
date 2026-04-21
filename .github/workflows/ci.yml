@@ -190,3 +190,17 @@ jobs:
         run: uv sync --dev --frozen
       - name: Validate OTel resource attribute spelling (§22.6)
         run: uv run python scripts/check_otel_semconv.py
+
+  metrics-cardinality-gate:
+    name: Metrics Cardinality Gate
+    runs-on: sovyx-4core
+    needs: otel-semconv-gate
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      - name: Install dependencies
+        run: uv sync --dev --frozen
+      - name: Refuse high-cardinality metric labels (§22.7)
+        run: uv run python scripts/check_metrics_cardinality.py
