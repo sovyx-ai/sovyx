@@ -40,6 +40,7 @@ nav:
   - Configuration: configuration.md
   - API Reference: api-reference.md
   - LLM Router: llm-router.md
+  - Observability: observability.md
   - Security: security.md
   - Modules:
     - Engine: modules/engine.md

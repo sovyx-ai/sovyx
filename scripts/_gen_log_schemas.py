@@ -602,6 +602,77 @@ def build_schema(event: str, description: str, payload: dict[str, tuple[dict[str
     }
 
 
+# ── docs/observability.md auto-gen block (P11.4) ───────────────────
+#
+# The prose in docs/observability.md is hand-written, but the events
+# catalog table is auto-generated from EVENTS so a phase can't add an
+# event without the doc staying in sync. Regeneration rewrites only
+# the block between these markers — everything outside is preserved.
+
+DOCS_PATH = Path(__file__).resolve().parent.parent / "docs" / "observability.md"
+_DOCS_BEGIN = "<!-- BEGIN AUTO-GENERATED EVENTS TABLE — do not edit by hand -->"
+_DOCS_END = "<!-- END AUTO-GENERATED EVENTS TABLE -->"
+
+
+def _docs_table_rows(
+    events: dict[str, tuple[str, dict[str, tuple[dict[str, Any], bool]]]],
+) -> str:
+    """Render the catalog as a GitHub-flavoured markdown table."""
+    lines = [
+        "| Event | Description | Required payload | Optional payload |",
+        "|---|---|---|---|",
+    ]
+    for event, (description, payload) in events.items():
+        required = sorted(field for field, (_, is_req) in payload.items() if is_req)
+        optional = sorted(field for field, (_, is_req) in payload.items() if not is_req)
+        required_cell = ", ".join(f"`{name}`" for name in required) or "—"
+        optional_cell = ", ".join(f"`{name}`" for name in optional) or "—"
+        lines.append(
+            f"| `{event}` | {description} | {required_cell} | {optional_cell} |"
+        )
+    return "\n".join(lines)
+
+
+def render_docs_table(events: dict[str, tuple[str, dict[str, tuple[dict[str, Any], bool]]]]) -> str:
+    """Return the full auto-generated block (markers included)."""
+    return "\n".join(
+        [
+            _DOCS_BEGIN,
+            "",
+            f"_{len(events)} canonical events. Regenerate via "
+            "`uv run python scripts/_gen_log_schemas.py`._",
+            "",
+            _docs_table_rows(events),
+            "",
+            _DOCS_END,
+        ]
+    )
+
+
+def write_docs_table(
+    events: dict[str, tuple[str, dict[str, tuple[dict[str, Any], bool]]]],
+) -> bool:
+    """Rewrite the auto-gen block in ``DOCS_PATH``.
+
+    Returns True if the file existed and was rewritten, False if the doc
+    is missing (first-time wiring — the generator does not create it).
+    """
+    if not DOCS_PATH.exists():
+        return False
+    current = DOCS_PATH.read_text(encoding="utf-8")
+    if _DOCS_BEGIN not in current or _DOCS_END not in current:
+        raise ValueError(
+            f"{DOCS_PATH} is missing the auto-gen markers "
+            f"({_DOCS_BEGIN!r} / {_DOCS_END!r}) — add them around the "
+            "events catalog section and re-run."
+        )
+    before, _, rest = current.partition(_DOCS_BEGIN)
+    _, _, after = rest.partition(_DOCS_END)
+    new_doc = f"{before}{render_docs_table(events)}{after}"
+    DOCS_PATH.write_text(new_doc, encoding="utf-8")
+    return True
+
+
 def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     written = 0
@@ -615,6 +686,11 @@ def main() -> None:
     models_path = OUT_DIR / "_models.py"
     models_path.write_text(build_models_module(EVENTS), encoding="utf-8")
     print(f"wrote pydantic models for {len(EVENTS)} events to {models_path}")
+
+    if write_docs_table(EVENTS):
+        print(f"refreshed catalog table in {DOCS_PATH}")
+    else:
+        print(f"{DOCS_PATH} not found — docs catalog not refreshed")
 
 
 if __name__ == "__main__":
