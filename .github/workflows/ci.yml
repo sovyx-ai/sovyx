@@ -219,3 +219,17 @@ jobs:
         run: uv sync --dev --frozen
       - name: Assert observability hot-path latency within budget (§23)
         run: uv run python scripts/check_perf_regression.py --iterations 20000
+
+  log-noise-gate:
+    name: Log Noise Gate
+    runs-on: sovyx-4core
+    needs: perf-regression-gate
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      - name: Install dependencies
+        run: uv sync --dev --frozen
+      - name: Refuse silent log-volume regressions (§23.2)
+        run: uv run python scripts/check_log_noise.py
