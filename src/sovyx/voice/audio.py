@@ -17,12 +17,53 @@ import enum
 import time
 from dataclasses import dataclass, field
 from typing import Any
+from uuid import uuid4
 
 import numpy as np
 
 from sovyx.observability.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+# int16 PCM full-scale reference for dBFS conversion. Using full-scale
+# (relative to 32768) is the standard digital-audio convention: 0 dBFS
+# is the clipping ceiling, -∞ dBFS is silence, voice typically lands
+# between -30 and -10 dBFS. A non-FS "raw" log10 of int16 samples
+# would produce numbers that are valid only inside this codebase and
+# meaningless against any external audio tool — so we use dBFS.
+_INT16_FULL_SCALE: float = 32768.0
+
+# Floor for the silence case. log10(0) is -∞; a fixed sentinel keeps
+# downstream consumers (dashboards, anomaly detectors) free of NaN /
+# -inf handling. -120 dBFS is well below any meaningful microphone
+# noise floor.
+_SILENCE_DBFS: float = -120.0
+
+# Per-frame clipping detection threshold. An int16 magnitude at or
+# above ~99% of full scale is treated as clipped. The threshold is
+# slightly below the ceiling so quantization noise on a pure 0 dBFS
+# tone doesn't generate false negatives.
+_CLIPPING_INT16_THRESHOLD: int = 32440
+
+
+def _frame_metrics(samples: np.ndarray) -> tuple[float, float, int]:
+    """Compute (rms_dbfs, peak_dbfs, clipping_count) for an int16 frame.
+
+    Uses float32 math to avoid int16 overflow when squaring (a single
+    sample at full scale already exceeds int16 range when squared).
+    Silence (zero RMS / peak) returns the sentinel
+    :data:`_SILENCE_DBFS` so log consumers never see ``-inf`` / ``NaN``.
+    """
+    if samples.size == 0:
+        return _SILENCE_DBFS, _SILENCE_DBFS, 0
+    f = samples.astype(np.float32, copy=False)
+    rms = float(np.sqrt(np.mean(f * f)))
+    peak = float(np.max(np.abs(f))) if f.size else 0.0
+    rms_dbfs = 20.0 * np.log10(rms / _INT16_FULL_SCALE) if rms > 0 else _SILENCE_DBFS
+    peak_dbfs = 20.0 * np.log10(peak / _INT16_FULL_SCALE) if peak > 0 else _SILENCE_DBFS
+    clipping = int(np.sum(np.abs(samples) >= _CLIPPING_INT16_THRESHOLD))
+    return rms_dbfs, peak_dbfs, clipping
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -229,6 +270,14 @@ class AudioCapture:
         self._stream: Any = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._running = False
+        # voice.stream_id and voice.device_id are bound on every
+        # audio.frame entry so a saga-grouped log view can correlate
+        # acoustic telemetry back to the exact stream/device that
+        # produced it (vs. a noisy "audio_capture" generic source).
+        # The id is regenerated on each start() so a restart after a
+        # device hot-plug produces a distinct stream identifier.
+        self._stream_id: str = ""
+        self._device_label: str = str(cfg.device) if cfg.device is not None else "default"
 
     # -- Properties ---------------------------------------------------------
 
@@ -264,6 +313,7 @@ class AudioCapture:
         import sounddevice as sd
 
         self._loop = asyncio.get_running_loop()
+        self._stream_id = uuid4().hex[:16]
         self._stream = sd.InputStream(
             samplerate=self._sample_rate,
             channels=self._channels,
@@ -279,6 +329,7 @@ class AudioCapture:
             rate=self._sample_rate,
             chunk_ms=self._chunk_samples * 1000 // self._sample_rate,
             device=self._device or "default",
+            **{"voice.stream_id": self._stream_id, "voice.device_id": self._device_label},
         )
 
     async def stop(self) -> None:
@@ -328,13 +379,36 @@ class AudioCapture:
         time_info: object,  # noqa: ARG002
         status: object,
     ) -> None:
-        """sounddevice callback — runs in the audio thread."""
+        """sounddevice callback — runs in the audio thread.
+
+        Emits ``audio.frame`` with rms_dbfs / peak_dbfs / clipping
+        count on every callback. The structlog SamplingProcessor
+        keeps every Nth entry (rate from
+        ``ObservabilitySamplingConfig.audio_frame_rate``) so the file
+        handler isn't saturated. The metric computation is microseconds
+        on a 320-sample int16 frame and the emit path is queue-backed
+        (BackgroundLogWriter) — both safe to call from the PortAudio
+        callback thread.
+        """
         if status:
             logger.warning("audio_input_status", status=str(status))
         # Extract mono channel
         mono = indata[:, 0].copy() if indata.ndim > 1 else indata.copy()
         # Write to ring buffer
         self._ring_buffer.write(mono)
+        # Acoustic telemetry — sampled by SamplingProcessor in the
+        # structlog chain so emit is cheap and bounded.
+        rms_dbfs, peak_dbfs, clipping = _frame_metrics(mono)
+        logger.info(
+            "audio.frame",
+            **{
+                "audio.rms_db": rms_dbfs,
+                "audio.peak_db": peak_dbfs,
+                "audio.clipping": clipping,
+                "voice.stream_id": self._stream_id,
+                "voice.device_id": self._device_label,
+            },
+        )
         # Thread-safe enqueue into asyncio
         if self._loop is not None and not self._queue.full():
             self._loop.call_soon_threadsafe(self._queue.put_nowait, mono)
