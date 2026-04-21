@@ -232,8 +232,7 @@ _SIGNATURES: list[FailureSignature] = [
     ),
     FailureSignature(
         {"exc_type": "IntegrityError", "event": "brain.episode.encode"},
-        "Concept embedding collision — likely a race; check "
-        "brain.embedding.cache.hit_rate.",
+        "Concept embedding collision — likely a race; check brain.embedding.cache.hit_rate.",
         "warning",
         None,
     ),
@@ -325,9 +324,7 @@ class ErrorEnricher:
     # the same diagnostic context that ERROR/CRITICAL entries do.
     _ENRICH_LEVELS = frozenset({"warning", "error", "critical"})
 
-    def __init__(
-        self, signatures: list[FailureSignature] | None = None
-    ) -> None:
+    def __init__(self, signatures: list[FailureSignature] | None = None) -> None:
         self._signatures = signatures if signatures is not None else _SIGNATURES
 
     def __call__(

@@ -448,9 +448,7 @@ class LLMRouter:
                         cost=round(response.cost_usd, 6),
                     )
 
-                    attempt_latency_ms = int(
-                        (time.monotonic() - attempt_started_at) * 1000
-                    )
+                    attempt_latency_ms = int((time.monotonic() - attempt_started_at) * 1000)
                     # ``generate()`` returns the whole response in one shot, so
                     # there's no separate first-token timestamp to capture —
                     # report TTFT == total latency for parity with ``stream()``.

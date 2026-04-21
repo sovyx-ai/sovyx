@@ -58,8 +58,9 @@ _extra_payload_keys = st.text(
     min_size=3,
     max_size=20,
 ).filter(
-    lambda k: k not in ENVELOPE_FIELDS
-    and k not in {"saga_id", "span_id", "event_id", "cause_id", "pid"},
+    lambda k: (
+        k not in ENVELOPE_FIELDS and k not in {"saga_id", "span_id", "event_id", "cause_id", "pid"}
+    ),
 )
 
 
@@ -99,9 +100,7 @@ class TestUnknownEventsAreForwardCompatible:
 
     @settings(max_examples=80, deadline=None, suppress_health_check=[HealthCheck.too_slow])
     @given(event_name=_unknown_event_names, level=_levels)
-    def test_unknown_event_passes_validate_entry(
-        self, event_name: str, level: str
-    ) -> None:
+    def test_unknown_event_passes_validate_entry(self, event_name: str, level: str) -> None:
         entry = _envelope(event_name) | {"level": level}
         # Forward compatibility: the envelope check accepts the entry
         # regardless of whether the event is in the catalog.
@@ -109,9 +108,7 @@ class TestUnknownEventsAreForwardCompatible:
 
     @settings(max_examples=80, deadline=None, suppress_health_check=[HealthCheck.too_slow])
     @given(event_name=_unknown_event_names)
-    def test_unknown_event_returns_none_from_validate_event(
-        self, event_name: str
-    ) -> None:
+    def test_unknown_event_returns_none_from_validate_event(self, event_name: str) -> None:
         result = validate_event(_envelope(event_name))
         assert result is None
 
@@ -198,9 +195,7 @@ class TestKnownEventValidatorBehaviour:
 
     @settings(max_examples=40, deadline=None, suppress_health_check=[HealthCheck.too_slow])
     @given(extras=st.lists(_extra_payload_keys, min_size=1, max_size=5, unique=True))
-    def test_extra_payload_fields_on_known_event_are_tagged(
-        self, extras: list[str]
-    ) -> None:
+    def test_extra_payload_fields_on_known_event_are_tagged(self, extras: list[str]) -> None:
         if not KNOWN_EVENTS:
             pytest.skip("KNOWN_EVENTS catalog is empty in this build")
         known = next(iter(KNOWN_EVENTS))
@@ -223,9 +218,7 @@ class TestKnownEventValidatorBehaviour:
         event=st.one_of(st.none(), st.text(min_size=0, max_size=60), st.integers()),
         level=_levels,
     )
-    def test_validator_never_raises_for_any_event_value(
-        self, event: object, level: str
-    ) -> None:
+    def test_validator_never_raises_for_any_event_value(self, event: object, level: str) -> None:
         validator = KnownEventValidator()
         record: dict[str, Any] = {"event": event, "level": level}
         # Any input — None, empty string, integer, any text — must
@@ -253,8 +246,7 @@ class TestEventPayloadFields:
             # Envelope fields are always declared on every model — they
             # come from the LogEntry parent class.
             assert ENVELOPE_FIELDS.issubset(fields), (
-                f"{event_name} dropped envelope fields: "
-                f"{sorted(ENVELOPE_FIELDS - fields)}"
+                f"{event_name} dropped envelope fields: {sorted(ENVELOPE_FIELDS - fields)}"
             )
 
     def test_every_known_event_pins_its_event_literal_to_its_name(self) -> None:

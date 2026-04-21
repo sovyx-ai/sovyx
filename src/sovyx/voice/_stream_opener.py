@@ -904,9 +904,7 @@ def _emit_fallback_event(
             "voice.from_auto_convert": prev.auto_convert,
             "voice.from_sample_rate": prev.sample_rate,
             "voice.from_channels": prev.channels,
-            "voice.to_mode": _combo_mode(
-                next_entry.host_api_name, exclusive=next_combo.exclusive
-            ),
+            "voice.to_mode": _combo_mode(next_entry.host_api_name, exclusive=next_combo.exclusive),
             "voice.to_host_api": next_entry.host_api_name,
             "voice.to_device_index": next_entry.index,
             "voice.to_exclusive": next_combo.exclusive,

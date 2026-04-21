@@ -123,7 +123,9 @@ class LinuxHotplugListener:
             friendly = _friendly_name(device)
             device_path = getattr(device, "device_path", None)
             logger.info(
-                "audio.device.arrived" if kind == HotplugEventKind.DEVICE_ADDED else "audio.device.removed",
+                "audio.device.arrived"
+                if kind == HotplugEventKind.DEVICE_ADDED
+                else "audio.device.removed",
                 **{
                     "voice.platform": "linux",
                     "voice.friendly_name": friendly or None,

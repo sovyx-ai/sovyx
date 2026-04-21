@@ -376,9 +376,7 @@ def start_download(
 
     coro = _run_download(entry, base, to_fetch)
     entry.task = (
-        task_factory(coro)
-        if task_factory
-        else spawn(coro, name=f"voice-model-download:{task_id}")
+        task_factory(coro) if task_factory else spawn(coro, name=f"voice-model-download:{task_id}")
     )
     logger.info(
         "voice_model_download_start",

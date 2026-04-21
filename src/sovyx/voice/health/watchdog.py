@@ -327,7 +327,9 @@ class VoiceCaptureWatchdog:
             self._default_device = default_device
             await default_device.start(self._on_hotplug)
         if self._apo_recheck_interval_s > 0:
-            self._apo_recheck_task = spawn(self._apo_recheck_loop(), name="voice-watchdog-apo-recheck")
+            self._apo_recheck_task = spawn(
+                self._apo_recheck_loop(), name="voice-watchdog-apo-recheck"
+            )
         self._started = True
         logger.info(
             "voice_watchdog_started",

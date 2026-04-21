@@ -65,6 +65,7 @@ def _frame_metrics(samples: np.ndarray) -> tuple[float, float, int]:
     clipping = int(np.sum(np.abs(samples) >= _CLIPPING_INT16_THRESHOLD))
     return rms_dbfs, peak_dbfs, clipping
 
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------

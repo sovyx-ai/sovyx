@@ -506,12 +506,8 @@ class PluginManager:
                     **{
                         "plugin_id": plugin_name,
                         "plugin.tool_name": tool_name,
-                        "plugin.permission.attempted_resource": getattr(
-                            e, "resource", ""
-                        ),
-                        "plugin.permission.required": list(
-                            getattr(e, "required", []) or []
-                        ),
+                        "plugin.permission.attempted_resource": getattr(e, "resource", ""),
+                        "plugin.permission.required": list(getattr(e, "required", []) or []),
                         "plugin.permission.detail": str(e),
                     },
                 )

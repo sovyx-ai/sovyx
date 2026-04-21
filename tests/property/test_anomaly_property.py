@@ -30,9 +30,7 @@ from sovyx.observability.anomaly import (
 # detector would happily store them (deque doesn't validate) but the
 # percentile semantics aren't defined; the production callers (latency,
 # RSS) only ever feed finite non-negative numbers.
-_finite_floats = st.floats(
-    min_value=-1e9, max_value=1e9, allow_nan=False, allow_infinity=False
-)
+_finite_floats = st.floats(min_value=-1e9, max_value=1e9, allow_nan=False, allow_infinity=False)
 _non_negative_floats = st.floats(
     min_value=0.0, max_value=1e9, allow_nan=False, allow_infinity=False
 )
@@ -111,9 +109,7 @@ class TestStreamingPercentileBasics:
         maxlen=st.integers(min_value=1, max_value=50),
         samples=st.lists(_finite_floats, min_size=1, max_size=200),
     )
-    def test_count_never_exceeds_maxlen(
-        self, maxlen: int, samples: list[float]
-    ) -> None:
+    def test_count_never_exceeds_maxlen(self, maxlen: int, samples: list[float]) -> None:
         sp = StreamingPercentile(maxlen=maxlen)
         for s in samples:
             sp.observe(s)
@@ -153,9 +149,7 @@ class TestDetectorNeverRaises:
             st.integers(),
             st.floats(allow_nan=True, allow_infinity=True),
         ),
-        level=st.one_of(
-            st.none(), st.sampled_from(["INFO", "ERROR", "WARNING", "garbage", ""])
-        ),
+        level=st.one_of(st.none(), st.sampled_from(["INFO", "ERROR", "WARNING", "garbage", ""])),
         latency=st.one_of(
             st.none(),
             st.floats(allow_nan=True, allow_infinity=True),
@@ -237,8 +231,7 @@ class TestDetectorFirstOccurrence:
             detector(None, "info", {"event": "b.first"})
             detector(None, "info", {"event": "c.first"})
         info_calls = [
-            c for c in mock_logger.info.call_args_list
-            if c.args == ("anomaly.first_occurrence",)
+            c for c in mock_logger.info.call_args_list if c.args == ("anomaly.first_occurrence",)
         ]
         # Three distinct events ⇒ three first-occurrence emissions —
         # the dedup key is event_name, not the anomaly type.
@@ -273,8 +266,7 @@ class TestDetectorLatencyThreshold:
                 detector(None, "info", {"event": "svc.call", "llm.latency_ms": 10.0})
             detector(None, "info", {"event": "svc.call", "llm.latency_ms": 1000.0})
         spikes = [
-            c for c in mock_logger.warning.call_args_list
-            if c.args == ("anomaly.latency_spike",)
+            c for c in mock_logger.warning.call_args_list if c.args == ("anomaly.latency_spike",)
         ]
         assert spikes == []
 
@@ -284,17 +276,14 @@ class TestDetectorLatencyThreshold:
         # baseline value when the spike is appended (otherwise the new
         # sample contaminates its own threshold — see _observe_latency
         # comment "new sample influences the next tick's baseline").
-        detector = AnomalyDetector(
-            _tuning(anomaly_min_samples=10, anomaly_latency_factor=2.0)
-        )
+        detector = AnomalyDetector(_tuning(anomaly_min_samples=10, anomaly_latency_factor=2.0))
         with patch("sovyx.observability.anomaly.logger") as mock_logger:
             for _ in range(100):
                 detector(None, "info", {"event": "svc.call", "llm.latency_ms": 10.0})
             # 1000ms vs P99 baseline 10ms = 100× → far above factor=2.
             detector(None, "info", {"event": "svc.call", "llm.latency_ms": 1000.0})
         spikes = [
-            c for c in mock_logger.warning.call_args_list
-            if c.args == ("anomaly.latency_spike",)
+            c for c in mock_logger.warning.call_args_list if c.args == ("anomaly.latency_spike",)
         ]
         assert len(spikes) == 1
         payload = spikes[0].kwargs
@@ -331,8 +320,7 @@ class TestDetectorCooldown:
             detector(None, "info", {"event": "svc.call", "llm.latency_ms": 1000.0})
             detector(None, "info", {"event": "svc.call", "llm.latency_ms": 1000.0})
         spikes = [
-            c for c in mock_logger.warning.call_args_list
-            if c.args == ("anomaly.latency_spike",)
+            c for c in mock_logger.warning.call_args_list if c.args == ("anomaly.latency_spike",)
         ]
         # Cooldown=3600s collapses both spikes into one emission.
         assert len(spikes) == 1
@@ -349,16 +337,13 @@ class TestLatencyFieldDiscovery:
         ["llm.latency_ms", "brain.latency_ms", "net.latency_ms", "voice.latency_ms"],
     )
     def test_picks_up_canonical_latency_fields(self, field: str) -> None:
-        detector = AnomalyDetector(
-            _tuning(anomaly_min_samples=10, anomaly_latency_factor=2.0)
-        )
+        detector = AnomalyDetector(_tuning(anomaly_min_samples=10, anomaly_latency_factor=2.0))
         with patch("sovyx.observability.anomaly.logger") as mock_logger:
             for _ in range(100):
                 detector(None, "info", {"event": "svc.x", field: 5.0})
             detector(None, "info", {"event": "svc.x", field: 500.0})
         spikes = [
-            c for c in mock_logger.warning.call_args_list
-            if c.args == ("anomaly.latency_spike",)
+            c for c in mock_logger.warning.call_args_list if c.args == ("anomaly.latency_spike",)
         ]
         assert len(spikes) == 1
 
@@ -380,7 +365,5 @@ class TestLatencyFieldDiscovery:
         # registers a tracker, and the detector survives the call.
         detector = AnomalyDetector(_tuning())
         for _ in range(15):
-            detector(
-                None, "info", {"event": "svc.nan", "llm.latency_ms": float("nan")}
-            )
+            detector(None, "info", {"event": "svc.nan", "llm.latency_ms": float("nan")})
         assert "svc.nan" not in detector._latency_per_event  # noqa: SLF001

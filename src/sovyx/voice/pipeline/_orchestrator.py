@@ -856,9 +856,7 @@ class VoicePipeline:
                 "voice.state": self._state.name,
                 "voice.consecutive_deaf_warnings": self._deaf_warnings_consecutive,
                 "voice.threshold": self._auto_bypass_threshold,
-                "voice.max_vad_probability": round(
-                    self._max_vad_prob_since_heartbeat, 3
-                ),
+                "voice.max_vad_probability": round(self._max_vad_prob_since_heartbeat, 3),
                 "voice.frames_processed": self._vad_frames_since_heartbeat,
                 "voice.voice_clarity_active": self._voice_clarity_active,
             },
@@ -1000,9 +998,7 @@ class VoicePipeline:
         # the post-apply re-probe still classified the signal as dead;
         # otherwise every strategy either failed-to-apply or was not
         # applicable, which is a flat failure.
-        any_applied = any(
-            o.verdict is BypassVerdict.APPLIED_STILL_DEAD for o in outcomes
-        )
+        any_applied = any(o.verdict is BypassVerdict.APPLIED_STILL_DEAD for o in outcomes)
         bypass_verdict = "partial" if any_applied else "failure"
         logger.error(
             "audio.apo.bypassed",

@@ -37,6 +37,7 @@ def _hash_subject(subject: str) -> str:
     """
     return hashlib.sha256(subject.encode("utf-8")).hexdigest()[:16]
 
+
 TOKEN_VALIDITY_DAYS = 7
 GRACE_PERIOD_DAYS = 7
 JWT_ALGORITHM = "EdDSA"

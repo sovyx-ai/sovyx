@@ -227,9 +227,7 @@ class HotPathSnapshotter:
                 "perf.hotpath.window_seconds": window_seconds,
                 "perf.hotpath.total_calls": total,
                 "perf.hotpath.top_n": self._top_n,
-                "perf.hotpath.entries": [
-                    {"name": name, "count": count} for name, count in top
-                ],
+                "perf.hotpath.entries": [{"name": name, "count": count} for name, count in top],
                 "perf.hotpath.snapshot_final": final,
             },
         )

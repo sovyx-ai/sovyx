@@ -1268,9 +1268,7 @@ class AudioCaptureTask:
         self._stream_callback_frames = 0
         sample_rate = int(getattr(info, "sample_rate", 0) or 0)
         mode = "exclusive" if getattr(info, "exclusive_used", False) else "shared"
-        buffer_size_ms = (
-            int(self._blocksize * 1000 / sample_rate) if sample_rate else 0
-        )
+        buffer_size_ms = int(self._blocksize * 1000 / sample_rate) if sample_rate else 0
         logger.info(
             "audio.stream.opened",
             **{

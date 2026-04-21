@@ -69,7 +69,7 @@ def _ptbr_templates() -> dict[str, _TemplateFn]:
             f"STT iniciado ({_f(e, 'voice.audio_ms', _f(e, 'audio_ms', '?'))}ms de áudio capturado)"
         ),
         "voice.stt.response": lambda e: (
-            f"Transcrição: \"{_f(e, 'voice.text', _f(e, 'text', ''))}\" "
+            f'Transcrição: "{_f(e, "voice.text", _f(e, "text", ""))}" '
             f"({_f(e, 'voice.latency_ms', _f(e, 'latency_ms', '?'))}ms, "
             f"conf={float(_f(e, 'voice.confidence', _f(e, 'confidence', 0.0))):.2f})"
         ),
@@ -205,7 +205,7 @@ def _enus_templates() -> dict[str, _TemplateFn]:
             f"STT started ({_f(e, 'voice.audio_ms', _f(e, 'audio_ms', '?'))}ms of audio captured)"
         ),
         "voice.stt.response": lambda e: (
-            f"Transcript: \"{_f(e, 'voice.text', _f(e, 'text', ''))}\" "
+            f'Transcript: "{_f(e, "voice.text", _f(e, "text", ""))}" '
             f"({_f(e, 'voice.latency_ms', _f(e, 'latency_ms', '?'))}ms, "
             f"conf={float(_f(e, 'voice.confidence', _f(e, 'confidence', 0.0))):.2f})"
         ),

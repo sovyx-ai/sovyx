@@ -289,9 +289,7 @@ async def stream_logs(websocket: WebSocket) -> None:
 
     indexer = getattr(websocket.app.state, "fts_indexer", None)
     if indexer is None:
-        await websocket.send_json(
-            {"type": "error", "message": "fts_indexer not configured"}
-        )
+        await websocket.send_json({"type": "error", "message": "fts_indexer not configured"})
         await websocket.close(code=4503)
         return
 
@@ -346,9 +344,7 @@ def _iso_to_unix(value: str | None) -> float | None:
         return None
 
 
-async def _gather_saga_rows(
-    request: Request, saga_id: str, limit: int
-) -> list[dict[str, object]]:
+async def _gather_saga_rows(request: Request, saga_id: str, limit: int) -> list[dict[str, object]]:
     """Return saga rows via FTS when available, else legacy file scan."""
     indexer = getattr(request.app.state, "fts_indexer", None)
     if indexer is not None:

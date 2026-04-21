@@ -256,9 +256,7 @@ class AnomalyDetector:
             window_start = now - self._error_window_s
             baseline_start = now - (self._error_window_s * 2)
             current = sum(1 for ts in self._error_window if ts >= window_start)
-            previous = sum(
-                1 for ts in self._error_window if baseline_start <= ts < window_start
-            )
+            previous = sum(1 for ts in self._error_window if baseline_start <= ts < window_start)
 
         # Need at least one previous-window sample to compute a ratio,
         # plus a small floor on previous to suppress 0→1 noise spikes.
@@ -283,9 +281,7 @@ class AnomalyDetector:
         with self._lock:
             self._rss_history.append((now, rss_bytes))
             window_start = now - self._memory_window_s
-            historical = [
-                (ts, val) for ts, val in self._rss_history if ts <= window_start
-            ]
+            historical = [(ts, val) for ts, val in self._rss_history if ts <= window_start]
             if not historical:
                 return
             # Use the oldest in-window snapshot as the comparison baseline

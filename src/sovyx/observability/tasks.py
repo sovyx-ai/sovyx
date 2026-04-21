@@ -308,7 +308,9 @@ def spawn(
     )
 
     task.add_done_callback(
-        lambda t: _on_done(t, task_id=task_id, name=name, owner=owner, saga_id=saga_id, started_at=started_at)
+        lambda t: _on_done(
+            t, task_id=task_id, name=name, owner=owner, saga_id=saga_id, started_at=started_at
+        )
     )
     return task
 

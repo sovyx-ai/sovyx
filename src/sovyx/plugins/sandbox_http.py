@@ -57,6 +57,7 @@ def _emit_denied(
         },
     )
 
+
 # ── Constants ───────────────────────────────────────────────────────
 
 _DEFAULT_RATE_LIMIT = 10  # requests per minute
@@ -185,7 +186,9 @@ def _estimate_body_bytes(kwargs: dict[str, object]) -> int:
     if json_payload is not None:
         import json as _json  # noqa: PLC0415 — avoid module-level dep on json.
 
-        return len(_json.dumps(json_payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+        return len(
+            _json.dumps(json_payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        )
     return 0
 
 
