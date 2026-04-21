@@ -32,6 +32,7 @@ from starlette.status import HTTP_401_UNAUTHORIZED, HTTP_503_SERVICE_UNAVAILABLE
 from sovyx import __version__
 from sovyx.dashboard import STATIC_DIR
 from sovyx.observability.logging import get_logger
+from sovyx.observability.tasks import spawn
 
 if TYPE_CHECKING:
     from sovyx.engine.config import APIConfig
@@ -726,7 +727,7 @@ class DashboardServer:
         self._server = uvicorn.Server(uvi_config)
 
         # Run in background task
-        asyncio.create_task(self._server.serve())
+        spawn(self._server.serve(), name="dashboard-uvicorn-server")
 
         logger.info(
             "dashboard_started",
