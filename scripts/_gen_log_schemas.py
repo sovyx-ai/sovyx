@@ -461,6 +461,125 @@ EVENTS: dict[str, tuple[str, dict[str, tuple[dict[str, Any], bool]]]] = {
 }
 
 
+# ── Pydantic model generation (P11.3) ──────────────────────────────
+#
+# The same EVENTS table that drives the JSON catalog also drives a
+# typed-model module (``src/sovyx/observability/log_schema/_models.py``).
+# Each event becomes a ``LogEvent`` subclass with strictly-typed payload
+# fields (``Field(..., alias="voice.probability")``). The KNOWN_EVENTS
+# registry in ``observability/schema.py`` is built from that module.
+#
+# Two sources of truth would rot — the table here is the only place a
+# new event is declared. JSON files + pydantic models are byproducts.
+
+# Map the JSON-Schema type tokens above → annotated Python types for
+# the generated pydantic models. Adding a new T_* token requires both
+# this map AND the JSON token map above to stay in sync.
+_PY_TYPE_BY_TOKEN: dict[str, str] = {
+    json.dumps(T_STR, sort_keys=True): "str",
+    json.dumps(T_INT, sort_keys=True): "int",
+    json.dumps(T_FLOAT, sort_keys=True): "float",
+    json.dumps(T_BOOL, sort_keys=True): "bool",
+    json.dumps(T_LIST_NUM, sort_keys=True): "list[float]",
+    json.dumps(T_LIST_STR, sort_keys=True): "list[str]",
+}
+
+
+def _python_type_for(field_schema: dict[str, Any]) -> str:
+    """Return the annotated Python type for a payload field schema."""
+    key = json.dumps(field_schema, sort_keys=True)
+    py_type = _PY_TYPE_BY_TOKEN.get(key)
+    if py_type is None:
+        raise ValueError(
+            f"unsupported payload type token in generator — extend _PY_TYPE_BY_TOKEN: {field_schema!r}"
+        )
+    return py_type
+
+
+def _class_name_for(event: str) -> str:
+    """Convert a dotted event name (``voice.vad.frame``) → CapWords (``VoiceVadFrame``).
+
+    Underscores inside segments are also treated as word boundaries, so
+    ``voice.vad.state_change`` → ``VoiceVadStateChange`` (not the half-pep8
+    ``VoiceVadState_change`` that ``str.capitalize`` would produce).
+    """
+    pieces = event.replace(".", "_").split("_")
+    return "".join(piece.capitalize() for piece in pieces if piece)
+
+
+def _attr_name_for(field: str) -> str:
+    """Convert a dotted payload-field name to a Python attribute (``voice.probability`` → ``voice_probability``)."""
+    return field.replace(".", "_")
+
+
+def build_models_module(events: dict[str, tuple[str, dict[str, tuple[dict[str, Any], bool]]]]) -> str:
+    """Emit the generated ``_models.py`` source as a single string."""
+    classes: list[str] = []
+    registry_lines: list[str] = []
+
+    for event, (description, payload) in events.items():
+        cls_name = _class_name_for(event)
+        registry_lines.append(f'    {cls_name}.event_name: {cls_name},')
+
+        body: list[str] = [
+            f'class {cls_name}(LogEvent):',
+            f'    """{description}"""',
+            "",
+            f'    event_name: ClassVar[str] = "{event}"',
+            f'    event: Literal["{event}"] = "{event}"',
+        ]
+
+        for field_name, (field_schema, is_required) in payload.items():
+            attr = _attr_name_for(field_name)
+            py_type = _python_type_for(field_schema)
+            if is_required:
+                if field_name == attr:
+                    body.append(f"    {attr}: {py_type} = Field(...)")
+                else:
+                    body.append(f'    {attr}: {py_type} = Field(..., alias="{field_name}")')
+            else:
+                if field_name == attr:
+                    body.append(f"    {attr}: {py_type} | None = None")
+                else:
+                    body.append(
+                        f'    {attr}: {py_type} | None = Field(default=None, alias="{field_name}")'
+                    )
+
+        classes.append("\n".join(body))
+
+    header = '''"""Generated pydantic models for every cataloged log event.
+
+DO NOT EDIT — regenerate via ``uv run python scripts/_gen_log_schemas.py``.
+
+Each class subclasses :class:`sovyx.observability.schema.LogEvent` and
+declares strictly-typed payload fields with JSON aliases (e.g.
+``voice.probability``). The :data:`EVENT_REGISTRY` below maps each
+canonical event name to its model class — :data:`KNOWN_EVENTS` in
+``observability/schema.py`` re-exports it.
+"""
+
+from __future__ import annotations
+
+from typing import ClassVar, Literal
+
+from pydantic import Field
+
+from sovyx.observability.schema import LogEvent
+'''
+    all_lines = [f'    "{_class_name_for(name)}",' for name in events]
+    all_lines.append('    "EVENT_REGISTRY",')
+    all_block = "__all__ = [\n" + "\n".join(all_lines) + "\n]\n"
+
+    registry_block = (
+        "EVENT_REGISTRY: dict[str, type[LogEvent]] = {\n"
+        + "\n".join(registry_lines)
+        + "\n}\n"
+    )
+
+    parts = [header, all_block, "", "\n\n\n".join(classes), "", registry_block]
+    return "\n".join(parts)
+
+
 def build_schema(event: str, description: str, payload: dict[str, tuple[dict[str, Any], bool]]) -> dict[str, Any]:
     properties: dict[str, Any] = dict(ENVELOPE_PROPERTIES)
     properties["event"] = {"const": event}
@@ -492,6 +611,10 @@ def main() -> None:
         path.write_text(json.dumps(schema, indent=2, sort_keys=False) + "\n", encoding="utf-8")
         written += 1
     print(f"wrote {written} schemas to {OUT_DIR}")
+
+    models_path = OUT_DIR / "_models.py"
+    models_path.write_text(build_models_module(EVENTS), encoding="utf-8")
+    print(f"wrote pydantic models for {len(EVENTS)} events to {models_path}")
 
 
 if __name__ == "__main__":
