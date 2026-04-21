@@ -5,7 +5,7 @@ Replaces the four ~25-line `_emit_*` methods that used to live inside
 is identical: best-effort fire-and-forget on the EventBus, swallowing
 any failure (logging side-channels must never crash plugin execution).
 
-Saga/cause propagation: ``loop.create_task(coro)`` copies the current
+Saga/cause propagation: ``spawn(coro)`` copies the current
 :mod:`contextvars` context (PEP 567), so any ``saga_id`` bound at the
 fire site flows into the spawned task automatically. ``EventBus.emit``
 then re-binds ``saga_id`` + ``cause_id=event.event_id`` before each
@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
 from sovyx.observability.saga import current_event_id, current_saga_id
+from sovyx.observability.tasks import spawn
 
 if TYPE_CHECKING:  # pragma: no cover
     from sovyx.engine.events import Event, EventBus
@@ -50,13 +51,13 @@ class PluginEventEmitter:
             return
         try:
             try:
-                loop = asyncio.get_running_loop()
+                asyncio.get_running_loop()
             except RuntimeError:
                 return  # No event loop — drop silently.
             # The spawned task inherits this frame's contextvars (PEP
             # 567), so saga_id / event_id bound here remain visible
             # inside _emit_with_logging and downstream EventBus.emit.
-            loop.create_task(self._emit_with_logging(event))
+            spawn(self._emit_with_logging(event), name="plugin-event-emit")
         except Exception:  # noqa: BLE001  # nosec B110
             # Event emission must never crash the manager.
             return
