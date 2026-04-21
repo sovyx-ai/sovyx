@@ -217,6 +217,72 @@ async def get_health(request: Request) -> JSONResponse:
     )
 
 
+# ── Active alerts (Phase 11 Task 11.7) ──
+
+
+@router.get("/alerts/active", dependencies=[Depends(verify_token)])
+async def get_active_alerts(request: Request) -> JSONResponse:
+    """Currently firing alerts.
+
+    Resolves the engine ``AlertManager`` from the registry, runs an
+    on-demand ``evaluate()`` so the response reflects the latest
+    metric samples + SLO burn rates, and returns the firing alerts
+    plus their grouped severity counts.
+
+    Returns ``{"firing": [], "summary": {...}}`` when the registry
+    isn't wired (e.g., dashboard-only test apps) — never raises.
+    """
+    registry = getattr(request.app.state, "registry", None)
+    if registry is None:
+        return JSONResponse(
+            {
+                "firing": [],
+                "summary": {
+                    "total_rules": 0,
+                    "firing_count": 0,
+                    "firing_rules": [],
+                    "severity_counts": {"info": 0, "warning": 0, "critical": 0},
+                },
+            }
+        )
+
+    from sovyx.observability.alerts import AlertManager
+
+    if not registry.is_registered(AlertManager):
+        return JSONResponse(
+            {
+                "firing": [],
+                "summary": {
+                    "total_rules": 0,
+                    "firing_count": 0,
+                    "firing_rules": [],
+                    "severity_counts": {"info": 0, "warning": 0, "critical": 0},
+                },
+            }
+        )
+
+    alert_manager: AlertManager = await registry.resolve(AlertManager)
+    fired = await alert_manager.evaluate()
+
+    return JSONResponse(
+        {
+            "firing": [
+                {
+                    "rule_name": a.rule_name,
+                    "severity": a.severity.value,
+                    "message": a.message,
+                    "metric_name": a.metric_name,
+                    "current_value": a.current_value,
+                    "threshold": a.threshold,
+                    "timestamp": a.timestamp,
+                }
+                for a in fired
+            ],
+            "summary": alert_manager.get_alert_summary(),
+        }
+    )
+
+
 # ── Prometheus /metrics (no auth — scrapers don't send Bearer) ──
 
 metrics_router = APIRouter()

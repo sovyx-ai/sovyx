@@ -633,10 +633,45 @@ async def bootstrap(
         health_registry = await create_engine_health_registry(registry)
         registry.register_instance(HealthRegistry, health_registry)
 
+        # 7. SLOMonitor + AlertManager (Phase 11 Task 11.7).
+        # The five default SLOs (brain_search/response_time/availability/
+        # error_rate/cost_per_message) and five default alert rules
+        # (high_error_rate/disk_space_low/memory_pressure/cost_exceeded/
+        # provider_errors) match SPE-026 §6 + §8. Registered as
+        # singletons so:
+        #   * the dashboard ``GET /api/alerts/active`` route resolves
+        #     them via the registry,
+        #   * call sites that record SLO events (``record_latency``,
+        #     ``record_cost``) and alert metrics (``record_metric``)
+        #     reuse the same instance instead of spawning isolated
+        #     trackers per module.
+        # Alerts fire CRITICAL/WARNING via ``logger.warning`` and emit
+        # ``AlertFired``/``AlertResolved`` events on the bus — wired
+        # here so the EventBus is the same instance the bridge and
+        # cognitive loop publish to.
+        from sovyx.observability.alerts import (
+            AlertManager,
+            create_default_alert_manager,
+        )
+        from sovyx.observability.slo import (
+            SLOMonitor,
+            create_default_monitor,
+        )
+
+        slo_monitor = create_default_monitor()
+        alert_manager = create_default_alert_manager(
+            event_bus=event_bus,
+            slo_monitor=slo_monitor,
+        )
+        registry.register_instance(SLOMonitor, slo_monitor)
+        registry.register_instance(AlertManager, alert_manager)
+
         logger.info(
             "bootstrap_complete",
             minds=len(mind_configs),
             health_check_count=health_registry.check_count,
+            slo_count=len(slo_monitor.slo_keys),
+            alert_rule_count=len(alert_manager.rules),
         )
         return registry
 
