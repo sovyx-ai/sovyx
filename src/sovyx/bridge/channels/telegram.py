@@ -22,6 +22,7 @@ from sovyx.bridge.protocol import InboundMessage
 from sovyx.engine.errors import ChannelConnectionError
 from sovyx.engine.types import ChannelType
 from sovyx.observability.logging import get_logger
+from sovyx.observability.tasks import spawn
 
 if TYPE_CHECKING:
     from aiogram.types import Message
@@ -90,7 +91,7 @@ class TelegramChannel:
         if self._running:
             return
         self._running = True
-        self._poll_task = asyncio.create_task(self._poll_loop())
+        self._poll_task = spawn(self._poll_loop(), name="telegram-poll-loop")
         logger.info("telegram_channel_started")
 
     async def stop(self) -> None:
