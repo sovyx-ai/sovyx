@@ -17,14 +17,24 @@ Usage::
     exporter = PrometheusExporter(reader)
     text = exporter.export()
     # → "# HELP sovyx_messages_received_total Total messages received...\\n..."
+
+For a long-running daemon, :class:`PrometheusHttpServer` wraps this
+exporter in a stdlib ``wsgiref`` daemon-thread HTTP server suitable for
+Prometheus scraping on a dedicated port (default 9101). Phase 11
+Task 11.6 wires it into ``engine.bootstrap`` behind the
+``observability.features.metrics_exporter`` flag.
 """
 
 from __future__ import annotations
 
 import math
+import threading
 from typing import TYPE_CHECKING, Any
+from wsgiref.simple_server import WSGIServer, make_server
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
 # Unit mapping: OTel unit → Prometheus suffix
@@ -277,3 +287,143 @@ class PrometheusExporter:
             if value == int(value):
                 return str(int(value))
         return str(value)
+
+
+# ── Standalone HTTP server (Phase 11 Task 11.6) ─────────────────────────────
+
+
+# Prometheus exposition format media type — version 0.0.4 is the legacy
+# OpenMetrics-compatible text format every scraper accepts. Bumping to
+# OpenMetrics 1.0 would require also emitting ``_created`` lines.
+_PROMETHEUS_MEDIA_TYPE = "text/plain; version=0.0.4; charset=utf-8"
+
+
+class PrometheusHttpServer:
+    """Daemon-thread HTTP server exposing ``/metrics`` for Prometheus.
+
+    Runs a minimal ``wsgiref.simple_server`` instance on a dedicated
+    port so Prometheus scrapers can pull metrics without going through
+    the dashboard's authenticated API surface. Two routes only:
+
+    * ``GET /metrics`` — Prometheus text exposition (200 OK).
+    * Anything else — 404 with a one-line helper.
+
+    The server runs in a daemon thread so the process exits cleanly on
+    SIGTERM without waiting for in-flight scrapes. :meth:`stop` is
+    idempotent and called from bootstrap's ``_closables`` cleanup.
+
+    Args:
+        reader: The OTel ``InMemoryMetricReader`` shared with
+            :func:`sovyx.observability.metrics.setup_metrics`.
+        port: TCP port to bind. Default 9101 — the IANA-unassigned
+            port commonly used by community Prometheus exporters.
+        host: Bind address. Default ``"0.0.0.0"`` for container
+            deployments; pass ``"127.0.0.1"`` to scope to localhost.
+    """
+
+    def __init__(
+        self,
+        reader: InMemoryMetricReader,
+        *,
+        port: int = 9101,
+        host: str = "0.0.0.0",  # noqa: S104 — operator must firewall externally.
+    ) -> None:
+        self._reader = reader
+        self._port = port
+        self._host = host
+        self._exporter = PrometheusExporter(reader)
+        self._server: WSGIServer | None = None
+        self._thread: threading.Thread | None = None
+
+    @property
+    def port(self) -> int:
+        """Bound TCP port (read-only after construction)."""
+        return self._port
+
+    @property
+    def is_running(self) -> bool:
+        """``True`` while the daemon thread is serving requests."""
+        return self._thread is not None and self._thread.is_alive()
+
+    def start(self) -> None:
+        """Bind the socket and spawn the serving thread.
+
+        Idempotent — calling :meth:`start` on an already-running server
+        is a no-op so bootstrap can re-enter cleanly.
+
+        Raises:
+            OSError: If the port is already bound (operator must pick
+                a free port via ``SOVYX_OBSERVABILITY__METRICS_PORT``).
+        """
+        if self.is_running:
+            return
+        self._server = make_server(self._host, self._port, self._wsgi_app)
+        # serve_forever blocks; daemon=True so the thread dies with the
+        # process and doesn't keep an interpreter shutdown waiting.
+        self._thread = threading.Thread(
+            target=self._server.serve_forever,
+            name=f"prometheus-exporter-{self._port}",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        """Shut the server down and join the thread.
+
+        Safe to call multiple times. Used by bootstrap's ``_closables``
+        cleanup chain — see :func:`sovyx.engine.bootstrap.bootstrap`.
+        """
+        server, thread = self._server, self._thread
+        self._server, self._thread = None, None
+        if server is not None:
+            server.shutdown()
+            server.server_close()
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=5.0)
+
+    # ── WSGI handler ────────────────────────────────────────────────
+
+    def _wsgi_app(
+        self,
+        environ: dict[str, Any],
+        start_response: Any,  # noqa: ANN401 — WSGI callback signature.
+    ) -> Iterable[bytes]:
+        """Minimal WSGI app — routes ``/metrics`` to the exporter."""
+        path = environ.get("PATH_INFO", "/")
+        method = environ.get("REQUEST_METHOD", "GET")
+
+        if path == "/metrics" and method == "GET":
+            body = self._exporter.export() or "# No metrics collected yet\n"
+            payload = body.encode("utf-8")
+            start_response(
+                "200 OK",
+                [
+                    ("Content-Type", _PROMETHEUS_MEDIA_TYPE),
+                    ("Content-Length", str(len(payload))),
+                ],
+            )
+            return [payload]
+
+        if path == "/" and method == "GET":
+            payload = "sovyx prometheus exporter — see /metrics\n".encode()
+            start_response(
+                "200 OK",
+                [
+                    ("Content-Type", "text/plain; charset=utf-8"),
+                    ("Content-Length", str(len(payload))),
+                ],
+            )
+            return [payload]
+
+        payload = b"not found\n"
+        start_response(
+            "404 Not Found",
+            [
+                ("Content-Type", "text/plain; charset=utf-8"),
+                ("Content-Length", str(len(payload))),
+            ],
+        )
+        return [payload]
+
+
+__all__ = ["PrometheusExporter", "PrometheusHttpServer"]

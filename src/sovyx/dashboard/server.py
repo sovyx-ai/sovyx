@@ -693,6 +693,22 @@ class DashboardServer:
             # Wire online health checks so /api/health exposes LLM, Brain, etc.
             self._app.state.health_registry = await self._create_health_registry()
 
+            # Wire OTel InMemoryMetricReader so /metrics exposes Prometheus
+            # exposition. Bootstrap (Phase 11 Task 11.6) registers the
+            # singleton from ``setup_metrics``; dashboards started against
+            # a hand-rolled registry (legacy tests) leave it None and the
+            # /metrics route degrades to "# No metrics available" rather
+            # than 500'ing — same contract the route already documents.
+            try:
+                from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+
+                if self._registry.is_registered(InMemoryMetricReader):
+                    self._app.state.metrics_reader = await self._registry.resolve(
+                        InMemoryMetricReader,
+                    )
+            except Exception:  # noqa: BLE001 — reader missing degrades gracefully.
+                logger.debug("metrics_reader_wire_failed")
+
             # Wire MindConfig from PersonalityEngine (if registered)
             try:
                 from sovyx.mind.personality import PersonalityEngine

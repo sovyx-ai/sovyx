@@ -483,6 +483,13 @@ class ObservabilityFeaturesConfig(BaseSettings):
     anomaly_detection: bool = True
     tamper_chain: bool = False
     schema_validation: bool = True
+    # Phase 11 Task 11.6 — opt-in dedicated Prometheus scrape port. Default
+    # off because operators commonly run behind a firewall that doesn't
+    # expose 9101; the dashboard also serves /metrics on its own port for
+    # quick access. Enable in production observability deployments where
+    # Prometheus needs an unauthenticated scrape endpoint isolated from
+    # the dashboard's API surface.
+    metrics_exporter: bool = False
 
 
 class ObservabilityPIIConfig(BaseSettings):
@@ -585,6 +592,10 @@ class ObservabilityConfig(BaseSettings):
     crash_dump_path: Path | None = None
     fts_index_path: Path | None = None
     fast_path_file: Path | None = None
+    # Phase 11 Task 11.6 — port for the dedicated Prometheus scrape
+    # endpoint started by ``observability.prometheus.PrometheusHttpServer``.
+    # Only honored when ``features.metrics_exporter`` is on.
+    metrics_port: int = Field(default=9101, ge=1, le=65535)
 
 
 class TuningConfig(BaseModel):

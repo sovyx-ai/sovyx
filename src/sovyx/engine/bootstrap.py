@@ -142,6 +142,51 @@ async def bootstrap(
             data_dir=engine_config.data_dir,
         )
 
+        # 0.4. Metrics pipeline (Phase 11 Task 11.6).
+        # ``setup_metrics`` builds the OTel MeterProvider on top of an
+        # ``InMemoryMetricReader`` we own here so it can be re-exported
+        # in three places that all converge on the same metric stream:
+        #   * the dashboard ``/metrics`` route (always on, served on
+        #     the dashboard port) — wires ``app.state.metrics_reader``
+        #     from ``DashboardServer.start()``.
+        #   * a dedicated stdlib ``wsgiref`` daemon-thread HTTP server
+        #     started below when ``features.metrics_exporter`` is on,
+        #     listening on ``observability.metrics_port`` (default 9101)
+        #     for Prometheus scrapers that should not transit the
+        #     authenticated dashboard surface.
+        #   * the ``/api/metrics`` JSON endpoint (``collect_json``).
+        # Registering the reader as a ``ServiceRegistry`` singleton lets
+        # the dashboard resolve the same instance regardless of bootstrap
+        # ordering — no global lookup, no risk of shadowed providers.
+        from opentelemetry.sdk.metrics.export import (
+            InMemoryMetricReader as _InMemoryMetricReader,
+        )
+
+        from sovyx.observability.metrics import (
+            MetricsRegistry,
+            setup_metrics,
+        )
+
+        metrics_reader = _InMemoryMetricReader()
+        metrics_registry = setup_metrics(readers=[metrics_reader])
+        registry.register_instance(MetricsRegistry, metrics_registry)
+        registry.register_instance(_InMemoryMetricReader, metrics_reader)
+
+        if engine_config.observability.features.metrics_exporter:
+            from sovyx.observability.prometheus import PrometheusHttpServer
+
+            metrics_http_server = PrometheusHttpServer(
+                metrics_reader,
+                port=engine_config.observability.metrics_port,
+            )
+            metrics_http_server.start()
+            _closables.append(metrics_http_server)
+            registry.register_instance(PrometheusHttpServer, metrics_http_server)
+            logger.info(
+                "prometheus_exporter_started",
+                port=engine_config.observability.metrics_port,
+            )
+
         # 0.5. ResourceSnapshotter + HotPathSnapshotter (Phase 6 Task 6.8).
         # Both share the ``async_queue`` feature flag — the same flag that
         # enables the non-blocking log handler, since both produce periodic
