@@ -2003,9 +2003,9 @@ class FinancialMathPlugin(ISovyxPlugin):
 
         try:
             d_val = Decimal(cleaned)
-        except DecimalException:
+        except DecimalException as exc:
             msg = f"could not parse '{raw}' as a number"
-            raise _ValidationError(msg)  # noqa: B904
+            raise _ValidationError(msg) from exc
 
         result: dict[str, str] = {
             "value": _format_decimal(d_val),
