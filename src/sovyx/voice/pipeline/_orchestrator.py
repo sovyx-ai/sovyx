@@ -865,7 +865,7 @@ class VoicePipeline:
         )
         # Schedule the coordinator on the running loop — this helper
         # runs on the per-frame hot path and must not block.
-        asyncio.create_task(self._invoke_deaf_signal())
+        spawn(self._invoke_deaf_signal(), name="voice-pipeline-deaf-signal")
 
     async def _invoke_deaf_signal(self) -> None:
         """Invoke the deaf-signal callback and surface its outcomes.
