@@ -25,6 +25,11 @@ class AudioOutputQueue:
         self._queue: asyncio.Queue[AudioChunk] = asyncio.Queue()
         self._playing = False
         self._interrupted = False
+        # Tracks total audio_ms enqueued but not yet drained — gives the
+        # dashboard a real "how much audio is queued" gauge instead of
+        # just a chunk count (chunks may be tiny single-sentence TTS or
+        # large multi-paragraph pre-renders).
+        self._pending_audio_ms = 0.0
 
     @property
     def is_playing(self) -> bool:
@@ -38,6 +43,24 @@ class AudioOutputQueue:
             chunk: Audio data to play.
         """
         await self._queue.put(chunk)
+        self._pending_audio_ms += float(chunk.duration_ms)
+        depth = self._queue.qsize()
+        logger.info(
+            "voice.output_queue.enqueued",
+            **{
+                "voice.depth": depth,
+                "voice.chunk_audio_ms": round(float(chunk.duration_ms), 1),
+                "voice.pending_audio_ms": round(self._pending_audio_ms, 1),
+            },
+        )
+        logger.info(
+            "voice.output_queue.depth",
+            **{
+                "voice.depth": depth,
+                "voice.pending_audio_ms": round(self._pending_audio_ms, 1),
+                "voice.is_playing": self._playing,
+            },
+        )
 
     async def play_immediate(self, chunk: AudioChunk) -> None:
         """Play a single chunk immediately (blocking until done).
@@ -55,13 +78,31 @@ class AudioOutputQueue:
         """Play all queued chunks sequentially until queue is empty."""
         self._playing = True
         self._interrupted = False
+        chunks_drained = 0
+        audio_ms_drained = 0.0
         try:
             while not self._queue.empty() and not self._interrupted:
                 chunk = self._queue.get_nowait()
+                self._pending_audio_ms = max(
+                    0.0, self._pending_audio_ms - float(chunk.duration_ms)
+                )
                 await _play_audio(chunk)
+                chunks_drained += 1
+                audio_ms_drained += float(chunk.duration_ms)
         finally:
             self._playing = False
+            interrupted = self._interrupted
             self._interrupted = False
+            logger.info(
+                "voice.output_queue.drained",
+                **{
+                    "voice.chunks_drained": chunks_drained,
+                    "voice.audio_ms_drained": round(audio_ms_drained, 1),
+                    "voice.depth_remaining": self._queue.qsize(),
+                    "voice.pending_audio_ms": round(self._pending_audio_ms, 1),
+                    "voice.interrupted": interrupted,
+                },
+            )
 
     def interrupt(self) -> None:
         """Stop current playback and clear the queue (barge-in)."""
@@ -72,6 +113,7 @@ class AudioOutputQueue:
                 self._queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
+        self._pending_audio_ms = 0.0
 
     def clear(self) -> None:
         """Clear pending chunks without interrupting current playback."""
@@ -80,6 +122,7 @@ class AudioOutputQueue:
                 self._queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
+        self._pending_audio_ms = 0.0
 
 
 async def _play_audio(chunk: AudioChunk) -> None:
