@@ -49,6 +49,32 @@ logger = get_logger(__name__)
 _DEFAULT_TOOL_TIMEOUT_S = 30.0
 _MAX_CONSECUTIVE_FAILURES = 5
 
+# Hard byte cap for plugin.args_preview / plugin.result_preview fields
+# emitted on every invoke. Content sanitization (PII masking) happens
+# downstream in the structlog PIIRedactor processor — this helper only
+# enforces size so a 5 MB result never lands in a single log record.
+_INVOKE_PREVIEW_MAX_BYTES = 256
+
+
+def _clamp_preview(value: object, *, max_bytes: int = _INVOKE_PREVIEW_MAX_BYTES) -> str:
+    """Render *value* as a short str preview clamped to *max_bytes* UTF-8 bytes.
+
+    Dicts and lists are JSON-serialized with a ``default=str`` fallback so
+    non-JSON-native types (paths, datetimes, exceptions) still produce a
+    bounded preview instead of raising. Truncation always happens on a
+    UTF-8 boundary; a Unicode replacement character is never emitted.
+    """
+    if isinstance(value, (dict, list, tuple)):
+        import json as _json
+
+        rendered = _json.dumps(value, separators=(",", ":"), ensure_ascii=False, default=str)
+    else:
+        rendered = str(value)
+    data = rendered.encode("utf-8", errors="replace")
+    if len(data) <= max_bytes:
+        return rendered
+    return data[:max_bytes].decode("utf-8", errors="ignore") + "…"
+
 
 # Public re-exports — keep backward-compatible imports working.
 __all__ = [
@@ -387,6 +413,18 @@ class PluginManager:
         start_ms = time.monotonic()
         error_msg = ""
         success = False
+        result_preview = ""
+
+        args_preview = _clamp_preview(arguments)
+        logger.info(
+            "plugin.invoke.started",
+            **{
+                "plugin_id": plugin_name,
+                "plugin.tool_name": tool_name,
+                "plugin.args_preview": args_preview,
+                "plugin.timeout_s": timeout,
+            },
+        )
 
         # Execute with timeout and ImportGuard
         guard = loaded.guard or ImportGuard(plugin_name)
@@ -398,6 +436,7 @@ class PluginManager:
                 )
             success = True
             self._record_success(plugin_name)
+            result_preview = _clamp_preview(result)
             return _ToolResult(
                 call_id="",
                 name=tool_name,
@@ -418,6 +457,20 @@ class PluginManager:
             # reimport. Dispatch by name.
             if type(e).__name__ == "PermissionDeniedError":
                 error_msg = f"Permission denied: {e}"
+                logger.warning(
+                    "plugin.invoke.permission_denied",
+                    **{
+                        "plugin_id": plugin_name,
+                        "plugin.tool_name": tool_name,
+                        "plugin.permission.attempted_resource": getattr(
+                            e, "resource", ""
+                        ),
+                        "plugin.permission.required": list(
+                            getattr(e, "required", []) or []
+                        ),
+                        "plugin.permission.detail": str(e),
+                    },
+                )
                 # Permission errors don't count as plugin failures
                 return _ToolResult(
                     call_id="",
@@ -442,6 +495,19 @@ class PluginManager:
         finally:
             health.active_tasks = max(0, health.active_tasks - 1)
             duration_ms = int((time.monotonic() - start_ms) * 1000)
+            logger.info(
+                "plugin.invoke.completed",
+                **{
+                    "plugin_id": plugin_name,
+                    "plugin.tool_name": tool_name,
+                    "plugin.duration_ms": duration_ms,
+                    "plugin.success": success,
+                    "plugin.result_preview": result_preview,
+                    "plugin.health.consecutive_failures": health.consecutive_failures,
+                    "plugin.health.active_tasks": health.active_tasks,
+                    "plugin.error": error_msg,
+                },
+            )
             self._emit_tool_executed(
                 plugin_name,
                 tool_name,

@@ -143,6 +143,8 @@ _PII_FIELD_CLASSES: Final[dict[str, str]] = {
     "prompts": "prompts",
     "system_prompt": "prompts",
     "user_prompt": "prompts",
+    "plugin.args_preview": "prompts",
+    "plugin.result_preview": "responses",
     "response": "responses",
     "responses": "responses",
     "completion": "responses",
