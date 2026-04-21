@@ -17,6 +17,7 @@ import asyncio
 import time
 import typing
 
+from sovyx.observability.audit import get_audit_logger
 from sovyx.observability.logging import get_logger
 from sovyx.plugins._dependency import _topological_sort
 from sovyx.plugins._event_emitter import PluginEventEmitter
@@ -48,6 +49,24 @@ if typing.TYPE_CHECKING:  # pragma: no cover
     from sovyx.plugins.manifest import PluginManifest
 
 logger = get_logger(__name__)
+audit_logger = get_audit_logger()
+
+
+def _hash_manifest(manifest: PluginManifest | None) -> str | None:
+    """SHA-256 of the manifest's canonical JSON form, or None if absent.
+
+    Used by the plugin permission audit to fingerprint exactly which
+    manifest version granted a permission set, so a later
+    ``audit.plugin.reloaded`` with a different hash flags that the
+    permission contract changed across the reload.
+    """
+    if manifest is None:
+        return None
+    import hashlib  # noqa: PLC0415 — single-call import isolation.
+
+    payload = manifest.model_dump_json().encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
 
 # ── Constants ───────────────────────────────────────────────────────
 
@@ -248,6 +267,17 @@ class PluginManager:
         if not granted:
             granted = {p.value for p in plugin.permissions}
         enforcer = PermissionEnforcer(name, granted)
+
+        audit_logger.info(
+            "audit.plugin.permissions.granted",
+            **{
+                "plugin.id": name,
+                "plugin.version": plugin.version,
+                "plugin.manifest_hash": _hash_manifest(manifest),
+                "plugin.permissions": sorted(granted),
+                "plugin.permission_count": len(granted),
+            },
+        )
 
         # Create data directory
         from pathlib import Path as _Path

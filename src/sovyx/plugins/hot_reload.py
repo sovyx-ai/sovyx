@@ -14,6 +14,7 @@ import sys
 import time
 import typing
 
+from sovyx.observability.audit import get_audit_logger
 from sovyx.observability.logging import get_logger
 from sovyx.observability.tasks import spawn
 
@@ -23,6 +24,7 @@ if typing.TYPE_CHECKING:  # pragma: no cover
     from sovyx.plugins.manager import PluginManager
 
 logger = get_logger(__name__)
+audit_logger = get_audit_logger()
 
 # Debounce: ignore changes within this window (seconds)
 _DEBOUNCE_S = 1.0
@@ -183,6 +185,16 @@ class PluginFileWatcher:
                     "plugin_reloaded",
                     plugin=plugin_name,
                     attempt=attempt + 1,
+                )
+                audit_logger.info(
+                    "audit.plugin.reloaded",
+                    **{
+                        "plugin.id": plugin_name,
+                        "plugin.module": module_name,
+                        "plugin.version": getattr(new_plugin, "version", None),
+                        "plugin.reload_attempt": attempt + 1,
+                        "plugin.total_reloads": self._reload_count,
+                    },
                 )
                 return
 

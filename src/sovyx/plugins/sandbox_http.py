@@ -23,10 +23,39 @@ from urllib.parse import urlparse
 
 import httpx
 
+from sovyx.observability.audit import get_audit_logger
 from sovyx.observability.logging import get_logger
 from sovyx.plugins.permissions import PermissionDeniedError
 
 logger = get_logger(__name__)
+audit_logger = get_audit_logger()
+
+
+def _emit_denied(
+    plugin_id: str,
+    *,
+    url: str,
+    hostname: str | None,
+    reason: str,
+) -> None:
+    """Emit ``audit.plugin.permissions.denied`` for a sandbox rejection.
+
+    Centralised so every denial path (domain allowlist, DNS rebinding,
+    direct IP local-net) carries the same envelope. ``hostname`` is the
+    raw host from the URL (may be None for malformed inputs); ``reason``
+    is a short stable token consumers can group on
+    (``"domain_not_allowed"``, ``"local_ip_via_dns"``, ``"local_ip_direct"``,
+    ``"invalid_url"``).
+    """
+    audit_logger.warning(
+        "audit.plugin.permissions.denied",
+        **{
+            "plugin.id": plugin_id,
+            "plugin.denied_url": url,
+            "plugin.denied_host": hostname,
+            "plugin.denied_reason": reason,
+        },
+    )
 
 # ── Constants ───────────────────────────────────────────────────────
 
@@ -252,12 +281,14 @@ class SandboxedHttpClient:
         hostname = parsed.hostname
 
         if not hostname:
+            _emit_denied(self._plugin, url=url, hostname=None, reason="invalid_url")
             raise PermissionDeniedError(self._plugin, f"Invalid URL: {url}")
 
         # Check domain allowlist (empty = no domains allowed) unless the
         # client was built in open-web mode. The local-IP + DNS-rebinding +
         # rate-limit + size-cap checks below still apply.
         if not self._allow_any_domain and hostname not in self._allowed:
+            _emit_denied(self._plugin, url=url, hostname=hostname, reason="domain_not_allowed")
             raise PermissionDeniedError(
                 self._plugin,
                 f"Domain '{hostname}' not in allowed list: {sorted(self._allowed)}",
@@ -266,6 +297,7 @@ class SandboxedHttpClient:
         # DNS rebinding protection: resolve and check IP
         resolved_ip = _resolve_hostname(hostname)
         if resolved_ip and _is_local_ip(resolved_ip) and not self._allow_local:
+            _emit_denied(self._plugin, url=url, hostname=hostname, reason="local_ip_via_dns")
             raise PermissionDeniedError(
                 self._plugin,
                 f"Domain '{hostname}' resolves to local IP {resolved_ip}",
@@ -276,6 +308,7 @@ class SandboxedHttpClient:
             ipaddress.ip_address(hostname)
             # It's a raw IP address
             if not self._allow_local and _is_local_ip(hostname):
+                _emit_denied(self._plugin, url=url, hostname=hostname, reason="local_ip_direct")
                 raise PermissionDeniedError(
                     self._plugin,
                     f"Local network access blocked: {hostname}",
