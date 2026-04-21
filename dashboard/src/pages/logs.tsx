@@ -48,6 +48,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { CausalityGraph } from "@/components/dashboard/causality-graph";
 import { LogRow } from "@/components/dashboard/log-row";
 import { EmptyState } from "@/components/empty-state";
 import { LogsEmptyAnimation } from "@/components/empty-state-animations";
@@ -724,25 +725,7 @@ function CausalityTab({ sagaId }: { sagaId: string | null }) {
   if (!graph || graph.edges.length === 0) {
     return <p className="text-xs text-[var(--svx-color-text-secondary)]">{t("tabs.causalityEmpty")}</p>;
   }
-  // Placeholder: full DAG layout lands in P10.5 (CausalityGraph.tsx).
-  return (
-    <ul className="space-y-1">
-      {graph.edges.map((edge, idx) => (
-        <li
-          key={`${edge.id ?? idx}-${edge.timestamp}`}
-          className="font-code rounded-[var(--svx-radius-sm)] bg-[var(--svx-color-bg-elevated)] p-2 text-[10px]"
-        >
-          <div className="text-[var(--svx-color-text-tertiary)]">{edge.timestamp}</div>
-          <div className="text-[var(--svx-color-text-primary)]">{edge.event}</div>
-          {edge.cause_id && (
-            <div className="text-[var(--svx-color-text-secondary)]">
-              ← {edge.cause_id}
-            </div>
-          )}
-        </li>
-      ))}
-    </ul>
-  );
+  return <CausalityGraph edges={graph.edges} />;
 }
 
 function SagaTab({ sagaId }: { sagaId: string | null }) {

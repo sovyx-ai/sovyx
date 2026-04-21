@@ -1,3 +1,4 @@
+export { CausalityGraph } from "./causality-graph";
 export { CognitiveTimeline } from "./cognitive-timeline";
 export { StatCard, StatCardSkeleton } from "./stat-card";
 export { HealthGrid } from "./health-grid";
