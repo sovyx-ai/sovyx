@@ -131,10 +131,16 @@ if TYPE_CHECKING:
         install_crash_hooks as install_crash_hooks,
     )
     from sovyx.observability.saga import (
+        SagaHandle as SagaHandle,
+    )
+    from sovyx.observability.saga import (
         async_saga_scope as async_saga_scope,
     )
     from sovyx.observability.saga import (
         async_span_scope as async_span_scope,
+    )
+    from sovyx.observability.saga import (
+        begin_saga as begin_saga,
     )
     from sovyx.observability.saga import (
         current_event_id as current_event_id,
@@ -144,6 +150,9 @@ if TYPE_CHECKING:
     )
     from sovyx.observability.saga import (
         current_span_id as current_span_id,
+    )
+    from sovyx.observability.saga import (
+        end_saga as end_saga,
     )
     from sovyx.observability.saga import (
         saga_scope as saga_scope,
@@ -255,11 +264,14 @@ _SUBMODULE_MAP: dict[str, tuple[str, ...]] = {
     "sovyx.observability.pii": ("PIIRedactor",),
     "sovyx.observability.ringbuffer": ("RingBufferHandler", "install_crash_hooks"),
     "sovyx.observability.saga": (
+        "SagaHandle",
         "async_saga_scope",
         "async_span_scope",
+        "begin_saga",
         "current_event_id",
         "current_saga_id",
         "current_span_id",
+        "end_saga",
         "saga_scope",
         "span_scope",
         "trace_saga",
@@ -332,9 +344,11 @@ __all__ = [
     "SLOReport",
     "SLOStatus",
     "SLOTracker",
+    "SagaHandle",
     "SovyxTracer",
     "async_saga_scope",
     "async_span_scope",
+    "begin_saga",
     "bind_request_context",
     "bound_request_context",
     "build_cause_chain",
@@ -347,6 +361,7 @@ __all__ = [
     "current_event_id",
     "current_saga_id",
     "current_span_id",
+    "end_saga",
     "get_logger",
     "get_metrics",
     "get_request_context",

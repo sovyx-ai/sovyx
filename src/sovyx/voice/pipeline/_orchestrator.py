@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.engine.errors import VoiceError
 from sovyx.observability.logging import get_logger
+from sovyx.observability.saga import SagaHandle, begin_saga, end_saga
 from sovyx.voice.health._metrics import record_time_to_first_utterance
 from sovyx.voice.health.contract import BypassVerdict
 from sovyx.voice.jarvis import JarvisConfig, JarvisIllusion, split_at_boundaries
@@ -138,8 +139,11 @@ class VoicePipeline:
         # works, it just lacks the ducking layer.
         self._self_feedback_gate = self_feedback_gate
 
-        # State
-        self._state = VoicePipelineState.IDLE
+        # State — initialized via the backing attribute directly so the
+        # _state property setter doesn't fire for the first IDLE assignment
+        # (no saga to open or close at construction time).
+        self._voice_saga: SagaHandle | None = None
+        self._state_value: VoicePipelineState = VoicePipelineState.IDLE
         self._utterance_frames: list[npt.NDArray[np.int16]] = []
         self._silence_counter = 0
         self._recording_counter = 0
@@ -172,6 +176,59 @@ class VoicePipeline:
         # emission. Only the wake-word path contributes (barge-in uses a
         # different SpeechStartedEvent site in _transition_to_recording).
         self._wake_detected_monotonic: float | None = None
+
+    # -- State property + saga lifecycle ------------------------------------
+
+    @property
+    def _state(self) -> VoicePipelineState:
+        """Current internal state — backed by ``_state_value``.
+
+        Defined as a property so every assignment (``self._state = X``)
+        flows through the setter, which manages the ``voice_turn`` saga
+        lifecycle. Reads have zero overhead beyond an attribute lookup.
+        """
+        return self._state_value
+
+    @_state.setter
+    def _state(self, new: VoicePipelineState) -> None:
+        old = self._state_value
+        self._state_value = new
+        if old is new:
+            return
+        if old is VoicePipelineState.IDLE and new is not VoicePipelineState.IDLE:
+            self._open_voice_turn_saga()
+        elif new is VoicePipelineState.IDLE and old is not VoicePipelineState.IDLE:
+            self._close_voice_turn_saga()
+
+    def _open_voice_turn_saga(self) -> None:
+        """Open the per-turn voice saga (called on IDLE→active transitions).
+
+        If a previous turn's saga is somehow still open (defensive: a
+        crash path that bypassed the IDLE transition), close it as
+        ``saga.failed`` with a synthetic exception describing the
+        anomaly before opening the new one. This keeps the dashboard's
+        timeline clean rather than letting handles dangle indefinitely.
+        """
+        if self._voice_saga is not None:
+            end_saga(
+                self._voice_saga,
+                exc=RuntimeError("voice_turn saga abandoned by state machine"),
+            )
+        self._voice_saga = begin_saga("voice_turn", kind="voice")
+
+    def _close_voice_turn_saga(self) -> None:
+        """Close the active voice turn saga (called on active→IDLE transitions).
+
+        Idempotent — safe to call when no saga is open. The
+        ``saga.completed`` entry carries the duration measured by
+        :func:`begin_saga`, so the dashboard can render turn-latency
+        directly from the saga lifecycle without joining other
+        instrumentation.
+        """
+        if self._voice_saga is None:
+            return
+        end_saga(self._voice_saga)
+        self._voice_saga = None
 
     # -- Properties ----------------------------------------------------------
 

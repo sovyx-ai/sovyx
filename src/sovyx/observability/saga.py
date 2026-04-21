@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import functools
 import time
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -38,7 +39,8 @@ from structlog.contextvars import (
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable, Iterator
+    from collections.abc import AsyncIterator, Callable, Iterator, Mapping
+    from contextvars import Token
 
 logger = get_logger(__name__)
 
@@ -245,12 +247,95 @@ async def async_span_scope(
         reset_contextvars(**tokens)
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class SagaHandle:
+    """Opaque handle to a manually-opened saga.
+
+    Returned by :func:`begin_saga` and consumed by :func:`end_saga`.
+    Carries the bookkeeping needed to emit the ``saga.completed`` /
+    ``saga.failed`` lifecycle entries with correct duration and to
+    reset the structlog contextvar bindings.
+
+    Frozen: handles are values, not state. Pass them around freely.
+    """
+
+    saga_id: str
+    name: str
+    kind: str
+    started: float
+    tokens: Mapping[str, Token[Any]]
+
+
+def begin_saga(name: str, *, kind: str = "default") -> SagaHandle:
+    """Open a saga without a context manager — for cross-frame lifetimes.
+
+    Some sagas (voice turns, bridge messages) span multiple async
+    invocations driven by a state machine, so a ``with`` statement
+    cannot bracket them. ``begin_saga`` + :func:`end_saga` exposes the
+    same lifecycle imperatively: the caller stores the returned
+    :class:`SagaHandle` and passes it to ``end_saga`` when the
+    operation finishes.
+
+    The same contextvar binding semantics apply — ``saga_id`` is
+    bound for the duration so any log emitted between ``begin_saga``
+    and ``end_saga`` (across whichever async tasks share the
+    Context) carries the saga id automatically.
+
+    The caller is responsible for ensuring ``end_saga`` runs even on
+    error paths. A handle that's never ended produces a
+    ``saga.started`` entry with no matching close — visible in the
+    dashboard as a "dangling saga" anomaly, which is itself a useful
+    operational signal but should be the exception, not the norm.
+    """
+    saga_id = _new_id()
+    tokens = bind_contextvars(saga_id=saga_id)
+    handle = SagaHandle(
+        saga_id=saga_id,
+        name=name,
+        kind=kind,
+        started=time.perf_counter(),
+        tokens=tokens,
+    )
+    logger.info("saga.started", saga_name=name, kind=kind)
+    return handle
+
+
+def end_saga(handle: SagaHandle, *, exc: BaseException | None = None) -> None:
+    """Close a saga opened by :func:`begin_saga`.
+
+    Emits ``saga.completed`` (when ``exc`` is None) or ``saga.failed``
+    (when ``exc`` is provided), then resets the structlog contextvar
+    bindings via the tokens captured at begin time. Always safe to
+    call exactly once per handle; calling twice will produce a
+    duplicate close entry and a no-op reset.
+    """
+    if exc is None:
+        _emit_completed(
+            "saga.completed",
+            handle.started,
+            saga_name=handle.name,
+            kind=handle.kind,
+        )
+    else:
+        _emit_failed(
+            "saga.failed",
+            handle.started,
+            exc,
+            saga_name=handle.name,
+            kind=handle.kind,
+        )
+    reset_contextvars(**handle.tokens)
+
+
 __all__ = [
+    "SagaHandle",
     "async_saga_scope",
     "async_span_scope",
+    "begin_saga",
     "current_event_id",
     "current_saga_id",
     "current_span_id",
+    "end_saga",
     "saga_scope",
     "span_scope",
     "trace_saga",
