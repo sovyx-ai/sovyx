@@ -38,6 +38,7 @@ from sovyx.observability._fast_path import (
 )
 from sovyx.observability.async_handler import AsyncQueueHandler, BackgroundLogWriter
 from sovyx.observability.envelope import EnvelopeProcessor
+from sovyx.observability.failure_dictionary import ErrorEnricher
 from sovyx.observability.pii import PIIRedactor
 from sovyx.observability.ringbuffer import RingBufferHandler, install_crash_hooks
 from sovyx.observability.sampling import SamplingProcessor
@@ -329,6 +330,13 @@ def _setup_logging_locked(
     if obs_config is not None:
         if obs_config.features.pii_redaction:
             shared_processors.append(PIIRedactor(obs_config.pii))
+        # ErrorEnricher runs AFTER PIIRedactor so signature regexes don't
+        # match against raw PII (e.g., a phone number embedded in a
+        # message). Runs BEFORE ClampFieldsProcessor so the diagnosis
+        # hint isn't truncated by the per-field budget. Always installed
+        # — operators always benefit from diagnosis hints, and the cost
+        # is paid only by WARNING+ entries (see ErrorEnricher).
+        shared_processors.append(ErrorEnricher())
         # SamplingProcessor is always installed when obs_config is set;
         # it only drops events that are explicitly registered for
         # rate-limiting (see _SAMPLED_EVENTS in observability.sampling).
