@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Path, Query, Request
 from fastapi.responses import JSONResponse
 
@@ -62,3 +64,29 @@ async def get_saga(
     log_file = getattr(request.app.state, "log_file", None)
     entries = query_saga(log_file, saga_id, limit=limit)
     return JSONResponse({"saga_id": saga_id, "entries": entries})
+
+
+@router.get("/logs/sagas/{saga_id}/story")
+async def get_saga_story(
+    request: Request,
+    saga_id: str = Path(min_length=1, max_length=64),
+    locale: Literal["pt-BR", "en-US"] = Query(default="pt-BR"),
+) -> JSONResponse:
+    """Render a saga as a human-readable storyline (pt-BR or en-US).
+
+    Delegates to :func:`sovyx.observability.narrative.build_user_journey`,
+    which streams the structured log file, filters entries by
+    ``saga_id``, sorts chronologically, and renders each known event
+    via a localized template.
+    """
+    from pathlib import Path as _Path
+
+    from sovyx.observability.narrative import build_user_journey
+
+    log_file = getattr(request.app.state, "log_file", None)
+    if log_file is None:
+        return JSONResponse(
+            {"saga_id": saga_id, "story": "(log file not configured)", "locale": locale}
+        )
+    story = build_user_journey(saga_id, _Path(str(log_file)), locale=locale)
+    return JSONResponse({"saga_id": saga_id, "story": story, "locale": locale})
