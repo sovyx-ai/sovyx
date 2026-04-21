@@ -27,6 +27,7 @@ from sovyx.engine.types import PerceptionType
 from sovyx.observability.logging import get_logger
 from sovyx.observability.metrics import get_metrics
 from sovyx.observability.saga import async_saga_scope
+from sovyx.observability.tasks import spawn
 
 if TYPE_CHECKING:
     from sovyx.cognitive.financial_gate import FinancialGate
@@ -148,12 +149,14 @@ class BridgeManager:
         from sovyx.engine.events import ChannelConnected
 
         try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(
-                self._events.emit(ChannelConnected(channel_type=adapter.channel_type.value))
-            )
+            asyncio.get_running_loop()
         except RuntimeError:
             pass
+        else:
+            spawn(
+                self._events.emit(ChannelConnected(channel_type=adapter.channel_type.value)),
+                name="bridge-channel-connected-emit",
+            )
 
     async def start(self) -> None:
         """Start all registered channel adapters."""
