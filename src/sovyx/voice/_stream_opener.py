@@ -215,57 +215,84 @@ async def open_input_stream(
     sd = sd_module if sd_module is not None else _import_sounddevice()
     chain = _device_chain(device, enumerate_fn=enumerate_fn, kind="input")
 
-    attempts: list[OpenAttempt] = []
+    # Flatten the (entry, combo) pyramid so each failure can peek at the
+    # next attempt and emit a structured ``audio.stream.fallback`` event
+    # describing the from→to transition. Depth (host-API rank) is
+    # remembered per (entry, combo) pair for the StreamInfo we return.
+    pairs: list[tuple[int, DeviceEntry, _Combo]] = []
     for depth, entry in enumerate(chain):
-        combos = _input_combos(entry=entry, target_rate=target_rate, tuning=tuning)
-        for combo in combos:
-            stream, attempt = await _try_open_input(
-                sd=sd,
-                entry=entry,
-                combo=combo,
-                blocksize=blocksize,
-                dtype=dtype,
-                callback=callback,
-            )
-            attempts.append(attempt)
-            if stream is None:
-                continue
+        for combo in _input_combos(entry=entry, target_rate=target_rate, tuning=tuning):
+            pairs.append((depth, entry, combo))
 
-            # Post-open validation (silence detection).
-            if validate_fn is not None:
-                try:
-                    peak_db = await validate_fn(stream, device_index=entry.index)
-                except Exception as exc:  # noqa: BLE001 — validator misbehaviour
-                    await _close_stream_quiet(stream)
-                    attempts.append(
-                        OpenAttempt(
-                            host_api=entry.host_api_name,
-                            device_index=entry.index,
-                            sample_rate=combo.sample_rate,
-                            channels=combo.channels,
-                            auto_convert=combo.auto_convert,
-                            error_code=ErrorCode.INTERNAL_ERROR,
-                            error_detail=f"validator raised: {exc}",
-                        ),
+    attempts: list[OpenAttempt] = []
+    for idx, (depth, entry, combo) in enumerate(pairs):
+        next_pair = pairs[idx + 1] if idx + 1 < len(pairs) else None
+        stream, attempt = await _try_open_input(
+            sd=sd,
+            entry=entry,
+            combo=combo,
+            blocksize=blocksize,
+            dtype=dtype,
+            callback=callback,
+        )
+        attempts.append(attempt)
+        if stream is None:
+            if next_pair is not None:
+                _emit_fallback_event(
+                    prev=attempt,
+                    next_entry=next_pair[1],
+                    next_combo=next_pair[2],
+                    attempt_n=len(attempts),
+                )
+            continue
+
+        # Post-open validation (silence detection).
+        if validate_fn is not None:
+            try:
+                peak_db = await validate_fn(stream, device_index=entry.index)
+            except Exception as exc:  # noqa: BLE001 — validator misbehaviour
+                await _close_stream_quiet(stream)
+                validator_attempt = OpenAttempt(
+                    host_api=entry.host_api_name,
+                    device_index=entry.index,
+                    sample_rate=combo.sample_rate,
+                    channels=combo.channels,
+                    auto_convert=combo.auto_convert,
+                    error_code=ErrorCode.INTERNAL_ERROR,
+                    error_detail=f"validator raised: {exc}",
+                )
+                attempts.append(validator_attempt)
+                if next_pair is not None:
+                    _emit_fallback_event(
+                        prev=validator_attempt,
+                        next_entry=next_pair[1],
+                        next_combo=next_pair[2],
+                        attempt_n=len(attempts),
                     )
-                    continue
-                if peak_db < tuning.capture_validation_min_rms_db:
-                    await _close_stream_quiet(stream)
-                    attempts.append(
-                        OpenAttempt(
-                            host_api=entry.host_api_name,
-                            device_index=entry.index,
-                            sample_rate=combo.sample_rate,
-                            channels=combo.channels,
-                            auto_convert=combo.auto_convert,
-                            error_code=ErrorCode.INTERNAL_ERROR,
-                            error_detail=(
-                                f"silent stream (peak {peak_db:.1f} dBFS "
-                                f"< threshold {tuning.capture_validation_min_rms_db:.1f} dBFS)"
-                            ),
-                        ),
+                continue
+            if peak_db < tuning.capture_validation_min_rms_db:
+                await _close_stream_quiet(stream)
+                silent_attempt = OpenAttempt(
+                    host_api=entry.host_api_name,
+                    device_index=entry.index,
+                    sample_rate=combo.sample_rate,
+                    channels=combo.channels,
+                    auto_convert=combo.auto_convert,
+                    error_code=ErrorCode.INTERNAL_ERROR,
+                    error_detail=(
+                        f"silent stream (peak {peak_db:.1f} dBFS "
+                        f"< threshold {tuning.capture_validation_min_rms_db:.1f} dBFS)"
+                    ),
+                )
+                attempts.append(silent_attempt)
+                if next_pair is not None:
+                    _emit_fallback_event(
+                        prev=silent_attempt,
+                        next_entry=next_pair[1],
+                        next_combo=next_pair[2],
+                        attempt_n=len(attempts),
                     )
-                    continue
+                continue
 
             # The winning attempt is whatever ``_try_open_input`` just appended —
             # its ``auto_convert`` / ``exclusive`` fields are the *effective*
@@ -834,6 +861,63 @@ def _resample_int16(
     resampled = np.interp(x_dst, x_src, audio.astype(np.float32))
     clipped = np.clip(resampled, -32_768, 32_767)
     return clipped.astype(np.int16)
+
+
+def _combo_mode(host_api: str, *, exclusive: bool) -> str:
+    """Render a compact ``host_api/exclusive|shared`` mode label.
+
+    Used by :func:`_emit_fallback_event` so the dashboard can group
+    transitions by mode without parsing four separate fields. Lives
+    next to the other emit helpers because it is purely cosmetic — the
+    full-fidelity from/to fields ride alongside it on every event.
+    """
+    return f"{host_api}/{'exclusive' if exclusive else 'shared'}"
+
+
+def _emit_fallback_event(
+    *,
+    prev: OpenAttempt,
+    next_entry: DeviceEntry,
+    next_combo: _Combo,
+    attempt_n: int,
+) -> None:
+    """Emit ``audio.stream.fallback`` for one step of the pyramid.
+
+    Fired *after* an attempt fails (open exception, validator
+    exception, or silence), and *before* the next combo is tried —
+    so a saga reader can trace the cascade decisively (failure → next
+    attempt) instead of having to correlate two separate logs.
+
+    The full from/to combo is recorded so operators can reconstruct
+    the cascade graph offline; the compact ``from_mode`` / ``to_mode``
+    labels exist for at-a-glance dashboard grouping. ``attempt_n`` is
+    1-indexed and counts the failure that triggered the fallback.
+    """
+    error_code = prev.error_code.value if prev.error_code is not None else None
+    logger.warning(
+        "audio.stream.fallback",
+        **{
+            "voice.from_mode": _combo_mode(prev.host_api, exclusive=prev.exclusive),
+            "voice.from_host_api": prev.host_api,
+            "voice.from_device_index": prev.device_index,
+            "voice.from_exclusive": prev.exclusive,
+            "voice.from_auto_convert": prev.auto_convert,
+            "voice.from_sample_rate": prev.sample_rate,
+            "voice.from_channels": prev.channels,
+            "voice.to_mode": _combo_mode(
+                next_entry.host_api_name, exclusive=next_combo.exclusive
+            ),
+            "voice.to_host_api": next_entry.host_api_name,
+            "voice.to_device_index": next_entry.index,
+            "voice.to_exclusive": next_combo.exclusive,
+            "voice.to_auto_convert": next_combo.auto_convert,
+            "voice.to_sample_rate": next_combo.sample_rate,
+            "voice.to_channels": next_combo.channels,
+            "voice.error_code": error_code,
+            "voice.error_detail": prev.error_detail or "",
+            "voice.attempt_n": attempt_n,
+        },
+    )
 
 
 def _emit_exclusive_mode_events(
