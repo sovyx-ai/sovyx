@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 
 from sovyx.engine._lock_dict import LRULockDict
 from sovyx.observability.logging import get_logger
+from sovyx.observability.tasks import spawn
 from sovyx.voice.device_test._meter import PeakHoldMeter
 from sovyx.voice.device_test._models import (
     ClosedFrame,
@@ -243,7 +244,7 @@ class TestSession:
         last_successful_send = open_ts
         explicit_reason: CloseReason | None = None
 
-        stop_task = asyncio.create_task(self._stop_event.wait())
+        stop_task = spawn(self._stop_event.wait(), name="device-test-stop-waiter")
         try:
             async for audio_frame in self._source.frames():
                 if self._stop_event.is_set():
