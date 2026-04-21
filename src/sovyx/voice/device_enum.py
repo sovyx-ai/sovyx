@@ -150,7 +150,74 @@ def enumerate_devices() -> list[DeviceEntry]:
                 is_os_default=is_os_default,
             )
         )
+    _emit_enumeration(out, default_in=default_in, default_out=default_out)
     return out
+
+
+def _emit_enumeration(
+    entries: list[DeviceEntry],
+    *,
+    default_in: int,
+    default_out: int,
+) -> None:
+    """Emit ``audio.device.enumerated`` only when the device topology changes.
+
+    The full device list is included so the dashboard can render the
+    enumeration without a follow-up RPC, but emitting on every call
+    would spam during the boot cascade (each stream-open re-enumerates).
+    A SHA-256 fingerprint of the (name, host_api, channels, default_rate)
+    tuples is cached at module scope; the event fires only when the
+    fingerprint changes — which is precisely when an operator wants to
+    see it (cold boot, hot-plug, USB renumeration). The fingerprint
+    survives across :func:`enumerate_devices` invocations within the
+    same process.
+    """
+    import hashlib
+
+    signature_items = sorted(
+        (
+            e.name,
+            e.host_api_name,
+            e.max_input_channels,
+            e.max_output_channels,
+            e.default_samplerate,
+        )
+        for e in entries
+    )
+    signature = hashlib.sha256(repr(signature_items).encode("utf-8")).hexdigest()[:16]
+    global _last_enumeration_signature  # noqa: PLW0603
+    if signature == _last_enumeration_signature:
+        return
+    _last_enumeration_signature = signature
+
+    devices = [
+        {
+            "index": e.index,
+            "name": e.name,
+            "host_api": e.host_api_name,
+            "max_input_channels": e.max_input_channels,
+            "max_output_channels": e.max_output_channels,
+            "default_samplerate": e.default_samplerate,
+            "is_default_input": e.index == default_in and e.max_input_channels > 0,
+            "is_default_output": e.index == default_out and e.max_output_channels > 0,
+        }
+        for e in entries
+    ]
+    logger.info(
+        "audio.device.enumerated",
+        **{
+            "voice.device_count": len(entries),
+            "voice.input_count": sum(1 for e in entries if e.max_input_channels > 0),
+            "voice.output_count": sum(1 for e in entries if e.max_output_channels > 0),
+            "voice.default_input_index": default_in,
+            "voice.default_output_index": default_out,
+            "voice.signature": signature,
+            "voice.devices": devices,
+        },
+    )
+
+
+_last_enumeration_signature: str | None = None
 
 
 def pick_preferred(entries: list[DeviceEntry], *, kind: str) -> list[DeviceEntry]:
