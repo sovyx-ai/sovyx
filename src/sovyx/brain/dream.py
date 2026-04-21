@@ -53,6 +53,7 @@ from sovyx.brain._dream_prompts import build_pattern_prompt
 from sovyx.engine.events import DreamCompleted
 from sovyx.engine.types import ConceptCategory
 from sovyx.observability.logging import get_logger
+from sovyx.observability.tasks import spawn
 
 if TYPE_CHECKING:
     from sovyx.brain.concept_repo import ConceptRepository
@@ -432,7 +433,7 @@ class DreamScheduler:
             return
 
         self._running = True
-        self._task = asyncio.create_task(self._loop(mind_id))
+        self._task = spawn(self._loop(mind_id), name="dream-scheduler")
         logger.info(
             "dream_scheduler_started",
             mind_id=str(mind_id),
