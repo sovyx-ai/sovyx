@@ -168,7 +168,10 @@ async def bootstrap(
         )
 
         metrics_reader = _InMemoryMetricReader()
-        metrics_registry = setup_metrics(readers=[metrics_reader])
+        metrics_registry = setup_metrics(
+            readers=[metrics_reader],
+            max_series=engine_config.observability.metrics_max_series,
+        )
         registry.register_instance(MetricsRegistry, metrics_registry)
         registry.register_instance(_InMemoryMetricReader, metrics_reader)
 

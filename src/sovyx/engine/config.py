@@ -623,6 +623,17 @@ class ObservabilityConfig(BaseSettings):
     # Only honored when ``features.metrics_exporter`` is on.
     metrics_port: int = Field(default=9101, ge=1, le=65535)
 
+    # Phase 11+ Task 11+.2 — global cardinality budget shared across
+    # every counter / histogram / gauge. Once the *total* number of
+    # (metric, label-tuple) pairs reaches ``metrics_max_series``, new
+    # label combinations are folded into a single ``_overflow=true``
+    # series per metric and a one-shot WARNING is emitted with the
+    # canonical ``metrics.cardinality.exceeded`` event. The default of
+    # 10 000 series matches the §22.7 budget and Prometheus best
+    # practice (each series carries ~3 KiB of memory in the scrape
+    # backend, so 10 000 ≈ 30 MiB worst-case before the budget kicks).
+    metrics_max_series: int = Field(default=10_000, ge=100, le=1_000_000)
+
 
 class TuningConfig(BaseModel):
     """Aggregate tuning knobs for cognitive / brain / voice / llm subsystems.

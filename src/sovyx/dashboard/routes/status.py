@@ -283,6 +283,46 @@ async def get_active_alerts(request: Request) -> JSONResponse:
     )
 
 
+# ── Cardinality budget snapshot (Phase 11+ Task 11+.2) ──
+
+
+@router.get("/observability/metrics/cardinality", dependencies=[Depends(verify_token)])
+async def get_metrics_cardinality(request: Request) -> JSONResponse:
+    """Top-N metrics by Prometheus series count + global budget posture.
+
+    Resolves the engine ``MetricsRegistry`` from the registry and
+    delegates to :meth:`MetricsRegistry.cardinality_report`. Operators
+    poll this endpoint to see which metric is driving the most series
+    *before* the global budget (default 10 000 series) trips — once it
+    trips, new label combinations are silently folded into a single
+    ``_overflow=true`` series per metric and a one-shot WARNING fires.
+
+    Returns ``{"max_series": 0, "total_series": 0, "metrics": []}``
+    when the registry isn't wired (e.g., dashboard-only test apps).
+    """
+    registry = getattr(request.app.state, "registry", None)
+    if registry is None:
+        return JSONResponse(
+            {"max_series": 0, "total_series": 0, "metrics": []},
+        )
+
+    from sovyx.observability.metrics import MetricsRegistry
+
+    if not registry.is_registered(MetricsRegistry):
+        return JSONResponse(
+            {"max_series": 0, "total_series": 0, "metrics": []},
+        )
+
+    metrics_registry: MetricsRegistry = await registry.resolve(MetricsRegistry)
+    try:
+        top_n = int(request.query_params.get("top_n", "20"))
+    except (ValueError, TypeError):
+        top_n = 20
+    top_n = max(1, min(top_n, 200))
+
+    return JSONResponse(metrics_registry.cardinality_report(top_n=top_n))
+
+
 # ── Prometheus /metrics (no auth — scrapers don't send Bearer) ──
 
 metrics_router = APIRouter()
