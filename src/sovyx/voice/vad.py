@@ -8,6 +8,7 @@ Ref: SPE-010 §3 (VAD), IMPL-004 §2.4 (SileroVAD v5 code)
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 from enum import IntEnum, auto
 from typing import TYPE_CHECKING
@@ -21,6 +22,11 @@ if TYPE_CHECKING:
     import numpy.typing as npt
 
 logger = get_logger(__name__)
+
+_WINDOW_HISTORY = 5
+"""Rolling-window depth carried on ``voice.vad.state_changed`` so the
+dashboard timeline can render the probability / RMS build-up that led
+to each FSM transition instead of a single point estimate."""
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -180,6 +186,11 @@ class SileroVAD:
         self._vad_state = VADState.SILENCE
         self._consecutive_count = 0
 
+        # Rolling windows for state_changed enrichment. Bounded so the
+        # memory footprint is constant regardless of session length.
+        self._prob_history: deque[float] = deque(maxlen=_WINDOW_HISTORY)
+        self._rms_history: deque[float] = deque(maxlen=_WINDOW_HISTORY)
+
         logger.info(
             "SileroVAD initialised",
             model=str(model_path),
@@ -229,6 +240,26 @@ class SileroVAD:
         output, self._state = self._session.run(None, ort_inputs)[:2]
         probability = float(output[0][0])
 
+        # Rolling window — append before the FSM tick so the enrichment
+        # on a transition reflects the probabilities that *led to* it.
+        rms = float(np.sqrt(np.mean(audio * audio))) if audio.size else 0.0
+        self._prob_history.append(probability)
+        self._rms_history.append(rms)
+
+        # Per-frame telemetry (sampled by SamplingProcessor at the rate
+        # set in ObservabilitySamplingConfig.vad_frame_rate). Operators
+        # can disable sampling for live-debug by setting the rate to 0.
+        logger.info(
+            "voice.vad.frame",
+            **{
+                "voice.probability": round(probability, 4),
+                "voice.rms": round(rms, 4),
+                "voice.state": self._vad_state.name,
+                "voice.onset_threshold": self._config.onset_threshold,
+                "voice.offset_threshold": self._config.offset_threshold,
+            },
+        )
+
         # FSM transition — log every state change so operators can see
         # exactly when/why the orchestrator moved between silence and speech
         # without guessing from the absence of downstream events.
@@ -240,6 +271,19 @@ class SileroVAD:
                 from_state=prev_state.name,
                 to_state=self._vad_state.name,
                 probability=round(probability, 3),
+            )
+            logger.info(
+                "voice.vad.state_changed",
+                **{
+                    "voice.from_state": prev_state.name,
+                    "voice.to_state": self._vad_state.name,
+                    "voice.probability": round(probability, 4),
+                    "voice.rms": round(rms, 4),
+                    "voice.onset_threshold": self._config.onset_threshold,
+                    "voice.offset_threshold": self._config.offset_threshold,
+                    "voice.prob_window": [round(p, 4) for p in self._prob_history],
+                    "voice.rms_window": [round(r, 4) for r in self._rms_history],
+                },
             )
 
         return VADEvent(
@@ -255,6 +299,8 @@ class SileroVAD:
         self._state = np.zeros(_LSTM_STATE_SHAPE, dtype=np.float32)
         self._vad_state = VADState.SILENCE
         self._consecutive_count = 0
+        self._prob_history.clear()
+        self._rms_history.clear()
 
     @property
     def state(self) -> VADState:
