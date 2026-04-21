@@ -129,6 +129,50 @@ class _RateLimiter:
         return max(0, self._max - active)
 
 
+# ── Telemetry helpers ───────────────────────────────────────────────
+
+
+def _estimate_body_bytes(kwargs: dict[str, object]) -> int:
+    """Best-effort byte size of the request body for logging.
+
+    Plugins can pass body via ``content`` (bytes/str), ``data`` (form
+    dict or str), or ``json`` (Python object → JSON-encoded). The exact
+    serialized size depends on httpx's renderer; this estimate is good
+    enough for the request log and avoids importing the full encoder.
+    """
+    content = kwargs.get("content")
+    if isinstance(content, (bytes, bytearray)):
+        return len(content)
+    if isinstance(content, str):
+        return len(content.encode("utf-8"))
+    data = kwargs.get("data")
+    if isinstance(data, (bytes, bytearray)):
+        return len(data)
+    if isinstance(data, str):
+        return len(data.encode("utf-8"))
+    if isinstance(data, dict):
+        return sum(len(str(k).encode()) + len(str(v).encode()) for k, v in data.items())
+    json_payload = kwargs.get("json")
+    if json_payload is not None:
+        import json as _json  # noqa: PLC0415 — avoid module-level dep on json.
+
+        return len(_json.dumps(json_payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+    return 0
+
+
+def _extract_header_keys(kwargs: dict[str, object]) -> list[str]:
+    """Return header *keys only* (no values) for redacted log output."""
+    headers = kwargs.get("headers")
+    if isinstance(headers, dict):
+        return [str(k) for k in headers]
+    if hasattr(headers, "keys"):
+        try:
+            return [str(k) for k in headers.keys()]  # type: ignore[union-attr]  # noqa: SIM118
+        except Exception:  # noqa: BLE001 — diagnostic helper isolation.
+            return []
+    return []
+
+
 # ── Sandboxed HTTP Client ──────────────────────────────────────────
 
 
@@ -284,9 +328,64 @@ class SandboxedHttpClient:
         Returns:
             httpx.Response (body truncated if too large).
         """
-        self._validate_url(url)
-        self._limiter.acquire()
+        parsed = urlparse(url)
+        host_only = parsed.hostname or ""
+        # Body size — best-effort: stringified content / json kwargs.
+        # Path is intentionally not logged at this layer (the path may
+        # carry per-user identifiers; the PII redactor strips them at
+        # the envelope level if it slips through anywhere else).
+        body_bytes = _estimate_body_bytes(kwargs)
+        # Header keys only — values may carry tokens. Sorted for stable
+        # log output; envelope-level redaction will further sanitize.
+        headers_redacted = sorted(_extract_header_keys(kwargs))
 
+        try:
+            self._validate_url(url)
+        except PermissionDeniedError as exc:
+            logger.warning(
+                "plugin.http.violation",
+                **{
+                    "plugin_id": self._plugin,
+                    "plugin.http.method": method,
+                    "plugin.http.url_host_only": host_only,
+                    "plugin.http.violation_kind": "url_validation",
+                    "plugin.http.reason": str(exc),
+                },
+            )
+            raise
+
+        try:
+            self._limiter.acquire()
+        except PermissionDeniedError as exc:
+            logger.warning(
+                "plugin.http.violation",
+                **{
+                    "plugin_id": self._plugin,
+                    "plugin.http.method": method,
+                    "plugin.http.url_host_only": host_only,
+                    "plugin.http.violation_kind": "rate_limit",
+                    "plugin.http.reason": str(exc),
+                    "plugin.http.rate_remaining": self._limiter.remaining,
+                },
+            )
+            raise
+
+        allowed_domain = self._allow_any_domain or host_only in self._allowed
+        logger.info(
+            "plugin.http.request",
+            **{
+                "plugin_id": self._plugin,
+                "plugin.http.method": method,
+                "plugin.http.url_host_only": host_only,
+                "plugin.http.headers_redacted": headers_redacted,
+                "plugin.http.body_bytes": body_bytes,
+                "plugin.http.allowed_domain": allowed_domain,
+                "plugin.http.rate_limited": False,
+            },
+        )
+
+        # Legacy debug entry — preserved so callers grepping for the
+        # old event name still find request traces in legacy log dumps.
         logger.debug(
             "plugin_http_request",
             plugin=self._plugin,
@@ -294,7 +393,9 @@ class SandboxedHttpClient:
             url=url,
         )
 
+        started = time.monotonic()
         response = await self._client.request(method, url, **kwargs)  # type: ignore[arg-type]
+        latency_ms = (time.monotonic() - started) * 1000.0
 
         # Check response size
         content_length = response.headers.get("content-length")
@@ -306,6 +407,31 @@ class SandboxedHttpClient:
                 size=content_length,
                 limit=self._max_bytes,
             )
+            logger.warning(
+                "plugin.http.violation",
+                **{
+                    "plugin_id": self._plugin,
+                    "plugin.http.method": method,
+                    "plugin.http.url_host_only": host_only,
+                    "plugin.http.violation_kind": "response_too_large",
+                    "plugin.http.response_bytes": int(content_length),
+                    "plugin.http.limit_bytes": self._max_bytes,
+                },
+            )
+
+        response_bytes = int(content_length) if content_length else len(response.content or b"")
+        logger.info(
+            "plugin.http.response",
+            **{
+                "plugin_id": self._plugin,
+                "plugin.http.method": method,
+                "plugin.http.url_host_only": host_only,
+                "plugin.http.status": response.status_code,
+                "plugin.http.response_bytes": response_bytes,
+                "plugin.http.latency_ms": round(latency_ms, 2),
+                "plugin.http.attempt": 1,
+            },
+        )
 
         return response
 
