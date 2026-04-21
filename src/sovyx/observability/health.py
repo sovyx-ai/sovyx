@@ -710,10 +710,14 @@ def _wire_logger() -> Any:  # noqa: ANN401  # structlog BoundLogger has no publi
     break the chain. This helper is called only inside the wireup
     helpers below (debug-only call sites), so the import happens
     after ``logging.py`` finishes initialising.
+
+    ``__name__`` resolves to ``sovyx.observability.health`` — the same
+    string the previous literal hardcoded — but tying it to the module
+    avoids drift if the module is ever moved or split.
     """
     from sovyx.observability.logging import get_logger  # noqa: PLC0415
 
-    return get_logger("sovyx.observability.health")
+    return get_logger(__name__)
 
 
 async def create_engine_health_registry(
