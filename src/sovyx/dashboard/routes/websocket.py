@@ -30,10 +30,19 @@ async def websocket_endpoint(
 
     ws_manager = websocket.app.state.ws_manager
     await ws_manager.connect(websocket)
+    client_repr = ws_manager._client_repr(websocket)  # noqa: SLF001
     try:
         while True:
             # Keep connection alive, handle client pings.
             data = await websocket.receive_text()
+            logger.debug(
+                "net.ws.recv",
+                **{
+                    "net.client": client_repr,
+                    "net.message_bytes": len(data.encode("utf-8")),
+                    "net.message_kind": "ping" if data == "ping" else "data",
+                },
+            )
             if data == "ping":
                 await websocket.send_text("pong")
     except WebSocketDisconnect:

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import secrets
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -77,6 +78,10 @@ class ConnectionManager:
 
     def __init__(self) -> None:
         self._connections: list[WebSocket] = []
+        # Per-socket connect timestamp (for net.ws.disconnect duration_ms).
+        # Indexed by id() to avoid hashing the WebSocket object itself,
+        # which is unhashable on some Starlette versions.
+        self._connect_times: dict[int, float] = {}
         self._lock = asyncio.Lock()
 
     async def connect(self, websocket: WebSocket) -> None:
@@ -84,14 +89,37 @@ class ConnectionManager:
         await websocket.accept()
         async with self._lock:
             self._connections.append(websocket)
-        logger.debug("ws_connected", count=len(self._connections))
+            self._connect_times[id(websocket)] = time.monotonic()
+            count = len(self._connections)
+        client = self._client_repr(websocket)
+        logger.debug("ws_connected", count=count)
+        logger.info(
+            "net.ws.connect",
+            **{
+                "net.client": client,
+                "net.active_count": count,
+            },
+        )
 
     async def disconnect(self, websocket: WebSocket) -> None:
         """Remove a WebSocket connection."""
         async with self._lock:
             if websocket in self._connections:
                 self._connections.remove(websocket)
-        logger.debug("ws_disconnected", count=len(self._connections))
+            connected_at = self._connect_times.pop(id(websocket), None)
+            count = len(self._connections)
+        duration_ms = 0
+        if connected_at is not None:
+            duration_ms = int((time.monotonic() - connected_at) * 1000)
+        logger.debug("ws_disconnected", count=count)
+        logger.info(
+            "net.ws.disconnect",
+            **{
+                "net.client": self._client_repr(websocket),
+                "net.duration_ms": duration_ms,
+                "net.active_count": count,
+            },
+        )
 
     async def broadcast(self, message: dict[str, Any]) -> None:
         """Send JSON message to all connected clients.
@@ -105,23 +133,68 @@ class ConnectionManager:
         if not snapshot:
             return
 
+        # Approx payload size — JSON-encoded length matches what FastAPI
+        # actually pushes onto the wire. Computed once so every per-socket
+        # send.event reports the same byte count.
+        try:
+            import json as _json
+
+            message_bytes = len(_json.dumps(message).encode("utf-8"))
+        except (TypeError, ValueError):
+            message_bytes = -1
+        event_type = str(message.get("type", "")) if isinstance(message, dict) else ""
+
         stale: list[WebSocket] = []
         for ws in snapshot:
+            send_started_at = time.monotonic()
             try:
                 await ws.send_json(message)
-            except Exception:  # noqa: BLE001
+                logger.debug(
+                    "net.ws.send",
+                    **{
+                        "net.client": self._client_repr(ws),
+                        "net.message_bytes": message_bytes,
+                        "net.event_type": event_type,
+                        "net.send_latency_ms": int(
+                            (time.monotonic() - send_started_at) * 1000
+                        ),
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001
                 stale.append(ws)
+                logger.warning(
+                    "net.ws.send",
+                    **{
+                        "net.client": self._client_repr(ws),
+                        "net.message_bytes": message_bytes,
+                        "net.event_type": event_type,
+                        "net.send_failed": True,
+                        "net.error_type": type(exc).__name__,
+                    },
+                )
 
         if stale:
             async with self._lock:
                 for ws in stale:
                     if ws in self._connections:
                         self._connections.remove(ws)
+                    self._connect_times.pop(id(ws), None)
 
     @property
     def active_count(self) -> int:
         """Number of active WebSocket connections."""
         return len(self._connections)
+
+    @staticmethod
+    def _client_repr(websocket: WebSocket) -> str:
+        """Best-effort ``host:port`` string for telemetry — never raises."""
+        try:
+            client = websocket.client
+            if client is None:
+                return "unknown"
+            return f"{client.host}:{client.port}"
+        except (AttributeError, RuntimeError):
+            return "unknown"
 
 
 # ── Request ID Middleware ──
