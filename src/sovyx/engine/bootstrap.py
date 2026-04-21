@@ -148,6 +148,17 @@ async def bootstrap(
         )
         registry.register_instance(EventBus, event_bus)
 
+        # 1.5. Startup self-diagnosis cascade (Phase 4 of
+        # IMPL-OBSERVABILITY-001). Runs *before* heavy subsystems so
+        # the platform/hardware/audio fingerprint is captured even if
+        # later steps fail. Gated by ``observability.features.startup_cascade``
+        # so a regression can be rolled back without disabling the
+        # observability stack as a whole.
+        if engine_config.observability.features.startup_cascade:
+            from sovyx.observability.self_diagnosis import run_startup_cascade
+
+            await run_startup_cascade(engine_config, registry, event_bus)
+
         # 2. DatabaseManager
         db_manager = DatabaseManager(engine_config, event_bus)
         await db_manager.start()
