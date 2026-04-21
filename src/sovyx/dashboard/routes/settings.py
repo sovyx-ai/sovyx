@@ -60,4 +60,19 @@ async def update_settings(request: Request) -> JSONResponse:
     config_path = getattr(request.app.state, "config_path", None)
     changes = apply_settings(config, body, config_path=config_path)
 
+    if changes:
+        from sovyx.observability.audit import emit_config_change, parse_change_summary
+
+        request_id = getattr(request.state, "request_id", None)
+        for field_path, summary in changes.items():
+            old, new = parse_change_summary(summary)
+            emit_config_change(
+                field_path,
+                old_value_summary=old,
+                new_value_summary=new,
+                actor="user",
+                request_id=request_id,
+                source="dashboard",
+            )
+
     return JSONResponse({"ok": True, "changes": changes})

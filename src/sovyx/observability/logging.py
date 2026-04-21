@@ -457,6 +457,18 @@ def _setup_logging_locked(
     for noisy_logger in ("httpx", "httpcore", "urllib3", "hpack"):
         logging.getLogger(noisy_logger).setLevel(logging.WARNING)
 
+    # ── Dedicated audit handler ──
+    # Audit events (config changes, license activations, permission
+    # grants) get their own rotating file so retention is decoupled
+    # from main log rotation and they survive even when sovyx.log is
+    # being investigated/drained. The handler is attached to the
+    # `sovyx.audit` stdlib logger with propagate=False, so audit
+    # entries never leak into sovyx.log.
+    if data_dir is not None:
+        from sovyx.observability.audit import setup_audit_handler  # noqa: PLC0415
+
+        setup_audit_handler(data_dir / "audit" / "audit.jsonl")
+
     _setup_done = True
 
     # Re-apply persisted runtime overrides so an investigation that

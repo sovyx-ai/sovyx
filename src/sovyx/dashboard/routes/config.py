@@ -55,6 +55,21 @@ async def update_config(request: Request) -> JSONResponse:
     mind_yaml_path = getattr(request.app.state, "mind_yaml_path", None)
     changes = apply_config(mind_config, body, mind_yaml_path=mind_yaml_path)
 
+    if changes:
+        from sovyx.observability.audit import emit_config_change, parse_change_summary
+
+        request_id = getattr(request.state, "request_id", None)
+        for field_path, summary in changes.items():
+            old, new = parse_change_summary(summary)
+            emit_config_change(
+                field_path,
+                old_value_summary=old,
+                new_value_summary=new,
+                actor="user",
+                request_id=request_id,
+                source="dashboard",
+            )
+
     ws_manager = getattr(request.app.state, "ws_manager", None)
     if changes and ws_manager is not None:
         await ws_manager.broadcast(
