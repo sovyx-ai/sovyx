@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from sovyx.engine.errors import EngineError
 from sovyx.observability.logging import get_logger
+from sovyx.observability.tasks import spawn
 
 if TYPE_CHECKING:
     from sovyx.engine.events import EventBus
@@ -216,8 +217,8 @@ class LifecycleManager:
                     return cfg.api.host, cfg.api.port
 
                 # Use existing loop if available
-                loop = asyncio.get_running_loop()
-                task = loop.create_task(_get_config())
+                asyncio.get_running_loop()
+                task = spawn(_get_config(), name="lifecycle-banner-config-resolve")
                 # Can't await in sync — use defaults if not resolved yet
                 if task.done():
                     host, port = task.result()
