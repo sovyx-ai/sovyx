@@ -26,6 +26,11 @@ from sovyx.plugins._manager_types import (
     PluginError,
     _PluginHealth,
 )
+from sovyx.plugins.lifecycle import (
+    emit_plugin_loaded as _emit_lifecycle_loaded,
+    emit_plugin_unloaded as _emit_lifecycle_unloaded,
+    probe_now as _probe_now,
+)
 from sovyx.plugins.context import BrainAccess, EventBusAccess, PluginContext
 from sovyx.plugins.permissions import (
     Permission,
@@ -233,6 +238,9 @@ class PluginManager:
     ) -> None:
         """Internal plugin loading with context creation."""
         name = plugin.name
+        # Captured before any I/O so the probe brackets the entire
+        # load operation, including setup() and tool collection.
+        probe = _probe_now()
 
         # Get granted permissions
         granted = self._granted_perms.get(name, set())
@@ -306,6 +314,12 @@ class PluginManager:
         self._health[name] = _PluginHealth()
 
         logger.info("plugin_loaded", name=name, tools=len(tools))
+        _emit_lifecycle_loaded(
+            name,
+            probe,
+            plugin_version=plugin.version,
+            tool_count=len(tools),
+        )
         self._emit_plugin_loaded(name, plugin.version, len(tools))
 
     def _discover_entry_points(self) -> list[type[ISovyxPlugin]]:
@@ -705,6 +719,7 @@ class PluginManager:
             raise PluginError(msg)
 
         loaded = self._plugins[name]
+        probe = _probe_now()
 
         # Cleanup events
         if loaded.context.event_bus:
@@ -718,6 +733,7 @@ class PluginManager:
         del self._plugins[name]
         self._health.pop(name, None)
         logger.info("plugin_unloaded", name=name)
+        _emit_lifecycle_unloaded(name, probe, reason="explicit")
         self._emit_plugin_unloaded(name, reason="explicit")
 
     async def shutdown(self) -> None:
