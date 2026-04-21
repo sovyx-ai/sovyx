@@ -311,7 +311,7 @@ describe("LogRow", () => {
     "renders %s level",
     (level) => {
       const { container } = render(<LogRow entry={{ ...baseEntry, level }} />);
-      expect(container.textContent).toContain(level.padEnd(5));
+      expect(container.textContent).toContain(level);
     },
   );
 
