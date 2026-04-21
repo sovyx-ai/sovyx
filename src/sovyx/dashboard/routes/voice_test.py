@@ -50,6 +50,7 @@ from starlette.status import (
 from sovyx.dashboard.routes._deps import verify_token
 from sovyx.observability.logging import get_logger
 from sovyx.observability.metrics import get_metrics
+from sovyx.observability.tasks import spawn
 from sovyx.voice.device_test import (
     PROTOCOL_VERSION,
     WS_CLOSE_DISABLED,
@@ -522,7 +523,7 @@ async def start_output_test(request: Request, body: TestOutputRequest) -> JSONRe
         None,
     ) or SoundDeviceOutputSink(tuning=tuning)
 
-    entry.task = asyncio.create_task(
+    entry.task = spawn(
         _run_output_job(
             entry=entry,
             job_id=job_id,
@@ -533,6 +534,7 @@ async def start_output_test(request: Request, body: TestOutputRequest) -> JSONRe
             tts=tts,
             sink=sink,
         ),
+        name=f"voice-test-output-job:{job_id}",
     )
 
     return JSONResponse(
