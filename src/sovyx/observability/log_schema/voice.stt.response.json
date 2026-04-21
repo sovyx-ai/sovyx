@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sovyx.dev/log_schema/voice.stt.response.json",
+  "title": "voice.stt.response",
+  "description": "STT result returned with transcript + confidence.",
+  "type": "object",
+  "required": [
+    "timestamp",
+    "level",
+    "logger",
+    "event",
+    "schema_version",
+    "process_id",
+    "host",
+    "sovyx_version",
+    "sequence_no",
+    "voice.model",
+    "voice.provider",
+    "voice.language",
+    "voice.audio_ms",
+    "voice.latency_ms",
+    "voice.confidence",
+    "voice.text_chars",
+    "voice.transcript"
+  ],
+  "properties": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "level": {
+      "enum": [
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR",
+        "CRITICAL"
+      ]
+    },
+    "logger": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "process_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "host": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sovyx_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sequence_no": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "saga_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cause_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "span_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "event": {
+      "const": "voice.stt.response"
+    },
+    "voice.model": {
+      "type": "string"
+    },
+    "voice.provider": {
+      "type": "string"
+    },
+    "voice.language": {
+      "type": "string"
+    },
+    "voice.audio_ms": {
+      "type": "integer"
+    },
+    "voice.latency_ms": {
+      "type": "number"
+    },
+    "voice.confidence": {
+      "type": "number"
+    },
+    "voice.text_chars": {
+      "type": "integer"
+    },
+    "voice.transcript": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true
+}

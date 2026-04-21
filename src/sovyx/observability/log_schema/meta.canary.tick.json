@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sovyx.dev/log_schema/meta.canary.tick.json",
+  "title": "meta.canary.tick",
+  "description": "Synthetic heartbeat \u2014 confirms the logging pipeline is reachable end-to-end.",
+  "type": "object",
+  "required": [
+    "timestamp",
+    "level",
+    "logger",
+    "event",
+    "schema_version",
+    "process_id",
+    "host",
+    "sovyx_version",
+    "sequence_no",
+    "meta.tick_id",
+    "meta.timestamp",
+    "meta.lag_ms"
+  ],
+  "properties": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "level": {
+      "enum": [
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR",
+        "CRITICAL"
+      ]
+    },
+    "logger": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "process_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "host": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sovyx_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sequence_no": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "saga_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cause_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "span_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "event": {
+      "const": "meta.canary.tick"
+    },
+    "meta.tick_id": {
+      "type": "integer"
+    },
+    "meta.timestamp": {
+      "type": "string"
+    },
+    "meta.lag_ms": {
+      "type": "number"
+    }
+  },
+  "additionalProperties": true
+}

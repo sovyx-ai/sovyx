@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sovyx.dev/log_schema/voice.barge_in.detected.json",
+  "title": "voice.barge_in.detected",
+  "description": "User started speaking while TTS was playing \u2014 playback was interrupted.",
+  "type": "object",
+  "required": [
+    "timestamp",
+    "level",
+    "logger",
+    "event",
+    "schema_version",
+    "process_id",
+    "host",
+    "sovyx_version",
+    "sequence_no",
+    "voice.mind_id",
+    "voice.frames_sustained",
+    "voice.prob",
+    "voice.threshold_frames",
+    "voice.output_was_playing"
+  ],
+  "properties": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "level": {
+      "enum": [
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR",
+        "CRITICAL"
+      ]
+    },
+    "logger": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "process_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "host": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sovyx_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sequence_no": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "saga_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cause_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "span_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "event": {
+      "const": "voice.barge_in.detected"
+    },
+    "voice.mind_id": {
+      "type": "string"
+    },
+    "voice.frames_sustained": {
+      "type": "integer"
+    },
+    "voice.prob": {
+      "type": "number"
+    },
+    "voice.threshold_frames": {
+      "type": "integer"
+    },
+    "voice.output_was_playing": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": true
+}

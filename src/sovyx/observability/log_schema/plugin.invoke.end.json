@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sovyx.dev/log_schema/plugin.invoke.end.json",
+  "title": "plugin.invoke.end",
+  "description": "Plugin tool returned (success or error) \u2014 duration + health snapshot.",
+  "type": "object",
+  "required": [
+    "timestamp",
+    "level",
+    "logger",
+    "event",
+    "schema_version",
+    "process_id",
+    "host",
+    "sovyx_version",
+    "sequence_no",
+    "plugin_id",
+    "plugin.tool_name",
+    "plugin.duration_ms",
+    "plugin.success",
+    "plugin.health.consecutive_failures",
+    "plugin.health.active_tasks"
+  ],
+  "properties": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "level": {
+      "enum": [
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR",
+        "CRITICAL"
+      ]
+    },
+    "logger": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "process_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "host": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sovyx_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sequence_no": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "saga_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cause_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "span_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "event": {
+      "const": "plugin.invoke.end"
+    },
+    "plugin_id": {
+      "type": "string"
+    },
+    "plugin.tool_name": {
+      "type": "string"
+    },
+    "plugin.duration_ms": {
+      "type": "integer"
+    },
+    "plugin.success": {
+      "type": "boolean"
+    },
+    "plugin.result_preview": {
+      "type": "string"
+    },
+    "plugin.health.consecutive_failures": {
+      "type": "integer"
+    },
+    "plugin.health.active_tasks": {
+      "type": "integer"
+    },
+    "plugin.error": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true
+}

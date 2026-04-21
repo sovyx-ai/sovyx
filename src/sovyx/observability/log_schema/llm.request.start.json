@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sovyx.dev/log_schema/llm.request.start.json",
+  "title": "llm.request.start",
+  "description": "LLMRouter dispatched a request to a provider.",
+  "type": "object",
+  "required": [
+    "timestamp",
+    "level",
+    "logger",
+    "event",
+    "schema_version",
+    "process_id",
+    "host",
+    "sovyx_version",
+    "sequence_no",
+    "llm.provider",
+    "llm.model",
+    "llm.tokens_in",
+    "llm.context_tokens",
+    "llm.system_tokens"
+  ],
+  "properties": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "level": {
+      "enum": [
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR",
+        "CRITICAL"
+      ]
+    },
+    "logger": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "process_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "host": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sovyx_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sequence_no": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "saga_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cause_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "span_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "event": {
+      "const": "llm.request.start"
+    },
+    "llm.provider": {
+      "type": "string"
+    },
+    "llm.model": {
+      "type": "string"
+    },
+    "llm.tokens_in": {
+      "type": "integer"
+    },
+    "llm.context_tokens": {
+      "type": "integer"
+    },
+    "llm.system_tokens": {
+      "type": "integer"
+    }
+  },
+  "additionalProperties": true
+}

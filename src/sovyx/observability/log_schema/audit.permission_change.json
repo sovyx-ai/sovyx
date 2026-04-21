@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sovyx.dev/log_schema/audit.permission_change.json",
+  "title": "audit.permission_change",
+  "description": "Plugin permission denied or escalated \u2014 emitted on permission.",
+  "type": "object",
+  "required": [
+    "timestamp",
+    "level",
+    "logger",
+    "event",
+    "schema_version",
+    "process_id",
+    "host",
+    "sovyx_version",
+    "sequence_no",
+    "plugin_id",
+    "plugin.tool_name",
+    "plugin.permission.detail"
+  ],
+  "properties": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "level": {
+      "enum": [
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR",
+        "CRITICAL"
+      ]
+    },
+    "logger": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "process_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "host": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sovyx_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sequence_no": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "saga_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cause_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "span_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "event": {
+      "const": "audit.permission_change"
+    },
+    "plugin_id": {
+      "type": "string"
+    },
+    "plugin.tool_name": {
+      "type": "string"
+    },
+    "plugin.permission.attempted_resource": {
+      "type": "string"
+    },
+    "plugin.permission.required": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "plugin.permission.detail": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true
+}

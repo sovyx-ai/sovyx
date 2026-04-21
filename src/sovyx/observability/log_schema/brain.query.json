@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sovyx.dev/log_schema/brain.query.json",
+  "title": "brain.query",
+  "description": "BrainService retrieval \u2014 start log + completion log share the event name.",
+  "type": "object",
+  "required": [
+    "timestamp",
+    "level",
+    "logger",
+    "event",
+    "schema_version",
+    "process_id",
+    "host",
+    "sovyx_version",
+    "sequence_no",
+    "brain.k",
+    "brain.filter",
+    "brain.query_len"
+  ],
+  "properties": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "level": {
+      "enum": [
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR",
+        "CRITICAL"
+      ]
+    },
+    "logger": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "process_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "host": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sovyx_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sequence_no": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "saga_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cause_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "span_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "event": {
+      "const": "brain.query"
+    },
+    "brain.k": {
+      "type": "integer"
+    },
+    "brain.filter": {
+      "type": "string"
+    },
+    "brain.query_len": {
+      "type": "integer"
+    },
+    "brain.latency_ms": {
+      "type": "integer"
+    },
+    "brain.result_count": {
+      "type": "integer"
+    },
+    "brain.top_score": {
+      "type": "number"
+    },
+    "brain.search_mode": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sovyx.dev/log_schema/voice.wake.detected.json",
+  "title": "voice.wake.detected",
+  "description": "Wake-word fired and the orchestrator armed STT.",
+  "type": "object",
+  "required": [
+    "timestamp",
+    "level",
+    "logger",
+    "event",
+    "schema_version",
+    "process_id",
+    "host",
+    "sovyx_version",
+    "sequence_no",
+    "voice.score",
+    "voice.model_name",
+    "voice.stage1_threshold",
+    "voice.stage2_threshold",
+    "voice.transcription",
+    "voice.window_frames"
+  ],
+  "properties": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "level": {
+      "enum": [
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR",
+        "CRITICAL"
+      ]
+    },
+    "logger": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "process_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "host": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sovyx_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sequence_no": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "saga_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cause_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "span_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "event": {
+      "const": "voice.wake.detected"
+    },
+    "voice.score": {
+      "type": "number"
+    },
+    "voice.model_name": {
+      "type": "string"
+    },
+    "voice.stage1_threshold": {
+      "type": "number"
+    },
+    "voice.stage2_threshold": {
+      "type": "number"
+    },
+    "voice.transcription": {
+      "type": "string"
+    },
+    "voice.window_frames": {
+      "type": "integer"
+    }
+  },
+  "additionalProperties": true
+}

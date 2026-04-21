@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sovyx.dev/log_schema/voice.vad.state_change.json",
+  "title": "voice.vad.state_change",
+  "description": "VAD finite-state-machine transition (silence \u2194 speech).",
+  "type": "object",
+  "required": [
+    "timestamp",
+    "level",
+    "logger",
+    "event",
+    "schema_version",
+    "process_id",
+    "host",
+    "sovyx_version",
+    "sequence_no",
+    "voice.from_state",
+    "voice.to_state",
+    "voice.probability",
+    "voice.rms",
+    "voice.onset_threshold",
+    "voice.offset_threshold",
+    "voice.prob_window",
+    "voice.rms_window"
+  ],
+  "properties": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "level": {
+      "enum": [
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR",
+        "CRITICAL"
+      ]
+    },
+    "logger": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "process_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "host": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sovyx_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sequence_no": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "saga_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cause_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "span_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "event": {
+      "const": "voice.vad.state_change"
+    },
+    "voice.from_state": {
+      "type": "string"
+    },
+    "voice.to_state": {
+      "type": "string"
+    },
+    "voice.probability": {
+      "type": "number"
+    },
+    "voice.rms": {
+      "type": "number"
+    },
+    "voice.onset_threshold": {
+      "type": "number"
+    },
+    "voice.offset_threshold": {
+      "type": "number"
+    },
+    "voice.prob_window": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      }
+    },
+    "voice.rms_window": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      }
+    }
+  },
+  "additionalProperties": true
+}

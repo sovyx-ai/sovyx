@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sovyx.dev/log_schema/license.validated.json",
+  "title": "license.validated",
+  "description": "LicenseValidator accepted (or refused) the JWT \u2014 tier + expiry surfaced.",
+  "type": "object",
+  "required": [
+    "timestamp",
+    "level",
+    "logger",
+    "event",
+    "schema_version",
+    "process_id",
+    "host",
+    "sovyx_version",
+    "sequence_no",
+    "license.subject_hash",
+    "license.tier",
+    "license.expiry",
+    "license.minds_max",
+    "license.feature_count"
+  ],
+  "properties": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "level": {
+      "enum": [
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR",
+        "CRITICAL"
+      ]
+    },
+    "logger": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "process_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "host": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sovyx_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sequence_no": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "saga_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cause_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "span_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "event": {
+      "const": "license.validated"
+    },
+    "license.subject_hash": {
+      "type": "string"
+    },
+    "license.tier": {
+      "type": "string"
+    },
+    "license.expiry": {
+      "type": "integer"
+    },
+    "license.minds_max": {
+      "type": "integer"
+    },
+    "license.feature_count": {
+      "type": "integer"
+    },
+    "license.grace_days_remaining": {
+      "type": "integer"
+    },
+    "license.expired_for_seconds": {
+      "type": "integer"
+    }
+  },
+  "additionalProperties": true
+}

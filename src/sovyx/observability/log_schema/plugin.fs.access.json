@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sovyx.dev/log_schema/plugin.fs.access.json",
+  "title": "plugin.fs.access",
+  "description": "SandboxedFsAccess read or write \u2014 path is relative to the plugin sandbox root.",
+  "type": "object",
+  "required": [
+    "timestamp",
+    "level",
+    "logger",
+    "event",
+    "schema_version",
+    "process_id",
+    "host",
+    "sovyx_version",
+    "sequence_no",
+    "plugin_id",
+    "plugin.fs.path_relative",
+    "plugin.fs.bytes"
+  ],
+  "properties": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "level": {
+      "enum": [
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR",
+        "CRITICAL"
+      ]
+    },
+    "logger": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "const": "1.0.0"
+    },
+    "process_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "host": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sovyx_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sequence_no": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "saga_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cause_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "span_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "event": {
+      "const": "plugin.fs.access"
+    },
+    "plugin_id": {
+      "type": "string"
+    },
+    "plugin.fs.path_relative": {
+      "type": "string"
+    },
+    "plugin.fs.bytes": {
+      "type": "integer"
+    },
+    "plugin.fs.binary": {
+      "type": "boolean"
+    },
+    "plugin.fs.mode": {
+      "type": "string"
+    }
+  },
+  "additionalProperties": true
+}
