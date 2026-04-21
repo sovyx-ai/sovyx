@@ -479,7 +479,7 @@ class ObservabilityFeaturesConfig(BaseSettings):
     saga_propagation: bool = False
     voice_telemetry: bool = True
     startup_cascade: bool = True
-    plugin_introspection: bool = False
+    plugin_introspection: bool = True
     anomaly_detection: bool = False
     tamper_chain: bool = False
     schema_validation: bool = True
