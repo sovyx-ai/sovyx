@@ -397,7 +397,7 @@ class VoiceCaptureWatchdog:
             if self._pending is not None and not self._pending.done():
                 return
             self._state = WatchdogState.BACKOFF
-            self._pending = asyncio.create_task(self._backoff_chain())
+            self._pending = spawn(self._backoff_chain(), name="voice-watchdog-backoff")
             record_recovery_attempt(trigger="deaf_backoff")
             logger.info(
                 "voice_watchdog_backoff_scheduled",
