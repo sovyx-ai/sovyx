@@ -142,15 +142,43 @@ def _emit_completed(
     logger.info(event, duration_ms=round(duration_ms, 3), **fields)
 
 
+def _build_saga_binds(saga_id: str, binds: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Compose the contextvar payload for a saga scope.
+
+    ``saga_id`` is always present. Caller-supplied ``binds`` (e.g.
+    ``channel_id`` from BridgeManager) merge in alongside, but a
+    caller cannot accidentally overwrite ``saga_id`` — that key is
+    reserved and dropped from the user-supplied dict before merge.
+    """
+    payload: dict[str, Any] = {"saga_id": saga_id}
+    if binds:
+        for key, value in binds.items():
+            if key == "saga_id":
+                continue
+            payload[key] = value
+    return payload
+
+
 @contextlib.contextmanager
-def saga_scope(name: str, *, kind: str = "default") -> Iterator[str]:
+def saga_scope(
+    name: str,
+    *,
+    kind: str = "default",
+    binds: Mapping[str, Any] | None = None,
+) -> Iterator[str]:
     """Sync context manager that opens a saga scope.
 
-    Generates ``saga_id``, binds it to structlog contextvars, emits
-    ``saga.started``, then ``saga.completed`` (success) or
-    ``saga.failed`` (any :class:`BaseException`, re-raised). Always
-    restores the parent scope's bindings via reset tokens — nested
-    sagas survive correctly.
+    Generates ``saga_id``, binds it (plus any caller-supplied
+    ``binds``) to structlog contextvars, emits ``saga.started``,
+    then ``saga.completed`` (success) or ``saga.failed`` (any
+    :class:`BaseException`, re-raised). All bindings are restored to
+    the parent scope's values via reset tokens — nested sagas survive
+    correctly even with overlapping bind keys.
+
+    The ``binds`` parameter is the canonical way to attach
+    scope-spanning ids that aren't ``saga_id`` (e.g. ``channel_id``
+    for bridge sagas, ``mind_id`` for cognitive sagas). They reset
+    cleanly at scope exit so callers don't have to track tokens.
 
     Catches :class:`BaseException` so KeyboardInterrupt / SystemExit
     inside a saga still produce a ``saga.failed`` entry. The
@@ -158,7 +186,7 @@ def saga_scope(name: str, *, kind: str = "default") -> Iterator[str]:
     only, not error handling.
     """
     saga_id = _new_id()
-    tokens = bind_contextvars(saga_id=saga_id)
+    tokens = bind_contextvars(**_build_saga_binds(saga_id, binds))
     started = time.perf_counter()
     logger.info("saga.started", saga_name=name, kind=kind)
     try:
@@ -173,10 +201,15 @@ def saga_scope(name: str, *, kind: str = "default") -> Iterator[str]:
 
 
 @contextlib.asynccontextmanager
-async def async_saga_scope(name: str, *, kind: str = "default") -> AsyncIterator[str]:
+async def async_saga_scope(
+    name: str,
+    *,
+    kind: str = "default",
+    binds: Mapping[str, Any] | None = None,
+) -> AsyncIterator[str]:
     """Async equivalent of :func:`saga_scope` — same contract."""
     saga_id = _new_id()
-    tokens = bind_contextvars(saga_id=saga_id)
+    tokens = bind_contextvars(**_build_saga_binds(saga_id, binds))
     started = time.perf_counter()
     logger.info("saga.started", saga_name=name, kind=kind)
     try:

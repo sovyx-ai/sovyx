@@ -26,6 +26,7 @@ from sovyx.engine.errors import CognitiveError
 from sovyx.engine.types import PerceptionType
 from sovyx.observability.logging import get_logger
 from sovyx.observability.metrics import get_metrics
+from sovyx.observability.saga import async_saga_scope
 
 if TYPE_CHECKING:
     from sovyx.cognitive.financial_gate import FinancialGate
@@ -181,7 +182,25 @@ class BridgeManager:
         """Process inbound message through the full pipeline.
 
         NEVER raises — all errors handled internally.
+
+        Opens a ``bridge_message`` saga for the duration so every log
+        emitted downstream (cognitive loop, brain, channel send) carries
+        the same ``saga_id`` and the originating ``channel_id`` /
+        ``channel_user_id`` — making it possible to reconstruct the full
+        causal chain of a single inbound message from the logs.
         """
+        async with async_saga_scope(
+            "bridge_message",
+            kind="bridge",
+            binds={
+                "channel_id": message.channel_type.value,
+                "channel_user_id": message.channel_user_id,
+            },
+        ):
+            await self._handle_inbound_inner(message)
+
+    async def _handle_inbound_inner(self, message: InboundMessage) -> None:
+        """Inner pipeline body — runs inside the ``bridge_message`` saga."""
         # ── Financial callback interception (before cognitive loop) ──
         callback = message.callback_data
         if callback and callback.startswith("fin_"):
