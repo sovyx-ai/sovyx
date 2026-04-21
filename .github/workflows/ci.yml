@@ -176,3 +176,17 @@ jobs:
         run: uv sync --dev --frozen
       - name: Assert no raw PII leaks past the redactor (§22.3)
         run: uv run python scripts/check_test_pii.py
+
+  otel-semconv-gate:
+    name: OTel Semconv Gate
+    runs-on: sovyx-4core
+    needs: pii-leak-gate
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      - name: Install dependencies
+        run: uv sync --dev --frozen
+      - name: Validate OTel resource attribute spelling (§22.6)
+        run: uv run python scripts/check_otel_semconv.py
