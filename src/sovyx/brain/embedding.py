@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -235,7 +236,19 @@ class EmbeddingEngine:
         prefix = "query: " if is_query else "passage: "
         prefixed = prefix + text
 
+        started_at = time.monotonic()
         result = await asyncio.to_thread(self._encode_sync, [prefixed])
+        embed_ms = int((time.monotonic() - started_at) * 1000)
+        logger.info(
+            "brain.embedding.encoded",
+            **{
+                "brain.text_len": len(text),
+                "brain.embed_ms": embed_ms,
+                "brain.cache_hit": False,
+                "brain.is_query": is_query,
+                "brain.batch_size": 1,
+            },
+        )
         return result[0]
 
     async def encode_batch(
@@ -268,7 +281,21 @@ class EmbeddingEngine:
         prefix = "query: " if is_query else "passage: "
         prefixed = [prefix + t for t in texts]
 
-        return await asyncio.to_thread(self._encode_sync, prefixed)
+        started_at = time.monotonic()
+        result = await asyncio.to_thread(self._encode_sync, prefixed)
+        embed_ms = int((time.monotonic() - started_at) * 1000)
+        total_chars = sum(len(t) for t in texts)
+        logger.info(
+            "brain.embedding.encoded",
+            **{
+                "brain.text_len": total_chars,
+                "brain.embed_ms": embed_ms,
+                "brain.cache_hit": False,
+                "brain.is_query": is_query,
+                "brain.batch_size": len(texts),
+            },
+        )
+        return result
 
     def _encode_sync(self, texts: list[str]) -> list[list[float]]:
         """Synchronous encoding (runs in thread pool)."""

@@ -7,6 +7,7 @@ Falls back to FTS5-only when sqlite-vec is unavailable.
 from __future__ import annotations
 
 import sqlite3
+import time
 from typing import TYPE_CHECKING
 
 from sovyx.engine.errors import EmbeddingError, SearchError
@@ -64,6 +65,16 @@ class HybridRetrieval:
         Returns:
             List of (concept, rrf_score) sorted by score DESC.
         """
+        started_at = time.monotonic()
+        logger.info(
+            "brain.search.started",
+            **{
+                "brain.k": limit,
+                "brain.filter": "concepts",
+                "brain.query_len": len(query),
+            },
+        )
+
         fts_results = await self._concepts.search_by_text(query, mind_id, limit=limit * 2)
 
         vec_results: list[tuple[Concept, float]] = []
@@ -92,9 +103,25 @@ class HybridRetrieval:
                 boosted = base * (1.0 + quality * 0.4)  # Up to 40% boost
                 fts_only.append((concept, boosted))
             fts_only.sort(key=lambda x: x[1], reverse=True)
-            return fts_only[:limit]
+            results = fts_only[:limit]
+            self._emit_search_completed(
+                started_at=started_at,
+                limit=limit,
+                kind="concepts",
+                results=results,
+                mode="fts5_only",
+            )
+            return results
 
-        return self._rrf_fusion(fts_results, vec_results, limit)
+        merged = self._rrf_fusion(fts_results, vec_results, limit)
+        self._emit_search_completed(
+            started_at=started_at,
+            limit=limit,
+            kind="concepts",
+            results=merged,
+            mode="hybrid_rrf",
+        )
+        return merged
 
     async def search_episodes(
         self,
@@ -115,16 +142,34 @@ class HybridRetrieval:
         Returns:
             List of (episode, score) sorted by score DESC.
         """
+        started_at = time.monotonic()
+        logger.info(
+            "brain.search.started",
+            **{
+                "brain.k": limit,
+                "brain.filter": "episodes",
+                "brain.query_len": len(query),
+            },
+        )
+
         if self._embedding.has_embeddings and self._episodes._pool.has_sqlite_vec:
             try:
                 query_emb = await self._embedding.encode(query, is_query=True)
                 vec_results = await self._episodes.search_by_embedding(
                     query_emb, mind_id, limit=limit
                 )
-                return [
+                results = [
                     (episode, 1.0 / (self._k + rank_pos + 1))
                     for rank_pos, (episode, _) in enumerate(vec_results)
                 ]
+                self._emit_search_completed(
+                    started_at=started_at,
+                    limit=limit,
+                    kind="episodes",
+                    results=results,
+                    mode="vector",
+                )
+                return results
             except (EmbeddingError, SearchError, sqlite3.Error, ValueError):
                 # Same failure profile as the concept-search path above.
                 # Fall through to the recency-only fallback below.
@@ -132,9 +177,41 @@ class HybridRetrieval:
 
         # Fallback: return recent episodes
         recent = await self._episodes.get_recent(mind_id, limit=limit)
-        return [
+        fallback_results = [
             (episode, 1.0 / (self._k + rank_pos + 1)) for rank_pos, episode in enumerate(recent)
         ]
+        self._emit_search_completed(
+            started_at=started_at,
+            limit=limit,
+            kind="episodes",
+            results=fallback_results,
+            mode="recency_fallback",
+        )
+        return fallback_results
+
+    @staticmethod
+    def _emit_search_completed(
+        *,
+        started_at: float,
+        limit: int,
+        kind: str,
+        results: list[tuple[object, float]],
+        mode: str,
+    ) -> None:
+        """Emit ``brain.search.completed`` with latency, count, and top score."""
+        latency_ms = int((time.monotonic() - started_at) * 1000)
+        top_score = results[0][1] if results else 0.0
+        logger.info(
+            "brain.search.completed",
+            **{
+                "brain.k": limit,
+                "brain.filter": kind,
+                "brain.latency_ms": latency_ms,
+                "brain.result_count": len(results),
+                "brain.top_score": round(float(top_score), 6),
+                "brain.search_mode": mode,
+            },
+        )
 
     async def search_all(
         self,

@@ -577,6 +577,12 @@ class BrainService:
     # Cold start default: moderate-high novelty (not 1.0 to avoid over-inflation)
     _COLD_START_NOVELTY = 0.70
 
+    # Score above which a concept is considered novel enough to encode.
+    # Sovyx blends novelty into importance rather than gating on it
+    # directly, but the dashboard surfaces this threshold so operators
+    # can correlate "novel scores" against encode-rate trends.
+    _NOVELTY_ENCODE_THRESHOLD: float = 0.5
+
     async def compute_novelty(
         self,
         text: str,
@@ -603,18 +609,60 @@ class BrainService:
         try:
             count = await self._concepts.count_by_category(mind_id, category)
         except Exception:  # noqa: BLE001
+            self._emit_novelty_decision(
+                score=self._COLD_START_NOVELTY,
+                reason="count_lookup_failed",
+                category=category,
+            )
             return self._COLD_START_NOVELTY
 
         if count < self._COLD_START_THRESHOLD:
+            self._emit_novelty_decision(
+                score=self._COLD_START_NOVELTY,
+                reason="cold_start",
+                category=category,
+            )
             return self._COLD_START_NOVELTY
 
         if self._embedding.has_embeddings:
             try:
-                return await self._compute_novelty_embedding(text, category, mind_id)
+                score = await self._compute_novelty_embedding(text, category, mind_id)
+                self._emit_novelty_decision(
+                    score=score,
+                    reason="embedding_centroid",
+                    category=category,
+                )
+                return score
             except Exception:  # noqa: BLE001
                 logger.debug("embedding_novelty_failed_falling_back_to_fts5")
 
-        return await self._compute_novelty_fts5(text, mind_id)
+        score = await self._compute_novelty_fts5(text, mind_id)
+        self._emit_novelty_decision(
+            score=score,
+            reason="fts5_fallback",
+            category=category,
+        )
+        return score
+
+    def _emit_novelty_decision(
+        self,
+        *,
+        score: float,
+        reason: str,
+        category: str,
+    ) -> None:
+        """Emit ``brain.novelty.decision`` for the just-computed novelty score."""
+        decision = "encode" if score >= self._NOVELTY_ENCODE_THRESHOLD else "skip"
+        logger.info(
+            "brain.novelty.decision",
+            **{
+                "brain.score": round(float(score), 4),
+                "brain.threshold": self._NOVELTY_ENCODE_THRESHOLD,
+                "brain.decision": decision,
+                "brain.reason": reason,
+                "brain.category": category,
+            },
+        )
 
     async def _compute_novelty_embedding(
         self,

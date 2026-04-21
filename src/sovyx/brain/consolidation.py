@@ -147,6 +147,25 @@ class ConsolidationCycle:
             duration_s=event.duration_s,
         )
 
+        # Plan §7.3 — single tick record with normalized field names so
+        # the dashboard can chart consolidation throughput across mind ids
+        # without joining the four legacy "consolidation_*" lines above.
+        # ``brain.episodes_processed`` carries the recalculated-concept
+        # count: Sovyx consolidates concepts (not episodes), and the
+        # recalc pass is the throughput-bound step worth tracking.
+        logger.info(
+            "brain.consolidation.tick",
+            **{
+                "brain.episodes_processed": recalculated,
+                "brain.promoted": merged_count,
+                "brain.decayed": decayed_concepts + decayed_relations,
+                "brain.pruned": pruned_concepts + pruned_relations,
+                "brain.normalized": normalized,
+                "brain.centroids_cached": centroids_cached,
+                "brain.duration_s": round(duration, 3),
+            },
+        )
+
         return event
 
     # Batch size for score recalculation (DB writes per batch)
