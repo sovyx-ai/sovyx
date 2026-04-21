@@ -8,6 +8,7 @@ A 7-day grace period after expiry allows degraded local-only operation.
 
 from __future__ import annotations
 
+import hashlib
 import time
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -15,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 import jwt
 
+from sovyx.observability.audit import get_audit_logger
 from sovyx.observability.logging import get_logger
 from sovyx.tiers import GRACE_FEATURES, TIER_MIND_LIMITS
 
@@ -22,6 +24,18 @@ if TYPE_CHECKING:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 logger = get_logger(__name__)
+audit_logger = get_audit_logger()
+
+
+def _hash_subject(subject: str) -> str:
+    """SHA-256 the account id so audit logs never carry raw UUIDs.
+
+    Truncated to 16 hex chars (64 bits) — wide enough that operators
+    can correlate validations for the same account across an audit
+    file without exposing the account uuid that, paired with public
+    metadata, could de-anonymise a user.
+    """
+    return hashlib.sha256(subject.encode("utf-8")).hexdigest()[:16]
 
 TOKEN_VALIDITY_DAYS = 7
 GRACE_PERIOD_DAYS = 7
@@ -102,6 +116,15 @@ class LicenseValidator:
             3. Expired beyond grace / invalid → expired/invalid.
         """
         if self._public_key is None:
+            audit_logger.warning(
+                "audit.license.invalid",
+                **{
+                    "license.reason": "no_public_key",
+                    "license.subject_hash": None,
+                    "license.tier": None,
+                    "license.expiry": None,
+                },
+            )
             return LicenseInfo(status=LicenseStatus.INVALID)
 
         try:
@@ -122,6 +145,16 @@ class LicenseValidator:
                     "refresh_before",
                     decoded["exp"] - 2 * 86400,
                 ),
+            )
+            audit_logger.info(
+                "audit.license.validated",
+                **{
+                    "license.subject_hash": _hash_subject(claims.sub),
+                    "license.tier": claims.tier,
+                    "license.expiry": claims.exp,
+                    "license.minds_max": claims.minds_max,
+                    "license.feature_count": len(claims.features),
+                },
             )
             return LicenseInfo(
                 status=LicenseStatus.VALID,
@@ -153,12 +186,17 @@ class LicenseValidator:
 
             now = int(time.time())
             grace_end = claims.exp + GRACE_PERIOD_DAYS * 86400
+            subject_hash = _hash_subject(claims.sub)
             if now < grace_end:
                 days_remaining = max(0, (grace_end - now) // 86400)
-                logger.warning(
-                    "License in grace period",
-                    account_id=claims.sub,
-                    days_remaining=days_remaining,
+                audit_logger.warning(
+                    "audit.license.grace",
+                    **{
+                        "license.subject_hash": subject_hash,
+                        "license.tier": claims.tier,
+                        "license.expiry": claims.exp,
+                        "license.grace_days_remaining": days_remaining,
+                    },
                 )
                 return LicenseInfo(
                     status=LicenseStatus.GRACE,
@@ -169,9 +207,25 @@ class LicenseValidator:
                     grace_days_remaining=days_remaining,
                 )
 
-            logger.warning("License expired beyond grace period", account_id=claims.sub)
+            audit_logger.warning(
+                "audit.license.expired",
+                **{
+                    "license.subject_hash": subject_hash,
+                    "license.tier": claims.tier,
+                    "license.expiry": claims.exp,
+                    "license.expired_for_seconds": now - grace_end,
+                },
+            )
             return LicenseInfo(status=LicenseStatus.EXPIRED, claims=claims)
 
-        except jwt.InvalidTokenError:
-            logger.warning("Invalid license token")
+        except jwt.InvalidTokenError as exc:
+            audit_logger.warning(
+                "audit.license.invalid",
+                **{
+                    "license.reason": type(exc).__name__,
+                    "license.subject_hash": None,
+                    "license.tier": None,
+                    "license.expiry": None,
+                },
+            )
             return LicenseInfo(status=LicenseStatus.INVALID)
