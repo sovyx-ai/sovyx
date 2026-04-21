@@ -315,6 +315,14 @@ class TelegramChannel:
         while self._running:
             tick_started_at = time.monotonic()
             try:
+                # Probe the API with a single round-trip BEFORE marking the
+                # channel connected. ``start_polling`` owns its own long-running
+                # receive loop and only returns on error/stop, so placing
+                # ``_mark_connected`` above it would fire ``recovered`` before
+                # any network I/O happened — inverting the connection-state
+                # semantics and producing a ``recovered → lost`` sawtooth on
+                # sustained outages.
+                await self._bot.get_me()
                 self._mark_connected()
                 await self._dp.start_polling(self._bot, handle_signals=False)
             except asyncio.CancelledError:

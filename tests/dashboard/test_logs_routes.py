@@ -488,3 +488,38 @@ class TestAuthGate:
         )
         resp = client.get(path)
         assert resp.status_code == 401
+
+
+# ── WebSocket /api/logs/stream auth ─────────────────────────────────────────
+
+
+class TestStreamLogsWebsocketAuth:
+    """Regression: the WS tail must gate on ``app.state.auth_token``.
+
+    The handler previously read ``app.state._server_token`` (a module-level
+    global that was never exposed on ``app.state``), so ``getattr`` always
+    returned ``None`` and the ``expected is not None`` short-circuit opened
+    the stream to unauthenticated callers.
+    """
+
+    def test_missing_token_is_rejected(self, app_no_indexer: FastAPI) -> None:
+        from starlette.websockets import WebSocketDisconnect
+
+        client = TestClient(app_no_indexer)
+        with (  # noqa: PT012 — starlette raises WebSocketDisconnect inside the context manager
+            pytest.raises(WebSocketDisconnect) as exc_info,
+            client.websocket_connect("/api/logs/stream"),
+        ):
+            pass
+        assert exc_info.value.code == 4401  # noqa: PLR2004
+
+    def test_wrong_token_is_rejected(self, app_no_indexer: FastAPI) -> None:
+        from starlette.websockets import WebSocketDisconnect
+
+        client = TestClient(app_no_indexer)
+        with (  # noqa: PT012
+            pytest.raises(WebSocketDisconnect) as exc_info,
+            client.websocket_connect("/api/logs/stream?token=nope"),
+        ):
+            pass
+        assert exc_info.value.code == 4401  # noqa: PLR2004

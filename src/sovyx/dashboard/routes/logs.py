@@ -276,10 +276,10 @@ async def stream_logs(websocket: WebSocket) -> None:
     Auth is enforced by reading ``token`` from the query string
     (FastAPI's ``Depends(verify_token)`` does not flow into
     WebSocket routes reliably across versions). The token must
-    match ``request.app.state._server_token`` set by
+    match ``request.app.state.auth_token`` set by
     :func:`sovyx.dashboard.server.create_app`.
     """
-    expected = getattr(websocket.app.state, "_server_token", None)
+    expected = getattr(websocket.app.state, "auth_token", None)
     provided = websocket.query_params.get("token")
     if expected is not None and provided != expected:
         await websocket.close(code=4401)

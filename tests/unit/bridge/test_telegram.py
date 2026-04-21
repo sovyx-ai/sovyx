@@ -235,6 +235,7 @@ class TestPollLoop:
                 raise ConnectionError(msg)
             ch._running = False  # Stop after success
 
+        ch._bot.get_me = AsyncMock()
         ch._dp.start_polling = AsyncMock(side_effect=failing_poll)
         ch._running = True
         await ch._poll_loop()
@@ -243,6 +244,7 @@ class TestPollLoop:
     async def test_poll_cancelled_exits(self) -> None:
         """CancelledError exits the loop cleanly."""
         ch = TelegramChannel(VALID_TOKEN, _mock_bridge())
+        ch._bot.get_me = AsyncMock()
         ch._dp.start_polling = AsyncMock(side_effect=asyncio.CancelledError)
         await ch._poll_loop()  # Should not raise
 
@@ -253,6 +255,7 @@ class TestPollLoop:
         async def slow_poll(*_args: object, **_kwargs: object) -> None:
             await asyncio.sleep(1.0)  # cancelled by ch.stop()
 
+        ch._bot.get_me = AsyncMock()
         ch._dp.start_polling = AsyncMock(side_effect=slow_poll)
         ch._running = True
         ch._poll_task = asyncio.create_task(ch._poll_loop())
