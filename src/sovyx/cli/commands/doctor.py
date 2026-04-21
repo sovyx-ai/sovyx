@@ -1,6 +1,6 @@
 """CLI command: sovyx doctor — health checks for installation and voice stack.
 
-Composes two doctor surfaces under one command:
+Composes three doctor surfaces under one command:
 
 * ``sovyx doctor`` — general installation health (disk, RAM, CPU,
   model files, config + online RPC checks against a running daemon).
@@ -8,6 +8,12 @@ Composes two doctor surfaces under one command:
   per ADR §4.8. Runs the L5 pre-flight (the subset the CLI can drive
   standalone) and surfaces per-step results with a non-zero exit code
   equal to the number of failing steps.
+* ``sovyx doctor cascade`` — invokes :func:`run_startup_cascade` in
+  operator mode (no daemon boot), captures the log slice by ``saga_id``,
+  and renders it as a human-readable timeline. This is the
+  IMPL-OBSERVABILITY-001 §15 replacement for the legacy ``.ps1``
+  forensic scripts: the same data, structured, OS-agnostic, and
+  reproducible from any operator shell.
 
 The voice surface is intentionally standalone — it does NOT require a
 running daemon. Daemon-dependent bits (ComboStore fast-path, live
@@ -21,14 +27,18 @@ import asyncio
 import contextlib
 import dataclasses
 import json
+import logging
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
 from sovyx.cli.rpc_client import DaemonClient
+from sovyx.engine.config import EngineConfig
+from sovyx.engine.registry import ServiceRegistry
 from sovyx.observability.health import (
     CheckResult,
     CheckStatus,
@@ -41,6 +51,9 @@ from sovyx.voice.health import (
     default_step_names,
     run_preflight,
 )
+
+if TYPE_CHECKING:
+    pass
 
 console = Console()
 doctor_app = typer.Typer(
@@ -299,6 +312,115 @@ def _format_details(details: object) -> str:
         return ""
     parts = [f"{k}={v}" for k, v in details.items()]
     return ", ".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# `sovyx doctor cascade` — startup self-diagnosis in operator mode.
+# ---------------------------------------------------------------------------
+
+
+class _CascadeCapture(logging.Handler):
+    """Capture every record emitted during the cascade.
+
+    The cascade emits via structlog, which after envelope processing
+    forwards records to stdlib logging. The handler stores raw records
+    so the renderer can pull saga_id / event / level / extras without
+    re-parsing JSON.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.DEBUG)
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
+
+@doctor_app.command("cascade")
+def doctor_cascade(
+    output_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit captured cascade as JSONL on stdout (operators piping into jq).",
+    ),
+) -> None:
+    """Run the startup self-diagnosis cascade and render it.
+
+    Pivots the legacy ``.ps1`` forensic scripts onto the structured
+    cascade defined in :mod:`sovyx.observability.self_diagnosis`. No
+    daemon boot is required — this command is the operator entry point
+    for "what does Sovyx see on this machine right now".
+
+    Exit code is the number of WARNING-or-higher records emitted during
+    the cascade so CI / monitoring pipelines can gate on a clean boot.
+    """
+    exit_code = _run_cascade(output_json=output_json)
+    raise typer.Exit(exit_code)
+
+
+def _run_cascade(*, output_json: bool) -> int:
+    """Execute the cascade with a temporary capture handler attached."""
+    from sovyx.observability.logging import setup_logging
+    from sovyx.observability.self_diagnosis import run_startup_cascade
+
+    config = EngineConfig()
+    setup_logging(config.log, config.observability, data_dir=config.data_dir)
+
+    registry = ServiceRegistry()
+    registry.register_instance(EngineConfig, config)
+
+    capture = _CascadeCapture()
+    root = logging.getLogger()
+    root.addHandler(capture)
+    try:
+        # The cascade itself sets up the saga; capture every record
+        # emitted while it runs (the saga_scope binds saga_id into the
+        # contextvars, which envelope processors copy into each record's
+        # extra fields).
+        with contextlib.redirect_stdout(sys.stderr):
+            asyncio.run(run_startup_cascade(config, registry, None))
+    finally:
+        root.removeHandler(capture)
+
+    if output_json:
+        for record in capture.records:
+            payload = {
+                "ts": record.created,
+                "level": record.levelname,
+                "logger": record.name,
+                "event": record.getMessage(),
+                "saga_id": getattr(record, "saga_id", None),
+            }
+            typer.echo(json.dumps(payload, ensure_ascii=False))
+        return sum(1 for r in capture.records if r.levelno >= logging.WARNING)
+
+    table = Table(title="Sovyx Doctor — Startup Cascade", show_lines=False)
+    table.add_column("", width=5)
+    table.add_column("Step / Event", min_width=28)
+    table.add_column("Logger", min_width=22)
+    table.add_column("Saga", width=18)
+    for record in capture.records:
+        icon = {
+            logging.DEBUG: "[dim]·[/dim]",
+            logging.INFO: "[green]OK[/green]",
+            logging.WARNING: "[yellow]WARN[/yellow]",
+            logging.ERROR: "[red]FAIL[/red]",
+            logging.CRITICAL: "[red bold]CRIT[/red bold]",
+        }.get(record.levelno, "?")
+        saga_id = getattr(record, "saga_id", "") or ""
+        table.add_row(icon, record.getMessage(), record.name, saga_id)
+    console.print(table)
+
+    warnings = sum(1 for r in capture.records if r.levelno == logging.WARNING)
+    errors = sum(1 for r in capture.records if r.levelno >= logging.ERROR)
+    total = len(capture.records)
+    summary_style = "red" if errors else ("yellow" if warnings else "green")
+    console.print(
+        f"\n[{summary_style} bold]{total}[/{summary_style} bold] cascade events captured"
+        + (f", [yellow]{warnings} warnings[/yellow]" if warnings else "")
+        + (f", [red]{errors} errors[/red]" if errors else "")
+    )
+    return errors + warnings
 
 
 __all__ = ["doctor_app"]
