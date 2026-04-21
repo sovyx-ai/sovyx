@@ -859,8 +859,9 @@ class VoiceCaptureWatchdog:
             waiter.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await waiter
-        self._audio_service_down_waiter = asyncio.create_task(
+        self._audio_service_down_waiter = spawn(
             self._await_audio_service_restart(),
+            name="voice-watchdog-audio-service-restart-waiter",
         )
 
     async def _await_audio_service_restart(self) -> None:
