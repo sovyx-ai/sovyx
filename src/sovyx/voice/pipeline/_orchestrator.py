@@ -10,6 +10,7 @@ from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.engine.errors import VoiceError
 from sovyx.observability.logging import get_logger
 from sovyx.observability.saga import SagaHandle, begin_saga, end_saga
+from sovyx.observability.tasks import spawn
 from sovyx.voice.health._metrics import record_time_to_first_utterance
 from sovyx.voice.health.contract import BypassVerdict
 from sovyx.voice.jarvis import JarvisConfig, JarvisIllusion, split_at_boundaries
@@ -740,8 +741,9 @@ class VoicePipeline:
         self._first_token_event.clear()
 
         if self._config.fillers_enabled:
-            self._filler_task = asyncio.create_task(
-                self._jarvis.play_filler_after_delay(self._output, self._first_token_event)
+            self._filler_task = spawn(
+                self._jarvis.play_filler_after_delay(self._output, self._first_token_event),
+                name="voice-pipeline-filler",
             )
 
     # -- Internal helpers ----------------------------------------------------
