@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
@@ -70,6 +71,11 @@ class SignalChannel:
         self._running = False
         self._poll_task: asyncio.Task[None] | None = None
         self._session: aiohttp.ClientSession | None = None
+        # Connection-state tracking for net.connection.lost/.recovered.
+        # The first successful poll emits a `recovered` event with
+        # `downtime_ms=0`, signalling "polling is up" at startup.
+        self._connected: bool = False
+        self._connection_lost_at: float | None = None
 
     @property
     def channel_type(self) -> ChannelType:
@@ -190,6 +196,8 @@ class SignalChannel:
             "recipients": [target],
         }
 
+        message_bytes = len(message.encode("utf-8"))
+        started_at = time.monotonic()
         try:
             session = self._get_session()
             url = f"{self._api_url}/v2/send"
@@ -205,16 +213,45 @@ class SignalChannel:
                 # Signal REST API returns timestamps, not message IDs
                 result = await resp.json()
                 timestamp = str(result.get("timestamp", "0"))
-                logger.debug(
-                    "signal_message_sent",
-                    target=target,
-                    timestamp=timestamp,
+                send_latency_ms = int((time.monotonic() - started_at) * 1000)
+                logger.info(
+                    "net.message.sent",
+                    **{
+                        "net.channel": "signal",
+                        "net.channel_id": target,
+                        "net.message_bytes": message_bytes,
+                        "net.send_latency_ms": send_latency_ms,
+                    },
                 )
                 return timestamp
         except ChannelConnectionError:
+            send_latency_ms = int((time.monotonic() - started_at) * 1000)
+            logger.warning(
+                "net.message.sent",
+                **{
+                    "net.channel": "signal",
+                    "net.channel_id": target,
+                    "net.message_bytes": message_bytes,
+                    "net.send_latency_ms": send_latency_ms,
+                    "net.send_failed": True,
+                    "net.error_type": "ChannelConnectionError",
+                },
+            )
             raise
         except Exception as exc:  # noqa: BLE001
+            send_latency_ms = int((time.monotonic() - started_at) * 1000)
             logger.error("signal_send_failed", target=target, error=str(exc))
+            logger.warning(
+                "net.message.sent",
+                **{
+                    "net.channel": "signal",
+                    "net.channel_id": target,
+                    "net.message_bytes": message_bytes,
+                    "net.send_latency_ms": send_latency_ms,
+                    "net.send_failed": True,
+                    "net.error_type": type(exc).__name__,
+                },
+            )
             msg = f"Failed to send Signal message: {exc}"
             raise ChannelConnectionError(msg) from exc
 
@@ -283,23 +320,73 @@ class SignalChannel:
         """Poll for incoming messages with exponential backoff on errors."""
         backoff = 1.0
         while self._running:
+            tick_started_at = time.monotonic()
             try:
-                await self._receive_messages()
+                message_count = await self._receive_messages()
+                tick_latency_ms = int((time.monotonic() - tick_started_at) * 1000)
+                self._mark_connected()
+                logger.debug(
+                    "net.poll.tick",
+                    **{
+                        "net.channel": "signal",
+                        "net.message_count": message_count,
+                        "net.latency_ms": tick_latency_ms,
+                    },
+                )
                 backoff = 1.0
                 await asyncio.sleep(_POLL_INTERVAL)
             except asyncio.CancelledError:
                 break
-            except Exception:  # noqa: BLE001 — poll loop must survive single failures
+            except Exception as exc:  # noqa: BLE001 — poll loop must survive single failures
                 logger.warning(
                     "signal_poll_error",
                     backoff=backoff,
                     exc_info=True,
                 )
+                self._mark_disconnected(exc)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, _MAX_BACKOFF)
 
-    async def _receive_messages(self) -> None:
-        """Poll /v1/receive and dispatch inbound messages."""
+    def _mark_connected(self) -> None:
+        """Emit ``net.connection.recovered`` on the closed→open transition."""
+        if self._connected:
+            return
+        downtime_ms = 0
+        if self._connection_lost_at is not None:
+            downtime_ms = int((time.monotonic() - self._connection_lost_at) * 1000)
+        self._connected = True
+        self._connection_lost_at = None
+        logger.info(
+            "net.connection.recovered",
+            **{
+                "net.channel": "signal",
+                "net.downtime_ms": downtime_ms,
+            },
+        )
+
+    def _mark_disconnected(self, exc: BaseException) -> None:
+        """Emit ``net.connection.lost`` on the open→closed transition."""
+        if not self._connected and self._connection_lost_at is not None:
+            return
+        self._connected = False
+        self._connection_lost_at = time.monotonic()
+        logger.warning(
+            "net.connection.lost",
+            **{
+                "net.channel": "signal",
+                "net.error_type": type(exc).__name__,
+            },
+        )
+
+    async def _receive_messages(self) -> int:
+        """Poll /v1/receive and dispatch inbound messages.
+
+        Returns:
+            Count of envelopes received this tick (used by the
+            ``net.poll.tick`` emitter — includes non-data envelopes
+            like receipts and typing indicators that ``_handle_envelope``
+            silently skips).
+        """
 
         phone_encoded = quote(self._phone)
         url = f"{self._api_url}/v1/receive/{phone_encoded}"
@@ -310,12 +397,13 @@ class SignalChannel:
             timeout=aiohttp.ClientTimeout(total=_RECEIVE_TIMEOUT),
         ) as resp:
             if resp.status != 200:  # noqa: PLR2004
-                return
+                return 0
 
             messages: list[dict[str, Any]] = await resp.json()
 
         for msg_data in messages:
             await self._handle_envelope(msg_data)
+        return len(messages)
 
     async def _handle_envelope(self, envelope_data: dict[str, Any]) -> None:
         """Parse a signal-cli envelope and dispatch as InboundMessage."""
@@ -337,6 +425,15 @@ class SignalChannel:
         # Determine chat_id (group or DM)
         group_info = data_message.get("groupInfo")
         chat_id = group_info.get("groupId", source) if group_info else source
+
+        logger.info(
+            "net.message.received",
+            **{
+                "net.channel": "signal",
+                "net.channel_id": chat_id,
+                "net.message_bytes": len(text.encode("utf-8")),
+            },
+        )
 
         inbound = InboundMessage(
             channel_type=ChannelType.SIGNAL,

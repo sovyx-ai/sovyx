@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from typing import TYPE_CHECKING
 
 from aiogram import Bot, Dispatcher, Router
@@ -55,6 +56,12 @@ class TelegramChannel:
         self._dp.include_router(self._router)
         self._running = False
         self._poll_task: asyncio.Task[None] | None = None
+        # Connection-state tracking for net.connection.lost/.recovered.
+        # Polling starts in the "unknown" state — `_connected=False` so the
+        # first successful poll emits a `recovered` event with `downtime_ms=0`,
+        # giving operators a clear "polling is up" signal at startup.
+        self._connected: bool = False
+        self._connection_lost_at: float | None = None
 
         # Register message handler
         self._router.message.register(self._on_message)
@@ -131,17 +138,41 @@ class TelegramChannel:
             kwargs["reply_to_message_id"] = int(reply_to)
         if buttons:
             kwargs["reply_markup"] = self._build_inline_keyboard(buttons)
+        started_at = time.monotonic()
+        message_bytes = len(message.encode("utf-8"))
         try:
             result = await self._bot.send_message(
                 chat_id=int(target),
                 **kwargs,  # type: ignore[arg-type]
             )
+            send_latency_ms = int((time.monotonic() - started_at) * 1000)
+            logger.info(
+                "net.message.sent",
+                **{
+                    "net.channel": "telegram",
+                    "net.channel_id": target,
+                    "net.message_bytes": message_bytes,
+                    "net.send_latency_ms": send_latency_ms,
+                },
+            )
             return str(result.message_id)
         except Exception as e:  # noqa: BLE001
+            send_latency_ms = int((time.monotonic() - started_at) * 1000)
             logger.error(
                 "telegram_send_failed",
                 target=target,
                 error=str(e),
+            )
+            logger.warning(
+                "net.message.sent",
+                **{
+                    "net.channel": "telegram",
+                    "net.channel_id": target,
+                    "net.message_bytes": message_bytes,
+                    "net.send_latency_ms": send_latency_ms,
+                    "net.send_failed": True,
+                    "net.error_type": type(e).__name__,
+                },
             )
             raise
 
@@ -259,6 +290,15 @@ class TelegramChannel:
         if not message.text or not message.from_user:
             return
 
+        logger.info(
+            "net.message.received",
+            **{
+                "net.channel": "telegram",
+                "net.channel_id": str(message.chat.id),
+                "net.message_bytes": len(message.text.encode("utf-8")),
+            },
+        )
+
         inbound = InboundMessage(
             channel_type=ChannelType.TELEGRAM,
             channel_user_id=str(message.from_user.id),
@@ -273,17 +313,65 @@ class TelegramChannel:
         """Polling loop with exponential backoff on errors."""
         backoff = 1
         while self._running:
+            tick_started_at = time.monotonic()
             try:
+                self._mark_connected()
                 await self._dp.start_polling(self._bot, handle_signals=False)
             except asyncio.CancelledError:
                 break
-            except Exception:  # noqa: BLE001 — poll loop must survive single failures
+            except Exception as exc:  # noqa: BLE001 — poll loop must survive single failures
                 logger.warning(
                     "telegram_poll_error",
                     backoff=backoff,
                     exc_info=True,
                 )
+                self._mark_disconnected(exc)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, _MAX_BACKOFF)
             else:
                 backoff = 1
+            finally:
+                # aiogram's start_polling drives the receive loop internally;
+                # we cannot count individual updates from out here, so the
+                # per-iteration tick reports an aggregate session duration
+                # with message_count=-1 to flag "unknown — opaque driver."
+                tick_latency_ms = int((time.monotonic() - tick_started_at) * 1000)
+                logger.debug(
+                    "net.poll.tick",
+                    **{
+                        "net.channel": "telegram",
+                        "net.message_count": -1,
+                        "net.latency_ms": tick_latency_ms,
+                    },
+                )
+
+    def _mark_connected(self) -> None:
+        """Emit ``net.connection.recovered`` on the closed→open transition."""
+        if self._connected:
+            return
+        downtime_ms = 0
+        if self._connection_lost_at is not None:
+            downtime_ms = int((time.monotonic() - self._connection_lost_at) * 1000)
+        self._connected = True
+        self._connection_lost_at = None
+        logger.info(
+            "net.connection.recovered",
+            **{
+                "net.channel": "telegram",
+                "net.downtime_ms": downtime_ms,
+            },
+        )
+
+    def _mark_disconnected(self, exc: BaseException) -> None:
+        """Emit ``net.connection.lost`` on the open→closed transition."""
+        if not self._connected and self._connection_lost_at is not None:
+            return
+        self._connected = False
+        self._connection_lost_at = time.monotonic()
+        logger.warning(
+            "net.connection.lost",
+            **{
+                "net.channel": "telegram",
+                "net.error_type": type(exc).__name__,
+            },
+        )
