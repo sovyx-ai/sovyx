@@ -27,6 +27,7 @@ import time
 import typing
 
 from sovyx.observability.logging import get_logger
+from sovyx.observability.tasks import spawn
 
 if typing.TYPE_CHECKING:  # pragma: no cover
     from sovyx.engine.events import EventBus
@@ -319,8 +320,8 @@ class PluginStateTracker:
             import asyncio
 
             try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(self._event_bus.emit(event))
+                asyncio.get_running_loop()
+                spawn(self._event_bus.emit(event), name="plugin-state-changed-emit")
             except RuntimeError:
                 pass  # No event loop, skip emit
         except ImportError:  # pragma: no cover
