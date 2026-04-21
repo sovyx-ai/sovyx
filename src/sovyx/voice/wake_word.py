@@ -268,6 +268,13 @@ class WakeWordDetector:
         # Audio buffer for stage-2 verification
         self._audio_buffer: list[npt.NDArray[np.float32]] = []
 
+        # Telemetry attribution: model file stem identifies the wake-word
+        # variant in dashboards even if the same detector is reused with
+        # multiple ONNX checkpoints across boots.
+        self._model_path = str(model_path)
+        self._model_name = model_path.stem
+        self._frame_ms = int(self._config.frame_samples * 1000 / self._config.sample_rate)
+
         logger.info(
             "WakeWordDetector initialised",
             model=str(model_path),
@@ -309,6 +316,27 @@ class WakeWordDetector:
 
         # Get ONNX score
         score = self._run_inference(audio)
+
+        # Per-frame telemetry (sampled by SamplingProcessor at the rate
+        # set in ObservabilitySamplingConfig.wake_word_score_rate). The
+        # cooldown_ms_remaining field is non-zero only while we're
+        # actively suppressing — every other frame reports 0 so the
+        # dashboard can render cooldown windows as solid bands.
+        cooldown_ms_remaining = 0
+        if self._state == WakeWordState.COOLDOWN:
+            remaining_frames = max(0, self._config.cooldown_frames - self._frame_counter)
+            cooldown_ms_remaining = remaining_frames * self._frame_ms
+        logger.info(
+            "voice.wake_word.score",
+            **{
+                "voice.score": round(score, 4),
+                "voice.threshold": self._config.stage1_threshold,
+                "voice.stage2_threshold": self._config.stage2_threshold,
+                "voice.cooldown_ms_remaining": cooldown_ms_remaining,
+                "voice.state": self._state.name,
+                "voice.model_name": self._model_name,
+            },
+        )
 
         # State machine transition
         detected = self._update_state(score, audio)
@@ -411,6 +439,17 @@ class WakeWordDetector:
                     "Wake word CONFIRMED (2-stage)",
                     peak_score=self._peak_score,
                     transcription=result.transcription,
+                )
+                logger.info(
+                    "voice.wake_word.detected",
+                    **{
+                        "voice.score": round(self._peak_score, 4),
+                        "voice.model_name": self._model_name,
+                        "voice.stage1_threshold": self._config.stage1_threshold,
+                        "voice.stage2_threshold": self._config.stage2_threshold,
+                        "voice.transcription": result.transcription,
+                        "voice.window_frames": self._frame_counter,
+                    },
                 )
                 self._enter_cooldown()
                 return True

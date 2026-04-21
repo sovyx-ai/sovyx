@@ -519,6 +519,7 @@ class ObservabilitySamplingConfig(BaseSettings):
 
     audio_frame_rate: int = 100
     vad_frame_rate: int = 50
+    wake_word_score_rate: int = 50
     output_queue_depth_interval_ms: int = 1000
     perf_hotpath_interval_seconds: int = 60
 

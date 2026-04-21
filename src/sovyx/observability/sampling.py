@@ -36,6 +36,7 @@ if TYPE_CHECKING:
 _SAMPLED_EVENTS: Final[dict[str, str]] = {
     "audio.frame": "audio_frame_rate",
     "voice.vad.frame": "vad_frame_rate",
+    "voice.wake_word.score": "wake_word_score_rate",
 }
 """Mapping of event name → ``ObservabilitySamplingConfig`` attribute.
 
