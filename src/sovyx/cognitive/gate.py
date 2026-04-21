@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 from sovyx.engine.errors import CognitiveError
 from sovyx.observability.logging import bind_request_context, clear_request_context, get_logger
+from sovyx.observability.tasks import spawn
 
 if TYPE_CHECKING:
     from sovyx.cognitive.act import ActionResult
@@ -96,7 +97,7 @@ class CogLoopGate:
     async def start(self) -> None:
         """Start background worker."""
         self._running = True
-        self._worker_task = asyncio.create_task(self._worker())
+        self._worker_task = spawn(self._worker(), name="cognitive-gate-worker")
         logger.info("cogloop_gate_started")
 
     async def stop(self) -> None:
