@@ -177,6 +177,15 @@ class VoicePipeline:
         # different SpeechStartedEvent site in _transition_to_recording).
         self._wake_detected_monotonic: float | None = None
 
+        # Frame inter-arrival tracking for voice.frame_drop.detected.
+        # Frames are pushed by the capture loop at the OS-driven cadence
+        # (32 ms = _FRAME_SAMPLES / _SAMPLE_RATE * 1000). A gap larger than
+        # 2× expected means the capture path stalled — a starvation
+        # fingerprint distinct from the deaf-warning case (deaf = frames
+        # arrive but VAD rejects them; drop = frames don't arrive at all).
+        self._last_frame_monotonic: float | None = None
+        self._expected_frame_interval_s: float = _FRAME_SAMPLES / _SAMPLE_RATE
+
     # -- State property + saga lifecycle ------------------------------------
 
     @property
@@ -325,6 +334,27 @@ class VoicePipeline:
         if not self._running:
             return {"state": self._state.name, "event": "not_running"}
 
+        # Frame-drop detection: compare inter-arrival to expected cadence.
+        # A 2× threshold tolerates normal scheduling jitter while still
+        # surfacing real starvation events (USB renegotiation, capture
+        # task stall, OS scheduler hiccup).
+        now_monotonic = time.monotonic()
+        if self._last_frame_monotonic is not None:
+            gap_s = now_monotonic - self._last_frame_monotonic
+            if gap_s > self._expected_frame_interval_s * 2.0:
+                logger.warning(
+                    "voice.frame_drop.detected",
+                    **{
+                        "voice.gap_ms": round(gap_s * 1000.0, 1),
+                        "voice.expected_interval_ms": round(
+                            self._expected_frame_interval_s * 1000.0, 1
+                        ),
+                        "voice.state": self._state.name,
+                        "voice.mind_id": self._config.mind_id,
+                    },
+                )
+        self._last_frame_monotonic = now_monotonic
+
         import numpy as np
 
         audio_f32 = frame.astype(np.float32) / 32768.0
@@ -452,6 +482,16 @@ class VoicePipeline:
                 self._self_feedback_gate.on_tts_end()
             await self._emit(BargeInEvent(mind_id=self._config.mind_id))
             logger.info("Barge-in detected", mind_id=self._config.mind_id)
+            logger.warning(
+                "voice.barge_in.detected",
+                **{
+                    "voice.mind_id": self._config.mind_id,
+                    "voice.frames_sustained": self._config.barge_in_threshold,
+                    "voice.prob": round(float(vad_event.probability), 3),
+                    "voice.threshold_frames": self._config.barge_in_threshold,
+                    "voice.output_was_playing": True,
+                },
+            )
             return await self._transition_to_recording(frame)
 
         if not self._output.is_playing:
@@ -807,6 +847,20 @@ class VoicePipeline:
             return
 
         self._coordinator_invocation_pending = True
+        logger.warning(
+            "voice.deaf.detected",
+            **{
+                "voice.mind_id": self._config.mind_id,
+                "voice.state": self._state.name,
+                "voice.consecutive_deaf_warnings": self._deaf_warnings_consecutive,
+                "voice.threshold": self._auto_bypass_threshold,
+                "voice.max_vad_probability": round(
+                    self._max_vad_prob_since_heartbeat, 3
+                ),
+                "voice.frames_processed": self._vad_frames_since_heartbeat,
+                "voice.voice_clarity_active": self._voice_clarity_active,
+            },
+        )
         # Schedule the coordinator on the running loop — this helper
         # runs on the per-frame hot path and must not block.
         asyncio.create_task(self._invoke_deaf_signal())
@@ -837,6 +891,16 @@ class VoicePipeline:
         if callback is None:
             self._coordinator_invocation_pending = False
             return
+        logger.warning(
+            "voice.deaf.recovery_attempted",
+            **{
+                "voice.mind_id": self._config.mind_id,
+                "voice.consecutive_deaf_warnings": self._deaf_warnings_consecutive,
+                "voice.threshold": self._auto_bypass_threshold,
+                "voice.voice_clarity_active": self._voice_clarity_active,
+                "voice.auto_bypass_enabled": self._auto_bypass_enabled,
+            },
+        )
         try:
             outcomes = await callback()
         except Exception as exc:  # noqa: BLE001 — callback is user-supplied; shield the pipeline
