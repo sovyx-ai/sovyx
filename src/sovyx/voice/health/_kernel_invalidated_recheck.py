@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.observability.logging import get_logger
+from sovyx.observability.tasks import spawn
 from sovyx.voice.health._metrics import record_kernel_invalidated_event
 from sovyx.voice.health._quarantine import (
     EndpointQuarantine,
@@ -131,7 +132,7 @@ class KernelInvalidatedRechecker:
         if self._started:
             return
         self._started = True
-        self._task = asyncio.create_task(self._loop())
+        self._task = spawn(self._loop(), name="voice-kernel-invalidated-recheck")
         logger.info(
             "voice_kernel_invalidated_rechecker_started",
             interval_s=self._interval_s,
