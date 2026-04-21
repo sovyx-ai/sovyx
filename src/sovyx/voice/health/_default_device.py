@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Protocol
 
 from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.observability.logging import get_logger
+from sovyx.observability.tasks import spawn
 from sovyx.voice.health.contract import HotplugEvent, HotplugEventKind
 
 if TYPE_CHECKING:
@@ -120,7 +121,7 @@ class PollingDefaultDeviceWatcher:
         if self._started:
             return
         self._started = True
-        self._task = asyncio.create_task(self._run(on_event))
+        self._task = spawn(self._run(on_event), name="voice-default-device-watcher")
         logger.info(
             "voice_default_device_watcher_started",
             poll_interval_s=self._interval,
