@@ -52,6 +52,7 @@ from uuid import uuid4
 
 from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.observability.logging import get_logger
+from sovyx.observability.tasks import spawn
 from sovyx.voice._frame_normalizer import FrameNormalizer
 from sovyx.voice._stream_opener import _import_sounddevice
 
@@ -611,7 +612,7 @@ class AudioCaptureTask:
 
         self._running = True
         self._last_heartbeat_monotonic = time.monotonic()
-        self._consumer = asyncio.create_task(self._consume_loop(), name="audio-capture-consumer")
+        self._consumer = spawn(self._consume_loop(), name="audio-capture-consumer")
         self._emit_stream_opened(info, apo_bypass_attempted=False)
         logger.info(
             "audio_capture_task_started",
