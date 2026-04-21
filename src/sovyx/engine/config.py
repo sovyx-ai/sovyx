@@ -480,7 +480,7 @@ class ObservabilityFeaturesConfig(BaseSettings):
     voice_telemetry: bool = True
     startup_cascade: bool = True
     plugin_introspection: bool = True
-    anomaly_detection: bool = False
+    anomaly_detection: bool = True
     tamper_chain: bool = False
     schema_validation: bool = True
 

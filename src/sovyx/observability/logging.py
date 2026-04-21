@@ -36,6 +36,7 @@ from sovyx.observability._fast_path import (
     FastPathHandler,
     NonFastPathFilter,
 )
+from sovyx.observability.anomaly import AnomalyDetector
 from sovyx.observability.async_handler import AsyncQueueHandler, BackgroundLogWriter
 from sovyx.observability.envelope import EnvelopeProcessor
 from sovyx.observability.failure_dictionary import ErrorEnricher
@@ -347,6 +348,12 @@ def _setup_logging_locked(
         # Sits before wrap_for_formatter so JSONRenderer sees clamped
         # values, never the raw 10 MB string. See §22.1.
         shared_processors.append(ClampFieldsProcessor(obs_config.tuning.max_field_bytes))
+        # AnomalyDetector observes the FULLY-enriched + clamped entry,
+        # so its own emits ride the same envelope/redaction guarantees.
+        # Mounted last so its `__call__` is the final read-only pass
+        # before wrap_for_formatter hands the dict to the renderer.
+        if obs_config.features.anomaly_detection:
+            shared_processors.append(AnomalyDetector(obs_config.tuning))
 
     # ── Console renderer ──
     if config.console_format == "json":
