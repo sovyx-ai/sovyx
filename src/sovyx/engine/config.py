@@ -543,6 +543,16 @@ class ObservabilityTuningConfig(BaseSettings):
     max_entry_bytes: int = Field(default=64 * 1024, ge=4 * 1024, le=4 * 1024 * 1024)
     metrics_cardinality_max_total: int = Field(default=10_000, ge=100, le=1_000_000)
 
+    # ── Anomaly detector (P8.1) ──
+    anomaly_window_size: int = Field(default=1000, ge=50, le=100_000)
+    anomaly_min_samples: int = Field(default=50, ge=10, le=10_000)
+    anomaly_latency_factor: float = Field(default=2.0, ge=1.1, le=100.0)
+    anomaly_error_rate_window_s: int = Field(default=60, ge=5, le=3600)
+    anomaly_error_rate_factor: float = Field(default=3.0, ge=1.1, le=100.0)
+    anomaly_memory_growth_window_s: int = Field(default=300, ge=30, le=3600)
+    anomaly_memory_growth_pct: float = Field(default=10.0, ge=1.0, le=100.0)
+    anomaly_cooldown_s: int = Field(default=60, ge=1, le=3600)
+
 
 class ObservabilityConfig(BaseSettings):
     """Sovyx observability subsystem configuration.
