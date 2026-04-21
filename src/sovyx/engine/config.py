@@ -477,7 +477,7 @@ class ObservabilityFeaturesConfig(BaseSettings):
     async_queue: bool = True
     pii_redaction: bool = True
     saga_propagation: bool = False
-    voice_telemetry: bool = False
+    voice_telemetry: bool = True
     startup_cascade: bool = False
     plugin_introspection: bool = False
     anomaly_detection: bool = False
