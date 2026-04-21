@@ -280,6 +280,18 @@ async def bootstrap(
                         source="boot",
                     )
 
+        # 0.57. Secret-rotation hygiene check (§22.4 — Phase 11+ Task 11+.11).
+        # Emits ``security.secrets.rotation_overdue`` (WARNING) when the
+        # operator-stamped ``security.secrets_rotated_at`` is older than
+        # ``rotation_warn_days`` (default 90). Fresh installs land on
+        # ``rotation_unknown`` (INFO) and stay quiet. The check runs
+        # before EventBus so the warning surfaces in the very first batch
+        # of boot logs — operators tail those during deploys and a buried
+        # rotation reminder gets ignored.
+        from sovyx.observability.secret_rotation import check_secret_rotation
+
+        check_secret_rotation(engine_config.security)
+
         # 1. EventBus
         event_bus = EventBus(
             saga_propagation_enabled=engine_config.observability.features.saga_propagation,

@@ -7,6 +7,7 @@ and programmatic overrides. Priority: overrides > env > yaml > defaults.
 from __future__ import annotations
 
 import os
+from datetime import datetime  # noqa: TC003 — pydantic resolves field type at runtime.
 from pathlib import Path
 from typing import Any, Literal
 
@@ -655,6 +656,48 @@ class TuningConfig(BaseModel):
     llm: LLMTuningConfig = Field(default_factory=LLMTuningConfig)
 
 
+class SecurityConfig(BaseModel):
+    """Operator-managed security knobs that have boot-time consequences.
+
+    Currently scoped to the secret-rotation hygiene check (§22.4): the
+    operator stamps ``secrets_rotated_at`` whenever they rotate any
+    ``SOVYX_*`` secret (provider API keys, license JWT, webhook URLs)
+    and the daemon emits ``security.secrets.rotation_overdue`` at boot
+    when the timestamp is older than ``rotation_warn_days``.
+
+    The check is intentionally a *warning*, not a hard failure — a
+    daemon that refuses to start because a secret is 91 days old is
+    worse than one that runs and asks the operator to rotate. Hardening
+    to "fail closed" is left to operators via custom alerting on the
+    emitted event.
+
+    Why a separate model instead of a dedicated env var: rotation
+    cadence is a deployment policy, not a secret. Keeping it on the
+    config object makes the value visible to ``sovyx doctor``, the
+    dashboard config view, and the audit log without leaking through
+    process environment.
+    """
+
+    secrets_rotated_at: datetime | None = Field(
+        default=None,
+        description=(
+            "ISO-8601 timestamp the operator last rotated SOVYX_* secrets. "
+            "When None, the boot-time check skips (fresh install grace). "
+            "Set via SOVYX_SECURITY__SECRETS_ROTATED_AT=2026-04-20T00:00:00Z."
+        ),
+    )
+    rotation_warn_days: int = Field(
+        default=90,
+        ge=1,
+        le=3650,
+        description=(
+            "Age (in days) past which a rotation warning is emitted at "
+            "boot. Default 90 mirrors the §22.4 procedure; raise for "
+            "low-traffic deployments where rotation is more disruptive."
+        ),
+    )
+
+
 class SocketConfig(BaseModel):
     """Unix socket path for daemon RPC.
 
@@ -699,6 +742,7 @@ class EngineConfig(BaseSettings):
     socket: SocketConfig = Field(default_factory=SocketConfig)
     tuning: TuningConfig = Field(default_factory=TuningConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    security: SecurityConfig = Field(default_factory=SecurityConfig)
 
     @model_validator(mode="after")
     def resolve_log_file(self) -> EngineConfig:
