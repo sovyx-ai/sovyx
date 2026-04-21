@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING, Any, Literal
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
     from pathlib import Path
 
 logger = get_logger(__name__)
@@ -66,7 +65,8 @@ def _ptbr_templates() -> dict[str, _TemplateFn]:
             f"(prob={float(_f(e, 'voice.prob', _f(e, 'prob', 0.0))):.2f})"
         ),
         "voice.stt.requested": lambda e: (
-            f"STT iniciado ({_f(e, 'voice.audio_ms', _f(e, 'audio_ms', '?'))}ms de áudio capturado)"
+            f"STT iniciado ({_f(e, 'voice.audio_ms', _f(e, 'audio_ms', '?'))}ms "
+            f"de áudio capturado)"
         ),
         "voice.stt.response": lambda e: (
             f'Transcrição: "{_f(e, "voice.text", _f(e, "text", ""))}" '
@@ -402,7 +402,7 @@ def build_user_journey(
     return "\n".join(lines)
 
 
-def _iter_saga_entries(saga_id: str, log_path: Path) -> "list[dict[str, Any]]":
+def _iter_saga_entries(saga_id: str, log_path: Path) -> list[dict[str, Any]]:
     """Stream-parse *log_path* and yield entries with matching saga_id.
 
     Handles the common modes the structlog file handler produces:

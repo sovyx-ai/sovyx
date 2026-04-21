@@ -411,8 +411,9 @@ class PiperTTS(TTSEngine):
         Returns:
             AudioChunk with int16 PCM audio at the voice's sample rate.
         """
-        import numpy as np
         import time
+
+        import numpy as np
 
         if not self._initialized:
             await self.initialize()

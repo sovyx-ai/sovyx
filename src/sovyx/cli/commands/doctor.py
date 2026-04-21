@@ -30,7 +30,6 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import typer
 from rich.console import Console
@@ -51,9 +50,6 @@ from sovyx.voice.health import (
     default_step_names,
     run_preflight,
 )
-
-if TYPE_CHECKING:
-    pass
 
 console = Console()
 doctor_app = typer.Typer(

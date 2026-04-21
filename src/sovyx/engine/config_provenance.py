@@ -51,13 +51,16 @@ class FieldProvenance(BaseModel):
     env_key: str | None = None
     """The canonical env-var name (set even when the env var was not used)."""
     field_path: str = Field(default="")
-    """Dotted path from root settings to this field (e.g., ``observability.features.async_queue``)."""
+    """Dotted path from root settings to this field.
+
+    Example: ``observability.features.async_queue``.
+    """
 
 
 def track_provenance(
     config: BaseSettings,
     *,
-    environ: "Mapping[str, str] | None" = None,
+    environ: Mapping[str, str] | None = None,
 ) -> dict[str, FieldProvenance]:
     """Return a flat ``dotted-path → FieldProvenance`` map for *config*.
 
@@ -87,7 +90,7 @@ def _walk(
     instance: BaseModel,
     *,
     prefix: str,
-    env: "Mapping[str, str]",
+    env: Mapping[str, str],
     out: dict[str, FieldProvenance],
 ) -> None:
     """Depth-first walk of *instance*, populating *out* in place."""
@@ -116,10 +119,7 @@ def _walk(
         # field's declared default value. We can't perfectly distinguish
         # "user set it to the same value as the default" vs "left it
         # alone", but matching env presence is a reliable proxy.
-        if raw_env_value is not None:
-            source = ConfigSource.ENV_VAR
-        else:
-            source = ConfigSource.DEFAULT
+        source = ConfigSource.ENV_VAR if raw_env_value is not None else ConfigSource.DEFAULT
 
         # Field default may be a callable (default_factory) — attempt
         # comparison only when default is a plain value to avoid

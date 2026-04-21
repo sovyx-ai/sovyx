@@ -13,7 +13,6 @@ policy) stays defined in one place.
 
 from __future__ import annotations
 
-import asyncio
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -29,6 +28,7 @@ from sovyx.voice.model_registry import (
 )
 
 if TYPE_CHECKING:
+    import asyncio
     from collections.abc import Awaitable, Callable
     from pathlib import Path
 

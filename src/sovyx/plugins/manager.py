@@ -27,12 +27,16 @@ from sovyx.plugins._manager_types import (
     PluginError,
     _PluginHealth,
 )
+from sovyx.plugins.context import BrainAccess, EventBusAccess, PluginContext
 from sovyx.plugins.lifecycle import (
     emit_plugin_loaded as _emit_lifecycle_loaded,
+)
+from sovyx.plugins.lifecycle import (
     emit_plugin_unloaded as _emit_lifecycle_unloaded,
+)
+from sovyx.plugins.lifecycle import (
     probe_now as _probe_now,
 )
-from sovyx.plugins.context import BrainAccess, EventBusAccess, PluginContext
 from sovyx.plugins.permissions import (
     Permission,
     PermissionEnforcer,

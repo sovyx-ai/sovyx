@@ -109,9 +109,13 @@ END;
 """
 
 _INSERT_SQL = """
-INSERT OR IGNORE INTO logs
-    (timestamp_iso, timestamp_unix, level, logger, event, message, saga_id, sequence_no, content_json)
-VALUES (:ts_iso, :ts_unix, :level, :logger, :event, :message, :saga_id, :sequence_no, :content_json)
+INSERT OR IGNORE INTO logs (
+    timestamp_iso, timestamp_unix, level, logger, event, message,
+    saga_id, sequence_no, content_json
+) VALUES (
+    :ts_iso, :ts_unix, :level, :logger, :event, :message,
+    :saga_id, :sequence_no, :content_json
+)
 """
 
 _DEFAULT_TAIL_INTERVAL_S = 0.5
@@ -305,7 +309,7 @@ class FTSIndexer:
                     self._stop_event.wait(),
                     timeout=self._tail_interval_s,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
 
     async def _consume_new_lines(self, offset: int) -> int:
@@ -444,7 +448,7 @@ class FTSIndexer:
                     self._stop_event.wait(),
                     timeout=_RETENTION_INTERVAL_S,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
 
     async def _prune_once(self) -> int:

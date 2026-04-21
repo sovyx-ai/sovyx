@@ -290,8 +290,9 @@ class KokoroTTS(TTSEngine):
         the ONNX session. Used by the voice-test flow to let the setup
         wizard sample every voice in the catalog without a ~300 MB reload.
         """
-        import numpy as np
         import time
+
+        import numpy as np
 
         if not self._initialized:
             await self.initialize()

@@ -320,7 +320,7 @@ async def stream_logs(websocket: WebSocket) -> None:
                     cursor_unix = last_unix + 0.001
             try:
                 await asyncio.wait_for(websocket.receive_text(), timeout=poll_interval)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
     except WebSocketDisconnect:
         return

@@ -9,7 +9,6 @@ Implements BrainReader + BrainWriter protocols.
 
 from __future__ import annotations
 
-import asyncio
 import sqlite3
 from typing import TYPE_CHECKING
 
@@ -21,6 +20,8 @@ from sovyx.observability.tasks import spawn
 from sovyx.observability.tracing import get_tracer
 
 if TYPE_CHECKING:
+    import asyncio
+
     from sovyx.brain.concept_repo import ConceptRepository
     from sovyx.brain.embedding import EmbeddingEngine
     from sovyx.brain.episode_repo import EpisodeRepository

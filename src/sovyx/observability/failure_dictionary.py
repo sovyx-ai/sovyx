@@ -51,7 +51,7 @@ class FailureSignature:
         self.severity = severity
         self.runbook_url = runbook_url
 
-    def matches(self, entry: "MutableMapping[str, Any]") -> bool:
+    def matches(self, entry: MutableMapping[str, Any]) -> bool:
         """Return ``True`` iff *entry* satisfies every ``match_fields`` clause."""
         for key, expected in self.match_fields.items():
             value = entry.get(key)
@@ -331,8 +331,8 @@ class ErrorEnricher:
         self,
         _logger: Any,  # noqa: ANN401 — opaque structlog logger reference.
         _method_name: str,
-        event_dict: "MutableMapping[str, Any]",
-    ) -> "MutableMapping[str, Any]":
+        event_dict: MutableMapping[str, Any],
+    ) -> MutableMapping[str, Any]:
         """Add ``diagnosis_*`` fields to *event_dict* on first signature match."""
         level = event_dict.get("level")
         if not isinstance(level, str) or level.lower() not in self._ENRICH_LEVELS:

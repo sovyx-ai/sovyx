@@ -28,10 +28,12 @@ import contextlib
 import hashlib
 import time
 from collections import OrderedDict
-from collections.abc import AsyncIterator
-from typing import Generic, TypeVar
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 from sovyx.observability.logging import get_logger
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 _K = TypeVar("_K")
 

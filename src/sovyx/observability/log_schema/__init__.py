@@ -12,12 +12,15 @@ from __future__ import annotations
 
 import json
 from importlib.resources import files
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from importlib.resources.abc import Traversable
 
 __all__ = ["load", "load_all", "event_names"]
 
 
-def _resources() -> Any:
+def _resources() -> Traversable:
     return files(__name__)
 
 
