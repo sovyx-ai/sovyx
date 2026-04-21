@@ -10,6 +10,7 @@ Ref: SPE-007 §5, Pre-Compute V05-37.
 from __future__ import annotations
 
 import dataclasses
+import time
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
@@ -309,6 +310,9 @@ class LLMRouter:
             models_to_try.extend(self._get_equivalent_models(model))
 
         errors: list[str] = []
+        attempt_n = 0
+        attempts_chain: list[dict[str, object]] = []
+        prev_attempt: tuple[str, str] | None = None
 
         for try_model in models_to_try:
             for provider in self._providers:
@@ -324,6 +328,16 @@ class LLMRouter:
                 circuit = self._circuits.get(provider.name)
                 if circuit and not circuit.can_call():
                     errors.append(f"{provider.name}: circuit open")
+                    if prev_attempt is not None:
+                        logger.info(
+                            "llm.route.fallback",
+                            **{
+                                "llm.from_provider": prev_attempt[0],
+                                "llm.to_provider": provider.name,
+                                "llm.reason": "circuit_open",
+                                "llm.error": "",
+                            },
+                        )
                     continue
 
                 try:
@@ -335,6 +349,16 @@ class LLMRouter:
                             fallback_model=try_model,
                             provider=provider.name,
                         )
+                    attempt_n += 1
+                    attempt_started_at = time.monotonic()
+                    logger.info(
+                        "llm.route.attempt",
+                        **{
+                            "llm.provider": provider.name,
+                            "llm.model": use_model,
+                            "llm.attempt_n": attempt_n,
+                        },
+                    )
                     tracer = get_tracer()
                     metrics = get_metrics()
 
@@ -422,21 +446,69 @@ class LLMRouter:
                         cost=round(response.cost_usd, 6),
                     )
 
+                    attempt_latency_ms = int(
+                        (time.monotonic() - attempt_started_at) * 1000
+                    )
+                    # ``generate()`` returns the whole response in one shot, so
+                    # there's no separate first-token timestamp to capture —
+                    # report TTFT == total latency for parity with ``stream()``.
+                    logger.info(
+                        "llm.route.succeeded",
+                        **{
+                            "llm.provider": provider.name,
+                            "llm.model": response.model,
+                            "llm.tokens_in": response.tokens_in,
+                            "llm.tokens_out": response.tokens_out,
+                            "llm.cost_usd": round(response.cost_usd, 6),
+                            "llm.latency_ms": attempt_latency_ms,
+                            "llm.first_token_ms": attempt_latency_ms,
+                            "llm.attempt_n": attempt_n,
+                        },
+                    )
+
                     return response
 
                 except Exception as e:  # noqa: BLE001 — provider failover — must catch anything so next provider is tried
                     if circuit:
                         circuit.record_failure()
                     errors.append(f"{provider.name}: {e}")
+                    attempts_chain.append(
+                        {
+                            "provider": provider.name,
+                            "model": use_model,
+                            "error": str(e),
+                            "error_type": type(e).__name__,
+                        }
+                    )
                     logger.warning(
                         "provider_failed",
                         provider=provider.name,
                         error=str(e),
                     )
+                    if prev_attempt is not None:
+                        logger.info(
+                            "llm.route.fallback",
+                            **{
+                                "llm.from_provider": prev_attempt[0],
+                                "llm.to_provider": provider.name,
+                                "llm.reason": "provider_error",
+                                "llm.error": str(e),
+                            },
+                        )
+                    prev_attempt = (provider.name, use_model)
                     continue
 
         error_msg = (
             f"All providers failed: {'; '.join(errors)}" if errors else "No available providers"
+        )
+        logger.error(
+            "llm.route.failed",
+            **{
+                "llm.attempts": attempts_chain,
+                "llm.attempt_count": attempt_n,
+                "llm.last_error": attempts_chain[-1]["error"] if attempts_chain else "",
+                "llm.requested_model": model or "",
+            },
         )
         raise ProviderUnavailableError(error_msg)
 
@@ -492,6 +564,9 @@ class LLMRouter:
         errors: list[str] = []
         chosen_provider: LLMProvider | None = None
         chosen_model: str | None = None
+        attempts_chain: list[dict[str, object]] = []
+        prev_attempt: tuple[str, str] | None = None
+        attempt_n = 0
 
         for try_model in models_to_try:
             for provider in self._providers:
@@ -502,7 +577,28 @@ class LLMRouter:
                 circuit = self._circuits.get(provider.name)
                 if circuit and not circuit.can_call():
                     errors.append(f"{provider.name}: circuit open")
+                    if prev_attempt is not None:
+                        logger.info(
+                            "llm.route.fallback",
+                            **{
+                                "llm.from_provider": prev_attempt[0],
+                                "llm.to_provider": provider.name,
+                                "llm.reason": "circuit_open",
+                                "llm.error": "",
+                            },
+                        )
                     continue
+                attempt_n += 1
+                logger.info(
+                    "llm.route.attempt",
+                    **{
+                        "llm.provider": provider.name,
+                        "llm.model": try_model or "default",
+                        "llm.attempt_n": attempt_n,
+                        "llm.streaming": True,
+                    },
+                )
+                prev_attempt = (provider.name, try_model or "default")
                 chosen_provider = provider
                 chosen_model = try_model or "default"
                 break
@@ -515,11 +611,22 @@ class LLMRouter:
                 if errors
                 else "No available providers"
             )
+            logger.error(
+                "llm.route.failed",
+                **{
+                    "llm.attempts": attempts_chain,
+                    "llm.attempt_count": attempt_n,
+                    "llm.last_error": attempts_chain[-1]["error"] if attempts_chain else "",
+                    "llm.requested_model": model or "",
+                    "llm.streaming": True,
+                },
+            )
             raise ProviderUnavailableError(error_msg)
 
         circuit = self._circuits.get(chosen_provider.name)
         start = _time.monotonic()
         first_chunk_emitted = False
+        first_token_ms = 0
         final_chunk: LLMStreamChunk | None = None
         metrics = get_metrics()
 
@@ -538,6 +645,7 @@ class LLMRouter:
                 if not first_chunk_emitted and (chunk.delta_text or chunk.tool_call_delta):
                     first_chunk_emitted = True
                     ttft = int((_time.monotonic() - start) * 1000)
+                    first_token_ms = ttft
                     await self._events.emit(
                         ThinkStreamStarted(
                             model=use_model,
@@ -552,6 +660,25 @@ class LLMRouter:
         except Exception as e:  # noqa: BLE001
             if circuit:
                 circuit.record_failure()
+            attempts_chain.append(
+                {
+                    "provider": chosen_provider.name,
+                    "model": use_model,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                }
+            )
+            logger.error(
+                "llm.route.failed",
+                **{
+                    "llm.attempts": attempts_chain,
+                    "llm.attempt_count": attempt_n,
+                    "llm.last_error": str(e),
+                    "llm.requested_model": model or "",
+                    "llm.streaming": True,
+                    "llm.mid_stream": first_chunk_emitted,
+                },
+            )
             raise ProviderUnavailableError(f"{chosen_provider.name} stream failed: {e}") from e
 
         if circuit:
@@ -605,6 +732,21 @@ class LLMRouter:
                 tokens=final_chunk.tokens_in + final_chunk.tokens_out,
                 cost=round(cost, 6),
                 latency_ms=latency,
+            )
+
+            logger.info(
+                "llm.route.succeeded",
+                **{
+                    "llm.provider": chosen_provider.name,
+                    "llm.model": final_chunk.model or chosen_model or "",
+                    "llm.tokens_in": final_chunk.tokens_in,
+                    "llm.tokens_out": final_chunk.tokens_out,
+                    "llm.cost_usd": round(cost, 6),
+                    "llm.latency_ms": latency,
+                    "llm.first_token_ms": first_token_ms,
+                    "llm.attempt_n": attempt_n,
+                    "llm.streaming": True,
+                },
             )
 
     @staticmethod
