@@ -522,7 +522,11 @@ def _setup_logging_locked(
     if data_dir is not None:
         from sovyx.observability.audit import setup_audit_handler  # noqa: PLC0415
 
-        setup_audit_handler(data_dir / "audit" / "audit.jsonl")
+        tamper_chain_enabled = obs_config is not None and obs_config.features.tamper_chain
+        setup_audit_handler(
+            data_dir / "audit" / "audit.jsonl",
+            tamper_chain=tamper_chain_enabled,
+        )
 
     _setup_done = True
 

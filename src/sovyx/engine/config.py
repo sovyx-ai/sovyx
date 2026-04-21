@@ -560,6 +560,12 @@ class ObservabilityTuningConfig(BaseSettings):
     anomaly_memory_growth_pct: float = Field(default=10.0, ge=1.0, le=100.0)
     anomaly_cooldown_s: int = Field(default=60, ge=1, le=3600)
 
+    # ── Synthetic canary (§27.3) ──
+    # Period between ``meta.canary.tick`` records. Bounded ``ge=5`` so
+    # tests can exercise the loop quickly; ``le=3600`` so a misconfigured
+    # daemon can't go a whole hour silent on the gap-detection probe.
+    canary_interval_seconds: int = Field(default=60, ge=5, le=3600)
+
 
 class ObservabilityOtelConfig(BaseSettings):
     """OpenTelemetry OTLP exporter configuration (Phase 11 Task 11.8).

@@ -31,6 +31,7 @@ Aligned with IMPL-OBSERVABILITY-001 §15 (Phase 9, Tasks 9.3–9.5).
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import logging.handlers
 from typing import TYPE_CHECKING, Any
@@ -63,6 +64,7 @@ def setup_audit_handler(
     *,
     max_bytes: int = 10 * 1024 * 1024,
     backup_count: int = 10,
+    tamper_chain: bool = False,
 ) -> None:
     """Install a dedicated rotating JSON file handler on ``sovyx.audit``.
 
@@ -81,6 +83,14 @@ def setup_audit_handler(
             which on a typical engagement covers ~6 months of config
             changes. Override via :func:`setup_audit_handler` callers
             when stricter retention is required.
+        tamper_chain: When True, swap the rotating file handler for
+            :class:`HashChainHandler` so the audit log itself becomes
+            tamper-evident (§27.4 — "audit-of-auditor"). Off by default
+            to keep audit-write latency under 1 µs; the cost is ~2 µs
+            per record (one ``json.dumps`` + one SHA-256). Operators
+            running compliance audits should pair this with the boot/
+            rotation chain-verification hooks so a broken chain
+            actually triggers an alert.
 
     The handler reuses :class:`structlog.stdlib.ProcessorFormatter`
     with a :class:`structlog.processors.JSONRenderer` so audit lines
@@ -93,7 +103,7 @@ def setup_audit_handler(
     previous = getattr(audit_logger, _AUDIT_HANDLER_ATTR, None)
     if previous is not None:
         audit_logger.removeHandler(previous)
-        with _suppress(OSError):
+        with contextlib.suppress(OSError):
             previous.close()
         setattr(audit_logger, _AUDIT_HANDLER_ATTR, None)
 
@@ -104,12 +114,23 @@ def setup_audit_handler(
             structlog.processors.JSONRenderer(),
         ],
     )
-    handler = logging.handlers.RotatingFileHandler(
-        audit_path,
-        maxBytes=max_bytes,
-        backupCount=backup_count,
-        encoding="utf-8",
-    )
+    handler: logging.handlers.RotatingFileHandler
+    if tamper_chain:
+        from sovyx.observability.tamper import HashChainHandler  # noqa: PLC0415
+
+        handler = HashChainHandler(
+            audit_path,
+            max_bytes=max_bytes,
+            backup_count=backup_count,
+            encoding="utf-8",
+        )
+    else:
+        handler = logging.handlers.RotatingFileHandler(
+            audit_path,
+            maxBytes=max_bytes,
+            backupCount=backup_count,
+            encoding="utf-8",
+        )
     handler.setFormatter(formatter)
 
     audit_logger.addHandler(handler)
@@ -172,6 +193,50 @@ def emit_config_change(
     )
 
 
+def emit_chain_verified(
+    chain_path: Path,
+    *,
+    intact: bool,
+    entries: int,
+    broken_at: int | None,
+    source: str,
+) -> None:
+    """Emit the canonical ``audit.chain.verified`` envelope (§27.4).
+
+    Self-referential by design: this audit event is itself written to
+    the audit log, so the verifier observes its own success in the
+    next chain entry. The ``audit.is_meta`` flag is set so external
+    consumers can filter "auditor noise" from "real audit events"
+    without having to special-case the event name.
+
+    Args:
+        chain_path: File whose hash chain was verified. Recorded as
+            an absolute path so post-mortem reconstruction can find
+            the file regardless of cwd.
+        intact: Result of :func:`verify_chain` — ``True`` when every
+            line's ``chain_hash`` matched the recomputed value.
+        entries: Number of records inspected. Useful for sanity-
+            checking against expected file size.
+        broken_at: Zero-based index of the first broken line when
+            ``intact`` is False; ``None`` otherwise. Pinpoints the
+            tampered region for the operator.
+        source: Where the verification originated. ``"boot"`` (every
+            startup), ``"rotation"`` (before a file is rotated out),
+            ``"cli"`` (operator-driven via ``sovyx audit verify-chain``).
+    """
+    get_audit_logger().info(
+        "audit.chain.verified",
+        **{
+            "audit.chain.path": str(chain_path),
+            "audit.chain.intact": intact,
+            "audit.chain.entries": entries,
+            "audit.chain.broken_at": broken_at,
+            "audit.chain.source": source,
+            "audit.is_meta": True,
+        },
+    )
+
+
 def parse_change_summary(value: str) -> tuple[str | None, str | None]:
     """Split a ``"old → new"`` change marker into its two halves.
 
@@ -192,23 +257,8 @@ def parse_change_summary(value: str) -> tuple[str | None, str | None]:
     return (None, value.strip() or None)
 
 
-# ── Internal helpers ────────────────────────────────────────────────
-
-
-class _suppress:
-    """Tiny ``contextlib.suppress`` clone — avoids importing contextlib."""
-
-    def __init__(self, *exc: type[BaseException]) -> None:
-        self._exc = exc
-
-    def __enter__(self) -> None:  # noqa: D401 — context-manager protocol.
-        return None
-
-    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:  # noqa: ANN401
-        return exc_type is not None and issubclass(exc_type, self._exc)
-
-
 __all__ = [
+    "emit_chain_verified",
     "emit_config_change",
     "get_audit_logger",
     "parse_change_summary",

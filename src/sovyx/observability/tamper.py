@@ -41,6 +41,7 @@ Aligned with IMPL-OBSERVABILITY-001 §15 (Phase 9, Task 9.6).
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -142,13 +143,54 @@ class HashChainHandler(logging.handlers.RotatingFileHandler):
             record_handler_error()
             self.handleError(record)
 
-    def doRollover(self) -> None:
+    def doRollover(self) -> None:  # noqa: N802 — stdlib RotatingFileHandler API.
         """Rotate the file and start a fresh chain.
 
         ``chain_id`` flips to a new UUID so the verifier can detect a
         rotation boundary even when files are concatenated by an
         operator. ``_prev_hash`` resets to :data:`GENESIS_HASH`.
+
+        Before super-class rotation runs, verify the chain on the file
+        about to be retired and emit ``audit.chain.verified`` (§27.4 —
+        "audit-of-auditor"). The verification result is the only
+        chance to catch in-flight tampering before the file is renamed
+        to a backup; a broken chain that survives rotation looks the
+        same as a corruption in any old backup.
         """
+        from pathlib import Path  # noqa: PLC0415
+
+        chain_path = Path(self.baseFilename)
+        # Flush + close the current stream so the verifier sees every
+        # byte we have written so far. We don't reopen — super() will.
+        with contextlib.suppress(Exception):
+            self.flush()
+
+        intact: bool
+        broken_at: int | None
+        entries = 0
+        try:
+            with chain_path.open("r", encoding="utf-8") as fh:
+                entries = sum(1 for line in fh if line.strip())
+            verified, idx = verify_chain(chain_path)
+            intact = verified
+            broken_at = None if verified else idx
+        except (OSError, ValueError):
+            intact = False
+            broken_at = None
+
+        try:
+            from sovyx.observability.audit import emit_chain_verified  # noqa: PLC0415
+
+            emit_chain_verified(
+                chain_path,
+                intact=intact,
+                entries=entries,
+                broken_at=broken_at,
+                source="rotation",
+            )
+        except Exception:  # noqa: BLE001 — audit emission must not abort rotation.
+            pass
+
         super().doRollover()
         self._chain_id = uuid.uuid4().hex
         self._prev_hash = GENESIS_HASH

@@ -11,6 +11,7 @@ from rich.console import Console
 from rich.table import Table
 
 from sovyx import __version__
+from sovyx.cli.commands.audit import audit_app
 from sovyx.cli.commands.brain_analyze import analyze_app
 from sovyx.cli.commands.dashboard import dashboard_app
 from sovyx.cli.commands.doctor import doctor_app
@@ -34,6 +35,7 @@ app.add_typer(logs_app)
 app.add_typer(dashboard_app, name="dashboard")
 app.add_typer(doctor_app)
 app.add_typer(plugin_app, name="plugin")
+app.add_typer(audit_app)
 
 
 def _get_client() -> DaemonClient:

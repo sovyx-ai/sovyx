@@ -228,6 +228,58 @@ async def bootstrap(
             spawn(hotpath_snapshotter.run(), name="hotpath-snapshotter")
             registry.register_instance(HotPathSnapshotter, hotpath_snapshotter)
 
+        # 0.55. Synthetic canary heartbeat (§27.3 — Phase 11+ Task 11+.10).
+        # Emits ``meta.canary.tick`` every ``canary_interval_seconds``
+        # (default 60 s). An external operator script — outside this repo —
+        # checks that ticks reach the log file (and the SIEM if a forwarder
+        # is wired) within the expected window. A missing tick is the
+        # trivial signal "the logging pipeline stopped" that distinguishes
+        # a quiet daemon from a dead one. Runs unconditionally — the cost
+        # is one INFO line per minute, dwarfed by every other event in
+        # the system.
+        from sovyx.observability.canary import CanaryEmitter
+        from sovyx.observability.tasks import spawn as _spawn_canary
+
+        canary_emitter = CanaryEmitter(engine_config.observability)
+        _spawn_canary(canary_emitter.run(), name="canary-emitter")
+        registry.register_instance(CanaryEmitter, canary_emitter)
+
+        # 0.56. Boot-time chain verification (§27.4 — "audit-of-auditor").
+        # When tamper_chain is enabled, both sovyx.log and audit.jsonl
+        # are written by HashChainHandler. Verify each at startup and
+        # emit ``audit.chain.verified``: an unobserved broken chain is
+        # the same as no chain at all. The check is best-effort — a
+        # missing or empty file degrades to a no-op rather than blocking
+        # the boot; the operator notices via the dashboard meta-health
+        # endpoint (§27.2).
+        if engine_config.observability.features.tamper_chain:
+            from sovyx.observability.audit import emit_chain_verified
+            from sovyx.observability.tamper import verify_chain
+
+            audit_chain_path = engine_config.data_dir / "audit" / "audit.jsonl"
+            for _chain_path in (engine_config.log.log_file, audit_chain_path):
+                if _chain_path is None or not _chain_path.is_file():
+                    continue
+                try:
+                    with _chain_path.open("r", encoding="utf-8") as _fh:
+                        _entries = sum(1 for _line in _fh if _line.strip())
+                    _verified, _idx = verify_chain(_chain_path)
+                    emit_chain_verified(
+                        _chain_path,
+                        intact=_verified,
+                        entries=_entries,
+                        broken_at=None if _verified else _idx,
+                        source="boot",
+                    )
+                except (OSError, ValueError):
+                    emit_chain_verified(
+                        _chain_path,
+                        intact=False,
+                        entries=0,
+                        broken_at=None,
+                        source="boot",
+                    )
+
         # 1. EventBus
         event_bus = EventBus(
             saga_propagation_enabled=engine_config.observability.features.saga_propagation,
