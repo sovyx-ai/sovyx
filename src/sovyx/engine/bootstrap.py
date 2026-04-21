@@ -187,6 +187,23 @@ async def bootstrap(
                 port=engine_config.observability.metrics_port,
             )
 
+        # 0.45. OpenTelemetry OTLP exporter (Phase 11 Task 11.8).
+        # Default OFF — operators opt in via
+        # ``SOVYX_OBSERVABILITY__OTEL__ENABLED=true`` so nodes that don't
+        # ship to a collector pay zero startup cost (the optional
+        # ``opentelemetry-exporter-otlp`` package isn't even imported).
+        # When enabled, OtelExporter installs a real ``TracerProvider``
+        # with OTLP/gRPC export and standard resource attributes; the
+        # closable wrapper lets bootstrap rollback flush in-flight spans
+        # via ``await otel.stop()``.
+        if engine_config.observability.otel.enabled:
+            from sovyx.observability.otel import OtelExporter
+
+            otel_exporter = OtelExporter(engine_config.observability.otel)
+            otel_exporter.start()
+            _closables.append(otel_exporter)
+            registry.register_instance(OtelExporter, otel_exporter)
+
         # 0.5. ResourceSnapshotter + HotPathSnapshotter (Phase 6 Task 6.8).
         # Both share the ``async_queue`` feature flag — the same flag that
         # enables the non-blocking log handler, since both produce periodic

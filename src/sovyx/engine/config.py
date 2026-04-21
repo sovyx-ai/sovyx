@@ -561,6 +561,31 @@ class ObservabilityTuningConfig(BaseSettings):
     anomaly_cooldown_s: int = Field(default=60, ge=1, le=3600)
 
 
+class ObservabilityOtelConfig(BaseSettings):
+    """OpenTelemetry OTLP exporter configuration (Phase 11 Task 11.8).
+
+    Default OFF. When ``enabled``, ``observability.otel.OtelExporter``
+    installs a real ``TracerProvider`` with an OTLP/gRPC ``SpanExporter``
+    targeting ``endpoint`` and the standard resource attributes
+    (``service.name``, ``service.version``, ``deployment.environment``,
+    ``host.name``, ``process.pid``).
+
+    Optional packages — install via ``pip install sovyx[otel]``:
+        - ``opentelemetry-exporter-otlp`` (required when enabled)
+        - ``opentelemetry-instrumentation-httpx`` (auto-instrument
+          httpx client calls with spans; controlled by
+          ``instrument_httpx``)
+    """
+
+    model_config = SettingsConfigDict(env_prefix="SOVYX_OBSERVABILITY__OTEL__", extra="ignore")
+
+    enabled: bool = False
+    endpoint: str = "http://localhost:4317"
+    insecure: bool = True
+    deployment_environment: str = "dev"
+    instrument_httpx: bool = True
+
+
 class ObservabilityConfig(BaseSettings):
     """Sovyx observability subsystem configuration.
 
@@ -584,6 +609,7 @@ class ObservabilityConfig(BaseSettings):
     pii: ObservabilityPIIConfig = Field(default_factory=ObservabilityPIIConfig)
     sampling: ObservabilitySamplingConfig = Field(default_factory=ObservabilitySamplingConfig)
     tuning: ObservabilityTuningConfig = Field(default_factory=ObservabilityTuningConfig)
+    otel: ObservabilityOtelConfig = Field(default_factory=ObservabilityOtelConfig)
 
     async_queue_size: int = Field(default=65536, ge=1024, le=1048576)
     ring_buffer_size: int = Field(default=2000, ge=100, le=50000)

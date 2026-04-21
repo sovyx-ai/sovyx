@@ -68,6 +68,10 @@ voice = [
     "kokoro-onnx>=0.4",
     "scipy>=1.11",
 ]
+otel = [
+    "opentelemetry-exporter-otlp>=1.20",
+    "opentelemetry-instrumentation-httpx>=0.41b0",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
@@ -147,6 +151,12 @@ module = [
     "dateutil.*",
     "icalendar.*",
     "defusedxml.*",
+    # Optional sovyx[otel] extras — installed only when operators wire
+    # an OTLP collector. Lazy-imported inside ``observability.otel`` so
+    # the engine works without them; mypy needs the override since the
+    # default install path doesn't pull these wheels.
+    "opentelemetry.exporter.otlp.*",
+    "opentelemetry.instrumentation.*",
 ]
 ignore_missing_imports = true
 
