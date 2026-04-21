@@ -60,6 +60,19 @@ IPV4_RE: Final[re.Pattern[str]] = re.compile(
     r"\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\b"
 )
 LUHN_RE: Final[re.Pattern[str]] = re.compile(r"\b(?:\d[ -]?){12,18}\d\b")
+# JWT (RFC 7519) — three URL-safe-base64 segments joined by dots. The
+# header almost always starts with ``eyJ`` (the base64 encoding of
+# ``{"``), which lets us anchor without false-positives on arbitrary
+# dotted identifiers. Min 16 chars per segment keeps short demo strings
+# from triggering.
+JWT_RE: Final[re.Pattern[str]] = re.compile(
+    r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"
+)
+# Provider API keys: Anthropic ``sk-ant-...``, OpenAI ``sk-...`` /
+# ``sk-proj-...``, generic ``sk_live_...`` (Stripe family). All start
+# with ``sk-`` or ``sk_`` and continue with ≥24 url-safe characters —
+# tight enough to skip CSS class names like ``sk-button``.
+API_KEY_RE: Final[re.Pattern[str]] = re.compile(r"\bsk[-_][A-Za-z0-9_-]{24,}\b")
 
 
 def _luhn_valid(digits: str) -> bool:
@@ -87,6 +100,13 @@ def _mask_credit_cards(text: str) -> str:
 
 
 _REGEX_REDACTORS: Final[tuple[tuple[re.Pattern[str], str], ...]] = (
+    # JWT and API-key patterns run BEFORE the email pattern because a
+    # JWT payload segment can contain ``@`` after base64 decoding into
+    # a printable ASCII slice; running EMAIL_RE first would carve a
+    # spurious "[redacted-email]" out of the middle of a token. Same
+    # reasoning for ``sk-...@host`` shaped credentials.
+    (JWT_RE, "[redacted-jwt]"),
+    (API_KEY_RE, "[redacted-api-key]"),
     (EMAIL_RE, "[redacted-email]"),
     (CPF_RE, "[redacted-cpf]"),
     (CNPJ_RE, "[redacted-cnpj]"),
@@ -215,10 +235,12 @@ class PIIRedactor:
 
 
 __all__ = [
+    "API_KEY_RE",
     "CNPJ_RE",
     "CPF_RE",
     "EMAIL_RE",
     "IPV4_RE",
+    "JWT_RE",
     "LUHN_RE",
     "PHONE_BR_RE",
     "PHONE_E164_RE",

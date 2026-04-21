@@ -29,26 +29,33 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
-from sovyx.observability._clamp_fields import ClampFieldsProcessor
-from sovyx.observability._exception_serializer import ExceptionTreeProcessor
-from sovyx.observability._fast_path import (
-    FastPathFilter,
-    FastPathHandler,
-    NonFastPathFilter,
-)
-from sovyx.observability.anomaly import AnomalyDetector
-from sovyx.observability.async_handler import AsyncQueueHandler, BackgroundLogWriter
-from sovyx.observability.envelope import EnvelopeProcessor
-from sovyx.observability.failure_dictionary import ErrorEnricher
-from sovyx.observability.pii import PIIRedactor
-from sovyx.observability.ringbuffer import RingBufferHandler, install_crash_hooks
-from sovyx.observability.sampling import SamplingProcessor
+# Sister-module imports are deferred to inside ``setup_logging`` /
+# ``_setup_logging_locked``. Eager imports here form a hard cycle:
+# every "logger-using" sister module (``anomaly``, ``failure_dictionary``,
+# ``saga``, ``slo``, ``alerts``, ``metrics``, …) does
+# ``from sovyx.observability.logging import get_logger`` at module
+# load. If logging.py imports any of those at *its* top level, the
+# first cold-import of logging.py — through ``sovyx --help``, the
+# dashboard, or any standalone script — partially-initializes
+# logging.py, and the sister module's ``get_logger`` import
+# raises ``ImportError`` because the symbol is not yet defined.
+#
+# By moving every concrete sister-module import inside the function
+# body, logging.py's top-level finishes synchronously after only
+# stdlib + structlog imports, ``get_logger`` is bound, and the
+# sister modules can safely complete their own load. ``setup_logging``
+# is the one entry point that needs the processors / handlers, and by
+# the time it runs the cycle is already broken.
+#
+# Type-only references for module-level globals stay under
+# ``TYPE_CHECKING`` so mypy still validates the annotations.
 
 if TYPE_CHECKING:
     from collections.abc import Generator, MutableMapping
     from pathlib import Path
 
     from sovyx.engine.config import LoggingConfig, ObservabilityConfig
+    from sovyx.observability.async_handler import BackgroundLogWriter
 
 # ── Request Context (via structlog.contextvars) ─────────────────────────────
 
@@ -291,6 +298,37 @@ def _setup_logging_locked(
 ) -> None:
     """Inner setup — called under ``_setup_lock``. Not part of public API."""
     global _setup_done, _async_writer, _data_dir  # noqa: PLW0603
+
+    # Sister-module imports are deferred to here (not module top-level)
+    # to break a circular import: every sister module that emits logs
+    # imports ``get_logger`` from this module at *its* top level. If
+    # this module imports them at *its* top level, the first cold-load
+    # of logging.py partially-initializes it and the sister's
+    # ``get_logger`` import raises ``ImportError``. By the time
+    # ``setup_logging`` is invoked (which is after import is complete)
+    # the cycle is no longer active and these imports are safe.
+    from sovyx.observability._clamp_fields import ClampFieldsProcessor  # noqa: PLC0415
+    from sovyx.observability._exception_serializer import (  # noqa: PLC0415
+        ExceptionTreeProcessor,
+    )
+    from sovyx.observability._fast_path import (  # noqa: PLC0415
+        FastPathFilter,
+        FastPathHandler,
+        NonFastPathFilter,
+    )
+    from sovyx.observability.anomaly import AnomalyDetector  # noqa: PLC0415
+    from sovyx.observability.async_handler import (  # noqa: PLC0415
+        AsyncQueueHandler,
+        BackgroundLogWriter,
+    )
+    from sovyx.observability.envelope import EnvelopeProcessor  # noqa: PLC0415
+    from sovyx.observability.failure_dictionary import ErrorEnricher  # noqa: PLC0415
+    from sovyx.observability.pii import PIIRedactor  # noqa: PLC0415
+    from sovyx.observability.ringbuffer import (  # noqa: PLC0415
+        RingBufferHandler,
+        install_crash_hooks,
+    )
+    from sovyx.observability.sampling import SamplingProcessor  # noqa: PLC0415
 
     root_logger = logging.getLogger()
 
@@ -559,6 +597,12 @@ def shutdown_logging(timeout: float = 5.0) -> None:
     never blocks the process from exiting.
     """
     global _async_writer  # noqa: PLW0603
+
+    # Sister-module imports deferred — see docstring on the equivalent
+    # block at the top of ``_setup_logging_locked``.
+    from sovyx.observability._fast_path import FastPathHandler  # noqa: PLC0415
+    from sovyx.observability.ringbuffer import RingBufferHandler  # noqa: PLC0415
+
     if _async_writer is not None:
         _async_writer.drain_and_stop(timeout=timeout)
         _async_writer = None

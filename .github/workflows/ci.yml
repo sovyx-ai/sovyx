@@ -162,3 +162,17 @@ jobs:
         run: uv sync --dev --frozen
       - name: Enforce explicit exception cause chains (PEP 3134)
         run: uv run python scripts/check_exception_chains.py
+
+  pii-leak-gate:
+    name: PII Leak Gate
+    runs-on: sovyx-4core
+    needs: exception-chain-gate
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      - name: Install dependencies
+        run: uv sync --dev --frozen
+      - name: Assert no raw PII leaks past the redactor (§22.3)
+        run: uv run python scripts/check_test_pii.py
