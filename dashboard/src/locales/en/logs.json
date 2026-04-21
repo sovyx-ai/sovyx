@@ -11,5 +11,30 @@
   },
   "error": {
     "loadFailed": "Failed to load logs"
+  },
+  "status": {
+    "live": "live",
+    "legacyFallback": "legacy fallback (FTS unavailable)"
+  },
+  "filters": {
+    "search": "Search",
+    "searchPlaceholder": "FTS5 query…",
+    "level": "Level",
+    "allLevels": "All",
+    "logger": "Logger",
+    "sagaId": "Saga ID",
+    "since": "Since",
+    "until": "Until",
+    "reset": "Reset filters"
+  },
+  "tabs": {
+    "detail": "Detail",
+    "causality": "Causality",
+    "saga": "Saga",
+    "narrative": "Narrative",
+    "noSaga": "Selected entry has no saga_id.",
+    "causalityEmpty": "No causality edges recorded for this saga.",
+    "sagaEmpty": "No entries indexed for this saga yet.",
+    "narrativeEmpty": "No narrative could be rendered for this saga."
   }
 }
