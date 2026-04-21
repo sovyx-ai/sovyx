@@ -478,7 +478,7 @@ class ObservabilityFeaturesConfig(BaseSettings):
     pii_redaction: bool = True
     saga_propagation: bool = False
     voice_telemetry: bool = True
-    startup_cascade: bool = False
+    startup_cascade: bool = True
     plugin_introspection: bool = False
     anomaly_detection: bool = False
     tamper_chain: bool = False
