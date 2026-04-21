@@ -149,6 +149,7 @@ class KokoroTTS(TTSEngine):
         self._model_dir = Path(model_dir)
         self._kokoro: Any | None = None
         self._initialized = False
+        self._chunk_counter = 0
 
     # -- Properties --------------------------------------------------------
 
@@ -290,6 +291,7 @@ class KokoroTTS(TTSEngine):
         wizard sample every voice in the catalog without a ~300 MB reload.
         """
         import numpy as np
+        import time
 
         if not self._initialized:
             await self.initialize()
@@ -312,6 +314,7 @@ class KokoroTTS(TTSEngine):
         # Kokoro's `create` runs G2P + ONNX VITS2 synchronously and is
         # CPU-bound (multiple seconds for a long sentence). Offload to a
         # worker thread so the event loop stays responsive.
+        gen_start = time.monotonic()
         samples, sample_rate = await asyncio.to_thread(
             self._kokoro.create,
             text,
@@ -319,6 +322,7 @@ class KokoroTTS(TTSEngine):
             speed=resolved_speed,
             lang=language,
         )
+        generation_ms = (time.monotonic() - gen_start) * 1000
 
         # Convert float32 → int16 PCM
         audio_int16: np.ndarray = np.clip(
@@ -328,6 +332,22 @@ class KokoroTTS(TTSEngine):
         ).astype(np.int16)
 
         duration_ms = len(audio_int16) / sample_rate * 1000
+
+        self._chunk_counter += 1
+        logger.info(
+            "voice.tts.chunk_emitted",
+            **{
+                "voice.chunk_index": self._chunk_counter,
+                "voice.text_chars": len(text),
+                "voice.audio_ms": round(duration_ms, 1),
+                "voice.generation_ms": round(generation_ms, 1),
+                "voice.model": "kokoro",
+                "voice.voice": voice,
+                "voice.language": language,
+                "voice.sample_rate": sample_rate,
+                "voice.speed": resolved_speed,
+            },
+        )
 
         return AudioChunk(
             audio=audio_int16,

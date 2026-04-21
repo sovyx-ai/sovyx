@@ -186,6 +186,7 @@ class PiperTTS(TTSEngine):
         self._session: Any | None = None
         self._voice_config: dict[str, Any] | None = None
         self._initialized = False
+        self._chunk_counter = 0
 
     # -- Properties --------------------------------------------------------
 
@@ -411,6 +412,7 @@ class PiperTTS(TTSEngine):
             AudioChunk with int16 PCM audio at the voice's sample rate.
         """
         import numpy as np
+        import time
 
         if not self._initialized:
             await self.initialize()
@@ -431,6 +433,7 @@ class PiperTTS(TTSEngine):
         all_audio: list[np.ndarray] = []
         sentence_phonemes = self._phonemize(text)
 
+        gen_start = time.monotonic()
         for phonemes in sentence_phonemes:
             if not phonemes:
                 continue
@@ -445,6 +448,7 @@ class PiperTTS(TTSEngine):
             )
             all_audio.append(audio)
             all_audio.append(silence)
+        generation_ms = (time.monotonic() - gen_start) * 1000
 
         if not all_audio:
             return AudioChunk(
@@ -455,6 +459,21 @@ class PiperTTS(TTSEngine):
 
         combined = np.concatenate(all_audio)
         duration_ms = len(combined) / sr * 1000
+
+        self._chunk_counter += 1
+        logger.info(
+            "voice.tts.chunk_emitted",
+            **{
+                "voice.chunk_index": self._chunk_counter,
+                "voice.text_chars": len(text),
+                "voice.audio_ms": round(duration_ms, 1),
+                "voice.generation_ms": round(generation_ms, 1),
+                "voice.model": "piper",
+                "voice.voice": self._config.voice,
+                "voice.sample_rate": sr,
+                "voice.speaker_id": self._config.speaker_id,
+            },
+        )
 
         return AudioChunk(
             audio=combined,
