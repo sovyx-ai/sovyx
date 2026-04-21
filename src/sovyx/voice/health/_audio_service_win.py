@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 
 from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.observability.logging import get_logger
+from sovyx.observability.tasks import spawn
 from sovyx.voice.health._audio_service import (
     AudioServiceMonitor,
     NoopAudioServiceMonitor,
@@ -99,7 +100,7 @@ class WindowsAudioServiceMonitor:
         if self._started:
             return
         self._started = True
-        self._task = asyncio.create_task(self._run(on_event))
+        self._task = spawn(self._run(on_event), name="voice-audio-service-monitor-win")
         logger.info(
             "voice_audio_service_monitor_started",
             platform="win32",
