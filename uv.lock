@@ -3158,6 +3158,7 @@ dependencies = [
 dev = [
     { name = "bandit" },
     { name = "hypothesis" },
+    { name = "jsonschema" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -3202,6 +3203,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.100" },
     { name = "icalendar", specifier = ">=5.0" },
+    { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4.21" },
     { name = "kokoro-onnx", marker = "extra == 'voice'", specifier = ">=0.4" },
     { name = "moonshine-voice", marker = "extra == 'voice'", specifier = ">=0.0.50" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.9" },

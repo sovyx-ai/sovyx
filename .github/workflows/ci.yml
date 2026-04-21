@@ -134,3 +134,17 @@ jobs:
         with:
           name: coverage-report
           path: coverage.xml
+
+  schema-gate:
+    name: Log Schema Gate
+    runs-on: sovyx-4core
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      - name: Install dependencies
+        run: uv sync --dev --frozen
+      - name: Validate log schema catalog
+        run: uv run python scripts/check_log_schemas.py
