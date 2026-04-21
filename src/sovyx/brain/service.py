@@ -17,6 +17,7 @@ from sovyx.engine.events import ConceptContradicted, ConceptCreated, EpisodeEnco
 from sovyx.engine.types import ConceptCategory
 from sovyx.observability.logging import get_logger
 from sovyx.observability.metrics import get_metrics
+from sovyx.observability.tasks import spawn
 from sovyx.observability.tracing import get_tracer
 
 if TYPE_CHECKING:
@@ -550,7 +551,7 @@ class BrainService:
         (replacing ``ensure_future`` which loses references).
         """
         for cid in concept_ids:
-            task = asyncio.create_task(self._safe_record_access(cid))
+            task = spawn(self._safe_record_access(cid), name="brain-record-access")
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
 
