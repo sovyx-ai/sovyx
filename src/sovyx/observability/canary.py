@@ -19,8 +19,12 @@ The emitter is intentionally minimal:
   gap in the sequence (or a tick_id reset to 1 mid-stream) is a
   bootstrap event the operator script can correlate with the daemon's
   start time.
-* Cancellation drops a closing ``meta.canary.final=True`` so a graceful
-  shutdown leaves a "we stopped on purpose" anchor in the stream.
+* ``meta.lag_ms`` carries the scheduler drift between expected vs
+  actual fire. Sustained non-zero drift is the early warning that the
+  event loop is starving long before a tick goes missing entirely.
+* On cancellation the loop emits one final tick before propagating
+  ``CancelledError`` so a graceful shutdown leaves an explicit anchor
+  rather than an unobserved silence.
 
 The loop is registered with :func:`sovyx.observability.tasks.spawn` from
 :mod:`sovyx.engine.bootstrap` (Phase 11+ Task 11+.10) so it appears in
@@ -31,7 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
@@ -55,6 +59,8 @@ class CanaryEmitter:
         self._config = observability_config
         self._stop_event = asyncio.Event()
         self._tick_id = 0
+        self._interval_s: float = 0.0
+        self._next_tick_at: datetime | None = None
 
     def stop(self) -> None:
         """Signal the loop to exit on its next wake-up."""
@@ -65,44 +71,61 @@ class CanaryEmitter:
 
         Wakes every ``canary_interval_seconds``, increments the
         monotonic ``tick_id``, and emits ``meta.canary.tick``. Honours
-        cancellation by emitting a final tick with ``meta.canary.final=True``
-        so the stream ends with an explicit shutdown marker rather than
-        an unobserved silence.
+        cancellation by emitting a final tick so the stream ends with
+        an explicit shutdown marker rather than an unobserved silence.
         """
-        interval = max(1, int(self._config.tuning.canary_interval_seconds))
-        logger.info("meta.canary.started", **{"meta.canary.interval_seconds": interval})
+        self._interval_s = max(1.0, float(self._config.tuning.canary_interval_seconds))
+        logger.info(
+            "meta.canary.started",
+            **{"meta.canary.interval_seconds": int(self._interval_s)},
+        )
         try:
             while not self._stop_event.is_set():
-                self._emit_tick(final=False)
+                self._emit_tick()
                 with contextlib.suppress(TimeoutError):
-                    await asyncio.wait_for(self._stop_event.wait(), timeout=interval)
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=self._interval_s)
         except asyncio.CancelledError:
-            self._emit_tick(final=True)
+            self._emit_tick()
             raise
         else:
-            self._emit_tick(final=True)
+            self._emit_tick()
         finally:
             logger.info("meta.canary.stopped")
 
-    def _emit_tick(self, *, final: bool) -> None:
+    def _emit_tick(self) -> None:
         """Emit a single ``meta.canary.tick`` record with the next ``tick_id``.
 
-        The wall-clock timestamp is formatted in ISO 8601 UTC with
-        microsecond precision so the operator script can compute
-        emit→ingest latency without parsing the envelope ``timestamp``
-        (which carries the same instant via the structlog processor —
-        the duplication is intentional, in case the envelope's
-        timestamp is rewritten by a downstream forwarder).
+        Schema fields (per ``log_schema/meta.canary.tick.json``):
+
+        * ``meta.tick_id``  — monotonic counter starting at 1.
+        * ``meta.timestamp`` — ISO-8601 UTC wall clock at emit. Duplicates
+          the envelope ``timestamp`` on purpose: a downstream forwarder
+          may rewrite the envelope timestamp during ingest, but the
+          operator script needs the *original* emit instant to compute
+          end-to-end latency.
+        * ``meta.lag_ms`` — drift between when the tick was scheduled
+          (previous tick + ``interval``) and when it actually fired.
+          ``0.0`` on the very first tick (no scheduled-at to compare).
+          Sustained non-zero lag is the early warning that the event
+          loop is starving — long before a tick goes missing entirely.
         """
+        now = datetime.now(UTC)
+        if self._next_tick_at is None:
+            lag_ms = 0.0
+        else:
+            lag_ms = max(0.0, (now - self._next_tick_at).total_seconds() * 1000.0)
+
         self._tick_id += 1
         logger.info(
             "meta.canary.tick",
             **{
-                "meta.canary.tick_id": self._tick_id,
-                "meta.canary.timestamp": datetime.now(UTC).isoformat(),
-                "meta.canary.final": final,
+                "meta.tick_id": self._tick_id,
+                "meta.timestamp": now.isoformat(),
+                "meta.lag_ms": lag_ms,
             },
         )
+
+        self._next_tick_at = now + timedelta(seconds=self._interval_s)
 
 
 __all__ = ["CanaryEmitter"]
