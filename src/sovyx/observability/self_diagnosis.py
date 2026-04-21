@@ -343,31 +343,43 @@ async def _emit_models(registry: ServiceRegistry) -> None:
 
 
 async def _emit_config_provenance(config: EngineConfig) -> None:
-    """Emit a coarse config snapshot.
+    """Emit per-field config provenance via :mod:`config_provenance`.
 
-    Per-field provenance (env vs. yaml vs. default) lands in Phase 9
-    (Task 9.2) once :mod:`sovyx.engine.config_provenance` is wired. This
-    helper currently emits the resolved field-set as a flat snapshot so
-    operators have *something* in the cascade until the provenance
-    tracker arrives.
+    Walks the resolved :class:`EngineConfig` and emits one
+    ``config.value.resolved`` event per field carrying the value, its
+    source (default / env_var / file / cli / dashboard), and the
+    canonical env-var key the value would respond to. A trailing
+    ``startup.config.provenance`` summarizes the field count and how
+    many were overridden, so the dashboard saga has a single anchor
+    line that introduces the per-field stream.
     """
-    snapshot = config.model_dump(mode="json", exclude_none=False)
+    from sovyx.engine.config_provenance import (  # noqa: PLC0415 — boot-time scope.
+        ConfigSource,
+        track_provenance,
+    )
+
+    provenance = track_provenance(config)
+    overridden = 0
+    for field_path, prov in provenance.items():
+        if prov.source != ConfigSource.DEFAULT:
+            overridden += 1
+        logger.info(
+            "config.value.resolved",
+            **{
+                "cfg.field": field_path,
+                "cfg.source": str(prov.source),
+                "cfg.value": prov.resolved_value,
+                "cfg.env_key": prov.env_key,
+            },
+        )
+
     logger.info(
         "startup.config.provenance",
         **{
-            "cfg.snapshot": snapshot,
-            "cfg.field_count": _count_fields(snapshot),
+            "cfg.field_count": len(provenance),
+            "cfg.overridden_count": overridden,
         },
     )
-
-
-def _count_fields(value: Any) -> int:  # noqa: ANN401 — recursive shape walk.
-    """Return the leaf count for a nested dict/list snapshot."""
-    if isinstance(value, dict):
-        return sum(_count_fields(v) for v in value.values())
-    if isinstance(value, list):
-        return sum(_count_fields(v) for v in value)
-    return 1
 
 
 async def _emit_health_snapshot(registry: ServiceRegistry) -> None:
