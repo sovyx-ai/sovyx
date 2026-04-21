@@ -94,6 +94,14 @@ class SandboxedFsAccess:
         """
         # Reject absolute paths
         if os.path.isabs(relative):
+            logger.warning(
+                "plugin.fs.violation",
+                **{
+                    "plugin_id": self._plugin,
+                    "plugin.fs.path_relative": relative,
+                    "plugin.fs.violation_kind": "absolute_path",
+                },
+            )
             raise PermissionDeniedError(self._plugin, f"Absolute paths not allowed: {relative}")
 
         # Join and resolve
@@ -103,6 +111,14 @@ class SandboxedFsAccess:
         try:
             target.relative_to(self._data_dir)
         except ValueError:
+            logger.warning(
+                "plugin.fs.violation",
+                **{
+                    "plugin_id": self._plugin,
+                    "plugin.fs.path_relative": relative,
+                    "plugin.fs.violation_kind": "path_escape",
+                },
+            )
             raise PermissionDeniedError(
                 self._plugin,
                 f"Path escapes sandbox: {relative} → {target}",
@@ -154,7 +170,17 @@ class SandboxedFsAccess:
         if not path.exists():
             raise FileNotFoundError(f"File not found: {relative}")
 
-        return path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8")
+        logger.info(
+            "plugin.fs.read",
+            **{
+                "plugin_id": self._plugin,
+                "plugin.fs.path_relative": relative,
+                "plugin.fs.bytes": len(text.encode("utf-8")),
+                "plugin.fs.binary": False,
+            },
+        )
+        return text
 
     async def read_bytes(self, relative: str) -> bytes:
         """Read a binary file from plugin data_dir.
@@ -175,7 +201,17 @@ class SandboxedFsAccess:
         if not path.exists():
             raise FileNotFoundError(f"File not found: {relative}")
 
-        return path.read_bytes()
+        data = path.read_bytes()
+        logger.info(
+            "plugin.fs.read",
+            **{
+                "plugin_id": self._plugin,
+                "plugin.fs.path_relative": relative,
+                "plugin.fs.bytes": len(data),
+                "plugin.fs.binary": True,
+            },
+        )
+        return data
 
     async def write(self, relative: str, content: str) -> None:
         """Write a text file to plugin data_dir.
@@ -209,17 +245,49 @@ class SandboxedFsAccess:
     async def _write_data(self, relative: str, data: bytes) -> None:
         """Internal write with size checks."""
         if len(data) > self._max_file:
+            logger.warning(
+                "plugin.fs.violation",
+                **{
+                    "plugin_id": self._plugin,
+                    "plugin.fs.path_relative": relative,
+                    "plugin.fs.violation_kind": "file_too_large",
+                    "plugin.fs.bytes": len(data),
+                    "plugin.fs.limit_bytes": self._max_file,
+                },
+            )
             raise PermissionDeniedError(
                 self._plugin,
                 f"File too large: {len(data)} > {self._max_file} bytes",
             )
 
-        self._check_storage_budget(len(data))
+        try:
+            self._check_storage_budget(len(data))
+        except PermissionDeniedError:
+            logger.warning(
+                "plugin.fs.violation",
+                **{
+                    "plugin_id": self._plugin,
+                    "plugin.fs.path_relative": relative,
+                    "plugin.fs.violation_kind": "storage_budget",
+                    "plugin.fs.bytes": len(data),
+                    "plugin.fs.total_limit_bytes": self._max_total,
+                },
+            )
+            raise
         path = self._safe_path(relative)
 
         # Create parent dirs if needed
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
+        logger.info(
+            "plugin.fs.write",
+            **{
+                "plugin_id": self._plugin,
+                "plugin.fs.path_relative": relative,
+                "plugin.fs.bytes": len(data),
+                "plugin.fs.mode": "binary",
+            },
+        )
 
     async def delete(self, relative: str) -> bool:
         """Delete a file from plugin data_dir.
@@ -286,7 +354,16 @@ class SandboxedFsAccess:
         if not path.is_dir():
             raise FileNotFoundError(f"Not a directory: {relative}")
 
-        return sorted(entry.name for entry in path.iterdir())
+        entries = sorted(entry.name for entry in path.iterdir())
+        logger.info(
+            "plugin.fs.list_dir",
+            **{
+                "plugin_id": self._plugin,
+                "plugin.fs.path_relative": relative,
+                "plugin.fs.entry_count": len(entries),
+            },
+        )
+        return entries
 
     @property
     def storage_used(self) -> int:
