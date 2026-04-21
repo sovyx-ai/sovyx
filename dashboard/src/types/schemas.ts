@@ -159,18 +159,127 @@ export const BrainSearchResponseSchema = z.object({
 
 // ── Logs ──
 
+/**
+ * Log entry schema — mirrors the structlog JSON envelope plus the
+ * Phase 1/2 observability fields (saga_id, cause_id, span_id, …) and
+ * the Phase 8.4 diagnosis hints. All envelope fields are optional so
+ * the dashboard tolerates pre-Phase-1 deployments. ``catchall`` keeps
+ * unknown keys without failing validation.
+ */
 export const LogEntrySchema = z
   .object({
     timestamp: z.string(),
     level: LogLevelSchema,
     logger: z.string(),
     event: z.string(),
+    schema_version: z.string().optional(),
+    process_id: z.number().int().optional(),
+    pid: z.number().int().optional(),
+    host: z.string().optional(),
+    sovyx_version: z.string().optional(),
+    saga_id: z.string().nullable().optional(),
+    cause_id: z.string().nullable().optional(),
+    span_id: z.string().nullable().optional(),
+    sequence_no: z.number().int().optional(),
+    diagnosis_hint: z.string().optional(),
+    diagnosis_severity: z.string().optional(),
+    diagnosis_runbook_url: z.string().optional(),
+    snippet: z.string().nullable().optional(),
+    content: z.string().optional(),
+    message: z.string().optional(),
   })
   .catchall(z.unknown());
 
 export const LogsResponseSchema = z.object({
   entries: z.array(LogEntrySchema),
 });
+
+/** GET /api/logs/search response — FTS5-backed query. */
+export const LogSearchResponseSchema = z.object({
+  query: z.string(),
+  filters: z.object({
+    level: z.string().nullable(),
+    logger: z.string().nullable(),
+    saga_id: z.string().nullable(),
+    since: z.string().nullable(),
+    until: z.string().nullable(),
+  }),
+  count: z.number().int(),
+  entries: z.array(LogEntrySchema),
+});
+
+/** GET /api/logs/sagas/{saga_id} response. */
+export const SagaResponseSchema = z.object({
+  saga_id: z.string(),
+  entries: z.array(LogEntrySchema),
+});
+
+/** Causality DAG node — used as the base shape for edges as well. */
+export const CausalityNodeSchema = z.object({
+  id: z.string().nullable(),
+  event: z.string().nullable(),
+  logger: z.string().nullable(),
+  timestamp: z.string(),
+  level: z.string(),
+});
+
+/** Causality edge — extends node with cause_id parent pointer. */
+export const CausalityEdgeSchema = CausalityNodeSchema.extend({
+  cause_id: z.string().nullable(),
+});
+
+/** GET /api/logs/sagas/{saga_id}/causality response. */
+export const CausalityGraphResponseSchema = z.object({
+  saga_id: z.string(),
+  edges: z.array(CausalityEdgeSchema),
+});
+
+/** One step of the localized narrative (P8.3). */
+export const NarrativeStepSchema = z.object({
+  timestamp: z.string(),
+  text: z.string(),
+  event: z.string().optional(),
+});
+
+/** GET /api/logs/sagas/{saga_id}/story response. */
+export const NarrativeResponseSchema = z.object({
+  saga_id: z.string(),
+  story: z.string(),
+  locale: z.enum(["pt-BR", "en-US"]),
+  steps: z.array(NarrativeStepSchema).optional(),
+});
+
+/** Anomaly event names emitted by AnomalyDetector (Phase 8.1). */
+export const AnomalyKindSchema = z.enum([
+  "anomaly.first_occurrence",
+  "anomaly.latency_spike",
+  "anomaly.error_rate_spike",
+  "anomaly.memory_growth",
+]);
+
+/** GET /api/logs/anomalies response. */
+export const AnomaliesResponseSchema = z.object({
+  count: z.number().int(),
+  entries: z.array(LogEntrySchema),
+});
+
+/** WS /api/logs/stream — batch frame. */
+export const LogStreamBatchSchema = z.object({
+  type: z.literal("batch"),
+  entries: z.array(LogEntrySchema),
+});
+
+/** WS /api/logs/stream — error frame. */
+export const LogStreamErrorSchema = z.object({
+  type: z.literal("error"),
+  message: z.string(),
+});
+
+/** Discriminated union over all log-stream frames. */
+export const LogStreamFrameSchema = z.discriminatedUnion("type", [
+  LogStreamBatchSchema,
+  LogStreamErrorSchema,
+]);
 
 // ── Activity Timeline ──
 

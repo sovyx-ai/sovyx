@@ -154,15 +154,127 @@ export interface BrainSearchResponse {
  * - level: DEBUG/INFO/WARNING/ERROR/CRITICAL
  * - logger: dotted module path (e.g. "sovyx.brain.service")
  * - timestamp: ISO datetime
- * - Plus arbitrary extra key-value pairs
+ * - Plus the observability envelope (saga_id, cause_id, span_id, …)
+ *   added by `EnvelopeProcessor` when the observability subsystem is
+ *   active, plus arbitrary extra key-value pairs.
+ *
+ * All envelope fields are OPTIONAL because the dashboard must keep
+ * working against pre-Phase-1 deployments that do not emit them.
  */
 export interface LogEntry {
   timestamp: string;
   level: "DEBUG" | "INFO" | "WARNING" | "ERROR" | "CRITICAL";
-  logger: string; // module path (structlog uses "logger", not "module")
-  event: string; // message text (structlog uses "event", not "message")
-  [key: string]: unknown; // extra structured fields
+  logger: string;
+  event: string;
+  // ── Envelope (Phase 1 / Phase 2) ──
+  schema_version?: string;
+  process_id?: number;
+  pid?: number;
+  host?: string;
+  sovyx_version?: string;
+  saga_id?: string | null;
+  cause_id?: string | null;
+  span_id?: string | null;
+  sequence_no?: number;
+  // ── Diagnosis (Phase 8.4) ──
+  diagnosis_hint?: string;
+  diagnosis_severity?: string;
+  diagnosis_runbook_url?: string;
+  // ── FTS5 search annotations (Phase 10) ──
+  snippet?: string | null;
+  content?: string;
+  message?: string;
+  [key: string]: unknown;
 }
+
+/** GET /api/logs/search response. */
+export interface LogSearchResponse {
+  query: string;
+  filters: {
+    level: string | null;
+    logger: string | null;
+    saga_id: string | null;
+    since: string | null;
+    until: string | null;
+  };
+  count: number;
+  entries: LogEntry[];
+}
+
+// ── Sagas ──
+
+/**
+ * GET /api/logs/sagas/{saga_id} response — every entry tagged with the saga,
+ * sorted chronologically.
+ */
+export interface SagaResponse {
+  saga_id: string;
+  entries: LogEntry[];
+}
+
+/** One node in the saga causality graph. */
+export interface CausalityNode {
+  id: string | null;
+  event: string | null;
+  logger: string | null;
+  timestamp: string;
+  level: string;
+}
+
+/** One edge in the saga causality graph (parent pointer). */
+export interface CausalityEdge extends CausalityNode {
+  cause_id: string | null;
+}
+
+/** GET /api/logs/sagas/{saga_id}/causality response. */
+export interface CausalityGraphResponse {
+  saga_id: string;
+  edges: CausalityEdge[];
+}
+
+/** One step in the rendered narrative — pre-formatted localized text. */
+export interface NarrativeStep {
+  timestamp: string;
+  text: string;
+  event?: string;
+}
+
+/** GET /api/logs/sagas/{saga_id}/story response (P8.3). */
+export interface NarrativeResponse {
+  saga_id: string;
+  story: string;
+  locale: "pt-BR" | "en-US";
+  steps?: NarrativeStep[];
+}
+
+// ── Anomalies ──
+
+/** Anomaly types emitted by the AnomalyDetector (Phase 8.1). */
+export type AnomalyKind =
+  | "anomaly.first_occurrence"
+  | "anomaly.latency_spike"
+  | "anomaly.error_rate_spike"
+  | "anomaly.memory_growth";
+
+/** GET /api/logs/anomalies response — recent anomaly.* events. */
+export interface AnomaliesResponse {
+  count: number;
+  entries: LogEntry[];
+}
+
+/** WS /api/logs/stream batch frame. */
+export interface LogStreamBatch {
+  type: "batch";
+  entries: LogEntry[];
+}
+
+/** WS /api/logs/stream error frame. */
+export interface LogStreamError {
+  type: "error";
+  message: string;
+}
+
+export type LogStreamFrame = LogStreamBatch | LogStreamError;
 
 // ── WebSocket Events ──
 
