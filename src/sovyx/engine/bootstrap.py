@@ -142,6 +142,27 @@ async def bootstrap(
             data_dir=engine_config.data_dir,
         )
 
+        # 0.5. ResourceSnapshotter + HotPathSnapshotter (Phase 6 Task 6.8).
+        # Both share the ``async_queue`` feature flag — the same flag that
+        # enables the non-blocking log handler, since both produce periodic
+        # INFO records that must not stall the event loop. Spawned via
+        # ``spawn()`` so the tasks appear in the TaskRegistry; their
+        # ``except asyncio.CancelledError`` branch emits a final snapshot
+        # before the loop tears down, so no entry in ``_closables`` is
+        # needed — process-level cancellation already drains them cleanly.
+        if engine_config.observability.features.async_queue:
+            from sovyx.observability.counters import HotPathSnapshotter
+            from sovyx.observability.resources import ResourceSnapshotter
+            from sovyx.observability.tasks import spawn
+
+            resource_snapshotter = ResourceSnapshotter(engine_config.observability)
+            spawn(resource_snapshotter.run(), name="resource-snapshotter")
+            registry.register_instance(ResourceSnapshotter, resource_snapshotter)
+
+            hotpath_snapshotter = HotPathSnapshotter(engine_config.observability)
+            spawn(hotpath_snapshotter.run(), name="hotpath-snapshotter")
+            registry.register_instance(HotPathSnapshotter, hotpath_snapshotter)
+
         # 1. EventBus
         event_bus = EventBus(
             saga_propagation_enabled=engine_config.observability.features.saga_propagation,
