@@ -846,6 +846,19 @@ class VoicePipeline:
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
+            logger.error(
+                "audio.apo.bypassed",
+                **{
+                    "voice.verdict": "failure",
+                    "voice.mind_id": self._config.mind_id,
+                    "voice.attempts": 0,
+                    "voice.strategies": [],
+                    "voice.outcomes": [],
+                    "voice.error": str(exc),
+                    "voice.error_type": type(exc).__name__,
+                    "voice.voice_clarity_active": self._voice_clarity_active,
+                },
+            )
             self._coordinator_invocation_pending = False
             return
         finally:
@@ -875,6 +888,22 @@ class VoicePipeline:
                 threshold=self._auto_bypass_threshold,
                 action="capture_integrity_coordinator",
             )
+            logger.warning(
+                "audio.apo.bypassed",
+                **{
+                    "voice.verdict": "success",
+                    "voice.mind_id": self._config.mind_id,
+                    "voice.strategy_name": applied_healthy.strategy_name,
+                    "voice.attempt_index": applied_healthy.attempt_index,
+                    "voice.attempts": len(outcomes),
+                    "voice.strategies": [o.strategy_name for o in outcomes],
+                    "voice.outcomes": [o.verdict.value for o in outcomes],
+                    "voice.reason": applied_healthy.detail,
+                    "voice.voice_clarity_active": self._voice_clarity_active,
+                    "voice.consecutive_deaf_warnings": self._deaf_warnings_consecutive,
+                    "voice.threshold": self._auto_bypass_threshold,
+                },
+            )
             return
 
         # Every strategy either failed to apply or applied-but-still-dead.
@@ -900,6 +929,26 @@ class VoicePipeline:
                 "enhancements in the OS sound settings or switch capture "
                 "device."
             ),
+        )
+        # "partial" verdict: at least one strategy applied cleanly but
+        # the post-apply re-probe still classified the signal as dead;
+        # otherwise every strategy either failed-to-apply or was not
+        # applicable, which is a flat failure.
+        any_applied = any(
+            o.verdict is BypassVerdict.APPLIED_STILL_DEAD for o in outcomes
+        )
+        bypass_verdict = "partial" if any_applied else "failure"
+        logger.error(
+            "audio.apo.bypassed",
+            **{
+                "voice.verdict": bypass_verdict,
+                "voice.mind_id": self._config.mind_id,
+                "voice.attempts": len(outcomes),
+                "voice.strategies": [o.strategy_name for o in outcomes],
+                "voice.outcomes": [o.verdict.value for o in outcomes],
+                "voice.voice_clarity_active": self._voice_clarity_active,
+                "voice.quarantined": True,
+            },
         )
 
     async def _emit(self, event: object) -> None:

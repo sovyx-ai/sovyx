@@ -583,6 +583,44 @@ def _emit_capture_apo_detection(*, resolved_name: str | None) -> None:
             resolved_name=resolved_name,
         )
 
+    # Dotted-namespace telemetry (IMPL-OBSERVABILITY-001 §3.6). The
+    # scan event always fires once per pipeline boot — even with zero
+    # endpoints — so the dashboard knows the detector ran. Per-endpoint
+    # detail is folded into voice.endpoints so the timeline can render
+    # the full chain without a follow-up RPC.
+    voice_clarity_global = any(rep.voice_clarity_active for rep in reports)
+    logger.info(
+        "audio.apo.scan",
+        **{
+            "voice.endpoint_count": len(reports),
+            "voice.active_endpoint_id": active.endpoint_id if active else None,
+            "voice.active_endpoint_name": active.endpoint_name if active else None,
+            "voice.resolved_name": resolved_name,
+            "voice.voice_clarity_global": voice_clarity_global,
+            "voice.endpoints": [
+                {
+                    "endpoint_id": rep.endpoint_id,
+                    "endpoint_name": rep.endpoint_name,
+                    "device_interface_name": rep.device_interface_name,
+                    "enumerator": rep.enumerator,
+                    "fx_binding_count": rep.fx_binding_count,
+                    "known_apos": list(rep.known_apos),
+                    "raw_clsids": list(rep.raw_clsids),
+                    "voice_clarity_active": rep.voice_clarity_active,
+                }
+                for rep in reports
+            ],
+        },
+    )
+    logger.info(
+        "audio.apo.voice_clarity_detected",
+        **{
+            "voice.detected": voice_clarity_global,
+            "voice.active_endpoint_detected": bool(active and active.voice_clarity_active),
+            "voice.active_endpoint_name": active.endpoint_name if active else None,
+        },
+    )
+
 
 # ── Component factories (sync — called via to_thread) ────────────────
 
