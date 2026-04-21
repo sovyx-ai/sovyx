@@ -873,6 +873,23 @@ class TestResourceMonitoring:
 # ── Event Emission (TASK-433) ───────────────────────────────────────
 
 
+async def _drain_plugin_events() -> None:
+    """Wait for all in-flight ``plugin-event-emit`` tasks to settle.
+
+    Plugin lifecycle events are emitted via ``spawn()`` (fire-and-forget)
+    for saga/cause contextvar propagation — the call returns before the
+    event reaches the bus. Tests that assert on ``mock_bus.emit`` must
+    drain these background tasks first, otherwise the AsyncMock hasn't
+    recorded the call yet.
+    """
+    loop = asyncio.get_running_loop()
+    for _ in range(10):
+        pending = [t for t in asyncio.all_tasks(loop) if t.get_name() == "plugin-event-emit"]
+        if not pending:
+            return
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
 class TestEventEmission:
     """Tests for PluginToolExecuted and PluginAutoDisabled events."""
 
@@ -883,6 +900,7 @@ class TestEventEmission:
         mgr = PluginManager(event_bus=mock_bus, data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(FakeWeatherPlugin())
         await mgr.execute("weather.get_weather", {"city": "NYC"})
+        await _drain_plugin_events()
 
         # Find PluginToolExecuted in emit calls
         from sovyx.plugins.events import PluginToolExecuted
@@ -906,6 +924,7 @@ class TestEventEmission:
         mgr = PluginManager(event_bus=mock_bus, data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(ErrorToolPlugin())
         await mgr.execute("error-tool.broken", {})
+        await _drain_plugin_events()
 
         from sovyx.plugins.events import PluginToolExecuted
 
@@ -927,6 +946,7 @@ class TestEventEmission:
 
         for _ in range(5):
             await mgr.execute("error-tool.broken", {})
+        await _drain_plugin_events()
 
         from sovyx.plugins.events import PluginAutoDisabled
 
@@ -946,6 +966,7 @@ class TestEventEmission:
         mock_bus = AsyncMock()
         mgr = PluginManager(event_bus=mock_bus, data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(FakeWeatherPlugin())
+        await _drain_plugin_events()
 
         from sovyx.plugins.events import PluginLoaded
 
@@ -965,9 +986,11 @@ class TestEventEmission:
         mock_bus = AsyncMock()
         mgr = PluginManager(event_bus=mock_bus, data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(FakeWeatherPlugin())
+        await _drain_plugin_events()
         mock_bus.emit.reset_mock()
 
         await mgr.unload("weather")
+        await _drain_plugin_events()
 
         from sovyx.plugins.events import PluginUnloaded
 
@@ -995,6 +1018,7 @@ class TestEventEmission:
         mgr = PluginManager(event_bus=mock_bus, data_dir=tmp_path, discover_entry_points=False)
         await mgr.load_single(SlowPlugin())
         await mgr.execute("slow.slow_op", {}, timeout=0.01)
+        await _drain_plugin_events()
 
         from sovyx.plugins.events import PluginToolExecuted
 

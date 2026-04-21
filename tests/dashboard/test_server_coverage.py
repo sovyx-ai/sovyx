@@ -515,7 +515,13 @@ class TestDashboardServerLifecycle:
         from sovyx.engine.config import APIConfig
 
         config = APIConfig()
+        # Empty registry mock: is_registered=False everywhere so the
+        # dashboard uses fallback paths for HealthRegistry / MetricsReader /
+        # EngineConfig / PersonalityEngine. resolve() stays AsyncMock so
+        # any code path that slips through still returns an awaitable.
         mock_registry = MagicMock()
+        mock_registry.is_registered = MagicMock(return_value=False)
+        mock_registry.resolve = AsyncMock()
         server = DashboardServer(config=config, registry=mock_registry)
 
         mock_uvi_server = MagicMock()

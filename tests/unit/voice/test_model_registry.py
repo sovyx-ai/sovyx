@@ -355,7 +355,11 @@ class TestOtelAttemptCounter:
 
         try:
             with (
-                patch.object(registry.model_download_attempts, "add", new=spy_add),
+                patch.object(
+                    registry.model_download_attempts._instrument,
+                    "add",
+                    new=spy_add,
+                ),
                 patch.object(ModelDownloader, "_download", staticmethod(fake_download)),
                 patch.object(ModelDownloader, "_verify_checksum", return_value=True),
             ):
@@ -391,7 +395,11 @@ class TestOtelAttemptCounter:
 
         try:
             with (
-                patch.object(registry.model_download_attempts, "add", new=spy_add),
+                patch.object(
+                    registry.model_download_attempts._instrument,
+                    "add",
+                    new=spy_add,
+                ),
                 patch.object(ModelDownloader, "_download", staticmethod(fake_download)),
                 patch.object(ModelDownloader, "_verify_checksum", return_value=True),
             ):

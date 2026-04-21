@@ -294,36 +294,36 @@ async def open_input_stream(
                     )
                 continue
 
-            # The winning attempt is whatever ``_try_open_input`` just appended —
-            # its ``auto_convert`` / ``exclusive`` fields are the *effective*
-            # values (accounting for WasapiSettings being dropped on older
-            # PortAudio builds), not the combo's nominal request.
-            winning = attempts[-1]
-            info = StreamInfo(
-                host_api=entry.host_api_name,
-                device_index=entry.index,
-                sample_rate=combo.sample_rate,
-                channels=combo.channels,
-                dtype=dtype,
-                auto_convert_used=winning.auto_convert,
-                exclusive_used=winning.exclusive,
-                fallback_depth=depth if len(attempts) == 1 else len(attempts) - 1,
-                attempts=tuple(attempts),
-            )
-            logger.info(
-                "voice_stream_opened",
-                host_api=info.host_api,
-                device_index=info.device_index,
-                sample_rate=info.sample_rate,
-                channels=info.channels,
-                auto_convert=info.auto_convert_used,
-                exclusive=info.exclusive_used,
-                fallback_depth=info.fallback_depth,
-                total_attempts=len(attempts),
-            )
-            _emit_exclusive_mode_events(info, attempts)
-            _record_attempts(attempts, kind="input")
-            return stream, info
+        # The winning attempt is whatever ``_try_open_input`` just appended —
+        # its ``auto_convert`` / ``exclusive`` fields are the *effective*
+        # values (accounting for WasapiSettings being dropped on older
+        # PortAudio builds), not the combo's nominal request.
+        winning = attempts[-1]
+        info = StreamInfo(
+            host_api=entry.host_api_name,
+            device_index=entry.index,
+            sample_rate=combo.sample_rate,
+            channels=combo.channels,
+            dtype=dtype,
+            auto_convert_used=winning.auto_convert,
+            exclusive_used=winning.exclusive,
+            fallback_depth=depth if len(attempts) == 1 else len(attempts) - 1,
+            attempts=tuple(attempts),
+        )
+        logger.info(
+            "voice_stream_opened",
+            host_api=info.host_api,
+            device_index=info.device_index,
+            sample_rate=info.sample_rate,
+            channels=info.channels,
+            auto_convert=info.auto_convert_used,
+            exclusive=info.exclusive_used,
+            fallback_depth=info.fallback_depth,
+            total_attempts=len(attempts),
+        )
+        _emit_exclusive_mode_events(info, attempts)
+        _record_attempts(attempts, kind="input")
+        return stream, info
 
     last = attempts[-1] if attempts else None
     code = last.error_code if last and last.error_code else ErrorCode.INTERNAL_ERROR
