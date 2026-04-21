@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 
 from sovyx.engine.events import ConsolidationCompleted
 from sovyx.observability.logging import get_logger
+from sovyx.observability.tasks import spawn
 
 if TYPE_CHECKING:
     from sovyx.brain.concept_repo import ConceptRepository
@@ -520,7 +521,7 @@ class ConsolidationScheduler:
             return
 
         self._running = True
-        self._task = asyncio.create_task(self._loop(mind_id))
+        self._task = spawn(self._loop(mind_id), name="consolidation-scheduler")
         logger.info(
             "consolidation_scheduler_started",
             mind_id=str(mind_id),
