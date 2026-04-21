@@ -266,6 +266,86 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return response
 
 
+# ── HTTP Telemetry Middleware ──
+
+
+class HttpTelemetryMiddleware(BaseHTTPMiddleware):
+    """Emit ``net.http.request`` / ``net.http.response`` for every HTTP call.
+
+    Lives outside RequestIdMiddleware so the response side can read
+    ``request.state.request_id`` (populated by the inner middleware) and
+    correlate the pair. Body bytes are read from ``Content-Length`` —
+    consuming the request body here would break downstream handlers, so
+    chunked uploads with no length header report ``-1``.
+    """
+
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: RequestResponseEndpoint,
+    ) -> Response:
+        """Time the request and emit the request/response pair."""
+        method = request.method
+        path = request.url.path
+        client_repr = "unknown"
+        if request.client is not None:
+            client_repr = f"{request.client.host}:{request.client.port}"
+        try:
+            request_bytes = int(request.headers.get("content-length", "0"))
+        except ValueError:
+            request_bytes = -1
+
+        logger.debug(
+            "net.http.request",
+            **{
+                "net.method": method,
+                "net.path": path,
+                "net.client": client_repr,
+                "net.request_bytes": request_bytes,
+            },
+        )
+
+        started_at = time.monotonic()
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            latency_ms = int((time.monotonic() - started_at) * 1000)
+            logger.warning(
+                "net.http.response",
+                **{
+                    "net.method": method,
+                    "net.path": path,
+                    "net.client": client_repr,
+                    "net.status_code": 500,
+                    "net.response_bytes": -1,
+                    "net.latency_ms": latency_ms,
+                    "net.failed": True,
+                    "net.error_type": type(exc).__name__,
+                },
+            )
+            raise
+
+        latency_ms = int((time.monotonic() - started_at) * 1000)
+        try:
+            response_bytes = int(response.headers.get("content-length", "-1"))
+        except ValueError:
+            response_bytes = -1
+
+        log_method = logger.warning if response.status_code >= 500 else logger.info  # noqa: PLR2004
+        log_method(
+            "net.http.response",
+            **{
+                "net.method": method,
+                "net.path": path,
+                "net.client": client_repr,
+                "net.status_code": response.status_code,
+                "net.response_bytes": response_bytes,
+                "net.latency_ms": latency_ms,
+            },
+        )
+        return response
+
+
 # ── App Factory ──
 
 
@@ -316,6 +396,12 @@ def create_app(config: APIConfig | None = None, *, token: str | None = None) -> 
     from sovyx.dashboard.rate_limit import RateLimitMiddleware
 
     app.add_middleware(RateLimitMiddleware)
+
+    # HTTP telemetry — added LAST so it is the OUTERMOST middleware.
+    # Starlette wraps in reverse-add order: the outermost layer sees the
+    # full request/response cycle including time spent in CORS, RequestId,
+    # SecurityHeaders, and RateLimit, giving accurate end-to-end latency.
+    app.add_middleware(HttpTelemetryMiddleware)
 
     # Shared state
     ws_manager = ConnectionManager()
