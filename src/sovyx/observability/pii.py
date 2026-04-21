@@ -137,6 +137,8 @@ _PII_FIELD_CLASSES: Final[dict[str, str]] = {
     "transcript": "transcripts",
     "transcripts": "transcripts",
     "stt_text": "transcripts",
+    "voice.transcript": "transcripts",
+    "voice.text": "transcripts",
     "prompt": "prompts",
     "prompts": "prompts",
     "system_prompt": "prompts",

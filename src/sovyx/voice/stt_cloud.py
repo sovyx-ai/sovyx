@@ -273,6 +273,18 @@ class CloudSTT(STTEngine):
         self._ensure_ready()
         self._state = STTState.TRANSCRIBING
 
+        audio_ms = int(len(audio) * 1000 / sample_rate) if sample_rate > 0 else 0
+        logger.info(
+            "voice.stt.request",
+            **{
+                "voice.model": _WHISPER_MODEL,
+                "voice.provider": "openai_whisper_cloud",
+                "voice.language": self._config.language,
+                "voice.audio_ms": audio_ms,
+                "voice.sample_rate": sample_rate,
+            },
+        )
+
         try:
             start = time.monotonic()
 
@@ -296,8 +308,23 @@ class CloudSTT(STTEngine):
                 audio_duration_s=round(duration_s, 1),
             )
 
+            stripped = text.strip()
+            logger.info(
+                "voice.stt.response",
+                **{
+                    "voice.model": _WHISPER_MODEL,
+                    "voice.provider": "openai_whisper_cloud",
+                    "voice.language": self._config.language,
+                    "voice.audio_ms": audio_ms,
+                    "voice.latency_ms": round(elapsed_ms, 1),
+                    "voice.confidence": 0.95,
+                    "voice.text_chars": len(stripped),
+                    "voice.transcript": stripped,
+                },
+            )
+
             return TranscriptionResult(
-                text=text.strip(),
+                text=stripped,
                 language=self._config.language,
                 confidence=0.95,  # Cloud Whisper is high-confidence
                 duration_ms=elapsed_ms,

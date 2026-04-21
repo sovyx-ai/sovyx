@@ -284,6 +284,18 @@ class MoonshineSTT(STTEngine):
         self._ensure_ready()
         self._state = STTState.TRANSCRIBING
 
+        audio_ms = int(len(audio) * 1000 / sample_rate) if sample_rate > 0 else 0
+        logger.info(
+            "voice.stt.request",
+            **{
+                "voice.model": self._config.model_size,
+                "voice.provider": "moonshine",
+                "voice.language": self._config.language,
+                "voice.audio_ms": audio_ms,
+                "voice.sample_rate": sample_rate,
+            },
+        )
+
         try:
             start = time.monotonic()
             text = await self._transcribe_oneshot(audio, sample_rate)
@@ -295,8 +307,23 @@ class MoonshineSTT(STTEngine):
                 duration_ms=round(elapsed_ms, 1),
             )
 
+            stripped = text.strip()
+            logger.info(
+                "voice.stt.response",
+                **{
+                    "voice.model": self._config.model_size,
+                    "voice.provider": "moonshine",
+                    "voice.language": self._config.language,
+                    "voice.audio_ms": audio_ms,
+                    "voice.latency_ms": round(elapsed_ms, 1),
+                    "voice.confidence": 0.9,
+                    "voice.text_chars": len(stripped),
+                    "voice.transcript": stripped,
+                },
+            )
+
             return TranscriptionResult(
-                text=text.strip(),
+                text=stripped,
                 language=self._config.language,
                 confidence=0.9,
                 duration_ms=elapsed_ms,
