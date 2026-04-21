@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
+from sovyx.observability.tasks import spawn
 from sovyx.voice.model_registry import (
     VOICE_MODELS,
     VoiceModelInfo,
@@ -374,7 +375,11 @@ def start_download(
         return entry
 
     coro = _run_download(entry, base, to_fetch)
-    entry.task = (task_factory or asyncio.create_task)(coro)
+    entry.task = (
+        task_factory(coro)
+        if task_factory
+        else spawn(coro, name=f"voice-model-download:{task_id}")
+    )
     logger.info(
         "voice_model_download_start",
         task_id=task_id,
