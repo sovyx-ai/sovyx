@@ -32,6 +32,8 @@ from __future__ import annotations
 import itertools
 import os
 import platform
+import sys
+import uuid
 from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING, Any
 
@@ -50,6 +52,21 @@ if TYPE_CHECKING:
 # the EventBus dispatch currently in flight, cause = the parent of
 # the current event in a handler chain).
 _CONTEXTUAL_IDS: tuple[str, ...] = ("saga_id", "span_id", "event_id", "cause_id")
+
+
+SERVICE_NAMESPACE: str = "sovyx"
+"""OTel ``service.namespace`` — fixed per project so the same trace
+backend can host multiple Sovyx-derivative deployments without label
+collisions with other tenants. Imported by ``observability.otel`` so
+spans and logs share the exact same string."""
+
+
+SERVICE_INSTANCE_ID: str = str(uuid.uuid4())
+"""Per-boot UUIDv4 — survives a daemon restart in the same container
+(``process_id`` resets, ``service.instance.id`` rotates). Used to
+correlate spans, metrics, and logs emitted by a single boot session
+even when the OS recycles the PID. Computed once at module import so
+every emitter (envelope + OTel Resource) sees the same value."""
 
 
 def _resolve_sovyx_version() -> str:
@@ -93,11 +110,25 @@ class EnvelopeProcessor:
     __slots__ = ("_cached", "_counter")
 
     def __init__(self) -> None:
+        # Envelope (legacy contract) fields stay verbatim — schema
+        # ``ENVELOPE_FIELDS`` and the dashboard query layer key off
+        # ``host`` / ``process_id`` / ``sovyx_version``. Renaming
+        # would break the wire format. The OTel-semconv-aligned
+        # twins below ride alongside as ``extra="allow"`` payload
+        # keys, so log forwarders that consume semconv get the
+        # canonical names without extra translation.
         self._cached: dict[str, Any] = {
             "schema_version": SCHEMA_VERSION,
             "process_id": os.getpid(),
             "host": platform.node() or "unknown",
             "sovyx_version": _resolve_sovyx_version(),
+            # OTel semconv 1.27+ resource attributes (mirrored on
+            # every log so log/span join is trivial in the backend).
+            "service.namespace": SERVICE_NAMESPACE,
+            "service.instance.id": SERVICE_INSTANCE_ID,
+            "host.arch": platform.machine() or "unknown",
+            "process.runtime.name": sys.implementation.name,
+            "process.runtime.version": platform.python_version(),
         }
         self._counter: Iterator[int] = itertools.count()
 
@@ -135,4 +166,4 @@ class EnvelopeProcessor:
         return event_dict
 
 
-__all__ = ["EnvelopeProcessor"]
+__all__ = ["SERVICE_INSTANCE_ID", "SERVICE_NAMESPACE", "EnvelopeProcessor"]

@@ -35,10 +35,13 @@ from __future__ import annotations
 
 import asyncio
 import os
+import platform
 import socket
+import sys
 from typing import TYPE_CHECKING, Any
 
 from sovyx import __version__
+from sovyx.observability.envelope import SERVICE_INSTANCE_ID, SERVICE_NAMESPACE
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
@@ -63,22 +66,43 @@ def _build_resource_attributes(
 ) -> dict[str, str | int]:
     """Build the OTel ``Resource`` attribute dict.
 
-    Follows the OTel semantic conventions:
+    Aligned with OpenTelemetry semantic conventions 1.27+ (resource):
+
         * ``service.name`` — fixed ``"sovyx"`` so trace queries can group
           regardless of host.
+        * ``service.namespace`` — fixed ``"sovyx"`` from
+          :data:`SERVICE_NAMESPACE`; lets multi-tenant collectors filter
+          our spans without a label collision with other projects.
         * ``service.version`` — engine version from ``importlib.metadata``.
+        * ``service.instance.id`` — per-boot UUIDv4 from
+          :data:`SERVICE_INSTANCE_ID`. The same value rides on every
+          log envelope, so spans and logs from one boot can be joined
+          even when the OS recycles the PID.
         * ``deployment.environment`` — operator-supplied (dev / staging /
           prod) so the same trace backend can hold multiple environments.
         * ``host.name`` — ``socket.gethostname()``; used for fleet scoping.
+        * ``host.arch`` — ``platform.machine()`` (``x86_64`` /
+          ``aarch64`` / ``arm64``); useful when triaging arch-specific
+          regressions in ONNX or Piper inference.
         * ``process.pid`` — the daemon PID, useful for correlating a trace
           to a specific process restart in the logs.
+        * ``process.runtime.name`` — ``sys.implementation.name``
+          (``cpython`` / ``pypy`` / etc.).
+        * ``process.runtime.version`` — ``platform.python_version()``;
+          surfaces the interpreter ABI so backends can stratify
+          trace-derived metrics across Python upgrades.
     """
     return {
         "service.name": "sovyx",
+        "service.namespace": SERVICE_NAMESPACE,
         "service.version": __version__,
+        "service.instance.id": SERVICE_INSTANCE_ID,
         "deployment.environment": deployment_environment,
         "host.name": socket.gethostname(),
+        "host.arch": platform.machine() or "unknown",
         "process.pid": os.getpid(),
+        "process.runtime.name": sys.implementation.name,
+        "process.runtime.version": platform.python_version(),
     }
 
 
