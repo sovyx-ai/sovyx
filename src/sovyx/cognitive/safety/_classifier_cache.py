@@ -8,6 +8,8 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from sovyx.observability.cache_telemetry import CacheTelemetry
+
 if TYPE_CHECKING:
     from sovyx.cognitive.safety._classifier_types import SafetyVerdict
 
@@ -49,6 +51,7 @@ class ClassificationCache:
         self._ttl_sec = ttl_sec
         self._hits = 0
         self._misses = 0
+        self._telemetry = CacheTelemetry(name="safety.classifier")
 
     @staticmethod
     def _key(text: str) -> str:
@@ -61,15 +64,24 @@ class ClassificationCache:
         entry = self._cache.get(key)
         if entry is None:
             self._misses += 1
+            self._telemetry.record_miss(size=len(self._cache), maxsize=self._max_size)
             return None
         if time.monotonic() > entry.expires_at:
-            # Expired — remove and miss
+            # Expired — remove and miss. Counted as eviction (TTL) so
+            # operators can tell apart capacity churn from TTL churn.
             del self._cache[key]
             self._misses += 1
+            self._telemetry.record_evict(
+                size=len(self._cache),
+                maxsize=self._max_size,
+                reason="ttl",
+            )
+            self._telemetry.record_miss(size=len(self._cache), maxsize=self._max_size)
             return None
         # Hit — move to end (most recently used)
         self._cache.move_to_end(key)
         self._hits += 1
+        self._telemetry.record_hit(size=len(self._cache), maxsize=self._max_size)
         return entry.verdict
 
     def put(self, text: str, verdict: SafetyVerdict) -> None:
@@ -80,9 +92,14 @@ class ClassificationCache:
             expires_at=time.monotonic() + self._ttl_sec,
         )
         self._cache.move_to_end(key)
-        # Evict oldest if over capacity
+        # Evict oldest if over capacity.
         while len(self._cache) > self._max_size:
             self._cache.popitem(last=False)
+            self._telemetry.record_evict(
+                size=len(self._cache),
+                maxsize=self._max_size,
+                reason="lru",
+            )
 
     @property
     def hit_rate(self) -> float:

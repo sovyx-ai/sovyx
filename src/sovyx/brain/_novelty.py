@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, MutableMapping
 from typing import TYPE_CHECKING
 
+from sovyx.observability.cache_telemetry import CacheTelemetry
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -33,6 +34,13 @@ COLD_START_NOVELTY = 0.70
 # Calibrated similarity -> novelty mapping.
 _HIGH_SIM = 0.85
 _LOW_SIM = 0.30
+
+
+# Module-level telemetry: BrainService owns the centroid cache instance,
+# but every BrainService in the process funnels through this lookup
+# function — one shared CacheTelemetry gives an accurate aggregate
+# hit-ratio without leaking cache instances into the public surface.
+_CENTROID_CACHE_TELEMETRY = CacheTelemetry(name="brain.centroid")
 
 
 async def compute_novelty_embedding(
@@ -63,6 +71,7 @@ async def compute_novelty_embedding(
     centroid = centroid_cache.get(cache_key)
 
     if centroid is None:
+        _CENTROID_CACHE_TELEMETRY.record_miss(size=len(centroid_cache), maxsize=None)
         category_embeddings = await concepts.get_embeddings_by_category(
             mind_id,
             category,
@@ -73,6 +82,8 @@ async def compute_novelty_embedding(
 
         centroid = await embedding.compute_category_centroid(category_embeddings)
         centroid_cache[cache_key] = centroid
+    else:
+        _CENTROID_CACHE_TELEMETRY.record_hit(size=len(centroid_cache), maxsize=None)
 
     similarity = EmbeddingEngine.cosine_similarity(new_embedding, centroid)
 
