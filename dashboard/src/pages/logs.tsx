@@ -50,6 +50,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CausalityGraph } from "@/components/dashboard/causality-graph";
 import { LogRow } from "@/components/dashboard/log-row";
+import { NarrativePanel } from "@/components/dashboard/narrative-panel";
 import { SagaTimeline } from "@/components/dashboard/saga-timeline";
 import { EmptyState } from "@/components/empty-state";
 import { LogsEmptyAnimation } from "@/components/empty-state-animations";
@@ -791,14 +792,7 @@ function NarrativeTab({ sagaId }: { sagaId: string | null }) {
   if (!narrative) {
     return <p className="text-xs text-[var(--svx-color-text-secondary)]">{t("tabs.narrativeEmpty")}</p>;
   }
-  // Placeholder: rich rendering lands in P10.7 (NarrativePanel.tsx).
-  return (
-    <article className="prose prose-invert max-w-none text-xs">
-      <pre className="whitespace-pre-wrap text-xs text-[var(--svx-color-text-primary)]">
-        {narrative.story}
-      </pre>
-    </article>
-  );
+  return <NarrativePanel narrative={narrative} />;
 }
 
 // ── Re-export so test files can reach the inline helpers if needed ──

@@ -36,5 +36,12 @@
     "causalityEmpty": "No causality edges recorded for this saga.",
     "sagaEmpty": "No entries indexed for this saga yet.",
     "narrativeEmpty": "No narrative could be rendered for this saga."
+  },
+  "narrative": {
+    "locale": "locale",
+    "mode": {
+      "compact": "Compact",
+      "expanded": "Expanded"
+    }
   }
 }

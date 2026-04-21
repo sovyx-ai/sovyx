@@ -1,5 +1,6 @@
 export { CausalityGraph } from "./causality-graph";
 export { CognitiveTimeline } from "./cognitive-timeline";
+export { NarrativePanel } from "./narrative-panel";
 export { SagaTimeline } from "./saga-timeline";
 export { StatCard, StatCardSkeleton } from "./stat-card";
 export { HealthGrid } from "./health-grid";
