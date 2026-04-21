@@ -62,6 +62,61 @@ def query_logs(
         return []
 
 
+def query_saga(
+    log_file: Path | None,
+    saga_id: str,
+    *,
+    limit: int = 10000,
+) -> list[dict[str, Any]]:
+    """Return every log entry whose ``saga_id`` matches *saga_id*.
+
+    File-scan implementation (Phase 2 stop-gap). The FTS5 sidecar
+    index in Phase 10 will replace the linear scan with an indexed
+    lookup, but the response shape is identical so dashboard callers
+    don't need to change.
+
+    Reads the last ~8 MB of the log tail (covers an active saga's
+    entire lifetime under normal voice/cognitive volume). Older sagas
+    that fall outside the tail window will be reachable through FTS5
+    once Phase 10 lands.
+
+    Returns entries sorted chronologically (oldest first) so the
+    saga reads as a story top-to-bottom.
+
+    Args:
+        log_file: Path to JSON log file. Returns [] if None or missing.
+        saga_id: Exact saga identifier to filter on.
+        limit: Maximum entries to return (cap to bound memory usage).
+
+    Returns:
+        List of log entries belonging to the saga, oldest first.
+    """
+    if log_file is None or not log_file.exists() or not saga_id:
+        return []
+
+    try:
+        # Read a wider tail than /api/logs because a single saga can
+        # legitimately produce hundreds of entries across many minutes.
+        lines = _tail_lines(log_file, max_lines=limit * 4, max_bytes=8 * 1024 * 1024)
+    except Exception:  # noqa: BLE001
+        logger.debug("query_saga_failed_read", log_file=str(log_file))
+        return []
+
+    matches: list[dict[str, Any]] = []
+    for line in lines:
+        entry = _parse_line(line)
+        if entry is None:
+            continue
+        if entry.get("saga_id") != saga_id:
+            continue
+        matches.append(entry)
+        if len(matches) >= limit:
+            break
+
+    matches.sort(key=lambda e: str(e.get("timestamp", "")))
+    return matches
+
+
 def _read_and_filter(
     log_file: Path,
     *,
@@ -100,11 +155,22 @@ def _read_and_filter(
     return list(results)
 
 
-def _tail_lines(path: Path, max_lines: int = 1000) -> list[str]:
+_DEFAULT_TAIL_BYTES = 1024 * 1024  # 1 MB
+
+
+def _tail_lines(
+    path: Path,
+    max_lines: int = 1000,
+    *,
+    max_bytes: int = _DEFAULT_TAIL_BYTES,
+) -> list[str]:
     """Read last N lines from a file efficiently using seek-from-end.
 
-    For files up to 1MB, reads the whole file (fast enough).
-    For larger files, seeks to the last ~1MB and reads from there.
+    For files up to ``max_bytes``, reads the whole file (fast enough).
+    For larger files, seeks to the last ``max_bytes`` and reads from
+    there. Default ``max_bytes`` of 1 MB matches the original
+    ``/api/logs`` behaviour; saga queries override to 8 MB so a long
+    saga's entire trail fits in the scanned window.
 
     Rotation resilience:
         ``RotatingFileHandler`` may rotate the file (rename to ``.1``)
@@ -112,7 +178,7 @@ def _tail_lines(path: Path, max_lines: int = 1000) -> list[str]:
         file vanishes or is empty (just rotated), we retry once after
         a short sleep and then fall back to the ``.1`` backup.
     """
-    lines = _try_read_file(path, max_lines)
+    lines = _try_read_file(path, max_lines, max_bytes=max_bytes)
     if lines is not None:
         return lines
 
@@ -121,17 +187,22 @@ def _tail_lines(path: Path, max_lines: int = 1000) -> list[str]:
     import time
 
     time.sleep(0.1)
-    lines = _try_read_file(path, max_lines)
+    lines = _try_read_file(path, max_lines, max_bytes=max_bytes)
     if lines is not None:
         return lines
 
     # Still empty/missing — try the .1 backup (most recent rotated file).
     backup = path.parent / f"{path.name}.1"
-    lines = _try_read_file(backup, max_lines)
+    lines = _try_read_file(backup, max_lines, max_bytes=max_bytes)
     return lines if lines is not None else []
 
 
-def _try_read_file(path: Path, max_lines: int) -> list[str] | None:
+def _try_read_file(
+    path: Path,
+    max_lines: int,
+    *,
+    max_bytes: int = _DEFAULT_TAIL_BYTES,
+) -> list[str] | None:
     """Attempt to read tail lines from a single file.
 
     Returns:
@@ -142,10 +213,9 @@ def _try_read_file(path: Path, max_lines: int) -> list[str] | None:
         if file_size == 0:
             return None
 
-        max_read = 1024 * 1024  # 1MB
         with path.open("rb") as f:
-            if file_size > max_read:
-                f.seek(-max_read, 2)
+            if file_size > max_bytes:
+                f.seek(-max_bytes, 2)
                 f.readline()  # Skip partial first line
             data = f.read()
 
