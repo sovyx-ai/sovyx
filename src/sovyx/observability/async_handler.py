@@ -56,12 +56,17 @@ class AsyncQueueHandler(logging.handlers.QueueHandler):
         the default re-raises :class:`queue.Full`, which would
         propagate up through the structlog chain into application
         code. We swallow + count instead so a noisy moment can't
-        crash the caller.
+        crash the caller. Each drop also feeds the process-global
+        60-second windowed counter that powers the
+        ``/api/observability/health`` ``dropped_60s`` field (§27.2).
         """
         try:
             self._queue.put_nowait(record)
         except queue.Full:
             self._dropped += 1
+            from sovyx.observability._health_state import record_drop  # noqa: PLC0415
+
+            record_drop()
 
     def prepare(self, record: logging.LogRecord) -> logging.LogRecord:
         """Hand the unformatted record to the writer thread.
@@ -146,4 +151,26 @@ class BackgroundLogWriter:
             handler.flush()
 
 
-__all__ = ["AsyncQueueHandler", "BackgroundLogWriter"]
+class TrackingRotatingFileHandler(logging.handlers.RotatingFileHandler):
+    """``RotatingFileHandler`` that feeds the §27.2 handler-error counter.
+
+    The base class' :meth:`handleError` writes the traceback to
+    ``sys.stderr`` and returns silently — fine for noise containment,
+    useless for monitoring. We layer a count-then-delegate so the
+    health endpoint's ``handler_errors_60s`` field reflects writes
+    that failed to land on disk (e.g., transient ENOSPC, missing
+    parent directory, broken pipe to the rotation target).
+    """
+
+    def handleError(self, record: logging.LogRecord) -> None:  # noqa: N802 — stdlib API.
+        from sovyx.observability._health_state import record_handler_error  # noqa: PLC0415
+
+        record_handler_error()
+        super().handleError(record)
+
+
+__all__ = [
+    "AsyncQueueHandler",
+    "BackgroundLogWriter",
+    "TrackingRotatingFileHandler",
+]

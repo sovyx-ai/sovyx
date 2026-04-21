@@ -42,7 +42,10 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import math
+import threading
 import time
+from collections import deque
 from typing import TYPE_CHECKING, Any
 
 from sovyx.observability.logging import get_logger
@@ -52,6 +55,13 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 logger = get_logger(__name__)
+
+# Lag-sample retention for the §27.2 ``fts5_lag_ms_p99`` field. 4 096
+# samples at 200 inserts/batch covers ~20 batches' worth of recent
+# history — enough to reflect the current write window without
+# letting the deque grow unbounded on busy daemons. Samples are
+# captured per-row at flush time (``time.time() - row.ts_unix``).
+_FTS_LAG_SAMPLES_MAX: int = 4_096
 
 # ── Schema ──────────────────────────────────────────────────────────
 
@@ -198,6 +208,14 @@ class FTSIndexer:
         self._retention_task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
         self._search_lock = asyncio.Lock()  # aiosqlite is serialized; share fairly.
+        # Per-row lag samples (ms) used by :meth:`lag_ms_p99` to feed
+        # the ``/api/observability/health`` ``fts5_lag_ms_p99`` field
+        # (§27.2). Captured at flush time as ``time.time() - row.ts_unix``;
+        # the deque is bounded so a long-lived daemon's memory is
+        # constant. Threading lock — the property is a sync read but
+        # samples are appended from the asyncio tail loop's executor.
+        self._lag_samples_ms: deque[float] = deque(maxlen=_FTS_LAG_SAMPLES_MAX)
+        self._lag_samples_lock = threading.Lock()
 
     # ── Lifecycle ──────────────────────────────────────────────────
 
@@ -371,6 +389,45 @@ class FTSIndexer:
                 )
                 with contextlib.suppress(Exception):
                     await self._conn.rollback()
+                # Skip lag accounting on failed flushes — those rows
+                # didn't actually land in the index, so reporting their
+                # "lag" would understate true freshness.
+                return
+        self._record_lag_samples(batch)
+
+    def _record_lag_samples(self, batch: list[dict[str, Any]]) -> None:
+        """Append (now - row.ts_unix) ms for every row in a successful batch."""
+        now = time.time()
+        with self._lag_samples_lock:
+            for row in batch:
+                ts_unix = row.get("ts_unix")
+                if not isinstance(ts_unix, (int, float)) or ts_unix <= 0:
+                    continue
+                lag_ms = max(0.0, (now - float(ts_unix)) * 1000.0)
+                self._lag_samples_ms.append(lag_ms)
+
+    def lag_ms_p99(self) -> float | None:
+        """Return the 99th-percentile FTS-index lag (ms), or ``None`` when no samples.
+
+        Returned value powers the §27.2 ``fts5_lag_ms_p99`` field. The
+        sample window is bounded by :data:`_FTS_LAG_SAMPLES_MAX`, so
+        a daemon that has been quiet for hours will report based on
+        whichever batches landed most recently — operators get an
+        accurate "current" picture, not a lifetime average dragged
+        down by historic stragglers.
+
+        Computed via nearest-rank percentile (no interpolation): for
+        ``n`` samples, p99 is the value at index ``ceil(0.99 * n) - 1``
+        of the sorted list. Linear in window size; with 4 096 samples
+        the sort is sub-millisecond on commodity hardware so cost is
+        amortized across a polling interval ≥1 s.
+        """
+        with self._lag_samples_lock:
+            if not self._lag_samples_ms:
+                return None
+            samples = sorted(self._lag_samples_ms)
+        rank = max(1, math.ceil(0.99 * len(samples)))
+        return round(samples[rank - 1], 3)
 
     async def _retention_loop(self) -> None:
         """Hourly pruner — delete rows older than ``retention_days``."""

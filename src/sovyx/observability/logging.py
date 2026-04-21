@@ -320,6 +320,7 @@ def _setup_logging_locked(
     from sovyx.observability.async_handler import (  # noqa: PLC0415
         AsyncQueueHandler,
         BackgroundLogWriter,
+        TrackingRotatingFileHandler,
     )
     from sovyx.observability.envelope import EnvelopeProcessor  # noqa: PLC0415
     from sovyx.observability.failure_dictionary import ErrorEnricher  # noqa: PLC0415
@@ -460,7 +461,12 @@ def _setup_logging_locked(
                 encoding="utf-8",
             )
         else:
-            file_handler = logging.handlers.RotatingFileHandler(
+            # TrackingRotatingFileHandler subclass forwards handleError
+            # into the §27.2 handler-error counter so disk-write failures
+            # (ENOSPC, broken parent dir, transient EIO) surface on the
+            # /api/observability/health ``handler_errors_60s`` field
+            # instead of vanishing into stderr.
+            file_handler = TrackingRotatingFileHandler(
                 config.log_file,
                 maxBytes=max_bytes,
                 backupCount=backup_count,

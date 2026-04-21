@@ -123,21 +123,23 @@ class HashChainHandler(logging.handlers.RotatingFileHandler):
                 return
 
             canonical = _canonical(parsed)
-            chain_hash = hashlib.sha256(
-                self._prev_hash.encode("ascii") + canonical
-            ).hexdigest()
+            chain_hash = hashlib.sha256(self._prev_hash.encode("ascii") + canonical).hexdigest()
 
             parsed["prev_hash"] = self._prev_hash
             parsed["chain_hash"] = chain_hash
             parsed["chain_id"] = self._chain_id
 
             line = json.dumps(parsed, ensure_ascii=False)
-            stream = self.stream
-            stream.write(line + self.terminator)
+            if self.stream is None:
+                self.stream = self._open()
+            self.stream.write(line + self.terminator)
             self.flush()
 
             self._prev_hash = chain_hash
         except Exception:  # noqa: BLE001 — handler errors must not raise.
+            from sovyx.observability._health_state import record_handler_error  # noqa: PLC0415
+
+            record_handler_error()
             self.handleError(record)
 
     def doRollover(self) -> None:
@@ -206,9 +208,7 @@ def verify_chain(path: Path) -> tuple[bool, int]:
                 return (False, idx)
 
             canonical = _canonical(parsed)
-            expected = hashlib.sha256(
-                prev_hash.encode("ascii") + canonical
-            ).hexdigest()
+            expected = hashlib.sha256(prev_hash.encode("ascii") + canonical).hexdigest()
 
             if expected != stored_chain_hash:
                 return (False, idx)

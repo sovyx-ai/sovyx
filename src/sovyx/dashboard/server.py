@@ -469,6 +469,9 @@ def create_app(config: APIConfig | None = None, *, token: str | None = None) -> 
         logs as logs_routes,
     )
     from sovyx.dashboard.routes import (
+        observability as observability_routes,
+    )
+    from sovyx.dashboard.routes import (
         onboarding as onboarding_routes,
     )
     from sovyx.dashboard.routes import (
@@ -528,6 +531,7 @@ def create_app(config: APIConfig | None = None, *, token: str | None = None) -> 
     app.include_router(telemetry_routes.router)
     app.include_router(setup_routes.router)
     app.include_router(onboarding_routes.router)
+    app.include_router(observability_routes.router)
     app.include_router(ws_routes.router)
 
     # ── Static Files + SPA Fallback ──
