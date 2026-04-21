@@ -50,6 +50,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CausalityGraph } from "@/components/dashboard/causality-graph";
 import { LogRow } from "@/components/dashboard/log-row";
+import { SagaTimeline } from "@/components/dashboard/saga-timeline";
 import { EmptyState } from "@/components/empty-state";
 import { LogsEmptyAnimation } from "@/components/empty-state-animations";
 import { useDashboardStore } from "@/stores/dashboard";
@@ -757,20 +758,7 @@ function SagaTab({ sagaId }: { sagaId: string | null }) {
   if (!saga || saga.entries.length === 0) {
     return <p className="text-xs text-[var(--svx-color-text-secondary)]">{t("tabs.sagaEmpty")}</p>;
   }
-  // Placeholder: timeline rendering lands in P10.6 (SagaTimeline.tsx).
-  return (
-    <ul className="space-y-1">
-      {saga.entries.map((entry, idx) => (
-        <li
-          key={entryKey(entry, idx)}
-          className="font-code rounded-[var(--svx-radius-sm)] bg-[var(--svx-color-bg-elevated)] p-2 text-[10px]"
-        >
-          <div className="text-[var(--svx-color-text-tertiary)]">{entry.timestamp}</div>
-          <div className="text-[var(--svx-color-text-primary)]">{entry.event}</div>
-        </li>
-      ))}
-    </ul>
-  );
+  return <SagaTimeline entries={saga.entries} />;
 }
 
 function NarrativeTab({ sagaId }: { sagaId: string | null }) {
