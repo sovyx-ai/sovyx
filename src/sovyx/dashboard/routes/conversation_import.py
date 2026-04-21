@@ -17,7 +17,6 @@ Auth: both endpoints require the dashboard Bearer token via the shared
 
 from __future__ import annotations
 
-import asyncio
 import shutil
 import tempfile
 from pathlib import Path
@@ -29,6 +28,7 @@ from starlette.status import HTTP_202_ACCEPTED, HTTP_503_SERVICE_UNAVAILABLE
 
 from sovyx.dashboard.routes._deps import verify_token
 from sovyx.observability.logging import get_logger
+from sovyx.observability.tasks import spawn
 from sovyx.upgrade.conv_import import (
     ChatGPTImporter,
     ClaudeImporter,
@@ -224,7 +224,7 @@ async def start_conversation_import(request: Request) -> JSONResponse:
     await tracker.update(job_id, conversations_total=total, state=ImportState.PENDING)
 
     # Fire off the background task. The task owns tmp_dir cleanup.
-    asyncio.create_task(
+    spawn(
         _run_import_job(
             job_id=job_id,
             platform=platform,
@@ -233,6 +233,7 @@ async def start_conversation_import(request: Request) -> JSONResponse:
             registry=registry,
             tracker=tracker,
         ),
+        name="conversation-import-job",
     )
 
     logger.info(
