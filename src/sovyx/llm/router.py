@@ -210,6 +210,7 @@ class LLMRouter:
             p.name: CircuitBreaker(
                 failure_threshold=circuit_breaker_failures,
                 recovery_timeout_s=circuit_breaker_reset_s,
+                provider=p.name,
             )
             for p in providers
         }
@@ -227,6 +228,7 @@ class LLMRouter:
             self._circuits[provider.name] = CircuitBreaker(
                 failure_threshold=3,
                 recovery_timeout_s=60,
+                provider=provider.name,
             )
         logger.info("llm_provider_hot_registered", provider=provider.name)
 
