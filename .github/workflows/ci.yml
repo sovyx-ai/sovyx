@@ -204,3 +204,18 @@ jobs:
         run: uv sync --dev --frozen
       - name: Refuse high-cardinality metric labels (§22.7)
         run: uv run python scripts/check_metrics_cardinality.py
+
+  perf-regression-gate:
+    name: Perf Regression Gate
+    runs-on: sovyx-4core
+    needs: metrics-cardinality-gate
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+      - name: Install dependencies
+        run: uv sync --dev --frozen
+      - name: Assert observability hot-path latency within budget (§23)
+        run: uv run python scripts/check_perf_regression.py --iterations 20000
