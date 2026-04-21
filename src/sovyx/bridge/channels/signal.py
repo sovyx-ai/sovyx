@@ -26,6 +26,7 @@ from sovyx.bridge.protocol import InboundMessage
 from sovyx.engine.errors import ChannelConnectionError
 from sovyx.engine.types import ChannelType
 from sovyx.observability.logging import get_logger
+from sovyx.observability.tasks import spawn
 
 if TYPE_CHECKING:
     from sovyx.bridge.manager import BridgeManager
@@ -141,7 +142,7 @@ class SignalChannel:
             return
         self._session = aiohttp.ClientSession()
         self._running = True
-        self._poll_task = asyncio.create_task(self._poll_loop())
+        self._poll_task = spawn(self._poll_loop(), name="signal-poll-loop")
         logger.info("signal_channel_started", phone=self._phone)
 
     async def stop(self) -> None:
