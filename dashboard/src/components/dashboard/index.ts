@@ -6,6 +6,7 @@ export { StatCard, StatCardSkeleton } from "./stat-card";
 export { HealthGrid } from "./health-grid";
 export { ActivityFeed } from "./activity-feed";
 export { LogRow } from "./log-row";
+export { LogFilterBar } from "./log-filter-bar";
 export { MetricChart } from "./metric-chart";
 export { LetterAvatar, MindAvatar } from "./letter-avatar";
 export { ChannelBadge } from "./channel-badge";

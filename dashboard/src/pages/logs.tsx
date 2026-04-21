@@ -31,7 +31,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type ChangeEvent,
 } from "react";
 import { useTranslation } from "react-i18next";
 import { useSearchParams } from "react-router";
@@ -41,14 +40,18 @@ import {
   ArrowDownIcon,
   FileTextIcon,
   RefreshCwIcon,
-  SearchIcon,
   TrashIcon,
   XIcon,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { CausalityGraph } from "@/components/dashboard/causality-graph";
+import {
+  LogFilterBar,
+  LOG_LEVELS,
+  type LogFilterState,
+  type LogLevel,
+} from "@/components/dashboard/log-filter-bar";
 import { LogRow } from "@/components/dashboard/log-row";
 import { NarrativePanel } from "@/components/dashboard/narrative-panel";
 import { SagaTimeline } from "@/components/dashboard/saga-timeline";
@@ -79,29 +82,13 @@ import {
 
 // ── Constants ──────────────────────────────────────────────────────
 
-const LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] as const;
-type LogLevel = (typeof LOG_LEVELS)[number];
-
 const PAGE_SIZE = 500;
 const TAB_KEYS = ["detail", "causality", "saga", "narrative"] as const;
 type TabKey = (typeof TAB_KEYS)[number];
 
-const LEVEL_COLORS: Record<LogLevel, string> = {
-  DEBUG: "text-[var(--svx-color-text-tertiary)]",
-  INFO: "text-[var(--svx-color-success)]",
-  WARNING: "text-[var(--svx-color-warning)]",
-  ERROR: "text-[var(--svx-color-error)]",
-  CRITICAL: "text-[var(--svx-color-error)]",
-};
-
-interface FilterState {
-  q: string;
-  level: LogLevel | null;
-  logger: string;
-  saga_id: string;
-  since: string;
-  until: string;
-}
+// Filter state shape lives in <LogFilterBar/>; alias the type locally
+// so the rest of this module keeps reading naturally.
+type FilterState = LogFilterState;
 
 function readFilters(params: URLSearchParams): FilterState {
   const level = params.get("level");
@@ -357,6 +344,16 @@ export default function LogsPage() {
 
   const selectedSagaId = selectedEntry?.saga_id ?? null;
 
+  // Surface every distinct logger seen in the current result set so the
+  // filter bar can offer cheap autocomplete without an extra round-trip.
+  const knownLoggers = useMemo(() => {
+    const seen = new Set<string>();
+    for (const entry of entries) {
+      if (entry.logger) seen.add(entry.logger);
+    }
+    return Array.from(seen);
+  }, [entries]);
+
   // ── Render ───────────────────────────────────────────────────────
   return (
     <div className="flex h-[calc(100vh-6rem)] flex-col gap-3">
@@ -404,129 +401,12 @@ export default function LogsPage() {
       </header>
 
       <div className="flex flex-1 gap-3 overflow-hidden">
-        {/* ── Left pane: filters (will become LogFilterBar in P10.8) ── */}
-        <aside className="flex w-72 shrink-0 flex-col gap-3 overflow-y-auto rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)] p-3">
-          <div>
-            <label className="text-[10px] font-medium uppercase tracking-wider text-[var(--svx-color-text-tertiary)]">
-              {t("filters.search")}
-            </label>
-            <div className="relative mt-1">
-              <SearchIcon className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-[var(--svx-color-text-secondary)]" />
-              <Input
-                value={filters.q}
-                onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  updateFilters({ q: e.target.value })
-                }
-                placeholder={t("filters.searchPlaceholder")}
-                className="h-8 pl-7 text-xs"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="text-[10px] font-medium uppercase tracking-wider text-[var(--svx-color-text-tertiary)]">
-              {t("filters.level")}
-            </label>
-            <div className="mt-1 grid grid-cols-3 gap-1">
-              <button
-                type="button"
-                onClick={() => updateFilters({ level: null })}
-                className={cn(
-                  "rounded-[var(--svx-radius-sm)] border px-2 py-1 text-[10px] font-medium transition-colors",
-                  filters.level === null
-                    ? "border-[var(--svx-color-brand-primary)] bg-[var(--svx-color-bg-elevated)] text-[var(--svx-color-text-primary)]"
-                    : "border-[var(--svx-color-border-strong)] hover:bg-[var(--svx-color-bg-elevated)]",
-                )}
-              >
-                {t("filters.allLevels")}
-              </button>
-              {LOG_LEVELS.map((level) => (
-                <button
-                  key={level}
-                  type="button"
-                  onClick={() =>
-                    updateFilters({ level: filters.level === level ? null : level })
-                  }
-                  className={cn(
-                    "rounded-[var(--svx-radius-sm)] border px-2 py-1 text-[10px] font-medium transition-colors",
-                    filters.level === level
-                      ? "border-[var(--svx-color-brand-primary)] bg-[var(--svx-color-bg-elevated)]"
-                      : "border-[var(--svx-color-border-strong)] hover:bg-[var(--svx-color-bg-elevated)]",
-                    LEVEL_COLORS[level],
-                  )}
-                >
-                  {level}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <label className="text-[10px] font-medium uppercase tracking-wider text-[var(--svx-color-text-tertiary)]">
-              {t("filters.logger")}
-            </label>
-            <Input
-              value={filters.logger}
-              onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                updateFilters({ logger: e.target.value })
-              }
-              placeholder="sovyx.brain"
-              className="mt-1 h-8 text-xs"
-            />
-          </div>
-
-          <div>
-            <label className="text-[10px] font-medium uppercase tracking-wider text-[var(--svx-color-text-tertiary)]">
-              {t("filters.sagaId")}
-            </label>
-            <Input
-              value={filters.saga_id}
-              onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                updateFilters({ saga_id: e.target.value })
-              }
-              placeholder="saga-uuid"
-              className="mt-1 h-8 text-xs"
-            />
-          </div>
-
-          <div>
-            <label className="text-[10px] font-medium uppercase tracking-wider text-[var(--svx-color-text-tertiary)]">
-              {t("filters.since")}
-            </label>
-            <Input
-              type="datetime-local"
-              value={filters.since}
-              onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                updateFilters({ since: e.target.value })
-              }
-              className="mt-1 h-8 text-xs"
-            />
-          </div>
-
-          <div>
-            <label className="text-[10px] font-medium uppercase tracking-wider text-[var(--svx-color-text-tertiary)]">
-              {t("filters.until")}
-            </label>
-            <Input
-              type="datetime-local"
-              value={filters.until}
-              onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                updateFilters({ until: e.target.value })
-              }
-              className="mt-1 h-8 text-xs"
-            />
-          </div>
-
-          <Button
-            variant="ghost"
-            size="sm"
-            className="mt-auto h-7 gap-1.5 text-xs"
-            onClick={resetFilters}
-          >
-            <XIcon className="size-3.5" />
-            {t("filters.reset")}
-          </Button>
-        </aside>
+        <LogFilterBar
+          filters={filters}
+          onChange={updateFilters}
+          onReset={resetFilters}
+          knownLoggers={knownLoggers}
+        />
 
         {/* ── Center pane: virtualized log table ─── */}
         <section className="flex flex-1 flex-col overflow-hidden rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border-default)] bg-[var(--svx-color-bg-surface)]">

@@ -1,10 +1,17 @@
 /**
  * LogRow — Single expandable log entry for the virtual scroll list.
  *
- * Click to expand structured extra fields (JSON). Uses measureElement
- * from @tanstack/react-virtual for dynamic height remeasurement.
+ * Click to expand structured extra fields (JSON). Uses
+ * ``measureElement`` from @tanstack/react-virtual for dynamic-height
+ * remeasurement.
  *
- * Ref: Architecture §3.4, immersion-final §3
+ * Hot-path component — wrapped in ``React.memo`` (anti-pattern doc
+ * §Frontend) and structured so every prop is referentially stable
+ * across parent re-renders. The host page must hand a stable
+ * ``LogEntry`` reference (the dedup helper in logs.tsx already does
+ * this).
+ *
+ * Ref: Architecture §3.4, IMPL-OBSERVABILITY-001 §16 Task 10.8.
  */
 
 import {
@@ -15,6 +22,8 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
+import { ChevronRightIcon } from "lucide-react";
+
 import type { LogEntry } from "@/types/api";
 import { formatTimePrecise } from "@/lib/format";
 import { safeStringify } from "@/lib/safe-json";
@@ -24,12 +33,20 @@ interface LogRowProps {
   entry: LogEntry;
 }
 
-const LEVEL_STYLES: Record<LogEntry["level"], string> = {
+const LEVEL_TEXT: Record<LogEntry["level"], string> = {
   DEBUG: "text-[var(--svx-color-text-tertiary)]",
   INFO: "text-[var(--svx-color-success)]",
   WARNING: "text-[var(--svx-color-warning)]",
   ERROR: "text-[var(--svx-color-error)]",
   CRITICAL: "text-[var(--svx-color-error)] font-bold",
+};
+
+const LEVEL_BADGE: Record<LogEntry["level"], string> = {
+  DEBUG: "bg-[var(--svx-color-bg-elevated)] text-[var(--svx-color-text-tertiary)]",
+  INFO: "bg-[var(--svx-color-success-subtle)] text-[var(--svx-color-success)]",
+  WARNING: "bg-[var(--svx-color-warning-subtle)] text-[var(--svx-color-warning)]",
+  ERROR: "bg-[var(--svx-color-error-subtle)] text-[var(--svx-color-error)]",
+  CRITICAL: "bg-[var(--svx-color-error-subtle)] text-[var(--svx-color-error)] font-bold",
 };
 
 const LEVEL_BG: Record<LogEntry["level"], string> = {
@@ -39,8 +56,6 @@ const LEVEL_BG: Record<LogEntry["level"], string> = {
   ERROR: "bg-[var(--svx-color-error-subtle)]",
   CRITICAL: "bg-[var(--svx-color-error-subtle)]",
 };
-
-
 
 function LogRowImpl({ entry }: LogRowProps) {
   const [expanded, setExpanded] = useState(false);
@@ -69,7 +84,7 @@ function LogRowImpl({ entry }: LogRowProps) {
     [toggle],
   );
 
-  // Extract known fields; rest is extra structured data
+  // Extract known fields; rest is extra structured data.
   const { extraFields, hasExtra } = useMemo(() => {
     const { timestamp: _ts, level: _lv, logger: _lg, event: _ev, ...rest } = entry;
     return { extraFields: rest, hasExtra: Object.keys(rest).length > 0 };
@@ -92,18 +107,35 @@ function LogRowImpl({ entry }: LogRowProps) {
       className={cn(
         "font-code border-b border-[var(--svx-color-border-subtle)] px-3 py-1.5 text-xs transition-colors",
         LEVEL_BG[entry.level],
-        hasExtra && "cursor-pointer hover:bg-[var(--svx-color-bg-hover)] focus:outline-none focus:ring-2 focus:ring-[var(--svx-color-brand-primary)]/60",
+        hasExtra &&
+          "cursor-pointer hover:bg-[var(--svx-color-bg-hover)] focus:outline-none focus:ring-2 focus:ring-[var(--svx-color-brand-primary)]/60",
       )}
       {...interactiveProps}
     >
       <div className="flex items-baseline gap-3">
+        {hasExtra ? (
+          <ChevronRightIcon
+            className={cn(
+              "size-3 shrink-0 self-center text-[var(--svx-color-text-tertiary)] transition-transform",
+              expanded && "rotate-90",
+            )}
+            aria-hidden="true"
+          />
+        ) : (
+          <span className="size-3 shrink-0" aria-hidden="true" />
+        )}
         <span className="shrink-0 text-[var(--svx-color-text-tertiary)]">
           {formatTimePrecise(entry.timestamp)}
         </span>
-        <span className={cn("w-12 shrink-0 font-medium", LEVEL_STYLES[entry.level])}>
-          {entry.level.padEnd(5)}
+        <span
+          className={cn(
+            "shrink-0 rounded-[var(--svx-radius-sm)] px-1.5 py-0.5 text-[10px] uppercase tracking-wider",
+            LEVEL_BADGE[entry.level],
+          )}
+        >
+          {entry.level}
         </span>
-        <span className="shrink-0 text-[var(--svx-color-brand-muted)]">
+        <span className={cn("shrink-0 text-[var(--svx-color-brand-muted)]", LEVEL_TEXT[entry.level])}>
           {entry.logger}
         </span>
         <span className="min-w-0 truncate text-[var(--svx-color-text-primary)]">
