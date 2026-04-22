@@ -58,12 +58,13 @@ from sovyx.voice._frame_normalizer import FrameNormalizer
 from sovyx.voice._stream_opener import _import_sounddevice
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     import numpy as np
     import numpy.typing as npt
 
     from sovyx.engine.config import VoiceTuningConfig
+    from sovyx.voice._stream_opener import OpenAttempt
     from sovyx.voice.device_enum import DeviceEntry
     from sovyx.voice.pipeline._orchestrator import VoicePipeline
 
@@ -81,7 +82,98 @@ _HEARTBEAT_INTERVAL_S = _VoiceTuning().capture_heartbeat_interval_seconds
 _RMS_FLOOR_DB = -120.0
 
 
-class CaptureSilenceError(RuntimeError):
+# ── T7 session-manager contention helpers ────────────────────────────
+
+_SESSION_MANAGER_CONTENTION_ERROR_CODES: frozenset[str] = frozenset(
+    {
+        "device_busy",
+        "device_disappeared",
+        "device_not_found",
+    }
+)
+"""ErrorCode values interpreted as "another client holds the device".
+
+PortAudio on Linux returns ``-9985 Device unavailable`` for the common
+"PipeWire grabbed hw:X,Y" pathology. The opener classifies that as
+``ErrorCode.DEVICE_BUSY``. ``DEVICE_DISAPPEARED`` covers the related
+``-9988 Device disappeared`` and ``DEVICE_NOT_FOUND`` is included
+because some kernel-invalidated states surface as ``-9996 Invalid
+device`` when a session manager yanks the exclusive lock mid-open.
+"""
+
+
+def _is_session_manager_contention_pattern(
+    *,
+    platform: str,
+    open_attempts: Sequence[OpenAttempt],
+) -> bool:
+    """Return ``True`` iff the attempt list matches "session manager holds hw".
+
+    The rule is intentionally narrow — false positives would only
+    swap a generic ``RuntimeError`` message for a slightly more useful
+    one (no regression risk), but we still constrain the heuristic to
+    (a) Linux only, (b) at least one attempt made, (c) every attempt
+    falls in the contention-class :data:`_SESSION_MANAGER_CONTENTION_ERROR_CODES`.
+
+    The ``attempts_tried_hw_and_virtual`` half of the ADR rule is
+    handled upstream by the candidate-set: when this function fires,
+    the opener already iterated the opener-side pyramid on the *current*
+    candidate, and the cascade-level loop in
+    :func:`~sovyx.voice.health.cascade.run_cascade_for_candidates` has
+    exhausted every candidate (hardware + virtual). Re-checking here
+    would require access to the cascade history, which the capture
+    task legitimately does not have. Keeping the check at open-level
+    is sound because the cascade only reaches ``start()`` on a device
+    it already considered "best bet remaining" — a device-busy cluster
+    at this stage implies every earlier candidate also failed.
+    """
+    if platform != "linux":
+        return False
+    if not open_attempts:
+        return False
+    return all(
+        attempt.error_code is not None
+        and attempt.error_code.value in _SESSION_MANAGER_CONTENTION_ERROR_CODES
+        for attempt in open_attempts
+    )
+
+
+def _suggest_session_manager_alternatives() -> list[str]:
+    """Return the UI-facing action tokens for a session-manager grab.
+
+    Order: preferred alternative first. The dashboard maps each token
+    to an i18n key + an action (chip click dispatches the corresponding
+    fallback request). Currently static — future revisions may query
+    enumeration to elide tokens for devices that don't exist on the
+    host, but doing so here would introduce a sync ``sounddevice`` call
+    on the error path.
+    """
+    return [
+        "select_device:pipewire",
+        "select_device:default",
+        "select_device:pulse",
+        "stop_process:pipewire",
+    ]
+
+
+class CaptureError(RuntimeError):
+    """Base class for structured capture-pipeline errors.
+
+    Establishes an ``isinstance(..., CaptureError)`` check-point the
+    dashboard ``/api/voice/enable`` handler can use to discriminate
+    "known structured capture failure" from a generic ``RuntimeError``
+    (which includes programmer bugs). Continues to inherit from
+    :class:`RuntimeError` so existing ``except RuntimeError`` handlers
+    in legacy code keep working during the migration.
+
+    Introduced by ``voice-linux-cascade-root-fix`` T7. Pre-existing
+    subclasses (``CaptureSilenceError``, ``CaptureInoperativeError``)
+    are re-parented atomically in the same commit; Python MRO preserves
+    ``isinstance(..., RuntimeError)`` semantics.
+    """
+
+
+class CaptureSilenceError(CaptureError):
     """The capture stream opened but delivered only silence.
 
     Typical causes on Windows: MME host API with non-native sample rate
@@ -104,7 +196,7 @@ class CaptureSilenceError(RuntimeError):
         self.observed_peak_rms_db = observed_peak_rms_db
 
 
-class CaptureInoperativeError(RuntimeError):
+class CaptureInoperativeError(CaptureError):
     """The boot cascade declared the capture endpoint inoperative.
 
     Raised from :func:`sovyx.voice.factory.create_voice_pipeline` BEFORE
@@ -146,6 +238,56 @@ class CaptureInoperativeError(RuntimeError):
         self.host_api = host_api
         self.reason = reason
         self.attempts = attempts
+
+
+class CaptureDeviceContendedError(CaptureError):
+    """Every candidate failed with the session-manager-contention pattern.
+
+    Raised when :meth:`AudioCaptureTask._raise_classified_open_error`
+    observes a Linux-specific failure pattern where every attempted
+    combo on the target device came back with a contention-class
+    :class:`~sovyx.voice.device_test._protocol.ErrorCode` (``DEVICE_BUSY``,
+    ``DEVICE_DISAPPEARED``, ``DEVICE_NOT_FOUND``) — the strong signal
+    that another audio client is holding the hardware. See
+    ``docs-internal/ADR-voice-linux-cascade-candidate-set.md`` §5.
+
+    Carries enough structure for the dashboard to render an actionable
+    banner: the ``suggested_actions`` tokens map to i18n keys
+    (``"select_device:pipewire"`` → "Try the PipeWire virtual device"),
+    and ``contending_process_hint`` is populated when the
+    :mod:`sovyx.voice._session_manager_detector` managed to pin down
+    which process holds the mic (usually ``pipewire`` /
+    ``wireplumber``).
+
+    Attributes:
+        device: Index / name of the device whose open attempts failed.
+        host_api: Host API label. Always ``"ALSA"`` in the known VAIO
+            pattern but kept generic for forward compatibility.
+        suggested_actions: Ordered list of i18n tokens the UI renders
+            as clickable chips. First entry is the most preferred.
+        contending_process_hint: Best-effort process name holding the
+            device (``"pipewire"`` / ``"wireplumber"`` / ``"pulseaudio"``).
+            ``None`` when the detector wasn't consulted or failed.
+        attempts: The opener's raw attempts list for debug logs. Not
+            rendered in the UI but handy for support tickets.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        device: int | str | None,
+        host_api: str | None,
+        suggested_actions: list[str],
+        contending_process_hint: str | None = None,
+        attempts: list[OpenAttempt] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.device = device
+        self.host_api = host_api
+        self.suggested_actions = list(suggested_actions)
+        self.contending_process_hint = contending_process_hint
+        self.attempts = list(attempts) if attempts else []
 
 
 class ExclusiveRestartVerdict(StrEnum):
@@ -692,6 +834,44 @@ class AudioCaptureTask:
         return self._host_api_name
 
     @property
+    def active_device_index(self) -> int:
+        """PortAudio index of the open capture device; ``-1`` pre-start.
+
+        Introduced by :mod:`voice-linux-cascade-root-fix` so runtime
+        bypass strategies can address the exact numeric index the
+        stream is currently bound to. ``-1`` is the structural
+        sentinel for "not yet started" — no real PortAudio device
+        ever takes that index.
+        """
+        if isinstance(self._input_device, int):
+            return self._input_device
+        return -1
+
+    @property
+    def active_device_kind(self) -> str:
+        """Best-effort semantic kind of the active device.
+
+        Returns the :class:`~sovyx.voice.device_enum.DeviceKind` value
+        for the current ``active_device_name`` when enumeration
+        succeeds; ``"unknown"`` otherwise. Used by the
+        :class:`LinuxSessionManagerEscapeBypass` eligibility probe to
+        tell a hardware node from a session-manager virtual.
+        Never raises.
+        """
+        if not self._running:
+            return "unknown"
+        try:
+            from sovyx.voice.device_enum import classify_device_kind
+
+            return classify_device_kind(
+                name=self._resolved_device_name or "",
+                host_api_name=self._host_api_name or "",
+                platform_key=sys.platform,
+            ).value
+        except Exception:  # noqa: BLE001 — classifier must never fail an apply path
+            return "unknown"
+
+    @property
     def last_rms_db(self) -> float:
         """Most recent per-frame RMS in dBFS (updated by consumer loop)."""
         return self._last_rms_db
@@ -858,11 +1038,21 @@ class AudioCaptureTask:
     ) -> None:
         """Map a :class:`StreamOpenError` to the public exception API.
 
-        When every pyramid attempt produced a silent stream, raise
-        :class:`CaptureSilenceError` so the existing dashboard route
-        catches it and renders the wizard silence UX. Otherwise re-raise
-        a :class:`RuntimeError` carrying ``.code`` + ``.attempts`` so
-        operators see precisely which combinations were tried.
+        Classification order (most specific first):
+
+        1. **All silent** → :class:`CaptureSilenceError`. Every variant
+           opened but delivered ≤ validation-RMS audio; the wizard UX
+           handles this distinctly (the mic is open but nobody's home).
+        2. **Session-manager contention (Linux)** →
+           :class:`CaptureDeviceContendedError`. Every variant failed
+           with a contention-class error code on Linux AND at least
+           one candidate was tried — the strong signal that another
+           audio client is holding ``hw:X,Y``. Carries
+           ``suggested_actions`` so the dashboard renders actionable
+           chips. Introduced by ``voice-linux-cascade-root-fix`` T7.
+        3. **Default** → generic :class:`RuntimeError` with ``.code``
+           + ``.attempts`` attached for operator debugging. Preserves
+           the pre-T7 behaviour for patterns we don't recognise.
         """
         attempts = list(getattr(exc, "attempts", []))
         all_silent = bool(attempts) and all(
@@ -888,6 +1078,35 @@ class AudioCaptureTask:
                 host_api=entry.host_api_name,
                 observed_peak_rms_db=worst,
             ) from exc
+
+        # T7 — session-manager contention (Linux). See
+        # :func:`_is_session_manager_contention_pattern` for the rule.
+        if _is_session_manager_contention_pattern(
+            platform=sys.platform,
+            open_attempts=attempts,
+        ):
+            suggested = _suggest_session_manager_alternatives()
+            msg = (
+                f"Every attempt on device={entry.index!r} "
+                f"(host_api={entry.host_api_name!r}) failed with a device-busy error "
+                "— another audio client (likely PipeWire or PulseAudio) is holding this "
+                "device. Try selecting the 'pipewire' or 'default' PCM instead."
+            )
+            logger.error(
+                "audio_capture_device_contended",
+                device=entry.index,
+                host_api=entry.host_api_name,
+                suggested_actions=suggested,
+                attempt_count=len(attempts),
+            )
+            raise CaptureDeviceContendedError(
+                msg,
+                device=entry.index,
+                host_api=entry.host_api_name,
+                suggested_actions=suggested,
+                attempts=attempts,
+            ) from exc
+
         runtime = RuntimeError(str(exc))
         runtime.code = getattr(exc, "code", None)  # type: ignore[attr-defined]
         runtime.attempts = attempts  # type: ignore[attr-defined]
@@ -1515,28 +1734,41 @@ class AudioCaptureTask:
         _emit_alsa_hw_direct_restart_metric(result)
         return result
 
-    async def request_session_manager_restart(self) -> SessionManagerRestartResult:
+    async def request_session_manager_restart(
+        self,
+        target_device: DeviceEntry | None = None,
+    ) -> SessionManagerRestartResult:
         """Revert the capture stream to the PipeWire/PulseAudio session manager.
 
-        Linux-specific twin of :meth:`request_shared_restart`. The
-        ``LinuxPipeWireDirectBypass`` strategy invokes this during
-        ``revert`` when an ALSA-direct experiment proved ineffective or
-        a later strategy superseded it. Returns the stream to the same
-        session-manager-backed configuration the user started with.
+        Linux-specific twin of :meth:`request_shared_restart`. Two
+        legitimate callers:
 
-        Resolution: re-enumerate input devices, locate the first
-        sibling whose :attr:`DeviceEntry.host_api_name` lies in
-        ``_LINUX_SESSION_MANAGER_HOST_APIS`` (``PulseAudio``,
-        ``PipeWire``, ``JACK``). When no such sibling exists, the
-        device is ALSA-only and the revert cannot proceed — the
-        function returns :attr:`SessionManagerRestartVerdict.DOWNGRADED_TO_ALSA_HW`
-        with the existing stream preserved.
+        * :class:`LinuxPipeWireDirectBypass` (revert path) — no
+          ``target_device`` supplied, the method searches for the
+          first sibling whose :attr:`DeviceEntry.host_api_name` lies
+          in :data:`_LINUX_SESSION_MANAGER_HOST_APIS`.
+        * :class:`LinuxSessionManagerEscapeBypass` (apply path, T6
+          of voice-linux-cascade-root-fix) — supplies a concrete
+          ``target_device`` resolved to a session-manager virtual
+          (``pipewire``, ``pulse``) or the OS default ``default`` PCM.
+          The method skips sibling discovery and opens directly.
+
+        When neither path yields a target the method returns
+        :attr:`SessionManagerRestartVerdict.DOWNGRADED_TO_ALSA_HW` with
+        the existing stream preserved.
+
+        Args:
+            target_device: Optional explicit target. When ``None``,
+                the canonical-name-sibling discovery runs. When
+                provided, the method opens against that device
+                verbatim — callers are responsible for pre-filtering.
 
         Returns:
             A :class:`SessionManagerRestartResult`. A non-engaged
             verdict means either the session-manager reopen was not
-            feasible (``DOWNGRADED_TO_ALSA_HW``) or the pipeline is
-            now without a live capture (``OPEN_FAILED_NO_STREAM``).
+            feasible (``DOWNGRADED_TO_ALSA_HW``, ``NO_TARGET``) or the
+            pipeline is now without a live capture
+            (``OPEN_FAILED_NO_STREAM``).
         """
         if not self._running:
             logger.debug("audio_capture_session_manager_restart_skipped_not_running")
@@ -1565,9 +1797,12 @@ class AudioCaptureTask:
             _emit_session_manager_restart_metric(result)
             return result
 
-        session_entry = self._find_sibling_with_host_api_in(
-            _LINUX_SESSION_MANAGER_HOST_APIS,
-        )
+        if target_device is not None:
+            session_entry: DeviceEntry | None = target_device
+        else:
+            session_entry = self._find_sibling_with_host_api_in(
+                _LINUX_SESSION_MANAGER_HOST_APIS,
+            )
         if session_entry is None:
             logger.warning(
                 "audio_capture_session_manager_restart_no_sibling",

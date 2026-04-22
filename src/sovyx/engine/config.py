@@ -205,8 +205,21 @@ class VoiceTuningConfig(BaseSettings):
     # session: if exclusive also fails, we do not oscillate.
     voice_clarity_autofix: bool = True
     deaf_warnings_before_exclusive_retry: int = 2
+    # Ordered host-API preference for the opener's pyramid fallback.
+    # VLX-007 added "PipeWire" + "PulseAudio" + "JACK" to cover builds
+    # of PortAudio that expose those backends as standalone host APIs
+    # (Arch/NixOS futures). The list is a superset — entries absent
+    # from the host's PortAudio build are silently skipped.
     capture_fallback_host_apis: list[str] = Field(
-        default_factory=lambda: ["Windows WASAPI", "Windows DirectSound", "Core Audio", "ALSA"],
+        default_factory=lambda: [
+            "Windows WASAPI",
+            "Core Audio",
+            "ALSA",
+            "PipeWire",
+            "PulseAudio",
+            "JACK Audio Connection Kit",
+            "Windows DirectSound",
+        ],
     )
     # WASAPI-specific opener behaviour. ``auto_convert`` lets the WASAPI
     # backend resample + rechannel + rechannel-type transparently; critical
@@ -250,6 +263,28 @@ class VoiceTuningConfig(BaseSettings):
     # LRULockDict (ADR §5.5). 64 is generous — rigs with that many active
     # capture endpoints are exceedingly rare.
     cascade_lifecycle_lock_max: int = 64
+    # VLX-005 — when a Linux ``hw:X,Y`` device reports a non-canonical
+    # native sample rate (e.g. 44100), prepend a combo targeting that
+    # rate to the cascade table so we don't burn attempts on
+    # ``paInvalidSampleRate`` (-9997) failures. Bounds protect against
+    # drivers reporting junk (4 Hz ultrasonic, 10 MHz, etc.) — a rate
+    # outside the window is ignored and the default cascade table is
+    # used unchanged.
+    cascade_native_rate_min_hz: int = 8_000
+    cascade_native_rate_max_hz: int = 192_000
+    # T10 — Linux session-manager grab detector (``sovyx doctor
+    # linux_session_manager_grab`` + ``/api/voice/capture-diagnostics``).
+    # pactl wall-clock cap: 2 s covers laptop + server (~200 ms typical).
+    detector_pactl_timeout_s: float = 2.0
+    # /proc scan wall-clock cap: 1.5 s protects against hosts with
+    # tens of thousands of PIDs.
+    detector_proc_timeout_s: float = 1.5
+    # /proc scan PID count cap: 5 000 is ~1 000× the typical desktop.
+    detector_proc_max_scan: int = 5_000
+    # Evidence string cap for the report payload. 2 KiB fits in OTLP
+    # attribute limits and is enough for the pactl section that
+    # mentions the grabbing app.
+    detector_evidence_max_chars: int = 2_048
 
     # L4 runtime resilience (ADR §4.4, Sprint 2). Master kill-switch that
     # disables the whole watchdog + hot-plug + power + default-change
@@ -500,7 +535,14 @@ class VoiceTuningConfig(BaseSettings):
     # for the production voice pipeline within a bounded time.
     device_test_max_lifetime_s: float = 300.0  # 5 min absolute session cap
     device_test_peer_alive_timeout_s: float = 10.0  # no-send watchdog
-    device_test_force_close_grace_s: float = 2.0  # stop→close grace window
+    # stop→close grace window. The SessionRegistry.close_all() pre-enable
+    # hook waits this long for each test session to release its PortAudio
+    # stream before force-closing. 2 s covers worst-case ALSA PCM drain
+    # (~500 ms) plus a 500 ms safety margin; longer would risk the
+    # dashboard HTTP timeout (30 s default in the React client) when the
+    # user juggles many meter sessions before hitting "Enable voice".
+    # See ``voice-linux-cascade-root-fix`` T8 for the handoff contract.
+    device_test_force_close_grace_s: float = 2.0
 
 
 class LLMTuningConfig(BaseSettings):

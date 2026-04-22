@@ -36,12 +36,12 @@ from typing import TYPE_CHECKING
 from sovyx.observability.logging import get_logger
 from sovyx.voice.health._quarantine import EndpointQuarantine, get_default_quarantine
 from sovyx.voice.health.capture_overrides import CaptureOverrides
-from sovyx.voice.health.cascade import run_cascade
+from sovyx.voice.health.cascade import run_cascade, run_cascade_for_candidates
 from sovyx.voice.health.combo_store import ComboStore
-from sovyx.voice.health.contract import CascadeResult, ProbeMode
+from sovyx.voice.health.contract import CandidateEndpoint, CascadeResult, ProbeMode
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Sequence
     from pathlib import Path
 
     from sovyx.engine.config import VoiceTuningConfig
@@ -316,6 +316,129 @@ async def run_boot_cascade(
     logger.info(
         "voice_boot_cascade_result",
         endpoint=endpoint_guid,
+        source=result.source,
+        attempts=result.attempts_count,
+        budget_exhausted=result.budget_exhausted,
+        has_winner=result.winning_combo is not None,
+    )
+    return result
+
+
+async def run_boot_cascade_for_candidates(
+    *,
+    candidates: Sequence[CandidateEndpoint],
+    data_dir: Path,
+    tuning: VoiceTuningConfig,
+    platform_key: str | None = None,
+    combo_store: ComboStore | None = None,
+    capture_overrides: CaptureOverrides | None = None,
+    quarantine: EndpointQuarantine | None = None,
+) -> CascadeResult | None:
+    """Run the cold cascade against a candidate-set (VLX-002 fix).
+
+    Symmetric companion to :func:`run_boot_cascade`: same boot-time
+    semantics (best-effort, swallowed exceptions, populates
+    :class:`ComboStore` on winner), but consults the
+    :class:`~sovyx.voice.health.contract.CandidateEndpoint` list built
+    by :func:`~sovyx.voice.health._candidate_builder.build_capture_candidates`
+    rather than a single resolved device.
+
+    When ``len(candidates) == 1`` the behaviour is indistinguishable
+    from :func:`run_boot_cascade` with ``resolved = candidates[0]`` —
+    this is the regression invariant that lets us migrate
+    Windows / macOS callers without behavioural change.
+
+    Args:
+        candidates: Ordered candidate list. Must be non-empty. The
+            first candidate is the user-preferred device.
+        data_dir: Sovyx data directory.
+        tuning: Effective :class:`VoiceTuningConfig`.
+        platform_key: Runtime platform key. Defaults to ``sys.platform``.
+        combo_store: DI hook for tests. Production callers pass ``None``.
+        capture_overrides: DI hook for tests.
+        quarantine: §4.4.7 endpoint quarantine store.
+
+    Returns:
+        :class:`CascadeResult` on successful cascade run (any outcome,
+        including exhaustion). ``None`` when the cascade cannot run —
+        :class:`ComboStore` init failed, the cascade raised, etc. The
+        factory treats ``None`` as "fall back to legacy opener path".
+
+    Raises:
+        ValueError: ``candidates`` is empty (programmer error —
+            ``build_capture_candidates`` always returns ≥ 1 entry).
+    """
+    if not candidates:
+        msg = "candidates must be non-empty"
+        raise ValueError(msg)
+
+    plat = platform_key or sys.platform
+
+    store = combo_store
+    overrides = capture_overrides
+    if store is None:
+        try:
+            store = ComboStore(resolve_combo_store_path(data_dir))
+            store.load()
+        except Exception:  # noqa: BLE001 — store failure must not block boot (ADR §5.11)
+            logger.warning("voice_boot_cascade_combo_store_unavailable", exc_info=True)
+            store = None
+    if overrides is None:
+        try:
+            overrides = CaptureOverrides(resolve_capture_overrides_path(data_dir))
+            overrides.load()
+        except Exception:  # noqa: BLE001 — overrides failure must not block boot (ADR §5.11)
+            logger.warning("voice_boot_cascade_capture_overrides_unavailable", exc_info=True)
+            overrides = None
+
+    # Phase 3 driver-watchdog pre-flight — only meaningful for the
+    # user-preferred candidate on Windows. Other candidates (pipewire
+    # virtual, etc.) don't have a kernel-PnP driver mapping.
+    effective_autofix = tuning.voice_clarity_autofix
+    primary = candidates[0]
+    if plat == "win32" and tuning.voice_clarity_autofix:
+        effective_autofix = await _autofix_after_driver_watchdog_scan(
+            resolved_name=primary.friendly_name,
+            device_interface_name=primary.canonical_name,
+            lookback_hours=tuning.driver_watchdog_lookback_hours,
+            timeout_s=tuning.driver_watchdog_scan_timeout_s,
+        )
+
+    try:
+        result = await run_cascade_for_candidates(
+            candidates=candidates,
+            mode=ProbeMode.COLD,
+            platform_key=plat,
+            combo_store=store,
+            capture_overrides=overrides,
+            total_budget_s=tuning.cascade_total_budget_s,
+            attempt_budget_s=tuning.cascade_attempt_budget_s,
+            voice_clarity_autofix=effective_autofix,
+            quarantine=quarantine,
+            kernel_invalidated_failover_enabled=tuning.kernel_invalidated_failover_enabled,
+        )
+    except Exception:  # noqa: BLE001 — cascade crash must never block the pipeline (ADR §5.11)
+        logger.error(
+            "voice_boot_cascade_for_candidates_raised",
+            primary_endpoint=primary.endpoint_guid,
+            primary_device_index=primary.device_index,
+            candidate_count=len(candidates),
+            exc_info=True,
+        )
+        return None
+
+    logger.info(
+        "voice_boot_cascade_for_candidates_result",
+        primary_endpoint=primary.endpoint_guid,
+        candidate_count=len(candidates),
+        winning_rank=(
+            result.winning_candidate.preference_rank
+            if result.winning_candidate is not None
+            else None
+        ),
+        winning_source=(
+            str(result.winning_candidate.source) if result.winning_candidate is not None else None
+        ),
         source=result.source,
         attempts=result.attempts_count,
         budget_exhausted=result.budget_exhausted,

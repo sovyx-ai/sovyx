@@ -530,6 +530,36 @@ def _open_input_stream(
 ) -> InputStreamLike:
     """Construct and return an ``sd.InputStream`` matching ``combo``.
 
+    **Host-API routing contract (VLX-001 / ADR `voice-linux-cascade-
+    candidate-set` §2.1):**
+
+    Host-API selection happens in two places, with a clear split of
+    responsibility:
+
+    1. **Cross-endpoint** — the :func:`~sovyx.voice.health.cascade.run_cascade_for_candidates`
+       caller chooses which :class:`~sovyx.voice.health.contract.CandidateEndpoint`
+       (and thus which ``device_index``) to probe. On Linux this is how
+       the cascade reaches ``pipewire`` / ``default`` virtual PCMs even
+       though PortAudio exposes them under the same ``"ALSA"``
+       host-API label as a bare ``hw:X,Y`` node — the candidate builder
+       resolves each virtual to its own PortAudio index, and this
+       function honours that index verbatim.
+    2. **Intra-endpoint** — ``combo.host_api`` + ``extra_settings``
+       (WASAPI only) drive within-endpoint variants. The cascade table
+       still enumerates per-host-API combos so Windows can distinguish
+       exclusive vs. shared; on Linux every non-WASAPI combo resolves
+       to ``extra_settings=None`` below, which is exactly right because
+       PortAudio's Linux build has no ``AlsaSettings`` equivalent —
+       the ``device_index`` alone dictates the kernel path.
+
+    Before the ``voice-linux-cascade-root-fix`` refactor, ``run_cascade``
+    pinned a single ``device_index`` across every combo in the Linux
+    cascade table, making the ``"JACK"`` / ``"PipeWire"`` /
+    ``"PulseAudio"`` labels cosmetic — every probe went through ALSA
+    direct against the same ``hw:X,Y`` node. The candidate-set cascade
+    in T3 fixed that structurally; this function's contract is the
+    downstream half of the story.
+
     Mirrors :func:`sovyx.voice._stream_opener._build_wasapi_settings` so
     both the capture-task opener and the health probe honour the full
     ``(auto_convert, exclusive)`` combo surface. Before this was fixed
@@ -556,6 +586,24 @@ def _open_input_stream(
     extra = _build_probe_wasapi_settings(sd, combo)
     if extra is not None:
         kwargs["extra_settings"] = extra
+
+    # T1 — Forensic-grade observability: record every kwarg finally passed
+    # to ``sd.InputStream``. When a probe misbehaves this event is the
+    # single source of truth for "what the OS saw", independent of which
+    # combo variant produced the call.
+    logger.info(
+        "voice_probe_stream_open_params",
+        device=device_index,
+        samplerate=combo.sample_rate,
+        channels=combo.channels,
+        dtype=kwargs["dtype"],
+        blocksize=combo.frames_per_buffer,
+        host_api=combo.host_api,
+        exclusive=combo.exclusive,
+        auto_convert=combo.auto_convert,
+        extra_settings_applied=extra is not None,
+        extra_settings_type=type(extra).__name__ if extra is not None else None,
+    )
 
     return sd.InputStream(**kwargs)
 

@@ -115,6 +115,13 @@ class _LiveEntry:
     pinned: bool = False
     needs_revalidation: bool = False
     available: bool = True
+    # voice-linux-cascade-root-fix T11 / schema v3. :class:`DeviceKind`
+    # value as a string (``"hardware"`` / ``"session_manager_virtual"``
+    # / ``"os_default"`` / ``"unknown"``). Back-compat default
+    # ``"unknown"`` so existing writers that don't yet populate the
+    # field continue to compile — legacy v2 entries migrate to this
+    # value via :func:`_migrate_v2_to_v3`.
+    candidate_kind: str = "unknown"
 
     def to_immutable(self) -> ComboEntry:
         return ComboEntry(
@@ -138,6 +145,7 @@ class _LiveEntry:
             probe_history=tuple(self.probe_history),
             pinned=self.pinned,
             needs_revalidation=self.needs_revalidation,
+            candidate_kind=self.candidate_kind,
         )
 
 
@@ -747,6 +755,7 @@ class ComboStore:
             probe_history=history,
             pinned=bool(raw_entry.get("pinned", False)),
             needs_revalidation=False,
+            candidate_kind=str(raw_entry.get("candidate_kind", "unknown")),
         )
 
 
@@ -816,6 +825,8 @@ def _entry_to_dict(live: _LiveEntry) -> dict[str, Any]:
         "last_boot_diagnosis": live.last_boot_diagnosis.value,
         "probe_history": [_history_to_dict(h) for h in live.probe_history],
         "pinned": live.pinned,
+        # voice-linux-cascade-root-fix T11 / schema v3.
+        "candidate_kind": live.candidate_kind,
     }
 
 

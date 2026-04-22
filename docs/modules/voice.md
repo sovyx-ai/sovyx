@@ -266,6 +266,84 @@ Diagnostics surfaces:
   `voice_clarity_active` flag. The setup wizard renders a one-click
   "enable exclusive mode" card when the bit is set.
 
+## Linux session-manager contention (VLX-002 / VLX-003)
+
+On modern Linux distributions (Mint 22, Ubuntu 24.04+, Fedora 40+)
+PipeWire runs as the default session manager and grabs every hardware
+ALSA device (`hw:X,Y`) in shared mode at boot. When the user pins a
+bare `hw:X,Y` PCM as the Sovyx capture device — either explicitly via
+`mind.yaml::voice.input_device_name` or via the onboarding picker —
+PortAudio's exclusive-mode open paths return `-9985 Device
+unavailable` because PipeWire already holds the kernel ALSA handle.
+
+### How Sovyx recovers
+
+The cascade does **not** fail closed. `build_capture_candidates`
+(`sovyx.voice.health._candidate_builder`) expands the resolved
+`DeviceEntry` into an ordered candidate set on Linux:
+
+1. The user-preferred device (rank 0).
+2. Canonical-name siblings of the preferred device (rank 1..N) —
+   empty on modern Linux where PortAudio only exposes the ALSA host
+   API.
+3. Session-manager virtuals — `pipewire`, `pulse` PCMs.
+4. The `default` / `sysdefault` ALSA alias.
+5. Any remaining enumerated input device (catch-all tail).
+
+`run_cascade_for_candidates` iterates the list in order. The first
+candidate that produces a HEALTHY probe wins. When `hw:X,Y` is
+contended, the cascade transparently falls over to `pipewire` or
+`default` — both are shared-mode and resolve cleanly.
+
+### Observability
+
+The dashboard renders the winning candidate's `kind` so the user can
+see "running on `pipewire` (fallback from `hw:1,0`)" when the mic is
+contested. Events emitted:
+
+- `voice_cascade_probe_call` / `voice_cascade_probe_result` — per-probe
+  telemetry across every candidate × combo pair.
+- `voice_cascade_winner_selected` — carries `source`, `combo_host_api`,
+  `device_index`, `device_friendly_name`.
+- `voice_cascade_candidate_set_resolved` — cross-candidate summary with
+  `winning_rank`, `winning_source`, `winning_kind`.
+
+### User-facing cure (when every candidate fails)
+
+When every candidate falls with the session-manager contention
+pattern, `/api/voice/enable` returns HTTP 503 with
+`error: "capture_device_contended"` + a list of
+`alternative_devices`. The onboarding UI renders clickable chips so
+the user can retry against `pipewire` / `default` with one click
+without re-opening settings.
+
+Proactive diagnosis is available via:
+
+- `sovyx doctor linux_session_manager_grab` — probes `pactl list
+  source-outputs` + a bounded `/proc/*/fd/*` scan to identify the
+  process holding the mic.
+- `GET /api/voice/capture-diagnostics` — same report, JSON payload for
+  the dashboard.
+
+### Runtime escape
+
+`LinuxSessionManagerEscapeBypass` covers the dynamic case — the
+pipeline booted healthy on `hw:X,Y`, then a later event (user opens
+Zoom, Bluetooth handset connects) grabs the hardware. The coordinator
+invokes the strategy on deaf-heartbeat and the stream reopens
+against the preferred session-manager virtual without recreating the
+pipeline. Complementary inverse of `LinuxPipeWireDirectBypass`
+(opt-in; covers `filter-chain` APO-degraded sources going in the
+opposite direction).
+
+### `mind.yaml` invariant
+
+The user's `input_device_name` preference is **never overwritten** by
+fallback. A subsequent boot where the preferred device is free will
+naturally pick it as rank-0 candidate and win the cascade. This
+decouples "what the user configured" from "what's actually capturing
+right now" — both are observable, neither corrupts the other.
+
 ## Roadmap
 
 - **Speaker recognition** (ECAPA-TDNN) — enrollment, verification, multi-user voice auth.

@@ -48,6 +48,9 @@ if TYPE_CHECKING:
     from sovyx.voice.health.bypass._linux_pipewire_direct import (
         LinuxPipeWireDirectBypass,
     )
+    from sovyx.voice.health.bypass._linux_session_manager_escape import (
+        LinuxSessionManagerEscapeBypass,
+    )
     from sovyx.voice.health.bypass._win_wasapi_exclusive import (
         WindowsWASAPIExclusiveBypass,
     )
@@ -56,6 +59,7 @@ __all__ = [
     "BypassApplyError",
     "LinuxALSAMixerResetBypass",
     "LinuxPipeWireDirectBypass",
+    "LinuxSessionManagerEscapeBypass",
     "PlatformBypassStrategy",
     "WindowsWASAPIExclusiveBypass",
 ]
@@ -70,6 +74,7 @@ __all__ = [
 _LAZY_EXPORTS: dict[str, str] = {
     "LinuxALSAMixerResetBypass": "sovyx.voice.health.bypass._linux_alsa_mixer",
     "LinuxPipeWireDirectBypass": "sovyx.voice.health.bypass._linux_pipewire_direct",
+    "LinuxSessionManagerEscapeBypass": ("sovyx.voice.health.bypass._linux_session_manager_escape"),
     "WindowsWASAPIExclusiveBypass": "sovyx.voice.health.bypass._win_wasapi_exclusive",
 }
 

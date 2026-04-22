@@ -56,6 +56,7 @@ from sovyx.voice.health._quarantine import (
     get_default_quarantine,
 )
 from sovyx.voice.health.contract import (
+    CandidateEndpoint,
     CascadeResult,
     Combo,
     Diagnosis,
@@ -374,6 +375,78 @@ The ``exclusive`` flag on Linux is interpreted by the stream opener as
 ``auto_convert`` signals "let the server resample/rechannel" on the
 mixing-layer entries.
 """
+
+
+def build_linux_cascade_for_device(
+    device_default_samplerate: int,
+    device_kind: str,
+    *,
+    tuning: _VoiceTuning | None = None,
+) -> tuple[Combo, ...]:
+    """Return the Linux cascade with an optional native-rate prepend.
+
+    **VLX-005 fix.** ALSA ``hw:X,Y`` nodes that report a non-canonical
+    native sample rate (most commonly 44 100 Hz on HDMI audio and 32 000
+    Hz on some Bluetooth codecs) reject the cascade's default 16 000 Hz
+    first-attempt with ``paInvalidSampleRate`` (-9997), burning one
+    probe per combo before ever reaching the 48 000 Hz fallback. When
+    the device exposes a sensible native rate that the default cascade
+    doesn't already cover, we prepend a dedicated exclusive combo at
+    that rate so the first probe stands a chance.
+
+    Args:
+        device_default_samplerate: ``DeviceEntry.default_samplerate`` —
+            what PortAudio advertises as the hardware's native rate.
+        device_kind: :class:`~sovyx.voice.device_enum.DeviceKind` as a
+            string. Only HARDWARE devices get the prepend; session-
+            manager virtuals and OS-default aliases do their own
+            resampling internally and are happy with any rate in the
+            default table.
+        tuning: Optional :class:`VoiceTuningConfig` for the bounds
+            ``cascade_native_rate_min_hz`` / ``cascade_native_rate_max_hz``.
+            When ``None`` the current process tuning is read once.
+
+    Returns:
+        Either :data:`LINUX_CASCADE` unchanged (most common) or a new
+        tuple with a prepended native-rate combo. Never mutates
+        :data:`LINUX_CASCADE`.
+    """
+    if device_kind != "hardware":
+        return LINUX_CASCADE
+
+    effective_tuning = tuning or _VoiceTuning()
+    min_hz = effective_tuning.cascade_native_rate_min_hz
+    max_hz = effective_tuning.cascade_native_rate_max_hz
+
+    if not (min_hz <= device_default_samplerate <= max_hz):
+        # Driver reporting junk (0, 4, ultrasonic) or a rate higher than
+        # what the cascade table supports. Skip prepend; default table
+        # handles 16k and 48k fallbacks the usual way.
+        return LINUX_CASCADE
+
+    # Skip if the rate is already canonical — the default cascade's
+    # attempts 0 (16k) and 1 (48k) already cover those paths.
+    if device_default_samplerate in {16_000, 48_000}:
+        return LINUX_CASCADE
+
+    # Guard: the rate must be an allowed Combo rate (else Combo ctor
+    # raises). Rates outside ALLOWED_SAMPLE_RATES are silently dropped.
+    from sovyx.voice.health.contract import ALLOWED_SAMPLE_RATES
+
+    if device_default_samplerate not in ALLOWED_SAMPLE_RATES:
+        return LINUX_CASCADE
+
+    native_combo = Combo(
+        host_api="ALSA",
+        sample_rate=device_default_samplerate,
+        channels=1,
+        sample_format="int16",
+        exclusive=True,
+        auto_convert=False,
+        frames_per_buffer=480,
+        platform_key="linux",
+    )
+    return (native_combo, *LINUX_CASCADE)
 
 
 def _macos_cascade() -> tuple[Combo, ...]:
@@ -710,12 +783,27 @@ async def _run_cascade_locked(
             endpoint=endpoint_guid,
             combo=_combo_tag(pinned),
         )
+        _log_probe_call(
+            endpoint_guid=endpoint_guid,
+            attempt=0,
+            device_index=device_index,
+            combo=pinned,
+            mode=mode,
+            attempt_budget_s=attempt_budget_s,
+        )
         result = await _try_combo(
             probe_fn=probe_fn,
             combo=pinned,
             mode=mode,
             device_index=device_index,
             attempt_budget_s=attempt_budget_s,
+        )
+        _log_probe_result(
+            endpoint_guid=endpoint_guid,
+            attempt=0,
+            device_index=device_index,
+            combo=pinned,
+            result=result,
         )
         attempts.append(result)
         attempts_count += 1
@@ -726,6 +814,20 @@ async def _run_cascade_locked(
             source="pinned",
         )
         if result.diagnosis is Diagnosis.HEALTHY:
+            # T1 — uniform winner telemetry across pinned/store/cascade.
+            logger.info(
+                "voice_cascade_winner_selected",
+                endpoint=endpoint_guid,
+                source="pinned",
+                attempts=1,
+                combo_host_api=pinned.host_api,
+                combo_sample_rate=pinned.sample_rate,
+                combo_channels=pinned.channels,
+                combo_exclusive=pinned.exclusive,
+                combo_auto_convert=pinned.auto_convert,
+                device_index=device_index,
+                device_friendly_name=device_friendly_name,
+            )
             return _make_result(
                 endpoint_guid=endpoint_guid,
                 winning_combo=pinned,
@@ -795,12 +897,27 @@ async def _run_cascade_locked(
             endpoint=endpoint_guid,
             combo=_combo_tag(store_combo),
         )
+        _log_probe_call(
+            endpoint_guid=endpoint_guid,
+            attempt=0,
+            device_index=device_index,
+            combo=store_combo,
+            mode=mode,
+            attempt_budget_s=attempt_budget_s,
+        )
         result = await _try_combo(
             probe_fn=probe_fn,
             combo=store_combo,
             mode=mode,
             device_index=device_index,
             attempt_budget_s=attempt_budget_s,
+        )
+        _log_probe_result(
+            endpoint_guid=endpoint_guid,
+            attempt=0,
+            device_index=device_index,
+            combo=store_combo,
+            result=result,
         )
         attempts.append(result)
         success = result.diagnosis is Diagnosis.HEALTHY
@@ -816,6 +933,20 @@ async def _run_cascade_locked(
         )
         if success:
             # Fast-path hit: do NOT re-record (combo already in store).
+            # T1 — uniform winner telemetry across pinned/store/cascade.
+            logger.info(
+                "voice_cascade_winner_selected",
+                endpoint=endpoint_guid,
+                source="store",
+                attempts=1,
+                combo_host_api=store_combo.host_api,
+                combo_sample_rate=store_combo.sample_rate,
+                combo_channels=store_combo.channels,
+                combo_exclusive=store_combo.exclusive,
+                combo_auto_convert=store_combo.auto_convert,
+                device_index=device_index,
+                device_friendly_name=device_friendly_name,
+            )
             return _make_result(
                 endpoint_guid=endpoint_guid,
                 winning_combo=store_combo,
@@ -907,12 +1038,27 @@ async def _run_cascade_locked(
             attempt=idx,
             combo=_combo_tag(combo),
         )
+        _log_probe_call(
+            endpoint_guid=endpoint_guid,
+            attempt=idx,
+            device_index=device_index,
+            combo=combo,
+            mode=mode,
+            attempt_budget_s=attempt_budget_s,
+        )
         result = await _try_combo(
             probe_fn=probe_fn,
             combo=combo,
             mode=mode,
             device_index=device_index,
             attempt_budget_s=attempt_budget_s,
+        )
+        _log_probe_result(
+            endpoint_guid=endpoint_guid,
+            attempt=idx,
+            device_index=device_index,
+            combo=combo,
+            result=result,
         )
         attempts.append(result)
         record_cascade_attempt(
@@ -966,6 +1112,23 @@ async def _run_cascade_locked(
                 probe=result,
                 cascade_attempts_before_success=attempts_count,
             )
+            # T1 — DoD #3 requires this event to be present in the log
+            # after a successful cascade run. Future T3 will extend it
+            # with ``winning_candidate`` / ``candidate_source`` fields
+            # once the candidate-set refactor lands.
+            logger.info(
+                "voice_cascade_winner_selected",
+                endpoint=endpoint_guid,
+                source="cascade",
+                attempts=attempts_count,
+                combo_host_api=combo.host_api,
+                combo_sample_rate=combo.sample_rate,
+                combo_channels=combo.channels,
+                combo_exclusive=combo.exclusive,
+                combo_auto_convert=combo.auto_convert,
+                device_index=device_index,
+                device_friendly_name=device_friendly_name,
+            )
             return _make_result(
                 endpoint_guid=endpoint_guid,
                 winning_combo=combo,
@@ -996,6 +1159,241 @@ async def _run_cascade_locked(
 
 
 _DEFAULT_LOCKS: LRULockDict[str] | None = None
+
+
+async def run_cascade_for_candidates(
+    *,
+    candidates: Sequence[CandidateEndpoint],
+    mode: ProbeMode,
+    platform_key: str,
+    combo_store: ComboStore | None = None,
+    capture_overrides: CaptureOverrides | None = None,
+    probe_fn: ProbeCallable | None = None,
+    lifecycle_locks: LRULockDict[str] | None = None,
+    total_budget_s: float = _DEFAULT_TOTAL_BUDGET_S,
+    attempt_budget_s: float = _DEFAULT_ATTEMPT_BUDGET_S,
+    voice_clarity_autofix: bool = True,
+    clock: Callable[[], float] = time.monotonic,
+    quarantine: EndpointQuarantine | None = None,
+    kernel_invalidated_failover_enabled: bool | None = None,
+) -> CascadeResult:
+    """Run the cascade against an ordered set of capture candidates.
+
+    This is the candidate-set entry point introduced by the
+    ``voice-linux-cascade-root-fix`` mission (VLX-002). It iterates the
+    caller-supplied :class:`~sovyx.voice.health.contract.CandidateEndpoint`
+    list in order, delegating each to :func:`run_cascade` with the
+    candidate's per-endpoint identity. The first healthy winner wins.
+
+    Division of labour vs. :func:`run_cascade`:
+
+    * :func:`run_cascade` — cross-combo, single endpoint. Pinned →
+      ComboStore fast-path → platform cascade table walk.
+    * :func:`run_cascade_for_candidates` — cross-endpoint, delegates to
+      :func:`run_cascade` per candidate. Source of truth for the
+      session-manager-escape path at boot time on Linux (VLX-002).
+
+    The total wall-clock ``total_budget_s`` is shared across all
+    candidates. Each :func:`run_cascade` call gets the remaining budget,
+    so the last candidate may get a shorter window than the first. This
+    matches the pre-refactor behaviour (one endpoint, one budget) when
+    called with ``len(candidates) == 1``.
+
+    Args:
+        candidates: Ordered list from
+            :func:`~sovyx.voice.health._candidate_builder.build_capture_candidates`.
+            Must be non-empty; the first candidate is the user-preferred
+            one (``CandidateSource.USER_PREFERRED``).
+        mode: :attr:`ProbeMode.COLD` at boot, :attr:`ProbeMode.WARM`
+            during the wizard.
+        platform_key: ``"win32"`` / ``"linux"`` / ``"darwin"``.
+        combo_store: Persistent fast-path store — forwarded verbatim to
+            each :func:`run_cascade` invocation. Each candidate hits the
+            store under its own ``endpoint_guid``, so a stored combo for
+            ``pipewire`` is still consulted when the user-preferred
+            hardware candidate's own fast-path is stale.
+        capture_overrides: User-pinned combos — forwarded verbatim.
+        probe_fn: Probe entry point. Defaults to
+            :func:`~sovyx.voice.health.probe.probe`.
+        lifecycle_locks: Per-endpoint lock dict. Each candidate gets its
+            own lock; parallel invocations of this function against
+            disjoint candidate sets do not serialize.
+        total_budget_s: Shared wall-clock budget across all candidates.
+            On exhaustion the function returns ``budget_exhausted=True``
+            with attempts from candidates tried so far.
+        attempt_budget_s: Per-probe hard timeout.
+        voice_clarity_autofix: Forwarded to each :func:`run_cascade` call.
+        clock: Monotonic clock. Swappable for deterministic tests.
+        quarantine: Shared quarantine store. All candidates check the
+            same instance — a quarantined ``pipewire`` endpoint does
+            not re-probe even if ``hw:1,0`` just finished quarantining.
+        kernel_invalidated_failover_enabled: Master toggle for the
+            §4.4.7 quarantine behaviour.
+
+    Returns:
+        :class:`CascadeResult` with:
+
+        * ``winning_candidate`` populated when any candidate produced a
+          healthy combo.
+        * ``endpoint_guid`` set to the winning candidate's guid, or the
+          first candidate's guid on exhaustion (log correlation).
+        * ``attempts`` containing the concatenation of every attempt
+          across all tried candidates, in iteration order.
+
+    Raises:
+        ValueError: ``candidates`` is empty.
+    """
+    if not candidates:
+        msg = "candidates must be non-empty (build_capture_candidates contract)"
+        raise ValueError(msg)
+
+    deadline = clock() + total_budget_s
+    aggregated_attempts: list[ProbeResult] = []
+    total_attempts_count = 0
+    last_result: CascadeResult | None = None
+
+    logger.info(
+        "voice_cascade_candidate_set_started",
+        platform=platform_key,
+        candidate_count=len(candidates),
+        candidate_kinds=[str(c.kind) for c in candidates],
+        candidate_sources=[str(c.source) for c in candidates],
+    )
+
+    # T4 — defensive invariant: dedup by (device_index, host_api_name)
+    # must already hold (build_capture_candidates guarantees this), but
+    # an ill-behaved injected builder in tests or a future refactor could
+    # re-introduce collisions. Log-warn + continue rather than raise; the
+    # cascade loop is already O(n×m) and probe idempotency absorbs dupes.
+    seen_candidate_keys: set[tuple[int, str]] = set()
+
+    for candidate_idx, candidate in enumerate(candidates):
+        remaining = max(0.0, deadline - clock())
+        if remaining <= 0.0:
+            logger.warning(
+                "voice_cascade_candidate_set_budget_exhausted",
+                tried=candidate_idx,
+                remaining_candidates=len(candidates) - candidate_idx,
+            )
+            break
+
+        dedup_key = (candidate.device_index, candidate.host_api_name)
+        if dedup_key in seen_candidate_keys:
+            logger.warning(
+                "voice_cascade_candidate_duplicate",
+                candidate_rank=candidate.preference_rank,
+                device_index=candidate.device_index,
+                host_api=candidate.host_api_name,
+            )
+        seen_candidate_keys.add(dedup_key)
+
+        logger.info(
+            "voice_cascade_candidate_started",
+            candidate_rank=candidate.preference_rank,
+            candidate_source=str(candidate.source),
+            candidate_kind=str(candidate.kind),
+            device_index=candidate.device_index,
+            host_api=candidate.host_api_name,
+            friendly_name=candidate.friendly_name,
+            endpoint_guid=candidate.endpoint_guid,
+            remaining_budget_s=remaining,
+        )
+
+        # T5 — per-candidate native-rate cascade. Only prepends when
+        # the candidate is HARDWARE and reports a non-canonical rate
+        # that the default Linux cascade would waste attempts on.
+        per_candidate_cascade: Sequence[Combo] | None = None
+        if platform_key == "linux":
+            tailored = build_linux_cascade_for_device(
+                candidate.default_samplerate,
+                str(candidate.kind),
+            )
+            if tailored is not LINUX_CASCADE:
+                per_candidate_cascade = tailored
+                logger.info(
+                    "voice_cascade_native_rate_prepended",
+                    candidate_rank=candidate.preference_rank,
+                    device_index=candidate.device_index,
+                    native_rate=candidate.default_samplerate,
+                )
+
+        per_candidate_result = await run_cascade(
+            endpoint_guid=candidate.endpoint_guid,
+            device_index=candidate.device_index,
+            mode=mode,
+            platform_key=platform_key,
+            device_friendly_name=candidate.friendly_name,
+            device_interface_name=candidate.canonical_name,
+            physical_device_id=candidate.canonical_name,
+            combo_store=combo_store,
+            capture_overrides=capture_overrides,
+            probe_fn=probe_fn,
+            lifecycle_locks=lifecycle_locks,
+            total_budget_s=remaining,
+            attempt_budget_s=attempt_budget_s,
+            voice_clarity_autofix=voice_clarity_autofix,
+            cascade_override=per_candidate_cascade,
+            clock=clock,
+            quarantine=quarantine,
+            kernel_invalidated_failover_enabled=kernel_invalidated_failover_enabled,
+        )
+        aggregated_attempts.extend(per_candidate_result.attempts)
+        total_attempts_count += per_candidate_result.attempts_count
+        last_result = per_candidate_result
+
+        if per_candidate_result.winning_combo is not None:
+            logger.info(
+                "voice_cascade_candidate_set_resolved",
+                winning_rank=candidate.preference_rank,
+                winning_source=str(candidate.source),
+                winning_kind=str(candidate.kind),
+                device_index=candidate.device_index,
+                host_api=candidate.host_api_name,
+                endpoint_guid=candidate.endpoint_guid,
+                tried=candidate_idx + 1,
+                total=len(candidates),
+            )
+            return CascadeResult(
+                endpoint_guid=candidate.endpoint_guid,
+                winning_combo=per_candidate_result.winning_combo,
+                winning_probe=per_candidate_result.winning_probe,
+                attempts=tuple(aggregated_attempts),
+                attempts_count=total_attempts_count,
+                budget_exhausted=False,
+                source=per_candidate_result.source,
+                winning_candidate=candidate,
+            )
+
+        # Non-healthy candidate — advance to the next one unless budget
+        # is already exhausted (we'll break on the next iteration's
+        # ``remaining <= 0`` guard).
+        logger.info(
+            "voice_cascade_candidate_failed",
+            candidate_rank=candidate.preference_rank,
+            candidate_source=str(candidate.source),
+            device_index=candidate.device_index,
+            source_label=per_candidate_result.source,
+            budget_exhausted=per_candidate_result.budget_exhausted,
+        )
+
+    # Exhausted — return aggregated result keyed on the first candidate
+    # so log correlation is stable.
+    logger.error(
+        "voice_cascade_candidate_set_exhausted",
+        candidate_count=len(candidates),
+        attempts_total=total_attempts_count,
+    )
+    first = candidates[0]
+    return CascadeResult(
+        endpoint_guid=first.endpoint_guid,
+        winning_combo=None,
+        winning_probe=None,
+        attempts=tuple(aggregated_attempts),
+        attempts_count=total_attempts_count,
+        budget_exhausted=last_result.budget_exhausted if last_result else False,
+        source="none",
+        winning_candidate=None,
+    )
 
 
 def _default_locks() -> LRULockDict[str]:
@@ -1254,11 +1652,86 @@ def _combo_tag(combo: Combo) -> str:
     )
 
 
+_LOG_DETAIL_MAX_CHARS = 512
+"""Cap on ``error_detail`` truncation in cascade/probe events (T1).
+
+Matches the cap used by ``anomaly.latency_spike`` so structured fields
+stay within OTLP attribute-size limits without surprising operators.
+"""
+
+
+def _truncate_detail(detail: str | None) -> str:
+    """Clamp ``detail`` for structured log fields; safe for ``None``."""
+    if not detail:
+        return ""
+    if len(detail) <= _LOG_DETAIL_MAX_CHARS:
+        return detail
+    return detail[: _LOG_DETAIL_MAX_CHARS - 1] + "…"
+
+
+def _log_probe_call(
+    *,
+    endpoint_guid: str,
+    attempt: int,
+    device_index: int,
+    combo: Combo,
+    mode: ProbeMode,
+    attempt_budget_s: float,
+) -> None:
+    """Emit ``voice_cascade_probe_call`` before every probe invocation (T1).
+
+    Uniform across cascade/pinned/store paths so post-mortem log greps
+    see the same structured key set regardless of which source fed the
+    probe call.
+    """
+    logger.info(
+        "voice_cascade_probe_call",
+        endpoint=endpoint_guid,
+        attempt=attempt,
+        device_index=device_index,
+        combo_host_api=combo.host_api,
+        combo_sample_rate=combo.sample_rate,
+        combo_channels=combo.channels,
+        combo_sample_format=combo.sample_format,
+        combo_exclusive=combo.exclusive,
+        combo_auto_convert=combo.auto_convert,
+        combo_frames_per_buffer=combo.frames_per_buffer,
+        mode=str(mode),
+        attempt_budget_s=attempt_budget_s,
+    )
+
+
+def _log_probe_result(
+    *,
+    endpoint_guid: str,
+    attempt: int,
+    device_index: int,
+    combo: Combo,
+    result: ProbeResult,
+) -> None:
+    """Emit ``voice_cascade_probe_result`` after every probe invocation (T1)."""
+    logger.info(
+        "voice_cascade_probe_result",
+        endpoint=endpoint_guid,
+        attempt=attempt,
+        device_index=device_index,
+        combo_host_api=combo.host_api,
+        combo_sample_rate=combo.sample_rate,
+        diagnosis=str(result.diagnosis),
+        rms_db=result.rms_db,
+        callbacks_fired=result.callbacks_fired,
+        duration_ms=result.duration_ms,
+        error_detail=_truncate_detail(result.error),
+    )
+
+
 __all__ = [
     "LINUX_CASCADE",
     "MACOS_CASCADE",
     "WINDOWS_CASCADE",
     "WINDOWS_CASCADE_AGGRESSIVE",
     "ProbeCallable",
+    "build_linux_cascade_for_device",
     "run_cascade",
+    "run_cascade_for_candidates",
 ]

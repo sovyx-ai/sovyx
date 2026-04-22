@@ -14,6 +14,12 @@ import {
   type SelectedDevices,
   type SelectedVoice,
 } from "@/components/setup-wizard";
+import {
+  DeviceContentionBanner,
+  type AlternativeDevice,
+  type CaptureDeviceContendedPayload,
+} from "@/components/voice/DeviceContentionBanner";
+import { VoiceCaptureDeviceContendedErrorSchema } from "@/types/schemas";
 
 interface VoiceStepProps {
   onConfigured: () => void;
@@ -45,6 +51,9 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
     command: string;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [contention, setContention] = useState<CaptureDeviceContendedPayload | null>(
+    null,
+  );
   const [copied, setCopied] = useState(false);
   const [devices, setDevices] = useState<SelectedDevices>({
     input_device: null,
@@ -55,50 +64,88 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
     voice: null,
   });
 
-  const handleEnable = useCallback(async () => {
-    setEnabling(true);
-    setMissingDeps(null);
-    setError(null);
-    try {
-      // Only send voice_id / language when the picker actually resolved —
-      // the backend validates against the catalog, so passing a stale
-      // `null` dropdown value would 400. The effective language still
-      // falls back to MindConfig on the server if we omit it here.
-      const body: Record<string, unknown> = { ...devices };
-      if (voiceSelection.voice) body.voice_id = voiceSelection.voice;
-      if (voiceSelection.language) body.language = voiceSelection.language;
-      const result = await api.post<EnableResult>("/api/voice/enable", body);
-      if (result.ok) {
-        setEnabled(true);
-      }
-    } catch (err) {
-      if (err instanceof ApiError) {
-        if (err.status === 429) {
-          setError("Too many requests — wait a moment and try again.");
-        } else {
-          try {
-            const body = JSON.parse(err.message) as EnableResult;
-            if (body.error === "missing_deps" && body.missing_deps) {
-              setMissingDeps({
-                deps: body.missing_deps,
-                command: body.install_command ?? "pip install sovyx[voice]",
-              });
-            } else if (typeof body.error === "string" && body.error.toLowerCase().includes("audio")) {
-              setError("No audio hardware detected. Connect a microphone and speakers.");
-            } else {
-              setError(body.error ?? "Failed to enable voice");
-            }
-          } catch {
-            setError(err.message || "Failed to enable voice pipeline");
-          }
+  const enableWithDevices = useCallback(
+    async (deviceSpec: SelectedDevices, inputDeviceName?: string) => {
+      setEnabling(true);
+      setMissingDeps(null);
+      setError(null);
+      setContention(null);
+      try {
+        // Only send voice_id / language when the picker actually resolved —
+        // the backend validates against the catalog, so passing a stale
+        // `null` dropdown value would 400. The effective language still
+        // falls back to MindConfig on the server if we omit it here.
+        const body: Record<string, unknown> = { ...deviceSpec };
+        if (voiceSelection.voice) body.voice_id = voiceSelection.voice;
+        if (voiceSelection.language) body.language = voiceSelection.language;
+        if (inputDeviceName) {
+          body.input_device_name = inputDeviceName;
         }
-      } else {
-        setError("Failed to enable voice pipeline");
+        const result = await api.post<EnableResult>("/api/voice/enable", body);
+        if (result.ok) {
+          setEnabled(true);
+        }
+      } catch (err) {
+        if (err instanceof ApiError) {
+          if (err.status === 429) {
+            setError("Too many requests — wait a moment and try again.");
+          } else {
+            try {
+              const parsed = JSON.parse(err.message) as Record<string, unknown>;
+              // T9 — capture_device_contended takes priority: render
+              // the chip banner instead of the generic error toast.
+              const contentionParse =
+                VoiceCaptureDeviceContendedErrorSchema.safeParse(parsed);
+              if (contentionParse.success) {
+                setContention(contentionParse.data);
+              } else {
+                const body = parsed as unknown as EnableResult;
+                if (body.error === "missing_deps" && body.missing_deps) {
+                  setMissingDeps({
+                    deps: body.missing_deps,
+                    command:
+                      body.install_command ?? "pip install sovyx[voice]",
+                  });
+                } else if (
+                  typeof body.error === "string" &&
+                  body.error.toLowerCase().includes("audio")
+                ) {
+                  setError(
+                    "No audio hardware detected. Connect a microphone and speakers.",
+                  );
+                } else {
+                  setError(body.error ?? "Failed to enable voice");
+                }
+              }
+            } catch {
+              setError(err.message || "Failed to enable voice pipeline");
+            }
+          }
+        } else {
+          setError("Failed to enable voice pipeline");
+        }
+      } finally {
+        setEnabling(false);
       }
-    } finally {
-      setEnabling(false);
-    }
-  }, [devices, voiceSelection]);
+    },
+    [voiceSelection],
+  );
+
+  const handleEnable = useCallback(async () => {
+    await enableWithDevices(devices);
+  }, [devices, enableWithDevices]);
+
+  const handleSelectAlternative = useCallback(
+    (device: AlternativeDevice) => {
+      const nextDevices: SelectedDevices = {
+        ...devices,
+        input_device: device.index,
+      };
+      setDevices(nextDevices);
+      void enableWithDevices(nextDevices, device.name);
+    },
+    [devices, enableWithDevices],
+  );
 
   const handleCopy = useCallback((cmd: string) => {
     void navigator.clipboard.writeText(cmd);
@@ -168,8 +215,16 @@ export function VoiceStep({ onConfigured, onSkip, language }: VoiceStepProps) {
         </div>
       )}
 
+      {/* T9 — session-manager-contention banner with clickable chips */}
+      {contention && (
+        <DeviceContentionBanner
+          payload={contention}
+          onSelectAlternative={enabling ? null : handleSelectAlternative}
+        />
+      )}
+
       {/* Generic error */}
-      {error && !missingDeps && (
+      {error && !missingDeps && !contention && (
         <div className="rounded-[var(--svx-radius-md)] bg-[var(--svx-color-error)]/10 px-3 py-2.5 text-xs text-[var(--svx-color-error)]">
           {error}
         </div>

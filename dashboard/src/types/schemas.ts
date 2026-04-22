@@ -822,6 +822,40 @@ export const VoiceHealthForgetResponseSchema = z.object({
   invalidated: z.boolean(),
 });
 
+// ── voice-linux-cascade-root-fix T9 — alternative-device banner ──
+//
+// Backend returns HTTP 503 with ``error: "capture_device_contended"``
+// when every candidate failed because a session manager holds the
+// hardware. The dashboard renders a banner with clickable chips for
+// each alternative; clicking one dispatches a new ``/api/voice/enable``
+// with ``input_device_name`` / ``input_device`` pinned to that device.
+export const VoiceDeviceKindSchema = z.enum([
+  "hardware",
+  "session_manager_virtual",
+  "os_default",
+  "unknown",
+]);
+
+export const VoiceAlternativeDeviceSchema = z.object({
+  index: z.number().int(),
+  name: z.string(),
+  host_api: z.string(),
+  kind: VoiceDeviceKindSchema,
+  max_input_channels: z.number().int(),
+  default_samplerate: z.number().int(),
+});
+
+export const VoiceCaptureDeviceContendedErrorSchema = z.object({
+  ok: z.literal(false),
+  error: z.literal("capture_device_contended"),
+  detail: z.string(),
+  device: z.union([z.number(), z.string(), z.null()]),
+  host_api: z.union([z.string(), z.null()]),
+  suggested_actions: z.array(z.string()),
+  contending_process_hint: z.union([z.string(), z.null()]).optional(),
+  alternative_devices: z.array(VoiceAlternativeDeviceSchema),
+});
+
 export const VoiceHealthPinResponseSchema = z.object({
   endpoint_guid: z.string(),
   pinned: z.boolean(),

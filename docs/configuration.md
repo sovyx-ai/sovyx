@@ -322,6 +322,14 @@ tuning:
     kokoro_model_url: "…"
     device_test_frame_rate_hz: 30
     device_test_peak_hold_ms: 1500
+    # voice-linux-cascade-root-fix (T5, T10) — session-manager
+    # contention detection + native-rate cascade prepend:
+    cascade_native_rate_min_hz: 8000     # lower bound for hw: native-rate prepend
+    cascade_native_rate_max_hz: 192000   # upper bound
+    detector_pactl_timeout_s: 2.0        # pactl wall-clock cap
+    detector_proc_timeout_s: 1.5         # /proc scan wall-clock cap
+    detector_proc_max_scan: 5000         # /proc scan PID count cap
+    detector_evidence_max_chars: 2048    # report payload truncation cap
     # … see voice-device-test module for the full device-test family
 ```
 

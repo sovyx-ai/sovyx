@@ -5,8 +5,19 @@ handler. No implicit field upserts, no "loose JSON survives a round
 trip" guarantees. A migration that fails archives the source file and
 returns an empty store (R4 path in :mod:`combo_store`).
 
-Currently only v1 → v2 is implemented. Future versions add a new
-:func:`_migrate_v2_to_v3` handler and extend :data:`_MIGRATIONS`.
+Schema history:
+
+* ``v1`` — original (pre-v0.20) layout. No ``device_class``, no
+  ``endpoint_fxproperties_sha``, ``validation_mode`` implicit.
+* ``v2`` — v0.20 / ADR §3 layout. Adds ``device_class``,
+  ``validation_mode``, ``endpoint_fxproperties_sha``, plus the
+  outer ``audio_subsystem_fingerprint`` block.
+* ``v3`` — ``voice-linux-cascade-root-fix`` T11. Adds
+  ``candidate_kind`` per entry so the cascade-candidate-set
+  fast-path can distinguish ``hardware`` / ``session_manager_virtual``
+  / ``os_default`` stored winners — useful for telemetry and for
+  surfacing "running on pipewire (fallback)" vs. "running on
+  hw:1,0" in the dashboard without a secondary lookup.
 """
 
 from __future__ import annotations
@@ -21,7 +32,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 
 class MigrationError(RuntimeError):
@@ -138,8 +149,46 @@ def _migrate_v1_to_v2(
     return out
 
 
+def _migrate_v2_to_v3(
+    raw: dict[str, Any],
+    *,
+    audio_subsystem_fingerprint_factory: Callable[[], dict[str, Any]],  # noqa: ARG001
+    endpoint_fxproperties_sha_for: Callable[[str], str],  # noqa: ARG001
+) -> dict[str, Any]:
+    """Backfill ``candidate_kind`` for voice-linux-cascade-root-fix T11.
+
+    The new field describes the winning candidate's
+    :class:`~sovyx.voice.device_enum.DeviceKind` — populated verbatim
+    by future writers, backfilled here as ``"unknown"`` for v2 entries
+    so the reader always sees a string.
+
+    Unrelated fields are preserved verbatim — this is a pure additive
+    migration, no reshaping. A malformed ``entries`` block raises
+    :class:`MigrationError` (handled by the caller's archive path).
+    """
+    entries = raw.get("entries")
+    if not isinstance(entries, dict):
+        msg = f"v2 entries field is not a dict (got {type(entries).__name__})"
+        raise MigrationError(msg)
+
+    new_entries: dict[str, Any] = {}
+    for guid, entry in entries.items():
+        if not isinstance(entry, dict):
+            logger.warning("combo_store_migration_dropped_non_dict_entry", endpoint=guid)
+            continue
+        new_entry: dict[str, Any] = dict(entry)
+        new_entry.setdefault("candidate_kind", "unknown")
+        new_entries[guid] = new_entry
+
+    out: dict[str, Any] = dict(raw)
+    out["schema_version"] = 3
+    out["entries"] = new_entries
+    return out
+
+
 _MIGRATIONS: dict[int, Callable[..., dict[str, Any]]] = {
     1: _migrate_v1_to_v2,
+    2: _migrate_v2_to_v3,
 }
 
 

@@ -512,7 +512,7 @@ class TestKernelInvalidatedFailoverEmits:
 
     @pytest.mark.asyncio()
     async def test_failover_emits_metric_with_alternative_host_api(self, tmp_path) -> None:
-        from dataclasses import dataclass
+        from dataclasses import dataclass, field
         from unittest.mock import AsyncMock, MagicMock
 
         import sovyx.voice.factory as factory_mod
@@ -523,6 +523,7 @@ class TestKernelInvalidatedFailoverEmits:
             source: str
             winning_combo: object | None = None
             attempts_count: int = 0
+            winning_candidate: object | None = field(default=None)
 
         original = DeviceEntry(
             index=3,
@@ -567,7 +568,11 @@ class TestKernelInvalidatedFailoverEmits:
                 return_value=[],
             ),
             patch(
-                "sovyx.voice.health._factory_integration.run_boot_cascade",
+                "sovyx.voice.device_enum.enumerate_devices",
+                return_value=[original, alternative],
+            ),
+            patch(
+                "sovyx.voice.health._factory_integration.run_boot_cascade_for_candidates",
                 new=run_cascade,
             ),
             patch(
@@ -596,7 +601,7 @@ class TestKernelInvalidatedFailoverEmits:
 
     @pytest.mark.asyncio()
     async def test_no_alternative_does_not_emit_failover(self, tmp_path) -> None:
-        from dataclasses import dataclass
+        from dataclasses import dataclass, field
         from unittest.mock import AsyncMock, MagicMock
 
         import sovyx.voice.factory as factory_mod
@@ -608,6 +613,7 @@ class TestKernelInvalidatedFailoverEmits:
             source: str
             winning_combo: object | None = None
             attempts_count: int = 0
+            winning_candidate: object | None = field(default=None)
 
         original = DeviceEntry(
             index=3,
@@ -630,7 +636,11 @@ class TestKernelInvalidatedFailoverEmits:
                 return_value=[],
             ),
             patch(
-                "sovyx.voice.health._factory_integration.run_boot_cascade",
+                "sovyx.voice.device_enum.enumerate_devices",
+                return_value=[original],
+            ),
+            patch(
+                "sovyx.voice.health._factory_integration.run_boot_cascade_for_candidates",
                 new=AsyncMock(return_value=_Result(source="quarantined")),
             ),
             patch(
@@ -774,7 +784,7 @@ class TestCascadeVerdictRaisesInoperative:
 
     @pytest.mark.asyncio()
     async def test_exhausted_cascade_raises_capture_inoperative(self, tmp_path) -> None:
-        from dataclasses import dataclass
+        from dataclasses import dataclass, field
         from unittest.mock import AsyncMock, MagicMock
 
         import sovyx.voice.factory as factory_mod
@@ -786,6 +796,7 @@ class TestCascadeVerdictRaisesInoperative:
             source: str
             winning_combo: object | None = None
             attempts_count: int = 0
+            winning_candidate: object | None = field(default=None)
 
         original = DeviceEntry(
             index=4,
@@ -807,8 +818,16 @@ class TestCascadeVerdictRaisesInoperative:
                 return_value=[],
             ),
             patch(
-                "sovyx.voice.health._factory_integration.run_boot_cascade",
+                "sovyx.voice.device_enum.enumerate_devices",
+                return_value=[original],
+            ),
+            patch(
+                "sovyx.voice.health._factory_integration.run_boot_cascade_for_candidates",
                 new=AsyncMock(return_value=_Result(source="none", attempts_count=6)),
+            ),
+            patch(
+                "sovyx.voice.health._factory_integration.select_alternative_endpoint",
+                return_value=None,
             ),
             pytest.raises(CaptureInoperativeError) as exc_info,
         ):
@@ -823,7 +842,7 @@ class TestCascadeVerdictRaisesInoperative:
 
     @pytest.mark.asyncio()
     async def test_healthy_cascade_returns_device(self, tmp_path) -> None:
-        from dataclasses import dataclass
+        from dataclasses import dataclass, field
         from unittest.mock import AsyncMock, MagicMock
 
         import sovyx.voice.factory as factory_mod
@@ -834,6 +853,7 @@ class TestCascadeVerdictRaisesInoperative:
             source: str
             winning_combo: object | None = None
             attempts_count: int = 0
+            winning_candidate: object | None = field(default=None)
 
         original = DeviceEntry(
             index=2,
@@ -855,7 +875,11 @@ class TestCascadeVerdictRaisesInoperative:
                 return_value=[],
             ),
             patch(
-                "sovyx.voice.health._factory_integration.run_boot_cascade",
+                "sovyx.voice.device_enum.enumerate_devices",
+                return_value=[original],
+            ),
+            patch(
+                "sovyx.voice.health._factory_integration.run_boot_cascade_for_candidates",
                 new=AsyncMock(
                     return_value=_Result(
                         source="cascade", winning_combo=object(), attempts_count=1
@@ -878,7 +902,7 @@ class TestCascadeVerdictRaisesInoperative:
         original device instead of raising — useful for the legacy
         opener path where deafness is observed downstream.
         """
-        from dataclasses import dataclass
+        from dataclasses import dataclass, field
         from unittest.mock import AsyncMock, MagicMock
 
         import sovyx.voice.factory as factory_mod
@@ -889,6 +913,7 @@ class TestCascadeVerdictRaisesInoperative:
             source: str
             winning_combo: object | None = None
             attempts_count: int = 0
+            winning_candidate: object | None = field(default=None)
 
         original = DeviceEntry(
             index=4,
@@ -910,8 +935,16 @@ class TestCascadeVerdictRaisesInoperative:
                 return_value=[],
             ),
             patch(
-                "sovyx.voice.health._factory_integration.run_boot_cascade",
+                "sovyx.voice.device_enum.enumerate_devices",
+                return_value=[original],
+            ),
+            patch(
+                "sovyx.voice.health._factory_integration.run_boot_cascade_for_candidates",
                 new=AsyncMock(return_value=_Result(source="none", attempts_count=3)),
+            ),
+            patch(
+                "sovyx.voice.health._factory_integration.select_alternative_endpoint",
+                return_value=None,
             ),
         ):
             out = await factory_mod._run_vchl_boot_cascade(
@@ -956,7 +989,11 @@ class TestCascadeVerdictRaisesInoperative:
                 return_value=[],
             ),
             patch(
-                "sovyx.voice.health._factory_integration.run_boot_cascade",
+                "sovyx.voice.device_enum.enumerate_devices",
+                return_value=[original],
+            ),
+            patch(
+                "sovyx.voice.health._factory_integration.run_boot_cascade_for_candidates",
                 new=AsyncMock(side_effect=RuntimeError("probe crashed")),
             ),
         ):

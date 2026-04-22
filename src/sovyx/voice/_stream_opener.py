@@ -60,6 +60,7 @@ from sovyx.voice.device_test._source import (
     AudioSourceError,
     _classify_portaudio_error,
 )
+from sovyx.voice.health._metrics import record_opener_attempt
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -74,6 +75,14 @@ logger = get_logger(__name__)
 
 
 _WASAPI_HOST_API = "Windows WASAPI"
+
+_LOG_DETAIL_MAX_CHARS = 512
+"""Cap on ``error_detail`` truncation for T1 opener observability events.
+
+Matches the cap used by ``voice_cascade_probe_result`` in
+:mod:`sovyx.voice.health.cascade` so structured log consumers see a
+uniform truncation contract.
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,6 +236,23 @@ async def open_input_stream(
     attempts: list[OpenAttempt] = []
     for idx, (depth, entry, combo) in enumerate(pairs):
         next_pair = pairs[idx + 1] if idx + 1 < len(pairs) else None
+        # T1 — pre-call observability. Paired with voice_opener_attempt_result
+        # below so a crash between the two reveals exactly which opener
+        # kwarg set was in flight.
+        logger.info(
+            "voice_opener_attempt",
+            attempt_n=idx + 1,
+            total_pairs=len(pairs),
+            chain_depth=depth,
+            device_index=entry.index,
+            host_api=entry.host_api_name,
+            sample_rate=combo.sample_rate,
+            channels=combo.channels,
+            dtype=dtype,
+            blocksize=blocksize,
+            auto_convert=combo.auto_convert,
+            exclusive=combo.exclusive,
+        )
         stream, attempt = await _try_open_input(
             sd=sd,
             entry=entry,
@@ -234,6 +260,28 @@ async def open_input_stream(
             blocksize=blocksize,
             dtype=dtype,
             callback=callback,
+        )
+        # T1 — post-call observability + Prometheus counter.
+        logger.info(
+            "voice_opener_attempt_result",
+            attempt_n=idx + 1,
+            device_index=entry.index,
+            host_api=entry.host_api_name,
+            sample_rate=combo.sample_rate,
+            channels=combo.channels,
+            auto_convert_effective=attempt.auto_convert,
+            exclusive_effective=attempt.exclusive,
+            success=attempt.error_code is None,
+            error_code=attempt.error_code.value if attempt.error_code else None,
+            error_detail=(
+                attempt.error_detail[: _LOG_DETAIL_MAX_CHARS - 1] + "…"
+                if attempt.error_detail and len(attempt.error_detail) > _LOG_DETAIL_MAX_CHARS
+                else (attempt.error_detail or "")
+            ),
+        )
+        record_opener_attempt(
+            host_api=entry.host_api_name,
+            error_code=attempt.error_code.value if attempt.error_code else None,
         )
         attempts.append(attempt)
         if stream is None:
@@ -530,6 +578,11 @@ def _device_chain(
     :func:`device_enum.enumerate_devices` already encodes the platform
     preference, which the caller can override via
     :attr:`VoiceTuningConfig.capture_fallback_host_apis`.
+
+    T3 (cascade-candidate-set) will simplify this function to return
+    ``[starting]`` — sibling iteration moves to the cascade layer via
+    :func:`~sovyx.voice.health._candidate_builder.build_capture_candidates`.
+    Until T3 lands, behaviour is unchanged; T1 only adds observability.
     """
     if enumerate_fn is None:
         from sovyx.voice.device_enum import enumerate_devices
@@ -547,7 +600,30 @@ def _device_chain(
     if not any(s.index == starting.index for s in siblings):
         siblings = [starting, *siblings]
     rest = [s for s in siblings if s.index != starting.index]
-    return [starting, *rest]
+    chain = [starting, *rest]
+
+    # T1 — Observability: make the chain explicit so log readers see
+    # exactly which devices the opener will iterate, in order, and can
+    # pinpoint a missing sibling without instrumenting the enumeration.
+    logger.info(
+        "voice_device_chain_resolved",
+        kind=kind,
+        starting_index=starting.index,
+        starting_host_api=starting.host_api_name,
+        starting_name=starting.name,
+        chain_length=len(chain),
+        chain=[
+            {
+                "index": e.index,
+                "host_api": e.host_api_name,
+                "name": e.name,
+                "canonical_name": e.canonical_name,
+            }
+            for e in chain
+        ],
+    )
+
+    return chain
 
 
 def _input_combos(

@@ -232,6 +232,38 @@ def record_active_endpoint_change(*, reason: EndpointChangeReason) -> None:
     )
 
 
+def record_opener_attempt(
+    *,
+    host_api: str,
+    error_code: str | None,
+) -> None:
+    """Record one pyramid attempt in :func:`~sovyx.voice._stream_opener.open_input_stream`.
+
+    Introduced by ``voice-linux-cascade-root-fix`` T1 so opener-level
+    fallbacks are observable alongside cascade-level attempts. One call
+    per ``_try_open_input`` invocation — emitted after the attempt is
+    classified, regardless of whether it succeeded.
+
+    Args:
+        host_api: PortAudio host-API name of the attempted device. Empty
+            / missing → ``"unknown"``.
+        error_code: ``None`` for success; otherwise the
+            :class:`~sovyx.voice.device_test._protocol.ErrorCode` string
+            value (``"device_busy"``, ``"unsupported_samplerate"``, ...).
+    """
+    counter = getattr(get_metrics(), "voice_opener_attempts", None)
+    if counter is None:
+        return
+    counter.add(
+        1,
+        attributes={
+            "host_api": host_api or "unknown",
+            "error_code": error_code or "none",
+            "result": "ok" if error_code is None else "fail",
+        },
+    )
+
+
 def record_kernel_invalidated_event(
     *,
     platform: str,
@@ -425,6 +457,7 @@ __all__ = [
     "record_combo_store_hit",
     "record_combo_store_invalidation",
     "record_kernel_invalidated_event",
+    "record_opener_attempt",
     "record_preflight_failure",
     "record_probe_diagnosis",
     "record_probe_duration",

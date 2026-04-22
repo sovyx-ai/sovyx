@@ -272,6 +272,11 @@ async def capture_diagnostics(request: Request) -> JSONResponse:
     any_clarity = any(r.voice_clarity_active for r in reports)
     active_clarity = bool(active_report is not None and active_report.voice_clarity_active)
 
+    # T10 — Linux session-manager grab report. No-op on Windows/macOS
+    # (the detector itself returns has_grab=None with
+    # detection_method="unavailable" on those platforms).
+    session_manager_grab = await _collect_session_manager_grab_report()
+
     return JSONResponse(
         {
             "platform_supported": bool(reports) or _is_windows(),
@@ -290,6 +295,7 @@ async def capture_diagnostics(request: Request) -> JSONResponse:
             "voice_clarity_active": active_clarity,
             "any_voice_clarity_active": any_clarity,
             "endpoints": endpoints,
+            "session_manager_grab": session_manager_grab,
             "fix_suggestion": (
                 "Open the mic in WASAPI exclusive mode to bypass the APO chain. "
                 "Set SOVYX_TUNING__VOICE__CAPTURE_WASAPI_EXCLUSIVE=true, or leave "
@@ -302,11 +308,80 @@ async def capture_diagnostics(request: Request) -> JSONResponse:
     )
 
 
+async def _collect_session_manager_grab_report() -> dict[str, object]:
+    """Invoke the Linux session-manager detector and return a JSON-safe payload.
+
+    Never raises. On non-Linux platforms the detector returns
+    ``has_grab=None`` with ``detection_method="unavailable"`` which
+    we surface verbatim — the dashboard renders a neutral "not
+    applicable" state.
+    """
+    import dataclasses as _dc
+
+    from sovyx.engine.config import VoiceTuningConfig
+    from sovyx.voice._session_manager_detector import detect_session_manager_grab
+
+    try:
+        report = await detect_session_manager_grab(tuning=VoiceTuningConfig())
+    except Exception as exc:  # noqa: BLE001 — diagnostics endpoint must never 500
+        logger.debug("voice_capture_diagnostics_detector_failed", exc_info=True)
+        return {
+            "has_grab": None,
+            "detection_method": "unavailable",
+            "grabbing_processes": [],
+            "evidence": f"detector invocation failed: {exc}",
+        }
+    return {
+        "has_grab": report.has_grab,
+        "detection_method": report.detection_method,
+        "grabbing_processes": [_dc.asdict(p) for p in report.grabbing_processes],
+        "evidence": report.evidence,
+    }
+
+
 def _is_windows() -> bool:
     """Return True when running on Windows (module-level for patchability)."""
     import sys as _sys
 
     return _sys.platform == "win32"
+
+
+def _enumerate_alternative_devices() -> list[dict[str, object]]:
+    """Return session-manager-virtual / OS-default inputs for the UI banner.
+
+    Used by the ``CaptureDeviceContendedError`` handler (T7) so the
+    dashboard can render clickable "try this device instead" chips.
+    Fails soft: returns ``[]`` when enumeration fails (no ``sounddevice``,
+    headless CI) — the UI just shows the suggested-action tokens
+    without device-specific chips.
+    """
+    try:
+        from sovyx.voice.device_enum import DeviceKind, enumerate_devices
+    except Exception:  # noqa: BLE001 — import failure on exotic builds
+        return []
+
+    try:
+        devices = enumerate_devices()
+    except Exception:  # noqa: BLE001
+        return []
+
+    alternatives: list[dict[str, object]] = []
+    for entry in devices:
+        if entry.max_input_channels <= 0:
+            continue
+        if entry.kind not in {DeviceKind.SESSION_MANAGER_VIRTUAL, DeviceKind.OS_DEFAULT}:
+            continue
+        alternatives.append(
+            {
+                "index": entry.index,
+                "name": entry.name,
+                "host_api": entry.host_api_name,
+                "kind": str(entry.kind),
+                "max_input_channels": entry.max_input_channels,
+                "default_samplerate": entry.default_samplerate,
+            }
+        )
+    return alternatives
 
 
 @router.post("/capture-exclusive")
@@ -948,18 +1023,24 @@ async def enable_voice(request: Request) -> JSONResponse:
         if registry.is_registered(VoicePipeline):
             return JSONResponse({"ok": True, "status": "already_active"})
 
-    # 3.5 v0.20.2 / Bug B — close + wait for any live voice_test meter
-    # sessions BEFORE the factory probes the mic. Without this the old
-    # session keeps PortAudio open on the capture endpoint and the
-    # cascade probes inside create_voice_pipeline fail with
-    # ``DEVICE_BUSY`` while the browser meter is still streaming.
+    # 3.5 v0.20.2 / Bug B + voice-linux-cascade-root-fix T8 — close AND
+    # AWAIT any live voice_test meter sessions BEFORE the factory probes
+    # the mic. ``SessionRegistry.close_all`` is a cooperative shutdown:
+    # it stops each session, waits up to
+    # ``tuning.device_test_force_close_grace_s`` for the PortAudio stream
+    # to drain, then force-closes on timeout. The await is what makes
+    # the next probe reliable — without it the session's ``stream.close``
+    # would race the cascade's reopen on the same ``hw:X,Y`` node and
+    # produce spurious ``DEVICE_BUSY`` on the first candidate.
     voice_test_registry = getattr(request.app.state, "voice_test_registry", None)
     if voice_test_registry is not None:
         from sovyx.voice.device_test import CloseReason, SessionRegistry
 
         if isinstance(voice_test_registry, SessionRegistry):
+            logger.info("voice_enable_test_session_handoff_begin")
             with contextlib.suppress(Exception):
                 await voice_test_registry.close_all(reason=CloseReason.SERVER_SHUTDOWN)
+            logger.info("voice_enable_test_session_handoff_done")
 
     # 4. Create pipeline
     from sovyx.voice.factory import VoiceFactoryError, create_voice_pipeline
@@ -1096,7 +1177,10 @@ async def enable_voice(request: Request) -> JSONResponse:
     # MME variant falls through to WASAPI (or DirectSound) without any
     # caller-side retry bookkeeping. ``CaptureSilenceError`` is only
     # raised when *every* viable variant delivered zeros.
-    from sovyx.voice._capture_task import CaptureSilenceError
+    from sovyx.voice._capture_task import (
+        CaptureDeviceContendedError,
+        CaptureSilenceError,
+    )
 
     try:
         await bundle.capture_task.start()
@@ -1117,6 +1201,34 @@ async def enable_voice(request: Request) -> JSONResponse:
                 "device": exc.device,
                 "host_api": exc.host_api,
                 "observed_peak_rms_db": exc.observed_peak_rms_db,
+            },
+            status_code=503,
+        )
+    except CaptureDeviceContendedError as exc:
+        # T7 — session-manager contention pattern detected. Return a
+        # 503 with actionable alternatives so the frontend can render
+        # clickable chips instead of a generic "Audio capture failed"
+        # banner.
+        logger.error(
+            "voice_capture_device_contended",
+            device=exc.device,
+            host_api=exc.host_api,
+            suggested_actions=exc.suggested_actions,
+            contending_process_hint=exc.contending_process_hint,
+        )
+        with contextlib.suppress(Exception):
+            await bundle.pipeline.stop()
+        alternatives = _enumerate_alternative_devices()
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "capture_device_contended",
+                "detail": str(exc),
+                "device": exc.device,
+                "host_api": exc.host_api,
+                "suggested_actions": exc.suggested_actions,
+                "contending_process_hint": exc.contending_process_hint,
+                "alternative_devices": alternatives,
             },
             status_code=503,
         )

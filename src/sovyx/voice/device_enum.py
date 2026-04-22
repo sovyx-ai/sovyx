@@ -30,7 +30,10 @@ that collapses the 31-char MME truncation onto the full name.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+import sys
+from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any
 
 from sovyx.observability.logging import get_logger
@@ -42,6 +45,10 @@ _HOST_API_PREFERENCE: tuple[str, ...] = (
     "Windows WASAPI",  # Win: native rate conversion, works w/ USB headsets
     "Core Audio",  # macOS
     "ALSA",  # Linux native
+    # Linux modern session manager — only present when PortAudio ships a
+    # PipeWire backend natively (rare today, common in Arch/NixOS futures).
+    # VLX-007.
+    "PipeWire",
     "PulseAudio",  # Linux user-session
     "JACK Audio Connection Kit",  # Linux pro audio
     "Windows DirectSound",  # Win legacy fallback 1
@@ -49,6 +56,137 @@ _HOST_API_PREFERENCE: tuple[str, ...] = (
     "MME",  # Win legacy last resort — breaks rate conversion
     "OSS",  # BSD
 )
+
+
+class DeviceKind(StrEnum):
+    """Semantic taxonomy of audio-device PCMs on Linux.
+
+    Classifies what the PCM *is* from an audio-subsystem perspective,
+    not from PortAudio's host-API perspective. In the modern Linux
+    stack PortAudio typically only exposes the ``ALSA`` host API, so
+    every device (including the ``pipewire`` / ``pulse`` virtual PCMs
+    and the ``default`` alias) reports the same ``host_api_name``. The
+    ``kind`` field resolves the real identity via PCM-name pattern
+    matching — it is what the cascade candidate-set builder consumes
+    to decide the fallback order.
+
+    Non-Linux platforms default to :attr:`UNKNOWN`; the candidate set
+    builder on Windows / macOS doesn't consult this field, so no
+    behavioural change applies outside Linux.
+
+    Members:
+        HARDWARE: Direct hardware PCM — ``hw:X,Y``, ``plughw:X,Y``, or
+            vendor-style names like ``"HD-Audio Generic: SN6180 Analog
+            (hw:1,0)"``. Susceptible to session-manager grabs.
+        SESSION_MANAGER_VIRTUAL: PulseAudio, PipeWire, JACK virtual
+            PCM — ``pipewire``, ``pulse``, ``pulseaudio``, ``jack``.
+            Always "shared"; resamples internally; typically safe
+            fallback when the user's HARDWARE choice is busy.
+        OS_DEFAULT: The ALSA ``default`` / ``sysdefault`` PCM alias —
+            usually routes through the session manager on modern
+            distros but worth treating as a distinct candidate for
+            telemetry + ComboStore keying.
+        UNKNOWN: No pattern matched; Windows / macOS devices land here.
+    """
+
+    HARDWARE = "hardware"
+    SESSION_MANAGER_VIRTUAL = "session_manager_virtual"
+    OS_DEFAULT = "os_default"
+    UNKNOWN = "unknown"
+
+
+# Regex patterns for :func:`classify_device_kind`. Each pattern is
+# anchored to the lowercased, stripped device name so "default" alone
+# matches the ALSA default PCM but "default-sink-alias" does not.
+# Ordering matters: check OS_DEFAULT first because "default" is the
+# most specific signal (and the most commonly misclassified).
+#
+# Terminator explicitly enumerates what follows: end-of-string, colon,
+# underscore, or a literal whitespace character. ``\b`` would also
+# match ``-`` (non-word), incorrectly classifying "default-sink-alias"
+# as OS_DEFAULT. The classifier must never over-match here — false
+# positives here corrupt the candidate-set ordering.
+_OS_DEFAULT_PATTERN = re.compile(r"^(?:default|sysdefault)(?:$|[:_\s])")
+_SESSION_MANAGER_PATTERN = re.compile(r"^(?:pipewire|pulse(?:audio)?|jack)(?:$|[:_\s])")
+# Vendor-style hardware names commonly embed "(hw:X,Y)" or begin with
+# "hw:X,Y" / "plughw:X,Y". Match any form.
+_HARDWARE_PATTERN = re.compile(r"\b(?:plug)?hw:\d+,\d+\b")
+# Extract (card, device) from an ALSA-style name. Used by T10 doctor
+# and by T3 candidate builder for endpoint-guid stability.
+_ALSA_CARD_DEVICE_PATTERN = re.compile(r"(?:plug)?hw:(\d+),(\d+)")
+
+
+def classify_device_kind(
+    *,
+    name: str,
+    host_api_name: str,
+    platform_key: str,
+) -> DeviceKind:
+    """Classify a PortAudio device into a :class:`DeviceKind`.
+
+    The classifier is Linux-focused: Windows and macOS always return
+    :attr:`DeviceKind.UNKNOWN` because their candidate-set strategy
+    does not depend on virtual-vs-hardware PCM distinction — WASAPI /
+    CoreAudio expose one device per physical endpoint and session
+    managers are invisible to PortAudio at the host-API layer.
+
+    Args:
+        name: Raw PCM name from :func:`sounddevice.query_devices`.
+        host_api_name: PortAudio host-API name (``"ALSA"``, ``"Windows
+            WASAPI"``, …). Reserved for future ambiguity resolution —
+            currently unused because Linux classification is driven
+            entirely by PCM name.
+        platform_key: ``"linux"``, ``"win32"``, ``"darwin"``. Callers
+            typically pass :data:`sys.platform`; tests may override.
+
+    Returns:
+        :class:`DeviceKind` value. Never raises — an unrecognised name
+        on Linux collapses to :attr:`DeviceKind.UNKNOWN`, which the
+        candidate builder treats as "pass through without adding as
+        virtual/default fallback".
+    """
+    del host_api_name  # reserved for future use — see docstring
+    if platform_key != "linux":
+        return DeviceKind.UNKNOWN
+
+    stripped = name.strip().lower()
+    if not stripped:
+        return DeviceKind.UNKNOWN
+
+    # Order: OS_DEFAULT → SESSION_MANAGER_VIRTUAL → HARDWARE. The first
+    # two are anchored (most specific); hardware is a substring match.
+    if _OS_DEFAULT_PATTERN.match(stripped):
+        return DeviceKind.OS_DEFAULT
+    if _SESSION_MANAGER_PATTERN.match(stripped):
+        return DeviceKind.SESSION_MANAGER_VIRTUAL
+    if _HARDWARE_PATTERN.search(stripped):
+        return DeviceKind.HARDWARE
+    return DeviceKind.UNKNOWN
+
+
+def extract_alsa_card_device(name: str) -> tuple[int, int] | None:
+    """Parse an ALSA ``hw:X,Y`` / ``plughw:X,Y`` tuple from ``name``.
+
+    Accepts both bare forms (``"hw:1,0"``) and vendor-embedded forms
+    (``"HD-Audio Generic: SN6180 Analog (hw:1,0)"``). Returns ``None``
+    when no pattern matches — safe for use on Windows / macOS names
+    and on malformed inputs.
+
+    Used by:
+
+    * :mod:`sovyx.voice._session_manager_detector` (T10) — to correlate
+      ``/proc/asound/card*`` entries with PortAudio's view.
+    * :mod:`sovyx.voice.health._candidate_builder` (T3) — to dedupe
+      hardware siblings by ``(card, device)`` when multiple PCM names
+      point at the same physical node (e.g. ``hw:1,0`` + ``plughw:1,0``).
+
+    The function is deterministic and allocation-light (one regex
+    search per call). Safe to call on hot paths.
+    """
+    match = _ALSA_CARD_DEVICE_PATTERN.search(name)
+    if match is None:
+        return None
+    return int(match.group(1)), int(match.group(2))
 
 
 @dataclass(frozen=True)
@@ -68,6 +206,11 @@ class DeviceEntry:
         max_output_channels: Channel count for playback; 0 if not an output.
         default_samplerate: Native rate the driver reports.
         is_os_default: Whether PortAudio marks this index as the OS default.
+        kind: Semantic classification — see :class:`DeviceKind`. Populated
+            by :func:`enumerate_devices`. Defaults to
+            :attr:`DeviceKind.UNKNOWN` so legacy constructions without
+            the field continue to work (back-compat for anything that
+            instantiates :class:`DeviceEntry` directly in tests).
     """
 
     index: int
@@ -79,6 +222,7 @@ class DeviceEntry:
     max_output_channels: int
     default_samplerate: int
     is_os_default: bool
+    kind: DeviceKind = field(default=DeviceKind.UNKNOWN)
 
 
 def _canonicalise(name: str) -> str:
@@ -126,6 +270,7 @@ def enumerate_devices() -> list[DeviceEntry]:
         for i, a in enumerate(raw_host_apis)
     }
 
+    platform_key = sys.platform
     out: list[DeviceEntry] = []
     for i, d in enumerate(raw_devices):
         if not isinstance(d, dict):
@@ -148,6 +293,11 @@ def enumerate_devices() -> list[DeviceEntry]:
                 max_output_channels=out_ch,
                 default_samplerate=sr,
                 is_os_default=is_os_default,
+                kind=classify_device_kind(
+                    name=name,
+                    host_api_name=host_name,
+                    platform_key=platform_key,
+                ),
             )
         )
     _emit_enumeration(out, default_in=default_in, default_out=default_out)
@@ -200,6 +350,7 @@ def _emit_enumeration(
             "default_samplerate": e.default_samplerate,
             "is_default_input": e.index == default_in and e.max_input_channels > 0,
             "is_default_output": e.index == default_out and e.max_output_channels > 0,
+            "kind": str(e.kind),
         }
         for e in entries
     ]
@@ -264,6 +415,7 @@ def pick_preferred(entries: list[DeviceEntry], *, kind: str) -> list[DeviceEntry
                 max_output_channels=chosen.max_output_channels,
                 default_samplerate=chosen.default_samplerate,
                 is_os_default=True,
+                kind=chosen.kind,
             )
         preferred.append(chosen)
 

@@ -33,6 +33,7 @@ if TYPE_CHECKING:
         SessionManagerRestartResult,
         SharedRestartResult,
     )
+    from sovyx.voice.device_enum import DeviceEntry, DeviceKind
 
 
 # ── Enums ────────────────────────────────────────────────────────────────
@@ -69,6 +70,41 @@ class Diagnosis(StrEnum):
     # capture device. Cure is physical: replug or reboot.
     KERNEL_INVALIDATED = "kernel_invalidated"
     UNKNOWN = "unknown"
+
+
+class CandidateSource(StrEnum):
+    """Reason a :class:`CandidateEndpoint` is in the cascade's candidate set.
+
+    Populated by :func:`~sovyx.voice.health._candidate_builder.build_capture_candidates`.
+    Used for telemetry (``voice_cascade_probe_call.candidate_source``) and
+    for the UI banner that explains why the cascade picked a fallback.
+
+    Members:
+        USER_PREFERRED: The device the user pinned via ``mind.yaml``
+            (``input_device_name``) or the request body. Always rank 0
+            when present.
+        CANONICAL_SIBLING: Same :attr:`~sovyx.voice.device_enum.DeviceEntry.canonical_name`
+            as USER_PREFERRED but different ``host_api_name`` — legacy
+            "same physical device exposed by multiple host APIs" path.
+            Dominant on Windows (WASAPI / DirectSound / MME of one mic);
+            usually empty on Linux where PortAudio exposes only ALSA.
+        SESSION_MANAGER_VIRTUAL: PipeWire / PulseAudio / JACK virtual
+            PCM. Added on Linux only, and only when
+            ``USER_PREFERRED.kind == HARDWARE`` (we don't duplicate).
+        OS_DEFAULT: The ``default`` / ``sysdefault`` ALSA alias. Added
+            on Linux only, and only when not already present via
+            ``USER_PREFERRED``.
+        FALLBACK: Any remaining enumerated input device not already
+            claimed by one of the above sources. Tail of the list —
+            rarely reached; exists so a truly exotic setup (vendor
+            virtual PCM) still gets a shot before ``CaptureInoperativeError``.
+    """
+
+    USER_PREFERRED = "user_preferred"
+    CANONICAL_SIBLING = "canonical_sibling"
+    SESSION_MANAGER_VIRTUAL = "session_manager_virtual"
+    OS_DEFAULT = "os_default"
+    FALLBACK = "fallback"
 
 
 class ProbeMode(StrEnum):
@@ -323,6 +359,83 @@ class Combo:
 
 
 @dataclass(frozen=True, slots=True)
+class CandidateEndpoint:
+    """One endpoint the cascade should consider when opening capture.
+
+    A :class:`CandidateEndpoint` is the cascade-land analogue of a
+    :class:`~sovyx.voice.device_enum.DeviceEntry`: it carries the
+    device identity *plus* the metadata the cascade needs to (a) order
+    attempts, (b) key the ComboStore, (c) drive quarantine lifecycle,
+    and (d) populate user-visible telemetry. Built by
+    :func:`~sovyx.voice.health._candidate_builder.build_capture_candidates`.
+
+    The distinction between :attr:`device_index` and
+    :attr:`~sovyx.voice.device_enum.DeviceEntry.index` is deliberate:
+    the cascade may produce multiple ``CandidateEndpoint``\\ s with
+    different ``device_index`` values derived from the same physical
+    device (e.g. ``hw:1,0`` + ``plughw:1,0`` on Linux), and each gets
+    its own :attr:`endpoint_guid` for independent fast-path / quarantine
+    state in :class:`~sovyx.voice.health.combo_store.ComboStore`.
+
+    Attributes:
+        device_index: PortAudio device index — ephemeral across boots,
+            but always valid for the lifetime of one enumeration pass.
+        host_api_name: PortAudio host-API name (``"ALSA"``, ``"Windows
+            WASAPI"``, ``"Core Audio"``, …). Used for telemetry and to
+            cross-check with the device's actual host API in the probe.
+        kind: Semantic classification
+            (:class:`~sovyx.voice.device_enum.DeviceKind`). Drives
+            Linux-specific candidate-builder ordering heuristics.
+        canonical_name: The normalised, host-API-agnostic device name —
+            equal to :attr:`DeviceEntry.canonical_name`. Used by the
+            cascade-side logging and ComboStore keys.
+        friendly_name: Human-readable device name, for UI banners and
+            doctor-subcommand output.
+        source: Why this candidate is in the set — see
+            :class:`CandidateSource`.
+        preference_rank: 0 = try first. Stable deterministic ordering
+            within one boot; **not** a persistent score. The
+            :class:`CascadeResult.winning_candidate`'s rank is what the
+            ComboStore fast-path hydrates on the next boot.
+        endpoint_guid: Stable identifier from
+            :func:`~sovyx.voice.health._factory_integration.derive_endpoint_guid`.
+            Each ``CandidateEndpoint`` gets its own — two candidates
+            that differ only by ``device_index`` but share
+            ``(canonical_name, host_api_name, platform)`` produce the
+            same guid by design (deterministic hash). Two candidates
+            with different ``canonical_name`` produce different guids
+            — which is exactly the desired ComboStore independence.
+    """
+
+    device_index: int
+    host_api_name: str
+    kind: DeviceKind
+    canonical_name: str
+    friendly_name: str
+    source: CandidateSource
+    preference_rank: int
+    endpoint_guid: str
+    default_samplerate: int = 0
+
+    def __post_init__(self) -> None:
+        if self.device_index < 0:
+            msg = f"device_index must be >= 0, got {self.device_index}"
+            raise ValueError(msg)
+        if not self.host_api_name:
+            msg = "host_api_name must be a non-empty string"
+            raise ValueError(msg)
+        if not self.endpoint_guid:
+            msg = "endpoint_guid must be a non-empty string"
+            raise ValueError(msg)
+        if self.preference_rank < 0:
+            msg = f"preference_rank must be >= 0, got {self.preference_rank}"
+            raise ValueError(msg)
+        if self.default_samplerate < 0:
+            msg = f"default_samplerate must be >= 0, got {self.default_samplerate}"
+            raise ValueError(msg)
+
+
+@dataclass(frozen=True, slots=True)
 class RemediationHint:
     """Single-source-of-truth pointer to user-facing remediation copy.
 
@@ -456,6 +569,10 @@ class ComboEntry:
     probe_history: tuple[ProbeHistoryEntry, ...] = ()
     pinned: bool = False
     needs_revalidation: bool = False  # set by R6/R7/R8/R9/R10/R11 on load
+    # voice-linux-cascade-root-fix T11 / schema v3.
+    # :class:`~sovyx.voice.device_enum.DeviceKind` value as string.
+    # Back-compat default ``"unknown"`` preserves v2 entries as-is.
+    candidate_kind: str = "unknown"
 
 
 @dataclass(frozen=True, slots=True)
@@ -525,6 +642,12 @@ class CascadeResult:
         winning_combo: The combo that produced :attr:`Diagnosis.HEALTHY`
             (warm) or callbacks-OK (cold). ``None`` when the cascade
             exhausted without a winner.
+        winning_candidate: The :class:`CandidateEndpoint` that yielded
+            the winner, with its original ``source`` and
+            ``preference_rank`` preserved. ``None`` on exhaustion,
+            quarantine, or when the cascade ran against a legacy
+            single-endpoint call-site (pre-T3 of voice-linux-cascade-
+            root-fix — kept for a window during the migration).
         winning_probe: The :class:`ProbeResult` that earned the winning
             combo. ``None`` on exhaustion.
         attempts: Every probe that ran during the cascade, in order.
@@ -539,11 +662,13 @@ class CascadeResult:
             out before a winner emerged.
         source: Where the winning combo came from —
             ``"pinned"`` / ``"store"`` / ``"cascade"`` / ``"none"`` /
-            ``"quarantined"``. ``"quarantined"`` means the endpoint is in
-            the §4.4.7 kernel-invalidated quarantine and no probe ran;
-            callers should fail-over to the next viable endpoint.
+            ``"quarantined"``. ``"quarantined"`` means every candidate
+            was in the §4.4.7 kernel-invalidated quarantine and no probe
+            ran; callers should fail-over to the next viable endpoint.
         endpoint_guid: GUID of the endpoint the cascade ran on (echoed
-            for caller convenience).
+            for caller convenience). With candidate-set cascade this
+            is the **winning** candidate's guid, or the first
+            candidate's guid on exhaustion (for log correlation).
     """
 
     endpoint_guid: str
@@ -553,6 +678,7 @@ class CascadeResult:
     attempts_count: int
     budget_exhausted: bool
     source: str  # "pinned" | "store" | "cascade" | "none" | "quarantined"
+    winning_candidate: CandidateEndpoint | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -753,6 +879,12 @@ class CaptureTaskProto(Protocol):
     def active_device_name(self) -> str: ...
 
     @property
+    def active_device_index(self) -> int: ...
+
+    @property
+    def active_device_kind(self) -> str: ...
+
+    @property
     def host_api_name(self) -> str | None: ...
 
     async def request_exclusive_restart(self) -> ExclusiveRestartResult: ...
@@ -761,7 +893,10 @@ class CaptureTaskProto(Protocol):
 
     async def request_alsa_hw_direct_restart(self) -> AlsaHwDirectRestartResult: ...
 
-    async def request_session_manager_restart(self) -> SessionManagerRestartResult: ...
+    async def request_session_manager_restart(
+        self,
+        target_device: DeviceEntry | None = None,
+    ) -> SessionManagerRestartResult: ...
 
     async def tap_recent_frames(
         self,
@@ -802,6 +937,8 @@ class BypassContext:
     platform_key: str
     capture_task: CaptureTaskProto
     probe_fn: Callable[[], Awaitable[IntegrityResult]]
+    current_device_index: int = -1
+    current_device_kind: str = "unknown"
 
 
 @dataclass(frozen=True, slots=True)

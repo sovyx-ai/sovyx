@@ -362,6 +362,83 @@ def doctor_cascade(
     raise typer.Exit(exit_code)
 
 
+@doctor_app.command("linux_session_manager_grab")
+def doctor_linux_session_manager_grab(
+    output_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the report as a single JSON object on stdout.",
+    ),
+) -> None:
+    """Detect whether another audio client holds the capture hardware.
+
+    Introduced by ``voice-linux-cascade-root-fix`` T10. Answers the
+    support question "why does 'Enable voice' keep saying my mic is
+    busy?" by calling :func:`sovyx.voice._session_manager_detector.detect_session_manager_grab`
+    and rendering its verdict.
+
+    Exit codes:
+
+    * ``0`` — detector confirmed no grab (``has_grab=False``).
+    * ``1`` — detector confirmed a grab (``has_grab=True``). The mic
+      is held by another app; the printed process list names the
+      culprit.
+    * ``2`` — detector was inconclusive (``has_grab=None``). Neither
+      pactl nor the /proc scan produced a confident answer. Treat as
+      "unknown" — the production cascade is still free to attempt.
+
+    Linux-only; on Windows / macOS the command exits ``2`` with a
+    "not applicable" message.
+    """
+    exit_code = asyncio.run(_run_linux_session_manager_grab(output_json=output_json))
+    raise typer.Exit(exit_code)
+
+
+async def _run_linux_session_manager_grab(*, output_json: bool) -> int:
+    """Execute the detector and render the result."""
+    from sovyx.engine.config import VoiceTuningConfig
+    from sovyx.voice._session_manager_detector import detect_session_manager_grab
+
+    tuning = VoiceTuningConfig()
+    report = await detect_session_manager_grab(tuning=tuning)
+
+    if output_json:
+        payload = {
+            "has_grab": report.has_grab,
+            "detection_method": report.detection_method,
+            "grabbing_processes": [dataclasses.asdict(p) for p in report.grabbing_processes],
+            "evidence": report.evidence,
+        }
+        print(json.dumps(payload, ensure_ascii=False))
+    else:
+        console = Console()
+        if report.has_grab is True:
+            console.print(
+                "[bold yellow]⚠ Capture hardware is held by another client.[/]",
+            )
+        elif report.has_grab is False:
+            console.print("[bold green]✓ Capture hardware is free.[/]")
+        else:
+            console.print(
+                "[bold blue]ℹ Detector could not determine grab state[/]"
+                " (pactl missing and/or /proc scan timed out).",
+            )
+        console.print(f"  method    = {report.detection_method}")
+        if report.grabbing_processes:
+            console.print("  processes =")
+            for proc in report.grabbing_processes:
+                label = f"{proc.name}" if proc.name else "(unknown)"
+                console.print(f"    - pid={proc.pid} name={label!r}")
+        if report.evidence:
+            console.print(f"  evidence  = {report.evidence}")
+
+    if report.has_grab is True:
+        return 1
+    if report.has_grab is False:
+        return 0
+    return 2
+
+
 def _run_cascade(*, output_json: bool) -> int:
     """Execute the cascade with a temporary capture handler attached."""
     from sovyx.observability.logging import setup_logging

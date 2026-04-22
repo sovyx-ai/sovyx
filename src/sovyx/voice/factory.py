@@ -442,36 +442,61 @@ async def _run_vchl_boot_cascade(
     driving_device = resolved
     final_result = None
     try:
+        import sys as _sys
+
         from sovyx.voice._apo_detector import detect_capture_apos
+        from sovyx.voice.device_enum import enumerate_devices
         from sovyx.voice.health import current_platform_key
+        from sovyx.voice.health._candidate_builder import build_capture_candidates
         from sovyx.voice.health._factory_integration import (
             derive_endpoint_guid,
-            run_boot_cascade,
+            run_boot_cascade_for_candidates,
             select_alternative_endpoint,
         )
         from sovyx.voice.health._metrics import record_kernel_invalidated_event
 
         apo_reports = await asyncio.to_thread(detect_capture_apos)
-        result = await run_boot_cascade(
+        all_devices = await asyncio.to_thread(enumerate_devices)
+        candidates = build_capture_candidates(
             resolved=resolved,
-            data_dir=effective_data_dir,
-            tuning=tuning,
+            all_devices=all_devices,
+            platform_key=_sys.platform,
             apo_reports=apo_reports,
         )
+        result = await run_boot_cascade_for_candidates(
+            candidates=candidates,
+            data_dir=effective_data_dir,
+            tuning=tuning,
+        )
         final_result = result
-        # §4.4.7 fail-over — the original endpoint is in kernel-invalidated
-        # state; the quarantine entry is already recorded inside the
-        # cascade. Pick an alternative endpoint and re-run once.
+        # When the cascade-candidate-set produced a winner whose
+        # device_index differs from ``resolved`` (the user-preferred one
+        # was busy and a session-manager virtual won), rebind
+        # ``driving_device`` so the :class:`AudioCaptureTask` opens the
+        # device that actually passed the probe. The user's ``mind.yaml``
+        # is NOT mutated — their preference is preserved as rank-0
+        # candidate for future boots (ADR §2.6).
+        if result is not None and result.winning_candidate is not None:
+            winner = result.winning_candidate
+            for dev in all_devices:
+                if dev.index == winner.device_index and dev.host_api_name == winner.host_api_name:
+                    driving_device = dev
+                    break
+        # §4.4.7 fail-over — all candidates ended up in kernel-invalidated
+        # quarantine. Pick an alternative endpoint outside the current
+        # canonical-name family and re-run the candidate-set cascade.
         if (
             result is not None
-            and result.source == "quarantined"
+            and result.source in {"quarantined", "none"}
+            and result.winning_combo is None
             and tuning.kernel_invalidated_failover_enabled
         ):
+            excluded_guids = tuple(c.endpoint_guid for c in candidates)
             original_guid = derive_endpoint_guid(resolved, apo_reports=apo_reports)
             alternative = select_alternative_endpoint(
                 kind="input",
                 apo_reports=apo_reports,
-                exclude_endpoint_guids=(original_guid,),
+                exclude_endpoint_guids=(original_guid, *excluded_guids),
                 exclude_physical_device_ids=(resolved.canonical_name,),
             )
             if alternative is None:
@@ -479,8 +504,9 @@ async def _run_vchl_boot_cascade(
                     "voice_boot_cascade_no_alternative_endpoint",
                     quarantined_endpoint=original_guid,
                     quarantined_friendly_name=resolved.name,
+                    tried_candidates=len(candidates),
                 )
-                # final_result retains source="quarantined" → INOPERATIVE
+                # final_result retains source="none"/"quarantined" → INOPERATIVE
                 # verdict below will raise CaptureInoperativeError.
             else:
                 logger.warning(
@@ -495,14 +521,28 @@ async def _run_vchl_boot_cascade(
                     host_api=alternative.host_api_name or "unknown",
                     action="failover",
                 )
-                alt_result = await run_boot_cascade(
+                alt_candidates = build_capture_candidates(
                     resolved=alternative,
+                    all_devices=all_devices,
+                    platform_key=_sys.platform,
+                    apo_reports=apo_reports,
+                )
+                alt_result = await run_boot_cascade_for_candidates(
+                    candidates=alt_candidates,
                     data_dir=effective_data_dir,
                     tuning=tuning,
-                    apo_reports=apo_reports,
                 )
                 driving_device = alternative
                 final_result = alt_result
+                if alt_result is not None and alt_result.winning_candidate is not None:
+                    winner = alt_result.winning_candidate
+                    for dev in all_devices:
+                        if (
+                            dev.index == winner.device_index
+                            and dev.host_api_name == winner.host_api_name
+                        ):
+                            driving_device = dev
+                            break
     except Exception:  # noqa: BLE001 — cascade-side faults must never block voice enablement
         logger.warning("voice_boot_cascade_dispatch_failed", exc_info=True)
         return resolved
@@ -786,10 +826,29 @@ def _build_bypass_strategies(platform_key: str) -> list[PlatformBypassStrategy]:
         from sovyx.voice.health.bypass import (
             LinuxALSAMixerResetBypass,
             LinuxPipeWireDirectBypass,
+            LinuxSessionManagerEscapeBypass,
         )
 
+        # Strategy order matters: cheapest + most specific first.
+        #
+        # 1. ``LinuxALSAMixerResetBypass`` — mandatory, default-on.
+        #    Resets saturated pre-ADC gain; no stream teardown. Covers
+        #    the common "boost control driven to 100% by the desktop"
+        #    pathology. First because it is the lowest-cost check.
+        # 2. ``LinuxSessionManagerEscapeBypass`` — VLX-003/VLX-004.
+        #    Moves the capture from a pinned ``hw:X,Y`` to a session-
+        #    manager virtual when another desktop app grabbed the
+        #    hardware. Second because the reopen cost is higher than
+        #    a mixer-reset but lower than the hw-direct bypass below.
+        # 3. ``LinuxPipeWireDirectBypass`` — opt-in.
+        #    Inverse direction: goes from session-manager to hw:
+        #    direct. Only fires when the user has explicitly set
+        #    ``linux_pipewire_direct_bypass_enabled=True`` because
+        #    engaging the bypass steals the device from every other
+        #    desktop app.
         return [
             LinuxALSAMixerResetBypass(),
+            LinuxSessionManagerEscapeBypass(),
             LinuxPipeWireDirectBypass(),
         ]
     return []

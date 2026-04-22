@@ -531,6 +531,15 @@ class MetricsRegistry:
             "User-perceived KPI — latency from WakeWordDetectedEvent to "
             "SpeechStartedEvent. ADR §5.14 target p95 ≤ 200 ms.",
         )
+        self.voice_opener_attempts = self._counter(
+            "sovyx.voice.opener.attempts",
+            "Per-attempt outcomes of open_input_stream pyramid (labels: "
+            "host_api, error_code=none|device_busy|unsupported_samplerate|"
+            "device_not_found|permission_denied|internal_error|..., "
+            "result=ok|fail). Introduced by voice-linux-cascade-root-fix "
+            "T1 to make opener fallbacks queryable alongside cascade "
+            "attempts.",
+        )
 
     # ── Internal instrument factories ───────────────────────────────
     # Centralised so every counter / histogram registered on this

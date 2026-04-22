@@ -625,6 +625,8 @@ class CaptureIntegrityCoordinator:
             platform_key=self._platform_key,
             capture_task=self._capture_task,
             probe_fn=lambda: self._probe.probe_warm(self._capture_task),
+            current_device_index=self._capture_task.active_device_index,
+            current_device_kind=self._capture_task.active_device_kind,
         )
 
     def _quarantine_endpoint(
