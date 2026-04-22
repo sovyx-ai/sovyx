@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sovyx"
-version = "0.21.1"
+version = "0.21.2"
 description = "Sovereign Minds Engine — Persistent AI companion with real memory"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
