@@ -44,6 +44,7 @@ import asyncio
 import contextlib
 import math
 import re
+import sys
 import time
 from dataclasses import dataclass
 from enum import StrEnum
@@ -276,6 +277,142 @@ class SharedRestartResult:
     detail: str | None = None
 
 
+class AlsaHwDirectRestartVerdict(StrEnum):
+    """Verdict of :meth:`AudioCaptureTask.request_alsa_hw_direct_restart`.
+
+    Linux-specific twin of :class:`ExclusiveRestartVerdict`. The
+    ``LinuxPipeWireDirectBypass`` strategy requests this restart when it
+    wants to bypass a misbehaving PipeWire/PulseAudio filter chain and
+    talk to the kernel ALSA device directly. PortAudio's ``ALSA`` host
+    API opens the device without traversing the session manager.
+
+    Members:
+        ALSA_HW_ENGAGED: Stream reopened and PortAudio confirmed the
+            winning attempt targets the ``ALSA`` host API. The session
+            manager is no longer in the signal path.
+        DOWNGRADED_TO_SESSION_MANAGER: Stream reopened but the opener
+            fell back to a sibling device that routes through
+            PipeWire/PulseAudio (no ALSA-direct sibling survived). The
+            session-manager chain is still in the signal path.
+        NO_ALSA_SIBLING: Enumeration yielded no ``ALSA``-host-API
+            sibling for the currently active device — some distros ship
+            PortAudio builds with ALSA compiled out, or the ALSA device
+            is held by another exclusive client. Existing stream
+            preserved; no mutation occurred.
+        OPEN_FAILED_NO_STREAM: Both the ALSA-direct open and the
+            session-manager fallback raised. The stream is closed and
+            the consumer task has been signalled to exit — upstream
+            supervisors MUST rebuild the capture task.
+        NOT_LINUX: Called on a non-Linux host — no-op, preserves the
+            existing stream. Strategies must gate on
+            ``platform_key == "linux"`` but the method is defensive.
+        NOT_RUNNING: Called while the task is stopped — no-op.
+    """
+
+    ALSA_HW_ENGAGED = "alsa_hw_engaged"
+    DOWNGRADED_TO_SESSION_MANAGER = "downgraded_to_session_manager"
+    NO_ALSA_SIBLING = "no_alsa_sibling"
+    OPEN_FAILED_NO_STREAM = "open_failed_no_stream"
+    NOT_LINUX = "not_linux"
+    NOT_RUNNING = "not_running"
+
+
+class SessionManagerRestartVerdict(StrEnum):
+    """Verdict of :meth:`AudioCaptureTask.request_session_manager_restart`.
+
+    Linux-specific twin of :class:`SharedRestartVerdict`. Called by the
+    ``LinuxPipeWireDirectBypass`` strategy during ``revert`` to return
+    the stream to PipeWire/PulseAudio after an ALSA-direct experiment.
+
+    Members:
+        SESSION_MANAGER_ENGAGED: Stream reopened against a sibling
+            device served by PulseAudio or PipeWire; the session
+            manager is back in the signal path.
+        DOWNGRADED_TO_ALSA_HW: Enumeration yielded no
+            PulseAudio/PipeWire sibling — the device is only reachable
+            via ALSA direct. The stream is alive but still bypasses the
+            session manager (same state as before the request).
+        OPEN_FAILED_NO_STREAM: The session-manager reopen raised and no
+            stream is live. Consumer task signalled to exit; supervisor
+            must rebuild.
+        NOT_LINUX: Called on a non-Linux host — no-op.
+        NOT_RUNNING: Called while the task is stopped — no-op.
+    """
+
+    SESSION_MANAGER_ENGAGED = "session_manager_engaged"
+    DOWNGRADED_TO_ALSA_HW = "downgraded_to_alsa_hw"
+    OPEN_FAILED_NO_STREAM = "open_failed_no_stream"
+    NOT_LINUX = "not_linux"
+    NOT_RUNNING = "not_running"
+
+
+@dataclass(frozen=True, slots=True)
+class AlsaHwDirectRestartResult:
+    """Structured outcome of :meth:`AudioCaptureTask.request_alsa_hw_direct_restart`.
+
+    Attributes:
+        verdict: The :class:`AlsaHwDirectRestartVerdict` describing what
+            happened. Callers should treat anything other than
+            :attr:`AlsaHwDirectRestartVerdict.ALSA_HW_ENGAGED` as an
+            unsuccessful bypass — the session-manager chain is still in
+            place or the stream is gone.
+        engaged: Convenience flag — ``True`` iff
+            ``verdict == ALSA_HW_ENGAGED``.
+        host_api: Host API of the resulting stream. ``"ALSA"`` on
+            successful engagement; ``None`` when the stream is down.
+        device: Resolved PortAudio device index of the resulting stream.
+        sample_rate: Effective sample rate of the resulting stream.
+        detail: Human-readable error / downgrade reason for logs and
+            the dashboard UI. ``None`` on successful engagement.
+    """
+
+    verdict: AlsaHwDirectRestartVerdict
+    engaged: bool
+    host_api: str | None = None
+    device: int | str | None = None
+    sample_rate: int | None = None
+    detail: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class SessionManagerRestartResult:
+    """Structured outcome of :meth:`AudioCaptureTask.request_session_manager_restart`.
+
+    Attributes:
+        verdict: The :class:`SessionManagerRestartVerdict` describing
+            what happened. ``SESSION_MANAGER_ENGAGED`` means the revert
+            worked and the pipeline is now running through PipeWire or
+            PulseAudio again.
+        engaged: Convenience flag — ``True`` iff
+            ``verdict == SESSION_MANAGER_ENGAGED``.
+        host_api: Host API of the resulting stream.
+        device: Resolved PortAudio device index of the resulting stream.
+        sample_rate: Effective sample rate of the resulting stream.
+        detail: Human-readable error / downgrade reason for logs and
+            the dashboard UI. ``None`` on successful engagement.
+    """
+
+    verdict: SessionManagerRestartVerdict
+    engaged: bool
+    host_api: str | None = None
+    device: int | str | None = None
+    sample_rate: int | None = None
+    detail: str | None = None
+
+
+_LINUX_ALSA_HOST_API = "ALSA"
+"""PortAudio's label for the direct-to-kernel ALSA host API on Linux."""
+
+
+_LINUX_SESSION_MANAGER_HOST_APIS: frozenset[str] = frozenset({"PulseAudio", "PipeWire", "JACK"})
+"""Host APIs that route through a Linux session manager.
+
+A device served by any of these is considered non-direct for the
+purpose of :meth:`request_alsa_hw_direct_restart` — the strategy wants
+to route *around* these layers, not through them.
+"""
+
+
 def _emit_exclusive_restart_metric(result: ExclusiveRestartResult) -> None:
     """Record a ``voice.capture.exclusive_restart.verdicts`` counter event.
 
@@ -332,6 +469,66 @@ def _emit_shared_restart_metric(result: SharedRestartResult) -> None:
         )
     except Exception:  # noqa: BLE001 — metrics must never break capture
         logger.debug("voice_capture_shared_restart_metric_failed", exc_info=True)
+
+
+def _emit_alsa_hw_direct_restart_metric(result: AlsaHwDirectRestartResult) -> None:
+    """Record a ``voice.capture.alsa_hw_direct_restart.verdicts`` counter event.
+
+    Linux-specific twin of :func:`_emit_exclusive_restart_metric`. The
+    counter is emitted regardless of whether the strategy engaged so
+    dashboards can tell "Linux direct bypass never got a chance"
+    (``NO_ALSA_SIBLING`` / ``NOT_LINUX``) apart from "direct bypass was
+    tried and the session manager was bypassed" (``ALSA_HW_ENGAGED``)
+    without scraping logs.
+    """
+    try:
+        import sys
+
+        from sovyx.observability.metrics import get_metrics
+
+        registry = get_metrics()
+        counter = getattr(registry, "voice_capture_alsa_hw_direct_restart_verdicts", None)
+        if counter is None:
+            return
+        counter.add(
+            1,
+            attributes={
+                "verdict": result.verdict.value,
+                "host_api": result.host_api or "none",
+                "platform": sys.platform,
+            },
+        )
+    except Exception:  # noqa: BLE001 — metrics must never break capture
+        logger.debug("voice_capture_alsa_hw_direct_restart_metric_failed", exc_info=True)
+
+
+def _emit_session_manager_restart_metric(
+    result: SessionManagerRestartResult,
+) -> None:
+    """Record a ``voice.capture.session_manager_restart.verdicts`` counter event.
+
+    Symmetric twin of :func:`_emit_alsa_hw_direct_restart_metric` for
+    the revert side of the Linux PipeWire-direct strategy.
+    """
+    try:
+        import sys
+
+        from sovyx.observability.metrics import get_metrics
+
+        registry = get_metrics()
+        counter = getattr(registry, "voice_capture_session_manager_restart_verdicts", None)
+        if counter is None:
+            return
+        counter.add(
+            1,
+            attributes={
+                "verdict": result.verdict.value,
+                "host_api": result.host_api or "none",
+                "platform": sys.platform,
+            },
+        )
+    except Exception:  # noqa: BLE001 — metrics must never break capture
+        logger.debug("voice_capture_session_manager_restart_metric_failed", exc_info=True)
 
 
 def _rms_db_int16(frame: Any) -> float:  # noqa: ANN401 — numpy int16 array; Any keeps numpy lazy-imported
@@ -1124,6 +1321,411 @@ class AudioCaptureTask:
         )
         _emit_shared_restart_metric(result)
         return result
+
+    async def request_alsa_hw_direct_restart(self) -> AlsaHwDirectRestartResult:
+        """Reopen the capture stream against the ALSA-direct sibling device.
+
+        Linux-specific twin of :meth:`request_exclusive_restart`. The
+        ``LinuxPipeWireDirectBypass`` strategy invokes this when it
+        wants to bypass a misbehaving PipeWire/PulseAudio filter chain
+        (e.g. ``module-echo-cancel``, ``rnnoise`` filter, user-added
+        EQ) and talk to the kernel ALSA device directly.
+
+        Resolution: re-enumerate input devices, locate the sibling whose
+        :attr:`DeviceEntry.canonical_name` matches the current endpoint
+        AND whose :attr:`DeviceEntry.host_api_name` equals ``"ALSA"``.
+        When found, that entry is handed to the unified opener as the
+        starting point — the opener's sibling-chain fallback then
+        automatically covers the "ALSA open refused, fall back to
+        PulseAudio" path.
+
+        Idempotent — safe to call while stopped or on a non-Linux host;
+        in either case it is a no-op and the existing stream (if any)
+        is preserved.
+
+        Returns:
+            An :class:`AlsaHwDirectRestartResult`. Callers inspect
+            ``result.engaged`` (``True`` iff the ALSA host API actually
+            won the fallback pyramid) to know whether the PipeWire
+            bypass is in effect.
+        """
+        if not self._running:
+            logger.debug("audio_capture_alsa_hw_direct_restart_skipped_not_running")
+            result = AlsaHwDirectRestartResult(
+                verdict=AlsaHwDirectRestartVerdict.NOT_RUNNING,
+                engaged=False,
+                detail="capture task is not running",
+            )
+            _emit_alsa_hw_direct_restart_metric(result)
+            return result
+        if sys.platform != "linux":
+            logger.debug(
+                "audio_capture_alsa_hw_direct_restart_skipped_not_linux",
+                platform=sys.platform,
+            )
+            result = AlsaHwDirectRestartResult(
+                verdict=AlsaHwDirectRestartVerdict.NOT_LINUX,
+                engaged=False,
+                host_api=self._host_api_name,
+                device=self._input_device,
+                sample_rate=self._sample_rate,
+                detail=f"request_alsa_hw_direct_restart is Linux-only; running on {sys.platform}",
+            )
+            _emit_alsa_hw_direct_restart_metric(result)
+            return result
+
+        alsa_entry = self._find_sibling_with_host_api(_LINUX_ALSA_HOST_API)
+        if alsa_entry is None:
+            logger.warning(
+                "audio_capture_alsa_hw_direct_restart_no_sibling",
+                device=self._input_device,
+                host_api=self._host_api_name,
+            )
+            result = AlsaHwDirectRestartResult(
+                verdict=AlsaHwDirectRestartVerdict.NO_ALSA_SIBLING,
+                engaged=False,
+                host_api=self._host_api_name,
+                device=self._input_device,
+                sample_rate=self._sample_rate,
+                detail=(
+                    "no ALSA-host-API sibling found for current endpoint "
+                    "(PortAudio build without ALSA, or device held exclusive)"
+                ),
+            )
+            _emit_alsa_hw_direct_restart_metric(result)
+            return result
+
+        from sovyx.voice._stream_opener import StreamOpenError, open_input_stream
+
+        tuning = self._tuning if self._tuning is not None else _VoiceTuning()
+        logger.warning(
+            "audio_capture_alsa_hw_direct_restart_begin",
+            device=self._input_device,
+            host_api=self._host_api_name,
+            target_host_api=_LINUX_ALSA_HOST_API,
+            target_device_index=alsa_entry.index,
+        )
+
+        # Tear down the existing (session-manager-backed) stream before
+        # we grab the kernel device — some ALSA drivers reject a second
+        # client even for read-only capture.
+        await asyncio.to_thread(self._close_stream, "alsa_hw_direct_restart")
+        while not self._queue.empty():
+            with contextlib.suppress(asyncio.QueueEmpty):
+                self._queue.get_nowait()
+
+        try:
+            stream, info = await open_input_stream(
+                device=alsa_entry,
+                target_rate=self._sample_rate,
+                blocksize=self._blocksize,
+                callback=self._audio_callback,
+                tuning=tuning,
+                sd_module=self._sd_module,
+                enumerate_fn=self._enumerate_fn,
+                validate_fn=None,
+            )
+        except StreamOpenError as exc:
+            logger.error(
+                "audio_capture_alsa_hw_direct_restart_failed",
+                error=str(exc),
+                device=self._input_device,
+                host_api=self._host_api_name,
+            )
+            # Mirror the exclusive-fallback behaviour: try to recover
+            # the pipeline through shared mode so the user is not left
+            # with a dead stream.
+            try:
+                await self._reopen_stream_after_device_error()
+            except Exception as fallback_exc:  # noqa: BLE001
+                logger.error(
+                    "audio_capture_alsa_hw_direct_fallback_failed",
+                    error=str(fallback_exc),
+                )
+                self._signal_consumer_shutdown()
+                result = AlsaHwDirectRestartResult(
+                    verdict=AlsaHwDirectRestartVerdict.OPEN_FAILED_NO_STREAM,
+                    engaged=False,
+                    host_api=self._host_api_name,
+                    device=self._input_device,
+                    detail=(
+                        f"ALSA-direct open failed ({exc}); session-manager "
+                        f"fallback also failed ({fallback_exc})"
+                    ),
+                )
+                _emit_alsa_hw_direct_restart_metric(result)
+                return result
+            result = AlsaHwDirectRestartResult(
+                verdict=AlsaHwDirectRestartVerdict.DOWNGRADED_TO_SESSION_MANAGER,
+                engaged=False,
+                host_api=self._host_api_name,
+                device=self._input_device,
+                sample_rate=self._sample_rate,
+                detail=f"ALSA-direct open failed ({exc}); recovered via session manager",
+            )
+            _emit_alsa_hw_direct_restart_metric(result)
+            return result
+
+        self._stream = stream
+        self._sample_rate = info.sample_rate
+        self._input_device = info.device_index
+        self._host_api_name = info.host_api
+        self._resolved_device_name = alsa_entry.name
+        self._normalizer = FrameNormalizer(
+            source_rate=info.sample_rate,
+            source_channels=info.channels,
+        )
+        self._allocate_ring_buffer(tuning)
+        self._emit_stream_opened(info, apo_bypass_attempted=True)
+
+        if info.host_api != _LINUX_ALSA_HOST_API:
+            logger.error(
+                "audio_capture_alsa_hw_direct_restart_downgraded_to_session_manager",
+                device=self._input_device,
+                host_api=info.host_api,
+                sample_rate=self._sample_rate,
+                channels=info.channels,
+            )
+            result = AlsaHwDirectRestartResult(
+                verdict=AlsaHwDirectRestartVerdict.DOWNGRADED_TO_SESSION_MANAGER,
+                engaged=False,
+                host_api=self._host_api_name,
+                device=self._input_device,
+                sample_rate=self._sample_rate,
+                detail=(
+                    f"opener fell back to {info.host_api!r} — session manager still in signal path"
+                ),
+            )
+            _emit_alsa_hw_direct_restart_metric(result)
+            return result
+        logger.warning(
+            "audio_capture_alsa_hw_direct_restart_ok",
+            device=self._input_device,
+            host_api=self._host_api_name,
+            sample_rate=self._sample_rate,
+            channels=info.channels,
+        )
+        result = AlsaHwDirectRestartResult(
+            verdict=AlsaHwDirectRestartVerdict.ALSA_HW_ENGAGED,
+            engaged=True,
+            host_api=self._host_api_name,
+            device=self._input_device,
+            sample_rate=self._sample_rate,
+        )
+        _emit_alsa_hw_direct_restart_metric(result)
+        return result
+
+    async def request_session_manager_restart(self) -> SessionManagerRestartResult:
+        """Revert the capture stream to the PipeWire/PulseAudio session manager.
+
+        Linux-specific twin of :meth:`request_shared_restart`. The
+        ``LinuxPipeWireDirectBypass`` strategy invokes this during
+        ``revert`` when an ALSA-direct experiment proved ineffective or
+        a later strategy superseded it. Returns the stream to the same
+        session-manager-backed configuration the user started with.
+
+        Resolution: re-enumerate input devices, locate the first
+        sibling whose :attr:`DeviceEntry.host_api_name` lies in
+        ``_LINUX_SESSION_MANAGER_HOST_APIS`` (``PulseAudio``,
+        ``PipeWire``, ``JACK``). When no such sibling exists, the
+        device is ALSA-only and the revert cannot proceed — the
+        function returns :attr:`SessionManagerRestartVerdict.DOWNGRADED_TO_ALSA_HW`
+        with the existing stream preserved.
+
+        Returns:
+            A :class:`SessionManagerRestartResult`. A non-engaged
+            verdict means either the session-manager reopen was not
+            feasible (``DOWNGRADED_TO_ALSA_HW``) or the pipeline is
+            now without a live capture (``OPEN_FAILED_NO_STREAM``).
+        """
+        if not self._running:
+            logger.debug("audio_capture_session_manager_restart_skipped_not_running")
+            result = SessionManagerRestartResult(
+                verdict=SessionManagerRestartVerdict.NOT_RUNNING,
+                engaged=False,
+                detail="capture task is not running",
+            )
+            _emit_session_manager_restart_metric(result)
+            return result
+        if sys.platform != "linux":
+            logger.debug(
+                "audio_capture_session_manager_restart_skipped_not_linux",
+                platform=sys.platform,
+            )
+            result = SessionManagerRestartResult(
+                verdict=SessionManagerRestartVerdict.NOT_LINUX,
+                engaged=False,
+                host_api=self._host_api_name,
+                device=self._input_device,
+                sample_rate=self._sample_rate,
+                detail=(
+                    f"request_session_manager_restart is Linux-only; running on {sys.platform}"
+                ),
+            )
+            _emit_session_manager_restart_metric(result)
+            return result
+
+        session_entry = self._find_sibling_with_host_api_in(
+            _LINUX_SESSION_MANAGER_HOST_APIS,
+        )
+        if session_entry is None:
+            logger.warning(
+                "audio_capture_session_manager_restart_no_sibling",
+                device=self._input_device,
+                host_api=self._host_api_name,
+            )
+            result = SessionManagerRestartResult(
+                verdict=SessionManagerRestartVerdict.DOWNGRADED_TO_ALSA_HW,
+                engaged=False,
+                host_api=self._host_api_name,
+                device=self._input_device,
+                sample_rate=self._sample_rate,
+                detail=(
+                    "no PulseAudio/PipeWire sibling available — device is "
+                    "ALSA-direct only; existing stream preserved"
+                ),
+            )
+            _emit_session_manager_restart_metric(result)
+            return result
+
+        from sovyx.voice._stream_opener import StreamOpenError, open_input_stream
+
+        tuning = self._tuning if self._tuning is not None else _VoiceTuning()
+        logger.warning(
+            "audio_capture_session_manager_restart_begin",
+            device=self._input_device,
+            host_api=self._host_api_name,
+            target_host_api=session_entry.host_api_name,
+            target_device_index=session_entry.index,
+        )
+
+        await asyncio.to_thread(self._close_stream, "session_manager_restart")
+        while not self._queue.empty():
+            with contextlib.suppress(asyncio.QueueEmpty):
+                self._queue.get_nowait()
+
+        try:
+            stream, info = await open_input_stream(
+                device=session_entry,
+                target_rate=self._sample_rate,
+                blocksize=self._blocksize,
+                callback=self._audio_callback,
+                tuning=tuning,
+                sd_module=self._sd_module,
+                enumerate_fn=self._enumerate_fn,
+                validate_fn=None,
+            )
+        except StreamOpenError as exc:
+            logger.error(
+                "audio_capture_session_manager_restart_failed",
+                error=str(exc),
+                device=self._input_device,
+                host_api=self._host_api_name,
+            )
+            self._signal_consumer_shutdown()
+            result = SessionManagerRestartResult(
+                verdict=SessionManagerRestartVerdict.OPEN_FAILED_NO_STREAM,
+                engaged=False,
+                host_api=self._host_api_name,
+                device=self._input_device,
+                detail=f"session-manager reopen failed: {exc}",
+            )
+            _emit_session_manager_restart_metric(result)
+            return result
+
+        self._stream = stream
+        self._sample_rate = info.sample_rate
+        self._input_device = info.device_index
+        self._host_api_name = info.host_api
+        self._resolved_device_name = session_entry.name
+        self._normalizer = FrameNormalizer(
+            source_rate=info.sample_rate,
+            source_channels=info.channels,
+        )
+        self._allocate_ring_buffer(tuning)
+        self._emit_stream_opened(info, apo_bypass_attempted=False)
+
+        if info.host_api not in _LINUX_SESSION_MANAGER_HOST_APIS:
+            logger.warning(
+                "audio_capture_session_manager_restart_downgraded_to_alsa_hw",
+                device=self._input_device,
+                host_api=info.host_api,
+            )
+            result = SessionManagerRestartResult(
+                verdict=SessionManagerRestartVerdict.DOWNGRADED_TO_ALSA_HW,
+                engaged=False,
+                host_api=self._host_api_name,
+                device=self._input_device,
+                sample_rate=self._sample_rate,
+                detail=(
+                    f"opener fell back to {info.host_api!r} — session manager not in signal path"
+                ),
+            )
+            _emit_session_manager_restart_metric(result)
+            return result
+        logger.warning(
+            "audio_capture_session_manager_restart_ok",
+            device=self._input_device,
+            host_api=self._host_api_name,
+            sample_rate=self._sample_rate,
+            channels=info.channels,
+        )
+        result = SessionManagerRestartResult(
+            verdict=SessionManagerRestartVerdict.SESSION_MANAGER_ENGAGED,
+            engaged=True,
+            host_api=self._host_api_name,
+            device=self._input_device,
+            sample_rate=self._sample_rate,
+        )
+        _emit_session_manager_restart_metric(result)
+        return result
+
+    def _find_sibling_with_host_api(self, host_api: str) -> DeviceEntry | None:
+        """Return the enumeration sibling of the current endpoint on ``host_api``.
+
+        Siblings share the same :attr:`DeviceEntry.canonical_name` but
+        are served by different host APIs — on Linux a single USB
+        microphone typically appears once via ``ALSA``, once via
+        ``PulseAudio``, once via ``PipeWire``. Returns ``None`` when the
+        current entry has no sibling on the requested host API.
+        """
+        return self._find_sibling_with_host_api_in(frozenset({host_api}))
+
+    def _find_sibling_with_host_api_in(
+        self,
+        host_apis: frozenset[str],
+    ) -> DeviceEntry | None:
+        """Return the first enumeration sibling whose host API is in ``host_apis``.
+
+        Uses the same :func:`_resolve_input_entry` entry point as the
+        start + restart paths so any DI-provided ``enumerate_fn`` is
+        honoured. Returns ``None`` on enumeration failure rather than
+        raising — the caller translates the absence into a structured
+        verdict.
+        """
+        try:
+            current = _resolve_input_entry(
+                input_device=self._input_device,
+                enumerate_fn=self._enumerate_fn,
+                host_api_name=self._host_api_name,
+            )
+        except RuntimeError:
+            return None
+        canonical = current.canonical_name
+        if self._enumerate_fn is not None:
+            entries = self._enumerate_fn()
+        else:
+            from sovyx.voice.device_enum import enumerate_devices
+
+            entries = enumerate_devices()
+        for entry in entries:
+            if entry.max_input_channels <= 0:
+                continue
+            if entry.canonical_name != canonical:
+                continue
+            if entry.host_api_name in host_apis:
+                return entry
+        return None
 
     def _ensure_endpoint_guid(self, entry: DeviceEntry | None) -> None:
         """Populate :attr:`_endpoint_guid` from ``entry`` if still unset.

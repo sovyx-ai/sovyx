@@ -64,17 +64,18 @@ class _MonotonicStub:
 
 
 class TestDefaultStepNames:
-    """Canonical 8-step mapping stays stable."""
+    """Canonical 9-step mapping stays stable."""
 
-    def test_covers_all_eight_steps(self) -> None:
+    def test_covers_all_nine_steps(self) -> None:
         names = default_step_names()
-        assert set(names.keys()) == {1, 2, 3, 4, 5, 6, 7, 8}
+        assert set(names.keys()) == {1, 2, 3, 4, 5, 6, 7, 8, 9}
 
     def test_codes_align_with_enum(self) -> None:
         names = default_step_names()
         assert names[1][1] is PreflightStepCode.MIC_MUTED
         assert names[4][1] is PreflightStepCode.PORTAUDIO_UNAVAILABLE
         assert names[8][1] is PreflightStepCode.WAKE_WORD_MISBEHAVING
+        assert names[9][1] is PreflightStepCode.LINUX_MIXER_SATURATED
 
     def test_current_platform_key_matches_sys_platform(self) -> None:
         import sys

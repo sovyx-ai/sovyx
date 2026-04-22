@@ -50,6 +50,7 @@ from sovyx.voice.health import (
     default_step_names,
     run_preflight,
 )
+from sovyx.voice.health._linux_mixer_check import check_linux_mixer_sanity
 
 console = Console()
 doctor_app = typer.Typer(
@@ -221,12 +222,19 @@ def _run_voice_doctor(*, output_json: bool, device: str | None) -> int:
     """Execute the voice doctor flow. Returns the desired exit code."""
     names = default_step_names()
     portaudio_name, portaudio_code = names[4]
+    mixer_name, mixer_code = names[9]
     specs = [
         PreflightStepSpec(
             step=4,
             name=portaudio_name,
             code=portaudio_code,
             check=check_portaudio(),
+        ),
+        PreflightStepSpec(
+            step=9,
+            name=mixer_name,
+            code=mixer_code,
+            check=check_linux_mixer_sanity(),
         ),
     ]
     # structlog's default PrintLoggerFactory writes to stdout, which would

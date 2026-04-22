@@ -937,6 +937,51 @@ export interface CaptureExclusiveResponse {
   applied_immediately: boolean;
 }
 
+// ── Linux ALSA mixer diagnostics + remediation ──
+
+export interface LinuxMixerControl {
+  name: string;
+  min_raw: number;
+  max_raw: number;
+  current_raw: number;
+  current_db: number | null;
+  max_db: number | null;
+  is_boost_control: boolean;
+  saturation_risk: boolean;
+  asymmetric: boolean;
+}
+
+export interface LinuxMixerCard {
+  card_index: number;
+  card_id: string;
+  card_longname: string;
+  aggregated_boost_db: number;
+  saturation_warning: boolean;
+  controls: LinuxMixerControl[];
+}
+
+export interface LinuxMixerDiagnosticsResponse {
+  platform_supported: boolean;
+  amixer_available: boolean;
+  snapshots: LinuxMixerCard[];
+  aggregated_boost_db_ceiling: number;
+  saturation_ratio_ceiling: number;
+  reset_enabled_by_default: boolean;
+}
+
+export interface LinuxMixerResetResponse {
+  ok: boolean;
+  reason?: string;
+  reason_code?: string;
+  detail?: string;
+  card_index?: number;
+  card_id?: string;
+  card_longname?: string;
+  candidate_card_indexes?: number[];
+  applied_controls?: [string, number][];
+  reverted_controls?: [string, number][];
+}
+
 // ────────────────────────────────────────────────────────────────────────
 // Voice Capture Health Lifecycle (VCHL) — L7 REST surface (ADR §4.7)
 // ────────────────────────────────────────────────────────────────────────

@@ -418,6 +418,60 @@ class VoiceTuningConfig(BaseSettings):
     bypass_fingerprint_catalog_enabled: bool = False
     bypass_fingerprint_min_confidence: float = 0.7
 
+    # ── Linux ALSA bypass strategies (Phase 3) ─────────────────────────
+    # See docs-internal/plans/linux-alsa-mixer-saturation-fix.md for the
+    # full derivation. Covers two orthogonal Linux failure modes that
+    # both surface as ``IntegrityVerdict.APO_DEGRADED``: analog mixer
+    # saturation (Internal Mic Boost / Capture driven above the ADC's
+    # safe range) and session-manager DSP (PulseAudio
+    # ``module-echo-cancel`` / PipeWire filter-chain).
+    #
+    # Strategy #1 — ``LinuxALSAMixerResetBypass`` (linux.alsa_mixer_reset).
+    # Reads the card's boost + capture controls via ``amixer``, snapshots
+    # them, and reduces the over-driven ones to a safe fraction of max.
+    # Fully reverted on teardown — the pipeline never leaves the mixer
+    # in an unknown state. Enabled by default because the mutation is
+    # 100 % reversible and the subprocess cost is ~50 ms.
+    linux_alsa_mixer_reset_enabled: bool = True
+    # Fraction of ``max_raw`` to set Boost-class controls to on apply.
+    # ``0.0`` = zero out, which is almost always the right answer for
+    # laptop-internal mics: a +36 dB ``Internal Mic Boost`` is never
+    # correct for a normal-distance speaker — it was shipped at max by
+    # default to save Skype calls in the Windows XP era, and the
+    # default never changed.
+    linux_mixer_boost_reset_fraction: float = 0.0
+    # Fraction of ``max_raw`` to set Capture-class controls to on apply.
+    # ``0.5`` ≈ 0 dB for most codecs with the 0..80 / -40..+30 dB range
+    # observed on HDA Intel / Realtek / SN6180 parts. Never ``0.0`` —
+    # that would mute the mic and a subsequent probe would classify the
+    # endpoint as DRIVER_SILENT rather than HEALTHY.
+    linux_mixer_capture_reset_fraction: float = 0.5
+    # Saturation-detection threshold — a control is at saturation risk
+    # when ``current_raw > max_raw * ratio`` AND the control name matches
+    # one of the boost / capture patterns. ``0.5`` catches the VAIO case
+    # (3/3 = 1.0, 80/80 = 1.0) without false-positiving on reasonable
+    # defaults such as ``Capture = 40/80`` (= 0.5 is borderline but not
+    # flagged). See ``_linux_mixer_probe._BOOST_PATTERNS``.
+    linux_mixer_saturation_ratio_ceiling: float = 0.5
+    # Aggregated boost-chain dB above which the card is flagged even
+    # when no single control crosses the ratio ceiling. Catches
+    # multi-boost cases (``Internal Mic Boost`` + ``Front Mic Boost`` +
+    # ``Capture`` each at 60 %, individually under the ratio gate but
+    # summing to clipping territory).
+    linux_mixer_aggregated_boost_db_ceiling: float = 18.0
+    # Strategy #2 — ``LinuxPipeWireDirectBypass`` (linux.pipewire_direct).
+    # Rebinds the capture stream to the raw ALSA ``hw:X,Y`` node,
+    # bypassing PipeWire / PulseAudio session-manager DSP entirely.
+    # Disabled by default: the rebind requires a full stream reopen and
+    # on some distros the raw hw: path introduces audible latency
+    # spikes. Enable per-stack once validated.
+    linux_pipewire_direct_bypass_enabled: bool = False
+    # Hard wall-clock cap for each ``amixer`` / ``alsactl`` / ``pactl``
+    # invocation originating from the Linux bypass strategies. Mirrors
+    # ``_apo_detector_linux._SUBPROCESS_TIMEOUT_S`` — never block the
+    # event loop behind a frozen audio tool.
+    linux_mixer_subprocess_timeout_s: float = 2.0
+
     # AudioCaptureTask ring buffer — bounded snapshot of the most
     # recent frames delivered by PortAudio. Fed by the capture
     # callback, consumed by :meth:`AudioCaptureTask.tap_recent_frames`

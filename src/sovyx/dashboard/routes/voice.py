@@ -14,7 +14,10 @@ from sovyx.dashboard.routes._deps import verify_token
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from sovyx.voice.cognitive_bridge import VoiceCognitiveBridge
+    from sovyx.voice.health.contract import MixerCardSnapshot
 
 logger = get_logger(__name__)
 
@@ -406,6 +409,331 @@ async def set_capture_exclusive(request: Request) -> JSONResponse:
     if restart_detail is not None:
         response["detail"] = restart_detail
     return JSONResponse(response)
+
+
+def _is_linux() -> bool:
+    """Return True when running on Linux (module-level for patchability)."""
+    import sys as _sys
+
+    return _sys.platform == "linux"
+
+
+def _amixer_available() -> bool:
+    """Return True when ``amixer`` is resolvable on ``PATH``.
+
+    Extracted to a module-level helper so tests can patch it without
+    shelling out to the real filesystem. Used by both diagnostics and
+    reset endpoints to distinguish "Linux host without alsa-utils"
+    (graceful no-op) from "Linux host with alsa-utils but nothing
+    saturating" (healthy state).
+    """
+    import shutil
+
+    return shutil.which("amixer") is not None
+
+
+def _serialize_mixer_snapshots(
+    snapshots: Sequence[MixerCardSnapshot],
+) -> list[dict[str, object]]:
+    """Render :class:`MixerCardSnapshot` list for JSON transport.
+
+    Keeps field names aligned with
+    ``dashboard/src/types/schemas.ts::LinuxMixerCardSchema`` — a rename
+    here requires a matching rename on the zod schema and the card
+    component's prop type.
+    """
+    payload: list[dict[str, object]] = []
+    for snap in snapshots:
+        controls_payload: list[dict[str, object]] = []
+        for ctl in snap.controls:
+            controls_payload.append(
+                {
+                    "name": ctl.name,
+                    "min_raw": ctl.min_raw,
+                    "max_raw": ctl.max_raw,
+                    "current_raw": ctl.current_raw,
+                    "current_db": ctl.current_db,
+                    "max_db": ctl.max_db,
+                    "is_boost_control": ctl.is_boost_control,
+                    "saturation_risk": ctl.saturation_risk,
+                    "asymmetric": ctl.asymmetric,
+                }
+            )
+        payload.append(
+            {
+                "card_index": snap.card_index,
+                "card_id": snap.card_id,
+                "card_longname": snap.card_longname,
+                "aggregated_boost_db": round(snap.aggregated_boost_db, 2),
+                "saturation_warning": snap.saturation_warning,
+                "controls": controls_payload,
+            }
+        )
+    return payload
+
+
+@router.get("/linux-mixer-diagnostics")
+async def linux_mixer_diagnostics(request: Request) -> JSONResponse:
+    """Snapshot of every ALSA card's gain state — Linux-only.
+
+    Drives the dashboard's ``LinuxMicGainCard`` component. Non-Linux
+    hosts receive ``platform_supported=False`` so the UI can render a
+    disabled card with an explanatory tooltip rather than erroring.
+
+    Response shape (Linux):
+        ``{"platform_supported": True, "amixer_available": bool,
+        "snapshots": [MixerCardSchema], "aggregated_boost_db_ceiling":
+        float, "saturation_ratio_ceiling": float,
+        "reset_enabled_by_default": bool}``
+
+    Side-effect-free: calls
+    :func:`sovyx.voice.health._linux_mixer_probe.enumerate_alsa_mixer_snapshots`
+    behind :func:`asyncio.to_thread` so the subprocess fan-out never
+    blocks the event loop. Runs unauthenticated-free because the router
+    already enforces ``verify_token``.
+    """
+    del request  # unused — kept for FastAPI dependency resolution parity
+
+    from sovyx.engine.config import VoiceTuningConfig
+
+    tuning = VoiceTuningConfig()
+
+    if not _is_linux():
+        return JSONResponse(
+            {
+                "platform_supported": False,
+                "amixer_available": False,
+                "snapshots": [],
+                "aggregated_boost_db_ceiling": (tuning.linux_mixer_aggregated_boost_db_ceiling),
+                "saturation_ratio_ceiling": (tuning.linux_mixer_saturation_ratio_ceiling),
+                "reset_enabled_by_default": (tuning.linux_alsa_mixer_reset_enabled),
+            }
+        )
+
+    from sovyx.voice.health._linux_mixer_probe import (
+        enumerate_alsa_mixer_snapshots,
+    )
+
+    amixer_available = _amixer_available()
+    try:
+        snapshots = await asyncio.to_thread(enumerate_alsa_mixer_snapshots)
+    except Exception:  # noqa: BLE001
+        logger.warning("linux_mixer_diagnostics_probe_failed", exc_info=True)
+        snapshots = []
+
+    return JSONResponse(
+        {
+            "platform_supported": True,
+            "amixer_available": amixer_available,
+            "snapshots": _serialize_mixer_snapshots(snapshots),
+            "aggregated_boost_db_ceiling": (tuning.linux_mixer_aggregated_boost_db_ceiling),
+            "saturation_ratio_ceiling": (tuning.linux_mixer_saturation_ratio_ceiling),
+            "reset_enabled_by_default": tuning.linux_alsa_mixer_reset_enabled,
+        }
+    )
+
+
+@router.post("/linux-mixer-reset")
+async def linux_mixer_reset(request: Request) -> JSONResponse:
+    """Reset saturated ALSA gain controls on one card — user-initiated.
+
+    Body (all fields optional)::
+
+        {"card_index": int}
+
+    When ``card_index`` is omitted, the endpoint auto-selects the
+    saturating card if exactly one card has
+    :attr:`MixerCardSnapshot.saturation_warning=True`; multiple
+    saturating cards produce ``ok=False`` with ``reason="ambiguous_card"``
+    so the user can retry with an explicit index.
+
+    Applied controls are the ones flagged
+    :attr:`MixerControlSnapshot.saturation_risk=True` on the target
+    card — never the full control list. The write is atomic:
+    :func:`apply_mixer_reset` rolls back every successful mutation if
+    any individual ``amixer sset`` call fails.
+
+    Response (success)::
+
+        {"ok": True, "card_index": int, "card_id": str,
+         "card_longname": str, "applied_controls": [[name, raw], ...],
+         "reverted_controls": [[name, raw], ...]}
+
+    Response (failure modes)::
+
+        {"ok": False, "reason":
+            "not_linux" | "amixer_unavailable" | "no_snapshots" |
+            "ambiguous_card" | "card_not_found" | "not_saturating" |
+            "no_controls_to_reset" | "apply_failed",
+         "detail": str, "reason_code": str (from BypassApplyError when
+         applicable)}
+
+    The ALSA mixer change persists until reboot or manual override.
+    The endpoint does not persist anything to ``system.yaml`` — this is
+    a one-shot remediation, independent of the coordinator-driven
+    auto-bypass (governed by
+    :attr:`VoiceTuningConfig.linux_alsa_mixer_reset_enabled`).
+    """
+    from sovyx.engine.config import VoiceTuningConfig
+    from sovyx.voice.health._linux_mixer_apply import apply_mixer_reset
+    from sovyx.voice.health._linux_mixer_probe import (
+        enumerate_alsa_mixer_snapshots,
+    )
+    from sovyx.voice.health.bypass._strategy import BypassApplyError
+
+    if not _is_linux():
+        return JSONResponse(
+            {
+                "ok": False,
+                "reason": "not_linux",
+                "detail": ("Linux ALSA mixer reset is only available on Linux hosts."),
+            }
+        )
+    if not _amixer_available():
+        return JSONResponse(
+            {
+                "ok": False,
+                "reason": "amixer_unavailable",
+                "detail": (
+                    "`amixer` not found on PATH — install the alsa-utils "
+                    "package to enable mixer remediation."
+                ),
+            }
+        )
+
+    try:
+        body = await request.json()
+    except (ValueError, UnicodeDecodeError):
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    raw_card_index = body.get("card_index")
+    requested_card_index: int | None
+    if raw_card_index is None:
+        requested_card_index = None
+    else:
+        try:
+            requested_card_index = int(raw_card_index)
+        except (TypeError, ValueError):
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "reason": "invalid_card_index",
+                    "detail": ("card_index must be an integer from /proc/asound/cards."),
+                }
+            )
+
+    snapshots = await asyncio.to_thread(enumerate_alsa_mixer_snapshots)
+    if not snapshots:
+        return JSONResponse(
+            {
+                "ok": False,
+                "reason": "no_snapshots",
+                "detail": (
+                    "amixer returned no cards — the audio subsystem may be "
+                    "unreachable or no card exposes a mixer."
+                ),
+            }
+        )
+
+    target = None
+    if requested_card_index is not None:
+        for snap in snapshots:
+            if snap.card_index == requested_card_index:
+                target = snap
+                break
+        if target is None:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "reason": "card_not_found",
+                    "detail": (
+                        f"No ALSA card with index {requested_card_index} was reported by amixer."
+                    ),
+                }
+            )
+    else:
+        saturating = [s for s in snapshots if s.saturation_warning]
+        if not saturating:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "reason": "not_saturating",
+                    "detail": (
+                        "No ALSA card currently reports a saturation warning — nothing to reset."
+                    ),
+                }
+            )
+        if len(saturating) > 1:
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "reason": "ambiguous_card",
+                    "detail": (
+                        "Multiple cards report saturation — re-submit with an explicit card_index."
+                    ),
+                    "candidate_card_indexes": [s.card_index for s in saturating],
+                }
+            )
+        target = saturating[0]
+
+    controls_to_reset = [c for c in target.controls if c.saturation_risk]
+    if not controls_to_reset:
+        return JSONResponse(
+            {
+                "ok": False,
+                "reason": "no_controls_to_reset",
+                "detail": (
+                    f"Card {target.card_index} ({target.card_id}) has no "
+                    "individual control flagged as saturating — nothing to "
+                    "reset."
+                ),
+                "card_index": target.card_index,
+                "card_id": target.card_id,
+            }
+        )
+
+    tuning = VoiceTuningConfig()
+    try:
+        result = await apply_mixer_reset(
+            card_index=target.card_index,
+            controls_to_reset=controls_to_reset,
+            tuning=tuning,
+        )
+    except BypassApplyError as exc:
+        logger.warning(
+            "linux_mixer_reset_apply_failed",
+            card_index=target.card_index,
+            reason=exc.reason,
+            detail=str(exc),
+        )
+        return JSONResponse(
+            {
+                "ok": False,
+                "reason": "apply_failed",
+                "reason_code": exc.reason,
+                "detail": str(exc),
+                "card_index": target.card_index,
+                "card_id": target.card_id,
+            }
+        )
+
+    logger.info(
+        "linux_mixer_reset_applied",
+        card_index=result.card_index,
+        controls_reset=[name for name, _ in result.applied_controls],
+        controls_count=len(result.applied_controls),
+    )
+    return JSONResponse(
+        {
+            "ok": True,
+            "card_index": result.card_index,
+            "card_id": target.card_id,
+            "card_longname": target.card_longname,
+            "applied_controls": [[name, raw] for name, raw in result.applied_controls],
+            "reverted_controls": [[name, raw] for name, raw in result.reverted_controls],
+        }
+    )
 
 
 @router.get("/hardware-detect")

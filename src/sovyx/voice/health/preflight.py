@@ -89,6 +89,15 @@ class PreflightStepCode(StrEnum):
     """Step 8. Silence produced a wake-word score above the threshold —
     the model is broken, miscalibrated, or the wrong file was loaded."""
 
+    LINUX_MIXER_SATURATED = "linux_mixer_saturated"
+    """Step 9 (Linux only). One or more ALSA mixer gain controls
+    (typically ``Internal Mic Boost`` + ``Capture``) sits near max,
+    summing to a pre-ADC gain that clips the ADC on every peak of
+    speech. The matching remediation is
+    :class:`sovyx.voice.health.bypass.LinuxALSAMixerResetBypass`; the
+    dashboard surfaces a ``LinuxMicGainCard`` explainer with a reset
+    button."""
+
 
 @dataclass(frozen=True, slots=True)
 class PreflightStep:
@@ -483,11 +492,13 @@ def check_tts_synthesize(
 
 
 def default_step_names() -> Mapping[int, tuple[str, PreflightStepCode]]:
-    """Return the canonical (name, code) for each of the 8 ADR steps.
+    """Return the canonical (name, code) for each of the 9 ADR steps.
 
     Callers that want to run a subset (e.g. CLI doctor with the four
     checks the voice subpackage owns) use this mapping to fill in
-    the ``name`` / ``code`` fields without hard-coding strings.
+    the ``name`` / ``code`` fields without hard-coding strings. Step 9
+    (``linux_mixer_saturated``) is Linux-only; on non-Linux hosts the
+    check short-circuits to a ``skipped=True`` pass.
     """
     return {
         1: ("OS mic mute flag", PreflightStepCode.MIC_MUTED),
@@ -498,6 +509,7 @@ def default_step_names() -> Mapping[int, tuple[str, PreflightStepCode]]:
         6: ("TTS synthesis", PreflightStepCode.TTS_UNAVAILABLE),
         7: ("LLM provider reachable", PreflightStepCode.LLM_UNREACHABLE),
         8: ("Wake-word silence sanity", PreflightStepCode.WAKE_WORD_MISBEHAVING),
+        9: ("Linux ALSA mixer sanity", PreflightStepCode.LINUX_MIXER_SATURATED),
     }
 
 

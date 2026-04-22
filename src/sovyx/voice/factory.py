@@ -752,21 +752,44 @@ def _resolve_platform_key() -> str:
 
 
 def _build_bypass_strategies(platform_key: str) -> list[PlatformBypassStrategy]:
-    """Return the platform-filtered strategy list for Phase 1.
+    """Return the platform-filtered bypass strategy list.
 
-    Phase 1 ships a single concrete strategy —
-    :class:`~sovyx.voice.health.bypass.WindowsWASAPIExclusiveBypass` —
-    which is the definitive fix for the Windows Voice Clarity /
-    ``VocaEffectPack`` regression (CLAUDE.md anti-pattern #21). Linux
-    + macOS return an empty list: the coordinator treats an exhausted
-    strategy sequence as "no bypass available" and quarantines the
-    endpoint so the next boot / hotplug picks an alternative.
-    Phase 3 will slot ``WindowsDisableSysFx``, ``LinuxALSADirectNode``,
-    and ``MacOSVPIODisable`` into this builder — all via the same
-    :class:`PlatformBypassStrategy` Protocol.
+    Order within a platform is the order the coordinator tries them;
+    a strategy whose ``probe_eligibility`` reports
+    ``applicable=False`` is skipped without counting toward the
+    ``bypass_strategy_max_attempts`` budget.
+
+    * **win32** —
+      :class:`~sovyx.voice.health.bypass.WindowsWASAPIExclusiveBypass`.
+      The definitive fix for the Windows Voice Clarity /
+      ``VocaEffectPack`` regression (CLAUDE.md anti-pattern #21).
+    * **linux** —
+      :class:`~sovyx.voice.health.bypass.LinuxALSAMixerResetBypass`
+      first (mandatory, default-on, non-destructive: mutates the
+      ALSA mixer in-place and reverts on teardown), then
+      :class:`~sovyx.voice.health.bypass.LinuxPipeWireDirectBypass`
+      (opt-in via
+      :attr:`VoiceTuningConfig.linux_pipewire_direct_bypass_enabled`;
+      tears down the capture stream and reopens against the ALSA
+      kernel device, bypassing the session manager). A disabled
+      opt-in strategy stays in the list but reports
+      ``applicable=False`` so dashboards see the intent without
+      paying apply cost.
+    * **darwin** — empty until Phase 4 ships
+      :class:`MacOSVPIODisable`.
     """
     if platform_key == "win32":
         from sovyx.voice.health.bypass import WindowsWASAPIExclusiveBypass
 
         return [WindowsWASAPIExclusiveBypass()]
+    if platform_key == "linux":
+        from sovyx.voice.health.bypass import (
+            LinuxALSAMixerResetBypass,
+            LinuxPipeWireDirectBypass,
+        )
+
+        return [
+            LinuxALSAMixerResetBypass(),
+            LinuxPipeWireDirectBypass(),
+        ]
     return []

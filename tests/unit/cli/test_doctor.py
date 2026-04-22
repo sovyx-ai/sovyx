@@ -53,7 +53,10 @@ class TestDoctorVoiceDefault:
         assert result.exit_code == 0
         assert "Voice Doctor" in result.stdout
         assert "PortAudio" in result.stdout
-        assert "All 1 step(s) passed" in result.stdout
+        # Two steps now: PortAudio (step 4) + Linux mixer sanity (step 9).
+        # The mixer check skips on non-Linux hosts and passes with no hint,
+        # so both steps are green and the summary is "All 2 step(s) passed".
+        assert "All 2 step(s) passed" in result.stdout
 
     def test_failure_exit_code_equals_failure_count(self, tmp_path: Path) -> None:
         with patch(
@@ -63,7 +66,8 @@ class TestDoctorVoiceDefault:
             result = runner.invoke(app, ["doctor", "voice"])
         assert result.exit_code == 1
         assert "FAIL" in result.stdout
-        assert "1 of 1 step(s) failed" in result.stdout
+        # Mixer check passes on non-Linux (skipped), PortAudio fails → 1/2.
+        assert "1 of 2 step(s) failed" in result.stdout
         assert "portaudio_unavailable" in result.stdout
 
     def test_json_output_is_parseable_and_exits_with_failure_count(self, tmp_path: Path) -> None:
@@ -76,10 +80,14 @@ class TestDoctorVoiceDefault:
         payload = json.loads(result.stdout)
         assert payload["passed"] is False
         assert payload["first_failure_code"] == "portaudio_unavailable"
-        assert payload["steps_run"] == 1
-        assert len(payload["steps"]) == 1
-        assert payload["steps"][0]["code"] == "portaudio_unavailable"
-        assert payload["steps"][0]["passed"] is False
+        assert payload["steps_run"] == 2
+        assert len(payload["steps"]) == 2
+        portaudio_step = next(s for s in payload["steps"] if s["step"] == 4)
+        assert portaudio_step["code"] == "portaudio_unavailable"
+        assert portaudio_step["passed"] is False
+        mixer_step = next(s for s in payload["steps"] if s["step"] == 9)
+        assert mixer_step["code"] == "linux_mixer_saturated"
+        assert mixer_step["passed"] is True
         assert payload["device_filter"] is None
 
     def test_device_flag_is_recorded_in_json_payload(self, tmp_path: Path) -> None:

@@ -671,6 +671,51 @@ export const CaptureExclusiveResponseSchema = z.object({
   applied_immediately: z.boolean(),
 });
 
+// ── Linux ALSA mixer diagnostics + remediation ──
+
+export const LinuxMixerControlSchema = z.object({
+  name: z.string(),
+  min_raw: z.number().int(),
+  max_raw: z.number().int(),
+  current_raw: z.number().int(),
+  current_db: z.number().nullable(),
+  max_db: z.number().nullable(),
+  is_boost_control: z.boolean(),
+  saturation_risk: z.boolean(),
+  asymmetric: z.boolean(),
+});
+
+export const LinuxMixerCardSchema = z.object({
+  card_index: z.number().int(),
+  card_id: z.string(),
+  card_longname: z.string(),
+  aggregated_boost_db: z.number(),
+  saturation_warning: z.boolean(),
+  controls: z.array(LinuxMixerControlSchema),
+});
+
+export const LinuxMixerDiagnosticsResponseSchema = z.object({
+  platform_supported: z.boolean(),
+  amixer_available: z.boolean(),
+  snapshots: z.array(LinuxMixerCardSchema),
+  aggregated_boost_db_ceiling: z.number(),
+  saturation_ratio_ceiling: z.number(),
+  reset_enabled_by_default: z.boolean(),
+});
+
+export const LinuxMixerResetResponseSchema = z.object({
+  ok: z.boolean(),
+  reason: z.string().optional(),
+  reason_code: z.string().optional(),
+  detail: z.string().optional(),
+  card_index: z.number().int().optional(),
+  card_id: z.string().optional(),
+  card_longname: z.string().optional(),
+  candidate_card_indexes: z.array(z.number().int()).optional(),
+  applied_controls: z.array(z.tuple([z.string(), z.number().int()])).optional(),
+  reverted_controls: z.array(z.tuple([z.string(), z.number().int()])).optional(),
+});
+
 // ── Voice Capture Health (L7, ADR §4.7) ──
 
 export const VoiceHealthComboSchema = z.object({

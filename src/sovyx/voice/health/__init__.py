@@ -41,6 +41,7 @@ from sovyx.voice.health._kernel_invalidated_recheck import (
     KernelInvalidatedRechecker,
     RecheckProbeCallable,
 )
+from sovyx.voice.health._linux_mixer_check import check_linux_mixer_sanity
 from sovyx.voice.health._power import NoopPowerEventListener, PowerEventListener
 from sovyx.voice.health._quarantine import (
     EndpointQuarantine,
@@ -186,6 +187,7 @@ __all__ = [
     "build_platform_default_device_watcher",
     "build_platform_hotplug_listener",
     "build_platform_power_listener",
+    "check_linux_mixer_sanity",
     "check_portaudio",
     "check_tts_synthesize",
     "check_wake_word_smoke",

@@ -39,6 +39,7 @@ import { api, isAbortError } from "@/lib/api";
 import { toast } from "sonner";
 import { ExportImportSection } from "@/components/settings/export-import";
 import { VoiceClarityCard } from "@/components/settings/voice-clarity-card";
+import { LinuxMicGainCard } from "@/components/settings/linux-mic-gain-card";
 import { ErrorBoundary } from "@/components/error-boundary";
 import type {
   Settings,
@@ -806,6 +807,11 @@ export default function SettingsPage() {
       {/* ── Voice Clarity / capture APO bypass ── */}
       <ErrorBoundary name="section.settings.voiceClarity" variant="section">
         <VoiceClarityCard />
+      </ErrorBoundary>
+
+      {/* ── Linux ALSA mixer saturation remediation ── */}
+      <ErrorBoundary name="section.settings.linuxMicGain" variant="section">
+        <LinuxMicGainCard />
       </ErrorBoundary>
 
       {/* ── Export / Import ── */}

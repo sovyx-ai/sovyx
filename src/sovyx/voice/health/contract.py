@@ -27,7 +27,12 @@ if TYPE_CHECKING:
     import numpy as np
     import numpy.typing as npt
 
-    from sovyx.voice._capture_task import ExclusiveRestartResult, SharedRestartResult
+    from sovyx.voice._capture_task import (
+        AlsaHwDirectRestartResult,
+        ExclusiveRestartResult,
+        SessionManagerRestartResult,
+        SharedRestartResult,
+    )
 
 
 # ── Enums ────────────────────────────────────────────────────────────────
@@ -754,6 +759,10 @@ class CaptureTaskProto(Protocol):
 
     async def request_shared_restart(self) -> SharedRestartResult: ...
 
+    async def request_alsa_hw_direct_restart(self) -> AlsaHwDirectRestartResult: ...
+
+    async def request_session_manager_restart(self) -> SessionManagerRestartResult: ...
+
     async def tap_recent_frames(
         self,
         duration_s: float,
@@ -827,6 +836,122 @@ class BypassOutcome:
     detail: str = ""
 
 
+# ── Linux ALSA mixer snapshots (Phase 3) ────────────────────────────────
+#
+# These types describe the *state* of the ALSA analog mixer chain on one
+# card. They are produced by :mod:`sovyx.voice.health._linux_mixer_probe`
+# (read-only), consumed by :mod:`sovyx.voice.health._linux_mixer_apply`
+# (writes + snapshot-driven rollback), and serialised onto the dashboard
+# via ``GET /api/voice/linux-mixer-diagnostics``.
+#
+# See ``docs-internal/plans/linux-alsa-mixer-saturation-fix.md`` §2.3.2
+# for the derivation of each field + the classification rules.
+
+
+@dataclass(frozen=True, slots=True)
+class MixerControlSnapshot:
+    """State of one ``amixer`` simple control on a single ALSA card.
+
+    Produced by :func:`sovyx.voice.health._linux_mixer_probe.enumerate_alsa_mixer_snapshots`.
+    Immutable — apply/revert builds :class:`MixerApplySnapshot` from these,
+    never mutates them in place.
+
+    Args:
+        name: ``amixer`` simple-control name (``"Capture"``,
+            ``"Internal Mic Boost"``, …). Case-sensitive; used verbatim
+            in the subsequent ``amixer -c N set`` call.
+        min_raw: Lower bound of the control's raw integer range (usually
+            ``0`` but some codecs expose negative floors).
+        max_raw: Upper bound of the raw integer range. Reading
+            ``current_raw == max_raw`` on a boost-class control is the
+            canonical saturation signal.
+        current_raw: Current raw value. The probe reads the Front-Left
+            channel; controls with a left/right asymmetry the probe
+            picks up are surfaced via :attr:`asymmetric`.
+        current_db: Current gain in dB, when the control exposes a dB
+            mapping. ``None`` for enum controls or controls without a
+            dB tag.
+        max_db: DB value at :attr:`max_raw`, for aggregated-boost
+            accounting. ``None`` when :attr:`current_db` is ``None``.
+        is_boost_control: ``True`` when the control name matches one of
+            the boost / capture patterns recognised by the probe — the
+            set of controls that saturate ADCs when driven to max.
+        saturation_risk: ``True`` iff :attr:`is_boost_control` AND
+            ``current_raw / max_raw > linux_mixer_saturation_ratio_ceiling``.
+            The coordinator keys off this flag.
+        asymmetric: ``True`` when the Front-Left and Front-Right
+            readings differ. Surfaced for diagnostics only; apply sets
+            both channels to the same target value.
+    """
+
+    name: str
+    min_raw: int
+    max_raw: int
+    current_raw: int
+    current_db: float | None
+    max_db: float | None
+    is_boost_control: bool
+    saturation_risk: bool
+    asymmetric: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class MixerCardSnapshot:
+    """State of all gain-bearing controls on a single ALSA card.
+
+    Args:
+        card_index: ``/proc/asound/cards`` index. Used directly in
+            ``amixer -c <index>`` subsequent calls.
+        card_id: Short identifier from ``/proc/asound/cards`` (e.g.
+            ``"Generic_1"``).
+        card_longname: Full human-readable name (e.g.
+            ``"HDA Intel (Family 17h/19h HD Audio Controller)"``). Used
+            for endpoint matching against
+            :attr:`BypassContext.endpoint_friendly_name`.
+        controls: All controls observed on this card, in ``amixer``
+            enumeration order.
+        aggregated_boost_db: Sum of :attr:`MixerControlSnapshot.current_db`
+            across every boost-class control that exposes a dB mapping.
+            ``0.0`` when no boost control reports a dB value.
+        saturation_warning: ``True`` iff at least one control has
+            :attr:`MixerControlSnapshot.saturation_risk` OR
+            :attr:`aggregated_boost_db` exceeds
+            ``linux_mixer_aggregated_boost_db_ceiling``.
+    """
+
+    card_index: int
+    card_id: str
+    card_longname: str
+    controls: tuple[MixerControlSnapshot, ...]
+    aggregated_boost_db: float
+    saturation_warning: bool
+
+
+@dataclass(frozen=True, slots=True)
+class MixerApplySnapshot:
+    """Record of a completed ``amixer`` mutation — drives revert.
+
+    Produced by :func:`sovyx.voice.health._linux_mixer_apply.apply_mixer_reset`
+    on success. Consumed by :func:`restore_mixer_snapshot` to roll back
+    the strategy's mutation on coordinator teardown or next-strategy
+    advancement.
+
+    Args:
+        card_index: Card whose controls were mutated.
+        reverted_controls: ``(name, pre_apply_raw_value)`` pairs in the
+            order they were mutated. Revert walks this list in reverse
+            so the last mutation is undone first.
+        applied_controls: ``(name, post_apply_raw_value)`` pairs for
+            telemetry + the dashboard's confirmation UI. Never used for
+            revert — the revert-from-snapshot contract is "restore the
+            pre-apply state", not "set to a different target".
+    """
+
+    card_index: int
+    reverted_controls: tuple[tuple[str, int], ...]
+    applied_controls: tuple[tuple[str, int], ...]
+
+
 __all__ = [
     "ALLOWED_FORMATS",
     "ALLOWED_HOST_APIS_BY_PLATFORM",
@@ -845,6 +970,9 @@ __all__ = [
     "IntegrityResult",
     "IntegrityVerdict",
     "LoadReport",
+    "MixerApplySnapshot",
+    "MixerCardSnapshot",
+    "MixerControlSnapshot",
     "OverrideEntry",
     "ProbeHistoryEntry",
     "ProbeMode",
