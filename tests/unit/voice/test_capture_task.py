@@ -1016,3 +1016,152 @@ class TestExclusiveRestart:
             assert "platform" in attrs
         finally:
             await task.stop()
+
+
+# ─────────────────────────────────────────────────────────────────────
+# v1.3 §4.2 L4-B — mark-based tap contract
+# ─────────────────────────────────────────────────────────────────────
+
+
+class TestRingStatePackingInvariants:
+    """Packed state must keep epoch and samples consistent across the
+    single-atomic-assignment contract the :class:`CaptureTaskProto`
+    readers depend on."""
+
+    def _fresh_task(self) -> AudioCaptureTask:
+        from sovyx.voice._capture_task import AudioCaptureTask
+
+        task = AudioCaptureTask.__new__(AudioCaptureTask)
+        task._ring_buffer = None  # noqa: SLF001
+        task._ring_capacity = 0  # noqa: SLF001
+        task._ring_write_index = 0  # noqa: SLF001
+        task._ring_state = 0  # noqa: SLF001
+        task._tuning = None  # noqa: SLF001
+        return task
+
+    def test_initial_mark_is_zero_zero(self) -> None:
+        task = self._fresh_task()
+        assert task.samples_written_mark() == (0, 0)
+
+    def test_allocate_bumps_epoch_and_resets_samples(self) -> None:
+        from sovyx.engine.config import VoiceTuningConfig
+
+        task = self._fresh_task()
+        task._allocate_ring_buffer(VoiceTuningConfig())  # noqa: SLF001
+        first_mark = task.samples_written_mark()
+        assert first_mark == (1, 0)
+
+        # Simulate prior writes accumulating samples then re-allocate.
+        from sovyx.voice._capture_task import _RING_EPOCH_SHIFT
+
+        task._ring_state |= 999  # noqa: SLF001 — pretend 999 samples written
+        task._allocate_ring_buffer(VoiceTuningConfig())  # noqa: SLF001
+        second_mark = task.samples_written_mark()
+        assert second_mark[0] == 2  # epoch bumped
+        assert second_mark[1] == 0  # samples reset
+        # And the internal state matches the decomposed pair.
+        assert task._ring_state == (2 << _RING_EPOCH_SHIFT)  # noqa: SLF001
+
+    def test_ring_write_updates_state_atomically(self) -> None:
+        import numpy as np
+
+        from sovyx.engine.config import VoiceTuningConfig
+
+        task = self._fresh_task()
+        task._allocate_ring_buffer(VoiceTuningConfig())  # noqa: SLF001
+        task._ring_write(np.zeros(512, dtype=np.int16))  # noqa: SLF001
+        mark = task.samples_written_mark()
+        assert mark[0] == 1
+        assert mark[1] == 512
+
+
+class TestTapFramesSinceMark:
+    """Mark/tap contract — pre-apply contamination is impossible and
+    ring resets between mark and tap are handled gracefully."""
+
+    @pytest.mark.asyncio()
+    async def test_tap_waits_until_min_samples_accumulate(self) -> None:
+        """With same epoch and insufficient samples, tap waits until
+        either ``min_samples`` accumulate or ``max_wait_s`` expires."""
+        import asyncio
+
+        import numpy as np
+
+        from sovyx.engine.config import VoiceTuningConfig
+        from sovyx.voice._capture_task import AudioCaptureTask
+
+        task = AudioCaptureTask.__new__(AudioCaptureTask)
+        task._ring_buffer = np.zeros(16_000, dtype=np.int16)  # noqa: SLF001
+        task._ring_capacity = 16_000  # noqa: SLF001
+        task._ring_write_index = 0  # noqa: SLF001
+        task._ring_state = 0  # noqa: SLF001
+        task._tuning = VoiceTuningConfig(mark_tap_poll_interval_s=0.01)  # noqa: SLF001
+
+        task._allocate_ring_buffer(task._tuning)  # epoch → 1  # noqa: SLF001
+        mark = task.samples_written_mark()
+
+        async def feed() -> None:
+            await asyncio.sleep(0.02)
+            task._ring_write(np.zeros(8_000, dtype=np.int16))  # noqa: SLF001
+
+        feeder = asyncio.create_task(feed())
+        frames = await task.tap_frames_since_mark(
+            mark=mark,
+            min_samples=8_000,
+            max_wait_s=1.0,
+        )
+        await feeder
+        assert frames.size == 8_000
+
+    @pytest.mark.asyncio()
+    async def test_tap_returns_on_deadline_without_enough_samples(self) -> None:
+        import numpy as np
+
+        from sovyx.engine.config import VoiceTuningConfig
+        from sovyx.voice._capture_task import AudioCaptureTask
+
+        task = AudioCaptureTask.__new__(AudioCaptureTask)
+        task._ring_buffer = np.zeros(16_000, dtype=np.int16)  # noqa: SLF001
+        task._ring_capacity = 16_000  # noqa: SLF001
+        task._ring_write_index = 0  # noqa: SLF001
+        task._ring_state = 0  # noqa: SLF001
+        task._tuning = VoiceTuningConfig(mark_tap_poll_interval_s=0.01)  # noqa: SLF001
+
+        task._allocate_ring_buffer(task._tuning)  # epoch → 1  # noqa: SLF001
+        mark = task.samples_written_mark()
+
+        frames = await task.tap_frames_since_mark(
+            mark=mark,
+            min_samples=8_000,
+            max_wait_s=0.05,
+        )
+        # Deadline expired with zero new samples — empty array, never None.
+        assert frames.size == 0
+
+    @pytest.mark.asyncio()
+    async def test_tap_epoch_mismatch_short_circuits(self) -> None:
+        """An epoch advance between mark and tap indicates a ring reset;
+        every sample now in the buffer is post-mark."""
+        import numpy as np
+
+        from sovyx.engine.config import VoiceTuningConfig
+        from sovyx.voice._capture_task import AudioCaptureTask
+
+        task = AudioCaptureTask.__new__(AudioCaptureTask)
+        task._ring_buffer = np.zeros(16_000, dtype=np.int16)  # noqa: SLF001
+        task._ring_capacity = 16_000  # noqa: SLF001
+        task._ring_write_index = 0  # noqa: SLF001
+        task._ring_state = 0  # noqa: SLF001
+        task._tuning = VoiceTuningConfig()  # noqa: SLF001
+
+        task._allocate_ring_buffer(task._tuning)  # noqa: SLF001
+        mark = task.samples_written_mark()
+        # Reset happens between mark and tap — new epoch, empty ring.
+        task._allocate_ring_buffer(task._tuning)  # noqa: SLF001
+
+        frames = await task.tap_frames_since_mark(
+            mark=mark,
+            min_samples=1_000,
+            max_wait_s=0.5,
+        )
+        assert frames.size == 0  # Empty ring after reset → empty result.

@@ -903,6 +903,71 @@ class CaptureTaskProto(Protocol):
         duration_s: float,
     ) -> npt.NDArray[np.int16]: ...
 
+    def samples_written_mark(self) -> tuple[int, int]:
+        """Return an opaque ``(epoch, samples_written)`` pair.
+
+        The tuple is opaque: pass it unchanged to
+        :meth:`tap_frames_since_mark`; do not compare, do arithmetic
+        on, or log the individual components without acknowledging they
+        are implementation details of the ring-buffer state machine.
+
+        Implementations MUST produce the pair from a single atomic read
+        of the internal packed state so both ints are guaranteed to
+        correspond to the same state generation (same epoch). See
+        :mod:`sovyx.voice._capture_task` for the packed encoding
+        rationale.
+
+        v1.3 §4.2.2 rationale — the contract is ``tuple[int, int]``
+        rather than a single packed ``int`` so the pair survives every
+        JSON / Prometheus / structlog serialization boundary without
+        silently truncating (packed marks can exceed ``2**53``, the
+        JavaScript ``Number`` safe range). The packed representation
+        remains private to the capture task.
+
+        Synchronous. Safe to call from any async context.
+        """
+        ...
+
+    async def tap_frames_since_mark(
+        self,
+        mark: tuple[int, int],
+        min_samples: int,
+        max_wait_s: float,
+    ) -> npt.NDArray[np.int16]:
+        """Return frames written AFTER ``mark`` was captured.
+
+        Polls the ring-buffer state until at least ``min_samples`` new
+        frames have accumulated post-``mark`` or ``max_wait_s`` elapses,
+        then returns the tail slice via :meth:`tap_recent_frames`. The
+        returned array always corresponds to audio the capture task
+        delivered strictly after :meth:`samples_written_mark` was
+        called — the primary fix for the v0.21.2 probe-window
+        contamination bug (see dossier ``SVX-VOICE-LINUX-20260422``).
+
+        Ring-buffer reset handling: if the epoch bundled in ``mark``
+        differs from the current epoch, the buffer was reallocated
+        mid-session (e.g. a WASAPI exclusive restart zeroed the ring).
+        Implementations MUST treat every sample currently in the buffer
+        as post-mark and return whatever is available without waiting
+        for the absent pre-reset frame count.
+
+        Args:
+            mark: Opaque pair returned by
+                :meth:`samples_written_mark`. Pass unchanged; never
+                synthesize one.
+            min_samples: Target accumulation threshold — the method
+                returns as soon as this many new frames are available.
+            max_wait_s: Hard timeout. On expiry the method returns
+                whatever fresh frames exist (possibly empty) rather
+                than blocking the coordinator's bypass loop.
+
+        Returns:
+            Zero-copy-free slice of the ring buffer, at most
+            ``min_samples`` long. Empty array on timeout with no new
+            frames.
+        """
+        ...
+
     def apply_mic_ducking_db(self, gain_db: float) -> None: ...
 
 

@@ -78,6 +78,31 @@ _VALIDATION_S = _VoiceTuning().capture_validation_seconds
 _VALIDATION_MIN_RMS_DB = _VoiceTuning().capture_validation_min_rms_db
 _HEARTBEAT_INTERVAL_S = _VoiceTuning().capture_heartbeat_interval_seconds
 
+# ── v1.3 §4.2 L4-B — ring buffer state packing ──────────────────────
+#
+# The capture task packs ``(epoch, samples_written)`` into a single
+# ``int`` attribute so a single ``LOAD_ATTR`` by an external consumer
+# (:meth:`samples_written_mark`) observes both components atomically
+# — without the packing, a reader could race the writer between the
+# "bump samples" and "bump epoch" assignments and see an epoch that
+# does not match the samples count.
+#
+# Layout: ``state = (epoch << _RING_EPOCH_SHIFT) | (samples & _RING_SAMPLES_MASK)``
+#
+# * Samples occupy the low 40 bits. At 16 kHz that is 2**40 / 16000 / 86400 / 365
+#   ≈ 2179 years of continuous capture before wrapping — practically unreachable
+#   within a single process lifetime.
+# * Epoch occupies the remaining (high) bits of a Python ``int`` (arbitrary
+#   precision). In realistic use the epoch increments once per stream reopen,
+#   so ~10^4 is the practical ceiling across a multi-year daemon lifetime.
+#
+# External consumers (:class:`CaptureIntegrityCoordinator`) receive the
+# pair as ``tuple[int, int]`` — neither component individually can
+# exceed ``2**53`` in realistic deployments, so the tuple survives JSON
+# / Prometheus / structlog serialization boundaries without truncation.
+_RING_EPOCH_SHIFT = 40
+_RING_SAMPLES_MASK = (1 << _RING_EPOCH_SHIFT) - 1
+
 # Floor for log10 — 32-bit PCM noise ≈ -96 dBFS, so -120 is safely below.
 _RMS_FLOOR_DB = -120.0
 
@@ -773,10 +798,18 @@ class AudioCaptureTask:
         # them without a lock as long as neither path awaits while
         # mutating the index fields. That invariant is asserted by the
         # unit tests — do not add awaits inside the critical sections.
+        #
+        # v1.3 §4.2 L4-B — ``_ring_state`` packs ``(epoch, samples_written)``
+        # into a single int (layout in ``_RING_EPOCH_SHIFT`` / ``_RING_SAMPLES_MASK``)
+        # so external readers via :meth:`samples_written_mark` observe a
+        # consistent pair in one atomic ``LOAD_ATTR``. The bare
+        # ``_ring_write_index`` remains separate because it is read only
+        # by :meth:`tap_recent_frames` on the same event loop as the
+        # writer — no cross-loop atomicity required.
         self._ring_buffer: npt.NDArray[np.int16] | None = None
         self._ring_capacity: int = 0
         self._ring_write_index: int = 0
-        self._ring_samples_written: int = 0
+        self._ring_state: int = 0
 
     # -- Properties -----------------------------------------------------------
 
@@ -1988,6 +2021,12 @@ class AudioCaptureTask:
         leaks stale frames from the pre-reopen stream. The write pointer
         is reset to zero so ``tap_recent_frames`` after the reopen only
         returns audio from the fresh stream.
+
+        v1.3 §4.2 L4-B — the epoch component of ``_ring_state`` bumps on
+        every allocation so an in-flight :meth:`tap_frames_since_mark`
+        can detect "the ring was reset while I was waiting" via epoch
+        inequality and avoid waiting forever for a sample count the new
+        ring will never reach.
         """
         import numpy as np
 
@@ -1996,7 +2035,12 @@ class AudioCaptureTask:
         self._ring_buffer = np.zeros(capacity, dtype=np.int16)
         self._ring_capacity = capacity
         self._ring_write_index = 0
-        self._ring_samples_written = 0
+        # Bump epoch, reset samples. Single atomic assignment so any
+        # concurrent reader observing ``_ring_state`` sees the new
+        # (epoch, 0) pair consistently — never an old-epoch/new-samples
+        # or new-epoch/old-samples interleaving.
+        current_epoch = self._ring_state >> _RING_EPOCH_SHIFT
+        self._ring_state = (current_epoch + 1) << _RING_EPOCH_SHIFT
 
     def _ring_write(self, window: npt.NDArray[np.int16]) -> None:
         """Append a pipeline-shaped frame (16 kHz mono int16) to the ring.
@@ -2015,12 +2059,20 @@ class AudioCaptureTask:
         n = int(window.shape[0])
         if n <= 0 or cap <= 0:
             return
+        # v1.3 §4.2 — compute the post-write state once and commit via
+        # a single ``_ring_state = ...`` assignment so cross-loop readers
+        # never observe a half-updated pair. The samples component wraps
+        # at ``_RING_SAMPLES_MASK`` (effectively never, at 16 kHz); the
+        # epoch is preserved by masking the low bits.
+        state = self._ring_state
+        epoch_bits = state & ~_RING_SAMPLES_MASK
+        new_samples = ((state & _RING_SAMPLES_MASK) + n) & _RING_SAMPLES_MASK
         # If a single window is larger than the buffer (pathological —
         # 33 s default holds ~1_032 blocks of 16 ms), keep only the tail.
         if n >= cap:
             buf[:] = window[-cap:]
             self._ring_write_index = 0
-            self._ring_samples_written += n
+            self._ring_state = epoch_bits | new_samples
             return
         start = self._ring_write_index
         end = start + n
@@ -2031,7 +2083,7 @@ class AudioCaptureTask:
             buf[start:cap] = window[:head]
             buf[0 : n - head] = window[head:]
         self._ring_write_index = (start + n) % cap
-        self._ring_samples_written += n
+        self._ring_state = epoch_bits | new_samples
 
     async def tap_recent_frames(
         self,
@@ -2067,7 +2119,9 @@ class AudioCaptureTask:
         if buf is None or cap <= 0 or duration_s <= 0:
             return np.zeros(0, dtype=np.int16)
         wanted = min(cap, int(duration_s * _SAMPLE_RATE))
-        available = min(self._ring_samples_written, cap)
+        # v1.3 §4.2 — derive samples_written from the packed ``_ring_state``
+        # so reads and writes share a single source of truth.
+        available = min(self._ring_state & _RING_SAMPLES_MASK, cap)
         n = min(wanted, available)
         if n <= 0:
             return np.zeros(0, dtype=np.int16)
@@ -2080,6 +2134,86 @@ class AudioCaptureTask:
         out[:head] = buf[begin:cap]
         out[head:] = buf[0 : n - head]
         return out
+
+    # -- v1.3 §4.2 L4-B — mark-based tap -------------------------------
+
+    def samples_written_mark(self) -> tuple[int, int]:
+        """Return an opaque ``(epoch, samples_written)`` pair.
+
+        Atomic decomposition of the packed :attr:`_ring_state` into the
+        two logical components the coordinator needs:
+
+        1. Single ``LOAD_ATTR`` of ``_ring_state`` copies both components
+           into a local name in one bytecode step — no cross-loop race
+           can split the epoch from the samples.
+        2. The returned tuple is therefore guaranteed to reflect one
+           consistent state generation, satisfying the
+           :class:`~sovyx.voice.health.contract.CaptureTaskProto`
+           contract.
+
+        Callers treat the tuple as opaque. See the Protocol docstring
+        for the contract's rationale.
+        """
+        state = self._ring_state  # single atomic LOAD_ATTR
+        return (state >> _RING_EPOCH_SHIFT, state & _RING_SAMPLES_MASK)
+
+    async def tap_frames_since_mark(
+        self,
+        mark: tuple[int, int],
+        min_samples: int,
+        max_wait_s: float,
+    ) -> npt.NDArray[np.int16]:
+        """Return frames written AFTER ``mark`` was captured.
+
+        See :class:`~sovyx.voice.health.contract.CaptureTaskProto` for
+        the full contract. Implementation notes:
+
+        * ``_ring_state`` is read in one ``LOAD_ATTR`` per loop iteration
+          so epoch and samples count always correspond to the same state
+          generation.
+        * If the epoch bundled in ``mark`` no longer matches the current
+          epoch, the ring was reallocated (a stream reopen / exclusive
+          restart): every sample currently in the buffer is by
+          definition post-mark, and we short-circuit with the available
+          tail rather than spinning for a delta that will never
+          materialise.
+        * The poll interval comes from
+          :attr:`VoiceTuningConfig.mark_tap_poll_interval_s` (§14.E4)
+          so operators can tune responsiveness without editing code.
+        """
+        import numpy as np
+
+        mark_epoch, mark_samples = mark
+        tuning = self._tuning if self._tuning is not None else _VoiceTuning()
+        poll_interval_s = max(0.001, float(tuning.mark_tap_poll_interval_s))
+        deadline = time.monotonic() + max(0.0, float(max_wait_s))
+
+        while True:
+            state = self._ring_state  # atomic LOAD_ATTR per iteration
+            current_epoch = state >> _RING_EPOCH_SHIFT
+            current_samples = state & _RING_SAMPLES_MASK
+
+            if current_epoch != mark_epoch:
+                # Ring was reallocated after the mark was taken — every
+                # sample now in the buffer is post-reset, so treat the
+                # entire capacity as post-mark.
+                available = min(current_samples, self._ring_capacity)
+                if available >= min_samples or time.monotonic() >= deadline:
+                    if available <= 0:
+                        return np.zeros(0, dtype=np.int16)
+                    return await self.tap_recent_frames(
+                        min(available, min_samples) / _SAMPLE_RATE,
+                    )
+            else:
+                new_samples = current_samples - mark_samples
+                if new_samples >= min_samples:
+                    return await self.tap_recent_frames(min_samples / _SAMPLE_RATE)
+                if time.monotonic() >= deadline:
+                    if new_samples <= 0:
+                        return np.zeros(0, dtype=np.int16)
+                    return await self.tap_recent_frames(new_samples / _SAMPLE_RATE)
+
+            await asyncio.sleep(poll_interval_s)
 
     def _emit_stream_opened(
         self,

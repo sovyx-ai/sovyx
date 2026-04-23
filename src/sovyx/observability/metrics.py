@@ -526,6 +526,34 @@ class MetricsRegistry:
             "degradation signal derived from RMS + spectral flatness "
             "+ energy rolloff + Silero VAD max probability.",
         )
+        self.voice_health_bypass_probe_wait_ms = self._histogram(
+            "sovyx.voice.health.bypass.probe_wait_ms",
+            "Wall-clock time the CaptureIntegrityCoordinator waited in "
+            "tap_frames_since_mark between strategy.apply() returning "
+            "and post-apply frames being ready for classification "
+            "(labels: strategy). Introduced by v1.3 §14.E1 as the "
+            "primary telemetry feeding the probe_jitter_margin_s review "
+            "gate — p95 rising above "
+            "(integrity_probe_duration_s + probe_jitter_margin_s) * 1000 "
+            "signals an under-provisioned jitter margin.",
+        )
+        self.voice_health_bypass_probe_window_contaminated = self._counter(
+            "sovyx.voice.health.bypass.probe_window_contaminated",
+            "Fires when tap_frames_since_mark returned fewer than "
+            "min_samples post-apply frames within max_wait_s (labels: "
+            "strategy). A non-zero count means the coordinator fell back "
+            "to classifying an undersized sample — the tuple mark still "
+            "prevented pre-apply contamination, but the verdict carries "
+            "reduced statistical weight.",
+        )
+        self.voice_health_bypass_improvement_resolution = self._counter(
+            "sovyx.voice.health.bypass.improvement_resolution",
+            "Counts APPLIED_HEALTHY verdicts reached via the v1.3 §14.E2 "
+            "improvement heuristic — post-apply verdict is VAD_MUTE but "
+            "spectral rolloff improved by >= improvement_rolloff_factor. "
+            "Paired with a follow-up deaf-within-60s counter (future) to "
+            "compute Type I/II error rates of the heuristic.",
+        )
         self.voice_health_time_to_first_utterance = self._histogram(
             "sovyx.voice.health.time_to_first_utterance",
             "User-perceived KPI — latency from WakeWordDetectedEvent to "

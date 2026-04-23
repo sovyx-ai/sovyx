@@ -85,6 +85,9 @@ METRIC_PROBE_START_TIME_ERRORS = "sovyx.voice.health.probe.start_time_errors"
 METRIC_APO_DEGRADED_EVENTS = "sovyx.voice.health.apo_degraded.events"
 METRIC_BYPASS_STRATEGY_VERDICTS = "sovyx.voice.health.bypass_strategy.verdicts"
 METRIC_CAPTURE_INTEGRITY_VERDICTS = "sovyx.voice.health.capture_integrity.verdicts"
+METRIC_BYPASS_PROBE_WAIT_MS = "sovyx.voice.health.bypass.probe_wait_ms"
+METRIC_BYPASS_PROBE_WINDOW_CONTAMINATED = "sovyx.voice.health.bypass.probe_window_contaminated"
+METRIC_BYPASS_IMPROVEMENT_RESOLUTION = "sovyx.voice.health.bypass.improvement_resolution"
 
 
 # ── Label enums (closed sets for low-cardinality guarantees) ─────────────
@@ -363,6 +366,61 @@ def record_bypass_strategy_verdict(
     )
 
 
+def record_bypass_probe_wait_ms(*, strategy: str, wait_ms: float) -> None:
+    """Record the post-apply probe wait duration (v1.3 §14.E1).
+
+    Fed from :meth:`CaptureIntegrityCoordinator.handle_deaf_signal` —
+    measures the wall-clock span between ``strategy.apply()`` returning
+    and :meth:`AudioCaptureTask.tap_frames_since_mark` yielding enough
+    post-apply frames for classification.
+
+    Args:
+        strategy: Stable strategy identifier (same token used by
+            :func:`record_bypass_strategy_verdict`).
+        wait_ms: Observed duration in milliseconds. Clamped at zero so
+            a negative clock skew does not poison the histogram.
+    """
+    histogram = getattr(get_metrics(), "voice_health_bypass_probe_wait_ms", None)
+    if histogram is None:
+        return
+    histogram.record(
+        max(0.0, float(wait_ms)),
+        attributes={"strategy": strategy or "unknown"},
+    )
+
+
+def record_bypass_probe_window_contaminated(*, strategy: str) -> None:
+    """Record a degraded-but-not-contaminated post-apply probe (v1.3 §14.E1).
+
+    The tuple-mark design eliminates pre-apply frame leakage entirely;
+    this counter instead fires when the coordinator had to classify
+    *fewer* than ``min_samples`` post-apply frames because the tap
+    timed out. Distinct signal from a failed apply — the fix was
+    applied, but the verdict carries reduced statistical weight.
+    """
+    counter = getattr(get_metrics(), "voice_health_bypass_probe_window_contaminated", None)
+    if counter is None:
+        return
+    counter.add(1, attributes={"strategy": strategy or "unknown"})
+
+
+def record_bypass_improvement_resolution(*, strategy: str) -> None:
+    """Record a v1.3 §14.E2 improvement-heuristic resolution.
+
+    Fires when the post-apply verdict is ``VAD_MUTE`` yet the spectral
+    rolloff improved by at least
+    :attr:`VoiceTuningConfig.improvement_rolloff_factor` — the
+    coordinator treats the attempt as resolved because the spectrum
+    demonstrates the fix worked even though the user stopped speaking
+    during settle. Label ``strategy`` matches
+    :func:`record_bypass_strategy_verdict`.
+    """
+    counter = getattr(get_metrics(), "voice_health_bypass_improvement_resolution", None)
+    if counter is None:
+        return
+    counter.add(1, attributes={"strategy": strategy or "unknown"})
+
+
 def record_capture_integrity_verdict(
     *,
     verdict: str,
@@ -446,11 +504,17 @@ __all__ = [
     "METRIC_KERNEL_INVALIDATED_EVENTS",
     "METRIC_PROBE_START_TIME_ERRORS",
     "METRIC_APO_DEGRADED_EVENTS",
+    "METRIC_BYPASS_IMPROVEMENT_RESOLUTION",
+    "METRIC_BYPASS_PROBE_WAIT_MS",
+    "METRIC_BYPASS_PROBE_WINDOW_CONTAMINATED",
     "METRIC_BYPASS_STRATEGY_VERDICTS",
     "METRIC_CAPTURE_INTEGRITY_VERDICTS",
     "METRIC_TIME_TO_FIRST_UTTERANCE",
     "record_active_endpoint_change",
     "record_apo_degraded_event",
+    "record_bypass_improvement_resolution",
+    "record_bypass_probe_wait_ms",
+    "record_bypass_probe_window_contaminated",
     "record_bypass_strategy_verdict",
     "record_capture_integrity_verdict",
     "record_cascade_attempt",

@@ -33,6 +33,9 @@ from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.observability.logging import get_logger
 from sovyx.voice.health._metrics import (
     record_apo_degraded_event,
+    record_bypass_improvement_resolution,
+    record_bypass_probe_wait_ms,
+    record_bypass_probe_window_contaminated,
     record_bypass_strategy_verdict,
     record_capture_integrity_verdict,
 )
@@ -197,6 +200,51 @@ class CaptureIntegrityProbe:
     ) -> None:
         self._vad = vad
         self._tuning = tuning
+
+    async def analyse_raw(
+        self,
+        frames: npt.NDArray[np.int16],
+        *,
+        endpoint_guid: str,
+    ) -> IntegrityResult:
+        """Classify an arbitrary frame buffer without ring-tapping.
+
+        Counterpart to :meth:`probe_warm` for the v1.3 §4.2 L4-B path:
+        the coordinator calls :meth:`AudioCaptureTask.tap_frames_since_mark`
+        to obtain post-apply-only frames, then hands them here for
+        classification. Shares the same thread offloading policy and
+        INCONCLUSIVE fall-back as ``probe_warm``; the duration reported
+        in the result reflects the frames' actual length rather than
+        the tuning default, since the tap may return short on timeout.
+
+        Args:
+            frames: Post-apply audio snapshot (int16 mono @ 16 kHz).
+            endpoint_guid: Stable GUID for the live endpoint, copied
+                into the result for telemetry correlation.
+
+        Returns:
+            An :class:`IntegrityResult` — never raises; tap / analysis
+            hiccups collapse into an INCONCLUSIVE verdict with a
+            diagnostic ``detail`` string.
+        """
+        tuning = self._tuning if self._tuning is not None else _VoiceTuning()
+        duration_s = float(frames.size) / _SAMPLE_RATE if frames.size > 0 else 0.0
+
+        if frames.size < _MIN_SAMPLES_FOR_ANALYSIS:
+            return self._inconclusive(
+                endpoint_guid,
+                duration_s,
+                raw_frames=int(frames.size),
+                detail="post_apply_tap_underrun",
+            )
+
+        return await asyncio.to_thread(
+            self._analyse_sync,
+            frames,
+            endpoint_guid,
+            duration_s,
+            tuning,
+        )
 
     async def probe_warm(
         self,
@@ -465,7 +513,17 @@ class CaptureIntegrityCoordinator:
 
             outcomes: list[BypassOutcome] = []
             max_attempts = max(1, int(tuning.bypass_strategy_max_attempts))
-            settle_s = max(0.0, float(tuning.bypass_strategy_post_apply_settle_s))
+            # v1.3 §4.2 L4-B — the tap waits for post-apply frames to
+            # accumulate rather than sleeping a fixed window, so the
+            # coordinator's timing surface becomes the *tap's* deadline.
+            # ``probe_duration_s + probe_jitter_margin_s`` covers the
+            # worst realistic scheduler jitter without bloating the
+            # per-attempt budget. See §14.E1.
+            probe_duration_s = max(0.0, float(tuning.integrity_probe_duration_s))
+            jitter_margin_s = max(0.0, float(tuning.probe_jitter_margin_s))
+            probe_min_samples = int(probe_duration_s * _SAMPLE_RATE)
+            probe_max_wait_s = probe_duration_s + jitter_margin_s
+            improvement_factor = max(1.0, float(tuning.improvement_rolloff_factor))
             attempts_counted = 0
 
             for idx, strategy in enumerate(self._strategies):
@@ -498,6 +556,12 @@ class CaptureIntegrityCoordinator:
                     continue
 
                 attempts_counted += 1
+                # v1.3 §4.2 L4-B — capture the ring-buffer mark BEFORE
+                # calling ``apply`` so every sample the tap returns later
+                # is guaranteed to have been written strictly after the
+                # fix took effect. The tuple contract eliminates the
+                # pre-apply contamination window that broke v0.21.2.
+                apply_mark: tuple[int, int] = self._capture_task.samples_written_mark()
                 t0 = time.monotonic()
                 try:
                     apply_tag = await strategy.apply(context)
@@ -545,18 +609,70 @@ class CaptureIntegrityCoordinator:
                     )
                     continue
 
-                # Give the driver a moment to settle — Windows APO
-                # teardown on an exclusive-mode switch takes ~200 ms.
-                if settle_s > 0:
-                    await asyncio.sleep(settle_s)
-                after = await self._probe.probe_warm(self._capture_task)
+                # v1.3 §4.2 L4-B — wait for ``min_samples`` post-apply
+                # frames to accumulate, then analyse exactly those
+                # frames. This replaces the v0.21.2 ``sleep(settle_s)``
+                # + ``tap_recent_frames`` path, which tapped a window
+                # reaching further back in time than ``settle_s``
+                # advanced forward and so classified pre-apply audio
+                # as "post-apply verdict". The mark-based tap has no
+                # such contamination.
+                apply_end_monotonic = time.monotonic()
+                post_apply_frames = await self._capture_task.tap_frames_since_mark(
+                    mark=apply_mark,
+                    min_samples=probe_min_samples,
+                    max_wait_s=probe_max_wait_s,
+                )
+                tap_end_monotonic = time.monotonic()
+                wait_ms = (tap_end_monotonic - apply_end_monotonic) * 1000.0
+                record_bypass_probe_wait_ms(strategy=strategy.name, wait_ms=wait_ms)
+                tap_contaminated = int(post_apply_frames.size) < probe_min_samples
+                if tap_contaminated:
+                    record_bypass_probe_window_contaminated(strategy=strategy.name)
+                logger.info(
+                    "bypass_coordinator_probe_window_post_apply_only",
+                    strategy=strategy.name,
+                    endpoint_guid=context.endpoint_guid,
+                    post_apply_frames=int(post_apply_frames.size),
+                    min_samples_required=probe_min_samples,
+                    wait_ms=round(wait_ms, 1),
+                    tap_short=tap_contaminated,
+                    # Tuple components are always within the JS Number
+                    # safe range (< 2**53) so structured-log consumers
+                    # can key off them without worrying about silent
+                    # numeric truncation. Never log ``apply_mark`` as
+                    # an aggregate — it is opaque by contract.
+                    mark_epoch=apply_mark[0],
+                    mark_samples=apply_mark[1],
+                )
+                after = await self._probe.analyse_raw(
+                    post_apply_frames,
+                    endpoint_guid=context.endpoint_guid,
+                )
                 record_capture_integrity_verdict(
                     verdict=after.verdict.value,
                     phase="post_bypass",
                 )
                 elapsed_ms = (time.monotonic() - t0) * 1000.0
 
-                if after.verdict is IntegrityVerdict.HEALTHY:
+                # v1.3 §4.2 L4-B improvement heuristic (§14.E2). When
+                # the user stopped speaking during settle the post-apply
+                # probe sees silence → VAD_MUTE, which is not HEALTHY
+                # but also does not mean the fix failed. If the spectral
+                # rolloff improved by at least
+                # ``improvement_rolloff_factor`` the fix demonstrably
+                # cleaned the signal path and the coordinator should
+                # stop rather than revert a working strategy.
+                rolloff_improved = (
+                    after.spectral_rolloff_hz > before.spectral_rolloff_hz * improvement_factor
+                )
+                improvement_hit = after.verdict is IntegrityVerdict.VAD_MUTE and rolloff_improved
+
+                if after.verdict is IntegrityVerdict.HEALTHY or improvement_hit:
+                    resolution_reason = apply_tag
+                    if improvement_hit:
+                        resolution_reason = f"{apply_tag}:improvement_heuristic"
+                        record_bypass_improvement_resolution(strategy=strategy.name)
                     outcomes.append(
                         BypassOutcome(
                             strategy_name=strategy.name,
@@ -565,19 +681,22 @@ class CaptureIntegrityCoordinator:
                             integrity_before=before,
                             integrity_after=after,
                             elapsed_ms=elapsed_ms,
-                            detail=apply_tag,
+                            detail=resolution_reason,
                         ),
                     )
                     record_bypass_strategy_verdict(
                         strategy=strategy.name,
                         verdict=BypassVerdict.APPLIED_HEALTHY.value,
-                        reason=apply_tag,
+                        reason=resolution_reason,
                     )
                     logger.info(
                         "capture_integrity_coordinator_resolved",
                         strategy=strategy.name,
                         endpoint_guid=context.endpoint_guid,
                         elapsed_ms=round(elapsed_ms, 1),
+                        improvement_heuristic=improvement_hit,
+                        before_rolloff_hz=round(before.spectral_rolloff_hz, 1),
+                        after_rolloff_hz=round(after.spectral_rolloff_hz, 1),
                     )
                     self._is_resolved = True
                     return outcomes
