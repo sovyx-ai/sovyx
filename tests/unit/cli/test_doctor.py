@@ -159,7 +159,17 @@ class TestDoctorVoiceFixFlag:
     """
 
     def test_fix_flag_advertised_in_help(self) -> None:
-        result = runner.invoke(app, ["doctor", "voice", "--help"])
+        # Disable Rich color + widen the viewport so ``--fix`` is not
+        # split by ANSI escape codes or line-wrapped between columns.
+        # On CI's narrow default TTY, Rich inserts color reset codes
+        # mid-token (``-\x1b[0m-fix``) and/or breaks after the first
+        # ``-`` — either breaks a naïve ``in`` substring assert while
+        # still rendering correctly to a human reader.
+        result = runner.invoke(
+            app,
+            ["doctor", "voice", "--help"],
+            env={"NO_COLOR": "1", "COLUMNS": "200", "TERM": "dumb"},
+        )
         assert result.exit_code == 0
         assert "--fix" in result.stdout
         assert "--yes" in result.stdout
