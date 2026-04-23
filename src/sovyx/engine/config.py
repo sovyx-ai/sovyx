@@ -444,7 +444,35 @@ class VoiceTuningConfig(BaseSettings):
     # strategy B applies, reverts, ad infinitum). The post-apply
     # settle window is the driver-side debounce before re-probing.
     bypass_strategy_max_attempts: int = 3
-    bypass_strategy_post_apply_settle_s: float = 1.5
+    # v1.3 §14.E3 — post-apply settle window. Was 1.5 s in v0.21.2 and
+    # earlier, which violated the invariant ``settle >= integrity_probe_duration_s``
+    # (both consumed by :meth:`CaptureIntegrityCoordinator.handle_deaf_signal`):
+    # the probe's 3.0 s ring-buffer tap window reached back further in
+    # time than the settle window advanced forward, so the post-apply
+    # probe contained pre-apply frames and classified the (now-fixed)
+    # signal as still APO_DEGRADED. 3.2 s = ``integrity_probe_duration_s``
+    # (3.0) plus a 200 ms driver-side settle margin — the same margin
+    # Windows WASAPI APO teardown has historically needed. Paired with
+    # the L4-A validator below, which enforces the invariant even when
+    # an operator overrides one knob without the other.
+    bypass_strategy_post_apply_settle_s: float = 3.2
+    # v1.3 §14.E1 — jitter margin added to ``integrity_probe_duration_s``
+    # when computing ``tap_frames_since_mark``'s ``max_wait_s``. The
+    # mark-based tap returns as soon as ``min_samples`` accumulate, so
+    # this margin only kicks in when the event loop is under scheduler
+    # pressure; 0.5 s covers p99 of observed jitter without bloating
+    # the bypass-attempt budget.
+    probe_jitter_margin_s: float = 0.5
+    # v1.3 §14.E2 — improvement heuristic factor. When the post-apply
+    # probe returns ``VAD_MUTE`` (user stopped speaking during settle)
+    # AND ``before.spectral_rolloff_hz * improvement_rolloff_factor``
+    # exceeds ``after.spectral_rolloff_hz``, the coordinator treats the
+    # attempt as resolved instead of reverting — the fix demonstrably
+    # improved the spectrum even if the VAD did not re-fire. 5.0x is
+    # large enough to be unambiguous (clean speech → clipped speech
+    # rolloff ratio is typically 20-40x) while rejecting noise-floor
+    # shifts that do not represent real spectral recovery.
+    improvement_rolloff_factor: float = 5.0
 
     # Phase 4 hardware-fingerprint catalog placeholders. Disabled in
     # Phase 1; surfaced here so the tuning contract is stable across
@@ -516,6 +544,17 @@ class VoiceTuningConfig(BaseSettings):
     # Sized for ``integrity_probe_duration_s`` + watchdog recheck
     # window. 33 s at 16 kHz mono int16 ≈ 1 MB — bounded, acceptable.
     capture_ring_buffer_seconds: float = 33.0
+    # v1.3 §14.E4 — poll interval for
+    # :meth:`AudioCaptureTask.tap_frames_since_mark`. The tap spins in
+    # a ``while True: check / sleep`` loop so the coordinator can resume
+    # as soon as ``min_samples`` post-apply frames accumulate. 50 ms
+    # sits comfortably above event-loop jitter (<10 ms on modern hosts)
+    # and below the 160 ms PortAudio callback cadence at 16 kHz / 2560
+    # samples, so one poll tick per callback is the worst case. Exposed
+    # as a tuning knob rather than a module constant because §14
+    # mandates every empirical value carry an env override for live
+    # adjustment without a rebuild.
+    mark_tap_poll_interval_s: float = 0.05
 
     # Voice device test (setup-wizard meters + TTS test button).
     # Kill-switch + ballistics + rate limiting for the test endpoints.
@@ -543,6 +582,40 @@ class VoiceTuningConfig(BaseSettings):
     # user juggles many meter sessions before hitting "Enable voice".
     # See ``voice-linux-cascade-root-fix`` T8 for the handoff contract.
     device_test_force_close_grace_s: float = 2.0
+
+    @model_validator(mode="after")
+    def _enforce_settle_ge_probe(self) -> VoiceTuningConfig:
+        """v1.3 §4.1 L4-A — guard-rail against probe-window regression.
+
+        The coordinator's post-apply probe window consumes both
+        :attr:`integrity_probe_duration_s` (how many seconds of signal
+        the probe analyses) and :attr:`bypass_strategy_post_apply_settle_s`
+        (how many seconds elapse between apply and probe). The ring
+        buffer only contains post-apply frames when ``settle >= probe``;
+        any override that breaks the invariant silently reintroduces the
+        v0.21.2 probe-window contamination bug (see dossier
+        ``SVX-VOICE-LINUX-20260422``).
+
+        Rejecting misconfig at boot is cheaper than a silent regression
+        in production. The error message is specific so an operator
+        tuning one knob via ``SOVYX_TUNING__VOICE__*`` sees both the
+        offending values and which direction to adjust.
+        """
+        if self.bypass_strategy_post_apply_settle_s < self.integrity_probe_duration_s:
+            msg = (
+                "Invalid voice tuning: "
+                f"bypass_strategy_post_apply_settle_s="
+                f"{self.bypass_strategy_post_apply_settle_s} must be >= "
+                f"integrity_probe_duration_s={self.integrity_probe_duration_s}. "
+                "The post-apply probe window must not reach further back "
+                "than the settle window advances forward — otherwise the "
+                "probe analyses pre-apply frames and mis-classifies a "
+                "successful fix as still degraded. Raise "
+                "SOVYX_TUNING__VOICE__BYPASS_STRATEGY_POST_APPLY_SETTLE_S "
+                "or lower SOVYX_TUNING__VOICE__INTEGRITY_PROBE_DURATION_S."
+            )
+            raise ValueError(msg)
+        return self
 
 
 class LLMTuningConfig(BaseSettings):

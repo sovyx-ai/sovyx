@@ -483,3 +483,73 @@ class TestTuningEnvOverrides:
         assert cfg.cascade_attempt_budget_s == 3.0
         assert cfg.cascade_wizard_total_budget_s == 90.0
         assert cfg.cascade_lifecycle_lock_max == 128
+
+
+class TestVoiceTuningV13EmpiricalDefaults:
+    """v1.3 §14 — empirical tuning knobs + L4-A validator.
+
+    Asserts the defaults + env-override surface + validator invariant
+    for every knob declared in §14 of the IMPLEMENTATION_PLAN (E1/E2/
+    E3/E4). Regression tests for the v0.21.2 probe-window bug live
+    here because they check the invariant the validator enforces, not
+    the coordinator's runtime behaviour.
+    """
+
+    def _clear_voice_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for key in list(os.environ):
+            if key.startswith("SOVYX_TUNING__VOICE__"):
+                monkeypatch.delenv(key, raising=False)
+
+    def test_v13_defaults_exact(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """v1.3 freezes these defaults — bumping any requires a plan update."""
+        self._clear_voice_env(monkeypatch)
+        cfg = VoiceTuningConfig()
+        assert cfg.bypass_strategy_post_apply_settle_s == 3.2  # §14.E3
+        assert cfg.probe_jitter_margin_s == 0.5  # §14.E1
+        assert cfg.improvement_rolloff_factor == 5.0  # §14.E2
+        assert cfg.mark_tap_poll_interval_s == 0.05  # §14.E4
+
+    def test_validator_enforces_settle_ge_probe(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """L4-A — misconfig that reintroduces the probe-window bug is rejected."""
+        self._clear_voice_env(monkeypatch)
+        # The v0.21.2 combination that caused the incident: settle < probe.
+        with pytest.raises(Exception) as exc_info:
+            VoiceTuningConfig(
+                integrity_probe_duration_s=3.0,
+                bypass_strategy_post_apply_settle_s=1.5,
+            )
+        # pydantic wraps the ValueError in a ValidationError; exact class
+        # differs across pydantic minor versions, so assert on the name
+        # + payload instead of on isinstance.
+        assert "bypass_strategy_post_apply_settle_s" in str(exc_info.value)
+
+    def test_default_settle_exceeds_default_probe(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Invariant holds even when future changes bump one knob without the other."""
+        self._clear_voice_env(monkeypatch)
+        cfg = VoiceTuningConfig()
+        assert cfg.bypass_strategy_post_apply_settle_s >= cfg.integrity_probe_duration_s
+
+    def test_v13_env_overrides(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Every §14 knob respects its SOVYX_TUNING__VOICE__* env variable."""
+        monkeypatch.setenv("SOVYX_TUNING__VOICE__PROBE_JITTER_MARGIN_S", "0.75")
+        monkeypatch.setenv("SOVYX_TUNING__VOICE__IMPROVEMENT_ROLLOFF_FACTOR", "7.5")
+        monkeypatch.setenv("SOVYX_TUNING__VOICE__MARK_TAP_POLL_INTERVAL_S", "0.1")
+        monkeypatch.setenv(
+            "SOVYX_TUNING__VOICE__BYPASS_STRATEGY_POST_APPLY_SETTLE_S",
+            "4.0",
+        )
+        cfg = VoiceTuningConfig()
+        assert cfg.probe_jitter_margin_s == 0.75
+        assert cfg.improvement_rolloff_factor == 7.5
+        assert cfg.mark_tap_poll_interval_s == 0.1
+        assert cfg.bypass_strategy_post_apply_settle_s == 4.0
+
+    def test_validator_respects_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Env override that breaks the invariant is still rejected at boot."""
+        monkeypatch.setenv(
+            "SOVYX_TUNING__VOICE__BYPASS_STRATEGY_POST_APPLY_SETTLE_S",
+            "1.0",
+        )
+        with pytest.raises(Exception) as exc_info:
+            VoiceTuningConfig()
+        assert "bypass_strategy_post_apply_settle_s" in str(exc_info.value)
