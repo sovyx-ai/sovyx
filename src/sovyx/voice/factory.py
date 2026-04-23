@@ -9,8 +9,9 @@ the pipeline in a single async call. All ONNX loads wrapped in
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from sovyx.observability.logging import get_logger
@@ -53,10 +54,83 @@ class VoiceBundle:
     Callers own both objects — the pipeline must be registered in the
     service registry and the capture task must be started to actually
     listen to the microphone.
+
+    v1.3 §4.6 L6 introduced ``boot_preflight_warnings``: a tuple of
+    warning dicts produced by the step 9 ALSA-mixer preflight run
+    during boot. The default empty tuple preserves backward
+    compatibility for every call site that does not consume the field.
+    Dashboard callers pump the warnings into
+    :class:`sovyx.voice.health.BootPreflightWarningsStore` registered
+    on the :class:`ServiceRegistry`; CLI callers read the
+    filesystem-persisted counterpart written in parallel by the
+    factory (see :func:`write_preflight_warnings_file`).
     """
 
     pipeline: VoicePipeline
     capture_task: AudioCaptureTask
+    boot_preflight_warnings: tuple[dict[str, object], ...] = field(default_factory=tuple)
+
+
+async def _run_boot_preflight(
+    *,
+    tuning: VoiceTuningConfig,
+) -> list[dict[str, object]]:
+    """Run the boot-time subset of :mod:`voice.health.preflight` (v1.3 §4.6 L6).
+
+    The factory runs step 9 (Linux ALSA mixer sanity) at every pipeline
+    boot so a saturated codec default surfaces before the user ever
+    hits "Enable voice" — the v0.21.2 incident established that users
+    who already left the dashboard by the time the first deaf
+    heartbeat fires never see the diagnostic. Non-Linux hosts pass
+    cheaply (the check short-circuits via ``sys.platform``); Linux
+    hosts without ``amixer`` also pass (missing tooling is logged but
+    not escalated to a boot warning).
+
+    The factory itself is platform-neutral — every step the cold
+    cascade touches runs on every OS. We intentionally *do not* run
+    the step 1/2/3/4/5/6/7/8 checks here because most of them require
+    running subprocess / ONNX sessions that duplicate work the main
+    factory is already doing in parallel. Step 9 is the surgical
+    addition dossier ``SVX-VOICE-LINUX-20260422`` calls for, and no
+    more.
+
+    Returns a list of warning dicts — each includes ``code``,
+    ``severity``, ``hint``, and a ``details`` mapping. The
+    ``severity`` tag is always ``"warning"`` at this stage; if a
+    future check surfaces a hard failure the factory will raise
+    instead.
+    """
+    from sovyx.voice.health import (
+        PreflightStepSpec,
+        check_linux_mixer_sanity,
+        default_step_names,
+        run_preflight,
+    )
+
+    names = default_step_names()
+    step9_name, step9_code = names[9]
+    specs = [
+        PreflightStepSpec(
+            step=9,
+            name=step9_name,
+            code=step9_code,
+            check=check_linux_mixer_sanity(tuning=tuning),
+        ),
+    ]
+    report = await run_preflight(steps=specs, stop_on_first_failure=False)
+    warnings: list[dict[str, object]] = []
+    for step in report.steps:
+        if step.passed:
+            continue
+        warnings.append(
+            {
+                "code": step.code.value,
+                "severity": "warning",
+                "hint": step.hint,
+                "details": dict(step.details),
+            },
+        )
+    return warnings
 
 
 async def create_voice_pipeline(
@@ -374,7 +448,52 @@ async def create_voice_pipeline(
         bypass_strategies=[s.name for s in strategies],
     )
     _emit_capture_apo_detection(resolved_name=resolved.name if resolved is not None else None)
-    return VoiceBundle(pipeline=pipeline, capture_task=capture_task)
+
+    # ── 7. v1.3 §4.6 L6 boot preflight step 9 + §4.8 L7 marker file ──
+    #
+    # Detection-only: we never auto-remediate the mixer at boot because
+    # the §4.7.4 rationale is explicit — mutating ALSA controls without
+    # a user action violates the consent model L0 was already rebated
+    # for. The factory emits a warning channel (via store + marker
+    # file) and leaves remediation to the user (dashboard button or
+    # ``sovyx doctor voice --fix``). Stale-marker handling mirrors
+    # v1.3 §-1C #1 alt (e): a passing preflight cleans any marker
+    # written by a prior saturated boot.
+    boot_warnings = await _run_boot_preflight(tuning=tuning)
+    for warning in boot_warnings:
+        logger.warning(
+            "voice_pipeline_boot_preflight_warning",
+            code=warning.get("code"),
+            severity=warning.get("severity"),
+            hint=warning.get("hint"),
+        )
+
+    from sovyx.voice.health import (
+        clear_preflight_warnings_file,
+        write_preflight_warnings_file,
+    )
+
+    if boot_warnings:
+        with contextlib.suppress(OSError):
+            write_preflight_warnings_file(warnings=boot_warnings, data_dir=data_dir)
+        logger.info(
+            "voice_preflight_marker_written",
+            count=len(boot_warnings),
+            codes=[w.get("code") for w in boot_warnings],
+        )
+    else:
+        with contextlib.suppress(OSError):
+            clear_preflight_warnings_file(data_dir=data_dir)
+        logger.info(
+            "voice_pipeline_boot_preflight_stale_marker_cleared",
+            hint="preflight step 9 passed; any prior saturated-boot marker removed",
+        )
+
+    return VoiceBundle(
+        pipeline=pipeline,
+        capture_task=capture_task,
+        boot_preflight_warnings=tuple(boot_warnings),
+    )
 
 
 async def _run_vchl_boot_cascade(

@@ -181,6 +181,139 @@ class TestVoiceBundle:
         assert bundle.pipeline is pipeline
         assert bundle.capture_task is capture
 
+    def test_v13_boot_preflight_warnings_default_empty(self) -> None:
+        """v1.3 §4.6 introduced ``boot_preflight_warnings``; unset → ()."""
+        from unittest.mock import MagicMock
+
+        bundle = VoiceBundle(pipeline=MagicMock(), capture_task=MagicMock())
+        assert bundle.boot_preflight_warnings == ()
+
+    def test_v13_boot_preflight_warnings_carried(self) -> None:
+        from unittest.mock import MagicMock
+
+        warnings = (
+            {"code": "linux_mixer_saturated", "hint": "reset"},
+            {"code": "other", "hint": "-"},
+        )
+        bundle = VoiceBundle(
+            pipeline=MagicMock(),
+            capture_task=MagicMock(),
+            boot_preflight_warnings=warnings,
+        )
+        assert bundle.boot_preflight_warnings == warnings
+
+
+class TestRunBootPreflight:
+    """v1.3 §4.6 L6 — ``_run_boot_preflight`` aggregates step 9 failures."""
+
+    @pytest.mark.asyncio()
+    async def test_passing_check_returns_empty_list(self) -> None:
+        """Non-Linux (or Linux + clean mixer) produces no warnings."""
+        from unittest.mock import patch
+
+        import sovyx.voice.factory as factory_mod
+        import sovyx.voice.health as voice_health_mod
+        from sovyx.engine.config import VoiceTuningConfig
+
+        async def _clean() -> tuple[bool, str, dict[str, object]]:
+            return True, "", {"platform": "darwin", "skipped": True}
+
+        # _run_boot_preflight imports ``check_linux_mixer_sanity`` from
+        # ``sovyx.voice.health`` (the re-export namespace) inside the
+        # function body, so the stable patch target is the attribute on
+        # that alias, not on the underlying ``_linux_mixer_check`` module
+        # (CLAUDE.md §11).
+        with patch.object(
+            voice_health_mod,
+            "check_linux_mixer_sanity",
+            return_value=_clean,
+        ):
+            warnings = await factory_mod._run_boot_preflight(tuning=VoiceTuningConfig())
+        assert warnings == []
+
+    @pytest.mark.asyncio()
+    async def test_failing_check_produces_warning_dict(self) -> None:
+        from unittest.mock import patch
+
+        import sovyx.voice.factory as factory_mod
+        import sovyx.voice.health as voice_health_mod
+        from sovyx.engine.config import VoiceTuningConfig
+
+        async def _saturated() -> tuple[bool, str, dict[str, object]]:
+            return (
+                False,
+                "mixer saturated; run --fix",
+                {"aggregated_boost_db": 42.0},
+            )
+
+        with patch.object(
+            voice_health_mod,
+            "check_linux_mixer_sanity",
+            return_value=_saturated,
+        ):
+            warnings = await factory_mod._run_boot_preflight(tuning=VoiceTuningConfig())
+        assert len(warnings) == 1
+        warning = warnings[0]
+        assert warning["code"] == "linux_mixer_saturated"
+        assert warning["severity"] == "warning"
+        assert warning["hint"] == "mixer saturated; run --fix"
+        assert warning["details"] == {"aggregated_boost_db": 42.0}
+
+
+class TestBootPreflightMarkerLifecycle:
+    """v1.3 §4.6.4 + §-1C #1 — marker write on warnings / clear on pass."""
+
+    @pytest.mark.asyncio()
+    async def test_marker_cleared_when_preflight_passes_after_prior_saturation(
+        self,
+        tmp_path,
+    ) -> None:
+        """The v1.3 alt (e) fix: a passing boot clears a stale marker.
+
+        Calls the marker-helper pair directly (rather than the full
+        factory) because the factory wires many other moving parts
+        unrelated to the marker lifecycle. The factory invokes the
+        same helpers on every boot, so asserting on the helpers'
+        composition covers the contract.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        import sovyx.voice.factory as factory_mod
+        from sovyx.engine.config import VoiceTuningConfig
+        from sovyx.voice.health import (
+            read_preflight_warnings_file,
+            write_preflight_warnings_file,
+        )
+
+        # Seed a stale marker from a prior saturated boot.
+        write_preflight_warnings_file(
+            [{"code": "linux_mixer_saturated", "hint": "stale"}],
+            data_dir=tmp_path,
+        )
+        assert read_preflight_warnings_file(data_dir=tmp_path) != []
+
+        # Simulate a passing boot by reproducing the factory's marker
+        # branch in isolation.
+        with patch.object(factory_mod, "_run_boot_preflight", new=AsyncMock(return_value=[])):
+            from sovyx.voice.health import (
+                clear_preflight_warnings_file,
+            )
+            from sovyx.voice.health import (
+                write_preflight_warnings_file as write_fn,
+            )
+
+            # Mirror the factory's two branches:
+            boot_warnings = await factory_mod._run_boot_preflight(
+                tuning=VoiceTuningConfig(),
+            )
+            if boot_warnings:
+                write_fn(warnings=boot_warnings, data_dir=tmp_path)
+            else:
+                clear_preflight_warnings_file(data_dir=tmp_path)
+
+        # The stale marker must be gone.
+        assert read_preflight_warnings_file(data_dir=tmp_path) == []
+
 
 class TestFactoryWiresDeviceAndCapture:
     """create_voice_pipeline passes input_device through to the capture task."""

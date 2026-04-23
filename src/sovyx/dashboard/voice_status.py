@@ -174,6 +174,25 @@ async def get_voice_status(registry: ServiceRegistry) -> dict[str, Any]:
     except Exception:  # noqa: BLE001
         logger.debug("voice_status_hardware_failed")
 
+    # v1.3 §4.6 L6 — boot preflight warnings (always-present list; empty
+    # on non-Linux, on Linux without ``amixer``, or when the factory's
+    # step 9 check passed). Consumed by the dashboard voice page to
+    # render the LinuxMicGainCard banner without a second round-trip to
+    # /api/voice/linux-mixer-diagnostics — see the L5a × L6 cell of the
+    # plan interaction matrix. ``BootPreflightWarningsStore`` is
+    # registered by ``enable_voice``; its absence here (pipeline never
+    # enabled, or registry was bypassed in tests) degrades to the empty
+    # default rather than surfacing a fake error.
+    status["preflight_warnings"] = []
+    try:
+        from sovyx.voice.health import BootPreflightWarningsStore
+
+        if registry.is_registered(BootPreflightWarningsStore):
+            store = await registry.resolve(BootPreflightWarningsStore)
+            status["preflight_warnings"] = store.snapshot()
+    except Exception:  # noqa: BLE001
+        logger.debug("voice_status_preflight_warnings_failed")
+
     return status
 
 

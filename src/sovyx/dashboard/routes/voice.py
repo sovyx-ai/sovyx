@@ -1263,6 +1263,7 @@ async def enable_voice(request: Request) -> JSONResponse:
     if registry is not None:
         from sovyx.voice._capture_task import AudioCaptureTask
         from sovyx.voice.cognitive_bridge import VoiceCognitiveBridge
+        from sovyx.voice.health import BootPreflightWarningsStore
         from sovyx.voice.pipeline._orchestrator import VoicePipeline
         from sovyx.voice.stt import STTEngine
         from sovyx.voice.tts_piper import TTSEngine
@@ -1280,6 +1281,36 @@ async def enable_voice(request: Request) -> JSONResponse:
             registry.register_instance(WakeWordDetector, bundle.pipeline.wake_word)
         if bridge_ref[0] is not None:
             registry.register_instance(VoiceCognitiveBridge, bridge_ref[0])
+
+        # v1.3 §4.6 L6 — publish the factory's boot preflight warnings
+        # through a ``BootPreflightWarningsStore`` service. Callers
+        # (``get_voice_status``) access it via ``registry.resolve``,
+        # keeping parity with every other voice component. Re-enable
+        # lifecycle: if a store is already registered (user disabled
+        # then re-enabled), we refresh the snapshot in place rather
+        # than append — disable_voice will deregister if stopped
+        # cleanly; a crash-and-re-enable also converges to a fresh
+        # snapshot without accumulating state.
+        if registry.is_registered(BootPreflightWarningsStore):
+            preflight_store = await registry.resolve(BootPreflightWarningsStore)
+        else:
+            preflight_store = BootPreflightWarningsStore()
+            registry.register_instance(BootPreflightWarningsStore, preflight_store)
+        preflight_store.set_warnings(list(bundle.boot_preflight_warnings))
+
+        # v1.3 §4.6 L6 — WebSocket push mirrors the status-endpoint
+        # payload so dashboards listening live (not polling) receive
+        # the same signal. Best-effort: a WS failure never blocks the
+        # enable handshake.
+        ws_manager = getattr(request.app.state, "ws_manager", None)
+        if ws_manager is not None and bundle.boot_preflight_warnings:
+            for warning in bundle.boot_preflight_warnings:
+                with contextlib.suppress(Exception):
+                    await ws_manager.broadcast(
+                        channel="voice",
+                        event="voice_preflight_warning",
+                        payload=warning,
+                    )
 
     # 6. Persist config
     #
@@ -1391,6 +1422,7 @@ async def disable_voice(request: Request) -> JSONResponse:
     if registry is not None:
         from sovyx.voice._capture_task import AudioCaptureTask
         from sovyx.voice.cognitive_bridge import VoiceCognitiveBridge
+        from sovyx.voice.health import BootPreflightWarningsStore
         from sovyx.voice.pipeline._orchestrator import VoicePipeline
         from sovyx.voice.stt import STTEngine
         from sovyx.voice.tts_piper import TTSEngine
@@ -1418,13 +1450,17 @@ async def disable_voice(request: Request) -> JSONResponse:
                 registry.deregister(VoicePipeline)
 
         # Deregister sub-components so the next enable re-registers fresh
-        # instances bound to the new pipeline.
+        # instances bound to the new pipeline. ``BootPreflightWarningsStore``
+        # is part of this set: disabling voice invalidates the prior
+        # boot-warning snapshot, and the next enable rebuilds it from a
+        # fresh ``_run_boot_preflight`` call (v1.3 §4.6.7).
         for interface in (
             SileroVAD,
             STTEngine,
             TTSEngine,
             WakeWordDetector,
             VoiceCognitiveBridge,
+            BootPreflightWarningsStore,
         ):
             if registry.is_registered(interface):
                 registry.deregister(interface)

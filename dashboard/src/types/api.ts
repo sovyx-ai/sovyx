@@ -982,6 +982,19 @@ export interface LinuxMixerResetResponse {
   reverted_controls?: [string, number][];
 }
 
+/**
+ * v1.3 §4.6 L6 — boot preflight warning carried on
+ * ``GET /api/voice/status.preflight_warnings`` and via the
+ * WebSocket ``voice_preflight_warning`` event. Schema mirrors
+ * ``BootPreflightWarningsStore.snapshot()`` on the backend.
+ */
+export interface PreflightWarning {
+  code: string;
+  severity?: string;
+  hint?: string;
+  details?: Record<string, unknown>;
+}
+
 // ────────────────────────────────────────────────────────────────────────
 // Voice Capture Health Lifecycle (VCHL) — L7 REST surface (ADR §4.7)
 // ────────────────────────────────────────────────────────────────────────

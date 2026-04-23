@@ -41,10 +41,15 @@ characterization) pass ``stop_on_first_failure=False``.
 
 from __future__ import annotations
 
+import contextlib
+import json
+import os
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import StrEnum
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
@@ -518,7 +523,170 @@ def current_platform_key() -> str:
     return sys.platform
 
 
+# ---------------------------------------------------------------------------
+# v1.3 §4.6 L6 — Boot preflight warnings registry-backed store.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class BootPreflightWarningsStore:
+    """In-memory holder for boot preflight warnings, resolvable via ServiceRegistry.
+
+    Populated by :func:`sovyx.voice.factory.create_voice_pipeline`
+    (wired via ``dashboard.routes.voice.enable_voice``) when the step 9
+    mixer sanity check fails at boot. Consumed by
+    :func:`sovyx.dashboard.voice_status.get_voice_status` so
+    ``GET /api/voice/status`` can surface the warning list — keyed via
+    :meth:`sovyx.engine.registry.ServiceRegistry.resolve` for
+    consistency with every other voice service (VoicePipeline,
+    STTEngine, TTSEngine, …).
+
+    The store is mutable on purpose: disable + re-enable creates a
+    fresh instance (see ``disable_voice`` deregister path), while a
+    subsequent enable on the same registry replaces the warnings
+    snapshot via :meth:`set_warnings` rather than appending — so
+    repeated toggles never accumulate stale state.
+
+    L7 (:func:`write_preflight_warnings_file`) persists the same data
+    to ``~/.sovyx/preflight_warnings.json`` so CLI-first users see the
+    warning on ``sovyx start`` / ``sovyx status`` even without opening
+    the dashboard. The two channels are written in parallel by the
+    factory; neither depends on the other for correctness.
+    """
+
+    warnings: list[dict[str, object]] = field(default_factory=list)
+
+    def set_warnings(self, warnings: list[dict[str, object]]) -> None:
+        """Replace the snapshot with a defensive copy of ``warnings``."""
+        self.warnings = list(warnings)
+
+    def clear(self) -> None:
+        """Drop every stored warning. Called on pipeline disable."""
+        self.warnings = []
+
+    def snapshot(self) -> list[dict[str, object]]:
+        """Return a defensive copy for caller read-only consumption.
+
+        Callers (``get_voice_status``) serialise this into JSON; a
+        defensive copy guarantees a later ``set_warnings`` / ``clear``
+        cannot mutate the response mid-flight.
+        """
+        return list(self.warnings)
+
+
+# ---------------------------------------------------------------------------
+# v1.3 §4.8 L7 — Boot preflight warnings marker file.
+# ---------------------------------------------------------------------------
+
+
+_PREFLIGHT_WARNINGS_FILENAME = "preflight_warnings.json"
+_PREFLIGHT_WARNINGS_SCHEMA_VERSION = 1
+
+
+def preflight_warnings_file_path(data_dir: Path | None = None) -> Path:
+    """Return the absolute path to the boot preflight warnings marker.
+
+    The file lives under the user's Sovyx data directory so it is
+    user-scoped (multi-user hosts cannot cross-read) and mirrors every
+    other persistent artefact Sovyx writes. Callers that need a
+    test-scoped directory pass ``data_dir`` explicitly; production
+    callers pass ``None`` and the path resolves to ``~/.sovyx/``.
+
+    Args:
+        data_dir: Optional override for the base directory. Tests pass
+            ``tmp_path / ".sovyx"``; production omits the argument.
+
+    Returns:
+        Absolute :class:`~pathlib.Path` to the marker file (may or may
+        not exist — callers use :func:`read_preflight_warnings_file`
+        to observe contents).
+    """
+    base = data_dir if data_dir is not None else (Path.home() / ".sovyx")
+    return base / _PREFLIGHT_WARNINGS_FILENAME
+
+
+def write_preflight_warnings_file(
+    warnings: list[dict[str, object]],
+    *,
+    data_dir: Path | None = None,
+) -> None:
+    """Atomically persist boot preflight warnings to the marker file.
+
+    Writes to a sibling ``.tmp`` file and renames onto the final path
+    so a mid-write crash never leaves a partially-written marker for
+    the next CLI invocation to read. Callers typically wrap the call
+    in :func:`contextlib.suppress` with :class:`OSError` because
+    filesystem failures on boot must not block the voice pipeline from
+    starting — the in-memory store (L6) remains authoritative.
+
+    Args:
+        warnings: List of warning dicts (``code``, ``hint``, optional
+            ``details``) — same shape the dashboard store snapshots.
+        data_dir: Optional override; see
+            :func:`preflight_warnings_file_path`.
+    """
+    path = preflight_warnings_file_path(data_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": _PREFLIGHT_WARNINGS_SCHEMA_VERSION,
+        "written_at_utc": datetime.now(UTC).isoformat(),
+        "warnings": warnings,
+    }
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def read_preflight_warnings_file(
+    *,
+    data_dir: Path | None = None,
+) -> list[dict[str, object]]:
+    """Read the marker file, returning ``[]`` on missing / malformed input.
+
+    CLI consumers (``sovyx start`` / ``sovyx status`` /
+    ``sovyx doctor voice``) must render something sane on every
+    filesystem state — the user's boot sequence cannot hinge on a
+    marker being parseable. Unknown schema versions degrade to empty
+    rather than fail so an older CLI reading a newer file does not
+    crash.
+    """
+    path = preflight_warnings_file_path(data_dir)
+    if not path.exists():
+        return []
+    try:
+        payload: object = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+    if not isinstance(payload, dict):
+        return []
+    warnings = payload.get("warnings", [])
+    if not isinstance(warnings, list):
+        return []
+    # Keep only dict entries — defensive against a hand-edited file
+    # that swapped the list shape.
+    return [w for w in warnings if isinstance(w, dict)]
+
+
+def clear_preflight_warnings_file(*, data_dir: Path | None = None) -> None:
+    """Remove the marker file if present. Idempotent on missing files.
+
+    Called by:
+
+    * :func:`sovyx.voice.factory.create_voice_pipeline` when a boot
+      preflight pass follows a prior saturated boot — removes the
+      stale marker so the next ``sovyx start`` does not surface a
+      ghost warning (v1.3 §-1C #1 alternative (e)).
+    * :func:`sovyx.cli.commands.doctor._run_voice_doctor` after
+      ``--fix`` successfully remediates the mixer — the user acted on
+      the warning and the marker no longer reflects runtime state.
+    """
+    path = preflight_warnings_file_path(data_dir)
+    with contextlib.suppress(FileNotFoundError):
+        path.unlink()
+
+
 __all__ = [
+    "BootPreflightWarningsStore",
     "PreflightCheck",
     "PreflightReport",
     "PreflightStep",
@@ -527,7 +695,11 @@ __all__ = [
     "check_portaudio",
     "check_tts_synthesize",
     "check_wake_word_smoke",
+    "clear_preflight_warnings_file",
     "current_platform_key",
     "default_step_names",
+    "preflight_warnings_file_path",
+    "read_preflight_warnings_file",
     "run_preflight",
+    "write_preflight_warnings_file",
 ]

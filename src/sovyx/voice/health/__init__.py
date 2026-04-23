@@ -92,6 +92,7 @@ from sovyx.voice.health.contract import (
     WatchdogState,
 )
 from sovyx.voice.health.preflight import (
+    BootPreflightWarningsStore,
     PreflightCheck,
     PreflightReport,
     PreflightStep,
@@ -100,9 +101,13 @@ from sovyx.voice.health.preflight import (
     check_portaudio,
     check_tts_synthesize,
     check_wake_word_smoke,
+    clear_preflight_warnings_file,
     current_platform_key,
     default_step_names,
+    preflight_warnings_file_path,
+    read_preflight_warnings_file,
     run_preflight,
+    write_preflight_warnings_file,
 )
 from sovyx.voice.health.probe import probe
 from sovyx.voice.health.watchdog import (
@@ -128,6 +133,7 @@ __all__ = [
     "AudioServiceEventKind",
     "AudioServiceMonitor",
     "AudioSubsystemFingerprint",
+    "BootPreflightWarningsStore",
     "BypassContext",
     "BypassOutcome",
     "BypassVerdict",
@@ -191,11 +197,15 @@ __all__ = [
     "check_portaudio",
     "check_tts_synthesize",
     "check_wake_word_smoke",
+    "clear_preflight_warnings_file",
     "current_platform_key",
     "default_step_names",
     "get_default_quarantine",
+    "preflight_warnings_file_path",
     "probe",
+    "read_preflight_warnings_file",
     "reset_default_quarantine",
     "run_cascade",
     "run_preflight",
+    "write_preflight_warnings_file",
 ]

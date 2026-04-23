@@ -716,6 +716,17 @@ export const LinuxMixerResetResponseSchema = z.object({
   reverted_controls: z.array(z.tuple([z.string(), z.number().int()])).optional(),
 });
 
+// v1.3 §4.6 L6 — boot preflight warning carried on
+// /api/voice/status.preflight_warnings and as the WebSocket
+// "voice_preflight_warning" payload. Shape mirrors
+// ``BootPreflightWarningsStore.snapshot()`` on the backend.
+export const PreflightWarningSchema = z.object({
+  code: z.string(),
+  severity: z.string().optional(),
+  hint: z.string().optional(),
+  details: z.record(z.string(), z.unknown()).optional(),
+});
+
 // ── Voice Capture Health (L7, ADR §4.7) ──
 
 export const VoiceHealthComboSchema = z.object({

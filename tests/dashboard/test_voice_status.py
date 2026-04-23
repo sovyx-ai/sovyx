@@ -255,7 +255,13 @@ class TestGetVoiceStatus:
 
     @pytest.mark.asyncio()
     async def test_returns_all_expected_sections(self, mock_registry: MagicMock) -> None:
-        """Status dict contains all required top-level keys."""
+        """Status dict contains all required top-level keys.
+
+        v1.3 §4.6 L6 added ``preflight_warnings`` — a list of boot-time
+        warning dicts forwarded from the ``BootPreflightWarningsStore``
+        service. The key is always present (empty by default) so the
+        dashboard can render it unconditionally.
+        """
         status = await get_voice_status(mock_registry)
         expected_keys = {
             "pipeline",
@@ -266,6 +272,7 @@ class TestGetVoiceStatus:
             "vad",
             "wyoming",
             "hardware",
+            "preflight_warnings",
         }
         assert set(status.keys()) == expected_keys
 
