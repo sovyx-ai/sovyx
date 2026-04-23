@@ -4,7 +4,8 @@
  *
  * Covers: loading → hidden on non-Linux, healthy state, saturation
  * alert render, amixer-missing warning, successful reset toast, POST
- * failure handling.
+ * failure handling, and the v1.3 §4.5 L0-4 persistence hint that
+ * appears only after a successful reset.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -142,7 +143,7 @@ describe("LinuxMicGainCard", () => {
     });
   });
 
-  it("POSTs to linux-mixer-reset and toasts success", async () => {
+  it("POSTs to linux-mixer-reset, toasts success, and surfaces persist hint", async () => {
     mockFetch
       .mockResolvedValueOnce(jsonResponse(saturatingPayload()))
       .mockResolvedValueOnce(
@@ -188,6 +189,14 @@ describe("LinuxMicGainCard", () => {
     );
     expect(postCall).toBeDefined();
     expect(JSON.parse(postCall![1].body as string)).toEqual({ card_index: 1 });
+
+    // v1.3 L0-4 — persist hint appears after a successful reset.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("linux-mic-gain-persist-hint"),
+      ).toBeInTheDocument();
+    });
+    expect(screen.getByText(/sudo alsactl store/)).toBeInTheDocument();
   });
 
   it("toasts error on POST failure", async () => {

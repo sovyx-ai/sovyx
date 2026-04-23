@@ -64,6 +64,19 @@ function setupMockSuccess() {
   mockGet.mockImplementation((path: string) => {
     if (path === "/api/voice/status") return Promise.resolve(VOICE_STATUS);
     if (path === "/api/voice/models") return Promise.resolve(VOICE_MODELS);
+    // v1.3 §4.3 L5a — the page now renders LinuxMicGainCard which
+    // fetches this endpoint on mount. Provide a healthy default so
+    // existing tests don't fail on an unhandled path.
+    if (path === "/api/voice/linux-mixer-diagnostics") {
+      return Promise.resolve({
+        platform_supported: false,
+        amixer_available: false,
+        snapshots: [],
+        aggregated_boost_db_ceiling: 18,
+        saturation_ratio_ceiling: 0.5,
+        reset_enabled_by_default: true,
+      });
+    }
     return Promise.reject(new Error("unknown path"));
   });
 }
@@ -237,5 +250,67 @@ describe("VoicePage", () => {
     });
     const inactiveDots = screen.getAllByTestId("status-inactive");
     expect(inactiveDots.length).toBeGreaterThanOrEqual(1); // wyoming
+  });
+
+  // ── v1.3 §4.3 L5a — LinuxMicGainCard surface on the Voice page ──
+
+  it("renders LinuxMicGainCard with saturation alert when mixer is saturated", async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === "/api/voice/status") return Promise.resolve(VOICE_STATUS);
+      if (path === "/api/voice/models") return Promise.resolve(VOICE_MODELS);
+      if (path === "/api/voice/linux-mixer-diagnostics") {
+        return Promise.resolve({
+          platform_supported: true,
+          amixer_available: true,
+          snapshots: [
+            {
+              card_index: 1,
+              card_id: "Generic_1",
+              card_longname: "HD-Audio Generic",
+              aggregated_boost_db: 42.0,
+              saturation_warning: true,
+              controls: [
+                {
+                  name: "Internal Mic Boost",
+                  min_raw: 0,
+                  max_raw: 3,
+                  current_raw: 3,
+                  current_db: 36,
+                  max_db: 36,
+                  is_boost_control: true,
+                  saturation_risk: true,
+                  asymmetric: false,
+                },
+              ],
+            },
+          ],
+          aggregated_boost_db_ceiling: 18.0,
+          saturation_ratio_ceiling: 0.5,
+          reset_enabled_by_default: true,
+        });
+      }
+      return Promise.reject(new Error("unknown path"));
+    });
+    render(<VoicePage />);
+    await waitFor(() => {
+      expect(screen.getByTestId("linux-mic-gain-alert")).toBeInTheDocument();
+      expect(
+        screen.getByTestId("reset-linux-mic-gain-button"),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("hides LinuxMicGainCard entirely on non-Linux hosts", async () => {
+    setupMockSuccess(); // default: platform_supported=false
+    const { container } = render(<VoicePage />);
+    // The card self-hides on non-Linux — wait for that state to settle.
+    // A plain post-waitFor assertion would race the card's mount-time
+    // fetch which briefly puts it into ``loading`` mode (rendering a
+    // placeholder until the first response resolves).
+    await waitFor(() => {
+      expect(
+        container.querySelector('[data-testid="linux-mic-gain-card"]'),
+      ).toBeNull();
+    });
   });
 });

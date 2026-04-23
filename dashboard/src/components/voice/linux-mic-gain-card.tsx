@@ -13,6 +13,13 @@
  * Windows / macOS users don't see an irrelevant diagnostic. Also
  * surfaces a distinct warning when Linux is detected but `amixer` is
  * missing from PATH — installing `alsa-utils` is the prerequisite.
+ *
+ * v1.3 §4.3 L5a — moved from ``components/settings/`` to
+ * ``components/voice/`` so the Voice page can render it inline (and
+ * the Settings page continues to render the same module from the new
+ * path). The i18n namespace moves alongside: ``voice:linuxMicGain.*``.
+ * Rendering both pages points to the same component — there is no
+ * duplication.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -20,6 +27,7 @@ import { useTranslation } from "react-i18next";
 import {
   AlertTriangleIcon,
   CheckCircle2Icon,
+  InfoIcon,
   Loader2Icon,
   MicIcon,
   SlidersHorizontalIcon,
@@ -39,10 +47,16 @@ import type {
 } from "@/types/api";
 
 export function LinuxMicGainCard() {
-  const { t } = useTranslation(["settings"]);
+  const { t } = useTranslation(["voice"]);
   const [diag, setDiag] = useState<LinuxMixerDiagnosticsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [applying, setApplying] = useState(false);
+  // v1.3 L0-4 — once the reset applied successfully, surface the
+  // inline persistence hint so a technical user can optionally run
+  // ``sudo alsactl store`` to persist the safe values across reboots.
+  // Defaults to collapsed; the <details> element exposes the hint on
+  // demand without dominating the card for users who don't need it.
+  const [resetApplied, setResetApplied] = useState(false);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -79,13 +93,14 @@ export function LinuxMicGainCard() {
       );
       if (resp.ok) {
         toast.success(
-          t("settings:linuxMicGain.resetSuccess", {
+          t("voice:linuxMicGain.resetSuccess", {
             count: resp.applied_controls?.length ?? 0,
           }),
         );
+        setResetApplied(true);
       } else {
         toast.error(
-          t("settings:linuxMicGain.resetFailed", {
+          t("voice:linuxMicGain.resetFailed", {
             reason: resp.reason ?? "unknown",
             detail: resp.detail ?? "",
           }),
@@ -94,7 +109,7 @@ export function LinuxMicGainCard() {
       await load();
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Request failed";
-      toast.error(t("settings:linuxMicGain.failed", { error: msg }));
+      toast.error(t("voice:linuxMicGain.failed", { error: msg }));
     } finally {
       setApplying(false);
     }
@@ -116,14 +131,14 @@ export function LinuxMicGainCard() {
       <div className="flex items-center gap-2">
         <SlidersHorizontalIcon className="size-4 text-[var(--svx-color-brand-primary)]" />
         <h2 className="text-sm font-medium text-[var(--svx-color-text-primary)]">
-          {t("settings:linuxMicGain.title")}
+          {t("voice:linuxMicGain.title")}
         </h2>
       </div>
 
       {loading ? (
         <p className="mt-3 flex items-center gap-2 text-xs text-[var(--svx-color-text-tertiary)]">
           <Loader2Icon className="size-3 animate-spin" />
-          {t("settings:linuxMicGain.checking")}
+          {t("voice:linuxMicGain.checking")}
         </p>
       ) : amixerMissing ? (
         <div
@@ -134,10 +149,10 @@ export function LinuxMicGainCard() {
             <AlertTriangleIcon className="mt-0.5 size-4 shrink-0 text-amber-500" />
             <div className="flex-1 space-y-1">
               <p className="text-xs font-medium text-[var(--svx-color-text-primary)]">
-                {t("settings:linuxMicGain.amixerMissingTitle")}
+                {t("voice:linuxMicGain.amixerMissingTitle")}
               </p>
               <p className="text-xs text-[var(--svx-color-text-secondary)]">
-                {t("settings:linuxMicGain.amixerMissingBody")}
+                {t("voice:linuxMicGain.amixerMissingBody")}
               </p>
             </div>
           </div>
@@ -151,10 +166,10 @@ export function LinuxMicGainCard() {
             <AlertTriangleIcon className="mt-0.5 size-4 shrink-0 text-amber-500" />
             <div className="flex-1 space-y-2">
               <p className="text-xs font-medium text-[var(--svx-color-text-primary)]">
-                {t("settings:linuxMicGain.alertTitle")}
+                {t("voice:linuxMicGain.alertTitle")}
               </p>
               <p className="text-xs text-[var(--svx-color-text-secondary)]">
-                {t("settings:linuxMicGain.alertBody")}
+                {t("voice:linuxMicGain.alertBody")}
               </p>
               <ul className="space-y-1 text-[11px] text-[var(--svx-color-text-tertiary)]">
                 {saturating.map((card) => (
@@ -164,7 +179,7 @@ export function LinuxMicGainCard() {
                       {card.card_longname || card.card_id}
                     </span>
                     {" — "}
-                    {t("settings:linuxMicGain.cardBoost", {
+                    {t("voice:linuxMicGain.cardBoost", {
                       boost: card.aggregated_boost_db.toFixed(1),
                       controls: card.controls
                         .filter((c) => c.saturation_risk)
@@ -186,7 +201,7 @@ export function LinuxMicGainCard() {
                 ) : (
                   <WrenchIcon className="size-4" />
                 )}
-                {t("settings:linuxMicGain.resetButton")}
+                {t("voice:linuxMicGain.resetButton")}
               </Button>
             </div>
           </div>
@@ -194,9 +209,27 @@ export function LinuxMicGainCard() {
       ) : (
         <div className="mt-3 flex items-center gap-2 text-xs text-[var(--svx-color-text-tertiary)]">
           <CheckCircle2Icon className="size-4 text-emerald-500" />
-          <span>{t("settings:linuxMicGain.noIssues")}</span>
+          <span>{t("voice:linuxMicGain.noIssues")}</span>
         </div>
       )}
+
+      {resetApplied && !hasSaturation ? (
+        <details
+          className="mt-3 text-xs text-[var(--svx-color-text-tertiary)]"
+          data-testid="linux-mic-gain-persist-hint"
+        >
+          <summary className="flex cursor-pointer items-center gap-1">
+            <InfoIcon className="size-3" />
+            {t("voice:linuxMicGain.persistHintSummary")}
+          </summary>
+          <p className="mt-2">
+            {t("voice:linuxMicGain.persistHintBody")}
+          </p>
+          <pre className="mt-2 overflow-x-auto rounded-[var(--svx-radius-sm)] bg-[var(--svx-color-bg-muted)] p-2 font-mono text-[11px]">
+            sudo alsactl store
+          </pre>
+        </details>
+      ) : null}
     </section>
   );
 }

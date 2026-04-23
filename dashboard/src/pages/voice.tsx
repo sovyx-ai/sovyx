@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 import { api, isAbortError } from "@/lib/api";
 import { VoiceSetupModal } from "@/components/setup-wizard";
+import { LinuxMicGainCard } from "@/components/voice/linux-mic-gain-card";
 
 /* ── Types ── */
 
@@ -86,6 +87,10 @@ interface VoiceStatus {
   vad: VADStatus;
   wyoming: WyomingStatus;
   hardware: HardwareStatus;
+  // v1.3 §4.6 L6 — boot preflight warnings forwarded from the backend
+  // registry-resolved store. Optional because older daemons (pre-v1.3)
+  // never emit the field.
+  preflight_warnings?: import("@/types/api").PreflightWarning[];
 }
 
 interface ModelSelection {
@@ -393,6 +398,17 @@ export default function VoicePage() {
           </div>
         </div>
       )}
+
+      {/*
+        v1.3 §4.3 L5a — LinuxMicGainCard surface alignment.
+        The card self-hides on non-Linux hosts and when the mixer is
+        within a safe range, so it is a zero-visual-cost addition for
+        the common case. For the saturated case — the dossier-captured
+        v0.21.2 incident — it surfaces the warning on the Voice page
+        where users actually look when speech fails, rather than only
+        under Settings where the banner historically lived.
+      */}
+      <LinuxMicGainCard />
 
       {/* Status grid */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

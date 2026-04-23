@@ -39,7 +39,7 @@ import { api, isAbortError } from "@/lib/api";
 import { toast } from "sonner";
 import { ExportImportSection } from "@/components/settings/export-import";
 import { VoiceClarityCard } from "@/components/settings/voice-clarity-card";
-import { LinuxMicGainCard } from "@/components/settings/linux-mic-gain-card";
+import { LinuxMicGainCard } from "@/components/voice/linux-mic-gain-card";
 import { ErrorBoundary } from "@/components/error-boundary";
 import type {
   Settings,

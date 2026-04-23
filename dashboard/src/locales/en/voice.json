@@ -5,6 +5,22 @@
   "error": "Failed to load voice status",
   "retry": "Retry",
   "notConfigured": "Voice pipeline is not configured. Enable it in your Sovyx config to see status here.",
+  "linuxMicGain": {
+    "title": "Microphone input gain (Linux)",
+    "checking": "Checking ALSA mixer...",
+    "noIssues": "ALSA mixer gain is within a safe range — no saturation detected.",
+    "alertTitle": "Pre-ADC gain is saturating the microphone",
+    "alertBody": "One or more ALSA capture controls are pinned near maximum. Every peak of intelligible speech will clip the ADC and voice detection will fail. Reset the mixer to restore a safe capture level.",
+    "cardBoost": "aggregated boost +{{boost}} dB — controls: {{controls}}",
+    "resetButton": "Reset microphone gain",
+    "resetSuccess": "Reset {{count}} mixer control(s). Microphone should now capture cleanly.",
+    "resetFailed": "Reset failed: {{reason}} — {{detail}}",
+    "failed": "Could not reset ALSA mixer: {{error}}",
+    "amixerMissingTitle": "ALSA utilities not installed",
+    "amixerMissingBody": "The `amixer` command is required to diagnose and reset microphone gain. Install the alsa-utils package from your distribution's package manager.",
+    "persistHintSummary": "Persist this fix across reboots",
+    "persistHintBody": "ALSA resets its mixer to the system defaults on every boot. To keep the safe capture level across reboots, save the current state with alsactl store (requires sudo on most distros):"
+  },
   "sections": {
     "pipeline": "Pipeline",
     "capture": "Microphone",
