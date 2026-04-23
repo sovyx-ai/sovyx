@@ -43,6 +43,42 @@ def _get_client() -> DaemonClient:
     return DaemonClient()
 
 
+def _surface_preflight_warnings() -> None:
+    """Print any boot-preflight warnings persisted by the voice factory.
+
+    v1.3 §4.8 L7 — closes the user-perceived gap for voice-first-with-CLI
+    sessions: users who never open the dashboard still see the warning
+    on ``sovyx start`` / ``sovyx status`` because
+    :func:`sovyx.voice.factory.create_voice_pipeline` wrote the same
+    list the dashboard store holds to
+    ``~/.sovyx/preflight_warnings.json``. This helper reads the
+    marker (empty on missing/malformed) and prints one yellow line
+    per warning plus the canonical remediation hint.
+
+    Non-blocking: any IO hiccup is swallowed because a crashing voice
+    surface must not crash ``sovyx start``.
+    """
+    try:
+        from sovyx.voice.health import read_preflight_warnings_file
+    except Exception:  # noqa: BLE001
+        return
+    try:
+        warnings = read_preflight_warnings_file()
+    except Exception:  # noqa: BLE001
+        return
+    if not warnings:
+        return
+    for w in warnings:
+        code = w.get("code", "unknown")
+        hint = w.get("hint", "")
+        console.print(f"[yellow]⚠ Voice preflight warning:[/yellow] {code}")
+        if hint:
+            console.print(f"[dim]  {hint}[/dim]")
+        console.print(
+            "[dim]  Run: [bold]sovyx doctor voice --fix --yes[/bold] to remediate.[/dim]",
+        )
+
+
 def _run(coro: object) -> object:  # pragma: no cover
     """Run async coroutine in sync context."""
     return asyncio.run(coro)  # type: ignore[arg-type]
@@ -243,6 +279,12 @@ def start(
         await lifecycle.start()
 
         console.print("[bold green]Sovyx daemon started[/bold green]")
+        # v1.3 §4.8 L7 — surface any prior-session preflight warnings
+        # before handing off to ``run_forever``. A user booting into a
+        # session where the mixer is still saturated should not be
+        # silently blocked waiting for audio that will never reach the
+        # VAD.
+        _surface_preflight_warnings()
         await lifecycle.run_forever()
 
     _run(_start())
@@ -301,6 +343,11 @@ def status() -> None:
     except Exception as e:  # noqa: BLE001 — CLI boundary — renders error and exits; pragma: no cover
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from None
+
+    # v1.3 §4.8 L7 — also surface preflight warnings here so a user
+    # running ``sovyx status`` on an existing daemon sees the same
+    # signal the dashboard displays without having to open it.
+    _surface_preflight_warnings()
 
 
 # Brain commands

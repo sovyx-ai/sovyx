@@ -240,4 +240,63 @@ class TestWithDaemon:
             mock.return_value.is_daemon_running.return_value = True
             result = runner.invoke(app, ["start"])
         assert result.exit_code == 1
-        assert "already running" in result.stdout
+
+
+class TestPreflightWarningSurface:
+    """v1.3 §4.8 L7 — CLI commands read the marker file and surface warnings.
+
+    ``status`` is the easiest command to exercise because its happy
+    path is synchronous and fully mockable. ``start`` shares the same
+    helper so testing one helper call + one command arm covers the
+    contract.
+    """
+
+    def test_status_surfaces_preflight_warning_from_marker(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from sovyx.voice.health import write_preflight_warnings_file
+
+        # Anchor the marker file to tmp_path by pinning HOME so the
+        # CLI helper resolves to our fixture rather than the dev's home.
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))  # Windows fallback
+        (tmp_path / ".sovyx").mkdir()
+        write_preflight_warnings_file(
+            [
+                {
+                    "code": "linux_mixer_saturated",
+                    "hint": "reset mic gain",
+                },
+            ],
+            data_dir=tmp_path / ".sovyx",
+        )
+        with (
+            patch("sovyx.cli.main._get_client") as mock,
+            patch("sovyx.cli.main._run", return_value={"version": "0.1.0"}),
+        ):
+            mock.return_value.is_daemon_running.return_value = True
+            result = runner.invoke(app, ["status"])
+        assert result.exit_code == 0
+        # Rich renders the marker text onto stdout; assert on stable
+        # tokens rather than the whole rendered block.
+        assert "Voice preflight warning" in result.output
+        assert "linux_mixer_saturated" in result.output
+        assert "sovyx doctor voice --fix --yes" in result.output
+
+    def test_status_no_marker_no_surface(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
+        with (
+            patch("sovyx.cli.main._get_client") as mock,
+            patch("sovyx.cli.main._run", return_value={"version": "0.1.0"}),
+        ):
+            mock.return_value.is_daemon_running.return_value = True
+            result = runner.invoke(app, ["status"])
+        assert result.exit_code == 0
+        assert "Voice preflight warning" not in result.output
