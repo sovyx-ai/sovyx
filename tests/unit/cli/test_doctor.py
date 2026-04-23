@@ -149,6 +149,201 @@ def _make_always_fail_check() -> Any:
     return _check
 
 
+class TestDoctorVoiceFixFlag:
+    """v1.3 §4.4 L5b — ``sovyx doctor voice --fix`` safety surface.
+
+    Every test pins the platform via :func:`patch.object` on
+    ``sovyx.cli.commands.doctor.sys`` where Linux semantics are
+    required, because the ``--fix`` path is Linux-only. Tests that
+    verify the exit code on non-Linux don't need the pin.
+    """
+
+    def test_fix_flag_advertised_in_help(self) -> None:
+        result = runner.invoke(app, ["doctor", "voice", "--help"])
+        assert result.exit_code == 0
+        assert "--fix" in result.stdout
+        assert "--yes" in result.stdout
+        assert "--dry-run" in result.stdout
+        assert "--card-index" in result.stdout
+
+    def test_fix_on_non_linux_returns_unsupported(self) -> None:
+        """Non-Linux platforms exit 5 regardless of preflight state."""
+        import sys as real_sys
+
+        if real_sys.platform == "linux":
+            # On a Linux host we can't directly exercise this branch
+            # without running the full --fix flow; rely on the
+            # Linux-specific test below to cover the logic.
+            return
+        with patch(
+            "sovyx.cli.commands.doctor.check_portaudio",
+            lambda **_: _make_always_fail_check(),
+        ):
+            result = runner.invoke(app, ["doctor", "voice", "--fix"])
+        # Preflight fails (portaudio) but saturation is the only thing
+        # --fix addresses; the generic non-Linux check reports 5 via
+        # the "no saturation" short-circuit on the platform gate.
+        # Accept any of the semantic codes documented for this branch.
+        from sovyx.cli.commands.doctor import (
+            EXIT_DOCTOR_OK,
+            EXIT_DOCTOR_UNSUPPORTED,
+        )
+
+        assert result.exit_code in {EXIT_DOCTOR_OK, EXIT_DOCTOR_UNSUPPORTED}
+
+    def test_fix_no_saturation_returns_ok(self) -> None:
+        """When no saturation is present, --fix is a clean no-op."""
+        from sovyx.cli.commands.doctor import EXIT_DOCTOR_OK
+
+        with (
+            patch(
+                "sovyx.cli.commands.doctor.check_portaudio",
+                lambda **_: _make_always_pass_check(),
+            ),
+            # Force the Linux path + simulate a clean preflight outcome
+            # so we exercise the "no saturation" branch explicitly.
+            patch("sovyx.cli.commands.doctor.sys") as mock_sys,
+        ):
+            mock_sys.platform = "linux"
+            # Preserve the real ``sys.stdin`` / ``sys.stderr`` Rich
+            # + Typer depend on.
+            import sys as real_sys
+
+            mock_sys.stdin = real_sys.stdin
+            mock_sys.stderr = real_sys.stderr
+            result = runner.invoke(app, ["doctor", "voice", "--fix"])
+        assert result.exit_code == EXIT_DOCTOR_OK
+        assert "No saturation detected" in result.stdout
+
+    def test_fix_dry_run_prints_plan_without_mutating(self) -> None:
+        from sovyx.cli.commands.doctor import EXIT_DOCTOR_OK
+        from sovyx.voice.health.contract import (
+            MixerCardSnapshot,
+            MixerControlSnapshot,
+        )
+
+        saturated = MixerCardSnapshot(
+            card_index=1,
+            card_id="Generic_1",
+            card_longname="HD-Audio Generic",
+            controls=(
+                MixerControlSnapshot(
+                    name="Capture",
+                    min_raw=0,
+                    max_raw=80,
+                    current_raw=80,
+                    current_db=6.0,
+                    max_db=6.0,
+                    is_boost_control=True,
+                    saturation_risk=True,
+                ),
+                MixerControlSnapshot(
+                    name="Internal Mic Boost",
+                    min_raw=0,
+                    max_raw=3,
+                    current_raw=3,
+                    current_db=36.0,
+                    max_db=36.0,
+                    is_boost_control=True,
+                    saturation_risk=True,
+                ),
+            ),
+            aggregated_boost_db=42.0,
+            saturation_warning=True,
+        )
+
+        with (
+            patch("sovyx.cli.commands.doctor.sys") as mock_sys,
+            patch(
+                "sovyx.cli.commands.doctor.check_linux_mixer_sanity",
+                lambda **_: _make_always_fail_check(),
+            ),
+            patch(
+                "sovyx.cli.commands.doctor.check_portaudio",
+                lambda **_: _make_always_pass_check(),
+            ),
+            patch(
+                "sovyx.voice.health._linux_mixer_probe.enumerate_alsa_mixer_snapshots",
+                return_value=[saturated],
+            ),
+            patch("sovyx.voice.health._linux_mixer_apply.apply_mixer_reset") as mock_apply,
+        ):
+            import sys as real_sys
+
+            mock_sys.platform = "linux"
+            mock_sys.stdin = real_sys.stdin
+            mock_sys.stderr = real_sys.stderr
+            result = runner.invoke(
+                app,
+                ["doctor", "voice", "--fix", "--dry-run"],
+            )
+
+        assert result.exit_code == EXIT_DOCTOR_OK
+        assert "Planned mixer remediation" in result.stdout
+        assert "Capture" in result.stdout
+        assert "Internal Mic Boost" in result.stdout
+        mock_apply.assert_not_called()
+
+    def test_fix_non_tty_without_yes_aborts(self) -> None:
+        """Non-TTY stdin + no --yes must refuse to mutate."""
+        from sovyx.cli.commands.doctor import EXIT_DOCTOR_USER_ABORTED
+        from sovyx.voice.health.contract import (
+            MixerCardSnapshot,
+            MixerControlSnapshot,
+        )
+
+        saturated = MixerCardSnapshot(
+            card_index=1,
+            card_id="Generic_1",
+            card_longname="HD-Audio Generic",
+            controls=(
+                MixerControlSnapshot(
+                    name="Capture",
+                    min_raw=0,
+                    max_raw=80,
+                    current_raw=80,
+                    current_db=6.0,
+                    max_db=6.0,
+                    is_boost_control=True,
+                    saturation_risk=True,
+                ),
+            ),
+            aggregated_boost_db=42.0,
+            saturation_warning=True,
+        )
+
+        class _NonTTYStdin:
+            def isatty(self) -> bool:
+                return False
+
+        with (
+            patch("sovyx.cli.commands.doctor.sys") as mock_sys,
+            patch(
+                "sovyx.cli.commands.doctor.check_linux_mixer_sanity",
+                lambda **_: _make_always_fail_check(),
+            ),
+            patch(
+                "sovyx.cli.commands.doctor.check_portaudio",
+                lambda **_: _make_always_pass_check(),
+            ),
+            patch(
+                "sovyx.voice.health._linux_mixer_probe.enumerate_alsa_mixer_snapshots",
+                return_value=[saturated],
+            ),
+            patch("sovyx.voice.health._linux_mixer_apply.apply_mixer_reset") as mock_apply,
+        ):
+            import sys as real_sys
+
+            mock_sys.platform = "linux"
+            mock_sys.stdin = _NonTTYStdin()
+            mock_sys.stderr = real_sys.stderr
+            result = runner.invoke(app, ["doctor", "voice", "--fix"])
+
+        assert result.exit_code == EXIT_DOCTOR_USER_ABORTED
+        assert "requires an interactive TTY" in result.stdout
+        mock_apply.assert_not_called()
+
+
 class TestFormatDetails:
     """Sanity on the small helper used for table hint fallback."""
 

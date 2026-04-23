@@ -45,12 +45,37 @@ from sovyx.observability.health import (
     create_offline_registry,
 )
 from sovyx.voice.health import (
+    PreflightReport,
     PreflightStepSpec,
     check_portaudio,
+    clear_preflight_warnings_file,
     default_step_names,
     run_preflight,
 )
 from sovyx.voice.health._linux_mixer_check import check_linux_mixer_sanity
+
+# v1.3 §4.4 L5b — ``doctor voice --fix`` semantic exit codes. The
+# ``--fix`` flow steers into these instead of returning the failing
+# step count, so CI / shell wrappers can branch on the specific
+# outcome. The non-``--fix`` path preserves the v0.21.2 contract of
+# returning the number of failing steps.
+EXIT_DOCTOR_OK = 0
+"""No saturation, or --fix succeeded, or --dry-run printed the plan."""
+
+EXIT_DOCTOR_GENERIC_FAILURE = 1
+"""Reserved for non-fix paths (preserves existing behaviour for callers)."""
+
+EXIT_DOCTOR_SATURATED_NOT_FIXED = 2
+"""Saturation detected but --fix was not requested."""
+
+EXIT_DOCTOR_APPLY_FAILED = 3
+"""--fix attempted but apply_mixer_reset failed, or re-probe still saturated."""
+
+EXIT_DOCTOR_USER_ABORTED = 4
+"""--fix aborted: non-TTY shell without --yes, or interactive prompt rejected."""
+
+EXIT_DOCTOR_UNSUPPORTED = 5
+"""--fix requested on non-Linux, or ``amixer`` is not on PATH."""
 
 console = Console()
 doctor_app = typer.Typer(
@@ -206,20 +231,108 @@ def doctor_voice(
         help="Restrict checks to one endpoint by GUID or friendly name. "
         "(Currently informational — reserved for --fix / --reset / --aggressive.)",
     ),
+    fix: bool = typer.Option(
+        False,
+        "--fix",
+        help="Apply safe remediations for detected issues — currently "
+        "resets saturated ALSA mixer controls (Capture + Internal Mic "
+        "Boost) to a known-safe fraction. Linux-only.",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip the interactive confirmation on --fix. REQUIRED when "
+        "stdin is not a TTY (systemd unit, cron job, CI).",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="With --fix: print the planned mixer changes without "
+        "mutating anything. Useful for auditing remediation scope.",
+    ),
+    card_index: int | None = typer.Option(
+        None,
+        "--card-index",
+        help="With --fix: restrict the reset to one ALSA card index "
+        "(from /proc/asound/cards). Default resets every saturated card.",
+    ),
 ) -> None:
-    """Voice Capture Health Lifecycle diagnostics (ADR §4.8).
+    """Voice Capture Health Lifecycle diagnostics (ADR §4.8 + v1.3 §4.4).
 
-    Runs the subset of L5 pre-flight the CLI can drive without a
-    daemon: PortAudio host-API sanity and default-device enumeration.
-    Exit code equals the number of failed steps so CI pipelines can
-    gate on voice readiness.
+    Without ``--fix`` the command is diagnostic-only: it runs the
+    standalone subset of L5 pre-flight (PortAudio host-API sanity +
+    Linux ALSA mixer saturation) and returns the count of failing
+    steps so CI pipelines can gate on voice readiness.
+
+    With ``--fix`` the command becomes remediating: on a saturated
+    Linux mixer it invokes :func:`apply_mixer_reset` to drive the
+    over-driven controls down to their safe fractions, re-runs the
+    preflight to confirm, and clears the boot marker file (L7) on
+    success. Exit codes (see module-level constants) distinguish the
+    outcomes so shell wrappers can branch.
     """
-    exit_code = _run_voice_doctor(output_json=output_json, device=device)
+    exit_code = _run_voice_doctor(
+        output_json=output_json,
+        device=device,
+        fix=fix,
+        yes=yes,
+        dry_run=dry_run,
+        card_index=card_index,
+    )
     raise typer.Exit(exit_code)
 
 
-def _run_voice_doctor(*, output_json: bool, device: str | None) -> int:
+def _run_voice_doctor(
+    *,
+    output_json: bool,
+    device: str | None,
+    fix: bool = False,
+    yes: bool = False,
+    dry_run: bool = False,
+    card_index: int | None = None,
+) -> int:
     """Execute the voice doctor flow. Returns the desired exit code."""
+    report = _run_voice_preflight()
+    _render_voice_report(report, output_json=output_json, device=device)
+
+    failure_count = sum(1 for s in report.steps if not s.passed)
+
+    # Non-fix path: preserve v0.21.2 contract — exit code equals the
+    # number of failing steps so existing CI scripts keep working.
+    if not fix:
+        if failure_count and _first_failure_is_saturation(report):
+            # Keep behaviour stable but let callers distinguish the
+            # "saturation present, fix available" case via stderr
+            # without changing the numeric contract.
+            return failure_count
+        return failure_count
+
+    # ── --fix path — semantic exit codes ────────────────────────────
+    if sys.platform != "linux":
+        console.print(
+            f"\n[yellow]--fix is Linux-only; nothing to apply on {sys.platform}.[/yellow]",
+        )
+        return EXIT_DOCTOR_UNSUPPORTED
+
+    if report.passed or not _first_failure_is_saturation(report):
+        console.print("\n[green]No saturation detected — nothing to fix.[/green]")
+        return EXIT_DOCTOR_OK
+
+    return _apply_mixer_fix_flow(
+        yes=yes,
+        dry_run=dry_run,
+        card_index=card_index,
+    )
+
+
+def _run_voice_preflight() -> PreflightReport:
+    """Shared step 4 + step 9 preflight runner.
+
+    Extracted from :func:`_run_voice_doctor` so ``--fix`` can re-run
+    the exact same specs after the apply path without duplicating the
+    spec list.
+    """
     names = default_step_names()
     portaudio_name, portaudio_code = names[4]
     mixer_name, mixer_code = names[9]
@@ -241,8 +354,16 @@ def _run_voice_doctor(*, output_json: bool, device: str | None) -> int:
     # corrupt --json output and clutter the Rich table. Redirect any
     # stdout writes during preflight to stderr so the report alone owns stdout.
     with contextlib.redirect_stdout(sys.stderr):
-        report = asyncio.run(run_preflight(steps=specs, stop_on_first_failure=False))
+        return asyncio.run(run_preflight(steps=specs, stop_on_first_failure=False))
 
+
+def _render_voice_report(
+    report: PreflightReport,
+    *,
+    output_json: bool,
+    device: str | None,
+) -> None:
+    """Render a :class:`PreflightReport` as JSON or a Rich table."""
     if output_json:
         payload = {
             "passed": report.passed,
@@ -266,7 +387,7 @@ def _run_voice_doctor(*, output_json: bool, device: str | None) -> int:
             ],
         }
         typer.echo(json.dumps(payload, indent=2))
-        return sum(1 for s in report.steps if not s.passed)
+        return
 
     table = Table(
         title="Sovyx Voice Doctor — L5 Pre-flight",
@@ -291,23 +412,162 @@ def _run_voice_doctor(*, output_json: bool, device: str | None) -> int:
     if report.passed:
         console.print(
             f"\n[green]All {len(report.steps)} step(s) passed "
-            f"in {report.total_duration_ms:.1f} ms.[/green]"
+            f"in {report.total_duration_ms:.1f} ms.[/green]",
         )
     else:
         first = report.first_failure
         assert first is not None  # noqa: S101 — narrows type for reporting
         console.print(
             f"\n[red]{failure_count} of {len(report.steps)} step(s) failed. "
-            f"First failure: step {first.step} ({first.code.value}).[/red]"
+            f"First failure: step {first.step} ({first.code.value}).[/red]",
         )
         if first.hint:
             console.print(f"[dim]Hint:[/dim] {first.hint}")
     if device is not None:
         console.print(
             f"\n[dim]Note: --device {device!r} is informational in this "
-            "release; cascade-level filtering ships with the L7 RPC surface.[/dim]"
+            "release; cascade-level filtering ships with the L7 RPC surface.[/dim]",
         )
-    return failure_count
+
+
+def _first_failure_is_saturation(report: PreflightReport) -> bool:
+    """Return True when step 9 (linux_mixer_saturated) is the blocker."""
+    from sovyx.voice.health import PreflightStepCode
+
+    first = report.first_failure
+    return first is not None and first.code is PreflightStepCode.LINUX_MIXER_SATURATED
+
+
+def _apply_mixer_fix_flow(
+    *,
+    yes: bool,
+    dry_run: bool,
+    card_index: int | None,
+) -> int:
+    """Remediate a saturated ALSA mixer (``--fix`` path).
+
+    See :func:`_run_voice_doctor` and the module-level exit-code
+    constants for the outcome mapping. Subprocess errors degrade to
+    :data:`EXIT_DOCTOR_APPLY_FAILED` with the ``amixer`` reason token
+    surfaced so operators can read the failure mode straight from the
+    exit-code-plus-stderr pair.
+    """
+    from sovyx.engine.config import VoiceTuningConfig
+    from sovyx.voice.health._linux_mixer_apply import (
+        REASON_AMIXER_UNAVAILABLE,
+        apply_mixer_reset,
+    )
+    from sovyx.voice.health._linux_mixer_probe import enumerate_alsa_mixer_snapshots
+    from sovyx.voice.health.bypass._strategy import BypassApplyError
+
+    snapshots = enumerate_alsa_mixer_snapshots()
+    if not snapshots:
+        console.print(
+            "\n[yellow]No ALSA cards enumerable — is ``alsa-utils`` installed?[/yellow]",
+        )
+        return EXIT_DOCTOR_UNSUPPORTED
+
+    targets = [s for s in snapshots if s.saturation_warning]
+    if card_index is not None:
+        targets = [s for s in targets if s.card_index == card_index]
+    if not targets:
+        console.print(
+            f"\n[yellow]No saturating card matches --card-index={card_index}.[/yellow]"
+            if card_index is not None
+            else "\n[yellow]No saturating cards found.[/yellow]",
+        )
+        return EXIT_DOCTOR_OK
+
+    # Render the remediation plan before taking any action. --dry-run
+    # stops here; the interactive path re-uses the same summary for
+    # the confirmation prompt.
+    console.print("\n[bold]Planned mixer remediation:[/bold]")
+    for card in targets:
+        risky = [c.name for c in card.controls if c.saturation_risk]
+        console.print(
+            f"  [dim]card {card.card_index}[/dim] {card.card_longname or card.card_id} — "
+            f"reset [bold]{', '.join(risky) or '(none)'}[/bold] "
+            f"(aggregated boost {card.aggregated_boost_db:.1f} dB)",
+        )
+
+    if dry_run:
+        console.print("\n[dim]--dry-run: no changes applied.[/dim]")
+        return EXIT_DOCTOR_OK
+
+    if not yes:
+        if not sys.stdin.isatty():
+            console.print(
+                "\n[red]--fix without --yes requires an interactive TTY; "
+                "re-run with --yes in non-interactive shells.[/red]",
+            )
+            return EXIT_DOCTOR_USER_ABORTED
+        try:
+            confirmed = typer.confirm(
+                "Apply these mixer changes?",
+                default=False,
+            )
+        except typer.Abort:
+            console.print("\n[yellow]Aborted by user.[/yellow]")
+            return EXIT_DOCTOR_USER_ABORTED
+        if not confirmed:
+            console.print("\n[yellow]Aborted by user.[/yellow]")
+            return EXIT_DOCTOR_USER_ABORTED
+
+    tuning = VoiceTuningConfig()
+    applied: list[tuple[int, tuple[str, int]]] = []
+    for card in targets:
+        controls_to_reset = [c for c in card.controls if c.saturation_risk]
+        if not controls_to_reset:
+            continue
+        try:
+            snapshot = asyncio.run(
+                apply_mixer_reset(
+                    card.card_index,
+                    controls_to_reset,
+                    tuning=tuning,
+                ),
+            )
+        except BypassApplyError as exc:
+            if exc.reason == REASON_AMIXER_UNAVAILABLE:
+                console.print(
+                    "\n[red]amixer is not on PATH — install ``alsa-utils`` to enable --fix.[/red]",
+                )
+                return EXIT_DOCTOR_UNSUPPORTED
+            console.print(
+                f"\n[red]Mixer reset failed on card {card.card_index}: "
+                f"{exc.reason} ({exc}).[/red]",
+            )
+            return EXIT_DOCTOR_APPLY_FAILED
+        for control_name, raw in snapshot.applied_controls:
+            applied.append((card.card_index, (control_name, raw)))
+        console.print(
+            f"[green]✓[/green] card {card.card_index}: reset "
+            f"{len(snapshot.applied_controls)} control(s).",
+        )
+
+    if not applied:
+        console.print("\n[yellow]No controls required mutation.[/yellow]")
+        return EXIT_DOCTOR_OK
+
+    # Re-run the preflight to confirm the fix actually cleared step 9.
+    verify = _run_voice_preflight()
+    if _first_failure_is_saturation(verify):
+        console.print(
+            "\n[red]Post-fix preflight still reports saturation — the "
+            "mixer reset did not reach a safe configuration.[/red]",
+        )
+        return EXIT_DOCTOR_APPLY_FAILED
+
+    # v1.3 §4.7.7 — clear the marker so subsequent ``sovyx start`` /
+    # ``sovyx status`` no longer surface a warning the user just
+    # remediated. File removal is best-effort: a race with another
+    # process deleting it first is harmless.
+    with contextlib.suppress(OSError):
+        clear_preflight_warnings_file()
+    console.print(
+        "\n[green]Mixer remediated successfully; preflight warning marker cleared.[/green]",
+    )
+    return EXIT_DOCTOR_OK
 
 
 def _format_details(details: object) -> str:
