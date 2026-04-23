@@ -18,6 +18,7 @@ from sovyx.voice.health import (
     ComboStoreStats,
     Diagnosis,
     FactorySignature,
+    HardwareContext,
     LoadReport,
     MixerApplySnapshot,
     MixerControlRole,
@@ -1185,3 +1186,60 @@ class TestMixerSanityResult:
         )
         with pytest.raises(Exception):
             result.decision = MixerSanityDecision.ERROR  # type: ignore[misc]
+
+
+class TestHardwareContext:
+    """HardwareContext carries detected audio-hardware identity to L2.5."""
+
+    def test_driver_family_only(self) -> None:
+        hw = HardwareContext(driver_family="hda")
+        assert hw.driver_family == "hda"
+        assert hw.codec_id is None
+        assert hw.audio_stack is None
+
+    def test_full_fields(self) -> None:
+        hw = HardwareContext(
+            driver_family="hda",
+            codec_id="14F1:5045",
+            system_vendor="Sony Group Corporation",
+            system_product="VJFE69F11X-B0221H",
+            distro="linuxmint-22.2",
+            audio_stack="pipewire",
+            kernel="6.14.0-37-generic",
+        )
+        assert hw.codec_id == "14F1:5045"
+        assert hw.audio_stack == "pipewire"
+
+    @pytest.mark.parametrize(
+        "family",
+        ["hda", "sof", "usb-audio", "bt", "unknown"],
+    )
+    def test_all_valid_driver_families(self, family: str) -> None:
+        hw = HardwareContext(driver_family=family)  # type: ignore[arg-type]
+        assert hw.driver_family == family
+
+    def test_unknown_driver_family_rejected(self) -> None:
+        with pytest.raises(ValueError, match="driver_family='firewire'"):
+            HardwareContext(driver_family="firewire")  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize(
+        "stack",
+        ["pipewire", "pulseaudio", "alsa"],
+    )
+    def test_all_valid_audio_stacks(self, stack: str) -> None:
+        hw = HardwareContext(driver_family="hda", audio_stack=stack)  # type: ignore[arg-type]
+        assert hw.audio_stack == stack
+
+    def test_unknown_audio_stack_rejected(self) -> None:
+        with pytest.raises(ValueError, match="audio_stack='oss'"):
+            HardwareContext(driver_family="hda", audio_stack="oss")  # type: ignore[arg-type]
+
+    def test_unknown_driver_family_for_detection_failure(self) -> None:
+        # First-boot / exotic-hardware detection failure → "unknown" is valid.
+        hw = HardwareContext(driver_family="unknown")
+        assert hw.driver_family == "unknown"
+
+    def test_frozen(self) -> None:
+        hw = HardwareContext(driver_family="hda")
+        with pytest.raises(Exception):
+            hw.codec_id = "x"  # type: ignore[misc]

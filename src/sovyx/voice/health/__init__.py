@@ -42,6 +42,7 @@ from sovyx.voice.health._kernel_invalidated_recheck import (
     RecheckProbeCallable,
 )
 from sovyx.voice.health._linux_mixer_check import check_linux_mixer_sanity
+from sovyx.voice.health._mixer_roles import MixerControlRoleResolver
 from sovyx.voice.health._power import NoopPowerEventListener, PowerEventListener
 from sovyx.voice.health._quarantine import (
     EndpointQuarantine,
@@ -78,6 +79,7 @@ from sovyx.voice.health.contract import (
     Diagnosis,
     Eligibility,
     FactorySignature,
+    HardwareContext,
     HotplugEvent,
     HotplugEventKind,
     IntegrityResult,
@@ -167,6 +169,7 @@ __all__ = [
     "Eligibility",
     "EndpointQuarantine",
     "FactorySignature",
+    "HardwareContext",
     "HotplugEvent",
     "HotplugEventKind",
     "HotplugListener",
@@ -179,6 +182,7 @@ __all__ = [
     "MixerApplySnapshot",
     "MixerCardSnapshot",
     "MixerControlRole",
+    "MixerControlRoleResolver",
     "MixerControlSnapshot",
     "MixerKBProfile",
     "MixerPresetControl",

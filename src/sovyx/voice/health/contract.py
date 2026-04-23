@@ -1825,6 +1825,87 @@ class MixerSanityResult:
     error: str | None = None
 
 
+_HARDWARE_DRIVER_FAMILIES: frozenset[str] = frozenset(
+    {"hda", "sof", "usb-audio", "bt", "unknown"},
+)
+"""Driver families accepted by :class:`HardwareContext`.
+
+Superset of ``_DRIVER_FAMILIES`` (the KB-profile set) by the extra
+``"unknown"`` sentinel — KB profiles must target a specific family,
+but a detected hardware context may legitimately fail to determine
+one (e.g., obscure vendor driver on first boot before ``lspci`` /
+``/proc/asound/cards`` have populated).
+"""
+
+
+@dataclass(frozen=True, slots=True)
+class HardwareContext:
+    """Detected audio-hardware identity for L2.5 + KB matching.
+
+    Populated once per cascade pass by the Linux platform probe (or
+    the equivalent Windows/macOS stub in F3) and threaded through
+    three consumers:
+
+    * :class:`~sovyx.voice.health._mixer_roles.MixerControlRoleResolver`
+      — ``codec_id`` drives the per-codec override lookup;
+      ``driver_family`` drives the family-table lookup.
+    * ``MixerKBLookup.match`` (Phase F1.C) — every field is compared
+      ``fnmatch``-style against the corresponding glob on
+      :class:`MixerKBProfile`.
+    * ``_mixer_sanity._detect_user_customization`` (Phase F1.E) —
+      reads ``audio_stack`` / ``distro`` to locate the right config
+      paths for PipeWire / PulseAudio / WirePlumber.
+
+    Every field except ``driver_family`` is optional because detection
+    can partially fail — a missing ``codec_id`` should degrade the KB
+    match score, not abort the cascade.
+
+    Args:
+        driver_family: ALSA driver family. ``"unknown"`` is valid and
+            means "probe could not determine"; resolver then skips
+            the family table and relies on substring fallback.
+        codec_id: ``<vendor>:<device>`` hex pair read from
+            ``/proc/asound/card*/codec#*`` (e.g. ``"14F1:5045"``).
+            Case-normalisation is the producer's responsibility — the
+            resolver and KB loader both expect the exact string
+            ``/proc/asound`` reports.
+        system_vendor: ``dmidecode -s system-manufacturer`` output
+            (e.g. ``"Sony Group Corporation"``).
+        system_product: ``dmidecode -s system-product-name`` output
+            (e.g. ``"VJFE69F11X-B0221H"``).
+        distro: Short distro + version label (e.g.
+            ``"linuxmint-22.2"``). Used for config path resolution,
+            not for matching alone.
+        audio_stack: Active userspace audio stack, detected via
+            ``wpctl status`` / ``pactl info`` / ``/proc/asound/pcm``.
+            ``None`` when no userspace daemon is running.
+        kernel: Exact ``uname -r`` output (e.g. ``"6.14.0-37-generic"``).
+            Consumed as an ``fnmatch`` target against
+            :attr:`MixerKBProfile.kernel_major_minor_glob`.
+
+    Raises:
+        ValueError: On unknown ``driver_family`` or ``audio_stack``.
+    """
+
+    driver_family: Literal["hda", "sof", "usb-audio", "bt", "unknown"]
+    codec_id: str | None = None
+    system_vendor: str | None = None
+    system_product: str | None = None
+    distro: str | None = None
+    audio_stack: Literal["pipewire", "pulseaudio", "alsa"] | None = None
+    kernel: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.driver_family not in _HARDWARE_DRIVER_FAMILIES:
+            msg = (
+                f"driver_family={self.driver_family!r} not in {sorted(_HARDWARE_DRIVER_FAMILIES)}"
+            )
+            raise ValueError(msg)
+        if self.audio_stack is not None and self.audio_stack not in _AUDIO_STACKS:
+            msg = f"audio_stack={self.audio_stack!r} not in {sorted(_AUDIO_STACKS)}"
+            raise ValueError(msg)
+
+
 __all__ = [
     "ALLOWED_FORMATS",
     "ALLOWED_HOST_APIS_BY_PLATFORM",
@@ -1841,6 +1922,7 @@ __all__ = [
     "Diagnosis",
     "Eligibility",
     "FactorySignature",
+    "HardwareContext",
     "IntegrityResult",
     "IntegrityVerdict",
     "LoadReport",
