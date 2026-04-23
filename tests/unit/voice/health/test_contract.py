@@ -17,12 +17,26 @@ from sovyx.voice.health import (
     ComboEntry,
     ComboStoreStats,
     Diagnosis,
+    FactorySignature,
     LoadReport,
+    MixerApplySnapshot,
+    MixerControlRole,
+    MixerKBProfile,
+    MixerPresetControl,
+    MixerPresetSpec,
+    MixerPresetValueDb,
+    MixerPresetValueFraction,
+    MixerPresetValueRaw,
+    MixerSanityDecision,
+    MixerSanityResult,
+    MixerValidationMetrics,
     OverrideEntry,
     ProbeHistoryEntry,
     ProbeMode,
     ProbeResult,
     RemediationHint,
+    ValidationGates,
+    VerificationRecord,
 )
 
 
@@ -55,7 +69,7 @@ class TestDiagnosisEnum:
         assert Diagnosis.MUTED == "muted"
         assert Diagnosis.NO_SIGNAL.value == "no_signal"
 
-    def test_all_fourteen_values_present(self) -> None:
+    def test_all_nineteen_values_present(self) -> None:
         expected = {
             "healthy",
             "muted",
@@ -70,9 +84,29 @@ class TestDiagnosisEnum:
             "self_feedback",
             "permission_denied",
             "kernel_invalidated",
+            # L2.5 mixer sanity diagnoses (ADR-voice-mixer-sanity-l2.5-bidirectional).
+            "mixer_zeroed",
+            "mixer_saturated",
+            "mixer_unknown_pattern",
+            "mixer_customized",
+            "mixer_calibration_needed",
             "unknown",
         }
         assert {d.value for d in Diagnosis} == expected
+
+    def test_mixer_l25_values_are_strenum(self) -> None:
+        # xdist-safe value comparison for the new L2.5 members.
+        assert Diagnosis.MIXER_ZEROED == "mixer_zeroed"
+        assert Diagnosis.MIXER_SATURATED == "mixer_saturated"
+        assert Diagnosis.MIXER_UNKNOWN_PATTERN == "mixer_unknown_pattern"
+        assert Diagnosis.MIXER_CUSTOMIZED == "mixer_customized"
+        assert Diagnosis.MIXER_CALIBRATION_NEEDED == "mixer_calibration_needed"
+
+    def test_mixer_l25_values_distinct_from_apo_degraded(self) -> None:
+        # Regression guard — MIXER_SATURATED was split out of APO_DEGRADED
+        # so bypass coordinator routes to mixer reset instead of APO bypass.
+        assert Diagnosis.APO_DEGRADED is not Diagnosis.MIXER_SATURATED
+        assert Diagnosis.APO_DEGRADED.value != Diagnosis.MIXER_SATURATED.value
 
     def test_membership(self) -> None:
         assert "healthy" in {d.value for d in Diagnosis}
@@ -471,3 +505,683 @@ class TestComboStoreStats:
         b = ComboStoreStats()
         a.invalidations_by_reason["R7"] = 1
         assert b.invalidations_by_reason == {}
+
+
+# ── L2.5 mixer sanity contract tests ───────────────────────────────────
+
+
+class TestMixerControlRole:
+    """MixerControlRole is the role-based discovery enum (replaces pattern match)."""
+
+    def test_is_strenum(self) -> None:
+        assert issubclass(MixerControlRole, str)
+
+    def test_all_twelve_roles_present(self) -> None:
+        expected = {
+            "capture_master",
+            "internal_mic_boost",
+            "preamp_boost",
+            "digital_capture",
+            "input_source_selector",
+            "auto_mute",
+            "capture_switch",
+            "pga_master",
+            "pga_dmic",
+            "usb_mic_master",
+            "bt_hfp_gain",
+            "unknown",
+        }
+        assert {r.value for r in MixerControlRole} == expected
+
+    def test_string_equality(self) -> None:
+        assert MixerControlRole.CAPTURE_MASTER == "capture_master"
+        assert MixerControlRole.INTERNAL_MIC_BOOST == "internal_mic_boost"
+        assert MixerControlRole.UNKNOWN == "unknown"
+
+    def test_hashable_for_mapping_keys(self) -> None:
+        # KB profiles key FactorySignature mappings by role; require hashable.
+        mapping: dict[MixerControlRole, str] = {
+            MixerControlRole.CAPTURE_MASTER: "x",
+            MixerControlRole.PGA_DMIC: "y",
+        }
+        assert mapping[MixerControlRole.CAPTURE_MASTER] == "x"
+
+
+class TestMixerSanityDecision:
+    """Terminal decision enum — cascade keys off every value."""
+
+    def test_is_strenum(self) -> None:
+        assert issubclass(MixerSanityDecision, str)
+
+    def test_all_eight_decisions_present(self) -> None:
+        expected = {
+            "healed",
+            "rolled_back",
+            "skipped_healthy",
+            "skipped_customized",
+            "deferred_no_kb",
+            "deferred_ambiguous",
+            "deferred_platform",
+            "error",
+        }
+        assert {d.value for d in MixerSanityDecision} == expected
+
+    def test_string_equality(self) -> None:
+        assert MixerSanityDecision.HEALED == "healed"
+        assert MixerSanityDecision.ROLLED_BACK == "rolled_back"
+
+
+class TestMixerPresetValue:
+    """Tagged-union variants — raw/fraction/db."""
+
+    def test_raw_smoke(self) -> None:
+        v = MixerPresetValueRaw(raw=42)
+        assert v.raw == 42
+
+    def test_fraction_zero_accepted(self) -> None:
+        assert MixerPresetValueFraction(fraction=0.0).fraction == 0.0
+
+    def test_fraction_one_accepted(self) -> None:
+        assert MixerPresetValueFraction(fraction=1.0).fraction == 1.0
+
+    def test_fraction_mid_accepted(self) -> None:
+        assert MixerPresetValueFraction(fraction=0.5).fraction == 0.5
+
+    def test_fraction_below_zero_rejected(self) -> None:
+        with pytest.raises(ValueError, match=r"fraction=-0\.1.*\[0\.0, 1\.0\]"):
+            MixerPresetValueFraction(fraction=-0.1)
+
+    def test_fraction_above_one_rejected(self) -> None:
+        with pytest.raises(ValueError, match=r"fraction=1\.01.*\[0\.0, 1\.0\]"):
+            MixerPresetValueFraction(fraction=1.01)
+
+    def test_db_smoke(self) -> None:
+        v = MixerPresetValueDb(db=-12.0)
+        assert v.db == -12.0
+
+    def test_all_variants_frozen(self) -> None:
+        variants = (
+            MixerPresetValueRaw(raw=1),
+            MixerPresetValueFraction(fraction=0.5),
+            MixerPresetValueDb(db=0.0),
+        )
+        for v in variants:
+            with pytest.raises(Exception):
+                v.raw = 99  # type: ignore[misc,union-attr,attr-defined]
+
+
+class TestMixerPresetControl:
+    """MixerPresetControl validates role + channel_policy at construction."""
+
+    def test_well_formed(self) -> None:
+        ctl = MixerPresetControl(
+            role=MixerControlRole.CAPTURE_MASTER,
+            value=MixerPresetValueFraction(fraction=1.0),
+        )
+        assert ctl.role is MixerControlRole.CAPTURE_MASTER
+        assert ctl.channel_policy == "all"  # default
+
+    def test_unknown_role_rejected(self) -> None:
+        with pytest.raises(ValueError, match="UNKNOWN is not a valid preset target"):
+            MixerPresetControl(
+                role=MixerControlRole.UNKNOWN,
+                value=MixerPresetValueRaw(raw=0),
+            )
+
+    def test_unknown_channel_policy_rejected(self) -> None:
+        with pytest.raises(ValueError, match="channel_policy='nope'"):
+            MixerPresetControl(
+                role=MixerControlRole.CAPTURE_MASTER,
+                value=MixerPresetValueRaw(raw=0),
+                channel_policy="nope",  # type: ignore[arg-type]
+            )
+
+    def test_left_right_equal_policy_accepted(self) -> None:
+        ctl = MixerPresetControl(
+            role=MixerControlRole.INTERNAL_MIC_BOOST,
+            value=MixerPresetValueRaw(raw=0),
+            channel_policy="left_right_equal",
+        )
+        assert ctl.channel_policy == "left_right_equal"
+
+
+def _good_preset() -> MixerPresetSpec:
+    return MixerPresetSpec(
+        controls=(
+            MixerPresetControl(
+                role=MixerControlRole.CAPTURE_MASTER,
+                value=MixerPresetValueFraction(fraction=1.0),
+            ),
+            MixerPresetControl(
+                role=MixerControlRole.INTERNAL_MIC_BOOST,
+                value=MixerPresetValueRaw(raw=0),
+            ),
+        ),
+    )
+
+
+class TestMixerPresetSpec:
+    """MixerPresetSpec enforces non-empty + unique role + literal defaults."""
+
+    def test_well_formed(self) -> None:
+        preset = _good_preset()
+        assert len(preset.controls) == 2
+        assert preset.auto_mute_mode == "leave"
+        assert preset.runtime_pm_target == "leave"
+
+    def test_empty_controls_rejected(self) -> None:
+        with pytest.raises(ValueError, match="controls must be non-empty"):
+            MixerPresetSpec(controls=())
+
+    def test_duplicate_role_rejected(self) -> None:
+        dup = (
+            MixerPresetControl(
+                role=MixerControlRole.CAPTURE_MASTER,
+                value=MixerPresetValueFraction(fraction=1.0),
+            ),
+            MixerPresetControl(
+                role=MixerControlRole.CAPTURE_MASTER,
+                value=MixerPresetValueFraction(fraction=0.8),
+            ),
+        )
+        with pytest.raises(ValueError, match="'capture_master' appears more than once"):
+            MixerPresetSpec(controls=dup)
+
+    def test_unknown_auto_mute_mode_rejected(self) -> None:
+        with pytest.raises(ValueError, match="auto_mute_mode='on'"):
+            MixerPresetSpec(
+                controls=_good_preset().controls,
+                auto_mute_mode="on",  # type: ignore[arg-type]
+            )
+
+    def test_unknown_runtime_pm_target_rejected(self) -> None:
+        with pytest.raises(ValueError, match="runtime_pm_target='idle'"):
+            MixerPresetSpec(
+                controls=_good_preset().controls,
+                runtime_pm_target="idle",  # type: ignore[arg-type]
+            )
+
+    def test_all_literal_values_accepted(self) -> None:
+        for mode in ("disabled", "enabled", "leave"):
+            preset = MixerPresetSpec(
+                controls=_good_preset().controls,
+                auto_mute_mode=mode,  # type: ignore[arg-type]
+            )
+            assert preset.auto_mute_mode == mode
+        for target in ("on", "auto", "leave"):
+            preset = MixerPresetSpec(
+                controls=_good_preset().controls,
+                runtime_pm_target=target,  # type: ignore[arg-type]
+            )
+            assert preset.runtime_pm_target == target
+
+
+def _good_gates() -> ValidationGates:
+    return ValidationGates(
+        rms_dbfs_range=(-30.0, -15.0),
+        peak_dbfs_max=-2.0,
+        snr_db_vocal_band_min=15.0,
+        silero_prob_min=0.5,
+        wake_word_stage2_prob_min=0.4,
+    )
+
+
+class TestValidationGates:
+    """Post-apply gates — strict boundary validation."""
+
+    def test_well_formed(self) -> None:
+        gates = _good_gates()
+        assert gates.rms_dbfs_range == (-30.0, -15.0)
+        assert gates.silero_prob_min == 0.5
+
+    def test_inverted_rms_range_rejected(self) -> None:
+        with pytest.raises(ValueError, match="inverted"):
+            ValidationGates(
+                rms_dbfs_range=(-10.0, -30.0),
+                peak_dbfs_max=-2.0,
+                snr_db_vocal_band_min=15.0,
+                silero_prob_min=0.5,
+                wake_word_stage2_prob_min=0.4,
+            )
+
+    def test_positive_rms_bound_rejected(self) -> None:
+        with pytest.raises(ValueError, match="non-positive"):
+            ValidationGates(
+                rms_dbfs_range=(-30.0, 5.0),
+                peak_dbfs_max=-2.0,
+                snr_db_vocal_band_min=15.0,
+                silero_prob_min=0.5,
+                wake_word_stage2_prob_min=0.4,
+            )
+
+    def test_positive_peak_rejected(self) -> None:
+        with pytest.raises(ValueError, match="peak_dbfs_max=3.0.*non-positive"):
+            ValidationGates(
+                rms_dbfs_range=(-30.0, -15.0),
+                peak_dbfs_max=3.0,
+                snr_db_vocal_band_min=15.0,
+                silero_prob_min=0.5,
+                wake_word_stage2_prob_min=0.4,
+            )
+
+    def test_negative_snr_rejected(self) -> None:
+        with pytest.raises(ValueError, match="snr_db_vocal_band_min=-5.0"):
+            ValidationGates(
+                rms_dbfs_range=(-30.0, -15.0),
+                peak_dbfs_max=-2.0,
+                snr_db_vocal_band_min=-5.0,
+                silero_prob_min=0.5,
+                wake_word_stage2_prob_min=0.4,
+            )
+
+    def test_silero_prob_out_of_unit_rejected(self) -> None:
+        with pytest.raises(ValueError, match=r"silero_prob_min=1\.5"):
+            ValidationGates(
+                rms_dbfs_range=(-30.0, -15.0),
+                peak_dbfs_max=-2.0,
+                snr_db_vocal_band_min=15.0,
+                silero_prob_min=1.5,
+                wake_word_stage2_prob_min=0.4,
+            )
+
+    def test_wake_word_prob_out_of_unit_rejected(self) -> None:
+        with pytest.raises(ValueError, match=r"wake_word_stage2_prob_min=-0\.1"):
+            ValidationGates(
+                rms_dbfs_range=(-30.0, -15.0),
+                peak_dbfs_max=-2.0,
+                snr_db_vocal_band_min=15.0,
+                silero_prob_min=0.5,
+                wake_word_stage2_prob_min=-0.1,
+            )
+
+
+class TestFactorySignature:
+    """FactorySignature requires at least one expected_*_range."""
+
+    def test_raw_only(self) -> None:
+        sig = FactorySignature(
+            expected_raw_range=(0, 0),
+            expected_fraction_range=None,
+            expected_db_range=None,
+        )
+        assert sig.expected_raw_range == (0, 0)
+
+    def test_fraction_only(self) -> None:
+        sig = FactorySignature(
+            expected_raw_range=None,
+            expected_fraction_range=(0.3, 0.6),
+            expected_db_range=None,
+        )
+        assert sig.expected_fraction_range == (0.3, 0.6)
+
+    def test_db_only(self) -> None:
+        sig = FactorySignature(
+            expected_raw_range=None,
+            expected_fraction_range=None,
+            expected_db_range=(-40.0, -20.0),
+        )
+        assert sig.expected_db_range == (-40.0, -20.0)
+
+    def test_all_none_rejected(self) -> None:
+        with pytest.raises(ValueError, match="at least one of"):
+            FactorySignature(
+                expected_raw_range=None,
+                expected_fraction_range=None,
+                expected_db_range=None,
+            )
+
+    def test_inverted_raw_rejected(self) -> None:
+        with pytest.raises(ValueError, match="expected_raw_range.*inverted"):
+            FactorySignature(
+                expected_raw_range=(3, 0),
+                expected_fraction_range=None,
+                expected_db_range=None,
+            )
+
+    def test_inverted_fraction_rejected(self) -> None:
+        with pytest.raises(ValueError, match="expected_fraction_range.*inverted"):
+            FactorySignature(
+                expected_raw_range=None,
+                expected_fraction_range=(0.8, 0.2),
+                expected_db_range=None,
+            )
+
+    def test_out_of_unit_fraction_rejected(self) -> None:
+        with pytest.raises(ValueError, match="must lie within"):
+            FactorySignature(
+                expected_raw_range=None,
+                expected_fraction_range=(0.5, 1.2),
+                expected_db_range=None,
+            )
+
+    def test_inverted_db_rejected(self) -> None:
+        with pytest.raises(ValueError, match="expected_db_range.*inverted"):
+            FactorySignature(
+                expected_raw_range=None,
+                expected_fraction_range=None,
+                expected_db_range=(0.0, -30.0),
+            )
+
+
+def _good_verification() -> VerificationRecord:
+    return VerificationRecord(
+        system_product="VJFE69F11X-B0221H",
+        codec_id="14F1:5045",
+        kernel="6.14.0-37-generic",
+        distro="linuxmint-22.2",
+        verified_at="2026-04-23",
+        verified_by="sovyx-core",
+    )
+
+
+class TestVerificationRecord:
+    """Every attestation field must be non-empty (grep-able provenance)."""
+
+    def test_well_formed(self) -> None:
+        rec = _good_verification()
+        assert rec.verified_by == "sovyx-core"
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            "system_product",
+            "codec_id",
+            "kernel",
+            "distro",
+            "verified_at",
+            "verified_by",
+        ],
+    )
+    def test_each_empty_field_rejected(self, field: str) -> None:
+        base = {
+            "system_product": "VJFE69F11X-B0221H",
+            "codec_id": "14F1:5045",
+            "kernel": "6.14.0-37",
+            "distro": "linuxmint-22.2",
+            "verified_at": "2026-04-23",
+            "verified_by": "sovyx-core",
+        }
+        base[field] = ""
+        with pytest.raises(ValueError, match=f"{field} must be non-empty"):
+            VerificationRecord(**base)  # type: ignore[arg-type]
+
+
+def _good_kb_profile() -> MixerKBProfile:
+    return MixerKBProfile(
+        profile_id="vaio_vjfe69_sn6180",
+        profile_version=1,
+        schema_version=1,
+        codec_id_glob="14F1:5045",
+        driver_family="hda",
+        system_vendor_glob="Sony*",
+        system_product_glob="VJFE69*",
+        distro_family=None,
+        audio_stack="pipewire",
+        kernel_major_minor_glob="6.*",
+        match_threshold=0.6,
+        factory_regime="attenuation",
+        factory_signature={
+            MixerControlRole.CAPTURE_MASTER: FactorySignature(
+                expected_raw_range=None,
+                expected_fraction_range=(0.3, 0.6),
+                expected_db_range=None,
+            ),
+            MixerControlRole.INTERNAL_MIC_BOOST: FactorySignature(
+                expected_raw_range=(0, 0),
+                expected_fraction_range=None,
+                expected_db_range=None,
+            ),
+        },
+        recommended_preset=_good_preset(),
+        validation_gates=_good_gates(),
+        verified_on=(_good_verification(),),
+        contributed_by="sovyx-core",
+    )
+
+
+class TestMixerKBProfile:
+    """MixerKBProfile is YAML-sourced; validation must be exhaustive."""
+
+    def test_well_formed(self) -> None:
+        profile = _good_kb_profile()
+        assert profile.profile_id == "vaio_vjfe69_sn6180"
+        assert profile.driver_family == "hda"
+        assert profile.factory_regime == "attenuation"
+
+    def test_empty_profile_id_rejected(self) -> None:
+        with pytest.raises(ValueError, match="profile_id must be non-empty"):
+            MixerKBProfile(
+                **{**_kb_kwargs(), "profile_id": ""},  # type: ignore[arg-type]
+            )
+
+    def test_profile_version_below_one_rejected(self) -> None:
+        with pytest.raises(ValueError, match="profile_version=0"):
+            MixerKBProfile(**{**_kb_kwargs(), "profile_version": 0})  # type: ignore[arg-type]
+
+    def test_schema_version_below_one_rejected(self) -> None:
+        with pytest.raises(ValueError, match="schema_version=0"):
+            MixerKBProfile(**{**_kb_kwargs(), "schema_version": 0})  # type: ignore[arg-type]
+
+    def test_empty_codec_id_glob_rejected(self) -> None:
+        with pytest.raises(ValueError, match="codec_id_glob must be non-empty"):
+            MixerKBProfile(**{**_kb_kwargs(), "codec_id_glob": ""})  # type: ignore[arg-type]
+
+    def test_unknown_driver_family_rejected(self) -> None:
+        with pytest.raises(ValueError, match="driver_family='firewire'"):
+            MixerKBProfile(
+                **{**_kb_kwargs(), "driver_family": "firewire"},  # type: ignore[arg-type]
+            )
+
+    def test_unknown_audio_stack_rejected(self) -> None:
+        with pytest.raises(ValueError, match="audio_stack='oss'"):
+            MixerKBProfile(
+                **{**_kb_kwargs(), "audio_stack": "oss"},  # type: ignore[arg-type]
+            )
+
+    def test_null_audio_stack_accepted(self) -> None:
+        profile = MixerKBProfile(**{**_kb_kwargs(), "audio_stack": None})  # type: ignore[arg-type]
+        assert profile.audio_stack is None
+
+    def test_unknown_factory_regime_rejected(self) -> None:
+        with pytest.raises(ValueError, match="factory_regime='novel'"):
+            MixerKBProfile(
+                **{**_kb_kwargs(), "factory_regime": "novel"},  # type: ignore[arg-type]
+            )
+
+    def test_match_threshold_below_zero_rejected(self) -> None:
+        with pytest.raises(ValueError, match=r"match_threshold=-0\.1"):
+            MixerKBProfile(**{**_kb_kwargs(), "match_threshold": -0.1})  # type: ignore[arg-type]
+
+    def test_match_threshold_above_one_rejected(self) -> None:
+        with pytest.raises(ValueError, match=r"match_threshold=1\.5"):
+            MixerKBProfile(**{**_kb_kwargs(), "match_threshold": 1.5})  # type: ignore[arg-type]
+
+    def test_empty_factory_signature_rejected(self) -> None:
+        with pytest.raises(ValueError, match="factory_signature must be non-empty"):
+            MixerKBProfile(**{**_kb_kwargs(), "factory_signature": {}})  # type: ignore[arg-type]
+
+    def test_unknown_role_in_signature_rejected(self) -> None:
+        bad_sig = {
+            MixerControlRole.UNKNOWN: FactorySignature(
+                expected_raw_range=(0, 1),
+                expected_fraction_range=None,
+                expected_db_range=None,
+            ),
+        }
+        with pytest.raises(ValueError, match="must not contain"):
+            MixerKBProfile(
+                **{**_kb_kwargs(), "factory_signature": bad_sig},  # type: ignore[arg-type]
+            )
+
+    def test_empty_verified_on_rejected(self) -> None:
+        with pytest.raises(ValueError, match="verified_on must be non-empty"):
+            MixerKBProfile(**{**_kb_kwargs(), "verified_on": ()})  # type: ignore[arg-type]
+
+    def test_empty_contributed_by_rejected(self) -> None:
+        with pytest.raises(ValueError, match="contributed_by must be non-empty"):
+            MixerKBProfile(**{**_kb_kwargs(), "contributed_by": ""})  # type: ignore[arg-type]
+
+    def test_frozen(self) -> None:
+        profile = _good_kb_profile()
+        with pytest.raises(Exception):
+            profile.profile_id = "x"  # type: ignore[misc]
+
+
+def _kb_kwargs() -> dict[str, object]:
+    """Return constructor kwargs for a valid KB profile — tests mutate one at a time."""
+    return {
+        "profile_id": "vaio_vjfe69_sn6180",
+        "profile_version": 1,
+        "schema_version": 1,
+        "codec_id_glob": "14F1:5045",
+        "driver_family": "hda",
+        "system_vendor_glob": "Sony*",
+        "system_product_glob": "VJFE69*",
+        "distro_family": None,
+        "audio_stack": "pipewire",
+        "kernel_major_minor_glob": "6.*",
+        "match_threshold": 0.6,
+        "factory_regime": "attenuation",
+        "factory_signature": {
+            MixerControlRole.CAPTURE_MASTER: FactorySignature(
+                expected_raw_range=None,
+                expected_fraction_range=(0.3, 0.6),
+                expected_db_range=None,
+            ),
+        },
+        "recommended_preset": _good_preset(),
+        "validation_gates": _good_gates(),
+        "verified_on": (_good_verification(),),
+        "contributed_by": "sovyx-core",
+    }
+
+
+class TestMixerValidationMetrics:
+    """Pure-output dataclass — construction smoke + frozen invariant."""
+
+    def test_construct(self) -> None:
+        metrics = MixerValidationMetrics(
+            rms_dbfs=-22.0,
+            peak_dbfs=-4.0,
+            snr_db_vocal_band=18.0,
+            silero_max_prob=0.87,
+            silero_mean_prob=0.42,
+            wake_word_stage2_prob=0.55,
+            measurement_duration_ms=2000,
+        )
+        assert metrics.silero_max_prob == 0.87
+        assert metrics.measurement_duration_ms == 2000
+
+    def test_frozen(self) -> None:
+        metrics = MixerValidationMetrics(
+            rms_dbfs=-22.0,
+            peak_dbfs=-4.0,
+            snr_db_vocal_band=18.0,
+            silero_max_prob=0.87,
+            silero_mean_prob=0.42,
+            wake_word_stage2_prob=0.55,
+            measurement_duration_ms=2000,
+        )
+        with pytest.raises(Exception):
+            metrics.rms_dbfs = 0.0  # type: ignore[misc]
+
+
+class TestMixerSanityResult:
+    """Terminal result record — construction + optional fields."""
+
+    def test_skipped_healthy_shape(self) -> None:
+        result = MixerSanityResult(
+            decision=MixerSanityDecision.SKIPPED_HEALTHY,
+            diagnosis_before=Diagnosis.HEALTHY,
+            diagnosis_after=None,
+            regime="healthy",
+            matched_kb_profile=None,
+            kb_match_score=0.0,
+            user_customization_score=0.0,
+            cards_probed=(0,),
+            controls_modified=(),
+            rollback_snapshot=None,
+            probe_duration_ms=120,
+            apply_duration_ms=None,
+            validation_passed=None,
+            validation_metrics=None,
+        )
+        assert result.decision is MixerSanityDecision.SKIPPED_HEALTHY
+        assert result.rollback_snapshot is None
+        assert result.remediation is None
+        assert result.error is None
+
+    def test_healed_shape_with_metrics(self) -> None:
+        snap = MixerApplySnapshot(
+            card_index=0,
+            reverted_controls=(("Capture", 40),),
+            applied_controls=(("Capture", 80),),
+        )
+        metrics = MixerValidationMetrics(
+            rms_dbfs=-22.0,
+            peak_dbfs=-4.0,
+            snr_db_vocal_band=18.0,
+            silero_max_prob=0.87,
+            silero_mean_prob=0.42,
+            wake_word_stage2_prob=0.55,
+            measurement_duration_ms=2000,
+        )
+        result = MixerSanityResult(
+            decision=MixerSanityDecision.HEALED,
+            diagnosis_before=Diagnosis.MIXER_ZEROED,
+            diagnosis_after=Diagnosis.HEALTHY,
+            regime="attenuation",
+            matched_kb_profile="vaio_vjfe69_sn6180",
+            kb_match_score=0.87,
+            user_customization_score=0.12,
+            cards_probed=(0,),
+            controls_modified=("Capture", "Internal Mic Boost"),
+            rollback_snapshot=snap,
+            probe_duration_ms=150,
+            apply_duration_ms=120,
+            validation_passed=True,
+            validation_metrics=metrics,
+        )
+        assert result.validation_passed is True
+        assert result.matched_kb_profile == "vaio_vjfe69_sn6180"
+        assert result.rollback_snapshot is snap
+
+    def test_error_shape(self) -> None:
+        result = MixerSanityResult(
+            decision=MixerSanityDecision.ERROR,
+            diagnosis_before=Diagnosis.UNKNOWN,
+            diagnosis_after=None,
+            regime="unknown",
+            matched_kb_profile=None,
+            kb_match_score=0.0,
+            user_customization_score=0.0,
+            cards_probed=(),
+            controls_modified=(),
+            rollback_snapshot=None,
+            probe_duration_ms=0,
+            apply_duration_ms=None,
+            validation_passed=None,
+            validation_metrics=None,
+            error="MIXER_SANITY_PROBE_FAILED",
+        )
+        assert result.error == "MIXER_SANITY_PROBE_FAILED"
+
+    def test_frozen(self) -> None:
+        result = MixerSanityResult(
+            decision=MixerSanityDecision.SKIPPED_HEALTHY,
+            diagnosis_before=Diagnosis.HEALTHY,
+            diagnosis_after=None,
+            regime="healthy",
+            matched_kb_profile=None,
+            kb_match_score=0.0,
+            user_customization_score=0.0,
+            cards_probed=(0,),
+            controls_modified=(),
+            rollback_snapshot=None,
+            probe_duration_ms=120,
+            apply_duration_ms=None,
+            validation_passed=None,
+            validation_metrics=None,
+        )
+        with pytest.raises(Exception):
+            result.decision = MixerSanityDecision.ERROR  # type: ignore[misc]
