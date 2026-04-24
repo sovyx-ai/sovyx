@@ -545,9 +545,20 @@ async def check_and_maybe_heal(
         await orchestrator.run()
     except asyncio.CancelledError:
         # Caller cancelled mid-run — attempt rollback, re-raise.
+        # Paranoid-QA HIGH #2: rollback_if_needed MUST NOT swallow a
+        # second cancellation delivered while it's running; see the
+        # helper for its split-handler pattern.
         await orchestrator.rollback_if_needed()
         raise
-    except BaseException as exc:  # noqa: BLE001 — defensive: any unhandled error becomes ERROR
+    except Exception as exc:  # noqa: BLE001 — "Exception" not "BaseException" post-QA
+        # Paranoid-QA CRITICAL #1 / HIGH #1: narrowed from BaseException
+        # so KeyboardInterrupt / SystemExit propagate to the caller.
+        # Also: if the asyncio.CancelledError handler above raises a
+        # SECOND CancelledError during rollback (caller double-cancels
+        # on shutdown), it is an Exception-subclass in 3.8+... no, it
+        # is a BaseException. Python 3.8 moved CancelledError under
+        # BaseException — so Exception catches NEITHER Cancelled nor
+        # KeyboardInterrupt / SystemExit. That's what we want here.
         logger.exception(
             "mixer_sanity_unexpected_error",
             endpoint_guid=endpoint.endpoint_guid,
@@ -558,7 +569,19 @@ async def check_and_maybe_heal(
         ctx.error_token = "MIXER_SANITY_UNEXPECTED_ERROR"
 
     result = orchestrator.build_result()
-    ctx.telemetry.record_mixer_sanity_outcome(
+    # Paranoid-QA CRITICAL #9: resolve telemetry late — the setup may
+    # carry None (the bootstrap ran before telemetry was installed);
+    # fall back to the module-level recorder at record-time.
+    telemetry = ctx.telemetry
+    if isinstance(telemetry, _NoopTelemetry):
+        from sovyx.voice.health._telemetry import (  # noqa: PLC0415 — late-bound singleton lookup
+            get_telemetry,
+        )
+
+        late = get_telemetry()
+        if late is not None:
+            telemetry = late
+    telemetry.record_mixer_sanity_outcome(
         decision=result.decision.value,
         matched_profile=result.matched_kb_profile,
         score=result.kb_match_score,
@@ -590,7 +613,21 @@ class _SanityOrchestrator:
                     endpoint_guid=self._ctx.endpoint.endpoint_guid,
                     step=step,
                 )
-                self._ctx.decision = MixerSanityDecision.ERROR
+                # Paranoid-QA CRITICAL #6/#7: if budget trips AFTER
+                # apply has committed (apply_snapshot set) but BEFORE
+                # validate/persist finished, the terminal record would
+                # otherwise carry ``diagnosis_after=HEALTHY`` +
+                # ``validation_passed=True`` set by the earlier step
+                # while ``decision=ERROR`` — a self-contradictory
+                # shape. Normalise: when we're ROLLING BACK an
+                # apply-in-flight, surface it as ROLLED_BACK;
+                # otherwise ERROR.
+                if self._ctx.apply_snapshot is not None:
+                    self._ctx.decision = MixerSanityDecision.ROLLED_BACK
+                    self._ctx.diagnosis_after = self._ctx.diagnosis_before
+                    self._ctx.validation_passed = False
+                else:
+                    self._ctx.decision = MixerSanityDecision.ERROR
                 self._ctx.error_token = "MIXER_SANITY_BUDGET_EXCEEDED"
                 await self.rollback_if_needed()
                 return
@@ -645,8 +682,16 @@ class _SanityOrchestrator:
     async def rollback_if_needed(self) -> None:
         """Invoke ``mixer_restore_fn`` if we have an apply snapshot.
 
-        Best-effort — rollback failures are logged and swallowed so
-        the caller's exception semantics are preserved.
+        Best-effort for ``Exception`` subclasses only — rollback
+        failures are logged and swallowed so the caller's exception
+        semantics are preserved.
+
+        Paranoid-QA HIGH #2: ``CancelledError`` (BaseException in
+        Python 3.8+) IS re-raised. Earlier implementations used
+        ``except BaseException`` which silently swallowed the
+        cancellation delivered while restore was running mid-await,
+        leaving the caller's shutdown path hanging on a coroutine
+        that never propagated the cancel.
         """
         if self._ctx.apply_snapshot is None:
             return
@@ -655,7 +700,13 @@ class _SanityOrchestrator:
                 self._ctx.apply_snapshot,
                 tuning=self._ctx.tuning,
             )
-        except BaseException as exc:  # noqa: BLE001 — rollback must never propagate
+        except asyncio.CancelledError:
+            logger.warning(
+                "mixer_sanity_rollback_cancelled_mid_restore",
+                endpoint_guid=self._ctx.endpoint.endpoint_guid,
+            )
+            raise
+        except Exception as exc:  # noqa: BLE001 — Exception-only; BaseException propagates
             logger.warning(
                 "mixer_sanity_rollback_failed",
                 endpoint_guid=self._ctx.endpoint.endpoint_guid,

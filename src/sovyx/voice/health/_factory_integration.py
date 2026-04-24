@@ -445,6 +445,11 @@ async def run_boot_cascade_for_candidates(
             quarantine=quarantine,
             kernel_invalidated_failover_enabled=tuning.kernel_invalidated_failover_enabled,
             mixer_sanity=mixer_sanity,
+            # Paranoid-QA CRITICAL #8: thread the operator's tuning
+            # through so SOVYX_TUNING__VOICE__* env overrides reach
+            # the L2.5 budget / match threshold / customization
+            # thresholds / subprocess timeout.
+            tuning=tuning,
         )
     except Exception:  # noqa: BLE001 — cascade crash must never block the pipeline (ADR §5.11)
         logger.error(

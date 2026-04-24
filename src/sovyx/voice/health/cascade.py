@@ -613,6 +613,7 @@ async def run_cascade(
     quarantine: EndpointQuarantine | None = None,
     kernel_invalidated_failover_enabled: bool | None = None,
     mixer_sanity: MixerSanitySetup | None = None,
+    tuning: _VoiceTuning | None = None,
 ) -> CascadeResult:
     """Run the L2 cascade for ``endpoint_guid`` and return the outcome.
 
@@ -715,6 +716,7 @@ async def run_cascade(
             device_index=device_index,
             mode=mode,
             mixer_sanity=mixer_sanity,
+            tuning=tuning,
             platform_key=platform_key,
             device_friendly_name=device_friendly_name,
             device_interface_name=device_interface_name,
@@ -756,6 +758,7 @@ async def _run_cascade_locked(
     clock: Callable[[], float],
     quarantine: EndpointQuarantine | None,
     mixer_sanity: MixerSanitySetup | None,
+    tuning: _VoiceTuning | None = None,
 ) -> CascadeResult:
     deadline = clock() + total_budget_s
     attempts: list[ProbeResult] = []
@@ -1041,8 +1044,13 @@ async def _run_cascade_locked(
                 device_friendly_name=device_friendly_name,
                 combo_store=combo_store,
                 capture_overrides=capture_overrides,
+                tuning=tuning,
             )
-        except BaseException as exc:  # noqa: BLE001 — cascade must continue
+        except asyncio.CancelledError:
+            # Paranoid-QA CRITICAL #1: cancellation must propagate —
+            # the cascade loop may want to short-circuit.
+            raise
+        except Exception as exc:  # noqa: BLE001 — cascade must continue on non-cancel error
             logger.warning(
                 "voice_cascade_mixer_sanity_helper_raised",
                 endpoint=endpoint_guid,
@@ -1226,6 +1234,7 @@ async def run_cascade_for_candidates(
     quarantine: EndpointQuarantine | None = None,
     kernel_invalidated_failover_enabled: bool | None = None,
     mixer_sanity: MixerSanitySetup | None = None,
+    tuning: _VoiceTuning | None = None,
 ) -> CascadeResult:
     """Run the cascade against an ordered set of capture candidates.
 
@@ -1334,8 +1343,12 @@ async def run_cascade_for_candidates(
                 device_friendly_name=candidates[0].friendly_name,
                 combo_store=combo_store,
                 capture_overrides=capture_overrides,
+                tuning=tuning,
             )
-        except BaseException as exc:  # noqa: BLE001 — cascade must continue
+        except asyncio.CancelledError:
+            # Paranoid-QA CRITICAL #1: cancellation propagates.
+            raise
+        except Exception as exc:  # noqa: BLE001 — cascade must continue
             logger.warning(
                 "voice_cascade_candidate_set_mixer_sanity_raised",
                 error_type=type(exc).__name__,
@@ -1551,6 +1564,7 @@ async def _run_mixer_sanity(
     device_friendly_name: str,
     combo_store: ComboStore | None,
     capture_overrides: CaptureOverrides | None,
+    tuning: _VoiceTuning | None = None,
 ) -> None:
     """Invoke L2.5 ``check_and_maybe_heal`` for this endpoint.
 
@@ -1587,6 +1601,11 @@ async def _run_mixer_sanity(
         preference_rank=0,
         endpoint_guid=endpoint_guid,
     )
+    # Paranoid-QA CRITICAL #8: use the caller's tuning when
+    # provided — discarding it here would silently ignore every
+    # SOVYX_TUNING__VOICE__LINUX_MIXER_SANITY_* env override and
+    # violate anti-pattern #17 ("Hardcoded tuning constants").
+    effective_tuning = tuning if tuning is not None else _VoiceTuning()
     try:
         result = await check_and_maybe_heal(
             endpoint,
@@ -1594,7 +1613,7 @@ async def _run_mixer_sanity(
             kb_lookup=mixer_sanity.kb_lookup,
             role_resolver=mixer_sanity.role_resolver,
             validation_probe_fn=mixer_sanity.validation_probe_fn,
-            tuning=_VoiceTuning(),
+            tuning=effective_tuning,
             mixer_probe_fn=mixer_sanity.mixer_probe_fn,
             mixer_apply_fn=mixer_sanity.mixer_apply_fn,
             mixer_restore_fn=mixer_sanity.mixer_restore_fn,
@@ -1603,7 +1622,12 @@ async def _run_mixer_sanity(
             combo_store=combo_store,
             capture_overrides=capture_overrides,
         )
-    except BaseException as exc:  # noqa: BLE001 — cascade must not be aborted by L2.5
+    except asyncio.CancelledError:
+        # Paranoid-QA CRITICAL #1: cancel propagates past the cascade
+        # integration layer — the cascade itself decides whether to
+        # swallow or re-raise.
+        raise
+    except Exception as exc:  # noqa: BLE001 — Exception-only post-QA
         logger.warning(
             "voice_cascade_mixer_sanity_unexpected",
             endpoint=endpoint_guid,
