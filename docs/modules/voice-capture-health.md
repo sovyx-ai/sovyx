@@ -22,6 +22,7 @@ concern and exposes a small, dependency-injected surface.
 | L0    | `contract`                                            | Vocabulary — `Diagnosis`, `ProbeMode`, `Combo`, `ProbeResult`, `RemediationHint`, etc. |
 | L1    | `combo_store`, `capture_overrides`                    | Persistent JSON memo of (endpoint × winning combo) + user-pinned combos.               |
 | L2    | `cascade`                                             | Platform cascade tables + lifecycle lock + wall-clock budget.                          |
+| L2.5  | `_mixer_sanity`, `_mixer_roles`, `_mixer_kb`, `_hardware_detector`, `_linux_mixer_apply` | **Linux-only.** Bidirectional ALSA mixer healing — KB-matched preset apply with validation + rollback + alsactl persist. |
 | L3    | `probe`                                               | Single probe entry point with cold / warm modes.                                       |
 | L4    | `watchdog` + `_hotplug*`, `_power*`, `_audio_service*`| Runtime resilience — backoff re-probes, hot-plug listeners, power events, service crashes. |
 | L5    | `preflight`                                           | Pre-stream validation steps (`check_portaudio`, `check_wake_word_smoke`, ...).         |
@@ -48,6 +49,7 @@ combos tried in priority order until a probe returns
 ```text
 1. CaptureOverrides (user-pinned)        → source = "pinned"
 2. ComboStore fast path (last good)      → source = "store"
+2.5. L2.5 mixer sanity (Linux, opt-in)   → heals ALSA mixer in-place
 3. Platform cascade table walk           → source = "cascade"
 ```
 
@@ -55,19 +57,30 @@ The lifecycle lock (`LRULockDict`, capacity 64) ensures only one
 cascade per endpoint runs at a time — eliminating hot-plug races and
 doctor-vs-daemon conflicts.
 
+L2.5 is opt-in via `run_cascade(mixer_sanity=MixerSanitySetup(...))`
+and runs only when `platform_key == "linux"`. It heals the ALSA
+mixer state (not the PortAudio combo) so the subsequent platform
+walk has a chance against a known-good baseline. See the
+[Mixer sanity (L2.5)](#mixer-sanity-l25) section.
+
 ### Diagnosis ladder
 
 ```text
-HEALTHY         → frame stream alive + RMS > -55 dB + VAD probability > 0.5
-LOW_SIGNAL      → frames alive but RMS in [-70, -55] dB
-NO_SIGNAL       → frames alive but RMS < -70 dB (or no callbacks at all)
-VAD_INSENSITIVE → healthy RMS but VAD probability in (0.05, 0.5]
-APO_DEGRADED    → healthy RMS but VAD probability ≤ 0.05 (Voice Clarity etc.)
-DRIVER_ERROR    → PortAudio refused the combo
-DEVICE_BUSY     → exclusive contention with another process
-HOT_UNPLUGGED   → endpoint vanished mid-attempt
-SELF_FEEDBACK   → wake-word fired during TTS playback (caught by L4.4.6)
-PERMISSION_DENIED → OS blocked microphone access
+HEALTHY               → frame stream alive + RMS > -55 dB + VAD probability > 0.5
+LOW_SIGNAL            → frames alive but RMS in [-70, -55] dB
+NO_SIGNAL             → frames alive but RMS < -70 dB (or no callbacks at all)
+VAD_INSENSITIVE       → healthy RMS but VAD probability in (0.05, 0.5]
+APO_DEGRADED          → healthy RMS but VAD probability ≤ 0.05 (Voice Clarity etc.)
+DRIVER_ERROR          → PortAudio refused the combo
+DEVICE_BUSY           → exclusive contention with another process
+HOT_UNPLUGGED         → endpoint vanished mid-attempt
+SELF_FEEDBACK         → wake-word fired during TTS playback (caught by L4.4.6)
+PERMISSION_DENIED     → OS blocked microphone access
+MIXER_ZEROED          → L2.5: attenuation regime (Capture attenuated + boost at zero)
+MIXER_SATURATED       → L2.5: saturation regime (boost chain clipping internally)
+MIXER_UNKNOWN_PATTERN → L2.5: out-of-range mixer state with no KB match
+MIXER_CUSTOMIZED      → L2.5: intentional user tuning detected; no action taken
+MIXER_CALIBRATION_NEEDED → L2.5: no KB, no customization — wizard recommended
 ```
 
 The diagnosis drives `RemediationHint` text shown in `sovyx doctor voice`
@@ -130,6 +143,159 @@ the raw mic signal upstream of PortAudio.
 CoreAudio has a much smaller APO surface than Windows / Linux, so the
 cascade is correspondingly slim. The dominant macOS-specific failure
 mode is the Bluetooth HFP/SCO switch — see the HFP guard below.
+
+## Mixer sanity (L2.5)
+
+A Linux-only healing layer spec'd in
+[`ADR-voice-mixer-sanity-l2.5-bidirectional.md`](../../docs-internal/ADR-voice-mixer-sanity-l2.5-bidirectional.md).
+Fixes the **bidirectional** ALSA mixer-failure class that makes voice
+capture unusable on some laptops out-of-the-box:
+
+| Regime | Example | Symptom | Cure |
+|---|---|---|---|
+| **Saturation** | HDA Realtek + Internal Mic Boost at max | RMS healthy but Silero VAD max_prob < 0.05 (APO-like internal clipping) | L2.5 resets via KB preset or generic fractions |
+| **Attenuation** | VAIO VJFE69 + Conexant SN6180 (Capture at -34 dB + boost at 0) | Voice arrives at -60 dBFS — Silero trained on -25 to -15 dBFS, produces max_prob < 0.01 | L2.5 applies KB preset bringing Capture to 1.0 fraction |
+
+### State machine (7 steps)
+
+```text
+probe → classify → detect_customization → apply → validate → (persist | rollback) → done
+  ↓       ↓              ↓                    ↓          ↓             ↓
+amixer   KB match    7-signal user     apply_mixer_   Silero +     alsactl store
+ scan    + regime    heuristic (A..G)  preset +       SNR + WW     (best-effort)
+                     respects tuning   LIFO rollback  gates
+```
+
+Hard wall-clock budget: 5 s (tunable via
+`SOVYX_TUNING__VOICE__LINUX_MIXER_SANITY_BUDGET_S`).
+
+### 7-signal user-customization heuristic
+
+L2.5 respects intentional user tuning via a weighted score (sums
+to 1.0):
+
+| Signal | Weight | Description |
+|---|---|---|
+| A | 0.30 | Current mixer deviates from matched KB `factory_signature` (continuous: scales with 1 - factory_score). |
+| B | 0.15 | `~/.asoundrc` exists. |
+| C | 0.15 | `~/.config/pipewire/pipewire.conf.d/*.conf` present. |
+| D | 0.15 | `/var/lib/alsa/asound.state` mtime within last 7 days. |
+| E | 0.10 | `~/.config/wireplumber/wireplumber.conf.d/*.conf` present. |
+| F | 0.10 | `ComboStore` has entry for endpoint AND factory_signature_score < 0.5. |
+| G | 0.05 | `CaptureOverrides` has pinned combo for endpoint. |
+
+Three branches (tunable via
+`linux_mixer_user_customization_threshold_{apply,skip}`):
+
+* `score < 0.5` → auto-apply KB preset
+* `0.5 ≤ score ≤ 0.75` → defer (dashboard offers choice card)
+* `score > 0.75` → skip silently; user tuning is sacred
+
+### KB profile matching
+
+Profiles live under
+`src/sovyx/voice/health/_mixer_kb/profiles/*.yaml`
+(F1 ships empty; F1.H populates). Each profile declares:
+
+* Match criteria — `codec_id_glob` (required), driver_family,
+  system_vendor_glob, system_product_glob, audio_stack,
+  kernel_major_minor_glob.
+* `factory_signature` — per-role expected raw/fraction/dB ranges
+  describing what the factory-bad state looks like on this hardware.
+* `recommended_preset` — what to apply on match
+  (raw / fraction / dB values per role).
+* `validation_gates` — RMS + peak + SNR + Silero + OpenWakeWord
+  thresholds every post-apply probe must satisfy.
+* `verified_on` — HIL attestations (required for merge).
+
+Scoring: `codec_id` is a hard gate (mismatch → score 0). Remaining
+fields contribute weighted to a 0..1 composite. The highest-scoring
+profile above `match_threshold` (default 0.6) wins; a 2nd-place
+score within 0.05 → `DEFERRED_AMBIGUOUS` (dashboard card).
+
+### Role-based control discovery
+
+Control names vary across codec families (HDA: `"Capture"`,
+`"Internal Mic Boost"`; SOF: `"PGA1.0 1 Master Capture Volume"`;
+USB-audio: `"Mic"`). L2.5 maps raw names to a canonical
+`MixerControlRole` via 3-layer lookup:
+
+1. Per-codec override (e.g., Conexant SN6180 quirks).
+2. Driver-family exact match (F1: HDA only).
+3. Substring fallback (superset of
+   `_linux_mixer_probe._BOOST_CONTROL_PATTERNS`).
+
+SOF / USB-audio / BT role tables land in F2.
+
+### HardwareContext detection
+
+`_hardware_detector.detect_hardware_context()` populates the
+match inputs read-only + without subprocess:
+
+| Field | Source |
+|---|---|
+| codec_id | `/proc/asound/card*/codec#*` → `Vendor Id: 0x…` → `VVVV:DDDD` |
+| driver_family | `/proc/asound` shape (codec files → HDA; card id containing USB → usb-audio) |
+| system_vendor | `/sys/class/dmi/id/sys_vendor` |
+| system_product | `/sys/class/dmi/id/product_name` |
+| distro | `/etc/os-release` → `"<id>-<version_id>"` |
+| audio_stack | `$XDG_RUNTIME_DIR/pipewire-0` vs `pulse/native` vs `/proc/asound/pcm` |
+| kernel | `platform.uname().release` |
+
+Every field is optional — partial detection is fine; KB scoring
+handles None correctly. No `dmidecode` (needs root, violates
+invariant I7). No `lspci` subprocess.
+
+### runtime_pm (systemd + udev)
+
+The mixer state fix is orthogonal to runtime_pm — both are
+needed on affected hardware. L2.5 handles runtime_pm via a
+systemd oneshot + udev rule shipped under `packaging/`:
+
+* `systemd/sovyx-audio-runtime-pm.service` — oneshot at boot
+  writing `on` to every audio-class PCI device's
+  `power/control`. Tight sandboxing: `NoNewPrivileges` + empty
+  `CapabilityBoundingSet` + `ReadWritePaths` narrowed to
+  `/sys/bus/pci/devices`.
+* `udev/60-sovyx-audio-power.rules` — re-asserts `on` on
+  hotplug (dock / USB-C) and codec driver rebind.
+
+The daemon itself NEVER writes to `/sys` at runtime (invariant
+I7). Operator escape hatch: kernel command line
+`sovyx.audio.no_pm_override` disables the systemd unit globally.
+
+See [`packaging/README.md`](../../packaging/README.md) for
+distro-packaging install paths.
+
+### Opt-in from the cascade caller
+
+L2.5 does NOT fire by default — callers opt in by constructing a
+`MixerSanitySetup` and passing it to `run_cascade(mixer_sanity=…)`:
+
+```python
+from sovyx.voice.health import (
+    MixerControlRoleResolver, MixerKBLookup, MixerSanitySetup,
+    detect_hardware_context, run_cascade,
+)
+
+resolver = MixerControlRoleResolver()
+kb = MixerKBLookup.load_shipped(resolver=resolver)
+hw = await detect_hardware_context()
+
+setup = MixerSanitySetup(
+    hw=hw,
+    kb_lookup=kb,
+    role_resolver=resolver,
+    validation_probe_fn=my_probe_fn,  # warm-probe + SNR + WW stage-2
+)
+result = await run_cascade(
+    endpoint_guid="...", device_index=0, mode=ProbeMode.COLD,
+    platform_key="linux", mixer_sanity=setup, ...
+)
+```
+
+`mixer_sanity=None` (default) → zero behaviour change for every
+pre-L2.5 caller.
 
 ## Capture-APO detection
 

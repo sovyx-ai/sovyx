@@ -6,6 +6,90 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Added
+
+- **L2.5 Voice Mixer Sanity — bidirectional ALSA mixer healing on
+  Linux.** A new opt-in layer inside the Voice Capture Health Lifecycle
+  that sits between the ComboStore fast-path and the platform cascade
+  walk. Detects both saturation (pre-existing concern covered by
+  `LinuxALSAMixerResetBypass`) AND attenuation (newly-uncovered failure
+  class — pilot: Sony VAIO VJFE69F11X with Conexant SN6180 where
+  factory defaults ship `Capture = 40/80 = -34 dB` + `Internal Mic
+  Boost = 0`, putting voice at -60 dBFS vs Silero VAD's training range
+  of -25 to -15 dBFS). Surface:
+  * `check_and_maybe_heal(endpoint, hw, *, kb_lookup, role_resolver,
+    validation_probe_fn, tuning, ...)` — 7-step state machine: probe
+    → classify → detect_customization → apply → validate → (persist
+    | rollback) → done. Hard 5s wall-clock budget; full LIFO rollback
+    on any validation gate failure; persistence via `alsactl store`.
+  * `MixerKBLookup` — YAML-loaded hardware-profile catalogue with
+    weighted fnmatch scoring (codec_id hard gate; driver_family +
+    system_vendor + system_product + audio_stack + kernel +
+    factory_signature soft signals). Ambiguous match (top-2 tie
+    within 0.05) → defer for dashboard choice card.
+  * `MixerControlRoleResolver` — 3-layer discovery: per-codec
+    override (seeded with Conexant SN6180) → HDA driver-family
+    table → substring fallback (superset of existing boost-control
+    patterns).
+  * `detect_user_customization` — 7-signal heuristic (weights sum
+    to 1.0): mixer-vs-factory delta, `~/.asoundrc`, PipeWire/
+    WirePlumber user confs, recent `asound.state` mtime, ComboStore
+    drift, `capture_overrides` pins. Three branches (tunable
+    thresholds): auto-apply / defer / skip-silently. User tuning
+    is sacred.
+  * `detect_hardware_context` — read-only hardware identity from
+    `/proc/asound/card*/codec#*` + `/sys/class/dmi/id/*` +
+    `/etc/os-release` + XDG runtime sockets. No subprocess, no
+    `dmidecode`, no root (invariant I7).
+  * `apply_mixer_preset` — KB-driven preset applier with raw /
+    fraction / dB value dispatch, HDA auto-mute enum handling, and
+    LIFO rollback. dB variant raises in F1 (requires richer probe
+    data; F2 extends).
+  * `run_cascade(mixer_sanity=...)` — opt-in kwarg; `None` (default)
+    preserves byte-for-byte the pre-L2.5 behaviour for every existing
+    caller. When set AND `platform_key == "linux"`, the orchestrator
+    runs between ComboStore fast-path and platform walk.
+  * `check_linux_mixer_sanity` preflight now detects attenuation in
+    addition to saturation. Surfaces the distinct
+    `MIXER_CALIBRATION_NEEDED` regime on hardware with both low
+    Capture AND zeroed Internal Mic Boost.
+  * `packaging/systemd/sovyx-audio-runtime-pm.service` +
+    `audio-runtime-pm-setup` POSIX sh + `packaging/udev/60-sovyx-
+    audio-power.rules`. Tight sandboxing
+    (`NoNewPrivileges` + empty `CapabilityBoundingSet` +
+    `ProtectSystem=strict`). The daemon never writes to `/sys` at
+    runtime (invariant I7). Operator escape hatch: kernel cmdline
+    `sovyx.audio.no_pm_override`.
+  * New `Diagnosis` values — `MIXER_ZEROED`, `MIXER_SATURATED`,
+    `MIXER_UNKNOWN_PATTERN`, `MIXER_CUSTOMIZED`, `MIXER_CALIBRATION_NEEDED`.
+  * New tuning knobs under `VoiceTuningConfig`:
+    `linux_mixer_user_customization_threshold_apply` (0.5),
+    `..._skip` (0.75), `linux_mixer_sanity_kb_match_threshold`
+    (0.6), `linux_mixer_sanity_budget_s` (5.0). Override via
+    `SOVYX_TUNING__VOICE__*` env.
+  * See
+    [`docs/modules/voice-capture-health.md`](docs/modules/voice-capture-health.md)
+    § Mixer sanity (L2.5) for full architecture + KB contribution
+    workflow + CLI usage.
+
+F1 ships empty `_mixer_kb/profiles/` — production KB profiles
+(pilot VAIO + 5 reference HDA codecs) land in F1.H alongside HIL
+validation fixtures. F1.I ships the dashboard Mixer Health card +
+`sovyx doctor voice --mixer-preset` CLI flags. F2 extends role
+tables to SOF (Intel Meteor/Lunar Lake) + USB-audio + BT-HFP,
+adds user-contributed KB loader, and lifts the dB-preset
+limitation via multi-sample probe.
+
+### Fixed
+
+- **Timing-flake in `test_scheduler_survives_cycle_failure`**
+  (`tests/unit/brain/test_consolidation.py`). Fixed
+  `asyncio.sleep(0.3)` window replaced by event-based polling with
+  a 5s deadline — the scheduler coroutine sometimes got starved on
+  CI runners under load, causing 1 cycle instead of the expected
+  ≥2. Same fix applied to the sibling
+  `test_scheduler_runs_cycle` as preventive hardening.
+
 ## [0.16.13] — 2026-04-18
 
 ### Fixed
