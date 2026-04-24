@@ -45,14 +45,12 @@ import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from sovyx.observability.logging import get_logger
 from sovyx.voice.health.contract import MixerApplySnapshot
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
-
     from sovyx.engine.config import VoiceTuningConfig
 
 
@@ -73,13 +71,23 @@ _WAL_SCHEMA_VERSION = 1
 delete the stale WAL."""
 
 
-RecoveryRestoreFn = "Callable[[MixerApplySnapshot, VoiceTuningConfig], Awaitable[None]]"
-"""Signature alias for the injected rollback callable.
+class RestoreSnapshotFn(Protocol):
+    """Callable shape for the injected rollback function.
 
-Matches :func:`sovyx.voice.health._linux_mixer_apply.restore_mixer_snapshot`.
-Injected (rather than imported directly) so the recovery path is
-testable without touching real ALSA.
-"""
+    Expressed as a ``Protocol`` (not a ``Callable[...]`` alias)
+    because :func:`sovyx.voice.health._linux_mixer_apply.restore_mixer_snapshot`
+    takes ``tuning`` as a KEYWORD-only argument. ``Callable[[X, Y],
+    ...]`` types are always positional; mypy-on-Linux correctly
+    rejected that form when a keyword-only callable was passed in.
+    A Protocol lets us describe the exact keyword-only signature.
+    """
+
+    async def __call__(
+        self,
+        snapshot: MixerApplySnapshot,
+        *,
+        tuning: VoiceTuningConfig,
+    ) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -283,7 +291,7 @@ def clear_wal(path: Path) -> None:
 async def recover_if_present(
     *,
     path: Path,
-    restore_fn: Callable[[MixerApplySnapshot, VoiceTuningConfig], Awaitable[None]],
+    restore_fn: RestoreSnapshotFn,
     tuning: VoiceTuningConfig,
 ) -> bool:
     """If a WAL exists at ``path``, replay it and delete the file.
@@ -320,7 +328,7 @@ async def recover_if_present(
     )
     snapshot = wal.to_apply_snapshot()
     try:
-        await restore_fn(snapshot, tuning)
+        await restore_fn(snapshot, tuning=tuning)
     except Exception as exc:  # noqa: BLE001 — recovery is best-effort
         logger.warning(
             "mixer_half_heal_recovery_restore_failed",
