@@ -14,6 +14,8 @@ from sovyx.dashboard.routes import voice_kb as voice_kb_routes
 from sovyx.dashboard.server import create_app
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from fastapi import FastAPI
 
 
@@ -95,42 +97,34 @@ def shipped_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def app(shipped_dir: Path) -> FastAPI:
+def app(shipped_dir: Path) -> Iterator[FastAPI]:
     """App with the shipped-profiles directory pointed at a temp dir.
 
-    We patch both the route module's lazy resolver and the user-dir
-    derivation so the tests don't consult the real ``~/.sovyx``.
+    Patches apply via ``with``/``yield`` so they automatically unwind
+    on fixture teardown — even when a test uses ``app`` without
+    going through the ``client`` fixture. A prior version of this
+    fixture started patches with ``.start()`` and wired cleanup to
+    ``client``'s teardown only; ``test_missing_token_rejected`` used
+    ``app`` alone, leaking the ``Path.home()`` patch into every
+    subsequent test (breaking ``tests/unit/cli/test_main.py`` and
+    ``tests/unit/upgrade/test_doctor.py``).
     """
-    # Patch the shipped dir symbol used inside the route.
-    patcher = patch.object(voice_kb_routes, "_SHIPPED_PROFILES_DIR", shipped_dir)
-    patcher.start()
-
-    # Point Home() at a tmp location so no real user pool leaks in.
-    home_patch = patch.object(
-        Path,
-        "home",
-        staticmethod(lambda: shipped_dir.parent / "_no_user_home"),
-    )
-    home_patch.start()
-
-    instance = create_app(token=_TOKEN)
-
-    def _cleanup() -> None:
-        patcher.stop()
-        home_patch.stop()
-
-    instance.state._kb_test_cleanup = _cleanup  # type: ignore[attr-defined]
-    return instance
+    with (
+        patch.object(voice_kb_routes, "_SHIPPED_PROFILES_DIR", shipped_dir),
+        patch.object(
+            Path,
+            "home",
+            staticmethod(lambda: shipped_dir.parent / "_no_user_home"),
+        ),
+    ):
+        yield create_app(token=_TOKEN)
 
 
 @pytest.fixture
-def client(app: FastAPI) -> TestClient:
+def client(app: FastAPI) -> Iterator[TestClient]:
     headers = {"Authorization": f"Bearer {_TOKEN}"}
     with TestClient(app, headers=headers) as c:
         yield c
-    cleanup = getattr(app.state, "_kb_test_cleanup", None)
-    if cleanup is not None:
-        cleanup()
 
 
 # ---------------------------------------------------------------------------
