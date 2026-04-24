@@ -1,0 +1,34 @@
+# Sovyx — keep PCI audio-class devices at runtime_pm=on across
+# hotplug (dock attach/detach), sleep/wake, and codec driver reload.
+# Narrow target: ACTION add|change on SUBSYSTEM=sound, audio-class.
+#
+# Why this rule exists: the systemd oneshot fires only at boot. When
+# the user docks/undocks a laptop, hot-swaps a USB-C hub that exposes
+# an HDA audio device, or the kernel rebinds the codec driver (e.g.
+# after a sleep/wake cycle), the child PCI device's power/control
+# reverts to the kernel default ("auto"). Without re-asserting "on"
+# on each such event, the pilot-class attenuation symptom reappears.
+#
+# The shell fragment is inline rather than invoking an external
+# binary because udev rules are evaluated with very narrow PATH
+# semantics and we want zero sudo/polkit exposure here. /bin/sh is
+# available on every distro that ships systemd.
+#
+# %S%p expands to the absolute sysfs path of the event's device, so
+# "%S%p/../power/control" is the device-scoped power knob — no
+# enumeration loop needed. test -w guards against kernels that omit
+# the file for devices without runtime_pm support.
+#
+# See ADR-voice-mixer-sanity-l2.5-bidirectional §H.2 and V2 Master
+# Plan Part H.
+
+ACTION=="change", SUBSYSTEM=="sound", \
+    ATTRS{class}=="0x040300", \
+    RUN+="/bin/sh -c 'test -w %S%p/../power/control && echo on > %S%p/../power/control'"
+
+# Re-assert on add (new codec driver bind) so a runtime driver reload
+# (e.g. modprobe -r snd_hda_intel && modprobe snd_hda_intel) restores
+# our preferred state without a reboot.
+ACTION=="add", SUBSYSTEM=="sound", \
+    ATTRS{class}=="0x040300", \
+    RUN+="/bin/sh -c 'test -w %S%p/../power/control && echo on > %S%p/../power/control'"

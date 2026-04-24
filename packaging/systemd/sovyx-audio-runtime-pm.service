@@ -1,0 +1,57 @@
+[Unit]
+# Sovyx — disable runtime power management for audio-class PCI devices.
+#
+# Purpose: keep HDA / AC'97 / sound-class codecs in D0 across boot so
+# subsequent capture opens never hit the ~500 ms D3→D0 wake that makes
+# the first 40–60 ms of a phrase trickle out as silence or thermal
+# noise on pilot hardware (SVX-VOICE-LINUX-VJFE69-20260423). This is
+# the runtime_pm half of the L2.5 mixer-sanity story — the orchestrator
+# handles the ALSA mixer state; this unit handles the PCI runtime_pm
+# state so capture wakes are synchronous.
+#
+# Invariant I7 (no daemon-time privilege escalation): the daemon
+# NEVER writes to /sys/bus/pci/**/power/control at runtime. All writes
+# happen at boot + on udev hotplug via the 60-sovyx-audio-power rule.
+#
+# See ADR-voice-mixer-sanity-l2.5-bidirectional §H.1 and V2 Master
+# Plan Part H for the full derivation.
+
+Description=Sovyx — disable runtime power management for HDA audio codecs
+Documentation=man:sovyx(1) https://sovyx.dev/docs/voice-capture-health
+After=systemd-udevd.service sound.target
+Before=pulseaudio.service pipewire.service
+# Kernel-command-line escape hatch for operators who want to
+# explicitly opt out (rare — e.g. battery-critical embedded Linux).
+ConditionKernelCommandLine=!sovyx.audio.no_pm_override
+ConditionPathExists=/sys/class/sound
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/sovyx/audio-runtime-pm-setup
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+# Capability-bounded root via systemd; the unit runs as root only to
+# write /sys/bus/pci/**/power/control, which is root-owned 0644
+# everywhere. NoNewPrivileges + a denial-of-everything-else policy
+# caps the blast radius even if the helper is ever compromised.
+User=root
+Group=root
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/sys/bus/pci/devices
+PrivateTmp=yes
+PrivateDevices=no
+ProtectHostname=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

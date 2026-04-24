@@ -1,0 +1,69 @@
+#!/bin/sh
+# sovyx-audio-runtime-pm-setup — enumerate PCI sound-class devices and
+# write "on" to their power/control files so runtime_pm doesn't put
+# the codec into D3 after a few hundred ms of silence.
+#
+# Invoked by sovyx-audio-runtime-pm.service at boot (oneshot) and by
+# 60-sovyx-audio-power.rules on udev add/change. Idempotent — safe to
+# run multiple times; the script is a no-op when every codec is
+# already at "on".
+#
+# POSIX sh only (no bashisms) so BusyBox + Alpine + Dash + Bash all
+# work. Total: ~40 LOC including comments.
+#
+# Exit code is always 0 — a missing /sys entry is not a failure
+# condition. Failure to write a specific power/control file is logged
+# via stderr (captured by journald) and the next device is attempted.
+# This keeps the systemd unit reliable even on containers / VMs
+# where /sys/bus/pci might be partially masked.
+#
+# See ADR-voice-mixer-sanity-l2.5-bidirectional §H.1 and V2 Master
+# Plan Part H for derivation + class-code table.
+
+set -eu
+
+LOG_PREFIX="sovyx-audio-runtime-pm"
+
+# /sys/bus/pci/devices/*/class encodes the PCI class code as a 32-bit
+# hex string of the form 0xCCSSPP (class, subclass, programming iface).
+# 0x0403xx is the "Audio device" class — covers HDA, AC'97, USB-class
+# audio bridges, and a handful of FireWire audio devices. We match
+# the top 4 hex digits (0x0403) so subclass variants don't drop out.
+for class_file in /sys/bus/pci/devices/*/class; do
+    # Guard against an empty glob (host has no PCI devices at all —
+    # exotic but not impossible on some stripped kernels).
+    [ -e "$class_file" ] || continue
+
+    device_dir=$(dirname "$class_file")
+    # Read may fail transiently (e.g. device detach racing enumeration);
+    # skip gracefully rather than aborting the loop.
+    if ! class_value=$(cat "$class_file" 2>/dev/null); then
+        continue
+    fi
+
+    case "$class_value" in
+        0x0403*)
+            power_ctl="$device_dir/power/control"
+            # Some platforms / kernels omit the power/control file for
+            # devices without runtime_pm support — skip silently.
+            [ -w "$power_ctl" ] || continue
+
+            if ! current=$(cat "$power_ctl" 2>/dev/null); then
+                continue
+            fi
+
+            if [ "$current" != "on" ]; then
+                printf "%s: setting %s = on (was %s)\n" \
+                    "$LOG_PREFIX" "$power_ctl" "$current" >&2
+                # Write may fail under SELinux enforcing / AppArmor —
+                # surface the error via journald but don't abort.
+                if ! echo on > "$power_ctl" 2>/dev/null; then
+                    printf "%s: WARN write to %s failed (MAC policy?)\n" \
+                        "$LOG_PREFIX" "$power_ctl" >&2
+                fi
+            fi
+            ;;
+    esac
+done
+
+exit 0
