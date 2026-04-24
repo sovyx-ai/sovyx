@@ -10,6 +10,13 @@ RUN pip install --no-cache-dir uv==0.10.11
 # Copy everything needed for dependency resolution
 COPY pyproject.toml uv.lock README.md ./
 COPY src/ ./src/
+# Required by ``[tool.hatch.build.targets.wheel.force-include]`` in
+# pyproject.toml — the L2.5 packaging tree (systemd units, udev
+# rules, POSIX helpers, packaging README) ships *inside* the wheel
+# at ``sovyx/_packaging/`` so pipx/pip consumers can find the files
+# via ``importlib.resources``. Without this copy, ``uv sync`` fails
+# with ``FileNotFoundError: Forced include not found: /app/packaging/…``.
+COPY packaging/ ./packaging/
 
 # Install all deps + package in one shot
 RUN uv sync --no-dev --frozen
