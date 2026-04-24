@@ -535,6 +535,24 @@ class VoiceTuningConfig(BaseSettings):
     # event loop behind a frozen audio tool.
     linux_mixer_subprocess_timeout_s: float = 2.0
 
+    # L2.5 mixer-sanity user-customization thresholds (ADR-voice-mixer-
+    # sanity-l2.5-bidirectional §4.I4, V2 Master Plan Part E.5). The
+    # 6-signal customization heuristic emits a score in [0, 1]; below
+    # the lower threshold L2.5 auto-applies, between the two it defers
+    # (dashboard card), above the upper it skips silently to honour the
+    # user's intentional tuning (invariant I4 — user customization is
+    # sacred).
+    linux_mixer_user_customization_threshold_apply: float = 0.5
+    linux_mixer_user_customization_threshold_skip: float = 0.75
+    # L2.5 KB match threshold — overrides per-profile match_threshold
+    # when the caller does not pass ``min_score`` to
+    # :meth:`MixerKBLookup.match`. Default per V2 Master Plan §F.2.
+    linux_mixer_sanity_kb_match_threshold: float = 0.6
+    # Total wall-clock cap for one L2.5 invocation — if the orchestrator
+    # exceeds this, it rolls back any in-flight apply and returns
+    # ``MixerSanityDecision.ERROR``. V2 Master Plan §C.3.
+    linux_mixer_sanity_budget_s: float = 5.0
+
     # AudioCaptureTask ring buffer — bounded snapshot of the most
     # recent frames delivered by PortAudio. Fed by the capture
     # callback, consumed by :meth:`AudioCaptureTask.tap_recent_frames`

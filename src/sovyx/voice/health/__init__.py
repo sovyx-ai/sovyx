@@ -44,6 +44,11 @@ from sovyx.voice.health._kernel_invalidated_recheck import (
 from sovyx.voice.health._linux_mixer_check import check_linux_mixer_sanity
 from sovyx.voice.health._mixer_kb import MixerKBLookup, MixerKBMatch
 from sovyx.voice.health._mixer_roles import MixerControlRoleResolver
+from sovyx.voice.health._mixer_sanity import (
+    check_and_maybe_heal,
+    default_persist_via_alsactl,
+    detect_user_customization,
+)
 from sovyx.voice.health._power import NoopPowerEventListener, PowerEventListener
 from sovyx.voice.health._quarantine import (
     EndpointQuarantine,
@@ -234,13 +239,16 @@ __all__ = [
     "build_platform_default_device_watcher",
     "build_platform_hotplug_listener",
     "build_platform_power_listener",
+    "check_and_maybe_heal",
     "check_linux_mixer_sanity",
     "check_portaudio",
     "check_tts_synthesize",
     "check_wake_word_smoke",
     "clear_preflight_warnings_file",
     "current_platform_key",
+    "default_persist_via_alsactl",
     "default_step_names",
+    "detect_user_customization",
     "get_default_quarantine",
     "preflight_warnings_file_path",
     "probe",
