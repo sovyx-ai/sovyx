@@ -75,3 +75,16 @@ erebus/
 /sovyx-*.ps1
 /voice-diag.ps1
 /scripts/forensic_*
+
+# Per-incident forensic investigation workspaces — e.g.
+# ``.forensic-workspace/`` built by the SVX-VOICE-LINUX-20260422
+# post-mortem. These are private investigation notes (analysis,
+# diag_package, MISSION_PLAN, planning/…) and can grow to tens of MB;
+# they don't belong in the repo but must stay on disk for reference.
+.forensic-workspace/
+
+# Release artefacts of the standalone sovyx-voice-diag tool. Versioned
+# tarballs drop into the repo root when rebuilt; they're a sibling
+# release and don't ship with the main package.
+/sovyx-voice-diag-v*.tar.gz
+/sovyx-voice-diag-v*.tar.gz.sha256
