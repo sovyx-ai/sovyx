@@ -5,6 +5,7 @@ Coverage target: ≥95% on plugins/sandbox_fs.py
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -62,6 +63,17 @@ class TestPathSafety:
         with pytest.raises(PermissionDeniedError, match="Absolute"):
             fs_rw._safe_path("/etc/passwd")
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason=(
+            "Path.symlink_to requires SeCreateSymbolicLinkPrivilege on Windows, "
+            "which pytest runners rarely hold — OSError(WinError 1314) blocks "
+            "the fixture before the sandbox guard runs. The escape path is "
+            "covered on every platform via test_absolute_path_blocked + the "
+            "resolve() call in ``_safe_path``; the symlink-specific branch is "
+            "exercised on POSIX CI."
+        ),
+    )
     def test_symlink_escape_blocked(self, tmp_path: Path, enforcer_rw: PermissionEnforcer) -> None:
         """Symlink pointing outside data_dir is blocked."""
         data_dir = tmp_path / "plugin_data"
