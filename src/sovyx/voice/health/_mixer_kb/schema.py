@@ -85,6 +85,52 @@ class FactorySignatureModel(BaseModel):
             raise ValueError(msg)
         return self
 
+    @model_validator(mode="after")
+    def _ranges_are_ordered(self) -> Self:
+        """Paranoid-QA R4 MEDIUM-6: reject inverted ranges at the
+        schema boundary so pydantic surfaces structured error
+        context instead of the opaque ``"load_failed"`` log.
+
+        ``FactorySignature.__post_init__`` already rejects these,
+        but the loader catches the dataclass ``ValueError`` in its
+        generic-failure branch (loses field path + line number).
+        Raising at the schema layer means the loader hits the
+        dedicated ``ValidationError`` branch which logs
+        ``error_count`` + ``first_error`` with pydantic's pointer.
+        """
+        if self.expected_raw_range is not None:
+            lo, hi = self.expected_raw_range
+            if lo > hi:
+                msg = (
+                    f"expected_raw_range={self.expected_raw_range} is "
+                    f"inverted (lo > hi) — author mistake?"
+                )
+                raise ValueError(msg)
+        if self.expected_fraction_range is not None:
+            lo_f, hi_f = self.expected_fraction_range
+            if lo_f > hi_f:
+                msg = (
+                    f"expected_fraction_range={self.expected_fraction_range} is "
+                    f"inverted (lo > hi) — author mistake?"
+                )
+                raise ValueError(msg)
+            if not (0.0 <= lo_f <= 1.0) or not (0.0 <= hi_f <= 1.0):
+                msg = (
+                    f"expected_fraction_range={self.expected_fraction_range} "
+                    f"values must lie in [0.0, 1.0] — fraction is "
+                    f"(current_raw - min_raw) / (max_raw - min_raw)"
+                )
+                raise ValueError(msg)
+        if self.expected_db_range is not None:
+            lo_d, hi_d = self.expected_db_range
+            if lo_d > hi_d:
+                msg = (
+                    f"expected_db_range={self.expected_db_range} is "
+                    f"inverted (lo > hi) — author mistake?"
+                )
+                raise ValueError(msg)
+        return self
+
 
 class PresetValueModel(BaseModel):
     """Tagged-union variant — exactly one of raw/fraction/db set.
@@ -167,6 +213,26 @@ class RecommendedPresetModel(BaseModel):
     controls: tuple[PresetControlModel, ...] = Field(min_length=1)
     auto_mute_mode: Literal["disabled", "enabled", "leave"] = "leave"
     runtime_pm_target: Literal["on", "auto", "leave"] = "leave"
+
+    @model_validator(mode="after")
+    def _controls_unique_roles(self) -> Self:
+        """Paranoid-QA R4 MEDIUM-6: reject duplicate role entries at
+        schema layer. ``MixerPresetSpec.__post_init__`` catches this
+        too, but the loader's generic-failure branch logs opaque
+        ``"load_failed"`` — schema-level error gives pydantic's
+        structured path.
+        """
+        seen: set[str] = set()
+        for control in self.controls:
+            role_name = control.role
+            if role_name in seen:
+                msg = (
+                    f"recommended_preset.controls contains duplicate "
+                    f"role={role_name!r} — one entry per role"
+                )
+                raise ValueError(msg)
+            seen.add(role_name)
+        return self
 
     def to_preset_spec(self) -> MixerPresetSpec:
         return MixerPresetSpec(

@@ -1083,23 +1083,55 @@ class TestBuildMixerSanitySetupWalWiring:
         assert setup.half_heal_wal_path is None
 
     def test_factory_integration_invokes_with_wal_path(self) -> None:
-        """Invariant check via source grep: the production call site
-        in ``_factory_integration.py`` MUST pass
-        ``half_heal_wal_path=default_wal_path(data_dir)``. A silent
-        deletion of the kwarg would ship production without crash
-        recovery — this test is the backstop.
+        """Paranoid-QA R3 HIGH-14 + R4 MEDIUM-5: AST-based invariant.
+
+        The production call site in ``_factory_integration.py`` MUST
+        invoke ``build_mixer_sanity_setup`` with a
+        ``half_heal_wal_path`` kwarg whose value is a call to
+        ``default_wal_path(...)``. R3 greps the literal string —
+        fragile to any whitespace / identifier rename / line wrap.
+        R4 upgrades to an AST walk that verifies the kwarg
+        structure, not the exact source text.
         """
+        import ast
         from pathlib import Path as _Path
 
         repo_root = _Path(__file__).resolve().parents[4]
         src = (
             repo_root / "src" / "sovyx" / "voice" / "health" / "_factory_integration.py"
         ).read_text(encoding="utf-8")
-        assert "half_heal_wal_path=default_wal_path(data_dir)" in src, (
-            "factory_integration.py no longer passes "
-            "half_heal_wal_path=default_wal_path(data_dir) to "
-            "build_mixer_sanity_setup — production has lost crash "
-            "recovery; R3 HIGH #14 regression"
+        tree = ast.parse(src)
+
+        found_kwarg_value: ast.AST | None = None
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "build_mixer_sanity_setup"
+            ):
+                for kw in node.keywords:
+                    if kw.arg == "half_heal_wal_path":
+                        found_kwarg_value = kw.value
+                        break
+                if found_kwarg_value is not None:
+                    break
+
+        assert found_kwarg_value is not None, (
+            "_factory_integration.py no longer calls "
+            "build_mixer_sanity_setup with a ``half_heal_wal_path`` "
+            "kwarg — production has lost crash recovery. Regression "
+            "on R3 HIGH-14 invariant."
+        )
+        assert isinstance(found_kwarg_value, ast.Call), (
+            f"half_heal_wal_path kwarg is not a Call expression: "
+            f"got {type(found_kwarg_value).__name__}"
+        )
+        assert isinstance(found_kwarg_value.func, ast.Name), (
+            f"half_heal_wal_path kwarg's callable is not a bare name: "
+            f"got {type(found_kwarg_value.func).__name__}"
+        )
+        assert found_kwarg_value.func.id == "default_wal_path", (
+            f"half_heal_wal_path kwarg calls {found_kwarg_value.func.id}(), not default_wal_path"
         )
 
 

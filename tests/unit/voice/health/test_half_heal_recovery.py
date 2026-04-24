@@ -166,6 +166,40 @@ class TestLoadWal:
         assert wal is not None
         assert wal.reverted_controls == (("Capture", 40), ("Mic Boost", 0))
 
+    @pytest.mark.parametrize(
+        "bad_entry",
+        [
+            ["Capture", True],  # bool masquerading as int
+            ["Capture", False],  # bool masquerading as int
+            ["Capture", 3.14],  # float (not int)
+            [42, 10],  # int as name
+            [None, 10],  # None as name
+            [["nested"], 10],  # list as name
+        ],
+    )
+    def test_wrong_type_entry_rejects_whole_wal(
+        self, tmp_path: Path, bad_entry: list[object]
+    ) -> None:
+        """Paranoid-QA R4 MEDIUM-2: ``int(True)`` silently returns 1.
+        The load path now type-checks each entry and rejects the
+        entire WAL on any mismatch — legitimate kernel-sourced
+        raw values are always concrete ints, never bool/float.
+        """
+        path = tmp_path / "wal.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "card_index": 0,
+                    "reverted_controls": [bad_entry],
+                }
+            ),
+            encoding="utf-8",
+        )
+        assert load_wal(path) is None, (
+            f"WAL with entry {bad_entry!r} (type mismatch) should be rejected"
+        )
+
 
 # ── clear_wal ────────────────────────────────────────────────────────
 
@@ -242,10 +276,13 @@ class TestRecoverIfPresent:
         assert snapshot.reverted_controls == (("Cap", 50), ("Boost", 1))
 
     @pytest.mark.asyncio()
-    async def test_restore_failure_still_deletes_wal(self, tmp_path: Path) -> None:
-        """If the replay itself raises, the WAL is still cleared so
-        we don't loop forever on a broken restore. Future cascades
-        will probe the mixer state and make fresh decisions."""
+    async def test_restore_failure_preserves_wal_for_retry(self, tmp_path: Path) -> None:
+        """Paranoid-QA R4 HIGH-1: on transient restore failure (not
+        a timeout), preserve the WAL so the NEXT cascade's recovery
+        path retries via a fresh restore_fn. This matches the R3
+        CRIT-3 invariant on the in-process rollback path. A cleared
+        WAL here would orphan a stuck mixer until user intervention.
+        """
         path = tmp_path / "wal.json"
         write_wal(
             card_index=0,
@@ -254,10 +291,12 @@ class TestRecoverIfPresent:
         )
         restore_fn = AsyncMock(side_effect=RuntimeError("synthetic failure"))
         tuning = VoiceTuningConfig()
-        # recover_if_present swallows the exception.
         returned = await recover_if_present(path=path, restore_fn=restore_fn, tuning=tuning)
-        assert returned is True  # WAL was present + replay attempted
-        assert not path.exists()  # WAL deleted even though restore failed
+        assert returned is True  # replay was attempted
+        assert path.exists(), (
+            "WAL must be PRESERVED on restore-failure (non-timeout) "
+            "so the next cascade can retry — R4 HIGH-1"
+        )
 
     @pytest.mark.asyncio()
     async def test_malformed_wal_returns_false_does_not_call_restore(self, tmp_path: Path) -> None:

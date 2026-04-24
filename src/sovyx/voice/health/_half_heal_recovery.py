@@ -84,15 +84,19 @@ profile ~2 entries × ~30 bytes each + overhead ≈ 100 bytes).
 """
 
 
-_WAL_MAX_ENTRIES = 64
+_WAL_MAX_ENTRIES = 16
 """Max ``reverted_controls`` entries accepted by ``load_wal``.
 
-Paranoid-QA R3 HIGH #1/#3: even a well-formed but bloated WAL can
-DoS the recovery path — ``recover_if_present`` calls
-``restore_fn`` once per entry, each issuing an amixer subprocess
-with its own ``linux_mixer_subprocess_timeout_s`` ceiling.
-Bounding here forces the attacker's WAL to respect the realistic
-shape (pilot preset = 2 controls; every shipped preset is ≤ 10).
+Paranoid-QA R3 HIGH #1/#3 + R4 MEDIUM-1: even a well-formed but
+bloated WAL can DoS the recovery path — ``recover_if_present``
+calls ``restore_fn`` once per entry, each issuing an amixer
+subprocess with its own ``linux_mixer_subprocess_timeout_s``
+ceiling. R4 tightened from 64 to 16: realistic presets have ≤ 10
+controls (pilot has 2), and 16 × 3s subprocess_timeout = 48s
+which sits comfortably inside the recovery wall-clock cap
+(``_WAL_MAX_ENTRIES × subprocess_timeout × 1.25`` — see
+``_mixer_sanity._get_recovery_timeout``). 64 × 3s = 192s was
+excessive given the realistic workload.
 """
 
 
@@ -378,8 +382,27 @@ def load_wal(path: Path) -> HalfHealWal | None:
         for entry in reverted:
             if not isinstance(entry, (list, tuple)) or len(entry) != 2:
                 continue
-            name = str(entry[0])
-            raw_value = int(entry[1])
+            # Paranoid-QA R4 MEDIUM-2: reject bool entries
+            # explicitly. ``isinstance(True, int) is True`` in
+            # Python, so ``int(True) == 1`` / ``int(False) == 0``
+            # would quietly admit a WAL like ``["Capture", true]``
+            # which replays as raw=1. Legitimate kernel-sourced
+            # raw values are always concrete ints; bool in a WAL
+            # entry necessarily came from attacker content.
+            if (
+                not isinstance(entry[0], str)
+                or isinstance(entry[1], bool)
+                or not isinstance(entry[1], int)
+            ):
+                logger.warning(
+                    "mixer_half_heal_wal_control_entry_type_invalid",
+                    path=str(path),
+                    name_type=type(entry[0]).__name__,
+                    value_type=type(entry[1]).__name__,
+                )
+                return None
+            name = entry[0]
+            raw_value = entry[1]
             if len(name) == 0 or len(name) > _WAL_MAX_CONTROL_NAME_LEN:
                 logger.warning(
                     "mixer_half_heal_wal_control_name_length_invalid",
@@ -537,6 +560,15 @@ async def recover_if_present(
         ),
     )
     snapshot = wal.to_apply_snapshot()
+    # Paranoid-QA R4 HIGH-1: track whether the WAL should be kept
+    # for the NEXT cascade's recovery retry. Matches the R3 CRIT-3
+    # invariant on the in-process rollback path — a transient
+    # restore failure (amixer flaky, permission flicker) should
+    # NOT clear the WAL, so the next cascade can retry via a fresh
+    # ``restore_fn``. Timeout IS cleared because it signals a
+    # pathological WAL that would re-trigger the same DoS next
+    # boot.
+    clear_wal_on_exit = True
     try:
         if timeout_s is None:
             await restore_fn(snapshot, tuning=tuning)
@@ -554,9 +586,12 @@ async def recover_if_present(
             note=(
                 "WAL replay exceeded the wall-clock budget — "
                 "cancelling to unblock the cascade; mixer may be "
-                "in a partial state"
+                "in a partial state. WAL cleared because a timeout "
+                "on the realistic budget signals a pathological "
+                "WAL that would re-trigger the same DoS next boot"
             ),
         )
+        # clear_wal_on_exit stays True — block re-attempt next boot.
     except Exception as exc:  # noqa: BLE001 — recovery is best-effort
         logger.warning(
             "mixer_half_heal_recovery_restore_failed",
@@ -564,15 +599,14 @@ async def recover_if_present(
             detail=str(exc)[:200],
             note=(
                 "restore_mixer_snapshot raised during recovery — "
-                "mixer may still be in a partial state; cascade "
-                "will probe and attempt normal reconciliation"
+                "mixer may still be in a partial state. Preserving "
+                "WAL for next-boot retry (R4 HIGH-1) — matches the "
+                "R3 CRIT-3 in-process rollback-failed path"
             ),
         )
-    # Always clear the WAL after a replay attempt, even on
-    # restore failure. If we kept it, every future cascade would
-    # re-attempt the same (already-failing) replay, drowning the
-    # logs and masking the fact that the mixer is stuck.
-    clear_wal(path)
+        clear_wal_on_exit = False
+    if clear_wal_on_exit:
+        clear_wal(path)
     return True
 
 

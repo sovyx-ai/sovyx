@@ -133,12 +133,23 @@ def load_profiles_from_directory(directory: Path) -> list[MixerKBProfile]:
 
     profiles: list[MixerKBProfile] = []
     skipped: list[tuple[str, str]] = []
+    # Paranoid-QA R4 HIGH-6: dedupe within the pool. On a case-
+    # sensitive filesystem, two files named ``Café.yaml`` (NFC) and
+    # ``CAFÉ.yaml`` (cased NFD) can both carry ``profile_id: café``
+    # and both pass the loader's filename-stem check (via
+    # ``_normalise_for_match``). The resulting KBLookup has two
+    # profiles sharing a ``profile_id`` — ``match()`` scores them
+    # identically, the ambiguity-window check trips, and L2.5 DEFERS
+    # on hardware the KB explicitly targets. Dedupe here keeps the
+    # first-seen winner (sorted filename order for determinism) and
+    # logs the rejected twins so KB authors can clean up.
+    seen_profile_ids: dict[str, str] = {}
 
     for path in sorted(directory.glob("*.yaml")):
         if path.name.startswith(_PROFILE_INDEX_PREFIX):
             continue
         try:
-            profiles.append(load_profile_file(path))
+            profile = load_profile_file(path)
         except ValidationError as exc:
             logger.warning(
                 "mixer_kb_profile_schema_invalid",
@@ -147,6 +158,7 @@ def load_profiles_from_directory(directory: Path) -> list[MixerKBProfile]:
                 first_error=exc.errors()[0] if exc.errors() else None,
             )
             skipped.append((path.name, "schema_invalid"))
+            continue
         except yaml.YAMLError as exc:
             logger.warning(
                 "mixer_kb_profile_yaml_malformed",
@@ -154,6 +166,7 @@ def load_profiles_from_directory(directory: Path) -> list[MixerKBProfile]:
                 detail=str(exc)[:200],
             )
             skipped.append((path.name, "yaml_malformed"))
+            continue
         except (OSError, ValueError) as exc:
             logger.warning(
                 "mixer_kb_profile_load_failed",
@@ -161,6 +174,24 @@ def load_profiles_from_directory(directory: Path) -> list[MixerKBProfile]:
                 detail=str(exc)[:200],
             )
             skipped.append((path.name, "load_failed"))
+            continue
+        if profile.profile_id in seen_profile_ids:
+            logger.warning(
+                "mixer_kb_profile_id_duplicate_in_pool",
+                profile_id=profile.profile_id,
+                first_path=seen_profile_ids[profile.profile_id],
+                duplicate_path=str(path),
+                note=(
+                    "two files in the same pool carry the same "
+                    "profile_id; keeping the first (sorted order), "
+                    "dropping the second to avoid ambiguity-window "
+                    "deferrals in MixerKBLookup.match"
+                ),
+            )
+            skipped.append((path.name, "duplicate_profile_id"))
+            continue
+        seen_profile_ids[profile.profile_id] = str(path)
+        profiles.append(profile)
 
     if skipped:
         logger.info(

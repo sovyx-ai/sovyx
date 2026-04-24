@@ -245,14 +245,22 @@ class MixerKBLookup:
 
         Results include zero-score matches so callers can introspect;
         :meth:`match` applies the threshold filter downstream.
+
+        Paranoid-QA R4 MEDIUM-3: collects profile_ids whose
+        factory_signature had unmappable roles and emits ONE WARN
+        per cascade, instead of N per-profile WARNs. With a 50+
+        profile KB, a single resolver TODO would otherwise fire 50
+        WARNs per cascade.
         """
         results: list[MixerKBMatch] = []
+        unmappable_profile_ids: set[str] = set()
         for profile in self._profiles:
             score, breakdown = score_profile(
                 profile,
                 hw,
                 mixer_snapshot,
                 self._resolver,
+                unmappable_roles_out=unmappable_profile_ids,
             )
             results.append(
                 MixerKBMatch(
@@ -268,6 +276,7 @@ class MixerKBLookup:
                 hw,
                 mixer_snapshot,
                 self._resolver,
+                unmappable_roles_out=unmappable_profile_ids,
             )
             results.append(
                 MixerKBMatch(
@@ -275,6 +284,19 @@ class MixerKBLookup:
                     score=score,
                     per_field_scores=breakdown,
                     is_user_contributed=True,
+                ),
+            )
+        if unmappable_profile_ids:
+            logger.warning(
+                "mixer_kb_signature_roles_unmappable_aggregate",
+                codec_id=hw.codec_id,
+                driver_family=hw.driver_family,
+                profile_count=len(unmappable_profile_ids),
+                profile_ids=sorted(unmappable_profile_ids),
+                note=(
+                    "one or more KB profiles declare signature roles "
+                    "the resolver cannot map on this codec; individual "
+                    "per-profile details are at DEBUG level"
                 ),
             )
         return results

@@ -95,6 +95,8 @@ def score_profile(
     hw: HardwareContext,
     mixer_snapshot: Sequence[MixerCardSnapshot],
     resolver: MixerControlRoleResolver,
+    *,
+    unmappable_roles_out: set[str] | None = None,
 ) -> tuple[float, tuple[tuple[str, float, float], ...]]:
     """Score one profile against detected hardware + current mixer state.
 
@@ -111,6 +113,13 @@ def score_profile(
         resolver: Role resolver — consumed by the factory-signature
             check to map ``profile.factory_signature`` role keys
             onto actual control snapshots.
+        unmappable_roles_out: Optional output set — when provided,
+            this function adds the ``profile_id`` of any profile
+            whose factory_signature contains at least one role the
+            resolver couldn't map to any candidate control on any
+            card. Paranoid-QA R4 MEDIUM-3: ``MixerKBLookup._score_all``
+            passes a shared set and emits ONE WARN per cascade
+            instead of one per profile (which could be 50+).
     """
     # Layer 0: codec gate (hard requirement).
     #
@@ -192,14 +201,18 @@ def score_profile(
     # admitted via the soft-weight path — the post-apply validation
     # gates are the final arbiter of whether the preset was actually
     # the right one.
-    # Paranoid-QA R2 HIGH #8: surface resolver coverage gaps as a
-    # WARNING even when scoring continues. Operator-facing signal
-    # distinct from "healthy hardware silence" so KB authors +
-    # support can correlate a silent L2.5 no-op with a role-mapping
-    # TODO. Fires before the hard gate so it's visible regardless of
-    # whether we reject.
+    # Paranoid-QA R2 HIGH #8 + R4 MEDIUM-3: surface resolver
+    # coverage gaps as DEBUG here (per-profile). A single aggregated
+    # WARN is emitted by :meth:`MixerKBLookup._score_all` once per
+    # cascade, keyed on ``(codec_id, role_name)``. Previously this
+    # was a WARNING per profile — with 50 shipped profiles all
+    # matching a codec family, a single resolver TODO could fire 50
+    # WARNs per cascade, drowning SLO dashboards and conditioning
+    # operators to ignore the signal.
     if sig_result.roles_unmappable > 0:
-        logger.warning(
+        if unmappable_roles_out is not None:
+            unmappable_roles_out.add(profile.profile_id)
+        logger.debug(
             "mixer_kb_signature_role_unmappable",
             profile_id=profile.profile_id,
             roles_unmappable=sig_result.roles_unmappable,

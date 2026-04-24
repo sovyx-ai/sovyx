@@ -607,10 +607,36 @@ def _get_l25_lock() -> asyncio.Lock:
     is closed`` (or, worse, silent misbinding under CPython's
     lenient unbound-Future handling). Production has no test hook
     that resets the lock — this does.
+
+    Paranoid-QA R4 HIGH-7: emit a WARN breadcrumb on every rebind
+    so operators auditing multi-cascade behaviour can see the loop
+    swap happened. Also assert the prior lock was not held — a
+    held lock at rebind time signals a supervisor that cancelled
+    a task holding the lock WITHOUT running the task's
+    ``__aexit__`` — a latent leak worth surfacing even if the new
+    lock keeps working.
     """
     global _L25_LOCK, _L25_LOCK_LOOP  # noqa: PLW0603 — single-instance lazy init
     current_loop = asyncio.get_running_loop()
-    if _L25_LOCK is None or _L25_LOCK_LOOP is not current_loop:
+    if _L25_LOCK is None:
+        _L25_LOCK = asyncio.Lock()
+        _L25_LOCK_LOOP = current_loop
+        return _L25_LOCK
+    if _L25_LOCK_LOOP is not current_loop:
+        prior_was_locked = _L25_LOCK.locked()
+        logger.warning(
+            "mixer_sanity_lock_rebound_to_new_loop",
+            prior_loop_id=id(_L25_LOCK_LOOP),
+            current_loop_id=id(current_loop),
+            prior_was_locked=prior_was_locked,
+            note=(
+                "event loop changed since last cascade (daemon "
+                "stop+start cycle?). Creating a fresh Lock on the "
+                "current loop — safe, but prior_was_locked=True "
+                "indicates a task was cancelled without running "
+                "its lock-release __aexit__"
+            ),
+        )
         _L25_LOCK = asyncio.Lock()
         _L25_LOCK_LOOP = current_loop
     return _L25_LOCK
@@ -720,18 +746,31 @@ async def check_and_maybe_heal(
                     if mixer_restore_fn is not None
                     else _default_restore_mixer_snapshot
                 )
-                # Paranoid-QA R3 HIGH #1: cap the WAL replay with a
-                # wall-clock budget so a crafted (or pathologically
-                # large) WAL cannot stall cascade boot indefinitely.
-                # The L2.5 cascade budget applies to the orchestrator
-                # state machine; the recovery step ran BEFORE the
-                # clock started, so it needs its own cap. Reuse the
-                # same budget knob — same OoM, same operator tuning.
+                # Paranoid-QA R3 HIGH #1 + R4 HIGH-5: cap the WAL
+                # replay with a wall-clock budget. The original R3
+                # cap used ``linux_mixer_sanity_budget_s`` (5s) —
+                # but a legitimate WAL with ``_WAL_MAX_ENTRIES`` ×
+                # ``linux_mixer_subprocess_timeout_s`` can easily
+                # exceed that, causing spurious timeouts on
+                # honest-but-slow systems (high loadavg, slow
+                # storage). R4 HIGH-5 sizes the timeout to
+                # ``max_entries × subprocess_timeout × 1.25`` so
+                # every realistic WAL has headroom, while an
+                # attacker-capped WAL still has a bounded worst
+                # case.
+                from sovyx.voice.health._half_heal_recovery import (  # noqa: PLC0415 — local timeout sizing
+                    _WAL_MAX_ENTRIES,
+                )
+
+                recovery_timeout = max(
+                    _WAL_MAX_ENTRIES * tuning.linux_mixer_subprocess_timeout_s * 1.25,
+                    tuning.linux_mixer_sanity_budget_s,
+                )
                 await _recover_half_heal_if_present(
                     path=half_heal_wal_path,
                     restore_fn=effective_restore_fn,
                     tuning=tuning,
-                    timeout_s=tuning.linux_mixer_sanity_budget_s,
+                    timeout_s=recovery_timeout,
                 )
             return await _check_and_maybe_heal_impl(
                 endpoint,
@@ -837,13 +876,41 @@ async def _check_and_maybe_heal_impl(
         await orchestrator.run()
     except asyncio.CancelledError as exc:
         cancel_exc = exc
-        # Best-effort rollback. If the caller double-cancels and
-        # rollback itself raises CancelledError, we still want to
-        # reach the telemetry recorder — swallow here and re-raise
-        # the *original* below. The second cancel does not carry
-        # additional information beyond the first.
-        with contextlib.suppress(asyncio.CancelledError):
-            await orchestrator.rollback_if_needed()
+        # Paranoid-QA R4 HIGH-2: skip rollback when validation had
+        # already passed. A cancel during ``_step_persist`` fires
+        # AFTER apply+validate have succeeded — the mixer is in a
+        # good state, only the ``alsactl store`` persistence was
+        # interrupted. Rolling back now would drop the user from a
+        # validated-healthy mixer back to the pre-apply (broken)
+        # state purely because the persist subprocess got
+        # interrupted. The persist is recoverable on next boot
+        # (``alsactl restore`` loads the last stored state; the
+        # kernel still holds the live apply).
+        #
+        # Skip rollback iff (a) validation passed AND (b) apply
+        # committed. Otherwise fall through to the best-effort
+        # rollback — a cancel during apply / validate MUST still
+        # revert since the mixer is in a partial-apply or
+        # invalid-validate state.
+        skip_rollback = ctx.validation_passed is True and ctx.apply_snapshot is not None
+        if not skip_rollback:
+            # Best-effort rollback. If the caller double-cancels
+            # and rollback itself raises CancelledError, we still
+            # want to reach the telemetry recorder — swallow here
+            # and re-raise the *original* below.
+            with contextlib.suppress(asyncio.CancelledError):
+                await orchestrator.rollback_if_needed()
+        else:
+            logger.info(
+                "mixer_sanity_cancel_during_persist_retained_heal",
+                endpoint_guid=endpoint.endpoint_guid,
+                note=(
+                    "cancel fired after validation passed — mixer "
+                    "is in a healthy state, skipping rollback; the "
+                    "persist subprocess was interrupted but apply "
+                    "+ validation already committed"
+                ),
+            )
         ctx.decision = MixerSanityDecision.ERROR
         ctx.error_token = "MIXER_SANITY_CANCELLED"
     except Exception as exc:  # noqa: BLE001 — "Exception" not "BaseException" post-QA
@@ -980,7 +1047,42 @@ class _SanityOrchestrator:
                 else:
                     self._ctx.decision = MixerSanityDecision.ERROR
                 self._ctx.error_token = "MIXER_SANITY_BUDGET_EXCEEDED"
-                await self.rollback_if_needed()
+                # Paranoid-QA R4 HIGH-4: cap the budget-branch
+                # rollback too — without the wrap, a rollback of N
+                # controls (each ``linux_mixer_subprocess_timeout_s``
+                # ceiling) could run ~N*3s past the budget that
+                # supposedly already tripped. Only wrap in wait_for
+                # when there's ACTUALLY something to roll back
+                # (``apply_snapshot is not None``); otherwise
+                # ``rollback_if_needed`` short-circuits synchronously
+                # and a 0.0-second wait_for would spuriously fire.
+                if self._ctx.apply_snapshot is not None:
+                    # Use subprocess_timeout × entry-count as the
+                    # cap — lets a legitimate rollback complete even
+                    # when budget is tight; only trips on genuine
+                    # pathological wall-clock blowout.
+                    entries = len(self._ctx.apply_snapshot.reverted_controls) + len(
+                        self._ctx.apply_snapshot.reverted_enum_controls
+                    )
+                    rollback_timeout = max(
+                        entries * self._ctx.tuning.linux_mixer_subprocess_timeout_s * 1.25,
+                        self._ctx.tuning.linux_mixer_sanity_budget_s,
+                    )
+                    try:
+                        await asyncio.wait_for(
+                            self.rollback_if_needed(),
+                            timeout=rollback_timeout,
+                        )
+                    except TimeoutError:
+                        logger.warning(
+                            "mixer_sanity_rollback_budget_timeout",
+                            endpoint_guid=self._ctx.endpoint.endpoint_guid,
+                            rollback_timeout_s=rollback_timeout,
+                            budget_s=self._ctx.tuning.linux_mixer_sanity_budget_s,
+                        )
+                        self._ctx.rollback_failed = True
+                else:
+                    await self.rollback_if_needed()
                 return
             match step:
                 case "probe":
@@ -1030,26 +1132,28 @@ class _SanityOrchestrator:
                 decision=decision.value,
             )
             c.apply_duration_ms = 0
-        # Paranoid-QA R3 CRIT-3: surface rollback failure. If the
-        # rollback path logged + swallowed (no re-raise path), the
-        # advertised ``decision=ROLLED_BACK`` is a lie — the mixer
-        # is still in the failing-validation applied state.
-        # Downgrade to ERROR and stamp the error token so the
-        # dashboard renders a distinct badge and operators can tell
-        # "rollback tried but couldn't" from "rollback succeeded".
+        # Paranoid-QA R3 CRIT-3 + R4 CRIT-1: surface rollback
+        # failure unconditionally. The earlier allow-list
+        # (``VALIDATION_FAILED`` | ``BUDGET_EXCEEDED``) silently
+        # skipped composition for every other upstream token
+        # (APPLY_FAILED, PERSIST_FAILED, future tokens) — leaving
+        # ``decision=ERROR`` paired with the upstream token and no
+        # indication the rollback itself failed. Observers reading
+        # ``error=MIXER_SANITY_PERSIST_FAILED`` couldn't tell from
+        # the result whether the mixer had been restored or was
+        # stuck in the applied state.
+        #
+        # New rule: whenever ``rollback_failed`` is set, compose the
+        # ``ROLLBACK_FAILED_AFTER_<trigger>`` token. Callers that
+        # want the raw upstream token can still recover it by
+        # splitting on the ``_AFTER_`` suffix. No allow-list.
         if c.rollback_failed:
             decision = MixerSanityDecision.ERROR
-            if c.error_token is None or c.error_token in (
-                "MIXER_SANITY_VALIDATION_FAILED",
-                "MIXER_SANITY_BUDGET_EXCEEDED",
-            ):
-                # Preserve the upstream trigger when informative;
-                # otherwise stamp the rollback-specific token.
-                c.error_token = (
-                    f"MIXER_SANITY_ROLLBACK_FAILED_AFTER_{c.error_token.removeprefix('MIXER_SANITY_')}"
-                    if c.error_token
-                    else "MIXER_SANITY_ROLLBACK_FAILED"
-                )
+            if c.error_token:
+                upstream = c.error_token.removeprefix("MIXER_SANITY_")
+                c.error_token = f"MIXER_SANITY_ROLLBACK_FAILED_AFTER_{upstream}"
+            else:
+                c.error_token = "MIXER_SANITY_ROLLBACK_FAILED"
         return MixerSanityResult(
             decision=decision,
             diagnosis_before=c.diagnosis_before,
@@ -1469,7 +1573,20 @@ class _SanityOrchestrator:
             # Control absent on this card — apply will also no-op
             # on it, so no WAL entry is correct.
             return ()
-        return ((control_name, current_label),)
+        # Paranoid-QA R4 HIGH-3: strip whitespace. Some amixer
+        # versions emit the enum label with padding (e.g.,
+        # ``"Item0: 'Enabled  '"``) and ``_amixer_get_enum`` only
+        # strips outer quotes, not internal whitespace. A WAL that
+        # later replays ``amixer set <ctrl> "Enabled  "`` fails
+        # because amixer doesn't recognise the padded label; the
+        # replay's BypassApplyError is logged-and-swallowed,
+        # leaving the mixer stuck. Stripping here keeps the WAL
+        # round-trip deterministic.
+        stripped = current_label.strip()
+        if not stripped:
+            # Empty after strip — treat as absent.
+            return ()
+        return ((control_name, stripped),)
 
     async def _step_validate(self) -> _StepResult:
         """Run post-apply validation; gates pass → persist, fail → rollback."""
@@ -1994,6 +2111,10 @@ async def build_mixer_sanity_setup(
     kb_lookup: MixerKBLookup | None = None,
     role_resolver: MixerControlRoleResolver | None = None,
     half_heal_wal_path: Path | None = None,
+    mixer_probe_fn: MixerProbeFn | None = None,
+    mixer_apply_fn: MixerApplyFn | None = None,
+    mixer_restore_fn: MixerRestoreFn | None = None,
+    persist_fn: PersistFn | None = None,
 ) -> MixerSanitySetup | None:
     """Construct a :class:`MixerSanitySetup` for daemon boot.
 
@@ -2022,6 +2143,17 @@ async def build_mixer_sanity_setup(
             ``None`` to use :func:`detect_hardware_context`).
         kb_lookup: Override for KB lookup (tests).
         role_resolver: Override for the role resolver (tests).
+        half_heal_wal_path: Optional WAL path for mid-apply crash
+            recovery; production wires
+            ``default_wal_path(data_dir)``.
+        mixer_probe_fn, mixer_apply_fn, mixer_restore_fn, persist_fn:
+            Optional overrides for the Linux mixer strategy layer.
+            Paranoid-QA R4 MEDIUM-4: previously dropped on the
+            floor — the factory accepted only ``hw`` / ``kb_lookup``
+            / ``role_resolver``, and operators wiring custom
+            persist/apply/restore strategies saw the shipped
+            defaults silently run instead. All four fields now
+            flow through to the constructed :class:`MixerSanitySetup`.
     """
     # Lazy imports — these modules touch Linux-only subprocess /
     # /proc paths that we want to avoid importing on Windows / macOS
@@ -2070,6 +2202,10 @@ async def build_mixer_sanity_setup(
         validation_probe_fn=make_default_validation_probe_fn(probe_fn),
         telemetry=telemetry,
         half_heal_wal_path=half_heal_wal_path,
+        mixer_probe_fn=mixer_probe_fn,
+        mixer_apply_fn=mixer_apply_fn,
+        mixer_restore_fn=mixer_restore_fn,
+        persist_fn=persist_fn,
     )
 
 
