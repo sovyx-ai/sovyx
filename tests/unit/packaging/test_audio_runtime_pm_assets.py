@@ -28,6 +28,7 @@ _SYSTEMD_UNIT = _REPO_ROOT / "packaging" / "systemd" / "sovyx-audio-runtime-pm.s
 _SH_HELPER = _REPO_ROOT / "packaging" / "systemd" / "audio-runtime-pm-setup"
 _PERSIST_UNIT = _REPO_ROOT / "packaging" / "systemd" / "sovyx-audio-mixer-persist.service"
 _UDEV_RULE = _REPO_ROOT / "packaging" / "udev" / "60-sovyx-audio-power.rules"
+_UDEV_HELPER = _REPO_ROOT / "packaging" / "udev" / "sovyx-audio-power-setone"
 
 
 def _strip_shell_comments(text: str) -> str:
@@ -64,6 +65,13 @@ class TestAssetsExist:
 
     def test_persist_unit_present(self) -> None:
         assert _PERSIST_UNIT.is_file()
+
+    def test_udev_helper_present(self) -> None:
+        """Paranoid-QA CRITICAL #4: udev RUN+= now invokes this
+        packaged helper instead of inline /bin/sh -c '%S%p' — the
+        helper MUST exist in the shipped tree.
+        """
+        assert _UDEV_HELPER.is_file()
 
 
 # ── systemd unit invariants ─────────────────────────────────────────
@@ -231,25 +239,32 @@ class TestUdevRule:
         assert 'ACTION=="add"' in text
         assert 'ACTION=="change"' in text
 
-    def test_writes_on(self, text: str) -> None:
-        assert "echo on" in text
-
-    def test_writable_guard_inline(self, text: str) -> None:
-        """test -w before writing — skip devices without runtime_pm."""
-        assert "test -w" in text
-
     def test_uses_device_scoped_sysfs(self, text: str) -> None:
         """%S%p expands to the absolute sysfs path of the device —
         device-scoped, no enumeration loop."""
         assert "%S%p" in text
 
-    def test_no_external_binary_invocation_beyond_sh(self, text: str) -> None:
-        """Udev rules run with a narrow PATH — invoking anything
-        outside /bin/sh risks broken distros (Alpine puts /bin in
-        /usr/bin via symlink, etc.)."""
-        directives = _strip_shell_comments(text).lower()
-        assert "/usr/bin/" not in directives
-        assert "/usr/local/bin" not in directives
+    def test_invokes_packaged_helper_not_inline_shell(self, text: str) -> None:
+        """Paranoid-QA CRITICAL #4: the rule MUST invoke the packaged
+        helper ``/usr/libexec/sovyx/sovyx-audio-power-setone`` with
+        ``%S%p`` as a single argv element. Earlier revisions used
+        ``/bin/sh -c '… %S%p …'`` which string-interpolated the
+        kernel-sourced path into a shell command — a crafted path
+        would break out of quotes and execute shell code as root.
+        """
+        directives = _strip_shell_comments(text)
+        # Directive lines: must reference the canonical helper path.
+        assert "/usr/libexec/sovyx/sovyx-audio-power-setone" in directives
+        # Directive lines: must NOT carry an inline shell invocation
+        # that interpolates %S%p into a quoted string.
+        directive_lines = [
+            line for line in directives.splitlines() if line.strip().startswith("ACTION")
+        ]
+        for line in directive_lines:
+            assert "/bin/sh -c" not in line, f"inline /bin/sh invocation reintroduced: {line!r}"
+            assert "' " not in line and " '" not in line, (
+                f"directive uses single-quoted shell substitution: {line!r}"
+            )
 
     def test_no_sudo_or_pkexec(self, text: str) -> None:
         """Invariant I7 in the udev context too. Comments stripped
@@ -258,6 +273,67 @@ class TestUdevRule:
         directives = _strip_shell_comments(text).lower()
         assert "sudo" not in directives
         assert "pkexec" not in directives
+
+
+class TestUdevHelper:
+    """Paranoid-QA CRITICAL #4/#5 — the POSIX sh helper invoked by
+    the udev rule. It replaces the previous inline shell command.
+    """
+
+    @pytest.fixture(scope="class")
+    def text(self) -> str:
+        return _UDEV_HELPER.read_text(encoding="utf-8")
+
+    def test_posix_sh_shebang(self, text: str) -> None:
+        first_line = text.splitlines()[0]
+        assert first_line == "#!/bin/sh"
+
+    def test_set_eu(self, text: str) -> None:
+        assert "set -eu" in text
+
+    def test_refuses_non_sys_paths(self, text: str) -> None:
+        """Path arg MUST start with /sys/ — blocks attacker-invoking
+        the helper with a crafted argv from outside udev context.
+        """
+        assert "/sys/*" in text
+
+    def test_resolves_symlinks(self, text: str) -> None:
+        """readlink -f -resolves symlinks so a crafted symlink under
+        /sys/devices/ can't redirect the write outside /sys.
+        """
+        assert "readlink" in text
+
+    def test_writes_on(self, text: str) -> None:
+        """The actual ``echo on`` that used to live in the rule."""
+        assert "echo on" in text
+
+    def test_writable_guard(self, text: str) -> None:
+        """``test -w "$power_ctl"`` before writing — skip silently on
+        codecs without runtime_pm support.
+        """
+        assert '[ ! -w "$power_ctl" ]' in text
+
+    def test_power_control_path_shape_gate(self, text: str) -> None:
+        """Double-guard: after realpath, the resolved path must
+        literally end in ``/power/control``. A crafty symlink that
+        pointed to ``/etc/shadow`` would be rejected.
+        """
+        assert "*/power/control)" in text
+
+    def test_idempotent_skip(self, text: str) -> None:
+        """Skip when current value already ``on`` — silent on repeat
+        udev events.
+        """
+        assert 'if [ "$current" = "on" ]' in text
+
+    def test_exit_zero(self, text: str) -> None:
+        """Must never fail — udev does not re-run rules on failure."""
+        assert "exit 0" in text
+
+    def test_no_bashisms(self, text: str) -> None:
+        assert "[[ " not in text
+        assert "function " not in text
+        assert " == " not in text
 
 
 # ── Mixer persist unit invariants ───────────────────────────────────
