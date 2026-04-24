@@ -448,6 +448,9 @@ async def create_voice_pipeline(
         bypass_strategies=[s.name for s in strategies],
     )
     _emit_capture_apo_detection(resolved_name=resolved.name if resolved is not None else None)
+    _emit_linux_capture_apo_detection(
+        resolved_name=resolved.name if resolved is not None else None,
+    )
 
     # ── 7. v1.3 §4.6 L6 boot preflight step 9 + §4.8 L7 marker file ──
     #
@@ -777,6 +780,82 @@ def _emit_capture_apo_detection(*, resolved_name: str | None) -> None:
             "voice.detected": voice_clarity_global,
             "voice.active_endpoint_detected": bool(active and active.voice_clarity_active),
             "voice.active_endpoint_name": active.endpoint_name if active else None,
+        },
+    )
+
+
+def _emit_linux_capture_apo_detection(*, resolved_name: str | None) -> None:
+    """Log ``voice_linux_apo_*`` once per pipeline boot on Linux.
+
+    Peer of :func:`_emit_capture_apo_detection` — same contract
+    (best-effort, never raises, no-op on non-Linux) but runs the
+    PulseAudio / PipeWire subprocess detector instead of the
+    Windows MMDevices registry walk. Structured log surface
+    mirrors the Windows path so the dashboard can render Linux
+    echo-cancel / noise-suppression with the same timeline widget
+    it uses for Windows Voice Clarity.
+
+    Three log records emitted:
+
+    * ``voice_linux_apo_detected`` (INFO, user-visible) — fires
+      when the detector surfaced at least one named filter
+      (module-echo-cancel, rnnoise, etc.). Carries the dominant
+      session manager and deduplicated friendly labels.
+    * ``audio.apo.scan.linux`` (INFO, dotted-namespace telemetry)
+      — always fires so the dashboard knows the scan ran. Payload
+      mirrors Windows ``audio.apo.scan`` with a ``voice.platform``
+      discriminator so SLO queries can union the two topics.
+    * ``audio.apo.echo_cancel_detected`` (INFO) — one bit for
+      dashboards that want a single "any mic-chain processing
+      active?" signal across Windows + Linux.
+
+    Non-Linux platforms: the detector returns ``[]`` and this
+    function emits nothing (the scan event is gated on platform
+    to keep Windows telemetry clean of Linux zero-activity noise).
+    """
+    if sys.platform != "linux":
+        return
+
+    from sovyx.voice._apo_detector_linux import detect_capture_apos_linux
+
+    try:
+        reports = detect_capture_apos_linux()
+    except Exception:  # noqa: BLE001 — detector must never break startup
+        logger.debug("voice_linux_apo_detection_failed", exc_info=True)
+        return
+
+    # LinuxApoReport is session-wide — at most one report is
+    # returned today. The list wrapper mirrors the Windows API so
+    # tests and downstream consumers share a shape.
+    report = reports[0] if reports else None
+
+    if report is not None and report.known_apos:
+        logger.info(
+            "voice_linux_apo_detected",
+            session_manager=report.session_manager,
+            known_apos=report.known_apos,
+            echo_cancel_active=report.echo_cancel_active,
+            resolved_name=resolved_name,
+        )
+
+    echo_cancel_global = bool(report is not None and report.echo_cancel_active)
+    logger.info(
+        "audio.apo.scan.linux",
+        **{
+            "voice.platform": "linux",
+            "voice.session_manager": report.session_manager if report else "unknown",
+            "voice.echo_cancel_global": echo_cancel_global,
+            "voice.resolved_name": resolved_name,
+            "voice.known_apos": list(report.known_apos) if report else [],
+            "voice.raw_entries": list(report.raw_entries) if report else [],
+        },
+    )
+    logger.info(
+        "audio.apo.echo_cancel_detected",
+        **{
+            "voice.detected": echo_cancel_global,
+            "voice.platform": "linux",
+            "voice.session_manager": report.session_manager if report else "unknown",
         },
     )
 

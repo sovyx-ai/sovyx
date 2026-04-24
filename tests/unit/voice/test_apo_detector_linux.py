@@ -341,3 +341,179 @@ class TestLinuxApoReport:
             echo_cancel_active=any(label in detector._ECHO_CANCEL_SENTINELS for label in labels),
         )
         assert report.echo_cancel_active is expected_echo
+
+
+# ---------------------------------------------------------------------------
+# Factory-level emitter — mirrors Windows `_emit_capture_apo_detection`.
+# ---------------------------------------------------------------------------
+
+
+class TestFactoryEmitsLinuxApoDetectionEvent:
+    """``create_voice_pipeline`` logs ``voice_linux_apo_*`` once per boot.
+
+    The Linux emitter runs alongside the Windows one. Tests use caplog
+    to verify the right structured events fire on the right scan
+    outcomes.
+    """
+
+    def _log_messages(self, caplog: pytest.LogCaptureFixture) -> list[str]:
+        return [record.getMessage() for record in caplog.records]
+
+    def _has_event(self, caplog: pytest.LogCaptureFixture, event_name: str) -> bool:
+        needles = (f"'event': '{event_name}'", f'"event": "{event_name}"')
+        return any(any(needle in msg for needle in needles) for msg in self._log_messages(caplog))
+
+    def test_emits_detected_event_when_filter_present(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        from sovyx.voice import factory
+
+        fake_reports = [
+            LinuxApoReport(
+                session_manager="pipewire",
+                known_apos=["PipeWire Echo Cancel", "PipeWire RNNoise"],
+                raw_entries=["echo-cancel", "rnnoise"],
+                echo_cancel_active=True,
+            ),
+        ]
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch(
+                "sovyx.voice._apo_detector_linux.detect_capture_apos_linux",
+                return_value=fake_reports,
+            ),
+            caplog.at_level(logging.INFO, logger="sovyx.voice.factory"),
+        ):
+            factory._emit_linux_capture_apo_detection(
+                resolved_name="hw:0,0",
+            )
+
+        assert self._has_event(caplog, "voice_linux_apo_detected")
+        assert self._has_event(caplog, "audio.apo.scan.linux")
+        assert self._has_event(caplog, "audio.apo.echo_cancel_detected")
+
+    def test_emits_scan_event_even_when_empty(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Dashboard must know the scan ran — ``audio.apo.scan.linux``
+        fires on zero-hits too, so a silent bus doesn't look identical
+        to a broken detector.
+        """
+        import logging
+
+        from sovyx.voice import factory
+
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch(
+                "sovyx.voice._apo_detector_linux.detect_capture_apos_linux",
+                return_value=[],
+            ),
+            caplog.at_level(logging.INFO, logger="sovyx.voice.factory"),
+        ):
+            factory._emit_linux_capture_apo_detection(resolved_name="hw:0,0")
+
+        # Zero-hit path: no per-endpoint detected event (we only emit
+        # that when known_apos is non-empty), but scan + echo_cancel
+        # telemetry always fire so the dashboard sees the heartbeat.
+        assert not self._has_event(caplog, "voice_linux_apo_detected")
+        assert self._has_event(caplog, "audio.apo.scan.linux")
+        assert self._has_event(caplog, "audio.apo.echo_cancel_detected")
+
+    def test_noop_on_non_linux(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Non-Linux platforms must not emit Linux telemetry, even if
+        the detector is (somehow) called.
+        """
+        import logging
+
+        from sovyx.voice import factory
+
+        with (
+            patch.object(sys, "platform", "win32"),
+            patch(
+                "sovyx.voice._apo_detector_linux.detect_capture_apos_linux",
+                return_value=[],
+            ),
+            caplog.at_level(logging.INFO, logger="sovyx.voice.factory"),
+        ):
+            factory._emit_linux_capture_apo_detection(resolved_name="some-mic")
+
+        assert not self._has_event(caplog, "audio.apo.scan.linux")
+        assert not self._has_event(caplog, "audio.apo.echo_cancel_detected")
+        assert not self._has_event(caplog, "voice_linux_apo_detected")
+
+    def test_emitter_survives_detector_exception(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A subprocess blow-up MUST NOT crash pipeline startup.
+
+        The emitter swallows the exception, logs at DEBUG, and returns
+        cleanly — the scan telemetry is skipped this boot but the
+        pipeline continues.
+        """
+        import logging
+
+        from sovyx.voice import factory
+
+        def _boom() -> list[LinuxApoReport]:
+            msg = "pactl mysteriously fell over"
+            raise RuntimeError(msg)
+
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch(
+                "sovyx.voice._apo_detector_linux.detect_capture_apos_linux",
+                side_effect=_boom,
+            ),
+            caplog.at_level(logging.DEBUG, logger="sovyx.voice.factory"),
+        ):
+            factory._emit_linux_capture_apo_detection(resolved_name="hw:0,0")
+
+        # Debug record confirms we hit the failure path, but no INFO
+        # scan events fired because we returned before the logger
+        # calls.
+        assert self._has_event(caplog, "voice_linux_apo_detection_failed")
+        assert not self._has_event(caplog, "audio.apo.scan.linux")
+
+    def test_session_manager_propagates_to_scan_event(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Dashboard uses ``voice.session_manager`` to render the
+        right label (PipeWire vs PulseAudio vs mixed). Regression
+        guard: the field must survive the emitter path intact.
+        """
+        import logging
+
+        from sovyx.voice import factory
+
+        fake_reports = [
+            LinuxApoReport(
+                session_manager="mixed",
+                known_apos=["PulseAudio Echo Cancel"],
+                raw_entries=["module-echo-cancel"],
+                echo_cancel_active=True,
+            ),
+        ]
+        with (
+            patch.object(sys, "platform", "linux"),
+            patch(
+                "sovyx.voice._apo_detector_linux.detect_capture_apos_linux",
+                return_value=fake_reports,
+            ),
+            caplog.at_level(logging.INFO, logger="sovyx.voice.factory"),
+        ):
+            factory._emit_linux_capture_apo_detection(resolved_name="hw:1,0")
+
+        messages = self._log_messages(caplog)
+        scan_messages = [msg for msg in messages if "audio.apo.scan.linux" in msg]
+        assert scan_messages, "expected one audio.apo.scan.linux record"
+        assert any("mixed" in msg for msg in scan_messages)
