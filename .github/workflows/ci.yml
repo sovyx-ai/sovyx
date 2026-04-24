@@ -76,35 +76,32 @@ jobs:
     name: Test (${{ matrix.os }} / Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
-    # Soft-launch: Ubuntu cells are strict (must pass), Windows + macOS cells
-    # run observationally (``continue-on-error``) for 2-3 green runs before
-    # being promoted. ``experimental`` is the matrix flag that flips the
-    # gate per cell without branching the rest of the job.
-    continue-on-error: ${{ matrix.experimental }}
+    # Every cell is a blocking gate. The Windows + macOS rows spent one
+    # soft-launch run as ``experimental: true`` (commit 0a9e75f), which
+    # surfaced 24 macOS failures in two clean clusters — fixed in
+    # commits ebf0baf (AF_UNIX path length, test-side) and 8af0d03
+    # (FakeInputStream pacing, test-side) with zero production changes.
+    # Promoted here after the first fully-green 4-cell run.
     strategy:
       # See every failing cell in one run — with strict fail-fast a Linux
-      # flake would hide a real Windows/macOS regression. Affordable because
-      # the matrix is 4 cells, not 20.
+      # flake would hide a real Windows/macOS regression. Affordable
+      # because the matrix is 4 cells, not 20.
       fail-fast: false
       matrix:
         include:
           - os: sovyx-4core
             python-version: "3.11"
-            experimental: false
           - os: sovyx-4core
             python-version: "3.12"
-            experimental: false
-          # Windows + macOS start on Python 3.12 only. 3.11 coverage on
+          # Windows + macOS on Python 3.12 only. 3.11 coverage on
           # non-Linux adds marginal signal over 3.12 (stdlib differences
           # are platform-agnostic; the cross-platform risk surface is in
           # OS ↔ library interaction, not Python-version). Expand to 3.11
-          # on Win/Mac once the 3.12 matrix is consistently green.
+          # on Win/Mac if a 3.11-only regression ever slips through.
           - os: windows-latest
             python-version: "3.12"
-            experimental: true
           - os: macos-latest
             python-version: "3.12"
-            experimental: true
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-sovyx-python
