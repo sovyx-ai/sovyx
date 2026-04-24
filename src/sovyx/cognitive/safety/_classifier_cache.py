@@ -66,7 +66,16 @@ class ClassificationCache:
             self._misses += 1
             self._telemetry.record_miss(size=len(self._cache), maxsize=self._max_size)
             return None
-        if time.monotonic() > entry.expires_at:
+        # Inclusive comparison (``>=``) — an entry stamped at t=T with
+        # ``ttl_sec=Δ`` expires AT t=T+Δ, not one tick after. The
+        # previous strict ``>`` produced two surprising artifacts:
+        #   * ``ttl_sec=0.0`` never expired (documented as "don't cache"
+        #     in test_ttl_expiry, but the code disagreed).
+        #   * On coarse monotonic clocks (Windows, ~15.6 ms tick),
+        #     ``now == put_time`` was common even after a sleep, so
+        #     short TTLs spuriously returned stale entries.
+        # Both gone under ``>=``.
+        if time.monotonic() >= entry.expires_at:
             # Expired — remove and miss. Counted as eviction (TTL) so
             # operators can tell apart capacity churn from TTL churn.
             del self._cache[key]
