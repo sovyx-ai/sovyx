@@ -235,3 +235,90 @@ class TestDataClasses:
         bucket = CascadeOutcomeBucket(success=3, failure=1)
         assert bucket.total() == 4
         assert bucket.success_rate() == 0.75
+
+
+# ---------------------------------------------------------------------------
+# Paranoid-QA R2 HIGH #7 — mixer-sanity cardinality bounding
+# ---------------------------------------------------------------------------
+
+
+class TestMixerSanityCardinalityBound:
+    """User-contributed profile_ids MUST NOT appear verbatim in
+    telemetry keys. Arbitrary strings as label values blow up
+    Prometheus / OTLP metric cardinality in ways that break upstream
+    dashboards and alerting.
+    """
+
+    def test_shipped_profile_id_preserved_verbatim(self, output_path: Path) -> None:
+        rec = VoiceHealthTelemetry(enabled=True, output_path=output_path)
+        rec.record_mixer_sanity_outcome(
+            decision="healed",
+            matched_profile="vaio_vjfe69_sn6180",
+            score=0.92,
+            is_user_contributed=False,
+        )
+        snap = rec.snapshot()
+        buckets = snap["mixer_sanity_buckets"]
+        assert len(buckets) == 1
+        assert buckets[0]["matched_profile"] == "vaio_vjfe69_sn6180"
+
+    def test_user_profile_id_folded_into_hash_bucket(self, output_path: Path) -> None:
+        rec = VoiceHealthTelemetry(enabled=True, output_path=output_path)
+        rec.record_mixer_sanity_outcome(
+            decision="healed",
+            matched_profile="my_weird_custom_profile_from_forums_2026",
+            score=0.71,
+            is_user_contributed=True,
+        )
+        snap = rec.snapshot()
+        bucket = snap["mixer_sanity_buckets"][0]
+        # Folded to "user:<hex>" — verbatim string NEVER appears.
+        assert bucket["matched_profile"].startswith("user:")
+        # 8 hex chars after the prefix (4-byte blake2b digest).
+        assert len(bucket["matched_profile"]) == len("user:") + 8
+        assert "my_weird_custom_profile" not in bucket["matched_profile"]
+
+    def test_same_user_profile_always_hashes_to_same_bucket(self, output_path: Path) -> None:
+        """Determinism — two calls with the same user profile_id
+        MUST land in the same bucket (else metrics would bloat to
+        N calls = N buckets)."""
+        rec = VoiceHealthTelemetry(enabled=True, output_path=output_path)
+        for _ in range(5):
+            rec.record_mixer_sanity_outcome(
+                decision="healed",
+                matched_profile="persistent_user_profile_id",
+                score=0.8,
+                is_user_contributed=True,
+            )
+        snap = rec.snapshot()
+        buckets = snap["mixer_sanity_buckets"]
+        assert len(buckets) == 1
+        assert buckets[0]["count"] == 5
+
+    def test_different_user_profiles_get_different_buckets(self, output_path: Path) -> None:
+        rec = VoiceHealthTelemetry(enabled=True, output_path=output_path)
+        rec.record_mixer_sanity_outcome(
+            decision="healed",
+            matched_profile="user_profile_alpha",
+            score=0.8,
+            is_user_contributed=True,
+        )
+        rec.record_mixer_sanity_outcome(
+            decision="healed",
+            matched_profile="user_profile_beta",
+            score=0.9,
+            is_user_contributed=True,
+        )
+        snap = rec.snapshot()
+        assert len({b["matched_profile"] for b in snap["mixer_sanity_buckets"]}) == 2
+
+    def test_none_profile_maps_to_none_bucket(self, output_path: Path) -> None:
+        rec = VoiceHealthTelemetry(enabled=True, output_path=output_path)
+        rec.record_mixer_sanity_outcome(
+            decision="skipped_healthy",
+            matched_profile=None,
+            score=0.0,
+            is_user_contributed=False,
+        )
+        snap = rec.snapshot()
+        assert snap["mixer_sanity_buckets"][0]["matched_profile"] == "none"

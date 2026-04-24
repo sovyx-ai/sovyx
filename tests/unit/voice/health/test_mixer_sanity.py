@@ -916,6 +916,7 @@ class TestTelemetry:
             decision=result.decision.value,
             matched_profile=None,
             score=0.0,
+            is_user_contributed=False,
         )
 
     @pytest.mark.asyncio()
@@ -953,10 +954,20 @@ class TestTelemetry:
                 self.calls: list[dict[str, object]] = []
 
             def record_mixer_sanity_outcome(
-                self, *, decision: str, matched_profile: str | None, score: float
+                self,
+                *,
+                decision: str,
+                matched_profile: str | None,
+                score: float,
+                is_user_contributed: bool = False,
             ) -> None:
                 self.calls.append(
-                    {"decision": decision, "matched_profile": matched_profile, "score": score}
+                    {
+                        "decision": decision,
+                        "matched_profile": matched_profile,
+                        "score": score,
+                        "is_user_contributed": is_user_contributed,
+                    }
                 )
 
         fake_singleton = MagicMock()
@@ -1075,6 +1086,7 @@ class TestTelemetry:
                 decision: str,  # noqa: ARG002
                 matched_profile: str | None,  # noqa: ARG002
                 score: float,  # noqa: ARG002
+                is_user_contributed: bool = False,  # noqa: ARG002
             ) -> None:
                 raise RuntimeError("telemetry backend unreachable")
 

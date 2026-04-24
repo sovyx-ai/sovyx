@@ -187,6 +187,7 @@ class _TelemetryProto(Protocol):
         decision: str,
         matched_profile: str | None,
         score: float,
+        is_user_contributed: bool = False,
     ) -> None: ...
 
 
@@ -199,6 +200,7 @@ class _NoopTelemetry:
         decision: str,  # noqa: ARG002 — Protocol conformance
         matched_profile: str | None,  # noqa: ARG002
         score: float,  # noqa: ARG002
+        is_user_contributed: bool = False,  # noqa: ARG002
     ) -> None:
         """No-op — L2.5 respects the user's ``telemetry.enabled=False``."""
         return
@@ -755,6 +757,7 @@ async def _check_and_maybe_heal_impl(
             decision=result.decision.value,
             matched_profile=result.matched_kb_profile,
             score=result.kb_match_score,
+            is_user_contributed=(ctx.kb_match is not None and ctx.kb_match.is_user_contributed),
         )
     except Exception:  # noqa: BLE001 — never let telemetry mask a real outcome
         logger.exception(
@@ -1140,10 +1143,22 @@ class _SanityOrchestrator:
             c.diagnosis_after = Diagnosis.HEALTHY
             return _StepResult(next_step="persist")
         c.error_token = "MIXER_SANITY_VALIDATION_FAILED"
+        # Paranoid-QA R2 HIGH #6: emit explicit numeric fields rather
+        # than letting structlog ``repr()`` the whole dataclass.
+        # ``repr(dataclass)`` is an unbounded surface — a future
+        # field addition (e.g., a raw buffer sample, a device name,
+        # a file path) would be logged verbatim by accident.
+        # Explicit fields put the log schema under review.
         logger.info(
             "mixer_sanity_validation_gates_failed",
             endpoint_guid=c.endpoint.endpoint_guid,
-            metrics=metrics,
+            rms_dbfs=metrics.rms_dbfs,
+            peak_dbfs=metrics.peak_dbfs,
+            snr_db_vocal_band=metrics.snr_db_vocal_band,
+            silero_max_prob=metrics.silero_max_prob,
+            silero_mean_prob=metrics.silero_mean_prob,
+            wake_word_stage2_prob=metrics.wake_word_stage2_prob,
+            measurement_duration_ms=metrics.measurement_duration_ms,
         )
         return _StepResult(next_step="rollback")
 

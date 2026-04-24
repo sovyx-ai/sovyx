@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import hashlib
 import json
 import os
 import tempfile
@@ -124,14 +125,62 @@ class MixerSanityOutcomeKey:
         decision: :class:`MixerSanityDecision` value (e.g., ``"healed"``,
             ``"skipped_healthy"``, ``"rolled_back"``). Stable string —
             dashboards key on it.
-        matched_profile: KB profile_id that matched, or ``"none"`` when
-            no profile drove the decision. Kept low-cardinality: the
-            shipped KB is small; user-contributed profiles share their
-            profile_id too.
+        matched_profile: Low-cardinality profile bucket. Shipped KB
+            profile_ids are passed through verbatim (small, curated
+            set). User-contributed profile_ids (arbitrary strings
+            from ``~/.sovyx/mixer_kb/user/``) collapse to
+            ``"user:<8-hex>"`` — a stable short hash so the same
+            user profile always hits the same bucket, but Prometheus
+            / OTLP label cardinality stays bounded to shipped-count
+            + at most 2^32 buckets instead of the unbounded set of
+            arbitrary strings. ``"none"`` when no profile drove the
+            decision.
+
+    Paranoid-QA R2 HIGH #7: the bucketing is performed at
+    :meth:`VoiceHealthTelemetry.record_mixer_sanity_outcome` call
+    time via the ``is_user_contributed`` flag — the key itself
+    stays a plain string so downstream dashboards don't need to
+    parse provenance.
     """
 
     decision: str
     matched_profile: str
+
+
+_USER_PROFILE_HASH_LEN = 8
+"""Short-hash prefix length for user-contributed profile IDs.
+
+8 hex chars = 32 bits of hash = ~4.3B distinct buckets. A realistic
+deployment has O(100) user profiles — collisions are negligible
+while the cardinality ceiling is well under Prometheus's typical
+10k-label budget per metric.
+"""
+
+
+def _bucket_matched_profile(
+    matched_profile: str | None,
+    *,
+    is_user_contributed: bool,
+) -> str:
+    """Fold a raw profile_id into a cardinality-bounded bucket label.
+
+    Shipped profiles return verbatim; user profiles return
+    ``"user:<short-hash>"``. ``None`` → ``"none"``.
+    """
+    if matched_profile is None or matched_profile == "":
+        return "none"
+    if not is_user_contributed:
+        return matched_profile
+    # blake2b with a short digest is the canonical "give me a stable
+    # short fingerprint" API; usedforsecurity=False clarifies intent
+    # (we don't care about cryptographic strength — just stability +
+    # hash-quality better than naive truncation).
+    digest = hashlib.blake2b(
+        matched_profile.encode("utf-8"),
+        digest_size=_USER_PROFILE_HASH_LEN // 2,
+        usedforsecurity=False,
+    ).hexdigest()
+    return f"user:{digest}"
 
 
 @dataclass(slots=True)
@@ -240,6 +289,7 @@ class VoiceHealthTelemetry:
         decision: str,
         matched_profile: str | None,
         score: float,
+        is_user_contributed: bool = False,
     ) -> None:
         """Bump the bucket for ``(decision, matched_profile)`` by one.
 
@@ -261,12 +311,25 @@ class VoiceHealthTelemetry:
             score: Composite KB match score in ``[0, 1]``. Accumulated
                 into ``score_sum`` for averaging; the snapshot surfaces
                 the average per bucket.
+            is_user_contributed: When ``True``, ``matched_profile`` is
+                folded into ``"user:<8-hex-hash>"`` via
+                :func:`_bucket_matched_profile`. Paranoid-QA R2
+                HIGH #7: user-contributed profile IDs are arbitrary
+                strings from ``~/.sovyx/mixer_kb/user/`` — admitting
+                them as raw label values would blow up metric
+                cardinality on any upstream Prometheus / OTLP
+                collector. Shipped profile IDs flow through
+                verbatim (small curated set). Defaults to ``False``
+                so pre-R2 callers keep working.
         """
         if not self._enabled:
             return
         key = MixerSanityOutcomeKey(
             decision=decision or "unknown",
-            matched_profile=matched_profile or "none",
+            matched_profile=_bucket_matched_profile(
+                matched_profile,
+                is_user_contributed=is_user_contributed,
+            ),
         )
         now_monotonic = self._monotonic()
         flush_due = False
@@ -422,6 +485,7 @@ def record_mixer_sanity_outcome(
     decision: str,
     matched_profile: str | None,
     score: float,
+    is_user_contributed: bool = False,
 ) -> None:
     """Convenience wrapper — forwards to the installed recorder if any.
 
@@ -437,6 +501,7 @@ def record_mixer_sanity_outcome(
         decision=decision,
         matched_profile=matched_profile,
         score=score,
+        is_user_contributed=is_user_contributed,
     )
 
 

@@ -113,16 +113,20 @@ def score_profile(
             onto actual control snapshots.
     """
     # Layer 0: codec gate (hard requirement).
+    #
+    # Paranoid-QA R2 HIGH #5: we deliberately do NOT log the
+    # mismatch here. ``_score_all`` calls this once per KB profile on
+    # every cascade — with a growing shipped KB (50+ profiles) this
+    # fires a DEBUG event per profile per cascade, polluting logs
+    # when operators enable DEBUG to debug something unrelated. The
+    # aggregate scoring outcome is logged ONCE at
+    # :meth:`MixerKBLookup.match` (``mixer_kb_match_selected`` /
+    # ``mixer_kb_ambiguous_match``); per-profile mismatches add no
+    # actionable information on top.
     if hw.codec_id is None or not fnmatch.fnmatchcase(
         hw.codec_id,
         profile.codec_id_glob,
     ):
-        logger.debug(
-            "mixer_kb_codec_mismatch",
-            profile_id=profile.profile_id,
-            profile_codec_glob=profile.codec_id_glob,
-            hw_codec_id=hw.codec_id,
-        )
         return (0.0, (("codec_id", 0.0, _WEIGHT_CODEC_ID),))
 
     scores: list[tuple[str, float, float]] = [
