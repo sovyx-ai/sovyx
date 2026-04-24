@@ -169,6 +169,8 @@ async def apply_mixer_reset(
         card_index=card_index,
         reverted_controls=tuple(rollback_log),
         applied_controls=tuple(applied_log),
+        # ``apply_mixer_reset`` never touches enum controls; defaults
+        # to empty tuple to satisfy the R3 CRIT-1 extended shape.
     )
 
 
@@ -177,13 +179,25 @@ async def restore_mixer_snapshot(
     *,
     tuning: VoiceTuningConfig,
 ) -> None:
-    """Restore every control in ``snapshot`` to its pre-apply raw value.
+    """Restore every control in ``snapshot`` to its pre-apply state.
 
-    Walks :attr:`MixerApplySnapshot.reverted_controls` in reverse so
-    the last mutation is undone first (matches the LIFO stack the
-    apply phase built). Best-effort: a failure on one control is
-    logged at WARNING but does not abort the rest — partial revert is
-    still strictly better than no revert. The function never raises.
+    Walks :attr:`MixerApplySnapshot.reverted_enum_controls` FIRST
+    (R2 LOW-5 LIFO ordering — enum mutations happen after numerics
+    in apply, so they must be undone first on restore), then
+    :attr:`reverted_controls` in reverse so the last numeric
+    mutation is undone first (matches the LIFO stack the apply
+    phase built).
+
+    Best-effort: a failure on one control is logged at WARNING but
+    does not abort the rest — partial revert is still strictly
+    better than no revert. The function never raises.
+
+    Paranoid-QA R3 CRIT-1: walks the enum list too. Previously
+    enum rollback was handled only inside ``apply_mixer_preset``'s
+    own except handlers; snapshot-driven restore (half-heal
+    recovery, external teardown) bypassed it entirely, leaving
+    Auto-Mute in the failing-validation applied state after a
+    cross-boot replay.
     """
     if sys.platform != "linux":
         return
@@ -192,10 +206,42 @@ async def restore_mixer_snapshot(
             "linux_mixer_restore_skipped_no_amixer",
             card_index=snapshot.card_index,
             pending_controls=len(snapshot.reverted_controls),
+            pending_enum_controls=len(snapshot.reverted_enum_controls),
         )
         return
 
     timeout_s = tuning.linux_mixer_subprocess_timeout_s
+
+    # LIFO: enum rollback FIRST (mirrors apply order: enum writes
+    # happened AFTER the numeric loop).
+    for enum_name, enum_label in reversed(snapshot.reverted_enum_controls):
+        try:
+            await asyncio.to_thread(
+                _amixer_set_enum,
+                snapshot.card_index,
+                enum_name,
+                enum_label,
+                timeout_s,
+            )
+        except BypassApplyError as exc:
+            logger.warning(
+                "linux_mixer_restore_enum_control_failed",
+                card_index=snapshot.card_index,
+                control=enum_name,
+                target_label=enum_label,
+                reason=exc.reason,
+                detail=str(exc),
+            )
+        except asyncio.CancelledError:
+            logger.warning(
+                "linux_mixer_restore_cancelled",
+                card_index=snapshot.card_index,
+                control=enum_name,
+                pending_after=len(snapshot.reverted_controls)
+                + len(snapshot.reverted_enum_controls),
+            )
+            raise
+
     for name, raw in reversed(snapshot.reverted_controls):
         try:
             await asyncio.to_thread(
@@ -527,10 +573,18 @@ async def apply_mixer_preset(
         await _rollback_best_effort(card_index, rollback_log, timeout_s=timeout_s)
         raise
 
+    # Paranoid-QA R3 CRIT-1: include the enum rollback log so the
+    # half-heal WAL can serialise BOTH numeric and enum pre-apply
+    # state. Prior shape dropped ``enum_rollback_log`` — a
+    # mid-apply crash between numeric mutations and the Auto-Mute
+    # write left WAL recovery restoring numerics but not the enum,
+    # producing a frankenstate mixer with numeric = pre-apply +
+    # enum = post-apply (failing-validation) Disabled/Enabled.
     return MixerApplySnapshot(
         card_index=card_index,
         reverted_controls=tuple(rollback_log),
         applied_controls=tuple(applied_log),
+        reverted_enum_controls=tuple(enum_rollback_log),
     )
 
 

@@ -1182,11 +1182,23 @@ class MixerApplySnapshot:
             telemetry + the dashboard's confirmation UI. Never used for
             revert — the revert-from-snapshot contract is "restore the
             pre-apply state", not "set to a different target".
+        reverted_enum_controls: ``(name, pre_apply_enum_label)`` pairs
+            for enum-typed controls mutated during apply (chiefly
+            HDA ``Auto-Mute Mode``). Default ``()`` so callers that
+            only touch numeric controls need no new field. Paranoid-QA
+            R3 CRIT-1: added to fill the half-heal WAL coverage gap
+            — without it, a mid-apply crash between the numeric
+            mutations and the auto-mute write would be recovered with
+            numerics restored but Auto-Mute stuck in the applied
+            ``Disabled``/``Enabled`` state. Revert walks this list in
+            reverse AFTER (or before, per the LIFO-order fix)
+            ``reverted_controls``.
     """
 
     card_index: int
     reverted_controls: tuple[tuple[str, int], ...]
     applied_controls: tuple[tuple[str, int], ...]
+    reverted_enum_controls: tuple[tuple[str, str], ...] = ()
 
 
 # ── L2.5 mixer sanity (Phase F1) ────────────────────────────────────────

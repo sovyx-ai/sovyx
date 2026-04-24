@@ -429,3 +429,95 @@ class TestLoadWalSizeCap:
         wal = load_wal(path)
         assert wal is not None
         assert len(wal.reverted_controls) == 5
+
+
+# ── Paranoid-QA R3 CRIT-1 — auto_mute WAL coverage ─────────────────
+
+
+class TestEnumControlsPersistence:
+    """The WAL must carry the pre-apply enum label (Auto-Mute Mode)
+    so a mid-apply crash can fully restore state on next boot.
+    Before R3 CRIT-1, only numeric controls were serialised and
+    recovery produced a frankenstate mixer.
+    """
+
+    def test_write_and_load_enum_controls_roundtrip(self, tmp_path: Path) -> None:
+        path = tmp_path / "wal.json"
+        ok = write_wal(
+            card_index=0,
+            reverted_controls=(("Capture", 40),),
+            reverted_enum_controls=(("Auto-Mute Mode", "Enabled"),),
+            path=path,
+        )
+        assert ok is True
+        wal = load_wal(path)
+        assert wal is not None
+        assert wal.reverted_enum_controls == (("Auto-Mute Mode", "Enabled"),)
+        snap = wal.to_apply_snapshot()
+        assert snap.reverted_enum_controls == (("Auto-Mute Mode", "Enabled"),)
+
+    def test_empty_enum_controls_omitted_from_json(self, tmp_path: Path) -> None:
+        """When enum list is empty, the key is NOT written — keeps
+        the WAL compact and backwards-readable by older schema-v1
+        readers that never knew about the field."""
+        path = tmp_path / "wal.json"
+        write_wal(
+            card_index=0,
+            reverted_controls=(("Capture", 40),),
+            path=path,
+        )
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert "reverted_enum_controls" not in payload
+
+    def test_v1_wal_without_enum_key_loads(self, tmp_path: Path) -> None:
+        """A legacy WAL written before the enum field existed still
+        deserialises — ``reverted_enum_controls`` defaults to ``()``."""
+        path = tmp_path / "wal.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "card_index": 0,
+                    "reverted_controls": [["Capture", 40]],
+                }
+            ),
+            encoding="utf-8",
+        )
+        wal = load_wal(path)
+        assert wal is not None
+        assert wal.reverted_enum_controls == ()
+
+    def test_enum_label_forbidden_chars_refused(self, tmp_path: Path) -> None:
+        """Enum labels go to ``_amixer_set_enum`` as argv — same
+        content-validation rules as numeric names."""
+        path = tmp_path / "wal.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "card_index": 0,
+                    "reverted_controls": [],
+                    "reverted_enum_controls": [
+                        ["Auto-Mute Mode", "Enabled',iface=CARD"]
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        assert load_wal(path) is None
+
+    def test_enum_too_many_entries_refused(self, tmp_path: Path) -> None:
+        path = tmp_path / "wal.json"
+        entries = [["X", "Y"] for _ in range(200)]
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "card_index": 0,
+                    "reverted_controls": [],
+                    "reverted_enum_controls": entries,
+                }
+            ),
+            encoding="utf-8",
+        )
+        assert load_wal(path) is None

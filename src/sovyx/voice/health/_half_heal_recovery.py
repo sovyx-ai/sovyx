@@ -152,25 +152,23 @@ class RestoreSnapshotFn(Protocol):
 class HalfHealWal:
     """Serialisable view of a pending mixer-sanity apply.
 
-    Mirrors :class:`MixerApplySnapshot` — the two types have
-    identical payload but different intents:
+    Mirrors :class:`MixerApplySnapshot` — same intent, write-ahead
+    form (carries pre-apply state only; post-apply state isn't
+    known at WAL-write time).
 
-    * ``MixerApplySnapshot`` — result of a completed apply; carries
-      both ``reverted_controls`` (pre-apply state for rollback) and
-      ``applied_controls`` (post-apply state for audit).
-    * ``HalfHealWal`` — intent to apply; carries ONLY
-      ``reverted_controls`` because the post-apply state isn't
-      known at WAL-write time (we write before the first mutation).
-
-    On recovery, the WAL is promoted back to a
-    :class:`MixerApplySnapshot` with ``applied_controls=()`` so the
-    caller's ``restore_fn`` can consume it without a type-shape
-    adapter. The empty ``applied_controls`` is harmless —
-    ``restore_mixer_snapshot`` only reads ``reverted_controls``.
+    Paranoid-QA R3 CRIT-1: also carries ``reverted_enum_controls``.
+    Before this, ``_build_half_heal_wal_plan`` only captured numeric
+    pre-apply state, and a mid-apply crash between the numeric
+    loop and ``_apply_auto_mute`` produced a frankenstate mixer on
+    next-boot recovery (numerics restored, Auto-Mute stuck in
+    ``Disabled``/``Enabled``). The new field default is ``()`` so
+    serialised WALs without the key (schema-v1 upgrades) still
+    deserialise cleanly — no WAL-schema bump required.
     """
 
     card_index: int
     reverted_controls: tuple[tuple[str, int], ...]
+    reverted_enum_controls: tuple[tuple[str, str], ...] = ()
 
     def to_apply_snapshot(self) -> MixerApplySnapshot:
         """Promote to the shape :func:`restore_mixer_snapshot` consumes."""
@@ -178,6 +176,7 @@ class HalfHealWal:
             card_index=self.card_index,
             reverted_controls=self.reverted_controls,
             applied_controls=(),
+            reverted_enum_controls=self.reverted_enum_controls,
         )
 
 
@@ -196,6 +195,7 @@ def write_wal(
     card_index: int,
     reverted_controls: tuple[tuple[str, int], ...],
     path: Path,
+    reverted_enum_controls: tuple[tuple[str, str], ...] = (),
 ) -> bool:
     """Persist a ``HalfHealWal`` atomically. Returns ``True`` on success.
 
@@ -212,12 +212,23 @@ def write_wal(
     without the safety net (production callers log a WARN if this
     returns False — the alternative is aborting the whole cascade
     on a transient disk hiccup, which is worse).
+
+    Paranoid-QA R3 CRIT-1: ``reverted_enum_controls`` captures the
+    pre-apply label of any enum-typed control that the preset is
+    about to mutate (chiefly HDA ``Auto-Mute Mode``). Default
+    ``()`` makes existing callers work unchanged; orchestrator
+    populates it when ``preset.auto_mute_mode != "leave"`` so a
+    mid-apply crash can be fully recovered.
     """
-    payload = {
+    payload: dict[str, object] = {
         "schema_version": _WAL_SCHEMA_VERSION,
         "card_index": card_index,
         "reverted_controls": [[name, raw] for name, raw in reverted_controls],
     }
+    if reverted_enum_controls:
+        payload["reverted_enum_controls"] = [
+            [name, label] for name, label in reverted_enum_controls
+        ]
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -396,7 +407,75 @@ def load_wal(path: Path) -> HalfHealWal | None:
             detail=str(exc),
         )
         return None
-    return HalfHealWal(card_index=card_index, reverted_controls=controls)
+
+    # Paranoid-QA R3 CRIT-1: parse the optional enum-controls list.
+    # Absent key → empty tuple (backwards-compatible with v1 WALs
+    # written before this field existed). Same validation rules as
+    # numeric entries: length cap, forbidden chars. Enum label is
+    # also subject to the name-content rules because it's passed
+    # as an argv element to ``amixer`` — an attacker-controlled
+    # label with `,=` could confuse the selector just as much.
+    enum_raw = data.get("reverted_enum_controls")
+    enum_controls: tuple[tuple[str, str], ...] = ()
+    if enum_raw is not None:
+        if not isinstance(enum_raw, list):
+            logger.warning(
+                "mixer_half_heal_wal_enum_controls_not_list",
+                path=str(path),
+            )
+            return None
+        if len(enum_raw) > _WAL_MAX_ENTRIES:
+            logger.warning(
+                "mixer_half_heal_wal_too_many_enum_entries",
+                path=str(path),
+                count=len(enum_raw),
+                limit=_WAL_MAX_ENTRIES,
+            )
+            return None
+        try:
+            enum_builder: list[tuple[str, str]] = []
+            for entry in enum_raw:
+                if not isinstance(entry, (list, tuple)) or len(entry) != 2:
+                    continue
+                name = str(entry[0])
+                label = str(entry[1])
+                for field_name, field_value in (("name", name), ("label", label)):
+                    if (
+                        len(field_value) == 0
+                        or len(field_value) > _WAL_MAX_CONTROL_NAME_LEN
+                    ):
+                        logger.warning(
+                            "mixer_half_heal_wal_enum_field_length_invalid",
+                            path=str(path),
+                            field=field_name,
+                            length=len(field_value),
+                            limit=_WAL_MAX_CONTROL_NAME_LEN,
+                        )
+                        return None
+                    if any(
+                        c in _WAL_CONTROL_NAME_FORBIDDEN_CHARS for c in field_value
+                    ):
+                        logger.warning(
+                            "mixer_half_heal_wal_enum_field_forbidden_chars",
+                            path=str(path),
+                            field=field_name,
+                        )
+                        return None
+                enum_builder.append((name, label))
+            enum_controls = tuple(enum_builder)
+        except (TypeError, ValueError, IndexError) as exc:
+            logger.warning(
+                "mixer_half_heal_wal_enum_controls_invalid",
+                path=str(path),
+                detail=str(exc),
+            )
+            return None
+
+    return HalfHealWal(
+        card_index=card_index,
+        reverted_controls=controls,
+        reverted_enum_controls=enum_controls,
+    )
 
 
 def clear_wal(path: Path) -> None:

@@ -63,6 +63,7 @@ from sovyx.voice.health._mixer_kb.matcher import _match_factory_signature
 from sovyx.voice.health.contract import (
     Combo,
     Diagnosis,
+    MixerControlRole,
     MixerSanityDecision,
     MixerSanityResult,
     MixerValidationMetrics,
@@ -84,7 +85,6 @@ if TYPE_CHECKING:
         HardwareContext,
         MixerApplySnapshot,
         MixerCardSnapshot,
-        MixerControlRole,
         MixerControlSnapshot,
         MixerPresetSpec,
         ValidationGates,
@@ -1317,10 +1317,25 @@ class _SanityOrchestrator:
         pre_apply_controls = self._build_half_heal_wal_plan(
             target_card, role_mapping, c.kb_match.profile.recommended_preset
         )
-        if c.half_heal_wal_path is not None and pre_apply_controls:
+        # Paranoid-QA R3 CRIT-1: pre-read the Auto-Mute Mode label
+        # when the preset is going to toggle it, so the WAL carries
+        # the pre-apply enum state too. Without this, a mid-apply
+        # crash between the numeric loop and ``_apply_auto_mute``
+        # would be recovered with numerics restored but Auto-Mute
+        # stuck in the applied (``Disabled``/``Enabled``) state.
+        pre_apply_enum_controls = await self._build_half_heal_wal_enum_plan(
+            target_card.card_index,
+            role_mapping,
+            c.kb_match.profile.recommended_preset,
+            timeout_s=c.tuning.linux_mixer_subprocess_timeout_s,
+        )
+        if c.half_heal_wal_path is not None and (
+            pre_apply_controls or pre_apply_enum_controls
+        ):
             wal_written = _write_half_heal_wal(
                 card_index=target_card.card_index,
                 reverted_controls=pre_apply_controls,
+                reverted_enum_controls=pre_apply_enum_controls,
                 path=c.half_heal_wal_path,
             )
             if not wal_written:
@@ -1393,6 +1408,72 @@ class _SanityOrchestrator:
         # return the control tuples.
         del target_card
         return tuple(entries)
+
+    @staticmethod
+    async def _build_half_heal_wal_enum_plan(
+        card_index: int,
+        role_mapping: Mapping[MixerControlRole, tuple[MixerControlSnapshot, ...]],
+        preset: MixerPresetSpec,
+        *,
+        timeout_s: float,
+    ) -> tuple[tuple[str, str], ...]:
+        """Pre-compute the (name, pre_apply_enum_label) set for the WAL.
+
+        Paranoid-QA R3 CRIT-1: covers the enum mutation path that
+        the numeric WAL plan misses. Reads the current
+        ``Auto-Mute Mode`` label when the preset is going to toggle
+        it. Uses :func:`_amixer_get_enum` via :func:`asyncio.to_thread`
+        so the subprocess doesn't block the event loop (CLAUDE.md
+        anti-pattern #14).
+
+        Returns empty tuple when:
+
+        * The preset's ``auto_mute_mode`` is ``"leave"`` (no-op).
+        * The resolver doesn't expose a resolved
+          ``MixerControlRole.AUTO_MUTE`` AND the default
+          ``"Auto-Mute Mode"`` control isn't on the card.
+        * The amixer read fails for any reason — we treat absence
+          as "nothing to record"; if apply later succeeds, no WAL
+          entry is the correct state.
+        """
+        # Only touch enum controls when the preset actually toggles them.
+        if preset.auto_mute_mode == "leave":
+            return ()
+        # Resolve the control name the same way ``_apply_auto_mute``
+        # does: role-mapped control first, canonical fallback second.
+        # Import lazily to avoid a top-level cycle with
+        # ``_linux_mixer_apply`` (which imports from contract.py too).
+        from sovyx.voice.health._linux_mixer_apply import (  # noqa: PLC0415
+            _AUTO_MUTE_MODE_CONTROL_NAME,
+            _amixer_get_enum,
+        )
+
+        auto_mute_snapshots = role_mapping.get(MixerControlRole.AUTO_MUTE, ())
+        control_name = (
+            auto_mute_snapshots[0].name
+            if auto_mute_snapshots
+            else _AUTO_MUTE_MODE_CONTROL_NAME
+        )
+        try:
+            current_label = await asyncio.to_thread(
+                _amixer_get_enum,
+                card_index,
+                control_name,
+                timeout_s,
+            )
+        except Exception as exc:  # noqa: BLE001 — WAL pre-read is best-effort
+            logger.debug(
+                "mixer_sanity_auto_mute_pre_read_failed",
+                card_index=card_index,
+                control_name=control_name,
+                detail=str(exc)[:200],
+            )
+            return ()
+        if current_label is None:
+            # Control absent on this card — apply will also no-op
+            # on it, so no WAL entry is correct.
+            return ()
+        return ((control_name, current_label),)
 
     async def _step_validate(self) -> _StepResult:
         """Run post-apply validation; gates pass → persist, fail → rollback."""
