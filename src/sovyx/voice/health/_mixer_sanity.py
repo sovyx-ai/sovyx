@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import os
 import subprocess  # noqa: S404 — fixed-argv subprocess to trusted alsa-utils binary
 import sys
@@ -457,6 +458,15 @@ class _OrchestratorContext:
     # Persist outcome — False/None means the preset applied but
     # survives only until reboot.
     persist_succeeded: bool | None = None
+    # Paranoid-QA R2 HIGH #4: guard against double-rollback. The
+    # orchestrator's rollback path can be entered twice on a
+    # validation-failure → cancel chain (``_step_rollback`` runs, then
+    # the top-level CancelledError handler runs ``rollback_if_needed``
+    # again). ``restore_mixer_snapshot`` is semantically idempotent
+    # but re-applying the same snapshot wastes amixer round-trips +
+    # reopens the race window for a concurrent user tweak to get
+    # silently reverted.
+    rollback_performed: bool = False
 
     def controls_modified(self) -> tuple[str, ...]:
         """Names of controls actually mutated, as a flat tuple."""
@@ -488,6 +498,50 @@ class _StepResult:
 # ── Public entry point ──────────────────────────────────────────────
 
 
+# Paranoid-QA R2 HIGH #1: single global asyncio.Lock serialises every
+# L2.5 invocation regardless of endpoint. The ALSA mixer is shared
+# kernel state — two concurrent cascades (two endpoints coming online
+# within the cascade-debounce window, or a watchdog-triggered
+# recascade overlapping a boot-time cascade) could both probe the
+# same state, both apply, and leave the post-apply rollback out of
+# sync with the current committed preset.
+#
+# Contention budget: L2.5 fires at most on boot + on hot-plug events.
+# A single global lock is boring, correct, and has no semantic holes.
+# Per-card or per-endpoint locks would admit harder races because
+# different cascades would probe overlapping card sets.
+_L25_LOCK: asyncio.Lock | None = None
+
+
+def _get_l25_lock() -> asyncio.Lock:
+    """Lazy lock factory — creates the Lock on first use within the
+    current event loop. Module-level instantiation would bind to the
+    wrong loop in tests that spin up fresh loops per-case.
+    """
+    global _L25_LOCK  # noqa: PLW0603 — single-instance lazy init
+    if _L25_LOCK is None:
+        _L25_LOCK = asyncio.Lock()
+    return _L25_LOCK
+
+
+# Paranoid-QA R2 HIGH #2: contextvar guard against recursive entry.
+# The validation_probe_fn injected by production is wired through the
+# voice stack (capture probe + wake-word probe). A misrouted
+# event — e.g., validation probe triggering an audio-service restart
+# that fires a watchdog recascade — would re-enter L2.5 from within
+# the apply-validate window, racing the ALSA mutations we're in the
+# middle of.
+#
+# A contextvar (rather than a plain thread-local or module flag) is
+# the right tool because asyncio tasks inherit contextvars by
+# default — so a child Task spawned by the orchestrator also sees
+# the guard, blocking inadvertent self-dispatch through task groups.
+_L25_INSIDE: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "sovyx_mixer_sanity_inside",
+    default=False,
+)
+
+
 async def check_and_maybe_heal(
     endpoint: CandidateEndpoint,
     hw: HardwareContext,
@@ -517,6 +571,15 @@ async def check_and_maybe_heal(
     decision becomes ``ERROR`` with
     ``error=MIXER_SANITY_BUDGET_EXCEEDED``.
 
+    Concurrency: a module-level ``asyncio.Lock`` serialises every
+    call, regardless of endpoint. Two concurrent cascades contend
+    for the same ALSA mixer — the second waits for the first's
+    full apply-validate-persist chain to complete. Plus a
+    contextvar-based recursive-entry guard: nested calls within the
+    same asyncio Task short-circuit to ``ERROR`` with error token
+    ``MIXER_SANITY_REENTRANT_GUARD`` (a validation probe triggering
+    a recascade should never be able to race the in-flight apply).
+
     Platform: Linux only in F1. Non-Linux callers receive
     ``DEFERRED_PLATFORM`` with no side-effects.
     """
@@ -527,6 +590,86 @@ async def check_and_maybe_heal(
             endpoint_guid=endpoint.endpoint_guid,
         )
         return _defer_platform_result()
+
+    # Reentrancy guard — checked BEFORE acquiring the lock so a
+    # nested call can't deadlock on a lock its ancestor already
+    # holds.
+    if _L25_INSIDE.get():
+        logger.warning(
+            "mixer_sanity_reentrant_call_blocked",
+            endpoint_guid=endpoint.endpoint_guid,
+            note="L2.5 already running in this Task — returning ERROR",
+        )
+        return _reentrant_result()
+
+    token = _L25_INSIDE.set(True)
+    try:
+        async with _get_l25_lock():
+            return await _check_and_maybe_heal_impl(
+                endpoint,
+                hw,
+                kb_lookup=kb_lookup,
+                role_resolver=role_resolver,
+                validation_probe_fn=validation_probe_fn,
+                tuning=tuning,
+                mixer_probe_fn=mixer_probe_fn,
+                mixer_apply_fn=mixer_apply_fn,
+                mixer_restore_fn=mixer_restore_fn,
+                persist_fn=persist_fn,
+                telemetry=telemetry,
+                combo_store=combo_store,
+                capture_overrides=capture_overrides,
+            )
+    finally:
+        _L25_INSIDE.reset(token)
+
+
+def _reentrant_result() -> MixerSanityResult:
+    """Terminal record for a blocked recursive entry.
+
+    Shape mirrors :func:`_defer_platform_result` — zero side-effects,
+    explicit error token so telemetry + dashboard can surface the
+    guard firing as a distinct event from "real" L2.5 failures.
+    """
+    return MixerSanityResult(
+        decision=MixerSanityDecision.ERROR,
+        diagnosis_before=Diagnosis.UNKNOWN,
+        diagnosis_after=None,
+        regime="unknown",
+        matched_kb_profile=None,
+        kb_match_score=0.0,
+        user_customization_score=0.0,
+        cards_probed=(),
+        controls_modified=(),
+        rollback_snapshot=None,
+        probe_duration_ms=0,
+        apply_duration_ms=None,
+        validation_passed=None,
+        validation_metrics=None,
+        remediation=None,
+        error="MIXER_SANITY_REENTRANT_GUARD",
+    )
+
+
+async def _check_and_maybe_heal_impl(
+    endpoint: CandidateEndpoint,
+    hw: HardwareContext,
+    *,
+    kb_lookup: MixerKBLookup,
+    role_resolver: MixerControlRoleResolver,
+    validation_probe_fn: ValidationProbeFn,
+    tuning: VoiceTuningConfig,
+    mixer_probe_fn: MixerProbeFn | None = None,
+    mixer_apply_fn: MixerApplyFn | None = None,
+    mixer_restore_fn: MixerRestoreFn | None = None,
+    persist_fn: PersistFn | None = None,
+    telemetry: _TelemetryProto | None = None,
+    combo_store: ComboStore | None = None,
+    capture_overrides: CaptureOverrides | None = None,
+) -> MixerSanityResult:
+    """Actual state-machine body. Callers must acquire ``_get_l25_lock()``
+    and set the reentrancy contextvar before invoking this — the
+    public entry point :func:`check_and_maybe_heal` does both."""
 
     ctx = _OrchestratorContext(
         endpoint=endpoint,
@@ -661,7 +804,17 @@ class _SanityOrchestrator:
                 if self._ctx.apply_snapshot is not None:
                     self._ctx.decision = MixerSanityDecision.ROLLED_BACK
                     self._ctx.diagnosis_after = self._ctx.diagnosis_before
-                    self._ctx.validation_passed = False
+                    # Paranoid-QA R2 HIGH #10: preserve validation
+                    # truth. The earlier hard-coded ``= False`` lied
+                    # when validation had already passed and the
+                    # budget tripped during persist — the audit
+                    # record then read "apply succeeded, validation
+                    # failed, rolled back" when reality was "apply
+                    # succeeded, validation PASSED, persist starved
+                    # the budget, rolled back anyway". Only stamp
+                    # ``False`` when validation hadn't decided yet.
+                    if self._ctx.validation_passed is None:
+                        self._ctx.validation_passed = False
                 else:
                     self._ctx.decision = MixerSanityDecision.ERROR
                 self._ctx.error_token = "MIXER_SANITY_BUDGET_EXCEEDED"
@@ -690,10 +843,31 @@ class _SanityOrchestrator:
     def build_result(self) -> MixerSanityResult:
         """Freeze current context into the terminal
         :class:`MixerSanityResult` record.
+
+        Paranoid-QA R2 HIGH #9: enforces the shape invariant
+        ``apply_snapshot is not None ⇒ apply_duration_ms is not None``.
+        The two fields are set atomically inside ``_step_apply`` (no
+        await between them), so the invariant is true by construction
+        in the happy path. This assertion catches any future edit
+        that moves ``apply_duration_ms`` assignment past an await
+        point — at which point the builder produces an impossible
+        shape (``rollback_snapshot`` populated but ``apply_duration_ms``
+        None) that downstream dashboards would silently render as
+        "apply took 0 ms".
         """
         c = self._ctx
         decision = c.decision if c.decision is not None else MixerSanityDecision.ERROR
         match = c.kb_match
+        if c.apply_snapshot is not None and c.apply_duration_ms is None:
+            # Impossible in the happy path — defensive stamp + log
+            # so the invariant violation surfaces in observability
+            # without poisoning the result.
+            logger.error(
+                "mixer_sanity_impossible_shape_apply_duration_missing",
+                endpoint_guid=c.endpoint.endpoint_guid,
+                decision=decision.value,
+            )
+            c.apply_duration_ms = 0
         return MixerSanityResult(
             decision=decision,
             diagnosis_before=c.diagnosis_before,
@@ -728,8 +902,22 @@ class _SanityOrchestrator:
         cancellation delivered while restore was running mid-await,
         leaving the caller's shutdown path hanging on a coroutine
         that never propagated the cancel.
+
+        Paranoid-QA R2 HIGH #4: idempotent — second call is a no-op.
+        Rollback can be triggered from ``_step_rollback`` AND from a
+        top-level exception handler on the same invocation
+        (validation-fail → rollback step → caller cancels the
+        already-failing run mid-restore). The flag keeps the mixer
+        from being re-restored and also prevents the second call
+        from competing for the amixer lock with the first.
         """
         if self._ctx.apply_snapshot is None:
+            return
+        if self._ctx.rollback_performed:
+            logger.debug(
+                "mixer_sanity_rollback_skipped_already_done",
+                endpoint_guid=self._ctx.endpoint.endpoint_guid,
+            )
             return
         try:
             await self._ctx.mixer_restore_fn(
@@ -741,6 +929,13 @@ class _SanityOrchestrator:
                 "mixer_sanity_rollback_cancelled_mid_restore",
                 endpoint_guid=self._ctx.endpoint.endpoint_guid,
             )
+            # Do NOT set rollback_performed=True — cancellation mid-
+            # restore means the mixer is in an unknown state (part of
+            # the snapshot may have restored, part may not). A
+            # subsequent rollback attempt from the caller's handler
+            # should retry. Callers that can't tolerate that (e.g.,
+            # daemon shutdown) use ``contextlib.suppress`` at the
+            # outer frame.
             raise
         except Exception as exc:  # noqa: BLE001 — Exception-only; BaseException propagates
             logger.warning(
@@ -748,6 +943,13 @@ class _SanityOrchestrator:
                 endpoint_guid=self._ctx.endpoint.endpoint_guid,
                 detail=str(exc)[:200],
             )
+            # Mark performed even on logged failure — the restore
+            # helper itself logged the specifics and further retries
+            # from the same orchestrator won't succeed (state is
+            # locked by the same underlying failure mode).
+            self._ctx.rollback_performed = True
+            return
+        self._ctx.rollback_performed = True
 
     # ── Individual steps ────────────────────────────────────────────
 
