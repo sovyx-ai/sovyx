@@ -40,6 +40,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias, runtime_checkable
 
 from sovyx.observability.logging import get_logger
+from sovyx.voice.health._half_heal_recovery import (
+    clear_wal as _clear_half_heal_wal,
+)
+from sovyx.voice.health._half_heal_recovery import (
+    recover_if_present as _recover_half_heal_if_present,
+)
+from sovyx.voice.health._half_heal_recovery import (
+    write_wal as _write_half_heal_wal,
+)
 from sovyx.voice.health._linux_mixer_apply import (
     apply_mixer_preset as _default_apply_mixer_preset,
 )
@@ -74,6 +83,9 @@ if TYPE_CHECKING:
         HardwareContext,
         MixerApplySnapshot,
         MixerCardSnapshot,
+        MixerControlRole,
+        MixerControlSnapshot,
+        MixerPresetSpec,
         ValidationGates,
     )
 
@@ -169,6 +181,17 @@ class MixerSanitySetup:
     mixer_restore_fn: MixerRestoreFn | None = None
     persist_fn: PersistFn | None = None
     telemetry: _TelemetryProto | None = None
+    # Paranoid-QA R2 HIGH #3: path to the half-heal write-ahead
+    # log. ``None`` disables WAL recovery entirely (tests + dev
+    # environments without a persistent data_dir). Production wires
+    # ``default_wal_path(config.database.data_dir)``. When set,
+    # ``check_and_maybe_heal`` runs a recovery replay at the top of
+    # every cascade — if a prior invocation died mid-apply, its WAL
+    # is still on disk and gets replayed before the normal state
+    # machine runs. Also enables per-apply WAL writes around
+    # ``_step_apply`` so a crash DURING apply can be recovered on
+    # the next boot.
+    half_heal_wal_path: Path | None = None
 
 
 @runtime_checkable
@@ -441,6 +464,10 @@ class _OrchestratorContext:
     telemetry_was_provided: bool = False
     combo_store: ComboStore | None = None
     capture_overrides: CaptureOverrides | None = None
+    # Paranoid-QA R2 HIGH #3: when set, orchestrator writes a
+    # write-ahead log around _step_apply and attempts recovery at
+    # the top of the state machine. See :mod:`_half_heal_recovery`.
+    half_heal_wal_path: Path | None = None
 
     # Filled as the state machine progresses
     mixer_snapshot: tuple[MixerCardSnapshot, ...] = ()
@@ -559,6 +586,7 @@ async def check_and_maybe_heal(
     telemetry: _TelemetryProto | None = None,
     combo_store: ComboStore | None = None,
     capture_overrides: CaptureOverrides | None = None,
+    half_heal_wal_path: Path | None = None,
 ) -> MixerSanityResult:
     """Run the full L2.5 state machine for ``endpoint``.
 
@@ -581,6 +609,14 @@ async def check_and_maybe_heal(
     same asyncio Task short-circuit to ``ERROR`` with error token
     ``MIXER_SANITY_REENTRANT_GUARD`` (a validation probe triggering
     a recascade should never be able to race the in-flight apply).
+
+    Crash safety: when ``half_heal_wal_path`` is supplied, every
+    apply writes a write-ahead log to that path BEFORE the first
+    ``amixer_set`` and clears it on every terminal transition
+    (success, rollback, cancellation). If the process dies
+    mid-apply, the next cascade detects the WAL at entry and
+    replays it via ``mixer_restore_fn`` to restore the pre-apply
+    state before probing. See :mod:`_half_heal_recovery`.
 
     Platform: Linux only in F1. Non-Linux callers receive
     ``DEFERRED_PLATFORM`` with no side-effects.
@@ -607,6 +643,25 @@ async def check_and_maybe_heal(
     token = _L25_INSIDE.set(True)
     try:
         async with _get_l25_lock():
+            # Paranoid-QA R2 HIGH #3: half-heal recovery — if a
+            # previous L2.5 invocation died mid-apply, its WAL is
+            # on disk. Replay it now (before the state machine
+            # probes) so the mixer is back to pre-L2.5 state.
+            # Runs INSIDE the lock so two cascades can't race
+            # the WAL. Invoked once per cascade regardless of
+            # whether we end up applying anything — the cost is
+            # a single stat() when no WAL exists.
+            if half_heal_wal_path is not None:
+                effective_restore_fn = (
+                    mixer_restore_fn
+                    if mixer_restore_fn is not None
+                    else _default_restore_mixer_snapshot
+                )
+                await _recover_half_heal_if_present(
+                    path=half_heal_wal_path,
+                    restore_fn=effective_restore_fn,
+                    tuning=tuning,
+                )
             return await _check_and_maybe_heal_impl(
                 endpoint,
                 hw,
@@ -621,6 +676,7 @@ async def check_and_maybe_heal(
                 telemetry=telemetry,
                 combo_store=combo_store,
                 capture_overrides=capture_overrides,
+                half_heal_wal_path=half_heal_wal_path,
             )
     finally:
         _L25_INSIDE.reset(token)
@@ -668,6 +724,7 @@ async def _check_and_maybe_heal_impl(
     telemetry: _TelemetryProto | None = None,
     combo_store: ComboStore | None = None,
     capture_overrides: CaptureOverrides | None = None,
+    half_heal_wal_path: Path | None = None,
 ) -> MixerSanityResult:
     """Actual state-machine body. Callers must acquire ``_get_l25_lock()``
     and set the reentrancy contextvar before invoking this — the
@@ -693,6 +750,7 @@ async def _check_and_maybe_heal_impl(
         telemetry_was_provided=telemetry is not None,
         combo_store=combo_store,
         capture_overrides=capture_overrides,
+        half_heal_wal_path=half_heal_wal_path,
     )
 
     orchestrator = _SanityOrchestrator(ctx)
@@ -765,6 +823,17 @@ async def _check_and_maybe_heal_impl(
             endpoint_guid=endpoint.endpoint_guid,
             decision=result.decision.value,
         )
+
+    # Paranoid-QA R2 HIGH #3 — clear the half-heal WAL on every
+    # terminal transition (success, rollback, error, cancel). By
+    # the time we reach here, either apply committed fully +
+    # persist ran (HEALED), or rollback ran (ROLLED_BACK / ERROR),
+    # or we never applied at all (SKIPPED / DEFERRED). In all
+    # cases the WAL is stale and must be cleared so the next
+    # cascade doesn't attempt a spurious recovery. The
+    # ``clear_wal`` helper is idempotent and never raises.
+    if ctx.half_heal_wal_path is not None:
+        _clear_half_heal_wal(ctx.half_heal_wal_path)
 
     if cancel_exc is not None:
         raise cancel_exc
@@ -1098,6 +1167,43 @@ class _SanityOrchestrator:
         # scoring each card independently.
         target_card = c.mixer_snapshot[0]
         role_mapping = c.role_resolver.resolve_card(target_card, c.hw)
+
+        # Paranoid-QA R2 HIGH #3 — write the WAL BEFORE the first
+        # mutation so a crash mid-apply leaves enough state on disk
+        # for the next boot to restore. The preset's target controls
+        # are the set that WILL be touched; we serialise their
+        # pre-apply raw values as (name, raw) pairs. If anything in
+        # this step fails (rollback, exception, cancel), the WAL is
+        # cleared before return so the next boot doesn't
+        # double-restore. The WAL is intentionally a conservative
+        # superset — if apply_mixer_preset skips a control because
+        # current_raw already equals target_raw, restoring that
+        # control is a no-op, so inclusion is harmless.
+        pre_apply_controls = self._build_half_heal_wal_plan(
+            target_card, role_mapping, c.kb_match.profile.recommended_preset
+        )
+        if c.half_heal_wal_path is not None and pre_apply_controls:
+            wal_written = _write_half_heal_wal(
+                card_index=target_card.card_index,
+                reverted_controls=pre_apply_controls,
+                path=c.half_heal_wal_path,
+            )
+            if not wal_written:
+                # Surface the degradation as a WARNING but proceed —
+                # aborting the cascade on a transient disk hiccup
+                # would be a worse outcome than running apply
+                # without crash recovery for this one pass.
+                logger.warning(
+                    "mixer_sanity_wal_write_failed_proceeding",
+                    endpoint_guid=c.endpoint.endpoint_guid,
+                    wal_path=str(c.half_heal_wal_path),
+                    note=(
+                        "proceeding with apply without WAL protection — "
+                        "a mid-apply process death will not self-heal "
+                        "on next boot for this single attempt"
+                    ),
+                )
+
         try:
             c.apply_snapshot = await c.mixer_apply_fn(
                 target_card.card_index,
@@ -1115,10 +1221,43 @@ class _SanityOrchestrator:
             c.decision = MixerSanityDecision.ERROR
             c.error_token = "MIXER_SANITY_APPLY_FAILED"
             # apply_mixer_preset already rolled back internally; our
-            # snapshot stays None.
+            # snapshot stays None. Clear the WAL so the next cascade
+            # doesn't attempt recovery on a state that was already
+            # reverted in-process.
+            if c.half_heal_wal_path is not None:
+                _clear_half_heal_wal(c.half_heal_wal_path)
             return _StepResult(next_step="done")
         c.apply_duration_ms = int((time.monotonic() - apply_start) * 1000)
         return _StepResult(next_step="validate")
+
+    @staticmethod
+    def _build_half_heal_wal_plan(
+        target_card: MixerCardSnapshot,
+        role_mapping: Mapping[MixerControlRole, tuple[MixerControlSnapshot, ...]],
+        preset: MixerPresetSpec,
+    ) -> tuple[tuple[str, int], ...]:
+        """Pre-compute the (name, pre_apply_raw) set for the WAL.
+
+        Walks the preset's roles, looks up each role's resolved
+        controls on the target card, and emits (control.name,
+        control.current_raw) entries. The WAL intentionally over-
+        covers relative to the actual amixer_set calls
+        (apply_mixer_preset skips controls whose current_raw already
+        equals the target); an over-restore during recovery is a
+        no-op, whereas an under-restore would miss a control.
+        """
+        entries: list[tuple[str, int]] = []
+        seen: set[str] = set()
+        for pc in preset.controls:
+            for control in role_mapping.get(pc.role, ()):
+                if control.name in seen:
+                    continue
+                seen.add(control.name)
+                entries.append((control.name, control.current_raw))
+        # card_index comes from the outer caller — here we only
+        # return the control tuples.
+        del target_card
+        return tuple(entries)
 
     async def _step_validate(self) -> _StepResult:
         """Run post-apply validation; gates pass → persist, fail → rollback."""
@@ -1564,6 +1703,7 @@ async def build_mixer_sanity_setup(
     hw: HardwareContext | None = None,
     kb_lookup: MixerKBLookup | None = None,
     role_resolver: MixerControlRoleResolver | None = None,
+    half_heal_wal_path: Path | None = None,
 ) -> MixerSanitySetup | None:
     """Construct a :class:`MixerSanitySetup` for daemon boot.
 
@@ -1639,6 +1779,7 @@ async def build_mixer_sanity_setup(
         role_resolver=effective_resolver,
         validation_probe_fn=make_default_validation_probe_fn(probe_fn),
         telemetry=telemetry,
+        half_heal_wal_path=half_heal_wal_path,
     )
 
 

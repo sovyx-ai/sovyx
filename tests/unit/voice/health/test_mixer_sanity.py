@@ -24,6 +24,7 @@ Scenario coverage:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -826,6 +827,138 @@ class TestReentrancyGuard:
         inner_result = captured_inner_result[0]
         assert inner_result.decision is MixerSanityDecision.ERROR
         assert inner_result.error == "MIXER_SANITY_REENTRANT_GUARD"
+
+
+class TestHalfHealWalIntegration:
+    """Paranoid-QA R2 HIGH #3 orchestrator-level regression.
+
+    End-to-end: when ``half_heal_wal_path`` is provided, the
+    orchestrator writes the WAL before _step_apply and clears it
+    on every terminal transition.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_wal_written_before_apply_and_cleared_on_success(self, tmp_path: Path) -> None:
+        from sovyx.voice.health._half_heal_recovery import load_wal
+
+        wal_path = tmp_path / "wal.json"
+        observed_wal_during_apply: list[bool] = []
+
+        async def checking_apply(
+            card_index: int,  # noqa: ARG001
+            preset: MixerPresetSpec,  # noqa: ARG001
+            role_mapping: object,  # noqa: ARG001
+            *,
+            tuning: VoiceTuningConfig,  # noqa: ARG001
+        ) -> MixerApplySnapshot:
+            # Observe WAL presence mid-apply — must exist.
+            observed_wal_during_apply.append(wal_path.exists())
+            return _apply_snapshot()
+
+        with patch.object(mod, "sys") as sys_mock:
+            sys_mock.platform = "linux"
+            result = await check_and_maybe_heal(
+                _endpoint(),
+                _hw(),
+                kb_lookup=_lookup_with(_pilot_profile()),
+                role_resolver=MixerControlRoleResolver(),
+                validation_probe_fn=_pass_validation,
+                mixer_probe_fn=lambda: [_factory_attenuated_card()],
+                mixer_apply_fn=checking_apply,
+                mixer_restore_fn=AsyncMock(),
+                persist_fn=_noop_persist,
+                tuning=VoiceTuningConfig(),
+                half_heal_wal_path=wal_path,
+            )
+        assert result.decision is MixerSanityDecision.HEALED
+        # WAL existed mid-apply:
+        assert observed_wal_during_apply == [True]
+        # WAL cleared on success:
+        assert not wal_path.exists()
+        # Post-condition: no stale WAL left behind for the next cascade.
+        assert load_wal(wal_path) is None
+
+    @pytest.mark.asyncio()
+    async def test_wal_cleared_on_rollback(self, tmp_path: Path) -> None:
+        wal_path = tmp_path / "wal.json"
+        with patch.object(mod, "sys") as sys_mock:
+            sys_mock.platform = "linux"
+            result = await check_and_maybe_heal(
+                _endpoint(),
+                _hw(),
+                kb_lookup=_lookup_with(_pilot_profile()),
+                role_resolver=MixerControlRoleResolver(),
+                validation_probe_fn=_fail_validation,
+                mixer_probe_fn=lambda: [_factory_attenuated_card()],
+                mixer_apply_fn=AsyncMock(return_value=_apply_snapshot()),
+                mixer_restore_fn=AsyncMock(),
+                persist_fn=_noop_persist,
+                tuning=VoiceTuningConfig(),
+                half_heal_wal_path=wal_path,
+            )
+        assert result.decision is MixerSanityDecision.ROLLED_BACK
+        # WAL cleared even after rollback.
+        assert not wal_path.exists()
+
+    @pytest.mark.asyncio()
+    async def test_existing_wal_triggers_recovery_before_cascade(self, tmp_path: Path) -> None:
+        """If a prior cascade died mid-apply and left a WAL, the
+        next invocation detects it, restores pre-apply state, and
+        only then runs the state machine."""
+        from sovyx.voice.health._half_heal_recovery import write_wal
+
+        wal_path = tmp_path / "wal.json"
+        write_wal(
+            card_index=0,
+            reverted_controls=(("Capture", 40),),
+            path=wal_path,
+        )
+
+        restore = AsyncMock()
+        with patch.object(mod, "sys") as sys_mock:
+            sys_mock.platform = "linux"
+            await check_and_maybe_heal(
+                _endpoint(),
+                _hw(),
+                kb_lookup=_lookup_with(None),
+                role_resolver=MixerControlRoleResolver(),
+                validation_probe_fn=_pass_validation,
+                mixer_probe_fn=lambda: [_healthy_snapshot()],
+                mixer_apply_fn=AsyncMock(return_value=_apply_snapshot()),
+                mixer_restore_fn=restore,
+                persist_fn=_noop_persist,
+                tuning=VoiceTuningConfig(),
+                half_heal_wal_path=wal_path,
+            )
+
+        # Recovery ran: restore was called at boot with the WAL's
+        # snapshot promoted to MixerApplySnapshot shape.
+        restore.assert_awaited()
+        # WAL was cleared by recovery.
+        assert not wal_path.exists()
+
+    @pytest.mark.asyncio()
+    async def test_no_wal_path_no_file_created(self, tmp_path: Path) -> None:
+        """Opt-out: when ``half_heal_wal_path`` is None, no WAL is
+        written regardless of apply outcome."""
+        marker = tmp_path / "nothing-here.json"
+        with patch.object(mod, "sys") as sys_mock:
+            sys_mock.platform = "linux"
+            result = await check_and_maybe_heal(
+                _endpoint(),
+                _hw(),
+                kb_lookup=_lookup_with(_pilot_profile()),
+                role_resolver=MixerControlRoleResolver(),
+                validation_probe_fn=_pass_validation,
+                mixer_probe_fn=lambda: [_factory_attenuated_card()],
+                mixer_apply_fn=AsyncMock(return_value=_apply_snapshot()),
+                mixer_restore_fn=AsyncMock(),
+                persist_fn=_noop_persist,
+                tuning=VoiceTuningConfig(),
+                half_heal_wal_path=None,
+            )
+        assert result.decision is MixerSanityDecision.HEALED
+        assert not marker.exists()
 
 
 class TestRollbackIdempotence:

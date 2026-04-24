@@ -415,6 +415,9 @@ async def run_boot_cascade_for_candidates(
     mixer_sanity: MixerSanitySetup | None = None
     if plat == "linux":
         try:
+            from sovyx.voice.health._half_heal_recovery import (  # noqa: PLC0415 — lazy-Linux
+                default_wal_path,
+            )
             from sovyx.voice.health._mixer_sanity import (
                 build_mixer_sanity_setup,  # noqa: PLC0415 — lazy-Linux
             )
@@ -424,6 +427,11 @@ async def run_boot_cascade_for_candidates(
             mixer_sanity = await build_mixer_sanity_setup(
                 probe_fn=_probe_fn,
                 telemetry=get_telemetry(),
+                # Paranoid-QA R2 HIGH #3: half-heal write-ahead log
+                # rooted under ``data_dir/voice_health/``. Survives
+                # mid-apply process crashes so the next cascade can
+                # restore pre-apply state before probing.
+                half_heal_wal_path=default_wal_path(data_dir),
             )
         except Exception:  # noqa: BLE001 — L2.5 setup must never block boot
             logger.warning(

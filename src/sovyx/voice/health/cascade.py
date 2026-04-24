@@ -1621,6 +1621,7 @@ async def _run_mixer_sanity(
             telemetry=mixer_sanity.telemetry,
             combo_store=combo_store,
             capture_overrides=capture_overrides,
+            half_heal_wal_path=mixer_sanity.half_heal_wal_path,
         )
     except asyncio.CancelledError:
         # Paranoid-QA CRITICAL #1: cancel propagates past the cascade
