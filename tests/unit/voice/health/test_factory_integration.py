@@ -244,6 +244,61 @@ class TestDeriveEndpointGuid:
 
         assert guid.startswith("{surrogate-")
 
+    def test_linux_path_falls_through_to_surrogate_for_non_alsa_name(
+        self,
+    ) -> None:
+        """Sprint 0 regression: the Linux fingerprint tries first,
+        but names that don't parse as ALSA PCM devices (``"Microfone..."``
+        etc. from Windows-style friendly names in tests) fall through
+        to the surrogate — caller behaviour preserved for inputs
+        that were never going to match on Linux anyway.
+        """
+        entry = _make_entry()
+        guid = derive_endpoint_guid(entry, apo_reports=None, platform_key="linux")
+        assert guid.startswith("{surrogate-")
+
+    def test_linux_path_returns_native_fingerprint_when_parseable(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When compute_linux_endpoint_fingerprint returns a string,
+        derive_endpoint_guid MUST return it verbatim — the Linux
+        path is preferred over the surrogate."""
+        from sovyx.voice.health import _fingerprint_linux as fp_mod
+
+        def stub_fingerprint(
+            _entry: object,
+            *,
+            proc_asound: object = None,  # noqa: ARG001
+            sysfs_class_sound: object = None,  # noqa: ARG001
+            resolve_symlink: object = None,  # noqa: ARG001
+        ) -> str | None:
+            return "{linux-pci-0000_00_1f.3-codec-14F1:5045-0-capture}"
+
+        monkeypatch.setattr(
+            fp_mod,
+            "compute_linux_endpoint_fingerprint",
+            stub_fingerprint,
+        )
+
+        entry = _make_entry(name="hw:0,0", host_api_name="ALSA")
+        guid = derive_endpoint_guid(entry, apo_reports=None, platform_key="linux")
+        assert guid == "{linux-pci-0000_00_1f.3-codec-14F1:5045-0-capture}"
+
+    def test_windows_path_unchanged_by_linux_integration(self) -> None:
+        """The Linux fingerprint branch MUST NOT fire on
+        ``platform_key="win32"`` — Windows APO match → GUID,
+        no-match → surrogate, same as before Sprint 0."""
+        entry = _make_entry(name="hw:0,0", host_api_name="ALSA")
+        guid = derive_endpoint_guid(entry, apo_reports=None, platform_key="win32")
+        assert guid.startswith("{surrogate-")
+
+    def test_unknown_platform_falls_through_to_surrogate(self) -> None:
+        """macOS / sunos5 / etc. don't trigger the Linux fingerprint."""
+        entry = _make_entry(name="hw:0,0", host_api_name="CoreAudio")
+        guid = derive_endpoint_guid(entry, apo_reports=None, platform_key="darwin")
+        assert guid.startswith("{surrogate-")
+
 
 # ---------------------------------------------------------------------------
 # run_boot_cascade

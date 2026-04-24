@@ -138,23 +138,32 @@ def derive_endpoint_guid(
 
     Resolution order (ADR §1 endpoint_guid semantics):
 
-    1. On Windows, when an APO report is available for the device's
-       friendly name, use the Windows MMDevices endpoint GUID
-       (``PKEY_Device_FriendlyName`` match → registry subkey). This is
-       the canonical identifier used by :mod:`sovyx.voice.health._fingerprint`
-       for per-endpoint SHA256 fingerprinting.
+    1. **Windows + APO report**: use the MMDevices endpoint GUID
+       from the matched :class:`~sovyx.voice._apo_detector.CaptureApoReport`.
+       Canonical identifier used throughout the Windows audit trail.
 
-    2. Otherwise, derive a SHA256 surrogate from
-       ``(canonical_name, host_api_name, platform_key)`` and format it
-       as ``{surrogate-8-4-4-4-12}``. Stable across boots because
-       ``canonical_name`` is the MME-normalised device name (not the
-       ephemeral PortAudio index) and ``host_api_name`` is the label
-       PortAudio reports from its host-API table.
+    2. **Linux, sysfs-available**: use
+       :func:`~sovyx.voice.health._fingerprint_linux.compute_linux_endpoint_fingerprint`
+       which derives a stable ID from ``/sys/class/sound/card<N>/device``
+       symlink targets — PCI BDF for onboard codecs, USB VID:PID for
+       USB-audio. Returns the equivalent of an MMDevice GUID on
+       Linux: ``{linux-pci-<bdf>-codec-<vendor>:<device>-<pcm>-<dir>}``
+       or ``{linux-usb-<vid>:<pid>-<pcm>-<dir>}``. Falls through when
+       the device is a virtual alias (``"default"`` / ``"pulse"``) or
+       sysfs is inaccessible.
 
-    The surrogate is visually distinct from real Windows GUIDs so
-    operators reading logs can tell at a glance whether a real MMDevice
-    GUID was available. ComboStore accepts any non-empty string per
-    its R12 sanity rule.
+    3. **Fallback surrogate** — SHA256 over
+       ``(canonical_name, host_api_name, platform_key)`` formatted as
+       ``{surrogate-8-4-4-4-12}``. Stable enough to survive normal
+       reboots (``canonical_name`` is MME-truncation-normalised) but
+       brittle against hotplug reorder, PipeWire/PulseAudio naming
+       changes, and cross-host-API queries for the same physical
+       device.
+
+    The three distinct visual prefixes (``{...win GUID}`` /
+    ``{linux-...}`` / ``{surrogate-...}``) let operators reading logs
+    tell at a glance which mechanism produced the record. ComboStore
+    accepts any non-empty string per its R12 sanity rule.
     """
     plat = platform_key or sys.platform
 
@@ -164,6 +173,15 @@ def derive_endpoint_guid(
         report = find_endpoint_report(apo_reports, device_name=resolved.name)
         if report is not None and report.endpoint_id:
             return report.endpoint_id
+
+    if plat == "linux":
+        from sovyx.voice.health._fingerprint_linux import (  # noqa: PLC0415 — lazy-Linux
+            compute_linux_endpoint_fingerprint,
+        )
+
+        linux_fp = compute_linux_endpoint_fingerprint(resolved)
+        if linux_fp is not None:
+            return linux_fp
 
     hasher = hashlib.sha256()
     hasher.update(resolved.canonical_name.encode("utf-8"))
