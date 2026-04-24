@@ -16,6 +16,7 @@ jobs:
     name: Lint (ruff)
     runs-on: sovyx-4core
     steps:
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-sovyx-python
       - name: Verify lock file
         run: uv lock --check
@@ -28,6 +29,7 @@ jobs:
     name: Type Check (mypy)
     runs-on: sovyx-4core
     steps:
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-sovyx-python
       - name: mypy strict
         run: uv run mypy src/
@@ -36,6 +38,7 @@ jobs:
     name: Security (bandit)
     runs-on: sovyx-4core
     steps:
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-sovyx-python
       - name: Bandit scan
         run: uv run bandit -r src/sovyx/ --configfile pyproject.toml
@@ -103,6 +106,7 @@ jobs:
             python-version: "3.12"
             experimental: true
     steps:
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-sovyx-python
         with:
           python-version: ${{ matrix.python-version }}
@@ -151,6 +155,7 @@ jobs:
     runs-on: sovyx-4core
     needs: test
     steps:
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-sovyx-python
       - name: Validate log schema catalog
         run: uv run python scripts/check_log_schemas.py
@@ -160,6 +165,7 @@ jobs:
     runs-on: sovyx-4core
     needs: schema-gate
     steps:
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-sovyx-python
       - name: Enforce explicit exception cause chains (PEP 3134)
         run: uv run python scripts/check_exception_chains.py
@@ -169,6 +175,7 @@ jobs:
     runs-on: sovyx-4core
     needs: exception-chain-gate
     steps:
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-sovyx-python
       - name: Assert no raw PII leaks past the redactor (§22.3)
         run: uv run python scripts/check_test_pii.py
@@ -178,6 +185,7 @@ jobs:
     runs-on: sovyx-4core
     needs: pii-leak-gate
     steps:
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-sovyx-python
       - name: Validate OTel resource attribute spelling (§22.6)
         run: uv run python scripts/check_otel_semconv.py
@@ -187,6 +195,7 @@ jobs:
     runs-on: sovyx-4core
     needs: otel-semconv-gate
     steps:
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-sovyx-python
       - name: Refuse high-cardinality metric labels (§22.7)
         run: uv run python scripts/check_metrics_cardinality.py
@@ -197,6 +206,7 @@ jobs:
     needs: metrics-cardinality-gate
     timeout-minutes: 10
     steps:
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-sovyx-python
       - name: Assert observability hot-path latency within budget (§23)
         run: uv run python scripts/check_perf_regression.py --iterations 20000
@@ -206,6 +216,7 @@ jobs:
     runs-on: sovyx-4core
     needs: perf-regression-gate
     steps:
+      - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-sovyx-python
       - name: Refuse silent log-volume regressions (§23.2)
         run: uv run python scripts/check_log_noise.py

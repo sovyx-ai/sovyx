@@ -1,9 +1,18 @@
 name: Setup Sovyx Python env
 description: >
-  Checkout + install uv + sync dev deps — shared across every Python gate in
-  ci.yml. Consolidates the checkout / setup-uv / uv-sync sequence that used
-  to repeat in 9 jobs. Bumping ``setup-uv`` or changing the ``uv sync``
+  Install uv + sync dev deps — shared across every Python gate in ci.yml.
+  Consolidates the setup-uv / uv-python / uv-sync sequence that used to
+  repeat in 9 jobs. Bumping ``setup-uv`` or changing the ``uv sync``
   flags now happens in exactly one place.
+
+  IMPORTANT: this is a LOCAL composite action (``uses: ./.github/...``).
+  GitHub must locate ``action.yml`` on disk before the action runs, which
+  means ``actions/checkout@v4`` MUST be the first step of every job that
+  uses this action — the checkout step cannot live inside the composite
+  itself. That's the chicken-and-egg bootstrap rule for local actions:
+  the workflow interpreter reads the action file before any step of the
+  action runs, so a checkout inside the composite would need the file it
+  hasn't checked out yet.
 
 inputs:
   python-version:
@@ -24,9 +33,6 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-
     - name: Install uv
       uses: astral-sh/setup-uv@v5
       with:
