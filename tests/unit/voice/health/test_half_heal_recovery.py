@@ -268,3 +268,164 @@ class TestRecoverIfPresent:
         # load_wal returns None → recover_if_present returns False.
         assert await recover_if_present(path=path, restore_fn=restore_fn, tuning=tuning) is False
         restore_fn.assert_not_awaited()
+
+    @pytest.mark.asyncio()
+    async def test_timeout_cancels_long_restore_and_clears_wal(
+        self, tmp_path: Path
+    ) -> None:
+        """Paranoid-QA R3 HIGH #1 regression.
+
+        A crafted WAL can starve the boot cascade by making
+        ``restore_fn`` take arbitrarily long (each amixer subprocess
+        uses ``linux_mixer_subprocess_timeout_s`` × N entries). The
+        wrapper must cancel the replay when the wall-clock cap
+        trips, then clear the WAL so the next boot doesn't loop.
+        """
+        import asyncio as aio
+
+        path = tmp_path / "wal.json"
+        write_wal(
+            card_index=0,
+            reverted_controls=(("Capture", 40),),
+            path=path,
+        )
+
+        async def slow_restore(
+            _snap: MixerApplySnapshot,  # noqa: ARG001
+            *,
+            tuning: VoiceTuningConfig,  # noqa: ARG001
+        ) -> None:
+            await aio.sleep(10.0)  # will be cancelled by timeout
+
+        tuning = VoiceTuningConfig()
+        returned = await recover_if_present(
+            path=path,
+            restore_fn=slow_restore,
+            tuning=tuning,
+            timeout_s=0.05,
+        )
+        assert returned is True
+        # Timeout cancelled the restore; WAL cleared so next boot
+        # doesn't retry forever.
+        assert not path.exists()
+
+
+# ── Paranoid-QA R3 HIGH #2/#3 — size + content validation ──────────
+
+
+class TestLoadWalSizeCap:
+    """Size-cap + entry-count + control-name validation guard against
+    an attacker with ``data_dir`` write access staging a malicious
+    WAL (DoS, amixer selector smuggling, log poisoning).
+    """
+
+    def test_oversized_wal_refused(self, tmp_path: Path) -> None:
+        path = tmp_path / "wal.json"
+        huge_payload = json.dumps(
+            {
+                "schema_version": 1,
+                "card_index": 0,
+                "reverted_controls": [["Capture", 40]],
+                "filler": "A" * (128 * 1024),
+            }
+        )
+        path.write_text(huge_payload, encoding="utf-8")
+        assert load_wal(path) is None
+        assert path.exists()
+
+    def test_too_many_entries_refused(self, tmp_path: Path) -> None:
+        path = tmp_path / "wal.json"
+        entries = [["X", 0] for _ in range(200)]
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "card_index": 0,
+                    "reverted_controls": entries,
+                }
+            ),
+            encoding="utf-8",
+        )
+        assert load_wal(path) is None
+
+    def test_control_name_too_long_refused(self, tmp_path: Path) -> None:
+        path = tmp_path / "wal.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "card_index": 0,
+                    "reverted_controls": [["A" * 200, 0]],
+                }
+            ),
+            encoding="utf-8",
+        )
+        assert load_wal(path) is None
+
+    @pytest.mark.parametrize(
+        "bad_name",
+        [
+            "Master',index=0,iface=CARD",
+            "Capture\x00hidden",
+            "Capture\nSOMETHING",
+            'Capture"embedded',
+            "Capture,other",
+            "Capture=value",
+        ],
+    )
+    def test_forbidden_chars_in_control_name_refused(
+        self, tmp_path: Path, bad_name: str
+    ) -> None:
+        path = tmp_path / "wal.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "card_index": 0,
+                    "reverted_controls": [[bad_name, 0]],
+                }
+            ),
+            encoding="utf-8",
+        )
+        assert load_wal(path) is None, (
+            f"WAL with control name {bad_name!r} should have been refused"
+        )
+
+    def test_empty_control_name_refused(self, tmp_path: Path) -> None:
+        path = tmp_path / "wal.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "card_index": 0,
+                    "reverted_controls": [["", 0]],
+                }
+            ),
+            encoding="utf-8",
+        )
+        assert load_wal(path) is None
+
+    def test_legitimate_names_accepted(self, tmp_path: Path) -> None:
+        """Sanity: the R3 hardening does not reject realistic
+        control names (kernel-sourced amixer names)."""
+        path = tmp_path / "wal.json"
+        realistic = [
+            ["Capture", 40],
+            ["Internal Mic Boost", 0],
+            ["Front Mic Boost", 2],
+            ["Digital Capture Volume", 60],
+            ["Mic", 50],
+        ]
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "card_index": 0,
+                    "reverted_controls": realistic,
+                }
+            ),
+            encoding="utf-8",
+        )
+        wal = load_wal(path)
+        assert wal is not None
+        assert len(wal.reverted_controls) == 5

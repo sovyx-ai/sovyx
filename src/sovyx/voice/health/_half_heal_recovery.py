@@ -39,6 +39,7 @@ Design constraints:
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import os
@@ -69,6 +70,56 @@ are impossible by construction.
 _WAL_SCHEMA_VERSION = 1
 """Bump on shape changes. Mismatched versions abort recovery and
 delete the stale WAL."""
+
+
+_WAL_MAX_BYTES = 64 * 1024
+"""Hard size cap (bytes) on a WAL file before we even open it.
+
+Paranoid-QA R3 HIGH #2: without this, an attacker with write
+access to ``data_dir/voice_health/`` could stage a multi-gigabyte
+WAL; the daemon's boot recovery would OOM-crash on
+``path.read_text(...)`` before ``load_wal``'s schema checks ran.
+64 KiB is two orders of magnitude over any realistic WAL (pilot
+profile ~2 entries × ~30 bytes each + overhead ≈ 100 bytes).
+"""
+
+
+_WAL_MAX_ENTRIES = 64
+"""Max ``reverted_controls`` entries accepted by ``load_wal``.
+
+Paranoid-QA R3 HIGH #1/#3: even a well-formed but bloated WAL can
+DoS the recovery path — ``recover_if_present`` calls
+``restore_fn`` once per entry, each issuing an amixer subprocess
+with its own ``linux_mixer_subprocess_timeout_s`` ceiling.
+Bounding here forces the attacker's WAL to respect the realistic
+shape (pilot preset = 2 controls; every shipped preset is ≤ 10).
+"""
+
+
+_WAL_MAX_CONTROL_NAME_LEN = 128
+"""Max length of a single ``reverted_controls`` name string.
+
+Realistic amixer simple-control names are 5–30 chars
+(``"Capture"``, ``"Internal Mic Boost"``). 128 is a generous
+ceiling that blocks ARG_MAX-style amplification attacks (a 1 MiB
+name passed to ``execve`` would raise E2BIG but also consume the
+attacker-chosen number of seconds). 128 bytes × 64 entries =
+8 KiB total — fits comfortably inside ``_WAL_MAX_BYTES``.
+"""
+
+
+_WAL_CONTROL_NAME_FORBIDDEN_CHARS = frozenset(",='\"\x00\r\n\t")
+"""Characters a legitimate amixer simple-control name never
+contains — but which would, if passed in as argv, confuse amixer's
+simple-control selector parser (``name='X',index=N,iface=CARD``
+syntax). The NUL / CR / LF / TAB entries block embedded newlines
+from smuggling through log scrapers.
+
+Paranoid-QA R3 HIGH #3: rejects any WAL entry whose control name
+contains any of these. Kernel-sourced control names (the normal
+apply path) never include them; attacker-controlled WAL content
+does.
+"""
 
 
 class RestoreSnapshotFn(Protocol):
@@ -214,11 +265,50 @@ def load_wal(path: Path) -> HalfHealWal | None:
     """Parse the WAL at ``path``. Returns ``None`` if absent or invalid.
 
     Any parse failure (missing fields, schema mismatch, bad JSON,
-    I/O error) returns ``None`` and logs at WARN. The file is NOT
+    I/O error, size-cap exceeded, forbidden characters in control
+    names) returns ``None`` and logs at WARN. The file is NOT
     deleted by this function — the caller (recovery driver) is
     responsible for cleanup so the deletion happens atomically
     with the replay.
+
+    Paranoid-QA R3 HIGH #2/#3 hardening:
+
+    * ``stat().st_size`` is checked BEFORE ``read_text`` so a
+      crafted multi-gigabyte WAL cannot OOM the daemon on boot.
+    * Per-entry control-name length is capped at
+      ``_WAL_MAX_CONTROL_NAME_LEN`` and screened against
+      ``_WAL_CONTROL_NAME_FORBIDDEN_CHARS`` so attacker content
+      cannot confuse amixer's simple-control selector (`name='X',
+      index=N,iface=CARD`-style smuggling) nor smuggle NUL / CRLF
+      into operator logs.
+    * The whole ``reverted_controls`` list is capped at
+      ``_WAL_MAX_ENTRIES`` so a WAL under the byte-cap cannot
+      still starve the boot path with hundreds of amixer
+      subprocesses.
     """
+    # Paranoid-QA R3 HIGH #2: size cap enforced via ``stat`` so we
+    # never slurp a gigabyte WAL into memory. ``FileNotFoundError``
+    # falls through to the ``read_text`` branch below (same handling).
+    try:
+        size = path.stat().st_size
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        logger.warning(
+            "mixer_half_heal_wal_stat_failed",
+            path=str(path),
+            detail=str(exc),
+        )
+        return None
+    if size > _WAL_MAX_BYTES:
+        logger.warning(
+            "mixer_half_heal_wal_oversized",
+            path=str(path),
+            size_bytes=size,
+            limit_bytes=_WAL_MAX_BYTES,
+            note="refusing to load — WAL content is attacker-controlled",
+        )
+        return None
     try:
         raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -262,12 +352,43 @@ def load_wal(path: Path) -> HalfHealWal | None:
             path=str(path),
         )
         return None
-    try:
-        controls: tuple[tuple[str, int], ...] = tuple(
-            (str(entry[0]), int(entry[1]))
-            for entry in reverted
-            if isinstance(entry, (list, tuple)) and len(entry) == 2
+    # Paranoid-QA R3 HIGH #1/#3: cap entry count + per-entry
+    # validation.
+    if len(reverted) > _WAL_MAX_ENTRIES:
+        logger.warning(
+            "mixer_half_heal_wal_too_many_entries",
+            path=str(path),
+            count=len(reverted),
+            limit=_WAL_MAX_ENTRIES,
         )
+        return None
+    try:
+        controls_builder: list[tuple[str, int]] = []
+        for entry in reverted:
+            if not isinstance(entry, (list, tuple)) or len(entry) != 2:
+                continue
+            name = str(entry[0])
+            raw_value = int(entry[1])
+            if len(name) == 0 or len(name) > _WAL_MAX_CONTROL_NAME_LEN:
+                logger.warning(
+                    "mixer_half_heal_wal_control_name_length_invalid",
+                    path=str(path),
+                    name_length=len(name),
+                    limit=_WAL_MAX_CONTROL_NAME_LEN,
+                )
+                return None
+            if any(c in _WAL_CONTROL_NAME_FORBIDDEN_CHARS for c in name):
+                logger.warning(
+                    "mixer_half_heal_wal_control_name_forbidden_chars",
+                    path=str(path),
+                    note=(
+                        "name contains NUL / CRLF / amixer selector "
+                        "metacharacters — refusing to replay"
+                    ),
+                )
+                return None
+            controls_builder.append((name, raw_value))
+        controls: tuple[tuple[str, int], ...] = tuple(controls_builder)
     except (TypeError, ValueError, IndexError) as exc:
         logger.warning(
             "mixer_half_heal_wal_controls_invalid",
@@ -300,6 +421,7 @@ async def recover_if_present(
     path: Path,
     restore_fn: RestoreSnapshotFn,
     tuning: VoiceTuningConfig,
+    timeout_s: float | None = None,
 ) -> bool:
     """If a WAL exists at ``path``, replay it and delete the file.
 
@@ -319,6 +441,13 @@ async def recover_if_present(
             tuning) → awaitable None.
         tuning: Voice tuning config — passed through to
             ``restore_fn`` (it needs ``linux_mixer_subprocess_timeout_s``).
+        timeout_s: Wall-clock ceiling for the replay (Paranoid-QA
+            R3 HIGH #1). ``None`` disables the cap (test-only). In
+            production the orchestrator passes
+            ``tuning.linux_mixer_sanity_budget_s`` so a crafted
+            WAL can't stall boot cascade indefinitely. When the
+            replay exceeds the cap, it's cancelled, the WAL is
+            cleared, and a WARN log surfaces the event.
     """
     wal = load_wal(path)
     if wal is None:
@@ -335,7 +464,25 @@ async def recover_if_present(
     )
     snapshot = wal.to_apply_snapshot()
     try:
-        await restore_fn(snapshot, tuning=tuning)
+        if timeout_s is None:
+            await restore_fn(snapshot, tuning=tuning)
+        else:
+            await asyncio.wait_for(
+                restore_fn(snapshot, tuning=tuning),
+                timeout=timeout_s,
+            )
+    except TimeoutError:
+        logger.warning(
+            "mixer_half_heal_recovery_timeout",
+            path=str(path),
+            card_index=wal.card_index,
+            timeout_s=timeout_s,
+            note=(
+                "WAL replay exceeded the wall-clock budget — "
+                "cancelling to unblock the cascade; mixer may be "
+                "in a partial state"
+            ),
+        )
     except Exception as exc:  # noqa: BLE001 — recovery is best-effort
         logger.warning(
             "mixer_half_heal_recovery_restore_failed",

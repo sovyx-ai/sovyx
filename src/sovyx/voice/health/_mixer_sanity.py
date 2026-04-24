@@ -38,7 +38,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias, runtime_checkable
+from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias
 
 from sovyx.observability.logging import get_logger
 from sovyx.voice.health._half_heal_recovery import (
@@ -105,10 +105,28 @@ thread-bounded context.
 """
 
 
-MixerApplyFn: TypeAlias = "Callable[..., Awaitable[MixerApplySnapshot]]"
-"""Applies a KB preset. Signature matches
-:func:`~sovyx.voice.health._linux_mixer_apply.apply_mixer_preset`.
-"""
+class MixerApplyFn(Protocol):
+    """Applies a KB preset. Signature matches
+    :func:`~sovyx.voice.health._linux_mixer_apply.apply_mixer_preset`.
+
+    Paranoid-QA R3 HIGH #10: expressed as a ``Protocol`` — not
+    ``Callable[..., Awaitable[MixerApplySnapshot]]`` — because
+    the ``...`` ellipsis erases arity. Tests that injected
+    ``lambda: snapshot`` (zero args) type-checked fine under the
+    alias form, then blew up at runtime with ``TypeError: missing 3
+    positional args``. The Protocol declares the real signature
+    with keyword-only ``tuning`` so mypy catches shape mismatches
+    at compile time.
+    """
+
+    async def __call__(
+        self,
+        card_index: int,
+        preset: MixerPresetSpec,
+        role_mapping: Mapping[MixerControlRole, tuple[MixerControlSnapshot, ...]],
+        *,
+        tuning: VoiceTuningConfig,
+    ) -> MixerApplySnapshot: ...
 
 
 class MixerRestoreFn(Protocol):
@@ -208,7 +226,6 @@ class MixerSanitySetup:
     half_heal_wal_path: Path | None = None
 
 
-@runtime_checkable
 class _TelemetryProto(Protocol):
     """Minimal surface L2.5 needs from
     :class:`~sovyx.voice.health._telemetry.VoiceHealthTelemetry`.
@@ -216,6 +233,15 @@ class _TelemetryProto(Protocol):
     Defined as a Protocol so tests can inject a no-op stub; production
     wires the real telemetry singleton via
     :func:`~sovyx.voice.health._telemetry.get_telemetry`.
+
+    Paranoid-QA R3 HIGH #9: NOT ``@runtime_checkable``. R2 CRIT-4
+    removed the only ``isinstance(x, _TelemetryProto)`` call site;
+    leaving the decorator on would invite a future edit to re-add
+    ``isinstance()``-based dispatch, which performs **nominal-only**
+    signature matching (checks method presence + roughly arity, does
+    NOT verify parameter names or types). Sticking to mypy-only
+    verification catches signature-drift at compile time instead of
+    blowing up at runtime with ``TypeError: unexpected kwarg``.
     """
 
     def record_mixer_sanity_outcome(
@@ -510,6 +536,17 @@ class _OrchestratorContext:
     # reopens the race window for a concurrent user tweak to get
     # silently reverted.
     rollback_performed: bool = False
+    # Paranoid-QA R3 CRIT-3: distinguish "rollback completed" from
+    # "rollback ATTEMPTED but restore_fn raised and we logged +
+    # swallowed". Previous code set ``rollback_performed=True`` on
+    # both paths, which silently advertised
+    # ``decision=ROLLED_BACK, rollback_snapshot=X`` to the dashboard
+    # when the mixer was still stuck in the failing-validation
+    # applied state. Surfaced via ``error_token`` + consulted by
+    # the top-level impl to decide whether to clear the WAL
+    # (failed rollback MUST leave the WAL on disk so cross-boot
+    # recovery can retry).
+    rollback_failed: bool = False
 
     def controls_modified(self) -> tuple[str, ...]:
         """Names of controls actually mutated, as a flat tuple."""
@@ -554,16 +591,28 @@ class _StepResult:
 # Per-card or per-endpoint locks would admit harder races because
 # different cascades would probe overlapping card sets.
 _L25_LOCK: asyncio.Lock | None = None
+_L25_LOCK_LOOP: asyncio.AbstractEventLoop | None = None
 
 
 def _get_l25_lock() -> asyncio.Lock:
     """Lazy lock factory — creates the Lock on first use within the
-    current event loop. Module-level instantiation would bind to the
-    wrong loop in tests that spin up fresh loops per-case.
+    current event loop.
+
+    Paranoid-QA R3 HIGH #5: also re-initialises when the current
+    running loop differs from the one the lock was bound to. The
+    daemon's `sovyx stop` + `sovyx start` flow tears down Loop A
+    and spins up Loop B within the SAME process (the CLI process).
+    Without this guard, the second cascade would acquire a Lock
+    that belongs to a torn-down loop → ``RuntimeError: Event loop
+    is closed`` (or, worse, silent misbinding under CPython's
+    lenient unbound-Future handling). Production has no test hook
+    that resets the lock — this does.
     """
-    global _L25_LOCK  # noqa: PLW0603 — single-instance lazy init
-    if _L25_LOCK is None:
+    global _L25_LOCK, _L25_LOCK_LOOP  # noqa: PLW0603 — single-instance lazy init
+    current_loop = asyncio.get_running_loop()
+    if _L25_LOCK is None or _L25_LOCK_LOOP is not current_loop:
         _L25_LOCK = asyncio.Lock()
+        _L25_LOCK_LOOP = current_loop
     return _L25_LOCK
 
 
@@ -671,10 +720,18 @@ async def check_and_maybe_heal(
                     if mixer_restore_fn is not None
                     else _default_restore_mixer_snapshot
                 )
+                # Paranoid-QA R3 HIGH #1: cap the WAL replay with a
+                # wall-clock budget so a crafted (or pathologically
+                # large) WAL cannot stall cascade boot indefinitely.
+                # The L2.5 cascade budget applies to the orchestrator
+                # state machine; the recovery step ran BEFORE the
+                # clock started, so it needs its own cap. Reuse the
+                # same budget knob — same OoM, same operator tuning.
                 await _recover_half_heal_if_present(
                     path=half_heal_wal_path,
                     restore_fn=effective_restore_fn,
                     tuning=tuning,
+                    timeout_s=tuning.linux_mixer_sanity_budget_s,
                 )
             return await _check_and_maybe_heal_impl(
                 endpoint,
@@ -846,8 +903,27 @@ async def _check_and_maybe_heal_impl(
     # cases the WAL is stale and must be cleared so the next
     # cascade doesn't attempt a spurious recovery. The
     # ``clear_wal`` helper is idempotent and never raises.
-    if ctx.half_heal_wal_path is not None:
+    #
+    # Paranoid-QA R3 CRIT-3 amendment: preserve the WAL when
+    # ``rollback_failed`` is True. In that path the in-process
+    # restore raised — the mixer is stuck in the applied state
+    # and the NEXT boot's ``recover_if_present`` needs the WAL on
+    # disk to retry the restore via a fresh ``restore_fn``. If we
+    # cleared the WAL here, the stuck-mixer would persist until
+    # the user manually intervenes.
+    if ctx.half_heal_wal_path is not None and not ctx.rollback_failed:
         _clear_half_heal_wal(ctx.half_heal_wal_path)
+    elif ctx.rollback_failed and ctx.half_heal_wal_path is not None:
+        logger.warning(
+            "mixer_sanity_wal_preserved_for_next_boot_recovery",
+            endpoint_guid=endpoint.endpoint_guid,
+            wal_path=str(ctx.half_heal_wal_path),
+            note=(
+                "rollback_fn raised during in-process restore; WAL "
+                "retained so the next cascade's recovery path retries "
+                "the restore via a fresh restore_fn"
+            ),
+        )
 
     if cancel_exc is not None:
         raise cancel_exc
@@ -954,6 +1030,26 @@ class _SanityOrchestrator:
                 decision=decision.value,
             )
             c.apply_duration_ms = 0
+        # Paranoid-QA R3 CRIT-3: surface rollback failure. If the
+        # rollback path logged + swallowed (no re-raise path), the
+        # advertised ``decision=ROLLED_BACK`` is a lie — the mixer
+        # is still in the failing-validation applied state.
+        # Downgrade to ERROR and stamp the error token so the
+        # dashboard renders a distinct badge and operators can tell
+        # "rollback tried but couldn't" from "rollback succeeded".
+        if c.rollback_failed:
+            decision = MixerSanityDecision.ERROR
+            if c.error_token is None or c.error_token in (
+                "MIXER_SANITY_VALIDATION_FAILED",
+                "MIXER_SANITY_BUDGET_EXCEEDED",
+            ):
+                # Preserve the upstream trigger when informative;
+                # otherwise stamp the rollback-specific token.
+                c.error_token = (
+                    f"MIXER_SANITY_ROLLBACK_FAILED_AFTER_{c.error_token.removeprefix('MIXER_SANITY_')}"
+                    if c.error_token
+                    else "MIXER_SANITY_ROLLBACK_FAILED"
+                )
         return MixerSanityResult(
             decision=decision,
             diagnosis_before=c.diagnosis_before,
@@ -1029,11 +1125,36 @@ class _SanityOrchestrator:
                 endpoint_guid=self._ctx.endpoint.endpoint_guid,
                 detail=str(exc)[:200],
             )
-            # Mark performed even on logged failure — the restore
-            # helper itself logged the specifics and further retries
-            # from the same orchestrator won't succeed (state is
-            # locked by the same underlying failure mode).
+            # Paranoid-QA R3 CRIT-3: DO NOT set ``rollback_performed=True``
+            # when the restore raised. The earlier code set it to
+            # suppress the re-entry retry in the caller's handler
+            # — but that conflated "rollback complete" with
+            # "rollback gave up", causing
+            # ``decision=ROLLED_BACK, rollback_snapshot=X`` to be
+            # surfaced as success to the dashboard while the mixer
+            # was actually stuck in the applied state.
+            #
+            # The correct signal: ``rollback_failed=True`` so
+            # :meth:`build_result` can downgrade the decision to
+            # ERROR + set ``error_token=MIXER_SANITY_ROLLBACK_FAILED``,
+            # AND the top-level ``_check_and_maybe_heal_impl``
+            # preserves the WAL on disk so the NEXT boot's recovery
+            # path retries the restore via the same ``restore_fn``.
+            # Re-entry from the caller's handler is blocked by the
+            # existing ``rollback_performed`` flag (still False here)
+            # — wait, that's the opposite of what we want. We need
+            # to distinguish "first attempt raised → stop, surface,
+            # preserve WAL" from "two handlers both tried → first
+            # was fine, skip". Use BOTH flags:
+            #   rollback_performed = False  → we never completed
+            #   rollback_failed    = True   → we tried and failed
+            # The caller's handler sees ``performed=False`` and
+            # would normally retry; but we want to prevent retry
+            # in the SAME orchestrator run because the failure mode
+            # is sticky. Set performed=True only as a retry guard,
+            # and use rollback_failed as the observability signal.
             self._ctx.rollback_performed = True
+            self._ctx.rollback_failed = True
             return
         self._ctx.rollback_performed = True
 
@@ -1320,7 +1441,18 @@ class _SanityOrchestrator:
         c = self._ctx
         try:
             c.persist_succeeded = await c.persist_fn(c.cards_probed(), c.tuning)
-        except BaseException as exc:  # noqa: BLE001 — persist is best-effort
+        except Exception as exc:  # noqa: BLE001 — Exception-only (Paranoid-QA R3 CRIT-2)
+            # Paranoid-QA R3 CRIT-2: previously ``except BaseException``
+            # which contradicted :meth:`rollback_if_needed`'s narrower
+            # form (post-R2 HIGH #1) and swallowed ``CancelledError``,
+            # ``KeyboardInterrupt``, ``SystemExit``. A cancel delivered
+            # during ``systemctl start --no-block`` (several-second
+            # subprocess on a loaded system) would be silently
+            # swallowed, ``persist_succeeded=False`` set, and the
+            # state machine would march on to ``HEALED`` — leaving
+            # the caller's shutdown sequence hanging on a
+            # cancellation that never propagated. Exception-only
+            # semantics restore the R2-level rigour.
             logger.warning(
                 "mixer_sanity_persist_failed",
                 endpoint_guid=c.endpoint.endpoint_guid,
@@ -1393,7 +1525,18 @@ def _classify_regime_heuristically(
 def _diagnosis_for_regime(
     regime: Literal["saturation", "attenuation", "mixed", "healthy", "unknown"],
 ) -> Diagnosis:
-    """Map a regime label to the L2.5 Diagnosis value."""
+    """Map a regime label to the L2.5 Diagnosis value.
+
+    Paranoid-QA R3 HIGH #8: exhaustiveness enforced via
+    ``assert_never`` — a future edit that adds a new ``Literal``
+    value to the regime type WITHOUT updating this dispatch will
+    fail mypy-strict at the ``assert_never(regime)`` call. Earlier
+    the trailing ``return Diagnosis.MIXER_UNKNOWN_PATTERN`` silently
+    absorbed any new value, producing a potentially-wrong diagnosis
+    with zero type-checker signal.
+    """
+    from typing import assert_never  # noqa: PLC0415 — Python 3.11+ only, local import
+
     if regime == "attenuation":
         return Diagnosis.MIXER_ZEROED
     if regime == "saturation":
@@ -1402,7 +1545,9 @@ def _diagnosis_for_regime(
         return Diagnosis.MIXER_SATURATED  # bias to the more actionable side
     if regime == "healthy":
         return Diagnosis.HEALTHY
-    return Diagnosis.MIXER_UNKNOWN_PATTERN
+    if regime == "unknown":
+        return Diagnosis.MIXER_UNKNOWN_PATTERN
+    assert_never(regime)
 
 
 def _defer_platform_result() -> MixerSanityResult:

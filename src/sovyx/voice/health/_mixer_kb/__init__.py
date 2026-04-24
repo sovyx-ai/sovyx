@@ -126,6 +126,16 @@ class MixerKBLookup:
         provenance correctly. Failures in either pool degrade
         gracefully (WARN + empty partial result).
 
+        Paranoid-QA R3 HIGH #7: when the same ``profile_id`` appears
+        in BOTH the shipped and user directories, the user-contributed
+        copy takes precedence and the shipped copy is dropped. The
+        prior behaviour kept both; then :meth:`match` sorted by score
+        and the ambiguity-window check (0.05) would trip on the
+        identical scores, returning ``None`` → L2.5 DEFERRED on
+        hardware the user explicitly authored a profile for. With
+        the dedupe, the user override is honoured and the shipped
+        copy never enters scoring.
+
         Args:
             user_dir: Typically ``~/.sovyx/mixer_kb/user/``.
                 Missing directory is fine — returns empty user list.
@@ -133,7 +143,22 @@ class MixerKBLookup:
         """
         shipped = load_profiles_from_directory(_SHIPPED_PROFILES_DIR)
         user = load_profiles_from_directory(user_dir)
-        return cls(shipped, resolver=resolver, user_contributed=user)
+        user_ids = {p.profile_id for p in user}
+        deduped_shipped: list[MixerKBProfile] = []
+        for profile in shipped:
+            if profile.profile_id in user_ids:
+                logger.warning(
+                    "mixer_kb_user_profile_shadows_shipped",
+                    profile_id=profile.profile_id,
+                    note=(
+                        "user-contributed profile with the same "
+                        "profile_id as a shipped profile takes "
+                        "precedence; shipped copy dropped from scoring"
+                    ),
+                )
+                continue
+            deduped_shipped.append(profile)
+        return cls(deduped_shipped, resolver=resolver, user_contributed=user)
 
     @property
     def profiles(self) -> tuple[MixerKBProfile, ...]:

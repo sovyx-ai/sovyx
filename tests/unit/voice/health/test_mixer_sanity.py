@@ -74,15 +74,13 @@ def _reset_l25_concurrency_state() -> None:
     test also keeps the reentrancy sentinel from leaking between
     cases.
     """
-    import contextlib as _ctx
-
     mod._L25_LOCK = None
-    # contextvars inherit across tasks but are per-Context; pytest's
-    # test function is its own Context, so this reset is defensive
-    # against a previous test that somehow leaked state via
-    # ``.set()`` without resetting its token.
-    with _ctx.suppress(LookupError):
-        mod._L25_INSIDE.set(False)
+    mod._L25_LOCK_LOOP = None
+    # Reset the reentrancy contextvar defensively. Each pytest test
+    # function runs in its own Context, so this should be a no-op,
+    # but it prevents any leak from a previous test that used
+    # ``_L25_INSIDE.set(...)`` directly.
+    mod._L25_INSIDE.set(False)
 
 
 # ── Fixtures ────────────────────────────────────────────────────────
@@ -1024,6 +1022,153 @@ class TestRollbackIdempotence:
         # already ``True``.
         restore.assert_awaited_once()
         assert ctx.rollback_performed is True
+
+
+class TestRollbackFailureSurfacing:
+    """Paranoid-QA R3 CRIT-3 regression.
+
+    When the injected ``mixer_restore_fn`` raises, the orchestrator
+    logged-and-swallowed but ALSO stamped ``rollback_performed=True``,
+    causing the final result to advertise ``decision=ROLLED_BACK,
+    rollback_snapshot=X`` as if restore succeeded — while the mixer
+    remained stuck in the failing-validation applied state.
+    ``rollback_failed`` now records the truth and downgrades the
+    result + preserves the WAL for cross-boot retry.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_restore_raise_surfaces_as_error_with_token(
+        self,
+    ) -> None:
+        restore = AsyncMock(
+            side_effect=RuntimeError("amixer binary vanished mid-rollback"),
+        )
+        with patch.object(mod, "sys") as sys_mock:
+            sys_mock.platform = "linux"
+            result = await check_and_maybe_heal(
+                _endpoint(),
+                _hw(),
+                kb_lookup=_lookup_with(_pilot_profile()),
+                role_resolver=MixerControlRoleResolver(),
+                validation_probe_fn=_fail_validation,
+                mixer_probe_fn=lambda: [_factory_attenuated_card()],
+                mixer_apply_fn=AsyncMock(return_value=_apply_snapshot()),
+                mixer_restore_fn=restore,
+                persist_fn=_noop_persist,
+                tuning=VoiceTuningConfig(),
+            )
+        # Decision MUST NOT be ROLLED_BACK — the mixer is NOT
+        # restored; downgrading to ERROR lets the dashboard render
+        # the failure distinctly.
+        assert result.decision is MixerSanityDecision.ERROR
+        assert result.error is not None
+        assert "ROLLBACK_FAILED" in result.error
+        # The original upstream trigger should also be discoverable
+        # in the error token (VALIDATION_FAILED was the validate
+        # step outcome before rollback was attempted).
+        assert "VALIDATION_FAILED" in result.error
+        # And restore was attempted (i.e., not short-circuited
+        # before the restore_fn was called).
+        restore.assert_awaited()
+
+    @pytest.mark.asyncio()
+    async def test_restore_raise_preserves_wal_for_next_boot(
+        self, tmp_path: Path
+    ) -> None:
+        """If restore raised, the WAL MUST remain on disk so the
+        next cascade's ``recover_if_present`` can retry via a fresh
+        ``restore_fn``. Without this, a stuck mixer never self-heals."""
+        wal_path = tmp_path / "wal.json"
+        restore = AsyncMock(side_effect=RuntimeError("synthetic"))
+        with patch.object(mod, "sys") as sys_mock:
+            sys_mock.platform = "linux"
+            await check_and_maybe_heal(
+                _endpoint(),
+                _hw(),
+                kb_lookup=_lookup_with(_pilot_profile()),
+                role_resolver=MixerControlRoleResolver(),
+                validation_probe_fn=_fail_validation,
+                mixer_probe_fn=lambda: [_factory_attenuated_card()],
+                mixer_apply_fn=AsyncMock(return_value=_apply_snapshot()),
+                mixer_restore_fn=restore,
+                persist_fn=_noop_persist,
+                tuning=VoiceTuningConfig(),
+                half_heal_wal_path=wal_path,
+            )
+        # WAL persists for next-boot recovery retry.
+        assert wal_path.exists(), (
+            "rollback_failed path must NOT clear the WAL — the next "
+            "cascade needs it to retry the restore"
+        )
+
+
+class TestPersistExceptionNarrowing:
+    """Paranoid-QA R3 CRIT-2 regression.
+
+    ``_step_persist`` previously used ``except BaseException`` which
+    contradicted the R2 HIGH #1 narrowing on ``rollback_if_needed``.
+    A ``CancelledError`` delivered while ``persist_fn`` was awaiting
+    would be swallowed, ``persist_succeeded=False`` set, and the
+    state machine would march on to HEALED. Exception-only ensures
+    CancelledError / KeyboardInterrupt / SystemExit propagate.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_persist_cancel_propagates(self) -> None:
+        import asyncio as aio
+
+        async def cancelling_persist(
+            _cards: Sequence[int],  # noqa: ARG001
+            _tuning: VoiceTuningConfig,  # noqa: ARG001
+        ) -> bool:
+            # Simulate a cancel fired while systemctl start was
+            # mid-subprocess.
+            raise aio.CancelledError
+
+        with patch.object(mod, "sys") as sys_mock:
+            sys_mock.platform = "linux"
+            with pytest.raises(aio.CancelledError):
+                await check_and_maybe_heal(
+                    _endpoint(),
+                    _hw(),
+                    kb_lookup=_lookup_with(_pilot_profile()),
+                    role_resolver=MixerControlRoleResolver(),
+                    validation_probe_fn=_pass_validation,
+                    mixer_probe_fn=lambda: [_factory_attenuated_card()],
+                    mixer_apply_fn=AsyncMock(return_value=_apply_snapshot()),
+                    mixer_restore_fn=AsyncMock(),
+                    persist_fn=cancelling_persist,
+                    tuning=VoiceTuningConfig(),
+                )
+
+    @pytest.mark.asyncio()
+    async def test_persist_exception_still_surfaces_healed(self) -> None:
+        """Regular Exception (not BaseException) is still swallowed
+        and results in HEALED with MIXER_SANITY_PERSIST_FAILED — the
+        R2 semantics must survive the R3 narrowing."""
+
+        async def raising_persist(
+            _cards: Sequence[int],  # noqa: ARG001
+            _tuning: VoiceTuningConfig,  # noqa: ARG001
+        ) -> bool:
+            raise RuntimeError("systemctl is not available")
+
+        with patch.object(mod, "sys") as sys_mock:
+            sys_mock.platform = "linux"
+            result = await check_and_maybe_heal(
+                _endpoint(),
+                _hw(),
+                kb_lookup=_lookup_with(_pilot_profile()),
+                role_resolver=MixerControlRoleResolver(),
+                validation_probe_fn=_pass_validation,
+                mixer_probe_fn=lambda: [_factory_attenuated_card()],
+                mixer_apply_fn=AsyncMock(return_value=_apply_snapshot()),
+                mixer_restore_fn=AsyncMock(),
+                persist_fn=raising_persist,
+                tuning=VoiceTuningConfig(),
+            )
+        assert result.decision is MixerSanityDecision.HEALED
+        assert result.error == "MIXER_SANITY_PERSIST_FAILED"
 
 
 # ── Telemetry ───────────────────────────────────────────────────────
