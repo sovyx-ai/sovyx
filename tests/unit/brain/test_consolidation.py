@@ -443,7 +443,12 @@ class TestConsolidationScheduler:
         scheduler._interval_s = 0.05
 
         await scheduler.start(mind_id)
-        await asyncio.sleep(0.15)
+        # Event-based wait with generous deadline so CI runners under load
+        # never flake (was: fixed asyncio.sleep(0.15), which starved under
+        # contention and failed sporadically on the Linux matrix).
+        deadline = asyncio.get_event_loop().time() + 5.0
+        while cycle_mock.run.await_count < 1 and asyncio.get_event_loop().time() < deadline:
+            await asyncio.sleep(0.01)
         await scheduler.stop()
 
         assert cycle_mock.run.await_count >= 1
@@ -466,7 +471,15 @@ class TestConsolidationScheduler:
         scheduler._interval_s = 0.01
 
         await scheduler.start(mind_id)
-        await asyncio.sleep(0.3)
+        # Event-based wait with generous deadline — the fixed-sleep version
+        # flaked on Linux CI when the scheduler coroutine was starved during
+        # the 300ms window (observed 1 cycle instead of the expected ≥2).
+        # We only need call_count ≥ 2 to prove "survived first failure";
+        # polling with a 5s deadline gives enterprise headroom without
+        # slowing the happy path.
+        deadline = asyncio.get_event_loop().time() + 5.0
+        while call_count < 2 and asyncio.get_event_loop().time() < deadline:  # noqa: PLR2004
+            await asyncio.sleep(0.01)
         await scheduler.stop()
 
         # Should have been called at least twice (survived first failure)
