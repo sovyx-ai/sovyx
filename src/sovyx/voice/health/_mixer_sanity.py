@@ -111,10 +111,23 @@ MixerApplyFn: TypeAlias = "Callable[..., Awaitable[MixerApplySnapshot]]"
 """
 
 
-MixerRestoreFn: TypeAlias = "Callable[..., Awaitable[None]]"
-"""Restores a mixer snapshot. Signature matches
-:func:`~sovyx.voice.health._linux_mixer_apply.restore_mixer_snapshot`.
-"""
+class MixerRestoreFn(Protocol):
+    """Restores a mixer snapshot. Signature matches
+    :func:`~sovyx.voice.health._linux_mixer_apply.restore_mixer_snapshot`.
+
+    Expressed as a ``Protocol`` (not ``Callable[...]``) because
+    ``tuning`` is a keyword-only parameter and ``Callable[[X, Y], ...]``
+    types are always positional. A Protocol expresses the real
+    keyword-only signature and lets mypy-strict (CI-Linux) verify
+    callers pass a compatible function.
+    """
+
+    async def __call__(
+        self,
+        snapshot: MixerApplySnapshot,
+        *,
+        tuning: VoiceTuningConfig,
+    ) -> None: ...
 
 
 ValidationProbeFn: TypeAlias = (

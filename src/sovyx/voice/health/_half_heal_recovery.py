@@ -80,6 +80,13 @@ class RestoreSnapshotFn(Protocol):
     ...]`` types are always positional; mypy-on-Linux correctly
     rejected that form when a keyword-only callable was passed in.
     A Protocol lets us describe the exact keyword-only signature.
+
+    Structurally identical to :class:`sovyx.voice.health._mixer_sanity.MixerRestoreFn`
+    — defined here as well so this module stays importable without
+    pulling in ``_mixer_sanity`` (which imports this module).
+    Circular-import-proof by construction: two Protocol classes with
+    the same ``__call__`` signature are structurally
+    interchangeable for mypy.
     """
 
     async def __call__(
