@@ -222,9 +222,16 @@ def score_profile(
         return (0.0, tuple(scores))
     scores.append(("factory_sig", sig_result.score, _WEIGHT_FACTORY_SIG))
 
+    # Paranoid-QA R2 LOW #1: ``total_weight == 0.0`` is unreachable
+    # here — the codec gate (line 116) is the first branch, and
+    # reaching this point means we appended a codec entry with
+    # ``_WEIGHT_CODEC_ID = 0.4``. Every other entry contributes
+    # additional positive weight. The defensive zero-check was
+    # carrying load nobody was paying for; a ``ZeroDivisionError``
+    # from a hypothetical future all-zero-weights refactor is
+    # strictly preferable to a silent-zero return that masks the
+    # bug.
     total_weight = sum(w for _, _, w in scores)
-    if total_weight == 0.0:
-        return (0.0, tuple(scores))
     weighted_sum = sum(s * w for _, s, w in scores)
     return (weighted_sum / total_weight, tuple(scores))
 

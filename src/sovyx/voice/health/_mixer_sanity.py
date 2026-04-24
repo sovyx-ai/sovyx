@@ -32,6 +32,7 @@ import asyncio
 import contextlib
 import contextvars
 import os
+import stat
 import subprocess  # noqa: S404 — fixed-argv subprocess to trusted alsa-utils binary
 import sys
 import time
@@ -1446,12 +1447,66 @@ def _find_trusted_binary(candidates: tuple[str, ...]) -> str | None:
     refused even when present. Returns ``None`` when no canonical
     location holds the binary — caller falls through to the next
     persistence strategy or returns ``False``.
+
+    Threat model (Paranoid-QA R2 MEDIUM #1):
+
+    The classic TOCTOU concern (check via stat, use via subprocess)
+    does not apply here because the candidate paths — ``/usr/bin``,
+    ``/sbin``, ``/bin``, ``/usr/sbin`` — are writable only by root.
+    An attacker who can replace ``/usr/bin/systemctl`` between
+    resolution and exec already has root and can bypass any check
+    we layer on top. For that reason we don't use ``O_NOFOLLOW``
+    + ``fexecve`` here (which would also break legitimate
+    ``/usr/bin/systemctl -> /sbin/systemctl`` symlinks on
+    Arch-derivatives).
+
+    We DO log at DEBUG when a candidate resolves through a symlink
+    so operator-driven audits can spot unexpected indirection. The
+    final ``subprocess.run`` relies on the same canonical path, so
+    a symlink pointing outside the whitelist is detectable via
+    ``resolve()`` and skipped.
     """
     for path in candidates:
         p = Path(path)
         try:
-            if p.is_file() and os.access(p, os.X_OK):
-                return str(p)
+            # ``lstat`` inspects the link itself, not the target.
+            # ``is_file`` follows symlinks — we want to know both.
+            lstat_info = p.lstat()
+            if not p.is_file() or not os.access(p, os.X_OK):
+                continue
+            if stat.S_ISLNK(lstat_info.st_mode):
+                # Resolve the target and confirm it's either in the
+                # whitelist or under one of the canonical system bin
+                # directories. ``/usr/bin/systemctl -> /sbin/systemctl``
+                # is legitimate; ``/usr/bin/systemctl -> /tmp/attacker``
+                # is not.
+                try:
+                    resolved = str(p.resolve(strict=True))
+                except (OSError, RuntimeError):
+                    # Broken symlink or loop — skip.
+                    continue
+                trusted_prefixes = (
+                    "/usr/bin/",
+                    "/usr/sbin/",
+                    "/bin/",
+                    "/sbin/",
+                    "/usr/local/bin/",
+                    "/usr/local/sbin/",
+                )
+                if not any(resolved.startswith(prefix) for prefix in trusted_prefixes):
+                    logger.warning(
+                        "mixer_sanity_trusted_binary_symlink_escapes_whitelist",
+                        candidate=str(p),
+                        resolved=resolved,
+                        note="refusing — symlink target is outside canonical bin dirs",
+                    )
+                    continue
+                logger.debug(
+                    "mixer_sanity_trusted_binary_symlink_resolved",
+                    candidate=str(p),
+                    resolved=resolved,
+                )
+            return str(p)
         except OSError:
             continue
     return None

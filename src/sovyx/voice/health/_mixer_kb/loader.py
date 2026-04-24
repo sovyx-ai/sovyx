@@ -18,6 +18,7 @@ so F2's verifier has a visible transition path.
 
 from __future__ import annotations
 
+import unicodedata
 from typing import TYPE_CHECKING
 
 import yaml
@@ -32,6 +33,17 @@ if TYPE_CHECKING:
     from sovyx.voice.health.contract import MixerKBProfile
 
 logger = get_logger(__name__)
+
+
+def _normalise_for_match(text: str) -> str:
+    """Unicode-fold + casefold for filename/profile_id comparison.
+
+    Paranoid-QA R2 LOW #2/#3: casefold handles German ß/ss + most
+    Unicode case pairs, but composed vs decomposed accents (café
+    as NFC U+00E9 vs NFD U+0065 U+0301) still miscompare. NFKC
+    first, then casefold, closes both gaps.
+    """
+    return unicodedata.normalize("NFKC", text).casefold()
 
 
 _PROFILE_INDEX_PREFIX = "_"
@@ -65,14 +77,16 @@ def load_profile_file(path: Path) -> MixerKBProfile:
         )
         raise ValueError(msg)
     model = KBProfileModel.model_validate(parsed)
-    # Paranoid-QA HIGH #18: filename-stem comparison must be
-    # case-insensitive to survive case-insensitive filesystems
-    # (Windows NTFS default, macOS HFS+ default). A profile authored
-    # with ``profile_id: vaio_vjfe69`` in a file named ``VAIO_VJFE69.yaml``
-    # on dev Windows would silently fail ``== `` comparison and the
-    # profile would be dropped with "load_failed" — invisible to the
-    # user until the Linux CI runs and behaves differently.
-    if model.profile_id.casefold() != path.stem.casefold():
+    # Paranoid-QA HIGH #18 + R2 LOW #2/#3: filename-stem
+    # comparison must be case-insensitive AND Unicode-form-
+    # insensitive. ``casefold()`` alone handles German ß/ss and
+    # Turkish-I-like cases correctly, but composed vs decomposed
+    # accents (café as NFC "café" vs NFD "café") still miscompare.
+    # NFKC normalise both sides first so "café.yaml" matches
+    # ``profile_id: café`` regardless of which encoder wrote the
+    # filename. ``casefold + NFKC`` together cover every real-world
+    # filename/profile_id drift we've observed.
+    if _normalise_for_match(model.profile_id) != _normalise_for_match(path.stem):
         msg = (
             f"profile_id={model.profile_id!r} in {path.name!r} disagrees "
             f"with filename stem {path.stem!r} (case-folded); they must "

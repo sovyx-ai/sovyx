@@ -39,20 +39,34 @@ esac
 power_ctl="$devpath/../power/control"
 
 # Normalise the path so a symlink inside devpath can't redirect us
-# outside /sys. ``readlink -f`` is the POSIX-leaning portable option;
-# when absent (musl minimalism) we fall through to a best-effort
-# prefix check on the original path.
-if command -v readlink >/dev/null 2>&1; then
-    resolved=$(readlink -f "$power_ctl" 2>/dev/null || true)
-    if [ -z "$resolved" ]; then
-        exit 0
-    fi
-    case "$resolved" in
-        /sys/*/power/control) ;;
-        *) exit 0 ;;
-    esac
-    power_ctl="$resolved"
+# outside /sys. ``readlink -f`` is the POSIX-leaning portable option.
+#
+# Paranoid-QA R2 MEDIUM #3: when readlink is absent (rare — every
+# mainstream distro ships GNU coreutils or BusyBox readlink), we
+# REFUSE to write rather than falling through to a weak literal-
+# path check. Without resolution, the ``$devpath/../power/control``
+# construction is susceptible to a crafted symlink INSIDE $devpath
+# redirecting ``..`` to somewhere outside /sys. The earlier "best-
+# effort fallthrough" was a band-aid; safe default when the
+# resolution tool is missing is: decline to proceed.
+if ! command -v readlink >/dev/null 2>&1; then
+    # No readlink — we cannot safely resolve the parent, so silently
+    # skip. udev logs stay clean per exit 0; operators who need
+    # runtime_pm healing on a readlink-less system install coreutils.
+    exit 0
 fi
+
+resolved=$(readlink -f "$power_ctl" 2>/dev/null || true)
+if [ -z "$resolved" ]; then
+    # readlink returned empty — either the path doesn't exist, or
+    # resolution hit a loop. Either way, unsafe to write.
+    exit 0
+fi
+case "$resolved" in
+    /sys/*/power/control) ;;
+    *) exit 0 ;;
+esac
+power_ctl="$resolved"
 
 # Final write-guard: the resolved path must be writable AND must
 # literally end in /power/control (belt + suspenders against a crafty

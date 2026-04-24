@@ -655,17 +655,28 @@ class VoiceTuningConfig(BaseSettings):
         Reject the config at startup instead of shipping surprising
         behaviour at first cascade.
         """
+        # Paranoid-QA R2 MEDIUM #2: strict inequality, not <=. When
+        # ``apply == skip`` the defer band has width zero — every
+        # score lands either in apply-land or skip-land, with a
+        # single exact-equality score that's ambiguous (orchestrator
+        # uses ``<`` for apply and ``>`` for skip, so ``score ==
+        # apply == skip`` triggers neither branch and silently
+        # reaches the defer code path for a non-existent band).
+        # Requiring strict separation guarantees every score maps to
+        # exactly one of the three branches.
         if (
             self.linux_mixer_user_customization_threshold_apply
-            > self.linux_mixer_user_customization_threshold_skip
+            >= self.linux_mixer_user_customization_threshold_skip
         ):
             msg = (
                 f"linux_mixer_user_customization_threshold_apply="
                 f"{self.linux_mixer_user_customization_threshold_apply} must be "
-                f"<= linux_mixer_user_customization_threshold_skip="
+                f"< linux_mixer_user_customization_threshold_skip="
                 f"{self.linux_mixer_user_customization_threshold_skip} — "
                 "the apply threshold is the FLOOR of the defer band; "
-                "skip is the CEILING. Inverting them eliminates the band."
+                "skip is the CEILING. Equality eliminates the band "
+                "(width zero) and produces an ambiguous boundary at "
+                "the exact-equal score."
             )
             raise ValueError(msg)
         return self

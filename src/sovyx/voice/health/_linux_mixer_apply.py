@@ -501,20 +501,30 @@ async def apply_mixer_preset(
                 note="runtime_pm is handled by systemd oneshot (F1.G)",
             )
     except asyncio.CancelledError:
-        await _rollback_best_effort(card_index, rollback_log, timeout_s=timeout_s)
+        # Paranoid-QA R2 LOW #5: LIFO order requires enum rollback
+        # FIRST — the ``_apply_auto_mute`` call runs AFTER the
+        # numeric loop, so its rollback must come BEFORE the
+        # numeric LIFO walk to preserve the "undo in reverse
+        # commit order" invariant. Reverse order left a transient
+        # inconsistent state (numeric reverted + enum still in
+        # applied state) that, while settling to the correct
+        # terminal state, violated the atomicity contract
+        # apply_mixer_preset's docstring advertises.
         await _rollback_enum_best_effort(
             card_index,
             enum_rollback_log,
             timeout_s=timeout_s,
         )
+        await _rollback_best_effort(card_index, rollback_log, timeout_s=timeout_s)
         raise
     except BypassApplyError:
-        await _rollback_best_effort(card_index, rollback_log, timeout_s=timeout_s)
+        # Same LIFO ordering as the CancelledError branch — see above.
         await _rollback_enum_best_effort(
             card_index,
             enum_rollback_log,
             timeout_s=timeout_s,
         )
+        await _rollback_best_effort(card_index, rollback_log, timeout_s=timeout_s)
         raise
 
     return MixerApplySnapshot(

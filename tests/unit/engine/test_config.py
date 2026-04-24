@@ -553,3 +553,45 @@ class TestVoiceTuningV13EmpiricalDefaults:
         with pytest.raises(Exception) as exc_info:
             VoiceTuningConfig()
         assert "bypass_strategy_post_apply_settle_s" in str(exc_info.value)
+
+    def test_customization_apply_must_be_strictly_less_than_skip(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Paranoid-QA R2 MEDIUM #2 regression.
+
+        ``apply == skip`` collapses the defer band to zero width.
+        The orchestrator's branches use strict ``<`` and ``>``,
+        so any score equal to the shared threshold falls through
+        both branches and ends up in a defer path for a
+        non-existent band. Reject at config-load time.
+        """
+        self._clear_voice_env(monkeypatch)
+        with pytest.raises(Exception) as exc_info:
+            VoiceTuningConfig(
+                linux_mixer_user_customization_threshold_apply=0.6,
+                linux_mixer_user_customization_threshold_skip=0.6,
+            )
+        assert "linux_mixer_user_customization_threshold_apply" in str(exc_info.value)
+
+    def test_customization_apply_strictly_greater_than_skip_rejected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Inverted band (apply > skip) is also rejected — same
+        validator, preserved from Paranoid-QA HIGH #9."""
+        self._clear_voice_env(monkeypatch)
+        with pytest.raises(Exception) as exc_info:
+            VoiceTuningConfig(
+                linux_mixer_user_customization_threshold_apply=0.8,
+                linux_mixer_user_customization_threshold_skip=0.75,
+            )
+        assert "linux_mixer_user_customization_threshold" in str(exc_info.value)
+
+    def test_customization_strict_ordering_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Strict ``apply < skip`` (the contract) is accepted."""
+        self._clear_voice_env(monkeypatch)
+        cfg = VoiceTuningConfig(
+            linux_mixer_user_customization_threshold_apply=0.4,
+            linux_mixer_user_customization_threshold_skip=0.7,
+        )
+        assert cfg.linux_mixer_user_customization_threshold_apply == 0.4
+        assert cfg.linux_mixer_user_customization_threshold_skip == 0.7

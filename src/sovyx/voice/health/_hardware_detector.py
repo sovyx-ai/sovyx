@@ -148,7 +148,14 @@ def _resolve_xdg_runtime_dir(override: Path | None) -> Path | None:
     if override is not None:
         return override
     value = os.environ.get("XDG_RUNTIME_DIR")
-    if not value:
+    # Paranoid-QA R2 LOW #4: strip then truthy-check. A sysadmin
+    # who accidentally exported ``XDG_RUNTIME_DIR="   "`` (shell
+    # heredoc with stray whitespace) would otherwise send
+    # ``Path("   ")`` into the socket probe, which then fails
+    # silently with "no such file" rather than gracefully falling
+    # back to the "no xdg, try /run/user/$(id -u)" path. Treat
+    # whitespace-only as unset.
+    if not value or not value.strip():
         return None
     return Path(value)
 
@@ -257,13 +264,26 @@ def _read_dmi_field(dmi_path: Path, field: str) -> str | None:
     is missing, empty, or unreadable. The common failure is a
     containerised system (Docker, Flatpak) where ``/sys/class/dmi``
     is masked — graceful ``None`` keeps the orchestrator running.
+
+    Paranoid-QA R2 LOW #3: NFKC-normalise the result so the
+    downstream glob match in :func:`~sovyx.voice.health._mixer_kb.matcher.score_profile`
+    is stable across decomposed-vs-composed accent encodings.
+    BIOS vendors have historically emitted both — a Unicode
+    contributor authoring a KB profile with ``Motherhood s.r.o.``
+    NFC shouldn't fail to match DMI-reported ``Motherhood s.r.o.``
+    NFD. Also strips non-breaking spaces (U+00A0) which NFKC
+    converts to plain spaces.
     """
     path = dmi_path / field
     try:
         value = path.read_text(encoding="utf-8", errors="replace").strip()
     except OSError:
         return None
-    return value or None
+    if not value:
+        return None
+    import unicodedata  # noqa: PLC0415 — lazy to keep the import graph minimal
+
+    return unicodedata.normalize("NFKC", value)
 
 
 def _read_distro(os_release_path: Path) -> str | None:
