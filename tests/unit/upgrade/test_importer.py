@@ -104,7 +104,7 @@ def _create_smf_dir(
             "\n"
             "User drinks coffee daily.\n"
         )
-        (cat_dir / "likes-coffee.md").write_text(concept_md)
+        (cat_dir / "likes-coffee.md").write_text(concept_md, encoding="utf-8")
 
     if relations:
         meta_dir = smf / "metadata"
@@ -144,7 +144,11 @@ def _create_smf_dir(
             "\n"
             "**Summary:** A greeting.\n"
         )
-        (conv_dir / "ep-001.md").write_text(ep_md)
+        # Explicit utf-8 — on Windows the default encoding is cp1252, which
+        # can encode the em-dash body but round-trips as invalid utf-8 when
+        # the importer reads back with ``encoding="utf-8"``. Pin both sides
+        # to utf-8 so the test behaves identically on all platforms.
+        (conv_dir / "ep-001.md").write_text(ep_md, encoding="utf-8")
 
     return smf
 

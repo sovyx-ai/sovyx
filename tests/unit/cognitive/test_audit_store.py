@@ -5,15 +5,17 @@ Covers: init, append, flush, query, count, filtering, edge cases.
 
 from __future__ import annotations
 
+import sys
 import time
 from typing import TYPE_CHECKING
+
+import pytest
 
 from sovyx.cognitive.audit_store import AuditQueryResult, AuditStore
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    import pytest
 from sovyx.cognitive.safety_audit import SafetyEvent
 
 
@@ -153,6 +155,16 @@ class TestErrorPaths:
         # Should not raise
         assert store.count(hours=1) == 0
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason=(
+            "Windows cannot unlink a SQLite DB while any connection holds a "
+            "handle to it (WinError 32) — sqlite3.connect leaves implicit "
+            "connections pending even through 'with' blocks. The POSIX path "
+            "this test exercises (unlink-while-open) is not reproducible on "
+            "Windows; the semantic is covered by test_init_invalid_path."
+        ),
+    )
     def test_flush_after_db_deleted(self, tmp_path: Path) -> None:
         """Flush after DB file is gone returns 0."""
         db = tmp_path / "test.db"

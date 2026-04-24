@@ -33,7 +33,10 @@ class TestGetSettings:
 
         assert result["log_level"] == "INFO"
         assert result["log_format"] == "json"
-        assert result["log_file"] == "/tmp/sovyx.log"
+        # ``Path.__str__`` normalises separators per-platform (``/tmp/sovyx.log``
+        # on POSIX, ``\tmp\sovyx.log`` on Windows). Build the expected value
+        # the same way so the assertion holds on both.
+        assert result["log_file"] == str(Path("/tmp/sovyx.log"))  # noqa: S108
         assert result["telemetry_enabled"] is False
         assert result["api_enabled"] is True
         assert result["api_host"] == "127.0.0.1"
