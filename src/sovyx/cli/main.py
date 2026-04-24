@@ -15,6 +15,7 @@ from sovyx.cli.commands.audit import audit_app
 from sovyx.cli.commands.brain_analyze import analyze_app
 from sovyx.cli.commands.dashboard import dashboard_app
 from sovyx.cli.commands.doctor import doctor_app
+from sovyx.cli.commands.kb import kb_app
 from sovyx.cli.commands.logs import logs_app
 from sovyx.cli.commands.plugin import plugin_app
 from sovyx.cli.rpc_client import DaemonClient
@@ -36,6 +37,7 @@ app.add_typer(dashboard_app, name="dashboard")
 app.add_typer(doctor_app)
 app.add_typer(plugin_app, name="plugin")
 app.add_typer(audit_app)
+app.add_typer(kb_app, name="kb")
 
 
 def _get_client() -> DaemonClient:
