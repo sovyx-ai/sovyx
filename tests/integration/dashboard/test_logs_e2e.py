@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import logging.handlers
+import time
 from typing import TYPE_CHECKING
 
 import pytest
@@ -156,6 +157,13 @@ class TestLogsPipeline:
         entries_1 = query_logs(log_file)
         assert len(entries_1) >= 1
         first_ts = entries_1[0]["timestamp"]
+
+        # Advance the wall clock past Windows' ~15.6 ms monotonic-clock
+        # resolution so ``event_two`` gets a strictly-later ISO timestamp
+        # than ``event_one``. Without this, both events can share the
+        # same millisecond on a coarse-clock OS and the ``after > first_ts``
+        # filter drops event_two.
+        time.sleep(0.05)
 
         # Log another event
         logger.info("event_two")

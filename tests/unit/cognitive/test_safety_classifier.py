@@ -598,7 +598,11 @@ class TestClassificationCache:
         cache.put("test", v)
         import time
 
-        time.sleep(0.01)
+        # 50 ms > Windows' monotonic-clock resolution (~15.6 ms). A
+        # 10 ms sleep may round to a zero-tick delta, so ``time.monotonic()``
+        # at ``get`` reads the same value as at ``put`` and the strict
+        # ``now > put_time + ttl`` check holds stale entries past the TTL.
+        time.sleep(0.05)
         assert cache.get("test") is None
 
     def test_lru_eviction(self) -> None:

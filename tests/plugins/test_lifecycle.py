@@ -161,7 +161,11 @@ class TestUptime:
         tracker = PluginStateTracker("test")
         tracker.transition(PluginState.LOADING)
         tracker.transition(PluginState.ACTIVE)
-        time.sleep(0.01)
+        # 50 ms > Windows' default monotonic-clock resolution (~15.6 ms
+        # without ``timeBeginPeriod``). A 10 ms sleep can round down to
+        # a zero-tick delta on Windows, making ``uptime_seconds == 0.0``
+        # and failing the ``> 0`` assertion.
+        time.sleep(0.05)
         assert tracker.uptime_seconds > 0
 
     def test_uptime_resets_on_unloading(self) -> None:
