@@ -147,8 +147,18 @@ class _FakeInputStream:
         self.closed = True
 
     def _feed(self) -> None:
-        block_ms = self.blocksize * 1000.0 / self.samplerate
-        block_s = block_ms / 1000.0
+        # Decoupled from wall-clock pacing: ``sleep(0.0005)`` just yields
+        # the GIL so the probe's ``await asyncio.sleep`` can run. Real
+        # block-rate pacing (``time.sleep(blocksize/samplerate)`` ~= 32 ms
+        # at 16 kHz / 512 frames) was fragile on slower schedulers —
+        # macOS ARM64 on GitHub Actions produced only 3-4 callbacks over
+        # a 400 ms probe window, leaving the analyser with fewer samples
+        # than the 3200-sample warmup threshold and forcing ``rms_db=-inf``
+        # → ``Diagnosis.NO_SIGNAL`` even for test fixtures that mock
+        # healthy audio. Firing callbacks back-to-back instead fills
+        # the block buffer comfortably past warmup on every runner;
+        # the probe's own ``await asyncio.sleep(duration_ms)`` still
+        # governs the total probe window.
         frame_idx = 0
         while self._running:
             if self._block_factory is None:
@@ -163,7 +173,7 @@ class _FakeInputStream:
             except Exception:  # noqa: BLE001
                 return
             frame_idx += 1
-            time.sleep(block_s)
+            time.sleep(0.0005)
 
 
 class _FakeSoundDevice:
