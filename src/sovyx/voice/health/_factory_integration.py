@@ -28,6 +28,7 @@ event loop never blocks.
 from __future__ import annotations
 
 import hashlib
+import re
 import sys
 from dataclasses import dataclass
 from enum import StrEnum
@@ -126,6 +127,184 @@ async def _autofix_after_driver_watchdog_scan(
         ),
     )
     return False
+
+
+# Extracts the three identity pieces from a composed Linux endpoint
+# fingerprint:
+#   {linux-usb-1532:0543-0-capture}                 → usb  = 1532:0543
+#   {linux-pci-0000_00_1f.3-codec-14F1:5045-0-cap}  → codec = 14F1:5045
+#   {linux-pci-0000_00_1f.3-0-capture}              → no codec
+# Kept as narrow regexes so a future fingerprint-shape change
+# surfaces as a local test failure in this module, not a silent
+# correlation drop in production.
+_LINUX_FP_USB_RE = re.compile(
+    r"^\{linux-usb-(?P<vidpid>[0-9A-F]{4}:[0-9A-F]{4})-",
+    re.IGNORECASE,
+)
+_LINUX_FP_CODEC_RE = re.compile(
+    r"-codec-(?P<codec>[0-9A-F]{4}:[0-9A-F]{4})-",
+    re.IGNORECASE,
+)
+
+
+def _extract_linux_watchdog_hints(
+    *,
+    alsa_name: str,
+    endpoint_guid: str,
+) -> tuple[str | None, str | None, str | None]:
+    """Extract (alsa_card_id, usb_vid_pid, codec_vendor_id) hints.
+
+    Used on Linux to correlate ``journalctl -k`` distress events with
+    the device the cascade is about to probe. Hints are best-effort:
+    any piece we can't extract → ``None``, and
+    :meth:`LinuxDriverWatchdogScan.matches_device` accepts partial
+    hint sets.
+
+    Sources:
+
+    * ``alsa_card_id`` — parsed from the ALSA PCM name
+      (``alsa_name``). ``hw:N,M`` → ``"N"``; ``plughw:CARD=id,DEV=M``
+      → ``"id"`` (case-preserved). These match kernel-log device hints
+      like ``card0`` / ``card[PCH]`` via substring. Both single-device
+      and candidate-set callers pass a PortAudio / ALSA device name
+      here (``DeviceEntry.name`` or ``CandidateEndpoint.canonical_name``).
+    * ``usb_vid_pid`` and ``codec_vendor_id`` — regex-extracted from
+      the already-composed endpoint GUID. The fingerprint format is
+      internally owned (:mod:`sovyx.voice.health._fingerprint_linux`),
+      so back-parsing is safe as long as the shape is pinned.
+    """
+    alsa_card_id: str | None = None
+    name = alsa_name.strip()
+    hw_match = re.match(r"^(?:plug)?hw:(\d+)", name, re.IGNORECASE)
+    if hw_match is not None:
+        alsa_card_id = hw_match.group(1)
+    else:
+        card_eq_match = re.match(
+            r"^[\w-]+:CARD=([^,\s]+)",
+            name,
+            re.IGNORECASE,
+        )
+        if card_eq_match is not None:
+            alsa_card_id = card_eq_match.group(1)
+
+    usb_vid_pid: str | None = None
+    usb_match = _LINUX_FP_USB_RE.match(endpoint_guid)
+    if usb_match is not None:
+        usb_vid_pid = usb_match.group("vidpid").lower()
+
+    codec_vendor_id: str | None = None
+    codec_match = _LINUX_FP_CODEC_RE.search(endpoint_guid)
+    if codec_match is not None:
+        # The kernel-log codec hint is the vendor's 8-hex blob
+        # (e.g. ``0x14f15045``). Strip the colon and lower-case so
+        # the ``matches_device`` substring check lands inside the
+        # ``0x<hex>`` kernel form without bus-form noise.
+        codec_vendor_id = codec_match.group("codec").replace(":", "").lower()
+
+    return alsa_card_id, usb_vid_pid, codec_vendor_id
+
+
+async def _log_linux_driver_watchdog_scan(
+    *,
+    alsa_name: str,
+    endpoint_guid: str,
+    lookback_hours: int,
+    timeout_s: float,
+) -> None:
+    """Detection-tier scan of ``journalctl -k`` for audio distress.
+
+    Mirrors the Windows driver-watchdog pre-flight for observability,
+    but without the ``voice_clarity_autofix`` downgrade — on Linux
+    PortAudio already routes through ALSA shared mode, so there is
+    no symmetric "safer" mode to fall back to. The helper emits one
+    of four log records:
+
+    * ``voice_driver_watchdog_linux_unavailable`` — scan couldn't
+      run (non-systemd host, journalctl missing, permission denied).
+      DEBUG level so desktop installs don't spam warnings.
+    * ``voice_driver_watchdog_linux_clean`` — scan ran, zero events.
+    * ``voice_driver_watchdog_linux_events_unrelated`` — events
+      exist but none tie to this device's hints. INFO level.
+    * ``voice_driver_watchdog_linux_events_correlated`` — one or
+      more events matched this device. WARNING level, with full
+      event tuple serialised so operators can triage.
+
+    Exceptions from the scan are logged at DEBUG and swallowed —
+    boot must never block on the best-effort diagnostic.
+    """
+    from sovyx.voice.health._driver_watchdog_linux import (
+        scan_recent_linux_driver_watchdog_events,
+    )
+
+    try:
+        scan = await scan_recent_linux_driver_watchdog_events(
+            lookback_hours=lookback_hours,
+            timeout_s=timeout_s,
+        )
+    except Exception:  # noqa: BLE001 — scan is best-effort, never block boot
+        logger.debug(
+            "voice_driver_watchdog_linux_scan_raised",
+            exc_info=True,
+        )
+        return
+
+    if not scan.scan_attempted or scan.scan_failed:
+        logger.debug(
+            "voice_driver_watchdog_linux_unavailable",
+            endpoint=endpoint_guid,
+            attempted=scan.scan_attempted,
+            failed=scan.scan_failed,
+        )
+        return
+
+    if not scan.any_events:
+        logger.debug(
+            "voice_driver_watchdog_linux_clean",
+            endpoint=endpoint_guid,
+            lookback_hours=lookback_hours,
+        )
+        return
+
+    alsa_card_id, usb_vid_pid, codec_vendor_id = _extract_linux_watchdog_hints(
+        alsa_name=alsa_name,
+        endpoint_guid=endpoint_guid,
+    )
+    correlated = scan.matches_device(
+        alsa_card_id=alsa_card_id,
+        usb_vid_pid=usb_vid_pid,
+        codec_vendor_id=codec_vendor_id,
+    )
+
+    severities = sorted({event.severity for event in scan.events})
+    pattern_names = sorted({event.pattern_name for event in scan.events})
+
+    if not correlated:
+        logger.info(
+            "voice_driver_watchdog_linux_events_unrelated",
+            endpoint=endpoint_guid,
+            event_count=len(scan.events),
+            severities=severities,
+            patterns=pattern_names,
+        )
+        return
+
+    logger.warning(
+        "voice_driver_watchdog_linux_events_correlated",
+        endpoint=endpoint_guid,
+        event_count=len(scan.events),
+        severities=severities,
+        patterns=pattern_names,
+        alsa_card_id=alsa_card_id,
+        usb_vid_pid=usb_vid_pid,
+        codec_vendor_id=codec_vendor_id,
+        remediation=(
+            "journalctl -k surfaced audio distress events correlated "
+            "to this endpoint within the lookback window. Inspect the "
+            "pattern names (hda_codec_timeout, usb_descriptor_read_fail, "
+            "etc.) and consider replugging / reloading the audio module "
+            "before further debugging cascade outcomes."
+        ),
+    )
 
 
 def derive_endpoint_guid(
@@ -303,6 +482,20 @@ async def run_boot_cascade(
             timeout_s=tuning.driver_watchdog_scan_timeout_s,
         )
 
+    # Linux-side driver-watchdog scan. Detection-tier only — unlike
+    # Windows we don't downgrade anything based on the result, because
+    # Linux PortAudio already runs shared-mode via ALSA by default.
+    # The telemetry ties cascade outcomes to concrete kernel events
+    # (HDA codec wedge, USB descriptor failure, XRUN flood) so
+    # post-incident triage has a one-command audit trail.
+    if plat == "linux":
+        await _log_linux_driver_watchdog_scan(
+            alsa_name=resolved.name,
+            endpoint_guid=endpoint_guid,
+            lookback_hours=tuning.driver_watchdog_lookback_hours,
+            timeout_s=tuning.driver_watchdog_scan_timeout_s,
+        )
+
     try:
         result = await run_cascade(
             endpoint_guid=endpoint_guid,
@@ -419,6 +612,19 @@ async def run_boot_cascade_for_candidates(
         effective_autofix = await _autofix_after_driver_watchdog_scan(
             resolved_name=primary.friendly_name,
             device_interface_name=primary.canonical_name,
+            lookback_hours=tuning.driver_watchdog_lookback_hours,
+            timeout_s=tuning.driver_watchdog_scan_timeout_s,
+        )
+
+    # Linux detection-tier scan, symmetric to :func:`run_boot_cascade`
+    # but scoped to the primary candidate. Secondary candidates (the
+    # PipeWire / Pulse fallbacks) don't correspond to a physical
+    # kernel device with its own driver-watchdog signal, so there's
+    # nothing to correlate past the primary.
+    if plat == "linux":
+        await _log_linux_driver_watchdog_scan(
+            alsa_name=primary.canonical_name,
+            endpoint_guid=primary.endpoint_guid,
             lookback_hours=tuning.driver_watchdog_lookback_hours,
             timeout_s=tuning.driver_watchdog_scan_timeout_s,
         )
