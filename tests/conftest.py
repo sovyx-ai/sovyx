@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import shutil
+import sys
+import tempfile
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 from hypothesis import HealthCheck, settings
 
 if TYPE_CHECKING:
-    from pathlib import Path
+    from collections.abc import Iterator
 
 # ── Hypothesis global profile ──────────────────────────────────────────────
 # deadline=None prevents flaky failures when the host is under load
@@ -61,3 +65,39 @@ def mind_dir(data_dir: Path) -> Path:
     d = data_dir / "minds" / "test-mind"
     d.mkdir(parents=True)
     return d
+
+
+@pytest.fixture
+def short_socket_path() -> Iterator[Path]:
+    """Path for an ``AF_UNIX`` socket that survives the macOS 104-char limit.
+
+    macOS caps ``sockaddr_un.sun_path`` at **104 characters** (including
+    the null terminator). GitHub's macOS runner expands pytest's
+    ``tmp_path`` under ``/private/var/folders/XX/…/T/pytest-of-runner/
+    pytest-N/test-name0/`` — easily 100+ chars before the socket filename
+    is even appended. Binding there fails with::
+
+        OSError: AF_UNIX path too long
+
+    Using this fixture pins the parent directory to ``/tmp`` on POSIX
+    (via ``tempfile.mkdtemp(dir="/tmp")``), keeping the full path under
+    ~25 characters regardless of runner.
+
+    The yielded ``Path`` is the socket FILE — its parent directory
+    already exists (mkdtemp created it), but the file itself does not,
+    so callers that bind a server OR test for absence both work.
+
+    On Windows the tests that use this fixture run over TCP (not
+    ``AF_UNIX``), so the constraint doesn't apply; we still create a
+    temp dir under the default ``$TEMP`` so the fixture's teardown
+    behaviour is uniform across OSes.
+    """
+    # POSIX: pin to /tmp (short). Windows: default temp dir (RPC tests
+    # on Windows use TCP — the path here is only a carrier for the
+    # ``.port`` sidecar file, so any writable location works).
+    parent_dir = None if sys.platform == "win32" else "/tmp"
+    d = Path(tempfile.mkdtemp(prefix="sx-rpc-", dir=parent_dir))
+    try:
+        yield d / "s"
+    finally:
+        shutil.rmtree(d, ignore_errors=True)

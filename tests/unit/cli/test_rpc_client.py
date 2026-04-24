@@ -112,9 +112,9 @@ class TestIsDaemonRunning:
         assert client.is_daemon_running() is False
 
     @pytest.mark.asyncio
-    async def test_daemon_running(self, tmp_path: Path) -> None:
+    async def test_daemon_running(self, short_socket_path: Path) -> None:
         """Real server listening → True."""
-        sock = tmp_path / "test.sock"
+        sock = short_socket_path
         resp = {"jsonrpc": "2.0", "id": 1, "result": "ok"}
         server = await _start_mock_daemon(sock, response=resp)
         try:
@@ -166,9 +166,9 @@ class TestCall:
             await client.call("status")
 
     @pytest.mark.asyncio
-    async def test_successful_call(self, tmp_path: Path) -> None:
+    async def test_successful_call(self, short_socket_path: Path) -> None:
         """call() with valid response → returns result."""
-        sock = tmp_path / "daemon.sock"
+        sock = short_socket_path
         response = {"jsonrpc": "2.0", "id": 1, "result": {"status": "running"}}
         server = await _start_mock_daemon(sock, response=response)
         try:
@@ -179,9 +179,9 @@ class TestCall:
             await _stop_mock_daemon(server, sock)
 
     @pytest.mark.asyncio
-    async def test_request_id_increments(self, tmp_path: Path) -> None:
+    async def test_request_id_increments(self, short_socket_path: Path) -> None:
         """Each call increments the request ID."""
-        sock = tmp_path / "daemon.sock"
+        sock = short_socket_path
         received_requests: list[dict[str, Any]] = []
 
         async def capturing_handler(
@@ -215,9 +215,9 @@ class TestCall:
             await _stop_mock_daemon(server, sock)
 
     @pytest.mark.asyncio
-    async def test_params_forwarded(self, tmp_path: Path) -> None:
+    async def test_params_forwarded(self, short_socket_path: Path) -> None:
         """call() forwards params dict to daemon."""
-        sock = tmp_path / "daemon.sock"
+        sock = short_socket_path
         received_params: list[dict[str, Any]] = []
 
         async def handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -246,9 +246,9 @@ class TestCall:
             await _stop_mock_daemon(server, sock)
 
     @pytest.mark.asyncio
-    async def test_default_params_empty_dict(self, tmp_path: Path) -> None:
+    async def test_default_params_empty_dict(self, short_socket_path: Path) -> None:
         """call() without params sends empty dict."""
-        sock = tmp_path / "daemon.sock"
+        sock = short_socket_path
         received_params: list[dict[str, Any]] = []
 
         async def handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -277,9 +277,9 @@ class TestCall:
             await _stop_mock_daemon(server, sock)
 
     @pytest.mark.asyncio
-    async def test_rpc_error_response(self, tmp_path: Path) -> None:
+    async def test_rpc_error_response(self, short_socket_path: Path) -> None:
         """call() with RPC error in response → ChannelConnectionError."""
-        sock = tmp_path / "daemon.sock"
+        sock = short_socket_path
         error_response = {
             "jsonrpc": "2.0",
             "id": 1,
@@ -294,9 +294,9 @@ class TestCall:
             await _stop_mock_daemon(server, sock)
 
     @pytest.mark.asyncio
-    async def test_rpc_error_missing_fields(self, tmp_path: Path) -> None:
+    async def test_rpc_error_missing_fields(self, short_socket_path: Path) -> None:
         """call() with RPC error missing code/message → uses defaults."""
-        sock = tmp_path / "daemon.sock"
+        sock = short_socket_path
         error_response = {
             "jsonrpc": "2.0",
             "id": 1,
@@ -311,9 +311,9 @@ class TestCall:
             await _stop_mock_daemon(server, sock)
 
     @pytest.mark.asyncio
-    async def test_result_none_when_missing(self, tmp_path: Path) -> None:
+    async def test_result_none_when_missing(self, short_socket_path: Path) -> None:
         """call() with response missing 'result' → returns None."""
-        sock = tmp_path / "daemon.sock"
+        sock = short_socket_path
         response = {"jsonrpc": "2.0", "id": 1}
         server = await _start_mock_daemon(sock, response=response)
         try:
@@ -324,9 +324,9 @@ class TestCall:
             await _stop_mock_daemon(server, sock)
 
     @pytest.mark.asyncio
-    async def test_connect_timeout_no_transport(self, tmp_path: Path) -> None:
+    async def test_connect_timeout_no_transport(self, short_socket_path: Path) -> None:
         """call() when is_daemon_running is mocked True but transport absent → error."""
-        sock = tmp_path / "daemon.sock"
+        sock = short_socket_path
         client = DaemonClient(socket_path=sock)
 
         with (
@@ -336,9 +336,9 @@ class TestCall:
             await client.call("status", timeout=0.5)
 
     @pytest.mark.asyncio
-    async def test_writer_closed_after_call(self, tmp_path: Path) -> None:
+    async def test_writer_closed_after_call(self, short_socket_path: Path) -> None:
         """Writer is properly closed after successful call (finally block)."""
-        sock = tmp_path / "daemon.sock"
+        sock = short_socket_path
         response = {"jsonrpc": "2.0", "id": 1, "result": "ok"}
         server = await _start_mock_daemon(sock, response=response)
         try:
@@ -348,9 +348,9 @@ class TestCall:
             await _stop_mock_daemon(server, sock)
 
     @pytest.mark.asyncio
-    async def test_writer_closed_on_error(self, tmp_path: Path) -> None:
+    async def test_writer_closed_on_error(self, short_socket_path: Path) -> None:
         """Writer is closed even when RPC error occurs (finally block)."""
-        sock = tmp_path / "daemon.sock"
+        sock = short_socket_path
         error_response = {
             "jsonrpc": "2.0",
             "id": 1,

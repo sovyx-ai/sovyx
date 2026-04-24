@@ -23,8 +23,8 @@ _IS_WINDOWS = sys.platform == "win32"
 class TestRPCEndToEnd:
     """Server + Client integration (works on both Unix and Windows)."""
 
-    async def test_simple_method(self, tmp_path: Path) -> None:
-        socket_path = tmp_path / "test.sock"
+    async def test_simple_method(self, short_socket_path: Path) -> None:
+        socket_path = short_socket_path
         server = DaemonRPCServer(socket_path)
         server.register_method("ping", lambda: "pong")
 
@@ -36,8 +36,8 @@ class TestRPCEndToEnd:
         finally:
             await server.stop()
 
-    async def test_method_with_params(self, tmp_path: Path) -> None:
-        socket_path = tmp_path / "test.sock"
+    async def test_method_with_params(self, short_socket_path: Path) -> None:
+        socket_path = short_socket_path
         server = DaemonRPCServer(socket_path)
         server.register_method("add", lambda a, b: a + b)
 
@@ -49,8 +49,8 @@ class TestRPCEndToEnd:
         finally:
             await server.stop()
 
-    async def test_async_method(self, tmp_path: Path) -> None:
-        socket_path = tmp_path / "test.sock"
+    async def test_async_method(self, short_socket_path: Path) -> None:
+        socket_path = short_socket_path
         server = DaemonRPCServer(socket_path)
 
         async def async_greet(name: str = "World") -> str:
@@ -66,8 +66,8 @@ class TestRPCEndToEnd:
         finally:
             await server.stop()
 
-    async def test_method_not_found(self, tmp_path: Path) -> None:
-        socket_path = tmp_path / "test.sock"
+    async def test_method_not_found(self, short_socket_path: Path) -> None:
+        socket_path = short_socket_path
         server = DaemonRPCServer(socket_path)
 
         await server.start()
@@ -78,8 +78,8 @@ class TestRPCEndToEnd:
         finally:
             await server.stop()
 
-    async def test_method_error(self, tmp_path: Path) -> None:
-        socket_path = tmp_path / "test.sock"
+    async def test_method_error(self, short_socket_path: Path) -> None:
+        socket_path = short_socket_path
         server = DaemonRPCServer(socket_path)
 
         def fail() -> None:
@@ -107,9 +107,9 @@ class TestDaemonClient:
         with pytest.raises(ChannelConnectionError, match="not running"):
             await client.call("ping")
 
-    def test_stale_socket_detected(self, tmp_path: Path) -> None:
+    def test_stale_socket_detected(self, short_socket_path: Path) -> None:
         """A stale file (no listener) returns False."""
-        socket_path = tmp_path / "test.sock"
+        socket_path = short_socket_path
         if _IS_WINDOWS:
             _port_file_for(socket_path).write_text("1", encoding="utf-8")
         else:
@@ -121,8 +121,8 @@ class TestDaemonClient:
 class TestDaemonRPCServer:
     """Server-side tests."""
 
-    async def test_start_creates_transport_file(self, tmp_path: Path) -> None:
-        socket_path = tmp_path / "test.sock"
+    async def test_start_creates_transport_file(self, short_socket_path: Path) -> None:
+        socket_path = short_socket_path
         server = DaemonRPCServer(socket_path)
         await server.start()
         if _IS_WINDOWS:
@@ -131,8 +131,8 @@ class TestDaemonRPCServer:
             assert socket_path.exists()
         await server.stop()
 
-    async def test_stop_removes_transport_file(self, tmp_path: Path) -> None:
-        socket_path = tmp_path / "test.sock"
+    async def test_stop_removes_transport_file(self, short_socket_path: Path) -> None:
+        socket_path = short_socket_path
         server = DaemonRPCServer(socket_path)
         await server.start()
         await server.stop()
@@ -142,16 +142,16 @@ class TestDaemonRPCServer:
             assert not socket_path.exists()
 
     @pytest.mark.skipif(_IS_WINDOWS, reason="Unix socket permissions not applicable on Windows")
-    async def test_socket_permissions(self, tmp_path: Path) -> None:
-        socket_path = tmp_path / "test.sock"
+    async def test_socket_permissions(self, short_socket_path: Path) -> None:
+        socket_path = short_socket_path
         server = DaemonRPCServer(socket_path)
         await server.start()
         mode = socket_path.stat().st_mode
         assert mode & 0o777 == 0o600  # noqa: PLR2004
         await server.stop()
 
-    async def test_stale_file_replaced(self, tmp_path: Path) -> None:
-        socket_path = tmp_path / "test.sock"
+    async def test_stale_file_replaced(self, short_socket_path: Path) -> None:
+        socket_path = short_socket_path
         if _IS_WINDOWS:
             _port_file_for(socket_path).write_text("0", encoding="utf-8")
         else:
@@ -169,9 +169,9 @@ class TestDaemonRPCServer:
         server.register_method("test", lambda: True)
         assert "test" in server._methods
 
-    async def test_multiple_clients(self, tmp_path: Path) -> None:
+    async def test_multiple_clients(self, short_socket_path: Path) -> None:
         """Multiple sequential client calls."""
-        socket_path = tmp_path / "test.sock"
+        socket_path = short_socket_path
         server = DaemonRPCServer(socket_path)
         counter = {"n": 0}
 
@@ -191,11 +191,11 @@ class TestDaemonRPCServer:
         finally:
             await server.stop()
 
-    async def test_port_file_contains_valid_port(self, tmp_path: Path) -> None:
+    async def test_port_file_contains_valid_port(self, short_socket_path: Path) -> None:
         """On Windows, the .port file contains a valid TCP port number."""
         if not _IS_WINDOWS:
             pytest.skip("TCP port file only written on Windows")
-        socket_path = tmp_path / "test.sock"
+        socket_path = short_socket_path
         server = DaemonRPCServer(socket_path)
         await server.start()
         try:
@@ -210,9 +210,9 @@ class TestRPCServerCoverageGaps:
     """Cover remaining RPC server paths."""
 
     @pytest.mark.asyncio()
-    async def test_stop_without_start(self, tmp_path: Path) -> None:
+    async def test_stop_without_start(self, short_socket_path: Path) -> None:
         """Stop when server was never started is safe."""
-        socket_path = tmp_path / "test.sock"
+        socket_path = short_socket_path
         server = DaemonRPCServer(socket_path)
         await server.stop()  # _server is None — should not raise
         if _IS_WINDOWS:
@@ -226,9 +226,9 @@ class TestRPCServerCoverageGaps:
         "Covered by integration smoke tests."
     )
     @pytest.mark.asyncio()
-    async def test_handle_timeout_error(self, tmp_path: Path) -> None:
+    async def test_handle_timeout_error(self, short_socket_path: Path) -> None:
         """TimeoutError during connection handling sends error response."""
-        socket_path = tmp_path / "test.sock"
+        socket_path = short_socket_path
         server = DaemonRPCServer(socket_path)
 
         await server.start()
@@ -263,9 +263,9 @@ class TestRPCServerCoverageGaps:
 
     @pytest.mark.skip(reason="Same async-race cause as test_handle_timeout_error above.")
     @pytest.mark.asyncio()
-    async def test_handle_generic_exception(self, tmp_path: Path) -> None:
+    async def test_handle_generic_exception(self, short_socket_path: Path) -> None:
         """Generic exception during handling is logged silently."""
-        socket_path = tmp_path / "test.sock"
+        socket_path = short_socket_path
         server = DaemonRPCServer(socket_path)
 
         await server.start()
