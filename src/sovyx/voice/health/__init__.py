@@ -36,6 +36,7 @@ from sovyx.voice.health._default_device import (
     NoopDefaultDeviceWatcher,
     PollingDefaultDeviceWatcher,
 )
+from sovyx.voice.health._hardware_detector import detect_hardware_context
 from sovyx.voice.health._hotplug import HotplugListener, NoopHotplugListener
 from sovyx.voice.health._kernel_invalidated_recheck import (
     KernelInvalidatedRechecker,
@@ -250,6 +251,7 @@ __all__ = [
     "current_platform_key",
     "default_persist_via_alsactl",
     "default_step_names",
+    "detect_hardware_context",
     "detect_user_customization",
     "get_default_quarantine",
     "preflight_warnings_file_path",
