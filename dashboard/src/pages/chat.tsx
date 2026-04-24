@@ -20,7 +20,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useDashboardStore } from "@/stores/dashboard";
-import { api, isAbortError, getToken } from "@/lib/api";
+import { api, apiFetch, ApiError, clearToken, isAbortError } from "@/lib/api";
 import { ChatResponseSchema } from "@/types/schemas";
 import { cn } from "@/lib/utils";
 import { MarkdownContent, MessageTags, MessageMeta, CognitiveProgress, StreamingMessage } from "@/components/chat";
@@ -120,14 +120,14 @@ export default function ChatPage() {
     abortRef.current = controller;
 
     try {
-      // Try SSE streaming first
-      const token = getToken();
-      const resp = await fetch("/api/chat/stream", {
+      // Try SSE streaming first. Routed through apiFetch so the auth header
+      // is injected by a single code path (anti-pattern #18) — we can't use
+      // api.post() because SSE needs the raw Response body reader, not the
+      // parsed JSON. 401 is handled explicitly below to mirror request()'s
+      // clear-token-and-show-modal behavior.
+      const resp = await apiFetch("/api/chat/stream", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: text,
           user_name: "Dashboard",
@@ -135,6 +135,13 @@ export default function ChatPage() {
         }),
         signal: controller.signal,
       });
+
+      if (resp.status === 401) {
+        clearToken();
+        useDashboardStore.getState().setAuthenticated(false);
+        useDashboardStore.getState().setShowTokenModal(true);
+        throw new ApiError(401, "Unauthorized");
+      }
 
       if (!resp.ok || !resp.body) {
         throw new Error("SSE not available");
@@ -219,6 +226,14 @@ export default function ChatPage() {
 
     } catch (err) {
       if (isAbortError(err)) return;
+      // 401 already cleared the token and opened the modal — don't
+      // retry via the batch endpoint (would trigger a second modal).
+      if (err instanceof ApiError && err.status === 401) {
+        setLoading(false);
+        setStreamingText("");
+        setCogPhase(null);
+        return;
+      }
 
       // Fallback to batch endpoint
       try {
