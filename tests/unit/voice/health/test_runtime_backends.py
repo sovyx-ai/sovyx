@@ -23,6 +23,12 @@ from sovyx.voice.health._audio_service import (
     AudioServiceMonitor,
     NoopAudioServiceMonitor,
 )
+from sovyx.voice.health._audio_service_linux import (
+    _AUDIO_SERVICE_CANDIDATES,
+    LinuxAudioServiceMonitor,
+    _probe_existing_services,
+    build_linux_audio_service_monitor,
+)
 from sovyx.voice.health._audio_service_win import (
     WindowsAudioServiceMonitor,
     _query_audiosrv_state,
@@ -419,6 +425,233 @@ class TestBuildWindowsAudioServiceMonitor:
         ):
             monitor = build_windows_audio_service_monitor()
         assert isinstance(monitor, WindowsAudioServiceMonitor)
+
+
+# ---------------------------------------------------------------------------
+# LinuxAudioServiceMonitor
+# ---------------------------------------------------------------------------
+
+
+class TestLinuxProbeExistingServices:
+    """``_probe_existing_services`` filters candidates by systemctl
+    reachability — anything the fake query returns ``None`` for is
+    treated as not-installed; ``"unknown"`` state also excluded."""
+
+    def test_empty_query_returns_empty_set(self) -> None:
+        probed = _probe_existing_services(query=lambda _svc: None)
+        assert probed == set()
+
+    def test_filters_unknown_state(self) -> None:
+        def _q(svc: str) -> str | None:
+            return "active" if svc == "pipewire.service" else "unknown"
+
+        probed = _probe_existing_services(query=_q)
+        assert probed == {"pipewire.service"}
+
+    def test_accepts_inactive_and_failed(self) -> None:
+        """Installed-but-not-running services still count — the
+        monitor watches them for UP transitions."""
+
+        def _q(svc: str) -> str | None:
+            return {
+                "pipewire.service": "active",
+                "wireplumber.service": "inactive",
+                "pipewire-pulse.service": "failed",
+                "pulseaudio.service": None,
+            }[svc]
+
+        probed = _probe_existing_services(query=_q)
+        assert probed == {
+            "pipewire.service",
+            "wireplumber.service",
+            "pipewire-pulse.service",
+        }
+
+    def test_candidates_default_covers_pipewire_and_pulseaudio(self) -> None:
+        """Regression: the candidate list MUST include the three
+        PipeWire units and the legacy PulseAudio unit so operators
+        on either stack are covered."""
+        assert "pipewire.service" in _AUDIO_SERVICE_CANDIDATES
+        assert "wireplumber.service" in _AUDIO_SERVICE_CANDIDATES
+        assert "pipewire-pulse.service" in _AUDIO_SERVICE_CANDIDATES
+        assert "pulseaudio.service" in _AUDIO_SERVICE_CANDIDATES
+
+
+class TestLinuxAudioServiceMonitor:
+    """Polling monitor emits DOWN/UP transitions via injected fake query."""
+
+    def test_empty_services_raises(self) -> None:
+        with pytest.raises(ValueError, match="non-empty"):
+            LinuxAudioServiceMonitor(
+                services_to_monitor=frozenset(),
+                poll_interval_s=0.01,
+                query=lambda _svc: "active",
+            )
+
+    def test_invalid_interval_raises(self) -> None:
+        with pytest.raises(ValueError, match="poll_interval_s"):
+            LinuxAudioServiceMonitor(
+                services_to_monitor=frozenset({"pipewire.service"}),
+                poll_interval_s=0.0,
+                query=lambda _svc: "active",
+            )
+
+    @pytest.mark.asyncio()
+    async def test_transitions_emit_aggregate_events(self) -> None:
+        """Aggregate DOWN when ANY service flips inactive, UP when
+        all are active again. Correlated failures yield ONE event
+        per direction.
+
+        State sequence per POLL ROUND (a "round" = one call per
+        service), synchronized by a call-counter inside the query
+        so the monitor's async poll pace doesn't fight the test:
+
+            round 0: pw=active,  wp=active   → baseline, no event
+            round 1: pw=inactive,wp=active   → aggregate False → DOWN
+            round 2: pw=inactive,wp=inactive → still False, no event
+            round 3: pw=active,  wp=active   → aggregate True → UP
+        """
+        services = ("pipewire.service", "wireplumber.service")
+        rounds: list[dict[str, str]] = [
+            {"pipewire.service": "active", "wireplumber.service": "active"},
+            {"pipewire.service": "inactive", "wireplumber.service": "active"},
+            {"pipewire.service": "inactive", "wireplumber.service": "inactive"},
+            {"pipewire.service": "active", "wireplumber.service": "active"},
+        ]
+        # call_seen[svc] = number of times _query has been invoked
+        # for that service. The current round for a service is
+        # min(call_seen[svc], len(rounds) - 1) — after exhausting
+        # the table we lock onto the terminal state.
+        call_seen: dict[str, int] = dict.fromkeys(services, 0)
+
+        def _query(svc: str) -> str | None:
+            idx = min(call_seen[svc], len(rounds) - 1)
+            state = rounds[idx][svc]
+            call_seen[svc] = call_seen[svc] + 1
+            return state
+
+        events: list[AudioServiceEvent] = []
+
+        async def _cb(event: AudioServiceEvent) -> None:
+            events.append(event)
+
+        monitor = LinuxAudioServiceMonitor(
+            services_to_monitor=frozenset(services),
+            poll_interval_s=0.01,
+            query=_query,
+        )
+        await monitor.start(_cb)
+        # Drive enough real time for the state machine to walk the
+        # sequence — 4 rounds × 10 ms interval + margin.
+        for _ in range(100):
+            if len(events) >= 2:
+                break
+            await asyncio.sleep(0.01)
+        await monitor.stop()
+        kinds = [event.kind for event in events]
+        assert AudioServiceEventKind.DOWN in kinds
+        assert AudioServiceEventKind.UP in kinds
+        assert kinds.index(AudioServiceEventKind.DOWN) < kinds.index(
+            AudioServiceEventKind.UP,
+        )
+
+    @pytest.mark.asyncio()
+    async def test_failed_query_is_treated_as_no_change(self) -> None:
+        """Transient systemctl failure MUST NOT flip aggregate state."""
+        readings: list[str | None] = ["active", None, None, "inactive"]
+
+        def _query(_svc: str) -> str | None:
+            return readings.pop(0) if readings else "inactive"
+
+        events: list[AudioServiceEvent] = []
+
+        async def _cb(event: AudioServiceEvent) -> None:
+            events.append(event)
+
+        monitor = LinuxAudioServiceMonitor(
+            services_to_monitor=frozenset({"pipewire.service"}),
+            poll_interval_s=0.01,
+            query=_query,
+        )
+        await monitor.start(_cb)
+        for _ in range(80):
+            if events:
+                break
+            await asyncio.sleep(0.01)
+        await monitor.stop()
+        # Baseline=active → two None polls ignored → final inactive →
+        # exactly one DOWN event. The None polls never flipped state.
+        assert [event.kind for event in events] == [AudioServiceEventKind.DOWN]
+
+    @pytest.mark.asyncio()
+    async def test_start_is_idempotent(self) -> None:
+        monitor = LinuxAudioServiceMonitor(
+            services_to_monitor=frozenset({"pipewire.service"}),
+            poll_interval_s=0.01,
+            query=lambda _svc: "active",
+        )
+
+        async def _cb(event: AudioServiceEvent) -> None:
+            del event
+
+        await monitor.start(_cb)
+        first = monitor._task  # noqa: SLF001
+        await monitor.start(_cb)
+        assert monitor._task is first  # noqa: SLF001
+        await monitor.stop()
+
+    @pytest.mark.asyncio()
+    async def test_dispatch_exception_is_swallowed(self) -> None:
+        states = ["active", "inactive"]
+
+        def _query(_svc: str) -> str | None:
+            return states.pop(0) if states else "inactive"
+
+        async def _raising_cb(event: AudioServiceEvent) -> None:
+            del event
+            msg = "handler exploded"
+            raise RuntimeError(msg)
+
+        monitor = LinuxAudioServiceMonitor(
+            services_to_monitor=frozenset({"pipewire.service"}),
+            poll_interval_s=0.01,
+            query=_query,
+        )
+        await monitor.start(_raising_cb)
+        await asyncio.sleep(0.1)
+        await monitor.stop()
+
+    @pytest.mark.asyncio()
+    async def test_stop_before_start_is_noop(self) -> None:
+        monitor = LinuxAudioServiceMonitor(
+            services_to_monitor=frozenset({"pipewire.service"}),
+            poll_interval_s=0.01,
+            query=lambda _svc: "active",
+        )
+        await monitor.stop()
+
+
+class TestBuildLinuxAudioServiceMonitor:
+    """Factory probes once and returns Noop when no audio services
+    are installed (non-systemd host, headless container, etc.)."""
+
+    def test_returns_noop_when_no_services_probed(self) -> None:
+        monitor = build_linux_audio_service_monitor(query=lambda _svc: None)
+        assert isinstance(monitor, NoopAudioServiceMonitor)
+
+    def test_returns_real_monitor_when_probe_finds_services(self) -> None:
+        def _q(svc: str) -> str | None:
+            return "active" if svc == "pipewire.service" else None
+
+        monitor = build_linux_audio_service_monitor(query=_q)
+        assert isinstance(monitor, LinuxAudioServiceMonitor)
+
+    def test_returns_noop_when_all_services_report_unknown(self) -> None:
+        """A broken systemctl that answers ``"unknown"`` for every
+        service should degrade to Noop, not spin a poll loop against
+        state we can't reason about."""
+        monitor = build_linux_audio_service_monitor(query=lambda _svc: "unknown")
+        assert isinstance(monitor, NoopAudioServiceMonitor)
 
 
 # ---------------------------------------------------------------------------
