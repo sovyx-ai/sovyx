@@ -630,6 +630,109 @@ class TestFactorySignatureMatch:
         sig_entry = next(b for b in breakdown if b[0] == "factory_sig")
         assert sig_entry[1] == 0.0
 
+
+class TestRoleResolverCoverageGap:
+    """Paranoid-QA R2 HIGH #8 regression.
+
+    When the resolver returns ZERO candidate controls for a
+    signature role (codec variant unknown to the alias table), the
+    hard gate still trips — we can't verify the signature, so
+    rejecting is correct. But operators MUST see the coverage-gap
+    warning so silent no-ops don't look like "healthy hardware".
+    """
+
+    def test_unmappable_role_counts_surface_in_result(self) -> None:
+        # Build a profile whose factory_signature declares a role
+        # that the resolver cannot map to any control. Using
+        # ``LINE_IN_CAPTURE`` — rarely mapped in default resolver
+        # tables.
+        profile = MixerKBProfile(
+            profile_id="unmappable_role_test",
+            profile_version=1,
+            schema_version=1,
+            codec_id_glob="14F1:5045",
+            driver_family="hda",
+            system_vendor_glob=None,
+            system_product_glob=None,
+            distro_family=None,
+            audio_stack=None,
+            kernel_major_minor_glob=None,
+            match_threshold=0.5,
+            factory_regime="attenuation",
+            factory_signature={
+                # BT_HFP_GAIN — a real role the default resolver
+                # maps only when BT control names appear on the card.
+                # Our test card has only HDA-style ``Capture`` control,
+                # so this role will be UNMAPPABLE.
+                MixerControlRole.BT_HFP_GAIN: FactorySignature(
+                    expected_raw_range=(0, 0),
+                    expected_fraction_range=None,
+                    expected_db_range=None,
+                ),
+            },
+            recommended_preset=MixerPresetSpec(
+                controls=(
+                    MixerPresetControl(
+                        role=MixerControlRole.CAPTURE_MASTER,
+                        value=MixerPresetValueFraction(fraction=1.0),
+                    ),
+                ),
+            ),
+            validation_gates=ValidationGates(
+                rms_dbfs_range=(-30.0, -15.0),
+                peak_dbfs_max=-2.0,
+                snr_db_vocal_band_min=15.0,
+                silero_prob_min=0.5,
+                wake_word_stage2_prob_min=0.4,
+            ),
+            verified_on=(
+                VerificationRecord(
+                    system_product="X",
+                    codec_id="14F1:5045",
+                    kernel="6.0",
+                    distro="test",
+                    verified_at="2026-04-23",
+                    verified_by="test",
+                ),
+            ),
+            contributed_by="test",
+        )
+        hw = HardwareContext(driver_family="hda", codec_id="14F1:5045")
+        resolver = MixerControlRoleResolver()
+        card = _card_with_controls(
+            (_control("Capture", current_raw=40, max_raw=80),),
+        )
+        # Card has a Capture control but nothing for LINE_IN_CAPTURE.
+        result = _match_factory_signature(profile.factory_signature, [card], resolver, hw)
+        # Role could not be mapped on any card → counted as unmappable.
+        assert result.roles_unmappable == 1
+        assert result.roles_matched == 0
+        assert result.roles_total == 1
+        # Score falls to 0 → hard gate trips in score_profile.
+        score, _ = score_profile(profile, hw, [card], resolver)
+        assert score == 0.0
+
+    def test_unmappable_role_distinct_from_out_of_range(self) -> None:
+        """UNMAPPABLE and UNMATCHED_OUT_OF_RANGE must be distinct:
+        if the control IS found but its reading is outside the
+        expected range, that's a real healthy-state rejection, not
+        a resolver coverage gap."""
+        profile = _pilot_profile()
+        hw = HardwareContext(driver_family="hda", codec_id="14F1:5045")
+        resolver = MixerControlRoleResolver()
+        # Both roles mapped, but readings outside factory-bad range.
+        healthy = _card_with_controls(
+            (
+                _control("Capture", current_raw=64, max_raw=80),
+                _control("Internal Mic Boost", current_raw=2, max_raw=3),
+            ),
+        )
+        result = _match_factory_signature(profile.factory_signature, [healthy], resolver, hw)
+        # Roles WERE mapped (controls found), just didn't match.
+        assert result.roles_unmappable == 0
+        assert result.roles_matched == 0
+        assert result.roles_total == 2
+
     def test_codec_glob_wildcard(self) -> None:
         # fnmatch handles *, ?, [seq] — verify glob with wildcard.
         profile = MixerKBProfile(

@@ -192,11 +192,30 @@ def score_profile(
     # admitted via the soft-weight path — the post-apply validation
     # gates are the final arbiter of whether the preset was actually
     # the right one.
+    # Paranoid-QA R2 HIGH #8: surface resolver coverage gaps as a
+    # WARNING even when scoring continues. Operator-facing signal
+    # distinct from "healthy hardware silence" so KB authors +
+    # support can correlate a silent L2.5 no-op with a role-mapping
+    # TODO. Fires before the hard gate so it's visible regardless of
+    # whether we reject.
+    if sig_result.roles_unmappable > 0:
+        logger.warning(
+            "mixer_kb_signature_role_unmappable",
+            profile_id=profile.profile_id,
+            roles_unmappable=sig_result.roles_unmappable,
+            roles_total=sig_result.roles_total,
+            codec_id=hw.codec_id,
+            note=(
+                "resolver returned zero candidate controls for at least one "
+                "signature role — KB author or resolver missing an alias"
+            ),
+        )
     if sig_result.roles_matched == 0:
         logger.debug(
             "mixer_kb_factory_signature_zero_match",
             profile_id=profile.profile_id,
             roles_total=sig_result.roles_total,
+            roles_unmappable=sig_result.roles_unmappable,
             note="hard gate — profile does not apply when 0 signature roles match",
         )
         scores.append(("factory_sig", 0.0, _WEIGHT_FACTORY_SIG))
@@ -222,6 +241,15 @@ class FactorySignatureMatch:
     which is a fragile foundation for a safety-critical gate. This
     dataclass surfaces the integer ``roles_matched`` count directly.
 
+    Paranoid-QA R2 HIGH #8: also surfaces ``roles_unmappable`` — the
+    count of signature roles where the resolver found ZERO candidate
+    controls on ANY probed card. This happens when the codec gate
+    passed (profile claims this hardware) but the resolver lacks
+    aliases for the codec variant; the hard gate still rejects
+    (we can't verify the signature), but operators need a distinct
+    telemetry signal so resolver coverage gaps don't look like
+    "healthy hardware" silence.
+
     Attributes:
         score: ``roles_matched / roles_total`` in ``[0, 1]``. ``0.0``
             when either the signature is empty (defensive — rejected
@@ -231,11 +259,19 @@ class FactorySignatureMatch:
             Compared against zero by the hard gate.
         roles_total: Total number of roles declared in the signature
             (``len(signature)``). Also ``0`` when signature is empty.
+        roles_unmappable: Count of signature roles where NO card
+            returned any candidate control for the role. Distinct
+            from "control found but reading out of range"
+            (counted in ``roles_total - roles_matched -
+            roles_unmappable``). When positive, :func:`score_profile`
+            logs a coverage-gap warning so operators can correlate
+            silent L2.5 no-ops with KB-author / resolver TODO.
     """
 
     score: float
     roles_matched: int
     roles_total: int
+    roles_unmappable: int = 0
 
 
 def _match_factory_signature(
@@ -257,32 +293,70 @@ def _match_factory_signature(
         # Defensive: ``MixerKBProfile.__post_init__`` rejects empty
         # signatures, so reaching here means the caller built a
         # profile outside the contract path. Treat as no-match.
-        return FactorySignatureMatch(score=0.0, roles_matched=0, roles_total=0)
+        return FactorySignatureMatch(
+            score=0.0,
+            roles_matched=0,
+            roles_total=0,
+            roles_unmappable=0,
+        )
     matched = 0
+    unmappable = 0
     for role, sig in signature.items():
-        if _role_matches_in_snapshot(role, sig, snapshot, resolver, hw):
+        outcome = _role_outcome_in_snapshot(role, sig, snapshot, resolver, hw)
+        if outcome == _RoleOutcome.MATCHED:
             matched += 1
+        elif outcome == _RoleOutcome.UNMAPPABLE:
+            unmappable += 1
+        # UNMATCHED_OUT_OF_RANGE falls through — counted implicitly
+        # as ``total - matched - unmappable``.
     return FactorySignatureMatch(
         score=matched / total,
         roles_matched=matched,
         roles_total=total,
+        roles_unmappable=unmappable,
     )
 
 
-def _role_matches_in_snapshot(
+class _RoleOutcome:
+    """Three-valued outcome for a single signature role.
+
+    Not a StrEnum because this is a local sentinel, not a
+    public-surface value — the scorer collapses these back into
+    integer counts on the :class:`FactorySignatureMatch`.
+    """
+
+    MATCHED = "matched"
+    UNMATCHED_OUT_OF_RANGE = "unmatched_out_of_range"
+    UNMAPPABLE = "unmappable"
+
+
+def _role_outcome_in_snapshot(
     role: MixerControlRole,
     sig: FactorySignature,
     snapshot: Sequence[MixerCardSnapshot],
     resolver: MixerControlRoleResolver,
     hw: HardwareContext,
-) -> bool:
-    """Return True iff any card has a control matching ``sig`` for ``role``."""
+) -> str:
+    """Classify a single role's outcome across every probed card.
+
+    Returns ``MATCHED`` if any card has a control whose reading falls
+    inside the signature's declared range. Returns ``UNMAPPABLE`` if
+    NO card returned any candidate control for the role (resolver
+    coverage gap). Otherwise ``UNMATCHED_OUT_OF_RANGE`` (candidate
+    controls exist but current readings are out of range).
+    """
+    any_candidate_found = False
     for card in snapshot:
         role_map = resolver.resolve_card(card, hw)
-        for control in role_map.get(role, ()):
-            if _control_matches_signature(control, sig):
-                return True
-    return False
+        candidates = role_map.get(role, ())
+        if candidates:
+            any_candidate_found = True
+            for control in candidates:
+                if _control_matches_signature(control, sig):
+                    return _RoleOutcome.MATCHED
+    if not any_candidate_found:
+        return _RoleOutcome.UNMAPPABLE
+    return _RoleOutcome.UNMATCHED_OUT_OF_RANGE
 
 
 def _control_matches_signature(
