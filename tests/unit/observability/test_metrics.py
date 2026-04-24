@@ -281,15 +281,19 @@ class TestMeasureLatency:
         registry: MetricsRegistry,
         reader: InMemoryMetricReader,
     ) -> None:
+        # 50 ms > Windows' default monotonic-clock resolution (~15.6 ms).
+        # A 10 ms sleep can round down to zero elapsed when both
+        # ``time.perf_counter()`` reads fall in the same tick, which
+        # happens intermittently under full-suite scheduling pressure.
         with registry.measure_latency(registry.brain_search_latency):
-            time.sleep(0.01)  # ~10ms
+            time.sleep(0.05)
 
         data = collect_json(reader)
         metric = _find_metric(data, "sovyx.brain.search.latency")
         assert metric is not None
         point = metric["data_points"][0]
-        # Should be >= 10ms (sleep) but reasonable
-        assert point["sum"] >= 8.0  # allow some OS jitter
+        # Should be >= 40 ms (sleep - one tick of clock jitter) but reasonable.
+        assert point["sum"] >= 40.0
         assert point["sum"] < 500.0  # sanity: not absurdly long
 
     def test_records_with_attributes(
