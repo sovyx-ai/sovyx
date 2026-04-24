@@ -82,6 +82,59 @@ limitation via multi-sample probe.
 
 ### Fixed
 
+- **L2.5 Voice Mixer Sanity — Round-2 paranoid-audit closure.**
+  Closed 23 findings across CRITICAL/HIGH/MEDIUM/LOW severity from
+  the Round-2 audit. Highlights:
+  * **CRITICAL #1** — `.gitattributes` pins packaging artefacts
+    (systemd units, udev rule, POSIX helpers) to LF. Windows
+    checkout with `core.autocrlf=true` could have silently
+    corrupted shebangs + unit options for everyone who builds a
+    wheel from that checkout.
+  * **CRITICAL #2** — `pyproject.toml` force-includes
+    `packaging/*` inside the wheel at `sovyx/_packaging/`. Prior
+    state shipped wheels to PyPI carrying zero packaging assets,
+    leaving pipx/pip installs non-functional for the
+    systemctl-delegated alsactl path.
+  * **CRITICAL #3** — telemetry preserved on `CancelledError`
+    shutdown. `check_and_maybe_heal` now records the partial
+    outcome BEFORE re-raising, so daemon shutdown doesn't drop
+    the observability signal.
+  * **CRITICAL #4** — explicit telemetry sentinel. An explicit
+    `_NoopTelemetry()` injection (legitimate in tests) is no
+    longer silently swapped for the module-level singleton.
+  * **CRITICAL #5** — integer hard gate on factory_signature.
+    Replaced fragile `sig_score == 0.0` float comparison with
+    `roles_matched == 0` integer gate; immune to future
+    partial-credit scoring changes.
+  * **HIGH #1** — cross-cascade `asyncio.Lock` serialises every
+    L2.5 invocation regardless of endpoint. Two concurrent
+    cascades can't race the shared ALSA mixer state.
+  * **HIGH #2** — contextvars-based reentrancy guard. Nested
+    `check_and_maybe_heal` calls (e.g., validation-probe
+    triggering a watchdog recascade) short-circuit with
+    `ERROR/MIXER_SANITY_REENTRANT_GUARD`.
+  * **HIGH #3** — half-heal write-ahead log
+    (`_half_heal_recovery.py`). Mid-apply process deaths
+    (SIGKILL, OOM, kernel panic) now self-heal on next boot:
+    cascade detects the WAL, replays pre-apply state via
+    `restore_fn`, deletes the WAL, then probes fresh.
+  * **HIGH #4** — idempotent `rollback_if_needed`. Validation-
+    fail → `_step_rollback` → top-level handler no longer
+    double-restores.
+  * **HIGH #7** — cardinality-bounded telemetry buckets. User-
+    contributed profile IDs fold to `"user:<8-hex-hash>"` so
+    arbitrary strings can't blow up Prometheus/OTLP labels.
+  * **HIGH #8** — role-resolver coverage gap visibility. Added
+    `roles_unmappable` to `FactorySignatureMatch` + WARNING log
+    so KB authors can correlate silent L2.5 no-ops with resolver
+    TODO.
+  * Plus HIGH #5/#6/#9/#10, MEDIUM #1/#2/#3, LOW #1-#5 —
+    log-volume hygiene, validation-truth preservation, shape
+    invariants, strict threshold ordering, udev helper hardening,
+    Unicode normalisation, LIFO rollback ordering, and more.
+  See commits tagged `paranoid-QA R2 *` for full per-fix rationale
+  and regression tests.
+
 - **Timing-flake in `test_scheduler_survives_cycle_failure`**
   (`tests/unit/brain/test_consolidation.py`). Fixed
   `asyncio.sleep(0.3)` window replaced by event-based polling with
