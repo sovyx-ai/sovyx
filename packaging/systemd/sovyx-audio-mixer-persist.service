@@ -1,0 +1,58 @@
+[Unit]
+# Sovyx — persist current ALSA mixer state to asound.state.
+#
+# Triggered on-demand by the L2.5 orchestrator after a successful
+# apply + validation. The daemon does NOT invoke ``alsactl store``
+# directly because ``/var/lib/alsa/asound.state`` is root-owned 0644
+# and the daemon runs unprivileged (invariant I7). Instead, the
+# daemon calls ``systemctl --no-block start
+# sovyx-audio-mixer-persist.service`` which lets systemd run this
+# unit as root with a tightly-sandboxed capability set.
+#
+# Type=oneshot + no RemainAfterExit so the unit stays
+# inactive-after-exec and can be started again on the next
+# successful L2.5 heal.
+#
+# See ADR-voice-mixer-sanity-l2.5-bidirectional §H + V2 Master Plan
+# Part H for the systemd-delegate rationale (vs. setuid binary).
+
+Description=Sovyx — persist ALSA mixer state (L2.5 post-heal)
+Documentation=https://sovyx.dev/docs/voice-capture-health
+After=sound.target
+ConditionPathExists=/var/lib/alsa
+
+[Service]
+Type=oneshot
+# alsactl without -c persists every card in /var/lib/alsa/asound.state
+# — L2.5 typically only heals one card (the HDA internal capture
+# codec) but storing the whole file is idempotent + cheap.
+ExecStart=/usr/sbin/alsactl store -f
+StandardOutput=journal
+StandardError=journal
+User=root
+Group=root
+# Same capability-bounded-root approach as the runtime_pm unit:
+# alsactl needs write access to /var/lib/alsa/asound.state; every
+# other system privilege is dropped.
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/alsa
+PrivateTmp=yes
+PrivateDevices=no
+ProtectHostname=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# 5 s is ample — alsactl store on a single-card laptop is ~30 ms.
+# Cap bounds L2.5's persist_duration_ms so a pathological
+# /var/lib/alsa never blocks the cascade.
+TimeoutStartSec=5s
+
+# NOTE: no [Install] section — this unit is not enabled at boot. The
+# orchestrator triggers it on-demand via ``systemctl start``.

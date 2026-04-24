@@ -9,27 +9,45 @@ and helper scripts invoked with elevated capabilities.
 ```
 packaging/
 ├── systemd/
-│   ├── sovyx-audio-runtime-pm.service
-│   └── audio-runtime-pm-setup
+│   ├── sovyx-audio-runtime-pm.service    (boot oneshot — runtime_pm)
+│   ├── audio-runtime-pm-setup            (POSIX sh helper for the above)
+│   └── sovyx-audio-mixer-persist.service (on-demand — alsactl store)
 └── udev/
     └── 60-sovyx-audio-power.rules
 ```
 
 ## What these do
 
-Together they keep PCI audio-class devices at `runtime_pm=on` so
-Sovyx's voice capture pipeline doesn't suffer the ~500 ms D0 wake
-that truncates the first phrase of every utterance on affected
-laptops (pilot case: Sony VAIO VJFE69F11X with Conexant SN6180 —
-`SVX-VOICE-LINUX-VJFE69-20260423`). This is the runtime_pm half of
-the L2.5 mixer-sanity story; the ALSA mixer half lives in the
-Python package (`src/sovyx/voice/health/_mixer_sanity.py`).
+Together they let L2.5 keep the ALSA capture path healthy without
+granting the Sovyx daemon any extra OS privileges (invariant I7 —
+zero daemon-time privilege escalation).
 
-**The daemon never touches `/sys/bus/pci/**/power/control` at
-runtime** (invariant I7). All writes happen:
+**Two independent concerns**:
+
+1. **runtime_pm** — keep PCI audio-class devices at `power/control=on`
+   so Sovyx's voice capture doesn't suffer the ~500 ms D0 wake that
+   truncates the first phrase of every utterance on affected laptops
+   (pilot case: Sony VAIO VJFE69F11X with Conexant SN6180 —
+   `SVX-VOICE-LINUX-VJFE69-20260423`). Handled by
+   `sovyx-audio-runtime-pm.service` at boot and the udev rule on
+   hotplug / resume / codec rebind.
+2. **Mixer-state persistence** — when the L2.5 orchestrator heals an
+   attenuated or saturated mixer, the correction has to survive
+   reboot. `alsactl store -f` persists the live state to
+   `/var/lib/alsa/asound.state`, which is root-owned. The daemon runs
+   unprivileged, so L2.5 calls `systemctl start --no-block
+   sovyx-audio-mixer-persist.service` instead — the packaged unit
+   runs `alsactl store` as root with the same capability-bounded
+   sandbox as the runtime_pm oneshot.
+
+**The daemon writes to neither `/sys/bus/pci/**/power/control` nor
+`/var/lib/alsa/asound.state` at runtime**. All elevated writes happen:
 
 1. At boot via `sovyx-audio-runtime-pm.service` (systemd oneshot).
 2. On udev hotplug / resume via `60-sovyx-audio-power.rules`.
+3. On-demand after an L2.5 heal via `sovyx-audio-mixer-persist.service`
+   (systemd oneshot, not enabled at boot — triggered via
+   `systemctl start`).
 
 ## Install paths
 
@@ -37,6 +55,7 @@ runtime** (invariant I7). All writes happen:
 |---|---|
 | `sovyx-audio-runtime-pm.service` | `/etc/systemd/system/sovyx-audio-runtime-pm.service` (or `/usr/lib/systemd/system/` for vendor installs) |
 | `audio-runtime-pm-setup` | `/usr/libexec/sovyx/audio-runtime-pm-setup` (must be executable, `0755 root:root`) |
+| `sovyx-audio-mixer-persist.service` | `/etc/systemd/system/sovyx-audio-mixer-persist.service` (or `/usr/lib/systemd/system/`) — NOT enabled at boot; triggered on-demand by the daemon |
 | `60-sovyx-audio-power.rules` | `/etc/udev/rules.d/60-sovyx-audio-power.rules` (or `/usr/lib/udev/rules.d/`) |
 
 ## Package integration
@@ -55,6 +74,7 @@ And on uninstall:
 ```sh
 systemctl disable --now sovyx-audio-runtime-pm.service
 rm -f /etc/systemd/system/sovyx-audio-runtime-pm.service \
+      /etc/systemd/system/sovyx-audio-mixer-persist.service \
       /usr/libexec/sovyx/audio-runtime-pm-setup \
       /etc/udev/rules.d/60-sovyx-audio-power.rules
 systemctl daemon-reload

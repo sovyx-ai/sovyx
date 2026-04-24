@@ -113,7 +113,42 @@ class CascadeOutcomeBucket:
 
     def success_rate(self) -> float:
         total = self.total()
-        return self.success / total if total else 0.0
+        return (self.success / total) if total > 0 else 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class MixerSanityOutcomeKey:
+    """Bucket key for L2.5 mixer-sanity outcomes (ADR §J observability).
+
+    Attributes:
+        decision: :class:`MixerSanityDecision` value (e.g., ``"healed"``,
+            ``"skipped_healthy"``, ``"rolled_back"``). Stable string —
+            dashboards key on it.
+        matched_profile: KB profile_id that matched, or ``"none"`` when
+            no profile drove the decision. Kept low-cardinality: the
+            shipped KB is small; user-contributed profiles share their
+            profile_id too.
+    """
+
+    decision: str
+    matched_profile: str
+
+
+@dataclass(slots=True)
+class MixerSanityOutcomeBucket:
+    """Mutable counter for one :class:`MixerSanityOutcomeKey`.
+
+    Tracks both the hit count and the sum of KB match scores so the
+    snapshot can surface the average score per decision/profile pair —
+    a weak-match HEALED (score 0.61) is worth less than a strong-match
+    HEALED (score 0.98), and the dashboard distinguishes them.
+    """
+
+    count: int = 0
+    score_sum: float = 0.0
+
+    def average_score(self) -> float:
+        return (self.score_sum / self.count) if self.count > 0 else 0.0
 
 
 @dataclass(slots=True)
@@ -121,6 +156,9 @@ class _TelemetryState:
     """In-memory aggregate. Persisted by :meth:`VoiceHealthTelemetry.flush`."""
 
     buckets: dict[CascadeOutcomeKey, CascadeOutcomeBucket] = field(default_factory=dict)
+    mixer_sanity_buckets: dict[MixerSanityOutcomeKey, MixerSanityOutcomeBucket] = field(
+        default_factory=dict,
+    )
     last_flushed_monotonic: float = 0.0
     last_updated_iso: str = ""
 
@@ -196,6 +234,56 @@ class VoiceHealthTelemetry:
         if flush_due:
             self.flush()
 
+    def record_mixer_sanity_outcome(
+        self,
+        *,
+        decision: str,
+        matched_profile: str | None,
+        score: float,
+    ) -> None:
+        """Bump the bucket for ``(decision, matched_profile)`` by one.
+
+        Records the composite KB match score into the bucket's running
+        sum so the snapshot can average it per decision/profile pair.
+        Safe to call from any thread / sync context. Mirrors the
+        :meth:`record_cascade_outcome` flush policy — opportunistic
+        disk flush every :data:`_FLUSH_INTERVAL_S` of activity, never
+        raises into the caller.
+
+        Args:
+            decision: Stable :class:`MixerSanityDecision` value. The
+                dashboard keys off this exact string; renames are a
+                public-surface change.
+            matched_profile: ``profile_id`` that drove the decision,
+                or ``None`` when no profile matched (``DEFERRED_NO_KB``
+                /``SKIPPED_HEALTHY``). ``None`` maps to ``"none"`` in
+                the bucket key so cardinality stays bounded.
+            score: Composite KB match score in ``[0, 1]``. Accumulated
+                into ``score_sum`` for averaging; the snapshot surfaces
+                the average per bucket.
+        """
+        if not self._enabled:
+            return
+        key = MixerSanityOutcomeKey(
+            decision=decision or "unknown",
+            matched_profile=matched_profile or "none",
+        )
+        now_monotonic = self._monotonic()
+        flush_due = False
+        with self._lock:
+            bucket = self._state.mixer_sanity_buckets.get(key)
+            if bucket is None:
+                bucket = MixerSanityOutcomeBucket()
+                self._state.mixer_sanity_buckets[key] = bucket
+            bucket.count += 1
+            bucket.score_sum += float(score)
+            self._state.last_updated_iso = _utcnow_iso()
+            if now_monotonic - self._state.last_flushed_monotonic >= _FLUSH_INTERVAL_S:
+                self._state.last_flushed_monotonic = now_monotonic
+                flush_due = True
+        if flush_due:
+            self.flush()
+
     def snapshot(self) -> dict[str, object]:
         """Return a JSON-serialisable rollup of every bucket.
 
@@ -215,12 +303,25 @@ class VoiceHealthTelemetry:
                 }
                 for key, bucket in self._state.buckets.items()
             ]
+            mixer_sanity_buckets = [
+                {
+                    "decision": key.decision,
+                    "matched_profile": key.matched_profile,
+                    "count": bucket.count,
+                    "average_score": round(bucket.average_score(), 4),
+                }
+                for key, bucket in self._state.mixer_sanity_buckets.items()
+            ]
             last_updated = self._state.last_updated_iso
         buckets.sort(key=lambda row: (row["platform"], row["host_api"]))
+        mixer_sanity_buckets.sort(
+            key=lambda row: (row["decision"], row["matched_profile"]),
+        )
         return {
             "schema_version": _TELEMETRY_SCHEMA_VERSION,
             "last_updated": last_updated,
             "buckets": buckets,
+            "mixer_sanity_buckets": mixer_sanity_buckets,
         }
 
     def flush(self) -> bool:
@@ -316,6 +417,29 @@ def record_cascade_outcome(*, platform: str, host_api: str | None, success: bool
     )
 
 
+def record_mixer_sanity_outcome(
+    *,
+    decision: str,
+    matched_profile: str | None,
+    score: float,
+) -> None:
+    """Convenience wrapper — forwards to the installed recorder if any.
+
+    Safe to call when telemetry is uninitialised; the call is a no-op.
+    The L2.5 orchestrator's
+    :func:`~sovyx.voice.health._mixer_sanity.check_and_maybe_heal`
+    uses this indirectly via the ``telemetry`` Protocol it accepts.
+    """
+    recorder = get_telemetry()
+    if recorder is None:
+        return
+    recorder.record_mixer_sanity_outcome(
+        decision=decision,
+        matched_profile=matched_profile,
+        score=score,
+    )
+
+
 # ── Internal helpers (overridable from tests) ────────────────────────────
 
 
@@ -327,9 +451,12 @@ def _utcnow_iso() -> str:
 __all__ = [
     "CascadeOutcomeBucket",
     "CascadeOutcomeKey",
+    "MixerSanityOutcomeBucket",
+    "MixerSanityOutcomeKey",
     "VoiceHealthTelemetry",
     "build_telemetry_from_config",
     "get_telemetry",
     "record_cascade_outcome",
+    "record_mixer_sanity_outcome",
     "set_telemetry",
 ]

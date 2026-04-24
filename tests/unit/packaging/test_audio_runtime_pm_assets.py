@@ -26,6 +26,7 @@ import pytest
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SYSTEMD_UNIT = _REPO_ROOT / "packaging" / "systemd" / "sovyx-audio-runtime-pm.service"
 _SH_HELPER = _REPO_ROOT / "packaging" / "systemd" / "audio-runtime-pm-setup"
+_PERSIST_UNIT = _REPO_ROOT / "packaging" / "systemd" / "sovyx-audio-mixer-persist.service"
 _UDEV_RULE = _REPO_ROOT / "packaging" / "udev" / "60-sovyx-audio-power.rules"
 
 
@@ -60,6 +61,9 @@ class TestAssetsExist:
 
     def test_udev_rule_present(self) -> None:
         assert _UDEV_RULE.is_file()
+
+    def test_persist_unit_present(self) -> None:
+        assert _PERSIST_UNIT.is_file()
 
 
 # ── systemd unit invariants ─────────────────────────────────────────
@@ -254,3 +258,72 @@ class TestUdevRule:
         directives = _strip_shell_comments(text).lower()
         assert "sudo" not in directives
         assert "pkexec" not in directives
+
+
+# ── Mixer persist unit invariants ───────────────────────────────────
+
+
+class TestMixerPersistUnit:
+    """``sovyx-audio-mixer-persist.service`` — L2.5 post-heal ``alsactl
+    store`` delegate. NOT enabled at boot; triggered on-demand by the
+    daemon via ``systemctl start --no-block``.
+    """
+
+    @pytest.fixture(scope="class")
+    def text(self) -> str:
+        return _PERSIST_UNIT.read_text(encoding="utf-8")
+
+    def test_has_unit_section(self, text: str) -> None:
+        assert "[Unit]" in text
+
+    def test_has_service_section(self, text: str) -> None:
+        assert "[Service]" in text
+
+    def test_is_oneshot(self, text: str) -> None:
+        assert "Type=oneshot" in text
+
+    def test_execs_alsactl_store(self, text: str) -> None:
+        assert "ExecStart=/usr/sbin/alsactl store -f" in text
+
+    def test_no_install_section(self, text: str) -> None:
+        """NOT enabled at boot — triggered on-demand via
+        ``systemctl start``. An ``[Install]`` block with
+        ``WantedBy=`` would auto-enable it on package install, which
+        we explicitly don't want. Comments stripped so commentary
+        mentions don't false-positive.
+        """
+        directives = _strip_shell_comments(text)
+        assert "[Install]" not in directives
+        assert "WantedBy=" not in directives
+
+    def test_read_write_paths_scoped(self, text: str) -> None:
+        """Only ``/var/lib/alsa`` may be written — everything else
+        read-only under ``ProtectSystem=strict``.
+        """
+        assert "ReadWritePaths=/var/lib/alsa" in text
+
+    def test_no_new_privileges(self, text: str) -> None:
+        assert "NoNewPrivileges=yes" in text
+
+    def test_empty_capability_bounding_set(self, text: str) -> None:
+        assert "CapabilityBoundingSet=" in text
+
+    def test_protect_system_strict(self, text: str) -> None:
+        assert "ProtectSystem=strict" in text
+
+    def test_timeout_bounded(self, text: str) -> None:
+        """TimeoutStartSec caps the wall-clock so a pathological
+        /var/lib/alsa never blocks the L2.5 orchestrator's
+        systemctl-start call.
+        """
+        assert "TimeoutStartSec=" in text
+
+    def test_condition_path_exists(self, text: str) -> None:
+        """Don't run on systems without /var/lib/alsa (rare — nosystemd minimal containers)."""
+        assert "ConditionPathExists=/var/lib/alsa" in text
+
+    def test_no_sudo_or_polkit(self, text: str) -> None:
+        directives = _strip_shell_comments(text).lower()
+        assert "sudo" not in directives
+        assert "pkexec" not in directives
+        assert "polkit" not in directives

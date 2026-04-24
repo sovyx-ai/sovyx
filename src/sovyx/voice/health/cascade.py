@@ -1225,6 +1225,7 @@ async def run_cascade_for_candidates(
     clock: Callable[[], float] = time.monotonic,
     quarantine: EndpointQuarantine | None = None,
     kernel_invalidated_failover_enabled: bool | None = None,
+    mixer_sanity: MixerSanitySetup | None = None,
 ) -> CascadeResult:
     """Run the cascade against an ordered set of capture candidates.
 
@@ -1278,6 +1279,14 @@ async def run_cascade_for_candidates(
             not re-probe even if ``hw:1,0`` just finished quarantining.
         kernel_invalidated_failover_enabled: Master toggle for the
             §4.4.7 quarantine behaviour.
+        mixer_sanity: Optional L2.5 dependency bundle. When set AND
+            ``platform_key == "linux"``, L2.5 runs ONCE for the
+            whole candidate-set pass (using the first candidate's
+            identity) before the per-candidate cascade loop. The
+            inner :func:`run_cascade` invocations receive
+            ``mixer_sanity=None`` so healing is not re-attempted
+            for every candidate. Default ``None`` preserves pre-L2.5
+            behaviour.
 
     Returns:
         :class:`CascadeResult` with:
@@ -1308,6 +1317,30 @@ async def run_cascade_for_candidates(
         candidate_kinds=[str(c.kind) for c in candidates],
         candidate_sources=[str(c.source) for c in candidates],
     )
+
+    # 2.5 — L2.5 mixer sanity runs ONCE per candidate-set pass (the ALSA
+    # mixer is system-wide state; healing per-candidate would repeat work).
+    # Uses the first candidate's identity for telemetry / endpoint_guid
+    # (by candidate-builder contract that's the user-preferred one). We
+    # pass mixer_sanity=None to the inner run_cascade calls so L2.5 does
+    # NOT fire again under each per-endpoint lock — the healing already
+    # happened (or was skipped) at this layer.
+    if mixer_sanity is not None and platform_key == "linux":
+        try:
+            await _run_mixer_sanity(
+                mixer_sanity=mixer_sanity,
+                endpoint_guid=candidates[0].endpoint_guid,
+                device_index=candidates[0].device_index,
+                device_friendly_name=candidates[0].friendly_name,
+                combo_store=combo_store,
+                capture_overrides=capture_overrides,
+            )
+        except BaseException as exc:  # noqa: BLE001 — cascade must continue
+            logger.warning(
+                "voice_cascade_candidate_set_mixer_sanity_raised",
+                error_type=type(exc).__name__,
+                detail=str(exc)[:200],
+            )
 
     # T4 — defensive invariant: dedup by (device_index, host_api_name)
     # must already hold (build_capture_candidates guarantees this), but

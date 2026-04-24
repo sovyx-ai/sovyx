@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from sovyx.engine.config import VoiceTuningConfig
     from sovyx.voice._apo_detector import CaptureApoReport
     from sovyx.voice.device_enum import DeviceEntry
+    from sovyx.voice.health._mixer_sanity import MixerSanitySetup
 
 logger = get_logger(__name__)
 
@@ -404,6 +405,33 @@ async def run_boot_cascade_for_candidates(
             timeout_s=tuning.driver_watchdog_scan_timeout_s,
         )
 
+    # L2.5 mixer-sanity setup — Linux only, constructed once per boot
+    # cascade. ``build_mixer_sanity_setup`` returns ``None`` on non-
+    # Linux, on unknown driver family (no KB profile can match), or on
+    # KB load failure — all of which collapse to the pre-L2.5 cascade
+    # behaviour. Invariant I7: every runtime_pm write is delegated to
+    # the systemd oneshot + udev rule; the daemon itself never
+    # escalates. See ADR-voice-mixer-sanity-l2.5-bidirectional.
+    mixer_sanity: MixerSanitySetup | None = None
+    if plat == "linux":
+        try:
+            from sovyx.voice.health._mixer_sanity import (
+                build_mixer_sanity_setup,  # noqa: PLC0415 — lazy-Linux
+            )
+            from sovyx.voice.health._telemetry import get_telemetry  # noqa: PLC0415
+            from sovyx.voice.health.probe import probe as _probe_fn  # noqa: PLC0415
+
+            mixer_sanity = await build_mixer_sanity_setup(
+                probe_fn=_probe_fn,
+                telemetry=get_telemetry(),
+            )
+        except Exception:  # noqa: BLE001 — L2.5 setup must never block boot
+            logger.warning(
+                "voice_boot_cascade_mixer_sanity_setup_failed",
+                exc_info=True,
+            )
+            mixer_sanity = None
+
     try:
         result = await run_cascade_for_candidates(
             candidates=candidates,
@@ -416,6 +444,7 @@ async def run_boot_cascade_for_candidates(
             voice_clarity_autofix=effective_autofix,
             quarantine=quarantine,
             kernel_invalidated_failover_enabled=tuning.kernel_invalidated_failover_enabled,
+            mixer_sanity=mixer_sanity,
         )
     except Exception:  # noqa: BLE001 — cascade crash must never block the pipeline (ADR §5.11)
         logger.error(

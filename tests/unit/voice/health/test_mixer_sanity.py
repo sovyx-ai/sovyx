@@ -703,6 +703,7 @@ class TestDefaultPersistViaAlsactl:
 
     @pytest.mark.asyncio()
     async def test_missing_alsactl_returns_false(self) -> None:
+        """Neither systemctl nor alsactl available → False."""
         with (
             patch.object(mod, "sys") as sys_mock,
             patch.object(mod, "shutil") as shutil_mock,
@@ -711,3 +712,277 @@ class TestDefaultPersistViaAlsactl:
             shutil_mock.which.return_value = None
             ok = await mod.default_persist_via_alsactl([0], VoiceTuningConfig())
         assert ok is False
+
+    @pytest.mark.asyncio()
+    async def test_systemd_delegate_success(self) -> None:
+        """``systemctl start`` exit 0 → True (no fallback needed)."""
+
+        def fake_which(name: str) -> str | None:
+            return "/usr/bin/systemctl" if name == "systemctl" else None
+
+        def fake_run(*args: object, **_kwargs: object) -> object:
+            argv = args[0]  # type: ignore[index]
+
+            class _R:
+                returncode = 0
+                stderr = ""
+
+            if argv[0] == "systemctl":
+                return _R()
+            msg = "should not reach alsactl — systemd path succeeded"
+            raise AssertionError(msg)
+
+        with (
+            patch.object(mod, "sys") as sys_mock,
+            patch.object(mod, "shutil") as shutil_mock,
+            patch.object(mod.subprocess, "run", side_effect=fake_run),
+        ):
+            sys_mock.platform = "linux"
+            shutil_mock.which.side_effect = fake_which
+            ok = await mod.default_persist_via_alsactl([0], VoiceTuningConfig())
+        assert ok is True
+
+    @pytest.mark.asyncio()
+    async def test_systemd_delegate_fails_falls_through_to_alsactl(self) -> None:
+        """systemctl returns non-zero → fall back to direct alsactl."""
+
+        def fake_which(name: str) -> str | None:
+            if name == "systemctl":
+                return "/usr/bin/systemctl"
+            if name == "alsactl":
+                return "/usr/sbin/alsactl"
+            return None
+
+        class _R:
+            def __init__(self, rc: int, stderr: str = "") -> None:
+                self.returncode = rc
+                self.stderr = stderr
+
+        call_log: list[str] = []
+
+        def fake_run(*args: object, **_kwargs: object) -> object:
+            argv = args[0]  # type: ignore[index]
+            call_log.append(argv[0])  # type: ignore[index]
+            if argv[0] == "systemctl":
+                return _R(1, "Unit not found.")
+            if argv[0] == "alsactl":
+                return _R(0)
+            msg = f"unexpected argv {argv}"
+            raise AssertionError(msg)
+
+        with (
+            patch.object(mod, "sys") as sys_mock,
+            patch.object(mod, "shutil") as shutil_mock,
+            patch.object(mod.subprocess, "run", side_effect=fake_run),
+        ):
+            sys_mock.platform = "linux"
+            shutil_mock.which.side_effect = fake_which
+            ok = await mod.default_persist_via_alsactl([0, 1], VoiceTuningConfig())
+        assert ok is True
+        assert call_log == ["systemctl", "alsactl", "alsactl"]
+
+    @pytest.mark.asyncio()
+    async def test_both_strategies_fail(self) -> None:
+        """systemctl fails AND alsactl fails → False."""
+
+        def fake_which(name: str) -> str | None:
+            if name == "systemctl":
+                return "/usr/bin/systemctl"
+            if name == "alsactl":
+                return "/usr/sbin/alsactl"
+            return None
+
+        class _R:
+            def __init__(self, rc: int) -> None:
+                self.returncode = rc
+                self.stderr = "permission denied"
+
+        def fake_run(*args: object, **_kwargs: object) -> object:
+            argv = args[0]  # type: ignore[index]
+            if argv[0] == "systemctl":
+                return _R(1)
+            return _R(1)  # alsactl also fails
+
+        with (
+            patch.object(mod, "sys") as sys_mock,
+            patch.object(mod, "shutil") as shutil_mock,
+            patch.object(mod.subprocess, "run", side_effect=fake_run),
+        ):
+            sys_mock.platform = "linux"
+            shutil_mock.which.side_effect = fake_which
+            ok = await mod.default_persist_via_alsactl([0], VoiceTuningConfig())
+        assert ok is False
+
+
+# ── make_default_validation_probe_fn (F1 default) ──────────────────
+
+
+class TestMakeDefaultValidationProbeFn:
+    @pytest.mark.asyncio()
+    async def test_healthy_probe_maps_to_passing_metrics(self) -> None:
+        """HEALTHY probe with silero 0.9 → SNR sentinel 20.0, WW 0.5."""
+        from sovyx.voice.health.contract import ProbeMode
+
+        async def healthy_probe(
+            *, combo: object, mode: object, device_index: int, hard_timeout_s: float
+        ) -> object:
+            _ = (combo, mode, device_index, hard_timeout_s)
+            from sovyx.voice.health.contract import Combo, Diagnosis, ProbeResult
+
+            return ProbeResult(
+                diagnosis=Diagnosis.HEALTHY,
+                mode=ProbeMode.WARM,
+                combo=Combo(
+                    host_api="ALSA",
+                    sample_rate=16_000,
+                    channels=1,
+                    sample_format="int16",
+                    exclusive=False,
+                    auto_convert=False,
+                    frames_per_buffer=480,
+                    platform_key="linux",
+                ),
+                vad_max_prob=0.9,
+                vad_mean_prob=0.4,
+                rms_db=-22.0,
+                callbacks_fired=20,
+                duration_ms=2000,
+            )
+
+        validator = mod.make_default_validation_probe_fn(healthy_probe)
+        metrics = await validator(_endpoint(), VoiceTuningConfig())
+        assert metrics.rms_dbfs == -22.0  # noqa: PLR2004
+        # peak = min(-2.0, -22.0 + 9.0) = -13.0 (not clamped — below ceiling).
+        assert metrics.peak_dbfs == -13.0  # noqa: PLR2004
+        assert metrics.snr_db_vocal_band == 20.0  # noqa: PLR2004 — healthy sentinel
+        assert metrics.silero_max_prob == 0.9  # noqa: PLR2004
+        assert metrics.wake_word_stage2_prob == 0.5  # noqa: PLR2004 — VAD alive sentinel
+
+    @pytest.mark.asyncio()
+    async def test_peak_clamped_at_ceiling_when_rms_high(self) -> None:
+        """rms=-5 → estimated peak +4 → clamped to -2.0 ceiling."""
+        from sovyx.voice.health.contract import ProbeMode
+
+        async def loud_probe(
+            *, combo: object, mode: object, device_index: int, hard_timeout_s: float
+        ) -> object:
+            _ = (combo, mode, device_index, hard_timeout_s)
+            from sovyx.voice.health.contract import Combo, Diagnosis, ProbeResult
+
+            return ProbeResult(
+                diagnosis=Diagnosis.HEALTHY,
+                mode=ProbeMode.WARM,
+                combo=Combo(
+                    host_api="ALSA",
+                    sample_rate=16_000,
+                    channels=1,
+                    sample_format="int16",
+                    exclusive=False,
+                    auto_convert=False,
+                    frames_per_buffer=480,
+                    platform_key="linux",
+                ),
+                vad_max_prob=0.9,
+                vad_mean_prob=0.4,
+                rms_db=-5.0,
+                callbacks_fired=20,
+                duration_ms=2000,
+            )
+
+        validator = mod.make_default_validation_probe_fn(loud_probe)
+        metrics = await validator(_endpoint(), VoiceTuningConfig())
+        assert metrics.peak_dbfs == -2.0  # noqa: PLR2004 — clamped at ceiling
+
+    @pytest.mark.asyncio()
+    async def test_unhealthy_probe_maps_to_failing_metrics(self) -> None:
+        """Non-HEALTHY probe → sentinels go 0 → gates fail → rollback."""
+        from sovyx.voice.health.contract import ProbeMode
+
+        async def dead_probe(
+            *, combo: object, mode: object, device_index: int, hard_timeout_s: float
+        ) -> object:
+            _ = (combo, mode, device_index, hard_timeout_s)
+            from sovyx.voice.health.contract import Combo, Diagnosis, ProbeResult
+
+            return ProbeResult(
+                diagnosis=Diagnosis.NO_SIGNAL,
+                mode=ProbeMode.WARM,
+                combo=Combo(
+                    host_api="ALSA",
+                    sample_rate=16_000,
+                    channels=1,
+                    sample_format="int16",
+                    exclusive=False,
+                    auto_convert=False,
+                    frames_per_buffer=480,
+                    platform_key="linux",
+                ),
+                vad_max_prob=0.02,
+                vad_mean_prob=0.01,
+                rms_db=-80.0,
+                callbacks_fired=5,
+                duration_ms=2000,
+            )
+
+        validator = mod.make_default_validation_probe_fn(dead_probe)
+        metrics = await validator(_endpoint(), VoiceTuningConfig())
+        assert metrics.snr_db_vocal_band == 0.0  # noqa: PLR2004 — will fail gate
+        assert metrics.wake_word_stage2_prob == 0.0  # noqa: PLR2004 — VAD < 0.5
+
+
+# ── build_mixer_sanity_setup (bootstrap helper) ────────────────────
+
+
+class TestBuildMixerSanitySetup:
+    @pytest.mark.asyncio()
+    async def test_non_linux_returns_none(self) -> None:
+        async def dummy_probe(
+            *, combo: object, mode: object, device_index: int, hard_timeout_s: float
+        ) -> None:
+            _ = (combo, mode, device_index, hard_timeout_s)
+
+        with patch.object(mod, "sys") as sys_mock:
+            sys_mock.platform = "win32"
+            setup = await mod.build_mixer_sanity_setup(probe_fn=dummy_probe)
+        assert setup is None
+
+    @pytest.mark.asyncio()
+    async def test_unknown_driver_family_returns_none(self) -> None:
+        async def dummy_probe(
+            *, combo: object, mode: object, device_index: int, hard_timeout_s: float
+        ) -> None:
+            _ = (combo, mode, device_index, hard_timeout_s)
+
+        with patch.object(mod, "sys") as sys_mock:
+            sys_mock.platform = "linux"
+            setup = await mod.build_mixer_sanity_setup(
+                probe_fn=dummy_probe,
+                hw=HardwareContext(driver_family="unknown"),
+            )
+        assert setup is None
+
+    @pytest.mark.asyncio()
+    async def test_hda_hw_returns_valid_setup(self) -> None:
+        async def dummy_probe(
+            *, combo: object, mode: object, device_index: int, hard_timeout_s: float
+        ) -> None:
+            _ = (combo, mode, device_index, hard_timeout_s)
+
+        with patch.object(mod, "sys") as sys_mock:
+            sys_mock.platform = "linux"
+            hw = HardwareContext(
+                driver_family="hda",
+                codec_id="14F1:5045",
+            )
+            setup = await mod.build_mixer_sanity_setup(
+                probe_fn=dummy_probe,
+                hw=hw,
+            )
+        assert setup is not None
+        from sovyx.voice.health import MixerSanitySetup
+
+        assert isinstance(setup, MixerSanitySetup)
+        assert setup.hw.driver_family == "hda"
+        assert setup.kb_lookup is not None
+        assert setup.role_resolver is not None
+        assert setup.validation_probe_fn is not None
