@@ -45,6 +45,7 @@ from sovyx.voice.health._linux_mixer_check import check_linux_mixer_sanity
 from sovyx.voice.health._mixer_kb import MixerKBLookup, MixerKBMatch
 from sovyx.voice.health._mixer_roles import MixerControlRoleResolver
 from sovyx.voice.health._mixer_sanity import (
+    MixerSanitySetup,
     check_and_maybe_heal,
     default_persist_via_alsactl,
     detect_user_customization,
@@ -201,6 +202,7 @@ __all__ = [
     "MixerPresetValueRaw",
     "MixerSanityDecision",
     "MixerSanityResult",
+    "MixerSanitySetup",
     "MixerValidationMetrics",
     "NoopAudioServiceMonitor",
     "NoopDefaultDeviceWatcher",

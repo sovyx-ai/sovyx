@@ -116,6 +116,56 @@ PersistFn: TypeAlias = "Callable[[Sequence[int], VoiceTuningConfig], Awaitable[b
 """
 
 
+@dataclass(frozen=True, slots=True)
+class MixerSanitySetup:
+    """L2.5 dependency bundle — opts cascade into mixer healing.
+
+    Passed to :func:`~sovyx.voice.health.cascade.run_cascade` via the
+    ``mixer_sanity`` kwarg. When set AND ``platform_key == "linux"``,
+    the cascade invokes :func:`check_and_maybe_heal` between the
+    ComboStore fast-path and the platform cascade walk. Default
+    ``None`` keeps every existing caller at the pre-L2.5 behaviour —
+    zero regression by construction.
+
+    Why a dataclass instead of 5+ kwargs on ``run_cascade``: the
+    cascade signature already carries 15+ parameters; threading
+    individual L2.5 deps would push it past the reviewability
+    threshold. One aggregate parameter keeps the surface area sane
+    and makes future L2.5 extensions (e.g., user-contributed KB
+    dirs, alternative validation strategies) additive.
+
+    Args:
+        hw: Detected hardware context (driver family + codec +
+            system + kernel). Required — every scoring step keys
+            off it.
+        kb_lookup: Profile catalogue. Typically built at daemon
+            startup via :meth:`MixerKBLookup.load_shipped`.
+        role_resolver: Control-name → role resolver. A single
+            shared instance is fine.
+        validation_probe_fn: Post-apply metric acquisition — the
+            caller decides whether to run a real audio probe or a
+            stub. Production wires a warm probe + SNR + Silero +
+            OpenWakeWord; tests inject a deterministic pass/fail
+            callable.
+        mixer_probe_fn, mixer_apply_fn, mixer_restore_fn,
+        persist_fn: Optional overrides — ``None`` defaults resolve
+            inside ``check_and_maybe_heal`` to the shipped Linux
+            implementations.
+        telemetry: Optional :class:`_TelemetryProto`. ``None``
+            uses the internal no-op.
+    """
+
+    hw: HardwareContext
+    kb_lookup: MixerKBLookup
+    role_resolver: MixerControlRoleResolver
+    validation_probe_fn: ValidationProbeFn
+    mixer_probe_fn: MixerProbeFn | None = None
+    mixer_apply_fn: MixerApplyFn | None = None
+    mixer_restore_fn: MixerRestoreFn | None = None
+    persist_fn: PersistFn | None = None
+    telemetry: _TelemetryProto | None = None
+
+
 @runtime_checkable
 class _TelemetryProto(Protocol):
     """Minimal surface L2.5 needs from
@@ -970,6 +1020,7 @@ __all__ = [
     "MixerApplyFn",
     "MixerProbeFn",
     "MixerRestoreFn",
+    "MixerSanitySetup",
     "PersistFn",
     "ValidationProbeFn",
     "check_and_maybe_heal",

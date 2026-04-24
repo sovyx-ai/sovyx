@@ -57,6 +57,7 @@ from sovyx.voice.health._quarantine import (
 )
 from sovyx.voice.health.contract import (
     CandidateEndpoint,
+    CandidateSource,
     CascadeResult,
     Combo,
     Diagnosis,
@@ -73,6 +74,7 @@ from sovyx.voice.health.probe import (
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
+    from sovyx.voice.health._mixer_sanity import MixerSanitySetup
     from sovyx.voice.health.capture_overrides import CaptureOverrides
     from sovyx.voice.health.combo_store import ComboStore
 
@@ -610,6 +612,7 @@ async def run_cascade(
     clock: Callable[[], float] = time.monotonic,
     quarantine: EndpointQuarantine | None = None,
     kernel_invalidated_failover_enabled: bool | None = None,
+    mixer_sanity: MixerSanitySetup | None = None,
 ) -> CascadeResult:
     """Run the L2 cascade for ``endpoint_guid`` and return the outcome.
 
@@ -678,6 +681,15 @@ async def run_cascade(
             at call time. When ``False``, KERNEL_INVALIDATED results
             fall through to the next cascade combo as normal — preserves
             the pre-§4.4.7 behaviour for operators who want to opt out.
+        mixer_sanity: Optional L2.5 dependency bundle. When set AND
+            ``platform_key == "linux"``, the cascade runs
+            :func:`~sovyx.voice.health._mixer_sanity.check_and_maybe_heal`
+            between the ComboStore fast-path and the platform cascade
+            walk. On ``HEALED`` the mixer is corrected and the
+            subsequent platform walk validates a working combo; on any
+            other decision the cascade proceeds unchanged. Default
+            ``None`` preserves pre-L2.5 behaviour for every existing
+            caller.
     """
     # `or` treats an empty `LRULockDict` as falsy (``__len__ == 0``) and
     # silently drops the caller's shared lock — use an identity check.
@@ -702,6 +714,7 @@ async def run_cascade(
             endpoint_guid=endpoint_guid,
             device_index=device_index,
             mode=mode,
+            mixer_sanity=mixer_sanity,
             platform_key=platform_key,
             device_friendly_name=device_friendly_name,
             device_interface_name=device_interface_name,
@@ -742,6 +755,7 @@ async def _run_cascade_locked(
     cascade_override: Sequence[Combo] | None,
     clock: Callable[[], float],
     quarantine: EndpointQuarantine | None,
+    mixer_sanity: MixerSanitySetup | None,
 ) -> CascadeResult:
     deadline = clock() + total_budget_s
     attempts: list[ProbeResult] = []
@@ -999,6 +1013,41 @@ async def _run_cascade_locked(
                 host_api=store_combo.host_api,
                 combo=_combo_tag(store_combo),
                 diagnosis=str(result.diagnosis),
+            )
+
+    # 2.5. L2.5 mixer sanity — runs only when the caller opts in via
+    # ``mixer_sanity`` AND we are on Linux. Fire-and-forget from the
+    # cascade's perspective: on HEALED the ALSA mixer is corrected and
+    # the subsequent platform walk succeeds against the healed state;
+    # on any other decision the cascade proceeds unchanged. L2.5 does
+    # NOT pick a PortAudio combo (that's the platform cascade's
+    # responsibility) — it only repairs the mixer state so the
+    # platform walk has a chance. See ADR-voice-mixer-sanity-l2.5-
+    # bidirectional + V2 Master Plan Part C.1.
+    #
+    # The ``try/except BaseException`` here is defence-in-depth:
+    # ``_run_mixer_sanity`` already catches ``check_and_maybe_heal``
+    # errors internally, but a failure in its setup code (e.g.,
+    # ``CandidateEndpoint`` construction with malformed inputs) or a
+    # misbehaving DI callable injected by the user would otherwise
+    # abort the cascade — defeating the whole point of keeping L2.5
+    # an opt-in, side-channel layer.
+    if mixer_sanity is not None and platform_key == "linux":
+        try:
+            await _run_mixer_sanity(
+                mixer_sanity=mixer_sanity,
+                endpoint_guid=endpoint_guid,
+                device_index=device_index,
+                device_friendly_name=device_friendly_name,
+                combo_store=combo_store,
+                capture_overrides=capture_overrides,
+            )
+        except BaseException as exc:  # noqa: BLE001 — cascade must continue
+            logger.warning(
+                "voice_cascade_mixer_sanity_helper_raised",
+                endpoint=endpoint_guid,
+                error_type=type(exc).__name__,
+                detail=str(exc)[:200],
             )
 
     # 3. Platform cascade.
@@ -1459,6 +1508,87 @@ def _quarantine_endpoint(
         action="quarantine",
     )
     return True
+
+
+async def _run_mixer_sanity(
+    *,
+    mixer_sanity: MixerSanitySetup,
+    endpoint_guid: str,
+    device_index: int,
+    device_friendly_name: str,
+    combo_store: ComboStore | None,
+    capture_overrides: CaptureOverrides | None,
+) -> None:
+    """Invoke L2.5 ``check_and_maybe_heal`` for this endpoint.
+
+    Fire-and-forget from the cascade's perspective: the outcome is
+    logged + telemetry'd internally (via the ``_mixer_sanity`` module),
+    but we return no value — the cascade continues with its platform
+    walk regardless. L2.5 heals the ALSA mixer state; the platform
+    cascade still picks the PortAudio combo.
+
+    Builds a minimal :class:`CandidateEndpoint` on the fly so the
+    orchestrator has an endpoint identity to key telemetry on. Full
+    candidate metadata (source, preference_rank, canonical_name)
+    isn't needed for L2.5 — it operates on mixer state, not endpoint
+    enumeration.
+
+    Any unexpected error inside L2.5 is swallowed (already logged by
+    the orchestrator) so a misbehaving KB or probe cannot abort the
+    cascade — invariant P6 applied at the integration boundary.
+    """
+    from sovyx.voice.device_enum import (
+        DeviceKind,  # noqa: PLC0415 — lazy; only Linux path needs it
+    )
+    from sovyx.voice.health._mixer_sanity import (
+        check_and_maybe_heal,  # noqa: PLC0415 — lazy to avoid Linux import cost on Windows cold-start
+    )
+
+    endpoint = CandidateEndpoint(
+        device_index=device_index,
+        host_api_name="ALSA",
+        kind=DeviceKind.HARDWARE,
+        canonical_name=device_friendly_name or f"endpoint-{endpoint_guid}",
+        friendly_name=device_friendly_name or f"endpoint-{endpoint_guid}",
+        source=CandidateSource.USER_PREFERRED,
+        preference_rank=0,
+        endpoint_guid=endpoint_guid,
+    )
+    try:
+        result = await check_and_maybe_heal(
+            endpoint,
+            mixer_sanity.hw,
+            kb_lookup=mixer_sanity.kb_lookup,
+            role_resolver=mixer_sanity.role_resolver,
+            validation_probe_fn=mixer_sanity.validation_probe_fn,
+            tuning=_VoiceTuning(),
+            mixer_probe_fn=mixer_sanity.mixer_probe_fn,
+            mixer_apply_fn=mixer_sanity.mixer_apply_fn,
+            mixer_restore_fn=mixer_sanity.mixer_restore_fn,
+            persist_fn=mixer_sanity.persist_fn,
+            telemetry=mixer_sanity.telemetry,
+            combo_store=combo_store,
+            capture_overrides=capture_overrides,
+        )
+    except BaseException as exc:  # noqa: BLE001 — cascade must not be aborted by L2.5
+        logger.warning(
+            "voice_cascade_mixer_sanity_unexpected",
+            endpoint=endpoint_guid,
+            error_type=type(exc).__name__,
+            detail=str(exc)[:200],
+        )
+        return
+    logger.info(
+        "voice_cascade_mixer_sanity_outcome",
+        endpoint=endpoint_guid,
+        decision=result.decision.value,
+        matched_profile=result.matched_kb_profile,
+        score=round(result.kb_match_score, 3),
+        regime=result.regime,
+        apply_duration_ms=result.apply_duration_ms,
+        validation_passed=result.validation_passed,
+        error=result.error,
+    )
 
 
 def _lookup_override(

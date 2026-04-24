@@ -36,6 +36,7 @@ from sovyx.engine.config import VoiceTuningConfig
 from sovyx.voice.health._linux_mixer_probe import enumerate_alsa_mixer_snapshots
 
 if TYPE_CHECKING:
+    from sovyx.voice.health.contract import MixerCardSnapshot
     from sovyx.voice.health.preflight import PreflightCheck
 
 
@@ -45,6 +46,28 @@ _HINT_SATURATED = (
     "'Reset microphone gain' to apply a safe configuration, or run "
     "`sovyx doctor voice --fix`."
 )
+
+
+_HINT_ATTENUATED = (
+    "Linux ALSA mixer has heavily attenuated capture gain AND zeroed "
+    "internal mic boost — microphone input will arrive well below Silero "
+    "VAD's operating range. Open the Voice settings page and click "
+    "'Reset microphone gain', or run `sovyx doctor voice --fix`. The L2.5 "
+    "mixer-sanity layer can apply a KB-driven preset automatically when a "
+    "matching hardware profile is shipped."
+)
+
+
+_ATTENUATION_CAPTURE_FRACTION_CEILING: float = 0.5
+"""Below this raw-fraction a capture-class control counts as "attenuated".
+
+Matches the pilot case (VAIO VJFE69F11X: Capture = 40/80 = 0.5). Any
+capture-class control at or below this fraction AND all boost-class
+controls at ``min_raw`` (boost fraction = 0) trips the attenuation
+hint. Tuned conservatively — a user who intentionally runs the mic
+at 0.4 and adds a boost of 1/3 does NOT hit the attenuation path
+(signal G / capture_overrides will surface their intent elsewhere).
+"""
 
 
 def check_linux_mixer_sanity(
@@ -99,6 +122,7 @@ def check_linux_mixer_sanity(
             )
 
         saturating = [s for s in snapshots if s.saturation_warning]
+        attenuated = [s for s in snapshots if _is_attenuated(s)]
         details = {
             "platform": sys.platform,
             "snapshots": [
@@ -108,18 +132,67 @@ def check_linux_mixer_sanity(
                     "card_longname": s.card_longname,
                     "aggregated_boost_db": round(s.aggregated_boost_db, 2),
                     "saturation_warning": s.saturation_warning,
+                    "attenuation_warning": _is_attenuated(s),
                     "saturating_controls": [c.name for c in s.controls if c.saturation_risk],
                 }
                 for s in snapshots
             ],
             "aggregated_boost_db_ceiling": (effective.linux_mixer_aggregated_boost_db_ceiling),
             "saturation_ratio_ceiling": (effective.linux_mixer_saturation_ratio_ceiling),
+            "attenuation_capture_fraction_ceiling": (_ATTENUATION_CAPTURE_FRACTION_CEILING),
         }
-        if not saturating:
-            return True, "", details
-        return False, _HINT_SATURATED, details
+        # Saturation takes precedence in the hint message (it's the
+        # actionable fault that already has a cure shipped). When only
+        # attenuation is present, surface the distinct hint so the
+        # dashboard + L2.5 can route correctly.
+        if saturating:
+            return False, _HINT_SATURATED, details
+        if attenuated:
+            return False, _HINT_ATTENUATED, details
+        return True, "", details
 
     return _check
+
+
+def _is_attenuated(snapshot: MixerCardSnapshot) -> bool:
+    """Return ``True`` iff ``snapshot`` exhibits the L2.5 attenuation
+    regime.
+
+    Requires BOTH:
+
+    * at least one capture-class control at or below
+      :data:`_ATTENUATION_CAPTURE_FRACTION_CEILING`, and
+    * at least one boost-class control parked at its ``min_raw``.
+
+    A card that only exposes a Capture control (no boost stage) is
+    NOT flagged — the "capture is low + boost is zero" two-signal
+    pattern is the distinguishing signature of the factory-bad
+    pilot case (SVX-VOICE-LINUX-VJFE69-20260423). A low Capture
+    alone can be intentional user tuning (and signal G in the L2.5
+    customization heuristic will surface it there).
+
+    Pure — no subprocess calls. Used both by the preflight check and
+    by the L2.5 orchestrator's heuristic regime classifier as an
+    early-exit before KB match.
+    """
+    capture_low = False
+    saw_capture = False
+    saw_boost_at_zero = False
+    for control in snapshot.controls:
+        lowered = control.name.lower()
+        is_capture = "capture" in lowered
+        is_boost = "boost" in lowered and not is_capture
+        if is_capture:
+            saw_capture = True
+            span = control.max_raw - control.min_raw
+            if span <= 0:
+                continue
+            fraction = (control.current_raw - control.min_raw) / span
+            if fraction <= _ATTENUATION_CAPTURE_FRACTION_CEILING:
+                capture_low = True
+        elif is_boost and control.current_raw == control.min_raw:
+            saw_boost_at_zero = True
+    return saw_capture and capture_low and saw_boost_at_zero
 
 
 __all__ = ["check_linux_mixer_sanity"]
