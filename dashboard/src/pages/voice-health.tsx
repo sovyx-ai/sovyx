@@ -30,9 +30,15 @@ import {
   ShieldAlertIcon,
   CheckCircle2Icon,
   XCircleIcon,
+  DatabaseIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
 } from "lucide-react";
 import { useDashboardStore } from "@/stores/dashboard";
 import type {
+  MixerKbProfileDetail,
+  MixerKbProfileSummary,
+  MixerKbValidateResponse,
   VoiceHealthCombo,
   VoiceHealthComboEntry,
   VoiceHealthOverrideEntry,
@@ -433,6 +439,304 @@ function OverrideRow({ override }: { override: VoiceHealthOverrideEntry }) {
   );
 }
 
+/* ── Mixer KB card ── */
+
+/** One profile row with lazy-fetched detail on expand. */
+function MixerKbProfileRow({
+  summary,
+  detail,
+  expanded,
+  onToggle,
+}: {
+  summary: MixerKbProfileSummary;
+  detail: MixerKbProfileDetail | undefined;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const { t } = useTranslation("voice");
+  const PoolIcon = summary.pool === "shipped" ? ShieldAlertIcon : DatabaseIcon;
+  return (
+    <div
+      className="rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border)] bg-[var(--svx-color-surface-secondary)]"
+      data-testid={`mixer-kb-profile-${summary.profile_id}`}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-[var(--svx-color-surface-hover)]"
+        aria-expanded={expanded}
+        aria-controls={`mixer-kb-detail-${summary.profile_id}`}
+      >
+        {expanded ? (
+          <ChevronDownIcon className="size-3.5 text-[var(--svx-color-text-tertiary)]" />
+        ) : (
+          <ChevronRightIcon className="size-3.5 text-[var(--svx-color-text-tertiary)]" />
+        )}
+        <PoolIcon
+          className={`size-3.5 ${
+            summary.pool === "shipped"
+              ? "text-[var(--svx-color-status-green)]"
+              : "text-[var(--svx-color-status-amber)]"
+          }`}
+          aria-hidden="true"
+        />
+        <span className="flex-1 font-mono text-sm text-[var(--svx-color-text-primary)]">
+          {summary.profile_id}
+        </span>
+        <span className="font-mono text-[11px] text-[var(--svx-color-text-tertiary)]">
+          {summary.driver_family}
+        </span>
+        <span className="font-mono text-[11px] text-[var(--svx-color-text-tertiary)]">
+          {summary.codec_id_glob}
+        </span>
+        <span className="font-mono text-[11px] text-[var(--svx-color-text-tertiary)]">
+          {t("health.mixerKb.versionPrefix")}
+          {summary.profile_version}
+        </span>
+      </button>
+
+      {expanded && (
+        <div
+          id={`mixer-kb-detail-${summary.profile_id}`}
+          className="border-t border-[var(--svx-color-border)] px-3 py-2 font-mono text-[11px]"
+          data-testid={`mixer-kb-detail-${summary.profile_id}`}
+        >
+          {detail ? (
+            <dl className="grid grid-cols-[max-content,1fr] gap-x-3 gap-y-1 text-[var(--svx-color-text-secondary)]">
+              <dt>pool</dt>
+              <dd>{detail.pool}</dd>
+              <dt>schema_version</dt>
+              <dd>{detail.schema_version}</dd>
+              <dt>match_threshold</dt>
+              <dd>{detail.match_threshold.toFixed(3)}</dd>
+              <dt>factory_regime</dt>
+              <dd>{detail.factory_regime}</dd>
+              <dt>system_vendor_glob</dt>
+              <dd>{detail.system_vendor_glob ?? "—"}</dd>
+              <dt>system_product_glob</dt>
+              <dd>{detail.system_product_glob ?? "—"}</dd>
+              <dt>distro_family</dt>
+              <dd>{detail.distro_family ?? "—"}</dd>
+              <dt>audio_stack</dt>
+              <dd>{detail.audio_stack ?? "—"}</dd>
+              <dt>factory_signature_roles</dt>
+              <dd>
+                {detail.factory_signature_roles.length > 0
+                  ? detail.factory_signature_roles.join(", ")
+                  : "—"}
+              </dd>
+              <dt>verified_on_count</dt>
+              <dd>{detail.verified_on_count}</dd>
+              <dt>contributed_by</dt>
+              <dd>{detail.contributed_by}</dd>
+            </dl>
+          ) : (
+            <span className="text-[var(--svx-color-text-tertiary)]">
+              <Loader2Icon className="mr-1 inline-block size-3 animate-spin" />
+              {t("health.mixerKb.loadingDetail")}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Collapsible YAML-validate panel. Used by reviewers to sanity-check
+ * a PR's contribution before opening the repo. */
+function MixerKbValidatePanel() {
+  const { t } = useTranslation("voice");
+  const validate = useDashboardStore((s) => s.validateMixerKbProfile);
+  const [open, setOpen] = useState(false);
+  const [body, setBody] = useState("");
+  const [result, setResult] = useState<MixerKbValidateResponse | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const handleValidate = async () => {
+    if (!body.trim()) return;
+    setBusy(true);
+    try {
+      const resp = await validate({ yaml_body: body });
+      setResult(resp);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rounded-[var(--svx-radius-md)] border border-dashed border-[var(--svx-color-border)] bg-[var(--svx-color-surface-secondary)]">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-[var(--svx-color-text-secondary)] hover:bg-[var(--svx-color-surface-hover)]"
+        aria-expanded={open}
+        data-testid="mixer-kb-validate-toggle"
+      >
+        {open ? (
+          <ChevronDownIcon className="size-3.5" />
+        ) : (
+          <ChevronRightIcon className="size-3.5" />
+        )}
+        {t("health.mixerKb.validateTitle")}
+      </button>
+      {open && (
+        <div className="space-y-2 border-t border-[var(--svx-color-border)] px-3 py-3">
+          <p className="text-[11px] text-[var(--svx-color-text-tertiary)]">
+            {t("health.mixerKb.validateHint")}
+          </p>
+          <textarea
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            placeholder={t("health.mixerKb.validatePlaceholder")}
+            rows={10}
+            className="w-full rounded-[var(--svx-radius-sm)] border border-[var(--svx-color-border)] bg-[var(--svx-color-surface-primary)] px-2 py-1.5 font-mono text-[11px] text-[var(--svx-color-text-primary)]"
+            data-testid="mixer-kb-validate-textarea"
+          />
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void handleValidate()}
+              disabled={busy || !body.trim()}
+              className="inline-flex items-center gap-1.5 rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border)] px-3 py-1.5 text-xs text-[var(--svx-color-text-secondary)] hover:bg-[var(--svx-color-surface-hover)] disabled:opacity-50"
+              data-testid="mixer-kb-validate-submit"
+            >
+              {busy ? (
+                <Loader2Icon className="size-3.5 animate-spin" />
+              ) : (
+                <CheckCircle2Icon className="size-3.5" />
+              )}
+              {t("health.mixerKb.validateSubmit")}
+            </button>
+            {result && (
+              <span
+                className={`text-xs ${
+                  result.ok
+                    ? "text-[var(--svx-color-status-green)]"
+                    : "text-[var(--svx-color-status-red)]"
+                }`}
+                data-testid="mixer-kb-validate-verdict"
+              >
+                {result.ok
+                  ? `${t("health.mixerKb.validateOk")}${
+                      result.profile_id ? ` — ${result.profile_id}` : ""
+                    }`
+                  : t("health.mixerKb.validateFail")}
+              </span>
+            )}
+          </div>
+          {result && result.issues.length > 0 && (
+            <ul
+              className="space-y-1 rounded-[var(--svx-radius-sm)] border border-[var(--svx-color-status-red)]/40 bg-[var(--svx-color-status-red)]/10 px-3 py-2 font-mono text-[11px] text-[var(--svx-color-status-red)]"
+              data-testid="mixer-kb-validate-issues"
+            >
+              {result.issues.map((issue, idx) => (
+                // Loc + msg are deterministic for a given issue; index
+                // is a stable fallback for the rare "duplicate loc"
+                // shape pydantic occasionally emits.
+                // eslint-disable-next-line react/no-array-index-key
+                <li key={`${issue.loc}-${idx}`}>
+                  <span className="font-semibold">{issue.loc || "<root>"}</span>: {issue.msg}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Mixer-KB panel rendered alongside combos + overrides. */
+function MixerKbCard() {
+  const { t } = useTranslation("voice");
+  const list = useDashboardStore((s) => s.mixerKbList);
+  const loading = useDashboardStore((s) => s.mixerKbLoading);
+  const error = useDashboardStore((s) => s.mixerKbError);
+  const details = useDashboardStore((s) => s.mixerKbDetails);
+  const fetchList = useDashboardStore((s) => s.fetchMixerKbList);
+  const fetchDetail = useDashboardStore((s) => s.fetchMixerKbDetail);
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetchList(controller.signal);
+    return () => controller.abort();
+  }, [fetchList]);
+
+  const handleToggle = (profile_id: string) => {
+    const next = expanded === profile_id ? null : profile_id;
+    setExpanded(next);
+    if (next && !details[profile_id]) {
+      void fetchDetail(profile_id);
+    }
+  };
+
+  const profiles = list?.profiles ?? [];
+
+  return (
+    <section aria-labelledby="mixer-kb-heading" className="space-y-3">
+      <div className="flex items-baseline justify-between">
+        <h2
+          id="mixer-kb-heading"
+          className="text-sm font-semibold uppercase tracking-wider text-[var(--svx-color-text-secondary)]"
+        >
+          {t("health.mixerKb.sectionTitle")}
+        </h2>
+        <span
+          className="font-mono text-[11px] text-[var(--svx-color-text-tertiary)]"
+          data-testid="mixer-kb-count"
+        >
+          {list
+            ? `${list.shipped_count} / ${list.user_count}`
+            : "—"}
+        </span>
+      </div>
+      <p className="text-xs text-[var(--svx-color-text-tertiary)]">
+        {t("health.mixerKb.sectionHint")}
+      </p>
+      {loading && !list && (
+        <div
+          className="flex items-center gap-2 text-xs text-[var(--svx-color-text-tertiary)]"
+          data-testid="mixer-kb-loading"
+        >
+          <Loader2Icon className="size-3.5 animate-spin" />
+          {t("health.mixerKb.loadingList")}
+        </div>
+      )}
+      {error && (
+        <div
+          className="rounded-[var(--svx-radius-md)] border border-[var(--svx-color-status-red)]/40 bg-[var(--svx-color-status-red)]/10 px-3 py-2 font-mono text-xs text-[var(--svx-color-status-red)]"
+          data-testid="mixer-kb-error"
+        >
+          {error}
+        </div>
+      )}
+      {!loading && list && profiles.length === 0 && (
+        <div
+          className="rounded-[var(--svx-radius-lg)] border border-dashed border-[var(--svx-color-border)] bg-[var(--svx-color-surface-secondary)] p-6 text-center text-sm text-[var(--svx-color-text-tertiary)]"
+          data-testid="mixer-kb-empty"
+        >
+          {t("health.mixerKb.empty")}
+        </div>
+      )}
+      {profiles.length > 0 && (
+        <div className="space-y-2">
+          {profiles.map((summary) => (
+            <MixerKbProfileRow
+              key={`${summary.pool}-${summary.profile_id}`}
+              summary={summary}
+              detail={details[summary.profile_id]}
+              expanded={expanded === summary.profile_id}
+              onToggle={() => handleToggle(summary.profile_id)}
+            />
+          ))}
+        </div>
+      )}
+      <MixerKbValidatePanel />
+    </section>
+  );
+}
+
 /* ── Main page ── */
 
 export default function VoiceHealthPage() {
@@ -657,6 +961,10 @@ export default function VoiceHealthPage() {
           </div>
         )}
       </section>
+
+      {/* Mixer KB — independent of cascade state; shows shipped + user
+          profile pools plus an inline YAML-validate panel for reviewers. */}
+      <MixerKbCard />
     </div>
   );
 }

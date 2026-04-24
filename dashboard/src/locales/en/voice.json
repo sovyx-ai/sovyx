@@ -125,6 +125,20 @@
         "cli": "CLI"
       }
     },
+    "mixerKb": {
+      "sectionTitle": "Mixer KB profiles",
+      "sectionHint": "Shipped and user-contributed mixer profiles used by L2.5 to heal factory-bad captures. Count shows shipped / user.",
+      "versionPrefix": "v",
+      "empty": "No mixer-KB profiles loaded.",
+      "loadingList": "Loading profiles…",
+      "loadingDetail": "Loading detail…",
+      "validateTitle": "Validate a YAML profile",
+      "validateHint": "Paste a contributor's YAML. The backend runs the same loader the daemon uses at boot and reports pydantic issues inline.",
+      "validatePlaceholder": "profile_id: …\nprofile_version: 1\nschema_version: 1\n…",
+      "validateSubmit": "Validate",
+      "validateOk": "Schema OK",
+      "validateFail": "Validation failed"
+    },
     "actions": {
       "reprobeCold": "Re-probe (cold)",
       "reprobeWarm": "Re-probe (warm)",

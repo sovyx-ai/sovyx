@@ -1125,6 +1125,64 @@ export interface VoiceHealthQuarantineSnapshotResponse {
   count: number;
 }
 
+// ── Mixer KB (Sprint 4 dashboard workflow) ─────────────────────────────
+//
+// Mirrors the Pydantic response models in
+// ``src/sovyx/dashboard/routes/voice_kb.py``. ``pool`` distinguishes
+// shipped (bundled with the Sovyx wheel, HIL-validated) from user
+// (``~/.sovyx/mixer_kb/user/``, community-contributed, unsigned).
+
+/** Compact profile identity for list responses. */
+export interface MixerKbProfileSummary {
+  pool: string;
+  profile_id: string;
+  profile_version: number;
+  schema_version: number;
+  driver_family: string;
+  codec_id_glob: string;
+  match_threshold: number;
+  factory_regime: string;
+  contributed_by: string;
+}
+
+/** Full profile surface — superset of :class:`MixerKbProfileSummary`. */
+export interface MixerKbProfileDetail extends MixerKbProfileSummary {
+  system_vendor_glob: string | null;
+  system_product_glob: string | null;
+  distro_family: string | null;
+  audio_stack: string | null;
+  kernel_major_minor_glob: string | null;
+  factory_signature_roles: string[];
+  verified_on_count: number;
+}
+
+/** GET /api/voice/health/kb/profiles response. */
+export interface MixerKbListResponse {
+  profiles: MixerKbProfileSummary[];
+  shipped_count: number;
+  user_count: number;
+}
+
+/** One validation issue — flat shape mirrors pydantic's error list. */
+export interface MixerKbValidationIssue {
+  loc: string;
+  msg: string;
+}
+
+/** POST /api/voice/health/kb/validate request body. */
+export interface MixerKbValidateRequest {
+  yaml_body: string;
+  filename_stem?: string | null;
+}
+
+/** POST /api/voice/health/kb/validate response. */
+export interface MixerKbValidateResponse {
+  ok: boolean;
+  profile_id: string | null;
+  profile_version: number | null;
+  issues: MixerKbValidationIssue[];
+}
+
 /** POST /api/voice/health/reprobe request body. */
 export interface VoiceHealthReprobeRequest {
   endpoint_guid: string;

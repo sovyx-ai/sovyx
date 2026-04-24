@@ -871,3 +871,45 @@ export const VoiceHealthPinResponseSchema = z.object({
   endpoint_guid: z.string(),
   pinned: z.boolean(),
 });
+
+// ── Mixer KB (Sprint 4 dashboard workflow) ──────────────────────────
+
+export const MixerKbProfileSummarySchema = z.object({
+  pool: z.string(),
+  profile_id: z.string(),
+  profile_version: z.number().int(),
+  schema_version: z.number().int(),
+  driver_family: z.string(),
+  codec_id_glob: z.string(),
+  match_threshold: z.number(),
+  factory_regime: z.string(),
+  contributed_by: z.string(),
+});
+
+export const MixerKbProfileDetailSchema = MixerKbProfileSummarySchema.extend({
+  system_vendor_glob: z.string().nullable(),
+  system_product_glob: z.string().nullable(),
+  distro_family: z.string().nullable(),
+  audio_stack: z.string().nullable(),
+  kernel_major_minor_glob: z.string().nullable(),
+  factory_signature_roles: z.array(z.string()),
+  verified_on_count: z.number().int(),
+});
+
+export const MixerKbListResponseSchema = z.object({
+  profiles: z.array(MixerKbProfileSummarySchema),
+  shipped_count: z.number().int(),
+  user_count: z.number().int(),
+});
+
+export const MixerKbValidationIssueSchema = z.object({
+  loc: z.string(),
+  msg: z.string(),
+});
+
+export const MixerKbValidateResponseSchema = z.object({
+  ok: z.boolean(),
+  profile_id: z.string().nullable(),
+  profile_version: z.number().int().nullable(),
+  issues: z.array(MixerKbValidationIssueSchema),
+});

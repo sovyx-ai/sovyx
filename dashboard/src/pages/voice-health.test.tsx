@@ -21,6 +21,9 @@ const mockReprobe = vi.fn();
 const mockForget = vi.fn();
 const mockPin = vi.fn();
 const mockClearError = vi.fn();
+const mockFetchMixerKbList = vi.fn();
+const mockFetchMixerKbDetail = vi.fn();
+const mockValidateMixerKb = vi.fn();
 
 let mockState: Record<string, unknown> = {};
 
@@ -132,6 +135,16 @@ function setStore(
     forgetVoiceEndpoint: mockForget,
     pinVoiceEndpoint: mockPin,
     clearVoiceHealthError: mockClearError,
+    // Mixer-KB card defaults: empty list, no detail cache, stubbed
+    // actions. Individual tests override via ``extras`` when they
+    // exercise the card's behaviour.
+    mixerKbList: null,
+    mixerKbLoading: false,
+    mixerKbError: null,
+    mixerKbDetails: {},
+    fetchMixerKbList: mockFetchMixerKbList,
+    fetchMixerKbDetail: mockFetchMixerKbDetail,
+    validateMixerKbProfile: mockValidateMixerKb,
     ...extras,
   };
 }
@@ -142,6 +155,14 @@ beforeEach(() => {
   mockForget.mockReset().mockResolvedValue(true);
   mockPin.mockReset().mockResolvedValue(true);
   mockClearError.mockReset();
+  mockFetchMixerKbList.mockReset().mockResolvedValue(undefined);
+  mockFetchMixerKbDetail.mockReset().mockResolvedValue(null);
+  mockValidateMixerKb.mockReset().mockResolvedValue({
+    ok: true,
+    profile_id: null,
+    profile_version: null,
+    issues: [],
+  });
   setStore(null, { voiceHealthLoading: true });
 });
 
@@ -382,5 +403,226 @@ describe("VoiceHealthPage", () => {
     mockFetch.mockClear();
     fireEvent.click(screen.getByTestId("btn-refresh-voice-health"));
     await waitFor(() => expect(mockFetch).toHaveBeenCalled());
+  });
+});
+
+describe("VoiceHealthPage — Mixer KB card", () => {
+  const _healthySnapshot = {
+    combo_store: [],
+    overrides: [],
+    data_dir: "/tmp/sovyx",
+    voice_enabled: true,
+  } as const;
+
+  it("fetches the KB list on mount", async () => {
+    setStore(_healthySnapshot);
+    render(<VoiceHealthPage />);
+    await waitFor(() => expect(mockFetchMixerKbList).toHaveBeenCalled());
+  });
+
+  it("renders the empty-state when the backend returns zero profiles", async () => {
+    setStore(_healthySnapshot, {
+      mixerKbList: { profiles: [], shipped_count: 0, user_count: 0 },
+    });
+    render(<VoiceHealthPage />);
+    expect(await screen.findByTestId("mixer-kb-empty")).toBeInTheDocument();
+    expect(screen.getByTestId("mixer-kb-count")).toHaveTextContent("0 / 0");
+  });
+
+  it("renders the loading state before the first list lands", () => {
+    setStore(_healthySnapshot, {
+      mixerKbList: null,
+      mixerKbLoading: true,
+    });
+    render(<VoiceHealthPage />);
+    expect(screen.getByTestId("mixer-kb-loading")).toBeInTheDocument();
+  });
+
+  it("surfaces a mixer-KB fetch error in its own banner", () => {
+    setStore(_healthySnapshot, {
+      mixerKbList: null,
+      mixerKbLoading: false,
+      mixerKbError: "HTTP 500: kb unavailable",
+    });
+    render(<VoiceHealthPage />);
+    expect(screen.getByTestId("mixer-kb-error")).toHaveTextContent(
+      "kb unavailable",
+    );
+  });
+
+  it("renders one row per profile + the shipped/user counts", () => {
+    setStore(_healthySnapshot, {
+      mixerKbList: {
+        profiles: [
+          {
+            pool: "shipped",
+            profile_id: "vaio_vjfe69_sn6180",
+            profile_version: 1,
+            schema_version: 1,
+            driver_family: "hda",
+            codec_id_glob: "14F1:5045",
+            match_threshold: 0.6,
+            factory_regime: "attenuation",
+            contributed_by: "sovyx-core",
+          },
+          {
+            pool: "user",
+            profile_id: "community_xps",
+            profile_version: 2,
+            schema_version: 1,
+            driver_family: "usb-audio",
+            codec_id_glob: "1532:0543",
+            match_threshold: 0.5,
+            factory_regime: "saturation",
+            contributed_by: "alice",
+          },
+        ],
+        shipped_count: 1,
+        user_count: 1,
+      },
+    });
+    render(<VoiceHealthPage />);
+    expect(
+      screen.getByTestId("mixer-kb-profile-vaio_vjfe69_sn6180"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("mixer-kb-profile-community_xps"),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("mixer-kb-count")).toHaveTextContent("1 / 1");
+  });
+
+  it("expanding a row triggers a detail fetch and renders the panel", async () => {
+    setStore(_healthySnapshot, {
+      mixerKbList: {
+        profiles: [
+          {
+            pool: "shipped",
+            profile_id: "vaio_one",
+            profile_version: 1,
+            schema_version: 1,
+            driver_family: "hda",
+            codec_id_glob: "14F1:5045",
+            match_threshold: 0.6,
+            factory_regime: "attenuation",
+            contributed_by: "sovyx-core",
+          },
+        ],
+        shipped_count: 1,
+        user_count: 0,
+      },
+    });
+    render(<VoiceHealthPage />);
+    const row = screen.getByTestId("mixer-kb-profile-vaio_one");
+    const toggle = row.querySelector("button");
+    expect(toggle).not.toBeNull();
+    fireEvent.click(toggle!);
+    await waitFor(() =>
+      expect(mockFetchMixerKbDetail).toHaveBeenCalledWith("vaio_one"),
+    );
+    expect(screen.getByTestId("mixer-kb-detail-vaio_one")).toBeInTheDocument();
+  });
+
+  it("renders cached detail immediately without a second fetch", () => {
+    setStore(_healthySnapshot, {
+      mixerKbList: {
+        profiles: [
+          {
+            pool: "shipped",
+            profile_id: "vaio_detail",
+            profile_version: 1,
+            schema_version: 1,
+            driver_family: "hda",
+            codec_id_glob: "14F1:5045",
+            match_threshold: 0.6,
+            factory_regime: "attenuation",
+            contributed_by: "sovyx-core",
+          },
+        ],
+        shipped_count: 1,
+        user_count: 0,
+      },
+      mixerKbDetails: {
+        vaio_detail: {
+          pool: "shipped",
+          profile_id: "vaio_detail",
+          profile_version: 1,
+          schema_version: 1,
+          driver_family: "hda",
+          codec_id_glob: "14F1:5045",
+          match_threshold: 0.6,
+          factory_regime: "attenuation",
+          contributed_by: "sovyx-core",
+          system_vendor_glob: "Sony*",
+          system_product_glob: "VJFE69*",
+          distro_family: null,
+          audio_stack: "pipewire",
+          kernel_major_minor_glob: "6.*",
+          factory_signature_roles: ["capture_master", "internal_mic_boost"],
+          verified_on_count: 1,
+        },
+      },
+    });
+    render(<VoiceHealthPage />);
+    const row = screen.getByTestId("mixer-kb-profile-vaio_detail");
+    const toggle = row.querySelector("button");
+    fireEvent.click(toggle!);
+    expect(screen.getByText(/capture_master, internal_mic_boost/)).toBeInTheDocument();
+    // Cache hit — no additional fetch.
+    expect(mockFetchMixerKbDetail).not.toHaveBeenCalled();
+  });
+
+  it("validate panel: submits the textarea body and renders an OK verdict", async () => {
+    setStore(_healthySnapshot, {
+      mixerKbList: { profiles: [], shipped_count: 0, user_count: 0 },
+    });
+    mockValidateMixerKb.mockResolvedValueOnce({
+      ok: true,
+      profile_id: "vaio_candidate",
+      profile_version: 1,
+      issues: [],
+    });
+    render(<VoiceHealthPage />);
+    fireEvent.click(screen.getByTestId("mixer-kb-validate-toggle"));
+    const textarea = screen.getByTestId(
+      "mixer-kb-validate-textarea",
+    ) as HTMLTextAreaElement;
+    fireEvent.change(textarea, {
+      target: { value: "profile_id: vaio_candidate\n" },
+    });
+    fireEvent.click(screen.getByTestId("mixer-kb-validate-submit"));
+    await waitFor(() =>
+      expect(mockValidateMixerKb).toHaveBeenCalledWith({
+        yaml_body: "profile_id: vaio_candidate\n",
+      }),
+    );
+    expect(
+      await screen.findByTestId("mixer-kb-validate-verdict"),
+    ).toHaveTextContent(/Schema OK/);
+  });
+
+  it("validate panel: renders the full issue list on failure", async () => {
+    setStore(_healthySnapshot, {
+      mixerKbList: { profiles: [], shipped_count: 0, user_count: 0 },
+    });
+    mockValidateMixerKb.mockResolvedValueOnce({
+      ok: false,
+      profile_id: null,
+      profile_version: null,
+      issues: [
+        { loc: "codec_id_glob", msg: "Field required" },
+        { loc: "verified_on", msg: "must be non-empty" },
+      ],
+    });
+    render(<VoiceHealthPage />);
+    fireEvent.click(screen.getByTestId("mixer-kb-validate-toggle"));
+    const textarea = screen.getByTestId(
+      "mixer-kb-validate-textarea",
+    ) as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: "not enough fields" } });
+    fireEvent.click(screen.getByTestId("mixer-kb-validate-submit"));
+    const issues = await screen.findByTestId("mixer-kb-validate-issues");
+    expect(issues).toHaveTextContent("codec_id_glob");
+    expect(issues).toHaveTextContent("Field required");
+    expect(issues).toHaveTextContent("verified_on");
   });
 });

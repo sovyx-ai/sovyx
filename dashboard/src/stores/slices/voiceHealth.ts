@@ -12,6 +12,10 @@
  */
 import type { StateCreator } from "zustand";
 import type {
+  MixerKbListResponse,
+  MixerKbProfileDetail,
+  MixerKbValidateRequest,
+  MixerKbValidateResponse,
   VoiceHealthForgetResponse,
   VoiceHealthPinRequest,
   VoiceHealthPinResponse,
@@ -22,6 +26,9 @@ import type {
   VoiceHealthSnapshotResponse,
 } from "@/types/api";
 import {
+  MixerKbListResponseSchema,
+  MixerKbProfileDetailSchema,
+  MixerKbValidateResponseSchema,
   VoiceHealthForgetResponseSchema,
   VoiceHealthPinResponseSchema,
   VoiceHealthReprobeResponseSchema,
@@ -40,6 +47,13 @@ export interface VoiceHealthSlice {
   /** Per-endpoint in-flight action flag — disables buttons while a mutation is pending. */
   voiceHealthBusy: Record<string, boolean>;
 
+  /** Mixer-KB list response keyed off the /kb/profiles endpoint. */
+  mixerKbList: MixerKbListResponse | null;
+  mixerKbLoading: boolean;
+  mixerKbError: string | null;
+  /** Per-profile detail cache keyed by profile_id — lazy-populated on expand. */
+  mixerKbDetails: Record<string, MixerKbProfileDetail>;
+
   // ── Actions ──
   fetchVoiceHealth: (signal?: AbortSignal) => Promise<void>;
   reprobeVoiceEndpoint: (
@@ -51,6 +65,15 @@ export interface VoiceHealthSlice {
   ) => Promise<boolean>;
   pinVoiceEndpoint: (body: VoiceHealthPinRequest) => Promise<boolean>;
   clearVoiceHealthError: () => void;
+
+  fetchMixerKbList: (signal?: AbortSignal) => Promise<void>;
+  fetchMixerKbDetail: (
+    profile_id: string,
+    signal?: AbortSignal,
+  ) => Promise<MixerKbProfileDetail | null>;
+  validateMixerKbProfile: (
+    body: MixerKbValidateRequest,
+  ) => Promise<MixerKbValidateResponse | null>;
 }
 
 export const createVoiceHealthSlice: StateCreator<
@@ -65,6 +88,10 @@ export const createVoiceHealthSlice: StateCreator<
   voiceHealthError: null,
   voiceHealthLastProbe: {},
   voiceHealthBusy: {},
+  mixerKbList: null,
+  mixerKbLoading: false,
+  mixerKbError: null,
+  mixerKbDetails: {},
 
   fetchVoiceHealth: async (signal?: AbortSignal) => {
     set({ voiceHealthLoading: true, voiceHealthError: null });
@@ -185,6 +212,76 @@ export const createVoiceHealthSlice: StateCreator<
   },
 
   clearVoiceHealthError: () => set({ voiceHealthError: null }),
+
+  fetchMixerKbList: async (signal?: AbortSignal) => {
+    set({ mixerKbLoading: true, mixerKbError: null });
+    try {
+      const data = await api.get<MixerKbListResponse>(
+        "/api/voice/health/kb/profiles",
+        { signal, schema: MixerKbListResponseSchema },
+      );
+      set({ mixerKbList: data, mixerKbLoading: false });
+    } catch (err) {
+      if (isAbortError(err)) {
+        set({ mixerKbLoading: false });
+        return;
+      }
+      const msg =
+        err instanceof ApiError
+          ? `HTTP ${err.status}: ${err.message}`
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      set({ mixerKbLoading: false, mixerKbError: msg });
+    }
+  },
+
+  fetchMixerKbDetail: async (profile_id: string, signal?: AbortSignal) => {
+    try {
+      const detail = await api.get<MixerKbProfileDetail>(
+        `/api/voice/health/kb/profiles/${encodeURIComponent(profile_id)}`,
+        { signal, schema: MixerKbProfileDetailSchema },
+      );
+      set((s) => ({
+        mixerKbDetails: { ...s.mixerKbDetails, [profile_id]: detail },
+      }));
+      return detail;
+    } catch (err) {
+      if (isAbortError(err)) {
+        return null;
+      }
+      const msg =
+        err instanceof ApiError
+          ? `HTTP ${err.status}: ${err.message}`
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      set({ mixerKbError: msg });
+      return null;
+    }
+  },
+
+  validateMixerKbProfile: async (body: MixerKbValidateRequest) => {
+    try {
+      // Note: 422 from pydantic (empty body, etc) arrives as an ApiError;
+      // every "real" validation outcome (schema miss, malformed YAML, OK)
+      // is a 200 with a structured response the caller can render inline.
+      return await api.post<MixerKbValidateResponse>(
+        "/api/voice/health/kb/validate",
+        body,
+        { schema: MixerKbValidateResponseSchema },
+      );
+    } catch (err) {
+      const msg =
+        err instanceof ApiError
+          ? `HTTP ${err.status}: ${err.message}`
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      set({ mixerKbError: msg });
+      return null;
+    }
+  },
 });
 
 /** Mode options exposed by the panel UI (kept here so the page can import
