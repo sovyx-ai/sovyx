@@ -769,21 +769,31 @@ class DuckDuckGoBackend(SearchBackend):
 
     @staticmethod
     async def _search_via_httpx(query: str, max_results: int) -> list[SearchResult]:
-        """Fallback: scrape DuckDuckGo HTML endpoint via httpx."""
+        """Fallback: scrape DuckDuckGo HTML endpoint via SandboxedHttpClient.
+
+        Routed through :class:`sovyx.plugins.sandbox_http.SandboxedHttpClient`
+        so that domain allowlist, local-network blocking, rate limit, and
+        response size cap apply uniformly — keeping this fallback honest
+        with the sandbox the plugin ships with (anti-pattern #13).
+        """
         import re  # noqa: PLC0415
 
-        import httpx  # noqa: PLC0415
+        from sovyx.plugins.sandbox_http import SandboxedHttpClient  # noqa: PLC0415
 
         _logger.info("ddg_httpx_fallback", query=query[:50])
+        client = SandboxedHttpClient(
+            plugin_name="web_intelligence.duckduckgo",
+            allowed_domains=["html.duckduckgo.com"],
+            timeout_s=_SEARCH_TIMEOUT,
+        )
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(
-                    "https://html.duckduckgo.com/html/",
-                    params={"q": query},
-                    headers={"User-Agent": "Mozilla/5.0 (compatible; SovyxBot/1.0)"},
-                )
-                resp.raise_for_status()
-                html = resp.text
+            resp = await client.get(
+                "https://html.duckduckgo.com/html/",
+                params={"q": query},
+                headers={"User-Agent": "Mozilla/5.0 (compatible; SovyxBot/1.0)"},
+            )
+            resp.raise_for_status()
+            html = resp.text
 
             results: list[SearchResult] = []
             for m in re.finditer(
@@ -816,6 +826,8 @@ class DuckDuckGoBackend(SearchBackend):
         except Exception:  # noqa: BLE001
             _logger.warning("ddg_httpx_fallback_failed", exc_info=True)
             return []
+        finally:
+            await client.close()
 
 
 class SearXNGBackend(SearchBackend):
