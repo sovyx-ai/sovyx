@@ -42,6 +42,7 @@ from sovyx.voice.health._kernel_invalidated_recheck import (
     RecheckProbeCallable,
 )
 from sovyx.voice.health._linux_mixer_check import check_linux_mixer_sanity
+from sovyx.voice.health._mixer_kb import MixerKBLookup, MixerKBMatch
 from sovyx.voice.health._mixer_roles import MixerControlRoleResolver
 from sovyx.voice.health._power import NoopPowerEventListener, PowerEventListener
 from sovyx.voice.health._quarantine import (
@@ -184,6 +185,8 @@ __all__ = [
     "MixerControlRole",
     "MixerControlRoleResolver",
     "MixerControlSnapshot",
+    "MixerKBLookup",
+    "MixerKBMatch",
     "MixerKBProfile",
     "MixerPresetControl",
     "MixerPresetSpec",
