@@ -706,19 +706,25 @@ class TestDefaultPersistViaAlsactl:
         """Neither systemctl nor alsactl available → False."""
         with (
             patch.object(mod, "sys") as sys_mock,
-            patch.object(mod, "shutil") as shutil_mock,
+            patch.object(mod, "_find_trusted_binary", return_value=None),
         ):
             sys_mock.platform = "linux"
-            shutil_mock.which.return_value = None
             ok = await mod.default_persist_via_alsactl([0], VoiceTuningConfig())
         assert ok is False
 
     @pytest.mark.asyncio()
     async def test_systemd_delegate_success(self) -> None:
-        """``systemctl start`` exit 0 → True (no fallback needed)."""
+        """``systemctl start`` exit 0 → True (no fallback needed).
 
-        def fake_which(name: str) -> str | None:
-            return "/usr/bin/systemctl" if name == "systemctl" else None
+        Paranoid-QA HIGH #6: argv MUST start with the absolute path
+        returned by ``_find_trusted_binary``, never a bare
+        ``"systemctl"`` token.
+        """
+
+        def fake_find(candidates: tuple[str, ...]) -> str | None:
+            if any("systemctl" in p for p in candidates):
+                return "/usr/bin/systemctl"
+            return None
 
         def fake_run(*args: object, **_kwargs: object) -> object:
             argv = args[0]  # type: ignore[index]
@@ -727,18 +733,21 @@ class TestDefaultPersistViaAlsactl:
                 returncode = 0
                 stderr = ""
 
-            if argv[0] == "systemctl":
+            assert argv[0] == "/usr/bin/systemctl", "argv[0] must be absolute path (HIGH #6)"
+            # Paranoid-QA MEDIUM: we no longer pass --no-block, so
+            # systemctl's real exit code is authoritative.
+            assert "--no-block" not in argv
+            if "systemctl" in argv[0]:
                 return _R()
             msg = "should not reach alsactl — systemd path succeeded"
             raise AssertionError(msg)
 
         with (
             patch.object(mod, "sys") as sys_mock,
-            patch.object(mod, "shutil") as shutil_mock,
+            patch.object(mod, "_find_trusted_binary", side_effect=fake_find),
             patch.object(mod.subprocess, "run", side_effect=fake_run),
         ):
             sys_mock.platform = "linux"
-            shutil_mock.which.side_effect = fake_which
             ok = await mod.default_persist_via_alsactl([0], VoiceTuningConfig())
         assert ok is True
 
@@ -746,10 +755,10 @@ class TestDefaultPersistViaAlsactl:
     async def test_systemd_delegate_fails_falls_through_to_alsactl(self) -> None:
         """systemctl returns non-zero → fall back to direct alsactl."""
 
-        def fake_which(name: str) -> str | None:
-            if name == "systemctl":
+        def fake_find(candidates: tuple[str, ...]) -> str | None:
+            if any("systemctl" in p for p in candidates):
                 return "/usr/bin/systemctl"
-            if name == "alsactl":
+            if any("alsactl" in p for p in candidates):
                 return "/usr/sbin/alsactl"
             return None
 
@@ -763,32 +772,35 @@ class TestDefaultPersistViaAlsactl:
         def fake_run(*args: object, **_kwargs: object) -> object:
             argv = args[0]  # type: ignore[index]
             call_log.append(argv[0])  # type: ignore[index]
-            if argv[0] == "systemctl":
+            if "systemctl" in argv[0]:
                 return _R(1, "Unit not found.")
-            if argv[0] == "alsactl":
+            if "alsactl" in argv[0]:
                 return _R(0)
             msg = f"unexpected argv {argv}"
             raise AssertionError(msg)
 
         with (
             patch.object(mod, "sys") as sys_mock,
-            patch.object(mod, "shutil") as shutil_mock,
+            patch.object(mod, "_find_trusted_binary", side_effect=fake_find),
             patch.object(mod.subprocess, "run", side_effect=fake_run),
         ):
             sys_mock.platform = "linux"
-            shutil_mock.which.side_effect = fake_which
             ok = await mod.default_persist_via_alsactl([0, 1], VoiceTuningConfig())
         assert ok is True
-        assert call_log == ["systemctl", "alsactl", "alsactl"]
+        assert call_log == [
+            "/usr/bin/systemctl",
+            "/usr/sbin/alsactl",
+            "/usr/sbin/alsactl",
+        ]
 
     @pytest.mark.asyncio()
     async def test_both_strategies_fail(self) -> None:
         """systemctl fails AND alsactl fails → False."""
 
-        def fake_which(name: str) -> str | None:
-            if name == "systemctl":
+        def fake_find(candidates: tuple[str, ...]) -> str | None:
+            if any("systemctl" in p for p in candidates):
                 return "/usr/bin/systemctl"
-            if name == "alsactl":
+            if any("alsactl" in p for p in candidates):
                 return "/usr/sbin/alsactl"
             return None
 
@@ -799,19 +811,47 @@ class TestDefaultPersistViaAlsactl:
 
         def fake_run(*args: object, **_kwargs: object) -> object:
             argv = args[0]  # type: ignore[index]
-            if argv[0] == "systemctl":
+            if "systemctl" in argv[0]:
                 return _R(1)
             return _R(1)  # alsactl also fails
 
         with (
             patch.object(mod, "sys") as sys_mock,
-            patch.object(mod, "shutil") as shutil_mock,
+            patch.object(mod, "_find_trusted_binary", side_effect=fake_find),
             patch.object(mod.subprocess, "run", side_effect=fake_run),
         ):
             sys_mock.platform = "linux"
-            shutil_mock.which.side_effect = fake_which
             ok = await mod.default_persist_via_alsactl([0], VoiceTuningConfig())
         assert ok is False
+
+    @pytest.mark.asyncio()
+    async def test_timeout_clamped_low(self) -> None:
+        """Paranoid-QA LOW: tuning timeout=0 must be clamped to 0.5s,
+        not pass through as instant-timeout (DoS of persist path).
+        """
+        observed: list[float] = []
+
+        def fake_find(candidates: tuple[str, ...]) -> str | None:
+            return "/usr/bin/systemctl" if any("systemctl" in p for p in candidates) else None
+
+        def fake_run(*args: object, **kwargs: object) -> object:
+            observed.append(float(kwargs["timeout"]))  # type: ignore[arg-type]
+
+            class _R:
+                returncode = 0
+                stderr = ""
+
+            return _R()
+
+        zero = VoiceTuningConfig(linux_mixer_subprocess_timeout_s=0.0)
+        with (
+            patch.object(mod, "sys") as sys_mock,
+            patch.object(mod, "_find_trusted_binary", side_effect=fake_find),
+            patch.object(mod.subprocess, "run", side_effect=fake_run),
+        ):
+            sys_mock.platform = "linux"
+            await mod.default_persist_via_alsactl([0], zero)
+        assert observed == [0.5]
 
 
 # ── make_default_validation_probe_fn (F1 default) ──────────────────

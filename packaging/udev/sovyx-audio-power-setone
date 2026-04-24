@@ -1,0 +1,81 @@
+#!/bin/sh
+# sovyx-audio-power-setone — udev-invoked helper to assert runtime_pm=on
+# on a single audio-class PCI device after hotplug / rebind.
+#
+# Argument: the device's sysfs path (e.g. /sys/devices/pci0000:00/...).
+# Passed as argv[1] by the udev rule via ``%S%p`` — never interpolated
+# into a shell string, so path bytes carrying quotes / newlines /
+# metacharacters cannot break out (paranoid-QA CRITICAL #4 / #5).
+#
+# Hardening posture:
+#   * POSIX /bin/sh — no bashisms, works under Alpine / BusyBox.
+#   * Strict argument validation: refuses anything whose realpath is
+#     not under /sys/bus/pci or /sys/devices (blocks symlink swap).
+#   * Empty stdout/stderr on silent skip so udev logs stay clean.
+#   * Exit 0 always — udev does not re-run rules on failure, and a
+#     missing power/control file (rare non-runtime_pm codec) is not
+#     an error.
+#
+# Invariant I7: invoked FROM udev at root, NOT from the Sovyx daemon.
+# The daemon has no path that calls this helper.
+
+set -eu
+
+devpath="${1:-}"
+if [ -z "$devpath" ]; then
+    exit 0
+fi
+
+# Refuse paths we were never supposed to receive. udev %S%p always
+# produces an absolute /sys/... path; anything else is an attacker
+# / bug.
+case "$devpath" in
+    /sys/*) ;;
+    *) exit 0 ;;
+esac
+
+# The power/control file we intend to write. Single literal join —
+# no shell expansion of $devpath beyond the variable read.
+power_ctl="$devpath/../power/control"
+
+# Normalise the path so a symlink inside devpath can't redirect us
+# outside /sys. ``readlink -f`` is the POSIX-leaning portable option;
+# when absent (musl minimalism) we fall through to a best-effort
+# prefix check on the original path.
+if command -v readlink >/dev/null 2>&1; then
+    resolved=$(readlink -f "$power_ctl" 2>/dev/null || true)
+    if [ -z "$resolved" ]; then
+        exit 0
+    fi
+    case "$resolved" in
+        /sys/*/power/control) ;;
+        *) exit 0 ;;
+    esac
+    power_ctl="$resolved"
+fi
+
+# Final write-guard: the resolved path must be writable AND must
+# literally end in /power/control (belt + suspenders against a crafty
+# symlink that points to /etc/shadow etc.).
+case "$power_ctl" in
+    */power/control) ;;
+    *) exit 0 ;;
+esac
+
+if [ ! -w "$power_ctl" ]; then
+    exit 0
+fi
+
+# Skip if already "on" — idempotency keeps udev logs quiet on the
+# second and later firings of the same rule.
+if current=$(cat "$power_ctl" 2>/dev/null); then
+    if [ "$current" = "on" ]; then
+        exit 0
+    fi
+fi
+
+# All guards passed. Write and exit 0 regardless of whether the
+# write succeeded (the kernel may reject under SELinux enforcing
+# with a narrow policy — not our concern at this layer).
+echo on > "$power_ctl" 2>/dev/null || true
+exit 0

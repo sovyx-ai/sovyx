@@ -301,7 +301,19 @@ def _amixer_set(
     with a stable reason token so the caller can branch on
     ``.reason`` without string parsing.
     """
-    argv = ["amixer", "-c", str(card_index), "sset", control_name, str(target_raw)]
+    # ``--`` terminates option parsing so a hostile / quirky codec
+    # exposing a control name beginning with ``-`` (e.g. ``-D`` which
+    # amixer would otherwise interpret as a device selector) cannot
+    # smuggle a flag into our invocation (paranoid-QA HIGH #5).
+    argv = [
+        "amixer",
+        "-c",
+        str(card_index),
+        "--",
+        "sset",
+        control_name,
+        str(target_raw),
+    ]
     try:
         proc = subprocess.run(  # noqa: S603 — fixed argv, no shell, timeout enforced
             argv,
@@ -611,7 +623,8 @@ def _amixer_get_enum(
     control values). Never raises — failure upstream causes the
     caller to skip the write.
     """
-    argv = ["amixer", "-c", str(card_index), "get", control_name]
+    # ``--`` terminates amixer option parsing (paranoid-QA HIGH #5).
+    argv = ["amixer", "-c", str(card_index), "--", "get", control_name]
     try:
         proc = subprocess.run(  # noqa: S603 — fixed argv, no shell, timeout enforced
             argv,
@@ -641,7 +654,8 @@ def _amixer_set_enum(
     timeout_s: float,
 ) -> None:
     """Write an enum label — delegates to :func:`_amixer_set` argv shape."""
-    argv = ["amixer", "-c", str(card_index), "sset", control_name, label]
+    # ``--`` terminates option parsing (paranoid-QA HIGH #5).
+    argv = ["amixer", "-c", str(card_index), "--", "sset", control_name, label]
     try:
         proc = subprocess.run(  # noqa: S603 — fixed argv, no shell, timeout enforced
             argv,

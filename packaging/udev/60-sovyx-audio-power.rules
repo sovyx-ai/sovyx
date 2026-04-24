@@ -9,26 +9,32 @@
 # reverts to the kernel default ("auto"). Without re-asserting "on"
 # on each such event, the pilot-class attenuation symptom reappears.
 #
-# The shell fragment is inline rather than invoking an external
-# binary because udev rules are evaluated with very narrow PATH
-# semantics and we want zero sudo/polkit exposure here. /bin/sh is
-# available on every distro that ships systemd.
+# Security model (updated after paranoid-QA audit — CRITICAL #4/#5):
+# Earlier revisions of this rule used ``/bin/sh -c '… %S%p …'`` which
+# string-interpolated the kernel-sourced sysfs path into a shell
+# command. That path is normally clean, but (a) some USB descriptors
+# can smuggle bytes that udev passes through verbatim and (b) future
+# edits to the ATTRS filter could relax the sound-subsystem gate.
+# The inline shell form made root-RCE possible once either of those
+# assumptions broke.
 #
-# %S%p expands to the absolute sysfs path of the event's device, so
-# "%S%p/../power/control" is the device-scoped power knob — no
-# enumeration loop needed. test -w guards against kernels that omit
-# the file for devices without runtime_pm support.
+# Current form: invoke ``/usr/libexec/sovyx/sovyx-audio-power-setone``
+# with ``%S%p`` as a single argv element. The helper (POSIX sh)
+# validates the argument — refusing any path not under /sys, any
+# symlink that escapes /sys, and any target that isn't literally
+# ``*/power/control``. Argv boundary means shell metacharacters in
+# the path can never be reinterpreted.
 #
-# See ADR-voice-mixer-sanity-l2.5-bidirectional §H.2 and V2 Master
-# Plan Part H.
+# See ADR-voice-mixer-sanity-l2.5-bidirectional §H.2 + V2 Master
+# Plan Part H + packaging/udev/sovyx-audio-power-setone.
 
 ACTION=="change", SUBSYSTEM=="sound", \
     ATTRS{class}=="0x040300", \
-    RUN+="/bin/sh -c 'test -w %S%p/../power/control && echo on > %S%p/../power/control'"
+    RUN+="/usr/libexec/sovyx/sovyx-audio-power-setone %S%p"
 
 # Re-assert on add (new codec driver bind) so a runtime driver reload
 # (e.g. modprobe -r snd_hda_intel && modprobe snd_hda_intel) restores
 # our preferred state without a reboot.
 ACTION=="add", SUBSYSTEM=="sound", \
     ATTRS{class}=="0x040300", \
-    RUN+="/bin/sh -c 'test -w %S%p/../power/control && echo on > %S%p/../power/control'"
+    RUN+="/usr/libexec/sovyx/sovyx-audio-power-setone %S%p"

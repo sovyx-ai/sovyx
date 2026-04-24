@@ -29,7 +29,7 @@ See V2 Master Plan Part C.1 (placement), C.2 (state machine), E.1
 from __future__ import annotations
 
 import asyncio
-import shutil
+import os
 import subprocess  # noqa: S404 — fixed-argv subprocess to trusted alsa-utils binary
 import sys
 import time
@@ -972,6 +972,43 @@ _SYSTEMD_PERSIST_UNIT = "sovyx-audio-mixer-persist.service"
 the L2.5 orchestrator after a successful heal."""
 
 
+# Absolute-path binaries — paranoid-QA HIGH #6. A daemon whose PATH is
+# influenced by the unit's ``Environment=`` directive (common operator
+# mistake: ``PATH=$HOME/bin:$PATH``) would otherwise let an attacker
+# with write access to that dir plant a shim for ``systemctl`` or
+# ``alsactl`` and hijack the one runtime bridge to root (invariant I7
+# relies on systemctl being the genuine systemd client). Hardcoding
+# canonical absolute paths — with graceful fallthrough when absent —
+# removes that hijack surface.
+_SYSTEMCTL_PATHS: tuple[str, ...] = (
+    "/usr/bin/systemctl",
+    "/bin/systemctl",
+)
+_ALSACTL_PATHS: tuple[str, ...] = (
+    "/usr/sbin/alsactl",
+    "/sbin/alsactl",
+    "/usr/bin/alsactl",
+)
+
+
+def _find_trusted_binary(candidates: tuple[str, ...]) -> str | None:
+    """Return the first canonical-path binary that exists on disk.
+
+    Does NOT consult ``PATH``. Any path outside the whitelist is
+    refused even when present. Returns ``None`` when no canonical
+    location holds the binary — caller falls through to the next
+    persistence strategy or returns ``False``.
+    """
+    for path in candidates:
+        p = Path(path)
+        try:
+            if p.is_file() and os.access(p, os.X_OK):
+                return str(p)
+        except OSError:
+            continue
+    return None
+
+
 async def default_persist_via_alsactl(
     cards: Sequence[int],
     tuning: VoiceTuningConfig,
@@ -1012,12 +1049,26 @@ async def default_persist_via_alsactl(
     """
     if sys.platform != "linux":
         return False
+    # Paranoid-QA HIGH #6: resolve subprocess binaries via a fixed
+    # canonical-path whitelist. ``shutil.which`` honours $PATH and
+    # would let an operator's ill-configured unit-level
+    # ``Environment=PATH=$HOME/bin:$PATH`` redirect ``systemctl`` to
+    # an attacker-controlled shim.
+    systemctl_path = _find_trusted_binary(_SYSTEMCTL_PATHS)
+    # Paranoid-QA LOW: clamp subprocess timeout so a bad env override
+    # (``SOVYX_TUNING__VOICE__LINUX_MIXER_SUBPROCESS_TIMEOUT_S=0``)
+    # cannot DoS the persist path by timing out instantly, nor block
+    # the event loop for minutes at the other extreme.
+    timeout_s = max(0.5, min(tuning.linux_mixer_subprocess_timeout_s, 30.0))
     # Strategy 1: systemd delegate.
-    if shutil.which("systemctl") is not None:
+    if systemctl_path is not None:
+        # ``start`` without ``--no-block`` so the real exit code of the
+        # unit (success / failure during ExecStart) propagates to us.
+        # The unit's ``TimeoutStartSec=5s`` bounds wall-clock at the
+        # systemd side; our own ``timeout_s`` bounds us.
         argv_sd = [
-            "systemctl",
+            systemctl_path,
             "start",
-            "--no-block",
             _SYSTEMD_PERSIST_UNIT,
         ]
         try:
@@ -1025,7 +1076,7 @@ async def default_persist_via_alsactl(
                 subprocess.run,  # noqa: S603 — fixed argv, no shell, timeout enforced
                 argv_sd,
                 capture_output=True,
-                timeout=tuning.linux_mixer_subprocess_timeout_s,
+                timeout=timeout_s,
                 check=False,
                 text=True,
                 errors="replace",
@@ -1052,13 +1103,13 @@ async def default_persist_via_alsactl(
     # Strategy 2: direct alsactl — only works when daemon has write
     # access to /var/lib/alsa/asound.state (typically means running
     # as root, which is rare in Sovyx deployments).
-    if shutil.which("alsactl") is None:
+    alsactl_path = _find_trusted_binary(_ALSACTL_PATHS)
+    if alsactl_path is None:
         logger.debug("mixer_sanity_alsactl_missing")
         return False
-    timeout_s = tuning.linux_mixer_subprocess_timeout_s
     all_ok = True
     for card_index in cards:
-        argv = ["alsactl", "store", "-f", "-c", str(card_index)]
+        argv = [alsactl_path, "store", "-f", "-c", str(card_index)]
         try:
             proc = await asyncio.to_thread(
                 subprocess.run,  # noqa: S603 — fixed argv, no shell, timeout enforced
