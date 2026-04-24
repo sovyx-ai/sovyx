@@ -635,6 +635,41 @@ class VoiceTuningConfig(BaseSettings):
             raise ValueError(msg)
         return self
 
+    @model_validator(mode="after")
+    def _enforce_customization_thresholds_ordered(self) -> VoiceTuningConfig:
+        """Paranoid-QA HIGH #9 — L2.5 customization thresholds must be
+        ordered ``apply <= skip``.
+
+        The orchestrator branches on ``score`` using two knobs:
+
+        * ``score < linux_mixer_user_customization_threshold_apply``
+          → auto-apply the KB preset (low customization).
+        * ``score > linux_mixer_user_customization_threshold_skip``
+          → respect user intent, skip L2.5 entirely.
+        * Between the two → defer for dashboard confirmation.
+
+        If an operator's env override sets ``apply > skip`` (e.g.
+        ``APPLY=0.8, SKIP=0.75``) the middle "defer" band inverts —
+        there's no score that would land in defer, and the boundary
+        between apply and skip becomes ambiguous at exact equality.
+        Reject the config at startup instead of shipping surprising
+        behaviour at first cascade.
+        """
+        if (
+            self.linux_mixer_user_customization_threshold_apply
+            > self.linux_mixer_user_customization_threshold_skip
+        ):
+            msg = (
+                f"linux_mixer_user_customization_threshold_apply="
+                f"{self.linux_mixer_user_customization_threshold_apply} must be "
+                f"<= linux_mixer_user_customization_threshold_skip="
+                f"{self.linux_mixer_user_customization_threshold_skip} — "
+                "the apply threshold is the FLOOR of the defer band; "
+                "skip is the CEILING. Inverting them eliminates the band."
+            )
+            raise ValueError(msg)
+        return self
+
 
 class LLMTuningConfig(BaseSettings):
     """Tunable thresholds for the LLM router complexity classifier.

@@ -470,8 +470,15 @@ class TestScoreProfile:
             "factory_sig",
         }
 
-    def test_partial_match_codec_only(self) -> None:
-        # Only codec matches + factory_sig miss + driver mismatch.
+    def test_codec_match_without_factory_sig_is_hard_gated(self) -> None:
+        """Paranoid-QA CRITICAL #10 — factory_signature is a HARD gate.
+
+        Codec matches, driver mismatches, and factory_sig scores 0
+        (no signature role matches the healthy snapshot). Previously
+        the weighted algorithm gave score≈0.8 — high enough to apply
+        the preset on healthy hardware. Now the hard gate returns
+        exactly 0.0 so the lookup filters the profile out.
+        """
         profile = _pilot_profile()
         hw = HardwareContext(
             driver_family="usb-audio",  # != profile.driver_family=hda
@@ -484,13 +491,15 @@ class TestScoreProfile:
             [_healthy_snapshot()],  # factory_sig won't match
             resolver,
         )
-        # Only codec_id contributes. weighted_sum = 0.4, total_weight = 0.5
-        # (0.4 codec + 0.1 factory_sig with sig_score=0), score = 0.4/0.5 = 0.8
-        assert 0.7 < score < 0.85
+        assert score == 0.0
         fields_hit = {name for name, _, _ in breakdown}
+        # codec_id entry is present (with value 1.0) but factory_sig
+        # forced the hard gate — both appear in the breakdown.
         assert "codec_id" in fields_hit
-        assert "driver_family" not in fields_hit
         assert "factory_sig" in fields_hit
+        # factory_sig entry has score 0 — the hard-gate signal.
+        sig_entry = next(b for b in breakdown if b[0] == "factory_sig")
+        assert sig_entry[1] == 0.0
 
     def test_factory_sig_fraction_match(self) -> None:
         profile = _pilot_profile()

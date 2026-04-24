@@ -1557,6 +1557,14 @@ class FactorySignature:
                 "expected_db_range to be non-None"
             )
             raise ValueError(msg)
+        # Paranoid-QA HIGH #10: reject degenerate ranges (``lo == hi``)
+        # for fraction + db. The only range where a point-match is
+        # meaningful is ``expected_raw_range`` (``(0, 0)`` captures
+        # "boost muted" on HDA — a real pilot signature). Fraction +
+        # dB point-matches have near-zero probability of firing due
+        # to float precision and are almost certainly KB authoring
+        # bugs; reject loudly rather than ship a profile that never
+        # matches in production.
         if self.expected_raw_range is not None:
             lo_r, hi_r = self.expected_raw_range
             if lo_r > hi_r:
@@ -1573,10 +1581,22 @@ class FactorySignature:
                     "must lie within [0.0, 1.0]"
                 )
                 raise ValueError(msg)
+            if lo_f == hi_f:
+                msg = (
+                    f"expected_fraction_range={self.expected_fraction_range!r} "
+                    "is degenerate (lo == hi); use a band or widen the bounds"
+                )
+                raise ValueError(msg)
         if self.expected_db_range is not None:
             lo_d, hi_d = self.expected_db_range
             if lo_d > hi_d:
                 msg = f"expected_db_range={self.expected_db_range!r} is inverted"
+                raise ValueError(msg)
+            if lo_d == hi_d:
+                msg = (
+                    f"expected_db_range={self.expected_db_range!r} is "
+                    "degenerate (lo == hi); use a band"
+                )
                 raise ValueError(msg)
 
 

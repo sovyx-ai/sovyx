@@ -811,7 +811,12 @@ class _SanityOrchestrator:
             endpoint_guid=c.endpoint.endpoint_guid,
         )
         score = c.customization.score
-        if score > c.tuning.linux_mixer_user_customization_threshold_skip:
+        # Paranoid-QA HIGH #9: both thresholds use ``>=`` so the
+        # boundary lives at the apply-threshold (inclusive). With
+        # apply=0.5 and skip=0.75 a score of exactly 0.5 is the first
+        # "defer" value, 0.75 is the first "skip" value. VoiceTuningConfig
+        # validates apply <= skip so the bands never invert.
+        if score >= c.tuning.linux_mixer_user_customization_threshold_skip:
             c.decision = MixerSanityDecision.SKIPPED_CUSTOMIZED
             c.diagnosis_before = Diagnosis.MIXER_CUSTOMIZED
             c.remediation = RemediationHint(

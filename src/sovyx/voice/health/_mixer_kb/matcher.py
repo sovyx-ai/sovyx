@@ -132,20 +132,23 @@ def score_profile(
     if hw.driver_family == profile.driver_family:
         scores.append(("driver_family", 1.0, _WEIGHT_DRIVER_FAMILY))
 
+    # Paranoid-QA CRITICAL #11: ``fnmatchcase`` (not ``fnmatch``)
+    # everywhere. ``fnmatch.fnmatch`` applies ``os.path.normcase`` which
+    # lowercases on Windows / NTFS — a profile authored with
+    # ``SONY*`` matches ``"sony"`` on the dev workstation but NOT on
+    # the Linux CI runner, making scoring dependent on the host OS.
+    # KB profiles ship case-sensitive by contract.
     if (
         profile.system_vendor_glob
         and hw.system_vendor is not None
-        and fnmatch.fnmatch(
-            hw.system_vendor,
-            profile.system_vendor_glob,
-        )
+        and fnmatch.fnmatchcase(hw.system_vendor, profile.system_vendor_glob)
     ):
         scores.append(("system_vendor", 1.0, _WEIGHT_SYSTEM_VENDOR))
 
     if (
         profile.system_product_glob
         and hw.system_product is not None
-        and fnmatch.fnmatch(hw.system_product, profile.system_product_glob)
+        and fnmatch.fnmatchcase(hw.system_product, profile.system_product_glob)
     ):
         scores.append(("system_product", 1.0, _WEIGHT_SYSTEM_PRODUCT))
 
@@ -155,7 +158,7 @@ def score_profile(
     if (
         profile.kernel_major_minor_glob
         and hw.kernel is not None
-        and fnmatch.fnmatch(hw.kernel, profile.kernel_major_minor_glob)
+        and fnmatch.fnmatchcase(hw.kernel, profile.kernel_major_minor_glob)
     ):
         scores.append(("kernel_mm", 1.0, _WEIGHT_KERNEL))
 
@@ -165,6 +168,27 @@ def score_profile(
         resolver,
         hw,
     )
+    # Paranoid-QA CRITICAL #10: factory_signature is the PROOF that
+    # the observed hardware is in the factory-bad regime the profile
+    # is designed to cure. With the soft-weight scheme, a profile
+    # matching codec + driver_family alone could reach score 0.8+ even
+    # when NONE of the signature roles match current readings —
+    # applying the preset on healthy hardware (or user-tuned to a
+    # different state) would be harmful. Hard gate: zero role-match
+    # in the signature → the profile does NOT apply to this hardware,
+    # regardless of how well other fields score.
+    #
+    # Partial signature match (sig_score > 0) is still admitted via
+    # the soft-weight path — the post-apply validation gates are the
+    # final arbiter of whether the preset was actually the right one.
+    if sig_score == 0.0:
+        logger.debug(
+            "mixer_kb_factory_signature_zero_match",
+            profile_id=profile.profile_id,
+            note="hard gate — profile does not apply when 0 signature roles match",
+        )
+        scores.append(("factory_sig", 0.0, _WEIGHT_FACTORY_SIG))
+        return (0.0, tuple(scores))
     scores.append(("factory_sig", sig_score, _WEIGHT_FACTORY_SIG))
 
     total_weight = sum(w for _, _, w in scores)

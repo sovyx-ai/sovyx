@@ -65,11 +65,18 @@ def load_profile_file(path: Path) -> MixerKBProfile:
         )
         raise ValueError(msg)
     model = KBProfileModel.model_validate(parsed)
-    if model.profile_id != path.stem:
+    # Paranoid-QA HIGH #18: filename-stem comparison must be
+    # case-insensitive to survive case-insensitive filesystems
+    # (Windows NTFS default, macOS HFS+ default). A profile authored
+    # with ``profile_id: vaio_vjfe69`` in a file named ``VAIO_VJFE69.yaml``
+    # on dev Windows would silently fail ``== `` comparison and the
+    # profile would be dropped with "load_failed" — invisible to the
+    # user until the Linux CI runs and behaves differently.
+    if model.profile_id.casefold() != path.stem.casefold():
         msg = (
             f"profile_id={model.profile_id!r} in {path.name!r} disagrees "
-            f"with filename stem {path.stem!r}; they must match so "
-            f"directory listings are authoritative"
+            f"with filename stem {path.stem!r} (case-folded); they must "
+            f"match so directory listings are authoritative"
         )
         raise ValueError(msg)
     if model.signature is not None:
