@@ -29,6 +29,7 @@ See V2 Master Plan Part C.1 (placement), C.2 (state machine), E.1
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import subprocess  # noqa: S404 — fixed-argv subprocess to trusted alsa-utils binary
 import sys
@@ -427,6 +428,14 @@ class _OrchestratorContext:
     validation_probe_fn: ValidationProbeFn
     persist_fn: PersistFn
     telemetry: _TelemetryProto
+    # Paranoid-QA R2 CRITICAL #4 — distinguishes "caller passed None"
+    # (fall back to module-level singleton at record time) from
+    # "caller explicitly injected a _NoopTelemetry or real recorder".
+    # Without this flag, an explicit ``telemetry=_NoopTelemetry()`` is
+    # indistinguishable from the default, and the late-bind logic
+    # silently swaps in the module singleton — overriding the test's
+    # explicit choice to disable telemetry.
+    telemetry_was_provided: bool = False
     combo_store: ComboStore | None = None
     capture_overrides: CaptureOverrides | None = None
 
@@ -536,29 +545,39 @@ async def check_and_maybe_heal(
         validation_probe_fn=validation_probe_fn,
         persist_fn=persist_fn if persist_fn is not None else default_persist_via_alsactl,
         telemetry=telemetry if telemetry is not None else _NoopTelemetry(),
+        telemetry_was_provided=telemetry is not None,
         combo_store=combo_store,
         capture_overrides=capture_overrides,
     )
 
     orchestrator = _SanityOrchestrator(ctx)
+    # Paranoid-QA R2 CRITICAL #3 — preserve the originating
+    # ``CancelledError`` across telemetry recording. A naked ``raise``
+    # inside the ``except asyncio.CancelledError`` handler skips the
+    # build_result + record_mixer_sanity_outcome that sits after this
+    # try/except, so the shutdown cascade drops the partial L2.5
+    # outcome. Instead we stash the exception, let telemetry record,
+    # then re-raise below.
+    cancel_exc: BaseException | None = None
     try:
         await orchestrator.run()
-    except asyncio.CancelledError:
-        # Caller cancelled mid-run — attempt rollback, re-raise.
-        # Paranoid-QA HIGH #2: rollback_if_needed MUST NOT swallow a
-        # second cancellation delivered while it's running; see the
-        # helper for its split-handler pattern.
-        await orchestrator.rollback_if_needed()
-        raise
+    except asyncio.CancelledError as exc:
+        cancel_exc = exc
+        # Best-effort rollback. If the caller double-cancels and
+        # rollback itself raises CancelledError, we still want to
+        # reach the telemetry recorder — swallow here and re-raise
+        # the *original* below. The second cancel does not carry
+        # additional information beyond the first.
+        with contextlib.suppress(asyncio.CancelledError):
+            await orchestrator.rollback_if_needed()
+        ctx.decision = MixerSanityDecision.ERROR
+        ctx.error_token = "MIXER_SANITY_CANCELLED"
     except Exception as exc:  # noqa: BLE001 — "Exception" not "BaseException" post-QA
         # Paranoid-QA CRITICAL #1 / HIGH #1: narrowed from BaseException
         # so KeyboardInterrupt / SystemExit propagate to the caller.
-        # Also: if the asyncio.CancelledError handler above raises a
-        # SECOND CancelledError during rollback (caller double-cancels
-        # on shutdown), it is an Exception-subclass in 3.8+... no, it
-        # is a BaseException. Python 3.8 moved CancelledError under
-        # BaseException — so Exception catches NEITHER Cancelled nor
-        # KeyboardInterrupt / SystemExit. That's what we want here.
+        # CancelledError is a direct BaseException subclass (Python 3.8+
+        # moved it off Exception) so this ``except Exception`` correctly
+        # does NOT catch Cancelled / KeyboardInterrupt / SystemExit.
         logger.exception(
             "mixer_sanity_unexpected_error",
             endpoint_guid=endpoint.endpoint_guid,
@@ -569,23 +588,40 @@ async def check_and_maybe_heal(
         ctx.error_token = "MIXER_SANITY_UNEXPECTED_ERROR"
 
     result = orchestrator.build_result()
-    # Paranoid-QA CRITICAL #9: resolve telemetry late — the setup may
-    # carry None (the bootstrap ran before telemetry was installed);
-    # fall back to the module-level recorder at record-time.
-    telemetry = ctx.telemetry
-    if isinstance(telemetry, _NoopTelemetry):
+    # ── Late-bind telemetry (Paranoid-QA CRITICAL #9 + R2 CRITICAL #4) ──
+    #
+    # The module-level singleton is consulted only when the caller did
+    # NOT explicitly inject a telemetry. An explicit
+    # ``_NoopTelemetry()`` injection (common in tests) must survive
+    # this branch — isinstance() alone can't tell "default noop" from
+    # "explicit noop", hence the ``telemetry_was_provided`` sentinel.
+    final_telemetry: _TelemetryProto = ctx.telemetry
+    if not ctx.telemetry_was_provided:
         from sovyx.voice.health._telemetry import (  # noqa: PLC0415 — late-bound singleton lookup
             get_telemetry,
         )
 
         late = get_telemetry()
         if late is not None:
-            telemetry = late
-    telemetry.record_mixer_sanity_outcome(
-        decision=result.decision.value,
-        matched_profile=result.matched_kb_profile,
-        score=result.kb_match_score,
-    )
+            final_telemetry = late
+    # Telemetry recording MUST NOT shadow the real exit. A broken
+    # recorder (network down, serialization bug, clock skew) should
+    # log and move on — the orchestrator's result is authoritative.
+    try:
+        final_telemetry.record_mixer_sanity_outcome(
+            decision=result.decision.value,
+            matched_profile=result.matched_kb_profile,
+            score=result.kb_match_score,
+        )
+    except Exception:  # noqa: BLE001 — never let telemetry mask a real outcome
+        logger.exception(
+            "mixer_sanity_telemetry_record_failed",
+            endpoint_guid=endpoint.endpoint_guid,
+            decision=result.decision.value,
+        )
+
+    if cancel_exc is not None:
+        raise cancel_exc
     return result
 
 
@@ -797,14 +833,14 @@ class _SanityOrchestrator:
         # Compute the factory-signature score separately so the heuristic
         # can score signal A accurately. (The kb_lookup's composite score
         # mixes in other fields.)
-        factory_score = _match_factory_signature(
+        factory_result = _match_factory_signature(
             c.kb_match.profile.factory_signature,
             c.mixer_snapshot,
             c.role_resolver,
             c.hw,
         )
         c.customization = detect_user_customization(
-            factory_signature_score=factory_score,
+            factory_signature_score=factory_result.score,
             hw=c.hw,
             combo_store=c.combo_store,
             capture_overrides=c.capture_overrides,

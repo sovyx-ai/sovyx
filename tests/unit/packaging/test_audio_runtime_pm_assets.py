@@ -403,3 +403,103 @@ class TestMixerPersistUnit:
         assert "sudo" not in directives
         assert "pkexec" not in directives
         assert "polkit" not in directives
+
+
+# ── Distribution invariants (wheel + line endings) ──────────────────
+
+
+class TestWheelForceInclude:
+    """Paranoid-QA R2 CRITICAL #2 regression guard.
+
+    The packaging artifacts live in ``packaging/`` at repo root,
+    *outside* ``src/sovyx/``. Hatch's default ``[tool.hatch.build.targets.wheel]``
+    only packages the configured ``packages`` tree — without an
+    explicit ``force-include`` block, every wheel published to PyPI
+    ships WITHOUT the systemd units / udev rule / helpers. Downstream
+    pipx + manual installers then have no way to reach the files.
+
+    These tests fail loudly if a future edit strips the force-include
+    block.
+    """
+
+    @pytest.fixture(scope="class")
+    def pyproject_text(self) -> str:
+        return (_REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+    def test_has_force_include_section(self, pyproject_text: str) -> None:
+        assert "[tool.hatch.build.targets.wheel.force-include]" in pyproject_text
+
+    def test_systemd_runtime_pm_unit_force_included(self, pyproject_text: str) -> None:
+        assert '"packaging/systemd/sovyx-audio-runtime-pm.service"' in pyproject_text
+        assert "sovyx/_packaging/systemd/sovyx-audio-runtime-pm.service" in pyproject_text
+
+    def test_systemd_mixer_persist_unit_force_included(self, pyproject_text: str) -> None:
+        assert '"packaging/systemd/sovyx-audio-mixer-persist.service"' in pyproject_text
+        assert "sovyx/_packaging/systemd/sovyx-audio-mixer-persist.service" in pyproject_text
+
+    def test_shell_helper_force_included(self, pyproject_text: str) -> None:
+        assert '"packaging/systemd/audio-runtime-pm-setup"' in pyproject_text
+        assert "sovyx/_packaging/systemd/audio-runtime-pm-setup" in pyproject_text
+
+    def test_udev_rule_force_included(self, pyproject_text: str) -> None:
+        assert '"packaging/udev/60-sovyx-audio-power.rules"' in pyproject_text
+        assert "sovyx/_packaging/udev/60-sovyx-audio-power.rules" in pyproject_text
+
+    def test_udev_helper_force_included(self, pyproject_text: str) -> None:
+        assert '"packaging/udev/sovyx-audio-power-setone"' in pyproject_text
+        assert "sovyx/_packaging/udev/sovyx-audio-power-setone" in pyproject_text
+
+
+class TestGitattributesLFEnforcement:
+    """Paranoid-QA R2 CRITICAL #1 regression guard.
+
+    These POSIX artifacts MUST be checked out with LF line endings on
+    every platform. A stray CRLF in a ``#!/bin/sh`` shebang makes the
+    kernel reject the interpreter with "No such file or directory"
+    (the kernel sees ``/bin/sh\\r``); CRLF in a systemd unit silently
+    drops options; CRLF in a udev rule skips the whole rule.
+
+    ``.gitattributes`` pins them to ``text eol=lf`` so a Windows
+    contributor with ``core.autocrlf=true`` cannot poison the repo.
+    """
+
+    @pytest.fixture(scope="class")
+    def attributes_text(self) -> str:
+        return (_REPO_ROOT / ".gitattributes").read_text(encoding="utf-8")
+
+    def test_gitattributes_file_exists(self) -> None:
+        assert (_REPO_ROOT / ".gitattributes").is_file()
+
+    def test_systemd_service_glob_pinned_lf(self, attributes_text: str) -> None:
+        assert "*.service" in attributes_text
+        assert "packaging/systemd/*.service" in attributes_text
+
+    def test_udev_rules_glob_pinned_lf(self, attributes_text: str) -> None:
+        assert "*.rules" in attributes_text
+        assert "packaging/udev/*.rules" in attributes_text
+
+    def test_systemd_helper_pinned_lf(self, attributes_text: str) -> None:
+        assert "packaging/systemd/audio-runtime-pm-setup" in attributes_text
+
+    def test_udev_helper_pinned_lf(self, attributes_text: str) -> None:
+        assert "packaging/udev/sovyx-audio-power-setone" in attributes_text
+
+    @pytest.mark.parametrize(
+        "asset",
+        [
+            _SYSTEMD_UNIT,
+            _PERSIST_UNIT,
+            _SH_HELPER,
+            _UDEV_RULE,
+            _UDEV_HELPER,
+        ],
+    )
+    def test_asset_has_no_cr_bytes(self, asset: Path) -> None:
+        """Enforce *current* checkout is LF — catches the case where a
+        Windows contributor committed CRLF before ``.gitattributes``
+        landed. ``read_bytes()`` avoids Python's universal-newlines
+        translation."""
+        raw = asset.read_bytes()
+        assert b"\r" not in raw, (
+            f"{asset} contains CR bytes — was committed with CRLF line endings"
+        )

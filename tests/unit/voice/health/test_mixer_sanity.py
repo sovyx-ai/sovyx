@@ -639,6 +639,163 @@ class TestTelemetry:
             )
         assert result.decision is MixerSanityDecision.SKIPPED_HEALTHY
 
+    @pytest.mark.asyncio()
+    async def test_explicit_noop_telemetry_not_late_bind_swapped(self) -> None:
+        """Paranoid-QA R2 CRITICAL #4 regression.
+
+        When the caller explicitly injects a ``_NoopTelemetry()``
+        (legitimate use: tests that disable telemetry on purpose), the
+        late-bind fallback MUST NOT swap it for the module-level
+        singleton — the explicit injection is authoritative. The
+        previous implementation used ``isinstance(x, _NoopTelemetry)``
+        as the "no caller-provided telemetry" marker, which collapsed
+        these two cases.
+        """
+
+        class SpyNoop(mod._NoopTelemetry):
+            def __init__(self) -> None:
+                self.calls: list[dict[str, object]] = []
+
+            def record_mixer_sanity_outcome(
+                self, *, decision: str, matched_profile: str | None, score: float
+            ) -> None:
+                self.calls.append(
+                    {"decision": decision, "matched_profile": matched_profile, "score": score}
+                )
+
+        fake_singleton = MagicMock()
+        explicit_noop = SpyNoop()
+
+        with (
+            patch.object(mod, "sys") as sys_mock,
+            patch(
+                "sovyx.voice.health._telemetry.get_telemetry",
+                return_value=fake_singleton,
+            ),
+        ):
+            sys_mock.platform = "linux"
+            await check_and_maybe_heal(
+                _endpoint(),
+                _hw(),
+                kb_lookup=_lookup_with(None),
+                role_resolver=MixerControlRoleResolver(),
+                validation_probe_fn=_pass_validation,
+                mixer_probe_fn=lambda: [_healthy_snapshot()],
+                telemetry=explicit_noop,
+                tuning=VoiceTuningConfig(),
+            )
+
+        assert len(explicit_noop.calls) == 1, (
+            "Explicit _NoopTelemetry was swapped for the module-level singleton"
+        )
+        fake_singleton.record_mixer_sanity_outcome.assert_not_called()
+
+    @pytest.mark.asyncio()
+    async def test_telemetry_none_late_binds_module_singleton(self) -> None:
+        """Paranoid-QA R2 CRITICAL #4 positive case.
+
+        ``telemetry=None`` → late-bind kicks in → the module-level
+        ``get_telemetry()`` singleton receives the record. This is the
+        "bootstrap wired L2.5 before the telemetry service booted"
+        path the late-bind was originally introduced for.
+        """
+        late_telemetry = MagicMock()
+
+        with (
+            patch.object(mod, "sys") as sys_mock,
+            patch(
+                "sovyx.voice.health._telemetry.get_telemetry",
+                return_value=late_telemetry,
+            ),
+        ):
+            sys_mock.platform = "linux"
+            await check_and_maybe_heal(
+                _endpoint(),
+                _hw(),
+                kb_lookup=_lookup_with(None),
+                role_resolver=MixerControlRoleResolver(),
+                validation_probe_fn=_pass_validation,
+                mixer_probe_fn=lambda: [_healthy_snapshot()],
+                telemetry=None,
+                tuning=VoiceTuningConfig(),
+            )
+
+        late_telemetry.record_mixer_sanity_outcome.assert_called_once()
+
+    @pytest.mark.asyncio()
+    async def test_cancellederror_preserves_telemetry_before_reraise(
+        self,
+    ) -> None:
+        """Paranoid-QA R2 CRITICAL #3 regression.
+
+        If the caller cancels ``check_and_maybe_heal`` mid-run (e.g.,
+        daemon shutdown), the orchestrator MUST still record the
+        partial outcome before re-raising ``CancelledError``. Shutdown
+        is the one observability signal we cannot afford to lose —
+        it's the diff between "L2.5 was in flight and bailed cleanly"
+        and "L2.5 silently vanished".
+        """
+        import asyncio
+
+        telemetry = MagicMock()
+
+        def cancelling_probe() -> Sequence[MixerCardSnapshot]:
+            raise asyncio.CancelledError
+
+        with patch.object(mod, "sys") as sys_mock:
+            sys_mock.platform = "linux"
+            with pytest.raises(asyncio.CancelledError):
+                await check_and_maybe_heal(
+                    _endpoint(),
+                    _hw(),
+                    kb_lookup=_lookup_with(None),
+                    role_resolver=MixerControlRoleResolver(),
+                    validation_probe_fn=_pass_validation,
+                    mixer_probe_fn=cancelling_probe,
+                    telemetry=telemetry,
+                    tuning=VoiceTuningConfig(),
+                )
+
+        # Telemetry recorded the partial outcome BEFORE the cancel
+        # propagated — that's the whole point of the fix.
+        telemetry.record_mixer_sanity_outcome.assert_called_once()
+        call_kwargs = telemetry.record_mixer_sanity_outcome.call_args.kwargs
+        # The decision reflects the cancellation path (ERROR +
+        # MIXER_SANITY_CANCELLED error token is visible via
+        # build_result — here we only assert the decision shape,
+        # since the result is not returned to the caller on cancel).
+        assert call_kwargs["decision"] == MixerSanityDecision.ERROR.value
+
+    @pytest.mark.asyncio()
+    async def test_telemetry_record_failure_does_not_mask_exit(self) -> None:
+        """A broken telemetry recorder must not hijack the real return
+        value. The exception is logged and swallowed; the orchestrator
+        result is the authoritative outcome."""
+
+        class BrokenTelemetry:
+            def record_mixer_sanity_outcome(
+                self,
+                *,
+                decision: str,  # noqa: ARG002
+                matched_profile: str | None,  # noqa: ARG002
+                score: float,  # noqa: ARG002
+            ) -> None:
+                raise RuntimeError("telemetry backend unreachable")
+
+        with patch.object(mod, "sys") as sys_mock:
+            sys_mock.platform = "linux"
+            result = await check_and_maybe_heal(
+                _endpoint(),
+                _hw(),
+                kb_lookup=_lookup_with(None),
+                role_resolver=MixerControlRoleResolver(),
+                validation_probe_fn=_pass_validation,
+                mixer_probe_fn=lambda: [_healthy_snapshot()],
+                telemetry=BrokenTelemetry(),
+                tuning=VoiceTuningConfig(),
+            )
+        assert result.decision is MixerSanityDecision.SKIPPED_HEALTHY
+
 
 # ── _check_validation_gates ──────────────────────────────────────────
 

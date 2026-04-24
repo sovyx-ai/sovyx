@@ -120,6 +120,24 @@ exclude = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/sovyx"]
 
+# Ship the Linux system artifacts (systemd units, udev rule, POSIX
+# helpers) *inside* the wheel so pipx / pip installs can discover and
+# install them. Distro maintainers (.deb/.rpm) and pipx users resolve
+# these via ``importlib.resources.files("sovyx") / "_packaging"``.
+#
+# Without this block, the packaging/ tree exists only in the repo
+# checkout — PyPI consumers have no way to obtain the files, which
+# makes L2.5's invariant-I7 path (systemctl-delegated alsactl store,
+# udev-driven runtime_pm re-application) non-functional on the
+# majority of install paths.
+[tool.hatch.build.targets.wheel.force-include]
+"packaging/systemd/sovyx-audio-runtime-pm.service"    = "sovyx/_packaging/systemd/sovyx-audio-runtime-pm.service"
+"packaging/systemd/sovyx-audio-mixer-persist.service" = "sovyx/_packaging/systemd/sovyx-audio-mixer-persist.service"
+"packaging/systemd/audio-runtime-pm-setup"            = "sovyx/_packaging/systemd/audio-runtime-pm-setup"
+"packaging/udev/60-sovyx-audio-power.rules"           = "sovyx/_packaging/udev/60-sovyx-audio-power.rules"
+"packaging/udev/sovyx-audio-power-setone"             = "sovyx/_packaging/udev/sovyx-audio-power-setone"
+"packaging/README.md"                                 = "sovyx/_packaging/README.md"
+
 [tool.mypy]
 strict = true
 python_version = "3.11"

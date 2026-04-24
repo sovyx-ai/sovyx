@@ -162,34 +162,42 @@ def score_profile(
     ):
         scores.append(("kernel_mm", 1.0, _WEIGHT_KERNEL))
 
-    sig_score = _match_factory_signature(
+    sig_result = _match_factory_signature(
         profile.factory_signature,
         mixer_snapshot,
         resolver,
         hw,
     )
-    # Paranoid-QA CRITICAL #10: factory_signature is the PROOF that
-    # the observed hardware is in the factory-bad regime the profile
-    # is designed to cure. With the soft-weight scheme, a profile
-    # matching codec + driver_family alone could reach score 0.8+ even
-    # when NONE of the signature roles match current readings —
-    # applying the preset on healthy hardware (or user-tuned to a
-    # different state) would be harmful. Hard gate: zero role-match
-    # in the signature → the profile does NOT apply to this hardware,
-    # regardless of how well other fields score.
+    # Paranoid-QA CRITICAL #10 + R2 CRITICAL #5: factory_signature is
+    # the PROOF that the observed hardware is in the factory-bad
+    # regime the profile is designed to cure. With the soft-weight
+    # scheme, a profile matching codec + driver_family alone could
+    # reach score 0.8+ even when NONE of the signature roles match
+    # current readings — applying the preset on healthy hardware (or
+    # user-tuned to a different state) would be harmful.
     #
-    # Partial signature match (sig_score > 0) is still admitted via
-    # the soft-weight path — the post-apply validation gates are the
-    # final arbiter of whether the preset was actually the right one.
-    if sig_score == 0.0:
+    # Hard gate: zero roles matched → the profile does NOT apply,
+    # regardless of how well other fields scored. We gate on the
+    # integer ``roles_matched`` field, NOT on the derived float
+    # ``score``. A future signature change that makes the score a
+    # weighted combination of per-role closeness (e.g., partial credit
+    # for "control reads 0.11 vs expected [0.0, 0.10]") would silently
+    # break ``score == 0.0`` — the integer gate is immune to that.
+    #
+    # Partial signature match (``roles_matched > 0``) is still
+    # admitted via the soft-weight path — the post-apply validation
+    # gates are the final arbiter of whether the preset was actually
+    # the right one.
+    if sig_result.roles_matched == 0:
         logger.debug(
             "mixer_kb_factory_signature_zero_match",
             profile_id=profile.profile_id,
+            roles_total=sig_result.roles_total,
             note="hard gate — profile does not apply when 0 signature roles match",
         )
         scores.append(("factory_sig", 0.0, _WEIGHT_FACTORY_SIG))
         return (0.0, tuple(scores))
-    scores.append(("factory_sig", sig_score, _WEIGHT_FACTORY_SIG))
+    scores.append(("factory_sig", sig_result.score, _WEIGHT_FACTORY_SIG))
 
     total_weight = sum(w for _, _, w in scores)
     if total_weight == 0.0:
@@ -198,33 +206,63 @@ def score_profile(
     return (weighted_sum / total_weight, tuple(scores))
 
 
+@dataclass(frozen=True, slots=True)
+class FactorySignatureMatch:
+    """Structured result for :func:`_match_factory_signature`.
+
+    Paranoid-QA R2 CRITICAL #5: the scoring path needs to distinguish
+    "zero roles matched" (hard gate trip → profile rejected) from
+    "some roles matched but the derived score rounds near zero"
+    (legitimate partial match → continue soft-weight scoring). An
+    exact-float ``score == 0.0`` comparison collapses those cases,
+    which is a fragile foundation for a safety-critical gate. This
+    dataclass surfaces the integer ``roles_matched`` count directly.
+
+    Attributes:
+        score: ``roles_matched / roles_total`` in ``[0, 1]``. ``0.0``
+            when either the signature is empty (defensive — rejected
+            at profile build time) or no roles matched.
+        roles_matched: Integer count of signature roles whose readings
+            fell inside the expected range on at least one card.
+            Compared against zero by the hard gate.
+        roles_total: Total number of roles declared in the signature
+            (``len(signature)``). Also ``0`` when signature is empty.
+    """
+
+    score: float
+    roles_matched: int
+    roles_total: int
+
+
 def _match_factory_signature(
     signature: Mapping[MixerControlRole, FactorySignature],
     snapshot: Sequence[MixerCardSnapshot],
     resolver: MixerControlRoleResolver,
     hw: HardwareContext,
-) -> float:
-    """Return fraction of signature roles whose readings match expected ranges.
+) -> FactorySignatureMatch:
+    """Return structured match for ``signature`` against current readings.
 
     Iterates the profile's ``factory_signature`` entries; for each
     role, walks every card's role mapping looking for a
     :class:`MixerControlSnapshot` whose current reading falls inside
     one of the signature's declared ``expected_*_range`` fields.
     A role matches if *any* of its control candidates matches.
-
-    Returns:
-        Fraction in ``[0, 1]`` — roles-matched / total-roles-in-signature.
-        ``0.0`` when signature is empty (should never happen given
-        :class:`MixerKBProfile.__post_init__` rejects empty signatures,
-        but defensive).
     """
-    if not signature:
-        return 0.0
+    total = len(signature)
+    if total == 0:
+        # Defensive: ``MixerKBProfile.__post_init__`` rejects empty
+        # signatures, so reaching here means the caller built a
+        # profile outside the contract path. Treat as no-match.
+        return FactorySignatureMatch(score=0.0, roles_matched=0, roles_total=0)
     matched = 0
     for role, sig in signature.items():
         if _role_matches_in_snapshot(role, sig, snapshot, resolver, hw):
             matched += 1
-    return matched / len(signature)
+    return FactorySignatureMatch(
+        score=matched / total,
+        roles_matched=matched,
+        roles_total=total,
+    )
 
 
 def _role_matches_in_snapshot(

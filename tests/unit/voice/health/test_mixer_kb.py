@@ -38,7 +38,11 @@ from sovyx.voice.health._mixer_kb.loader import (
     load_profile_file,
     load_profiles_from_directory,
 )
-from sovyx.voice.health._mixer_kb.matcher import score_profile
+from sovyx.voice.health._mixer_kb.matcher import (
+    FactorySignatureMatch,
+    _match_factory_signature,
+    score_profile,
+)
 from sovyx.voice.health._mixer_kb.schema import KBProfileModel
 
 _GOOD_YAML = dedent("""
@@ -529,6 +533,102 @@ class TestScoreProfile:
         _, breakdown = score_profile(profile, hw, [mixed], resolver)
         sig_entry = next(b for b in breakdown if b[0] == "factory_sig")
         assert sig_entry[1] == pytest.approx(0.5)  # 1/2
+
+
+class TestFactorySignatureMatch:
+    """Paranoid-QA R2 CRITICAL #5 regression.
+
+    The hard gate rejecting profiles with zero signature-role matches
+    MUST key off an integer count, not an exact-float comparison. The
+    dataclass ensures the count is always available independent of
+    the derived score.
+    """
+
+    def test_empty_signature_returns_zero_matched_count(self) -> None:
+        """Defensive — MixerKBProfile rejects empty signatures at
+        build time, but the matcher still handles them safely."""
+        resolver = MixerControlRoleResolver()
+        hw = HardwareContext(driver_family="hda", codec_id="14F1:5045")
+        result = _match_factory_signature({}, [], resolver, hw)
+        assert isinstance(result, FactorySignatureMatch)
+        assert result.roles_matched == 0
+        assert result.roles_total == 0
+        assert result.score == 0.0
+
+    def test_full_match_returns_matched_equals_total(self) -> None:
+        profile = _pilot_profile()
+        hw = HardwareContext(driver_family="hda", codec_id="14F1:5045")
+        resolver = MixerControlRoleResolver()
+        # Capture: 40/80 = 0.5 frac (inside [0.3, 0.6]) → matches.
+        # Internal Mic Boost: raw=0 (exact match for [0, 0]) → matches.
+        factory_bad = _card_with_controls(
+            (
+                _control("Capture", current_raw=40, max_raw=80),
+                _control("Internal Mic Boost", current_raw=0, max_raw=3),
+            ),
+        )
+        result = _match_factory_signature(
+            profile.factory_signature,
+            [factory_bad],
+            resolver,
+            hw,
+        )
+        assert result.roles_matched == result.roles_total
+        assert result.roles_total == 2
+        assert result.score == pytest.approx(1.0)
+
+    def test_zero_match_returns_matched_zero_but_total_positive(self) -> None:
+        """The critical invariant: ``roles_matched == 0`` even when
+        the signature declares roles. The hard gate keys off this
+        integer comparison, not the derived float score."""
+        profile = _pilot_profile()
+        hw = HardwareContext(driver_family="hda", codec_id="14F1:5045")
+        resolver = MixerControlRoleResolver()
+        # Healthy readings — no signature role matches the
+        # factory-bad regime.
+        healthy = _card_with_controls(
+            (
+                _control("Capture", current_raw=60, max_raw=80),
+                _control("Internal Mic Boost", current_raw=2, max_raw=3),
+            ),
+        )
+        result = _match_factory_signature(
+            profile.factory_signature,
+            [healthy],
+            resolver,
+            hw,
+        )
+        assert result.roles_matched == 0
+        assert result.roles_total == 2
+        assert result.score == 0.0
+
+    def test_hard_gate_rejects_profile_on_zero_role_match(self) -> None:
+        """End-to-end: score_profile returns 0.0 when zero signature
+        roles match, regardless of how well codec / driver / system
+        fields scored. Uses the integer count as the gate, so a
+        future "partial credit" scoring change cannot re-introduce a
+        near-zero float that slips past the gate."""
+        profile = _pilot_profile()
+        # Every scoreable field matches — only the factory_sig fails.
+        hw = HardwareContext(
+            driver_family="hda",
+            codec_id="14F1:5045",
+            system_vendor="Sony Group Corporation",
+            system_product="VJFE69F11X",
+            audio_stack="pipewire",
+            kernel="6.8",
+        )
+        resolver = MixerControlRoleResolver()
+        healthy = _card_with_controls(
+            (
+                _control("Capture", current_raw=60, max_raw=80),
+                _control("Internal Mic Boost", current_raw=2, max_raw=3),
+            ),
+        )
+        score, breakdown = score_profile(profile, hw, [healthy], resolver)
+        assert score == 0.0
+        sig_entry = next(b for b in breakdown if b[0] == "factory_sig")
+        assert sig_entry[1] == 0.0
 
     def test_codec_glob_wildcard(self) -> None:
         # fnmatch handles *, ?, [seq] — verify glob with wildcard.

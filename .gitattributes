@@ -1,0 +1,66 @@
+# Default: normalize text files to LF in the repository;
+# Git checks out with the platform-native EOL on Windows by default
+# unless a file-specific rule pins it (below).
+* text=auto
+
+# --------------------------------------------------------------------
+# Linux-only shipped assets — MUST use LF, no platform translation.
+# CRLF in these files breaks:
+#   * POSIX `#!/bin/sh` shebangs (kernel refuses the interpreter)
+#   * systemd unit parsing (options silently ignored)
+#   * udev rule parsing (entire rule skipped)
+# These ship inside wheels and get installed onto real Linux systems,
+# so a Windows checkout cloning with autocrlf=true would corrupt them
+# for everyone who builds a wheel from that checkout.
+# --------------------------------------------------------------------
+
+packaging/systemd/*.service          text eol=lf
+packaging/systemd/audio-runtime-pm-setup text eol=lf
+packaging/udev/*.rules               text eol=lf
+packaging/udev/sovyx-audio-power-setone  text eol=lf
+
+# Generic shell-script / POSIX helper safety net
+*.sh         text eol=lf
+*.service    text eol=lf
+*.rules      text eol=lf
+*.socket     text eol=lf
+*.timer      text eol=lf
+*.mount      text eol=lf
+*.path       text eol=lf
+
+# Python / YAML / TOML — LF is portable and matches tooling expectations
+*.py   text eol=lf
+*.pyi  text eol=lf
+*.yaml text eol=lf
+*.yml  text eol=lf
+*.toml text eol=lf
+*.md   text eol=lf
+*.cfg  text eol=lf
+*.ini  text eol=lf
+*.txt  text eol=lf
+*.json text eol=lf
+
+# Windows-specific artifacts keep CRLF
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+*.ps1  text eol=crlf
+
+# Binary / generated artifacts — never translate
+*.onnx  binary
+*.bin   binary
+*.pt    binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.wav   binary
+*.mp3   binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.otf   binary
+*.gz    binary
+*.tar   binary
+*.zip   binary
+*.pdf   binary
