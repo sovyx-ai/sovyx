@@ -307,6 +307,150 @@ async def _log_linux_driver_watchdog_scan(
     )
 
 
+# Extracts the two identity pieces we can read back from a composed
+# macOS endpoint fingerprint:
+#   {macos-usb-<uid>-input}       → device_uid = <uid>
+#   {macos-builtin-<uid>-input}   → device_uid = <uid>
+#   {macos-bluetooth-<uid>-duplex}→ device_uid = <uid>
+# The transport slot can be anything (including ``unknown``); the
+# identity slot is captured as ``[^-]+`` because we sanitise hyphens
+# out of UIDs at fingerprint-compose time.
+_MACOS_FP_DEVICE_RE = re.compile(
+    r"^\{macos-(?P<transport>[A-Za-z0-9_]+)-(?P<uid>[A-Za-z0-9_.+]+)-",
+    re.IGNORECASE,
+)
+
+
+def _extract_macos_watchdog_hints(
+    *,
+    device_name: str,
+    endpoint_guid: str,
+) -> tuple[str | None, str | None]:
+    """Extract ``(device_uid, device_name)`` hints for macOS scan
+    correlation.
+
+    Used on macOS to tie ``log show`` distress events to the device
+    the cascade is about to probe. Hints are best-effort:
+
+    * ``device_uid`` — back-parsed from the composed endpoint GUID.
+      The fingerprint format is internally owned by
+      :mod:`sovyx.voice.health._fingerprint_macos`; a shape change
+      there must keep this regex in sync (tests pin the expected
+      forms).
+    * ``device_name`` — passed through verbatim from the caller. The
+      PortAudio / CoreAudio name is what ``log show`` usually carries
+      in ``name=…`` hints.
+
+    We intentionally don't try to derive USB VID:PID on macOS: the
+    fingerprint doesn't carry it, and matching substrings against
+    VID:PID-style hints in log output has a much worse
+    precision/recall tradeoff than matching against the deviceUID or
+    human name.
+    """
+    device_uid: str | None = None
+    match = _MACOS_FP_DEVICE_RE.match(endpoint_guid)
+    if match is not None:
+        uid = match.group("uid").strip()
+        if uid:
+            device_uid = uid
+
+    stripped_name = device_name.strip() or None
+    return device_uid, stripped_name
+
+
+async def _log_macos_driver_watchdog_scan(
+    *,
+    device_name: str,
+    endpoint_guid: str,
+    lookback_hours: int,
+    timeout_s: float,
+) -> None:
+    """Detection-tier scan of ``log show`` for coreaudiod distress.
+
+    Peer of :func:`_log_linux_driver_watchdog_scan`. Same four-state
+    log surface — *unavailable*, *clean*, *events-unrelated*,
+    *events-correlated* — keyed off a macOS scan. No behaviour
+    change: macOS has no user-space "safer mode" to fall back to, so
+    the signal is pure observability for post-incident triage.
+
+    Exceptions from the scan are logged at DEBUG and swallowed so
+    boot never blocks on the best-effort diagnostic.
+    """
+    from sovyx.voice.health._driver_watchdog_macos import (
+        scan_recent_macos_driver_watchdog_events,
+    )
+
+    try:
+        scan = await scan_recent_macos_driver_watchdog_events(
+            lookback_hours=lookback_hours,
+            timeout_s=timeout_s,
+        )
+    except Exception:  # noqa: BLE001 — scan is best-effort, never block boot
+        logger.debug(
+            "voice_driver_watchdog_macos_scan_raised",
+            exc_info=True,
+        )
+        return
+
+    if not scan.scan_attempted or scan.scan_failed:
+        logger.debug(
+            "voice_driver_watchdog_macos_unavailable",
+            endpoint=endpoint_guid,
+            attempted=scan.scan_attempted,
+            failed=scan.scan_failed,
+        )
+        return
+
+    if not scan.any_events:
+        logger.debug(
+            "voice_driver_watchdog_macos_clean",
+            endpoint=endpoint_guid,
+            lookback_hours=lookback_hours,
+        )
+        return
+
+    device_uid, hinted_name = _extract_macos_watchdog_hints(
+        device_name=device_name,
+        endpoint_guid=endpoint_guid,
+    )
+    correlated = scan.matches_device(
+        device_uid=device_uid,
+        device_name=hinted_name,
+    )
+
+    severities = sorted({event.severity for event in scan.events})
+    pattern_names = sorted({event.pattern_name for event in scan.events})
+
+    if not correlated:
+        logger.info(
+            "voice_driver_watchdog_macos_events_unrelated",
+            endpoint=endpoint_guid,
+            event_count=len(scan.events),
+            severities=severities,
+            patterns=pattern_names,
+        )
+        return
+
+    logger.warning(
+        "voice_driver_watchdog_macos_events_correlated",
+        endpoint=endpoint_guid,
+        event_count=len(scan.events),
+        severities=severities,
+        patterns=pattern_names,
+        device_uid=device_uid,
+        device_name=hinted_name,
+        remediation=(
+            "log show surfaced coreaudiod distress events correlated "
+            "to this endpoint within the lookback window. Inspect the "
+            "pattern names (hal_io_engine_error, aggregate_device_"
+            "disconnected, coreaudiod_watchdog_reset, etc.) and "
+            "consider replugging the device or restarting coreaudiod "
+            "(`sudo killall coreaudiod`) before further debugging "
+            "cascade outcomes."
+        ),
+    )
+
+
 def derive_endpoint_guid(
     resolved: DeviceEntry,
     *,
@@ -361,6 +505,15 @@ def derive_endpoint_guid(
         linux_fp = compute_linux_endpoint_fingerprint(resolved)
         if linux_fp is not None:
             return linux_fp
+
+    if plat == "darwin":
+        from sovyx.voice.health._fingerprint_macos import (  # noqa: PLC0415 — lazy-Darwin
+            compute_macos_endpoint_fingerprint,
+        )
+
+        macos_fp = compute_macos_endpoint_fingerprint(resolved)
+        if macos_fp is not None:
+            return macos_fp
 
     hasher = hashlib.sha256()
     hasher.update(resolved.canonical_name.encode("utf-8"))
@@ -496,6 +649,19 @@ async def run_boot_cascade(
             timeout_s=tuning.driver_watchdog_scan_timeout_s,
         )
 
+    # macOS detection-tier scan — symmetric to the Linux branch
+    # above. No behaviour change, only observability: ``log show``
+    # surfaces coreaudiod distress (HAL engine error, aggregate
+    # disconnect, watchdog timeout) and the helper emits correlated /
+    # unrelated / clean log records the dashboard can render.
+    if plat == "darwin":
+        await _log_macos_driver_watchdog_scan(
+            device_name=resolved.name,
+            endpoint_guid=endpoint_guid,
+            lookback_hours=tuning.driver_watchdog_lookback_hours,
+            timeout_s=tuning.driver_watchdog_scan_timeout_s,
+        )
+
     try:
         result = await run_cascade(
             endpoint_guid=endpoint_guid,
@@ -624,6 +790,15 @@ async def run_boot_cascade_for_candidates(
     if plat == "linux":
         await _log_linux_driver_watchdog_scan(
             alsa_name=primary.canonical_name,
+            endpoint_guid=primary.endpoint_guid,
+            lookback_hours=tuning.driver_watchdog_lookback_hours,
+            timeout_s=tuning.driver_watchdog_scan_timeout_s,
+        )
+
+    # macOS detection-tier scan, same candidate-primary scoping.
+    if plat == "darwin":
+        await _log_macos_driver_watchdog_scan(
+            device_name=primary.friendly_name,
             endpoint_guid=primary.endpoint_guid,
             lookback_hours=tuning.driver_watchdog_lookback_hours,
             timeout_s=tuning.driver_watchdog_scan_timeout_s,
