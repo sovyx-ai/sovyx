@@ -553,20 +553,54 @@ class TestBootstrapOllamaAutoDetect:
         self._verified = False  # type: ignore[attr-defined]
         return False
 
-    @staticmethod
-    def _remove_cloud_keys() -> None:
-        for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"):
-            os.environ.pop(key, None)
+    # Every cloud-LLM API-key env var the bootstrap auto-detect loop
+    # checks (src/sovyx/engine/bootstrap.py:439-482). Must cover all of
+    # them — a single leftover key on the dev host makes ``cloud_providers``
+    # non-empty and bypasses the Ollama auto-detect branch entirely,
+    # silently skipping the path the test exercises.
+    _CLOUD_LLM_ENV_KEYS: tuple[str, ...] = (
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "GOOGLE_API_KEY",
+        "XGROK_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "MISTRAL_API_KEY",
+        "GROQ_API_KEY",
+        "TOGETHER_API_KEY",
+        "FIREWORKS_API_KEY",
+    )
+
+    @classmethod
+    def _sanitise_cloud_env(cls, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Remove every cloud-LLM key from the env via monkeypatch.
+
+        Uses ``monkeypatch.delenv`` so the removals unwind on test
+        teardown — the previous staticmethod ``_remove_cloud_keys``
+        mutated ``os.environ`` directly and leaked its deletions into
+        every subsequent test in the session.
+        """
+        for key in cls._CLOUD_LLM_ENV_KEYS:
+            monkeypatch.delenv(key, raising=False)
 
     @pytest.mark.asyncio(loop_scope="function")
     @pytest.mark.timeout(15)
-    async def test_auto_detect_ollama_no_cloud_keys(self, tmp_path: Path) -> None:
+    async def test_auto_detect_ollama_no_cloud_keys(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """When no cloud keys, bootstrap auto-detects Ollama."""
         from unittest.mock import AsyncMock
 
         from sovyx.llm.providers.ollama import OllamaProvider
 
-        config = EngineConfig(database=DatabaseConfig(data_dir=tmp_path))
+        self._sanitise_cloud_env(monkeypatch)
+        # EngineConfig.data_dir defaults to ``~/.sovyx``; bootstrap reads
+        # ``<data_dir>/channel.env`` + ``<data_dir>/secrets.env`` and
+        # re-seeds ``os.environ`` from them (bootstrap.py:118-127). Point
+        # data_dir at tmp_path too so the env-sanitisation above holds
+        # through the whole bootstrap path.
+        config = EngineConfig(data_dir=tmp_path, database=DatabaseConfig(data_dir=tmp_path))
         mind = MindConfig(name="Test")
 
         with (
@@ -578,7 +612,6 @@ class TestBootstrapOllamaAutoDetect:
                 return_value=["llama3.1:latest", "mistral:7b"],
             ),
         ):
-            self._remove_cloud_keys()
             registry = await bootstrap(config, [mind])
 
         assert mind.llm.default_provider == "ollama"
@@ -613,15 +646,19 @@ class TestBootstrapOllamaAutoDetect:
 
     @pytest.mark.asyncio(loop_scope="function")
     @pytest.mark.timeout(15)
-    async def test_ollama_not_reachable(self, tmp_path: Path) -> None:
+    async def test_ollama_not_reachable(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """Ollama not running → warning logged, no crash."""
         from sovyx.llm.providers.ollama import OllamaProvider
 
-        config = EngineConfig(database=DatabaseConfig(data_dir=tmp_path))
+        self._sanitise_cloud_env(monkeypatch)
+        config = EngineConfig(data_dir=tmp_path, database=DatabaseConfig(data_dir=tmp_path))
         mind = MindConfig(name="Test")
 
         with patch.object(OllamaProvider, "ping", self._fake_ping_fail):
-            self._remove_cloud_keys()
             registry = await bootstrap(config, [mind])
 
         assert mind.llm.default_model == ""
@@ -631,13 +668,18 @@ class TestBootstrapOllamaAutoDetect:
 
     @pytest.mark.asyncio(loop_scope="function")
     @pytest.mark.timeout(15)
-    async def test_ollama_running_no_models(self, tmp_path: Path) -> None:
+    async def test_ollama_running_no_models(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """Ollama reachable but no models → warning, no crash."""
         from unittest.mock import AsyncMock
 
         from sovyx.llm.providers.ollama import OllamaProvider
 
-        config = EngineConfig(database=DatabaseConfig(data_dir=tmp_path))
+        self._sanitise_cloud_env(monkeypatch)
+        config = EngineConfig(data_dir=tmp_path, database=DatabaseConfig(data_dir=tmp_path))
         mind = MindConfig(name="Test")
 
         with (
@@ -649,7 +691,6 @@ class TestBootstrapOllamaAutoDetect:
                 return_value=[],
             ),
         ):
-            self._remove_cloud_keys()
             registry = await bootstrap(config, [mind])
 
         assert mind.llm.default_model == ""
@@ -681,13 +722,18 @@ class TestBootstrapOllamaAutoDetect:
 
     @pytest.mark.asyncio(loop_scope="function")
     @pytest.mark.timeout(15)
-    async def test_persist_auto_detected_config(self, tmp_path: Path) -> None:
+    async def test_persist_auto_detected_config(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """Auto-detected config is persisted to mind.yaml."""
         from unittest.mock import AsyncMock
 
         from sovyx.llm.providers.ollama import OllamaProvider
 
-        config = EngineConfig(database=DatabaseConfig(data_dir=tmp_path))
+        self._sanitise_cloud_env(monkeypatch)
+        config = EngineConfig(data_dir=tmp_path, database=DatabaseConfig(data_dir=tmp_path))
         mind = MindConfig(name="Test")
 
         with (
@@ -699,7 +745,6 @@ class TestBootstrapOllamaAutoDetect:
                 return_value=["mistral:latest"],
             ),
         ):
-            self._remove_cloud_keys()
             registry = await bootstrap(config, [mind])
 
         # Check persisted YAML
@@ -719,8 +764,21 @@ class TestBootstrapOllamaAutoDetect:
 class TestChannelEnvLoading:
     """Tests for channel.env loading in bootstrap."""
 
-    def test_loads_sovyx_prefixed_vars(self, tmp_path: Path) -> None:
+    def test_loads_sovyx_prefixed_vars(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         """channel.env with SOVYX_ prefix vars are loaded."""
+        # The loader's ``k not in os.environ`` guard (tested in
+        # ``test_does_not_overwrite_existing_env``) would see a host-set
+        # ``SOVYX_TELEGRAM_TOKEN`` — typical on a dev machine that runs
+        # the real daemon — and skip the write, leaving the real token
+        # in place where the assert would compare it against ``test123``.
+        # ``monkeypatch.delenv`` isolates the pre-test state and restores
+        # on teardown so the real token survives untouched.
+        monkeypatch.delenv("SOVYX_TELEGRAM_TOKEN", raising=False)
+
         env_file = tmp_path / "channel.env"
         env_file.write_text("SOVYX_TELEGRAM_TOKEN=test123\n")
 
