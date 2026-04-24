@@ -423,31 +423,23 @@ class TestResolveXdgRuntimeDir:
     ``value.strip()`` check passes every other test silently.
     """
 
-    def test_override_wins_over_env(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_override_wins_over_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
         resolved = _resolve_xdg_runtime_dir(tmp_path)
         assert resolved == tmp_path
 
-    def test_env_resolved_when_no_override(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_env_resolved_when_no_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from pathlib import Path as _Path
 
         monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
         resolved = _resolve_xdg_runtime_dir(None)
         assert resolved == _Path("/run/user/1000")
 
-    def test_unset_env_returns_none(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_unset_env_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
         assert _resolve_xdg_runtime_dir(None) is None
 
-    def test_empty_string_env_returns_none(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_empty_string_env_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("XDG_RUNTIME_DIR", "")
         assert _resolve_xdg_runtime_dir(None) is None
 

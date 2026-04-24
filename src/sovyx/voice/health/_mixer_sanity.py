@@ -1329,9 +1329,7 @@ class _SanityOrchestrator:
             c.kb_match.profile.recommended_preset,
             timeout_s=c.tuning.linux_mixer_subprocess_timeout_s,
         )
-        if c.half_heal_wal_path is not None and (
-            pre_apply_controls or pre_apply_enum_controls
-        ):
+        if c.half_heal_wal_path is not None and (pre_apply_controls or pre_apply_enum_controls):
             wal_written = _write_half_heal_wal(
                 card_index=target_card.card_index,
                 reverted_controls=pre_apply_controls,
@@ -1450,9 +1448,7 @@ class _SanityOrchestrator:
 
         auto_mute_snapshots = role_mapping.get(MixerControlRole.AUTO_MUTE, ())
         control_name = (
-            auto_mute_snapshots[0].name
-            if auto_mute_snapshots
-            else _AUTO_MUTE_MODE_CONTROL_NAME
+            auto_mute_snapshots[0].name if auto_mute_snapshots else _AUTO_MUTE_MODE_CONTROL_NAME
         )
         try:
             current_label = await asyncio.to_thread(

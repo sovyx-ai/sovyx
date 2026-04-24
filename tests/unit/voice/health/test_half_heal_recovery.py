@@ -270,9 +270,7 @@ class TestRecoverIfPresent:
         restore_fn.assert_not_awaited()
 
     @pytest.mark.asyncio()
-    async def test_timeout_cancels_long_restore_and_clears_wal(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_timeout_cancels_long_restore_and_clears_wal(self, tmp_path: Path) -> None:
         """Paranoid-QA R3 HIGH #1 regression.
 
         A crafted WAL can starve the boot cascade by making
@@ -373,9 +371,7 @@ class TestLoadWalSizeCap:
             "Capture=value",
         ],
     )
-    def test_forbidden_chars_in_control_name_refused(
-        self, tmp_path: Path, bad_name: str
-    ) -> None:
+    def test_forbidden_chars_in_control_name_refused(self, tmp_path: Path, bad_name: str) -> None:
         path = tmp_path / "wal.json"
         path.write_text(
             json.dumps(
@@ -497,9 +493,7 @@ class TestEnumControlsPersistence:
                     "schema_version": 1,
                     "card_index": 0,
                     "reverted_controls": [],
-                    "reverted_enum_controls": [
-                        ["Auto-Mute Mode", "Enabled',iface=CARD"]
-                    ],
+                    "reverted_enum_controls": [["Auto-Mute Mode", "Enabled',iface=CARD"]],
                 }
             ),
             encoding="utf-8",

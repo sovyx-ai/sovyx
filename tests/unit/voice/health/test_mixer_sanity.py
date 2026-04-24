@@ -1038,9 +1038,7 @@ class TestBuildMixerSanitySetupWalWiring:
     """
 
     @pytest.mark.asyncio()
-    async def test_wal_path_propagates_into_setup(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_wal_path_propagates_into_setup(self, tmp_path: Path) -> None:
         from sovyx.voice.health._mixer_sanity import build_mixer_sanity_setup
         from sovyx.voice.health.probe import probe as _probe_fn
 
@@ -1065,7 +1063,8 @@ class TestBuildMixerSanitySetupWalWiring:
 
     @pytest.mark.asyncio()
     async def test_wal_path_defaults_to_none_when_not_provided(
-        self, tmp_path: Path  # noqa: ARG002
+        self,
+        tmp_path: Path,  # noqa: ARG002
     ) -> None:
         from sovyx.voice.health._mixer_sanity import build_mixer_sanity_setup
         from sovyx.voice.health.probe import probe as _probe_fn
@@ -1094,12 +1093,7 @@ class TestBuildMixerSanitySetupWalWiring:
 
         repo_root = _Path(__file__).resolve().parents[4]
         src = (
-            repo_root
-            / "src"
-            / "sovyx"
-            / "voice"
-            / "health"
-            / "_factory_integration.py"
+            repo_root / "src" / "sovyx" / "voice" / "health" / "_factory_integration.py"
         ).read_text(encoding="utf-8")
         assert "half_heal_wal_path=default_wal_path(data_dir)" in src, (
             "factory_integration.py no longer passes "
@@ -1222,9 +1216,7 @@ class TestRollbackFailureSurfacing:
         restore.assert_awaited()
 
     @pytest.mark.asyncio()
-    async def test_restore_raise_preserves_wal_for_next_boot(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_restore_raise_preserves_wal_for_next_boot(self, tmp_path: Path) -> None:
         """If restore raised, the WAL MUST remain on disk so the
         next cascade's ``recover_if_present`` can retry via a fresh
         ``restore_fn``. Without this, a stuck mixer never self-heals."""

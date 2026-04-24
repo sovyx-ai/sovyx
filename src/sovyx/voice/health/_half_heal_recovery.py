@@ -440,10 +440,7 @@ def load_wal(path: Path) -> HalfHealWal | None:
                 name = str(entry[0])
                 label = str(entry[1])
                 for field_name, field_value in (("name", name), ("label", label)):
-                    if (
-                        len(field_value) == 0
-                        or len(field_value) > _WAL_MAX_CONTROL_NAME_LEN
-                    ):
+                    if len(field_value) == 0 or len(field_value) > _WAL_MAX_CONTROL_NAME_LEN:
                         logger.warning(
                             "mixer_half_heal_wal_enum_field_length_invalid",
                             path=str(path),
@@ -452,9 +449,7 @@ def load_wal(path: Path) -> HalfHealWal | None:
                             limit=_WAL_MAX_CONTROL_NAME_LEN,
                         )
                         return None
-                    if any(
-                        c in _WAL_CONTROL_NAME_FORBIDDEN_CHARS for c in field_value
-                    ):
+                    if any(c in _WAL_CONTROL_NAME_FORBIDDEN_CHARS for c in field_value):
                         logger.warning(
                             "mixer_half_heal_wal_enum_field_forbidden_chars",
                             path=str(path),
