@@ -215,8 +215,19 @@ class DatabasePool:
                 loadable = getattr(sqlite_vec, "loadable_path", None)
                 if loadable is not None:
                     path = loadable()
-                    # loadable_path() may omit extension; sqlite adds it
-                    if path and (os.path.exists(path) or os.path.exists(f"{path}.so")):
+                    # ``loadable_path()`` returns the extensionless base
+                    # (``<site-packages>/sqlite_vec/vec0``); sqlite appends
+                    # the right suffix for the platform at ``load_extension``
+                    # time. We must accept all three suffix conventions here
+                    # so the existence check matches on every OS:
+                    #   * Linux   → vec0.so
+                    #   * macOS   → vec0.dylib
+                    #   * Windows → vec0.dll
+                    # Previously only ``.so`` was tried, so Windows + macOS
+                    # ran the fallback branch and returned None, silently
+                    # disabling sqlite-vec on those platforms.
+                    suffixes = ("", ".so", ".dylib", ".dll")
+                    if path and any(os.path.exists(f"{path}{s}") for s in suffixes):
                         return str(path)
             except ImportError:
                 pass

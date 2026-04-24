@@ -325,6 +325,50 @@ class TestExtensions:
             result = DatabasePool._find_extension_path("some_ext")
             assert result is None
 
+    def test_find_extension_path_accepts_windows_dll_suffix(self) -> None:
+        """pip's ``loadable_path`` returns an extensionless base — on
+        Windows the real file is ``vec0.dll``. The loader must probe
+        every plausible suffix (``""``, ``.so``, ``.dylib``, ``.dll``)
+        so sqlite-vec works on every platform.
+
+        Regression guard: prior to this test the loader only checked
+        ``""`` and ``.so``, silently disabling sqlite-vec on Windows
+        and macOS.
+        """
+        import sovyx.persistence.pool as pool_module
+
+        fake_mod = MagicMock()
+        fake_mod.loadable_path.return_value = "/fake/sqlite_vec/vec0"
+
+        def exists_only_dll(path: str) -> bool:
+            # Only the ``.dll`` variant exists on disk — mirrors a
+            # fresh Windows install where sqlite_vec ships vec0.dll.
+            return path == "/fake/sqlite_vec/vec0.dll"
+
+        with (
+            patch.object(pool_module.importlib, "import_module", return_value=fake_mod),
+            patch.object(pool_module.os.path, "exists", side_effect=exists_only_dll),
+        ):
+            result = DatabasePool._find_extension_path("vec0")
+        assert result == "/fake/sqlite_vec/vec0"
+
+    def test_find_extension_path_accepts_macos_dylib_suffix(self) -> None:
+        """macOS counterpart of the Windows regression above."""
+        import sovyx.persistence.pool as pool_module
+
+        fake_mod = MagicMock()
+        fake_mod.loadable_path.return_value = "/fake/sqlite_vec/vec0"
+
+        def exists_only_dylib(path: str) -> bool:
+            return path == "/fake/sqlite_vec/vec0.dylib"
+
+        with (
+            patch.object(pool_module.importlib, "import_module", return_value=fake_mod),
+            patch.object(pool_module.os.path, "exists", side_effect=exists_only_dylib),
+        ):
+            result = DatabasePool._find_extension_path("vec0")
+        assert result == "/fake/sqlite_vec/vec0"
+
     async def test_load_extensions_called_per_connection(self, db_path: Path) -> None:
         """_load_extensions called for write + all read connections."""
         load_count = 0
