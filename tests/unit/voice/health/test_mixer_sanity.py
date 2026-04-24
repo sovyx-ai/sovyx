@@ -624,69 +624,60 @@ class TestBudgetExceeded:
     async def test_budget_exceeded_after_validation_passed_preserves_truth(
         self,
     ) -> None:
-        """Paranoid-QA R2 HIGH #10 regression.
+        """Paranoid-QA R2 HIGH #10 regression (rewritten R3 CRIT-4).
 
-        If budget trips during ``_step_persist`` — i.e., after
-        validation ran and set ``validation_passed=True`` — the
-        normalisation path must NOT overwrite the truth with
-        ``False``. The audit record should read
-        ``decision=ROLLED_BACK, validation_passed=True`` so operators
-        can tell "rolled back because budget tripped" from "rolled
-        back because audio sounded wrong".
+        The pre-R3 version of this test mutated tuning mid-persist
+        and asserted the happy-path HEALED outcome — that didn't
+        exercise the R2 HIGH #10 guard at all. This version drives
+        the orchestrator's state machine directly: it seeds a
+        context where validation already passed + an apply snapshot
+        exists + the budget has tripped, then runs one iteration
+        of the state machine and asserts the normalisation
+        preserves ``validation_passed=True``. A breaking diff that
+        reverts the R2 HIGH-10 guard back to unconditional
+        ``validation_passed = False`` fails this test immediately.
         """
-        # Drive the orchestrator past validate into persist, then
-        # force budget to trip during persist.
-        tuning = VoiceTuningConfig()
-        tuning_dict = tuning.model_dump()
-        tuning_dict["linux_mixer_sanity_budget_s"] = 10.0  # generous up to persist
-        generous_tuning = VoiceTuningConfig(**tuning_dict)
+        # Construct a budget that has ALREADY expired by lying
+        # about start_time_s (start in the distant past).
+        tight = VoiceTuningConfig()
+        tight_dict = tight.model_dump()
+        tight_dict["linux_mixer_sanity_budget_s"] = 0.01
+        tight = VoiceTuningConfig(**tight_dict)
 
-        restore = AsyncMock()
+        ctx = mod._OrchestratorContext(
+            endpoint=_endpoint(),
+            hw=_hw(),
+            tuning=tight,
+            start_time_s=__import__("time").monotonic() - 10.0,  # past
+            mixer_probe_fn=lambda: [_factory_attenuated_card()],
+            mixer_apply_fn=AsyncMock(return_value=_apply_snapshot()),
+            mixer_restore_fn=AsyncMock(),
+            kb_lookup=_lookup_with(_pilot_profile()),
+            role_resolver=MixerControlRoleResolver(),
+            validation_probe_fn=_pass_validation,
+            persist_fn=_noop_persist,
+            telemetry=mod._NoopTelemetry(),
+            telemetry_was_provided=False,
+        )
+        # Seed the state a persist-phase entry would have:
+        ctx.apply_snapshot = _apply_snapshot()
+        ctx.validation_passed = True  # R2 HIGH-10 scenario
+        ctx.diagnosis_before = Diagnosis.MIXER_ZEROED
 
-        async def budget_starving_persist(
-            _cards: Sequence[int],  # noqa: ARG001
-            _tuning: VoiceTuningConfig,  # noqa: ARG001
-        ) -> bool:
-            # Simulate "persist ran until the wall-clock budget
-            # expired". We mutate tuning mid-run to trip the budget
-            # check on the NEXT state-machine iteration.
-            import time
+        orchestrator = mod._SanityOrchestrator(ctx)
+        await orchestrator.run()
 
-            # Eat the whole budget in one spin.
-            generous_tuning_dict = generous_tuning.model_dump()
-            generous_tuning_dict["linux_mixer_sanity_budget_s"] = 0.0
-            import contextlib as _ctx
-
-            for attr, value in generous_tuning_dict.items():
-                with _ctx.suppress(AttributeError):
-                    object.__setattr__(generous_tuning, attr, value)
-            time.sleep(0.001)
-            return True
-
-        with patch.object(mod, "sys") as sys_mock:
-            sys_mock.platform = "linux"
-            result = await check_and_maybe_heal(
-                _endpoint(),
-                _hw(),
-                kb_lookup=_lookup_with(_pilot_profile()),
-                role_resolver=MixerControlRoleResolver(),
-                validation_probe_fn=_pass_validation,
-                mixer_probe_fn=lambda: [_factory_attenuated_card()],
-                mixer_apply_fn=AsyncMock(return_value=_apply_snapshot()),
-                mixer_restore_fn=restore,
-                persist_fn=budget_starving_persist,
-                tuning=generous_tuning,
-            )
-        # Since persist step finished successfully and validation
-        # passed, the state reaches HEALED before the budget check
-        # fires on the next iteration. In the hypothetical race
-        # where persist ran long enough to trip budget AFTER a
-        # passing validation, the normalization must preserve the
-        # passed-validation fact. We simulate that by asserting the
-        # observed happy-path state is HEALED (persist completed),
-        # which is strictly stronger than not-lying-about-validation.
-        assert result.decision is MixerSanityDecision.HEALED
-        assert result.validation_passed is True
+        # The budget-branch must:
+        #  (a) surface as ROLLED_BACK (apply committed)
+        #  (b) leave validation_passed=True (R2 HIGH-10 invariant)
+        #  (c) carry the BUDGET_EXCEEDED error token
+        assert ctx.decision is MixerSanityDecision.ROLLED_BACK
+        assert ctx.validation_passed is True, (
+            "budget-exceeded path overwrote validation_passed with "
+            "False even though validation had already set it True "
+            "— R2 HIGH-10 regression"
+        )
+        assert ctx.error_token == "MIXER_SANITY_BUDGET_EXCEEDED"
 
 
 class TestCrossCascadeLock:
@@ -700,31 +691,61 @@ class TestCrossCascadeLock:
 
     @pytest.mark.asyncio()
     async def test_second_cascade_waits_for_first(self) -> None:
-        """A second `check_and_maybe_heal` starts only after the
-        first releases the lock — verified by timestamping the
-        probe calls of each cascade."""
+        """Serialisation proven by a critical-section counter — NOT
+        wall-clock timestamps.
+
+        Paranoid-QA R3 HIGH #11: the earlier version used
+        ``time.monotonic()`` deltas + ``await aio.sleep(0.05)`` to
+        prove c2 started after c1 ended. Wall-clock proofs fail
+        both ways under load — they can pass when the lock is
+        broken (scheduling coincidence) and fail when the lock
+        works (timer resolution jitter). This counter-based
+        version increments when a cascade enters the lock-protected
+        region and asserts the counter NEVER exceeds 1 — catches
+        any overlap regardless of wall-clock noise.
+        """
         import asyncio as aio
 
-        probe_times: list[tuple[str, float]] = []
+        in_critical_section = 0
+        max_observed = 0
+
+        def make_probe() -> object:
+            def _probe() -> Sequence[MixerCardSnapshot]:
+                nonlocal in_critical_section, max_observed
+                in_critical_section += 1
+                max_observed = max(max_observed, in_critical_section)
+                return [_factory_attenuated_card()]
+
+            return _probe
 
         async def slow_validation(
             _endpoint: CandidateEndpoint,  # noqa: ARG001
             _tuning: VoiceTuningConfig,  # noqa: ARG001
         ) -> MixerValidationMetrics:
-            probe_times.append(("validate_start", __import__("time").monotonic()))
+            # Long await INSIDE the critical section — if the lock
+            # is missing, the other cascade will enter its probe
+            # during this sleep and bump the counter above 1.
             await aio.sleep(0.05)
-            probe_times.append(("validate_end", __import__("time").monotonic()))
             return _good_metrics()
 
-        def cascade1_probe() -> Sequence[MixerCardSnapshot]:
-            probe_times.append(("c1_probe", __import__("time").monotonic()))
-            return [_factory_attenuated_card()]
+        async def fast_validation(
+            _endpoint: CandidateEndpoint,  # noqa: ARG001
+            _tuning: VoiceTuningConfig,  # noqa: ARG001
+        ) -> MixerValidationMetrics:
+            return _good_metrics()
 
-        def cascade2_probe() -> Sequence[MixerCardSnapshot]:
-            probe_times.append(("c2_probe", __import__("time").monotonic()))
-            return [_factory_attenuated_card()]
+        async def decrementing_persist(
+            _cards: Sequence[int],  # noqa: ARG001
+            _tuning: VoiceTuningConfig,  # noqa: ARG001
+        ) -> bool:
+            nonlocal in_critical_section
+            in_critical_section -= 1
+            return True
 
-        async def run_c1() -> MixerSanityResult:
+        async def run(
+            probe: object,
+            validation: object,
+        ) -> MixerSanityResult:
             with patch.object(mod, "sys") as sys_mock:
                 sys_mock.platform = "linux"
                 return await check_and_maybe_heal(
@@ -732,41 +753,23 @@ class TestCrossCascadeLock:
                     _hw(),
                     kb_lookup=_lookup_with(_pilot_profile()),
                     role_resolver=MixerControlRoleResolver(),
-                    validation_probe_fn=slow_validation,
-                    mixer_probe_fn=cascade1_probe,
+                    validation_probe_fn=validation,
+                    mixer_probe_fn=probe,
                     mixer_apply_fn=AsyncMock(return_value=_apply_snapshot()),
                     mixer_restore_fn=AsyncMock(),
-                    persist_fn=_noop_persist,
+                    persist_fn=decrementing_persist,
                     tuning=VoiceTuningConfig(),
                 )
 
-        async def run_c2() -> MixerSanityResult:
-            await aio.sleep(0.001)  # let c1 grab the lock first
-            with patch.object(mod, "sys") as sys_mock:
-                sys_mock.platform = "linux"
-                return await check_and_maybe_heal(
-                    _endpoint(),
-                    _hw(),
-                    kb_lookup=_lookup_with(_pilot_profile()),
-                    role_resolver=MixerControlRoleResolver(),
-                    validation_probe_fn=_pass_validation,
-                    mixer_probe_fn=cascade2_probe,
-                    mixer_apply_fn=AsyncMock(return_value=_apply_snapshot()),
-                    mixer_restore_fn=AsyncMock(),
-                    persist_fn=_noop_persist,
-                    tuning=VoiceTuningConfig(),
-                )
-
-        _, _ = await aio.gather(run_c1(), run_c2())
-
-        # c2's probe MUST happen strictly after c1's validate ended
-        # (i.e., c1 released the lock). If the lock were absent, c2's
-        # probe would interleave with c1's validate.
-        c1_validate_end = next(t for name, t in probe_times if name == "validate_end")
-        c2_probe_start = next(t for name, t in probe_times if name == "c2_probe")
-        assert c2_probe_start >= c1_validate_end, (
-            f"c2 probe ran at {c2_probe_start:.4f} before c1 released lock at "
-            f"{c1_validate_end:.4f} — cross-cascade lock is not serialising"
+        await aio.gather(
+            run(make_probe(), slow_validation),
+            run(make_probe(), fast_validation),
+        )
+        # If the lock is broken, both probes fire concurrently and
+        # max_observed hits 2. The lock's job is to keep this at 1.
+        assert max_observed == 1, (
+            f"cross-cascade lock failed to serialise — observed "
+            f"{max_observed} cascades in the critical section at once"
         )
 
 
@@ -1022,6 +1025,153 @@ class TestRollbackIdempotence:
         # already ``True``.
         restore.assert_awaited_once()
         assert ctx.rollback_performed is True
+
+
+class TestBuildMixerSanitySetupWalWiring:
+    """Paranoid-QA R3 HIGH #14 regression.
+
+    ``_factory_integration.run_boot_cascade_for_candidates`` threads
+    ``half_heal_wal_path=default_wal_path(data_dir)`` through
+    ``build_mixer_sanity_setup``. Without this test, silently
+    deleting the kwarg ships production without crash recovery and
+    every existing test still passes.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_wal_path_propagates_into_setup(
+        self, tmp_path: Path
+    ) -> None:
+        from sovyx.voice.health._mixer_sanity import build_mixer_sanity_setup
+        from sovyx.voice.health.probe import probe as _probe_fn
+
+        wal_path = tmp_path / "voice_health" / "mixer_sanity_half_heal.json"
+        # Inject hw override so this test works on non-Linux too.
+        setup = await build_mixer_sanity_setup(
+            probe_fn=_probe_fn,
+            hw=_hw(),
+            kb_lookup=_lookup_with(None),
+            role_resolver=MixerControlRoleResolver(),
+            half_heal_wal_path=wal_path,
+        )
+        # On non-Linux, build_mixer_sanity_setup returns None. Skip
+        # the assertion there — the point of this test is the Linux
+        # production wiring.
+        if setup is None:
+            pytest.skip(
+                "build_mixer_sanity_setup returned None "
+                "(non-Linux or unknown driver family); nothing to assert"
+            )
+        assert setup.half_heal_wal_path == wal_path
+
+    @pytest.mark.asyncio()
+    async def test_wal_path_defaults_to_none_when_not_provided(
+        self, tmp_path: Path  # noqa: ARG002
+    ) -> None:
+        from sovyx.voice.health._mixer_sanity import build_mixer_sanity_setup
+        from sovyx.voice.health.probe import probe as _probe_fn
+
+        setup = await build_mixer_sanity_setup(
+            probe_fn=_probe_fn,
+            hw=_hw(),
+            kb_lookup=_lookup_with(None),
+            role_resolver=MixerControlRoleResolver(),
+        )
+        if setup is None:
+            pytest.skip(
+                "build_mixer_sanity_setup returned None "
+                "(non-Linux or unknown driver family); nothing to assert"
+            )
+        assert setup.half_heal_wal_path is None
+
+    def test_factory_integration_invokes_with_wal_path(self) -> None:
+        """Invariant check via source grep: the production call site
+        in ``_factory_integration.py`` MUST pass
+        ``half_heal_wal_path=default_wal_path(data_dir)``. A silent
+        deletion of the kwarg would ship production without crash
+        recovery — this test is the backstop.
+        """
+        from pathlib import Path as _Path
+
+        repo_root = _Path(__file__).resolve().parents[4]
+        src = (
+            repo_root
+            / "src"
+            / "sovyx"
+            / "voice"
+            / "health"
+            / "_factory_integration.py"
+        ).read_text(encoding="utf-8")
+        assert "half_heal_wal_path=default_wal_path(data_dir)" in src, (
+            "factory_integration.py no longer passes "
+            "half_heal_wal_path=default_wal_path(data_dir) to "
+            "build_mixer_sanity_setup — production has lost crash "
+            "recovery; R3 HIGH #14 regression"
+        )
+
+
+class TestValidationMetricsLogExplicitFields:
+    """Paranoid-QA R3 HIGH #12 regression.
+
+    R2 HIGH #6 replaced ``logger.info(..., metrics=metrics)`` with
+    per-field kwargs so a future field addition (raw buffer sample,
+    device name, etc.) wouldn't silently leak through repr. That
+    fix had no test — a refactor back to the dataclass-repr form
+    would pass every existing test. This test patches the logger
+    and asserts the expected fields appear individually.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_validation_gates_failed_log_has_explicit_fields(
+        self,
+    ) -> None:
+        captured_calls: list[tuple[str, dict[str, object]]] = []
+
+        def fake_info(event: str, **kwargs: object) -> None:
+            captured_calls.append((event, dict(kwargs)))
+
+        with patch.object(mod, "sys") as sys_mock:
+            sys_mock.platform = "linux"
+            with patch.object(mod.logger, "info", side_effect=fake_info):
+                await check_and_maybe_heal(
+                    _endpoint(),
+                    _hw(),
+                    kb_lookup=_lookup_with(_pilot_profile()),
+                    role_resolver=MixerControlRoleResolver(),
+                    validation_probe_fn=_fail_validation,
+                    mixer_probe_fn=lambda: [_factory_attenuated_card()],
+                    mixer_apply_fn=AsyncMock(return_value=_apply_snapshot()),
+                    mixer_restore_fn=AsyncMock(),
+                    persist_fn=_noop_persist,
+                    tuning=VoiceTuningConfig(),
+                )
+        # Find the validation-failed log event.
+        failed_event = next(
+            (kw for ev, kw in captured_calls if ev == "mixer_sanity_validation_gates_failed"),
+            None,
+        )
+        assert failed_event is not None, (
+            "validation-gates-failed log event did not fire — the test "
+            "premise is broken (did validation actually fail?)"
+        )
+        # Must NOT carry a dataclass blob named ``metrics``.
+        assert "metrics" not in failed_event, (
+            "log event carries ``metrics=<dataclass>`` — R2 HIGH #6 "
+            "invariant broken, please pass explicit per-field kwargs"
+        )
+        # Must carry every explicit field we care about.
+        for expected in (
+            "rms_dbfs",
+            "peak_dbfs",
+            "snr_db_vocal_band",
+            "silero_max_prob",
+            "silero_mean_prob",
+            "wake_word_stage2_prob",
+            "measurement_duration_ms",
+        ):
+            assert expected in failed_event, (
+                f"explicit field {expected!r} missing from "
+                f"mixer_sanity_validation_gates_failed kwargs"
+            )
 
 
 class TestRollbackFailureSurfacing:

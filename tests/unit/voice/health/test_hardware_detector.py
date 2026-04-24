@@ -24,6 +24,7 @@ from sovyx.voice.health._hardware_detector import (
     _parse_codec_vendor_id,
     _read_distro,
     _read_dmi_field,
+    _resolve_xdg_runtime_dir,
 )
 
 if TYPE_CHECKING:
@@ -410,3 +411,56 @@ class TestDetectHardwareContext:
         hw = await detect_hardware_context()
         assert isinstance(hw, HardwareContext)
         assert hw.driver_family in {"hda", "sof", "usb-audio", "bt", "unknown"}
+
+
+class TestResolveXdgRuntimeDir:
+    """Paranoid-QA R3 HIGH #13 (verifies R2 LOW-4 guard).
+
+    ``_resolve_xdg_runtime_dir`` treats whitespace-only
+    ``XDG_RUNTIME_DIR`` as unset — a sysadmin who exported
+    ``XDG_RUNTIME_DIR="   "`` shouldn't drive ``Path("   ")`` into
+    the pipewire-socket probe. Without these tests, deleting the
+    ``value.strip()`` check passes every other test silently.
+    """
+
+    def test_override_wins_over_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+        resolved = _resolve_xdg_runtime_dir(tmp_path)
+        assert resolved == tmp_path
+
+    def test_env_resolved_when_no_override(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from pathlib import Path as _Path
+
+        monkeypatch.setenv("XDG_RUNTIME_DIR", "/run/user/1000")
+        resolved = _resolve_xdg_runtime_dir(None)
+        assert resolved == _Path("/run/user/1000")
+
+    def test_unset_env_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+        assert _resolve_xdg_runtime_dir(None) is None
+
+    def test_empty_string_env_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("XDG_RUNTIME_DIR", "")
+        assert _resolve_xdg_runtime_dir(None) is None
+
+    @pytest.mark.parametrize(
+        "whitespace_value",
+        ["   ", "\t", "\n", "\r\n", " \t\n "],
+    )
+    def test_whitespace_only_env_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch, whitespace_value: str
+    ) -> None:
+        """R2 LOW-4 guard: whitespace-only values are unset. Without
+        this, ``Path("   ")`` would be constructed and the pipewire
+        socket probe would fail silently instead of gracefully
+        falling back to the "no XDG" path."""
+        monkeypatch.setenv("XDG_RUNTIME_DIR", whitespace_value)
+        assert _resolve_xdg_runtime_dir(None) is None
