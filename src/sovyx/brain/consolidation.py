@@ -213,8 +213,15 @@ class ConsolidationCycle:
         batch: list[tuple[ConceptId, float, float]] = []
 
         for concept in concepts:
-            # Timeout guard — flush what we have and stop
-            if time.monotonic() > deadline:
+            # Timeout guard — flush what we have and stop.
+            # ``>=`` (not strict ``>``) so ``_SCORE_TIMEOUT_S=0`` means
+            # "process nothing, return immediately" — matches caller
+            # intuition and the test fixture. With strict ``>`` a
+            # 0-timeout degenerated on Windows' coarse monotonic clock
+            # (``now == deadline`` within the same ~15.6 ms tick, so
+            # the guard never tripped and the entire concept list was
+            # processed).
+            if time.monotonic() >= deadline:
                 logger.warning(
                     "score_recalculation_timeout",
                     mind_id=str(mind_id),
