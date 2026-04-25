@@ -208,6 +208,145 @@ class TestValidateConfig:
             validate_config(VoicePipelineConfig(confirmation_tone="chime"))
 
 
+class TestValidateConfigUpperBoundsHardening:
+    """Mission band-aids #11/#37/#38 — upper-bound + consistency checks.
+
+    Pre-hardening only lower bounds were enforced. Pathological values
+    like ``max_recording_frames=99999`` (5+ minutes per turn) or
+    ``filler_delay_ms=300000`` (5 minutes of dead air) silently passed
+    and produced mysterious user-facing failures at runtime.
+    """
+
+    # mind_id sanity ──────────────────────────────────────────────────
+
+    def test_empty_mind_id_rejected(self) -> None:
+        with pytest.raises(ValueError, match="mind_id"):
+            validate_config(VoicePipelineConfig(mind_id=""))
+
+    def test_whitespace_only_mind_id_rejected(self) -> None:
+        with pytest.raises(ValueError, match="mind_id"):
+            validate_config(VoicePipelineConfig(mind_id="   "))
+
+    # filler_delay_ms upper bound ────────────────────────────────────
+
+    def test_filler_delay_ms_above_ceiling_rejected(self) -> None:
+        from sovyx.voice.pipeline._config import _FILLER_DELAY_MS_MAX
+
+        with pytest.raises(ValueError, match="filler_delay_ms"):
+            validate_config(VoicePipelineConfig(filler_delay_ms=_FILLER_DELAY_MS_MAX + 1))
+
+    def test_filler_delay_ms_at_ceiling_accepted(self) -> None:
+        from sovyx.voice.pipeline._config import _FILLER_DELAY_MS_MAX
+
+        validate_config(VoicePipelineConfig(filler_delay_ms=_FILLER_DELAY_MS_MAX))
+
+    # silence_frames_end upper bound ─────────────────────────────────
+
+    def test_silence_frames_end_above_ceiling_rejected(self) -> None:
+        from sovyx.voice.pipeline._config import _SILENCE_FRAMES_END_MAX
+
+        with pytest.raises(ValueError, match="silence_frames_end"):
+            validate_config(VoicePipelineConfig(silence_frames_end=_SILENCE_FRAMES_END_MAX + 1))
+
+    def test_silence_frames_end_at_ceiling_accepted(self) -> None:
+        from sovyx.voice.pipeline._config import _SILENCE_FRAMES_END_MAX
+
+        validate_config(VoicePipelineConfig(silence_frames_end=_SILENCE_FRAMES_END_MAX))
+
+    # max_recording_frames upper bound ───────────────────────────────
+
+    def test_max_recording_frames_above_ceiling_rejected(self) -> None:
+        from sovyx.voice.pipeline._config import _MAX_RECORDING_FRAMES_MAX
+
+        with pytest.raises(ValueError, match="max_recording_frames"):
+            validate_config(
+                VoicePipelineConfig(max_recording_frames=_MAX_RECORDING_FRAMES_MAX + 1)
+            )
+
+    def test_max_recording_frames_at_ceiling_accepted(self) -> None:
+        from sovyx.voice.pipeline._config import _MAX_RECORDING_FRAMES_MAX
+
+        validate_config(VoicePipelineConfig(max_recording_frames=_MAX_RECORDING_FRAMES_MAX))
+
+    # barge_in_threshold upper bound ─────────────────────────────────
+
+    def test_barge_in_threshold_above_ceiling_rejected(self) -> None:
+        from sovyx.voice.pipeline._config import _BARGE_IN_THRESHOLD_MAX
+
+        with pytest.raises(ValueError, match="barge_in_threshold"):
+            validate_config(VoicePipelineConfig(barge_in_threshold=_BARGE_IN_THRESHOLD_MAX + 1))
+
+    def test_barge_in_threshold_at_ceiling_accepted(self) -> None:
+        from sovyx.voice.pipeline._config import _BARGE_IN_THRESHOLD_MAX
+
+        validate_config(VoicePipelineConfig(barge_in_threshold=_BARGE_IN_THRESHOLD_MAX))
+
+    # filler_phrases consistency ─────────────────────────────────────
+
+    def test_fillers_enabled_with_empty_catalog_rejected(self) -> None:
+        with pytest.raises(ValueError, match="non-empty filler_phrases"):
+            validate_config(VoicePipelineConfig(fillers_enabled=True, filler_phrases=()))
+
+    def test_fillers_disabled_with_empty_catalog_accepted(self) -> None:
+        """Disabling fillers makes the empty catalog harmless."""
+        validate_config(VoicePipelineConfig(fillers_enabled=False, filler_phrases=()))
+
+    def test_filler_phrases_above_catalog_ceiling_rejected(self) -> None:
+        from sovyx.voice.pipeline._config import _FILLER_PHRASES_MAX
+
+        too_many = tuple(f"phrase {i}" for i in range(_FILLER_PHRASES_MAX + 1))
+        with pytest.raises(ValueError, match="filler_phrases catalog"):
+            validate_config(VoicePipelineConfig(filler_phrases=too_many))
+
+    def test_empty_filler_phrase_rejected(self) -> None:
+        with pytest.raises(ValueError, match=r"filler_phrases\[1\]"):
+            validate_config(
+                VoicePipelineConfig(
+                    filler_phrases=("Let me think...", "", "One moment..."),
+                ),
+            )
+
+    def test_whitespace_filler_phrase_rejected(self) -> None:
+        with pytest.raises(ValueError, match=r"filler_phrases\[0\]"):
+            validate_config(
+                VoicePipelineConfig(filler_phrases=("   \t\n   ", "Sure...")),
+            )
+
+    def test_default_config_passes_hardened_validation(self) -> None:
+        """Backwards-compat regression — the shipped default must
+        continue to pass all the new hardening checks."""
+        validate_config(VoicePipelineConfig())
+
+
+class TestConfigBoundsConstants:
+    """Mission #11/#37/#38 — public-surface tuning constants don't drift."""
+
+    def test_filler_delay_ms_max(self) -> None:
+        from sovyx.voice.pipeline._config import _FILLER_DELAY_MS_MAX
+
+        assert _FILLER_DELAY_MS_MAX == 10_000
+
+    def test_silence_frames_end_max(self) -> None:
+        from sovyx.voice.pipeline._config import _SILENCE_FRAMES_END_MAX
+
+        assert _SILENCE_FRAMES_END_MAX == 250  # noqa: PLR2004
+
+    def test_max_recording_frames_max(self) -> None:
+        from sovyx.voice.pipeline._config import _MAX_RECORDING_FRAMES_MAX
+
+        assert _MAX_RECORDING_FRAMES_MAX == 1_875
+
+    def test_barge_in_threshold_max(self) -> None:
+        from sovyx.voice.pipeline._config import _BARGE_IN_THRESHOLD_MAX
+
+        assert _BARGE_IN_THRESHOLD_MAX == 50  # noqa: PLR2004
+
+    def test_filler_phrases_max(self) -> None:
+        from sovyx.voice.pipeline._config import _FILLER_PHRASES_MAX
+
+        assert _FILLER_PHRASES_MAX == 50  # noqa: PLR2004
+
+
 # ===========================================================================
 # split_at_boundaries
 # ===========================================================================
