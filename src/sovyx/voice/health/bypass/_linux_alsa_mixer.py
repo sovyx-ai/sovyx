@@ -264,6 +264,42 @@ class LinuxALSAMixerResetBypass:
             outcome = "mixer_boost_up_applied"
 
         self._applied_snapshot = snapshot
+        # v0.22.4 safety — re-probe after apply to confirm we did not
+        # flip the regime. Pilot evidence (VAIO VJFE69F11X, 2026-04-25):
+        # the first attenuation-fix defaults (0.75/0.66) lifted the
+        # attenuated controls past the saturation_ratio_ceiling (0.5),
+        # so the next preflight reported saturation while the actual
+        # signal was clipped — VAD still classified as deaf, just for
+        # a different reason. Detect that here and roll back atomically
+        # so the coordinator can mark this strategy as "applied but
+        # ineffective" without leaving the mixer in a worse state.
+        post_snapshots = enumerate_alsa_mixer_snapshots()
+        post_target = next(
+            (s for s in post_snapshots if s.card_index == target.card_index),
+            None,
+        )
+        if (
+            post_target is not None
+            and post_target.saturation_warning
+            and not target.saturation_warning
+        ):
+            logger.warning(
+                "bypass_strategy_apply_overcorrected",
+                strategy=_STRATEGY_NAME,
+                card_index=snapshot.card_index,
+                pre_regime="attenuation",
+                post_regime="saturation",
+                hint=(
+                    "boost-up overshot saturation ceiling; rolling back. "
+                    "Tune linux_mixer_*_attenuation_fix_fraction lower."
+                ),
+            )
+            await restore_mixer_snapshot(snapshot, tuning=tuning)
+            self._applied_snapshot = None
+            raise BypassApplyError(
+                "boost-up overshot saturation ceiling; rolled back",
+                reason="apply_overcorrected_to_saturation",
+            )
         logger.info(
             "bypass_strategy_apply_ok",
             strategy=_STRATEGY_NAME,

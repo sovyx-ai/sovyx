@@ -956,34 +956,25 @@ class TestApplyMixerBoostUpPilotCase:
                 tuning=VoiceTuningConfig(),
             )
 
-        # Defaults: capture_attenuation_fix_fraction=0.75, boost_attenuation_fix_fraction=0.66
-        # Capture: 0 + round(80 * 0.75) = 60
-        # Mic Boost: 0 + round(3 * 0.66) = 2
-        # Internal Mic Boost: 0 + round(3 * 0.66) = 2
-        assert calls == [
-            (1, "Mic Boost", 2),
-            (1, "Capture", 60),
-            (1, "Internal Mic Boost", 2),
-        ]
-        assert snap.applied_controls == (
-            ("Mic Boost", 2),
-            ("Capture", 60),
-            ("Internal Mic Boost", 2),
-        )
-        assert snap.reverted_controls == (
-            ("Mic Boost", 0),
-            ("Capture", 40),
-            ("Internal Mic Boost", 1),
-        )
+        # v0.22.4 defaults (revised after pilot oscillation v0.22.3):
+        #   capture_attenuation_fix_fraction = 0.5  (AT saturation_ratio_ceiling, NOT past)
+        #   boost_attenuation_fix_fraction   = 0.33 (= 1/3, well below ceiling)
+        # Capture: 0 + round(80 * 0.5)  = 40 → already at 40, NO-OP (skipped)
+        # Mic Boost: 0 + round(3 * 0.33) = 1
+        # Internal Mic Boost: 0 + round(3 * 0.33) = 1 → already at 1, NO-OP
+        # Only Mic Boost actually changes; the other two are at-target.
+        assert calls == [(1, "Mic Boost", 1)]
+        assert snap.applied_controls == (("Mic Boost", 1),)
+        assert snap.reverted_controls == (("Mic Boost", 0),)
 
     @pytest.mark.asyncio()
     async def test_skips_controls_already_at_target(self, _linux_env: None) -> None:
-        # Capture already at target fraction (60/80=0.75) → no mutation.
-        already_boosted = _ctl_attenuated("Capture", current_raw=60, max_raw=80)
+        # v0.22.4 defaults: capture target fraction = 0.5; 40/80 = 0.5 → NO-OP.
+        already_at_target = _ctl_attenuated("Capture", current_raw=40, max_raw=80)
         with patch.object(mod, "_amixer_set") as amixer:
             snap = await apply_mixer_boost_up(
                 1,
-                [already_boosted],
+                [already_at_target],
                 tuning=VoiceTuningConfig(),
             )
         amixer.assert_not_called()
@@ -1004,8 +995,12 @@ class TestApplyMixerBoostUpRollback:
                     reason=REASON_AMIXER_SET_FAILED,
                 )
 
+        # v0.22.4 defaults: capture 0.5, boost 0.33. Need controls that
+        # are NOT already at target to exercise the apply path:
+        # Capture 30/80 (0.375 < 0.5) → target 40 (CHANGES).
+        # Internal Mic Boost 0/3 → target 1 (CHANGES, then fails).
         controls = [
-            _ctl_attenuated("Capture", current_raw=40, max_raw=80),
+            _ctl_attenuated("Capture", current_raw=30, max_raw=80),
             _ctl_attenuated("Internal Mic Boost", current_raw=0, max_raw=3),
         ]
         with (
@@ -1015,9 +1010,9 @@ class TestApplyMixerBoostUpRollback:
             await apply_mixer_boost_up(1, controls, tuning=VoiceTuningConfig())
 
         assert exc.value.reason == REASON_AMIXER_SET_FAILED
-        # Forward: Capture 40→60, then failed Internal Mic Boost, then rollback Capture 60→40.
+        # Forward: Capture 30→40, then failed Internal Mic Boost 0→1, then rollback Capture 40→30.
         assert calls == [
-            ("Capture", 60),
-            ("Internal Mic Boost", 2),
             ("Capture", 40),
+            ("Internal Mic Boost", 1),
+            ("Capture", 30),
         ]

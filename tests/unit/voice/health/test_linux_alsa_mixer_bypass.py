@@ -439,3 +439,58 @@ class TestApplyAttenuationRegime:
         assert outcome == "mixer_reset_applied"
         reset.assert_awaited_once()
         boost.assert_not_called()
+
+    @pytest.mark.asyncio()
+    async def test_apply_rolls_back_when_boost_up_overshoots(self) -> None:
+        """v0.22.4 safety: if boost-up flips regime to saturation, roll back.
+
+        Pilot evidence (VAIO VJFE69F11X, 2026-04-25, post-v0.22.3): the
+        first attenuation-fix defaults (0.75/0.66) lifted the controls
+        past the saturation_ratio_ceiling (0.5). Pre-fix preflight
+        reported attenuation; post-fix reported saturation. VAD still
+        deaf (signal clipped). Safety check must detect that and roll
+        back to leave the mixer in its pre-apply state.
+        """
+        strat = LinuxALSAMixerResetBypass()
+        attenuated_pre = _card_attenuated()
+        # Same card_index but post-apply now saturating.
+        saturated_post = _card(
+            card_index=1,
+            card_id="Generic_1",
+            saturation_warning=True,
+        )
+        boost_snap = MixerApplySnapshot(
+            card_index=1,
+            reverted_controls=(("Mic Boost", 0), ("Capture", 40)),
+            applied_controls=(("Mic Boost", 2), ("Capture", 60)),
+        )
+        # First call returns pre-apply (attenuated); second call returns
+        # post-apply (now saturated) → triggers rollback.
+        snapshot_seq = [[attenuated_pre], [saturated_post]]
+        with (
+            patch.object(
+                mod,
+                "enumerate_alsa_mixer_snapshots",
+                side_effect=snapshot_seq,
+            ),
+            patch.object(
+                mod,
+                "apply_mixer_boost_up",
+                new=AsyncMock(return_value=boost_snap),
+            ) as boost,
+            patch.object(
+                mod,
+                "restore_mixer_snapshot",
+                new=AsyncMock(),
+            ) as restore,
+            pytest.raises(BypassApplyError) as exc_info,
+        ):
+            await strat.apply(_context())
+
+        # boost_up was called, then restore was called (rollback path).
+        boost.assert_awaited_once()
+        restore.assert_awaited_once()
+        # Snapshot cleared so revert() does not double-restore.
+        assert strat._applied_snapshot is None  # noqa: SLF001
+        # Reason token surfaced for coordinator telemetry.
+        assert exc_info.value.reason == "apply_overcorrected_to_saturation"

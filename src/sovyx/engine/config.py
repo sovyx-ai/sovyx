@@ -525,16 +525,27 @@ class VoiceTuningConfig(BaseSettings):
     # Fraction targets for the ATTENUATION fix path (`sovyx doctor voice
     # --fix` on attenuated cards — capture+boost both well below VAD
     # operating range). Distinct from `*_reset_fraction` which REDUCES
-    # gain on saturated cards. Defaults: capture 0.75 = ~+0 dB on a
-    # 0..80 control; boost 0.66 = ~+24 dB on a 0..3 boost control —
-    # the safe midpoint that lifts signal above Silero VAD floor
-    # without saturating.
-    # Pilot evidence (VAIO VJFE69F11X-B0221H, SN6180 codec, 2026-04-25):
+    # gain on saturated cards.
+    #
+    # Defaults are deliberately AT the saturation_ratio_ceiling (0.5)
+    # for capture and BELOW it for boost — the saturation check uses
+    # strict ``>`` so a control at exactly 0.5 ratio does NOT trigger
+    # saturation_risk. This keeps the apply path strictly inside the
+    # "neither attenuated nor saturated" window and prevents the
+    # oscillation observed on the second pilot run (v0.22.3): defaults
+    # of 0.75/0.66 lifted attenuated controls past the saturation
+    # ceiling, flipping the regime — fix detected attenuation, applied
+    # boost, re-probe now reports saturation, deaf-detection still
+    # triggered with a CLIPPED signal instead of a SILENT one.
+    #
+    # Pilot evidence (VAIO VJFE69F11X-B0221H, SN6180 codec):
     # Mic Boost 0/3, Capture 40/80, Internal Mic Boost 1/3 → aggregated
-    # -22 dB, Silero max_prob ~ 0. Boosting to fractions below restores
-    # ~+24 dB aggregate, well within the VAD operating range.
-    linux_mixer_capture_attenuation_fix_fraction: float = 0.75
-    linux_mixer_boost_attenuation_fix_fraction: float = 0.66
+    # -22 dB, Silero max_prob ~ 0. With current defaults:
+    # Capture 40 → 40 (at 0.5 ratio = no-op); Mic Boost 0 → 1 (1/3 =
+    # +12 dB); Internal Mic Boost 1 → 1 (no-op). Aggregated swing:
+    # -22 dB → -10 dB. Above VAD floor, well below saturation ceiling.
+    linux_mixer_capture_attenuation_fix_fraction: float = 0.5
+    linux_mixer_boost_attenuation_fix_fraction: float = 0.33
     # Strategy #2 — ``LinuxPipeWireDirectBypass`` (linux.pipewire_direct).
     # Rebinds the capture stream to the raw ALSA ``hw:X,Y`` node,
     # bypassing PipeWire / PulseAudio session-manager DSP entirely.
