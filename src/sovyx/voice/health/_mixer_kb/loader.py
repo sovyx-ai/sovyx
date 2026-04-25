@@ -11,9 +11,15 @@ profile level, not the cohort level: one bad YAML should not sink
 every other KB entry. The orchestrator can still match against the
 valid profiles that loaded, and the dashboard surfaces the skip list.
 
-Ed25519 signature field on profiles is accepted but not enforced in
-F1 (stub per task T1.C.2). ``signature`` presence is logged at DEBUG
-so F2's verifier has a visible transition path.
+F2 wire-up: the loader now accepts an optional
+:class:`KBSignatureVerifier`. When a verifier is supplied, every
+profile is signature-checked before its frozen runtime form is
+materialised. Mode.LENIENT (the default verifier mode) emits
+``voice.kb.signature.invalid`` WARN events but lets unsigned /
+badly-signed profiles through; Mode.STRICT skips them entirely.
+Passing ``verifier=None`` (the default) keeps the legacy F1
+behaviour — no verification at all — for backward compat with
+call sites that haven't been migrated yet.
 """
 
 from __future__ import annotations
@@ -25,6 +31,10 @@ import yaml
 from pydantic import ValidationError
 
 from sovyx.observability.logging import get_logger
+from sovyx.voice.health._mixer_kb._signing import (
+    KBSignatureError,
+    KBSignatureVerifier,
+)
 from sovyx.voice.health._mixer_kb.schema import KBProfileModel
 
 if TYPE_CHECKING:
@@ -55,8 +65,23 @@ parse index / signature / changelog YAMLs as profiles.
 """
 
 
-def load_profile_file(path: Path) -> MixerKBProfile:
+def load_profile_file(
+    path: Path,
+    *,
+    verifier: KBSignatureVerifier | None = None,
+) -> MixerKBProfile:
     """Load and validate one profile YAML file.
+
+    Args:
+        path: Profile YAML file to load.
+        verifier: Optional :class:`KBSignatureVerifier`. When
+            supplied, the loaded profile is signature-checked
+            against the verifier's trusted public key. Behaviour
+            depends on the verifier's :class:`Mode` —
+            ``Mode.LENIENT`` emits a structured WARN and returns
+            the profile anyway; ``Mode.STRICT`` raises
+            :class:`KBSignatureError`. ``None`` (default) skips
+            verification entirely (legacy F1 behaviour).
 
     Raises:
         FileNotFoundError: ``path`` does not exist.
@@ -67,6 +92,8 @@ def load_profile_file(path: Path) -> MixerKBProfile:
         ValueError: ``profile_id`` stem disagrees with the YAML body
             — the loader enforces filename-as-id to prevent silent
             profile renames on disk.
+        KBSignatureError: Only when ``verifier.mode is Mode.STRICT``
+            and the signature does not verify.
     """
     raw_text = path.read_text(encoding="utf-8")
     parsed = yaml.safe_load(raw_text)
@@ -93,16 +120,27 @@ def load_profile_file(path: Path) -> MixerKBProfile:
             f"match so directory listings are authoritative"
         )
         raise ValueError(msg)
-    if model.signature is not None:
+    if verifier is not None:
+        # F2 wire-up: feed the parsed YAML mapping (NOT the pydantic
+        # model) into the verifier so the canonical-payload bytes
+        # reflect the on-disk content faithfully. The verifier emits
+        # its own structured WARN on rejection in LENIENT mode and
+        # raises KBSignatureError in STRICT mode.
+        verifier.verify(parsed)
+    elif model.signature is not None:
         logger.debug(
-            "mixer_kb_profile_signature_present_not_enforced_in_f1",
+            "mixer_kb_profile_signature_present_no_verifier_configured",
             profile_id=model.profile_id,
             path=str(path),
         )
     return model.to_profile()
 
 
-def load_profiles_from_directory(directory: Path) -> list[MixerKBProfile]:
+def load_profiles_from_directory(
+    directory: Path,
+    *,
+    verifier: KBSignatureVerifier | None = None,
+) -> list[MixerKBProfile]:
     """Load every ``*.yaml`` in ``directory`` (non-recursive).
 
     Files starting with :data:`_PROFILE_INDEX_PREFIX` are skipped.
@@ -149,7 +187,7 @@ def load_profiles_from_directory(directory: Path) -> list[MixerKBProfile]:
         if path.name.startswith(_PROFILE_INDEX_PREFIX):
             continue
         try:
-            profile = load_profile_file(path)
+            profile = load_profile_file(path, verifier=verifier)
         except ValidationError as exc:
             logger.warning(
                 "mixer_kb_profile_schema_invalid",
@@ -158,6 +196,19 @@ def load_profiles_from_directory(directory: Path) -> list[MixerKBProfile]:
                 first_error=exc.errors()[0] if exc.errors() else None,
             )
             skipped.append((path.name, "schema_invalid"))
+            continue
+        except KBSignatureError as exc:
+            # F2: only reachable when verifier mode is STRICT — the
+            # verifier itself emits the structured WARN before
+            # raising. Per the cohort-level failure policy, one bad
+            # signature should not sink the rest of the pool.
+            logger.warning(
+                "mixer_kb_profile_signature_rejected",
+                path=str(path),
+                profile_id=exc.profile_id,
+                verdict=exc.result.value,
+            )
+            skipped.append((path.name, f"signature_{exc.result.value}"))
             continue
         except yaml.YAMLError as exc:
             logger.warning(
