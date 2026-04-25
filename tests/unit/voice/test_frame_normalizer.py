@@ -1492,3 +1492,165 @@ class TestFrameNormalizerM2WireUp:
             if s == VoiceStage.CAPTURE and k == StageEventKind.SUCCESS
         ]
         assert successes == []
+
+
+# ---------------------------------------------------------------------------
+# Band-aid #8 — phase-inversion downmix detector
+# ---------------------------------------------------------------------------
+
+
+class TestChannelCorrelation:
+    """Pure-function correlation check used by the phase-inversion
+    downmix detector."""
+
+    def test_identical_channels_correlation_is_one(self) -> None:
+        from sovyx.voice._frame_normalizer import _channel_correlation
+
+        signal = np.linspace(-0.5, 0.5, 1024).astype(np.float32)
+        assert abs(_channel_correlation(signal, signal) - 1.0) < 0.001  # noqa: PLR2004
+
+    def test_phase_inverted_channels_correlation_is_minus_one(self) -> None:
+        from sovyx.voice._frame_normalizer import _channel_correlation
+
+        signal = np.linspace(-0.5, 0.5, 1024).astype(np.float32)
+        inverted = -signal
+        assert abs(_channel_correlation(signal, inverted) - (-1.0)) < 0.001  # noqa: PLR2004
+
+    def test_orthogonal_channels_correlation_near_zero(self) -> None:
+        """Sin and cos at the same frequency are perfectly orthogonal —
+        Pearson correlation should be ~0."""
+        from sovyx.voice._frame_normalizer import _channel_correlation
+
+        n = 16_000  # 1 s @ 16 kHz
+        t = np.linspace(0, 1.0, n, endpoint=False, dtype=np.float32)
+        sin_signal = np.sin(2.0 * np.pi * 100.0 * t).astype(np.float32)
+        cos_signal = np.cos(2.0 * np.pi * 100.0 * t).astype(np.float32)
+        # Pearson r for orthogonal signals over an integer-cycle
+        # window should be effectively zero.
+        assert abs(_channel_correlation(sin_signal, cos_signal)) < 0.01  # noqa: PLR2004
+
+    def test_silent_channel_returns_zero(self) -> None:
+        """Below-floor RMS → return 0 (correlation is undefined for
+        zero-signal case)."""
+        from sovyx.voice._frame_normalizer import _channel_correlation
+
+        signal = np.linspace(-0.5, 0.5, 1024).astype(np.float32)
+        silence = np.zeros(1024, dtype=np.float32)
+        assert _channel_correlation(signal, silence) == 0.0
+        assert _channel_correlation(silence, signal) == 0.0
+
+    def test_empty_channels_returns_zero(self) -> None:
+        from sovyx.voice._frame_normalizer import _channel_correlation
+
+        empty = np.zeros(0, dtype=np.float32)
+        assert _channel_correlation(empty, empty) == 0.0
+
+    def test_shape_mismatch_raises(self) -> None:
+        from sovyx.voice._frame_normalizer import _channel_correlation
+
+        a = np.zeros(100, dtype=np.float32)
+        b = np.zeros(200, dtype=np.float32)
+        with pytest.raises(ValueError, match="shape mismatch"):
+            _channel_correlation(a, b)
+
+
+class TestPhaseInversionDetector:
+    """End-to-end: phase-inverted stereo input through FrameNormalizer
+    triggers the WARN + bumps the public counter."""
+
+    def _stereo_block(
+        self,
+        left: np.ndarray,
+        right: np.ndarray,
+    ) -> np.ndarray:
+        """Build a 2-channel int16 block from two float32 [-1, 1] arrays."""
+        stereo_f = np.column_stack([left, right])
+        return (stereo_f * 32767.0).astype(np.int16)
+
+    def test_phase_inverted_stereo_flagged(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        norm = FrameNormalizer(source_rate=16_000, source_channels=2)
+        # Build a sine + its negation.
+        n = 1024
+        signal = (np.sin(np.linspace(0, 4.0, n)) * 0.5).astype(np.float32)
+        block = self._stereo_block(signal, -signal)
+        with caplog.at_level(logging.WARNING):
+            norm.push(block)
+        assert norm.phase_inverted_count == 1
+        assert any(
+            "voice.audio.downmix_phase_inverted" in str(r.msg)
+            for r in caplog.records
+        )
+
+    def test_correlated_stereo_not_flagged(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Identical stereo (mono played on both channels) — correlation
+        ≈ +1.0, well above threshold, no flag."""
+        import logging
+
+        norm = FrameNormalizer(source_rate=16_000, source_channels=2)
+        n = 1024
+        signal = (np.sin(np.linspace(0, 4.0, n)) * 0.5).astype(np.float32)
+        block = self._stereo_block(signal, signal)
+        with caplog.at_level(logging.WARNING):
+            norm.push(block)
+        assert norm.phase_inverted_count == 0
+
+    def test_warn_rate_limited(self) -> None:
+        """Multiple consecutive inverted blocks → counter grows but
+        WARN fires at most once per _PHASE_INVERSION_LOG_INTERVAL_S."""
+        import logging
+
+        norm = FrameNormalizer(source_rate=16_000, source_channels=2)
+        # Inject a fake clock so the rate limit is deterministic.
+        fake_now = [0.0]
+        norm._monotonic = lambda: fake_now[0]  # type: ignore[method-assign]
+        n = 1024
+        signal = (np.sin(np.linspace(0, 4.0, n)) * 0.5).astype(np.float32)
+        block = self._stereo_block(signal, -signal)
+
+        warns: list[str] = []
+        handler = logging.Handler()
+        handler.emit = lambda record: warns.append(str(record.msg))  # type: ignore[method-assign]
+        logger_obj = logging.getLogger("sovyx.voice._frame_normalizer")
+        logger_obj.addHandler(handler)
+        logger_obj.setLevel(logging.WARNING)
+        try:
+            for _ in range(5):
+                norm.push(block)
+            # All 5 blocks flagged as inverted.
+            assert norm.phase_inverted_count == 5  # noqa: PLR2004
+            # But only ONE WARN fired (rate limit @ 5 s, fake clock
+            # didn't advance).
+            phase_warns = [w for w in warns if "phase_inverted" in w]
+            assert len(phase_warns) == 1
+
+            # Advance the clock past the rate limit window.
+            fake_now[0] = 10.0
+            norm.push(block)
+            phase_warns = [w for w in warns if "phase_inverted" in w]
+            assert len(phase_warns) == 2  # noqa: PLR2004
+        finally:
+            logger_obj.removeHandler(handler)
+
+    def test_silent_stereo_not_flagged(self) -> None:
+        """Both channels at zero RMS → correlation returns 0, above
+        the threshold, no flag (silence is not an inversion)."""
+        norm = FrameNormalizer(source_rate=16_000, source_channels=2)
+        block = np.zeros((1024, 2), dtype=np.int16)
+        norm.push(block)
+        assert norm.phase_inverted_count == 0
+
+    def test_mono_input_skips_check(self) -> None:
+        """1-channel input never triggers the phase check (no
+        second channel to correlate against)."""
+        norm = FrameNormalizer(source_rate=16_000, source_channels=1)
+        block = _sine_wave_int16(440, 16_000, 0.05, channels=1, amplitude=0.5)
+        norm.push(block)
+        assert norm.phase_inverted_count == 0

@@ -158,6 +158,54 @@ Prevents false positives on the very first (typically tiny) block
 following stream open."""
 
 
+# ---------------------------------------------------------------------------
+# Phase-inversion downmix detection (band-aid #8 replacement)
+# ---------------------------------------------------------------------------
+#
+# Pre-band-aid #8: ``_downmix`` averages stereo channels via
+# ``block_f.mean(axis=1)``. When the channels are 180° out of phase
+# (e.g. a USB stereo mic with a channel-swap firmware bug, or an
+# active noise-cancelling headset that delivers an inverted reference
+# signal in the right channel), the average collapses to silence.
+# The cascade then sees a "deaf" capture, the deaf-detection
+# coordinator promotes the device to APO bypass, and the user is
+# none the wiser that their hardware is actively broken.
+#
+# Band-aid #8 fix: compute Pearson correlation between the channels
+# (``r = sum(L*R) / sqrt(sum(L²)*sum(R²))``); if ``r < -0.3`` (the
+# canonical "destructively correlated" threshold from audio-stream
+# QA), emit a structured ``voice.audio.downmix_phase_inverted`` WARN
+# rate-limited per stream. The downmix output continues unchanged
+# (no behaviour change at this stage — operator decides whether to
+# pick L-only / R-only / sum based on the WARN signal).
+
+_PHASE_INVERSION_CORR_THRESHOLD = -0.3
+"""Cross-channel Pearson correlation below which the downmix is
+flagged as phase-inverted. -0.3 is the canonical "destructively
+correlated" threshold from audio-stream QA references — below it
+the average-downmix output is meaningfully attenuated relative to
+either single channel. Above -0.3 the channels are merely
+loosely-correlated (a normal stereo recording), not actively
+cancelling. Below -0.7 they are essentially exact inversions
+(the silence-on-downmix worst case)."""
+
+_PHASE_INVERSION_MIN_RMS_FOR_CHECK = 0.001
+"""Per-channel RMS floor below which the phase check is skipped
+(returns 0.0 correlation = "no signal"). Below this floor the
+denominator in the Pearson formula is dominated by quantisation
+noise and the correlation is meaningless. 0.001 normalised =
+~ -60 dBFS, well below speech levels but above the typical
+silence floor."""
+
+_PHASE_INVERSION_LOG_INTERVAL_S = 5.0
+"""Minimum gap between two phase-inversion WARN logs from the same
+FrameNormalizer instance. Without rate-limiting, a sustained
+phase-inverted stereo input would log once per push() call
+(~100 Hz), drowning the dashboard. 5 s matches the heartbeat
+cadence and is short enough that operators see the issue within
+the first failed utterance."""
+
+
 @dataclass(frozen=True, slots=True)
 class SaturationCounters:
     """Per-call clipping diagnostics from :func:`_float_to_int16_saturate`.
@@ -291,6 +339,14 @@ class FrameNormalizer:
         self._window_samples_clipped: int = 0
         self._window_started_monotonic: float | None = None
         self._last_warning_monotonic: float | None = None
+        # Band-aid #8: phase-inversion downmix detector state.
+        # ``_phase_inverted_count`` is cumulative over the lifetime
+        # of the normaliser; ``_last_phase_warning_monotonic`` rate-
+        # limits the WARN log per :data:`_PHASE_INVERSION_LOG_INTERVAL_S`.
+        # Public counter exposed via :attr:`phase_inverted_count` for
+        # dashboard attribution.
+        self._phase_inverted_count: int = 0
+        self._last_phase_warning_monotonic: float | None = None
         # Injectable clock for deterministic tests. Shape mirrors
         # ``time.monotonic``.
         self._monotonic: Callable[[], float] = time.monotonic
@@ -526,6 +582,18 @@ class FrameNormalizer:
         return self._lifetime_samples_processed
 
     @property
+    def phase_inverted_count(self) -> int:
+        """Cumulative count of stereo blocks where L/R Pearson
+        correlation was below
+        :data:`_PHASE_INVERSION_CORR_THRESHOLD` (band-aid #8). Each
+        flagged block emits a rate-limited
+        ``voice.audio.downmix_phase_inverted`` WARN (see
+        :data:`_PHASE_INVERSION_LOG_INTERVAL_S`). Non-zero on a
+        healthy mic = stereo channels are destructively correlated;
+        average-downmix collapses to silence."""
+        return self._phase_inverted_count
+
+    @property
     def lifetime_samples_clipped(self) -> int:
         """Cumulative count of float samples that hit either int16 rail
         since construction. Survives :meth:`reset`. Foundation for the
@@ -713,10 +781,59 @@ class FrameNormalizer:
             if self._source_channels == 1:
                 out: npt.NDArray[np.float32] = block_f[:, 0].astype(np.float32)
                 return out
+            # Band-aid #8: phase-inversion check on stereo downmix.
+            # Only the 2-channel case is meaningful for the
+            # destructive-correlation failure mode (a 6-channel
+            # surround source mixed to mono can have any spatial
+            # relationship; the L/R-only case is the silent-
+            # cancellation pathology this guard exists to flag).
+            if block_f.shape[1] == 2:
+                self._maybe_flag_phase_inversion(
+                    left=block_f[:, 0],
+                    right=block_f[:, 1],
+                )
             avg: npt.NDArray[np.float32] = block_f.mean(axis=1).astype(np.float32)
             return avg
         msg = f"block must be 1-D or 2-D, got ndim={block_f.ndim}"
         raise ValueError(msg)
+
+    def _maybe_flag_phase_inversion(
+        self,
+        *,
+        left: npt.NDArray[np.float32],
+        right: npt.NDArray[np.float32],
+    ) -> None:
+        """Compute L/R correlation; emit rate-limited WARN if inverted.
+
+        Pure observability — does NOT alter the downmix output. The
+        WARN is the recovery signal for the operator (consider
+        switching to L-only or R-only via a future opt-in toggle).
+        """
+        correlation = _channel_correlation(left, right)
+        if correlation > _PHASE_INVERSION_CORR_THRESHOLD:
+            return
+        # Below threshold → flag as phase-inverted. Bump cumulative
+        # counter unconditionally; rate-limit the WARN log.
+        self._phase_inverted_count += 1
+        now = self._monotonic()
+        last = self._last_phase_warning_monotonic
+        if last is not None and (now - last) < _PHASE_INVERSION_LOG_INTERVAL_S:
+            return
+        self._last_phase_warning_monotonic = now
+        logger.warning(
+            "voice.audio.downmix_phase_inverted",
+            **{
+                "voice.correlation": round(correlation, 4),
+                "voice.threshold": _PHASE_INVERSION_CORR_THRESHOLD,
+                "voice.lifetime_inversion_count": self._phase_inverted_count,
+                "voice.action_required": (
+                    "stereo channels are destructively correlated — "
+                    "average-downmix collapses to silence; consider "
+                    "switching to a single-channel source or sum-instead-"
+                    "of-average downmix"
+                ),
+            },
+        )
 
     def _resample(
         self,
@@ -832,6 +949,61 @@ def _linear_to_db(linear: float) -> float:
     if linear <= 0.0:
         return float("-inf")
     return 20.0 * math.log10(linear)
+
+
+def _channel_correlation(
+    left: npt.NDArray[np.float32],
+    right: npt.NDArray[np.float32],
+) -> float:
+    """Pearson correlation between two equal-length channel buffers.
+
+    Pure function. Returns ``r ∈ [-1, 1]`` where:
+
+    * ``+1.0`` — channels are identical (mono played on both speakers).
+    * ``0.0`` — channels are uncorrelated (true stereo separation).
+    * ``-1.0`` — channels are exact inverses (phase-flipped). Average-
+      downmix collapses these to silence.
+
+    Returns ``0.0`` when either channel's RMS is below
+    :data:`_PHASE_INVERSION_MIN_RMS_FOR_CHECK` — Pearson correlation
+    is undefined for the zero-signal case (denominator is zero), and
+    "no signal" is the safe interpretation (no inversion to flag).
+
+    Args:
+        left: First channel, ``float32`` in ``[-1, 1]``.
+        right: Second channel, same shape + dtype as ``left``.
+
+    Raises:
+        ValueError: ``left`` and ``right`` have different shapes.
+    """
+    import numpy as np
+
+    if left.shape != right.shape:
+        msg = (
+            f"left/right shape mismatch: left={left.shape}, "
+            f"right={right.shape}"
+        )
+        raise ValueError(msg)
+    if left.size == 0:
+        return 0.0
+    # Cast to float64 for the dot products — float32 can lose
+    # precision on long buffers + the correlation is a single
+    # scalar so the cost is negligible.
+    left_f64 = left.astype(np.float64)
+    right_f64 = right.astype(np.float64)
+    rms_l = float(np.sqrt(np.mean(left_f64 * left_f64)))
+    rms_r = float(np.sqrt(np.mean(right_f64 * right_f64)))
+    if rms_l < _PHASE_INVERSION_MIN_RMS_FOR_CHECK:
+        return 0.0
+    if rms_r < _PHASE_INVERSION_MIN_RMS_FOR_CHECK:
+        return 0.0
+    # Pearson correlation: dot / (||L|| * ||R||) where ||.|| is L2.
+    # Equivalent to mean(L*R) / (rms_l * rms_r) for the sample case.
+    cov = float(np.mean(left_f64 * right_f64))
+    correlation = cov / (rms_l * rms_r)
+    # Clamp to [-1, 1] — float arithmetic can drift slightly past
+    # the bounds for nearly-perfect correlation.
+    return max(-1.0, min(1.0, correlation))
 
 
 __all__ = ["FrameNormalizer", "SaturationCounters"]
