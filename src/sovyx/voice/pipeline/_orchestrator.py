@@ -58,6 +58,50 @@ _DEAF_MIN_FRAMES = _VoiceTuning().pipeline_deaf_min_frames
 _DEAF_VAD_MAX_THRESHOLD = _VoiceTuning().pipeline_deaf_vad_max_threshold
 _DEAF_WARNINGS_BEFORE_EXCLUSIVE_RETRY = _VoiceTuning().deaf_warnings_before_exclusive_retry
 
+# ---------------------------------------------------------------------------
+# O3 frame-drop detection tuning
+# ---------------------------------------------------------------------------
+#
+# Pre-O3 the pipeline only checked a relative ``gap > 2× expected``
+# threshold. That hides the "all frames consistently late" failure mode:
+# if every frame arrives at 1.5× the expected interval (e.g., system
+# load, USB renegotiation backpressure, capture-thread priority drift),
+# the relative check NEVER fires even though cumulative latency is
+# audibly degrading the response loop. O3 keeps the per-frame absolute
+# budget (perceptually meaningful — anything beyond 64 ms is audible in
+# a real-time voice loop regardless of nominal frame size) and adds a
+# rolling-window cumulative-drift detector so sustained-degradation
+# conditions surface independently of any single-frame violation.
+
+_FRAME_DROP_ABSOLUTE_BUDGET_S = 0.064
+"""Absolute per-frame inter-arrival budget. 64 ms = 2× the nominal
+32 ms cadence at 16 kHz / 512-sample window — chosen to match the
+perceptual threshold above which a real-time voice loop gains
+audible latency artefacts (Bencina, "Real-Time Audio Programming
+101", 2020). A single frame exceeding this budget produces a
+``voice.frame.drop_detected`` WARNING with ``threshold_kind=
+"absolute_budget"``."""
+
+_FRAME_DROP_DRIFT_WINDOW_FRAMES = 32
+"""Rolling window over which the cumulative-drift detector averages
+inter-arrival times. 32 frames at 16 kHz / 512-sample window =
+~1.024 s of audio — long enough to suppress per-frame jitter while
+short enough to react to sustained drift before the user notices."""
+
+_FRAME_DROP_DRIFT_RATIO = 1.10
+"""Mean inter-arrival ÷ expected interval threshold above which the
+cumulative-drift detector fires. 1.10 = 10% sustained drift; chosen
+because consistent +10% scheduling jitter accumulates ~3 ms per
+frame, which over 32 frames = ~100 ms of cumulative latency —
+audible. Below this the drift is noise; above it the drift is
+structurally problematic."""
+
+_FRAME_DROP_DRIFT_RATE_LIMIT_S = 1.0
+"""Minimum gap between successive ``voice.frame.cumulative_drift_detected``
+emissions. A sustained drift produces one event per second, not one
+per window — the dashboard already aggregates by minute, so per-second
+firing is enough resolution to localise onset/offset."""
+
 
 class VoicePipeline:
     """Orchestrates the complete voice pipeline.
@@ -203,14 +247,23 @@ class VoicePipeline:
         # different SpeechStartedEvent site in _transition_to_recording).
         self._wake_detected_monotonic: float | None = None
 
-        # Frame inter-arrival tracking for voice.frame_drop.detected.
-        # Frames are pushed by the capture loop at the OS-driven cadence
-        # (32 ms = _FRAME_SAMPLES / _SAMPLE_RATE * 1000). A gap larger than
-        # 2× expected means the capture path stalled — a starvation
-        # fingerprint distinct from the deaf-warning case (deaf = frames
-        # arrive but VAD rejects them; drop = frames don't arrive at all).
+        # Frame inter-arrival tracking. O3 splits the pre-existing
+        # single relative threshold into two complementary detectors:
+        # an ABSOLUTE per-frame budget (catastrophic single-frame
+        # stalls — USB renegotiation, capture-thread priority loss)
+        # and a ROLLING-WINDOW cumulative-drift check (the failure mode
+        # the pre-O3 relative threshold silently masked: if every frame
+        # arrives 1.5× late the relative check never fires while
+        # cumulative latency degrades audibly). The drift window is
+        # bounded so memory stays constant for long-running daemons.
+        from collections import deque
+
         self._last_frame_monotonic: float | None = None
         self._expected_frame_interval_s: float = _FRAME_SAMPLES / _SAMPLE_RATE
+        self._recent_frame_intervals: deque[float] = deque(
+            maxlen=_FRAME_DROP_DRIFT_WINDOW_FRAMES,
+        )
+        self._last_drift_warning_monotonic: float | None = None
 
     # -- State property + saga lifecycle ------------------------------------
 
@@ -360,25 +413,10 @@ class VoicePipeline:
         if not self._running:
             return {"state": self._state.name, "event": "not_running"}
 
-        # Frame-drop detection: compare inter-arrival to expected cadence.
-        # A 2× threshold tolerates normal scheduling jitter while still
-        # surfacing real starvation events (USB renegotiation, capture
-        # task stall, OS scheduler hiccup).
+        # O3 frame-drop detection — see _check_frame_drop_signals for
+        # the per-frame absolute budget + rolling-window drift contract.
         now_monotonic = time.monotonic()
-        if self._last_frame_monotonic is not None:
-            gap_s = now_monotonic - self._last_frame_monotonic
-            if gap_s > self._expected_frame_interval_s * 2.0:
-                logger.warning(
-                    "voice.frame_drop.detected",
-                    **{
-                        "voice.gap_ms": round(gap_s * 1000.0, 1),
-                        "voice.expected_interval_ms": round(
-                            self._expected_frame_interval_s * 1000.0, 1
-                        ),
-                        "voice.state": self._state.name,
-                        "voice.mind_id": self._config.mind_id,
-                    },
-                )
+        self._check_frame_drop_signals(now_monotonic)
         self._last_frame_monotonic = now_monotonic
 
         import numpy as np
@@ -772,6 +810,85 @@ class VoicePipeline:
             )
 
     # -- Internal helpers ----------------------------------------------------
+
+    def _check_frame_drop_signals(self, now_monotonic: float) -> None:
+        """O3 frame-drop monitor: absolute budget + cumulative-drift detector.
+
+        Two complementary signals fire from this single helper:
+
+        * **Absolute per-frame budget** — when the inter-arrival gap
+          exceeds :data:`_FRAME_DROP_ABSOLUTE_BUDGET_S` (64 ms,
+          perceptual threshold for real-time voice). One WARNING per
+          violating frame; the gap value is reported verbatim so
+          dashboards can rank stalls.
+        * **Rolling-window cumulative drift** — once
+          :data:`_FRAME_DROP_DRIFT_WINDOW_FRAMES` samples have
+          accumulated, the mean inter-arrival is compared against the
+          expected cadence. When the ratio exceeds
+          :data:`_FRAME_DROP_DRIFT_RATIO` (10% sustained drift), a
+          WARNING fires — rate-limited by
+          :data:`_FRAME_DROP_DRIFT_RATE_LIMIT_S` so a sustained
+          condition produces one event per second, not one per
+          window. This is the failure mode the pre-O3 single relative
+          threshold silently masked.
+
+        Both events carry ``voice.threshold_kind`` so dashboards can
+        distinguish absolute (catastrophic) vs drift (cumulative)
+        signals without parsing the message string.
+        """
+        if self._last_frame_monotonic is None:
+            # First frame in the session — no inter-arrival yet.
+            return
+        gap_s = now_monotonic - self._last_frame_monotonic
+        self._recent_frame_intervals.append(gap_s)
+
+        # ── Absolute per-frame budget ──────────────────────────────
+        if gap_s > _FRAME_DROP_ABSOLUTE_BUDGET_S:
+            logger.warning(
+                "voice.frame.drop_detected",
+                **{
+                    "voice.threshold_kind": "absolute_budget",
+                    "voice.gap_ms": round(gap_s * 1000.0, 1),
+                    "voice.budget_ms": round(_FRAME_DROP_ABSOLUTE_BUDGET_S * 1000.0, 1),
+                    "voice.expected_interval_ms": round(
+                        self._expected_frame_interval_s * 1000.0, 1
+                    ),
+                    "voice.state": self._state.name,
+                    "voice.mind_id": self._config.mind_id,
+                },
+            )
+
+        # ── Rolling-window cumulative-drift ────────────────────────
+        if len(self._recent_frame_intervals) < _FRAME_DROP_DRIFT_WINDOW_FRAMES:
+            return  # not enough samples yet
+        mean_interval = sum(self._recent_frame_intervals) / len(self._recent_frame_intervals)
+        drift_ratio = mean_interval / self._expected_frame_interval_s
+        if drift_ratio < _FRAME_DROP_DRIFT_RATIO:
+            return
+        # Rate-limit so sustained drift doesn't spam — one event per
+        # _FRAME_DROP_DRIFT_RATE_LIMIT_S window. Fresh start uses
+        # ``None`` sentinel (distinct from ``0.0`` which is a valid
+        # monotonic clock value in tests with injected clocks).
+        if (
+            self._last_drift_warning_monotonic is not None
+            and (now_monotonic - self._last_drift_warning_monotonic)
+            < _FRAME_DROP_DRIFT_RATE_LIMIT_S
+        ):
+            return
+        self._last_drift_warning_monotonic = now_monotonic
+        logger.warning(
+            "voice.frame.cumulative_drift_detected",
+            **{
+                "voice.threshold_kind": "rolling_window_drift",
+                "voice.mean_interval_ms": round(mean_interval * 1000.0, 2),
+                "voice.expected_interval_ms": round(self._expected_frame_interval_s * 1000.0, 2),
+                "voice.drift_ratio": round(drift_ratio, 3),
+                "voice.drift_ratio_threshold": _FRAME_DROP_DRIFT_RATIO,
+                "voice.window_frames": len(self._recent_frame_intervals),
+                "voice.state": self._state.name,
+                "voice.mind_id": self._config.mind_id,
+            },
+        )
 
     def _track_vad_for_heartbeat(self, probability: float) -> None:
         """Accumulate per-frame VAD stats and emit a periodic heartbeat.

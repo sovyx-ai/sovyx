@@ -2321,3 +2321,216 @@ class TestPipelineSelfFeedbackGate:
         with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
             await pipeline.speak("hello")
         assert pipeline.state == VoicePipelineState.IDLE
+
+
+# ===========================================================================
+# O3: Frame-drop detection — absolute budget + cumulative drift
+# ===========================================================================
+#
+# Pre-O3 the pipeline only checked ``gap > 2× expected``. That hides
+# the "all frames consistently late" failure mode: every frame at 1.5×
+# the expected interval produces no warning while cumulative latency
+# audibly degrades the response loop. O3 keeps the per-frame absolute
+# budget (perceptually meaningful) and adds a rolling-window drift
+# detector so sustained-degradation conditions surface independently.
+#
+# Reference: MISSION-voice-mixer-enterprise-refactor-2026-04-25 §3.6, O3.
+
+
+class TestFrameDropDetectionO3:
+    """O3 absolute-budget + cumulative-drift detectors."""
+
+    def test_frame_drop_constants_match_canonical(self) -> None:
+        """Public-surface tuning constants must not drift silently."""
+        from sovyx.voice.pipeline import _orchestrator as mod
+
+        assert mod._FRAME_DROP_ABSOLUTE_BUDGET_S == 0.064  # noqa: PLR2004
+        assert mod._FRAME_DROP_DRIFT_RATIO == 1.10  # noqa: PLR2004
+        assert mod._FRAME_DROP_DRIFT_WINDOW_FRAMES == 32  # noqa: PLR2004
+        assert mod._FRAME_DROP_DRIFT_RATE_LIMIT_S == 1.0
+
+    def _drive_inter_arrival(
+        self,
+        pipeline: VoicePipeline,
+        gaps_s: list[float],
+        *,
+        start_time: float = 1000.0,
+    ) -> None:
+        """Synchronously walk ``_check_frame_drop_signals`` across ``gaps_s``.
+
+        Bypasses ``feed_frame``'s VAD/STT/TTS path (which would need
+        coroutine plumbing). The signal logic under test is pure
+        sync — driving ``_check_frame_drop_signals`` directly with an
+        injected monotonic gives us deterministic frame-drop tests
+        without needing fake VAD frames.
+        """
+        clock_t = start_time
+        # First frame initialises the monotonic anchor (no inter-arrival yet).
+        pipeline._check_frame_drop_signals(clock_t)
+        pipeline._last_frame_monotonic = clock_t
+        for gap in gaps_s:
+            clock_t += gap
+            pipeline._check_frame_drop_signals(clock_t)
+            pipeline._last_frame_monotonic = clock_t
+
+    @pytest.mark.asyncio
+    async def test_no_warning_when_cadence_matches_expected(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.WARNING, logger=_ORCH_LOGGER)
+        pipeline, _ = _make_pipeline()
+        await pipeline.start()
+        # All frames arrive at exactly the expected cadence (32 ms).
+        expected = pipeline._expected_frame_interval_s
+        self._drive_inter_arrival(pipeline, [expected] * 50)
+        assert _events_of(caplog, "voice.frame.drop_detected") == []
+        assert _events_of(caplog, "voice.frame.cumulative_drift_detected") == []
+
+    @pytest.mark.asyncio
+    async def test_absolute_budget_warning_on_single_late_frame(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.WARNING, logger=_ORCH_LOGGER)
+        pipeline, _ = _make_pipeline()
+        await pipeline.start()
+        from sovyx.voice.pipeline import _orchestrator as mod
+
+        expected = pipeline._expected_frame_interval_s
+        # One large gap above the absolute budget (64 ms).
+        late_gap = mod._FRAME_DROP_ABSOLUTE_BUDGET_S + 0.010  # 74 ms
+        self._drive_inter_arrival(pipeline, [expected, late_gap, expected])
+        events = _events_of(caplog, "voice.frame.drop_detected")
+        assert len(events) == 1
+        assert events[0]["voice.threshold_kind"] == "absolute_budget"
+        assert events[0]["voice.gap_ms"] == pytest.approx(74.0, abs=0.5)
+
+    @pytest.mark.asyncio
+    async def test_no_drift_warning_below_ratio_threshold(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """5% sustained drift (below 10% threshold) must NOT fire."""
+        caplog.set_level(logging.WARNING, logger=_ORCH_LOGGER)
+        pipeline, _ = _make_pipeline()
+        await pipeline.start()
+        expected = pipeline._expected_frame_interval_s
+        # 5% drift — below the 10% threshold.
+        slightly_late = expected * 1.05
+        # 50 frames so the rolling window fills up.
+        self._drive_inter_arrival(pipeline, [slightly_late] * 50)
+        assert _events_of(caplog, "voice.frame.cumulative_drift_detected") == []
+
+    @pytest.mark.asyncio
+    async def test_drift_warning_when_all_frames_consistently_late(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The exact pre-O3 silent-failure mode: 50% drift every frame.
+
+        Pre-O3 the relative ``2× expected`` check NEVER fires for this
+        pattern (1.5× < 2×), but cumulative latency audibly degrades.
+        With O3 the rolling-window drift detector catches it.
+        """
+        caplog.set_level(logging.WARNING, logger=_ORCH_LOGGER)
+        pipeline, _ = _make_pipeline()
+        await pipeline.start()
+        expected = pipeline._expected_frame_interval_s
+        # 50% sustained drift — well above 10% threshold.
+        drifted = expected * 1.5
+        from sovyx.voice.pipeline import _orchestrator as mod
+
+        # Need to fill the window (32 frames) before drift fires.
+        self._drive_inter_arrival(pipeline, [drifted] * mod._FRAME_DROP_DRIFT_WINDOW_FRAMES)
+        events = _events_of(caplog, "voice.frame.cumulative_drift_detected")
+        assert len(events) == 1
+        assert events[0]["voice.threshold_kind"] == "rolling_window_drift"
+        assert events[0]["voice.drift_ratio"] == pytest.approx(1.5, abs=0.01)
+
+    @pytest.mark.asyncio
+    async def test_drift_warning_rate_limited(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Sustained drift must produce ≤1 event per rate-limit window."""
+        caplog.set_level(logging.WARNING, logger=_ORCH_LOGGER)
+        pipeline, _ = _make_pipeline()
+        await pipeline.start()
+        expected = pipeline._expected_frame_interval_s
+        drifted = expected * 1.5
+        from sovyx.voice.pipeline import _orchestrator as mod
+
+        # Fill window + many extra frames within the same rate-limit window.
+        # 32 frames at drifted=48ms = 1.536s — already past the 1s rate limit
+        # window when window-fill completes. So we test with less frames OR
+        # we expect just 1 event since drift detection happens on EACH frame.
+        # Use a tighter drift_window-only test to ensure proper rate limit.
+        # Drive 32 frames quickly → first emission. Then drive more frames
+        # at unchanged drifted cadence — should NOT re-emit because
+        # rate-limit is gauged by the SAME monotonic clock the frames
+        # advance.
+        gaps = [drifted] * mod._FRAME_DROP_DRIFT_WINDOW_FRAMES
+        # Total monotonic advance = 32 * 48ms = 1.536s — past the 1s
+        # rate-limit, so we instead use shorter-than-expected drifted
+        # increments by injecting an artificially-tight monotonic clock.
+        # Easier: drive less drift per frame to fit window-fill within
+        # 1 second.
+        small_drift = expected * 1.15  # 36.8ms
+        # 32 frames * 36.8ms = 1.18s (just past rate limit), so reduce
+        # frames slightly to stay inside the window.
+        # Actually, the rate-limit is measured between WARNING emissions,
+        # not from t=0. First warning happens at frame 32 (window full).
+        # Subsequent frames at 36.8ms each — we need (next - first) < 1s
+        # to verify rate-limiting suppression. So use ≤27 frames after
+        # the first emission (27 * 36.8 = ~993ms < 1s).
+        self._drive_inter_arrival(
+            pipeline, [small_drift] * (mod._FRAME_DROP_DRIFT_WINDOW_FRAMES + 27)
+        )
+        events = _events_of(caplog, "voice.frame.cumulative_drift_detected")
+        assert len(events) == 1, (
+            f"expected exactly 1 event under rate-limit window, got {len(events)}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_drift_re_arms_after_rate_limit_window(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """After rate-limit window elapses, a new drift event fires."""
+        caplog.set_level(logging.WARNING, logger=_ORCH_LOGGER)
+        pipeline, _ = _make_pipeline()
+        await pipeline.start()
+        from sovyx.voice.pipeline import _orchestrator as mod
+
+        expected = pipeline._expected_frame_interval_s
+        drifted = expected * 1.5  # 48ms
+        # 32 frames * 48ms = 1.536s — second emission becomes eligible
+        # after the rate-limit elapses (~1s), so the second half of the
+        # 50-frame run produces a new event.
+        self._drive_inter_arrival(
+            pipeline,
+            [drifted] * (mod._FRAME_DROP_DRIFT_WINDOW_FRAMES * 2),
+        )
+        events = _events_of(caplog, "voice.frame.cumulative_drift_detected")
+        # First fires at frame 32 (~1.536s in). Second fires after rate
+        # limit elapses — the loop drives (drift_window * 2) = 64 frames
+        # total = ~3.07s. Rate-limit is 1s → we expect at least 2 events.
+        assert len(events) >= 2  # noqa: PLR2004
+
+    @pytest.mark.asyncio
+    async def test_first_frame_never_fires_either_signal(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The first frame can't produce inter-arrival, so no event fires."""
+        caplog.set_level(logging.WARNING, logger=_ORCH_LOGGER)
+        pipeline, _ = _make_pipeline()
+        await pipeline.start()
+        # Just one anchor — _check_frame_drop_signals returns early.
+        pipeline._check_frame_drop_signals(1000.0)
+        assert _events_of(caplog, "voice.frame.drop_detected") == []
+        assert _events_of(caplog, "voice.frame.cumulative_drift_detected") == []
+
+    @pytest.mark.asyncio
+    async def test_recent_intervals_window_is_bounded(self) -> None:
+        """The rolling-window deque must stay constant size."""
+        pipeline, _ = _make_pipeline()
+        await pipeline.start()
+        from sovyx.voice.pipeline import _orchestrator as mod
+
+        expected = pipeline._expected_frame_interval_s
+        # Drive way more than the window size — ensure no unbounded growth.
+        self._drive_inter_arrival(pipeline, [expected] * 200)
+        assert len(pipeline._recent_frame_intervals) == mod._FRAME_DROP_DRIFT_WINDOW_FRAMES
