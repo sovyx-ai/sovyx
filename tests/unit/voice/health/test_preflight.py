@@ -285,6 +285,276 @@ class TestPreflightOrchestrator:
         assert report.steps[0].details == {"count": 1}
 
 
+# ===========================================================================
+# H1: Step dependency gating (skip dependent steps on prerequisite failure)
+# ===========================================================================
+#
+# Pre-H1: every step ran sequentially. ``stop_on_first_failure=False``
+# (the doctor / dashboard path) ran ALL steps even after a precondition
+# failed, producing confusing duplicate failures with the same root
+# cause (e.g. capture cascade after PortAudio enumeration broke). H1
+# adds declarative ``depends_on`` to PreflightStepSpec; failed-dependency
+# steps are skipped (not run), and the resulting outcome carries
+# ``skipped_due_to`` so dashboards can render the lineage.
+#
+# Reference: MISSION-voice-mixer-enterprise-refactor-2026-04-25 §3.9, H1.
+
+
+class TestStepDependenciesH1:
+    @pytest.mark.asyncio()
+    async def test_no_deps_means_step_runs_unaffected(self) -> None:
+        """Pre-H1 specs (no ``depends_on``) must continue to work."""
+        specs = [
+            PreflightStepSpec(
+                step=1,
+                name="a",
+                code=PreflightStepCode.MIC_MUTED,
+                check=_fail_check("nope"),
+            ),
+            PreflightStepSpec(
+                step=2,
+                name="b",
+                code=PreflightStepCode.MIC_PERMISSION_DENIED,
+                check=_pass_check(),
+            ),
+        ]
+        report = await run_preflight(steps=specs, stop_on_first_failure=False)
+        # Both ran (step 2 doesn't declare dep on step 1's code).
+        assert len(report.steps) == 2
+        assert report.steps[0].passed is False
+        assert report.steps[1].passed is True
+        assert report.steps[1].skipped_due_to == ()
+
+    @pytest.mark.asyncio()
+    async def test_dep_failure_skips_dependent_step(self) -> None:
+        ran: list[int] = []
+
+        def _trace_pass(step: int) -> Any:
+            async def _check() -> tuple[bool, str, dict[str, Any]]:
+                ran.append(step)
+                return True, "", {}
+
+            return _check
+
+        def _trace_fail(step: int) -> Any:
+            async def _check() -> tuple[bool, str, dict[str, Any]]:
+                ran.append(step)
+                return False, "broke", {}
+
+            return _check
+
+        specs = [
+            PreflightStepSpec(
+                step=4,
+                name="portaudio",
+                code=PreflightStepCode.PORTAUDIO_UNAVAILABLE,
+                check=_trace_fail(4),
+            ),
+            PreflightStepSpec(
+                step=5,
+                name="capture",
+                code=PreflightStepCode.CAPTURE_UNHEALTHY,
+                check=_trace_pass(5),
+                depends_on=(PreflightStepCode.PORTAUDIO_UNAVAILABLE,),
+            ),
+        ]
+        report = await run_preflight(steps=specs, stop_on_first_failure=False)
+
+        # Step 4 ran and failed; step 5 was SKIPPED (its check never ran).
+        assert ran == [4]
+        assert len(report.steps) == 2
+        assert report.steps[1].passed is False
+        assert report.steps[1].skipped_due_to == (PreflightStepCode.PORTAUDIO_UNAVAILABLE,)
+        assert "skipped" in report.steps[1].hint
+        assert report.steps[1].duration_ms == 0.0
+        assert report.steps[1].details["skipped_due_to"] == ["portaudio_unavailable"]
+
+    @pytest.mark.asyncio()
+    async def test_independent_steps_after_skip_still_run(self) -> None:
+        """A skipped step doesn't propagate skipping to unrelated peers."""
+        ran: list[int] = []
+
+        def _trace_pass(step: int) -> Any:
+            async def _check() -> tuple[bool, str, dict[str, Any]]:
+                ran.append(step)
+                return True, "", {}
+
+            return _check
+
+        def _trace_fail(step: int) -> Any:
+            async def _check() -> tuple[bool, str, dict[str, Any]]:
+                ran.append(step)
+                return False, "broke", {}
+
+            return _check
+
+        specs = [
+            PreflightStepSpec(
+                step=4,
+                name="portaudio",
+                code=PreflightStepCode.PORTAUDIO_UNAVAILABLE,
+                check=_trace_fail(4),
+            ),
+            PreflightStepSpec(
+                step=5,
+                name="capture",
+                code=PreflightStepCode.CAPTURE_UNHEALTHY,
+                check=_trace_pass(5),
+                depends_on=(PreflightStepCode.PORTAUDIO_UNAVAILABLE,),
+            ),
+            # Step 7 LLM has nothing to do with PortAudio — must still run.
+            PreflightStepSpec(
+                step=7,
+                name="llm",
+                code=PreflightStepCode.LLM_UNREACHABLE,
+                check=_trace_pass(7),
+            ),
+        ]
+        report = await run_preflight(steps=specs, stop_on_first_failure=False)
+        assert ran == [4, 7]
+        assert len(report.steps) == 3
+        assert report.steps[2].passed is True
+
+    @pytest.mark.asyncio()
+    async def test_multiple_failed_deps_all_listed_in_skipped_due_to(self) -> None:
+        """A step depending on N codes lists ALL failed ones in lineage."""
+        specs = [
+            PreflightStepSpec(
+                step=1,
+                name="mic",
+                code=PreflightStepCode.MIC_MUTED,
+                check=_fail_check("muted"),
+            ),
+            PreflightStepSpec(
+                step=4,
+                name="portaudio",
+                code=PreflightStepCode.PORTAUDIO_UNAVAILABLE,
+                check=_fail_check("no host api"),
+            ),
+            PreflightStepSpec(
+                step=5,
+                name="capture",
+                code=PreflightStepCode.CAPTURE_UNHEALTHY,
+                check=_pass_check(),  # would pass if reached
+                depends_on=(
+                    PreflightStepCode.MIC_MUTED,
+                    PreflightStepCode.PORTAUDIO_UNAVAILABLE,
+                ),
+            ),
+        ]
+        report = await run_preflight(steps=specs, stop_on_first_failure=False)
+        skipped = report.steps[2]
+        assert skipped.passed is False
+        assert set(skipped.skipped_due_to) == {
+            PreflightStepCode.MIC_MUTED,
+            PreflightStepCode.PORTAUDIO_UNAVAILABLE,
+        }
+
+    @pytest.mark.asyncio()
+    async def test_dep_satisfied_when_prerequisite_passed(self) -> None:
+        """If the dependency PASSED, the dependent step runs normally."""
+        specs = [
+            PreflightStepSpec(
+                step=4,
+                name="portaudio",
+                code=PreflightStepCode.PORTAUDIO_UNAVAILABLE,
+                check=_pass_check(),
+            ),
+            PreflightStepSpec(
+                step=5,
+                name="capture",
+                code=PreflightStepCode.CAPTURE_UNHEALTHY,
+                check=_pass_check(),
+                depends_on=(PreflightStepCode.PORTAUDIO_UNAVAILABLE,),
+            ),
+        ]
+        report = await run_preflight(steps=specs, stop_on_first_failure=False)
+        assert all(s.passed for s in report.steps)
+        assert all(s.skipped_due_to == () for s in report.steps)
+
+    @pytest.mark.asyncio()
+    async def test_skipped_step_failure_does_NOT_clear_first_failure(self) -> None:
+        """``first_failure`` keeps the FIRST failed step (not the skipped one)."""
+        specs = [
+            PreflightStepSpec(
+                step=4,
+                name="portaudio",
+                code=PreflightStepCode.PORTAUDIO_UNAVAILABLE,
+                check=_fail_check("no host"),
+            ),
+            PreflightStepSpec(
+                step=5,
+                name="capture",
+                code=PreflightStepCode.CAPTURE_UNHEALTHY,
+                check=_pass_check(),
+                depends_on=(PreflightStepCode.PORTAUDIO_UNAVAILABLE,),
+            ),
+        ]
+        report = await run_preflight(steps=specs, stop_on_first_failure=False)
+        assert report.first_failure is not None
+        assert report.first_failure.code is PreflightStepCode.PORTAUDIO_UNAVAILABLE
+
+    @pytest.mark.asyncio()
+    async def test_skipped_step_can_propagate_further(self) -> None:
+        """A SKIPPED step's code joins ``failed_codes``, so transitive
+        depends_on chains also get skipped (cascading dependency)."""
+        ran: list[int] = []
+
+        def _trace_pass(step: int) -> Any:
+            async def _check() -> tuple[bool, str, dict[str, Any]]:
+                ran.append(step)
+                return True, "", {}
+
+            return _check
+
+        def _trace_fail(step: int) -> Any:
+            async def _check() -> tuple[bool, str, dict[str, Any]]:
+                ran.append(step)
+                return False, "broke", {}
+
+            return _check
+
+        # 4 fails → 5 skipped (depends on 4) → 6 skipped (depends on 5)
+        specs = [
+            PreflightStepSpec(
+                step=4,
+                name="portaudio",
+                code=PreflightStepCode.PORTAUDIO_UNAVAILABLE,
+                check=_trace_fail(4),
+            ),
+            PreflightStepSpec(
+                step=5,
+                name="capture",
+                code=PreflightStepCode.CAPTURE_UNHEALTHY,
+                check=_trace_pass(5),
+                depends_on=(PreflightStepCode.PORTAUDIO_UNAVAILABLE,),
+            ),
+            PreflightStepSpec(
+                step=6,
+                name="tts",
+                code=PreflightStepCode.TTS_UNAVAILABLE,
+                check=_trace_pass(6),
+                depends_on=(PreflightStepCode.CAPTURE_UNHEALTHY,),
+            ),
+        ]
+        report = await run_preflight(steps=specs, stop_on_first_failure=False)
+        # Only step 4 actually ran its check.
+        assert ran == [4]
+        assert report.steps[1].skipped_due_to == (PreflightStepCode.PORTAUDIO_UNAVAILABLE,)
+        assert report.steps[2].skipped_due_to == (PreflightStepCode.CAPTURE_UNHEALTHY,)
+
+    @pytest.mark.asyncio()
+    async def test_depends_on_default_is_empty_tuple(self) -> None:
+        """Backwards-compat: omitting depends_on means no dependencies."""
+        spec = PreflightStepSpec(
+            step=1,
+            name="a",
+            code=PreflightStepCode.MIC_MUTED,
+            check=_pass_check(),
+        )
+        assert spec.depends_on == ()
+
+
 class _FakeSD:
     """Minimal ``sounddevice`` stub."""
 

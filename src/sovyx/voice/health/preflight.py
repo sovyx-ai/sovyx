@@ -135,6 +135,23 @@ class PreflightStep:
     """Step-specific extra context (winning combo, detected APOs,
     reachable providers, etc.). The orchestrator never inspects this."""
 
+    skipped_due_to: tuple[PreflightStepCode, ...] = ()
+    """Step codes whose failure caused this step to be skipped (H1).
+
+    Empty tuple means the step's ``check`` actually executed and
+    produced ``passed`` / ``hint`` / ``details`` directly. A non-empty
+    tuple means the step was preemptively marked failed because at
+    least one of its declared :attr:`PreflightStepSpec.depends_on`
+    codes was in the failed set when execution reached it. The
+    orchestrator skips the ``check`` callable entirely (preserving
+    its preconditions — the whole reason dependencies exist), sets
+    ``passed=False``, ``duration_ms=0.0``, and populates this field
+    so the dashboard can distinguish a real failure from a cascaded
+    one. Operators reading the report see a clear ``skipped because
+    step X failed`` lineage instead of confusing repeat-failure
+    messages from a check that depends on a broken precondition.
+    """
+
 
 @dataclass(frozen=True, slots=True)
 class PreflightReport:
@@ -172,12 +189,32 @@ class PreflightCheck(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class PreflightStepSpec:
-    """Declaration of one step the orchestrator should run."""
+    """Declaration of one step the orchestrator should run.
+
+    Attributes:
+        step: 1-based ordinal — also drives execution order.
+        name: Human-readable name surfaced in logs / wizard UI.
+        code: Stable machine-readable identity.
+        check: Async callable returning ``(passed, hint, details)``.
+        depends_on: Step codes this step structurally depends on (H1).
+            When :func:`run_preflight` runs with
+            ``stop_on_first_failure=False`` (the doctor CLI / dashboard
+            path that wants the full report) and any code in this tuple
+            failed earlier in the run, the orchestrator skips this
+            step's ``check`` and emits a ``passed=False`` outcome with
+            :attr:`PreflightStep.skipped_due_to` populated. Empty by
+            default — pre-H1 specs continue to work unchanged. Use this
+            to express real preconditions (e.g. step 5 capture-cascade
+            cannot run if step 4 PortAudio enumeration is broken — a
+            cascade attempt would just produce a confusing duplicate
+            failure with the same root cause).
+    """
 
     step: int
     name: str
     code: PreflightStepCode
     check: PreflightCheck
+    depends_on: tuple[PreflightStepCode, ...] = ()
 
 
 async def run_preflight(
@@ -224,8 +261,52 @@ async def run_preflight(
     run_start = clock()
     results: list[PreflightStep] = []
     first_failure: PreflightStep | None = None
+    failed_codes: set[PreflightStepCode] = set()
 
     for spec in steps:
+        # H1 dependency gate: skip the check entirely when a declared
+        # precondition has already failed in this run. Without this,
+        # downstream steps run on a broken precondition and produce
+        # confusing duplicate failures with the same root cause (e.g.
+        # ``capture cascade unhealthy`` after ``PortAudio unavailable``
+        # — the cascade was always going to fail; logging it pretends
+        # the user has two problems to fix when they have one).
+        unmet_deps = tuple(dep for dep in spec.depends_on if dep in failed_codes)
+        if unmet_deps:
+            outcome = PreflightStep(
+                step=spec.step,
+                name=spec.name,
+                code=spec.code,
+                passed=False,
+                hint=(
+                    f"skipped — depends on "
+                    f"{', '.join(d.value for d in unmet_deps)} which failed earlier"
+                ),
+                duration_ms=0.0,
+                details={"skipped_due_to": [d.value for d in unmet_deps]},
+                skipped_due_to=unmet_deps,
+            )
+            results.append(outcome)
+            failed_codes.add(outcome.code)
+            logger.info(
+                "voice.preflight.step_skipped_dependency",
+                **{
+                    "voice.step": outcome.step,
+                    "voice.name": outcome.name,
+                    "voice.code": outcome.code.value,
+                    "voice.skipped_due_to": [d.value for d in unmet_deps],
+                },
+            )
+            record_preflight_failure(step=outcome.name, code=outcome.code.value)
+            if first_failure is None:
+                first_failure = outcome
+            # Skipped steps don't honour stop_on_first_failure: by
+            # construction they didn't *run*, so there's nothing to halt.
+            # They DO populate first_failure for the report shape, but
+            # the loop continues so subsequent independent steps still
+            # produce diagnostics for the operator.
+            continue
+
         step_start = clock()
         try:
             passed, hint, details = await spec.check()
@@ -262,6 +343,7 @@ async def run_preflight(
             duration_ms=round(outcome.duration_ms, 1),
         )
         if not outcome.passed:
+            failed_codes.add(outcome.code)
             record_preflight_failure(step=outcome.name, code=outcome.code.value)
             if first_failure is None:
                 first_failure = outcome
