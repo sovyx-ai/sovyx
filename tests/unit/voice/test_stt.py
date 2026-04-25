@@ -1200,3 +1200,86 @@ class TestSTTM2WireUp:
             if s == VoiceStage.STT and k == StageEventKind.DROP and et is not None
         ]
         assert len(drops) >= 1
+
+
+# ---------------------------------------------------------------------------
+# TS3 chaos wire-up — STT_TIMEOUT injection
+# ---------------------------------------------------------------------------
+
+
+class TestSTTChaosWireUp:
+    """MoonshineSTT.transcribe must honour the chaos injector.
+
+    With chaos enabled at 100% rate, every transcribe should
+    produce the SAME observable outcome as a real timeout: the
+    rejection_reason set, the timeout_count bumped, and the M2
+    DROP event fired with error_type=transcribe_timeout.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_chaos_disabled_no_injection(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """SOVYX_CHAOS__ENABLED unset → no timeouts injected."""
+        from sovyx.voice._chaos import _ENABLED_ENV_VAR, _RATE_ENV_VAR_PREFIX
+
+        monkeypatch.delenv(_ENABLED_ENV_VAR, raising=False)
+        monkeypatch.setenv(f"{_RATE_ENV_VAR_PREFIX}STT_TIMEOUT_PCT", "100")
+
+        stt, mock_mv = _build_stt(completed_text="hello")
+        with patch.dict("sys.modules", {"moonshine_voice": mock_mv}):
+            await stt.initialize()
+            result = await stt.transcribe(np.zeros(16_000, dtype=np.float32))
+            assert result.rejection_reason is None
+            assert stt.timeout_count == 0
+
+    @pytest.mark.asyncio()
+    async def test_chaos_enabled_at_100_pct_always_injects_timeout(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Chaos at 100% → every transcribe yields a timeout
+        rejection (same observable behaviour as a real model
+        timeout)."""
+        from sovyx.voice._chaos import _ENABLED_ENV_VAR, _RATE_ENV_VAR_PREFIX
+
+        monkeypatch.setenv(_ENABLED_ENV_VAR, "true")
+        monkeypatch.setenv(f"{_RATE_ENV_VAR_PREFIX}STT_TIMEOUT_PCT", "100")
+
+        stt, mock_mv = _build_stt(completed_text="hello")
+        with patch.dict("sys.modules", {"moonshine_voice": mock_mv}):
+            await stt.initialize()
+            result = await stt.transcribe(np.zeros(16_000, dtype=np.float32))
+            assert result.text == ""
+            assert result.rejection_reason == "transcribe_timeout"
+            assert stt.timeout_count == 1
+
+    @pytest.mark.asyncio()
+    async def test_chaos_injects_via_same_path_as_real_timeout(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The injected timeout fires the same M2 DROP event
+        (error_type=transcribe_timeout) as a real timeout — proves
+        the chaos injection path is observationally identical to
+        the real failure path."""
+        from sovyx.voice import stt as stt_mod
+        from sovyx.voice._chaos import _ENABLED_ENV_VAR, _RATE_ENV_VAR_PREFIX
+        from sovyx.voice._stage_metrics import StageEventKind, VoiceStage
+
+        recorded: list[tuple[Any, Any, Any]] = []
+
+        def _capture(stage: Any, kind: Any, *, error_type: str | None = None) -> None:
+            recorded.append((stage, kind, error_type))
+
+        monkeypatch.setattr(stt_mod, "record_stage_event", _capture)
+        monkeypatch.setenv(_ENABLED_ENV_VAR, "true")
+        monkeypatch.setenv(f"{_RATE_ENV_VAR_PREFIX}STT_TIMEOUT_PCT", "100")
+
+        stt, mock_mv = _build_stt(completed_text="hello")
+        with patch.dict("sys.modules", {"moonshine_voice": mock_mv}):
+            await stt.initialize()
+            await stt.transcribe(np.zeros(16_000, dtype=np.float32))
+
+        assert (VoiceStage.STT, StageEventKind.DROP, "transcribe_timeout") in recorded

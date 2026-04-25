@@ -32,6 +32,7 @@ from enum import IntEnum, auto
 from typing import TYPE_CHECKING, Any
 
 from sovyx.observability.logging import get_logger
+from sovyx.voice._chaos import ChaosInjector, ChaosSite
 from sovyx.voice._stage_metrics import (
     StageEventKind,
     VoiceStage,
@@ -393,6 +394,13 @@ class MoonshineSTT(STTEngine):
         # nothing" — indistinguishable from real silence at the
         # caller boundary, so chronic STT degradation never surfaced.
         self._timeout_count: int = 0
+        # TS3 chaos injector — opt-in failure injection at the
+        # STT_TIMEOUT site. Disabled by default
+        # (SOVYX_CHAOS__ENABLED=False); chaos test matrix sets the
+        # env var + per-site rate to validate that the S2 timeout
+        # taxonomy + M2 DROP event fire correctly under realistic
+        # operating conditions.
+        self._chaos = ChaosInjector(site_id=ChaosSite.STT_TIMEOUT.value)
 
     @property
     def state(self) -> STTState:
@@ -505,6 +513,18 @@ class MoonshineSTT(STTEngine):
             with measure_stage_duration(VoiceStage.STT) as _stage_token:
                 start = time.monotonic()
                 try:
+                    # TS3 chaos: opt-in TimeoutError injection.
+                    # When the operator sets SOVYX_CHAOS__ENABLED=
+                    # true AND SOVYX_CHAOS__INJECT_STT_TIMEOUT_PCT >
+                    # 0, this randomly raises a TimeoutError before
+                    # any real work happens — caught by the same
+                    # except TimeoutError below as a real model
+                    # timeout, exercising the full recovery path
+                    # (counter bump, structured event,
+                    # rejection_reason result).
+                    if self._chaos.should_inject():
+                        msg = "chaos-injected STT timeout"
+                        raise TimeoutError(msg)
                     text = await self._transcribe_oneshot(audio, sample_rate)
                 except TimeoutError:
                     # S2: timeout is its own rejection class — distinct
