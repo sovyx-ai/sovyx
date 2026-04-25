@@ -88,3 +88,6 @@ erebus/
 # release and don't ship with the main package.
 /sovyx-voice-diag-v*.tar.gz
 /sovyx-voice-diag-v*.tar.gz.sha256
+
+# pilot tarballs received from operators (analyst-side workspace)
+incoming/
