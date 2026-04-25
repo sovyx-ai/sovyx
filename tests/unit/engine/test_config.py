@@ -595,3 +595,191 @@ class TestVoiceTuningV13EmpiricalDefaults:
         )
         assert cfg.linux_mixer_user_customization_threshold_apply == 0.4
         assert cfg.linux_mixer_user_customization_threshold_skip == 0.7
+
+
+# ===========================================================================
+# Mission #11: VoiceTuningConfig pydantic Field bounds hardening
+# ===========================================================================
+#
+# Pre-hardening, fields like ``transcribe_timeout_seconds`` and
+# ``pipeline_deaf_min_frames`` were bare int/float defaults — env-var
+# overrides like ``SOVYX_TUNING__VOICE__TRANSCRIBE_TIMEOUT_SECONDS=0``
+# (instant-fail every transcription) or
+# ``SOVYX_TUNING__VOICE__PIPELINE_DEAF_MIN_FRAMES=99999999`` (deaf
+# detector never fires) loaded silently and produced mysterious
+# runtime behaviour. Pydantic ``Field(ge=, le=)`` bounds catch
+# misconfiguration at config-load time so the failure is loud
+# (ValidationError on instantiation) instead of mysterious.
+#
+# Reference: MISSION-voice-mixer-enterprise-refactor-2026-04-25
+# Appendix A band-aid #11 (Deaf Threshold bounds).
+
+
+class TestVoiceTuningPydanticBoundsB11:
+    """Pydantic Field bounds reject out-of-range values at load time."""
+
+    @staticmethod
+    def _clear_voice_env(monkeypatch: pytest.MonkeyPatch) -> None:
+        for key in list(os.environ):
+            if key.startswith("SOVYX_TUNING__VOICE__"):
+                monkeypatch.delenv(key, raising=False)
+
+    # ── transcribe_timeout_seconds bounds ────────────────────────────
+
+    def test_transcribe_timeout_below_floor_rejected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from pydantic import ValidationError
+
+        self._clear_voice_env(monkeypatch)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(transcribe_timeout_seconds=0.0)
+
+    def test_transcribe_timeout_above_ceiling_rejected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from pydantic import ValidationError
+
+        self._clear_voice_env(monkeypatch)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(transcribe_timeout_seconds=999.0)
+
+    def test_transcribe_timeout_at_floor_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._clear_voice_env(monkeypatch)
+        cfg = VoiceTuningConfig(transcribe_timeout_seconds=0.5)
+        assert cfg.transcribe_timeout_seconds == 0.5
+
+    def test_transcribe_timeout_at_ceiling_accepted(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._clear_voice_env(monkeypatch)
+        cfg = VoiceTuningConfig(transcribe_timeout_seconds=120.0)
+        assert cfg.transcribe_timeout_seconds == 120.0
+
+    # ── pipeline_deaf_min_frames bounds ──────────────────────────────
+
+    def test_deaf_min_frames_below_floor_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from pydantic import ValidationError
+
+        self._clear_voice_env(monkeypatch)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(pipeline_deaf_min_frames=5)
+
+    def test_deaf_min_frames_above_ceiling_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from pydantic import ValidationError
+
+        self._clear_voice_env(monkeypatch)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(pipeline_deaf_min_frames=99_999_999)
+
+    # ── pipeline_deaf_vad_max_threshold bounds ───────────────────────
+
+    def test_deaf_vad_threshold_above_ceiling_rejected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from pydantic import ValidationError
+
+        self._clear_voice_env(monkeypatch)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(pipeline_deaf_vad_max_threshold=0.95)
+
+    def test_deaf_vad_threshold_negative_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from pydantic import ValidationError
+
+        self._clear_voice_env(monkeypatch)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(pipeline_deaf_vad_max_threshold=-0.1)
+
+    # ── deaf_warnings_before_exclusive_retry bounds ──────────────────
+
+    def test_deaf_warnings_zero_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Zero would disable the autofix entirely (defeats the
+        feature). Mission #11 requires a floor of 1."""
+        from pydantic import ValidationError
+
+        self._clear_voice_env(monkeypatch)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(deaf_warnings_before_exclusive_retry=0)
+
+    def test_deaf_warnings_above_ceiling_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from pydantic import ValidationError
+
+        self._clear_voice_env(monkeypatch)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(deaf_warnings_before_exclusive_retry=100)
+
+    # ── pipeline_heartbeat_interval_seconds bounds ───────────────────
+
+    def test_heartbeat_interval_below_floor_rejected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from pydantic import ValidationError
+
+        self._clear_voice_env(monkeypatch)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(pipeline_heartbeat_interval_seconds=0.1)
+
+    def test_heartbeat_interval_above_ceiling_rejected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from pydantic import ValidationError
+
+        self._clear_voice_env(monkeypatch)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(pipeline_heartbeat_interval_seconds=120.0)
+
+    # ── streaming_drain_seconds bounds ───────────────────────────────
+
+    def test_streaming_drain_above_ceiling_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from pydantic import ValidationError
+
+        self._clear_voice_env(monkeypatch)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(streaming_drain_seconds=30.0)
+
+    # ── cloud_stt_timeout_seconds bounds ─────────────────────────────
+
+    def test_cloud_stt_timeout_below_floor_rejected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from pydantic import ValidationError
+
+        self._clear_voice_env(monkeypatch)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(cloud_stt_timeout_seconds=0.0)
+
+    def test_cloud_stt_timeout_above_ceiling_rejected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from pydantic import ValidationError
+
+        self._clear_voice_env(monkeypatch)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(cloud_stt_timeout_seconds=600.0)
+
+    # ── cloud_stt_max_audio_seconds bounds ───────────────────────────
+
+    def test_cloud_stt_max_audio_above_ceiling_rejected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from pydantic import ValidationError
+
+        self._clear_voice_env(monkeypatch)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(cloud_stt_max_audio_seconds=999.0)
+
+    # ── Backwards-compat: shipped defaults still validate ────────────
+
+    def test_default_config_passes_hardened_validation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression — the shipped defaults must continue to load
+        cleanly after the hardening."""
+        self._clear_voice_env(monkeypatch)
+        cfg = VoiceTuningConfig()
+        # Sanity: read every field that was hardened — instantiation
+        # alone proves all bounds passed.
+        assert cfg.transcribe_timeout_seconds == 10.0
+        assert cfg.streaming_drain_seconds == 0.5
+        assert cfg.cloud_stt_timeout_seconds == 30.0
+        assert cfg.cloud_stt_max_audio_seconds == 120.0
+        assert cfg.pipeline_deaf_min_frames == 150  # noqa: PLR2004
+        assert cfg.pipeline_deaf_vad_max_threshold == 0.05
+        assert cfg.deaf_warnings_before_exclusive_retry == 2  # noqa: PLR2004
+        assert cfg.pipeline_heartbeat_interval_seconds == 5.0

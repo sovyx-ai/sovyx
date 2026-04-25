@@ -148,10 +148,32 @@ class VoiceTuningConfig(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="SOVYX_TUNING__VOICE__", extra="ignore")
 
-    transcribe_timeout_seconds: float = 10.0
-    streaming_drain_seconds: float = 0.5
-    cloud_stt_timeout_seconds: float = 30.0
-    cloud_stt_max_audio_seconds: float = 120.0
+    # ── Mission #11 hardening: pydantic Field bounds on the highest-
+    #    risk timeout / threshold fields. Catches misconfiguration at
+    #    config-load time (e.g.
+    #    ``SOVYX_TUNING__VOICE__TRANSCRIBE_TIMEOUT_SECONDS=0`` would
+    #    instant-fail every transcription; pre-hardening it loaded
+    #    silently) instead of at usage time. Bounds chosen from
+    #    perceptual + operational ceilings; widen via deliberate code
+    #    change, never via env override.
+    transcribe_timeout_seconds: float = Field(default=10.0, ge=0.5, le=120.0)
+    """STT transcription budget. Floor 0.5 s prevents instant-fail
+    misconfigurations; ceiling 120 s caps the worst-case wait so a
+    wedged backend doesn't hang the daemon."""
+
+    streaming_drain_seconds: float = Field(default=0.5, ge=0.0, le=10.0)
+    """Post-stop drain budget for the moonshine streaming listener.
+    Above 10 s the next turn is wedged behind a tail of stale events."""
+
+    cloud_stt_timeout_seconds: float = Field(default=30.0, ge=1.0, le=300.0)
+    """Cloud STT (OpenAI Whisper API) request timeout. Floor 1 s
+    prevents instant-fail; ceiling 300 s = 5 min, beyond which the
+    request is structurally hung and the user should retry."""
+
+    cloud_stt_max_audio_seconds: float = Field(default=120.0, ge=1.0, le=600.0)
+    """Maximum audio duration accepted by the cloud STT endpoint.
+    OpenAI's documented cap is 25 MB raw audio (~10 min @ 16 kHz);
+    the 600 s ceiling matches that with headroom for retries."""
     auto_select_min_gpu_vram_mb: int = 4_000
     auto_select_high_ram_threshold_mb: int = 16_000
     auto_select_low_ram_threshold_mb: int = 2_048
@@ -180,7 +202,11 @@ class VoiceTuningConfig(BaseSettings):
     # interval with max VAD probability observed, frames processed, and the
     # current FSM state. Essential for diagnosing "VAD never fires" scenarios
     # where audio is captured but the orchestrator stays in IDLE.
-    pipeline_heartbeat_interval_seconds: float = 5.0
+    pipeline_heartbeat_interval_seconds: float = Field(default=5.0, ge=0.5, le=60.0)
+    """Mission #11: floor 0.5 s prevents log-storm from a fast
+    heartbeat misconfiguration (would emit ~120 events/min);
+    ceiling 60 s ensures the deaf detector's window is bounded
+    enough to react before the user gives up."""
     # Deaf-pipeline heuristic: if the orchestrator has processed at
     # least ``pipeline_deaf_min_frames`` frames in the current heartbeat
     # window and the max observed VAD probability never crossed
@@ -190,8 +216,20 @@ class VoiceTuningConfig(BaseSettings):
     # RMS) but VAD silently rejects every frame — typically because the
     # frames reaching :meth:`VoicePipeline.feed_frame` are not 16 kHz
     # mono (FrameNormalizer misconfigured / bypassed).
-    pipeline_deaf_min_frames: int = 150  # ~4.8 s at 32 ms/frame
-    pipeline_deaf_vad_max_threshold: float = 0.05
+    pipeline_deaf_min_frames: int = Field(default=150, ge=10, le=10_000)
+    """Mission #11: floor 10 prevents instant-trigger from a single
+    quiet frame (would cause deaf false-positives on every silent
+    pause); ceiling 10 000 caps the window at ~5 min @ 32 ms/frame
+    so a misconfigured value can't disable the deaf detector
+    entirely (which would re-introduce the silent-failure mode the
+    detector exists to surface)."""
+
+    pipeline_deaf_vad_max_threshold: float = Field(default=0.05, ge=0.0, le=0.5)
+    """Mission #11: ceiling 0.5 prevents a misconfigured value from
+    accepting normal-speech frames as "deaf" (a value above the
+    onset threshold would mark every speech window as silent input).
+    Floor 0.0 is permissive — equality with 0.0 means "absolutely
+    no signal" which is a legitimate strictness level."""
     # Auto-bypass: when the deaf heuristic fires ``N`` heartbeats in a row
     # on an endpoint the :mod:`sovyx.voice._apo_detector` flagged as
     # running Windows Voice Clarity (``voice_clarity_active=True``), the
@@ -204,7 +242,13 @@ class VoiceTuningConfig(BaseSettings):
     # never auto-retry. The retry attempt is one-shot per pipeline
     # session: if exclusive also fails, we do not oscillate.
     voice_clarity_autofix: bool = True
-    deaf_warnings_before_exclusive_retry: int = 2
+    deaf_warnings_before_exclusive_retry: int = Field(default=2, ge=1, le=20)
+    """Mission #11: floor 1 ensures the auto-bypass eventually fires
+    (zero would disable it entirely, defeating the autofix feature);
+    ceiling 20 caps the wait so a sustained-deaf condition gets the
+    bypass within ~100 s @ 5 s heartbeat (the user has already
+    started troubleshooting by then; longer is operationally
+    pointless)."""
     # Ordered host-API preference for the opener's pyramid fallback.
     # VLX-007 added "PipeWire" + "PulseAudio" + "JACK" to cover builds
     # of PortAudio that expose those backends as standalone host APIs
