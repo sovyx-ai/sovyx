@@ -103,6 +103,32 @@ per window — the dashboard already aggregates by minute, so per-second
 firing is enough resolution to localise onset/offset."""
 
 
+# ---------------------------------------------------------------------------
+# T1 Ring 5 atomic cancellation chain
+# ---------------------------------------------------------------------------
+#
+# Pre-T1 the barge-in path stopped the output queue but left in-flight
+# TTS synthesis running (wasted CPU + the next chunk would still appear)
+# and didn't signal upstream LLM token streams to stop. The user heard
+# silence after barge-in but the next turn would start mid-old-thought
+# because the LLM kept producing tokens. T1 introduces a transactional
+# four-step cancellation chain executed under a single asyncio.Lock so
+# concurrent barge-ins serialise, and per-step success/failure is
+# surfaced on a structured ``voice.tts.cancellation_chain`` event for
+# dashboard attribution.
+#
+# Reference: MISSION-voice-mixer-enterprise-refactor-2026-04-25 §3.4, T1.
+
+_CANCELLATION_TASK_TIMEOUT_S = 1.0
+"""Maximum wall-clock seconds to wait for an individual cancelled TTS
+task to actually finish (``await task`` with timeout). 1 second is
+the SRE-canonical "if it isn't dead by now it's hung" budget — long
+enough for a graceful CancelledError teardown (typical: <50 ms)
+but short enough that a wedged task doesn't block the next turn.
+On timeout the task is recorded as ``cancellation_timeout`` in
+the chain event so operators can attribute the wedge."""
+
+
 class VoicePipeline:
     """Orchestrates the complete voice pipeline.
 
@@ -233,6 +259,24 @@ class VoicePipeline:
         self._filler_task: asyncio.Task[bool] | None = None
         self._first_token_event = asyncio.Event()
         self._running = False
+
+        # ── T1 atomic cancellation chain state ───────────────────────
+        # In-flight TTS synthesis tasks tracked here so the barge-in
+        # path can cancel them transactionally (not just stop the
+        # output queue). Each ``speak`` / ``stream_text`` /
+        # ``flush_stream`` call wraps its TTS work in a
+        # ``create_task`` and registers the task into this set; the
+        # task removes itself in its ``finally``. ``cancel_speech_chain``
+        # iterates and cancels every entry under
+        # :attr:`_cancellation_lock` so concurrent barge-ins serialise.
+        self._in_flight_tts_tasks: set[asyncio.Task[Any]] = set()
+        self._cancellation_lock = asyncio.Lock()
+        # Optional upstream LLM cancellation hook. Cognitive layer
+        # registers an awaitable that signals the LLM client to stop
+        # generating; without it, barge-in still cancels output + TTS
+        # but the LLM keeps producing tokens that flow into the next
+        # turn (the pre-T1 silent failure mode).
+        self._llm_cancel_hook: Callable[[], Awaitable[None]] | None = None
 
         # Observability — feed_frame updates these on every frame so
         # _maybe_emit_heartbeat can answer "is VAD seeing real audio"
@@ -540,10 +584,13 @@ class VoicePipeline:
             and self._output.is_playing
             and await self._barge_in.check_frame_async(frame)
         ):
-            self._output.interrupt()
-            self._cancel_filler()
-            if self._self_feedback_gate is not None:
-                self._self_feedback_gate.on_tts_end()
+            # T1 atomic cancellation chain — single transactional
+            # surface replacing the pre-T1 inline cleanup. Stops
+            # output, cancels in-flight TTS, signals LLM, releases
+            # filler + self-feedback gate, all under a single Lock
+            # so concurrent barge-ins serialise. Per-step verdicts
+            # surface on ``voice.tts.cancellation_chain``.
+            await self.cancel_speech_chain(reason="barge_in")
             await self._emit(BargeInEvent(mind_id=self._config.mind_id))
             logger.info("Barge-in detected", mind_id=self._config.mind_id)
             logger.warning(
@@ -705,7 +752,7 @@ class VoicePipeline:
         await self._emit(TTSStartedEvent(mind_id=self._config.mind_id))
 
         try:
-            chunk = await self._tts.synthesize(text)
+            chunk = await self._synthesize_tracked(text)
             await self._output.play_immediate(chunk)
         except (VoiceError, RuntimeError, OSError) as exc:
             # TTS backends (Piper, Kokoro, cloud) share the same
@@ -750,7 +797,7 @@ class VoicePipeline:
         # Synthesize all complete segments
         for segment in segments[:-1]:
             try:
-                chunk = await self._tts.synthesize(segment)
+                chunk = await self._synthesize_tracked(segment)
                 await self._output.enqueue(chunk)
             except (VoiceError, RuntimeError, OSError) as exc:
                 # Per-segment resilience during streaming: skip the
@@ -761,6 +808,16 @@ class VoicePipeline:
                     error=str(exc),
                     exc_info=True,
                 )
+            except asyncio.CancelledError:
+                # T1 barge-in cancelled this segment via
+                # cancel_speech_chain. Stop iterating and let the
+                # next turn re-establish the LLM stream — the
+                # remaining segments belong to a discarded utterance.
+                logger.info(
+                    "voice.tts.stream_segment_cancelled",
+                    mind_id=self._config.mind_id,
+                )
+                return
 
         # Keep incomplete segment in buffer
         self._text_buffer = segments[-1] if segments else ""
@@ -772,8 +829,18 @@ class VoicePipeline:
         """
         if self._text_buffer.strip():
             try:
-                chunk = await self._tts.synthesize(self._text_buffer)
+                chunk = await self._synthesize_tracked(self._text_buffer)
                 await self._output.enqueue(chunk)
+            except asyncio.CancelledError:
+                # T1: cancelled by cancel_speech_chain mid-flush —
+                # discard the tail (the user already barged in) and
+                # let the next turn rebuild from a clean buffer.
+                self._text_buffer = ""
+                logger.info(
+                    "voice.tts.flush_cancelled",
+                    mind_id=self._config.mind_id,
+                )
+                return
             except (VoiceError, RuntimeError, OSError) as exc:
                 # Final-segment flush — losing this tail means the
                 # user hears an abrupt cut, but the loop advances.
@@ -1250,6 +1317,213 @@ class VoicePipeline:
             self._filler_task.cancel()
             self._filler_task = None
         self._first_token_event.set()
+
+    async def _synthesize_tracked(self, text: str) -> Any:  # noqa: ANN401 — TTS chunk type varies
+        """Synthesise ``text`` via a tracked task so T1 can cancel it.
+
+        The pre-T1 pattern was ``await self._tts.synthesize(text)`` —
+        the calling coroutine WAS the synthesis task, so an external
+        observer (the barge-in path) had no way to cancel just the
+        synth without cancelling its caller. T1 wraps each call in
+        ``asyncio.create_task`` and registers it into
+        :attr:`_in_flight_tts_tasks` so :meth:`cancel_speech_chain`
+        can iterate and cancel transactionally.
+
+        The task self-removes from the in-flight set in its own
+        ``finally`` so the set stays bounded. CancelledError
+        propagates so the caller (speak / stream_text / flush_stream)
+        sees the cancellation and can take its own cleanup path.
+        """
+        task: asyncio.Task[Any] = asyncio.create_task(
+            self._tts.synthesize(text),
+            name=f"voice-tts-synth-{id(self) & 0xFFFF}",
+        )
+        self._track_tts_task(task)
+        try:
+            return await task
+        finally:
+            self._untrack_tts_task(task)
+
+    # -- T1 atomic cancellation chain ---------------------------------------
+
+    def register_llm_cancel_hook(
+        self,
+        hook: Callable[[], Awaitable[None]] | None,
+    ) -> None:
+        """Wire (or unwire) the upstream LLM cancellation hook (T1).
+
+        The cognitive layer registers an awaitable that signals its LLM
+        client to stop generating tokens. Called by the orchestrator's
+        :meth:`cancel_speech_chain` (step 3 of the transactional chain)
+        so a barge-in stops not just the audio output and TTS work but
+        also the LLM upstream that's still producing the rest of the
+        utterance.
+
+        Pass ``None`` to unwire (e.g. when the cognitive layer tears
+        down). Replacing a non-``None`` hook with another non-``None``
+        hook is allowed (one cognitive layer hands off to another).
+
+        The hook MUST be idempotent — :meth:`cancel_speech_chain` may
+        invoke it multiple times across barge-in events and the chain
+        contract requires the hook to never raise (catch + log
+        internally) so chain-step accounting stays meaningful.
+        """
+        self._llm_cancel_hook = hook
+
+    def _track_tts_task(self, task: asyncio.Task[Any]) -> None:
+        """Register an in-flight TTS synthesis task for T1 cancellation.
+
+        Called by :meth:`speak`, :meth:`stream_text`, and
+        :meth:`flush_stream` whenever they spawn a TTS coroutine. The
+        task removes itself in its own ``finally`` via
+        :meth:`_untrack_tts_task` so the set stays bounded by the
+        in-flight set, not the lifetime of the daemon.
+        """
+        self._in_flight_tts_tasks.add(task)
+
+    def _untrack_tts_task(self, task: asyncio.Task[Any]) -> None:
+        """Remove ``task`` from the in-flight set. Safe to call multiple times."""
+        self._in_flight_tts_tasks.discard(task)
+
+    async def cancel_speech_chain(self, *, reason: str = "barge_in") -> None:
+        """Run the four-step transactional cancellation chain (T1).
+
+        Steps in order, each recorded with a ``"ok"`` / ``"failed"`` /
+        ``"timeout"`` verdict on the structured
+        ``voice.tts.cancellation_chain`` event:
+
+        1. **Output queue flush** — interrupt active playback so the
+           user hears barge-in immediately. Synchronous + always
+           succeeds (idempotent ``interrupt()``).
+        2. **In-flight TTS task cancellation** — every task in
+           :attr:`_in_flight_tts_tasks` is cancelled and awaited with
+           :data:`_CANCELLATION_TASK_TIMEOUT_S` budget. A wedged task
+           that doesn't honour CancelledError within the budget is
+           recorded as ``cancellation_timeout`` so operators can spot
+           a buggy TTS backend.
+        3. **Upstream LLM cancellation** — the registered
+           :attr:`_llm_cancel_hook` is awaited if present. Without
+           this step, the LLM keeps producing tokens that flow into
+           the next turn (the pre-T1 silent failure mode).
+        4. **Filler + self-feedback gate cleanup** — cancel the
+           pending filler task and release the mic-ducking gate.
+
+        The entire chain runs under :attr:`_cancellation_lock` so
+        concurrent barge-ins serialise; the second acquirer observes
+        the post-first-chain state (empty in-flight set, output
+        already stopped) and short-circuits naturally with all-ok
+        verdicts.
+
+        ``reason`` is recorded on the event so the dashboard can
+        attribute the chain to its trigger (``"barge_in"`` from
+        :meth:`_handle_speaking`, or future callers like
+        ``"shutdown"``, ``"manual_cancel"``).
+        """
+        async with self._cancellation_lock:
+            chain_started = time.monotonic()
+            step_results: dict[str, str] = {}
+
+            # Step 1: output queue flush. Idempotent — calling
+            # interrupt() on a quiescent queue is a no-op.
+            try:
+                self._output.interrupt()
+                step_results["output_flush"] = "ok"
+            except Exception as exc:  # noqa: BLE001 — chain shield
+                step_results["output_flush"] = "failed"
+                logger.warning(
+                    "voice.tts.cancellation_step_failed",
+                    step="output_flush",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
+            # Step 2: cancel + await in-flight TTS tasks. Snapshot the
+            # set so iteration is stable while tasks remove themselves
+            # via _untrack_tts_task in their own finally blocks.
+            tasks_snapshot = tuple(self._in_flight_tts_tasks)
+            cancelled_count = 0
+            timeout_count = 0
+            for task in tasks_snapshot:
+                if task.done():
+                    continue
+                task.cancel()
+                cancelled_count += 1
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(task),
+                        timeout=_CANCELLATION_TASK_TIMEOUT_S,
+                    )
+                except (TimeoutError, asyncio.CancelledError):
+                    # CancelledError is the EXPECTED outcome of
+                    # cancelling — don't treat it as failure. Timeout
+                    # means the task didn't honour the cancellation
+                    # within budget; record separately so dashboards
+                    # can spot wedged TTS backends.
+                    if not task.done():
+                        timeout_count += 1
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "voice.tts.cancellation_task_unexpected_exception",
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                    )
+            step_results["tts_tasks_cancel"] = "ok" if timeout_count == 0 else "timeout"
+
+            # Step 3: upstream LLM cancellation. Best-effort — the hook
+            # contract says "never raise", but we shield anyway so a
+            # buggy hook can't take down the chain.
+            if self._llm_cancel_hook is None:
+                step_results["llm_cancel"] = "no_hook_registered"
+            else:
+                try:
+                    await asyncio.wait_for(
+                        self._llm_cancel_hook(),
+                        timeout=_CANCELLATION_TASK_TIMEOUT_S,
+                    )
+                    step_results["llm_cancel"] = "ok"
+                except TimeoutError:
+                    step_results["llm_cancel"] = "timeout"
+                except Exception as exc:  # noqa: BLE001 — hook isolation
+                    step_results["llm_cancel"] = "failed"
+                    logger.warning(
+                        "voice.tts.cancellation_step_failed",
+                        step="llm_cancel",
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                    )
+
+            # Step 4: filler + self-feedback gate cleanup. Synchronous
+            # + idempotent, so wrap defensively but expect success.
+            try:
+                self._cancel_filler()
+                if self._self_feedback_gate is not None:
+                    self._self_feedback_gate.on_tts_end()
+                step_results["filler_and_gate"] = "ok"
+            except Exception as exc:  # noqa: BLE001 — chain shield
+                step_results["filler_and_gate"] = "failed"
+                logger.warning(
+                    "voice.tts.cancellation_step_failed",
+                    step="filler_and_gate",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
+            chain_duration_ms = (time.monotonic() - chain_started) * 1000.0
+            logger.info(
+                "voice.tts.cancellation_chain",
+                **{
+                    "voice.mind_id": self._config.mind_id,
+                    "voice.reason": reason,
+                    "voice.chain_duration_ms": round(chain_duration_ms, 2),
+                    "voice.tasks_cancelled": cancelled_count,
+                    "voice.tasks_timed_out": timeout_count,
+                    "voice.has_llm_hook": self._llm_cancel_hook is not None,
+                    "voice.step_output_flush": step_results["output_flush"],
+                    "voice.step_tts_tasks_cancel": step_results["tts_tasks_cancel"],
+                    "voice.step_llm_cancel": step_results["llm_cancel"],
+                    "voice.step_filler_and_gate": step_results["filler_and_gate"],
+                },
+            )
 
     def reset(self) -> None:
         """Reset the pipeline to IDLE state (for testing or error recovery)."""

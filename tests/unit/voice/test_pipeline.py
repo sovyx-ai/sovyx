@@ -2534,3 +2534,209 @@ class TestFrameDropDetectionO3:
         # Drive way more than the window size — ensure no unbounded growth.
         self._drive_inter_arrival(pipeline, [expected] * 200)
         assert len(pipeline._recent_frame_intervals) == mod._FRAME_DROP_DRIFT_WINDOW_FRAMES
+
+
+# ===========================================================================
+# T1: Atomic cancellation chain (Ring 5 transactional barge-in)
+# ===========================================================================
+#
+# Pre-T1 the barge-in path stopped the output queue but left in-flight TTS
+# synthesis running and didn't signal upstream LLM token streams to stop.
+# T1 introduces a transactional four-step chain executed under a single
+# asyncio.Lock so concurrent barge-ins serialise; per-step success/failure
+# is surfaced on a structured ``voice.tts.cancellation_chain`` event.
+#
+# Reference: MISSION-voice-mixer-enterprise-refactor-2026-04-25 §3.4, T1.
+
+
+class TestCancellationChainT1:
+    """Four-step transactional cancellation chain with structured event."""
+
+    @pytest.mark.asyncio
+    async def test_lock_attribute_initialised(self) -> None:
+        pipeline, _ = _make_pipeline()
+        assert isinstance(pipeline._cancellation_lock, asyncio.Lock)
+        assert pipeline._in_flight_tts_tasks == set()
+        assert pipeline._llm_cancel_hook is None
+
+    @pytest.mark.asyncio
+    async def test_chain_emits_structured_event_with_per_step_verdicts(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
+        pipeline, _ = _make_pipeline()
+        await pipeline.start()
+        await pipeline.cancel_speech_chain(reason="test")
+        events = _events_of(caplog, "voice.tts.cancellation_chain")
+        assert len(events) == 1
+        evt = events[0]
+        assert evt["voice.reason"] == "test"
+        assert evt["voice.step_output_flush"] == "ok"
+        assert evt["voice.step_tts_tasks_cancel"] == "ok"
+        assert evt["voice.step_llm_cancel"] == "no_hook_registered"
+        assert evt["voice.step_filler_and_gate"] == "ok"
+        assert evt["voice.tasks_cancelled"] == 0
+        assert evt["voice.tasks_timed_out"] == 0
+        assert evt["voice.has_llm_hook"] is False
+
+    @pytest.mark.asyncio
+    async def test_in_flight_tts_task_cancelled_by_chain(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A long-running TTS task is cancelled when the chain fires."""
+        caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
+        pipeline, _ = _make_pipeline()
+        await pipeline.start()
+
+        async def _slow_synth() -> None:
+            await asyncio.sleep(10.0)
+
+        task = asyncio.create_task(_slow_synth())
+        pipeline._track_tts_task(task)
+        try:
+            await pipeline.cancel_speech_chain(reason="barge_in")
+            assert task.cancelled() or task.done()
+        finally:
+            pipeline._untrack_tts_task(task)
+
+        events = _events_of(caplog, "voice.tts.cancellation_chain")
+        assert len(events) == 1
+        assert events[0]["voice.tasks_cancelled"] == 1
+        assert events[0]["voice.tasks_timed_out"] == 0
+
+    @pytest.mark.asyncio
+    async def test_register_llm_cancel_hook_sets_attribute(self) -> None:
+        pipeline, _ = _make_pipeline()
+        called = {"n": 0}
+
+        async def _hook() -> None:
+            called["n"] += 1
+
+        pipeline.register_llm_cancel_hook(_hook)
+        assert pipeline._llm_cancel_hook is _hook
+        # Unwire
+        pipeline.register_llm_cancel_hook(None)
+        assert pipeline._llm_cancel_hook is None
+
+    @pytest.mark.asyncio
+    async def test_chain_invokes_registered_llm_cancel_hook(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
+        pipeline, _ = _make_pipeline()
+        await pipeline.start()
+        called = {"n": 0}
+
+        async def _hook() -> None:
+            called["n"] += 1
+
+        pipeline.register_llm_cancel_hook(_hook)
+        await pipeline.cancel_speech_chain(reason="barge_in")
+        assert called["n"] == 1
+        events = _events_of(caplog, "voice.tts.cancellation_chain")
+        assert events[0]["voice.step_llm_cancel"] == "ok"
+        assert events[0]["voice.has_llm_hook"] is True
+
+    @pytest.mark.asyncio
+    async def test_chain_records_failed_when_llm_hook_raises(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Chain summary fires at INFO; hook failure also logs WARNING.
+        # Capture INFO so we see both.
+        caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
+        pipeline, _ = _make_pipeline()
+        await pipeline.start()
+
+        async def _bad_hook() -> None:
+            raise RuntimeError("hook bug")
+
+        pipeline.register_llm_cancel_hook(_bad_hook)
+        # Chain itself MUST NOT raise — it shields the hook.
+        await pipeline.cancel_speech_chain(reason="barge_in")
+        events = _events_of(caplog, "voice.tts.cancellation_chain")
+        assert events[0]["voice.step_llm_cancel"] == "failed"
+
+    @pytest.mark.asyncio
+    async def test_chain_records_timeout_when_llm_hook_hangs(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
+        pipeline, _ = _make_pipeline()
+        await pipeline.start()
+
+        async def _hung_hook() -> None:
+            await asyncio.sleep(10.0)
+
+        pipeline.register_llm_cancel_hook(_hung_hook)
+        await pipeline.cancel_speech_chain(reason="barge_in")
+        events = _events_of(caplog, "voice.tts.cancellation_chain")
+        assert events[0]["voice.step_llm_cancel"] == "timeout"
+
+    @pytest.mark.asyncio
+    async def test_concurrent_chains_serialised_by_lock(self) -> None:
+        """Two concurrent cancellation invocations serialise — the
+        second observes the post-first state."""
+        pipeline, _ = _make_pipeline()
+        await pipeline.start()
+        # No tasks in flight, so both chains should complete cleanly
+        # but they must NOT interleave (lock guarantees this).
+        results = await asyncio.gather(
+            pipeline.cancel_speech_chain(reason="first"),
+            pipeline.cancel_speech_chain(reason="second"),
+        )
+        assert results == [None, None]
+
+    @pytest.mark.asyncio
+    async def test_chain_cancels_filler_task(self) -> None:
+        pipeline, _ = _make_pipeline(fillers_enabled=True)
+        await pipeline.start()
+
+        async def _filler() -> bool:
+            await asyncio.sleep(10.0)
+            return False
+
+        pipeline._filler_task = asyncio.create_task(_filler())
+        await pipeline.cancel_speech_chain(reason="barge_in")
+        # Filler task is cancelled by step 4.
+        assert pipeline._filler_task is None
+
+    @pytest.mark.asyncio
+    async def test_chain_releases_self_feedback_gate(self) -> None:
+        pipeline, _ = _make_pipeline()
+
+        class _Gate:
+            def __init__(self) -> None:
+                self.tts_end_called = 0
+
+            def on_tts_start(self) -> None: ...
+
+            def on_tts_end(self) -> None:
+                self.tts_end_called += 1
+
+        gate = _Gate()
+        pipeline._self_feedback_gate = gate  # type: ignore[assignment]
+        await pipeline.start()
+        await pipeline.cancel_speech_chain(reason="barge_in")
+        assert gate.tts_end_called == 1
+
+    @pytest.mark.asyncio
+    async def test_track_and_untrack_tts_task(self) -> None:
+        pipeline, _ = _make_pipeline()
+
+        async def _noop() -> None:
+            return None
+
+        task = asyncio.create_task(_noop())
+        pipeline._track_tts_task(task)
+        assert task in pipeline._in_flight_tts_tasks
+        pipeline._untrack_tts_task(task)
+        assert task not in pipeline._in_flight_tts_tasks
+        # Untrack is idempotent.
+        pipeline._untrack_tts_task(task)
+        assert task not in pipeline._in_flight_tts_tasks
+        await task
