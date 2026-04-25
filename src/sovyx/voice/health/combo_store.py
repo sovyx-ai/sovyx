@@ -469,6 +469,10 @@ class ComboStore:
     ) -> None:
         self._ensure_loaded()
         with acquire_file_lock(self._lock_path):
+            # C1: refresh from disk inside the lock so concurrent
+            # writes from another daemon process are merged, not
+            # clobbered by our stale in-memory snapshot.
+            self._refresh_entries_from_disk_locked()
             now_iso = self._clock().isoformat(timespec="seconds")
             self._entries[endpoint_guid] = _LiveEntry(
                 endpoint_guid=endpoint_guid,
@@ -510,6 +514,17 @@ class ComboStore:
         if live is None:
             return
         with acquire_file_lock(self._lock_path):
+            # C1: refresh-then-resolve. Another process may have just
+            # invalidated this entry; re-read disk to pick that up,
+            # then re-fetch ``live`` against the post-refresh state.
+            self._refresh_entries_from_disk_locked()
+            live = self._entries.get(endpoint_guid)
+            if live is None:
+                # Entry was invalidated by a concurrent process between
+                # our pre-lock check and the refresh — drop the probe
+                # silently (treating it as recorded against the
+                # invalidated entry would just resurrect dead data).
+                return
             now_iso = self._clock().isoformat(timespec="seconds")
             live.probe_history.append(
                 ProbeHistoryEntry(
@@ -540,6 +555,12 @@ class ComboStore:
         if live is None:
             return
         with acquire_file_lock(self._lock_path):
+            # C1: refresh inside lock + re-fetch live (another process
+            # may have invalidated it since our pre-lock check).
+            self._refresh_entries_from_disk_locked()
+            live = self._entries.get(endpoint_guid)
+            if live is None:
+                return
             live.boots_validated += 1
             live.last_boot_validated = self._clock().isoformat(timespec="seconds")
             live.last_boot_diagnosis = diagnosis
@@ -552,6 +573,10 @@ class ComboStore:
         if endpoint_guid not in self._entries:
             return
         with acquire_file_lock(self._lock_path):
+            # C1: refresh inside lock so a concurrent record_winning
+            # by another process for OTHER GUIDs is preserved when we
+            # write the post-pop snapshot.
+            self._refresh_entries_from_disk_locked()
             self._entries.pop(endpoint_guid, None)
             self._stats.invalidations_by_reason[reason] = (
                 self._stats.invalidations_by_reason.get(reason, 0) + 1
@@ -562,6 +587,9 @@ class ComboStore:
     def invalidate_all(self) -> None:
         self._ensure_loaded()
         with acquire_file_lock(self._lock_path):
+            # invalidate_all is by definition destructive — no need to
+            # refresh from disk first; we're discarding everything
+            # whether or not a concurrent write landed in the window.
             self._archive(raw_reason="invalidate-all")
             self._entries = {}
             self._write_atomic()
@@ -571,6 +599,79 @@ class ComboStore:
     def _ensure_loaded(self) -> None:
         if not self._loaded:
             self.load()
+
+    def _refresh_entries_from_disk_locked(self) -> None:
+        """C1: read-modify-write — refresh ``self._entries`` from disk
+        while holding the file lock so concurrent writes from another
+        process are merged in instead of clobbered.
+
+        The pre-C1 write path was:
+            ``_ensure_loaded`` (no lock) → acquire_file_lock →
+            mutate self._entries (in-memory snapshot) → _write_atomic.
+
+        Window between ``_ensure_loaded`` and lock acquisition lets
+        another process write a fresh snapshot. The current process
+        then writes its STALE in-memory view + pending mutation, losing
+        the concurrent process's writes — the canonical lost-update
+        TOCTOU bug. The mission identified this as ComboStore band-aid
+        #25 (concurrent boot corruption).
+
+        Fix: re-read the file from disk INSIDE the lock immediately
+        before applying the pending mutation. Caller MUST hold the
+        file lock when invoking this method (asserted by precondition,
+        not enforced because Python lacks an attestable lock guard).
+
+        Invariants after this call:
+        * ``self._entries`` reflects the current on-disk state (any
+          concurrent writes that happened between the caller's
+          ``_ensure_loaded`` and lock acquisition are now visible).
+        * ``self._loaded`` stays ``True`` (it already was, as the
+          caller called ``_ensure_loaded`` before the lock).
+        * Read failures (corrupt JSON, missing file) leave the
+          in-memory ``self._entries`` unchanged — preserving the
+          last-known-good state is safer than dropping every entry
+          mid-write. The corruption itself surfaces via the existing
+          ``load()`` rules R1-R13 on the next full reload.
+
+        Note: this only refreshes ``_entries``; the global metadata
+        (fingerprint, model versions, OS build) doesn't change
+        between writes, so a write doesn't need to re-run the R5-R8
+        invalidation rules. The next ``load()`` call (next process
+        boot) will re-validate everything.
+        """
+        if not self._path.exists():
+            return  # nothing on disk yet — our in-memory state IS the truth
+        try:
+            text = self._path.read_text(encoding="utf-8")
+            raw = json.loads(text)
+            if not isinstance(raw, dict):
+                return
+        except (OSError, ValueError):
+            # Corrupt / unreadable file — preserve in-memory state.
+            # The next full load() picks up the corruption via R2.
+            return
+        new_entries: dict[str, _LiveEntry] = {}
+        for guid, raw_entry in (raw.get("entries") or {}).items():
+            try:
+                live = self._build_live_entry(guid, raw_entry, [])
+            except _SanityError:
+                # Corrupt entry — skip it. The next load() will surface
+                # it via R12 with structured logging.
+                continue
+            # ``needs_revalidation`` is COMPUTED state from
+            # load()-time rules R6/R7/R8/R10/R11/R13 and never
+            # persisted. If the entry existed in our in-memory cache
+            # before the refresh, preserve its computed flag — the
+            # disk read can't reproduce the load-time context that
+            # set it. New entries (visible only on disk because a
+            # concurrent process wrote them after our last load)
+            # default to ``False``, which matches the freshly-loaded
+            # semantic.
+            previous = self._entries.get(guid)
+            if previous is not None and previous.needs_revalidation:
+                live.needs_revalidation = True
+            new_entries[guid] = live
+        self._entries = new_entries
 
     def _maybe_auto_unpin(
         self,

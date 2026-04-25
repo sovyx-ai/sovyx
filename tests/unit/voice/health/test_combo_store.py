@@ -788,7 +788,11 @@ class TestBoots:
         store = _make_store(tmp_path)
         store.load()
         _record(store)
+        # C1: post-hardening, write paths refresh from disk inside the
+        # lock — direct in-memory mutation is dropped on the next
+        # write. Persist via _write_atomic so the test setup survives.
         store._entries["{guid-A}"].needs_revalidation = True
+        store._write_atomic()
         store.increment_boots_validated("{guid-A}", Diagnosis.LOW_SIGNAL)
         entry = store.get("{guid-A}")
         assert entry is not None
@@ -1022,10 +1026,14 @@ class TestPinnedAutoUnpinC2:
     def test_pinned_failure_increments_counter_below_threshold(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
         _record(store)
-        live = store._entries["{guid-A}"]
-        live.pinned = True
+        # C1: persist the pin to disk so record_probe's in-lock
+        # refresh sees pinned=True. Re-fetch live AFTER each call
+        # because refresh swaps the dict's value.
+        store._entries["{guid-A}"].pinned = True
+        store._write_atomic()
         # One failure — below threshold of 2.
         store.record_probe("{guid-A}", _failed_probe())
+        live = store._entries["{guid-A}"]
         assert live.consecutive_validation_failures == 1
         assert live.pinned is True
 
@@ -1037,11 +1045,12 @@ class TestPinnedAutoUnpinC2:
         caplog.set_level(logging.WARNING, logger=_C2_LOGGER)
         store = _make_store(tmp_path)
         _record(store)
-        live = store._entries["{guid-A}"]
-        live.pinned = True
+        store._entries["{guid-A}"].pinned = True
+        store._write_atomic()
         # Two consecutive failures = threshold met.
         store.record_probe("{guid-A}", _failed_probe())
         store.record_probe("{guid-A}", _failed_probe())
+        live = store._entries["{guid-A}"]
         assert live.pinned is False
         assert live.consecutive_validation_failures == 0  # reset on unpin
         assert live.needs_revalidation is True
@@ -1057,15 +1066,18 @@ class TestPinnedAutoUnpinC2:
         BACK-TO-BACK failures trip the threshold."""
         store = _make_store(tmp_path)
         _record(store)
-        live = store._entries["{guid-A}"]
-        live.pinned = True
+        store._entries["{guid-A}"].pinned = True
+        store._write_atomic()
         store.record_probe("{guid-A}", _failed_probe())
+        live = store._entries["{guid-A}"]
         assert live.consecutive_validation_failures == 1
         store.record_probe("{guid-A}", _good_probe())
+        live = store._entries["{guid-A}"]
         assert live.consecutive_validation_failures == 0
         assert live.pinned is True
         # A subsequent failure starts from zero again.
         store.record_probe("{guid-A}", _failed_probe())
+        live = store._entries["{guid-A}"]
         assert live.consecutive_validation_failures == 1
         assert live.pinned is True
 
@@ -1074,9 +1086,10 @@ class TestPinnedAutoUnpinC2:
         reset the counter on cold-start — the field is serialised."""
         store = _make_store(tmp_path)
         _record(store)
-        live = store._entries["{guid-A}"]
-        live.pinned = True
+        store._entries["{guid-A}"].pinned = True
+        store._write_atomic()
         store.record_probe("{guid-A}", _failed_probe())
+        live = store._entries["{guid-A}"]
         assert live.consecutive_validation_failures == 1
 
         # Rebuild store from disk.
@@ -1088,6 +1101,7 @@ class TestPinnedAutoUnpinC2:
 
         # Second failure across the boot boundary trips the threshold.
         store2.record_probe("{guid-A}", _failed_probe())
+        live2 = store2._entries["{guid-A}"]
         assert live2.pinned is False
         assert live2.consecutive_validation_failures == 0
 
@@ -1116,10 +1130,181 @@ class TestPinnedAutoUnpinC2:
         caplog.set_level(logging.INFO, logger=_C2_LOGGER)
         store = _make_store(tmp_path)
         _record(store)
-        live = store._entries["{guid-A}"]
-        live.pinned = True
+        store._entries["{guid-A}"].pinned = True
+        store._write_atomic()
         store.record_probe("{guid-A}", _failed_probe())
         events = _c2_events_of(caplog, "voice.combo_store.pin_failure_recorded")
         assert len(events) == 1
         assert events[0]["consecutive_failures"] == 1
         assert events[0]["threshold"] == _PIN_AUTO_UNPIN_FAILURE_THRESHOLD
+
+
+# ===========================================================================
+# C1: Concurrent boot — read-modify-write under lock prevents lost updates
+# ===========================================================================
+#
+# Pre-C1 the write path was:
+#     _ensure_loaded (no lock) → acquire_file_lock → mutate → _write_atomic.
+# Window between _ensure_loaded and lock acquisition let another process
+# write a fresh snapshot that the current process clobbered with its
+# stale in-memory view. The mission identified this as ComboStore
+# band-aid #25 (concurrent boot corruption).
+#
+# Reference: MISSION-voice-mixer-enterprise-refactor-2026-04-25 §3.8 C1.
+
+
+class TestConcurrentBootC1:
+    """The lost-update scenario the C1 read-modify-write closes."""
+
+    def _make_store_with_separate_locks(self, tmp_path: Path, label: str) -> ComboStore:
+        """Each call returns a fresh ComboStore against the same path —
+        simulating two daemon processes against the same data_dir."""
+        return _make_store(
+            tmp_path,
+            endpoint_sha_for=lambda guid, _l=label: f"ep-{_l}-{guid}",
+        )
+
+    def test_concurrent_record_winning_preserves_other_process_writes(
+        self, tmp_path: Path
+    ) -> None:
+        """Two processes both call ``record_winning`` for DIFFERENT
+        endpoint GUIDs. Pre-C1 the second writer would clobber the
+        first writer's record (it loaded the empty file before the
+        first write landed, then wrote its own snapshot). With C1
+        the second writer refreshes from disk inside the lock and
+        merges the first writer's record."""
+        # Process A: load (empty file), then write A's record.
+        store_a = self._make_store_with_separate_locks(tmp_path, "A")
+        store_a.load()
+        # Process B: load (also empty — A hasn't written yet),
+        # simulating the pre-lock window.
+        store_b = self._make_store_with_separate_locks(tmp_path, "B")
+        store_b.load()
+
+        # Now process A writes. Even though B already loaded an empty
+        # snapshot, A's write is independent.
+        store_a.record_winning(
+            "{guid-A}",
+            device_friendly_name="Mic A",
+            device_interface_name="USB\\A",
+            device_class="microphone",
+            endpoint_fxproperties_sha="ep-A-{guid-A}",
+            combo=_good_combo(),
+            probe=_good_probe(),
+            detected_apos=(),
+            cascade_attempts_before_success=1,
+        )
+
+        # Now process B writes its OWN record (different GUID).
+        # Pre-C1 this would clobber {guid-A} because B's in-memory
+        # view didn't have it. With C1, B refreshes from disk inside
+        # the lock and {guid-A} survives.
+        store_b.record_winning(
+            "{guid-B}",
+            device_friendly_name="Mic B",
+            device_interface_name="USB\\B",
+            device_class="microphone",
+            endpoint_fxproperties_sha="ep-B-{guid-B}",
+            combo=_good_combo(),
+            probe=_good_probe(),
+            detected_apos=(),
+            cascade_attempts_before_success=1,
+        )
+
+        # Final disk state must contain BOTH records.
+        store_check = self._make_store_with_separate_locks(tmp_path, "check")
+        store_check.load()
+        assert store_check.get("{guid-A}") is not None
+        assert store_check.get("{guid-B}") is not None
+
+    def test_concurrent_invalidate_preserves_other_process_record(self, tmp_path: Path) -> None:
+        """Process A invalidates {guid-A}; concurrent process B must
+        not lose its own {guid-B} record because B refreshes from
+        disk inside the lock before applying its mutation."""
+        store_a = self._make_store_with_separate_locks(tmp_path, "A")
+        store_a.load()
+        store_a.record_winning(
+            "{guid-A}",
+            device_friendly_name="Mic A",
+            device_interface_name="USB\\A",
+            device_class="microphone",
+            endpoint_fxproperties_sha="ep-A-{guid-A}",
+            combo=_good_combo(),
+            probe=_good_probe(),
+            detected_apos=(),
+            cascade_attempts_before_success=1,
+        )
+
+        store_b = self._make_store_with_separate_locks(tmp_path, "B")
+        store_b.load()
+        # B sees A's record, then writes its own.
+        store_b.record_winning(
+            "{guid-B}",
+            device_friendly_name="Mic B",
+            device_interface_name="USB\\B",
+            device_class="microphone",
+            endpoint_fxproperties_sha="ep-B-{guid-B}",
+            combo=_good_combo(),
+            probe=_good_probe(),
+            detected_apos=(),
+            cascade_attempts_before_success=1,
+        )
+
+        # Now A invalidates its own record. Without C1's refresh,
+        # A's stale view (only {guid-A}) would be written, dropping
+        # {guid-B}. With C1, the refresh sees both, A pops {guid-A},
+        # writes the result — {guid-B} survives.
+        store_a.invalidate("{guid-A}", reason="test")
+
+        store_check = self._make_store_with_separate_locks(tmp_path, "check")
+        store_check.load()
+        assert store_check.get("{guid-A}") is None  # A invalidated
+        assert store_check.get("{guid-B}") is not None  # B survives
+
+    def test_record_probe_drops_silently_when_concurrent_invalidate_fires(
+        self, tmp_path: Path
+    ) -> None:
+        """If process A's record_probe lands AFTER process B's
+        invalidate, A must drop the probe silently rather than
+        resurrecting the dead entry. This is the C1 record_probe
+        re-fetch path."""
+        store_a = self._make_store_with_separate_locks(tmp_path, "A")
+        store_a.load()
+        _record(store_a, guid="{guid-A}")
+
+        # A's local view still has the entry.
+        assert store_a.get("{guid-A}") is not None
+
+        # Process B invalidates the entry.
+        store_b = self._make_store_with_separate_locks(tmp_path, "B")
+        store_b.load()
+        store_b.invalidate("{guid-A}", reason="b-invalidated")
+
+        # Now A tries to record a probe against the entry. The
+        # in-memory view still has it, but the disk doesn't.
+        # Post-C1, record_probe refreshes from disk + re-fetches —
+        # finds None — and drops silently rather than resurrecting.
+        store_a.record_probe("{guid-A}", _good_probe())
+
+        # The entry stays absent on disk.
+        store_check = self._make_store_with_separate_locks(tmp_path, "check")
+        store_check.load()
+        assert store_check.get("{guid-A}") is None
+
+    def test_refresh_preserves_runtime_only_needs_revalidation(self, tmp_path: Path) -> None:
+        """``needs_revalidation`` is computed at load() time from
+        R6/R7/R8/R10/R11/R13 rules and never persisted. The
+        in-lock refresh must preserve it for already-known entries
+        — otherwise every write silently clears the load-time
+        invalidation latch and the daemon would re-use a known-
+        stale combo."""
+        store = _make_store(tmp_path)
+        store.load()
+        _record(store)
+        store._entries["{guid-A}"].needs_revalidation = True
+        store._write_atomic()  # persist the entry (without revalidation flag)
+
+        # Drive a refresh by calling any write path. The
+        # refresh must NOT clear the in-memory needs_revalidation.
+        store._refresh_entries_from_disk_locked()
+        assert store._entries["{guid-A}"].needs_revalidation is True
