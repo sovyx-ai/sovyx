@@ -28,7 +28,7 @@ import math
 from collections import deque
 from dataclasses import dataclass
 from enum import IntEnum, auto
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sovyx.observability.logging import get_logger
 from sovyx.voice._chaos import ChaosInjector, ChaosSite
@@ -415,7 +415,26 @@ class SileroVAD:
         self,
         model_path: Path,
         config: VADConfig | None = None,
+        *,
+        smoke_probe_at_construction: bool = True,
     ) -> None:
+        """Construct a Silero VAD bound to the model at ``model_path``.
+
+        Args:
+            model_path: Filesystem path to the ONNX model.
+            config: Tuning knobs (defaults to canonical Silero v5).
+            smoke_probe_at_construction: When True (default), run a
+                one-shot smoke probe through the loaded model
+                immediately after session construction to validate
+                the model agrees with ``config.sample_rate`` +
+                ``config.window_size``. Catches model/config
+                mismatches at startup instead of failing silently
+                on every real frame via the V1 fail-closed path.
+                Set to False for tests that mock the ONNX session
+                with a deterministic probability sequence — the
+                smoke probe would consume the first sequence
+                element. Production code MUST use the default True.
+        """
         import numpy as np  # noqa: F811
         import onnxruntime as ort
 
@@ -436,6 +455,24 @@ class SileroVAD:
         # Persistent LSTM state (h0, c0) — survives between frames
         self._state: npt.NDArray[np.float32] = np.zeros(_LSTM_STATE_SHAPE, dtype=np.float32)
         self._sr: npt.NDArray[np.int64] = np.array([self._config.sample_rate], dtype=np.int64)
+
+        # Band-aid #36: startup smoke probe. Verifies the loaded
+        # ONNX model agrees with the configured sample_rate +
+        # window_size BEFORE the first real frame arrives. Catches:
+        # * loaded a 16k-rate model with config.sample_rate=8000
+        #   (or vice versa) → model returns garbage probability
+        # * model file corrupted in transit but ONNX session built
+        #   anyway → first probability is NaN
+        # * window_size mismatch (model expects 512, config says
+        #   256) → ONNX raises during inference
+        # Any of these would silently freeze VAD at construction
+        # via the V1 corruption recovery path on every real frame.
+        # Failing loud at construction beats failing silent on
+        # every frame for the lifetime of the daemon. Tests with
+        # mock sessions opt out via ``smoke_probe_at_construction=
+        # False``.
+        if smoke_probe_at_construction:
+            self._smoke_probe_session(np)
 
         # FSM bookkeeping
         self._vad_state = VADState.SILENCE
@@ -645,6 +682,99 @@ class SileroVAD:
                 probability=probability,
                 state=self._vad_state,
             )
+
+    def _smoke_probe_session(self, np_module: Any) -> None:  # noqa: ANN401
+        """Band-aid #36: validate the ONNX session at construction.
+
+        Pushes a known-shape silence frame through the loaded model
+        with the configured ``sample_rate`` + ``window_size``. Asserts
+        the returned probability is a finite float in ``[0, 1]`` and
+        the LSTM state has the expected shape.
+
+        Failure modes this catches at startup (instead of on every
+        real frame for the lifetime of the daemon):
+
+        * Window-size mismatch (model expects 256 but config says 512,
+          or vice versa) → ONNX raises during inference.
+        * Sample-rate mismatch (model trained for 8 kHz but config
+          sets 16 kHz) → model still runs but probability is garbage
+          (NaN, Inf, or out of [0, 1]).
+        * Corrupted model file (truncated download, byte-swap on
+          mixed-endian transfer) → ONNX raises OR returns NaN.
+
+        Args:
+            np_module: numpy module reference passed in from the
+                construction context (avoids a second top-level
+                import) — typed as :data:`Any` because the numpy
+                module surface is broad and we only touch the
+                ``zeros`` / ``float32`` attributes here.
+
+        Raises:
+            RuntimeError: Any of the above failure modes. The
+                exception carries enough detail for the operator to
+                identify which axis (window / rate / model integrity)
+                broke. Pre-band-aid #36, all three modes degraded
+                silently into V1's fail-closed-to-silence path on
+                every subsequent frame.
+        """
+        np = np_module
+        # Build a known-shape silent probe frame. Silent input is the
+        # deterministic baseline: any healthy Silero session returns
+        # ``probability ≈ 0.0`` (well below the onset threshold).
+        # NaN/Inf/out-of-range output ⇒ session is broken before the
+        # first real frame ever arrives.
+        probe = np.zeros((1, self._config.window_size), dtype=np.float32)
+        ort_inputs = {
+            "input": probe,
+            "state": self._state,
+            "sr": self._sr,
+        }
+        try:
+            output, next_state = self._session.run(None, ort_inputs)[:2]
+        except Exception as exc:
+            # Translate to RuntimeError with operator-actionable
+            # context. Could be window-size mismatch (ONNX raises
+            # InvalidArgument), sample-rate misconfiguration, or a
+            # corrupted model file.
+            msg = (
+                f"VAD ONNX session smoke probe failed: {exc!r}. "
+                f"Configured sample_rate={self._config.sample_rate}, "
+                f"window_size={self._config.window_size}. Likely a "
+                f"model/config mismatch — verify the loaded ONNX "
+                f"model was trained for these parameters, or download "
+                f"a fresh copy if the file may be corrupted."
+            )
+            raise RuntimeError(msg) from exc
+        raw_probability = float(output[0][0])
+        # Use the V1 validator — same closed-set corruption taxonomy
+        # the runtime path uses, so smoke-probe failures + runtime
+        # failures share vocabulary in the dashboard.
+        is_corrupt, corruption_kind = _validate_inference_outputs(
+            raw_probability,
+            next_state,
+        )
+        if is_corrupt:
+            state_repr = (
+                next_state.shape
+                if hasattr(next_state, "shape")
+                else type(next_state).__name__
+            )
+            msg = (
+                f"VAD ONNX session smoke probe returned corrupt output "
+                f"({corruption_kind}): probability={raw_probability!r}, "
+                f"state.shape={state_repr}. Configured "
+                f"sample_rate={self._config.sample_rate}, "
+                f"window_size={self._config.window_size}. Likely a "
+                f"sample-rate mismatch (model trained for a different "
+                f"rate than configured) or a corrupted model file."
+            )
+            raise RuntimeError(msg)
+        logger.debug(
+            "voice.vad.smoke_probe_passed",
+            sample_rate=self._config.sample_rate,
+            window_size=self._config.window_size,
+            probe_probability=round(raw_probability, 6),
+        )
 
     def reset(self) -> None:
         """Reset LSTM and FSM state (call between conversations).

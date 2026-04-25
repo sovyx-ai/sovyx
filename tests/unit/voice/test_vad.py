@@ -79,7 +79,12 @@ def _build_vad(
     probabilities: list[float],
     config: VADConfig | None = None,
 ) -> SileroVAD:
-    """Construct a SileroVAD with mocked ONNX session."""
+    """Construct a SileroVAD with mocked ONNX session.
+
+    Disables the band-aid #36 smoke probe so the mock session's
+    deterministic probability sequence isn't consumed by the
+    construction-time probe call.
+    """
     cfg = config or VADConfig()
     mock_session = _make_mock_session(probabilities)
 
@@ -89,7 +94,11 @@ def _build_vad(
     mock_ort.InferenceSession.return_value = mock_session
 
     with patch.dict("sys.modules", {"onnxruntime": mock_ort}):
-        vad = SileroVAD(Path("/fake/model.onnx"), config=cfg)
+        vad = SileroVAD(
+            Path("/fake/model.onnx"),
+            config=cfg,
+            smoke_probe_at_construction=False,
+        )
 
     return vad
 
@@ -133,7 +142,11 @@ def _build_corruptable_vad(
     mock_ort.InferenceSession.return_value = mock_session
 
     with patch.dict("sys.modules", {"onnxruntime": mock_ort}):
-        return SileroVAD(Path("/fake/model.onnx"), config=cfg)
+        return SileroVAD(
+            Path("/fake/model.onnx"),
+            config=cfg,
+            smoke_probe_at_construction=False,
+        )
 
 
 def _events_of(
@@ -1389,7 +1402,11 @@ class TestVADM2WireUp:
         mock_ort.GraphOptimizationLevel.ORT_ENABLE_ALL = 99
         mock_ort.InferenceSession.return_value = mock_session
         with patch.dict("sys.modules", {"onnxruntime": mock_ort}):
-            vad = SileroVAD(Path("/fake/model.onnx"), config=cfg)
+            vad = SileroVAD(
+                Path("/fake/model.onnx"),
+                config=cfg,
+                smoke_probe_at_construction=False,
+            )
 
         vad.process_frame(_speech_frame())
 
@@ -1503,3 +1520,118 @@ class TestVADChaosWireUp:
         vad.process_frame(_speech_frame())
 
         assert (VoiceStage.VAD, StageEventKind.DROP, "probability_nan") in recorded
+
+
+# ---------------------------------------------------------------------------
+# Band-aid #36 — startup smoke probe validation
+# ---------------------------------------------------------------------------
+
+
+class TestSmokeProbeAtConstruction:
+    """Band-aid #36: VAD construction validates the loaded ONNX
+    model agrees with the configured sample_rate + window_size.
+    Failure modes (rate mismatch, window mismatch, corrupt model)
+    raise RuntimeError at construction instead of degrading silently
+    via the V1 fail-closed-to-silence path on every real frame."""
+
+    def test_smoke_probe_passes_on_healthy_session(self) -> None:
+        """Healthy session returning sane probability → construction
+        succeeds, no exception."""
+        cfg = VADConfig()
+        # Mock returns 0.0 (silence-baseline probability — what a
+        # healthy session would return for a zero-input probe).
+        mock_session = _make_mock_session([0.0])
+        mock_ort = MagicMock()
+        mock_ort.SessionOptions.return_value = MagicMock()
+        mock_ort.GraphOptimizationLevel.ORT_ENABLE_ALL = 99
+        mock_ort.InferenceSession.return_value = mock_session
+        with patch.dict("sys.modules", {"onnxruntime": mock_ort}):
+            vad = SileroVAD(
+                Path("/fake/model.onnx"),
+                config=cfg,
+                # Smoke probe ENABLED (the production default).
+                smoke_probe_at_construction=True,
+            )
+        # Construction succeeded; VAD is usable.
+        assert vad.state == VADState.SILENCE
+
+    def test_smoke_probe_raises_on_nan_probability(self) -> None:
+        """NaN output → RuntimeError with corruption_kind in message."""
+        cfg = VADConfig()
+        mock_session = _make_corruptable_session([(float("nan"), None)])
+        mock_ort = MagicMock()
+        mock_ort.SessionOptions.return_value = MagicMock()
+        mock_ort.GraphOptimizationLevel.ORT_ENABLE_ALL = 99
+        mock_ort.InferenceSession.return_value = mock_session
+        with patch.dict("sys.modules", {"onnxruntime": mock_ort}):  # noqa: SIM117
+            with pytest.raises(RuntimeError, match="smoke probe.*probability_nan"):
+                SileroVAD(
+                    Path("/fake/model.onnx"),
+                    config=cfg,
+                    smoke_probe_at_construction=True,
+                )
+
+    def test_smoke_probe_raises_on_out_of_range_probability(self) -> None:
+        """Probability above 1.0 → RuntimeError. Real Silero
+        probabilities are always in [0, 1]; out-of-range output
+        means the model isn't a real Silero VAD."""
+        cfg = VADConfig()
+        mock_session = _make_corruptable_session([(99.0, None)])
+        mock_ort = MagicMock()
+        mock_ort.SessionOptions.return_value = MagicMock()
+        mock_ort.GraphOptimizationLevel.ORT_ENABLE_ALL = 99
+        mock_ort.InferenceSession.return_value = mock_session
+        with patch.dict("sys.modules", {"onnxruntime": mock_ort}):  # noqa: SIM117
+            with pytest.raises(
+                RuntimeError, match="probability_out_of_range"
+            ):
+                SileroVAD(
+                    Path("/fake/model.onnx"),
+                    config=cfg,
+                    smoke_probe_at_construction=True,
+                )
+
+    def test_smoke_probe_raises_on_session_run_exception(self) -> None:
+        """ONNX session.run raising → translated to RuntimeError
+        with operator-actionable context."""
+        cfg = VADConfig()
+        mock_session = MagicMock()
+        # session.run raises — simulates the window-size mismatch
+        # case where ONNX's InvalidArgument fires.
+        mock_session.run = MagicMock(
+            side_effect=RuntimeError("InvalidArgument: shape mismatch")
+        )
+        mock_ort = MagicMock()
+        mock_ort.SessionOptions.return_value = MagicMock()
+        mock_ort.GraphOptimizationLevel.ORT_ENABLE_ALL = 99
+        mock_ort.InferenceSession.return_value = mock_session
+        with patch.dict("sys.modules", {"onnxruntime": mock_ort}):  # noqa: SIM117
+            with pytest.raises(RuntimeError, match="smoke probe failed"):
+                SileroVAD(
+                    Path("/fake/model.onnx"),
+                    config=cfg,
+                    smoke_probe_at_construction=True,
+                )
+
+    def test_smoke_probe_disabled_skips_validation(self) -> None:
+        """smoke_probe_at_construction=False bypasses the probe.
+        Used by the test suite to feed deterministic probability
+        sequences into the mock session without the probe consuming
+        the first element."""
+        cfg = VADConfig()
+        # Even with a NaN-returning mock, construction succeeds when
+        # the probe is disabled (the V1 runtime guard would catch
+        # the NaN on the first real process_frame call instead).
+        mock_session = _make_corruptable_session([(float("nan"), None)])
+        mock_ort = MagicMock()
+        mock_ort.SessionOptions.return_value = MagicMock()
+        mock_ort.GraphOptimizationLevel.ORT_ENABLE_ALL = 99
+        mock_ort.InferenceSession.return_value = mock_session
+        with patch.dict("sys.modules", {"onnxruntime": mock_ort}):
+            # Should not raise.
+            vad = SileroVAD(
+                Path("/fake/model.onnx"),
+                config=cfg,
+                smoke_probe_at_construction=False,
+            )
+        assert vad.state == VADState.SILENCE
