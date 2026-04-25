@@ -264,6 +264,27 @@ class VoiceTuningConfig(BaseSettings):
     Operators opt in via ``SOVYX_TUNING__VOICE__VOICE_APO_DLL_INTROSPECTION_ENABLED=true``
     when they need forensic detail in the dashboard."""
 
+    # ── F7 — Layer 4 community telemetry (privacy-first) ──────────
+    voice_community_telemetry_enabled: bool = False
+    """F7 wire-up: when True AND
+    :attr:`voice_community_telemetry_endpoint` is non-empty, the voice
+    factory POSTs an anonymised capture-diagnostics payload to the
+    community endpoint after a successful capture-enable. Default
+    False (privacy-first — telemetry NEVER leaves the user's machine
+    without explicit opt-in). All PII fields (endpoint GUID, device
+    name) are M1-hashed before transmission; raw values never leave
+    the process. See
+    :mod:`sovyx.voice.health._telemetry_client` for the payload
+    contract + privacy model."""
+
+    voice_community_telemetry_endpoint: str = ""
+    """Community-telemetry POST URL. Default empty — even with
+    ``voice_community_telemetry_enabled=True`` the client short-
+    circuits when the URL is empty. Operators set this via
+    ``SOVYX_TUNING__VOICE__VOICE_COMMUNITY_TELEMETRY_ENDPOINT=https://...``
+    only when the community-knowledge service exists and the
+    privacy review has cleared per-deployment opt-in."""
+
     # AudioCaptureTask stream health — catches the silent-zeros failure
     # mode where sd.InputStream opens cleanly but delivers all-zero
     # frames (MME + unsupported rate, driver hang, privacy block). See
