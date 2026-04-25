@@ -32,6 +32,12 @@ from enum import IntEnum, auto
 from typing import TYPE_CHECKING, Any
 
 from sovyx.observability.logging import get_logger
+from sovyx.voice._stage_metrics import (
+    StageEventKind,
+    VoiceStage,
+    measure_stage_duration,
+    record_stage_event,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -491,92 +497,115 @@ class MoonshineSTT(STTEngine):
         )
 
         try:
-            start = time.monotonic()
-            try:
-                text = await self._transcribe_oneshot(audio, sample_rate)
-            except TimeoutError:
-                # S2: timeout is its own rejection class — distinct from
-                # "user said nothing" (empty transcript through the
-                # normal path). Bump cumulative counter, emit
-                # structured event, return result with explicit
-                # ``rejection_reason`` so the orchestrator can branch
-                # (retry on secondary engine, surface to user) instead
-                # of treating it as silent input.
+            # Ring 6 RED + USE: every STT invocation flows through M2's
+            # measure_stage_duration so the dashboard sees the full
+            # latency distribution split by outcome (success vs error).
+            # record_stage_event below tags each return path with its
+            # specific kind/error_type so error rate is queryable.
+            with measure_stage_duration(VoiceStage.STT) as _stage_token:
+                start = time.monotonic()
+                try:
+                    text = await self._transcribe_oneshot(audio, sample_rate)
+                except TimeoutError:
+                    # S2: timeout is its own rejection class — distinct
+                    # from "user said nothing" (empty transcript through
+                    # the normal path). Bump cumulative counter, emit
+                    # structured event, return result with explicit
+                    # ``rejection_reason`` so the orchestrator can branch
+                    # (retry on secondary engine, surface to user)
+                    # instead of treating it as silent input.
+                    elapsed_ms = (time.monotonic() - start) * 1000
+                    self._timeout_count += 1
+                    logger.warning(
+                        "voice.stt.transcribe_timeout",
+                        **{
+                            "voice.rejection_reason": "transcribe_timeout",
+                            "voice.transcribe_timeout_s": self._config.transcribe_timeout,
+                            "voice.elapsed_ms": round(elapsed_ms, 1),
+                            "voice.audio_ms": audio_ms,
+                            "voice.lifetime_timeout_count": self._timeout_count,
+                            "voice.model": self._config.model_size,
+                            "voice.provider": "moonshine",
+                            "voice.language": self._config.language,
+                            "voice.action_required": (
+                                "consider_larger_timeout_or_smaller_model_or_secondary_stt"
+                            ),
+                        },
+                    )
+                    _stage_token.mark_error()
+                    record_stage_event(
+                        VoiceStage.STT,
+                        StageEventKind.DROP,
+                        error_type="transcribe_timeout",
+                    )
+                    return TranscriptionResult(
+                        text="",
+                        language=self._config.language,
+                        confidence=0.0,
+                        duration_ms=elapsed_ms,
+                        rejection_reason="transcribe_timeout",
+                    )
                 elapsed_ms = (time.monotonic() - start) * 1000
-                self._timeout_count += 1
-                logger.warning(
-                    "voice.stt.transcribe_timeout",
+
+                logger.debug(
+                    "Transcription complete",
+                    text_length=len(text),
+                    duration_ms=round(elapsed_ms, 1),
+                )
+
+                stripped = text.strip()
+
+                # ── S1 Ring 4 decode-validation guards ────────────
+                # Order: hallucination stop-list FIRST (cheap, catches
+                # the short-text cases the ratio check skips), then
+                # compression ratio (only meaningful for longer
+                # transcripts). Rejection short-circuits — we only run
+                # one guard per transcript so the reason token is
+                # unambiguous.
+                rejection_reason = self._validate_transcript(stripped, audio_ms, elapsed_ms)
+                if rejection_reason is not None:
+                    # Fail-closed: drop the transcript so the orchestrator
+                    # never feeds garbage to the LLM. The structured event
+                    # already fired inside _validate_transcript so
+                    # dashboards see the reject reason without needing
+                    # to parse the log. M2: record DROP with the
+                    # rejection reason as error_type — the bounded
+                    # cardinality bucket caps explosion if a future
+                    # validator adds many distinct reasons.
+                    record_stage_event(
+                        VoiceStage.STT,
+                        StageEventKind.DROP,
+                        error_type=rejection_reason,
+                    )
+                    return TranscriptionResult(
+                        text="",
+                        language=self._config.language,
+                        confidence=0.0,
+                        duration_ms=elapsed_ms,
+                        rejection_reason=rejection_reason,
+                    )
+
+                logger.info(
+                    "voice.stt.response",
                     **{
-                        "voice.rejection_reason": "transcribe_timeout",
-                        "voice.transcribe_timeout_s": self._config.transcribe_timeout,
-                        "voice.elapsed_ms": round(elapsed_ms, 1),
-                        "voice.audio_ms": audio_ms,
-                        "voice.lifetime_timeout_count": self._timeout_count,
                         "voice.model": self._config.model_size,
                         "voice.provider": "moonshine",
                         "voice.language": self._config.language,
-                        "voice.action_required": (
-                            "consider_larger_timeout_or_smaller_model_or_secondary_stt"
-                        ),
+                        "voice.audio_ms": audio_ms,
+                        "voice.latency_ms": round(elapsed_ms, 1),
+                        "voice.confidence": 0.9,
+                        "voice.text_chars": len(stripped),
+                        "voice.transcript": stripped,
                     },
                 )
+
+                record_stage_event(VoiceStage.STT, StageEventKind.SUCCESS)
                 return TranscriptionResult(
-                    text="",
+                    text=stripped,
                     language=self._config.language,
-                    confidence=0.0,
+                    confidence=0.9,
                     duration_ms=elapsed_ms,
-                    rejection_reason="transcribe_timeout",
                 )
-            elapsed_ms = (time.monotonic() - start) * 1000
-
-            logger.debug(
-                "Transcription complete",
-                text_length=len(text),
-                duration_ms=round(elapsed_ms, 1),
-            )
-
-            stripped = text.strip()
-
-            # ── S1 Ring 4 decode-validation guards ────────────────
-            # Order: hallucination stop-list FIRST (cheap, catches the
-            # short-text cases the ratio check skips), then compression
-            # ratio (only meaningful for longer transcripts). Rejection
-            # short-circuits — we only run one guard per transcript so
-            # the reason token is unambiguous.
-            rejection_reason = self._validate_transcript(stripped, audio_ms, elapsed_ms)
-            if rejection_reason is not None:
-                # Fail-closed: drop the transcript so the orchestrator
-                # never feeds garbage to the LLM. The structured event
-                # already fired inside _validate_transcript so dashboards
-                # see the reject reason without needing to parse the log.
-                return TranscriptionResult(
-                    text="",
-                    language=self._config.language,
-                    confidence=0.0,
-                    duration_ms=elapsed_ms,
-                    rejection_reason=rejection_reason,
-                )
-
-            logger.info(
-                "voice.stt.response",
-                **{
-                    "voice.model": self._config.model_size,
-                    "voice.provider": "moonshine",
-                    "voice.language": self._config.language,
-                    "voice.audio_ms": audio_ms,
-                    "voice.latency_ms": round(elapsed_ms, 1),
-                    "voice.confidence": 0.9,
-                    "voice.text_chars": len(stripped),
-                    "voice.transcript": stripped,
-                },
-            )
-
-            return TranscriptionResult(
-                text=stripped,
-                language=self._config.language,
-                confidence=0.9,
-                duration_ms=elapsed_ms,
-            )
         finally:
             if self._state != STTState.CLOSED:
                 self._state = STTState.READY

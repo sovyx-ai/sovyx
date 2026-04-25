@@ -1108,3 +1108,95 @@ class TestSTTTimeoutS2:
             await stt.close()
             # Counter is still readable on the closed instance.
             assert stt.timeout_count == 1
+
+
+# ---------------------------------------------------------------------------
+# M2 wire-up — RED + USE telemetry on transcribe
+# ---------------------------------------------------------------------------
+
+
+class TestSTTM2WireUp:
+    """STT.transcribe must emit M2 stage events on every return path.
+
+    Verifies the foundation built in M2 (per-stage RED + USE) is
+    actually invoked from production code — not just covered by
+    its own unit tests in isolation.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_success_path_records_success_event(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        recorded: list[tuple[Any, Any, Any]] = []
+
+        from sovyx.voice import stt as stt_mod
+        from sovyx.voice._stage_metrics import StageEventKind, VoiceStage
+
+        def _capture(stage: Any, kind: Any, *, error_type: str | None = None) -> None:
+            recorded.append((stage, kind, error_type))
+
+        monkeypatch.setattr(stt_mod, "record_stage_event", _capture)
+
+        stt, mock_mv = _build_stt(completed_text="hello world")
+        with patch.dict("sys.modules", {"moonshine_voice": mock_mv}):
+            await stt.initialize()
+            await stt.transcribe(np.zeros(16_000, dtype=np.float32))
+
+        assert (VoiceStage.STT, StageEventKind.SUCCESS, None) in recorded
+
+    @pytest.mark.asyncio()
+    async def test_timeout_path_records_drop_event(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        recorded: list[tuple[Any, Any, Any]] = []
+
+        from sovyx.voice import stt as stt_mod
+        from sovyx.voice._stage_metrics import StageEventKind, VoiceStage
+
+        def _capture(stage: Any, kind: Any, *, error_type: str | None = None) -> None:
+            recorded.append((stage, kind, error_type))
+
+        monkeypatch.setattr(stt_mod, "record_stage_event", _capture)
+
+        stt, mock_mv = _build_hung_stt(timeout_s=0.05)
+        with patch.dict("sys.modules", {"moonshine_voice": mock_mv}):
+            await stt.initialize()
+            await stt.transcribe(np.zeros(1600, dtype=np.float32))
+
+        assert (VoiceStage.STT, StageEventKind.DROP, "transcribe_timeout") in recorded
+
+    @pytest.mark.asyncio()
+    async def test_hallucination_rejection_records_drop_with_reason(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When _validate_transcript rejects (hallucination / repetition
+        / etc.), DROP event must carry the rejection_reason as
+        error_type so the dashboard can attribute the rejection
+        cause without parsing logs."""
+        recorded: list[tuple[Any, Any, Any]] = []
+
+        from sovyx.voice import stt as stt_mod
+        from sovyx.voice._stage_metrics import StageEventKind, VoiceStage
+
+        def _capture(stage: Any, kind: Any, *, error_type: str | None = None) -> None:
+            recorded.append((stage, kind, error_type))
+
+        monkeypatch.setattr(stt_mod, "record_stage_event", _capture)
+
+        # "Thank you" is in the EN hallucination stoplist.
+        stt, mock_mv = _build_stt(completed_text="thank you")
+        with patch.dict("sys.modules", {"moonshine_voice": mock_mv}):
+            await stt.initialize()
+            await stt.transcribe(np.zeros(16_000, dtype=np.float32))
+
+        # Verify a DROP was recorded with a non-None error_type
+        # (the exact reason token comes from _validate_transcript).
+        drops = [
+            (s, k, et)
+            for (s, k, et) in recorded
+            if s == VoiceStage.STT and k == StageEventKind.DROP and et is not None
+        ]
+        assert len(drops) >= 1
