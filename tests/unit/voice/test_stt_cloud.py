@@ -788,3 +788,93 @@ class TestPublicAPI:
         import sovyx.voice.stt_cloud as mod
 
         assert hasattr(mod, "httpx")
+
+
+# ---------------------------------------------------------------------------
+# M2 wire-up — RED + USE telemetry on cloud STT
+# ---------------------------------------------------------------------------
+
+
+class TestCloudSTTM2WireUp:
+    """CloudSTT.transcribe must emit M2 stage events.
+
+    Mirrors the MoonshineSTT M2 wire-up (commit 156ee8c) — same
+    pattern, applied to the cloud variant. Both engines emit
+    consistent events so dashboards can attribute STT health
+    by provider without per-engine special casing.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_success_path_records_success_event(
+        self,
+        config: CloudSTTConfig,
+        audio_1s: np.ndarray,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from typing import Any
+
+        recorded: list[tuple[Any, Any, Any]] = []
+
+        from sovyx.voice import stt_cloud as cloud_mod
+        from sovyx.voice._stage_metrics import StageEventKind, VoiceStage
+
+        def _capture(stage: Any, kind: Any, *, error_type: str | None = None) -> None:
+            recorded.append((stage, kind, error_type))
+
+        monkeypatch.setattr(cloud_mod, "record_stage_event", _capture)
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"text": "hello"}
+        mock_client = AsyncMock()
+        mock_client.post.return_value = mock_response
+
+        with patch.object(_stt_mod, "httpx") as mock_httpx:
+            mock_httpx.AsyncClient.return_value = mock_client
+            mock_httpx.Timeout.return_value = MagicMock()
+            engine = CloudSTT(config)
+            await engine.initialize()
+            await engine.transcribe(audio_1s)
+            await engine.close()
+
+        assert (VoiceStage.STT, StageEventKind.SUCCESS, None) in recorded
+
+    @pytest.mark.asyncio()
+    async def test_audio_too_long_raises_no_success_event(
+        self,
+        config: CloudSTTConfig,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """CloudSTTError on audio-too-long propagates via
+        measure_stage_duration's BaseException handler. No SUCCESS
+        event recorded — the body never reached the success site."""
+        from typing import Any
+
+        recorded: list[tuple[Any, Any, Any]] = []
+
+        from sovyx.voice import stt_cloud as cloud_mod
+        from sovyx.voice._stage_metrics import StageEventKind, VoiceStage
+
+        def _capture(stage: Any, kind: Any, *, error_type: str | None = None) -> None:
+            recorded.append((stage, kind, error_type))
+
+        monkeypatch.setattr(cloud_mod, "record_stage_event", _capture)
+
+        # 30 minutes of audio @ 16 kHz — way over _MAX_AUDIO_DURATION_S.
+        too_long = np.zeros(16_000 * 1800, dtype=np.float32)
+
+        with patch.object(_stt_mod, "httpx") as mock_httpx:
+            mock_httpx.AsyncClient.return_value = AsyncMock()
+            mock_httpx.Timeout.return_value = MagicMock()
+            engine = CloudSTT(config)
+            await engine.initialize()
+            with pytest.raises(CloudSTTError, match="Audio too long"):
+                await engine.transcribe(too_long)
+            await engine.close()
+
+        successes = [
+            (s, k, et)
+            for (s, k, et) in recorded
+            if s == VoiceStage.STT and k == StageEventKind.SUCCESS
+        ]
+        assert successes == []

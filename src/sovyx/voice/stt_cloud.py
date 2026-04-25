@@ -18,6 +18,12 @@ import httpx
 
 from sovyx.engine.errors import VoiceError
 from sovyx.observability.logging import get_logger
+from sovyx.voice._stage_metrics import (
+    StageEventKind,
+    VoiceStage,
+    measure_stage_duration,
+    record_stage_event,
+)
 from sovyx.voice.stt import (
     _DEFAULT_SAMPLE_RATE,
     PartialTranscription,
@@ -286,49 +292,60 @@ class CloudSTT(STTEngine):
         )
 
         try:
-            start = time.monotonic()
+            # Ring 6 RED + USE: matches MoonshineSTT.transcribe wire-up.
+            # The body is wrapped so audio-too-long CloudSTTError,
+            # _call_whisper_api network failures, and any other
+            # unhandled exception flow through measure_stage_duration's
+            # BaseException handler (recorded as outcome=error).
+            # SUCCESS event fires once before return on the happy path.
+            with measure_stage_duration(VoiceStage.STT):
+                start = time.monotonic()
 
-            # Validate audio duration
-            duration_s = len(audio) / sample_rate
-            if duration_s > _MAX_AUDIO_DURATION_S:
-                msg = f"Audio too long: {duration_s:.1f}s (max {_MAX_AUDIO_DURATION_S:.0f}s)"
-                raise CloudSTTError(msg)
+                # Validate audio duration
+                duration_s = len(audio) / sample_rate
+                if duration_s > _MAX_AUDIO_DURATION_S:
+                    msg = (
+                        f"Audio too long: {duration_s:.1f}s "
+                        f"(max {_MAX_AUDIO_DURATION_S:.0f}s)"
+                    )
+                    raise CloudSTTError(msg)
 
-            # Convert to WAV
-            wav_bytes = _audio_to_wav_bytes(audio, sample_rate)
+                # Convert to WAV
+                wav_bytes = _audio_to_wav_bytes(audio, sample_rate)
 
-            # Call API
-            text = await self._call_whisper_api(wav_bytes)
-            elapsed_ms = (time.monotonic() - start) * 1000
+                # Call API
+                text = await self._call_whisper_api(wav_bytes)
+                elapsed_ms = (time.monotonic() - start) * 1000
 
-            logger.debug(
-                "Cloud transcription complete",
-                text_length=len(text),
-                duration_ms=round(elapsed_ms, 1),
-                audio_duration_s=round(duration_s, 1),
-            )
+                logger.debug(
+                    "Cloud transcription complete",
+                    text_length=len(text),
+                    duration_ms=round(elapsed_ms, 1),
+                    audio_duration_s=round(duration_s, 1),
+                )
 
-            stripped = text.strip()
-            logger.info(
-                "voice.stt.response",
-                **{
-                    "voice.model": _WHISPER_MODEL,
-                    "voice.provider": "openai_whisper_cloud",
-                    "voice.language": self._config.language,
-                    "voice.audio_ms": audio_ms,
-                    "voice.latency_ms": round(elapsed_ms, 1),
-                    "voice.confidence": 0.95,
-                    "voice.text_chars": len(stripped),
-                    "voice.transcript": stripped,
-                },
-            )
+                stripped = text.strip()
+                logger.info(
+                    "voice.stt.response",
+                    **{
+                        "voice.model": _WHISPER_MODEL,
+                        "voice.provider": "openai_whisper_cloud",
+                        "voice.language": self._config.language,
+                        "voice.audio_ms": audio_ms,
+                        "voice.latency_ms": round(elapsed_ms, 1),
+                        "voice.confidence": 0.95,
+                        "voice.text_chars": len(stripped),
+                        "voice.transcript": stripped,
+                    },
+                )
 
-            return TranscriptionResult(
-                text=stripped,
-                language=self._config.language,
-                confidence=0.95,  # Cloud Whisper is high-confidence
-                duration_ms=elapsed_ms,
-            )
+                record_stage_event(VoiceStage.STT, StageEventKind.SUCCESS)
+                return TranscriptionResult(
+                    text=stripped,
+                    language=self._config.language,
+                    confidence=0.95,  # Cloud Whisper is high-confidence
+                    duration_ms=elapsed_ms,
+                )
         finally:
             if self._state != STTState.CLOSED:
                 self._state = STTState.READY
