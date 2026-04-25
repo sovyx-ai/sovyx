@@ -11,6 +11,7 @@ from sovyx.engine.errors import VoiceError
 from sovyx.observability.logging import get_logger
 from sovyx.observability.saga import SagaHandle, begin_saga, end_saga
 from sovyx.observability.tasks import spawn
+from sovyx.voice._chaos import ChaosInjector, ChaosSite
 from sovyx.voice.health._metrics import record_time_to_first_utterance
 from sovyx.voice.health.contract import BypassVerdict
 from sovyx.voice.jarvis import JarvisConfig, JarvisIllusion, split_at_boundaries
@@ -250,6 +251,17 @@ class VoicePipeline:
         # confirmed exhaustive, a follow-up commit can flip to
         # ``strict=True`` for hard enforcement.
         self._state_machine = PipelineStateMachine()
+        # TS3 chaos injector — opt-in invalid-transition simulation
+        # at the PIPELINE_INVALID_TRANSITION site. Disabled by
+        # default; chaos test matrix sets the env vars to validate
+        # that the O1 PipelineStateMachine WARN
+        # (pipeline.state.invalid_transition) fires correctly when
+        # a forbidden transition is observed. The actual orchestrator
+        # state remains intact — chaos only exercises the validator
+        # via a synthetic record_transition(IDLE, THINKING) call.
+        self._pipeline_chaos = ChaosInjector(
+            site_id=ChaosSite.PIPELINE_INVALID_TRANSITION.value,
+        )
         self._utterance_frames: list[npt.NDArray[np.int16]] = []
         self._silence_counter = 0
         self._recording_counter = 0
@@ -345,6 +357,19 @@ class VoicePipeline:
         # explicitly, and recording them keeps the dwell watchdog
         # accurate (each self-loop resets the dwell clock).
         self._state_machine.record_transition(old, new)
+        # TS3 chaos: opt-in invalid-transition simulation. When
+        # chaos fires, push a synthetic IDLE→THINKING through the
+        # validator (a known-invalid edge per the canonical table).
+        # Exercises the lenient-mode WARN path
+        # (pipeline.state.invalid_transition) under realistic
+        # operating conditions. The orchestrator's actual state
+        # remains intact — only the validator's history + invalid-
+        # transition counter are touched.
+        if self._pipeline_chaos.should_inject():
+            self._state_machine.record_transition(
+                VoicePipelineState.IDLE,
+                VoicePipelineState.THINKING,
+            )
         if old is new:
             return
         if old is VoicePipelineState.IDLE and new is not VoicePipelineState.IDLE:

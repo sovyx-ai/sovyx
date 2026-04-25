@@ -688,6 +688,66 @@ class TestPipelineStateMachineWireUp:
 
 
 # ===========================================================================
+# TS3 chaos wire-up — PIPELINE_INVALID_TRANSITION injection
+# ===========================================================================
+
+
+class TestPipelineInvalidTransitionChaos:
+    """Orchestrator state setter must honour the chaos injector.
+
+    With chaos enabled, every state mutation ALSO triggers a
+    synthetic invalid transition (IDLE→THINKING) through the O1
+    validator — exercises the lenient-mode WARN path under
+    realistic operating conditions. The orchestrator's actual
+    state remains intact.
+    """
+
+    @pytest.mark.asyncio
+    async def test_chaos_disabled_no_synthetic_transition(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from sovyx.voice._chaos import _ENABLED_ENV_VAR, _RATE_ENV_VAR_PREFIX
+
+        monkeypatch.delenv(_ENABLED_ENV_VAR, raising=False)
+        monkeypatch.setenv(
+            f"{_RATE_ENV_VAR_PREFIX}PIPELINE_INVALID_TRANSITION_PCT",
+            "100",
+        )
+
+        pipeline, _ = _make_pipeline()
+        # Trigger a valid transition.
+        pipeline._state = VoicePipelineState.WAKE_DETECTED
+        # No chaos = no invalid_transition_count bump.
+        assert pipeline._state_machine.invalid_transition_count == 0
+
+    @pytest.mark.asyncio
+    async def test_chaos_at_100_pct_injects_invalid_transition(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Chaos fires synthetic IDLE→THINKING through the validator
+        on every state mutation — the invalid_transition_count grows
+        by 1 per real transition, and the actual orchestrator state
+        flows normally."""
+        from sovyx.voice._chaos import _ENABLED_ENV_VAR, _RATE_ENV_VAR_PREFIX
+
+        monkeypatch.setenv(_ENABLED_ENV_VAR, "true")
+        monkeypatch.setenv(
+            f"{_RATE_ENV_VAR_PREFIX}PIPELINE_INVALID_TRANSITION_PCT",
+            "100",
+        )
+
+        pipeline, _ = _make_pipeline()
+        pipeline._state = VoicePipelineState.WAKE_DETECTED
+        # Real transition happened normally.
+        assert pipeline._state_machine.current_state == VoicePipelineState.THINKING
+        # The synthetic IDLE→THINKING was the LAST recorded transition.
+        # invalid_transition_count = 1 (the synthetic one).
+        assert pipeline._state_machine.invalid_transition_count == 1
+
+
+# ===========================================================================
 # BargeInDetector
 # ===========================================================================
 
