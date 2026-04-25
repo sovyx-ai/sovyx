@@ -1002,3 +1002,98 @@ class TestKokoroT2EnergyValidation:
         events = _tts_events_of(caplog, "voice.tts.chunk_emitted")
         assert len(events) >= 1
         assert events[-1]["voice.synthesis_health"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# M2 wire-up — RED + USE telemetry on TTS synthesis
+# ---------------------------------------------------------------------------
+
+
+class TestKokoroM2WireUp:
+    """KokoroTTS.synthesize_with must emit M2 stage events on every
+    return path. Mirrors TestSTTM2WireUp — proves the M2 foundation
+    is wired in production code, not just unit-tested in isolation.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_success_path_records_success_event(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from typing import Any
+
+        recorded: list[tuple[Any, Any, Any]] = []
+
+        from sovyx.voice import tts_kokoro as kokoro_mod
+        from sovyx.voice._stage_metrics import StageEventKind, VoiceStage
+
+        def _capture(stage: Any, kind: Any, *, error_type: str | None = None) -> None:
+            recorded.append((stage, kind, error_type))
+
+        monkeypatch.setattr(kokoro_mod, "record_stage_event", _capture)
+
+        kokoro, _ = _build_kokoro(tmp_path)
+        await kokoro.synthesize("hello world")
+
+        assert (VoiceStage.TTS, StageEventKind.SUCCESS, None) in recorded
+
+    @pytest.mark.asyncio()
+    async def test_empty_text_records_drop_with_reason(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from typing import Any
+
+        recorded: list[tuple[Any, Any, Any]] = []
+
+        from sovyx.voice import tts_kokoro as kokoro_mod
+        from sovyx.voice._stage_metrics import StageEventKind, VoiceStage
+
+        def _capture(stage: Any, kind: Any, *, error_type: str | None = None) -> None:
+            recorded.append((stage, kind, error_type))
+
+        monkeypatch.setattr(kokoro_mod, "record_stage_event", _capture)
+
+        kokoro, _ = _build_kokoro(tmp_path)
+        await kokoro.synthesize("")
+
+        assert (VoiceStage.TTS, StageEventKind.DROP, "empty_text") in recorded
+
+    @pytest.mark.asyncio()
+    async def test_zero_energy_synthesis_records_drop(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Zero-energy output (silent synthesis) is a soft failure —
+        DROP with error_type=zero_energy so dashboards can attribute
+        the rate of structural-output failures."""
+        from typing import Any
+
+        recorded: list[tuple[Any, Any, Any]] = []
+
+        from sovyx.voice import tts_kokoro as kokoro_mod
+        from sovyx.voice._stage_metrics import StageEventKind, VoiceStage
+
+        def _capture(stage: Any, kind: Any, *, error_type: str | None = None) -> None:
+            recorded.append((stage, kind, error_type))
+
+        monkeypatch.setattr(kokoro_mod, "record_stage_event", _capture)
+
+        # Build a kokoro mock that returns zero samples — below the
+        # -60 dBFS RMS floor.
+        mock_kokoro = MagicMock()
+        mock_kokoro.create = MagicMock(
+            return_value=(np.zeros(4800, dtype=np.float32), 24000),
+        )
+        mock_kokoro.get_voices = MagicMock(return_value=["af_bella"])
+
+        _setup_model_dir(tmp_path)
+        kokoro = KokoroTTS(tmp_path)
+        kokoro._kokoro = mock_kokoro
+        kokoro._initialized = True
+        await kokoro.synthesize("hello world")
+
+        assert (VoiceStage.TTS, StageEventKind.DROP, "zero_energy") in recorded

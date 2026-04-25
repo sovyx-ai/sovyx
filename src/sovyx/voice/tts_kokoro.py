@@ -17,6 +17,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from sovyx.observability.logging import get_logger
+from sovyx.voice._stage_metrics import (
+    StageEventKind,
+    VoiceStage,
+    measure_stage_duration,
+    record_stage_event,
+)
 from sovyx.voice.tts_piper import AudioChunk, TTSEngine
 
 if TYPE_CHECKING:
@@ -349,93 +355,128 @@ class KokoroTTS(TTSEngine):
 
         text = text.strip()
 
-        if not text:
-            return AudioChunk(
-                audio=np.array([], dtype=np.int16),
-                sample_rate=_DEFAULT_SAMPLE_RATE,
-                duration_ms=0.0,
+        # Ring 6 RED + USE: every synthesize invocation flows through
+        # M2's measure_stage_duration so dashboards see the full
+        # latency distribution split by outcome. record_stage_event
+        # below tags each return path with its specific kind /
+        # error_type. Implicit exceptions from kokoro.create are
+        # caught by measure_stage_duration's BaseException handler
+        # and recorded as ERROR with the exception class name.
+        with measure_stage_duration(VoiceStage.TTS) as _stage_token:
+            if not text:
+                # Empty input is a structured no-op, not a failure —
+                # but it still produces no audio, so DROP not SUCCESS.
+                # error_type=empty_text lets the dashboard distinguish
+                # "no audio because nothing to say" from real failures.
+                record_stage_event(
+                    VoiceStage.TTS,
+                    StageEventKind.DROP,
+                    error_type="empty_text",
+                )
+                return AudioChunk(
+                    audio=np.array([], dtype=np.int16),
+                    sample_rate=_DEFAULT_SAMPLE_RATE,
+                    duration_ms=0.0,
+                )
+
+            if self._kokoro is None:
+                msg = "KokoroTTS not initialized"
+                raise RuntimeError(msg)
+
+            resolved_speed = self._config.speed if speed is None else speed
+
+            # Kokoro's `create` runs G2P + ONNX VITS2 synchronously and
+            # is CPU-bound (multiple seconds for a long sentence).
+            # Offload to a worker thread so the event loop stays
+            # responsive.
+            gen_start = time.monotonic()
+            samples, sample_rate = await asyncio.to_thread(
+                self._kokoro.create,
+                text,
+                voice=voice,
+                speed=resolved_speed,
+                lang=language,
             )
+            generation_ms = (time.monotonic() - gen_start) * 1000
 
-        if self._kokoro is None:
-            msg = "KokoroTTS not initialized"
-            raise RuntimeError(msg)
+            # Convert float32 → int16 PCM
+            audio_int16: np.ndarray = np.clip(
+                samples * 32768.0,
+                -32768,
+                32767,
+            ).astype(np.int16)
 
-        resolved_speed = self._config.speed if speed is None else speed
+            duration_ms = len(audio_int16) / sample_rate * 1000
 
-        # Kokoro's `create` runs G2P + ONNX VITS2 synchronously and is
-        # CPU-bound (multiple seconds for a long sentence). Offload to a
-        # worker thread so the event loop stays responsive.
-        gen_start = time.monotonic()
-        samples, sample_rate = await asyncio.to_thread(
-            self._kokoro.create,
-            text,
-            voice=voice,
-            speed=resolved_speed,
-            lang=language,
-        )
-        generation_ms = (time.monotonic() - gen_start) * 1000
+            # T2 Ring 5 output-energy validation. The synthesis pipeline
+            # MUST produce audible output for non-empty input — silent
+            # output is a structural failure (corrupt voice file, ONNX
+            # session degeneration) and must surface explicitly so the
+            # orchestrator can trigger the Piper fallback. The chunk's
+            # ``synthesis_health`` field carries the verdict; structured
+            # WARNING fires for dashboards.
+            rms_dbfs = _compute_rms_dbfs(audio_int16)
+            synthesis_health: str | None = None
+            if rms_dbfs < _TTS_RMS_FLOOR_DBFS:
+                synthesis_health = "zero_energy"
+                logger.warning(
+                    "voice.tts.zero_energy_synthesis",
+                    **{
+                        "voice.text_chars": len(text),
+                        "voice.audio_ms": round(duration_ms, 1),
+                        "voice.generation_ms": round(generation_ms, 1),
+                        "voice.measured_rms_dbfs": (
+                            round(rms_dbfs, 2) if rms_dbfs != float("-inf") else "-inf"
+                        ),
+                        "voice.rms_floor_dbfs": _TTS_RMS_FLOOR_DBFS,
+                        "voice.model": "kokoro",
+                        "voice.voice": voice,
+                        "voice.language": language,
+                        "voice.sample_rate": sample_rate,
+                        "voice.action_required": (
+                            "fallback_to_piper_or_re_check_voice_file_integrity"
+                        ),
+                    },
+                )
 
-        # Convert float32 → int16 PCM
-        audio_int16: np.ndarray = np.clip(
-            samples * 32768.0,
-            -32768,
-            32767,
-        ).astype(np.int16)
-
-        duration_ms = len(audio_int16) / sample_rate * 1000
-
-        # T2 Ring 5 output-energy validation. The synthesis pipeline
-        # MUST produce audible output for non-empty input — silent
-        # output is a structural failure (corrupt voice file, ONNX
-        # session degeneration) and must surface explicitly so the
-        # orchestrator can trigger the Piper fallback. The chunk's
-        # ``synthesis_health`` field carries the verdict; structured
-        # WARNING fires for dashboards.
-        rms_dbfs = _compute_rms_dbfs(audio_int16)
-        synthesis_health: str | None = None
-        if rms_dbfs < _TTS_RMS_FLOOR_DBFS:
-            synthesis_health = "zero_energy"
-            logger.warning(
-                "voice.tts.zero_energy_synthesis",
+            self._chunk_counter += 1
+            logger.info(
+                "voice.tts.chunk_emitted",
                 **{
+                    "voice.chunk_index": self._chunk_counter,
                     "voice.text_chars": len(text),
                     "voice.audio_ms": round(duration_ms, 1),
                     "voice.generation_ms": round(generation_ms, 1),
-                    "voice.measured_rms_dbfs": (
-                        round(rms_dbfs, 2) if rms_dbfs != float("-inf") else "-inf"
-                    ),
-                    "voice.rms_floor_dbfs": _TTS_RMS_FLOOR_DBFS,
                     "voice.model": "kokoro",
                     "voice.voice": voice,
                     "voice.language": language,
                     "voice.sample_rate": sample_rate,
-                    "voice.action_required": "fallback_to_piper_or_re_check_voice_file_integrity",
+                    "voice.speed": resolved_speed,
+                    "voice.synthesis_health": synthesis_health or "ok",
                 },
             )
 
-        self._chunk_counter += 1
-        logger.info(
-            "voice.tts.chunk_emitted",
-            **{
-                "voice.chunk_index": self._chunk_counter,
-                "voice.text_chars": len(text),
-                "voice.audio_ms": round(duration_ms, 1),
-                "voice.generation_ms": round(generation_ms, 1),
-                "voice.model": "kokoro",
-                "voice.voice": voice,
-                "voice.language": language,
-                "voice.sample_rate": sample_rate,
-                "voice.speed": resolved_speed,
-                "voice.synthesis_health": synthesis_health or "ok",
-            },
-        )
+            # Zero-energy synthesis is a soft failure: the caller
+            # already knows to fall back to Piper, but the
+            # observability layer should record it as DROP with the
+            # specific error_type so the dashboard can attribute the
+            # rate of structural-output failures.
+            if synthesis_health == "zero_energy":
+                _stage_token.mark_error()
+                record_stage_event(
+                    VoiceStage.TTS,
+                    StageEventKind.DROP,
+                    error_type="zero_energy",
+                )
+            else:
+                record_stage_event(VoiceStage.TTS, StageEventKind.SUCCESS)
 
-        return AudioChunk(
-            audio=audio_int16,
-            sample_rate=sample_rate,
-            duration_ms=duration_ms,
-            synthesis_health=synthesis_health,
-        )
+            return AudioChunk(
+                audio=audio_int16,
+                sample_rate=sample_rate,
+                duration_ms=duration_ms,
+                synthesis_health=synthesis_health,
+            )
 
     async def synthesize_streaming(
         self,
