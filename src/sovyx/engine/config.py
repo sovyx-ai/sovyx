@@ -15,6 +15,7 @@ import yaml
 from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from sovyx.engine._home_path import resolve_home_dir
 from sovyx.engine.errors import ConfigNotFoundError, ConfigValidationError
 
 
@@ -44,7 +45,13 @@ class LoggingConfig(BaseModel):
 class DatabaseConfig(BaseModel):
     """SQLite database configuration."""
 
-    data_dir: Path = Field(default_factory=lambda: Path.home() / ".sovyx")
+    data_dir: Path = Field(
+        # #32 — defensive home resolution. ``Path.home()`` raises
+        # RuntimeError on POSIX containers without HOME and the daemon
+        # would crash before any structured error fires. ``resolve_home_dir``
+        # falls back to a per-user tempdir with a structured WARN.
+        default_factory=lambda: resolve_home_dir() / ".sovyx",
+    )
     wal_mode: bool = True
     mmap_size: int = 256 * 1024 * 1024  # 256MB
     cache_size: int = -64000  # 64MB (negative = KB)
@@ -1148,7 +1155,11 @@ class SocketConfig(BaseModel):
             if system_path.exists() and os.access(system_path, os.W_OK):
                 self.path = "/run/sovyx/sovyx.sock"
             else:
-                self.path = str(Path.home() / ".sovyx" / "sovyx.sock")
+                # #32 — defensive home resolution at the RPC socket
+                # path computation; otherwise a missing HOME causes
+                # the daemon's RPC layer to fail at startup with a
+                # confusing "Could not determine home directory" trace.
+                self.path = str(resolve_home_dir() / ".sovyx" / "sovyx.sock")
         return self
 
 
@@ -1165,7 +1176,13 @@ class EngineConfig(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="SOVYX_", env_nested_delimiter="__")
 
-    data_dir: Path = Field(default_factory=lambda: Path.home() / ".sovyx")
+    data_dir: Path = Field(
+        # #32 — defensive home resolution at the EngineConfig level
+        # (mirrors DatabaseConfig.data_dir). Daemon startup must
+        # never crash on a missing HOME / sandboxed home; the
+        # fallback is a per-user tempdir with structured WARN.
+        default_factory=lambda: resolve_home_dir() / ".sovyx",
+    )
     log: LoggingConfig = Field(default_factory=LoggingConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     hardware: HardwareConfig = Field(default_factory=HardwareConfig)
