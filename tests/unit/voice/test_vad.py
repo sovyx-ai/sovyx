@@ -20,7 +20,9 @@ from sovyx.voice.vad import (
     _CORRUPTION_RECOVERY_FRAMES,
     _CORRUPTION_UNRECOVERABLE_THRESHOLD,
     _CORRUPTION_UNRECOVERABLE_WINDOW,
+    _HYSTERESIS_MIN_DELTA,
     _LSTM_STATE_SHAPE,
+    SILERO_CANONICAL_HYSTERESIS_DELTA,
     SileroVAD,
     VADConfig,
     VADEvent,
@@ -1146,3 +1148,184 @@ class TestCorruptionGuardPropertyBased:
             vad.process_frame(_silence_frame())
             assert vad.corruption_count >= prev
             prev = vad.corruption_count
+
+
+# ---------------------------------------------------------------------------
+# V3: Schmitt-trigger hysteresis formalisation (Ring 3)
+# ---------------------------------------------------------------------------
+#
+# The Schmitt trigger needs a wide-enough gap between onset and offset
+# thresholds to suppress noise-floor chatter. The V3 tightening adds:
+#
+# * SILERO_CANONICAL_HYSTERESIS_DELTA — public constant naming the
+#   Silero/LiveKit-recommended 0.15 gap.
+# * _HYSTERESIS_MIN_DELTA — enforced minimum (anti-chatter floor).
+# * VADConfig.with_canonical_hysteresis() — factory deriving offset
+#   from onset using the canonical delta.
+# * VADConfig.hysteresis_delta — computed property for observability.
+#
+# Reference: MISSION-voice-mixer-enterprise-refactor-2026-04-25 §2.3, V3.
+
+
+class TestSchmittTriggerCanonicalConstants:
+    """Public constants must match the Silero/LiveKit canonical values."""
+
+    def test_canonical_delta_value(self) -> None:
+        # If this changes, dashboards / docs / third-party integrations
+        # that reference the constant break — bump deliberately, never
+        # by accident.
+        assert SILERO_CANONICAL_HYSTERESIS_DELTA == 0.15  # noqa: PLR2004
+
+    def test_min_delta_below_canonical(self) -> None:
+        # Anti-chatter floor must be strictly less than the canonical
+        # gap — otherwise the canonical config itself would be rejected.
+        assert _HYSTERESIS_MIN_DELTA < SILERO_CANONICAL_HYSTERESIS_DELTA
+
+    def test_min_delta_strictly_positive(self) -> None:
+        # Zero-or-negative floor would mean no enforcement at all.
+        assert _HYSTERESIS_MIN_DELTA > 0.0
+
+
+class TestHysteresisDeltaProperty:
+    """``VADConfig.hysteresis_delta`` is a computed property."""
+
+    def test_delta_for_default(self) -> None:
+        cfg = VADConfig()
+        assert cfg.hysteresis_delta == pytest.approx(0.2)
+
+    def test_delta_for_canonical(self) -> None:
+        cfg = VADConfig.with_canonical_hysteresis(0.7)
+        assert cfg.hysteresis_delta == pytest.approx(SILERO_CANONICAL_HYSTERESIS_DELTA)
+
+    def test_delta_property_is_read_only(self) -> None:
+        # Frozen+slots dataclasses with @property raise either
+        # FrozenInstanceError (sub of AttributeError) or TypeError
+        # depending on the CPython version; assert on the broader
+        # superclass that covers both.
+        cfg = VADConfig()
+        with pytest.raises((AttributeError, TypeError)):
+            cfg.hysteresis_delta = 0.0  # type: ignore[misc]
+
+
+class TestHysteresisMinDeltaEnforcement:
+    """``_validate_config`` rejects configs below the anti-chatter floor."""
+
+    def test_rejects_delta_below_floor(self) -> None:
+        # delta = 0.04 < 0.05 → reject
+        with pytest.raises(ValueError, match="hysteresis delta"):
+            _validate_config(
+                VADConfig(onset_threshold=0.5, offset_threshold=0.46),
+            )
+
+    def test_rejects_delta_at_floor_minus_epsilon(self) -> None:
+        # delta = 0.049 < 0.05 → reject
+        with pytest.raises(ValueError, match="hysteresis delta"):
+            _validate_config(
+                VADConfig(onset_threshold=0.5, offset_threshold=0.451),
+            )
+
+    def test_accepts_delta_at_floor(self) -> None:
+        # delta = 0.05 == 0.05 → accept
+        _validate_config(VADConfig(onset_threshold=0.5, offset_threshold=0.45))
+
+    def test_accepts_default_delta(self) -> None:
+        # The shipped defaults must continue to validate (no surprise
+        # behaviour change in v0.22.5).
+        _validate_config(VADConfig())  # delta = 0.2 ≥ 0.05
+
+    def test_error_mentions_canonical_factory(self) -> None:
+        """The error message must point users at the recommended fix."""
+        with pytest.raises(ValueError, match="with_canonical_hysteresis"):
+            _validate_config(
+                VADConfig(onset_threshold=0.5, offset_threshold=0.48),
+            )
+
+    def test_existing_offset_gte_onset_check_still_fires_first(self) -> None:
+        """offset >= onset must still raise the original error, not the new one."""
+        with pytest.raises(ValueError, match="offset_threshold.*must be <"):
+            _validate_config(VADConfig(onset_threshold=0.5, offset_threshold=0.5))
+
+
+class TestWithCanonicalHysteresis:
+    """``VADConfig.with_canonical_hysteresis`` factory contract."""
+
+    def test_derives_offset_from_onset(self) -> None:
+        cfg = VADConfig.with_canonical_hysteresis(0.7)
+        assert cfg.onset_threshold == pytest.approx(0.7)
+        assert cfg.offset_threshold == pytest.approx(0.55)
+
+    def test_derives_offset_for_default_silero_recommendation(self) -> None:
+        # LiveKit's "improved EOU" recommendation: onset=0.7 / offset=0.55
+        cfg = VADConfig.with_canonical_hysteresis(0.7)
+        assert cfg.hysteresis_delta == pytest.approx(SILERO_CANONICAL_HYSTERESIS_DELTA)
+
+    def test_returns_validated_config(self) -> None:
+        # Result must already pass _validate_config (i.e. be usable in
+        # SileroVAD construction without further checks).
+        cfg = VADConfig.with_canonical_hysteresis(0.6)
+        _validate_config(cfg)
+
+    def test_clamps_low_onset_to_min_delta(self) -> None:
+        # onset=0.10 → naive derived offset = -0.05 (invalid). Factory
+        # must fall back to the min-delta gap so the result is still
+        # a valid Schmitt trigger, not an exception.
+        cfg = VADConfig.with_canonical_hysteresis(0.10)
+        assert cfg.onset_threshold == pytest.approx(0.10)
+        assert cfg.offset_threshold > 0.0
+        assert cfg.hysteresis_delta >= _HYSTERESIS_MIN_DELTA
+        # And the result still validates (no exception).
+        _validate_config(cfg)
+
+    def test_high_onset_works(self) -> None:
+        # onset=0.95 → derived=0.80 — well-defined, no clamping.
+        cfg = VADConfig.with_canonical_hysteresis(0.95)
+        assert cfg.offset_threshold == pytest.approx(0.80)
+        _validate_config(cfg)
+
+    def test_optional_frame_overrides(self) -> None:
+        cfg = VADConfig.with_canonical_hysteresis(
+            0.7,
+            min_onset_frames=8,
+            min_offset_frames=3,
+        )
+        assert cfg.min_onset_frames == 8  # noqa: PLR2004
+        assert cfg.min_offset_frames == 3  # noqa: PLR2004
+
+    def test_optional_sample_rate_override(self) -> None:
+        cfg = VADConfig.with_canonical_hysteresis(0.7, sample_rate=8000)
+        assert cfg.sample_rate == 8000  # noqa: PLR2004
+        assert cfg.window_size == 256  # noqa: PLR2004
+
+    def test_invalid_onset_propagates(self) -> None:
+        # onset > 1.0 is invalid for the BASE config (sigmoid range
+        # violation), separate from the hysteresis-delta check.
+        with pytest.raises(ValueError, match="onset_threshold"):
+            cfg = VADConfig.with_canonical_hysteresis(1.5)
+            _validate_config(cfg)
+
+
+class TestSchmittTriggerEndToEnd:
+    """A canonical-hysteresis VAD still produces correct FSM behaviour."""
+
+    def test_canonical_hysteresis_silence_to_speech(self) -> None:
+        cfg = VADConfig.with_canonical_hysteresis(0.7, min_onset_frames=1)
+        # Probability above onset (0.7) → ONSET → SPEECH (min_onset=1)
+        vad = _build_vad([0.85], config=cfg)
+        evt = vad.process_frame(_speech_frame())
+        assert evt.state == VADState.SPEECH
+
+    def test_canonical_hysteresis_offset_does_not_fire_on_intermediate(self) -> None:
+        """Probabilities BETWEEN offset (0.55) and onset (0.7) preserve SPEECH."""
+        cfg = VADConfig.with_canonical_hysteresis(
+            0.7,
+            min_onset_frames=1,
+            min_offset_frames=3,
+        )
+        vad = _build_vad([0.85, 0.6, 0.6], config=cfg)
+        frame = _speech_frame()
+        vad.process_frame(frame)  # → SPEECH
+        evt2 = vad.process_frame(frame)  # 0.6 between 0.55 and 0.7 → stays SPEECH
+        assert evt2.state == VADState.SPEECH
+        evt3 = vad.process_frame(frame)
+        # Still SPEECH — Schmitt's middle band absorbs the noise.
+        assert evt3.state == VADState.SPEECH

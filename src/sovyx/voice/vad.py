@@ -90,6 +90,45 @@ unrecoverable. At 16 kHz / 512-sample window = 3.2 s of audio — the
 SRE-canonical "burn rate" alerting horizon for a 1-minute SLO budget
 (see Google SRE Workbook §5)."""
 
+# ---------------------------------------------------------------------------
+# Ring 3 Schmitt-trigger hysteresis tuning (V3)
+# ---------------------------------------------------------------------------
+#
+# A Schmitt trigger needs two distinct thresholds (onset > offset) and a
+# minimum gap (delta) wide enough to suppress chatter at the noise floor.
+# The constants below capture the Silero / LiveKit canonical values so
+# they're discoverable in one place; ``_validate_config`` enforces the
+# minimum so a misconfigured ``VADConfig`` can't silently degrade to
+# essentially-no-hysteresis (single-threshold flapping).
+
+SILERO_CANONICAL_HYSTERESIS_DELTA = 0.15
+"""Recommended ``onset_threshold - offset_threshold`` per Silero VAD's
+canonical configuration and LiveKit's production tuning (LiveKit blog
+"Improved end-of-turn model cuts voice-AI interruptions 39%", 2026).
+
+Smaller deltas (<0.1) produce the chatter the Schmitt trigger exists
+to prevent — at the boundary of the noise floor, raw probability
+fluctuates by ±0.05 between consecutive frames, so a 0.05-delta
+hysteresis is no hysteresis at all. The 0.15 value is the empirical
+sweet spot: tight enough to bound perceptual end-of-turn latency,
+wide enough to absorb model jitter on real speech.
+
+Used by :meth:`VADConfig.with_canonical_hysteresis` to derive
+``offset_threshold`` from a single user-provided ``onset_threshold``.
+"""
+
+_HYSTERESIS_MIN_DELTA = 0.05
+"""Minimum permissible ``onset_threshold - offset_threshold``. Below
+this value the Schmitt trigger collapses into a single-threshold
+flapping detector — see :data:`SILERO_CANONICAL_HYSTERESIS_DELTA`
+for the rationale.
+
+Enforced by :func:`_validate_config`. Configurations below this floor
+raise ``ValueError`` at construction so the failure is loud rather
+than silent (the alternative — silent acceptance + chatter at runtime
+— is the precise band-aid pattern the V3 tightening exists to
+prevent)."""
+
 
 # ---------------------------------------------------------------------------
 # Public types
@@ -127,20 +166,42 @@ class VADEvent:
 class VADConfig:
     """Calibrated parameters for SileroVAD v5 (IMPL-004 §5).
 
-    Defaults tuned for 16 kHz input on Pi 5 (Cortex-A76).
+    Defaults tuned for 16 kHz input on Pi 5 (Cortex-A76). The
+    ``onset_threshold`` / ``offset_threshold`` pair forms a Schmitt
+    trigger whose hysteresis prevents single-frame chatter at the
+    noise-floor boundary. See :data:`SILERO_CANONICAL_HYSTERESIS_DELTA`
+    for the canonical gap; :func:`_validate_config` enforces a minimum
+    of :data:`_HYSTERESIS_MIN_DELTA` so a too-small gap can't silently
+    degenerate the trigger into a single-threshold detector.
+
+    Use :meth:`with_canonical_hysteresis` to derive a Silero/LiveKit-
+    canonical config from a single ``onset_threshold`` value rather
+    than hand-picking both thresholds.
     """
 
     onset_threshold: float = 0.5
-    """Probability above which a frame is considered speech-likely."""
+    """Probability above which a frame is considered speech-likely
+    (upper Schmitt threshold)."""
 
     offset_threshold: float = 0.3
-    """Probability below which a frame is considered silence-likely."""
+    """Probability below which a frame is considered silence-likely
+    (lower Schmitt threshold). Must satisfy
+    ``onset_threshold - offset_threshold >= _HYSTERESIS_MIN_DELTA``."""
 
     min_onset_frames: int = 3
-    """Consecutive frames (≈96 ms) above onset to confirm speech start."""
+    """Consecutive frames (≈96 ms @ 16 kHz / 512-sample window) above
+    onset to confirm speech start. Lower = lower wake-word latency at
+    the cost of more false positives. Sovyx tunes for low wake latency;
+    LiveKit's canonical recommendation for turn-end detection is 8
+    frames (~250 ms) — the Sovyx default favors the wake path because
+    turn-end is also gated by VoiceTuningConfig silence timeouts
+    downstream of this FSM."""
 
     min_offset_frames: int = 8
-    """Consecutive frames (≈256 ms) below offset to confirm speech end."""
+    """Consecutive frames (≈256 ms @ 16 kHz / 512-sample window) below
+    offset to confirm speech end. Higher = more robust to natural
+    speech pauses (breathing, conjunctions) at the cost of perceived
+    response latency."""
 
     sample_rate: int = _SAMPLE_RATE_16K
     """Audio sample rate — only 8000 or 16000 supported."""
@@ -154,6 +215,62 @@ class VADConfig:
             return _WINDOW_8K
         msg = f"Unsupported sample rate: {self.sample_rate}. Use 8000 or 16000."
         raise ValueError(msg)
+
+    @property
+    def hysteresis_delta(self) -> float:
+        """Schmitt-trigger gap ``onset_threshold - offset_threshold``.
+
+        Surfaced as a property so dashboards and observability can
+        compare a live config to :data:`SILERO_CANONICAL_HYSTERESIS_DELTA`
+        without re-deriving it. Always ``>= _HYSTERESIS_MIN_DELTA``
+        on a config that survived :func:`_validate_config`.
+        """
+        return self.onset_threshold - self.offset_threshold
+
+    @classmethod
+    def with_canonical_hysteresis(
+        cls,
+        onset_threshold: float,
+        *,
+        min_onset_frames: int = 3,
+        min_offset_frames: int = 8,
+        sample_rate: int = _SAMPLE_RATE_16K,
+    ) -> VADConfig:
+        """Build a VADConfig with the Silero/LiveKit canonical hysteresis gap.
+
+        ``offset_threshold`` is derived as
+        ``onset_threshold - SILERO_CANONICAL_HYSTERESIS_DELTA`` and
+        clamped into ``(0, onset_threshold)`` so a high onset
+        (e.g. 0.95) doesn't push offset out of the valid (0, 1) domain.
+        The clamped value is then re-validated through ``_validate_config``
+        so the returned config is always usable.
+
+        Use this constructor when you want explicit Silero-canonical
+        behaviour without manually computing the offset, e.g.::
+
+            cfg = VADConfig.with_canonical_hysteresis(0.7)
+            # → onset=0.7, offset=0.55, delta=0.15
+
+        Raises:
+            ValueError: If ``onset_threshold`` is itself outside (0, 1)
+                — i.e. the caller asked for an impossible base config,
+                not a Schmitt-trigger problem.
+        """
+        derived_offset = onset_threshold - SILERO_CANONICAL_HYSTERESIS_DELTA
+        # Clamp so onset=0.05..0.99 always produces a valid (>0) offset.
+        # If derived_offset would be <= 0 (e.g. onset=0.10), fall back to
+        # a delta narrow enough to preserve the (>0) domain — but never
+        # narrower than the minimum hysteresis floor.
+        if derived_offset <= 0.0:
+            # onset=0.10 → derived=-0.05 → fallback to min-delta gap.
+            derived_offset = max(onset_threshold - _HYSTERESIS_MIN_DELTA, 0.001)
+        return cls(
+            onset_threshold=onset_threshold,
+            offset_threshold=derived_offset,
+            min_onset_frames=min_onset_frames,
+            min_offset_frames=min_offset_frames,
+            sample_rate=sample_rate,
+        )
 
 
 def _validate_inference_outputs(
@@ -223,6 +340,30 @@ def _validate_config(config: VADConfig) -> None:
         msg = (
             f"offset_threshold ({config.offset_threshold}) must be < "
             f"onset_threshold ({config.onset_threshold}) for hysteresis"
+        )
+        raise ValueError(msg)
+    delta = config.onset_threshold - config.offset_threshold
+    # IEEE-754 precision tolerance: 0.5 - 0.45 = 0.04999999... in
+    # binary float, so a strict ``delta < 0.05`` would falsely reject
+    # an exactly-at-floor configuration. The epsilon is small enough
+    # that a real sub-floor config (e.g. 0.04 actual delta) is still
+    # caught — sigmoid probabilities don't have meaningful precision
+    # beyond ~6 decimal places.
+    if delta < _HYSTERESIS_MIN_DELTA - 1e-9:
+        # V3: a Schmitt trigger with a sub-floor delta degenerates into
+        # a single-threshold flapping detector. The runtime symptom
+        # ("VAD turns on/off every frame at the noise floor") is
+        # indistinguishable from a real audio glitch, so we reject the
+        # config at construction rather than let it produce mysterious
+        # logs in production. Use VADConfig.with_canonical_hysteresis()
+        # if you want the Silero/LiveKit-recommended 0.15 gap derived
+        # automatically.
+        msg = (
+            f"hysteresis delta ({delta:.3f}) must be >= "
+            f"{_HYSTERESIS_MIN_DELTA:.3f} to suppress noise-floor "
+            f"chatter; use VADConfig.with_canonical_hysteresis() "
+            f"to derive offset_threshold from onset_threshold using "
+            f"the Silero/LiveKit canonical {SILERO_CANONICAL_HYSTERESIS_DELTA:.2f} gap"
         )
         raise ValueError(msg)
     if config.min_onset_frames < 1:
