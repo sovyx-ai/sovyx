@@ -24,7 +24,14 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from sovyx.voice._frame_normalizer import FrameNormalizer
+from sovyx.voice._frame_normalizer import (
+    _SATURATION_MIN_SAMPLES_FOR_WARNING,
+    _SATURATION_WARN_FRACTION,
+    _SATURATION_WINDOW_SECONDS,
+    FrameNormalizer,
+    SaturationCounters,
+    _float_to_int16_saturate,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -801,3 +808,392 @@ class TestDuckingProperty:
         assert out.dtype == np.int16
         assert out.min() >= -32768
         assert out.max() <= 32767
+
+
+# ===========================================================================
+# R2: Saturation feedback loop (Ring 2 signal integrity)
+# ===========================================================================
+#
+# Pre-R2 ``_float_to_int16_saturate`` clipped silently — loud transients
+# wrapped to int16 rails with no counter, no event, no signal. R2:
+#
+# * Pure function returns (int16_array, SaturationCounters)
+# * FrameNormalizer aggregates counters into a rolling window monitor
+# * Structured ``voice.audio.saturation_clipping`` warning fires when
+#   the window fraction exceeds 5% (EBU R128 / ITU-R BS.1770 canonical
+#   threshold), rate-limited to one event per window
+# * Public lifetime properties (``lifetime_samples_*``) for the future
+#   Layer 4 AGC2 closed-loop gain controller
+#
+# Reference: MISSION-voice-mixer-enterprise-refactor-2026-04-25 §3.1, R2.
+
+_NORM_LOGGER = "sovyx.voice._frame_normalizer"
+
+
+def _events_of(
+    caplog: pytest.LogCaptureFixture,
+    event_name: str,
+) -> list[dict[str, object]]:
+    """Filter caplog records by the structured ``event`` field."""
+    return [
+        r.msg
+        for r in caplog.records
+        if r.name == _NORM_LOGGER and isinstance(r.msg, dict) and r.msg.get("event") == event_name
+    ]
+
+
+class TestFloatToInt16SaturatePure:
+    """Exhaustive coverage of the pure saturate function and counters."""
+
+    def test_empty_input_returns_zero_counters(self) -> None:
+        out, counters = _float_to_int16_saturate(np.zeros(0, dtype=np.float32))
+        assert out.shape == (0,)
+        assert out.dtype == np.int16
+        assert counters.total_samples == 0
+        assert counters.clipped_positive == 0
+        assert counters.clipped_negative == 0
+        assert counters.clipping_fraction == 0.0
+
+    def test_no_clipping_for_in_range_samples(self) -> None:
+        # All samples in [-0.5, 0.5] — well within range
+        samples = np.array([-0.5, -0.25, 0.0, 0.25, 0.5], dtype=np.float32)
+        out, counters = _float_to_int16_saturate(samples)
+        assert counters.clipped_positive == 0
+        assert counters.clipped_negative == 0
+        assert counters.total_samples == 5  # noqa: PLR2004
+        # Verify the output samples are correctly scaled (no clipping took place).
+        assert out.dtype == np.int16
+        assert int(out[2]) == 0  # 0.0 * 32768 = 0
+
+    def test_positive_rail_clipping_counted(self) -> None:
+        # 1.5 * 32768 = 49152 > 32767 (positive rail) → clipped
+        samples = np.array([0.0, 1.5, 0.5, 2.0], dtype=np.float32)
+        _out, counters = _float_to_int16_saturate(samples)
+        assert counters.clipped_positive == 2  # 1.5 and 2.0 both clip  # noqa: PLR2004
+        assert counters.clipped_negative == 0
+        assert counters.total_samples == 4  # noqa: PLR2004
+
+    def test_negative_rail_clipping_counted(self) -> None:
+        # -1.5 * 32768 = -49152 < -32768 (negative rail) → clipped
+        samples = np.array([0.0, -1.5, -0.5, -2.0], dtype=np.float32)
+        _out, counters = _float_to_int16_saturate(samples)
+        assert counters.clipped_positive == 0
+        assert counters.clipped_negative == 2  # noqa: PLR2004
+        assert counters.total_samples == 4  # noqa: PLR2004
+
+    def test_mixed_clipping_counted_separately(self) -> None:
+        samples = np.array([2.0, -2.0, 0.5, -0.5, 3.0, -3.0], dtype=np.float32)
+        _out, counters = _float_to_int16_saturate(samples)
+        assert counters.clipped_positive == 2  # noqa: PLR2004
+        assert counters.clipped_negative == 2  # noqa: PLR2004
+        assert counters.total_samples == 6  # noqa: PLR2004
+
+    def test_boundary_at_exact_full_scale(self) -> None:
+        # 1.0 * 32768 = 32768 > 32767 → counts as clipped
+        # 0.99996948... * 32768 = 32767.0 → does NOT clip
+        samples = np.array([1.0, 32767.0 / 32768.0], dtype=np.float32)
+        _out, counters = _float_to_int16_saturate(samples)
+        assert counters.clipped_positive == 1
+        assert counters.clipped_negative == 0
+
+    def test_clipping_fraction_computed(self) -> None:
+        samples = np.array([2.0, 2.0, 0.5, 0.5], dtype=np.float32)
+        _out, counters = _float_to_int16_saturate(samples)
+        assert counters.clipping_fraction == 0.5
+
+    def test_clipped_total_sums_both_rails(self) -> None:
+        samples = np.array([2.0, 2.0, -2.0], dtype=np.float32)
+        _out, counters = _float_to_int16_saturate(samples)
+        assert counters.clipped_total == 3  # noqa: PLR2004
+
+    def test_output_dtype_always_int16(self) -> None:
+        samples = np.array([0.5, -0.5, 2.0, -2.0], dtype=np.float32)
+        out, _counters = _float_to_int16_saturate(samples)
+        assert out.dtype == np.int16
+        # Verify no wrap — clipped values are at the rails, not wrapped
+        assert out.min() >= -32768  # noqa: PLR2004
+        assert out.max() <= 32767  # noqa: PLR2004
+
+    def test_counters_immutable(self) -> None:
+        samples = np.array([0.5], dtype=np.float32)
+        _out, counters = _float_to_int16_saturate(samples)
+        with pytest.raises((AttributeError, TypeError)):
+            counters.total_samples = 999  # type: ignore[misc]
+
+
+class TestFrameNormalizerSaturationMonitor:
+    """End-to-end R2 monitor wired through ``FrameNormalizer.push``."""
+
+    def _norm_with_clock(
+        self,
+        clock_value: float = 0.0,
+        *,
+        source_rate: int = 48_000,
+        source_format: str = "float32",
+    ) -> FrameNormalizer:
+        """Build a normalizer with an injectable monotonic clock for
+        deterministic warning rate-limit tests.
+
+        Defaults to ``source_format="float32"`` so the test can inject
+        out-of-range values (>1.0 / <-1.0) that genuinely clip at the
+        ``_float_to_int16_saturate`` stage. int16/int24 inputs are
+        bounded by their source dtype and can never produce the
+        > full-scale floats that drive the saturate-clip path.
+        """
+        norm = FrameNormalizer(
+            source_rate=source_rate,
+            source_channels=1,
+            source_format=source_format,
+        )
+        clock_holder = {"t": clock_value}
+        norm._monotonic = lambda: clock_holder["t"]  # type: ignore[method-assign]
+        norm._clock_holder = clock_holder  # type: ignore[attr-defined]
+        return norm
+
+    def _advance(self, norm: FrameNormalizer, seconds: float) -> None:
+        norm._clock_holder["t"] += seconds  # type: ignore[attr-defined]
+
+    def _hot_block(self, n_samples: int) -> np.ndarray:
+        """Generate float32 samples WELL OUTSIDE [-1, 1] so every sample
+        clips at the int16 rail.
+
+        Values > 1.0 (or < -1.0) on the float32 source path get scaled
+        by 32768 inside ``_float_to_int16_saturate`` (so 1.5 → 49152 →
+        clipped to 32767). int16/int24 source paths can never produce
+        these out-of-range values, which is why this synthetic signal
+        explicitly uses the float32 source-format path.
+        """
+        return np.full(n_samples, 1.5, dtype=np.float32)
+
+    def test_lifetime_counters_start_at_zero(self) -> None:
+        norm = FrameNormalizer(source_rate=48_000, source_channels=1)
+        assert norm.lifetime_samples_processed == 0
+        assert norm.lifetime_samples_clipped == 0
+        assert norm.lifetime_clipping_fraction == 0.0
+
+    def test_lifetime_counters_accumulate_across_pushes(self) -> None:
+        # Stereo input → forces non-passthrough path → saturate runs
+        norm = FrameNormalizer(source_rate=48_000, source_channels=2)
+        block = _sine_wave_int16(1_000, 48_000, 0.05, channels=2, amplitude=0.5)
+        norm.push(block)
+        first = norm.lifetime_samples_processed
+        assert first > 0
+        norm.push(block)
+        # Second push doubles the processed count.
+        assert norm.lifetime_samples_processed == 2 * first
+
+    def test_passthrough_path_does_not_count_samples(self) -> None:
+        """int16 mono 16k → fast path → no saturate → counters stay zero."""
+        norm = FrameNormalizer(source_rate=16_000, source_channels=1)
+        block = _sine_wave_int16(1_000, 16_000, 0.5, channels=1, amplitude=0.5)
+        norm.push(block)
+        # Passthrough never invokes _float_to_int16_saturate.
+        assert norm.lifetime_samples_processed == 0
+        assert norm.lifetime_samples_clipped == 0
+
+    def test_no_warning_when_below_threshold(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_NORM_LOGGER)
+        # 16k mono float32 = passthrough on rate but float dtype path
+        # still triggers _float_to_int16_saturate. Sine wave at amp=0.1
+        # never clips.
+        norm = self._norm_with_clock(source_rate=16_000)
+        t = np.arange(16_000, dtype=np.float32) / 16_000
+        quiet = (0.1 * np.sin(2 * np.pi * 1000 * t)).astype(np.float32)
+        norm.push(quiet)
+        assert _events_of(caplog, "voice.audio.saturation_clipping") == []
+
+    def test_warning_fires_when_clipping_fraction_exceeds_threshold(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_NORM_LOGGER)
+        norm = self._norm_with_clock(source_rate=16_000)
+        # 16k mono float32 → no resample → all 16000 samples reach
+        # the saturate stage. >>4096 min for warning.
+        hot = self._hot_block(16_000)
+        norm.push(hot)
+        events = _events_of(caplog, "voice.audio.saturation_clipping")
+        assert len(events) == 1
+        assert events[0]["voice.window_clipping_fraction"] >= _SATURATION_WARN_FRACTION
+        assert events[0]["voice.warning_threshold_fraction"] == _SATURATION_WARN_FRACTION
+        assert "reduce_upstream_gain" in str(events[0]["voice.action_required"])
+
+    def test_warning_not_fired_below_min_samples(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Even 100% clipping is suppressed below the min-samples floor."""
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_NORM_LOGGER)
+        norm = self._norm_with_clock(source_rate=16_000)
+        # 1024 samples — well below _SATURATION_MIN_SAMPLES_FOR_WARNING (4096)
+        small_hot = self._hot_block(1024)
+        norm.push(small_hot)
+        # No event yet — not statistically significant.
+        assert _events_of(caplog, "voice.audio.saturation_clipping") == []
+        # Lifetime counters DID record the clipping (counters always run).
+        assert norm.lifetime_samples_clipped > 0
+
+    def test_warning_rate_limited_within_window(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Multiple hot blocks within one window emit at most one warning."""
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_NORM_LOGGER)
+        norm = self._norm_with_clock(source_rate=16_000)
+        hot = self._hot_block(16_000)
+
+        norm.push(hot)
+        assert len(_events_of(caplog, "voice.audio.saturation_clipping")) == 1
+
+        # Advance less than one window — second hot push must NOT warn.
+        self._advance(norm, _SATURATION_WINDOW_SECONDS / 2)
+        norm.push(hot)
+        assert len(_events_of(caplog, "voice.audio.saturation_clipping")) == 1
+
+    def test_warning_re_arms_after_window(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """After ``_SATURATION_WINDOW_SECONDS`` elapses, a second warning
+        can fire on a still-hot signal."""
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_NORM_LOGGER)
+        norm = self._norm_with_clock(source_rate=16_000)
+        hot = self._hot_block(16_000)
+
+        norm.push(hot)
+        assert len(_events_of(caplog, "voice.audio.saturation_clipping")) == 1
+
+        # Advance PAST one window + push more hot data.
+        self._advance(norm, _SATURATION_WINDOW_SECONDS + 0.1)
+        norm.push(hot)
+        # Second warning fires (rate-limit released, fresh window crossed).
+        assert len(_events_of(caplog, "voice.audio.saturation_clipping")) == 2  # noqa: PLR2004
+
+    def test_lifetime_clipping_fraction_zero_with_no_input(self) -> None:
+        norm = FrameNormalizer(source_rate=48_000, source_channels=1)
+        # Property must be safe to call BEFORE any push.
+        assert norm.lifetime_clipping_fraction == 0.0
+
+    def test_lifetime_clipping_fraction_reflects_clipped_ratio(self) -> None:
+        # Use float32 source so the hot block actually clips at the
+        # _float_to_int16_saturate stage (int16 inputs can't reach
+        # > full-scale floats internally).
+        norm = self._norm_with_clock(source_rate=48_000)
+        hot = self._hot_block(8_000)
+        norm.push(hot)
+        # Most samples should have clipped (fraction much greater than 0).
+        assert norm.lifetime_clipping_fraction > 0.5
+
+    def test_event_includes_lifetime_and_window_breakdown(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Operators need both the trigger window AND lifetime context."""
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_NORM_LOGGER)
+        norm = self._norm_with_clock(source_rate=16_000)
+        hot = self._hot_block(16_000)
+        norm.push(hot)
+        events = _events_of(caplog, "voice.audio.saturation_clipping")
+        assert len(events) == 1
+        # Expected attributes per the R2 contract.
+        evt = events[0]
+        assert "voice.window_clipping_fraction" in evt
+        assert "voice.window_samples_processed" in evt
+        assert "voice.window_samples_clipped" in evt
+        assert "voice.lifetime_clipping_fraction" in evt
+        assert "voice.lifetime_samples_processed" in evt
+        assert "voice.lifetime_samples_clipped" in evt
+        assert "voice.window_clipped_positive_fraction" in evt
+        assert "voice.window_clipped_negative_fraction" in evt
+
+
+class TestSaturationCountersProperty:
+    """Hypothesis: counter invariants hold for arbitrary float input."""
+
+    @settings(max_examples=50, deadline=None)
+    @given(
+        samples=st.lists(
+            st.floats(min_value=-3.0, max_value=3.0, allow_nan=False, allow_infinity=False),
+            min_size=1,
+            max_size=2048,
+        )
+    )
+    def test_counter_invariants(self, samples: list[float]) -> None:
+        arr = np.array(samples, dtype=np.float32)
+        out, counters = _float_to_int16_saturate(arr)
+        # Total samples matches input length.
+        assert counters.total_samples == arr.size
+        # Non-negative counters.
+        assert counters.clipped_positive >= 0
+        assert counters.clipped_negative >= 0
+        # Clipped total can't exceed total.
+        assert counters.clipped_total <= counters.total_samples
+        # Output is int16, no wrap.
+        assert out.dtype == np.int16
+        assert int(out.min()) >= -32768  # noqa: PLR2004
+        assert int(out.max()) <= 32767  # noqa: PLR2004
+        # Fraction in [0, 1].
+        assert 0.0 <= counters.clipping_fraction <= 1.0
+
+    @settings(max_examples=50, deadline=None)
+    @given(
+        n_in_range=st.integers(min_value=0, max_value=100),
+        n_clipped=st.integers(min_value=0, max_value=100),
+    )
+    def test_counters_reflect_known_clip_ratio(
+        self,
+        n_in_range: int,
+        n_clipped: int,
+    ) -> None:
+        if n_in_range + n_clipped == 0:
+            return  # empty input is the empty-counters case
+        # Build an array with a known number of clip-inducing values.
+        samples = np.array(
+            [0.5] * n_in_range + [2.0] * n_clipped,
+            dtype=np.float32,
+        )
+        _out, counters = _float_to_int16_saturate(samples)
+        assert counters.clipped_positive == n_clipped
+        assert counters.clipped_negative == 0
+        assert counters.total_samples == n_in_range + n_clipped
+
+
+class TestSaturationCountersDataclass:
+    """Pure-data invariants on ``SaturationCounters``."""
+
+    def test_zero_total_returns_zero_fraction(self) -> None:
+        c = SaturationCounters(total_samples=0, clipped_positive=0, clipped_negative=0)
+        assert c.clipping_fraction == 0.0
+        assert c.clipped_total == 0
+
+    def test_clipped_total_sums_both_rails(self) -> None:
+        c = SaturationCounters(total_samples=100, clipped_positive=3, clipped_negative=7)
+        assert c.clipped_total == 10  # noqa: PLR2004
+
+    def test_immutable(self) -> None:
+        c = SaturationCounters(total_samples=10, clipped_positive=1, clipped_negative=0)
+        with pytest.raises((AttributeError, TypeError)):
+            c.total_samples = 999  # type: ignore[misc]
+
+    def test_min_samples_constant_value(self) -> None:
+        # Regression on the public-surface tuning constant — bumps must
+        # be deliberate (the value gates a warning users will eventually
+        # see, so the threshold is part of the user-visible contract).
+        assert _SATURATION_MIN_SAMPLES_FOR_WARNING == 4096  # noqa: PLR2004
+        assert _SATURATION_WARN_FRACTION == 0.05  # noqa: PLR2004
+        assert _SATURATION_WINDOW_SECONDS == 1.0

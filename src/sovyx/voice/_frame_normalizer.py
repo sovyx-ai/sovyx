@@ -65,12 +65,16 @@ KiB at 48 kHz / 32 ms). Safe for long-running daemons.
 from __future__ import annotations
 
 import math
+import time
 import typing
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import numpy as np
     import numpy.typing as npt
 
@@ -100,6 +104,83 @@ within 50 ms of TTS-end" requirement and short enough to stay inaudible
 on voice content while long enough to avoid click artefacts from sudden
 multiplicative steps.
 """
+
+
+# ---------------------------------------------------------------------------
+# R2 saturation feedback loop tuning
+# ---------------------------------------------------------------------------
+#
+# Pre-R2: ``_float_to_int16_saturate`` clipped silently. Loud transients
+# wrapped to int16 rails with no counter, no event, no signal back to the
+# rest of the system. Sustained clipping (a too-hot mic, a runaway boost
+# control) was invisible until a user complained. R2 adds:
+#
+# * A pure-function counter that returns ``(samples, SaturationCounters)``
+#   so any caller sees the exact number of clipped samples per call.
+# * A rolling-window monitor on :class:`FrameNormalizer` that aggregates
+#   counters across blocks and emits a structured
+#   ``voice.audio.saturation_clipping`` event when the clipping fraction
+#   crosses the warning threshold. The event is rate-limited so a
+#   sustained-clipping condition produces one log per window, not one
+#   per block.
+# * Public properties (``clipping_fraction``, ``samples_processed``,
+#   ``samples_clipped``) that future AGC2 / mixer-recalibration logic
+#   can read to drive a closed-loop gain controller (Ring 1 Layer 4).
+
+_SATURATION_WARN_FRACTION = 0.05
+"""Clipping fraction (clipped / total) above which the warning event
+fires. 5% sustained clipping is the canonical "too hot" threshold from
+EBU R128 and the ITU-R BS.1770 broadcast loudness standards: short
+percussive transients (<5%) are perceptually transparent; sustained
+saturation (>5%) is audible distortion."""
+
+_SATURATION_WINDOW_SECONDS = 1.0
+"""Rolling window over which the clipping fraction is computed and
+warnings rate-limited. One second matches a typical voice-frame
+heartbeat cadence and is long enough to suppress per-block noise
+while short enough to react to sustained conditions before a user
+notices."""
+
+_SATURATION_MIN_SAMPLES_FOR_WARNING = 4096
+"""Lower bound on ``samples_processed`` before a warning can fire. At
+16 kHz this is ~256 ms of audio — enough to make the clipping fraction
+statistically meaningful. Below this, even a 100% clipped block of
+512 samples is too short to confidently classify as "sustained".
+Prevents false positives on the very first (typically tiny) block
+following stream open."""
+
+
+@dataclass(frozen=True, slots=True)
+class SaturationCounters:
+    """Per-call clipping diagnostics from :func:`_float_to_int16_saturate`.
+
+    Immutable so callers can pass it freely (telemetry payloads,
+    rolling-window aggregators) without defensive copying.
+
+    Attributes:
+        total_samples: Number of float samples examined (the input
+            array length). Always non-negative.
+        clipped_positive: Samples that would have wrapped past the
+            int16 positive rail (+32 767) and were clamped instead.
+        clipped_negative: Samples that would have wrapped past the
+            int16 negative rail (-32 768) and were clamped instead.
+    """
+
+    total_samples: int
+    clipped_positive: int
+    clipped_negative: int
+
+    @property
+    def clipped_total(self) -> int:
+        """Sum of positive- and negative-rail clipped samples."""
+        return self.clipped_positive + self.clipped_negative
+
+    @property
+    def clipping_fraction(self) -> float:
+        """Fraction of samples that hit a rail. Returns 0.0 when empty."""
+        if self.total_samples <= 0:
+            return 0.0
+        return self.clipped_total / self.total_samples
 
 
 class FrameNormalizer:
@@ -172,6 +253,29 @@ class FrameNormalizer:
         )
         self._current_linear_gain: float = 1.0
         self._target_linear_gain: float = 1.0
+
+        # ── R2 saturation feedback monitor ───────────────────────────
+        # Lifetime cumulative counters (visible via the public
+        # properties). Survive ``reset`` because they describe the
+        # health of the normaliser's data path over its entire
+        # lifetime — a long-running daemon's clipping count is a
+        # signal that the upstream gain is mis-set, regardless of any
+        # mid-session resets.
+        self._lifetime_samples_processed: int = 0
+        self._lifetime_samples_clipped: int = 0
+        # Rolling-window state. ``_window_*`` accumulators reset every
+        # ``_SATURATION_WINDOW_SECONDS`` so the warning fraction
+        # reflects RECENT clipping, not the integral over the entire
+        # session. ``_last_warning_monotonic`` rate-limits the warning
+        # event so a sustained-clipping condition produces one log per
+        # window, not one per block.
+        self._window_samples_processed: int = 0
+        self._window_samples_clipped: int = 0
+        self._window_started_monotonic: float | None = None
+        self._last_warning_monotonic: float | None = None
+        # Injectable clock for deterministic tests. Shape mirrors
+        # ``time.monotonic``.
+        self._monotonic: Callable[[], float] = time.monotonic
 
         logger.debug(
             "frame_normalizer_created",
@@ -308,7 +412,9 @@ class FrameNormalizer:
         # Ultra-fast path: int16 mono 16 kHz with unity ducking. This
         # is the dominant case once the cascade settles on the invariant
         # format on good hardware. Skips the float32 round-trip so the
-        # capture→VAD path is a memcpy.
+        # capture→VAD path is a memcpy. R2 saturation counters do NOT
+        # apply here — int16 input is already bounded, so by definition
+        # nothing can clip in this branch.
         if (
             self._passthrough
             and self._source_format == "int16"
@@ -321,7 +427,8 @@ class FrameNormalizer:
             mono_f32 = self._downmix(block)
             resampled = mono_f32 if self._passthrough else self._resample(mono_f32)
             ducked = self._apply_ducking(resampled)
-            as_int16 = _float_to_int16_saturate(ducked)
+            as_int16, saturation = _float_to_int16_saturate(ducked)
+            self._record_saturation(saturation)
 
         self._output_buf = np.concatenate([self._output_buf, as_int16])
 
@@ -343,6 +450,132 @@ class FrameNormalizer:
 
         self._output_buf = np.zeros(0, dtype=np.int16)
         self._current_linear_gain = self._target_linear_gain
+
+    # ── R2: saturation feedback monitor public surface ─────────────────
+
+    @property
+    def lifetime_samples_processed(self) -> int:
+        """Cumulative count of float samples passed through the saturate
+        stage since construction. Survives :meth:`reset`. Excludes the
+        ultra-fast int16 path (which can't clip)."""
+        return self._lifetime_samples_processed
+
+    @property
+    def lifetime_samples_clipped(self) -> int:
+        """Cumulative count of float samples that hit either int16 rail
+        since construction. Survives :meth:`reset`. Foundation for the
+        future Layer 4 AGC2 closed-loop gain controller, which reads
+        this to recalibrate the upstream gain when sustained clipping
+        is detected."""
+        return self._lifetime_samples_clipped
+
+    @property
+    def lifetime_clipping_fraction(self) -> float:
+        """``lifetime_samples_clipped / lifetime_samples_processed``.
+
+        Returns 0.0 before any sample has been processed. This is the
+        long-window signal — for the rolling short-window value used
+        to gate warnings, see ``_window_*`` internals (intentionally
+        not exposed; warnings are the public observability surface)."""
+        if self._lifetime_samples_processed <= 0:
+            return 0.0
+        return self._lifetime_samples_clipped / self._lifetime_samples_processed
+
+    def _record_saturation(self, counters: SaturationCounters) -> None:
+        """Aggregate per-call counters into the rolling window monitor (R2).
+
+        Called after every non-passthrough ``_float_to_int16_saturate``
+        invocation. Updates lifetime + rolling counters, then evaluates
+        the warning-emit gate:
+
+        1. Sufficient samples accumulated in the window to be
+           statistically meaningful (:data:`_SATURATION_MIN_SAMPLES_FOR_WARNING`).
+        2. Window-fraction exceeds the warning threshold
+           (:data:`_SATURATION_WARN_FRACTION`).
+        3. At least :data:`_SATURATION_WINDOW_SECONDS` since the last
+           warning emission (rate limiting).
+
+        When all three pass, a structured ``voice.audio.saturation_clipping``
+        event fires with both window and lifetime stats. The window
+        counters then reset so the next window starts fresh.
+        """
+        # Empty counters from a zero-sized block — nothing to record.
+        if counters.total_samples <= 0:
+            return
+
+        self._lifetime_samples_processed += counters.total_samples
+        self._lifetime_samples_clipped += counters.clipped_total
+        self._window_samples_processed += counters.total_samples
+        self._window_samples_clipped += counters.clipped_total
+
+        now = self._monotonic()
+        if self._window_started_monotonic is None:
+            self._window_started_monotonic = now
+
+        window_age = now - self._window_started_monotonic
+        window_fraction = (
+            self._window_samples_clipped / self._window_samples_processed
+            if self._window_samples_processed > 0
+            else 0.0
+        )
+
+        # Rate-limit gate first — cheapest check, short-circuits the
+        # rest when the window is still hot. ``None`` sentinel means
+        # "no warning has fired yet" (distinct from monotonic clock = 0,
+        # which is a valid time value tests use for determinism).
+        if (
+            self._last_warning_monotonic is not None
+            and (now - self._last_warning_monotonic) < _SATURATION_WINDOW_SECONDS
+        ):
+            # Still inside the rate-limit window. If the rolling
+            # accumulators have aged past one window, reset them so the
+            # next eligible warning reflects fresh data, not stale carry.
+            if window_age >= _SATURATION_WINDOW_SECONDS:
+                self._window_samples_processed = 0
+                self._window_samples_clipped = 0
+                self._window_started_monotonic = now
+            return
+
+        if (
+            self._window_samples_processed >= _SATURATION_MIN_SAMPLES_FOR_WARNING
+            and window_fraction >= _SATURATION_WARN_FRACTION
+        ):
+            logger.warning(
+                "voice.audio.saturation_clipping",
+                **{
+                    "voice.window_clipping_fraction": round(window_fraction, 4),
+                    "voice.window_samples_processed": self._window_samples_processed,
+                    "voice.window_samples_clipped": self._window_samples_clipped,
+                    "voice.window_clipped_positive_fraction": round(
+                        counters.clipped_positive / counters.total_samples,
+                        4,
+                    ),
+                    "voice.window_clipped_negative_fraction": round(
+                        counters.clipped_negative / counters.total_samples,
+                        4,
+                    ),
+                    "voice.lifetime_clipping_fraction": round(
+                        self.lifetime_clipping_fraction,
+                        4,
+                    ),
+                    "voice.lifetime_samples_processed": self._lifetime_samples_processed,
+                    "voice.lifetime_samples_clipped": self._lifetime_samples_clipped,
+                    "voice.warning_threshold_fraction": _SATURATION_WARN_FRACTION,
+                    "voice.action_required": ("reduce_upstream_gain_or_disable_capture_boost"),
+                },
+            )
+            self._last_warning_monotonic = now
+            self._window_samples_processed = 0
+            self._window_samples_clipped = 0
+            self._window_started_monotonic = now
+            return
+
+        # Window aged out without crossing the threshold — recycle so
+        # the next window starts from a clean slate.
+        if window_age >= _SATURATION_WINDOW_SECONDS:
+            self._window_samples_processed = 0
+            self._window_samples_clipped = 0
+            self._window_started_monotonic = now
 
     def _downmix(
         self,
@@ -455,19 +688,56 @@ class FrameNormalizer:
 
 def _float_to_int16_saturate(
     samples: npt.NDArray[np.float32],
-) -> npt.NDArray[np.int16]:
+) -> tuple[npt.NDArray[np.int16], SaturationCounters]:
     """Convert ``float32`` in [-1, 1] to ``int16`` with saturation clip.
 
     Per ADR §5.1 ("int24/float32 → int16 via saturation clip"). Loud
     transients near ±1.0 would otherwise wrap to ``INT16_MIN`` (which
     Silero reads as a non-physical impulse).
+
+    R2: returns a :class:`SaturationCounters` describing how many input
+    samples hit the +full-scale and -full-scale rails. The caller is
+    responsible for aggregating across calls if it wants a rolling
+    fraction; :class:`FrameNormalizer` does this and emits a structured
+    ``voice.audio.saturation_clipping`` event when the fraction crosses
+    the warning threshold. Pre-R2 callers that ignored the saturation
+    silently — and the band-aid that produced — are now extinct.
+
+    The function is pure (no side effects, no instance state): the
+    counter logic that drives observability lives in the aggregator,
+    not here, so the function stays trivially testable in isolation.
+
+    NaN inputs are clamped by ``np.clip`` to neither rail (NaN
+    comparisons return False), but the surrounding cast to int16 then
+    produces an undefined value. This function does NOT NaN-guard the
+    input; that contract is enforced upstream (Ring 2 signal integrity)
+    so the saturation stage doesn't need to duplicate it.
     """
     import numpy as np
 
+    if samples.size == 0:
+        # Avoid the overhead of np.sum on an empty array — and also
+        # produce a deterministic empty-counters snapshot the caller
+        # can safely accumulate without special-casing.
+        return np.zeros(0, dtype=np.int16), SaturationCounters(
+            total_samples=0,
+            clipped_positive=0,
+            clipped_negative=0,
+        )
+
     scaled = samples * 32768.0
+    # Count BEFORE the clamp — these are the values that would have
+    # wrapped if the clip wasn't there. Counting after the clamp would
+    # always yield zero (every sample is in-range post-clip).
+    clipped_positive = int(np.sum(scaled > 32767.0))
+    clipped_negative = int(np.sum(scaled < -32768.0))
     clipped = np.clip(scaled, -32768.0, 32767.0)
     out: npt.NDArray[np.int16] = clipped.astype(np.int16)
-    return out
+    return out, SaturationCounters(
+        total_samples=int(samples.size),
+        clipped_positive=clipped_positive,
+        clipped_negative=clipped_negative,
+    )
 
 
 def _db_to_linear(db: float) -> float:
@@ -484,4 +754,4 @@ def _linear_to_db(linear: float) -> float:
     return 20.0 * math.log10(linear)
 
 
-__all__ = ["FrameNormalizer"]
+__all__ = ["FrameNormalizer", "SaturationCounters"]
