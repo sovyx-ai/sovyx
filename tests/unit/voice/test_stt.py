@@ -941,3 +941,170 @@ class TestS1Constants:
 
     def test_min_len_for_ratio_check(self) -> None:
         assert _HALLUCINATION_MIN_LEN_FOR_RATIO_CHECK == 32  # noqa: PLR2004
+
+
+# ===========================================================================
+# S2: STT timeout — distinct rejection reason + cumulative counter + event
+# ===========================================================================
+#
+# Pre-S2 the timeout was logged with a bare WARNING and silently produced
+# an empty transcript that the orchestrator treated as "user said nothing".
+# Sustained engine degradation (model too slow, system load, GIL contention)
+# never surfaced because the user-facing signal was indistinguishable from
+# real silence. S2 distinguishes the timeout class:
+#
+# * ``TranscriptionResult.rejection_reason = "transcribe_timeout"``
+# * Structured ``voice.stt.transcribe_timeout`` WARNING event
+# * Cumulative ``MoonshineSTT.timeout_count`` counter for circuit-breaker
+#   consumers
+#
+# Reference: MISSION-voice-mixer-enterprise-refactor-2026-04-25 §3.3, S2.
+
+
+def _build_hung_stt(timeout_s: float = 0.05) -> tuple[MoonshineSTT, MagicMock]:
+    """Build a MoonshineSTT whose stream NEVER fires on_line_completed.
+
+    The asyncio.wait_for inside _transcribe_oneshot will timeout
+    deterministically after ``timeout_s`` seconds — the perfect
+    fixture for S2 timeout assertions.
+    """
+    cfg = MoonshineConfig(transcribe_timeout=timeout_s)
+    transcriber = MagicMock()
+
+    def _create_stream(update_interval: float = 0.3) -> MagicMock:  # noqa: ARG001
+        stream = MagicMock()
+        stream.add_listener = MagicMock()  # listener never invoked
+        stream.add_audio = MagicMock()
+        stream.stop = MagicMock()  # NEVER fires on_line_completed
+        stream.start = MagicMock()
+        stream.close = MagicMock()
+        return stream
+
+    transcriber.create_stream = _create_stream
+    mock_mv = _make_mock_moonshine_voice(transcriber=transcriber)
+    stt = MoonshineSTT(config=cfg)
+    return stt, mock_mv
+
+
+class TestSTTTimeoutS2:
+    """S2 contract: timeout has its own rejection reason + structured event."""
+
+    @pytest.mark.asyncio()
+    async def test_timeout_count_starts_at_zero(self) -> None:
+        stt = MoonshineSTT(config=MoonshineConfig())
+        assert stt.timeout_count == 0
+
+    @pytest.mark.asyncio()
+    async def test_timeout_returns_distinct_rejection_reason(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_STT_LOGGER)
+        stt, mock_mv = _build_hung_stt(timeout_s=0.05)
+        with patch.dict("sys.modules", {"moonshine_voice": mock_mv}):
+            await stt.initialize()
+            result = await stt.transcribe(np.zeros(1600, dtype=np.float32))
+        # Pre-S2: rejection_reason was None (silent empty transcript).
+        # Post-S2: explicit ``transcribe_timeout`` token.
+        assert result.text == ""
+        assert result.rejection_reason == "transcribe_timeout"
+        assert result.confidence == 0.0
+
+    @pytest.mark.asyncio()
+    async def test_timeout_emits_structured_event(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_STT_LOGGER)
+        stt, mock_mv = _build_hung_stt(timeout_s=0.05)
+        with patch.dict("sys.modules", {"moonshine_voice": mock_mv}):
+            await stt.initialize()
+            await stt.transcribe(np.zeros(1600, dtype=np.float32))
+        events = _stt_events_of(caplog, "voice.stt.transcribe_timeout")
+        assert len(events) == 1
+        evt = events[0]
+        assert evt["voice.rejection_reason"] == "transcribe_timeout"
+        assert evt["voice.transcribe_timeout_s"] == pytest.approx(0.05)
+        assert evt["voice.lifetime_timeout_count"] == 1
+        assert evt["voice.model"] == "tiny"
+        assert evt["voice.provider"] == "moonshine"
+        assert evt["voice.language"] == "en"
+        assert "secondary_stt" in str(evt["voice.action_required"])
+
+    @pytest.mark.asyncio()
+    async def test_timeout_count_increments_on_each_timeout(
+        self,
+    ) -> None:
+        stt, mock_mv = _build_hung_stt(timeout_s=0.05)
+        with patch.dict("sys.modules", {"moonshine_voice": mock_mv}):
+            await stt.initialize()
+            for _ in range(3):
+                await stt.transcribe(np.zeros(1600, dtype=np.float32))
+        assert stt.timeout_count == 3
+
+    @pytest.mark.asyncio()
+    async def test_timeout_does_not_fire_response_event(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The success-path ``voice.stt.response`` event must NOT fire
+        on timeout — would mislead dashboards."""
+        import logging
+
+        caplog.set_level(logging.INFO, logger=_STT_LOGGER)
+        stt, mock_mv = _build_hung_stt(timeout_s=0.05)
+        with patch.dict("sys.modules", {"moonshine_voice": mock_mv}):
+            await stt.initialize()
+            await stt.transcribe(np.zeros(1600, dtype=np.float32))
+        timeouts = _stt_events_of(caplog, "voice.stt.transcribe_timeout")
+        assert len(timeouts) == 1
+        responses = _stt_events_of(caplog, "voice.stt.response")
+        assert len(responses) == 0
+
+    @pytest.mark.asyncio()
+    async def test_timeout_does_not_run_validation_guards(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Timeout short-circuits BEFORE the S1 hallucination /
+        compression-ratio guards — the rejection_reason taxonomy is
+        unambiguous (timeout, not hallucination)."""
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_STT_LOGGER)
+        stt, mock_mv = _build_hung_stt(timeout_s=0.05)
+        with patch.dict("sys.modules", {"moonshine_voice": mock_mv}):
+            await stt.initialize()
+            result = await stt.transcribe(np.zeros(1600, dtype=np.float32))
+        assert result.rejection_reason == "transcribe_timeout"
+        # No transcript_rejected event (S1 path) should fire.
+        s1_events = _stt_events_of(caplog, "voice.stt.transcript_rejected")
+        assert len(s1_events) == 0
+
+    @pytest.mark.asyncio()
+    async def test_state_returns_to_ready_after_timeout(self) -> None:
+        """Engine remains usable after a timeout (no permanent
+        TRANSCRIBING lock-out)."""
+        stt, mock_mv = _build_hung_stt(timeout_s=0.05)
+        with patch.dict("sys.modules", {"moonshine_voice": mock_mv}):
+            await stt.initialize()
+            await stt.transcribe(np.zeros(1600, dtype=np.float32))
+        assert stt.state == STTState.READY
+
+    @pytest.mark.asyncio()
+    async def test_timeout_count_survives_close(self) -> None:
+        """Timeout counter is read-only state of the engine; close()
+        retires the engine but the count remains queryable on the
+        instance for post-mortem dashboards."""
+        stt, mock_mv = _build_hung_stt(timeout_s=0.05)
+        with patch.dict("sys.modules", {"moonshine_voice": mock_mv}):
+            await stt.initialize()
+            await stt.transcribe(np.zeros(1600, dtype=np.float32))
+            assert stt.timeout_count == 1
+            await stt.close()
+            # Counter is still readable on the closed instance.
+            assert stt.timeout_count == 1

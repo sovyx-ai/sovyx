@@ -377,6 +377,16 @@ class MoonshineSTT(STTEngine):
         self._config = config or MoonshineConfig()
         self._transcriber: object | None = None
         self._state = STTState.UNINITIALIZED
+        # S2 cumulative timeout counter — survives the full lifetime of
+        # the engine (NOT cleared by transcribe() boundary). Surfaces
+        # via :attr:`timeout_count` for circuit-breaker consumers
+        # (Ring 4 → fall back to secondary STT after sustained
+        # timeouts) and dashboard "Voice Health" attribution. Pre-S2
+        # the timeout was logged WARNING and silently produced an
+        # empty transcript that the orchestrator treated as "user said
+        # nothing" — indistinguishable from real silence at the
+        # caller boundary, so chronic STT degradation never surfaced.
+        self._timeout_count: int = 0
 
     @property
     def state(self) -> STTState:
@@ -387,6 +397,17 @@ class MoonshineSTT(STTEngine):
     def config(self) -> MoonshineConfig:
         """Active configuration."""
         return self._config
+
+    @property
+    def timeout_count(self) -> int:
+        """S2 cumulative count of transcription timeouts since engine
+        construction. Read-only. Non-zero on a long-running daemon is
+        a structural signal that the model load is too slow for the
+        configured ``transcribe_timeout`` (consider larger budget,
+        smaller model, or fall back to a secondary STT). Included
+        verbatim on every ``voice.stt.transcribe_timeout`` event so
+        the dashboard can render a running burndown."""
+        return self._timeout_count
 
     async def initialize(self) -> None:
         """Download model if needed and create transcriber.
@@ -471,7 +492,41 @@ class MoonshineSTT(STTEngine):
 
         try:
             start = time.monotonic()
-            text = await self._transcribe_oneshot(audio, sample_rate)
+            try:
+                text = await self._transcribe_oneshot(audio, sample_rate)
+            except TimeoutError:
+                # S2: timeout is its own rejection class — distinct from
+                # "user said nothing" (empty transcript through the
+                # normal path). Bump cumulative counter, emit
+                # structured event, return result with explicit
+                # ``rejection_reason`` so the orchestrator can branch
+                # (retry on secondary engine, surface to user) instead
+                # of treating it as silent input.
+                elapsed_ms = (time.monotonic() - start) * 1000
+                self._timeout_count += 1
+                logger.warning(
+                    "voice.stt.transcribe_timeout",
+                    **{
+                        "voice.rejection_reason": "transcribe_timeout",
+                        "voice.transcribe_timeout_s": self._config.transcribe_timeout,
+                        "voice.elapsed_ms": round(elapsed_ms, 1),
+                        "voice.audio_ms": audio_ms,
+                        "voice.lifetime_timeout_count": self._timeout_count,
+                        "voice.model": self._config.model_size,
+                        "voice.provider": "moonshine",
+                        "voice.language": self._config.language,
+                        "voice.action_required": (
+                            "consider_larger_timeout_or_smaller_model_or_secondary_stt"
+                        ),
+                    },
+                )
+                return TranscriptionResult(
+                    text="",
+                    language=self._config.language,
+                    confidence=0.0,
+                    duration_ms=elapsed_ms,
+                    rejection_reason="transcribe_timeout",
+                )
             elapsed_ms = (time.monotonic() - start) * 1000
 
             logger.debug(
@@ -722,13 +777,16 @@ class MoonshineSTT(STTEngine):
         stream.stop()
 
         try:
+            # S2: re-raise TimeoutError so the caller (transcribe) can
+            # distinguish a timeout from a real empty transcript and
+            # bump its lifetime counter + emit the structured event.
+            # Pre-S2 the timeout was logged WARNING here and silently
+            # produced an empty string, masking sustained engine
+            # degradation as "user said nothing".
             text = await asyncio.wait_for(
                 result_future,
                 timeout=self._config.transcribe_timeout,
             )
-        except TimeoutError:
-            logger.warning("Transcription timed out")
-            text = ""
         finally:
             stream.close()
 
