@@ -548,6 +548,77 @@ class TestAudioOutputQueueM2WireUp:
 
 
 # ===========================================================================
+# O1 wire-up — PipelineStateMachine observer in the orchestrator
+# ===========================================================================
+
+
+class TestPipelineStateMachineWireUp:
+    """The orchestrator's _state setter must record every transition.
+
+    Wire-up is via property-setter interception — zero call-site
+    changes, every existing ``self._state = X`` flows through the
+    observer automatically. Adoption is observability-grade
+    (lenient mode default), so invalid transitions log WARN
+    without raising.
+    """
+
+    @pytest.mark.asyncio
+    async def test_orchestrator_initialises_state_machine(self) -> None:
+        from sovyx.voice.pipeline._state_machine import PipelineStateMachine
+
+        pipeline, _ = _make_pipeline()
+        assert isinstance(pipeline._state_machine, PipelineStateMachine)
+        # Transition count should still be 0 — construction uses the
+        # backing _state_value directly, bypassing the setter (per
+        # the orchestrator's own design comment).
+        assert pipeline._state_machine.transition_count == 0
+        assert pipeline._state_machine.current_state == VoicePipelineState.IDLE
+
+    @pytest.mark.asyncio
+    async def test_state_assignment_records_transition(self) -> None:
+        pipeline, _ = _make_pipeline()
+        # Direct setter use (legitimate orchestrator pattern).
+        pipeline._state = VoicePipelineState.WAKE_DETECTED
+        assert pipeline._state_machine.transition_count == 1
+        assert pipeline._state_machine.current_state == VoicePipelineState.WAKE_DETECTED
+        history = pipeline._state_machine.history()
+        assert len(history) == 1
+        assert history[0].from_state == VoicePipelineState.IDLE
+        assert history[0].to_state == VoicePipelineState.WAKE_DETECTED
+        assert history[0].valid is True
+
+    @pytest.mark.asyncio
+    async def test_self_loop_recorded_in_history(self) -> None:
+        """IDLE → IDLE is a legitimate self-loop in the canonical
+        table — orchestrator does this on shutdown / reset paths."""
+        pipeline, _ = _make_pipeline()
+        pipeline._state = VoicePipelineState.IDLE
+        assert pipeline._state_machine.transition_count == 1
+
+    @pytest.mark.asyncio
+    async def test_invalid_transition_logged_not_raised(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Lenient mode (default) — invalid transition emits WARN
+        without raising, so adoption has zero behavioural risk."""
+        import logging
+
+        pipeline, _ = _make_pipeline()
+        with caplog.at_level(logging.WARNING):
+            # IDLE → THINKING is rejected by the canonical table.
+            pipeline._state = VoicePipelineState.THINKING
+        # No exception raised; current_state still advanced.
+        assert pipeline._state_machine.current_state == VoicePipelineState.THINKING
+        assert pipeline._state_machine.invalid_transition_count == 1
+        # Structured WARN fired.
+        assert any(
+            "pipeline.state.invalid_transition" in str(r.msg)
+            for r in caplog.records
+        )
+
+
+# ===========================================================================
 # BargeInDetector
 # ===========================================================================
 

@@ -28,6 +28,7 @@ from sovyx.voice.pipeline._events import (
 )
 from sovyx.voice.pipeline._output_queue import AudioOutputQueue
 from sovyx.voice.pipeline._state import VoicePipelineState
+from sovyx.voice.pipeline._state_machine import PipelineStateMachine
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
@@ -240,6 +241,15 @@ class VoicePipeline:
         # (no saga to open or close at construction time).
         self._voice_saga: SagaHandle | None = None
         self._state_value: VoicePipelineState = VoicePipelineState.IDLE
+        # O1 — observability-grade transition validator + dwell watchdog.
+        # Lenient mode (strict=False, the default) means invalid
+        # transitions log a structured WARN
+        # (``pipeline.state.invalid_transition``) but do NOT raise —
+        # zero behavioural risk for adoption. Once the orchestrator's
+        # transition sites are audited and the canonical table is
+        # confirmed exhaustive, a follow-up commit can flip to
+        # ``strict=True`` for hard enforcement.
+        self._state_machine = PipelineStateMachine()
         self._utterance_frames: list[npt.NDArray[np.int16]] = []
         self._silence_counter = 0
         self._recording_counter = 0
@@ -325,6 +335,16 @@ class VoicePipeline:
     def _state(self, new: VoicePipelineState) -> None:
         old = self._state_value
         self._state_value = new
+        # O1 — every state mutation flows through the validator.
+        # Lenient mode: invalid transitions emit a structured WARN
+        # without raising, so zero behavioural risk vs the pre-O1
+        # codepath. The bounded transition history is queryable via
+        # self._state_machine.history() for post-incident forensics.
+        # Note: we record EVERY mutation including self-loops — the
+        # canonical table allows IDLE/THINKING/SPEAKING self-loops
+        # explicitly, and recording them keeps the dwell watchdog
+        # accurate (each self-loop resets the dwell clock).
+        self._state_machine.record_transition(old, new)
         if old is new:
             return
         if old is VoicePipelineState.IDLE and new is not VoicePipelineState.IDLE:
