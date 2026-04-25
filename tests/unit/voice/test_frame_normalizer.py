@@ -1769,3 +1769,136 @@ class TestDuckingRampBounds:
         # The clamp would only fire below 1 sample (i.e., < 0.0625 ms),
         # which the new bound prohibits at construction.
         assert norm._ducking_ramp_samples >= 160
+
+
+# ---------------------------------------------------------------------------
+# #7 — Format-detection probe (channel layout strict + float32 magnitude)
+# ---------------------------------------------------------------------------
+
+
+class TestFormatDetectionProbeChannelLayout:
+    """#7 — strict channel-layout enforcement on 2-D blocks.
+
+    Pre-fix a 2-D block whose ``shape[1]`` mismatched the declared
+    ``source_channels`` was averaged silently — operators saw distorted
+    capture without any signal that the cascade had negotiated the
+    wrong channel layout.
+    """
+
+    def test_2d_block_with_wrong_channel_count_raises(self) -> None:
+        norm = FrameNormalizer(
+            source_rate=48_000,
+            source_channels=2,  # cascade thinks stereo
+            source_format="int16",
+        )
+        # Block actually carries 6-channel surround data.
+        block = np.zeros((480, 6), dtype=np.int16)
+        with pytest.raises(ValueError, match=r"channel layout drift"):
+            norm.push(block)
+
+    def test_2d_block_with_matching_channel_count_succeeds(self) -> None:
+        # Sanity guard: the strict check must NOT false-positive on
+        # legitimate matching layouts.
+        norm = FrameNormalizer(
+            source_rate=48_000,
+            source_channels=2,
+            source_format="int16",
+        )
+        block = np.zeros((480, 2), dtype=np.int16)
+        # No raise; returns whatever windows complete.
+        out = norm.push(block)
+        assert isinstance(out, list)
+
+    def test_1d_block_bypasses_layout_check(self) -> None:
+        # A 1-D block is unambiguously mono and matches any
+        # source_channels declaration. No raise expected.
+        norm = FrameNormalizer(
+            source_rate=48_000,
+            source_channels=2,
+            source_format="int16",
+        )
+        block = np.zeros(480, dtype=np.int16)
+        out = norm.push(block)
+        assert isinstance(out, list)
+
+
+class TestFormatDetectionProbeFloat32Magnitude:
+    """#7 — float32-magnitude probe.
+
+    A caller declaring ``float32`` whose buffer carries int16-magnitude
+    values triggers massive saturation downstream. The probe surfaces
+    the root cause as a structured WARN before the symptom drowns the
+    operator in R2 saturation logs.
+    """
+
+    def test_in_range_float32_no_warn(self, caplog: pytest.LogCaptureFixture) -> None:
+        import logging as _logging
+
+        norm = FrameNormalizer(
+            source_rate=16_000,
+            source_channels=1,
+            source_format="float32",
+        )
+        # In-range float32 (max abs ~ 0.5).
+        block = np.full(512, 0.5, dtype=np.float32)
+        with caplog.at_level(_logging.WARNING, logger="sovyx.voice._frame_normalizer"):
+            norm.push(block)
+        drift_logs = [r for r in caplog.records if "format_drift" in r.getMessage()]
+        assert drift_logs == []
+        assert norm.format_drift_count == 0
+
+    def test_out_of_range_float32_emits_warn(self, caplog: pytest.LogCaptureFixture) -> None:
+        import logging as _logging
+
+        norm = FrameNormalizer(
+            source_rate=16_000,
+            source_channels=1,
+            source_format="float32",
+        )
+        # Massively out-of-range — looks like int16-magnitude data
+        # mistakenly tagged float32 (max abs = 16000.0).
+        block = np.full(512, 16_000.0, dtype=np.float32)
+        with caplog.at_level(_logging.WARNING, logger="sovyx.voice._frame_normalizer"):
+            norm.push(block)
+        drift_logs = [r for r in caplog.records if "format_drift" in r.getMessage()]
+        assert len(drift_logs) == 1
+        assert norm.format_drift_count == 1
+
+    def test_int16_source_does_not_trigger_probe(self, caplog: pytest.LogCaptureFixture) -> None:
+        # The probe ONLY runs for declared float32 sources. An int16
+        # source with native-magnitude values must NOT false-positive.
+        import logging as _logging
+
+        norm = FrameNormalizer(
+            source_rate=16_000,
+            source_channels=1,
+            source_format="int16",
+        )
+        # int16 max value (32767) — would clearly trigger if the probe
+        # ran here. It MUST NOT.
+        block = np.full(512, 32_000, dtype=np.int16)
+        with caplog.at_level(_logging.WARNING, logger="sovyx.voice._frame_normalizer"):
+            norm.push(block)
+        drift_logs = [r for r in caplog.records if "format_drift" in r.getMessage()]
+        assert drift_logs == []
+        assert norm.format_drift_count == 0
+
+    def test_drift_warn_is_rate_limited(self, caplog: pytest.LogCaptureFixture) -> None:
+        # Sustained drift produces 1 WARN per _FORMAT_DRIFT_LOG_INTERVAL_S
+        # (60 s by default). 100 consecutive bad blocks must NOT emit
+        # 100 WARNs.
+        import logging as _logging
+
+        norm = FrameNormalizer(
+            source_rate=16_000,
+            source_channels=1,
+            source_format="float32",
+        )
+        block = np.full(512, 16_000.0, dtype=np.float32)
+        with caplog.at_level(_logging.WARNING, logger="sovyx.voice._frame_normalizer"):
+            for _ in range(100):
+                norm.push(block)
+        drift_logs = [r for r in caplog.records if "format_drift" in r.getMessage()]
+        # Exactly one WARN emitted; counter still bumped 100 times.
+        assert len(drift_logs) == 1
+        assert norm.format_drift_count == 100  # noqa: PLR2004

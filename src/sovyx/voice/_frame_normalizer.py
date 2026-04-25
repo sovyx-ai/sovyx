@@ -238,6 +238,48 @@ cadence and is short enough that operators see the issue within
 the first failed utterance."""
 
 
+# ── #7 — Format-detection probe (extends #40 dtype validation) ──
+#
+# #40 caught the dtype-mismatch case (caller declares ``float32`` but
+# delivers ``int16`` array — np.asarray would silently coerce types).
+# #7 closes the remaining two failure modes:
+#
+# 1. **Channel-layout drift.** A 2-D block whose ``shape[1]`` does NOT
+#    match the cascade-negotiated ``source_channels`` was previously
+#    averaged silently — a 5.1 surround source (6 channels) declared
+#    as stereo (2 channels) would still produce a single-channel mean
+#    over 6 columns, distorting the spatial recovery and silently
+#    masking the misnegotiation.
+#
+# 2. **Float32-magnitude misnegotiation.** A caller declaring
+#    ``float32`` whose buffer carries int16-magnitude values (e.g. a
+#    PortAudio host adapter that mistakenly forwards raw int16 as
+#    ``float32`` via cast instead of scaling) would trigger massive
+#    saturation downstream. The dtype check passes; the data is wrong.
+#    A loud one-shot WARN at the source — rate-limited — points the
+#    operator at the upstream format negotiation rather than chasing
+#    the symptom in R2 saturation logs.
+#
+# Both checks run on the slow (non-passthrough) path inside
+# ``_to_float32_unscaled``. The passthrough fast-path is bit-exact
+# and never sees these inputs.
+
+_FLOAT32_MAGNITUDE_PROBE_THRESHOLD = 10.0
+"""Maximum-absolute-value ceiling for a properly-scaled float32 source
+block. Legitimate float32 audio sits in ``[-1, 1]`` (with optional
+sub-unit headroom up to ~1.5 in some pipelines that allow soft-clip
+margin). A block whose ``max(|x|) > 10`` is — with effectively
+100 % confidence — int16-magnitude data mistakenly tagged as float32
+upstream. 10.0 is conservative enough to absorb legitimate brick-wall
+limiter overshoots without false-positiving."""
+
+_FORMAT_DRIFT_LOG_INTERVAL_S = 60.0
+"""Minimum gap between two format-drift WARN logs from the same
+FrameNormalizer instance. Sustained misnegotiation would produce
+~100 WARNs/sec without rate-limiting; 60 s gives operators one
+clear signal per minute without log-flooding."""
+
+
 @dataclass(frozen=True, slots=True)
 class SaturationCounters:
     """Per-call clipping diagnostics from :func:`_float_to_int16_saturate`.
@@ -389,6 +431,12 @@ class FrameNormalizer:
         # dashboard attribution.
         self._phase_inverted_count: int = 0
         self._last_phase_warning_monotonic: float | None = None
+        # #7 — format-detection probe state. ``_format_drift_count``
+        # is cumulative over the lifetime of the normaliser;
+        # ``_last_format_drift_warning_monotonic`` rate-limits the
+        # WARN log per :data:`_FORMAT_DRIFT_LOG_INTERVAL_S`.
+        self._format_drift_count: int = 0
+        self._last_format_drift_warning_monotonic: float | None = None
         # Injectable clock for deterministic tests. Shape mirrors
         # ``time.monotonic``.
         self._monotonic: Callable[[], float] = time.monotonic
@@ -817,6 +865,23 @@ class FrameNormalizer:
                 )
                 raise ValueError(msg)
 
+        # #7 — format-detection probe (extends #40 dtype check).
+        # Runs BEFORE the rank dispatch so both 1-D and 2-D paths
+        # benefit from the probe; the channel-layout strict check
+        # only applies to 2-D blocks (a 1-D block is unambiguously
+        # mono and matches any source_channels declaration).
+        if self._source_format == "float32" and block_f.size > 0:
+            self._maybe_flag_format_drift(block_f)
+        if block_f.ndim == 2 and block_f.shape[1] != self._source_channels:
+            msg = (
+                f"block channel layout drift — declared source_channels="
+                f"{self._source_channels} but block has shape={block_f.shape} "
+                f"(rank-2 columns={block_f.shape[1]}). Either the cascade "
+                f"negotiated the wrong channel count or the device started "
+                f"delivering a different layout mid-stream"
+            )
+            raise ValueError(msg)
+
         if block_f.ndim == 1:
             return block_f
         if block_f.ndim == 2:
@@ -876,6 +941,59 @@ class FrameNormalizer:
                 ),
             },
         )
+
+    def _maybe_flag_format_drift(
+        self,
+        block_f: npt.NDArray[np.float32],
+    ) -> None:
+        """#7 — float32-magnitude probe; emit rate-limited WARN on drift.
+
+        Pure observability — does NOT alter the downstream output.
+        The WARN points the operator at upstream format negotiation
+        (PortAudio host adapter, capture device callback) rather
+        than the saturation symptom in R2 logs.
+        """
+        import numpy as np
+
+        max_abs = float(np.max(np.abs(block_f))) if block_f.size > 0 else 0.0
+        if max_abs <= _FLOAT32_MAGNITUDE_PROBE_THRESHOLD:
+            return
+        # Above threshold → flag as format drift. Bump cumulative
+        # counter unconditionally; rate-limit the WARN log.
+        self._format_drift_count += 1
+        now = self._monotonic()
+        last = self._last_format_drift_warning_monotonic
+        if last is not None and (now - last) < _FORMAT_DRIFT_LOG_INTERVAL_S:
+            return
+        self._last_format_drift_warning_monotonic = now
+        logger.warning(
+            "voice.audio.format_drift",
+            **{
+                "voice.declared_format": self._source_format,
+                "voice.observed_max_abs": round(max_abs, 4),
+                "voice.threshold": _FLOAT32_MAGNITUDE_PROBE_THRESHOLD,
+                "voice.lifetime_drift_count": self._format_drift_count,
+                "voice.action_required": (
+                    f"declared source_format='float32' but block "
+                    f"max(|x|)={max_abs:.1f} >> 1.0 — likely int16-"
+                    f"magnitude data tagged as float32 upstream. "
+                    f"Audit the PortAudio host-adapter format conversion "
+                    f"OR re-declare source_format='int16' if the device "
+                    f"actually delivers int16"
+                ),
+            },
+        )
+
+    @property
+    def format_drift_count(self) -> int:
+        """Lifetime counter of format-drift detections (#7).
+
+        Incremented every time :meth:`_maybe_flag_format_drift` sees a
+        float32 block whose ``max(|x|)`` exceeds the probe threshold.
+        Exposed for dashboard attribution + integration tests; survives
+        :meth:`reset` because it describes the data path's lifetime
+        format-negotiation health."""
+        return self._format_drift_count
 
     def _resample(
         self,
