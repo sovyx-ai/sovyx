@@ -467,6 +467,87 @@ class TestAudioOutputQueue:
 
 
 # ===========================================================================
+# M2 wire-up — USE depth + saturation_pct on enqueue
+# ===========================================================================
+
+
+class TestAudioOutputQueueM2WireUp:
+    """AudioOutputQueue.enqueue must emit M2 USE telemetry.
+
+    Mirrors the four cognitive-stage RED wire-ups (capture, VAD,
+    STT, TTS) — proves the M2 USE foundation is wired into the
+    output mixer queue too.
+    """
+
+    @pytest.mark.asyncio
+    async def test_enqueue_records_queue_depth(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+
+        recorded: list[tuple[Any, int, int]] = []
+
+        from sovyx.voice._stage_metrics import VoiceStage
+        from sovyx.voice.pipeline import _output_queue as oq_mod
+
+        def _capture(stage: Any, depth: int, capacity: int) -> None:
+            recorded.append((stage, depth, capacity))
+
+        monkeypatch.setattr(oq_mod, "record_queue_depth", _capture)
+
+        q = AudioOutputQueue()
+        await q.enqueue(_audio_chunk(100))
+
+        assert len(recorded) == 1
+        stage, depth, capacity = recorded[0]
+        assert stage == VoiceStage.OUTPUT
+        assert depth == 1
+        assert capacity == 256  # noqa: PLR2004 — default reference
+
+    @pytest.mark.asyncio
+    async def test_capacity_reference_is_configurable(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+
+        recorded: list[tuple[Any, int, int]] = []
+
+        from sovyx.voice.pipeline import _output_queue as oq_mod
+
+        def _capture(stage: Any, depth: int, capacity: int) -> None:
+            recorded.append((stage, depth, capacity))
+
+        monkeypatch.setattr(oq_mod, "record_queue_depth", _capture)
+
+        q = AudioOutputQueue(usage_capacity_reference=64)
+        await q.enqueue(_audio_chunk(100))
+
+        assert recorded[0][2] == 64  # noqa: PLR2004
+
+    @pytest.mark.asyncio
+    async def test_each_enqueue_records_growing_depth(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+
+        recorded: list[tuple[Any, int, int]] = []
+
+        from sovyx.voice.pipeline import _output_queue as oq_mod
+
+        def _capture(stage: Any, depth: int, capacity: int) -> None:
+            recorded.append((stage, depth, capacity))
+
+        monkeypatch.setattr(oq_mod, "record_queue_depth", _capture)
+
+        q = AudioOutputQueue()
+        for _ in range(3):
+            await q.enqueue(_audio_chunk(100))
+
+        depths = [d for (_, d, _) in recorded]
+        assert depths == [1, 2, 3]
+
+
+# ===========================================================================
 # BargeInDetector
 # ===========================================================================
 

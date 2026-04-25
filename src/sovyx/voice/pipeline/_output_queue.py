@@ -6,11 +6,30 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
+from sovyx.voice._stage_metrics import VoiceStage, record_queue_depth
 
 if TYPE_CHECKING:
     from sovyx.voice.tts_piper import AudioChunk
 
 logger = get_logger(__name__)
+
+
+_DEFAULT_USAGE_CAPACITY_REFERENCE = 256
+"""Operator-meaningful upper bound on healthy queue depth.
+
+The underlying ``asyncio.Queue`` is unbounded (the orchestrator
+enforces back-pressure via barge-in + drain timing). For M2 USE
+saturation_pct to be meaningful we pin a *reference* capacity:
+the depth at which we'd consider the pipeline 'genuinely
+abnormal' (orchestrator over-pre-rendering, drain stalled,
+playback thread starved).
+
+256 chunks at typical TTS chunk size (~1 s of audio per chunk)
+≈ 4 minutes of buffered speech. Anything deeper than that is a
+bug — either barge-in is broken or the drain task is stuck. The
+``record_queue_depth`` saturation overflow warning fires at >100%
+(>256 chunks), which is exactly the right signal for operators.
+"""
 
 
 class AudioOutputQueue:
@@ -21,7 +40,22 @@ class AudioOutputQueue:
     current playback (used for barge-in).
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        usage_capacity_reference: int = _DEFAULT_USAGE_CAPACITY_REFERENCE,
+    ) -> None:
+        """Construct an audio output queue.
+
+        Args:
+            usage_capacity_reference: Reference depth ceiling for the
+                M2 ``voice.queue.saturation_pct`` metric. The actual
+                queue is unbounded; this value defines what
+                ``saturation_pct = 100`` means for the dashboard
+                ("at the depth we'd consider abnormal"). Tuneable per
+                deployment if a particular workload routinely runs
+                deeper than the default 256.
+        """
         self._queue: asyncio.Queue[AudioChunk] = asyncio.Queue()
         self._playing = False
         self._interrupted = False
@@ -30,6 +64,7 @@ class AudioOutputQueue:
         # just a chunk count (chunks may be tiny single-sentence TTS or
         # large multi-paragraph pre-renders).
         self._pending_audio_ms = 0.0
+        self._usage_capacity_reference = usage_capacity_reference
 
     @property
     def is_playing(self) -> bool:
@@ -45,6 +80,16 @@ class AudioOutputQueue:
         await self._queue.put(chunk)
         self._pending_audio_ms += float(chunk.duration_ms)
         depth = self._queue.qsize()
+        # Ring 6 USE — depth + saturation_pct via the M2 facade.
+        # The capacity reference is the operator-meaningful upper
+        # bound (default 256). Depths beyond that fire a structured
+        # warning via record_queue_depth's internal overflow guard,
+        # which is exactly the right operator signal.
+        record_queue_depth(
+            VoiceStage.OUTPUT,
+            depth=depth,
+            capacity=self._usage_capacity_reference,
+        )
         logger.info(
             "voice.output_queue.enqueued",
             **{
