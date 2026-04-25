@@ -89,7 +89,7 @@ class TestMatchTargetCard:
     def test_card_id_substring_match(self) -> None:
         saturating = [_card(card_id="Generic_1"), _card(card_index=2, card_id="ZZZ")]
         target = _match_target_card(
-            saturating=saturating,
+            faulted=saturating,
             endpoint_friendly_name="Generic_1: USB Audio",
         )
         assert target is saturating[0]
@@ -104,7 +104,7 @@ class TestMatchTargetCard:
             _card(card_index=1, card_id="HDMI", card_longname="HDMI audio"),
         ]
         target = _match_target_card(
-            saturating=saturating,
+            faulted=saturating,
             endpoint_friendly_name="intel speaker front",
         )
         assert target is saturating[0]
@@ -114,18 +114,18 @@ class TestMatchTargetCard:
             _card(card_index=0, card_longname="AT Sound Card"),
             _card(card_index=1, card_longname="HD Audio Xyz"),
         ]
-        target = _match_target_card(saturating=saturating, endpoint_friendly_name="at hd device")
+        target = _match_target_card(faulted=saturating, endpoint_friendly_name="at hd device")
         # Neither "at" nor "hd" length>=4 — multiple cards tie.
         assert target is None
 
     def test_single_card_fallback(self) -> None:
         only = [_card()]
-        target = _match_target_card(saturating=only, endpoint_friendly_name="unrelated name")
+        target = _match_target_card(faulted=only, endpoint_friendly_name="unrelated name")
         assert target is only[0]
 
     def test_ambiguous_returns_none(self) -> None:
         saturating = [_card(card_index=0), _card(card_index=1, card_id="OTHER")]
-        target = _match_target_card(saturating=saturating, endpoint_friendly_name="unrelated")
+        target = _match_target_card(faulted=saturating, endpoint_friendly_name="unrelated")
         assert target is None
 
 
@@ -158,7 +158,8 @@ class TestProbeEligibility:
         assert res.reason == "amixer_unavailable_on_host"
 
     @pytest.mark.asyncio()
-    async def test_no_saturation(self) -> None:
+    async def test_no_fault_detected(self) -> None:
+        # Card with neither saturation_warning nor attenuation pattern.
         strat = LinuxALSAMixerResetBypass()
         with patch.object(
             mod,
@@ -167,7 +168,8 @@ class TestProbeEligibility:
         ):
             res = await strat.probe_eligibility(_context())
         assert res.applicable is False
-        assert res.reason == "no_saturated_controls_detected"
+        # Renamed in v0.22.3: covers both saturation AND attenuation regimes.
+        assert res.reason == "no_saturation_or_attenuation_detected"
 
     @pytest.mark.asyncio()
     async def test_card_match_ambiguous(self) -> None:
@@ -288,3 +290,152 @@ class TestRevert:
             await strat.revert(_context())
         restore.assert_awaited_once()
         assert strat._applied_snapshot is None  # noqa: SLF001
+
+
+# ============================================================================
+# Attenuation regime — added in v0.22.3 (commit fixes the SAME architectural
+# bug that the CLI `--fix` had: the auto-bypass strategy filtered only
+# `saturation_warning`, so attenuated cards never reached apply().
+# Pilot evidence: VAIO VJFE69F11X-B0221H, 2026-04-25 — bypass coordinator
+# tried 3 strategies, all returned `not_applicable`, endpoint quarantined.
+# ============================================================================
+
+
+def _card_attenuated(
+    *,
+    card_index: int = 1,
+    card_id: str = "Generic_1",
+    card_longname: str = "HD-Audio Generic",
+) -> MixerCardSnapshot:
+    """Pilot fixture: Mic Boost 0/3 + Capture 40/80 + Internal Mic Boost 1/3.
+
+    `_is_attenuated` requires: at least one capture-class control at or
+    below 0.5 fraction AND at least one boost-class control at min_raw.
+    """
+    controls = (
+        MixerControlSnapshot(
+            name="Mic Boost",
+            min_raw=0,
+            max_raw=3,
+            current_raw=0,  # zeroed boost — attenuation signature
+            current_db=0.0,
+            max_db=36.0,
+            is_boost_control=True,
+            saturation_risk=False,
+        ),
+        MixerControlSnapshot(
+            name="Capture",
+            min_raw=0,
+            max_raw=80,
+            current_raw=40,  # 50% — at the attenuation ceiling
+            current_db=-34.0,
+            max_db=30.0,
+            is_boost_control=True,
+            saturation_risk=False,
+        ),
+        MixerControlSnapshot(
+            name="Internal Mic Boost",
+            min_raw=0,
+            max_raw=3,
+            current_raw=1,
+            current_db=12.0,
+            max_db=36.0,
+            is_boost_control=True,
+            saturation_risk=False,
+        ),
+    )
+    return MixerCardSnapshot(
+        card_index=card_index,
+        card_id=card_id,
+        card_longname=card_longname,
+        controls=controls,
+        aggregated_boost_db=-22.0,
+        saturation_warning=False,  # attenuation, not saturation
+    )
+
+
+class TestProbeEligibilityAttenuation:
+    @pytest.mark.asyncio()
+    async def test_attenuated_card_is_applicable(self) -> None:
+        """v0.22.3 fix: attenuated cards now trigger applicable=True."""
+        strat = LinuxALSAMixerResetBypass()
+        with patch.object(
+            mod,
+            "enumerate_alsa_mixer_snapshots",
+            return_value=[_card_attenuated()],
+        ):
+            res = await strat.probe_eligibility(_context())
+        assert res.applicable is True
+        assert res.estimated_cost_ms > 0
+
+
+class TestApplyAttenuationRegime:
+    @pytest.mark.asyncio()
+    async def test_apply_routes_to_boost_up(self) -> None:
+        """v0.22.3 fix: apply() must call apply_mixer_boost_up for attenuation."""
+        strat = LinuxALSAMixerResetBypass()
+        attenuated_card = _card_attenuated()
+
+        boost_snap = MixerApplySnapshot(
+            card_index=1,
+            reverted_controls=(
+                ("Mic Boost", 0),
+                ("Capture", 40),
+                ("Internal Mic Boost", 1),
+            ),
+            applied_controls=(
+                ("Mic Boost", 2),
+                ("Capture", 60),
+                ("Internal Mic Boost", 2),
+            ),
+        )
+        with (
+            patch.object(
+                mod,
+                "enumerate_alsa_mixer_snapshots",
+                return_value=[attenuated_card],
+            ),
+            patch.object(
+                mod,
+                "apply_mixer_boost_up",
+                new=AsyncMock(return_value=boost_snap),
+            ) as boost,
+            patch.object(mod, "apply_mixer_reset", new=AsyncMock()) as reset,
+        ):
+            outcome = await strat.apply(_context())
+
+        assert outcome == "mixer_boost_up_applied"
+        # boost_up called, reset NOT called.
+        boost.assert_awaited_once()
+        reset.assert_not_called()
+        # Snapshot stashed for revert path.
+        assert strat._applied_snapshot is boost_snap  # noqa: SLF001
+
+    @pytest.mark.asyncio()
+    async def test_apply_routes_to_reset_when_saturated(self) -> None:
+        """Saturation regime still routes to apply_mixer_reset (regression)."""
+        strat = LinuxALSAMixerResetBypass()
+        sat_card = _card()  # default_controls with saturation_risk=True
+        reset_snap = MixerApplySnapshot(
+            card_index=1,
+            reverted_controls=(("Capture", 31),),
+            applied_controls=(("Capture", 15),),
+        )
+        with (
+            patch.object(
+                mod,
+                "enumerate_alsa_mixer_snapshots",
+                return_value=[sat_card],
+            ),
+            patch.object(
+                mod,
+                "apply_mixer_reset",
+                new=AsyncMock(return_value=reset_snap),
+            ) as reset,
+            patch.object(mod, "apply_mixer_boost_up", new=AsyncMock()) as boost,
+        ):
+            outcome = await strat.apply(_context())
+
+        assert outcome == "mixer_reset_applied"
+        reset.assert_awaited_once()
+        boost.assert_not_called()

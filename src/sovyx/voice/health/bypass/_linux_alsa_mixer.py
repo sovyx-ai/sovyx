@@ -42,9 +42,11 @@ from typing import TYPE_CHECKING
 from sovyx.engine.config import VoiceTuningConfig
 from sovyx.observability.logging import get_logger
 from sovyx.voice.health._linux_mixer_apply import (
+    apply_mixer_boost_up,
     apply_mixer_reset,
     restore_mixer_snapshot,
 )
+from sovyx.voice.health._linux_mixer_check import _is_attenuated
 from sovyx.voice.health._linux_mixer_probe import enumerate_alsa_mixer_snapshots
 from sovyx.voice.health.bypass._strategy import BypassApplyError
 from sovyx.voice.health.contract import Eligibility
@@ -74,6 +76,7 @@ breaking change.
 _REASON_NOT_LINUX = "not_linux_platform"
 _REASON_DISABLED_BY_TUNING = "alsa_mixer_reset_disabled_by_tuning"
 _REASON_NO_SATURATION_DETECTED = "no_saturated_controls_detected"
+_REASON_NO_FAULT_DETECTED = "no_saturation_or_attenuation_detected"
 _REASON_NO_AMIXER = "amixer_unavailable_on_host"
 _REASON_CARD_MATCH_AMBIGUOUS = "card_match_ambiguous"
 
@@ -81,6 +84,7 @@ _REASON_CARD_MATCH_AMBIGUOUS = "card_match_ambiguous"
 # Apply-reason tokens surfaced through :class:`BypassApplyError.reason`.
 _APPLY_REASON_NO_SNAPSHOTS = "no_mixer_snapshots_at_apply"
 _APPLY_REASON_NO_SATURATED = "no_saturated_controls_at_apply"
+_APPLY_REASON_NO_ATTENUATED = "no_attenuated_controls_at_apply"
 _APPLY_REASON_CARD_GONE = "target_card_unavailable_at_apply"
 
 
@@ -162,15 +166,18 @@ class LinuxALSAMixerResetBypass:
                 reason=_REASON_NO_AMIXER,
                 estimated_cost_ms=0,
             )
-        saturating = [s for s in snapshots if s.saturation_warning]
-        if not saturating:
+        # Two regimes — saturation (controls clipping) OR attenuation
+        # (capture+boost below VAD floor). Strategy is applicable to
+        # either; apply() routes to the right remediation.
+        faulted = [s for s in snapshots if s.saturation_warning or _is_attenuated(s)]
+        if not faulted:
             return Eligibility(
                 applicable=False,
-                reason=_REASON_NO_SATURATION_DETECTED,
+                reason=_REASON_NO_FAULT_DETECTED,
                 estimated_cost_ms=0,
             )
         target = _match_target_card(
-            saturating=saturating,
+            faulted=faulted,
             endpoint_friendly_name=context.endpoint_friendly_name,
         )
         if target is None:
@@ -204,40 +211,69 @@ class LinuxALSAMixerResetBypass:
                 "mixer state vanished between eligibility and apply"
             )
             raise BypassApplyError(msg, reason=_APPLY_REASON_NO_SNAPSHOTS)
-        saturating = [s for s in snapshots if s.saturation_warning]
+        faulted = [s for s in snapshots if s.saturation_warning or _is_attenuated(s)]
         target = _match_target_card(
-            saturating=saturating,
+            faulted=faulted,
             endpoint_friendly_name=context.endpoint_friendly_name,
         )
         if target is None:
             msg = (
-                "no saturating ALSA card matched the active endpoint at apply "
+                "no faulted ALSA card matched the active endpoint at apply "
                 "time — re-probe shows zero or ambiguous candidates"
             )
             raise BypassApplyError(msg, reason=_APPLY_REASON_CARD_GONE)
-        controls_to_reset = [c for c in target.controls if c.saturation_risk]
-        if not controls_to_reset:
-            msg = (
-                "target card has saturation_warning but no individual control "
-                "flagged saturation_risk — probe/apply classification drift"
-            )
-            raise BypassApplyError(msg, reason=_APPLY_REASON_NO_SATURATED)
 
-        snapshot = await apply_mixer_reset(
-            card_index=target.card_index,
-            controls_to_reset=controls_to_reset,
-            tuning=tuning,
-        )
+        # Route by regime — saturation REDUCES, attenuation BOOSTS UP.
+        # The two are mutually exclusive on a single card (saturation
+        # needs controls at max_raw; attenuation needs boost at min_raw
+        # AND capture below 0.5 fraction); when both flags happen to be
+        # set the saturation path takes precedence (more conservative —
+        # never deliberately drives a control toward clipping).
+        if target.saturation_warning:
+            controls_to_reset = [c for c in target.controls if c.saturation_risk]
+            if not controls_to_reset:
+                msg = (
+                    "target card has saturation_warning but no individual control "
+                    "flagged saturation_risk — probe/apply classification drift"
+                )
+                raise BypassApplyError(msg, reason=_APPLY_REASON_NO_SATURATED)
+            snapshot = await apply_mixer_reset(
+                card_index=target.card_index,
+                controls_to_reset=controls_to_reset,
+                tuning=tuning,
+            )
+            outcome = "mixer_reset_applied"
+        else:
+            # Attenuation regime — lift capture+boost controls.
+            controls_to_boost = [
+                c
+                for c in target.controls
+                if "capture" in c.name.lower() or "boost" in c.name.lower()
+            ]
+            if not controls_to_boost:
+                msg = (
+                    "target card flagged attenuation but no capture/boost controls "
+                    "to lift — probe/apply classification drift"
+                )
+                raise BypassApplyError(msg, reason=_APPLY_REASON_NO_ATTENUATED)
+            snapshot = await apply_mixer_boost_up(
+                card_index=target.card_index,
+                controls_to_boost=controls_to_boost,
+                tuning=tuning,
+            )
+            outcome = "mixer_boost_up_applied"
+
         self._applied_snapshot = snapshot
         logger.info(
             "bypass_strategy_apply_ok",
             strategy=_STRATEGY_NAME,
             endpoint_guid=context.endpoint_guid,
             card_index=snapshot.card_index,
-            controls_reset=[name for name, _ in snapshot.applied_controls],
+            regime="saturation" if target.saturation_warning else "attenuation",
+            controls_changed=[name for name, _ in snapshot.applied_controls],
             controls_count=len(snapshot.applied_controls),
         )
-        return "mixer_reset_applied"
+        return outcome
 
     async def revert(
         self,
@@ -270,16 +306,20 @@ def _tuning_from_context() -> VoiceTuningConfig:
 
 def _match_target_card(
     *,
-    saturating: list[MixerCardSnapshot],
+    faulted: list[MixerCardSnapshot],
     endpoint_friendly_name: str,
 ) -> MixerCardSnapshot | None:
-    """Select the saturating card that most likely backs ``endpoint_friendly_name``.
+    """Select the faulted card that most likely backs ``endpoint_friendly_name``.
+
+    A "faulted" card is one with ``saturation_warning=True`` OR that
+    matches ``_is_attenuated`` — both regimes the bypass coordinator
+    can remediate via this strategy.
 
     Matching hierarchy:
 
     1. Exact substring match of ``card_id`` or any contiguous word of
        ``card_longname`` against ``endpoint_friendly_name`` (case-insensitive).
-    2. Fallback when exactly one saturating card exists: use it. A
+    2. Fallback when exactly one faulted card exists: use it. A
        single-card host has no ambiguity, so forcing a textual match
        against PortAudio's idiosyncratic endpoint naming would only
        fail unnecessarily.
@@ -287,7 +327,7 @@ def _match_target_card(
        ``card_match_ambiguous`` and the strategy stays out of a
        guessing game.
     """
-    if not saturating:
+    if not faulted:
         return None
     name_lower = (endpoint_friendly_name or "").lower()
     if name_lower:
@@ -296,15 +336,15 @@ def _match_target_card(
         # into PortAudio's endpoint descriptor on many distros. Fall
         # back to any word of card_longname with length ≥ 4 (avoid
         # 2–3 char filler matches like "at", "HD").
-        for card in saturating:
+        for card in faulted:
             if card.card_id and card.card_id.lower() in name_lower:
                 return card
-        for card in saturating:
+        for card in faulted:
             for token in _tokens(card.card_longname):
                 if len(token) >= 4 and token in name_lower:
                     return card
-    if len(saturating) == 1:
-        return saturating[0]
+    if len(faulted) == 1:
+        return faulted[0]
     return None
 
 
