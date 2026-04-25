@@ -548,6 +548,75 @@ class TestAudioOutputQueueM2WireUp:
 
 
 # ===========================================================================
+# TS3 chaos wire-up — OUTPUT_QUEUE_DROP injection
+# ===========================================================================
+
+
+class TestAudioOutputQueueChaosWireUp:
+    """AudioOutputQueue.enqueue must honour the chaos injector.
+
+    With chaos enabled, an artificial saturation reading is reported
+    (depth = 2x capacity) — exercises the M2 USE
+    voice.queue.saturation_overflow WARN path.
+    """
+
+    @pytest.mark.asyncio
+    async def test_chaos_disabled_no_saturation_record(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from sovyx.voice._chaos import _ENABLED_ENV_VAR, _RATE_ENV_VAR_PREFIX
+        from sovyx.voice.pipeline import _output_queue as oq_mod
+
+        recorded: list[tuple[Any, int, int]] = []
+
+        def _capture(stage: Any, depth: int, capacity: int) -> None:
+            recorded.append((stage, depth, capacity))
+
+        monkeypatch.setattr(oq_mod, "record_queue_depth", _capture)
+        monkeypatch.delenv(_ENABLED_ENV_VAR, raising=False)
+        monkeypatch.setenv(
+            f"{_RATE_ENV_VAR_PREFIX}OUTPUT_QUEUE_DROP_PCT", "100"
+        )
+
+        q = AudioOutputQueue()
+        await q.enqueue(_audio_chunk(100))
+
+        # No chaos injection — only the normal record_queue_depth call.
+        assert len(recorded) == 1
+
+    @pytest.mark.asyncio
+    async def test_chaos_at_100_pct_records_saturation_overflow(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from sovyx.voice._chaos import _ENABLED_ENV_VAR, _RATE_ENV_VAR_PREFIX
+        from sovyx.voice.pipeline import _output_queue as oq_mod
+
+        recorded: list[tuple[Any, int, int]] = []
+
+        def _capture(stage: Any, depth: int, capacity: int) -> None:
+            recorded.append((stage, depth, capacity))
+
+        monkeypatch.setattr(oq_mod, "record_queue_depth", _capture)
+        monkeypatch.setenv(_ENABLED_ENV_VAR, "true")
+        monkeypatch.setenv(
+            f"{_RATE_ENV_VAR_PREFIX}OUTPUT_QUEUE_DROP_PCT", "100"
+        )
+
+        q = AudioOutputQueue(usage_capacity_reference=64)
+        await q.enqueue(_audio_chunk(100))
+
+        # Chaos injected the synthetic over-cap reading (depth =
+        # 2 * capacity = 128, capacity = 64) BEFORE the normal
+        # depth=1 reading.
+        assert len(recorded) == 2  # noqa: PLR2004
+        synthetic, normal = recorded
+        assert synthetic[1] == 128 and synthetic[2] == 64  # noqa: PLR2004
+        assert normal[1] == 1 and normal[2] == 64  # noqa: PLR2004
+
+
+# ===========================================================================
 # O1 wire-up — PipelineStateMachine observer in the orchestrator
 # ===========================================================================
 

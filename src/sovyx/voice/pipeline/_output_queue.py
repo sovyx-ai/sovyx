@@ -6,6 +6,7 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
+from sovyx.voice._chaos import ChaosInjector, ChaosSite
 from sovyx.voice._stage_metrics import VoiceStage, record_queue_depth
 
 if TYPE_CHECKING:
@@ -65,6 +66,12 @@ class AudioOutputQueue:
         # large multi-paragraph pre-renders).
         self._pending_audio_ms = 0.0
         self._usage_capacity_reference = usage_capacity_reference
+        # TS3 chaos injector — opt-in saturation simulation at the
+        # OUTPUT_QUEUE_DROP site. Disabled by default; chaos test
+        # matrix sets the env vars to validate that the M2 USE
+        # voice.queue.saturation_overflow WARN fires correctly when
+        # depth exceeds the capacity reference.
+        self._chaos = ChaosInjector(site_id=ChaosSite.OUTPUT_QUEUE_DROP.value)
 
     @property
     def is_playing(self) -> bool:
@@ -80,6 +87,20 @@ class AudioOutputQueue:
         await self._queue.put(chunk)
         self._pending_audio_ms += float(chunk.duration_ms)
         depth = self._queue.qsize()
+        # TS3 chaos: opt-in saturation injection at the
+        # OUTPUT_QUEUE_DROP site. When chaos fires, REPORT a
+        # synthetic depth at 2x capacity reference — exercises the
+        # M2 voice.queue.saturation_overflow WARN path that
+        # operators rely on to detect real over-pre-rendering /
+        # stalled drains. The actual queue state is unchanged
+        # (real depth still tracked via the normal record_queue_depth
+        # call below), so chaos is observability-only here.
+        if self._chaos.should_inject():
+            record_queue_depth(
+                VoiceStage.OUTPUT,
+                depth=self._usage_capacity_reference * 2,
+                capacity=self._usage_capacity_reference,
+            )
         # Ring 6 USE — depth + saturation_pct via the M2 facade.
         # The capacity reference is the operator-meaningful upper
         # bound (default 256). Depths beyond that fire a structured
