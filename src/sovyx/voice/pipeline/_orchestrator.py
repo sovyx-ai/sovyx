@@ -130,6 +130,31 @@ class VoicePipeline:
         self._deaf_warnings_consecutive = 0
         self._coordinator_terminated = False
         self._coordinator_invocation_pending = False
+        # O2 (Ring 6 atomic deaf-signal handling): explicit asyncio.Lock
+        # serialises the deaf-signal flow. The pre-O2 design relied on
+        # asyncio's single-threaded execution + a sync flag check-and-set
+        # in :meth:`_maybe_trigger_bypass_coordinator` to prevent double
+        # spawn — defensible but fragile (any future ``await`` introduced
+        # into the sync path silently breaks the invariant). Wrapping
+        # the entire ``_invoke_deaf_signal`` flow in a Lock makes the
+        # critical-section contract explicit and refactor-resistant. The
+        # lock is also where the counter snapshot + reset happen, which
+        # eliminates the tight-retry loop the previous implementation
+        # exhibited when the coordinator returned empty ``outcomes``: the
+        # counter would have accumulated during the ``await callback()``
+        # window and immediately re-cross the threshold on the next
+        # heartbeat. See MISSION-voice-mixer-enterprise-refactor §3.6
+        # and the O2 task for the full rationale.
+        self._coordinator_lock = asyncio.Lock()
+        self._coordinator_dedup_count = 0
+        """Number of times the lock-protected re-validation rejected a
+        spawned invocation because the world had changed since the sync
+        guard fired (terminal latch set by a concurrent task, threshold
+        no longer met after a healthy heartbeat). Surfaced via the
+        ``voice.deaf.coordinator_invocation_deduplicated`` event for
+        operator observability — non-zero means the lock is doing real
+        work, which validates the defense-in-depth pattern even when
+        asyncio's single-threaded model would technically suffice."""
 
         # Self-feedback isolation (ADR §4.4.6). Structural half-duplex
         # gating is encoded directly in the state machine (wake-word
@@ -866,17 +891,46 @@ class VoicePipeline:
         spawn(self._invoke_deaf_signal(), name="voice-pipeline-deaf-signal")
 
     async def _invoke_deaf_signal(self) -> None:
-        """Invoke the deaf-signal callback and surface its outcomes.
+        """Invoke the deaf-signal callback and surface its outcomes (O2).
+
+        The entire flow runs under :attr:`_coordinator_lock` so concurrent
+        spawns (defensive against future code paths that might introduce
+        an ``await`` into the sync trigger) can't double-invoke the
+        callback. Three guards re-validate inside the lock because the
+        spawn-to-acquire window can be arbitrarily long under load:
+
+        * ``callback is None`` — trapped before lock acquisition (cheap,
+          and avoids needlessly contending the lock).
+        * ``_coordinator_terminated`` — a concurrent task may have
+          latched terminal between spawn and lock acquisition; emit a
+          deduplicated event so dashboards can attribute the no-op.
+        * ``_deaf_warnings_consecutive < threshold`` — a healthy
+          heartbeat between spawn and acquire may have reset the
+          counter; the original trigger condition no longer holds, so
+          treat as deduplicated.
+
+        On entry to the callback section we **snapshot** the consecutive-
+        deaf counter and **reset it to zero** before the ``await``. This
+        eliminates the pre-O2 tight-retry loop: previously, deaf
+        heartbeats firing during ``await callback()`` accumulated into
+        ``_deaf_warnings_consecutive`` so an empty-outcomes return would
+        immediately re-cross the threshold on the next heartbeat,
+        causing back-to-back coordinator invocations. With the in-lock
+        reset, each invocation starts a fresh accumulation window.
 
         The callback returns the coordinator's
         :class:`~sovyx.voice.health.contract.BypassOutcome` log. Empty
         means the coordinator short-circuited (already resolved this
         session or false alarm) — nothing to emit. A non-empty list is
-        terminal: we flip :attr:`_coordinator_terminated` so subsequent
-        deaf warnings don't re-enter the coordinator.
+        terminal: we flip :attr:`_coordinator_terminated` (still inside
+        the lock for atomicity) so subsequent deaf warnings short-
+        circuit at the sync trigger.
 
         Telemetry contract:
 
+        * ``voice.deaf.coordinator_invocation_deduplicated`` (INFO) —
+          re-validation rejected the spawned task. ``voice.reason``
+          attribute distinguishes the cause.
         * ``voice_apo_bypass_activated`` on the APPLIED_HEALTHY outcome
           (strategy_name, attempt_index, reason carry the winning
           mutation path — ``"exclusive_engaged"`` for the Phase 1 Windows
@@ -891,125 +945,177 @@ class VoicePipeline:
         if callback is None:
             self._coordinator_invocation_pending = False
             return
-        logger.warning(
-            "voice.deaf.recovery_attempted",
-            **{
-                "voice.mind_id": self._config.mind_id,
-                "voice.consecutive_deaf_warnings": self._deaf_warnings_consecutive,
-                "voice.threshold": self._auto_bypass_threshold,
-                "voice.voice_clarity_active": self._voice_clarity_active,
-                "voice.auto_bypass_enabled": self._auto_bypass_enabled,
-            },
-        )
-        try:
-            outcomes = await callback()
-        except Exception as exc:  # noqa: BLE001 — callback is user-supplied; shield the pipeline
-            logger.error(
-                "voice_apo_bypass_failed",
-                mind_id=self._config.mind_id,
-                error=str(exc),
-                error_type=type(exc).__name__,
-            )
-            logger.error(
-                "audio.apo.bypassed",
+
+        async with self._coordinator_lock:
+            # Re-validate guards under the lock — between spawn and
+            # acquisition the world may have changed.
+            if self._coordinator_terminated:
+                self._coordinator_invocation_pending = False
+                self._record_coordinator_dedup("terminated_by_concurrent_task")
+                return
+            if self._deaf_warnings_consecutive < self._auto_bypass_threshold:
+                self._coordinator_invocation_pending = False
+                self._record_coordinator_dedup("threshold_no_longer_met")
+                return
+
+            # Snapshot + reset — see method docstring for the tight-retry
+            # rationale. The snapshot is what we report in telemetry so
+            # the recovery_attempted event reflects the counter that
+            # justified this specific invocation, not a value mutated
+            # mid-flight by concurrent heartbeats.
+            invocation_counter_snapshot = self._deaf_warnings_consecutive
+            self._deaf_warnings_consecutive = 0
+
+            logger.warning(
+                "voice.deaf.recovery_attempted",
                 **{
-                    "voice.verdict": "failure",
                     "voice.mind_id": self._config.mind_id,
-                    "voice.attempts": 0,
-                    "voice.strategies": [],
-                    "voice.outcomes": [],
-                    "voice.error": str(exc),
-                    "voice.error_type": type(exc).__name__,
+                    "voice.consecutive_deaf_warnings": invocation_counter_snapshot,
+                    "voice.threshold": self._auto_bypass_threshold,
                     "voice.voice_clarity_active": self._voice_clarity_active,
+                    "voice.auto_bypass_enabled": self._auto_bypass_enabled,
                 },
             )
-            self._coordinator_invocation_pending = False
-            return
-        finally:
-            self._coordinator_invocation_pending = False
+            try:
+                outcomes = await callback()
+            except Exception as exc:  # noqa: BLE001 — callback is user-supplied; shield the pipeline
+                logger.error(
+                    "voice_apo_bypass_failed",
+                    mind_id=self._config.mind_id,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                logger.error(
+                    "audio.apo.bypassed",
+                    **{
+                        "voice.verdict": "failure",
+                        "voice.mind_id": self._config.mind_id,
+                        "voice.attempts": 0,
+                        "voice.strategies": [],
+                        "voice.outcomes": [],
+                        "voice.error": str(exc),
+                        "voice.error_type": type(exc).__name__,
+                        "voice.voice_clarity_active": self._voice_clarity_active,
+                    },
+                )
+                return
+            finally:
+                self._coordinator_invocation_pending = False
 
-        if not outcomes:
-            # Coordinator short-circuited (false-alarm probe or prior
-            # resolution). Don't burn the terminal flag — we may still
-            # want to retry if deafness persists after a transient
-            # clear.
-            return
+            if not outcomes:
+                # Coordinator short-circuited (false-alarm probe or prior
+                # resolution). Don't burn the terminal flag — we may still
+                # want to retry if deafness persists after a transient
+                # clear. The counter snapshot+reset above already broke
+                # the pre-O2 tight-retry pattern.
+                return
 
-        self._coordinator_terminated = True
-        applied_healthy = next(
-            (o for o in outcomes if o.verdict is BypassVerdict.APPLIED_HEALTHY),
-            None,
-        )
-        if applied_healthy is not None:
-            logger.warning(
-                "voice_apo_bypass_activated",
-                mind_id=self._config.mind_id,
-                strategy_name=applied_healthy.strategy_name,
-                attempt_index=applied_healthy.attempt_index,
-                reason=applied_healthy.detail,
-                voice_clarity_active=self._voice_clarity_active,
-                consecutive_deaf_warnings=self._deaf_warnings_consecutive,
-                threshold=self._auto_bypass_threshold,
-                action="capture_integrity_coordinator",
+            self._coordinator_terminated = True
+            applied_healthy = next(
+                (o for o in outcomes if o.verdict is BypassVerdict.APPLIED_HEALTHY),
+                None,
             )
-            logger.warning(
+            if applied_healthy is not None:
+                logger.warning(
+                    "voice_apo_bypass_activated",
+                    mind_id=self._config.mind_id,
+                    strategy_name=applied_healthy.strategy_name,
+                    attempt_index=applied_healthy.attempt_index,
+                    reason=applied_healthy.detail,
+                    voice_clarity_active=self._voice_clarity_active,
+                    consecutive_deaf_warnings=invocation_counter_snapshot,
+                    threshold=self._auto_bypass_threshold,
+                    action="capture_integrity_coordinator",
+                )
+                logger.warning(
+                    "audio.apo.bypassed",
+                    **{
+                        "voice.verdict": "success",
+                        "voice.mind_id": self._config.mind_id,
+                        "voice.strategy_name": applied_healthy.strategy_name,
+                        "voice.attempt_index": applied_healthy.attempt_index,
+                        "voice.attempts": len(outcomes),
+                        "voice.strategies": [o.strategy_name for o in outcomes],
+                        "voice.outcomes": [o.verdict.value for o in outcomes],
+                        "voice.reason": applied_healthy.detail,
+                        "voice.voice_clarity_active": self._voice_clarity_active,
+                        "voice.consecutive_deaf_warnings": invocation_counter_snapshot,
+                        "voice.threshold": self._auto_bypass_threshold,
+                    },
+                )
+                return
+
+            # Every strategy either failed to apply or applied-but-still-dead.
+            # The coordinator has already quarantined the endpoint; surface a
+            # single operator-facing event so the dashboard / doctor can
+            # switch their messaging to "auto-fix could not recover — see
+            # manual remediation steps".
+            logger.error(
+                "voice_apo_bypass_ineffective",
+                mind_id=self._config.mind_id,
+                attempts=len(outcomes),
+                strategies=[o.strategy_name for o in outcomes],
+                verdicts=[o.verdict.value for o in outcomes],
+                voice_clarity_active=self._voice_clarity_active,
+                hint=(
+                    "CaptureIntegrityCoordinator exhausted every eligible "
+                    "bypass strategy. Endpoint quarantined for apo_quarantine_s; "
+                    "factory will fail over to an alternate capture device on "
+                    "next boot. Likely causes: firmware-level DSP on the mic, "
+                    "a virtual audio cable with a fixed format, a damaged "
+                    "capture element, or an APO not yet covered by a "
+                    "platform strategy. Try manually disabling all "
+                    "enhancements in the OS sound settings or switch capture "
+                    "device."
+                ),
+            )
+            # "partial" verdict: at least one strategy applied cleanly but
+            # the post-apply re-probe still classified the signal as dead;
+            # otherwise every strategy either failed-to-apply or was not
+            # applicable, which is a flat failure.
+            any_applied = any(o.verdict is BypassVerdict.APPLIED_STILL_DEAD for o in outcomes)
+            bypass_verdict = "partial" if any_applied else "failure"
+            logger.error(
                 "audio.apo.bypassed",
                 **{
-                    "voice.verdict": "success",
+                    "voice.verdict": bypass_verdict,
                     "voice.mind_id": self._config.mind_id,
-                    "voice.strategy_name": applied_healthy.strategy_name,
-                    "voice.attempt_index": applied_healthy.attempt_index,
                     "voice.attempts": len(outcomes),
                     "voice.strategies": [o.strategy_name for o in outcomes],
                     "voice.outcomes": [o.verdict.value for o in outcomes],
-                    "voice.reason": applied_healthy.detail,
                     "voice.voice_clarity_active": self._voice_clarity_active,
-                    "voice.consecutive_deaf_warnings": self._deaf_warnings_consecutive,
-                    "voice.threshold": self._auto_bypass_threshold,
+                    "voice.quarantined": True,
                 },
             )
-            return
 
-        # Every strategy either failed to apply or applied-but-still-dead.
-        # The coordinator has already quarantined the endpoint; surface a
-        # single operator-facing event so the dashboard / doctor can
-        # switch their messaging to "auto-fix could not recover — see
-        # manual remediation steps".
-        logger.error(
-            "voice_apo_bypass_ineffective",
-            mind_id=self._config.mind_id,
-            attempts=len(outcomes),
-            strategies=[o.strategy_name for o in outcomes],
-            verdicts=[o.verdict.value for o in outcomes],
-            voice_clarity_active=self._voice_clarity_active,
-            hint=(
-                "CaptureIntegrityCoordinator exhausted every eligible "
-                "bypass strategy. Endpoint quarantined for apo_quarantine_s; "
-                "factory will fail over to an alternate capture device on "
-                "next boot. Likely causes: firmware-level DSP on the mic, "
-                "a virtual audio cable with a fixed format, a damaged "
-                "capture element, or an APO not yet covered by a "
-                "platform strategy. Try manually disabling all "
-                "enhancements in the OS sound settings or switch capture "
-                "device."
-            ),
-        )
-        # "partial" verdict: at least one strategy applied cleanly but
-        # the post-apply re-probe still classified the signal as dead;
-        # otherwise every strategy either failed-to-apply or was not
-        # applicable, which is a flat failure.
-        any_applied = any(o.verdict is BypassVerdict.APPLIED_STILL_DEAD for o in outcomes)
-        bypass_verdict = "partial" if any_applied else "failure"
-        logger.error(
-            "audio.apo.bypassed",
+    def _record_coordinator_dedup(self, reason: str) -> None:
+        """Bump the dedup counter and emit the structured observability event.
+
+        Called from inside the lock when re-validation rejects a spawned
+        ``_invoke_deaf_signal`` task. ``reason`` is one of:
+
+        * ``"terminated_by_concurrent_task"`` — terminal latch was set
+          by another coordinator invocation while we were waiting for
+          the lock.
+        * ``"threshold_no_longer_met"`` — a healthy heartbeat reset the
+          consecutive-deaf counter between spawn and lock acquisition.
+
+        Non-zero ``_coordinator_dedup_count`` over a release window
+        validates that the lock is doing real work — i.e. the
+        defense-in-depth pattern is justified even when the asyncio
+        single-threaded model would technically suffice. Surface this
+        on the dashboard "Voice Health" panel.
+        """
+        self._coordinator_dedup_count += 1
+        logger.info(
+            "voice.deaf.coordinator_invocation_deduplicated",
             **{
-                "voice.verdict": bypass_verdict,
                 "voice.mind_id": self._config.mind_id,
-                "voice.attempts": len(outcomes),
-                "voice.strategies": [o.strategy_name for o in outcomes],
-                "voice.outcomes": [o.verdict.value for o in outcomes],
-                "voice.voice_clarity_active": self._voice_clarity_active,
-                "voice.quarantined": True,
+                "voice.reason": reason,
+                "voice.dedup_count": self._coordinator_dedup_count,
+                "voice.consecutive_deaf_warnings": self._deaf_warnings_consecutive,
+                "voice.threshold": self._auto_bypass_threshold,
+                "voice.coordinator_terminated": self._coordinator_terminated,
             },
         )
 

@@ -1921,6 +1921,283 @@ class TestDeafSignalCoordinator:
 
 
 # ===========================================================================
+# O2: Deaf-signal coordinator atomicity (Ring 6 critical-section contract)
+# ===========================================================================
+#
+# The O2 refactor wraps the deaf-signal flow in an asyncio.Lock so the
+# critical section becomes refactor-resistant: the pre-O2 invariant
+# relied on asyncio's single-threaded execution + sync flag check-and-
+# set in _maybe_trigger_bypass_coordinator, which silently breaks the
+# moment any future change introduces an ``await`` into the sync trigger
+# path. The lock makes the contract explicit. Additionally, the counter
+# snapshot+reset inside the lock eliminates the pre-O2 tight-retry loop
+# where deaf heartbeats firing during ``await callback()`` would
+# accumulate and immediately re-cross the threshold on the next
+# heartbeat after an empty-outcomes return.
+#
+# Reference: MISSION-voice-mixer-enterprise-refactor-2026-04-25 §3.6, O2.
+
+
+class TestDeafSignalAtomicityO2:
+    """Lock-protected critical section + counter snapshot semantics."""
+
+    def _deaf_pipeline(
+        self,
+        *,
+        auto_bypass_enabled: bool,
+        callback: Any,
+        threshold: int = 2,
+        voice_clarity_active: bool = True,
+    ) -> VoicePipeline:
+        config = VoicePipelineConfig(
+            mind_id="test-mind",
+            wake_word_enabled=False,
+            barge_in_enabled=False,
+            fillers_enabled=False,
+            filler_delay_ms=100,
+            silence_frames_end=3,
+            max_recording_frames=10,
+        )
+        vad = _make_vad(speech=False)
+        vad.process_frame.return_value = VADEvent(
+            is_speech=False, probability=0.0, state=VADState.SILENCE
+        )
+        return VoicePipeline(
+            config=config,
+            vad=vad,
+            wake_word=_make_wake_word(detected=False),
+            stt=_make_stt(),
+            tts=_make_tts(),
+            event_bus=_make_event_bus(),
+            on_perception=None,
+            on_deaf_signal=callback,
+            voice_clarity_active=voice_clarity_active,
+            auto_bypass_enabled=auto_bypass_enabled,
+            auto_bypass_threshold=threshold,
+        )
+
+    @pytest.mark.asyncio
+    async def test_lock_attribute_initialised(self) -> None:
+        pipeline = self._deaf_pipeline(
+            auto_bypass_enabled=True, callback=AsyncMock(return_value=[])
+        )
+        assert isinstance(pipeline._coordinator_lock, asyncio.Lock)
+        assert pipeline._coordinator_dedup_count == 0
+
+    @pytest.mark.asyncio
+    async def test_concurrent_invocations_serialised_by_lock(self) -> None:
+        """Two spawned _invoke_deaf_signal tasks must serialise through the lock.
+
+        With the lock, only the first acquirer proceeds to the callback;
+        the second observes the post-first-invocation state (counter
+        reset to 0 by the first invocation) and short-circuits as
+        ``threshold_no_longer_met``. Without the lock the second
+        invocation could race and double-call the callback.
+        """
+        callback = AsyncMock(return_value=[])
+        pipeline = self._deaf_pipeline(auto_bypass_enabled=True, callback=callback, threshold=1)
+        await pipeline.start()
+        # Force the threshold-met state without going through the
+        # heartbeat path; lets us spawn two invocations directly.
+        pipeline._deaf_warnings_consecutive = 5
+
+        # Spawn two invocations back-to-back. The first acquires the
+        # lock and resets the counter; the second waits, then sees
+        # counter=0 < threshold and dedups.
+        task1 = asyncio.create_task(pipeline._invoke_deaf_signal())
+        task2 = asyncio.create_task(pipeline._invoke_deaf_signal())
+        await asyncio.gather(task1, task2)
+
+        callback.assert_awaited_once()
+        # The dedup happened — exactly one invocation was rejected.
+        assert pipeline._coordinator_dedup_count == 1
+
+    @pytest.mark.asyncio
+    async def test_dedup_event_emitted_when_threshold_no_longer_met(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
+        callback = AsyncMock(return_value=[])
+        pipeline = self._deaf_pipeline(auto_bypass_enabled=True, callback=callback, threshold=1)
+        await pipeline.start()
+        pipeline._deaf_warnings_consecutive = 5
+
+        task1 = asyncio.create_task(pipeline._invoke_deaf_signal())
+        task2 = asyncio.create_task(pipeline._invoke_deaf_signal())
+        await asyncio.gather(task1, task2)
+
+        dedup_events = _events_of(caplog, "voice.deaf.coordinator_invocation_deduplicated")
+        assert len(dedup_events) == 1
+        assert dedup_events[0]["voice.reason"] == "threshold_no_longer_met"
+        assert dedup_events[0]["voice.dedup_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_dedup_event_emitted_when_terminated_by_concurrent_task(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """If the terminal latch is set between spawn and lock acquire, dedup."""
+        caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
+        callback = AsyncMock(return_value=[_bypass_outcome(verdict="applied_healthy")])
+        pipeline = self._deaf_pipeline(auto_bypass_enabled=True, callback=callback, threshold=1)
+        await pipeline.start()
+        pipeline._deaf_warnings_consecutive = 5
+
+        task1 = asyncio.create_task(pipeline._invoke_deaf_signal())
+        task2 = asyncio.create_task(pipeline._invoke_deaf_signal())
+        await asyncio.gather(task1, task2)
+
+        callback.assert_awaited_once()
+        assert pipeline._coordinator_terminated is True
+        dedup_events = _events_of(caplog, "voice.deaf.coordinator_invocation_deduplicated")
+        assert len(dedup_events) == 1
+        # The second task observes terminated=True (set by task1 inside
+        # the lock) before checking the threshold.
+        assert dedup_events[0]["voice.reason"] == "terminated_by_concurrent_task"
+
+    @pytest.mark.asyncio
+    async def test_counter_snapshot_resets_to_zero_on_invocation(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Inside the lock, the consecutive-deaf counter must be reset to 0
+        BEFORE the await — so heartbeats during await accumulate from a
+        clean baseline, not from the pre-invocation value. This is the
+        core mechanism that breaks the pre-O2 tight-retry loop.
+        """
+        caplog.set_level(logging.WARNING, logger=_ORCH_LOGGER)
+        callback = AsyncMock(return_value=[])
+        pipeline = self._deaf_pipeline(auto_bypass_enabled=True, callback=callback, threshold=1)
+        await pipeline.start()
+        pipeline._deaf_warnings_consecutive = 7  # well above threshold
+
+        await pipeline._invoke_deaf_signal()
+
+        # Counter was reset before the await; empty outcomes don't
+        # latch terminal; pending is cleared by finally.
+        assert pipeline._deaf_warnings_consecutive == 0
+        assert pipeline._coordinator_terminated is False
+        assert pipeline._coordinator_invocation_pending is False
+
+        # The recovery_attempted event reports the snapshot, not the
+        # mutated post-reset value.
+        attempted = _events_of(caplog, "voice.deaf.recovery_attempted")
+        assert len(attempted) == 1
+        assert attempted[0]["voice.consecutive_deaf_warnings"] == 7  # noqa: PLR2004
+
+    @pytest.mark.asyncio
+    async def test_heartbeats_during_await_do_not_cause_immediate_retrigger(
+        self,
+    ) -> None:
+        """The pre-O2 tight-retry pattern: deaf heartbeats firing during
+        the coordinator's ``await callback()`` accumulated into the
+        counter, so an empty-outcomes return immediately re-crossed the
+        threshold on the next sync trigger. With O2's in-lock counter
+        reset, the post-callback counter starts from 0 even if heartbeats
+        bumped it during the await.
+        """
+
+        # The callback bumps the counter from "inside" the await window
+        # (simulating a heartbeat firing concurrently).
+        async def bump_then_return_empty() -> list[Any]:
+            pipeline._deaf_warnings_consecutive += 3
+            await asyncio.sleep(0)  # yield to the event loop
+            return []
+
+        pipeline = self._deaf_pipeline(
+            auto_bypass_enabled=True,
+            callback=bump_then_return_empty,
+            threshold=2,
+        )
+        await pipeline.start()
+        pipeline._deaf_warnings_consecutive = 5  # threshold met
+
+        await pipeline._invoke_deaf_signal()
+
+        # Counter started at 5 → reset to 0 inside the lock → callback
+        # bumped to 3 during await → final value is 3 (not 5+3=8).
+        # Critically, 3 < threshold=2 is FALSE — but the next sync
+        # trigger sees 3 ≥ 2 and would re-fire if the snapshot+reset
+        # weren't in place. Our regression assertion: counter <= 3,
+        # NOT 5+ (the pre-O2 accumulated value).
+        assert pipeline._deaf_warnings_consecutive == 3  # noqa: PLR2004
+        assert pipeline._coordinator_invocation_pending is False
+        assert pipeline._coordinator_terminated is False
+
+    @pytest.mark.asyncio
+    async def test_callback_exception_releases_lock(self) -> None:
+        """A raising callback must not leave the lock held — the next
+        invocation must be able to acquire it.
+        """
+
+        async def first_call_raises() -> list[Any]:
+            raise RuntimeError("transient")
+
+        pipeline = self._deaf_pipeline(
+            auto_bypass_enabled=True, callback=first_call_raises, threshold=1
+        )
+        await pipeline.start()
+        pipeline._deaf_warnings_consecutive = 5
+
+        await pipeline._invoke_deaf_signal()
+        # Lock must be released after the exception.
+        assert pipeline._coordinator_lock.locked() is False
+        # Pending was cleared by finally.
+        assert pipeline._coordinator_invocation_pending is False
+
+        # Subsequent invocation must be able to acquire (would deadlock
+        # if the lock was leaked).
+        pipeline._deaf_warnings_consecutive = 5
+
+        async def second_call_succeeds() -> list[Any]:
+            return [_bypass_outcome(verdict="applied_healthy")]
+
+        pipeline._on_deaf_signal = second_call_succeeds
+        await pipeline._invoke_deaf_signal()
+        assert pipeline._coordinator_terminated is True
+
+    @pytest.mark.asyncio
+    async def test_dedup_count_monotonic(self) -> None:
+        """Each dedup increments the counter; never decrements."""
+        callback = AsyncMock(return_value=[])
+        pipeline = self._deaf_pipeline(auto_bypass_enabled=True, callback=callback, threshold=1)
+        await pipeline.start()
+
+        # Simulate 3 dedup events directly.
+        pipeline._record_coordinator_dedup("threshold_no_longer_met")
+        assert pipeline._coordinator_dedup_count == 1
+        pipeline._record_coordinator_dedup("terminated_by_concurrent_task")
+        assert pipeline._coordinator_dedup_count == 2  # noqa: PLR2004
+        pipeline._record_coordinator_dedup("threshold_no_longer_met")
+        assert pipeline._coordinator_dedup_count == 3  # noqa: PLR2004
+
+    @pytest.mark.asyncio
+    async def test_recovery_attempted_event_reports_snapshot_not_mutated(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """``voice.consecutive_deaf_warnings`` on the recovery_attempted
+        event reports the snapshot value (what triggered the invocation),
+        not the post-reset 0. Operators reading the log need the trigger
+        cause, not the post-reset state.
+        """
+        caplog.set_level(logging.WARNING, logger=_ORCH_LOGGER)
+        callback = AsyncMock(return_value=[_bypass_outcome(verdict="applied_healthy")])
+        pipeline = self._deaf_pipeline(auto_bypass_enabled=True, callback=callback, threshold=2)
+        await pipeline.start()
+        pipeline._deaf_warnings_consecutive = 12
+
+        await pipeline._invoke_deaf_signal()
+
+        attempted = _events_of(caplog, "voice.deaf.recovery_attempted")
+        assert len(attempted) == 1
+        assert attempted[0]["voice.consecutive_deaf_warnings"] == 12  # noqa: PLR2004
+
+        activated = _events_of(caplog, "voice_apo_bypass_activated")
+        assert len(activated) == 1
+        # Same snapshot semantics on the success event: report the
+        # counter that justified the invocation, not the post-reset 0.
+        assert activated[0]["consecutive_deaf_warnings"] == 12  # noqa: PLR2004
+
+
+# ===========================================================================
 # VoicePipeline — self-feedback gate wiring (ADR §4.4.6)
 # ===========================================================================
 
