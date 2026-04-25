@@ -30,6 +30,7 @@ import json
 import logging
 import sys
 from pathlib import Path
+from typing import Any
 
 import typer
 from rich.console import Console
@@ -868,6 +869,215 @@ def _run_cascade(*, output_json: bool) -> int:
         + (f", [red]{errors} errors[/red]" if errors else "")
     )
     return errors + warnings
+
+
+@doctor_app.command("platform")
+def doctor_platform(
+    output_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the report as a single JSON object on stdout.",
+    ),
+) -> None:
+    """Render the cross-OS platform-diagnostics report.
+
+    Operator-side mirror of ``GET /api/voice/platform-diagnostics``
+    that runs WITHOUT a daemon and prints structured per-OS state:
+
+    * **Cross-platform** — microphone permission (granted / denied /
+      unknown + remediation hint).
+    * **Linux** — PipeWire / WirePlumber detection + ALSA UCM verb
+      selection.
+    * **Windows** — Audiosrv + AudioEndpointBuilder service state +
+      recent ETW audio operational events.
+    * **macOS** — HAL plug-in catalogue + Bluetooth audio profile +
+      Hardened-Runtime mic-entitlement verifier.
+
+    Probes are always run in parallel inside each branch via
+    ``asyncio.gather``; per-probe failures collapse into structured
+    notes — the command always exits ``0`` (this is a diagnostic, not
+    a gate). Operators piping into ``jq`` should use ``--json``.
+    """
+    exit_code = asyncio.run(_run_platform_diagnostics(output_json=output_json))
+    raise typer.Exit(exit_code)
+
+
+async def _run_platform_diagnostics(*, output_json: bool) -> int:
+    """Execute the per-OS detectors and render the result.
+
+    Mirrors the dispatch logic in
+    ``sovyx.dashboard.routes.voice_platform_diagnostics`` so the CLI
+    and dashboard surfaces stay consistent. Probe failures are
+    isolated per detector: a crash in one branch never takes out
+    the rest.
+    """
+    from sovyx.voice.health._mic_permission import check_microphone_permission
+
+    platform = sys.platform
+
+    async def _safe(
+        fn: Any,  # noqa: ANN401
+        *args: Any,  # noqa: ANN401
+        **kwargs: Any,  # noqa: ANN401
+    ) -> Any:  # noqa: ANN401
+        try:
+            return await asyncio.to_thread(fn, *args, **kwargs)
+        except Exception:  # noqa: BLE001 — diagnostic isolation
+            return None
+
+    mic_task = _safe(check_microphone_permission)
+    payload: dict[str, object] = {"platform": platform}
+
+    if platform == "linux":
+        from sovyx.voice.health._alsa_ucm import detect_ucm
+        from sovyx.voice.health._pipewire import detect_pipewire
+
+        mic_report, pw_report, ucm_report = await asyncio.gather(
+            mic_task,
+            _safe(detect_pipewire),
+            _safe(detect_ucm, "0"),
+        )
+        payload["linux"] = {
+            "pipewire": _serialise_dataclass_or_unknown(pw_report),
+            "alsa_ucm": _serialise_dataclass_or_unknown(ucm_report),
+        }
+    elif platform == "win32":
+        from sovyx.voice.health._windows_audio_service import (
+            query_audio_service_status,
+        )
+        from sovyx.voice.health._windows_etw import query_audio_etw_events
+
+        mic_report, svc_report, etw_report = await asyncio.gather(
+            mic_task,
+            _safe(query_audio_service_status),
+            _safe(query_audio_etw_events),
+        )
+        payload["windows"] = {
+            "audio_service": _serialise_dataclass_or_unknown(svc_report),
+            "etw_audio_events": _serialise_etw_results(etw_report),
+        }
+    elif platform == "darwin":
+        from sovyx.voice._bluetooth_profile_mac import (
+            detect_bluetooth_audio_profile,
+        )
+        from sovyx.voice._codesign_verify_mac import verify_microphone_entitlement
+        from sovyx.voice._hal_detector_mac import detect_hal_plugins
+
+        mic_report, hal_report, bt_report, cs_report = await asyncio.gather(
+            mic_task,
+            _safe(detect_hal_plugins),
+            _safe(detect_bluetooth_audio_profile),
+            _safe(verify_microphone_entitlement),
+        )
+        payload["macos"] = {
+            "hal_plugins": _serialise_dataclass_or_unknown(hal_report),
+            "bluetooth": _serialise_dataclass_or_unknown(bt_report),
+            "code_signing": _serialise_dataclass_or_unknown(cs_report),
+        }
+    else:
+        payload["platform"] = "other"
+        mic_report = await mic_task
+
+    payload["mic_permission"] = _serialise_dataclass_or_unknown(mic_report)
+
+    if output_json:
+        typer.echo(json.dumps(payload, ensure_ascii=False, default=str))
+        return 0
+
+    _render_platform_diagnostics_table(payload)
+    return 0
+
+
+def _serialise_dataclass_or_unknown(report: Any) -> dict[str, Any]:  # noqa: ANN401
+    """Convert a detector report dataclass into a plain dict.
+
+    Used by both the CLI rendering and the JSON output path. Returns
+    a sentinel ``{"status": "unknown", "notes": ["probe returned None"]}``
+    when the probe failed (reported as ``None`` from ``_safe``).
+
+    ``Any`` is intentional: this helper is generic across N detector
+    return types (PipeWireReport, UcmReport, EtwQueryResult, etc.)
+    without forcing a Protocol hierarchy across modules.
+    """
+    if report is None:
+        return {"status": "unknown", "notes": ["probe returned None"]}
+    if dataclasses.is_dataclass(report) and not isinstance(report, type):
+        coerced = _coerce_to_jsonable(dataclasses.asdict(report))
+        if isinstance(coerced, dict):
+            return coerced
+    return {"value": str(report)}
+
+
+def _serialise_etw_results(results: Any) -> list[dict[str, Any]]:  # noqa: ANN401
+    """Special-case the ETW probe — it returns a tuple of results."""
+    if results is None:
+        return []
+    out: list[dict[str, Any]] = []
+    for r in results:
+        if dataclasses.is_dataclass(r) and not isinstance(r, type):
+            coerced = _coerce_to_jsonable(dataclasses.asdict(r))
+            if isinstance(coerced, dict):
+                out.append(coerced)
+    return out
+
+
+def _coerce_to_jsonable(obj: Any) -> Any:  # noqa: ANN401
+    """Recursively convert StrEnum / tuple / set into JSON-safe types."""
+    if isinstance(obj, dict):
+        return {k: _coerce_to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [_coerce_to_jsonable(v) for v in obj]
+    # StrEnum values serialise as their string token via .value
+    if hasattr(obj, "value") and isinstance(getattr(obj, "value", None), str):
+        return obj.value
+    return obj
+
+
+def _render_platform_diagnostics_table(payload: dict[str, object]) -> None:
+    """Render the platform diagnostics payload as Rich tables."""
+    platform = payload.get("platform", "unknown")
+    console.print(
+        f"\n[bold]Sovyx Platform Diagnostics[/bold]  (platform=[cyan]{platform}[/cyan])\n",
+    )
+
+    mic = payload.get("mic_permission") or {}
+    mic_status = mic.get("status", "unknown") if isinstance(mic, dict) else "unknown"
+    mic_color = {
+        "granted": "green",
+        "denied": "red",
+        "unknown": "yellow",
+    }.get(str(mic_status), "yellow")
+    console.print(
+        f"  microphone permission : [{mic_color}]{mic_status}[/{mic_color}]",
+    )
+    if isinstance(mic, dict):
+        hint = mic.get("remediation_hint") or ""
+        if hint:
+            console.print(f"    └─ hint: {hint}")
+
+    for branch_name in ("linux", "windows", "macos"):
+        branch = payload.get(branch_name)
+        if not isinstance(branch, dict):
+            continue
+        console.print(f"\n[bold]{branch_name}[/bold]")
+        for section, data in branch.items():
+            console.print(f"  [bold cyan]{section}[/bold cyan]")
+            if isinstance(data, dict):
+                for k, v in data.items():
+                    if k in ("notes",) and isinstance(v, list) and v:
+                        console.print(f"    {k}: {'; '.join(str(x) for x in v)}")
+                    elif k in ("notes",):
+                        continue
+                    else:
+                        console.print(f"    {k}: {v}")
+            elif isinstance(data, list):
+                console.print(f"    ({len(data)} entries)")
+                for item in data[:3]:
+                    if isinstance(item, dict) and "channel" in item:
+                        n_events = len(item.get("events", []))
+                        console.print(
+                            f"    - {item['channel']}: {n_events} event(s)",
+                        )
 
 
 __all__ = ["doctor_app"]
