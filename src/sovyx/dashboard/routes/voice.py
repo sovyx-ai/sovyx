@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
@@ -1059,9 +1059,25 @@ async def enable_voice(request: Request) -> JSONResponse:
     # Closure holder — the bridge needs the pipeline, the pipeline needs the
     # callback. Fill the holder after the bundle is built.
     bridge_ref: list[VoiceCognitiveBridge | None] = [None]
+    # Gap 2 — track the most-recent in-flight cogloop task so the
+    # capture consumer is freed (it would otherwise block on
+    # ``await bridge.process(...)`` for the entire LLM + TTS duration,
+    # making barge-in detection structurally impossible because
+    # ``feed_frame`` cannot reach ``_handle_speaking`` while parked
+    # deep in the perception await chain). The orchestrator can now
+    # process the next frames during streaming, which is exactly when
+    # the user might barge in.
+    cogloop_task_ref: list[asyncio.Task[Any] | None] = [None]
 
     async def _on_perception(text: str, mind_id_str: str) -> None:
-        """Feed a transcription into the cognitive loop via the bridge."""
+        """Feed a transcription into the cognitive loop via the bridge.
+
+        Spawns the bridge call as a fire-and-forget task and returns
+        immediately so the orchestrator's capture consumer is freed
+        between turns. The spawned task is tracked in
+        ``cogloop_task_ref`` so :func:`disable_voice` can wait / cancel
+        it on shutdown, and so tests can assert on completion.
+        """
         bridge = bridge_ref[0]
         if bridge is None or not text.strip():
             return
@@ -1083,10 +1099,36 @@ async def enable_voice(request: Request) -> JSONResponse:
             conversation_history=[],
             person_name=None,
         )
-        try:
-            await bridge.process(cog_request)
-        except Exception:  # noqa: BLE001
-            logger.exception("voice_cognitive_bridge_failed")
+
+        async def _run_bridge_isolated() -> None:
+            try:
+                await bridge.process(cog_request)
+            except asyncio.CancelledError:
+                # Expected on barge-in (bridge.process converts to a
+                # sentinel internally; this branch only fires if the
+                # task was cancelled BEFORE bridge.process registered
+                # its own internal handler — defensive belt).
+                logger.info(
+                    "voice_cognitive_bridge_task_cancelled",
+                    mind_id=mind_id_str,
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("voice_cognitive_bridge_failed")
+
+        # If a previous turn's task is somehow still in flight (the
+        # user spoke a new utterance before the prior LLM/TTS finished
+        # AND the orchestrator did NOT trigger cancel_speech_chain —
+        # rare but possible on degraded streams), stop it explicitly so
+        # we never accumulate orphaned tasks. cancel() is idempotent
+        # against a done task.
+        previous_task = cogloop_task_ref[0]
+        if previous_task is not None and not previous_task.done():
+            previous_task.cancel()
+
+        cogloop_task_ref[0] = asyncio.create_task(
+            _run_bridge_isolated(),
+            name=f"voice-perception-{mind_id_str}",
+        )
 
     on_perception_cb = _on_perception if cognitive_loop is not None else None
 

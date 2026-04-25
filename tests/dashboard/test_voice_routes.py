@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from types import ModuleType
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -898,8 +899,16 @@ class TestOnPerceptionCallback:
             on_perception = factory_mock.call_args.kwargs["on_perception"]
             assert on_perception is not None
 
-            # Invoke it — this is what the pipeline does after STT
+            # Invoke it — this is what the pipeline does after STT.
+            # Gap 2: the route now SPAWNS the bridge call (instead of
+            # awaiting it inline) so the consumer is freed for
+            # barge-in detection during streaming. Yield the loop a
+            # few times so the spawned task gets to run before we
+            # assert; without this the test would race against the
+            # task scheduler.
             await on_perception("what time is it", "demo-mind")
+            for _ in range(5):
+                await asyncio.sleep(0)
 
         bridge_process.assert_awaited_once()
         submitted = bridge_process.call_args.args[0]
