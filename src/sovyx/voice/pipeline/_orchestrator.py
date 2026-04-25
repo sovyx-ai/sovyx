@@ -1576,6 +1576,34 @@ class VoicePipeline:
                     error_type=type(exc).__name__,
                 )
 
+            # Step 5: text-buffer cleanup (band-aid #15 final fix).
+            # Pre-step-5 the cancel_speech_chain left ``_text_buffer``
+            # untouched on barge-in. If the LLM had streamed
+            # "Hello, this is a long respo" before the user barged in,
+            # the buffer kept "Hello, this is a long respo" and the
+            # NEXT utterance's stream_text would prepend that residue
+            # — the user heard "Hello, this is a long respo[NEW
+            # TURN]" instead of the new turn cleanly. The T1 commit
+            # cleaned the buffer in stream_text's CancelledError path,
+            # but the broader cancel_speech_chain (called from
+            # barge_in, shutdown, manual_cancel) never touched it.
+            # This step closes that gap unconditionally — buffer is
+            # always empty after a chain run, regardless of which
+            # path triggered the chain.
+            try:
+                buffer_chars_dropped = len(self._text_buffer)
+                self._text_buffer = ""
+                step_results["text_buffer_cleanup"] = "ok"
+            except Exception as exc:  # noqa: BLE001 — chain shield
+                buffer_chars_dropped = 0
+                step_results["text_buffer_cleanup"] = "failed"
+                logger.warning(
+                    "voice.tts.cancellation_step_failed",
+                    step="text_buffer_cleanup",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
             chain_duration_ms = (time.monotonic() - chain_started) * 1000.0
             logger.info(
                 "voice.tts.cancellation_chain",
@@ -1586,10 +1614,12 @@ class VoicePipeline:
                     "voice.tasks_cancelled": cancelled_count,
                     "voice.tasks_timed_out": timeout_count,
                     "voice.has_llm_hook": self._llm_cancel_hook is not None,
+                    "voice.text_buffer_chars_dropped": buffer_chars_dropped,
                     "voice.step_output_flush": step_results["output_flush"],
                     "voice.step_tts_tasks_cancel": step_results["tts_tasks_cancel"],
                     "voice.step_llm_cancel": step_results["llm_cancel"],
                     "voice.step_filler_and_gate": step_results["filler_and_gate"],
+                    "voice.step_text_buffer_cleanup": step_results["text_buffer_cleanup"],
                 },
             )
 

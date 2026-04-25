@@ -575,9 +575,7 @@ class TestAudioOutputQueueChaosWireUp:
 
         monkeypatch.setattr(oq_mod, "record_queue_depth", _capture)
         monkeypatch.delenv(_ENABLED_ENV_VAR, raising=False)
-        monkeypatch.setenv(
-            f"{_RATE_ENV_VAR_PREFIX}OUTPUT_QUEUE_DROP_PCT", "100"
-        )
+        monkeypatch.setenv(f"{_RATE_ENV_VAR_PREFIX}OUTPUT_QUEUE_DROP_PCT", "100")
 
         q = AudioOutputQueue()
         await q.enqueue(_audio_chunk(100))
@@ -600,9 +598,7 @@ class TestAudioOutputQueueChaosWireUp:
 
         monkeypatch.setattr(oq_mod, "record_queue_depth", _capture)
         monkeypatch.setenv(_ENABLED_ENV_VAR, "true")
-        monkeypatch.setenv(
-            f"{_RATE_ENV_VAR_PREFIX}OUTPUT_QUEUE_DROP_PCT", "100"
-        )
+        monkeypatch.setenv(f"{_RATE_ENV_VAR_PREFIX}OUTPUT_QUEUE_DROP_PCT", "100")
 
         q = AudioOutputQueue(usage_capacity_reference=64)
         await q.enqueue(_audio_chunk(100))
@@ -681,10 +677,7 @@ class TestPipelineStateMachineWireUp:
         assert pipeline._state_machine.current_state == VoicePipelineState.THINKING
         assert pipeline._state_machine.invalid_transition_count == 1
         # Structured WARN fired.
-        assert any(
-            "pipeline.state.invalid_transition" in str(r.msg)
-            for r in caplog.records
-        )
+        assert any("pipeline.state.invalid_transition" in str(r.msg) for r in caplog.records)
 
 
 # ===========================================================================
@@ -3227,3 +3220,53 @@ class TestCancellationChainT1:
         pipeline._untrack_tts_task(task)
         assert task not in pipeline._in_flight_tts_tasks
         await task
+
+    # ── Band-aid #15 final fix: text-buffer cleanup in chain ───
+    @pytest.mark.asyncio
+    async def test_cancel_chain_clears_text_buffer(self) -> None:
+        """Step 5: cancel_speech_chain unconditionally clears
+        ``_text_buffer``. Pre-step-5 the buffer kept a residue like
+        "Hello, this is a long respo" after a mid-stream barge-in,
+        and the next utterance prepended that residue to its own
+        output."""
+        pipeline, _ = _make_pipeline()
+        await pipeline.start()
+        # Simulate mid-stream state: text buffered, awaiting more chunks.
+        pipeline._text_buffer = "Hello, this is a long respo"
+        await pipeline.cancel_speech_chain(reason="barge_in")
+        assert pipeline._text_buffer == ""
+
+    @pytest.mark.asyncio
+    async def test_cancel_chain_clears_buffer_on_empty_state(self) -> None:
+        """Buffer cleanup is unconditional — works even when
+        the buffer was already empty (idempotent)."""
+        pipeline, _ = _make_pipeline()
+        await pipeline.start()
+        assert pipeline._text_buffer == ""
+        await pipeline.cancel_speech_chain(reason="shutdown")
+        assert pipeline._text_buffer == ""
+
+    @pytest.mark.asyncio
+    async def test_cancel_chain_emits_buffer_chars_dropped_field(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The structured ``voice.tts.cancellation_chain`` event
+        records how many chars the cleanup dropped — operators
+        see whether barge-in interrupted a long generation or a
+        short one."""
+        import logging
+
+        pipeline, _ = _make_pipeline()
+        await pipeline.start()
+        pipeline._text_buffer = "X" * 42
+        with caplog.at_level(logging.INFO):
+            await pipeline.cancel_speech_chain(reason="manual_cancel")
+        events = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict) and r.msg.get("event") == "voice.tts.cancellation_chain"
+        ]
+        assert len(events) >= 1
+        assert events[-1].get("voice.text_buffer_chars_dropped") == 42  # noqa: PLR2004
+        assert events[-1].get("voice.step_text_buffer_cleanup") == "ok"
