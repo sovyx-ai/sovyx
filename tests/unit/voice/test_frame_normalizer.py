@@ -1341,10 +1341,7 @@ class TestAGC2IntegrationF5:
         only fix was apply_mixer_boost_up's hardcoded fractions —
         post-F5/F6 the AGC2 does it in user space, no mixer write
         required."""
-        import math
-
         from sovyx.voice._agc2 import AGC2, AGC2Config
-        from sovyx.voice._frame_normalizer import _INT16_SCALE
 
         # Force non-passthrough path (48 kHz mono → resample to 16 kHz).
         cfg = AGC2Config(target_dbfs=-18.0, max_gain_db=30.0)
@@ -1398,3 +1395,100 @@ class TestAGC2IntegrationF5:
                 assert window.dtype == np.int16
                 assert window.min() >= -32768  # noqa: PLR2004
                 assert window.max() <= 32767  # noqa: PLR2004
+
+
+# ---------------------------------------------------------------------------
+# M2 wire-up — RED + USE telemetry on capture
+# ---------------------------------------------------------------------------
+
+
+class TestFrameNormalizerM2WireUp:
+    """FrameNormalizer.push must emit M2 stage events.
+
+    Mirrors STT/TTS adoption — proves the M2 foundation is wired
+    in capture stage too. Empty-input is intentionally NOT
+    instrumented (zero-size callbacks at stream boundaries are
+    a no-op and would inflate the metric noise floor).
+    """
+
+    def test_push_records_success_event(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from typing import Any
+
+        recorded: list[tuple[Any, Any, Any]] = []
+
+        from sovyx.voice import _frame_normalizer as fn_mod
+        from sovyx.voice._stage_metrics import StageEventKind, VoiceStage
+
+        def _capture(stage: Any, kind: Any, *, error_type: str | None = None) -> None:
+            recorded.append((stage, kind, error_type))
+
+        monkeypatch.setattr(fn_mod, "record_stage_event", _capture)
+
+        norm = FrameNormalizer(source_rate=16_000, source_channels=1)
+        block = _sine_wave_int16(440, 16_000, 0.032, channels=1)
+        norm.push(block)
+
+        assert (VoiceStage.CAPTURE, StageEventKind.SUCCESS, None) in recorded
+
+    def test_empty_input_does_not_record_event(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Empty PortAudio callbacks are pure no-ops — no telemetry."""
+        from typing import Any
+
+        recorded: list[tuple[Any, Any, Any]] = []
+
+        from sovyx.voice import _frame_normalizer as fn_mod
+
+        def _capture(stage: Any, kind: Any, *, error_type: str | None = None) -> None:
+            recorded.append((stage, kind, error_type))
+
+        monkeypatch.setattr(fn_mod, "record_stage_event", _capture)
+
+        norm = FrameNormalizer(source_rate=16_000, source_channels=1)
+        norm.push(np.array([], dtype=np.int16))
+
+        assert recorded == []
+
+    def test_bad_dtype_propagates_as_error(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Bad input (wrong dtype for source_format) raises — the
+        measure_stage_duration BaseException handler records
+        duration with outcome=error and re-raises. Caller sees the
+        original ValueError; the RED counter sees no SUCCESS event."""
+        from typing import Any
+
+        recorded: list[tuple[Any, Any, Any]] = []
+
+        from sovyx.voice import _frame_normalizer as fn_mod
+        from sovyx.voice._stage_metrics import StageEventKind, VoiceStage
+
+        def _capture(stage: Any, kind: Any, *, error_type: str | None = None) -> None:
+            recorded.append((stage, kind, error_type))
+
+        monkeypatch.setattr(fn_mod, "record_stage_event", _capture)
+
+        norm = FrameNormalizer(
+            source_rate=16_000,
+            source_channels=1,
+            source_format="int16",
+        )
+        # float64 block when source_format is int16 → ValueError.
+        bad = np.zeros(512, dtype=np.float64)
+        with pytest.raises(ValueError):  # noqa: PT011
+            norm.push(bad)
+
+        # No SUCCESS event was recorded — exception propagated before
+        # the success-path call site.
+        successes = [
+            (s, k, et)
+            for (s, k, et) in recorded
+            if s == VoiceStage.CAPTURE and k == StageEventKind.SUCCESS
+        ]
+        assert successes == []

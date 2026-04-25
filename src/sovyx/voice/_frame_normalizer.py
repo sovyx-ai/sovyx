@@ -71,6 +71,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
+from sovyx.voice._stage_metrics import (
+    StageEventKind,
+    VoiceStage,
+    measure_stage_duration,
+    record_stage_event,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -425,45 +431,61 @@ class FrameNormalizer:
         import numpy as np
 
         if block.size == 0:
+            # Pure no-op: PortAudio occasionally delivers zero-sized
+            # callbacks at stream open / close boundaries. Skipping
+            # telemetry here keeps the metric noise floor honest —
+            # operators querying voice.capture.events expect them to
+            # correlate with real audio work.
             return []
 
-        # Ultra-fast path: int16 mono 16 kHz with unity ducking. This
-        # is the dominant case once the cascade settles on the invariant
-        # format on good hardware. Skips the float32 round-trip so the
-        # capture→VAD path is a memcpy. R2 saturation counters do NOT
-        # apply here — int16 input is already bounded, so by definition
-        # nothing can clip in this branch.
-        if (
-            self._passthrough
-            and self._source_format == "int16"
-            and block.dtype == np.int16
-            and self._target_linear_gain == 1.0
-            and self._current_linear_gain == 1.0
-        ):
-            as_int16 = block if block.ndim == 1 else block[:, 0].copy()
-        else:
-            mono_f32 = self._downmix(block)
-            resampled = mono_f32 if self._passthrough else self._resample(mono_f32)
-            ducked = self._apply_ducking(resampled)
-            as_int16, saturation = _float_to_int16_saturate(ducked)
-            self._record_saturation(saturation)
-            # F5/F6: optional AGC2 post-process. Only on the
-            # non-passthrough path because the passthrough path is
-            # bit-exact by contract (operators rely on it for A/B
-            # comparisons + golden-recording playback). When the
-            # cascade negotiates 16 kHz mono int16, the user is
-            # already operating at the target — AGC isn't needed.
-            if self._agc2 is not None:
-                as_int16 = self._agc2.process(as_int16)
+        # Ring 6 RED + USE: every push() invocation is one capture-stage
+        # call. Wrap the entire body so even ValueError on bad
+        # dtype/shape is captured with outcome=error via
+        # measure_stage_duration's BaseException handler. SUCCESS
+        # event fires once before return; window-emission rate is
+        # available separately through the existing
+        # lifetime_samples_processed counter.
+        with measure_stage_duration(VoiceStage.CAPTURE):
+            # Ultra-fast path: int16 mono 16 kHz with unity ducking.
+            # This is the dominant case once the cascade settles on
+            # the invariant format on good hardware. Skips the
+            # float32 round-trip so the capture→VAD path is a memcpy.
+            # R2 saturation counters do NOT apply here — int16 input
+            # is already bounded, so by definition nothing can clip
+            # in this branch.
+            if (
+                self._passthrough
+                and self._source_format == "int16"
+                and block.dtype == np.int16
+                and self._target_linear_gain == 1.0
+                and self._current_linear_gain == 1.0
+            ):
+                as_int16 = block if block.ndim == 1 else block[:, 0].copy()
+            else:
+                mono_f32 = self._downmix(block)
+                resampled = mono_f32 if self._passthrough else self._resample(mono_f32)
+                ducked = self._apply_ducking(resampled)
+                as_int16, saturation = _float_to_int16_saturate(ducked)
+                self._record_saturation(saturation)
+                # F5/F6: optional AGC2 post-process. Only on the
+                # non-passthrough path because the passthrough path is
+                # bit-exact by contract (operators rely on it for A/B
+                # comparisons + golden-recording playback). When the
+                # cascade negotiates 16 kHz mono int16, the user is
+                # already operating at the target — AGC isn't needed.
+                if self._agc2 is not None:
+                    as_int16 = self._agc2.process(as_int16)
 
-        self._output_buf = np.concatenate([self._output_buf, as_int16])
+            self._output_buf = np.concatenate([self._output_buf, as_int16])
 
-        windows: list[npt.NDArray[np.int16]] = []
-        while len(self._output_buf) >= _TARGET_WINDOW:
-            window = self._output_buf[:_TARGET_WINDOW].copy()
-            self._output_buf = self._output_buf[_TARGET_WINDOW:]
-            windows.append(window)
-        return windows
+            windows: list[npt.NDArray[np.int16]] = []
+            while len(self._output_buf) >= _TARGET_WINDOW:
+                window = self._output_buf[:_TARGET_WINDOW].copy()
+                self._output_buf = self._output_buf[_TARGET_WINDOW:]
+                windows.append(window)
+
+            record_stage_event(VoiceStage.CAPTURE, StageEventKind.SUCCESS)
+            return windows
 
     @property
     def agc2(self) -> AGC2 | None:
