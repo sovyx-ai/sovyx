@@ -3605,3 +3605,262 @@ class TestFalseWakeRecovery:
             refs["vad"].process_frame.return_value = _vad_event(True)
         assert pipeline.false_wake_rejected_count == 3  # noqa: PLR2004
         cb.assert_not_called()
+
+
+# ===========================================================================
+# Per-utterance trace ID (Ring 6 — Mission §2.6 / §9.4.6)
+# ===========================================================================
+
+
+class TestUtteranceTraceId:
+    """Mission §2.6 Ring 6 contract — every event in the wake → STT →
+    LLM → TTS chain stamps the same UUID4 trace id minted at the
+    utterance boundary, the orchestrator clears the trace at every
+    terminal back-to-IDLE transition, and barge-in mints a fresh trace
+    for the interrupting recording.
+
+    Closes audit Gap 3 (per-utterance trace ID at 0% adoption).
+    """
+
+    @pytest.mark.asyncio
+    async def test_idle_pipeline_has_empty_trace_id(self) -> None:
+        """Trace id is empty between utterances by construction."""
+        pipeline, _refs = _make_pipeline()
+        await pipeline.start()
+        assert pipeline.current_utterance_id == ""
+
+    @pytest.mark.asyncio
+    async def test_wake_word_mints_trace_id(self) -> None:
+        """Wake-word fire mints a non-empty UUID4 visible on the public
+        accessor and stamped on both head events (WakeWordDetectedEvent
+        + SpeechStartedEvent) with byte-for-byte equality."""
+        pipeline, refs = _make_pipeline(vad_speech=True, ww_detected=True)
+        await pipeline.start()
+
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
+            await pipeline.feed_frame(_speech_frame())
+
+        utterance_id = pipeline.current_utterance_id
+        assert utterance_id != ""
+        # UUID4 canonical 36-char form — `mint_utterance_id` uses
+        # str(uuid.uuid4()), so the format is fixed.
+        assert len(utterance_id) == 36  # noqa: PLR2004
+        assert utterance_id.count("-") == 4  # noqa: PLR2004
+
+        events = [call.args[0] for call in refs["bus"].emit.call_args_list]
+        wake_events = [e for e in events if isinstance(e, WakeWordDetectedEvent)]
+        speech_started_events = [e for e in events if isinstance(e, SpeechStartedEvent)]
+        assert len(wake_events) == 1
+        assert len(speech_started_events) == 1
+        assert wake_events[0].utterance_id == utterance_id
+        assert speech_started_events[0].utterance_id == utterance_id
+
+    @pytest.mark.asyncio
+    async def test_full_wake_cycle_carries_single_trace_id(self) -> None:
+        """One wake → one STT → one TTS playback all stamp the SAME
+        trace id. Mission §9.4.6 acceptance gate: the dashboard can
+        join the full per-turn span set on a single utterance_id."""
+        pipeline, refs = _make_pipeline(vad_speech=True, ww_detected=True, stt_text="hello")
+        await pipeline.start()
+
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
+            await pipeline.feed_frame(_speech_frame())
+        await pipeline.feed_frame(_speech_frame())
+
+        refs["vad"].process_frame.return_value = _vad_event(False)
+        for _ in range(3):
+            await pipeline.feed_frame(_silence_frame())
+
+        # The wake-word path's id is what every emission until TTS
+        # completion should carry.
+        events = [call.args[0] for call in refs["bus"].emit.call_args_list]
+        trace_ids = {
+            getattr(e, "utterance_id", None)
+            for e in events
+            if isinstance(
+                e,
+                (
+                    WakeWordDetectedEvent,
+                    SpeechStartedEvent,
+                    SpeechEndedEvent,
+                    TranscriptionCompletedEvent,
+                ),
+            )
+        }
+        # One utterance ⇒ one trace id covering all 4 head/middle events.
+        assert len(trace_ids) == 1
+        the_id = trace_ids.pop()
+        assert the_id is not None
+        assert the_id != ""
+        assert len(the_id) == 36  # noqa: PLR2004
+
+    @pytest.mark.asyncio
+    async def test_tts_completed_clears_trace_id(self) -> None:
+        """After speak() returns, the trace id is back to ``""`` so
+        the next utterance is guaranteed a fresh mint."""
+        pipeline, refs = _make_pipeline(wake_word_enabled=False)
+        await pipeline.start()
+
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
+            await pipeline.speak("hello")
+
+        assert pipeline.current_utterance_id == ""
+        events = [call.args[0] for call in refs["bus"].emit.call_args_list]
+        tts_started = [e for e in events if isinstance(e, TTSStartedEvent)]
+        tts_completed = [e for e in events if isinstance(e, TTSCompletedEvent)]
+        assert len(tts_started) == 1
+        assert len(tts_completed) == 1
+        # External speak() mints its own trace id since no wake came
+        # before it; both events carry the same id.
+        assert tts_started[0].utterance_id != ""
+        assert tts_started[0].utterance_id == tts_completed[0].utterance_id
+
+    @pytest.mark.asyncio
+    async def test_sequential_utterances_get_distinct_trace_ids(self) -> None:
+        """Two consecutive proactive ``speak`` calls mint two different
+        UUIDs — collision would mean the clear-on-IDLE step never
+        ran or the mint helper is non-pure."""
+        pipeline, _refs = _make_pipeline(wake_word_enabled=False)
+        await pipeline.start()
+
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
+            await pipeline.speak("hello")
+            first_id_after = pipeline.current_utterance_id  # cleared
+            await pipeline.speak("again")
+            second_id_after = pipeline.current_utterance_id  # cleared
+
+        # Both should be cleared post-completion.
+        assert first_id_after == ""
+        assert second_id_after == ""
+        # The actual ids on the wire must differ — otherwise the dashboard
+        # cannot distinguish two turns.
+        bus = pipeline._event_bus  # noqa: SLF001 — test-only
+        assert bus is not None
+        events = [call.args[0] for call in bus.emit.call_args_list]
+        tts_completed = [e for e in events if isinstance(e, TTSCompletedEvent)]
+        assert len(tts_completed) == 2  # noqa: PLR2004
+        assert tts_completed[0].utterance_id != tts_completed[1].utterance_id
+
+    @pytest.mark.asyncio
+    async def test_no_wake_recording_path_mints_trace_id(self) -> None:
+        """``_transition_to_recording`` (continuous-listen path with
+        ``wake_word_enabled=False``) is the head of the trace and
+        must mint when invoked without a prior id."""
+        pipeline, refs = _make_pipeline(wake_word_enabled=False, vad_speech=True, stt_text="hi")
+        await pipeline.start()
+
+        # IDLE → speech detected → straight into RECORDING (no wake gate).
+        await pipeline.feed_frame(_speech_frame())
+
+        utterance_id = pipeline.current_utterance_id
+        assert utterance_id != ""
+        events = [call.args[0] for call in refs["bus"].emit.call_args_list]
+        # No WakeWordDetectedEvent in the no-wake path; SpeechStarted
+        # is the head and must carry the trace.
+        wake_events = [e for e in events if isinstance(e, WakeWordDetectedEvent)]
+        assert wake_events == []
+        speech_started = [e for e in events if isinstance(e, SpeechStartedEvent)]
+        assert len(speech_started) == 1
+        assert speech_started[0].utterance_id == utterance_id
+
+    @pytest.mark.asyncio
+    async def test_stt_error_clears_trace_id(self) -> None:
+        """STT failure path clears the trace id on the IDLE return so
+        the next utterance is guaranteed a fresh mint, and the
+        PipelineErrorEvent stamps the failed utterance's id for
+        post-incident attribution."""
+        pipeline, refs = _make_pipeline(vad_speech=True, ww_detected=True, stt_text="hi")
+        refs["stt"].transcribe.side_effect = RuntimeError("ONNX exploded")
+        await pipeline.start()
+
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
+            await pipeline.feed_frame(_speech_frame())
+        await pipeline.feed_frame(_speech_frame())
+        # Snapshot the trace id before silence triggers _end_recording.
+        in_flight_id = pipeline.current_utterance_id
+        assert in_flight_id != ""
+
+        refs["vad"].process_frame.return_value = _vad_event(False)
+        for _ in range(3):
+            await pipeline.feed_frame(_silence_frame())
+
+        # IDLE return cleared the id.
+        assert pipeline.current_utterance_id == ""
+        events = [call.args[0] for call in refs["bus"].emit.call_args_list]
+        errors = [e for e in events if isinstance(e, PipelineErrorEvent)]
+        assert len(errors) == 1
+        assert errors[0].utterance_id == in_flight_id
+
+    @pytest.mark.asyncio
+    async def test_empty_transcription_clears_trace_id(self) -> None:
+        """STT returning an empty transcript still routes the IDLE
+        return through ``_clear_utterance_id`` (regression guard for
+        the silent-return code path)."""
+        pipeline, refs = _make_pipeline(vad_speech=True, ww_detected=True, stt_text="")
+        await pipeline.start()
+
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
+            await pipeline.feed_frame(_speech_frame())
+        await pipeline.feed_frame(_speech_frame())
+        refs["vad"].process_frame.return_value = _vad_event(False)
+        for _ in range(3):
+            await pipeline.feed_frame(_silence_frame())
+
+        assert pipeline.current_utterance_id == ""
+
+    @pytest.mark.asyncio
+    async def test_existing_id_preserved_on_speak_after_wake(self) -> None:
+        """When a wake-word path has already minted an id and the
+        cognitive layer then calls ``speak`` to respond, the same id
+        is reused — wake → STT → think → speak is one logical
+        utterance, not two."""
+        cb = AsyncMock()
+        pipeline, refs = _make_pipeline(
+            vad_speech=True, ww_detected=True, stt_text="hi", on_perception=cb
+        )
+        await pipeline.start()
+
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
+            await pipeline.feed_frame(_speech_frame())
+        await pipeline.feed_frame(_speech_frame())
+        refs["vad"].process_frame.return_value = _vad_event(False)
+        for _ in range(3):
+            await pipeline.feed_frame(_silence_frame())
+
+        # After STT completes the pipeline is in THINKING with the
+        # wake-minted id still set.
+        wake_minted_id = pipeline.current_utterance_id
+        assert wake_minted_id != ""
+
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
+            await pipeline.speak("the answer")
+
+        events = [call.args[0] for call in refs["bus"].emit.call_args_list]
+        tts_started = [e for e in events if isinstance(e, TTSStartedEvent)]
+        assert len(tts_started) == 1
+        # Same id as the wake mint — single trace covers the entire turn.
+        assert tts_started[0].utterance_id == wake_minted_id
+        # Cleared on TTS completion.
+        assert pipeline.current_utterance_id == ""
+
+    def test_mint_helper_is_pure_uuid4(self) -> None:
+        """Two consecutive mints produce different ids (UUID4 entropy
+        contract). Guards against an accidental constant mint that
+        would silently map every utterance to the same trace."""
+        pipeline, _refs = _make_pipeline()
+        first = pipeline._mint_new_utterance_id()  # noqa: SLF001 — test-only
+        second = pipeline._mint_new_utterance_id()  # noqa: SLF001 — test-only
+        assert first != second
+        assert len(first) == 36  # noqa: PLR2004
+        assert len(second) == 36  # noqa: PLR2004
+
+    def test_clear_helper_is_idempotent(self) -> None:
+        """Calling ``_clear_utterance_id`` when already empty is a
+        no-op — guards against AttributeError on double-clear paths
+        (stop() during cleanup, error handler entered twice)."""
+        pipeline, _refs = _make_pipeline()
+        assert pipeline.current_utterance_id == ""
+        pipeline._clear_utterance_id()  # noqa: SLF001 — test-only
+        assert pipeline.current_utterance_id == ""
+        pipeline._clear_utterance_id()  # noqa: SLF001 — test-only
+        assert pipeline.current_utterance_id == ""

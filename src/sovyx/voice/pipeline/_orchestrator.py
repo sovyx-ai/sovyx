@@ -12,6 +12,7 @@ from sovyx.observability.logging import get_logger
 from sovyx.observability.saga import SagaHandle, begin_saga, end_saga
 from sovyx.observability.tasks import spawn
 from sovyx.voice._chaos import ChaosInjector, ChaosSite
+from sovyx.voice._observability_pii import mint_utterance_id
 from sovyx.voice.health._metrics import record_time_to_first_utterance
 from sovyx.voice.health.contract import BypassVerdict
 from sovyx.voice.jarvis import JarvisConfig, JarvisIllusion, split_at_boundaries
@@ -385,6 +386,21 @@ class VoicePipeline:
         # rotation so dashboards can attribute over time.
         self._false_wake_rejected_count: int = 0
 
+        # ── Per-utterance trace ID (Ring 6 trace contract) ──────────
+        #
+        # Mission §2.6 / §9.4.6 — every event in the capture → VAD →
+        # STT → LLM → TTS chain stamps the same UUID4 so dashboards
+        # and log search reconstruct the full per-turn span set with
+        # one filter. Minted at every utterance boundary (wake-word
+        # fire, no-wake recording start, external proactive ``speak``)
+        # via :func:`_mint_new_utterance_id`; cleared at every
+        # terminal transition back to IDLE via
+        # :func:`_clear_utterance_id`. Empty string between
+        # utterances — the empty-default contract on the event
+        # dataclasses keeps tests and legacy bridges that construct
+        # events without a trace context working unchanged.
+        self._current_utterance_id: str = ""
+
     # -- State property + saga lifecycle ------------------------------------
 
     @property
@@ -528,6 +544,48 @@ class VoicePipeline:
         WARN events for the per-rejection trace."""
         return self._false_wake_rejected_count
 
+    @property
+    def current_utterance_id(self) -> str:
+        """Trace ID of the in-flight utterance, or ``""`` between turns.
+
+        Read-only accessor for downstream components (LLM router, TTS
+        engine, observability bridges) that want to stamp the same
+        trace context on their own structured logs / spans without
+        re-deriving it. Empty string when the pipeline is IDLE — by
+        construction, the orchestrator clears the field at every
+        terminal back-to-IDLE transition.
+        """
+        return self._current_utterance_id
+
+    # -- Per-utterance trace ID (Ring 6 trace contract) ----------------------
+
+    def _mint_new_utterance_id(self) -> str:
+        """Mint a fresh UUID4 for the next utterance and stash it.
+
+        Called at every utterance boundary (wake-word detected,
+        no-wake recording start, external ``speak`` without prior
+        context). Safe to call when an id is already set — the new
+        one replaces the previous (covers the barge-in path where
+        the prior utterance is being torn down at the same moment
+        the new one starts). Returns the minted id for the caller's
+        immediate use (event stamping, log emission), avoiding a
+        second attribute read on the hot path.
+        """
+        new_id = mint_utterance_id()
+        self._current_utterance_id = new_id
+        return new_id
+
+    def _clear_utterance_id(self) -> None:
+        """Reset the current utterance id back to the empty sentinel.
+
+        Called at every terminal back-to-IDLE transition (TTS
+        completed, error path, false-wake rejection, empty
+        transcription) so the next utterance is guaranteed a fresh
+        mint instead of re-using the prior trace. Idempotent —
+        safe to call when already empty.
+        """
+        self._current_utterance_id = ""
+
     # -- Lifecycle -----------------------------------------------------------
 
     async def start(self) -> None:
@@ -668,14 +726,35 @@ class VoicePipeline:
         if ww_event.detected:
             self._state = VoicePipelineState.WAKE_DETECTED
             self._wake_detected_monotonic = time.monotonic()
-            await self._emit(WakeWordDetectedEvent(mind_id=self._config.mind_id))
-            logger.info("Wake word detected", mind_id=self._config.mind_id)
+            # Mission §2.6 Ring 6 — mint trace id BEFORE the first
+            # event so WakeWordDetectedEvent is the head of the
+            # per-utterance span set. Every downstream emission
+            # (SpeechStarted, SpeechEnded, TranscriptionCompleted,
+            # TTSStarted, TTSCompleted) stamps the same id until
+            # _clear_utterance_id resets at the IDLE return.
+            utterance_id = self._mint_new_utterance_id()
+            await self._emit(
+                WakeWordDetectedEvent(
+                    mind_id=self._config.mind_id,
+                    utterance_id=utterance_id,
+                )
+            )
+            logger.info(
+                "Wake word detected",
+                mind_id=self._config.mind_id,
+                **{"voice.utterance_id": utterance_id},
+            )
 
             # Play confirmation beep
             if self._config.confirmation_tone == "beep":
                 await self._jarvis.play_beep(self._output)
 
-            await self._emit(SpeechStartedEvent(mind_id=self._config.mind_id))
+            await self._emit(
+                SpeechStartedEvent(
+                    mind_id=self._config.mind_id,
+                    utterance_id=utterance_id,
+                )
+            )
             if self._wake_detected_monotonic is not None:
                 ttfu_ms = (time.monotonic() - self._wake_detected_monotonic) * 1000.0
                 record_time_to_first_utterance(duration_ms=ttfu_ms)
@@ -745,9 +824,24 @@ class VoicePipeline:
             # filler + self-feedback gate, all under a single Lock
             # so concurrent barge-ins serialise. Per-step verdicts
             # surface on ``voice.tts.cancellation_chain``.
+            #
+            # Snapshot the trace id BEFORE the cancellation chain
+            # because the next recording (transition_to_recording
+            # below) will mint a fresh id; the BargeIn event needs to
+            # stamp the *interrupted* utterance, not the new one.
+            interrupted_utterance_id = self._current_utterance_id
             await self.cancel_speech_chain(reason="barge_in")
-            await self._emit(BargeInEvent(mind_id=self._config.mind_id))
-            logger.info("Barge-in detected", mind_id=self._config.mind_id)
+            await self._emit(
+                BargeInEvent(
+                    mind_id=self._config.mind_id,
+                    utterance_id=interrupted_utterance_id,
+                )
+            )
+            logger.info(
+                "Barge-in detected",
+                mind_id=self._config.mind_id,
+                **{"voice.utterance_id": interrupted_utterance_id},
+            )
             logger.warning(
                 "voice.barge_in.detected",
                 **{
@@ -756,16 +850,28 @@ class VoicePipeline:
                     "voice.prob": round(float(vad_event.probability), 3),
                     "voice.threshold_frames": self._config.barge_in_threshold,
                     "voice.output_was_playing": True,
+                    "voice.utterance_id": interrupted_utterance_id,
                 },
             )
+            # Clear the interrupted id so _transition_to_recording
+            # mints fresh for the new utterance instead of inheriting
+            # the cancelled one.
+            self._clear_utterance_id()
             return await self._transition_to_recording(frame)
 
         if not self._output.is_playing:
             # Playback finished
+            completed_utterance_id = self._current_utterance_id
             self._state = VoicePipelineState.IDLE
             if self._self_feedback_gate is not None:
                 self._self_feedback_gate.on_tts_end()
-            await self._emit(TTSCompletedEvent(mind_id=self._config.mind_id))
+            await self._emit(
+                TTSCompletedEvent(
+                    mind_id=self._config.mind_id,
+                    utterance_id=completed_utterance_id,
+                )
+            )
+            self._clear_utterance_id()
             return {"state": "IDLE", "event": "tts_completed"}
 
         return {"state": "SPEAKING"}
@@ -781,12 +887,29 @@ class VoicePipeline:
         self._utterance_frames = [frame]
         self._silence_counter = 0
         self._recording_counter = 1
+        # Mission §2.6 Ring 6 — covers two paths:
+        #   1. wake-word disabled (continuous listen) — no prior mint,
+        #      so this is the head of the trace.
+        #   2. barge-in replay — the previous utterance's id was just
+        #      cleared by cancel_speech_chain, so a fresh id is the
+        #      head of the *next* utterance's trace.
+        # Either way an empty id at this point means "new utterance
+        # boundary"; an already-set id means "wake-word path already
+        # minted" and we keep that one (wake → recording is a single
+        # logical utterance).
+        utterance_id = self._current_utterance_id or self._mint_new_utterance_id()
         logger.info(
             "voice_recording_started",
             mind_id=self._config.mind_id,
             wake_word_enabled=self._config.wake_word_enabled,
+            **{"voice.utterance_id": utterance_id},
         )
-        await self._emit(SpeechStartedEvent(mind_id=self._config.mind_id))
+        await self._emit(
+            SpeechStartedEvent(
+                mind_id=self._config.mind_id,
+                utterance_id=utterance_id,
+            )
+        )
         return {"state": "RECORDING", "event": "barge_in_recording"}
 
     async def _end_recording(self) -> dict[str, Any]:
@@ -794,9 +917,11 @@ class VoicePipeline:
         import numpy as np
 
         self._state = VoicePipelineState.TRANSCRIBING
+        utterance_id = self._current_utterance_id
 
         # Concatenate all frames
         if not self._utterance_frames:
+            self._clear_utterance_id()
             self._state = VoicePipelineState.IDLE
             return {"state": "IDLE", "event": "empty_recording"}
 
@@ -809,11 +934,13 @@ class VoicePipeline:
             frames=self._recording_counter,
             duration_ms=round(duration_ms, 1),
             silence_counter=self._silence_counter,
+            **{"voice.utterance_id": utterance_id},
         )
         await self._emit(
             SpeechEndedEvent(
                 mind_id=self._config.mind_id,
                 duration_ms=duration_ms,
+                utterance_id=utterance_id,
             )
         )
         self._utterance_frames.clear()
@@ -828,13 +955,20 @@ class VoicePipeline:
             # on-device backends (Moonshine). OSError: audio-device /
             # temp-file I/O. The pipeline transitions to IDLE so a
             # single bad utterance doesn't wedge the loop.
-            logger.error("STT failed", error=str(exc), exc_info=True)
+            logger.error(
+                "STT failed",
+                error=str(exc),
+                exc_info=True,
+                **{"voice.utterance_id": utterance_id},
+            )
             await self._emit(
                 PipelineErrorEvent(
                     mind_id=self._config.mind_id,
                     error=f"STT failed: {exc}",
+                    utterance_id=utterance_id,
                 )
             )
+            self._clear_utterance_id()
             self._state = VoicePipelineState.IDLE
             return {"state": "IDLE", "event": "stt_error", "error": str(exc)}
 
@@ -847,6 +981,7 @@ class VoicePipeline:
             has_text=bool(result.text.strip()),
             language=result.language,
             latency_ms=round(latency_ms, 1),
+            **{"voice.utterance_id": utterance_id},
         )
         await self._emit(
             TranscriptionCompletedEvent(
@@ -854,6 +989,7 @@ class VoicePipeline:
                 confidence=result.confidence,
                 language=result.language,
                 latency_ms=latency_ms,
+                utterance_id=utterance_id,
             )
         )
 
@@ -872,16 +1008,22 @@ class VoicePipeline:
                         "voice.rejection_reason": rejection_reason,
                         "voice.latency_ms": round(latency_ms, 1),
                         "voice.confidence": result.confidence,
+                        "voice.utterance_id": utterance_id,
                         "voice.action_required": ("user_did_not_get_a_response_check_stt_health"),
                     },
                 )
+                self._clear_utterance_id()
                 self._state = VoicePipelineState.IDLE
                 return {
                     "state": "IDLE",
                     "event": "transcription_dropped",
                     "rejection_reason": rejection_reason,
                 }
-            logger.debug("Empty transcription — discarding")
+            logger.debug(
+                "Empty transcription — discarding",
+                **{"voice.utterance_id": utterance_id},
+            )
+            self._clear_utterance_id()
             self._state = VoicePipelineState.IDLE
             return {"state": "IDLE", "event": "empty_transcription"}
 
@@ -911,6 +1053,7 @@ class VoicePipeline:
                     "voice.text_length": len(result.text),
                     "voice.lifetime_rejected_count": self._false_wake_rejected_count,
                     "voice.latency_ms": round(latency_ms, 1),
+                    "voice.utterance_id": utterance_id,
                     "voice.action_required": (
                         "Wake-word triggered but the resulting transcription "
                         "had sub-threshold confidence — most likely a false "
@@ -922,6 +1065,7 @@ class VoicePipeline:
                     ),
                 },
             )
+            self._clear_utterance_id()
             self._state = VoicePipelineState.IDLE
             return {
                 "state": "IDLE",
@@ -937,11 +1081,16 @@ class VoicePipeline:
                 "voice_perception_invoked",
                 mind_id=self._config.mind_id,
                 text_length=len(result.text),
+                **{"voice.utterance_id": utterance_id},
             )
             try:
                 await self._on_perception(result.text, self._config.mind_id)
             except Exception as exc:  # noqa: BLE001 — perception callback isolation
-                logger.error("Perception callback failed", error=str(exc))
+                logger.error(
+                    "Perception callback failed",
+                    error=str(exc),
+                    **{"voice.utterance_id": utterance_id},
+                )
         else:
             # No callback wired — transcription has nowhere to go. This
             # is the "voice enabled but cognitive loop not registered"
@@ -951,6 +1100,7 @@ class VoicePipeline:
                 "voice_perception_skipped_no_callback",
                 mind_id=self._config.mind_id,
                 text_length=len(result.text),
+                **{"voice.utterance_id": utterance_id},
             )
 
         return {
@@ -972,7 +1122,18 @@ class VoicePipeline:
         self._state = VoicePipelineState.SPEAKING
         if self._self_feedback_gate is not None:
             self._self_feedback_gate.on_tts_start()
-        await self._emit(TTSStartedEvent(mind_id=self._config.mind_id))
+        # External proactive ``speak`` (e.g. cognitive layer's
+        # initiative) without a preceding wake/recording mints its
+        # own trace id so dashboards still get a per-turn span set;
+        # an existing id from the wake → STT → think chain is
+        # preserved (single logical utterance).
+        utterance_id = self._current_utterance_id or self._mint_new_utterance_id()
+        await self._emit(
+            TTSStartedEvent(
+                mind_id=self._config.mind_id,
+                utterance_id=utterance_id,
+            )
+        )
 
         try:
             chunk = await self._synthesize_tracked(text)
@@ -982,18 +1143,30 @@ class VoicePipeline:
             # failure profile as STT — typed subsystem errors, ONNX
             # runtime failures, and I/O. Emit a pipeline error event
             # so the cognitive loop knows the utterance didn't speak.
-            logger.error("TTS failed", error=str(exc), exc_info=True)
+            logger.error(
+                "TTS failed",
+                error=str(exc),
+                exc_info=True,
+                **{"voice.utterance_id": utterance_id},
+            )
             await self._emit(
                 PipelineErrorEvent(
                     mind_id=self._config.mind_id,
                     error=f"TTS failed: {exc}",
+                    utterance_id=utterance_id,
                 )
             )
         finally:
             self._state = VoicePipelineState.IDLE
             if self._self_feedback_gate is not None:
                 self._self_feedback_gate.on_tts_end()
-            await self._emit(TTSCompletedEvent(mind_id=self._config.mind_id))
+            await self._emit(
+                TTSCompletedEvent(
+                    mind_id=self._config.mind_id,
+                    utterance_id=utterance_id,
+                )
+            )
+            self._clear_utterance_id()
 
     async def stream_text(self, text_chunk: str) -> None:
         """Stream text from LLM to TTS for speculative synthesis.
@@ -1008,7 +1181,18 @@ class VoicePipeline:
             self._state = VoicePipelineState.SPEAKING
             if self._self_feedback_gate is not None:
                 self._self_feedback_gate.on_tts_start()
-            await self._emit(TTSStartedEvent(mind_id=self._config.mind_id))
+            # Streaming path mints a trace id only when the cognitive
+            # layer fed text without a preceding wake/STT chain. The
+            # common path is wake → STT → THINKING → stream_text,
+            # where ``_current_utterance_id`` is already set from
+            # the wake-word mint.
+            utterance_id = self._current_utterance_id or self._mint_new_utterance_id()
+            await self._emit(
+                TTSStartedEvent(
+                    mind_id=self._config.mind_id,
+                    utterance_id=utterance_id,
+                )
+            )
 
         # Cancel filler if still pending
         if not self._first_token_event.is_set():
@@ -1078,10 +1262,17 @@ class VoicePipeline:
         # Drain all queued audio
         await self._output.drain()
 
+        completed_utterance_id = self._current_utterance_id
         self._state = VoicePipelineState.IDLE
         if self._self_feedback_gate is not None:
             self._self_feedback_gate.on_tts_end()
-        await self._emit(TTSCompletedEvent(mind_id=self._config.mind_id))
+        await self._emit(
+            TTSCompletedEvent(
+                mind_id=self._config.mind_id,
+                utterance_id=completed_utterance_id,
+            )
+        )
+        self._clear_utterance_id()
 
     async def start_thinking(self) -> None:
         """Start the thinking phase — initiate filler timer.
