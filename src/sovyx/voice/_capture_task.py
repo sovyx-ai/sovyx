@@ -54,6 +54,7 @@ from uuid import uuid4
 from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.observability.logging import get_logger
 from sovyx.observability.tasks import spawn
+from sovyx.voice._agc2 import build_agc2_if_enabled
 from sovyx.voice._frame_normalizer import FrameNormalizer
 from sovyx.voice._stream_opener import _import_sounddevice
 
@@ -1007,9 +1008,19 @@ class AudioCaptureTask:
         self._ensure_endpoint_guid(entry)
         self._allocate_ring_buffer(tuning)
 
+        # F5/F6: AGC2 default-on per VoiceTuningConfig.agc2_enabled
+        # (commit 2e36893). Operators can revert via
+        # SOVYX_TUNING__VOICE__AGC2_ENABLED=false. The factory
+        # returns None when disabled — FrameNormalizer accepts None
+        # as the no-op default so the call site needs no ``if`` branch.
+        _agc2_tuning = self._tuning if self._tuning is not None else _VoiceTuning()
         self._normalizer = FrameNormalizer(
             source_rate=info.sample_rate,
             source_channels=info.channels,
+            agc2=build_agc2_if_enabled(
+                enabled=_agc2_tuning.agc2_enabled,
+                sample_rate=info.sample_rate,
+            ),
         )
         if not self._normalizer.is_passthrough:
             logger.info(
@@ -1357,9 +1368,19 @@ class AudioCaptureTask:
         self._host_api_name = info.host_api
         if entry is not None:
             self._resolved_device_name = entry.name
+        # F5/F6: AGC2 default-on per VoiceTuningConfig.agc2_enabled
+        # (commit 2e36893). Operators can revert via
+        # SOVYX_TUNING__VOICE__AGC2_ENABLED=false. The factory
+        # returns None when disabled — FrameNormalizer accepts None
+        # as the no-op default so the call site needs no ``if`` branch.
+        _agc2_tuning = self._tuning if self._tuning is not None else _VoiceTuning()
         self._normalizer = FrameNormalizer(
             source_rate=info.sample_rate,
             source_channels=info.channels,
+            agc2=build_agc2_if_enabled(
+                enabled=_agc2_tuning.agc2_enabled,
+                sample_rate=info.sample_rate,
+            ),
         )
         # Reset the ring buffer so the bypass coordinator's post-apply
         # integrity probe only sees frames from the reopened stream.
@@ -1448,9 +1469,19 @@ class AudioCaptureTask:
         self._host_api_name = info.host_api
         if entry is not None:
             self._resolved_device_name = entry.name
+        # F5/F6: AGC2 default-on per VoiceTuningConfig.agc2_enabled
+        # (commit 2e36893). Operators can revert via
+        # SOVYX_TUNING__VOICE__AGC2_ENABLED=false. The factory
+        # returns None when disabled — FrameNormalizer accepts None
+        # as the no-op default so the call site needs no ``if`` branch.
+        _agc2_tuning = self._tuning if self._tuning is not None else _VoiceTuning()
         self._normalizer = FrameNormalizer(
             source_rate=info.sample_rate,
             source_channels=info.channels,
+            agc2=build_agc2_if_enabled(
+                enabled=_agc2_tuning.agc2_enabled,
+                sample_rate=info.sample_rate,
+            ),
         )
         # Reset the ring buffer — stale frames from the pre-error stream
         # would mislead any integrity probe issued immediately after the
@@ -1551,9 +1582,19 @@ class AudioCaptureTask:
         self._host_api_name = info.host_api
         if entry is not None:
             self._resolved_device_name = entry.name
+        # F5/F6: AGC2 default-on per VoiceTuningConfig.agc2_enabled
+        # (commit 2e36893). Operators can revert via
+        # SOVYX_TUNING__VOICE__AGC2_ENABLED=false. The factory
+        # returns None when disabled — FrameNormalizer accepts None
+        # as the no-op default so the call site needs no ``if`` branch.
+        _agc2_tuning = self._tuning if self._tuning is not None else _VoiceTuning()
         self._normalizer = FrameNormalizer(
             source_rate=info.sample_rate,
             source_channels=info.channels,
+            agc2=build_agc2_if_enabled(
+                enabled=_agc2_tuning.agc2_enabled,
+                sample_rate=info.sample_rate,
+            ),
         )
         self._allocate_ring_buffer(shared_tuning)
         self._emit_stream_opened(info, apo_bypass_attempted=False)
@@ -1723,9 +1764,19 @@ class AudioCaptureTask:
         self._input_device = info.device_index
         self._host_api_name = info.host_api
         self._resolved_device_name = alsa_entry.name
+        # F5/F6: AGC2 default-on per VoiceTuningConfig.agc2_enabled
+        # (commit 2e36893). Operators can revert via
+        # SOVYX_TUNING__VOICE__AGC2_ENABLED=false. The factory
+        # returns None when disabled — FrameNormalizer accepts None
+        # as the no-op default so the call site needs no ``if`` branch.
+        _agc2_tuning = self._tuning if self._tuning is not None else _VoiceTuning()
         self._normalizer = FrameNormalizer(
             source_rate=info.sample_rate,
             source_channels=info.channels,
+            agc2=build_agc2_if_enabled(
+                enabled=_agc2_tuning.agc2_enabled,
+                sample_rate=info.sample_rate,
+            ),
         )
         self._allocate_ring_buffer(tuning)
         self._emit_stream_opened(info, apo_bypass_attempted=True)
@@ -1906,9 +1957,19 @@ class AudioCaptureTask:
         self._input_device = info.device_index
         self._host_api_name = info.host_api
         self._resolved_device_name = session_entry.name
+        # F5/F6: AGC2 default-on per VoiceTuningConfig.agc2_enabled
+        # (commit 2e36893). Operators can revert via
+        # SOVYX_TUNING__VOICE__AGC2_ENABLED=false. The factory
+        # returns None when disabled — FrameNormalizer accepts None
+        # as the no-op default so the call site needs no ``if`` branch.
+        _agc2_tuning = self._tuning if self._tuning is not None else _VoiceTuning()
         self._normalizer = FrameNormalizer(
             source_rate=info.sample_rate,
             source_channels=info.channels,
+            agc2=build_agc2_if_enabled(
+                enabled=_agc2_tuning.agc2_enabled,
+                sample_rate=info.sample_rate,
+            ),
         )
         self._allocate_ring_buffer(tuning)
         self._emit_stream_opened(info, apo_bypass_attempted=False)
