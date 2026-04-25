@@ -606,6 +606,83 @@ class TestFloat32Input:
 
 
 # ---------------------------------------------------------------------------
+# Mission #40 — strict dtype validation for float32 source format
+# ---------------------------------------------------------------------------
+#
+# Pre-#40 the float32 branch silently coerced ANY dtype via np.asarray.
+# A caller declaring source_format="float32" but actually delivering
+# int16 produced a ~1000× amplified buffer (clipping cascaded into
+# saturation, R2 surfaced the symptom but not the root cause). The
+# strict check makes the contract violation loud (ValueError) so the
+# caller fixes the source rather than chasing downstream symptoms.
+
+
+class TestFloat32SourceDtypeValidationB40:
+    """Mission Appendix A band-aid #40 — float32 source must reject
+    non-float32 dtype inputs at the boundary."""
+
+    def test_int16_input_to_float32_source_rejected(self) -> None:
+        norm = FrameNormalizer(
+            source_rate=48_000,
+            source_channels=1,
+            source_format="float32",
+        )
+        # int16 buffer pretending to be float32 — would silently
+        # produce a 32000× amplified output without the new check.
+        bad_block = np.array([16000, -16000, 8000], dtype=np.int16)
+        with pytest.raises(ValueError, match="float32 source requires"):
+            norm.push(bad_block)
+
+    def test_int32_input_to_float32_source_rejected(self) -> None:
+        norm = FrameNormalizer(
+            source_rate=48_000,
+            source_channels=1,
+            source_format="float32",
+        )
+        bad_block = np.array([1, 2, 3], dtype=np.int32)
+        with pytest.raises(ValueError, match="float32 source requires"):
+            norm.push(bad_block)
+
+    def test_float64_input_to_float32_source_rejected(self) -> None:
+        """Even harmless float64 → float32 narrowing must be explicit
+        — caller should ``.astype(float32)`` before pushing."""
+        norm = FrameNormalizer(
+            source_rate=48_000,
+            source_channels=1,
+            source_format="float32",
+        )
+        bad_block = np.array([0.5, -0.5], dtype=np.float64)
+        with pytest.raises(ValueError, match="float32 source requires"):
+            norm.push(bad_block)
+
+    def test_correct_float32_input_accepted(self) -> None:
+        """Backwards-compat regression — the documented happy path
+        still works after the strict check."""
+        norm = FrameNormalizer(
+            source_rate=16_000,
+            source_channels=1,
+            source_format="float32",
+        )
+        good_block = np.zeros(512, dtype=np.float32)
+        windows = norm.push(good_block)
+        assert len(windows) == 1
+        assert windows[0].shape == (512,)
+        assert windows[0].dtype == np.int16
+
+    def test_error_message_names_alternative_formats(self) -> None:
+        """Error message must point caller at the fix path."""
+        norm = FrameNormalizer(
+            source_rate=48_000,
+            source_channels=1,
+            source_format="float32",
+        )
+        with pytest.raises(ValueError) as exc_info:
+            norm.push(np.array([1, 2], dtype=np.int16))
+        # Caller-actionable hint included.
+        assert "int16" in str(exc_info.value) or "source_format" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
 # source_format validation
 # ---------------------------------------------------------------------------
 

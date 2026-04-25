@@ -606,12 +606,27 @@ class FrameNormalizer:
                 raise ValueError(msg)
             block_f = (block.astype(np.float32) / _INT24_SCALE).astype(np.float32)
         elif self._source_format == "float32":
+            # Mission #40 (Format Validation): pre-hardening this branch
+            # silently coerced ANY dtype to float32 via ``np.asarray``.
+            # A caller declaring ``source_format="float32"`` but actually
+            # delivering int16 would produce a ~1000× amplified buffer
+            # (int16 values like 16000 cast directly to float32 16000.0
+            # instead of being scaled into [-1, 1]) — saturation would
+            # clip the output and R2 would surface the clipping, but the
+            # root-cause "you said float32 but sent int16" would never
+            # surface explicitly. The strict dtype check makes the
+            # contract violation loud (ValueError) so the caller fixes
+            # the source rather than chasing downstream symptoms.
+            if block.dtype != np.float32:
+                msg = (
+                    f"float32 source requires numpy float32 blocks in [-1, 1], "
+                    f"got dtype={block.dtype} — declare the correct source_format "
+                    f"(int16 / int24) or scale the input before push()"
+                )
+                raise ValueError(msg)
             # Cast narrows the numpy-stubs union (int16 | int32 | float32)
             # back to the NDArray[float32] we already know astype produces.
-            block_f = typing.cast(
-                "npt.NDArray[np.float32]",
-                np.asarray(block, dtype=np.float32),
-            )
+            block_f = typing.cast("npt.NDArray[np.float32]", block)
         else:  # int16
             if block.dtype == np.int16:
                 block_f = (block.astype(np.float32) / _INT16_SCALE).astype(np.float32)
