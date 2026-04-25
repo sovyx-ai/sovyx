@@ -75,6 +75,40 @@ selection probability (effectively unbounded variation) without
 the catalog itself becoming a maintenance burden."""
 
 
+# ── Band-aid #46 — false-wake recovery via STT-confidence gate ─────
+#
+# Pre-band-aid #46: any STT result with non-empty text was forwarded
+# to the perception callback, regardless of how confident the engine
+# was. Background noise that pattern-matched the wake-word produced
+# an invocation, then garbled STT output, then an LLM call trying
+# to respond to "kjlsdf askdjf" — a real user-visible UX failure.
+#
+# Defense already in place pre-#46:
+#  * Wake-word two-stage verification (`wake_word.py`) — stage1 +
+#    stage2 thresholds with cooldown.
+#  * STT Ring 4 (S1/S2) — hallucination stoplist + compression-ratio
+#    + logprob reject; surfaces via ``rejection_reason``.
+#
+# Gap: cloud STT engines expose a real per-utterance confidence
+# (averaged logprob, normalised 0-1). When that confidence is low
+# (e.g. < 0.5) but the engine still returned text, it's almost
+# certainly a degenerate transcription that should NOT reach the
+# LLM. The gate is opt-in (default 0.0 = disabled) because
+# Moonshine returns hardcoded fixed values (0.7-0.95) so a non-
+# zero default would be inert there but actively breaking on any
+# engine that returns honest 0-1 confidence.
+#
+# Default: 0.0 (disabled). Operators with a cloud STT (or a Moonshine
+# variant that exposes real confidence) opt-in by setting a non-zero
+# threshold via :attr:`VoicePipelineConfig.false_wake_min_confidence`.
+_FALSE_WAKE_MIN_CONFIDENCE_MAX = 0.99
+"""Hard ceiling on the false-wake confidence threshold. Above 0.99 a
+single near-miss-perfect transcription gets rejected — the user
+just gets ignored on healthy speech. The bound is loose enough
+that any practical opt-in setting (0.3, 0.5, 0.7) is permitted
+while a unit confusion (passing 1.5 thinking "1500ms") loud-fails."""
+
+
 @dataclass(frozen=True, slots=True)
 class VoicePipelineConfig:
     """Configuration for the VoicePipeline orchestrator.
@@ -108,6 +142,15 @@ class VoicePipelineConfig:
         "Let me check...",
         "Sure, let me look into that...",
     )
+    false_wake_min_confidence: float = 0.0
+    """Band-aid #46: minimum STT confidence required to forward a
+    transcription to the perception callback. Below this threshold
+    the recording is treated as a likely false wake (background
+    noise that pattern-matched the wake-word but didn't carry a
+    real command) and the pipeline returns to IDLE without
+    invoking the LLM. Default 0.0 = disabled (no behaviour change
+    pre-adoption); cloud STT users with honest 0-1 confidence opt
+    in by setting 0.3-0.7. Bounded ``[0.0, 0.99]``."""
 
 
 def validate_config(config: VoicePipelineConfig) -> None:
@@ -199,6 +242,18 @@ def validate_config(config: VoicePipelineConfig) -> None:
                 f"string (empty fillers render as silent TTS)"
             )
             raise ValueError(msg)
+
+    # Band-aid #46 — false-wake confidence gate bound. Bound is loose
+    # enough that any practical opt-in setting (0.3, 0.5, 0.7) is
+    # permitted while a unit confusion (passing 1.5) loud-fails.
+    if not (0.0 <= config.false_wake_min_confidence <= _FALSE_WAKE_MIN_CONFIDENCE_MAX):
+        msg = (
+            f"false_wake_min_confidence must be in "
+            f"[0.0, {_FALSE_WAKE_MIN_CONFIDENCE_MAX}] "
+            f"(band-aid #46 false-wake recovery), got "
+            f"{config.false_wake_min_confidence}"
+        )
+        raise ValueError(msg)
 
 
 # ---------------------------------------------------------------------------

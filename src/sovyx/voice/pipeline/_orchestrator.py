@@ -377,6 +377,14 @@ class VoicePipeline:
         self._vad_inference_timeouts: int = 0
         self._last_vad_timeout_warning_monotonic: float | None = None
 
+        # Band-aid #46 — false-wake rejection counter. Lifetime count
+        # of utterances dropped by the STT-confidence gate (visible
+        # via :attr:`false_wake_rejected_count`). Each rejection also
+        # emits a structured ``voice.wake.false_positive_rejected``
+        # WARN — the counter survives WARN suppression / log
+        # rotation so dashboards can attribute over time.
+        self._false_wake_rejected_count: int = 0
+
     # -- State property + saga lifecycle ------------------------------------
 
     @property
@@ -508,6 +516,17 @@ class VoicePipeline:
         session anomaly; pair with ``voice.vad.inference_timeout``
         WARN events for attribution."""
         return self._vad_inference_timeouts
+
+    @property
+    def false_wake_rejected_count(self) -> int:
+        """Lifetime count of utterances rejected by the band-aid #46
+        false-wake confidence gate. Always 0 unless the operator has
+        opted-in by setting :attr:`VoicePipelineConfig.false_wake_min_confidence`
+        to a non-zero threshold. Non-zero means the wake-word stage
+        is firing on noise the STT engine then reported as low-
+        confidence — pair with ``voice.wake.false_positive_rejected``
+        WARN events for the per-rejection trace."""
+        return self._false_wake_rejected_count
 
     # -- Lifecycle -----------------------------------------------------------
 
@@ -865,6 +884,51 @@ class VoicePipeline:
             logger.debug("Empty transcription — discarding")
             self._state = VoicePipelineState.IDLE
             return {"state": "IDLE", "event": "empty_transcription"}
+
+        # Band-aid #46 — false-wake recovery via STT confidence gate.
+        # When ``false_wake_min_confidence`` is opted-in (> 0.0) and
+        # the STT engine returns text BELOW that threshold, treat the
+        # recording as a likely false wake (background noise that
+        # pattern-matched the wake word but didn't carry a real
+        # command). Pre-#46 the orchestrator forwarded ANY non-empty
+        # text to perception → spurious LLM calls trying to respond
+        # to "kjlsdf askdjf". The gate is opt-in (0.0 default = no
+        # behaviour change pre-adoption) because Moonshine returns
+        # hardcoded fixed values (0.7-0.95) that would render any
+        # non-zero default inert there but actively breaking on
+        # cloud STT engines that expose honest 0-1 confidence.
+        if (
+            self._config.false_wake_min_confidence > 0.0
+            and result.confidence < self._config.false_wake_min_confidence
+        ):
+            self._false_wake_rejected_count += 1
+            logger.warning(
+                "voice.wake.false_positive_rejected",
+                **{
+                    "voice.mind_id": self._config.mind_id,
+                    "voice.confidence": round(float(result.confidence), 4),
+                    "voice.threshold": self._config.false_wake_min_confidence,
+                    "voice.text_length": len(result.text),
+                    "voice.lifetime_rejected_count": self._false_wake_rejected_count,
+                    "voice.latency_ms": round(latency_ms, 1),
+                    "voice.action_required": (
+                        "Wake-word triggered but the resulting transcription "
+                        "had sub-threshold confidence — most likely a false "
+                        "positive (noise that pattern-matched the wake word). "
+                        "If real commands are being rejected, lower "
+                        "false_wake_min_confidence; if false wakes still "
+                        "leak through, raise it. Trace: this rejection "
+                        "happened AFTER STT but BEFORE the LLM was called."
+                    ),
+                },
+            )
+            self._state = VoicePipelineState.IDLE
+            return {
+                "state": "IDLE",
+                "event": "false_wake_rejected",
+                "confidence": float(result.confidence),
+                "threshold": self._config.false_wake_min_confidence,
+            }
 
         # Feed perception
         self._state = VoicePipelineState.THINKING

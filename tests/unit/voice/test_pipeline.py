@@ -3404,3 +3404,204 @@ class TestVADInferenceTimeoutGuard:
         # transition to WAKE_DETECTED, the timeout path returned
         # early so state is still IDLE.
         assert pipeline.state == VoicePipelineState.IDLE
+
+
+# ===========================================================================
+# Band-aid #46 — false-wake recovery via STT confidence gate
+# ===========================================================================
+
+
+def _make_pipeline_with_false_wake_threshold(
+    *,
+    threshold: float,
+    stt_text: str = "hey sovyx do something",
+    stt_confidence: float = 0.95,
+    on_perception: AsyncMock | None = None,
+) -> tuple[VoicePipeline, dict[str, Any]]:
+    """Build a pipeline configured with a non-zero false-wake threshold.
+
+    Mirrors `_make_pipeline` but parameterises the band-aid #46 gate
+    AND the STT confidence so tests can drive the gate independently
+    of the default-confidence helper."""
+    config = VoicePipelineConfig(
+        mind_id="test-mind",
+        wake_word_enabled=True,
+        barge_in_enabled=False,
+        fillers_enabled=False,
+        filler_delay_ms=100,
+        silence_frames_end=3,
+        max_recording_frames=10,
+        false_wake_min_confidence=threshold,
+    )
+    vad = _make_vad(speech=True)
+    ww = _make_wake_word(detected=True)
+    stt = _make_stt(text=stt_text, confidence=stt_confidence)
+    tts = _make_tts()
+    bus = _make_event_bus()
+    pipeline = VoicePipeline(
+        config=config,
+        vad=vad,
+        wake_word=ww,
+        stt=stt,
+        tts=tts,
+        event_bus=bus,
+        on_perception=on_perception,
+    )
+    return pipeline, {"vad": vad, "ww": ww, "stt": stt, "tts": tts, "bus": bus, "config": config}
+
+
+class TestFalseWakeRecovery:
+    """Band-aid #46: STT-confidence gate after the wake → speech →
+    transcribe path. When the operator opts-in by setting
+    ``false_wake_min_confidence > 0.0``, transcriptions whose
+    confidence falls below the threshold are dropped — the pipeline
+    returns to IDLE without invoking the perception callback (no
+    spurious LLM call). Default 0.0 = disabled (no behaviour change
+    pre-adoption)."""
+
+    def test_default_threshold_is_zero_disabled(self) -> None:
+        """The factory default leaves the gate off, so existing
+        behaviour is preserved unless the operator opts in."""
+        config = VoicePipelineConfig(mind_id="test-mind")
+        assert config.false_wake_min_confidence == 0.0
+
+    def test_validator_accepts_zero(self) -> None:
+        validate_config(VoicePipelineConfig(false_wake_min_confidence=0.0))
+
+    def test_validator_accepts_typical_opt_in(self) -> None:
+        for v in (0.1, 0.3, 0.5, 0.7, 0.95):
+            validate_config(VoicePipelineConfig(false_wake_min_confidence=v))
+
+    def test_validator_rejects_negative(self) -> None:
+        with pytest.raises(ValueError, match="false_wake_min_confidence"):
+            validate_config(VoicePipelineConfig(false_wake_min_confidence=-0.1))
+
+    def test_validator_rejects_above_ceiling(self) -> None:
+        with pytest.raises(ValueError, match="band-aid #46"):
+            validate_config(VoicePipelineConfig(false_wake_min_confidence=1.0))
+
+    def test_validator_rejects_unit_confusion(self) -> None:
+        """A user passing 50 thinking "50%" must loud-fail."""
+        with pytest.raises(ValueError, match=r"\[0\.0, 0\.99\]"):
+            validate_config(VoicePipelineConfig(false_wake_min_confidence=50.0))
+
+    @pytest.mark.asyncio
+    async def test_default_pipeline_passes_low_confidence(self) -> None:
+        """With the gate disabled (default 0.0), even 0.01 confidence
+        text reaches the perception callback. Regression guard against
+        accidental default activation."""
+        cb = AsyncMock()
+        pipeline, _ = _make_pipeline(
+            vad_speech=True, ww_detected=True, stt_text="hello", on_perception=cb
+        )
+        # Override stt confidence to 0.01 — would be rejected by any
+        # non-zero threshold, must pass with the default 0.0.
+        await pipeline.start()
+        result_obj = MagicMock()
+        result_obj.text = "hello"
+        result_obj.confidence = 0.01
+        result_obj.language = "en"
+        result_obj.rejection_reason = None
+        pipeline._stt.transcribe.return_value = result_obj  # type: ignore[attr-defined]
+
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
+            await pipeline.feed_frame(_speech_frame())
+        await pipeline.feed_frame(_speech_frame())
+        pipeline._vad.process_frame.return_value = _vad_event(False)  # type: ignore[attr-defined]
+        for _ in range(3):
+            await pipeline.feed_frame(_silence_frame())
+        cb.assert_called_once_with("hello", "test-mind")
+        assert pipeline.false_wake_rejected_count == 0
+
+    @pytest.mark.asyncio
+    async def test_below_threshold_rejected_no_perception(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Opt-in threshold 0.5 + STT confidence 0.3 → rejection.
+        Perception NOT called; counter increments; WARN fires with
+        the structured payload operators key on."""
+        cb = AsyncMock()
+        pipeline, _ = _make_pipeline_with_false_wake_threshold(
+            threshold=0.5, stt_text="kjlsdf askdjf", stt_confidence=0.3, on_perception=cb
+        )
+        caplog.set_level(logging.WARNING, logger=_ORCH_LOGGER)
+        await pipeline.start()
+
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
+            await pipeline.feed_frame(_speech_frame())
+        await pipeline.feed_frame(_speech_frame())
+        pipeline._vad.process_frame.return_value = _vad_event(False)  # type: ignore[attr-defined]
+        for _ in range(3):
+            result = await pipeline.feed_frame(_silence_frame())
+
+        assert result["state"] == "IDLE"
+        assert result["event"] == "false_wake_rejected"
+        assert result["confidence"] == 0.3  # noqa: PLR2004
+        assert result["threshold"] == 0.5  # noqa: PLR2004
+        cb.assert_not_called()
+        assert pipeline.false_wake_rejected_count == 1
+        events = _events_of(caplog, "voice.wake.false_positive_rejected")
+        assert len(events) == 1
+        evt = events[0]
+        assert evt["voice.confidence"] == 0.3  # noqa: PLR2004
+        assert evt["voice.threshold"] == 0.5  # noqa: PLR2004
+        assert evt["voice.text_length"] == len("kjlsdf askdjf")
+        assert evt["voice.lifetime_rejected_count"] == 1
+        assert "false positive" in evt["voice.action_required"]
+
+    @pytest.mark.asyncio
+    async def test_above_threshold_passes_perception_invoked(self) -> None:
+        """Opt-in threshold 0.5 + STT confidence 0.7 → passes."""
+        cb = AsyncMock()
+        pipeline, _ = _make_pipeline_with_false_wake_threshold(
+            threshold=0.5, stt_text="real command", stt_confidence=0.7, on_perception=cb
+        )
+        await pipeline.start()
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
+            await pipeline.feed_frame(_speech_frame())
+        await pipeline.feed_frame(_speech_frame())
+        pipeline._vad.process_frame.return_value = _vad_event(False)  # type: ignore[attr-defined]
+        for _ in range(3):
+            await pipeline.feed_frame(_silence_frame())
+        cb.assert_called_once_with("real command", "test-mind")
+        assert pipeline.false_wake_rejected_count == 0
+
+    @pytest.mark.asyncio
+    async def test_at_threshold_inclusive_passes(self) -> None:
+        """STT confidence exactly equal to threshold → passes
+        (gate is strict ``<``, not ``<=``). Documents the choice
+        — equal is good enough."""
+        cb = AsyncMock()
+        pipeline, _ = _make_pipeline_with_false_wake_threshold(
+            threshold=0.5, stt_text="edge case", stt_confidence=0.5, on_perception=cb
+        )
+        await pipeline.start()
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
+            await pipeline.feed_frame(_speech_frame())
+        await pipeline.feed_frame(_speech_frame())
+        pipeline._vad.process_frame.return_value = _vad_event(False)  # type: ignore[attr-defined]
+        for _ in range(3):
+            await pipeline.feed_frame(_silence_frame())
+        cb.assert_called_once()
+        assert pipeline.false_wake_rejected_count == 0
+
+    @pytest.mark.asyncio
+    async def test_counter_accumulates_across_rejections(self) -> None:
+        """Three consecutive low-confidence transcripts → counter == 3."""
+        cb = AsyncMock()
+        pipeline, refs = _make_pipeline_with_false_wake_threshold(
+            threshold=0.5, stt_text="garbage", stt_confidence=0.1, on_perception=cb
+        )
+        await pipeline.start()
+        for _ in range(3):
+            with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
+                await pipeline.feed_frame(_speech_frame())
+            await pipeline.feed_frame(_speech_frame())
+            refs["vad"].process_frame.return_value = _vad_event(False)
+            for _ in range(3):
+                await pipeline.feed_frame(_silence_frame())
+            # Reset VAD to speech for the next wake cycle.
+            refs["vad"].process_frame.return_value = _vad_event(True)
+        assert pipeline.false_wake_rejected_count == 3  # noqa: PLR2004
+        cb.assert_not_called()
