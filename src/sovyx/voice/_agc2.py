@@ -480,4 +480,54 @@ class AGC2:
         return min(gain_db, max_safe_db)
 
 
-__all__ = ["AGC2", "AGC2Config"]
+def build_agc2_if_enabled(
+    *,
+    enabled: bool,
+    sample_rate: int = 16_000,
+) -> AGC2 | None:
+    """Construct an :class:`AGC2` if ``enabled``, else return ``None``.
+
+    Centralised factory consulted by every FrameNormalizer
+    construction site that wants to honour the
+    ``EngineConfig.tuning.voice.agc2_enabled`` flag (default
+    True since the F5/F6 promotion in
+    :mod:`sovyx.engine.config`).
+
+    Returning ``None`` is the explicit "AGC2 disabled" signal —
+    FrameNormalizer's ``agc2`` constructor argument accepts None
+    as the no-op default, so this factory's output drops directly
+    into the constructor without an ``if`` branch at the call
+    site::
+
+        normalizer = FrameNormalizer(
+            source_rate=info.sample_rate,
+            source_channels=info.channels,
+            agc2=build_agc2_if_enabled(
+                enabled=tuning.agc2_enabled,
+                sample_rate=info.sample_rate,
+            ),
+        )
+
+    Args:
+        enabled: Read straight from
+            :attr:`VoiceTuningConfig.agc2_enabled`. When False,
+            this returns None and the FrameNormalizer's
+            non-passthrough path stays in its pre-F5 behaviour
+            (no in-process gain control).
+        sample_rate: Audio sample rate the FrameNormalizer will
+            operate at. Passed into the AGC2 config so the
+            slew-rate calculations use the right frame-duration
+            denominator. Bounded to AGC2Config's [8000, 48000]
+            range.
+
+    Returns:
+        Configured :class:`AGC2` instance, or ``None`` if
+        ``enabled=False``.
+    """
+    if not enabled:
+        return None
+    cfg = AGC2Config(sample_rate=sample_rate)
+    return AGC2(cfg)
+
+
+__all__ = ["AGC2", "AGC2Config", "build_agc2_if_enabled"]

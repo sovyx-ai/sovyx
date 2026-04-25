@@ -242,6 +242,34 @@ class VoiceTuningConfig(BaseSettings):
     # never auto-retry. The retry attempt is one-shot per pipeline
     # session: if exclusive also fails, we do not oscillate.
     voice_clarity_autofix: bool = True
+    agc2_enabled: bool = True
+    """F5/F6 — promote AGC2 from opt-in (introduced 2026-04-25) to
+    default-on. AGC2 is the in-process closed-loop digital gain
+    controller that replaces the legacy ``apply_mixer_boost_up``
+    band-aid mixer-fractions path on Linux attenuated-mic
+    hardware. With ``agc2_enabled=True`` (the default since this
+    promotion), every FrameNormalizer constructed by the capture
+    task gets an AGC2 attached on its non-passthrough path; the
+    passthrough fast-path stays bit-exact (operators rely on that
+    for A/B comparisons + golden-recording playback).
+
+    Set to ``False`` (or
+    ``SOVYX_TUNING__VOICE__AGC2_ENABLED=false``) to revert to the
+    pre-F5 behaviour: no in-process gain control, signal flows
+    untouched through the cascade. Useful for users on hardware
+    where the OS / mixer chain already delivers correctly-levelled
+    audio + the AGC2 overhead is unnecessary, OR for A/B testing
+    AGC2 vs raw signal during pilots.
+
+    Risk profile of default-on: AGC2 has slew-rate limiting
+    (default 6 dB/sec, perceptually transparent), saturation
+    protector (post-gain peak clamped 1 LSB below int16 rail),
+    and silence-floor gating (estimator only updates above
+    -60 dBFS so noise floor doesn't pump up). In steady state
+    with healthy input, AGC2 stays near 0 dB gain and is a
+    no-op. Bad-case behaviour is bounded by the [min_gain_db,
+    max_gain_db] config — default [-10, 30] dB.
+    """
     deaf_warnings_before_exclusive_retry: int = Field(default=2, ge=1, le=20)
     """Mission #11: floor 1 ensures the auto-bypass eventually fires
     (zero would disable it entirely, defeating the autofix feature);

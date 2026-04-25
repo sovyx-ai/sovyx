@@ -402,4 +402,66 @@ class TestPublicSurface:
     def test_all_exports(self) -> None:
         from sovyx.voice import _agc2 as mod
 
-        assert set(mod.__all__) == {"AGC2", "AGC2Config"}
+        assert set(mod.__all__) == {"AGC2", "AGC2Config", "build_agc2_if_enabled"}
+
+
+# ── F5/F6 promotion helper ────────────────────────────────────────
+
+
+class TestBuildAgc2IfEnabled:
+    """build_agc2_if_enabled honours the EngineConfig.tuning.voice.
+    agc2_enabled flag — central factory for the F5→F6 promotion."""
+
+    def test_enabled_returns_agc2_instance(self) -> None:
+        from sovyx.voice._agc2 import AGC2, build_agc2_if_enabled
+
+        agc = build_agc2_if_enabled(enabled=True)
+        assert isinstance(agc, AGC2)
+
+    def test_disabled_returns_none(self) -> None:
+        from sovyx.voice._agc2 import build_agc2_if_enabled
+
+        assert build_agc2_if_enabled(enabled=False) is None
+
+    def test_sample_rate_threaded_into_config(self) -> None:
+        """Sample rate flows into AGC2Config so the slew-rate
+        calculations use the right frame-duration denominator."""
+        from sovyx.voice._agc2 import build_agc2_if_enabled
+
+        agc = build_agc2_if_enabled(enabled=True, sample_rate=48_000)
+        assert agc is not None
+        assert agc.config.sample_rate == 48_000
+
+    def test_default_sample_rate_is_16k(self) -> None:
+        """Default matches the pipeline's invariant 16 kHz target rate."""
+        from sovyx.voice._agc2 import build_agc2_if_enabled
+
+        agc = build_agc2_if_enabled(enabled=True)
+        assert agc is not None
+        assert agc.config.sample_rate == 16_000
+
+
+# ── EngineConfig agc2_enabled default ─────────────────────────────
+
+
+class TestVoiceTuningAgc2Default:
+    """The promotion contract: agc2_enabled default flips from
+    False (pre-F5/F6) to True (post-promotion). This test pins
+    the default so a future regression downgrade surfaces as a
+    test failure."""
+
+    def test_default_is_true(self) -> None:
+        from sovyx.engine.config import VoiceTuningConfig
+
+        # Construct without env override.
+        cfg = VoiceTuningConfig()
+        assert cfg.agc2_enabled is True
+
+    def test_env_override_disables(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from sovyx.engine.config import VoiceTuningConfig
+
+        monkeypatch.setenv("SOVYX_TUNING__VOICE__AGC2_ENABLED", "false")
+        cfg = VoiceTuningConfig()
+        assert cfg.agc2_enabled is False
