@@ -1,10 +1,10 @@
 # ======================================================================
-# Sovyx — Voice Capture Forensic Diagnostic (Windows only)
+# Sovyx -- Voice Capture Forensic Diagnostic (Windows only)
 #
 # Collects every piece of evidence required to determine WHY a microphone
 # passes audio (healthy RMS) but SileroVAD sees silence (probability
 # stuck near zero). The tool is read-only: no registry writes, no
-# service changes. Safe to run as a normal user — HKLM:\SOFTWARE\...
+# service changes. Safe to run as a normal user -- HKLM:\SOFTWARE\...
 # MMDevices is world-readable.
 #
 # OUTPUT (all written under <repo>\tmp\voice-diag\ by default)
@@ -30,7 +30,14 @@ param(
     # read the artifacts directly from the project tree.
     [string]$OutDir  = '',
     [string]$OutJson = '',
-    [string]$OutLog  = ''
+    [string]$OutLog  = '',
+    # V2: opt-in 30s ETW capture (heavy: ~50-200 MB .etl). Requires
+    # admin (wpr.exe). When -CaptureEtwProfile points to an .wprp file
+    # (e.g. microsoft/audio audio.wprp), uses that profile; otherwise
+    # uses GeneralProfile + CPU built-in profiles.
+    [switch]$CaptureEtw,
+    [string]$CaptureEtwProfile = '',
+    [int]$CaptureEtwSeconds = 30
 )
 
 $ErrorActionPreference = 'Continue'
@@ -62,7 +69,7 @@ function Write-Section([string]$title) {
 $Report = [ordered]@{
     schema_version       = 1
     collected_at_utc     = (Get-Date).ToUniversalTime().ToString('o')
-    tool_version         = '2026-04-20'
+    tool_version         = '2026-04-24-v2'
     windows              = $null
     powershell           = $null
     audio_endpoints      = @()
@@ -74,6 +81,17 @@ $Report = [ordered]@{
     sovyx_capture_diag   = $null
     sovyx_config         = $null
     sovyx_data_dir       = $null
+    # V2 (2026-04-24): camadas adicionais para paridade com Linux toolkit.
+    hardware             = $null
+    pnp_audio_devices    = @()
+    hotfixes_recent      = @()
+    audio_services       = @()
+    audio_event_log      = @()
+    apo_dll_resolution   = @()
+    consent_store        = $null
+    defender_exclusions  = $null
+    network_llm          = @()
+    live_captures        = @()
     errors               = @()
 }
 
@@ -116,7 +134,7 @@ $Report.powershell = [ordered]@{
 Write-Section 'Capture endpoints + APO chain (HKLM MMDevices)'
 
 # Catalog of CLSIDs the Sovyx APO detector knows about.
-# Kept in sync with src\sovyx\voice\_apo_detector.py — if this list
+# Kept in sync with src\sovyx\voice\_apo_detector.py -- if this list
 # disagrees with that module in future versions, update both.
 $KnownClsids = @{
     '{62DC1A93-AE24-464C-A43E-452F824C4250}' = 'MS Default Stream FX'
@@ -212,7 +230,7 @@ try {
                     $decoded = Decode-Value $raw
                     $kind = $fxKey.GetValueKind($valName).ToString()
                     $decodedLen = if ($decoded) { $decoded.Length } else { 0 }
-                    # Truncate absurd blobs — we only need the CLSIDs / package names
+                    # Truncate absurd blobs -- we only need the CLSIDs / package names
                     # embedded in the string; anything beyond 4000 chars is raw PCM/DSP
                     # preset data that would bloat the JSON and choke ConvertTo-Json.
                     if ($decodedLen -gt 4000) {
@@ -334,7 +352,7 @@ try {
 # ----------------------------------------------------------------------
 Write-Section 'Capture-side policy flags'
 # Values of interest are inside each endpoint's "Properties" subkey under
-# GUID {1da5d803-d492-4edd-8c23-e0c0ffee7f0e},<pid>  — already read above
+# GUID {1da5d803-d492-4edd-8c23-e0c0ffee7f0e},<pid>  -- already read above
 # as pkey_enable_exclusive_mode / disable_sysfx / enable_sysfx. Expose
 # them in a flat per-device table so the assistant can eyeball values.
 foreach ($e in $Report.audio_endpoints) {
@@ -438,7 +456,7 @@ if ($installedDspHits.Count -gt 0) {
 }
 
 # ----------------------------------------------------------------------
-# 5. PortAudio-level device enumeration — requires Python + sounddevice.
+# 5. PortAudio-level device enumeration -- requires Python + sounddevice.
 #    Uses sovyx's own environment when available so the enumeration
 #    matches what the daemon sees.
 # ----------------------------------------------------------------------
@@ -657,6 +675,496 @@ if (Test-Path $daemonLog) {
         source_path = $daemonLog
     }
     Write-Host ("  (not present) {0}" -f $daemonLog)
+}
+
+# ======================================================================
+# V2 EXTENSIONS (2026-04-24) -- sections 10-15
+#   10. Hardware fingerprint (BIOS/Board/PnP audio devices + DEVPKEYs)
+#   11. Recent KBs + audio services + System event log
+#   12. APO CLSID -> InprocServer32 DLL -> AuthenticodeSignature -> KB
+#   13. ConsentStore (microphone) + Defender exclusions + AppLocker
+#   14. WASAPI exclusive vs shared comparator probe (sounddevice + PaWPatch)
+#   15. Network reachability to LLM endpoints
+# ======================================================================
+
+# ----------------------------------------------------------------------
+# 10. Hardware fingerprint + PnP audio devices
+# ----------------------------------------------------------------------
+Write-Section 'Hardware (BIOS/Board/PnP audio devices)'
+
+try {
+    $bios   = Get-CimInstance Win32_BIOS -ErrorAction Stop
+    $board  = Get-CimInstance Win32_BaseBoard -ErrorAction Stop
+    $sys    = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
+    $Report.hardware = [ordered]@{
+        bios_vendor       = $bios.Manufacturer
+        bios_version      = $bios.SMBIOSBIOSVersion
+        bios_release_date = if ($bios.ReleaseDate) { $bios.ReleaseDate.ToString('o') } else { $null }
+        board_manufacturer= $board.Manufacturer
+        board_product     = $board.Product
+        system_manufacturer = $sys.Manufacturer
+        system_model      = $sys.Model
+        system_total_ram_gb = [math]::Round($sys.TotalPhysicalMemory / 1GB, 2)
+    }
+    Write-Host ("BIOS  : {0} {1}" -f $bios.Manufacturer, $bios.SMBIOSBIOSVersion)
+    Write-Host ("System: {0} / {1}" -f $sys.Manufacturer, $sys.Model)
+} catch {
+    $Report.errors += "hardware_fingerprint_failed: $_"
+    Write-Warning $_
+}
+
+# PnP audio devices (MEDIA + AudioEndpoint + AudioProcessingObject classes).
+# Cross-reference DEVPKEY for driver version + INF + signing date.
+# CRITICAL: anti-pattern #21 (Voice Clarity APO) ships via UBR servicing --
+# the AudioProcessingObject driver date is the smoking gun.
+Write-Host ''
+Write-Host 'PnP audio devices (MEDIA + AudioEndpoint + AudioProcessingObject):'
+try {
+    $pnpDevices = Get-PnpDevice -PresentOnly -Class MEDIA, AudioEndpoint, AudioProcessingObject -ErrorAction Stop
+    foreach ($dev in $pnpDevices) {
+        $row = [ordered]@{
+            instance_id   = $dev.InstanceId
+            class         = $dev.Class
+            friendly_name = $dev.FriendlyName
+            status        = $dev.Status
+            driver_version= $null
+            driver_date   = $null
+            driver_provider = $null
+            driver_inf    = $null
+            location_info = $null
+            bus_reported  = $null
+        }
+        # DEVPKEY queries -- each is one cmdlet call. Slow O(devices*5).
+        try {
+            $props = Get-PnpDeviceProperty -InstanceId $dev.InstanceId -KeyName `
+                'DEVPKEY_Device_DriverVersion','DEVPKEY_Device_DriverDate',`
+                'DEVPKEY_Device_DriverProvider','DEVPKEY_Device_DriverInfPath',`
+                'DEVPKEY_Device_LocationInfo','DEVPKEY_Device_BusReportedDeviceDesc' `
+                -ErrorAction SilentlyContinue
+            foreach ($p in $props) {
+                switch ($p.KeyName) {
+                    'DEVPKEY_Device_DriverVersion'         { $row.driver_version  = $p.Data }
+                    'DEVPKEY_Device_DriverDate'            { $row.driver_date     = if ($p.Data) { $p.Data.ToString('o') } else { $null } }
+                    'DEVPKEY_Device_DriverProvider'        { $row.driver_provider = $p.Data }
+                    'DEVPKEY_Device_DriverInfPath'         { $row.driver_inf      = $p.Data }
+                    'DEVPKEY_Device_LocationInfo'          { $row.location_info   = $p.Data }
+                    'DEVPKEY_Device_BusReportedDeviceDesc' { $row.bus_reported    = $p.Data }
+                }
+            }
+        } catch { }
+        $Report.pnp_audio_devices += $row
+        if ($dev.Class -eq 'AudioProcessingObject') {
+            Write-Host ("  [APO] {0,-50}  {1}  ({2})" -f $dev.FriendlyName, $row.driver_version, $row.driver_date) -ForegroundColor Yellow
+        } else {
+            Write-Host ("  [{0,-12}] {1,-50}  {2}" -f $dev.Class, $dev.FriendlyName, $row.driver_version)
+        }
+    }
+} catch {
+    $Report.errors += "pnp_enum_failed: $_"
+    Write-Warning $_
+}
+
+# ----------------------------------------------------------------------
+# 11. Recent HotFixes + Audio services + System event log audio errors
+# ----------------------------------------------------------------------
+Write-Section 'Windows Updates + Audio services + Event log'
+
+# HotFix history (last 30 by InstalledOn DESC).
+# CRITICAL: Voice Clarity APO arrived as UBR servicing -- the most recent
+# KBs are top suspects for "broke after update" cases.
+try {
+    $hotfixes = Get-HotFix -ErrorAction Stop | Sort-Object InstalledOn -Descending | Select-Object -First 30
+    foreach ($hf in $hotfixes) {
+        $Report.hotfixes_recent += [ordered]@{
+            hotfix_id     = $hf.HotFixID
+            description   = $hf.Description
+            installed_on  = if ($hf.InstalledOn) { $hf.InstalledOn.ToString('o') } else { $null }
+            installed_by  = $hf.InstalledBy
+        }
+    }
+    if ($Report.hotfixes_recent.Count -gt 0) {
+        Write-Host ("Last {0} hotfixes:" -f $Report.hotfixes_recent.Count)
+        foreach ($h in $Report.hotfixes_recent | Select-Object -First 10) {
+            Write-Host ("  {0,-10}  {1,-12}  {2}" -f $h.hotfix_id, $h.description, $h.installed_on)
+        }
+    }
+} catch {
+    $Report.errors += "hotfix_enum_failed: $_"
+    Write-Warning $_
+}
+
+# Audio service state.
+$audioSvcs = @('Audiosrv','AudioEndpointBuilder','MMCSS','RpcSs')
+foreach ($svcName in $audioSvcs) {
+    try {
+        $svc = Get-CimInstance Win32_Service -Filter "Name='$svcName'" -ErrorAction Stop
+        if ($svc) {
+            $Report.audio_services += [ordered]@{
+                name       = $svc.Name
+                state      = $svc.State
+                start_mode = $svc.StartMode
+                pid        = $svc.ProcessId
+                exit_code  = $svc.ExitCode
+                status     = $svc.Status
+            }
+            Write-Host ("  {0,-22}  state={1,-10}  pid={2}" -f $svc.Name, $svc.State, $svc.ProcessId)
+        }
+    } catch { }
+}
+
+# System event log: audio-relevant errors/warnings, last 200.
+Write-Host ''
+Write-Host 'System event log (audio sources, last 200):'
+try {
+    $audioEvents = Get-WinEvent -FilterHashtable @{
+        LogName='System'
+        ProviderName=@(
+            'Microsoft-Windows-Audio',
+            'Microsoft-Windows-AudioCore',
+            'Microsoft-Windows-AudioDeviceGraphIsolation',
+            'Microsoft-Windows-Kernel-PnP'
+        )
+        Level=@(2,3)  # Error + Warning
+    } -MaxEvents 200 -ErrorAction Stop
+    foreach ($ev in $audioEvents) {
+        $Report.audio_event_log += [ordered]@{
+            time          = $ev.TimeCreated.ToString('o')
+            level         = $ev.LevelDisplayName
+            provider      = $ev.ProviderName
+            event_id      = $ev.Id
+            message_head  = if ($ev.Message) {
+                $ev.Message.Substring(0, [Math]::Min($ev.Message.Length, 200))
+            } else { '' }
+        }
+    }
+    Write-Host ("  captured {0} audio-related System events (level=Error|Warning)" -f $Report.audio_event_log.Count)
+} catch {
+    if ($_.Exception.Message -notmatch 'No events were found') {
+        $Report.errors += "audio_event_log_failed: $_"
+        Write-Warning $_
+    } else {
+        Write-Host '  (no audio-relevant errors/warnings in System log)'
+    }
+}
+
+# ----------------------------------------------------------------------
+# 12. APO CLSID -> InprocServer32 DLL -> AuthenticodeSignature -> KB date
+# ----------------------------------------------------------------------
+Write-Section 'APO CLSID -> DLL -> signing -> Windows Update correlation'
+
+# Walk every CLSID we found in section 2 (audio_endpoints[].all_clsids),
+# resolve to the implementing DLL via HKCR\CLSID\<x>\InprocServer32, get
+# AuthenticodeSignature + LastWriteTime, and correlate against HotFix
+# install date to identify the KB that delivered the APO.
+$clsidUniverse = @{}
+foreach ($ep in $Report.audio_endpoints) {
+    foreach ($c in $ep.all_clsids) {
+        $clsidUniverse[$c] = $true
+    }
+}
+foreach ($clsid in $clsidUniverse.Keys) {
+    $regPaths = @(
+        "Registry::HKEY_CLASSES_ROOT\CLSID\$clsid\InprocServer32",
+        "Registry::HKEY_CLASSES_ROOT\WOW6432Node\CLSID\$clsid\InprocServer32"
+    )
+    $dllPath = $null
+    foreach ($rp in $regPaths) {
+        if (Test-Path $rp) {
+            try {
+                $entry = Get-ItemProperty -Path $rp -ErrorAction Stop
+                $dllPath = $entry.'(default)'
+                if (-not $dllPath) { $dllPath = $entry.PSObject.Properties['(Default)'].Value }
+                if ($dllPath) {
+                    # Expand env vars in path (e.g. %SystemRoot%\System32\foo.dll).
+                    $dllPath = [System.Environment]::ExpandEnvironmentVariables($dllPath)
+                    if (Test-Path $dllPath) { break }
+                }
+            } catch { }
+        }
+    }
+    $row = [ordered]@{
+        clsid           = $clsid
+        known_label     = if ($KnownClsids.ContainsKey($clsid)) { $KnownClsids[$clsid] } else { '' }
+        dll_path        = $dllPath
+        dll_exists      = if ($dllPath) { (Test-Path $dllPath) } else { $false }
+        file_version    = $null
+        product_version = $null
+        last_write      = $null
+        signing_status  = $null
+        signing_subject = $null
+        likely_kb       = $null
+    }
+    if ($dllPath -and (Test-Path $dllPath)) {
+        try {
+            $info = Get-Item -Path $dllPath -ErrorAction Stop
+            $row.last_write = $info.LastWriteTime.ToString('o')
+            try {
+                $verInfo = $info.VersionInfo
+                $row.file_version    = $verInfo.FileVersion
+                $row.product_version = $verInfo.ProductVersion
+            } catch { }
+            try {
+                $sig = Get-AuthenticodeSignature -FilePath $dllPath -ErrorAction Stop
+                $row.signing_status  = $sig.Status.ToString()
+                $row.signing_subject = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { $null }
+            } catch { }
+            # Correlate dll LastWriteTime against HotFix InstalledOn -- same
+            # day (within 1 day window) is strong evidence the KB delivered
+            # this DLL.
+            $dllDay = $info.LastWriteTime.Date
+            foreach ($hf in $Report.hotfixes_recent) {
+                if ($hf.installed_on) {
+                    $hfDay = ([DateTime]$hf.installed_on).Date
+                    $delta = ($dllDay - $hfDay).TotalDays
+                    if ([Math]::Abs($delta) -le 1) {
+                        $row.likely_kb = $hf.hotfix_id
+                        break
+                    }
+                }
+            }
+        } catch { }
+    }
+    $Report.apo_dll_resolution += $row
+    $emit = $false
+    if ($row.known_label) { $emit = $true }
+    if ($row.likely_kb)   { $emit = $true }
+    if ($emit) {
+        $dllStr = if ($row.dll_path) { $row.dll_path } else { '(unresolved)' }
+        Write-Host ("  {0}  ->  {1}" -f $clsid, $dllStr)
+        if ($row.known_label)     { Write-Host ("      label: {0}" -f $row.known_label) -ForegroundColor Yellow }
+        if ($row.likely_kb)       { Write-Host ("      KB:    {0} (within 1d of dll mtime)" -f $row.likely_kb) -ForegroundColor Cyan }
+        if ($row.signing_subject) { Write-Host ("      sig:   {0} ({1})" -f $row.signing_status, $row.signing_subject) }
+        if ($row.file_version)    { Write-Host ("      ver:   {0}" -f $row.file_version) }
+    }
+}
+Write-Host ("Resolved {0} CLSIDs (of {1} unique)" -f ($Report.apo_dll_resolution | Where-Object { $_.dll_exists }).Count, $clsidUniverse.Keys.Count)
+
+# ----------------------------------------------------------------------
+# 13. ConsentStore (microphone) + Defender exclusions
+# ----------------------------------------------------------------------
+Write-Section 'Microphone consent + Defender + AppLocker'
+
+# Microphone permission via ConsentStore. Per-app + global kill switch.
+$consentRoots = @(
+    @{ scope = 'user_global';     path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone' },
+    @{ scope = 'machine_global';  path = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone' }
+)
+$consentReport = [ordered]@{
+    user_global_value     = $null
+    machine_global_value  = $null
+    nonpackaged_apps      = @()
+    packaged_apps         = @()
+}
+foreach ($root in $consentRoots) {
+    if (Test-Path $root.path) {
+        try {
+            $rootProps = Get-ItemProperty -Path $root.path -ErrorAction Stop
+            $val = $rootProps.Value
+            if ($root.scope -eq 'user_global')    { $consentReport.user_global_value = $val }
+            if ($root.scope -eq 'machine_global') { $consentReport.machine_global_value = $val }
+            Write-Host ("  {0}: {1}" -f $root.scope, $val)
+        } catch { }
+        # NonPackaged apps subkey enumerates Win32 exes that requested mic.
+        $nonPkg = Join-Path $root.path 'NonPackaged'
+        if (Test-Path $nonPkg) {
+            try {
+                Get-ChildItem -Path $nonPkg -ErrorAction Stop | ForEach-Object {
+                    $appKey = $_
+                    try {
+                        $props = Get-ItemProperty -Path $appKey.PSPath -ErrorAction Stop
+                        $consentReport.nonpackaged_apps += [ordered]@{
+                            scope         = $root.scope
+                            app_path_enc  = $appKey.PSChildName
+                            value         = $props.Value
+                            last_used_us  = $props.LastUsedTimeStart
+                        }
+                    } catch { }
+                }
+            } catch { }
+        }
+    }
+}
+$Report.consent_store = $consentReport
+Write-Host ("  NonPackaged apps with mic consent records: {0}" -f $consentReport.nonpackaged_apps.Count)
+
+# Defender preferences -- exclusions can affect onnxruntime model load
+# (real-time scan stalls). Get-MpPreference is privileged on some builds.
+try {
+    $mp = Get-MpPreference -ErrorAction Stop
+    $Report.defender_exclusions = [ordered]@{
+        exclusion_path      = $mp.ExclusionPath
+        exclusion_extension = $mp.ExclusionExtension
+        exclusion_process   = $mp.ExclusionProcess
+        rt_protection_enabled = -not $mp.DisableRealtimeMonitoring
+        scan_avg_cpu_load   = $mp.ScanAvgCPULoadFactor
+    }
+    Write-Host ("  Defender RT protection: {0}" -f (-not $mp.DisableRealtimeMonitoring))
+    Write-Host ("  Path exclusions: {0}" -f $mp.ExclusionPath.Count)
+    Write-Host ("  Process exclusions: {0}" -f $mp.ExclusionProcess.Count)
+} catch {
+    $Report.defender_exclusions = @{ error = "$_" }
+    Write-Warning ("Defender query failed: {0}" -f $_)
+}
+
+# ----------------------------------------------------------------------
+# 14. WASAPI exclusive vs shared comparator probe (live capture)
+# ----------------------------------------------------------------------
+Write-Section 'Live capture: WASAPI shared vs exclusive (5s each, FFT + Silero)'
+
+# This is the SMOKING GUN test for anti-pattern #21:
+#   shared mode = signal goes through APOs (Voice Clarity destroys it)
+#   exclusive mode = APOs bypassed
+# If shared captures silence and exclusive captures voice → APO confirmed.
+#
+# Reuses Linux toolkit's analyze_wav.py + silero_probe.py for symmetric
+# metrics. Helper script lives next to this PS1 (created in section
+# below if absent).
+$wasapiHelper = Join-Path $scriptDir 'voice-diag-wasapi-comparator.py'
+if (-not (Test-Path $wasapiHelper)) {
+    Write-Warning "wasapi comparator helper not found at $wasapiHelper -- section 14 skipped"
+    $Report.live_captures += @{ error = 'helper_missing'; path = $wasapiHelper }
+} else {
+    $captureDir = Join-Path $RawDir 'live_captures'
+    if (-not (Test-Path $captureDir)) { New-Item -ItemType Directory -Path $captureDir -Force | Out-Null }
+
+    foreach ($cmd in $pythonCandidates) {
+        try {
+            $cmpJson = & $cmd $wasapiHelper --outdir $captureDir --duration 5 2>$null
+            if ($LASTEXITCODE -eq 0 -and $cmpJson) {
+                try {
+                    $parsed = $cmpJson | ConvertFrom-Json -ErrorAction Stop
+                    $Report.live_captures = $parsed
+                    Write-Host 'WASAPI comparator:'
+                    foreach ($mode in @('shared','exclusive')) {
+                        $r = $parsed.$mode
+                        if ($r) {
+                            Write-Host ("  [{0,-9}] rms={1,7:N1} dBFS  vad_max={2,5:N3}  ok={3}" -f $mode, $r.rms_dbfs, $r.silero_max_prob, $r.ok)
+                        }
+                    }
+                } catch {
+                    $Report.live_captures = @{ error = "parse_failed: $_"; raw = $cmpJson }
+                }
+                break
+            }
+        } catch { }
+    }
+    if (-not $Report.live_captures) {
+        $Report.live_captures = @{ error = 'helper_run_failed_or_python_unavailable' }
+        Write-Warning 'WASAPI comparator helper did not produce JSON output'
+    }
+}
+
+# ----------------------------------------------------------------------
+# 15. Network reachability to LLM/voice provider endpoints
+# ----------------------------------------------------------------------
+Write-Section 'Network reachability (LLM/STT/TTS providers)'
+
+$endpoints = @(
+    @{ host = 'api.anthropic.com';                    port = 443 },
+    @{ host = 'api.openai.com';                       port = 443 },
+    @{ host = 'generativelanguage.googleapis.com';    port = 443 },
+    @{ host = 'api.deepgram.com';                     port = 443 },
+    @{ host = 'api.elevenlabs.io';                    port = 443 }
+)
+foreach ($ep in $endpoints) {
+    $row = [ordered]@{
+        host        = $ep.host
+        port        = $ep.port
+        dns_ok      = $false
+        dns_ips     = @()
+        tcp_ok      = $false
+        rtt_ms      = $null
+    }
+    try {
+        $dns = Resolve-DnsName -Name $ep.host -Type A -ErrorAction Stop -DnsOnly
+        $row.dns_ok  = $true
+        $row.dns_ips = @($dns | Where-Object { $_.IPAddress } | Select-Object -ExpandProperty IPAddress -First 5)
+    } catch { }
+    try {
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $tcp = Test-NetConnection -ComputerName $ep.host -Port $ep.port -InformationLevel Quiet -WarningAction SilentlyContinue -ErrorAction Stop
+        $sw.Stop()
+        $row.tcp_ok = [bool]$tcp
+        $row.rtt_ms = [int]$sw.Elapsed.TotalMilliseconds
+    } catch { }
+    $Report.network_llm += $row
+    Write-Host ("  {0,-44}  dns={1}  tcp={2}  rtt={3}ms" -f $ep.host, $row.dns_ok, $row.tcp_ok, $row.rtt_ms)
+}
+
+# ----------------------------------------------------------------------
+# 16. ETW capture (opt-in via -CaptureEtw)
+# ----------------------------------------------------------------------
+# Windows Performance Recorder (wpr.exe) captures kernel + audio ETW
+# providers. The .etl is opaque without WPA, but it's the gold standard
+# evidence for audio glitches: per-frame audio engine telemetry, USB
+# transfer errors, DPC/ISR latency.
+#
+# Requires admin. Heavy artifact (~50-200 MB). Opt-in only.
+#
+# To use Microsoft's audio-specific profile:
+#   1. Clone https://github.com/microsoft/audio (MIT)
+#   2. Pass -CaptureEtwProfile <path>\audio.wprp
+# Otherwise this section uses the built-in GeneralProfile + CPU.
+$Report.etw_capture = $null
+if ($CaptureEtw) {
+    Write-Section ("ETW capture (wpr.exe, {0}s window)" -f $CaptureEtwSeconds)
+    $isAdmin = $false
+    try {
+        $isAdmin = ([Security.Principal.WindowsPrincipal] `
+            [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+                [Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch { }
+    if (-not $isAdmin) {
+        $Report.etw_capture = @{ ok = $false; reason = 'requires_admin' }
+        Write-Warning '  ETW capture requires admin (wpr.exe). Skipped.'
+    } else {
+        $etlPath = Join-Path $RawDir 'etw_audio_capture.etl'
+        $startArgs = @()
+        if ($CaptureEtwProfile -and (Test-Path $CaptureEtwProfile)) {
+            $startArgs = @('-start', $CaptureEtwProfile)
+            Write-Host ("  Using profile: {0}" -f $CaptureEtwProfile)
+        } else {
+            $startArgs = @('-start', 'GeneralProfile', '-start', 'CPU')
+            Write-Host '  Using built-in profiles: GeneralProfile + CPU'
+        }
+        try {
+            # Cancel any running session first.
+            & wpr.exe -cancel 2>$null | Out-Null
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            $startResult = & wpr.exe @startArgs 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                $Report.etw_capture = @{ ok = $false; reason = 'wpr_start_failed';
+                                          detail = ($startResult -join "`n") }
+                Write-Warning ("  wpr -start failed: {0}" -f ($startResult -join '; '))
+            } else {
+                Write-Host ("  capturing {0}s..." -f $CaptureEtwSeconds)
+                Start-Sleep -Seconds $CaptureEtwSeconds
+                $stopResult = & wpr.exe -stop $etlPath 2>&1
+                $sw.Stop()
+                if ($LASTEXITCODE -eq 0 -and (Test-Path $etlPath)) {
+                    $info = Get-Item $etlPath
+                    $Report.etw_capture = [ordered]@{
+                        ok           = $true
+                        profile      = if ($CaptureEtwProfile) { $CaptureEtwProfile } else { 'GeneralProfile+CPU' }
+                        duration_s   = $CaptureEtwSeconds
+                        elapsed_s    = [math]::Round($sw.Elapsed.TotalSeconds, 1)
+                        path         = $etlPath
+                        size_bytes   = [int64]$info.Length
+                        size_mb      = [math]::Round($info.Length / 1MB, 1)
+                    }
+                    Write-Host ("  captured {0}: {1} MB" -f $etlPath, $Report.etw_capture.size_mb)
+                } else {
+                    $Report.etw_capture = @{ ok = $false; reason = 'wpr_stop_failed';
+                                              detail = ($stopResult -join "`n") }
+                    Write-Warning ("  wpr -stop failed: {0}" -f ($stopResult -join '; '))
+                }
+            }
+        } catch {
+            $Report.etw_capture = @{ ok = $false; reason = 'exception';
+                                      detail = "$_" }
+            try { & wpr.exe -cancel 2>$null | Out-Null } catch { }
+        }
+    }
 }
 
 # ----------------------------------------------------------------------
