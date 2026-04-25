@@ -44,6 +44,36 @@ _STRATEGY_NAME = "win.wasapi_exclusive"
 _REASON_NOT_WIN32 = "not_win32_platform"
 _REASON_NOT_WASAPI = "not_wasapi_endpoint"
 
+# Mission band-aid #19: pre-hardening the eligibility check used a
+# case-insensitive substring match — ``"WASAPI" in host_api.upper()``.
+# PortAudio's canonical Windows host-API labels (per the v19 reference)
+# are a closed set; any future label that contains the substring
+# ``"WASAPI"`` but is NOT actually WASAPI (e.g. a vendor wrapper named
+# ``"WASAPI Compatibility Mode (DirectSound)"``) would have silently
+# passed and the strategy would have attempted an exclusive-mode open
+# against a non-WASAPI endpoint, producing a confusing failure mode
+# downstream. The hardened check uses an explicit allowlist of
+# canonical PortAudio Windows-WASAPI labels — case-insensitive
+# normalisation absorbs trivial casing variations without admitting
+# substring impersonation.
+_WASAPI_HOST_API_LABELS: frozenset[str] = frozenset(
+    {
+        # PortAudio v19 canonical label (the only legitimate value).
+        "windows wasapi",
+        # Bare label observed in legacy probe rollups + some
+        # third-party PortAudio wrappers; kept for backwards-compat
+        # with stored ComboStore entries that pre-date the canonical
+        # ``Windows WASAPI`` adoption.
+        "wasapi",
+    }
+)
+"""Canonical PortAudio Windows-WASAPI host-API labels (lowercased).
+
+Strategy eligibility membership is checked via exact-match equality
+after ``host_api_name.strip().lower()`` normalisation. Adding new
+labels here is a deliberate operator decision; never widen via
+substring matching."""
+
 # Conservative cost hint (ms). The real cost is dominated by PortAudio's
 # exclusive-mode negotiation on the audio thread — typically 200–400 ms
 # on modern Windows + Razer/Realtek hardware; 500 ms is a safe upper
@@ -96,8 +126,11 @@ class WindowsWASAPIExclusiveBypass:
                 reason=_REASON_NOT_WIN32,
                 estimated_cost_ms=0,
             )
-        host_api = (context.host_api_name or "").upper()
-        if "WASAPI" not in host_api:
+        # Mission #19: exact-match against canonical allowlist instead
+        # of substring containment. ``"WASAPI Compatibility (DirectSound)"``
+        # used to falsely pass; now it doesn't.
+        host_api_normalised = (context.host_api_name or "").strip().lower()
+        if host_api_normalised not in _WASAPI_HOST_API_LABELS:
             return Eligibility(
                 applicable=False,
                 reason=_REASON_NOT_WASAPI,
