@@ -703,6 +703,29 @@ class VoicePipeline:
         )
 
         if not result.text.strip():
+            # S1/S2 wire-up: distinguish "user genuinely said nothing"
+            # from "STT engine rejected the transcript" (hallucination
+            # filter, compression-ratio reject, timeout). Pre-S1/S2
+            # both paths produced the same silent IDLE transition,
+            # masking sustained STT degradation as normal silence.
+            rejection_reason = getattr(result, "rejection_reason", None)
+            if rejection_reason is not None:
+                logger.warning(
+                    "voice.stt.transcription_dropped",
+                    **{
+                        "voice.mind_id": self._config.mind_id,
+                        "voice.rejection_reason": rejection_reason,
+                        "voice.latency_ms": round(latency_ms, 1),
+                        "voice.confidence": result.confidence,
+                        "voice.action_required": ("user_did_not_get_a_response_check_stt_health"),
+                    },
+                )
+                self._state = VoicePipelineState.IDLE
+                return {
+                    "state": "IDLE",
+                    "event": "transcription_dropped",
+                    "rejection_reason": rejection_reason,
+                }
             logger.debug("Empty transcription — discarding")
             self._state = VoicePipelineState.IDLE
             return {"state": "IDLE", "event": "empty_transcription"}

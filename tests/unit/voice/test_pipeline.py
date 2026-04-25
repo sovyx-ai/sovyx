@@ -104,13 +104,25 @@ def _make_wake_word(detected: bool = False) -> MagicMock:
     return ww
 
 
-def _make_stt(text: str = "hello world", confidence: float = 0.95) -> AsyncMock:
-    """Create a mock STT engine."""
+def _make_stt(
+    text: str = "hello world",
+    confidence: float = 0.95,
+    rejection_reason: str | None = None,
+) -> AsyncMock:
+    """Create a mock STT engine.
+
+    ``rejection_reason`` defaults to ``None`` so the orchestrator's
+    S1/S2 wire-up takes the "user said nothing" path on empty
+    transcripts (the pre-rejection_reason behaviour). Pass an explicit
+    string ("hallucination_stoplist", "transcribe_timeout", etc.) to
+    test the new ``voice.stt.transcription_dropped`` event path.
+    """
     stt = AsyncMock()
     result = MagicMock()
     result.text = text
     result.confidence = confidence
     result.language = "en"
+    result.rejection_reason = rejection_reason
     stt.transcribe.return_value = result
     return stt
 
@@ -754,6 +766,61 @@ class TestPipelineStateMachine:
 
         assert result["state"] == "IDLE"
         assert result["event"] == "empty_transcription"
+
+    @pytest.mark.asyncio
+    async def test_stt_rejection_reason_emits_dropped_event(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """S1/S2 wire-up: when STT returns a rejection_reason (not just
+        empty text), the orchestrator must emit
+        ``voice.stt.transcription_dropped`` with the reason — distinct
+        from "user said nothing" (no rejection_reason)."""
+        # Build a pipeline whose STT mock returns text="" + rejection_reason
+        # set to "hallucination_stoplist" — simulating an S1 reject.
+        config = VoicePipelineConfig(
+            mind_id="test-mind",
+            wake_word_enabled=True,
+            barge_in_enabled=False,
+            fillers_enabled=False,
+            filler_delay_ms=100,
+            silence_frames_end=3,
+            max_recording_frames=10,
+        )
+        vad = _make_vad(speech=True)
+        ww = _make_wake_word(detected=True)
+        stt = _make_stt(text="", rejection_reason="hallucination_stoplist")
+        tts = _make_tts()
+        bus = _make_event_bus()
+
+        pipeline = VoicePipeline(
+            config=config,
+            vad=vad,
+            wake_word=ww,
+            stt=stt,
+            tts=tts,
+            event_bus=bus,
+            on_perception=AsyncMock(),
+        )
+
+        caplog.set_level(logging.WARNING, logger=_ORCH_LOGGER)
+        await pipeline.start()
+
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
+            await pipeline.feed_frame(_speech_frame())
+        await pipeline.feed_frame(_speech_frame())
+        vad.process_frame.return_value = _vad_event(False)
+        for _ in range(3):
+            result = await pipeline.feed_frame(_silence_frame())
+
+        # Pre-S1/S2 wire-up returned event="empty_transcription";
+        # post wire-up returns "transcription_dropped" with the reason.
+        assert result["event"] == "transcription_dropped"
+        assert result["rejection_reason"] == "hallucination_stoplist"
+        # Structured event fired so dashboards can attribute.
+        events = _events_of(caplog, "voice.stt.transcription_dropped")
+        assert len(events) == 1
+        assert events[0]["voice.rejection_reason"] == "hallucination_stoplist"
+        assert "user_did_not_get_a_response" in str(events[0]["voice.action_required"])
 
     @pytest.mark.asyncio
     async def test_stt_error_returns_idle(self) -> None:
