@@ -105,6 +105,45 @@ per window — the dashboard already aggregates by minute, so per-second
 firing is enough resolution to localise onset/offset."""
 
 
+# ── Band-aid #50 — VAD inference timeout guard ──────────────────────
+#
+# Pre-band-aid #50: ``feed_frame`` awaited
+# ``asyncio.to_thread(self._vad.process_frame, ...)`` with no timeout.
+# A pathologically slow VAD inference (ONNX runtime stall, CPU
+# thrashing under contention, kernel paging) would hang the entire
+# consumer loop on that one frame — every subsequent frame from the
+# capture queue stays buffered, the queue fills, frame drops cascade.
+# The existing O3 detector observes the symptom (frame drops) but
+# not the source (VAD-specific latency).
+#
+# Spec (F1 #50): "Timeout-guard VAD". The fix wraps the VAD await
+# in ``asyncio.wait_for`` with a generous ceiling (250 ms = ~10×
+# typical Silero VAD latency on a modern CPU). On timeout:
+#   * Emit ``voice.vad.inference_timeout`` WARN with frame metadata
+#     so operators get DIRECT attribution (vs. the downstream O3
+#     "frames are being dropped, cause unknown").
+#   * Skip this frame's VAD result; subsequent frames are unaffected.
+#     The ``to_thread`` worker keeps running — its result is silently
+#     discarded — but the next ``feed_frame`` call proceeds with a
+#     fresh inference rather than waiting for the wedged one.
+#   * Rate-limit the WARN per ``_VAD_INFERENCE_TIMEOUT_WARN_INTERVAL_S``
+#     so a sustained slow-VAD condition produces a drumbeat, not a
+#     flood (matches the band-aid #9 pattern for sustained-underrun).
+_VAD_INFERENCE_TIMEOUT_S = 0.250
+"""Per-frame VAD inference budget. Silero VAD on a modern CPU runs
+in ~5–20 ms; 250 ms is ~10× typical, generous enough that healthy
+deployments never trip but tight enough that a wedged inference
+doesn't stall the audio pipeline for >0.25 s. Below that floor a
+single GC pause would false-fire."""
+
+_VAD_INFERENCE_TIMEOUT_WARN_INTERVAL_S = 5.0
+"""Minimum gap between two ``voice.vad.inference_timeout`` WARN logs.
+A sustained slow-VAD condition (CPU pinned, ONNX stuck) produces
+one WARN every 5 s, not one per frame (~30 Hz unbounded would
+drown the dashboard). 5 s matches the heartbeat cadence so an
+operator sees the issue within the first frame batch after onset."""
+
+
 # ---------------------------------------------------------------------------
 # T1 Ring 5 atomic cancellation chain
 # ---------------------------------------------------------------------------
@@ -331,6 +370,13 @@ class VoicePipeline:
         )
         self._last_drift_warning_monotonic: float | None = None
 
+        # Band-aid #50 — VAD inference timeout-guard state. Lifetime
+        # cumulative count of timed-out VAD inferences (visible via
+        # :attr:`vad_inference_timeout_count`); rate-limit timestamp
+        # for the WARN.
+        self._vad_inference_timeouts: int = 0
+        self._last_vad_timeout_warning_monotonic: float | None = None
+
     # -- State property + saga lifecycle ------------------------------------
 
     @property
@@ -454,6 +500,15 @@ class VoicePipeline:
         """Wake word detector used by this pipeline."""
         return self._wake_word
 
+    @property
+    def vad_inference_timeout_count(self) -> int:
+        """Lifetime count of VAD inferences that exceeded
+        ``_VAD_INFERENCE_TIMEOUT_S`` (band-aid #50). Non-zero means
+        the host has experienced sustained CPU pressure or an ONNX
+        session anomaly; pair with ``voice.vad.inference_timeout``
+        WARN events for attribution."""
+        return self._vad_inference_timeouts
+
     # -- Lifecycle -----------------------------------------------------------
 
     async def start(self) -> None:
@@ -513,8 +568,44 @@ class VoicePipeline:
         audio_f32 = frame.astype(np.float32) / 32768.0
         # ONNX inference is CPU-bound and was blocking the event loop —
         # move it to a worker thread so the dashboard / HTTP / other async
-        # tasks remain responsive while VAD runs.
-        vad_event = await asyncio.to_thread(self._vad.process_frame, audio_f32)
+        # tasks remain responsive while VAD runs. Wrapped in a
+        # band-aid #50 timeout guard: a wedged inference doesn't stall
+        # the whole audio pipeline; the frame is dropped with a
+        # rate-limited WARN attributing the cause to VAD specifically
+        # (vs. the downstream O3 frame-drop signal).
+        try:
+            vad_event = await asyncio.wait_for(
+                asyncio.to_thread(self._vad.process_frame, audio_f32),
+                timeout=_VAD_INFERENCE_TIMEOUT_S,
+            )
+        except TimeoutError:
+            self._vad_inference_timeouts += 1
+            now = time.monotonic()
+            if (
+                self._last_vad_timeout_warning_monotonic is None
+                or now - self._last_vad_timeout_warning_monotonic
+                >= _VAD_INFERENCE_TIMEOUT_WARN_INTERVAL_S
+            ):
+                self._last_vad_timeout_warning_monotonic = now
+                logger.warning(
+                    "voice.vad.inference_timeout",
+                    **{
+                        "voice.timeout_s": _VAD_INFERENCE_TIMEOUT_S,
+                        "voice.lifetime_timeout_count": self._vad_inference_timeouts,
+                        "voice.state": self._state.name,
+                        "voice.action_required": (
+                            "VAD inference exceeded the per-frame budget. "
+                            "Likely causes: host CPU saturation starving the "
+                            "ONNX runtime, ONNX session corruption (rerun "
+                            "preflight: `sovyx doctor voice`), or kernel "
+                            "memory pressure (paging). Check `top` / "
+                            "Activity Monitor for CPU pinning on the Sovyx "
+                            "process. Subsequent frames are unaffected — "
+                            "this frame is dropped from VAD analysis."
+                        ),
+                    },
+                )
+            return {"state": self._state.name, "event": "vad_timeout"}
 
         self._track_vad_for_heartbeat(vad_event.probability)
 

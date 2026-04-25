@@ -3270,3 +3270,137 @@ class TestCancellationChainT1:
         assert len(events) >= 1
         assert events[-1].get("voice.text_buffer_chars_dropped") == 42  # noqa: PLR2004
         assert events[-1].get("voice.step_text_buffer_cleanup") == "ok"
+
+
+# ===========================================================================
+# Band-aid #50 — VAD inference timeout guard
+# ===========================================================================
+
+
+class TestVADInferenceTimeoutGuard:
+    """Band-aid #50: ``feed_frame`` wraps the VAD ``to_thread`` call in
+    a per-frame timeout (``_VAD_INFERENCE_TIMEOUT_S``). On timeout the
+    frame is skipped (returns ``vad_timeout`` event) and a rate-limited
+    structured WARN attributes the cause to VAD specifically — vs. the
+    downstream O3 frame-drop signal which only sees the symptom.
+    """
+
+    @pytest.mark.asyncio
+    async def test_vad_timeout_skips_frame_and_increments_counter(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A timed-out VAD inference returns a vad_timeout event,
+        increments the lifetime counter, and emits the WARN."""
+        pipeline, _ = _make_pipeline()
+        await pipeline.start()
+
+        # Patch wait_for in the orchestrator's namespace to raise
+        # TimeoutError, simulating a VAD inference that exceeds the
+        # 250 ms budget without the test actually having to wait.
+        from sovyx.voice.pipeline import _orchestrator as _orch_mod
+
+        async def _raise_timeout(coro: Any, *_args: Any, **_kwargs: Any) -> Any:
+            # Close the inner ``to_thread`` coroutine so the runtime
+            # doesn't warn "coroutine was never awaited" — production
+            # ``asyncio.wait_for`` awaits + cancels the coroutine
+            # itself; our patched stand-in must do the same.
+            if hasattr(coro, "close"):
+                coro.close()
+            raise TimeoutError
+
+        with (
+            caplog.at_level(logging.WARNING),
+            patch.object(_orch_mod.asyncio, "wait_for", _raise_timeout),
+        ):
+            result = await pipeline.feed_frame(_silence_frame())
+
+        assert result["event"] == "vad_timeout"
+        assert pipeline.vad_inference_timeout_count == 1
+        events = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict) and r.msg.get("event") == "voice.vad.inference_timeout"
+        ]
+        assert len(events) == 1
+        evt = events[0]
+        assert evt["voice.timeout_s"] == 0.250  # noqa: PLR2004
+        assert evt["voice.lifetime_timeout_count"] == 1
+        assert "host CPU saturation" in evt["voice.action_required"]
+
+    @pytest.mark.asyncio
+    async def test_vad_timeout_warn_rate_limited(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Multiple consecutive timeouts within the rate-limit window
+        emit only one WARN — the counter still increments per timeout
+        so attribution is preserved."""
+        pipeline, _ = _make_pipeline()
+        await pipeline.start()
+
+        from sovyx.voice.pipeline import _orchestrator as _orch_mod
+
+        async def _raise_timeout(coro: Any, *_args: Any, **_kwargs: Any) -> Any:
+            # Close the inner ``to_thread`` coroutine so the runtime
+            # doesn't warn "coroutine was never awaited" — production
+            # ``asyncio.wait_for`` awaits + cancels the coroutine
+            # itself; our patched stand-in must do the same.
+            if hasattr(coro, "close"):
+                coro.close()
+            raise TimeoutError
+
+        with (
+            caplog.at_level(logging.WARNING),
+            patch.object(_orch_mod.asyncio, "wait_for", _raise_timeout),
+        ):
+            # Three consecutive timeouts back-to-back (same
+            # monotonic-tick window from caller perspective).
+            for _ in range(3):
+                await pipeline.feed_frame(_silence_frame())
+
+        assert pipeline.vad_inference_timeout_count == 3
+        events = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict) and r.msg.get("event") == "voice.vad.inference_timeout"
+        ]
+        # Only the first timeout fires the WARN (rate-limited).
+        assert len(events) == 1
+
+    @pytest.mark.asyncio
+    async def test_vad_success_path_unchanged(self) -> None:
+        """Healthy VAD (within timeout) processes normally — counter
+        stays at zero, no WARN."""
+        pipeline, _ = _make_pipeline(vad_speech=False)
+        await pipeline.start()
+        result = await pipeline.feed_frame(_silence_frame())
+        # Normal IDLE path returns state, not vad_timeout.
+        assert result["state"] == "IDLE"
+        assert "event" not in result or result.get("event") != "vad_timeout"
+        assert pipeline.vad_inference_timeout_count == 0
+
+    @pytest.mark.asyncio
+    async def test_vad_timeout_does_not_corrupt_state_machine(self) -> None:
+        """Skipped frame must not advance the state machine — the
+        pipeline should still be IDLE after a timed-out frame so the
+        next healthy frame starts cleanly."""
+        pipeline, _ = _make_pipeline(vad_speech=True, ww_detected=True)
+        await pipeline.start()
+        from sovyx.voice.pipeline import _orchestrator as _orch_mod
+
+        async def _raise_timeout(coro: Any, *_args: Any, **_kwargs: Any) -> Any:
+            # Close the inner ``to_thread`` coroutine so the runtime
+            # doesn't warn "coroutine was never awaited" — production
+            # ``asyncio.wait_for`` awaits + cancels the coroutine
+            # itself; our patched stand-in must do the same.
+            if hasattr(coro, "close"):
+                coro.close()
+            raise TimeoutError
+
+        with patch.object(_orch_mod.asyncio, "wait_for", _raise_timeout):
+            await pipeline.feed_frame(_speech_frame())
+        # Despite the wake word + speech VAD that would normally
+        # transition to WAKE_DETECTED, the timeout path returned
+        # early so state is still IDLE.
+        assert pipeline.state == VoicePipelineState.IDLE
