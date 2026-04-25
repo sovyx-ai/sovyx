@@ -223,7 +223,7 @@ class TestDoctorVoiceFixFlag:
             mock_sys.stderr = real_sys.stderr
             result = runner.invoke(app, ["doctor", "voice", "--fix"])
         assert result.exit_code == EXIT_DOCTOR_OK
-        assert "No saturation detected" in result.stdout
+        assert "No saturation or attenuation detected" in result.stdout
 
     def test_fix_dry_run_prints_plan_without_mutating(self) -> None:
         from sovyx.cli.commands.doctor import EXIT_DOCTOR_OK

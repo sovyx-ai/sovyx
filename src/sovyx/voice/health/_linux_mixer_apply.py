@@ -174,6 +174,88 @@ async def apply_mixer_reset(
     )
 
 
+async def apply_mixer_boost_up(
+    card_index: int,
+    controls_to_boost: Sequence[MixerControlSnapshot],
+    *,
+    tuning: VoiceTuningConfig,
+) -> MixerApplySnapshot:
+    """Lift attenuated boost/capture controls on ``card_index``.
+
+    Counterpart of :func:`apply_mixer_reset` for the ATTENUATION regime
+    (capture+boost both well below VAD operating range, e.g. user reset
+    GNOME volume to 0 % or pulseaudio default-source-volume reset).
+    Sets each control to ``int(min_raw + span * fraction)`` where
+    ``fraction`` is
+    :attr:`VoiceTuningConfig.linux_mixer_capture_attenuation_fix_fraction`
+    for capture-path controls and
+    :attr:`VoiceTuningConfig.linux_mixer_boost_attenuation_fix_fraction`
+    for every other boost-class control.
+
+    Pilot evidence (VAIO VJFE69F11X-B0221H, SN6180, 2026-04-25):
+      Mic Boost           0/3   →  2/3   (+24 dB)
+      Capture            40/80  → 60/80  (~+0 dB; +30 dB above min)
+      Internal Mic Boost  1/3   →  2/3   (+12 dB)
+      Aggregated boost  -22 dB  → +24 dB  (above Silero VAD floor)
+
+    Atomicity model + rollback identical to :func:`apply_mixer_reset` —
+    every successful mutation's pre-apply value is recorded; on any
+    subsequent failure the recorded values are restored before
+    re-raising.
+
+    Raises:
+        BypassApplyError: same reason taxonomy as
+            :func:`apply_mixer_reset`.
+    """
+    if sys.platform != "linux":
+        msg = f"apply_mixer_boost_up is Linux-only; running on {sys.platform}"
+        raise BypassApplyError(msg, reason=REASON_NOT_LINUX)
+    if shutil.which("amixer") is None:
+        msg = "amixer binary not found on PATH (install alsa-utils)"
+        raise BypassApplyError(msg, reason=REASON_AMIXER_UNAVAILABLE)
+    if not controls_to_boost:
+        msg = "controls_to_boost is empty — nothing to do"
+        raise BypassApplyError(msg, reason=REASON_NO_CONTROLS)
+
+    timeout_s = tuning.linux_mixer_subprocess_timeout_s
+    boost_fraction = tuning.linux_mixer_boost_attenuation_fix_fraction
+    capture_fraction = tuning.linux_mixer_capture_attenuation_fix_fraction
+
+    rollback_log: list[tuple[str, int]] = []
+    applied_log: list[tuple[str, int]] = []
+
+    try:
+        for control in controls_to_boost:
+            target_raw = _compute_target_raw(
+                control,
+                boost_fraction=boost_fraction,
+                capture_fraction=capture_fraction,
+            )
+            if target_raw == control.current_raw:
+                continue
+            await asyncio.to_thread(
+                _amixer_set,
+                card_index,
+                control.name,
+                target_raw,
+                timeout_s,
+            )
+            rollback_log.append((control.name, control.current_raw))
+            applied_log.append((control.name, target_raw))
+    except asyncio.CancelledError:
+        await _rollback_best_effort(card_index, rollback_log, timeout_s=timeout_s)
+        raise
+    except BypassApplyError:
+        await _rollback_best_effort(card_index, rollback_log, timeout_s=timeout_s)
+        raise
+
+    return MixerApplySnapshot(
+        card_index=card_index,
+        reverted_controls=tuple(rollback_log),
+        applied_controls=tuple(applied_log),
+    )
+
+
 async def restore_mixer_snapshot(
     snapshot: MixerApplySnapshot,
     *,

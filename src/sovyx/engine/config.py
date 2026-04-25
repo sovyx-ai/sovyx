@@ -522,6 +522,19 @@ class VoiceTuningConfig(BaseSettings):
     # ``Capture`` each at 60 %, individually under the ratio gate but
     # summing to clipping territory).
     linux_mixer_aggregated_boost_db_ceiling: float = 18.0
+    # Fraction targets for the ATTENUATION fix path (`sovyx doctor voice
+    # --fix` on attenuated cards — capture+boost both well below VAD
+    # operating range). Distinct from `*_reset_fraction` which REDUCES
+    # gain on saturated cards. Defaults: capture 0.75 = ~+0 dB on a
+    # 0..80 control; boost 0.66 = ~+24 dB on a 0..3 boost control —
+    # the safe midpoint that lifts signal above Silero VAD floor
+    # without saturating.
+    # Pilot evidence (VAIO VJFE69F11X-B0221H, SN6180 codec, 2026-04-25):
+    # Mic Boost 0/3, Capture 40/80, Internal Mic Boost 1/3 → aggregated
+    # -22 dB, Silero max_prob ~ 0. Boosting to fractions below restores
+    # ~+24 dB aggregate, well within the VAD operating range.
+    linux_mixer_capture_attenuation_fix_fraction: float = 0.75
+    linux_mixer_boost_attenuation_fix_fraction: float = 0.66
     # Strategy #2 — ``LinuxPipeWireDirectBypass`` (linux.pipewire_direct).
     # Rebinds the capture stream to the raw ALSA ``hw:X,Y`` node,
     # bypassing PipeWire / PulseAudio session-manager DSP entirely.

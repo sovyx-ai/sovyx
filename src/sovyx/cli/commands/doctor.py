@@ -315,8 +315,10 @@ def _run_voice_doctor(
         )
         return EXIT_DOCTOR_UNSUPPORTED
 
-    if report.passed or not _first_failure_is_saturation(report):
-        console.print("\n[green]No saturation detected — nothing to fix.[/green]")
+    if report.passed or not (
+        _first_failure_is_saturation(report) or _first_failure_is_attenuation(report)
+    ):
+        console.print("\n[green]No saturation or attenuation detected — nothing to fix.[/green]")
         return EXIT_DOCTOR_OK
 
     return _apply_mixer_fix_flow(
@@ -431,11 +433,56 @@ def _render_voice_report(
 
 
 def _first_failure_is_saturation(report: PreflightReport) -> bool:
-    """Return True when step 9 (linux_mixer_saturated) is the blocker."""
+    """Return True when step 9 reports the SATURATION regime as the blocker.
+
+    Step 9 emits a single code (``LINUX_MIXER_SATURATED``) for both
+    saturation and attenuation regimes — distinguished only by the
+    ``details`` payload. When ``details.snapshots`` is present, this
+    helper inspects ``saturation_warning`` per-card to disambiguate.
+    For backward compatibility (callers/tests that build a step report
+    without populating ``details.snapshots``), it falls back to treating
+    the bare code as saturation — preserving the v0.21.2 contract.
+    """
     from sovyx.voice.health import PreflightStepCode
 
     first = report.first_failure
-    return first is not None and first.code is PreflightStepCode.LINUX_MIXER_SATURATED
+    if first is None or first.code is not PreflightStepCode.LINUX_MIXER_SATURATED:
+        return False
+    details = first.details if isinstance(first.details, dict) else {}
+    snapshots = details.get("snapshots")
+    if not snapshots:
+        # Legacy fallback — bare code historically implied saturation.
+        return True
+    return any(s.get("saturation_warning") is True for s in snapshots)
+
+
+def _first_failure_is_attenuation(report: PreflightReport) -> bool:
+    """Return True when step 9 reports the ATTENUATION regime as the blocker.
+
+    Counterpart of :func:`_first_failure_is_saturation` — same step,
+    same code, distinguished by ``details.snapshots[].attenuation_warning``.
+    Returns False when ``details.snapshots`` is absent (legacy/test
+    fixtures default to saturation semantics).
+    """
+    from sovyx.voice.health import PreflightStepCode
+
+    first = report.first_failure
+    if first is None or first.code is not PreflightStepCode.LINUX_MIXER_SATURATED:
+        return False
+    details = first.details if isinstance(first.details, dict) else {}
+    snapshots = details.get("snapshots") or []
+    return any(s.get("attenuation_warning") is True for s in snapshots)
+
+
+def _is_capture_or_boost_name(name: str) -> bool:
+    """Return True for ALSA mixer controls in the capture/boost path.
+
+    Used by the attenuation fix flow to select which controls to lift.
+    Mirrors the boost/capture pattern recognition in
+    :mod:`sovyx.voice.health._linux_mixer_probe`.
+    """
+    lowered = name.lower()
+    return "capture" in lowered or "boost" in lowered
 
 
 def _apply_mixer_fix_flow(
@@ -444,7 +491,22 @@ def _apply_mixer_fix_flow(
     dry_run: bool,
     card_index: int | None,
 ) -> int:
-    """Remediate a saturated ALSA mixer (``--fix`` path).
+    """Remediate a saturated OR attenuated ALSA mixer (``--fix`` path).
+
+    Two regimes are handled:
+
+    * **Saturation** (``saturation_warning=True``): boost/capture controls
+      are clipping. :func:`apply_mixer_reset` reduces them to safe
+      fractions (capture 0.5, boost 0.0 by default).
+    * **Attenuation** (``attenuation_warning=True`` via
+      :func:`_is_attenuated`): capture+boost are below the Silero VAD
+      operating range. :func:`apply_mixer_boost_up` lifts them to safe
+      midpoints (capture 0.75, boost 0.66 by default).
+
+    A single card can only be in one regime at a time (saturation
+    requires controls at ``max_raw``; attenuation requires boost at
+    ``min_raw`` AND capture below 0.5 fraction — mutually exclusive).
+    Multiple cards may exhibit different regimes simultaneously.
 
     See :func:`_run_voice_doctor` and the module-level exit-code
     constants for the outcome mapping. Subprocess errors degrade to
@@ -455,8 +517,10 @@ def _apply_mixer_fix_flow(
     from sovyx.engine.config import VoiceTuningConfig
     from sovyx.voice.health._linux_mixer_apply import (
         REASON_AMIXER_UNAVAILABLE,
+        apply_mixer_boost_up,
         apply_mixer_reset,
     )
+    from sovyx.voice.health._linux_mixer_check import _is_attenuated
     from sovyx.voice.health._linux_mixer_probe import enumerate_alsa_mixer_snapshots
     from sovyx.voice.health.bypass._strategy import BypassApplyError
 
@@ -467,27 +531,37 @@ def _apply_mixer_fix_flow(
         )
         return EXIT_DOCTOR_UNSUPPORTED
 
-    targets = [s for s in snapshots if s.saturation_warning]
+    saturating = [s for s in snapshots if s.saturation_warning]
+    attenuated = [s for s in snapshots if _is_attenuated(s)]
     if card_index is not None:
-        targets = [s for s in targets if s.card_index == card_index]
-    if not targets:
-        console.print(
-            f"\n[yellow]No saturating card matches --card-index={card_index}.[/yellow]"
+        saturating = [s for s in saturating if s.card_index == card_index]
+        attenuated = [s for s in attenuated if s.card_index == card_index]
+    if not saturating and not attenuated:
+        msg = (
+            f"No saturating or attenuated card matches --card-index={card_index}."
             if card_index is not None
-            else "\n[yellow]No saturating cards found.[/yellow]",
+            else "No saturating or attenuated cards found."
         )
+        console.print(f"\n[yellow]{msg}[/yellow]")
         return EXIT_DOCTOR_OK
 
     # Render the remediation plan before taking any action. --dry-run
     # stops here; the interactive path re-uses the same summary for
     # the confirmation prompt.
     console.print("\n[bold]Planned mixer remediation:[/bold]")
-    for card in targets:
+    for card in saturating:
         risky = [c.name for c in card.controls if c.saturation_risk]
         console.print(
             f"  [dim]card {card.card_index}[/dim] {card.card_longname or card.card_id} — "
-            f"reset [bold]{', '.join(risky) or '(none)'}[/bold] "
-            f"(aggregated boost {card.aggregated_boost_db:.1f} dB)",
+            f"[red]REDUCE[/red] [bold]{', '.join(risky) or '(none)'}[/bold] "
+            f"(saturation; aggregated boost {card.aggregated_boost_db:.1f} dB)",
+        )
+    for card in attenuated:
+        targets = [c for c in card.controls if _is_capture_or_boost_name(c.name)]
+        console.print(
+            f"  [dim]card {card.card_index}[/dim] {card.card_longname or card.card_id} — "
+            f"[cyan]BOOST UP[/cyan] [bold]{', '.join(c.name for c in targets) or '(none)'}[/bold] "
+            f"(attenuation; aggregated boost {card.aggregated_boost_db:.1f} dB)",
         )
 
     if dry_run:
@@ -515,7 +589,8 @@ def _apply_mixer_fix_flow(
 
     tuning = VoiceTuningConfig()
     applied: list[tuple[int, tuple[str, int]]] = []
-    for card in targets:
+    # Saturation path — REDUCE.
+    for card in saturating:
         controls_to_reset = [c for c in card.controls if c.saturation_risk]
         if not controls_to_reset:
             continue
@@ -544,17 +619,48 @@ def _apply_mixer_fix_flow(
             f"[green]✓[/green] card {card.card_index}: reset "
             f"{len(snapshot.applied_controls)} control(s).",
         )
+    # Attenuation path — BOOST UP.
+    for card in attenuated:
+        controls_to_boost = [c for c in card.controls if _is_capture_or_boost_name(c.name)]
+        if not controls_to_boost:
+            continue
+        try:
+            snapshot = asyncio.run(
+                apply_mixer_boost_up(
+                    card.card_index,
+                    controls_to_boost,
+                    tuning=tuning,
+                ),
+            )
+        except BypassApplyError as exc:
+            if exc.reason == REASON_AMIXER_UNAVAILABLE:
+                console.print(
+                    "\n[red]amixer is not on PATH — install ``alsa-utils`` to enable --fix.[/red]",
+                )
+                return EXIT_DOCTOR_UNSUPPORTED
+            console.print(
+                f"\n[red]Mixer boost-up failed on card {card.card_index}: "
+                f"{exc.reason} ({exc}).[/red]",
+            )
+            return EXIT_DOCTOR_APPLY_FAILED
+        for control_name, raw in snapshot.applied_controls:
+            applied.append((card.card_index, (control_name, raw)))
+        console.print(
+            f"[green]✓[/green] card {card.card_index}: boosted "
+            f"{len(snapshot.applied_controls)} control(s).",
+        )
 
     if not applied:
         console.print("\n[yellow]No controls required mutation.[/yellow]")
         return EXIT_DOCTOR_OK
 
-    # Re-run the preflight to confirm the fix actually cleared step 9.
+    # Re-run the preflight to confirm the fix actually cleared step 9
+    # in either regime.
     verify = _run_voice_preflight()
-    if _first_failure_is_saturation(verify):
+    if _first_failure_is_saturation(verify) or _first_failure_is_attenuation(verify):
         console.print(
-            "\n[red]Post-fix preflight still reports saturation — the "
-            "mixer reset did not reach a safe configuration.[/red]",
+            "\n[red]Post-fix preflight still reports a mixer fault — the "
+            "remediation did not reach a safe configuration.[/red]",
         )
         return EXIT_DOCTOR_APPLY_FAILED
 

@@ -38,6 +38,7 @@ from sovyx.voice.health._linux_mixer_apply import (
     REASON_PRESET_ROLE_MISSING,
     _compute_target_raw,
     _translate_preset_value,
+    apply_mixer_boost_up,
     apply_mixer_preset,
     apply_mixer_reset,
     restore_mixer_snapshot,
@@ -865,3 +866,158 @@ class TestApplyMixerPresetRuntimePm:
             )
         # Log emitted — F1.G systemd handles the actual /sys write.
         assert any("linux_mixer_runtime_pm_deferred" in rec.message for rec in caplog.records)
+
+
+# ============================================================================
+# apply_mixer_boost_up — ATTENUATION fix path (counterpart of apply_mixer_reset).
+# Pilot evidence: VAIO VJFE69F11X-B0221H, SN6180 codec, 2026-04-25.
+# Mic Boost 0/3, Capture 40/80, Internal Mic Boost 1/3 → aggregated -22 dB →
+# Silero VAD blind. apply_mixer_boost_up restores ~+24 dB aggregate.
+# ============================================================================
+
+
+def _ctl_attenuated(
+    name: str,
+    *,
+    current_raw: int,
+    max_raw: int,
+    min_raw: int = 0,
+) -> MixerControlSnapshot:
+    """Helper for attenuation-regime fixtures (low current_raw, headroom)."""
+    return MixerControlSnapshot(
+        name=name,
+        min_raw=min_raw,
+        max_raw=max_raw,
+        current_raw=current_raw,
+        current_db=-22.0,
+        max_db=36.0,
+        is_boost_control=True,
+        saturation_risk=False,
+    )
+
+
+class TestApplyMixerBoostUpEnvironment:
+    @pytest.mark.asyncio()
+    async def test_not_linux_raises(self) -> None:
+        with patch.object(mod, "sys") as sys_mock:
+            sys_mock.platform = "darwin"
+            with pytest.raises(BypassApplyError) as exc:
+                await apply_mixer_boost_up(
+                    1,
+                    [_ctl_attenuated("Capture", current_raw=40, max_raw=80)],
+                    tuning=VoiceTuningConfig(),
+                )
+            assert exc.value.reason == REASON_NOT_LINUX
+
+    @pytest.mark.asyncio()
+    async def test_amixer_unavailable_raises(self) -> None:
+        with (
+            patch.object(mod, "sys") as sys_mock,
+            patch.object(mod, "shutil") as shutil_mock,
+        ):
+            sys_mock.platform = "linux"
+            shutil_mock.which.return_value = None
+            with pytest.raises(BypassApplyError) as exc:
+                await apply_mixer_boost_up(
+                    1,
+                    [_ctl_attenuated("Capture", current_raw=40, max_raw=80)],
+                    tuning=VoiceTuningConfig(),
+                )
+            assert exc.value.reason == REASON_AMIXER_UNAVAILABLE
+
+    @pytest.mark.asyncio()
+    async def test_empty_controls_raises(self, _linux_env: None) -> None:
+        with pytest.raises(BypassApplyError) as exc:
+            await apply_mixer_boost_up(1, [], tuning=VoiceTuningConfig())
+        assert exc.value.reason == REASON_NO_CONTROLS
+
+
+class TestApplyMixerBoostUpPilotCase:
+    """Reproduces the VAIO VJFE69F11X-B0221H pilot case (2026-04-25)."""
+
+    @pytest.mark.asyncio()
+    async def test_lifts_attenuated_capture_and_boost(self, _linux_env: None) -> None:
+        calls: list[tuple[int, str, int]] = []
+
+        def fake_set(card: int, name: str, target: int, _timeout: float) -> None:
+            calls.append((card, name, target))
+
+        # Pilot fixture — exact values observed in tarball:
+        #   Mic Boost 0/3, Capture 40/80, Internal Mic Boost 1/3
+        controls = [
+            _ctl_attenuated("Mic Boost", current_raw=0, max_raw=3),
+            _ctl_attenuated("Capture", current_raw=40, max_raw=80),
+            _ctl_attenuated("Internal Mic Boost", current_raw=1, max_raw=3),
+        ]
+        with patch.object(mod, "_amixer_set", side_effect=fake_set):
+            snap = await apply_mixer_boost_up(
+                1,
+                controls,
+                tuning=VoiceTuningConfig(),
+            )
+
+        # Defaults: capture_attenuation_fix_fraction=0.75, boost_attenuation_fix_fraction=0.66
+        # Capture: 0 + round(80 * 0.75) = 60
+        # Mic Boost: 0 + round(3 * 0.66) = 2
+        # Internal Mic Boost: 0 + round(3 * 0.66) = 2
+        assert calls == [
+            (1, "Mic Boost", 2),
+            (1, "Capture", 60),
+            (1, "Internal Mic Boost", 2),
+        ]
+        assert snap.applied_controls == (
+            ("Mic Boost", 2),
+            ("Capture", 60),
+            ("Internal Mic Boost", 2),
+        )
+        assert snap.reverted_controls == (
+            ("Mic Boost", 0),
+            ("Capture", 40),
+            ("Internal Mic Boost", 1),
+        )
+
+    @pytest.mark.asyncio()
+    async def test_skips_controls_already_at_target(self, _linux_env: None) -> None:
+        # Capture already at target fraction (60/80=0.75) → no mutation.
+        already_boosted = _ctl_attenuated("Capture", current_raw=60, max_raw=80)
+        with patch.object(mod, "_amixer_set") as amixer:
+            snap = await apply_mixer_boost_up(
+                1,
+                [already_boosted],
+                tuning=VoiceTuningConfig(),
+            )
+        amixer.assert_not_called()
+        assert snap.applied_controls == ()
+        assert snap.reverted_controls == ()
+
+
+class TestApplyMixerBoostUpRollback:
+    @pytest.mark.asyncio()
+    async def test_failure_mid_sequence_rolls_back(self, _linux_env: None) -> None:
+        calls: list[tuple[str, int]] = []
+
+        def fake_set(_card: int, name: str, target: int, _timeout: float) -> None:
+            calls.append((name, target))
+            if name == "Internal Mic Boost":
+                raise BypassApplyError(
+                    "amixer sset returned exit=1",
+                    reason=REASON_AMIXER_SET_FAILED,
+                )
+
+        controls = [
+            _ctl_attenuated("Capture", current_raw=40, max_raw=80),
+            _ctl_attenuated("Internal Mic Boost", current_raw=0, max_raw=3),
+        ]
+        with (
+            patch.object(mod, "_amixer_set", side_effect=fake_set),
+            pytest.raises(BypassApplyError) as exc,
+        ):
+            await apply_mixer_boost_up(1, controls, tuning=VoiceTuningConfig())
+
+        assert exc.value.reason == REASON_AMIXER_SET_FAILED
+        # Forward: Capture 40→60, then failed Internal Mic Boost, then rollback Capture 60→40.
+        assert calls == [
+            ("Capture", 60),
+            ("Internal Mic Boost", 2),
+            ("Capture", 40),
+        ]
