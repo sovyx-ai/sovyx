@@ -569,6 +569,50 @@ class MetricsRegistry:
             "attempts.",
         )
 
+        # ── Voice pipeline RED + USE (Ring 6 — M2) ──────────────────
+        # Per-stage Rate / Errors / Duration plus Utilisation /
+        # Saturation / Errors for every async queue between stages.
+        # Single instrument per RED component with a closed-set
+        # ``stage`` label keeps cardinality bounded (capture, vad,
+        # stt, tts, output × success/error × top-N error_type via
+        # _stage_metrics' BoundedCardinalityBucket).
+        # Per-utterance trace IDs go on STRUCTURED LOG ATTRIBUTES, not
+        # on metric labels — that's the canonical OTel cardinality
+        # discipline and the M1 trace-ID contract assumes it.
+        self.voice_stage_events = self._counter(
+            "sovyx.voice.stage.events",
+            "Per-stage RED Rate + Errors counter (labels: stage="
+            "capture|vad|stt|tts|output, kind=success|error|drop, "
+            "error_type=<top-N bucketed>). One increment per stage "
+            "completion regardless of outcome — stage rate is the "
+            "sum across kinds, error rate is kind=error / total, drop "
+            "rate is kind=drop / total.",
+        )
+        self.voice_stage_duration = self._histogram(
+            "sovyx.voice.stage.duration",
+            "Per-stage RED Duration histogram in ms (labels: stage, "
+            "outcome=success|error). Records wall-clock latency per "
+            "stage invocation including failed paths so the dashboard "
+            "can compare success-path vs error-path tail latency.",
+        )
+        self.voice_queue_depth = self._histogram(
+            "sovyx.voice.queue.depth",
+            "USE Utilisation — current depth of an async queue between "
+            "voice stages, sampled per producer enqueue (labels: owner="
+            "capture|vad|stt|tts|output). Unit is ``1`` (count of items "
+            "queued) — interpretation requires pairing with the matching "
+            "voice.queue.saturation_pct sample.",
+            unit="1",
+        )
+        self.voice_queue_saturation_pct = self._histogram(
+            "sovyx.voice.queue.saturation_pct",
+            "USE Saturation — queue depth as a percentage of capacity, "
+            "sampled per producer enqueue (labels: owner). 0 = empty, "
+            "100 = at capacity (next enqueue blocks or drops). Sustained "
+            "p95 > 80%% indicates an under-provisioned consumer.",
+            unit="%",
+        )
+
     # ── Internal instrument factories ───────────────────────────────
     # Centralised so every counter / histogram registered on this
     # registry is automatically gated by the cardinality budget — a
