@@ -42,6 +42,7 @@ characterization) pass ``stop_on_first_failure=False``.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import sys
@@ -884,21 +885,342 @@ def clear_preflight_warnings_file(*, data_dir: Path | None = None) -> None:
         path.unlink()
 
 
+# ---------------------------------------------------------------------------
+# #27 — Model integrity check (extends Step 3 MODELS_CORRUPT coverage)
+# ---------------------------------------------------------------------------
+#
+# Pre-#27 the Step 3 ``MODELS_CORRUPT`` code was defined but the only
+# integrity validation lived inside ``ModelDownloader.ensure_model`` —
+# fired once at download time. Files that became corrupted on disk
+# AFTER download (rare but real: disk write error during another
+# process, partial recovery from a power cut, malware, user manually
+# swapping a file) would never be detected at boot. The first sign of
+# the corruption was a runtime failure deep in the voice / brain
+# pipeline.
+#
+# #27 closes the gap by shipping a sync, side-effect-free integrity
+# probe that any preflight caller can include in their step list. The
+# probe covers the FOUR voice models (SileroVAD, Moonshine STT, Kokoro
+# TTS model + voices) AND the TWO brain models (e5-small-v2 embedding
+# + tokenizer.json) — the "voice vectors + linguistics models" scope
+# F1 #27 specifies. Missing files are NOT a failure (they may not
+# have been downloaded yet — first-boot is a legitimate "not yet
+# downloaded" state); SHA mismatches ARE a failure (file exists,
+# bytes are wrong → corruption).
+
+
+@dataclass(frozen=True, slots=True)
+class ModelIntegritySpec:
+    """One model's expected on-disk state (#27).
+
+    Attributes:
+        name: Stable identity used in logs / hints (e.g. ``"silero-vad-v5"``).
+        category: One of ``"vad"``, ``"stt"``, ``"tts"``, ``"embedding"``,
+            ``"tokenizer"``. Used to bucket failures in the dashboard.
+        path: Absolute :class:`Path` to the file on disk.
+        expected_sha256: Lower-case hex digest the file MUST match
+            when present. Empty string disables the SHA check (the
+            probe degrades to a "file exists" check).
+    """
+
+    name: str
+    category: str
+    path: Path
+    expected_sha256: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ModelIntegrityFailure:
+    """One model that failed the integrity probe (#27)."""
+
+    name: str
+    category: str
+    path: str
+    reason: str
+    """One of ``"sha_mismatch"``, ``"read_error"``. Files that simply
+    don't exist yet are NOT failures (see :func:`verify_model_integrity`)."""
+
+    expected_sha256: str = ""
+    actual_sha256: str = ""
+    error_detail: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ModelIntegrityReport:
+    """Aggregate outcome of :func:`verify_model_integrity` (#27)."""
+
+    checked: tuple[str, ...]
+    """Names of every model whose file was present and SHA-verified."""
+
+    missing: tuple[str, ...]
+    """Names of models whose file does not exist on disk yet. NOT a
+    failure — first-boot / not-yet-downloaded is a legitimate state."""
+
+    failures: tuple[ModelIntegrityFailure, ...]
+    """Models that exist on disk but failed verification (corrupted,
+    swapped, partial-write recovery, etc.). Non-empty list = preflight
+    Step 3 should fail."""
+
+    @property
+    def passed(self) -> bool:
+        """True when no SHA mismatches / read errors were observed.
+        Missing files do NOT fail this check."""
+        return not self.failures
+
+
+_SHA256_CHUNK_BYTES = 1 << 20  # 1 MiB
+"""Chunk size for streaming SHA-256 over model files. 1 MiB keeps
+peak memory bounded on the largest models (Kokoro voices ~ 130 MB)
+while staying large enough to amortise per-chunk overhead."""
+
+
+def compute_file_sha256(path: Path) -> str:
+    """Stream-hash a file with bounded peak memory.
+
+    Reads in :data:`_SHA256_CHUNK_BYTES` chunks so peak memory is
+    capped regardless of file size — important for the 130 MB Kokoro
+    voices file. Returns the lower-case hex digest. Raises
+    :class:`OSError` (FileNotFoundError, PermissionError, …) on read
+    failure — callers wrap in try/except.
+    """
+    hasher = hashlib.sha256()
+    with path.open("rb") as fh:
+        while True:
+            chunk = fh.read(_SHA256_CHUNK_BYTES)
+            if not chunk:
+                break
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def verify_model_integrity(
+    specs: list[ModelIntegritySpec],
+) -> ModelIntegrityReport:
+    """Sync probe over a list of :class:`ModelIntegritySpec` (#27).
+
+    Side-effect-free: never downloads, never writes. For each spec:
+
+    * **File missing** — appended to ``missing``. Not a failure
+      (caller decides whether to gate on first-boot state).
+    * **File present, no expected SHA** — appended to ``checked``
+      (the file-exists check passed; SHA verification was skipped).
+    * **File present, SHA matches** — appended to ``checked``.
+    * **File present, SHA mismatches** — appended to ``failures``
+      with ``reason="sha_mismatch"``.
+    * **File present, OSError on read** — appended to ``failures``
+      with ``reason="read_error"`` and the OSError repr.
+
+    Never raises. The probe must survive disk-edge conditions so
+    boot doesn't hard-fail on a permission glitch.
+    """
+    checked: list[str] = []
+    missing: list[str] = []
+    failures: list[ModelIntegrityFailure] = []
+
+    for spec in specs:
+        if not spec.path.exists():
+            missing.append(spec.name)
+            continue
+        if not spec.expected_sha256:
+            checked.append(spec.name)
+            continue
+        try:
+            actual = compute_file_sha256(spec.path)
+        except OSError as exc:
+            failures.append(
+                ModelIntegrityFailure(
+                    name=spec.name,
+                    category=spec.category,
+                    path=str(spec.path),
+                    reason="read_error",
+                    expected_sha256=spec.expected_sha256.lower(),
+                    error_detail=f"{type(exc).__name__}: {exc}",
+                ),
+            )
+            continue
+        if actual.lower() != spec.expected_sha256.lower():
+            failures.append(
+                ModelIntegrityFailure(
+                    name=spec.name,
+                    category=spec.category,
+                    path=str(spec.path),
+                    reason="sha_mismatch",
+                    expected_sha256=spec.expected_sha256.lower(),
+                    actual_sha256=actual.lower(),
+                ),
+            )
+            continue
+        checked.append(spec.name)
+
+    return ModelIntegrityReport(
+        checked=tuple(checked),
+        missing=tuple(missing),
+        failures=tuple(failures),
+    )
+
+
+def default_model_integrity_specs(
+    *,
+    data_dir: Path,
+) -> list[ModelIntegritySpec]:
+    """Build the default spec list covering voice + brain models (#27).
+
+    Args:
+        data_dir: Sovyx data directory (typically ``~/.sovyx``). Voice
+            models live under ``<data_dir>/models/voice/``; brain models
+            live under ``<data_dir>/models/brain/``.
+
+    Returns:
+        Six :class:`ModelIntegritySpec` entries:
+
+        * ``silero-vad-v5`` (vad)
+        * ``moonshine-tiny`` (stt)
+        * ``kokoro-v1.0-int8`` (tts)
+        * ``kokoro-voices-v1.0`` (tts)
+        * ``e5-small-v2`` (embedding) — brain
+        * ``tokenizer`` (tokenizer) — brain
+
+    SHA pins come from the canonical model registries
+    (``sovyx.voice.model_registry`` + ``sovyx.brain._model_downloader``)
+    so a future SHA bump in either registry automatically updates the
+    integrity check.
+    """
+    # Lazy imports — these modules pull onnxruntime indirectly; defer
+    # until the spec is actually requested so cold-start cost stays
+    # in the caller path (preflight) and never in pure module import.
+    from sovyx.brain._model_downloader import (
+        MODEL_FILENAME as _BRAIN_MODEL_FILENAME,
+    )
+    from sovyx.brain._model_downloader import (
+        MODEL_SHA256 as _BRAIN_MODEL_SHA256,
+    )
+    from sovyx.brain._model_downloader import (
+        TOKENIZER_FILENAME as _BRAIN_TOKENIZER_FILENAME,
+    )
+    from sovyx.brain._model_downloader import (
+        TOKENIZER_SHA256 as _BRAIN_TOKENIZER_SHA256,
+    )
+    from sovyx.voice.model_registry import VOICE_MODELS
+
+    voice_dir = data_dir / "models" / "voice"
+    brain_dir = data_dir / "models" / "brain"
+
+    specs: list[ModelIntegritySpec] = []
+    for key in (
+        "silero-vad-v5",
+        "moonshine-tiny",
+        "kokoro-v1.0-int8",
+        "kokoro-voices-v1.0",
+    ):
+        info = VOICE_MODELS.get(key)
+        if info is None or not info.sha256:
+            continue
+        specs.append(
+            ModelIntegritySpec(
+                name=info.name,
+                category=info.category,
+                path=voice_dir / info.filename,
+                expected_sha256=info.sha256,
+            ),
+        )
+    specs.append(
+        ModelIntegritySpec(
+            name="e5-small-v2",
+            category="embedding",
+            path=brain_dir / _BRAIN_MODEL_FILENAME,
+            expected_sha256=_BRAIN_MODEL_SHA256,
+        ),
+    )
+    specs.append(
+        ModelIntegritySpec(
+            name=_BRAIN_TOKENIZER_FILENAME,
+            category="tokenizer",
+            path=brain_dir / _BRAIN_TOKENIZER_FILENAME,
+            expected_sha256=_BRAIN_TOKENIZER_SHA256,
+        ),
+    )
+    return specs
+
+
+async def check_model_integrity(
+    *,
+    data_dir: Path,
+    specs: list[ModelIntegritySpec] | None = None,
+) -> tuple[bool, str, dict[str, Any]]:
+    """Async :class:`PreflightCheck` for Step 3 ``MODELS_CORRUPT`` (#27).
+
+    Args:
+        data_dir: Sovyx data directory (used by the default spec
+            builder when ``specs`` is omitted).
+        specs: Optional override list of specs to verify. ``None``
+            defaults to :func:`default_model_integrity_specs`.
+
+    Returns:
+        ``(passed, hint, details)`` triple per the
+        :class:`PreflightCheck` protocol. ``passed=False`` only on
+        SHA mismatch / read error; missing files (first-boot) pass.
+
+    The check is synchronous on the inside — chunked file reads are
+    cheap (single-digit ms even for 130 MB at SSD bandwidth) and any
+    long-tail latency is absorbed by the ``run_preflight`` step
+    duration tracking, not by blocking the event loop in a hot path.
+    """
+    effective_specs = (
+        specs if specs is not None else default_model_integrity_specs(data_dir=data_dir)
+    )
+    report = verify_model_integrity(effective_specs)
+    details: dict[str, Any] = {
+        "checked": list(report.checked),
+        "missing": list(report.missing),
+        "failures": [
+            {
+                "name": f.name,
+                "category": f.category,
+                "path": f.path,
+                "reason": f.reason,
+                "expected_sha256": f.expected_sha256,
+                "actual_sha256": f.actual_sha256,
+                "error_detail": f.error_detail,
+            }
+            for f in report.failures
+        ],
+    }
+    if report.passed:
+        return True, "", details
+    failed_names = ", ".join(f.name for f in report.failures)
+    failed_reasons = ", ".join(f"{f.name}={f.reason}" for f in report.failures)
+    hint = (
+        f"voice/brain model integrity failed: {failed_names}. "
+        f"Reasons: {failed_reasons}. Re-download the affected files "
+        f"with `sovyx start` (auto-downloads missing models) or "
+        f"manually delete the corrupted file from {data_dir / 'models'} "
+        f"so the next boot fetches a fresh copy."
+    )
+    return False, hint, details
+
+
 __all__ = [
     "BootPreflightWarningsStore",
+    "ModelIntegrityFailure",
+    "ModelIntegrityReport",
+    "ModelIntegritySpec",
     "PreflightCheck",
     "PreflightReport",
     "PreflightStep",
     "PreflightStepCode",
     "PreflightStepSpec",
+    "check_model_integrity",
     "check_portaudio",
     "check_tts_synthesize",
     "check_wake_word_smoke",
     "clear_preflight_warnings_file",
+    "compute_file_sha256",
     "current_platform_key",
+    "default_model_integrity_specs",
     "default_step_names",
     "preflight_warnings_file_path",
     "read_preflight_warnings_file",
     "run_preflight",
+    "verify_model_integrity",
     "write_preflight_warnings_file",
 ]
