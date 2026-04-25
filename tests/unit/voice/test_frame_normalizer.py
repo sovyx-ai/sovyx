@@ -1581,10 +1581,7 @@ class TestPhaseInversionDetector:
         with caplog.at_level(logging.WARNING):
             norm.push(block)
         assert norm.phase_inverted_count == 1
-        assert any(
-            "voice.audio.downmix_phase_inverted" in str(r.msg)
-            for r in caplog.records
-        )
+        assert any("voice.audio.downmix_phase_inverted" in str(r.msg) for r in caplog.records)
 
     def test_correlated_stereo_not_flagged(
         self,
@@ -1654,3 +1651,121 @@ class TestPhaseInversionDetector:
         block = _sine_wave_int16(440, 16_000, 0.05, channels=1, amplitude=0.5)
         norm.push(block)
         assert norm.phase_inverted_count == 0
+
+
+# ---------------------------------------------------------------------------
+# Band-aid #41 — ducking ramp click-free bound
+# ---------------------------------------------------------------------------
+
+
+class TestDuckingRampBounds:
+    """``ducking_ramp_ms`` must be in ``[10, 1000]`` ms (band-aid #41).
+
+    Below 10 ms the multiplicative gain step produces audible clicks;
+    above 1 s the per-step ramp outlasts realistic TTS phrase
+    boundaries (likely a unit error). Both must loud-fail at
+    construction (anti-pattern #11) so a misconfigured deployment
+    surfaces at boot rather than producing artefacts the user reports.
+    """
+
+    def test_default_construction_passes_through_bound(self) -> None:
+        """The default 10 ms (= the spec's lower bound) must construct
+        cleanly. Regression guard: if the bound or default ever drifts
+        out of sync, the production default would itself be invalid."""
+        norm = FrameNormalizer(source_rate=16_000, source_channels=1)
+        # 10 ms × 16 kHz = 160 samples — also the band-aid #41 spec target.
+        assert norm._ducking_ramp_samples == 160
+
+    def test_explicit_minimum_accepted(self) -> None:
+        """Exactly 10 ms accepted (inclusive lower bound)."""
+        norm = FrameNormalizer(
+            source_rate=16_000,
+            source_channels=1,
+            ducking_ramp_ms=10.0,
+        )
+        assert norm._ducking_ramp_samples == 160
+
+    def test_explicit_maximum_accepted(self) -> None:
+        """Exactly 1000 ms accepted (inclusive upper bound)."""
+        norm = FrameNormalizer(
+            source_rate=16_000,
+            source_channels=1,
+            ducking_ramp_ms=1_000.0,
+        )
+        assert norm._ducking_ramp_samples == 16_000
+
+    def test_below_minimum_loud_fails(self) -> None:
+        """9.999 ms → ValueError mentioning the band-aid + the bound."""
+        with pytest.raises(
+            ValueError,
+            match=r"ducking_ramp_ms must be in \[10\.0, 1000\.0\] ms",
+        ):
+            FrameNormalizer(
+                source_rate=16_000,
+                source_channels=1,
+                ducking_ramp_ms=9.999,
+            )
+
+    def test_zero_loud_fails(self) -> None:
+        """0 ms — the prior bound (``> 0``) wouldn't have caught
+        ``0.001`` either, but 0 must still fail under the new bound."""
+        with pytest.raises(
+            ValueError,
+            match=r"ducking_ramp_ms must be in \[10\.0, 1000\.0\] ms",
+        ):
+            FrameNormalizer(
+                source_rate=16_000,
+                source_channels=1,
+                ducking_ramp_ms=0.0,
+            )
+
+    def test_negative_loud_fails(self) -> None:
+        """Negative duration — caller bug, must surface."""
+        with pytest.raises(
+            ValueError,
+            match=r"ducking_ramp_ms must be in \[10\.0, 1000\.0\] ms",
+        ):
+            FrameNormalizer(
+                source_rate=16_000,
+                source_channels=1,
+                ducking_ramp_ms=-1.0,
+            )
+
+    def test_above_maximum_loud_fails(self) -> None:
+        """1001 ms → ValueError. Likely a unit confusion (s vs. ms)."""
+        with pytest.raises(
+            ValueError,
+            match=r"ducking_ramp_ms must be in \[10\.0, 1000\.0\] ms",
+        ):
+            FrameNormalizer(
+                source_rate=16_000,
+                source_channels=1,
+                ducking_ramp_ms=1_001.0,
+            )
+
+    def test_egregious_unit_confusion_loud_fails(self) -> None:
+        """Caller passed seconds (1.5) instead of ms (1500) — fails."""
+        with pytest.raises(
+            ValueError,
+            match=r"band-aid #41 click-free bound",
+        ):
+            FrameNormalizer(
+                source_rate=16_000,
+                source_channels=1,
+                ducking_ramp_ms=1_500.0,
+            )
+
+    def test_no_sub_one_sample_clamp_remains(self) -> None:
+        """At the new minimum the ramp resolves to the full 160 samples
+        — proves the prior ``max(1, ...)`` clamp is unreachable and
+        therefore safely deletable. Regression guard against re-
+        introducing the dead clamp under a future bound relaxation."""
+        norm = FrameNormalizer(
+            source_rate=16_000,
+            source_channels=1,
+            ducking_ramp_ms=10.0,
+        )
+        # 160 samples == _MIN_DUCKING_RAMP_MS × _TARGET_RATE / 1000.
+        # The clamp would only fire below 1 sample (i.e., < 0.0625 ms),
+        # which the new bound prohibits at construction.
+        assert norm._ducking_ramp_samples >= 160

@@ -114,6 +114,38 @@ multiplicative steps.
 """
 
 
+# ── Band-aid #41 replacement — enforced ducking ramp bounds ──────────
+#
+# Pre-band-aid #41: ``__init__`` only rejected ``ducking_ramp_ms <= 0``.
+# A ramp of 0.001 ms (sub-sample) rounded to 0 ramp samples — clamped
+# to ``max(1, ...)`` = a ONE-sample transition. A 1-sample step from
+# unity to -18 dB at 16 kHz is a 62 µs gain ramp: well inside the
+# audible-click window (~3 ms perceptual threshold for transient
+# discontinuities) and produces a hard click on every TTS start/stop.
+#
+# Spec (F1 #41): "Min 160 samples". 160 samples at 16 kHz = 10 ms,
+# matching the ADR-recommended default. The fix per CLAUDE.md anti-
+# pattern #11 (loud-fail bounds): enforce the minimum at construction
+# so a misconfigured deployment fails at boot with a clear ValueError
+# rather than producing audible clicks the user will report.
+#
+# Upper bound: 1 000 ms (1 s). Above that the per-step ramp outlasts
+# any realistic TTS phrase boundary — set_ducking_gain_db calls would
+# never reach their target before the next change. Beyond 1 s the
+# value is almost certainly a unit confusion (seconds vs. ms).
+_MIN_DUCKING_RAMP_MS = 10.0
+"""Minimum click-free ramp at 16 kHz (160 samples). Below this,
+multiplicative gain steps produce audible clicks at TTS start/stop.
+Anchored to the human transient-perception threshold (~3 ms) with
+~3× headroom for the -18 dB default ducking range."""
+
+_MAX_DUCKING_RAMP_MS = 1_000.0
+"""Upper sanity bound. Above 1 s a per-step ramp outlasts any
+realistic TTS phrase boundary — strong indicator of a unit error
+(seconds vs. ms). Loud-fail rather than silently slowing
+ducking response below the operator's intent."""
+
+
 # ---------------------------------------------------------------------------
 # R2 saturation feedback loop tuning
 # ---------------------------------------------------------------------------
@@ -259,6 +291,9 @@ class FrameNormalizer:
         ducking_ramp_ms: Duration of the linear ramp used when
             :meth:`set_ducking_gain_db` changes the target gain. Default
             10 ms, which is well under the ADR's 50 ms release bound.
+            Bounded ``[10.0, 1000.0]`` ms (band-aid #41) — sub-10 ms
+            ramps produce audible clicks at TTS start/stop; >1 s ramps
+            outlast realistic TTS phrase boundaries.
         agc2: Optional :class:`~sovyx.voice._agc2.AGC2` controller (F5).
             When provided, every produced int16 frame is passed through
             ``agc2.process`` before being rewindowed — closed-loop digital
@@ -272,7 +307,7 @@ class FrameNormalizer:
     Raises:
         ValueError: If ``source_rate`` ≤ 0, ``source_channels`` < 1,
             ``source_format`` is not one of the supported strings, or
-            ``ducking_ramp_ms`` ≤ 0.
+            ``ducking_ramp_ms`` is outside ``[10.0, 1000.0]`` ms.
     """
 
     def __init__(
@@ -295,8 +330,16 @@ class FrameNormalizer:
                 f"source_format must be one of {sorted(_SUPPORTED_FORMATS)}, got {source_format!r}"
             )
             raise ValueError(msg)
-        if ducking_ramp_ms <= 0:
-            msg = f"ducking_ramp_ms must be positive, got {ducking_ramp_ms}"
+        if not (_MIN_DUCKING_RAMP_MS <= ducking_ramp_ms <= _MAX_DUCKING_RAMP_MS):
+            # Band-aid #41 loud-fail: sub-10 ms ramps produce audible
+            # clicks; >1 s ramps outlast TTS boundaries (likely unit
+            # confusion). Anti-pattern #11 — fail at construction with
+            # a clear message instead of silently producing artefacts.
+            msg = (
+                f"ducking_ramp_ms must be in "
+                f"[{_MIN_DUCKING_RAMP_MS}, {_MAX_DUCKING_RAMP_MS}] ms "
+                f"(band-aid #41 click-free bound), got {ducking_ramp_ms}"
+            )
             raise ValueError(msg)
 
         import numpy as np
@@ -313,10 +356,9 @@ class FrameNormalizer:
         self._output_buf: npt.NDArray[np.int16] = np.zeros(0, dtype=np.int16)
 
         self._ducking_ramp_ms = ducking_ramp_ms
-        self._ducking_ramp_samples = max(
-            1,
-            int(round(_TARGET_RATE * ducking_ramp_ms / 1000.0)),
-        )
+        # Band-aid #41 made the prior ``max(1, ...)`` clamp dead — at
+        # the minimum bound (10 ms) we already get 160 samples.
+        self._ducking_ramp_samples = int(round(_TARGET_RATE * ducking_ramp_ms / 1000.0))
         self._current_linear_gain: float = 1.0
         self._target_linear_gain: float = 1.0
 
@@ -979,10 +1021,7 @@ def _channel_correlation(
     import numpy as np
 
     if left.shape != right.shape:
-        msg = (
-            f"left/right shape mismatch: left={left.shape}, "
-            f"right={right.shape}"
-        )
+        msg = f"left/right shape mismatch: left={left.shape}, right={right.shape}"
         raise ValueError(msg)
     if left.size == 0:
         return 0.0
