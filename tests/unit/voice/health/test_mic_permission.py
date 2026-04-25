@@ -109,11 +109,24 @@ class TestCrossPlatformBranches:
         assert report.remediation_hint == ""
         assert any("linux" in n for n in report.notes)
 
-    def test_darwin_returns_unknown(self) -> None:
-        with patch.object(sys, "platform", "darwin"):
+    def test_darwin_routes_to_macos_probe(self) -> None:
+        # MA2: the darwin branch now calls the real TCC probe instead
+        # of returning the stub UNKNOWN. We patch the underlying probe
+        # to return UNKNOWN so this test stays platform-neutral and
+        # exercises the routing path without sqlite3 / TCC.db access.
+        with (
+            patch.object(sys, "platform", "darwin"),
+            patch(
+                "sovyx.voice.health._mic_permission_mac.query_macos_microphone_permission",
+                return_value=(None, ["test stub"]),
+            ),
+        ):
             report = check_microphone_permission()
         assert report.status is MicPermissionStatus.UNKNOWN
-        assert any("darwin" in n.lower() for n in report.notes)
+        # The stub note from the patched probe propagates into the
+        # report — confirms the routing actually called the macOS
+        # probe (vs. silently returning the old stub).
+        assert "test stub" in report.notes
 
     def test_unsupported_platform_returns_unknown(self) -> None:
         with patch.object(sys, "platform", "freebsd"):

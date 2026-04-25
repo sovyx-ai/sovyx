@@ -101,15 +101,44 @@ class MicPermissionReport:
 
     @property
     def remediation_hint(self) -> str:
-        """Operator-actionable remediation message ready for emit."""
+        """Operator-actionable remediation message ready for emit.
+
+        OS-aware: routes to the matching Settings / System
+        Preferences path so the user navigates ONE click instead of
+        Googling "how to fix mic permission". Detected via
+        ``sys.platform`` at access time so the same dataclass works
+        across OSes without per-construction branching."""
+        import sys as _sys
+
         if self.status is MicPermissionStatus.GRANTED:
             return ""
         if self.status is MicPermissionStatus.DENIED:
+            if _sys.platform == "darwin":
+                # MA2: macOS TCC. The exact path:
+                # System Settings → Privacy & Security → Microphone.
+                return (
+                    "macOS is blocking microphone access for Sovyx. "
+                    "Open System Settings → Privacy & Security → "
+                    "Microphone, enable Sovyx (or your Terminal / IDE "
+                    "if running Sovyx from one), then restart Sovyx. "
+                    "If Sovyx isn't listed, the OS will prompt on the "
+                    "next capture attempt — accept the prompt."
+                )
+            # Windows + others.
             return (
                 "Windows is blocking microphone access for desktop apps. "
                 "Open Settings → Privacy & security → Microphone, ensure "
                 "'Microphone access' is On AND 'Let desktop apps access "
                 "your microphone' is On, then restart Sovyx."
+            )
+        # UNKNOWN — don't presume which OS; surface the generic hint.
+        if _sys.platform == "darwin":
+            return (
+                "Microphone permission state could not be determined "
+                "(TCC.db unreadable — likely needs Full Disk Access for "
+                "the Terminal / IDE running Sovyx). If audio capture is "
+                "silent, check System Settings → Privacy & Security → "
+                "Microphone manually."
             )
         return (
             "Microphone permission state could not be determined "
@@ -145,16 +174,58 @@ def check_microphone_permission() -> MicPermissionReport:
             notes=("linux: no OS-level capture-consent gate (PulseAudio / PipeWire ACLs)",),
         )
     if sys.platform == "darwin":
-        return MicPermissionReport(
-            status=MicPermissionStatus.UNKNOWN,
-            notes=("darwin: TCC probe deferred to MA2; treat as UNKNOWN for now",),
-        )
+        return _check_macos()
     if sys.platform != "win32":
         return MicPermissionReport(
             status=MicPermissionStatus.UNKNOWN,
             notes=(f"unsupported platform: {sys.platform}",),
         )
     return _check_windows()
+
+
+def _check_macos() -> MicPermissionReport:
+    """macOS-only TCC consent probe (MA2).
+
+    Reads ``~/Library/Application Support/com.apple.TCC/TCC.db`` via
+    sqlite3 and translates the ``kTCCServiceMicrophone`` row's
+    auth_value into a :class:`MicPermissionStatus`. Wraps the
+    underlying probe so this module's per-OS dispatch stays uniform
+    in shape with ``_check_windows``."""
+    try:
+        from sovyx.voice.health._mic_permission_mac import (
+            auth_value_to_status_token,
+            query_macos_microphone_permission,
+        )
+
+        auth_value, probe_notes = query_macos_microphone_permission()
+    except Exception as exc:  # noqa: BLE001 — probe boundary
+        # The TCC reader itself crashed (unexpected). Don't propagate
+        # — collapse into UNKNOWN with a structured note so the
+        # cascade's other layers still get to act.
+        logger.warning(
+            "voice.mic_permission.tcc_probe_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        return MicPermissionReport(
+            status=MicPermissionStatus.UNKNOWN,
+            notes=(f"TCC probe crashed: {exc!r}",),
+        )
+
+    token = auth_value_to_status_token(auth_value)
+    if token == "granted":
+        status = MicPermissionStatus.GRANTED
+    elif token == "denied":
+        status = MicPermissionStatus.DENIED
+    else:
+        status = MicPermissionStatus.UNKNOWN
+
+    return MicPermissionReport(
+        status=status,
+        machine_value=None,  # macOS doesn't have HKLM-equivalent.
+        user_value=str(auth_value) if auth_value is not None else None,
+        notes=tuple(probe_notes),
+    )
 
 
 def _check_windows() -> MicPermissionReport:
