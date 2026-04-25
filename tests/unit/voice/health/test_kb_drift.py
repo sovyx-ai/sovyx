@@ -77,8 +77,11 @@ class TestDriftSample:
     def test_inverted_baseline_range_rejected(self) -> None:
         monitor = DriftMonitor()
         bad = DriftSample(
-            profile_id="p", control_role="r", value=0.5,
-            baseline_min=0.7, baseline_max=0.3,
+            profile_id="p",
+            control_role="r",
+            value=0.5,
+            baseline_min=0.7,
+            baseline_max=0.3,
         )
         with pytest.raises(ValueError, match="baseline_min"):
             monitor.record(bad)
@@ -173,8 +176,11 @@ class TestStateMachine:
         # Sample at exactly baseline_min.
         state = monitor.record(
             DriftSample(
-                profile_id="p", control_role="r", value=0.4,
-                baseline_min=0.4, baseline_max=0.6,
+                profile_id="p",
+                control_role="r",
+                value=0.4,
+                baseline_min=0.4,
+                baseline_max=0.6,
             )
         )
         # Window has 1 sample, all in-baseline → still UNKNOWN
@@ -245,10 +251,7 @@ class TestEventEmission:
         with caplog.at_level(logging.WARNING):
             for _ in range(2):
                 monitor.record(_sample(0.9))
-        events = [
-            r for r in caplog.records
-            if "voice.kb.profile.drift_detected" in str(r.msg)
-        ]
+        events = [r for r in caplog.records if "voice.kb.profile.drift_detected" in str(r.msg)]
         assert len(events) >= 1
 
     def test_drift_recovered_event_fires(
@@ -268,10 +271,7 @@ class TestEventEmission:
         with caplog.at_level(logging.INFO):
             for _ in range(2):
                 monitor.record(_sample(0.5))
-        events = [
-            r for r in caplog.records
-            if "voice.kb.profile.drift_recovered" in str(r.msg)
-        ]
+        events = [r for r in caplog.records if "voice.kb.profile.drift_recovered" in str(r.msg)]
         assert len(events) >= 1
 
 
@@ -287,9 +287,9 @@ class TestLRUEviction:
         keys = monitor.tracked_keys()
         assert len(keys) == 3
         # Oldest two evicted; last 3 remain.
-        assert (("p2", "capture") in keys
-                and ("p3", "capture") in keys
-                and ("p4", "capture") in keys)
+        assert (
+            ("p2", "capture") in keys and ("p3", "capture") in keys and ("p4", "capture") in keys
+        )
 
     def test_touch_moves_to_end(self) -> None:
         """Re-recording a key moves it to the LRU 'newest' end so
@@ -327,9 +327,7 @@ class TestThreadSafety:
             except Exception as exc:  # noqa: BLE001
                 errors.append(exc)
 
-        threads = [
-            threading.Thread(target=worker, args=(i,)) for i in range(n_threads)
-        ]
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(n_threads)]
         for t in threads:
             t.start()
         for t in threads:

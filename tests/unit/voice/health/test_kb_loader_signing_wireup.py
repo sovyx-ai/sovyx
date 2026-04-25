@@ -96,9 +96,7 @@ class TestLoadProfileFileWithVerifier:
         with caplog.at_level(logging.WARNING):
             profile = load_profile_file(path, verifier=verifier)
         assert profile.profile_id == "test_profile_b"
-        assert any(
-            "voice.kb.signature.invalid" in str(r.msg) for r in caplog.records
-        )
+        assert any("voice.kb.signature.invalid" in str(r.msg) for r in caplog.records)
 
     def test_strict_verifier_unsigned_profile_raises(
         self,
@@ -167,8 +165,7 @@ class TestLoadProfilesFromDirectoryWithVerifier:
         assert profiles == []
         # Each skip should produce a structured WARN.
         rejected = [
-            r for r in caplog.records
-            if "mixer_kb_profile_signature_rejected" in str(r.msg)
+            r for r in caplog.records if "mixer_kb_profile_signature_rejected" in str(r.msg)
         ]
         assert len(rejected) == 2
 
@@ -200,8 +197,5 @@ class TestLoadProfilesFromDirectoryWithVerifier:
             profiles = load_profiles_from_directory(tmp_path, verifier=verifier)
         assert {p.profile_id for p in profiles} == {"p_lenient_a", "p_lenient_b"}
         # Two warnings — one per unsigned profile.
-        warns = [
-            r for r in caplog.records
-            if "voice.kb.signature.invalid" in str(r.msg)
-        ]
+        warns = [r for r in caplog.records if "voice.kb.signature.invalid" in str(r.msg)]
         assert len(warns) == 2

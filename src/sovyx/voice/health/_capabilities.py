@@ -347,10 +347,7 @@ class CapabilityResolver:
             missing = set(Capability) - set(probes.keys())
             if missing:
                 names = sorted(c.name for c in missing)
-                msg = (
-                    f"probes mapping must cover every Capability; "
-                    f"missing: {names}"
-                )
+                msg = f"probes mapping must cover every Capability; missing: {names}"
                 raise ValueError(msg)
             self._probes: Mapping[Capability, Callable[[], bool]] = probes
         else:
@@ -388,8 +385,7 @@ class CapabilityResolver:
                     error=type(exc).__name__,
                     detail=str(exc)[:200],
                     action_required=(
-                        "fix the probe; in the meantime the resolver "
-                        "fail-closes to has=False"
+                        "fix the probe; in the meantime the resolver fail-closes to has=False"
                     ),
                 )
                 verdict = False

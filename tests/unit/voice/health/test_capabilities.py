@@ -32,7 +32,7 @@ def _stub_probes(
     out: dict[Capability, Any] = {}
     for cap in Capability:
         verdict = overrides.get(cap, False)
-        out[cap] = (lambda v=verdict: v)
+        out[cap] = lambda v=verdict: v
     return out
 
 
@@ -100,9 +100,7 @@ class TestResolverCache:
         with caplog.at_level(logging.WARNING):
             verdict = resolver.has(Capability.WASAPI_EXCLUSIVE)
         assert verdict is False
-        assert any(
-            "voice.capability.probe_failed" in str(r.msg) for r in caplog.records
-        )
+        assert any("voice.capability.probe_failed" in str(r.msg) for r in caplog.records)
 
     def test_reset_cache_re_probes(self) -> None:
         verdict = {"v": True}
@@ -255,9 +253,7 @@ class TestOnnxProbe:
 
         real_import = builtins.__import__
 
-        def deny_onnx(
-            name: str, *args: Any, **kwargs: Any
-        ) -> Any:  # noqa: ANN401
+        def deny_onnx(name: str, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
             if name == "onnxruntime":
                 msg = "no module"
                 raise ImportError(msg)

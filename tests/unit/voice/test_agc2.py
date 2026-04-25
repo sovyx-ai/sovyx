@@ -457,9 +457,7 @@ class TestVoiceTuningAgc2Default:
         cfg = VoiceTuningConfig()
         assert cfg.agc2_enabled is True
 
-    def test_env_override_disables(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_env_override_disables(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from sovyx.engine.config import VoiceTuningConfig
 
         monkeypatch.setenv("SOVYX_TUNING__VOICE__AGC2_ENABLED", "false")

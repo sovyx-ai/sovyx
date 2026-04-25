@@ -286,7 +286,7 @@ class BackoffSchedule:
             # Attempt 1 → base × multiplier
             # Attempt 2 → base × multiplier²
             # ...
-            computed = self._policy.base_delay_s * (self._policy.multiplier ** n)
+            computed = self._policy.base_delay_s * (self._policy.multiplier**n)
             computed = min(computed, self._policy.max_delay_s)
             jittered = self._apply_jitter(computed)
         # Logging outside the lock (logging may yield).

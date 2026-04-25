@@ -269,9 +269,7 @@ class PipelineStateMachine:
                 only after the orchestrator's transition sites are
                 fully migrated.
         """
-        if not (
-            _MIN_WATCHDOG_THRESHOLD_S <= watchdog_threshold_s <= _MAX_WATCHDOG_THRESHOLD_S
-        ):
+        if not (_MIN_WATCHDOG_THRESHOLD_S <= watchdog_threshold_s <= _MAX_WATCHDOG_THRESHOLD_S):
             msg = (
                 f"watchdog_threshold_s must be in "
                 f"[{_MIN_WATCHDOG_THRESHOLD_S}, {_MAX_WATCHDOG_THRESHOLD_S}], "

@@ -110,8 +110,7 @@ class TestAttenuatedMicAgc2Recovery:
         # Confirm input level matches mission baseline.
         input_rms = _rms_dbfs(attenuated_block)
         assert input_rms < -36.0, (  # noqa: PLR2004
-            f"input RMS {input_rms:.1f} dBFS not in attenuated range; "
-            f"check fixture amplitude"
+            f"input RMS {input_rms:.1f} dBFS not in attenuated range; check fixture amplitude"
         )
 
         # Drive the pipeline. Collect output windows for level analysis.

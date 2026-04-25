@@ -1123,9 +1123,7 @@ class TestKokoroChaosWireUp:
         from sovyx.voice._chaos import _ENABLED_ENV_VAR, _RATE_ENV_VAR_PREFIX
 
         monkeypatch.delenv(_ENABLED_ENV_VAR, raising=False)
-        monkeypatch.setenv(
-            f"{_RATE_ENV_VAR_PREFIX}TTS_ZERO_ENERGY_PCT", "100"
-        )
+        monkeypatch.setenv(f"{_RATE_ENV_VAR_PREFIX}TTS_ZERO_ENERGY_PCT", "100")
 
         kokoro, _ = _build_kokoro(tmp_path)
         chunk = await kokoro.synthesize("hello world")
@@ -1140,9 +1138,7 @@ class TestKokoroChaosWireUp:
         from sovyx.voice._chaos import _ENABLED_ENV_VAR, _RATE_ENV_VAR_PREFIX
 
         monkeypatch.setenv(_ENABLED_ENV_VAR, "true")
-        monkeypatch.setenv(
-            f"{_RATE_ENV_VAR_PREFIX}TTS_ZERO_ENERGY_PCT", "100"
-        )
+        monkeypatch.setenv(f"{_RATE_ENV_VAR_PREFIX}TTS_ZERO_ENERGY_PCT", "100")
 
         kokoro, _ = _build_kokoro(tmp_path)
         chunk = await kokoro.synthesize("hello world")
@@ -1170,9 +1166,7 @@ class TestKokoroChaosWireUp:
 
         monkeypatch.setattr(kokoro_mod, "record_stage_event", _capture)
         monkeypatch.setenv(_ENABLED_ENV_VAR, "true")
-        monkeypatch.setenv(
-            f"{_RATE_ENV_VAR_PREFIX}TTS_ZERO_ENERGY_PCT", "100"
-        )
+        monkeypatch.setenv(f"{_RATE_ENV_VAR_PREFIX}TTS_ZERO_ENERGY_PCT", "100")
 
         kokoro, _ = _build_kokoro(tmp_path)
         await kokoro.synthesize("hello world")

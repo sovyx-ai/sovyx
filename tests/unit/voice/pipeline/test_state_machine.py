@@ -135,10 +135,7 @@ class TestRecordTransition:
             )
         assert rec.valid is False
         assert m.invalid_transition_count == 1
-        assert any(
-            "pipeline.state.invalid_transition" in r.message
-            for r in caplog.records
-        )
+        assert any("pipeline.state.invalid_transition" in r.message for r in caplog.records)
 
     def test_invalid_transition_still_advances_state(self) -> None:
         """Even invalid transitions update current_state — the caller
@@ -253,10 +250,7 @@ class TestWatchdog:
             rec = m.fire_watchdog()
         assert rec.valid is True
         assert m.current_state is VoicePipelineState.IDLE
-        assert any(
-            "pipeline.state.watchdog_fired" in r.message
-            for r in caplog.records
-        )
+        assert any("pipeline.state.watchdog_fired" in r.message for r in caplog.records)
 
     def test_fire_watchdog_with_custom_recover_state(self) -> None:
         m = PipelineStateMachine()

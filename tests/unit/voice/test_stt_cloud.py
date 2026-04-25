@@ -950,9 +950,7 @@ class TestCloudSTTR1WireUp:
         engine_b = CloudSTT(cfg_b)
         assert engine_a._guard.key != engine_b._guard.key
         # Keys must be the M1 hashed form (12 hex chars).
-        assert engine_a._guard.key == hash_pii(
-            cfg_a.api_base_url, salt="voice.stt.cloud"
-        )
+        assert engine_a._guard.key == hash_pii(cfg_a.api_base_url, salt="voice.stt.cloud")
 
     @pytest.mark.asyncio()
     async def test_watchdog_buffer_above_api_timeout(
@@ -989,9 +987,7 @@ class TestCloudSTTChaosWireUp:
         from sovyx.voice._chaos import _ENABLED_ENV_VAR, _RATE_ENV_VAR_PREFIX
 
         monkeypatch.delenv(_ENABLED_ENV_VAR, raising=False)
-        monkeypatch.setenv(
-            f"{_RATE_ENV_VAR_PREFIX}CLOUD_STT_NETWORK_FAIL_PCT", "100"
-        )
+        monkeypatch.setenv(f"{_RATE_ENV_VAR_PREFIX}CLOUD_STT_NETWORK_FAIL_PCT", "100")
 
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -1022,9 +1018,7 @@ class TestCloudSTTChaosWireUp:
         from sovyx.voice._hystrix_guard import CircuitState
 
         monkeypatch.setenv(_ENABLED_ENV_VAR, "true")
-        monkeypatch.setenv(
-            f"{_RATE_ENV_VAR_PREFIX}CLOUD_STT_NETWORK_FAIL_PCT", "100"
-        )
+        monkeypatch.setenv(f"{_RATE_ENV_VAR_PREFIX}CLOUD_STT_NETWORK_FAIL_PCT", "100")
 
         # httpx mocked to succeed — but chaos overrides before the
         # call lands, so every transcribe injects RuntimeError.

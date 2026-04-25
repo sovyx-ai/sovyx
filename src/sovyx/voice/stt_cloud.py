@@ -344,10 +344,7 @@ class CloudSTT(STTEngine):
                 # Validate audio duration
                 duration_s = len(audio) / sample_rate
                 if duration_s > _MAX_AUDIO_DURATION_S:
-                    msg = (
-                        f"Audio too long: {duration_s:.1f}s "
-                        f"(max {_MAX_AUDIO_DURATION_S:.0f}s)"
-                    )
+                    msg = f"Audio too long: {duration_s:.1f}s (max {_MAX_AUDIO_DURATION_S:.0f}s)"
                     raise CloudSTTError(msg)
 
                 # Convert to WAV

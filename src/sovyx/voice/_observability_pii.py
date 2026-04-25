@@ -98,18 +98,18 @@ def hash_pii(
     Raises:
         ValueError: ``length`` outside the ``[8, 64]`` range.
     """
-    _MIN_HASH_LEN = 8
-    _MAX_HASH_LEN = 64
-    if not (_MIN_HASH_LEN <= length <= _MAX_HASH_LEN):
+    min_hash_len = 8
+    max_hash_len = 64
+    if not (min_hash_len <= length <= max_hash_len):
         msg = (
-            f"length must be in [{_MIN_HASH_LEN}, {_MAX_HASH_LEN}] "
+            f"length must be in [{min_hash_len}, {max_hash_len}] "
             f"(8 hex = 32-bit floor below which collisions become realistic; "
             f"64 hex = full SHA-256 digest), got {length}"
         )
         raise ValueError(msg)
     if not value:
         return ""
-    payload = f"{salt}::{value}".encode("utf-8")
+    payload = f"{salt}::{value}".encode()
     digest = hashlib.sha256(payload).hexdigest()
     return digest[:length]
 

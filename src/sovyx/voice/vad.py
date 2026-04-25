@@ -545,9 +545,7 @@ class SileroVAD:
         with measure_stage_duration(VoiceStage.VAD) as _stage_token:
             expected = self._config.window_size
             if audio_frame.shape != (expected,):
-                msg = (
-                    f"Expected frame of {expected} samples, got shape {audio_frame.shape}"
-                )
+                msg = f"Expected frame of {expected} samples, got shape {audio_frame.shape}"
                 raise ValueError(msg)
 
             # Normalise to float32 [-1, 1]
@@ -755,9 +753,7 @@ class SileroVAD:
         )
         if is_corrupt:
             state_repr = (
-                next_state.shape
-                if hasattr(next_state, "shape")
-                else type(next_state).__name__
+                next_state.shape if hasattr(next_state, "shape") else type(next_state).__name__
             )
             msg = (
                 f"VAD ONNX session smoke probe returned corrupt output "

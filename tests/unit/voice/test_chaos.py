@@ -81,9 +81,7 @@ class TestKillSwitch:
         monkeypatch.delenv(_ENABLED_ENV_VAR, raising=False)
         # Even at 100% rate, no injections when global is off.
         monkeypatch.setenv(_rate_var(ChaosSite.STT_TIMEOUT.value), "100")
-        injector = ChaosInjector(
-            site_id=ChaosSite.STT_TIMEOUT.value, seed=42
-        )
+        injector = ChaosInjector(site_id=ChaosSite.STT_TIMEOUT.value, seed=42)
         for _ in range(50):
             assert injector.should_inject() is False
         assert injector.injected_count == 0
@@ -95,9 +93,7 @@ class TestKillSwitch:
     ) -> None:
         monkeypatch.setenv(_ENABLED_ENV_VAR, "true")
         monkeypatch.setenv(_rate_var(ChaosSite.STT_TIMEOUT.value), "100")
-        injector = ChaosInjector(
-            site_id=ChaosSite.STT_TIMEOUT.value, seed=42
-        )
+        injector = ChaosInjector(site_id=ChaosSite.STT_TIMEOUT.value, seed=42)
         # 100% rate → every call injects.
         for _ in range(20):
             assert injector.should_inject() is True
@@ -108,9 +104,7 @@ class TestKillSwitch:
     ) -> None:
         monkeypatch.setenv(_ENABLED_ENV_VAR, "1")
         monkeypatch.setenv(_rate_var(ChaosSite.STT_TIMEOUT.value), "100")
-        injector = ChaosInjector(
-            site_id=ChaosSite.STT_TIMEOUT.value, seed=42
-        )
+        injector = ChaosInjector(site_id=ChaosSite.STT_TIMEOUT.value, seed=42)
         assert injector.should_inject() is True
 
     def test_enabled_via_yes(
@@ -119,9 +113,7 @@ class TestKillSwitch:
     ) -> None:
         monkeypatch.setenv(_ENABLED_ENV_VAR, "YES")
         monkeypatch.setenv(_rate_var(ChaosSite.STT_TIMEOUT.value), "100")
-        injector = ChaosInjector(
-            site_id=ChaosSite.STT_TIMEOUT.value, seed=42
-        )
+        injector = ChaosInjector(site_id=ChaosSite.STT_TIMEOUT.value, seed=42)
         assert injector.should_inject() is True
 
     def test_ambiguous_value_treated_as_disabled(
@@ -131,9 +123,7 @@ class TestKillSwitch:
         """`"on"` / `"yep"` are NOT recognised — strict bool."""
         monkeypatch.setenv(_ENABLED_ENV_VAR, "on")
         monkeypatch.setenv(_rate_var(ChaosSite.STT_TIMEOUT.value), "100")
-        injector = ChaosInjector(
-            site_id=ChaosSite.STT_TIMEOUT.value, seed=42
-        )
+        injector = ChaosInjector(site_id=ChaosSite.STT_TIMEOUT.value, seed=42)
         assert injector.should_inject() is False
 
 
@@ -147,9 +137,7 @@ class TestRateAccuracy:
     ) -> None:
         monkeypatch.setenv(_ENABLED_ENV_VAR, "true")
         monkeypatch.setenv(_rate_var(ChaosSite.STT_TIMEOUT.value), "0")
-        injector = ChaosInjector(
-            site_id=ChaosSite.STT_TIMEOUT.value, seed=42
-        )
+        injector = ChaosInjector(site_id=ChaosSite.STT_TIMEOUT.value, seed=42)
         for _ in range(100):
             assert injector.should_inject() is False
         assert injector.injected_count == 0
@@ -159,12 +147,8 @@ class TestRateAccuracy:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setenv(_ENABLED_ENV_VAR, "true")
-        monkeypatch.delenv(
-            _rate_var(ChaosSite.STT_TIMEOUT.value), raising=False
-        )
-        injector = ChaosInjector(
-            site_id=ChaosSite.STT_TIMEOUT.value, seed=42
-        )
+        monkeypatch.delenv(_rate_var(ChaosSite.STT_TIMEOUT.value), raising=False)
+        injector = ChaosInjector(site_id=ChaosSite.STT_TIMEOUT.value, seed=42)
         for _ in range(50):
             assert injector.should_inject() is False
 
@@ -174,9 +158,7 @@ class TestRateAccuracy:
     ) -> None:
         monkeypatch.setenv(_ENABLED_ENV_VAR, "true")
         monkeypatch.setenv(_rate_var(ChaosSite.STT_TIMEOUT.value), "100")
-        injector = ChaosInjector(
-            site_id=ChaosSite.STT_TIMEOUT.value, seed=42
-        )
+        injector = ChaosInjector(site_id=ChaosSite.STT_TIMEOUT.value, seed=42)
         for _ in range(100):
             assert injector.should_inject() is True
 
@@ -189,9 +171,7 @@ class TestRateAccuracy:
         slip through; tighter would flake on outliers."""
         monkeypatch.setenv(_ENABLED_ENV_VAR, "true")
         monkeypatch.setenv(_rate_var(ChaosSite.STT_TIMEOUT.value), "10")
-        injector = ChaosInjector(
-            site_id=ChaosSite.STT_TIMEOUT.value, seed=42
-        )
+        injector = ChaosInjector(site_id=ChaosSite.STT_TIMEOUT.value, seed=42)
         n = 1000
         for _ in range(n):
             injector.should_inject()
@@ -224,9 +204,7 @@ class TestCounters:
     ) -> None:
         monkeypatch.setenv(_ENABLED_ENV_VAR, "true")
         monkeypatch.setenv(_rate_var(ChaosSite.STT_TIMEOUT.value), "50")
-        injector = ChaosInjector(
-            site_id=ChaosSite.STT_TIMEOUT.value, seed=7
-        )
+        injector = ChaosInjector(site_id=ChaosSite.STT_TIMEOUT.value, seed=7)
         for _ in range(100):
             injector.should_inject()
         assert injector.total_count == 100
@@ -238,9 +216,7 @@ class TestCounters:
     ) -> None:
         monkeypatch.setenv(_ENABLED_ENV_VAR, "true")
         monkeypatch.setenv(_rate_var(ChaosSite.STT_TIMEOUT.value), "100")
-        injector = ChaosInjector(
-            site_id=ChaosSite.STT_TIMEOUT.value, seed=7
-        )
+        injector = ChaosInjector(site_id=ChaosSite.STT_TIMEOUT.value, seed=7)
         for _ in range(10):
             injector.should_inject()
         injector.reset_counters()
@@ -259,19 +235,12 @@ class TestMalformedEnv:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         monkeypatch.setenv(_ENABLED_ENV_VAR, "true")
-        monkeypatch.setenv(
-            _rate_var(ChaosSite.STT_TIMEOUT.value), "ten percent"
-        )
-        injector = ChaosInjector(
-            site_id=ChaosSite.STT_TIMEOUT.value, seed=42
-        )
+        monkeypatch.setenv(_rate_var(ChaosSite.STT_TIMEOUT.value), "ten percent")
+        injector = ChaosInjector(site_id=ChaosSite.STT_TIMEOUT.value, seed=42)
         with caplog.at_level(logging.WARNING):
             for _ in range(10):
                 assert injector.should_inject() is False
-        assert any(
-            "voice.chaos.malformed_rate_env_var" in str(r.msg)
-            for r in caplog.records
-        )
+        assert any("voice.chaos.malformed_rate_env_var" in str(r.msg) for r in caplog.records)
 
     def test_out_of_range_rate_warns_and_degrades(
         self,
@@ -279,19 +248,12 @@ class TestMalformedEnv:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         monkeypatch.setenv(_ENABLED_ENV_VAR, "true")
-        monkeypatch.setenv(
-            _rate_var(ChaosSite.STT_TIMEOUT.value), "150"
-        )
-        injector = ChaosInjector(
-            site_id=ChaosSite.STT_TIMEOUT.value, seed=42
-        )
+        monkeypatch.setenv(_rate_var(ChaosSite.STT_TIMEOUT.value), "150")
+        injector = ChaosInjector(site_id=ChaosSite.STT_TIMEOUT.value, seed=42)
         with caplog.at_level(logging.WARNING):
             for _ in range(10):
                 assert injector.should_inject() is False
-        assert any(
-            "voice.chaos.rate_out_of_range" in str(r.msg)
-            for r in caplog.records
-        )
+        assert any("voice.chaos.rate_out_of_range" in str(r.msg) for r in caplog.records)
 
     def test_negative_rate_warns_and_degrades(
         self,
@@ -299,19 +261,12 @@ class TestMalformedEnv:
         caplog: pytest.LogCaptureFixture,
     ) -> None:
         monkeypatch.setenv(_ENABLED_ENV_VAR, "true")
-        monkeypatch.setenv(
-            _rate_var(ChaosSite.STT_TIMEOUT.value), "-5"
-        )
-        injector = ChaosInjector(
-            site_id=ChaosSite.STT_TIMEOUT.value, seed=42
-        )
+        monkeypatch.setenv(_rate_var(ChaosSite.STT_TIMEOUT.value), "-5")
+        injector = ChaosInjector(site_id=ChaosSite.STT_TIMEOUT.value, seed=42)
         with caplog.at_level(logging.WARNING):
             for _ in range(5):
                 assert injector.should_inject() is False
-        assert any(
-            "voice.chaos.rate_out_of_range" in str(r.msg)
-            for r in caplog.records
-        )
+        assert any("voice.chaos.rate_out_of_range" in str(r.msg) for r in caplog.records)
 
 
 # ── Per-site isolation ────────────────────────────────────────────
@@ -343,9 +298,7 @@ class TestThreadSafety:
     ) -> None:
         monkeypatch.setenv(_ENABLED_ENV_VAR, "true")
         monkeypatch.setenv(_rate_var(ChaosSite.STT_TIMEOUT.value), "50")
-        injector = ChaosInjector(
-            site_id=ChaosSite.STT_TIMEOUT.value, seed=42
-        )
+        injector = ChaosInjector(site_id=ChaosSite.STT_TIMEOUT.value, seed=42)
         n_threads = 8
         per_thread = 100
         barrier = threading.Barrier(n_threads)
@@ -362,7 +315,4 @@ class TestThreadSafety:
             t.join()
         # No counter loss under concurrent access.
         assert injector.total_count == n_threads * per_thread
-        assert (
-            injector.injected_count + injector.skipped_count
-            == n_threads * per_thread
-        )
+        assert injector.injected_count + injector.skipped_count == n_threads * per_thread

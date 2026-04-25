@@ -1582,9 +1582,7 @@ class TestSmokeProbeAtConstruction:
         mock_ort.GraphOptimizationLevel.ORT_ENABLE_ALL = 99
         mock_ort.InferenceSession.return_value = mock_session
         with patch.dict("sys.modules", {"onnxruntime": mock_ort}):  # noqa: SIM117
-            with pytest.raises(
-                RuntimeError, match="probability_out_of_range"
-            ):
+            with pytest.raises(RuntimeError, match="probability_out_of_range"):
                 SileroVAD(
                     Path("/fake/model.onnx"),
                     config=cfg,
@@ -1598,9 +1596,7 @@ class TestSmokeProbeAtConstruction:
         mock_session = MagicMock()
         # session.run raises — simulates the window-size mismatch
         # case where ONNX's InvalidArgument fires.
-        mock_session.run = MagicMock(
-            side_effect=RuntimeError("InvalidArgument: shape mismatch")
-        )
+        mock_session.run = MagicMock(side_effect=RuntimeError("InvalidArgument: shape mismatch"))
         mock_ort = MagicMock()
         mock_ort.SessionOptions.return_value = MagicMock()
         mock_ort.GraphOptimizationLevel.ORT_ENABLE_ALL = 99
