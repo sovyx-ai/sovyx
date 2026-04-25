@@ -966,3 +966,100 @@ class TestCloudSTTR1WireUp:
         engine = CloudSTT(cfg)
         # Watchdog == api_timeout + 5 s buffer.
         assert engine._guard._config.watchdog_timeout_s == 15.0  # noqa: PLR2004
+
+
+# ---------------------------------------------------------------------------
+# TS3 chaos wire-up — CLOUD_STT_NETWORK_FAIL injection
+# ---------------------------------------------------------------------------
+
+
+class TestCloudSTTChaosWireUp:
+    """CloudSTT.transcribe must honour the chaos injector AND the
+    injected failures must be observationally identical to real
+    network failures — counting against the R1 CB so the breaker
+    opens after threshold consecutive injected failures."""
+
+    @pytest.mark.asyncio()
+    async def test_chaos_disabled_no_injection(
+        self,
+        config: CloudSTTConfig,
+        audio_1s: np.ndarray,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from sovyx.voice._chaos import _ENABLED_ENV_VAR, _RATE_ENV_VAR_PREFIX
+
+        monkeypatch.delenv(_ENABLED_ENV_VAR, raising=False)
+        monkeypatch.setenv(
+            f"{_RATE_ENV_VAR_PREFIX}CLOUD_STT_NETWORK_FAIL_PCT", "100"
+        )
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"text": "hello"}
+        mock_client = AsyncMock()
+        mock_client.post.return_value = mock_response
+
+        with patch.object(_stt_mod, "httpx") as mock_httpx:
+            mock_httpx.AsyncClient.return_value = mock_client
+            mock_httpx.Timeout.return_value = MagicMock()
+            engine = CloudSTT(config)
+            await engine.initialize()
+            result = await engine.transcribe(audio_1s)
+            assert result.text == "hello"
+            await engine.close()
+
+    @pytest.mark.asyncio()
+    async def test_chaos_at_100_pct_trips_circuit_breaker(
+        self,
+        config: CloudSTTConfig,
+        audio_1s: np.ndarray,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Chaos at 100% over failure_threshold consecutive
+        transcribes opens the R1 CB — proves chaos failures are
+        observationally identical to real upstream failures."""
+        from sovyx.voice._chaos import _ENABLED_ENV_VAR, _RATE_ENV_VAR_PREFIX
+        from sovyx.voice._hystrix_guard import CircuitState
+
+        monkeypatch.setenv(_ENABLED_ENV_VAR, "true")
+        monkeypatch.setenv(
+            f"{_RATE_ENV_VAR_PREFIX}CLOUD_STT_NETWORK_FAIL_PCT", "100"
+        )
+
+        # httpx mocked to succeed — but chaos overrides before the
+        # call lands, so every transcribe injects RuntimeError.
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"text": "hello"}
+        mock_client = AsyncMock()
+        mock_client.post.return_value = mock_response
+
+        with patch.object(_stt_mod, "httpx") as mock_httpx:
+            mock_httpx.AsyncClient.return_value = mock_client
+            mock_httpx.Timeout.return_value = MagicMock()
+            engine = CloudSTT(config)
+            await engine.initialize()
+
+            # Default failure_threshold=3 — 3 consecutive chaos
+            # injections trip the breaker. The chaos RuntimeError
+            # propagates as-is on the first 3 calls (not translated
+            # — only Hystrix-imposed exceptions get the CloudSTTError
+            # wrapper per the R1 contract). Each is recorded as a
+            # CB failure inside guard.run() before re-propagating.
+            for _ in range(3):
+                with pytest.raises(RuntimeError, match="chaos-injected"):
+                    await engine.transcribe(audio_1s)
+
+            # Circuit should now be OPEN.
+            assert engine._guard.state is CircuitState.OPEN
+
+            # Subsequent call fast-fails with the translated
+            # CloudSTTError (CircuitOpenError → CloudSTTError per the
+            # R1 wire-up in 8af4944). This is the proof of chaos +
+            # CB integration: chaos failures count against the CB,
+            # opening it after threshold; subsequent calls fast-fail
+            # without ever reaching the chaos check.
+            with pytest.raises(CloudSTTError, match="circuit breaker open"):
+                await engine.transcribe(audio_1s)
+
+            await engine.close()

@@ -18,6 +18,7 @@ import httpx
 
 from sovyx.engine.errors import VoiceError
 from sovyx.observability.logging import get_logger
+from sovyx.voice._chaos import ChaosInjector, ChaosSite
 from sovyx.voice._hystrix_guard import (
     BulkheadFullError,
     CircuitOpenError,
@@ -241,6 +242,16 @@ class CloudSTT(STTEngine):
                 watchdog_timeout_s=self._config.api_timeout + 5.0,
             ),
         )
+        # TS3 chaos injector — opt-in network failure injection at
+        # the CLOUD_STT_NETWORK_FAIL site. Disabled by default;
+        # chaos test matrix sets the env vars to validate that the
+        # R1 HystrixGuard CB opens correctly after failure_threshold
+        # consecutive injected failures + the BulkheadFullError /
+        # WatchdogFiredError translations to CloudSTTError fire on
+        # the right paths.
+        self._chaos = ChaosInjector(
+            site_id=ChaosSite.CLOUD_STT_NETWORK_FAIL.value,
+        )
 
     @property
     def state(self) -> STTState:
@@ -353,6 +364,18 @@ class CloudSTT(STTEngine):
                 # chained via ``raise ... from`` for forensics.
                 try:
                     async with self._guard.run():
+                        # TS3 chaos: opt-in network failure injection
+                        # at the CLOUD_STT_NETWORK_FAIL site. Fires
+                        # INSIDE the guard's run() context so the
+                        # injected RuntimeError counts as a real CB
+                        # failure — chaos at threshold rate opens the
+                        # breaker exactly like a real upstream outage
+                        # would. Validates the R1 CB transitions
+                        # (CLOSED → OPEN → HALF_OPEN → CLOSED) work
+                        # under realistic operating conditions.
+                        if self._chaos.should_inject():
+                            msg = "chaos-injected cloud STT network failure"
+                            raise RuntimeError(msg)
                         text = await self._call_whisper_api(wav_bytes)
                 except CircuitOpenError as exc:
                     msg = "Cloud STT circuit breaker open"
