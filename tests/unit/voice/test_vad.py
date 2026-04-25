@@ -6,6 +6,7 @@ Strategy: mock ONNX session to control probabilities, verify FSM transitions.
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -16,11 +17,16 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from sovyx.voice.vad import (
+    _CORRUPTION_RECOVERY_FRAMES,
+    _CORRUPTION_UNRECOVERABLE_THRESHOLD,
+    _CORRUPTION_UNRECOVERABLE_WINDOW,
+    _LSTM_STATE_SHAPE,
     SileroVAD,
     VADConfig,
     VADEvent,
     VADState,
     _validate_config,
+    _validate_inference_outputs,
 )
 
 _VAD_LOGGER = "sovyx.voice.vad"
@@ -84,6 +90,60 @@ def _build_vad(
         vad = SileroVAD(Path("/fake/model.onnx"), config=cfg)
 
     return vad
+
+
+def _make_corruptable_session(
+    outputs: list[tuple[float, np.ndarray | None]],
+) -> MagicMock:
+    """Mock ONNX session that returns ``(probability, lstm_state)`` per call.
+
+    Each tuple in ``outputs`` is one inference. ``lstm_state=None`` means
+    "echo back the state the caller passed in" (current healthy
+    behaviour); a concrete numpy array is returned verbatim, allowing
+    NaN/Inf injection or shape mismatch tests.
+    """
+    session = MagicMock()
+    call_idx = {"i": 0}
+
+    def _run(_output_names: Any, inputs: dict[str, Any]) -> list[Any]:  # noqa: ANN401
+        idx = call_idx["i"] % len(outputs)
+        call_idx["i"] += 1
+        prob, custom_state = outputs[idx]
+        output = np.array([[prob]], dtype=np.float32)
+        state = custom_state if custom_state is not None else inputs["state"]
+        return [output, state]
+
+    session.run = _run
+    return session
+
+
+def _build_corruptable_vad(
+    outputs: list[tuple[float, np.ndarray | None]],
+    config: VADConfig | None = None,
+) -> SileroVAD:
+    """Construct a SileroVAD whose ONNX session emits ``(prob, state)`` pairs."""
+    cfg = config or VADConfig()
+    mock_session = _make_corruptable_session(outputs)
+
+    mock_ort = MagicMock()
+    mock_ort.SessionOptions.return_value = MagicMock()
+    mock_ort.GraphOptimizationLevel.ORT_ENABLE_ALL = 99
+    mock_ort.InferenceSession.return_value = mock_session
+
+    with patch.dict("sys.modules", {"onnxruntime": mock_ort}):
+        return SileroVAD(Path("/fake/model.onnx"), config=cfg)
+
+
+def _events_of(
+    caplog: pytest.LogCaptureFixture,
+    event_name: str,
+) -> list[dict[str, Any]]:
+    """Filter caplog records by the structured ``event`` field."""
+    return [
+        r.msg
+        for r in caplog.records
+        if r.name == _VAD_LOGGER and isinstance(r.msg, dict) and r.msg.get("event") == event_name
+    ]
 
 
 def _silence_frame() -> np.ndarray:
@@ -678,3 +738,411 @@ class TestStateTransitionTelemetry:
             ("SILENCE", "SPEECH_ONSET"),
             ("SPEECH_ONSET", "SPEECH"),
         ]
+
+
+# ---------------------------------------------------------------------------
+# V1: NaN/Inf inference guard (Ring 3 defense-in-depth)
+# ---------------------------------------------------------------------------
+#
+# Regression for the "deaf microphone" silent-failure class: an ONNX
+# model that returns NaN/Inf in the probability OR poisons the recurrent
+# LSTM state will silently freeze the FSM in SILENCE forever (every
+# ``prob > threshold`` comparison evaluates False on NaN). The V1 guard
+# fail-closes (treats corrupt frame as silence), zeros the LSTM state,
+# and emits structured telemetry at three escalation tiers:
+#
+# * ``voice.vad.session_corrupt`` — every detection (WARNING)
+# * ``voice.vad.session_recovered`` — after N clean frames (INFO)
+# * ``voice.vad.session_unrecoverable`` — repeated corruption (ERROR)
+#
+# Reference: MISSION-voice-mixer-enterprise-refactor-2026-04-25 §2.3, §3.2, V1.
+
+
+def _bad_state(value: float) -> np.ndarray:
+    """Return an LSTM state filled with ``value`` (NaN/Inf for tests)."""
+    return np.full(_LSTM_STATE_SHAPE, value, dtype=np.float32)
+
+
+def _good_state() -> np.ndarray:
+    return np.zeros(_LSTM_STATE_SHAPE, dtype=np.float32)
+
+
+class TestValidateInferenceOutputs:
+    """Pure-function validator — exhaustive coverage of corruption taxa."""
+
+    def test_clean_inputs_pass(self) -> None:
+        is_corrupt, kind = _validate_inference_outputs(0.5, _good_state())
+        assert is_corrupt is False
+        assert kind == ""
+
+    def test_probability_at_zero_passes(self) -> None:
+        is_corrupt, _kind = _validate_inference_outputs(0.0, _good_state())
+        assert is_corrupt is False
+
+    def test_probability_at_one_passes(self) -> None:
+        is_corrupt, _kind = _validate_inference_outputs(1.0, _good_state())
+        assert is_corrupt is False
+
+    def test_probability_nan_detected(self) -> None:
+        is_corrupt, kind = _validate_inference_outputs(float("nan"), _good_state())
+        assert is_corrupt is True
+        assert kind == "probability_nan"
+
+    def test_probability_pos_inf_detected(self) -> None:
+        is_corrupt, kind = _validate_inference_outputs(float("inf"), _good_state())
+        assert is_corrupt is True
+        assert kind == "probability_nan"
+
+    def test_probability_neg_inf_detected(self) -> None:
+        is_corrupt, kind = _validate_inference_outputs(float("-inf"), _good_state())
+        assert is_corrupt is True
+        assert kind == "probability_nan"
+
+    def test_probability_above_one_detected(self) -> None:
+        is_corrupt, kind = _validate_inference_outputs(1.5, _good_state())
+        assert is_corrupt is True
+        assert kind == "probability_out_of_range"
+
+    def test_probability_negative_detected(self) -> None:
+        is_corrupt, kind = _validate_inference_outputs(-0.1, _good_state())
+        assert is_corrupt is True
+        assert kind == "probability_out_of_range"
+
+    def test_lstm_state_nan_detected(self) -> None:
+        is_corrupt, kind = _validate_inference_outputs(0.5, _bad_state(float("nan")))
+        assert is_corrupt is True
+        assert kind == "lstm_state_nan"
+
+    def test_lstm_state_pos_inf_detected(self) -> None:
+        is_corrupt, kind = _validate_inference_outputs(0.5, _bad_state(float("inf")))
+        assert is_corrupt is True
+        assert kind == "lstm_state_nan"
+
+    def test_lstm_state_partial_nan_detected(self) -> None:
+        """Even one NaN cell in the recurrent state must trip the guard."""
+        state = _good_state()
+        state[0, 0, 42] = float("nan")
+        is_corrupt, kind = _validate_inference_outputs(0.5, state)
+        assert is_corrupt is True
+        assert kind == "lstm_state_nan"
+
+    def test_lstm_state_wrong_shape_detected(self) -> None:
+        wrong_shape = np.zeros((1, 1, 64), dtype=np.float32)
+        is_corrupt, kind = _validate_inference_outputs(0.5, wrong_shape)
+        assert is_corrupt is True
+        assert kind == "lstm_state_shape_invalid"
+
+    def test_lstm_state_not_ndarray_detected(self) -> None:
+        is_corrupt, kind = _validate_inference_outputs(0.5, [[0.0, 0.0]])  # type: ignore[arg-type]
+        assert is_corrupt is True
+        assert kind == "lstm_state_shape_invalid"
+
+    def test_probability_checked_before_state(self) -> None:
+        """Both corrupt → probability kind wins (cheaper check, more visible)."""
+        is_corrupt, kind = _validate_inference_outputs(
+            float("nan"),
+            _bad_state(float("nan")),
+        )
+        assert is_corrupt is True
+        assert kind == "probability_nan"
+
+
+class TestVADCorruptionGuard:
+    """End-to-end V1 guard wired through ``process_frame``."""
+
+    def test_clean_run_emits_no_corruption_event(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        caplog.set_level(logging.WARNING, logger=_VAD_LOGGER)
+        vad = _build_corruptable_vad([(0.1, None)] * 5)
+        for _ in range(5):
+            vad.process_frame(_silence_frame())
+        assert _events_of(caplog, "voice.vad.session_corrupt") == []
+        assert vad.corruption_count == 0
+        assert vad.is_session_unrecoverable is False
+
+    def test_nan_probability_emits_corrupt_event(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        caplog.set_level(logging.WARNING, logger=_VAD_LOGGER)
+        vad = _build_corruptable_vad([(float("nan"), None)])
+        evt = vad.process_frame(_speech_frame())
+        # Fail-closed: NaN → 0.0 → FSM stays SILENCE despite "speech" frame.
+        assert evt.probability == 0.0
+        assert evt.is_speech is False
+        assert evt.state == VADState.SILENCE
+        events = _events_of(caplog, "voice.vad.session_corrupt")
+        assert len(events) == 1
+        assert events[0]["voice.corruption_kind"] == "probability_nan"
+        assert events[0]["voice.lifetime_corruption_count"] == 1
+        assert vad.corruption_count == 1
+
+    def test_nan_lstm_state_resets_state_to_zeros(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        caplog.set_level(logging.WARNING, logger=_VAD_LOGGER)
+        # First inference returns clean prob but corrupt next-state →
+        # the guard must zero state instead of accepting the corruption.
+        vad = _build_corruptable_vad([(0.5, _bad_state(float("nan")))])
+        vad.process_frame(_speech_frame())
+        assert vad.corruption_count == 1
+        assert np.all(vad._state == 0.0)  # noqa: SLF001
+        events = _events_of(caplog, "voice.vad.session_corrupt")
+        assert len(events) == 1
+        assert events[0]["voice.corruption_kind"] == "lstm_state_nan"
+
+    def test_corruption_does_not_drop_active_speech_state(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """One corrupt frame mid-speech must NOT collapse FSM to SILENCE."""
+        caplog.set_level(logging.WARNING, logger=_VAD_LOGGER)
+        config = VADConfig(min_onset_frames=1, min_offset_frames=8)
+        # Get into SPEECH, then inject one corrupt frame.
+        vad = _build_corruptable_vad(
+            [(0.9, None), (float("nan"), None), (0.9, None)],
+            config=config,
+        )
+        evt1 = vad.process_frame(_speech_frame())
+        assert evt1.state == VADState.SPEECH
+        evt2 = vad.process_frame(_speech_frame())
+        # Corrupt frame → prob=0.0 → FSM hysteresis transitions to OFFSET
+        # but is_speaking stays True (offset still counts as speech).
+        assert evt2.is_speech is True
+        assert evt2.state == VADState.SPEECH_OFFSET
+        # Resume speech — FSM rebounds.
+        evt3 = vad.process_frame(_speech_frame())
+        assert evt3.state == VADState.SPEECH
+
+    def test_recovery_event_after_n_clean_frames(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        caplog.set_level(logging.INFO, logger=_VAD_LOGGER)
+        vad = _build_corruptable_vad(
+            [(float("nan"), None)] + [(0.1, None)] * _CORRUPTION_RECOVERY_FRAMES,
+        )
+        for _ in range(1 + _CORRUPTION_RECOVERY_FRAMES):
+            vad.process_frame(_silence_frame())
+        recovered = _events_of(caplog, "voice.vad.session_recovered")
+        assert len(recovered) == 1
+        assert recovered[0]["voice.clean_frames_since_corrupt"] == _CORRUPTION_RECOVERY_FRAMES
+
+    def test_recovery_event_not_emitted_before_threshold(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        caplog.set_level(logging.INFO, logger=_VAD_LOGGER)
+        # One corruption + (N-1) clean frames → still no recovery event.
+        vad = _build_corruptable_vad(
+            [(float("nan"), None)] + [(0.1, None)] * (_CORRUPTION_RECOVERY_FRAMES - 1),
+        )
+        for _ in range(_CORRUPTION_RECOVERY_FRAMES):
+            vad.process_frame(_silence_frame())
+        assert _events_of(caplog, "voice.vad.session_recovered") == []
+
+    def test_recovery_streak_reset_by_new_corruption(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        caplog.set_level(logging.INFO, logger=_VAD_LOGGER)
+        # Corrupt → 2 clean → corrupt → 2 more clean. Streak reset means
+        # neither half reaches the recovery threshold (default 5).
+        ops: list[tuple[float, np.ndarray | None]] = [
+            (float("nan"), None),
+            (0.1, None),
+            (0.1, None),
+            (float("nan"), None),
+            (0.1, None),
+            (0.1, None),
+        ]
+        vad = _build_corruptable_vad(ops)
+        for _ in range(len(ops)):
+            vad.process_frame(_silence_frame())
+        assert _events_of(caplog, "voice.vad.session_recovered") == []
+        assert vad.corruption_count == 2
+
+    def test_unrecoverable_signal_emitted_on_repeated_corruption(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        caplog.set_level(logging.ERROR, logger=_VAD_LOGGER)
+        # Threshold corruptions back-to-back → well within window → fires.
+        vad = _build_corruptable_vad(
+            [(float("nan"), None)] * _CORRUPTION_UNRECOVERABLE_THRESHOLD,
+        )
+        for _ in range(_CORRUPTION_UNRECOVERABLE_THRESHOLD):
+            vad.process_frame(_silence_frame())
+        unrecoverable = _events_of(caplog, "voice.vad.session_unrecoverable")
+        assert len(unrecoverable) == 1
+        assert unrecoverable[0]["voice.window_frames"] == _CORRUPTION_UNRECOVERABLE_WINDOW
+        assert vad.is_session_unrecoverable is True
+
+    def test_unrecoverable_signal_emitted_only_once(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        caplog.set_level(logging.ERROR, logger=_VAD_LOGGER)
+        vad = _build_corruptable_vad(
+            [(float("nan"), None)] * (_CORRUPTION_UNRECOVERABLE_THRESHOLD + 5),
+        )
+        for _ in range(_CORRUPTION_UNRECOVERABLE_THRESHOLD + 5):
+            vad.process_frame(_silence_frame())
+        # Multiple corruptions still produce exactly one unrecoverable.
+        assert len(_events_of(caplog, "voice.vad.session_unrecoverable")) == 1
+
+    def test_unrecoverable_not_emitted_when_corruption_outside_window(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Corruptions spaced beyond the window must NOT trigger unrecoverable."""
+        caplog.set_level(logging.ERROR, logger=_VAD_LOGGER)
+        # 1 corrupt + (window+1) cleans + 1 corrupt + (window+1) cleans + 1 corrupt
+        # → 3 corruptions but each pair >window apart, so the sliding-window
+        # span fails the check.
+        ops: list[tuple[float, np.ndarray | None]] = []
+        for _ in range(_CORRUPTION_UNRECOVERABLE_THRESHOLD):
+            ops.append((float("nan"), None))
+            ops.extend([(0.1, None)] * (_CORRUPTION_UNRECOVERABLE_WINDOW + 1))
+        vad = _build_corruptable_vad(ops)
+        for _ in range(len(ops)):
+            vad.process_frame(_silence_frame())
+        assert _events_of(caplog, "voice.vad.session_unrecoverable") == []
+        assert vad.is_session_unrecoverable is False
+        # But the cumulative count and per-event WARNINGs still incremented.
+        assert vad.corruption_count == _CORRUPTION_UNRECOVERABLE_THRESHOLD
+
+    def test_corruption_count_survives_reset(self) -> None:
+        """``reset()`` clears FSM/state but NOT cumulative model-health counters."""
+        vad = _build_corruptable_vad(
+            [(float("nan"), None), (float("nan"), None)],
+        )
+        vad.process_frame(_silence_frame())
+        vad.process_frame(_silence_frame())
+        assert vad.corruption_count == 2
+        vad.reset()
+        assert vad.corruption_count == 2  # cumulative — does NOT reset
+        assert vad.state == VADState.SILENCE  # FSM does reset
+
+    def test_unrecoverable_flag_survives_reset(self) -> None:
+        """Once unrecoverable, the session stays unrecoverable until rebuild."""
+        vad = _build_corruptable_vad(
+            [(float("nan"), None)] * _CORRUPTION_UNRECOVERABLE_THRESHOLD,
+        )
+        for _ in range(_CORRUPTION_UNRECOVERABLE_THRESHOLD):
+            vad.process_frame(_silence_frame())
+        assert vad.is_session_unrecoverable is True
+        vad.reset()
+        assert vad.is_session_unrecoverable is True
+
+    def test_out_of_range_probability_treated_as_corruption(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Sigmoid contract violation (prob > 1.0) → corruption, not propagation."""
+        caplog.set_level(logging.WARNING, logger=_VAD_LOGGER)
+        vad = _build_corruptable_vad([(1.5, None)])
+        evt = vad.process_frame(_speech_frame())
+        assert evt.probability == 0.0
+        events = _events_of(caplog, "voice.vad.session_corrupt")
+        assert events[0]["voice.corruption_kind"] == "probability_out_of_range"
+
+
+class TestCorruptionGuardPropertyBased:
+    """Hypothesis: V1 guard never lets NaN/Inf escape into ``VADEvent``."""
+
+    @pytest.mark.filterwarnings(
+        # Hypothesis emits values like 1e308 which numpy casts to inf
+        # when packed into the mock ONNX output array. The V1 guard
+        # then correctly catches the inf — the warning itself is the
+        # mock layer reporting the cast, not a bug. Suppress it so the
+        # CI signal stays clean.
+        "ignore:overflow encountered in cast:RuntimeWarning",
+    )
+    @settings(deadline=None, suppress_health_check=[HealthCheck.too_slow])
+    @given(
+        # Any sequence of arbitrary float64 values, including NaN / Inf,
+        # must produce VADEvents whose ``probability`` is finite and in
+        # [0, 1]. This is the V1 contract distilled to one assertion.
+        probs=st.lists(
+            st.one_of(
+                st.floats(min_value=0.0, max_value=1.0),
+                st.floats(allow_nan=True, allow_infinity=True),
+            ),
+            min_size=1,
+            max_size=50,
+        ),
+    )
+    def test_probability_always_finite_and_in_unit_range(
+        self,
+        probs: list[float],
+    ) -> None:
+        outputs: list[tuple[float, np.ndarray | None]] = [(p, None) for p in probs]
+        vad = _build_corruptable_vad(outputs)
+        for _ in range(len(probs)):
+            evt = vad.process_frame(_silence_frame())
+            assert math.isfinite(evt.probability)
+            assert 0.0 <= evt.probability <= 1.0
+
+    @settings(deadline=None, suppress_health_check=[HealthCheck.too_slow])
+    @given(
+        # When ANY frame is corrupt, the LSTM state must be zeroed by
+        # the time the next frame runs — otherwise recurrent poisoning
+        # would silently spread. Sample mixed clean/corrupt sequences
+        # and assert the post-corruption state invariant.
+        sequence=st.lists(
+            st.one_of(
+                st.just("clean"),
+                st.just("corrupt_prob"),
+                st.just("corrupt_state"),
+            ),
+            min_size=2,
+            max_size=20,
+        ),
+    )
+    def test_lstm_state_zeroed_after_any_corruption(
+        self,
+        sequence: list[str],
+    ) -> None:
+        outputs: list[tuple[float, np.ndarray | None]] = []
+        for kind in sequence:
+            if kind == "clean":
+                outputs.append((0.1, None))
+            elif kind == "corrupt_prob":
+                outputs.append((float("nan"), None))
+            else:  # corrupt_state
+                outputs.append((0.5, _bad_state(float("nan"))))
+        vad = _build_corruptable_vad(outputs)
+        for kind in sequence:
+            vad.process_frame(_silence_frame())
+            if kind != "clean":
+                # Right after a corrupt frame, the LSTM state must have
+                # been replaced with zeros (the V1 reset action).
+                assert np.all(vad._state == 0.0)  # noqa: SLF001
+
+    @settings(deadline=None, suppress_health_check=[HealthCheck.too_slow])
+    @given(
+        # Counter monotonicity: corruption_count never decreases, ever.
+        n_frames=st.integers(min_value=1, max_value=30),
+        corrupt_indices=st.sets(
+            st.integers(min_value=0, max_value=29),
+            max_size=15,
+        ),
+    )
+    def test_corruption_counter_monotonic_non_decreasing(
+        self,
+        n_frames: int,
+        corrupt_indices: set[int],
+    ) -> None:
+        outputs: list[tuple[float, np.ndarray | None]] = [
+            (float("nan"), None) if i in corrupt_indices else (0.1, None) for i in range(n_frames)
+        ]
+        vad = _build_corruptable_vad(outputs)
+        prev = 0
+        for _ in range(n_frames):
+            vad.process_frame(_silence_frame())
+            assert vad.corruption_count >= prev
+            prev = vad.corruption_count

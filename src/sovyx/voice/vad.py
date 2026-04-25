@@ -3,11 +3,28 @@
 Onset/offset FSM with configurable thresholds and 512-sample window (32ms @16kHz).
 Prevents rapid on/off switching via consecutive-frame gating.
 
-Ref: SPE-010 §3 (VAD), IMPL-004 §2.4 (SileroVAD v5 code)
+Ring 3 (Decision Ensemble) defense-in-depth: every inference output is
+validated for finiteness and domain compliance before reaching the FSM
+(``_validate_inference_outputs``). Corruption — NaN/Inf in either the
+probability or the recurrent LSTM state — is treated as a silent-failure
+class: NaN comparisons silently evaluate False, which would freeze the
+FSM in SILENCE forever and produce the textbook "deaf microphone" user
+experience. The guard fail-closes (treats the corrupt frame as silence,
+the safer default than fabricating speech) and immediately resets the
+LSTM state so the next frame starts clean.
+
+A repeated-corruption monitor distinguishes a transient single-frame
+glitch (recoverable) from a structural model failure (escalate via the
+``voice.vad.session_unrecoverable`` event so an upstream circuit breaker
+can disable the VAD path and fall back to the secondary detector).
+
+Ref: SPE-010 §3 (VAD), IMPL-004 §2.4 (SileroVAD v5 code),
+MISSION-voice-mixer-enterprise-refactor-2026-04-25 §2.3 / §3.2 / V1.
 """
 
 from __future__ import annotations
 
+import math
 from collections import deque
 from dataclasses import dataclass
 from enum import IntEnum, auto
@@ -37,6 +54,41 @@ _SAMPLE_RATE_8K = 8000
 _WINDOW_16K = 512
 _WINDOW_8K = 256
 _LSTM_STATE_SHAPE = (2, 1, 128)
+
+# ---------------------------------------------------------------------------
+# Ring 3 NaN/Inf guard tuning (V1)
+# ---------------------------------------------------------------------------
+#
+# These constants govern the corruption monitor that distinguishes a
+# transient one-frame glitch from a structural ONNX-session failure.
+# All three are intentionally module-level rather than ``VoiceTuningConfig``
+# fields: they describe the failure-detection contract itself, not a user-
+# tunable trade-off. The cost of a false positive (an extra
+# ``session_unrecoverable`` event) is one ERROR log; the cost of a false
+# negative (missing a real model corruption) is the deaf-microphone class
+# of bugs the V1 guard exists to eliminate.
+
+_CORRUPTION_RECOVERY_FRAMES = 5
+"""Consecutive clean frames required after a corruption event before
+:data:`voice.vad.session_recovered` is emitted. Five frames at 16 kHz /
+512-sample window = 160 ms — long enough to confirm the LSTM state has
+genuinely settled (one full hysteresis bucket) without paying perceptual
+latency on a real speech onset."""
+
+_CORRUPTION_UNRECOVERABLE_THRESHOLD = 3
+"""Number of corruption events within :data:`_CORRUPTION_UNRECOVERABLE_WINDOW`
+frames that escalates from per-event WARNING to a single
+:data:`voice.vad.session_unrecoverable` ERROR. Three is the SRE-canonical
+"twice is coincidence, three times is a pattern" rule applied to fault
+detection; it also matches the Hystrix circuit-breaker default minimum
+sample size before opening on a failure-rate threshold."""
+
+_CORRUPTION_UNRECOVERABLE_WINDOW = 100
+"""Sliding window (in frames) over which
+:data:`_CORRUPTION_UNRECOVERABLE_THRESHOLD` corruptions trigger
+unrecoverable. At 16 kHz / 512-sample window = 3.2 s of audio — the
+SRE-canonical "burn rate" alerting horizon for a 1-minute SLO budget
+(see Google SRE Workbook §5)."""
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +154,61 @@ class VADConfig:
             return _WINDOW_8K
         msg = f"Unsupported sample rate: {self.sample_rate}. Use 8000 or 16000."
         raise ValueError(msg)
+
+
+def _validate_inference_outputs(
+    raw_probability: float,
+    raw_next_state: object,
+) -> tuple[bool, str]:
+    """Return ``(is_corrupt, kind)`` for one ONNX inference result (V1).
+
+    Pure function — no side effects, no instance state, fully unit-
+    testable in isolation. Caller (``SileroVAD.process_frame``) handles
+    the recovery action; this helper only classifies.
+
+    The "corrupt" verdict fires for any of:
+
+    * Probability is NaN, +Inf, or -Inf — the FSM can't compare it.
+    * Probability is out of the [0, 1] domain — the model is supposed
+      to produce a sigmoid; an out-of-range value is a contract
+      violation that should not be propagated to downstream consumers
+      (Whisper logprob filters, EOU ensembles, dashboards).
+    * The recurrent LSTM state contains a NaN/Inf cell — recurrent
+      poisoning will corrupt the *next* frame's probability even if
+      the *current* one happens to come out clean. We must catch it
+      now, before the corruption silently propagates.
+
+    The ``kind`` string is one of:
+
+    * ``"probability_nan"`` — non-finite scalar.
+    * ``"probability_out_of_range"`` — finite but outside [0, 1].
+    * ``"lstm_state_nan"`` — at least one non-finite cell in the
+      recurrent state tensor.
+    * ``"lstm_state_shape_invalid"`` — the next-state tensor isn't
+      shaped like the documented ``(2, 1, 128)`` LSTM hidden+cell
+      packing. Treated as corruption because applying it would either
+      crash the next inference or silently align mis-shaped values
+      against unrelated cells.
+
+    Probability is checked first because it's cheap (one float test);
+    the LSTM-state ``np.isfinite`` reduction over the full tensor is
+    O(N) and O(N) is *also* cheap (256 cells), but the early-out keeps
+    the corruption-kind name aligned with the most-immediately-visible
+    symptom for operators reading the log.
+    """
+    import numpy as np  # noqa: F811
+
+    if not math.isfinite(raw_probability):
+        return True, "probability_nan"
+    if not 0.0 <= raw_probability <= 1.0:
+        return True, "probability_out_of_range"
+    if not isinstance(raw_next_state, np.ndarray):
+        return True, "lstm_state_shape_invalid"
+    if raw_next_state.shape != _LSTM_STATE_SHAPE:
+        return True, "lstm_state_shape_invalid"
+    if not bool(np.all(np.isfinite(raw_next_state))):
+        return True, "lstm_state_nan"
+    return False, ""
 
 
 def _validate_config(config: VADConfig) -> None:
@@ -191,6 +298,22 @@ class SileroVAD:
         self._prob_history: deque[float] = deque(maxlen=_WINDOW_HISTORY)
         self._rms_history: deque[float] = deque(maxlen=_WINDOW_HISTORY)
 
+        # ── V1 NaN/Inf corruption monitor ────────────────────────────
+        # Counters survive resets so chronic model corruption surfaces
+        # in long-running daemons even if the FSM gets reset between
+        # conversations. The recovery streak (``_clean_streak_since_corrupt``)
+        # is the only field reset by ``reset_after_corruption`` to keep
+        # the recovered-event semantics local to a single corruption
+        # episode.
+        self._corruption_count: int = 0
+        self._frames_processed: int = 0
+        self._corruption_frame_log: deque[int] = deque(
+            maxlen=_CORRUPTION_UNRECOVERABLE_THRESHOLD,
+        )
+        self._clean_streak_since_corrupt: int = 0
+        self._unrecoverable_signal_emitted: bool = False
+        self._last_frame_was_corrupt: bool = False
+
         logger.info(
             "SileroVAD initialised",
             model=str(model_path),
@@ -237,8 +360,38 @@ class SileroVAD:
             "state": self._state,
             "sr": self._sr,
         }
-        output, self._state = self._session.run(None, ort_inputs)[:2]
-        probability = float(output[0][0])
+        output, raw_next_state = self._session.run(None, ort_inputs)[:2]
+        raw_probability = float(output[0][0])
+
+        # ── V1 NaN/Inf guard (Ring 3 defense-in-depth) ───────────────
+        # ONNX runtime can return NaN/Inf when the LSTM state has been
+        # poisoned (e.g. by an underflow/overflow in a prior frame, a
+        # corrupted ``.onnx`` file, or a numerically pathological input
+        # like a single-sample DC step). Letting NaN reach the FSM is a
+        # silent-failure class: every comparison ``prob > threshold``
+        # returns False, so the FSM freezes in its current state forever
+        # and the user sees a "deaf microphone". The guard fail-closes:
+        # corrupt frame is treated as silence (probability=0.0) and the
+        # LSTM state is zeroed so the next frame starts from a known-
+        # clean baseline. The corruption itself is surfaced as a
+        # WARNING with a trace ID so dashboards can correlate; repeated
+        # corruption escalates to a single ERROR (``unrecoverable``)
+        # for upstream circuit-breaker consumption.
+        self._frames_processed += 1
+        is_corrupt, corruption_kind = _validate_inference_outputs(
+            raw_probability,
+            raw_next_state,
+        )
+        if is_corrupt:
+            self._on_inference_corruption(
+                corruption_kind=corruption_kind,
+                raw_probability=raw_probability,
+            )
+            probability = 0.0  # fail-closed: silence is the safe default
+        else:
+            self._state = raw_next_state
+            probability = raw_probability
+            self._on_inference_clean()
 
         # Rolling window — append before the FSM tick so the enrichment
         # on a transition reflects the probabilities that *led to* it.
@@ -293,7 +446,14 @@ class SileroVAD:
         )
 
     def reset(self) -> None:
-        """Reset LSTM and FSM state (call between conversations)."""
+        """Reset LSTM and FSM state (call between conversations).
+
+        Zeros the recurrent LSTM state and the FSM. Does **not** clear
+        the cumulative corruption counters — those describe the health
+        of the underlying ONNX session over its lifetime and are needed
+        for long-running daemons to surface chronic model issues across
+        conversation boundaries.
+        """
         import numpy as np  # noqa: F811
 
         self._state = np.zeros(_LSTM_STATE_SHAPE, dtype=np.float32)
@@ -317,9 +477,134 @@ class SileroVAD:
         """Active configuration (read-only)."""
         return self._config
 
+    @property
+    def corruption_count(self) -> int:
+        """Total number of NaN/Inf corruption events since construction.
+
+        Cumulative across :meth:`reset` calls — the counter describes
+        the health of the underlying ONNX session, not the FSM. Surface
+        on the dashboard "Voice Health" panel as a session-quality
+        gauge; non-zero on a long-running daemon is a signal that the
+        model file or LSTM state has structural issues warranting an
+        engineer review, even if the V1 guard is keeping the FSM alive.
+        """
+        return self._corruption_count
+
+    @property
+    def is_session_unrecoverable(self) -> bool:
+        """``True`` after the unrecoverable signal has been emitted.
+
+        Set when :data:`_CORRUPTION_UNRECOVERABLE_THRESHOLD` corruptions
+        accumulate within :data:`_CORRUPTION_UNRECOVERABLE_WINDOW` frames.
+        Upstream consumers (Ring 6 orchestrator, dashboard, circuit
+        breaker) should treat this as a hard signal to fall back to a
+        secondary detector (LiveKit EOU, simple energy threshold) or
+        prompt the user to re-run ``sovyx doctor voice``. Re-armed only
+        by full reconstruction of the ``SileroVAD`` instance — once a
+        session is declared unrecoverable, it stays declared.
+        """
+        return self._unrecoverable_signal_emitted
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _on_inference_corruption(
+        self,
+        *,
+        corruption_kind: str,
+        raw_probability: float,
+    ) -> None:
+        """Handle a NaN/Inf detection from the latest inference (V1).
+
+        Three responsibilities, in order:
+
+        1. Reset the LSTM state to zeros so the *next* inference starts
+           from a known-clean baseline. Without this the recurrent
+           connection re-poisons every subsequent frame and corruption
+           becomes permanent until the daemon restarts.
+        2. Update the corruption monitor:
+           - Bump the lifetime counter (visible via :attr:`corruption_count`).
+           - Append the current frame index to the sliding window.
+           - Reset the clean-streak counter (any corruption breaks the
+             pending recovery confirmation).
+        3. Emit structured telemetry:
+           - ``voice.vad.session_corrupt`` (WARNING) for every detection.
+           - ``voice.vad.session_unrecoverable`` (ERROR, exactly once)
+             when the sliding window reaches the unrecoverable threshold.
+
+        The probability passed to the FSM is set to ``0.0`` by the
+        caller — fail-closed (silence) is the safer default than
+        fail-open (speech), which would fabricate phantom turn-ends and
+        feed STT garbage. The FSM state itself is preserved so the
+        recovery is graceful: if we were in SPEECH, a single corrupt
+        frame doesn't drop us to SILENCE; the FSM merely receives a
+        zero probability and applies its hysteresis as usual.
+        """
+        import numpy as np  # noqa: F811
+
+        self._state = np.zeros(_LSTM_STATE_SHAPE, dtype=np.float32)
+        self._corruption_count += 1
+        self._corruption_frame_log.append(self._frames_processed)
+        self._clean_streak_since_corrupt = 0
+        self._last_frame_was_corrupt = True
+
+        logger.warning(
+            "voice.vad.session_corrupt",
+            **{
+                "voice.corruption_kind": corruption_kind,
+                "voice.raw_probability_repr": repr(raw_probability),
+                "voice.frame_index": self._frames_processed,
+                "voice.lifetime_corruption_count": self._corruption_count,
+                "voice.fsm_state_preserved": self._vad_state.name,
+                "voice.action": "lstm_state_zeroed_probability_forced_silence",
+            },
+        )
+
+        if (
+            not self._unrecoverable_signal_emitted
+            and len(self._corruption_frame_log) >= _CORRUPTION_UNRECOVERABLE_THRESHOLD
+            and (
+                self._corruption_frame_log[-1] - self._corruption_frame_log[0]
+                <= _CORRUPTION_UNRECOVERABLE_WINDOW
+            )
+        ):
+            self._unrecoverable_signal_emitted = True
+            logger.error(
+                "voice.vad.session_unrecoverable",
+                **{
+                    "voice.corruptions_in_window": len(self._corruption_frame_log),
+                    "voice.window_frames": _CORRUPTION_UNRECOVERABLE_WINDOW,
+                    "voice.frame_index": self._frames_processed,
+                    "voice.lifetime_corruption_count": self._corruption_count,
+                    "voice.action_required": "fallback_to_secondary_vad_or_rebuild_session",
+                },
+            )
+
+    def _on_inference_clean(self) -> None:
+        """Track recovery progress after a corruption episode.
+
+        After :data:`_CORRUPTION_RECOVERY_FRAMES` consecutive clean
+        frames following a corruption, emit
+        :data:`voice.vad.session_recovered` exactly once per episode so
+        operators can confirm the V1 guard genuinely re-armed the
+        session — a corruption + nothing else in the log is ambiguous
+        (was it transient? did the daemon hang?), but corrupt + recovered
+        is unambiguous.
+        """
+        if not self._last_frame_was_corrupt and self._clean_streak_since_corrupt == 0:
+            return  # never been corrupt — nothing to track
+        self._clean_streak_since_corrupt += 1
+        self._last_frame_was_corrupt = False
+        if self._clean_streak_since_corrupt == _CORRUPTION_RECOVERY_FRAMES:
+            logger.info(
+                "voice.vad.session_recovered",
+                **{
+                    "voice.clean_frames_since_corrupt": _CORRUPTION_RECOVERY_FRAMES,
+                    "voice.frame_index": self._frames_processed,
+                    "voice.lifetime_corruption_count": self._corruption_count,
+                },
+            )
 
     def _update_state(self, probability: float) -> bool:  # noqa: PLR0911
         """Advance the hysteresis FSM and return whether speech is active."""
