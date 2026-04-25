@@ -29,6 +29,7 @@ from sovyx.voice.factory import (
     _maybe_check_mic_permission,
     _maybe_log_alsa_ucm_status,
     _maybe_log_pipewire_status,
+    _maybe_start_audio_service_watchdog,
 )
 
 _FACTORY_LOGGER = "sovyx.voice.factory"
@@ -441,6 +442,125 @@ class TestVoicePermissionError:
         err = VoicePermissionError("msg")
         assert err.remediation_hint == ""
         assert err.platform_status == ""
+
+
+# ── Audio service watchdog (WI2 wire-up) ──────────────────────────
+
+
+class TestAudioServiceWatchdog:
+    @pytest.mark.asyncio
+    async def test_disabled_returns_none(self) -> None:
+        # Default config — watchdog is OFF.
+        result = await _maybe_start_audio_service_watchdog()
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_enabled_non_windows_returns_none_with_log(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import sys
+
+        with (
+            patch(
+                "sovyx.engine.config.VoiceTuningConfig",
+                return_value=MagicMock(voice_audio_service_watchdog_enabled=True),
+            ),
+            patch.object(sys, "platform", "linux"),
+        ):
+            caplog.set_level(logging.INFO, logger=_FACTORY_LOGGER)
+            result = await _maybe_start_audio_service_watchdog()
+        assert result is None
+        skip_events = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict)
+            and r.msg.get("event") == "voice.factory.audio_service_watchdog_skipped_non_windows"
+        ]
+        assert len(skip_events) == 1
+
+    @pytest.mark.asyncio
+    async def test_enabled_windows_starts_watchdog(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import sys
+
+        from sovyx.voice.health._windows_audio_service import (
+            AudioServiceStatus,
+            WindowsServiceReport,
+            WindowsServiceState,
+        )
+
+        # Stub the underlying query so the watchdog's loop doesn't
+        # actually invoke sc.exe.
+        healthy = AudioServiceStatus(
+            audiosrv=WindowsServiceReport(
+                name="Audiosrv",
+                state=WindowsServiceState.RUNNING,
+            ),
+            audio_endpoint_builder=WindowsServiceReport(
+                name="AudioEndpointBuilder",
+                state=WindowsServiceState.RUNNING,
+            ),
+        )
+        with (
+            patch(
+                "sovyx.engine.config.VoiceTuningConfig",
+                return_value=MagicMock(voice_audio_service_watchdog_enabled=True),
+            ),
+            patch.object(sys, "platform", "win32"),
+            patch(
+                "sovyx.voice.health._windows_audio_service.query_audio_service_status",
+                return_value=healthy,
+            ),
+        ):
+            caplog.set_level(logging.INFO, logger=_FACTORY_LOGGER)
+            watchdog = await _maybe_start_audio_service_watchdog()
+
+        assert watchdog is not None
+        assert watchdog.is_running
+        # Cleanup — must not leak the asyncio task.
+        await watchdog.stop()
+        # Confirm it logged the start event.
+        start_events = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict)
+            and r.msg.get("event") == "voice.factory.audio_service_watchdog_started"
+        ]
+        assert len(start_events) == 1
+
+    @pytest.mark.asyncio
+    async def test_start_failure_logs_warn_returns_none(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import sys
+
+        # Force the import inside the helper to fail by injecting a
+        # broken module surface.
+        with (
+            patch(
+                "sovyx.engine.config.VoiceTuningConfig",
+                return_value=MagicMock(voice_audio_service_watchdog_enabled=True),
+            ),
+            patch.object(sys, "platform", "win32"),
+            patch(
+                "sovyx.voice.health._windows_audio_service.AudioServiceWatchdog",
+                side_effect=RuntimeError("ctor boom"),
+            ),
+        ):
+            caplog.set_level(logging.WARNING, logger=_FACTORY_LOGGER)
+            result = await _maybe_start_audio_service_watchdog()
+        assert result is None
+        crash_events = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict)
+            and r.msg.get("event") == "voice.factory.audio_service_watchdog_start_failed"
+        ]
+        assert len(crash_events) == 1
 
 
 pytestmark = pytest.mark.timeout(15)

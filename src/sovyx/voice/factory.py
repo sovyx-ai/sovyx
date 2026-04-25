@@ -281,6 +281,53 @@ def _maybe_log_alsa_ucm_status(card_id: str = "0") -> None:
     )
 
 
+async def _maybe_start_audio_service_watchdog() -> object | None:
+    """WI2 wire-up: instantiate and start the Windows audio-service
+    watchdog when opt-in. Returns the watchdog instance (so the
+    caller can stop it on voice-disable) or ``None`` when disabled,
+    on non-Windows, or when instantiation failed.
+
+    Default OFF via
+    :attr:`VoiceTuningConfig.voice_audio_service_watchdog_enabled`.
+    Operators opt in when they've observed audio-service-related
+    failures and want the rolling 30 s sc.exe poll surfacing service
+    state transitions in real time.
+
+    Failure isolation: instantiation / start failures log WARN but
+    NEVER prevent pipeline creation — the watchdog is supplementary
+    observability, not a hard requirement."""
+    from sovyx.engine.config import VoiceTuningConfig
+
+    tuning = VoiceTuningConfig()
+    if not tuning.voice_audio_service_watchdog_enabled:
+        return None
+    if sys.platform != "win32":
+        # Opt-in but wrong platform — log INFO so operators see the
+        # mismatch instead of silently failing to instantiate.
+        logger.info(
+            "voice.factory.audio_service_watchdog_skipped_non_windows",
+            platform=sys.platform,
+        )
+        return None
+    try:
+        from sovyx.voice.health._windows_audio_service import AudioServiceWatchdog
+
+        watchdog = AudioServiceWatchdog()
+        await watchdog.start()
+    except Exception as exc:  # noqa: BLE001 — observability gate isolation
+        logger.warning(
+            "voice.factory.audio_service_watchdog_start_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        return None
+    logger.info(
+        "voice.factory.audio_service_watchdog_started",
+        interval_s=watchdog._interval_s,  # noqa: SLF001 — telemetry only
+    )
+    return watchdog
+
+
 @dataclass(frozen=True)
 class VoiceBundle:
     """Result of :func:`create_voice_pipeline`.
@@ -298,11 +345,23 @@ class VoiceBundle:
     on the :class:`ServiceRegistry`; CLI callers read the
     filesystem-persisted counterpart written in parallel by the
     factory (see :func:`write_preflight_warnings_file`).
+
+    WI2 wire-up: when
+    ``VoiceTuningConfig.voice_audio_service_watchdog_enabled`` is
+    True (Windows only), the factory instantiates an
+    :class:`~sovyx.voice.health._windows_audio_service.AudioServiceWatchdog`
+    and starts it before returning. The bundle owns the watchdog
+    object so callers MUST call ``await bundle.audio_service_watchdog.stop()``
+    on voice-disable to release the polling task. ``None`` when the
+    watchdog is disabled, on non-Windows, or when instantiation
+    failed (logged as WARN; default-on the non-windows path is the
+    "feature not applicable" path, not an error).
     """
 
     pipeline: VoicePipeline
     capture_task: AudioCaptureTask
     boot_preflight_warnings: tuple[dict[str, object], ...] = field(default_factory=tuple)
+    audio_service_watchdog: object = None  # AudioServiceWatchdog | None
 
 
 async def _run_boot_preflight(
@@ -735,10 +794,13 @@ async def create_voice_pipeline(
             hint="preflight step 9 passed; any prior saturated-boot marker removed",
         )
 
+    audio_service_watchdog = await _maybe_start_audio_service_watchdog()
+
     return VoiceBundle(
         pipeline=pipeline,
         capture_task=capture_task,
         boot_preflight_warnings=tuple(boot_warnings),
+        audio_service_watchdog=audio_service_watchdog,
     )
 
 
