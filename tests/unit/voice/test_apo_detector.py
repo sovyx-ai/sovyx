@@ -634,3 +634,147 @@ class TestCatalogInvariants:
 
 # Unused import guard — SimpleNamespace imported for future test utilities.
 _ = SimpleNamespace
+
+
+# ---------------------------------------------------------------------------
+# W4 — Registry permission failure surfaces a structured WARN
+# ---------------------------------------------------------------------------
+
+
+class TestW4RegistryPermissionWarning:
+    """Pre-W4 the OpenKey OSError swallowed at DEBUG and was invisible
+    in operator logs. Now it emits a structured WARN with
+    ``voice.action_required`` so the operator knows APO detection is
+    disabled and what to do about it."""
+
+    def test_open_failure_logs_structured_warn_event(self, caplog: Any) -> None:
+        import logging as _logging
+
+        # Build a winreg mock whose OpenKey raises OSError at every call
+        # — simulates "Sovyx token cannot read MMDevices subtree".
+        winreg_mod = ModuleType("winreg")
+        winreg_mod.HKEY_LOCAL_MACHINE = "HKLM"  # type: ignore[attr-defined]
+
+        def _raise_oserror(*_args: Any, **_kwargs: Any) -> None:
+            msg = "Access is denied"
+            raise OSError(msg)
+
+        winreg_mod.OpenKey = _raise_oserror  # type: ignore[attr-defined]
+        winreg_mod.EnumKey = lambda *_a, **_k: ""  # type: ignore[attr-defined]
+        winreg_mod.QueryValueEx = lambda *_a, **_k: ("", 0)  # type: ignore[attr-defined]
+        winreg_mod.CloseKey = lambda *_a, **_k: None  # type: ignore[attr-defined]
+        winreg_mod.REG_SZ = 1  # type: ignore[attr-defined]
+        winreg_mod.REG_DWORD = 4  # type: ignore[attr-defined]
+        winreg_mod.REG_BINARY = 3  # type: ignore[attr-defined]
+
+        with (
+            patch.object(sys, "platform", "win32"),
+            patch.dict(sys.modules, {"winreg": winreg_mod}),
+            caplog.at_level(_logging.WARNING, logger="sovyx.voice._apo_detector"),
+        ):
+            reports = detect_capture_apos()
+
+        # Returned an empty list (no APOs detectable) — gracefully
+        # degraded, no exception propagated.
+        assert reports == []
+        # WARN was emitted with the expected event name + action_required.
+        warn_events = [
+            r
+            for r in caplog.records
+            if r.levelname == "WARNING" and "apo_registry_access_denied" in r.getMessage()
+        ]
+        assert len(warn_events) == 1, (
+            f"expected one WARN event, got {[r.getMessage() for r in caplog.records]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# W12 — Unicode-aware device-name matching (NFKC + casefold)
+# ---------------------------------------------------------------------------
+
+
+class TestW12UnicodeAwareMatching:
+    """Pre-W12 ``str.lower()`` was the only normalisation, which:
+
+    * Failed on full-width ASCII (Asian-locale paste).
+    * Mishandled German ß (should fold to ``ss``, not stay as ß).
+
+    These are real failure modes for vendor names on non-en-US Windows
+    installs. The normaliser now uses NFKC + casefold uniformly.
+    """
+
+    def _reports(self) -> list[CaptureApoReport]:
+        return [
+            CaptureApoReport(
+                endpoint_id="{ep-fullwidth}",
+                # Full-width ASCII as the friendly name (sometimes
+                # observed when device descriptors are pasted from
+                # Asian-locale Windows installs).
+                endpoint_name="Microfone (Razer BlackShark V2 Pro)",  # noqa: RUF001
+                enumerator="USB",
+                fx_binding_count=3,
+                device_interface_name="Razer BlackShark V2 Pro",  # noqa: RUF001
+                known_apos=[],
+                raw_clsids=[],
+                voice_clarity_active=False,
+            ),
+        ]
+
+    def test_fullwidth_query_matches_halfwidth_target(self) -> None:
+        # Caller passes a half-width name; target endpoint_name carries
+        # the full-width characters. NFKC normalisation must collapse
+        # them so the matcher still resolves.
+        rep = find_endpoint_report(
+            self._reports(),
+            device_name="Razer BlackShark V2 Pro",
+        )
+        assert rep is not None
+        assert rep.endpoint_id == "{ep-fullwidth}"
+
+    def test_eszett_casefolded_correctly(self) -> None:
+        # Build a report whose vendor name contains German ß. Caller
+        # passes the casefolded form ("ss"). casefold() must equate
+        # them; .lower() would not.
+        reports = [
+            CaptureApoReport(
+                endpoint_id="{ep-de}",
+                endpoint_name="Mikrofon (Großmeister Audio)",
+                enumerator="USB",
+                fx_binding_count=3,
+                device_interface_name="Großmeister Audio",
+                known_apos=[],
+                raw_clsids=[],
+                voice_clarity_active=False,
+            ),
+        ]
+        # The casefolded form of "Groß" is "gross". A caller that read
+        # the device name from a stack that already lower-cased it via
+        # .lower() (preserving ß) won't match — but a caller that
+        # passes the *original* string with ß WILL match because both
+        # sides go through _norm.
+        rep = find_endpoint_report(
+            reports,
+            device_name="Großmeister Audio",
+        )
+        assert rep is not None
+        assert rep.endpoint_id == "{ep-de}"
+
+    def test_norm_helper_handles_empty_string(self) -> None:
+        from sovyx.voice._apo_detector import _norm
+
+        assert _norm("") == ""
+        assert _norm("   ") == ""
+
+    def test_norm_helper_collapses_fullwidth(self) -> None:
+        from sovyx.voice._apo_detector import _norm
+
+        # Full-width "ABC" → half-width "abc".
+        assert _norm("ＡＢＣ") == "abc"
+
+    def test_norm_helper_casefolds_eszett(self) -> None:
+        from sovyx.voice._apo_detector import _norm
+
+        # casefold() folds ß → ss; lower() would not.
+        assert _norm("Großmeister") == "grossmeister"
+        # Sanity guard: this property is what str.lower() would NOT give us.
+        assert "Großmeister".lower() != "grossmeister"

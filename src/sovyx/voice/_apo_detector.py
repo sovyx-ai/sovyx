@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import re
 import sys
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -67,6 +68,29 @@ logger = get_logger(__name__)
 
 
 _CAPTURE_ROOT = r"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture"
+
+
+def _norm(value: str) -> str:
+    """Unicode-aware key for substring / equality matching (W12).
+
+    ``str.lower()`` is locale-incomplete for non-ASCII case folding —
+    German ``ß`` stays as ``ß`` (it should fold to ``ss``); Turkish
+    dotted/dotless ``İ``/``ı`` are mishandled; full-width ASCII (e.g.
+    pasted from Asian-locale device names) won't match its half-width
+    equivalent. ``unicodedata.normalize("NFKC", ...).casefold()`` is
+    the W3C-recommended canonical normalisation that fixes all three:
+
+    * NFKC collapses compatibility codepoints (full-width → half-width,
+      ligatures → letters, superscripts → bare digits).
+    * ``casefold()`` is Unicode-aware case folding (``ß`` → ``ss``,
+      ``İ`` → ``i̇``, etc.) — strictly stronger than ``lower()``.
+
+    Empty / whitespace-only inputs collapse to ``""`` so substring
+    short-circuits don't match accidentally.
+    """
+    if not value:
+        return ""
+    return unicodedata.normalize("NFKC", value).strip().casefold()
 
 
 # PKEY_* registry keys (property-store GUID + PID).
@@ -205,7 +229,30 @@ def detect_capture_apos() -> list[CaptureApoReport]:
     try:
         root = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _CAPTURE_ROOT)
     except OSError as exc:
-        logger.debug("voice_apo_registry_open_failed", detail=str(exc))
+        # W4 — registry permission silent fail: previously this swallowed
+        # at DEBUG (invisible in operator logs). Promoted to WARN with an
+        # action_required hint because reaching this branch on a normal
+        # Windows install means either (a) the MMDevices tree is corrupt
+        # (rare; reinstall driver) or (b) Sovyx is running under a token
+        # that lost SeBackupPrivilege (unusual; service-account hardening).
+        # Either way the operator deserves to see it.
+        logger.warning(
+            "voice.windows.apo_registry_access_denied",
+            error=str(exc),
+            error_type=type(exc).__name__,
+            registry_root=_CAPTURE_ROOT,
+            **{
+                "voice.action_required": (
+                    "Cannot read MMDevices capture registry. APO detection "
+                    "is disabled — Voice Clarity / Communications Mode "
+                    "auto-bypass cannot fire. Confirm Sovyx is running "
+                    "under a user token with read access to "
+                    "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\"
+                    "MMDevices\\Audio\\Capture, or reinstall the audio "
+                    "driver if the registry tree is corrupt."
+                ),
+            },
+        )
         return []
 
     reports: list[CaptureApoReport] = []
@@ -266,25 +313,25 @@ def find_endpoint_report(
         return None
 
     if endpoint_id:
-        ep_needle = endpoint_id.strip().lower()
+        ep_needle = _norm(endpoint_id)
         if ep_needle:
             for rep in reports:
-                if rep.endpoint_id.strip().lower() == ep_needle:
+                if _norm(rep.endpoint_id) == ep_needle:
                     return rep
 
     if not device_name:
         return None
-    needle = device_name.strip().lower()
+    needle = _norm(device_name)
     if len(needle) < 4:
         return None
 
     for rep in reports:
-        hay = rep.device_interface_name.strip().lower()
+        hay = _norm(rep.device_interface_name)
         if hay and _strict_name_match(needle, hay):
             return rep
 
     for rep in reports:
-        hay = rep.endpoint_name.strip().lower()
+        hay = _norm(rep.endpoint_name)
         if hay and _strict_name_match(needle, hay):
             return rep
 
@@ -361,7 +408,7 @@ def _read_endpoint(winreg_mod: object, root: object, endpoint_id: str) -> Captur
                 if label and label not in seen:
                     seen.add(label)
                     known.append(label)
-            lowered = text.lower()
+            lowered = _norm(text)
             for needle, label in _PACKAGE_PATTERNS:
                 if needle in lowered and label not in seen:
                     seen.add(label)
