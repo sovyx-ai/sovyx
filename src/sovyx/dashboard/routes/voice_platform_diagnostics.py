@@ -107,6 +107,22 @@ class WindowsAudioServicePayload(BaseModel):
     degraded_services: list[str] = Field(default_factory=list)
 
 
+class EtwEventPayload(BaseModel):
+    channel: str
+    level: str
+    event_id: int
+    timestamp_iso: str = ""
+    provider: str = ""
+    description: str = ""
+
+
+class EtwChannelPayload(BaseModel):
+    channel: str
+    events: list[EtwEventPayload] = Field(default_factory=list)
+    lookback_seconds: int = 3600
+    notes: list[str] = Field(default_factory=list)
+
+
 class HalPluginPayload(BaseModel):
     bundle_name: str
     path: str
@@ -148,6 +164,7 @@ class LinuxBranch(BaseModel):
 
 class WindowsBranch(BaseModel):
     audio_service: WindowsAudioServicePayload
+    etw_audio_events: list[EtwChannelPayload] = Field(default_factory=list)
 
 
 class MacOSBranch(BaseModel):
@@ -273,6 +290,39 @@ def _build_audio_service_payload(report: Any) -> WindowsAudioServicePayload:  # 
     )
 
 
+def _build_etw_payload(results: Any) -> list[EtwChannelPayload]:  # noqa: ANN401
+    """Convert a tuple of EtwQueryResult into the dashboard payload.
+
+    ``results`` is ``None`` when the probe failed entirely (rare —
+    the WI1 probe wraps subprocess failures internally). When
+    ``None``, returns an empty list rather than dropping a confusing
+    sentinel into the response.
+    """
+    if results is None:
+        return []
+    out: list[EtwChannelPayload] = []
+    for r in results:
+        out.append(
+            EtwChannelPayload(
+                channel=r.channel,
+                events=[
+                    EtwEventPayload(
+                        channel=ev.channel,
+                        level=ev.level.value,
+                        event_id=ev.event_id,
+                        timestamp_iso=ev.timestamp_iso,
+                        provider=ev.provider,
+                        description=ev.description,
+                    )
+                    for ev in r.events
+                ],
+                lookback_seconds=r.lookback_seconds,
+                notes=list(r.notes),
+            ),
+        )
+    return out
+
+
 def _build_hal_payload(report: Any) -> HalPayload:  # noqa: ANN401
     if report is None:
         return HalPayload(notes=["hal probe failed (returned None)"])
@@ -361,11 +411,18 @@ async def get_platform_diagnostics() -> PlatformDiagnosticsResponse:
         from sovyx.voice.health._windows_audio_service import (
             query_audio_service_status,
         )
+        from sovyx.voice.health._windows_etw import query_audio_etw_events
 
         svc_task = _safe_probe(query_audio_service_status)
-        mic_report, svc_report = await asyncio.gather(mic_task, svc_task)
+        etw_task = _safe_probe(query_audio_etw_events)
+        mic_report, svc_report, etw_report = await asyncio.gather(
+            mic_task,
+            svc_task,
+            etw_task,
+        )
         windows_branch = WindowsBranch(
             audio_service=_build_audio_service_payload(svc_report),
+            etw_audio_events=_build_etw_payload(etw_report),
         )
     elif platform == "darwin":
         from sovyx.voice._bluetooth_profile_mac import (

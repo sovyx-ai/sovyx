@@ -137,6 +137,39 @@ class TestWindowsBranch:
         assert "audiosrv" in body["windows"]["audio_service"]
         assert "audio_endpoint_builder" in body["windows"]["audio_service"]
 
+    def test_windows_branch_includes_etw_events_field(
+        self,
+        client: TestClient,
+    ) -> None:
+        # WI1 wire-up: the windows branch carries an etw_audio_events
+        # list (one entry per audio operational channel queried).
+        with patch.object(sys, "platform", "win32"):
+            response = client.get("/api/voice/platform-diagnostics")
+        body = response.json()
+        assert "etw_audio_events" in body["windows"]
+        assert isinstance(body["windows"]["etw_audio_events"], list)
+
+    def test_windows_etw_probe_failure_keeps_audio_service(
+        self,
+        client: TestClient,
+    ) -> None:
+        # ETW probe crash MUST NOT take out audio_service — both
+        # are independent gathers wrapped in _safe_probe.
+        with (
+            patch.object(sys, "platform", "win32"),
+            patch(
+                "sovyx.voice.health._windows_etw.query_audio_etw_events",
+                side_effect=RuntimeError("etw boom"),
+            ),
+        ):
+            response = client.get("/api/voice/platform-diagnostics")
+        assert response.status_code == 200
+        body = response.json()
+        # Audio service still populated.
+        assert "audiosrv" in body["windows"]["audio_service"]
+        # ETW collapsed to empty list (probe failure path).
+        assert body["windows"]["etw_audio_events"] == []
+
 
 class TestDarwinBranch:
     def test_darwin_branch_populated_on_darwin(
