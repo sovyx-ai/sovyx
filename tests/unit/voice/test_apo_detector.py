@@ -778,3 +778,86 @@ class TestW12UnicodeAwareMatching:
         assert _norm("Großmeister") == "grossmeister"
         # Sanity guard: this property is what str.lower() would NOT give us.
         assert "Großmeister".lower() != "grossmeister"
+
+
+# ---------------------------------------------------------------------------
+# W10 — Bounded walk + GIL yield
+# ---------------------------------------------------------------------------
+
+
+class TestW10BoundedWalk:
+    """Pre-W10 the EnumKey loop relied entirely on the registry itself
+    raising OSError to signal end-of-list. A corrupted registry that
+    keeps returning new keys forever would block the calling thread
+    indefinitely. The cap + WARN + cooperative GIL yield close that
+    failure mode."""
+
+    def test_cap_hit_emits_warn_and_returns_partial_list(
+        self,
+        caplog: Any,
+    ) -> None:
+        import logging as _logging
+
+        from sovyx.voice._apo_detector import _MAX_CAPTURE_ENDPOINTS
+
+        # Build a registry that has MORE than the cap endpoints — the
+        # walk should stop at the cap and emit a WARN.
+        endpoints: dict[str, dict[str, Any]] = {
+            f"{{ep-{i:03d}}}": {
+                "state": 1,
+                "friendly": f"Mic {i}",
+                "fx": [],
+            }
+            for i in range(_MAX_CAPTURE_ENDPOINTS + 50)
+        }
+        tree = _mmdevices_tree(endpoints)
+
+        with (
+            patch.object(sys, "platform", "win32"),
+            _with_fake_winreg(_make_winreg_mock(tree)),
+            caplog.at_level(_logging.WARNING, logger="sovyx.voice._apo_detector"),
+        ):
+            reports = detect_capture_apos()
+
+        # The walk stopped at the cap (returns are < total endpoints).
+        assert len(reports) <= _MAX_CAPTURE_ENDPOINTS
+        # A single WARN emitted for the cap-hit, with the canonical
+        # event name + the action_required hint.
+        cap_events = [
+            r
+            for r in caplog.records
+            if r.levelname == "WARNING" and "apo_walk_cap_hit" in r.getMessage()
+        ]
+        assert len(cap_events) == 1, (
+            f"expected exactly one cap-hit WARN, got {[r.getMessage() for r in caplog.records]}"
+        )
+
+    def test_normal_walk_does_not_emit_cap_warning(self, caplog: Any) -> None:
+        # A 4-endpoint walk should NOT emit the cap warning.
+        import logging as _logging
+
+        endpoints = {
+            "{ep-1}": {"state": 1, "friendly": "Mic 1", "fx": []},
+            "{ep-2}": {"state": 1, "friendly": "Mic 2", "fx": []},
+            "{ep-3}": {"state": 1, "friendly": "Mic 3", "fx": []},
+            "{ep-4}": {"state": 1, "friendly": "Mic 4", "fx": []},
+        }
+        tree = _mmdevices_tree(endpoints)
+        with (
+            patch.object(sys, "platform", "win32"),
+            _with_fake_winreg(_make_winreg_mock(tree)),
+            caplog.at_level(_logging.WARNING, logger="sovyx.voice._apo_detector"),
+        ):
+            reports = detect_capture_apos()
+
+        assert len(reports) == 4
+        # No cap-hit warning.
+        cap_events = [r for r in caplog.records if "apo_walk_cap_hit" in r.getMessage()]
+        assert cap_events == []
+
+    def test_max_endpoints_constant_is_reasonable(self) -> None:
+        from sovyx.voice._apo_detector import _MAX_CAPTURE_ENDPOINTS
+
+        # The cap should leave headroom for legitimate workstation
+        # deployments (many audio interfaces) without being unbounded.
+        assert 64 <= _MAX_CAPTURE_ENDPOINTS <= 1024  # noqa: PLR2004

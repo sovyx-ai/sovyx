@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import re
 import sys
+import time
 import unicodedata
 from dataclasses import dataclass, field
 from typing import Any
@@ -68,6 +69,27 @@ logger = get_logger(__name__)
 
 
 _CAPTURE_ROOT = r"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture"
+
+
+# W10 — bounded walk over the MMDevices capture tree. The MMDevices
+# subkey legitimately holds tens to ~100 endpoints on a heavily-used
+# system (every USB mic ever plugged in keeps a stale entry until
+# Windows expires it). 256 leaves headroom for outliers (workstations
+# with audio interfaces, virtualised stacks) while capping the worst
+# case if the registry gets corrupt and EnumKey returns garbage forever.
+_MAX_CAPTURE_ENDPOINTS = 256
+"""Hard ceiling on endpoints walked per :func:`detect_capture_apos`
+call. Hitting this emits a one-shot WARN — it should be rare enough
+to indicate either an exotic deployment OR a corrupted registry.
+Active endpoints (the ones that matter) are a tiny subset; the
+remainder is mostly stale unplugged-device residue."""
+
+_GIL_YIELD_INTERVAL = 32
+"""How many endpoints to walk between cooperative GIL releases. The
+function is called via ``asyncio.to_thread`` from the dashboard
+endpoint and factory startup — the worker thread holds the GIL
+during the loop. Yielding every N iterations lets other Python-side
+threads (capture / WS) make progress while the registry walk runs."""
 
 
 def _norm(value: str) -> str:
@@ -214,9 +236,19 @@ def detect_capture_apos() -> list[CaptureApoReport]:
     :class:`CaptureApoReport`; inactive endpoints (unplugged mics, etc.)
     are skipped so the report tracks what the user is actually using.
 
-    The function is pure (no observability side effects) so callers
-    control when to log the detection event — startup code logs once;
-    diagnostics endpoints may call it on every request.
+    The function is pure (no observability side effects beyond W4 + W10
+    structured warnings) so callers control when to log the detection
+    event — startup code logs once; diagnostics endpoints may call it
+    on every request.
+
+    **Threading model (W10).** This function performs synchronous
+    Windows registry I/O and blocks the calling thread. Async callers
+    MUST wrap it in ``asyncio.to_thread()`` (the dashboard endpoint
+    and the doctor CLI already do). The walk is internally bounded
+    by :data:`_MAX_CAPTURE_ENDPOINTS` and yields the GIL every
+    :data:`_GIL_YIELD_INTERVAL` iterations so other Python-side
+    threads (capture / websocket / metrics) make progress while
+    the registry walk runs.
     """
     if sys.platform != "win32":
         return []
@@ -258,7 +290,15 @@ def detect_capture_apos() -> list[CaptureApoReport]:
     reports: list[CaptureApoReport] = []
     try:
         idx = 0
+        cap_hit = False
         while True:
+            # W10 — bounded walk: cap at _MAX_CAPTURE_ENDPOINTS to
+            # avoid pathological loops on a corrupt registry that
+            # never raises StopIteration. Hitting the cap is rare
+            # enough to deserve a single WARN with the count.
+            if idx >= _MAX_CAPTURE_ENDPOINTS:
+                cap_hit = True
+                break
             try:
                 endpoint_id = winreg.EnumKey(root, idx)
             except OSError:
@@ -275,6 +315,30 @@ def detect_capture_apos() -> list[CaptureApoReport]:
                 continue
             if report is not None:
                 reports.append(report)
+            # W10 — periodic GIL release so other Python threads
+            # (capture / WS) make progress during the walk. zero-arg
+            # sleep is a Python convention for "yield to scheduler"
+            # without actually blocking.
+            if idx % _GIL_YIELD_INTERVAL == 0:
+                time.sleep(0)
+        if cap_hit:
+            logger.warning(
+                "voice.windows.apo_walk_cap_hit",
+                walked=idx,
+                cap=_MAX_CAPTURE_ENDPOINTS,
+                **{
+                    "voice.action_required": (
+                        f"MMDevices capture registry has more than "
+                        f"{_MAX_CAPTURE_ENDPOINTS} endpoint subkeys — "
+                        "stopping the walk to avoid unbounded scan time. "
+                        "This usually means the audio driver registry is "
+                        "polluted with stale endpoint entries (every USB "
+                        "mic ever plugged in keeps a residue subkey). "
+                        "Consider running `pnputil /enum-devices /removed` "
+                        "and pruning unused devices via Device Manager."
+                    ),
+                },
+            )
     finally:
         winreg.CloseKey(root)
     return reports
