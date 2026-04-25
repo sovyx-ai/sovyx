@@ -51,6 +51,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from sovyx.engine._backoff import BackoffPolicy, BackoffSchedule, JitterStrategy
 from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.observability.logging import get_logger
 from sovyx.observability.tasks import spawn
@@ -773,6 +774,12 @@ class AudioCaptureTask:
         self._normalizer: FrameNormalizer | None = None
         self._resolved_device_name: str | None = None
         self._endpoint_guid: str = endpoint_guid or ""
+        # Band-aid #10 replacement: per-task exponential backoff
+        # schedule for the reconnect loop. Lazy-initialised on first
+        # PortAudio error so the zero-error case has zero overhead.
+        # Reset to attempt 0 on each successful reconnect so a
+        # transient outage doesn't penalise future ones.
+        self._reconnect_backoff: BackoffSchedule | None = None
 
         # Telemetry — populated by the consumer loop.
         self._last_rms_db: float = _RMS_FLOOR_DB
@@ -2434,16 +2441,60 @@ class AudioCaptureTask:
                     host_api=self._host_api_name,
                 )
                 await asyncio.to_thread(self._close_stream, "device_error")
-                await asyncio.sleep(_RECONNECT_DELAY_S)
+                # Band-aid #10 replacement: exponential backoff with
+                # FULL jitter. Constant ``_RECONNECT_DELAY_S`` was the
+                # legacy band-aid that hammered a degraded driver
+                # every 5 s regardless of how long the outage was.
+                # The schedule is lazy-initialised so the (overwhelmingly
+                # common) zero-error case has zero backoff overhead.
+                # Reset on successful reconnect; advance on each failure.
+                if self._reconnect_backoff is None:
+                    # Clamp base delay to the BackoffPolicy minimum
+                    # (1 ms) so a test-time _RECONNECT_DELAY_S=0
+                    # override + future config that lets operators
+                    # set 0 doesn't violate the loud-fail bound.
+                    # The clamp preserves the operator intent of
+                    # "fast retries" while keeping the policy's
+                    # busy-loop guard rail.
+                    base = max(_RECONNECT_DELAY_S, 0.001)
+                    self._reconnect_backoff = BackoffSchedule(
+                        BackoffPolicy(
+                            base_delay_s=base,
+                            max_delay_s=max(base * 12.0, 60.0),
+                            multiplier=2.0,
+                            max_attempts=1_000_000,  # effectively unbounded
+                            jitter=JitterStrategy.FULL,
+                        )
+                    )
+                try:
+                    delay_s = self._reconnect_backoff.next()
+                except StopIteration:
+                    # Should not occur with max_attempts=1M, but the
+                    # schedule contract requires handling.
+                    delay_s = _RECONNECT_DELAY_S
+                logger.info(
+                    "audio_capture_reconnect_backoff",
+                    delay_s=round(delay_s, 3),
+                    attempt=self._reconnect_backoff.attempt_count,
+                    base_s=_RECONNECT_DELAY_S,
+                )
+                await asyncio.sleep(delay_s)
                 if not self._running:
                     return
                 try:
                     await self._reopen_stream_after_device_error()
                     logger.info("audio_capture_device_reconnected")
+                    # Successful reconnect — reset the backoff so the
+                    # next outage starts from base_delay_s, not
+                    # wherever the previous outage's escalation left
+                    # us. Without reset, a transient outage 30 min
+                    # ago would still penalise today's reconnect.
+                    self._reconnect_backoff.reset()
                 except Exception as reopen_exc:  # noqa: BLE001
                     logger.error(
                         "audio_capture_reconnect_failed",
                         error=str(reopen_exc),
+                        next_delay_attempt=self._reconnect_backoff.attempt_count,
                     )
             except Exception:  # noqa: BLE001
                 # A single bad frame must not kill the loop. Log with
