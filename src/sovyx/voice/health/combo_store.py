@@ -72,6 +72,35 @@ _FRAMES_PER_BUFFER_MIN = 64
 _FRAMES_PER_BUFFER_MAX = 8192
 
 
+# C2 (pinned-entry auto-unpin lifecycle).
+#
+# Pre-C2 a pinned ComboStore entry stayed pinned forever — the cascade
+# would re-validate it every boot (R6/R7/R8/R10/R11) but never unpin
+# even if every validation failed. The mission identified this as the
+# Ring 1 ComboStore band-aid (§3.8): a stale pin on a device that
+# stopped working (driver update broke the combo, hardware swapped on
+# the same GUID slot) silently prevents the cascade from finding a
+# working alternative. C2 introduces a lifecycle contract: if a pinned
+# entry's probe returns non-HEALTHY :data:`_PIN_AUTO_UNPIN_FAILURE_THRESHOLD`
+# consecutive times the pin is automatically released, surfaced via
+# the ``voice.combo_store.pin_auto_unpinned`` event so operators can
+# attribute the decision.
+
+_PIN_AUTO_UNPIN_FAILURE_THRESHOLD = 2
+"""Number of consecutive non-HEALTHY probe outcomes after which a
+pinned entry is auto-unpinned.
+
+Two is the SRE-canonical "twice is coincidence, not pattern but
+worth acting on" threshold — a single transient failure (USB
+renegotiation, momentary CPU contention) shouldn't release a user
+pin, but two in a row is enough signal that the pinned combo no
+longer reliably works on this hardware. The pin is released and the
+next boot cycle lets the cascade pick a fresh winner; the user can
+re-pin manually if the original combo is preferred for non-health
+reasons (latency, format compatibility).
+"""
+
+
 def _utc_now() -> datetime:
     return datetime.now(UTC)
 
@@ -115,6 +144,16 @@ class _LiveEntry:
     pinned: bool = False
     needs_revalidation: bool = False
     available: bool = True
+    consecutive_validation_failures: int = 0
+    """C2 auto-unpin counter. Bumped on every non-HEALTHY probe of a
+    pinned entry by :meth:`ComboStore.record_probe`; cleared on the
+    first HEALTHY probe and on auto-unpin. Persists across boots so a
+    failure run that spans a restart still triggers the unpin —
+    otherwise a daemon that crashes between probe failures would
+    silently reset the counter on every cold-start.
+
+    Default ``0`` is backwards-compatible: pre-C2 entries that don't
+    carry the field in their JSON read as 0 (no failures yet)."""
     # voice-linux-cascade-root-fix T11 / schema v3. :class:`DeviceKind`
     # value as a string (``"hardware"`` / ``"session_manager_virtual"``
     # / ``"os_default"`` / ``"unknown"``). Back-compat default
@@ -484,6 +523,11 @@ class ComboStore:
             )
             if len(live.probe_history) > _PROBE_HISTORY_MAX:
                 live.probe_history = live.probe_history[-_PROBE_HISTORY_MAX:]
+            # C2 auto-unpin lifecycle. Only applies when the entry is
+            # currently pinned — counter is reset on the first HEALTHY
+            # probe so an intermittent transient doesn't cause an
+            # "almost-unpin" that survives across boots.
+            self._maybe_auto_unpin(endpoint_guid, live, probe)
             self._write_atomic()
 
     def increment_boots_validated(
@@ -527,6 +571,71 @@ class ComboStore:
     def _ensure_loaded(self) -> None:
         if not self._loaded:
             self.load()
+
+    def _maybe_auto_unpin(
+        self,
+        endpoint_guid: str,
+        live: _LiveEntry,
+        probe: ProbeResult,
+    ) -> None:
+        """C2 auto-unpin lifecycle for a pinned entry after probe failure.
+
+        Lifecycle rules:
+
+        * Probe was HEALTHY — clear the failure counter so a future
+          intermittent failure doesn't carry stale weight.
+        * Probe was non-HEALTHY and the entry is pinned — bump the
+          counter. When it reaches
+          :data:`_PIN_AUTO_UNPIN_FAILURE_THRESHOLD` (2), release the
+          pin and emit ``voice.combo_store.pin_auto_unpinned``.
+        * Probe was non-HEALTHY and the entry is NOT pinned — no
+          action; the counter is only meaningful while pinned.
+
+        The counter persists across boots (it's serialised into the
+        JSON entry), so a daemon that crashes between probe failures
+        still triggers the unpin on the next failure rather than
+        silently resetting on cold-start.
+        """
+        if probe.diagnosis is Diagnosis.HEALTHY:
+            if live.consecutive_validation_failures > 0:
+                logger.debug(
+                    "voice.combo_store.pin_failure_counter_reset",
+                    endpoint=endpoint_guid,
+                    previous_count=live.consecutive_validation_failures,
+                )
+                live.consecutive_validation_failures = 0
+            return
+        if not live.pinned:
+            # Counter only matters for pinned entries — no point
+            # bumping for an unpinned entry that's already eligible
+            # for cascade re-evaluation.
+            return
+        live.consecutive_validation_failures += 1
+        if live.consecutive_validation_failures < _PIN_AUTO_UNPIN_FAILURE_THRESHOLD:
+            logger.info(
+                "voice.combo_store.pin_failure_recorded",
+                endpoint=endpoint_guid,
+                consecutive_failures=live.consecutive_validation_failures,
+                threshold=_PIN_AUTO_UNPIN_FAILURE_THRESHOLD,
+                diagnosis=probe.diagnosis.value,
+            )
+            return
+        # Threshold met — release the pin and reset the counter so a
+        # subsequent re-pin starts from a clean lifecycle.
+        live.pinned = False
+        failures_at_unpin = live.consecutive_validation_failures
+        live.consecutive_validation_failures = 0
+        live.needs_revalidation = True
+        logger.warning(
+            "voice.combo_store.pin_auto_unpinned",
+            **{
+                "voice.endpoint_guid": endpoint_guid,
+                "voice.consecutive_failures": failures_at_unpin,
+                "voice.threshold": _PIN_AUTO_UNPIN_FAILURE_THRESHOLD,
+                "voice.last_diagnosis": probe.diagnosis.value,
+                "voice.action": "pin_released_cascade_will_re_validate_next_boot",
+            },
+        )
 
     def _read_with_backup_recovery(
         self,
@@ -756,6 +865,9 @@ class ComboStore:
             pinned=bool(raw_entry.get("pinned", False)),
             needs_revalidation=False,
             candidate_kind=str(raw_entry.get("candidate_kind", "unknown")),
+            consecutive_validation_failures=int(
+                raw_entry.get("consecutive_validation_failures", 0),
+            ),
         )
 
 
@@ -827,6 +939,9 @@ def _entry_to_dict(live: _LiveEntry) -> dict[str, Any]:
         "pinned": live.pinned,
         # voice-linux-cascade-root-fix T11 / schema v3.
         "candidate_kind": live.candidate_kind,
+        # C2 auto-unpin lifecycle (additive — no schema bump; default 0
+        # on read keeps pre-C2 entries backwards-compat).
+        "consecutive_validation_failures": live.consecutive_validation_failures,
     }
 
 

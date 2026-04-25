@@ -20,6 +20,7 @@ from hypothesis import strategies as st
 from sovyx.voice.health._combo_store_migrations import CURRENT_SCHEMA_VERSION
 from sovyx.voice.health._file_lock import FileLockTimeoutError
 from sovyx.voice.health.combo_store import (
+    _PIN_AUTO_UNPIN_FAILURE_THRESHOLD,
     ComboStore,
     _combo_to_dict,
     _entry_to_dict,
@@ -960,3 +961,165 @@ class TestRoundTrip:
         assert entry.winning_combo.channels == combo.channels
         assert entry.winning_combo.sample_format == combo.sample_format
         assert entry.winning_combo.frames_per_buffer == combo.frames_per_buffer
+
+
+# ===========================================================================
+# C2: Pinned-entry auto-unpin lifecycle
+# ===========================================================================
+#
+# Pre-C2 a pinned ComboStore entry stayed pinned forever — the cascade
+# would re-validate every boot but never unpin even if every validation
+# failed. The mission identified this as a Ring 1 ComboStore band-aid
+# (§3.8): a stale pin on a device whose combo stopped working silently
+# blocks the cascade from finding a working alternative. C2 introduces
+# a lifecycle: N consecutive non-HEALTHY probes auto-unpin and emit
+# ``voice.combo_store.pin_auto_unpinned``.
+#
+# Reference: MISSION-voice-mixer-enterprise-refactor-2026-04-25 §3.8, C2.
+
+_C2_LOGGER = "sovyx.voice.health.combo_store"
+
+
+def _c2_events_of(caplog: pytest.LogCaptureFixture, event_name: str) -> list[dict[str, Any]]:
+    return [
+        r.msg
+        for r in caplog.records
+        if r.name == _C2_LOGGER and isinstance(r.msg, dict) and r.msg.get("event") == event_name
+    ]
+
+
+def _failed_probe(diagnosis: Diagnosis = Diagnosis.UNKNOWN) -> ProbeResult:
+    return ProbeResult(
+        diagnosis=diagnosis,
+        mode=ProbeMode.WARM,
+        combo=_good_combo(),
+        vad_max_prob=0.05,
+        vad_mean_prob=0.02,
+        rms_db=-60.0,
+        callbacks_fired=10,
+        duration_ms=1000,
+    )
+
+
+class TestPinnedAutoUnpinC2:
+    def test_threshold_constant_value(self) -> None:
+        """Public-surface tuning constant — bumps must be deliberate."""
+        assert _PIN_AUTO_UNPIN_FAILURE_THRESHOLD == 2  # noqa: PLR2004
+
+    def test_unpinned_entry_failures_are_not_counted(self, tmp_path: Path) -> None:
+        """The counter only matters while the entry is pinned."""
+        store = _make_store(tmp_path)
+        _record(store)
+        # Entry starts unpinned.
+        assert store._entries["{guid-A}"].pinned is False
+        # Drive failures — counter must NOT increment.
+        store.record_probe("{guid-A}", _failed_probe())
+        store.record_probe("{guid-A}", _failed_probe())
+        store.record_probe("{guid-A}", _failed_probe())
+        live = store._entries["{guid-A}"]
+        assert live.consecutive_validation_failures == 0
+
+    def test_pinned_failure_increments_counter_below_threshold(self, tmp_path: Path) -> None:
+        store = _make_store(tmp_path)
+        _record(store)
+        live = store._entries["{guid-A}"]
+        live.pinned = True
+        # One failure — below threshold of 2.
+        store.record_probe("{guid-A}", _failed_probe())
+        assert live.consecutive_validation_failures == 1
+        assert live.pinned is True
+
+    def test_pinned_threshold_failures_auto_unpin(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_C2_LOGGER)
+        store = _make_store(tmp_path)
+        _record(store)
+        live = store._entries["{guid-A}"]
+        live.pinned = True
+        # Two consecutive failures = threshold met.
+        store.record_probe("{guid-A}", _failed_probe())
+        store.record_probe("{guid-A}", _failed_probe())
+        assert live.pinned is False
+        assert live.consecutive_validation_failures == 0  # reset on unpin
+        assert live.needs_revalidation is True
+        events = _c2_events_of(caplog, "voice.combo_store.pin_auto_unpinned")
+        assert len(events) == 1
+        assert events[0]["voice.endpoint_guid"] == "{guid-A}"
+        assert events[0]["voice.consecutive_failures"] == 2  # noqa: PLR2004
+        assert events[0]["voice.threshold"] == 2  # noqa: PLR2004
+
+    def test_healthy_probe_resets_counter(self, tmp_path: Path) -> None:
+        """An intermittent failure followed by HEALTHY must NOT eventually
+        unpin — the counter resets on every successful probe so only
+        BACK-TO-BACK failures trip the threshold."""
+        store = _make_store(tmp_path)
+        _record(store)
+        live = store._entries["{guid-A}"]
+        live.pinned = True
+        store.record_probe("{guid-A}", _failed_probe())
+        assert live.consecutive_validation_failures == 1
+        store.record_probe("{guid-A}", _good_probe())
+        assert live.consecutive_validation_failures == 0
+        assert live.pinned is True
+        # A subsequent failure starts from zero again.
+        store.record_probe("{guid-A}", _failed_probe())
+        assert live.consecutive_validation_failures == 1
+        assert live.pinned is True
+
+    def test_counter_persists_across_load(self, tmp_path: Path) -> None:
+        """A daemon that crashes between probe failures must NOT silently
+        reset the counter on cold-start — the field is serialised."""
+        store = _make_store(tmp_path)
+        _record(store)
+        live = store._entries["{guid-A}"]
+        live.pinned = True
+        store.record_probe("{guid-A}", _failed_probe())
+        assert live.consecutive_validation_failures == 1
+
+        # Rebuild store from disk.
+        store2 = _make_store(tmp_path)
+        store2.load()
+        live2 = store2._entries["{guid-A}"]
+        assert live2.consecutive_validation_failures == 1
+        assert live2.pinned is True
+
+        # Second failure across the boot boundary trips the threshold.
+        store2.record_probe("{guid-A}", _failed_probe())
+        assert live2.pinned is False
+        assert live2.consecutive_validation_failures == 0
+
+    def test_pre_c2_entries_default_counter_to_zero(self, tmp_path: Path) -> None:
+        """A pre-C2 JSON entry that lacks the field must read as 0
+        (backwards-compat) — no migration, no schema bump required."""
+        store = _make_store(tmp_path)
+        _record(store)
+        path = store._path
+        # Read back, strip the new field, re-write.
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        for entry in raw["entries"].values():
+            entry.pop("consecutive_validation_failures", None)
+        path.write_text(json.dumps(raw), encoding="utf-8")
+
+        store2 = _make_store(tmp_path)
+        store2.load()
+        live = store2._entries["{guid-A}"]
+        assert live.consecutive_validation_failures == 0
+
+    def test_pre_threshold_failure_logs_progress(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        caplog.set_level(logging.INFO, logger=_C2_LOGGER)
+        store = _make_store(tmp_path)
+        _record(store)
+        live = store._entries["{guid-A}"]
+        live.pinned = True
+        store.record_probe("{guid-A}", _failed_probe())
+        events = _c2_events_of(caplog, "voice.combo_store.pin_failure_recorded")
+        assert len(events) == 1
+        assert events[0]["consecutive_failures"] == 1
+        assert events[0]["threshold"] == _PIN_AUTO_UNPIN_FAILURE_THRESHOLD
