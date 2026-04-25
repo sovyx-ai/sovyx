@@ -250,6 +250,20 @@ class VoiceTuningConfig(BaseSettings):
     Sovyx instance — operators opt in when they've observed
     audio-service-related issues. Non-Windows platforms skip."""
 
+    voice_apo_dll_introspection_enabled: bool = False
+    """WI3 wire-up: when True, the APO detector enriches each
+    :class:`~sovyx.voice._apo_detector.CaptureApoReport` with
+    DLL version-info for any CLSID NOT already in the static
+    catalog. Default False because:
+    (1) Each unknown CLSID triggers a registry lookup + DLL header
+        read on the audio-enable path, adding ~5-10 ms per
+        unknown APO.
+    (2) The static catalog covers the vast majority of MS APOs;
+        enrichment only matters when investigating a vendor-shipped
+        or post-Windows-Update APO not yet in the catalog.
+    Operators opt in via ``SOVYX_TUNING__VOICE__VOICE_APO_DLL_INTROSPECTION_ENABLED=true``
+    when they need forensic detail in the dashboard."""
+
     # AudioCaptureTask stream health — catches the silent-zeros failure
     # mode where sd.InputStream opens cleanly but delivers all-zero
     # frames (MME + unsupported rate, driver hang, privacy block). See

@@ -59,6 +59,7 @@ from __future__ import annotations
 import re
 import sys
 from dataclasses import dataclass, field
+from typing import Any
 
 from sovyx.observability.logging import get_logger
 
@@ -167,6 +168,17 @@ class CaptureApoReport:
     known_apos: list[str] = field(default_factory=list)
     raw_clsids: list[str] = field(default_factory=list)
     voice_clarity_active: bool = False
+    unknown_clsid_dll_info: dict[str, Any] = field(default_factory=dict)
+    """WI3 wire-up: per-CLSID DLL introspection for any CLSID not in
+    the static catalog. Empty unless
+    ``VoiceTuningConfig.voice_apo_dll_introspection_enabled`` is
+    True. Each value is an
+    :class:`~sovyx.voice._apo_dll_introspect.ApoDllInfo` carrying
+    the registered DLL path, version-info fields, and a
+    ``is_microsoft_signed`` heuristic. Typed as ``dict[str, Any]``
+    instead of ``dict[str, ApoDllInfo]`` to avoid a circular import
+    between this module and ``_apo_dll_introspect``; consumers can
+    cast safely or use the ``Any`` directly for dashboard rendering."""
 
 
 def detect_capture_apos() -> list[CaptureApoReport]:
@@ -357,6 +369,12 @@ def _read_endpoint(winreg_mod: object, root: object, endpoint_id: str) -> Captur
             if _VOICE_CLARITY_LABEL in known:
                 voice_clarity = True
 
+        # WI3 wire-up: opt-in DLL introspection for unknown CLSIDs.
+        # Static catalog hits stay zero-cost; only CLSIDs not in the
+        # catalog trigger the registry + DLL header read. Errors are
+        # caught + logged, never propagated — the report still ships.
+        unknown_dll_info = _maybe_introspect_unknown_clsids(raw_clsids)
+
         return CaptureApoReport(
             endpoint_id=endpoint_id,
             endpoint_name=str(friendly or ""),
@@ -366,9 +384,68 @@ def _read_endpoint(winreg_mod: object, root: object, endpoint_id: str) -> Captur
             known_apos=known,
             raw_clsids=raw_clsids,
             voice_clarity_active=voice_clarity,
+            unknown_clsid_dll_info=unknown_dll_info,
         )
     finally:
         wr.CloseKey(ep)  # type: ignore[attr-defined]
+
+
+def _maybe_introspect_unknown_clsids(
+    raw_clsids: list[str],
+) -> dict[str, Any]:
+    """WI3 wire-up: opt-in DLL introspection for CLSIDs not in
+    :data:`_KNOWN_CLSIDS`.
+
+    Returns a dict mapping each unknown CLSID to its
+    :class:`~sovyx.voice._apo_dll_introspect.ApoDllInfo`. Empty dict
+    when:
+      * The opt-in flag is off (default),
+      * No CLSIDs are unknown (all matched the static catalog),
+      * The introspection module crashes (logged + swallowed).
+
+    Never raises. Per-CLSID introspection failures collapse into
+    that CLSID's ApoDllInfo carrying notes — they don't abort the
+    full enrichment for siblings."""
+    try:
+        from sovyx.engine.config import VoiceTuningConfig
+
+        if not VoiceTuningConfig().voice_apo_dll_introspection_enabled:
+            return {}
+    except Exception as exc:  # noqa: BLE001 — config read isolation
+        logger.warning(
+            "voice.apo.config_read_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        return {}
+
+    unknown_clsids = [c for c in raw_clsids if c not in _KNOWN_CLSIDS]
+    if not unknown_clsids:
+        return {}
+
+    try:
+        from sovyx.voice._apo_dll_introspect import introspect_apo_clsid
+    except Exception as exc:  # noqa: BLE001 — import isolation
+        logger.warning(
+            "voice.apo.introspect_import_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        return {}
+
+    result: dict[str, Any] = {}
+    for clsid in unknown_clsids:
+        try:
+            result[clsid] = introspect_apo_clsid(clsid)
+        except Exception as exc:  # noqa: BLE001 — per-CLSID isolation
+            logger.warning(
+                "voice.apo.introspect_clsid_failed",
+                clsid=clsid,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            # Skip this CLSID — siblings still get enriched.
+    return result
 
 
 def _read_property(winreg_mod: object, ep: object, subkey: str, value_name: str) -> str | None:
