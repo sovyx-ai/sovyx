@@ -1165,3 +1165,219 @@ class TestTapFramesSinceMark:
             max_wait_s=0.5,
         )
         assert frames.size == 0  # Empty ring after reset → empty result.
+
+
+# ---------------------------------------------------------------------------
+# Band-aid #9 — sustained-underrun detection
+# ---------------------------------------------------------------------------
+
+
+def _bare_task_with_underrun_state(*, stream_id: str = "stream-0") -> AudioCaptureTask:
+    """Construct an :class:`AudioCaptureTask` with only the state the
+    sustained-underrun monitor depends on, bypassing __init__.
+
+    Mirrors the ring-buffer tests' bypass pattern (``__new__`` + manual
+    state) so the underrun rate-check can be exercised without the
+    full lifecycle (no event loop, no PortAudio, no consumer task)."""
+    task = AudioCaptureTask.__new__(AudioCaptureTask)
+    task._stream_id = stream_id  # noqa: SLF001
+    task._resolved_device_name = "test-mic"  # noqa: SLF001
+    task._stream_callback_frames = 0  # noqa: SLF001
+    task._stream_underruns = 0  # noqa: SLF001
+    task._underrun_window_started_at = None  # noqa: SLF001
+    task._underrun_window_callbacks_at_start = 0  # noqa: SLF001
+    task._underrun_window_underruns_at_start = 0  # noqa: SLF001
+    task._last_underrun_warning_monotonic = None  # noqa: SLF001
+    return task
+
+
+class TestSustainedUnderrunDetection:
+    """Band-aid #9: rolling-window WARN when underrun fraction sustains
+    above the threshold. The audio thread only increments counters
+    (anti-pattern #14); the consumer-loop helper computes the rate
+    and emits the structured WARN with operator-actionable details."""
+
+    def test_short_circuits_when_no_stream_open(self) -> None:
+        """No active stream → no window start, no WARN."""
+        task = _bare_task_with_underrun_state(stream_id="")
+        # Even with high counters, no stream means no monitoring.
+        task._stream_underruns = 1_000  # noqa: SLF001
+        task._stream_callback_frames = 1_000  # noqa: SLF001
+        task._check_sustained_underrun_rate()  # noqa: SLF001
+        assert task._underrun_window_started_at is None  # noqa: SLF001
+
+    def test_first_call_arms_window_no_warn(self) -> None:
+        """First invocation snapshots state; cannot warn yet."""
+        task = _bare_task_with_underrun_state()
+        task._stream_callback_frames = 5  # noqa: SLF001
+        task._check_sustained_underrun_rate()  # noqa: SLF001
+        assert task._underrun_window_started_at is not None  # noqa: SLF001
+        assert task._underrun_window_callbacks_at_start == 5  # noqa: SLF001
+        assert task._last_underrun_warning_monotonic is None  # noqa: SLF001
+
+    def test_window_not_yet_elapsed_no_warn(self) -> None:
+        """Within the window, no rate computation runs."""
+        task = _bare_task_with_underrun_state()
+        # Arm the window.
+        task._check_sustained_underrun_rate()  # noqa: SLF001
+        armed_at = task._underrun_window_started_at  # noqa: SLF001
+        # Same monotonic tick → no elapsed time → no roll, no warn.
+        task._stream_callback_frames = 200  # noqa: SLF001
+        task._stream_underruns = 100  # noqa: SLF001
+        task._check_sustained_underrun_rate()  # noqa: SLF001
+        # Window unchanged, no warn.
+        assert task._underrun_window_started_at == armed_at  # noqa: SLF001
+        assert task._last_underrun_warning_monotonic is None  # noqa: SLF001
+
+    def test_below_min_callbacks_does_not_warn(self) -> None:
+        """Tiny window (below MIN_CALLBACKS) cannot trip warn even at
+        100% underrun rate — protects against false positives on a
+        stream that's just opened."""
+        from unittest.mock import patch
+
+        task = _bare_task_with_underrun_state()
+        # Arm window at t=0.
+        with patch("sovyx.voice._capture_task.time.monotonic", return_value=0.0):
+            task._check_sustained_underrun_rate()  # noqa: SLF001
+        # Roll the window AFTER 11 s (>10 s window) but only 10 callbacks
+        # observed, all underruns. Below 50-callback floor → no warn.
+        task._stream_callback_frames = 10  # noqa: SLF001
+        task._stream_underruns = 10  # noqa: SLF001
+        with patch("sovyx.voice._capture_task.time.monotonic", return_value=11.0):
+            task._check_sustained_underrun_rate()  # noqa: SLF001
+        assert task._last_underrun_warning_monotonic is None  # noqa: SLF001
+
+    def test_below_warn_fraction_does_not_warn(self) -> None:
+        """Above the min-callbacks floor but underrun fraction below
+        threshold → no warn."""
+        from unittest.mock import patch
+
+        task = _bare_task_with_underrun_state()
+        with patch("sovyx.voice._capture_task.time.monotonic", return_value=0.0):
+            task._check_sustained_underrun_rate()  # noqa: SLF001
+        # 100 callbacks, 1 underrun = 1% — below 5% threshold.
+        task._stream_callback_frames = 100  # noqa: SLF001
+        task._stream_underruns = 1  # noqa: SLF001
+        with patch("sovyx.voice._capture_task.time.monotonic", return_value=11.0):
+            task._check_sustained_underrun_rate()  # noqa: SLF001
+        assert task._last_underrun_warning_monotonic is None  # noqa: SLF001
+
+    def test_sustained_underrun_emits_warn(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Above min-callbacks AND fraction ≥ threshold → warn fires."""
+        import logging
+        from unittest.mock import patch
+
+        task = _bare_task_with_underrun_state()
+        with patch("sovyx.voice._capture_task.time.monotonic", return_value=0.0):
+            task._check_sustained_underrun_rate()  # noqa: SLF001
+        # 200 callbacks, 20 underruns = 10% — above 5% threshold.
+        task._stream_callback_frames = 200  # noqa: SLF001
+        task._stream_underruns = 20  # noqa: SLF001
+        with (
+            caplog.at_level(logging.WARNING),
+            patch("sovyx.voice._capture_task.time.monotonic", return_value=11.0),
+        ):
+            task._check_sustained_underrun_rate()  # noqa: SLF001
+        assert task._last_underrun_warning_monotonic == 11.0  # noqa: SLF001
+        events = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict)
+            and r.msg.get("event") == "voice.audio.capture_sustained_underrun"
+        ]
+        assert len(events) == 1
+        evt = events[0]
+        assert evt["voice.stream_id"] == "stream-0"
+        assert evt["voice.device_id"] == "test-mic"
+        assert evt["voice.underruns_in_window"] == 20
+        assert evt["voice.callbacks_in_window"] == 200
+        assert evt["voice.underrun_fraction"] == 0.1
+        assert "USB-bus bandwidth" in evt["voice.action_required"]
+
+    def test_warn_rate_limited_per_stream(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A second sustained breach within the rate-limit interval
+        does NOT fire — operator gets one drumbeat per 30 s, not a
+        flood."""
+        import logging
+        from unittest.mock import patch
+
+        task = _bare_task_with_underrun_state()
+        # Arm window.
+        with patch("sovyx.voice._capture_task.time.monotonic", return_value=0.0):
+            task._check_sustained_underrun_rate()  # noqa: SLF001
+        # First breach → fires.
+        task._stream_callback_frames = 200  # noqa: SLF001
+        task._stream_underruns = 20  # noqa: SLF001
+        with caplog.at_level(logging.WARNING):
+            with patch(
+                "sovyx.voice._capture_task.time.monotonic",
+                return_value=11.0,
+            ):
+                task._check_sustained_underrun_rate()  # noqa: SLF001
+            # Second breach 10 s later (still within 30 s rate-limit).
+            task._stream_callback_frames = 400  # noqa: SLF001
+            task._stream_underruns = 40  # noqa: SLF001
+            with patch(
+                "sovyx.voice._capture_task.time.monotonic",
+                return_value=22.0,
+            ):
+                task._check_sustained_underrun_rate()  # noqa: SLF001
+        events = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict)
+            and r.msg.get("event") == "voice.audio.capture_sustained_underrun"
+        ]
+        assert len(events) == 1  # Only the first WARN, not the second.
+
+    def test_warn_fires_again_after_rate_limit_interval(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """After 30 s gap, a continuing breach DOES re-fire."""
+        import logging
+        from unittest.mock import patch
+
+        task = _bare_task_with_underrun_state()
+        with patch("sovyx.voice._capture_task.time.monotonic", return_value=0.0):
+            task._check_sustained_underrun_rate()  # noqa: SLF001
+        task._stream_callback_frames = 200  # noqa: SLF001
+        task._stream_underruns = 20  # noqa: SLF001
+        with caplog.at_level(logging.WARNING):
+            with patch("sovyx.voice._capture_task.time.monotonic", return_value=11.0):
+                task._check_sustained_underrun_rate()  # noqa: SLF001
+            # 35 s after first WARN — past the 30 s rate-limit gap.
+            task._stream_callback_frames = 400  # noqa: SLF001
+            task._stream_underruns = 40  # noqa: SLF001
+            with patch("sovyx.voice._capture_task.time.monotonic", return_value=46.0):
+                task._check_sustained_underrun_rate()  # noqa: SLF001
+        events = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict)
+            and r.msg.get("event") == "voice.audio.capture_sustained_underrun"
+        ]
+        assert len(events) == 2  # Both WARNs fired.
+
+    def test_window_rolls_even_when_warn_skipped(self) -> None:
+        """Below-threshold cycle still resets window state so the next
+        window observes a fresh interval — no stale snapshot bleed."""
+        from unittest.mock import patch
+
+        task = _bare_task_with_underrun_state()
+        with patch("sovyx.voice._capture_task.time.monotonic", return_value=0.0):
+            task._check_sustained_underrun_rate()  # noqa: SLF001
+        task._stream_callback_frames = 100  # noqa: SLF001
+        task._stream_underruns = 1  # 1% — below threshold.  # noqa: SLF001
+        with patch("sovyx.voice._capture_task.time.monotonic", return_value=11.0):
+            task._check_sustained_underrun_rate()  # noqa: SLF001
+        # Window snapshots advance even though no warn fired.
+        assert task._underrun_window_started_at == 11.0  # noqa: SLF001
+        assert task._underrun_window_callbacks_at_start == 100  # noqa: SLF001
+        assert task._underrun_window_underruns_at_start == 1  # noqa: SLF001

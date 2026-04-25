@@ -110,6 +110,66 @@ _RING_SAMPLES_MASK = (1 << _RING_EPOCH_SHIFT) - 1
 _RMS_FLOOR_DB = -120.0
 
 
+# ── Band-aid #9 replacement — sustained-underrun detection ───────────
+#
+# Pre-band-aid #9: ``_audio_callback`` incremented ``_stream_underruns``
+# on every ``input_underflow`` callback flag (≈ once per kernel xrun).
+# The counter was emitted only at ``audio.stream.closed`` (post-mortem)
+# and once per heartbeat — but with no threshold, no rate, and no
+# operator-actionable WARN. A USB driver in distress could throw 5 000
+# underruns in 30 seconds and the operator would see nothing until the
+# stream closed.
+#
+# Spec (F1 #9): "PortAudio Stream.latency query per callback".
+# Stream.latency is a static configured value (not a per-callback
+# instantaneous reading), so the spec's letter does not match
+# PortAudio's API. The spec's INTENT is "detect sustained xruns
+# during a stream's life and surface them as actionable signal".
+#
+# Fix: rolling-window underrun-fraction monitor. Each ``window_seconds``
+# of capture, the consumer loop computes ``underruns / callbacks`` over
+# the last window; if the fraction exceeds ``warn_fraction`` AND the
+# window has at least ``min_callbacks`` samples, emit a structured
+# ``voice.audio.capture_sustained_underrun`` WARN. Rate-limited to
+# at most one WARN per ``warn_interval_seconds`` per stream so a
+# multi-minute outage produces an actionable trickle, not a flood.
+#
+# Why the consumer (not the audio thread): the PortAudio callback runs
+# in PortAudio's audio thread which MUST NOT block (no logging, no
+# allocation). Counters increment in the callback (anti-pattern #14
+# safe — pure int += int); the rate check + WARN happen in
+# ``_consume_loop`` between awaits, where logging is safe.
+_CAPTURE_UNDERRUN_WINDOW_S = 10.0
+"""Rolling-window length over which the underrun fraction is computed.
+10 s is long enough that a 1-callback xrun (e.g. CPU spike that
+resolved) doesn't trip the warn — but short enough that a sustained
+USB-bus pressure surfaces within an utterance, not several utterances
+later. Matches the order of magnitude of the saturation feedback
+window in :mod:`sovyx.voice._frame_normalizer` for operator mental-
+model parity."""
+
+_CAPTURE_UNDERRUN_WARN_FRACTION = 0.05
+"""Underrun-to-callback fraction above which the WARN fires. 5%
+sustained underruns is the canonical "device under stress" threshold:
+below that, transient kernel-side glitches (USB scheduling jitter,
+host CPU spikes) are perceptually transparent; above 5% the dropouts
+are audible to a human and start affecting VAD/STT accuracy."""
+
+_CAPTURE_UNDERRUN_MIN_CALLBACKS = 50
+"""Minimum callback count in the window before the WARN can fire.
+At a typical 32 ms block size, 50 callbacks ≈ 1.6 s of capture
+— enough sample size that the ratio is statistically meaningful
+without being so large that an early-stream burst is missed."""
+
+_CAPTURE_UNDERRUN_WARN_INTERVAL_S = 30.0
+"""Minimum gap between two sustained-underrun WARN logs from the same
+stream. Without rate-limiting, a sustained-underrun condition would
+fire one WARN per consumer-loop iteration, drowning the dashboard.
+30 s matches the typical operator response cadence — long enough
+that a recovering condition self-suppresses, short enough that an
+unattended outage produces a regular drumbeat in the log feed."""
+
+
 # ── T7 session-manager contention helpers ────────────────────────────
 
 _SESSION_MANAGER_CONTENTION_ERROR_CODES: frozenset[str] = frozenset(
@@ -805,6 +865,16 @@ class AudioCaptureTask:
         self._stream_underruns: int = 0
         self._stream_overflows: int = 0
         self._stream_callback_frames: int = 0
+
+        # Band-aid #9 — sustained-underrun rolling-window state. Snapshot
+        # of the lifetime counters at window start; the consumer loop
+        # diffs the live counters against these to compute the per-window
+        # rate. ``_underrun_window_started_at`` is None until the first
+        # consumer iteration, then set on every window roll.
+        self._underrun_window_started_at: float | None = None
+        self._underrun_window_callbacks_at_start: int = 0
+        self._underrun_window_underruns_at_start: int = 0
+        self._last_underrun_warning_monotonic: float | None = None
 
         # Ring buffer — allocated lazily in :meth:`start` from the
         # per-instance tuning so tests that build the task without
@@ -2315,6 +2385,13 @@ class AudioCaptureTask:
         self._stream_underruns = 0
         self._stream_overflows = 0
         self._stream_callback_frames = 0
+        # Band-aid #9 — reset sustained-underrun state per stream so
+        # the warn fires on the new stream's xrun rate, not a leftover
+        # snapshot from a prior reopened stream's state.
+        self._underrun_window_started_at = None
+        self._underrun_window_callbacks_at_start = 0
+        self._underrun_window_underruns_at_start = 0
+        self._last_underrun_warning_monotonic = None
         sample_rate = int(getattr(info, "sample_rate", 0) or 0)
         mode = "exclusive" if getattr(info, "exclusive_used", False) else "shared"
         buffer_size_ms = int(self._blocksize * 1000 / sample_rate) if sample_rate else 0
@@ -2408,6 +2485,86 @@ class AudioCaptureTask:
                 self._queue.get_nowait()
         self._queue.put_nowait(frame)
 
+    def _check_sustained_underrun_rate(self) -> None:
+        """Fire ``voice.audio.capture_sustained_underrun`` WARN when
+        the rolling-window underrun fraction exceeds the threshold
+        (band-aid #9 replacement).
+
+        Runs in ``_consume_loop`` between awaits — never in the audio
+        callback (anti-pattern #14). Pure increment counters in the
+        callback; this method computes the per-window rate from
+        snapshots taken at window roll, then compares to the warn
+        threshold and rate-limits the WARN per stream.
+
+        Side-effect-free when:
+        * No stream is open (``_stream_id`` is empty).
+        * The window has not elapsed yet.
+        * The window has < ``_CAPTURE_UNDERRUN_MIN_CALLBACKS`` samples.
+        * The fraction is below ``_CAPTURE_UNDERRUN_WARN_FRACTION``.
+        * A prior WARN fired within ``_CAPTURE_UNDERRUN_WARN_INTERVAL_S``
+          seconds (rate-limited).
+
+        On WARN, the structured event includes ``action_required`` so
+        the operator gets concrete remediation steps (USB hub
+        bandwidth, host CPU pressure, WASAPI mode swap, etc.) directly
+        in the log feed without needing a separate runbook lookup.
+        """
+        if not self._stream_id:
+            return
+        # Per CLAUDE.md anti-pattern #24, use ``>=`` against monotonic
+        # deadlines so coarse-clock systems don't silently never fire.
+        now = time.monotonic()
+        if self._underrun_window_started_at is None:
+            self._underrun_window_started_at = now
+            self._underrun_window_callbacks_at_start = self._stream_callback_frames
+            self._underrun_window_underruns_at_start = self._stream_underruns
+            return
+        elapsed = now - self._underrun_window_started_at
+        if elapsed < _CAPTURE_UNDERRUN_WINDOW_S:
+            return
+        callbacks_in_window = (
+            self._stream_callback_frames - self._underrun_window_callbacks_at_start
+        )
+        underruns_in_window = self._stream_underruns - self._underrun_window_underruns_at_start
+        # Roll the window before any early-return path so the next
+        # iteration starts from a fresh snapshot regardless of whether
+        # this window fired the WARN.
+        self._underrun_window_started_at = now
+        self._underrun_window_callbacks_at_start = self._stream_callback_frames
+        self._underrun_window_underruns_at_start = self._stream_underruns
+        if callbacks_in_window < _CAPTURE_UNDERRUN_MIN_CALLBACKS:
+            return
+        fraction = underruns_in_window / callbacks_in_window
+        if fraction < _CAPTURE_UNDERRUN_WARN_FRACTION:
+            return
+        if (
+            self._last_underrun_warning_monotonic is not None
+            and now - self._last_underrun_warning_monotonic < _CAPTURE_UNDERRUN_WARN_INTERVAL_S
+        ):
+            return
+        self._last_underrun_warning_monotonic = now
+        logger.warning(
+            "voice.audio.capture_sustained_underrun",
+            **{
+                "voice.stream_id": self._stream_id,
+                "voice.device_id": self._resolved_device_name or "default",
+                "voice.window_seconds": round(elapsed, 2),
+                "voice.underruns_in_window": underruns_in_window,
+                "voice.callbacks_in_window": callbacks_in_window,
+                "voice.underrun_fraction": round(fraction, 4),
+                "voice.threshold_fraction": _CAPTURE_UNDERRUN_WARN_FRACTION,
+                "voice.action_required": (
+                    "Capture stream is xrunning under sustained pressure. "
+                    "Likely causes: USB-bus bandwidth contention (try a "
+                    "different port, avoid hubs), host CPU saturation "
+                    "starving the audio thread, or driver-side glitch. "
+                    "On Windows consider WASAPI exclusive via the dashboard. "
+                    "On Linux check `pactl list short sources` for "
+                    "competing clients."
+                ),
+            },
+        )
+
     async def _consume_loop(self) -> None:
         """Pull frames off the queue and feed them to the pipeline.
 
@@ -2450,6 +2607,11 @@ class AudioCaptureTask:
                         continue
                     await self._pipeline.feed_frame(window)
                 self._maybe_emit_heartbeat()
+                # Band-aid #9 — sustained-underrun rolling-window check.
+                # Runs in the consumer (not the audio callback) where
+                # logging is safe; the callback only does counter
+                # increments per anti-pattern #14.
+                self._check_sustained_underrun_rate()
             except asyncio.CancelledError:
                 raise
             except sd.PortAudioError as exc:
