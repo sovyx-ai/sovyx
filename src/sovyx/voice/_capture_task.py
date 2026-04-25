@@ -56,6 +56,7 @@ from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.observability.logging import get_logger
 from sovyx.observability.tasks import spawn
 from sovyx.voice._agc2 import build_agc2_if_enabled
+from sovyx.voice._chaos import ChaosInjector, ChaosSite
 from sovyx.voice._frame_normalizer import FrameNormalizer
 from sovyx.voice._stream_opener import _import_sounddevice
 
@@ -780,6 +781,15 @@ class AudioCaptureTask:
         # Reset to attempt 0 on each successful reconnect so a
         # transient outage doesn't penalise future ones.
         self._reconnect_backoff: BackoffSchedule | None = None
+        # TS3 chaos injector — opt-in frame-drop simulation at the
+        # CAPTURE_UNDERRUN site. Disabled by default; chaos test
+        # matrix sets the env vars to validate that the deaf-
+        # detection coordinator (O2) + watchdog promotion fire
+        # correctly when frames stop arriving at VAD. The chaos
+        # drops the frame BEFORE pipeline.feed_frame — observationally
+        # identical to a PortAudio kernel-side underrun from the
+        # consumer's perspective.
+        self._chaos = ChaosInjector(site_id=ChaosSite.CAPTURE_UNDERRUN.value)
 
         # Telemetry — populated by the consumer loop.
         self._last_rms_db: float = _RMS_FLOOR_DB
@@ -2429,6 +2439,15 @@ class AudioCaptureTask:
                     # samples that VAD sees — not an upstream raw block
                     # that the normalizer would later resample / downmix.
                     self._ring_write(window)
+                    # TS3 chaos: opt-in frame-drop at the
+                    # CAPTURE_UNDERRUN site. When chaos fires, skip
+                    # pipeline.feed_frame — observationally identical
+                    # to a PortAudio kernel-side underrun from the
+                    # consumer's perspective. Validates the O2 deaf
+                    # coordinator + watchdog promotion paths fire
+                    # correctly under realistic underrun rates.
+                    if self._chaos.should_inject():
+                        continue
                     await self._pipeline.feed_frame(window)
                 self._maybe_emit_heartbeat()
             except asyncio.CancelledError:
