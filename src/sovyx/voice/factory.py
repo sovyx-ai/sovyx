@@ -47,6 +47,240 @@ class VoiceFactoryError(Exception):
         self.missing_models = missing_models or []
 
 
+class VoicePermissionError(VoiceFactoryError):
+    """Raised when the OS denies Sovyx microphone access (band-aid
+    #34 wire-up).
+
+    Subclasses :class:`VoiceFactoryError` so callers catching the
+    base class still handle it; specific catches can use this class
+    to surface the OS-specific remediation hint to the dashboard
+    without scraping the message string.
+
+    Attributes:
+        remediation_hint: Operator-actionable message ready to render
+            verbatim in the dashboard error banner. Naming the exact
+            Settings path (Win 10/11) or System Preferences pane (macOS)
+            so the operator doesn't have to hunt.
+        platform_status: Raw verdict from
+            :func:`~sovyx.voice.health._mic_permission.check_microphone_permission`
+            (``"granted"`` / ``"denied"`` / ``"unknown"``).
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        remediation_hint: str = "",
+        platform_status: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.remediation_hint = remediation_hint
+        self.platform_status = platform_status
+
+
+# ── Preflight wire-ups (opt-in factory gates) ────────────────────
+
+
+def _maybe_check_mic_permission() -> None:
+    """Band-aid #34 wire-up: probe OS mic permission before pipeline
+    creation. Opt-in via
+    :attr:`VoiceTuningConfig.voice_check_mic_permission_enabled`.
+    Default OFF — operators opt in once they've validated the gate
+    on their hardware.
+
+    Raises:
+        VoicePermissionError: When the gate is enabled AND the probe
+            returns DENIED. Carries the OS-specific remediation hint
+            so the dashboard can surface it verbatim.
+
+    Never raises on UNKNOWN — the OS-level probe couldn't decide,
+    and the cascade's own deaf-detection covers the residual case.
+    Never raises on non-Windows when the gate is enabled — Linux
+    has no OS gate, macOS UNKNOWN is the deferred MA2 case.
+    """
+    from sovyx.engine.config import VoiceTuningConfig
+
+    tuning = VoiceTuningConfig()
+    if not tuning.voice_check_mic_permission_enabled:
+        return
+
+    try:
+        from sovyx.voice.health._mic_permission import (
+            MicPermissionStatus,
+            check_microphone_permission,
+        )
+
+        report = check_microphone_permission()
+    except Exception as exc:  # noqa: BLE001 — preflight gate isolation
+        # The probe itself crashed (registry permission anomaly,
+        # unexpected platform behaviour). Log structured WARN but
+        # do NOT block pipeline creation — the gate is best-effort
+        # observability, not a hard requirement.
+        logger.warning(
+            "voice.factory.mic_permission_probe_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        return
+
+    if report.status is MicPermissionStatus.DENIED:
+        msg = (
+            "Microphone access is denied at the OS level — capture would "
+            "produce all-zero frames forever. " + report.remediation_hint
+        )
+        logger.error(
+            "voice.factory.mic_permission_denied",
+            **{
+                "voice.platform_status": report.status.value,
+                "voice.machine_value": report.machine_value or "",
+                "voice.user_value": report.user_value or "",
+                "voice.action_required": report.remediation_hint,
+            },
+        )
+        raise VoicePermissionError(
+            msg,
+            remediation_hint=report.remediation_hint,
+            platform_status=report.status.value,
+        )
+
+    # GRANTED + UNKNOWN both proceed. UNKNOWN logs a structured note
+    # so dashboards can show "couldn't determine permission state"
+    # alongside subsequent capture telemetry.
+    if report.status is MicPermissionStatus.UNKNOWN:
+        logger.info(
+            "voice.factory.mic_permission_unknown",
+            **{"voice.notes": list(report.notes)},
+        )
+
+
+async def _maybe_check_llm_reachable(router: object | None = None) -> None:
+    """Band-aid #28 wire-up: probe LLM router reachability before
+    pipeline creation. Opt-in via
+    :attr:`VoiceTuningConfig.voice_check_llm_reachable_enabled`.
+    Default OFF.
+
+    Args:
+        router: Pre-resolved LLM router. ``None`` = skip the gate
+            silently (the factory can't resolve the router itself
+            because the registry isn't a global; callers that have
+            access to the registry pass the resolved router).
+
+    On FAIL: logs structured WARN but does NOT raise. Reasoning: the
+    LLM might be a process that takes a few seconds to come up after
+    Sovyx boots (Ollama in particular has a documented warm-up
+    window). Blocking the entire voice pipeline on it would surface
+    as "voice broken" rather than "LLM not yet ready" — worse UX
+    than letting voice come up + degrading gracefully when the LLM
+    is queried."""
+    from sovyx.engine.config import VoiceTuningConfig
+
+    tuning = VoiceTuningConfig()
+    if not tuning.voice_check_llm_reachable_enabled:
+        return
+    if router is None:
+        logger.info(
+            "voice.factory.llm_check_skipped_no_router",
+            reason="caller did not provide a router; gate skipped",
+        )
+        return
+
+    try:
+        from sovyx.voice.health.preflight import check_llm_reachable
+
+        check = check_llm_reachable(router=router)
+        passed, hint, details = await check()
+    except Exception as exc:  # noqa: BLE001 — preflight gate isolation
+        logger.warning(
+            "voice.factory.llm_check_probe_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        return
+
+    if not passed:
+        # Log WARN — operators see the LLM is not ready but voice
+        # still comes up. The next user utterance will hit the
+        # router's own retry / failover path.
+        logger.warning(
+            "voice.factory.llm_unreachable_at_startup",
+            **{
+                "voice.action_required": hint,
+                "voice.details": details,
+            },
+        )
+
+
+def _maybe_log_pipewire_status() -> None:
+    """F3 wire-up: read-only PipeWire detection on Linux startup.
+    Opt-in via
+    :attr:`VoiceTuningConfig.voice_pipewire_detection_enabled` (default
+    True — pure observability, never mutates state)."""
+    from sovyx.engine.config import VoiceTuningConfig
+
+    tuning = VoiceTuningConfig()
+    if not tuning.voice_pipewire_detection_enabled:
+        return
+    try:
+        from sovyx.voice.health._pipewire import detect_pipewire
+
+        report = detect_pipewire()
+    except Exception as exc:  # noqa: BLE001 — observability only
+        logger.warning(
+            "voice.factory.pipewire_detection_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        return
+    logger.info(
+        "voice.factory.pipewire_status",
+        **{
+            "voice.pipewire_status": report.status.value,
+            "voice.pipewire_socket_present": report.socket_present,
+            "voice.pipewire_pactl_available": report.pactl_available,
+            "voice.pipewire_server_name": report.server_name or "",
+            "voice.pipewire_echo_cancel_loaded": report.echo_cancel_loaded,
+            "voice.pipewire_modules_count": len(report.modules_loaded),
+            "voice.pipewire_notes": list(report.notes),
+        },
+    )
+
+
+def _maybe_log_alsa_ucm_status(card_id: str = "0") -> None:
+    """F4 wire-up: read-only ALSA UCM detection on Linux startup.
+    Opt-in via
+    :attr:`VoiceTuningConfig.voice_alsa_ucm_detection_enabled` (default
+    True). ``card_id`` defaults to ``"0"`` because most laptops have
+    the codec at index 0; future revisions can wire a per-device
+    lookup once the cascade has resolved the active card."""
+    from sovyx.engine.config import VoiceTuningConfig
+
+    tuning = VoiceTuningConfig()
+    if not tuning.voice_alsa_ucm_detection_enabled:
+        return
+    try:
+        from sovyx.voice.health._alsa_ucm import detect_ucm
+
+        report = detect_ucm(card_id)
+    except Exception as exc:  # noqa: BLE001 — observability only
+        logger.warning(
+            "voice.factory.alsa_ucm_detection_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        return
+    logger.info(
+        "voice.factory.alsa_ucm_status",
+        **{
+            "voice.ucm_status": report.status.value,
+            "voice.ucm_card_id": report.card_id,
+            "voice.ucm_alsaucm_available": report.alsaucm_available,
+            "voice.ucm_verbs": list(report.verbs),
+            "voice.ucm_active_verb": report.active_verb or "",
+            "voice.ucm_notes": list(report.notes),
+        },
+    )
+
+
 @dataclass(frozen=True)
 class VoiceBundle:
     """Result of :func:`create_voice_pipeline`.
@@ -199,6 +433,15 @@ async def create_voice_pipeline(
     """
     models_dir = model_dir or get_default_model_dir()
     models_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── 0. Preflight gates + observability (band-aid #34 + #28 +
+    #      F3 + F4 wire-ups) ─────────────────────────────────
+    # Mic + LLM gates default OFF (opt-in for safety). PipeWire +
+    # UCM observability default ON (read-only, never mutates state).
+    _maybe_check_mic_permission()
+    await _maybe_check_llm_reachable()
+    _maybe_log_pipewire_status()
+    _maybe_log_alsa_ucm_status()
 
     # ── 1. SileroVAD (auto-download) ──────────────────────────
     logger.info("voice_factory_creating_vad")

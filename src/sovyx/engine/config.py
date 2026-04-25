@@ -199,6 +199,57 @@ class VoiceTuningConfig(BaseSettings):
     # daemon past any operator's patience window.
     llm_preflight_timeout_seconds: float = Field(default=3.0, ge=0.5, le=60.0)
 
+    # ── Voice factory preflight gates (band-aid #34 / #28 wire-ups) ──
+    # Both default to False to preserve pre-wire-up behaviour. Operators
+    # opt in once they've validated the gate doesn't false-fire on
+    # their hardware. Per the staged-adoption discipline saved as the
+    # ``Staged adoption — foundation → wire-up incrementally`` feedback
+    # memory: never bundle foundation + 5 call-site adoptions in one
+    # commit; lenient default for new validators.
+    voice_check_mic_permission_enabled: bool = False
+    """Band-aid #34 wire-up: when True the voice factory probes the
+    OS microphone-permission state via
+    :func:`sovyx.voice.health._mic_permission.check_microphone_permission`
+    BEFORE creating the pipeline. On Windows DENIED → raises
+    :class:`VoicePermissionError` with the literal Settings path
+    operators must navigate. On UNKNOWN / non-Windows the gate is a
+    no-op (the cascade's own deaf-detection covers the residual)."""
+
+    voice_check_llm_reachable_enabled: bool = False
+    """Band-aid #28 wire-up: when True the voice factory probes the
+    LLM router's provider list via
+    :func:`sovyx.voice.health.preflight.check_llm_reachable` BEFORE
+    creating the pipeline. On FAIL the factory logs a structured
+    WARN but does NOT raise — the LLM might be the kind that takes
+    a few seconds to come up after Sovyx boots, and blocking the
+    whole voice pipeline on it would surface as "voice broken"
+    rather than "LLM not yet ready"."""
+
+    voice_pipewire_detection_enabled: bool = True
+    """F3 wire-up: when True, voice factory runs
+    :func:`sovyx.voice.health._pipewire.detect_pipewire` on Linux
+    startup and emits the verdict via structured event so dashboards
+    surface Layer-1 status. PURE OBSERVABILITY — never auto-loads
+    ``module-echo-cancel`` (mutating the user's PipeWire state
+    without explicit consent would surprise operators). Default True
+    because read-only detection is safe; non-Linux platforms skip
+    silently via the platform guard inside detect_pipewire."""
+
+    voice_alsa_ucm_detection_enabled: bool = True
+    """F4 wire-up: when True, voice factory runs
+    :func:`sovyx.voice.health._alsa_ucm.detect_ucm` on Linux startup
+    for the active ALSA card. PURE OBSERVABILITY — never auto-sets
+    a verb. Default True for the same safety reason as
+    ``voice_pipewire_detection_enabled``."""
+
+    voice_audio_service_watchdog_enabled: bool = False
+    """WI2 wire-up: when True (Windows only), voice factory
+    instantiates :class:`AudioServiceWatchdog` and starts it
+    alongside the pipeline. Default False because the watchdog's
+    rolling 30 s sc.exe queries are an additional process per
+    Sovyx instance — operators opt in when they've observed
+    audio-service-related issues. Non-Windows platforms skip."""
+
     # AudioCaptureTask stream health — catches the silent-zeros failure
     # mode where sd.InputStream opens cleanly but delivers all-zero
     # frames (MME + unsupported rate, driver hang, privacy block). See
