@@ -31,6 +31,7 @@ from enum import IntEnum, auto
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
+from sovyx.voice._chaos import ChaosInjector, ChaosSite
 from sovyx.voice._stage_metrics import (
     StageEventKind,
     VoiceStage,
@@ -461,6 +462,13 @@ class SileroVAD:
         self._unrecoverable_signal_emitted: bool = False
         self._last_frame_was_corrupt: bool = False
 
+        # TS3 chaos injector — opt-in NaN injection at the
+        # VAD_CORRUPTION site. Disabled by default; chaos test
+        # matrix sets the env vars to validate that the V1
+        # NaN/Inf guard fires correctly + LSTM resets cleanly +
+        # the M2 DROP event lands with error_type=probability_nan.
+        self._chaos = ChaosInjector(site_id=ChaosSite.VAD_CORRUPTION.value)
+
         logger.info(
             "SileroVAD initialised",
             model=str(model_path),
@@ -519,6 +527,18 @@ class SileroVAD:
             }
             output, raw_next_state = self._session.run(None, ort_inputs)[:2]
             raw_probability = float(output[0][0])
+
+            # TS3 chaos: opt-in NaN injection at the VAD_CORRUPTION
+            # site. When SOVYX_CHAOS__ENABLED=true AND
+            # SOVYX_CHAOS__INJECT_VAD_CORRUPTION_PCT > 0, the raw
+            # probability is overwritten with NaN — the V1 guard
+            # below will detect the corruption, fail-closed to
+            # silence, and reset the LSTM state. Chaos validates
+            # that the V1 recovery path actually works under
+            # realistic operating conditions, not just under the
+            # unit-test mock that injects NaN deterministically.
+            if self._chaos.should_inject():
+                raw_probability = float("nan")
 
             # ── V1 NaN/Inf guard (Ring 3 defense-in-depth) ───────
             # ONNX runtime can return NaN/Inf when the LSTM state has

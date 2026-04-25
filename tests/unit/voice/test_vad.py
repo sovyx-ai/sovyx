@@ -1430,3 +1430,76 @@ class TestVADM2WireUp:
         # record_stage_event call site.
         vad_events = [(s, k, et) for (s, k, et) in recorded if s == VoiceStage.VAD]
         assert vad_events == []
+
+
+# ---------------------------------------------------------------------------
+# TS3 chaos wire-up — VAD_CORRUPTION injection
+# ---------------------------------------------------------------------------
+
+
+class TestVADChaosWireUp:
+    """SileroVAD.process_frame must honour the chaos injector.
+
+    With chaos enabled at 100% rate, every frame's raw
+    probability gets overwritten with NaN before the V1 guard
+    runs — proving the V1 corruption-detection + recovery path
+    fires correctly under chaos, not just under the
+    deterministic NaN-injection mock the V1 unit tests use.
+    """
+
+    def test_chaos_disabled_no_injection(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from sovyx.voice._chaos import _ENABLED_ENV_VAR, _RATE_ENV_VAR_PREFIX
+
+        monkeypatch.delenv(_ENABLED_ENV_VAR, raising=False)
+        monkeypatch.setenv(f"{_RATE_ENV_VAR_PREFIX}VAD_CORRUPTION_PCT", "100")
+
+        vad = _build_vad([0.5])
+        evt = vad.process_frame(_speech_frame())
+        # No corruption registered; probability stays clean.
+        assert vad.corruption_count == 0
+        assert evt.probability == 0.5  # noqa: PLR2004
+
+    def test_chaos_at_100_pct_injects_nan_every_frame(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from sovyx.voice._chaos import _ENABLED_ENV_VAR, _RATE_ENV_VAR_PREFIX
+
+        monkeypatch.setenv(_ENABLED_ENV_VAR, "true")
+        monkeypatch.setenv(f"{_RATE_ENV_VAR_PREFIX}VAD_CORRUPTION_PCT", "100")
+
+        vad = _build_vad([0.5])
+        # Drive 5 frames — every one should be classified as
+        # corrupt by the V1 guard (NaN injected by chaos).
+        for _ in range(5):
+            evt = vad.process_frame(_speech_frame())
+            # V1 fail-closes to probability=0.0 on corruption.
+            assert evt.probability == 0.0
+        assert vad.corruption_count == 5  # noqa: PLR2004
+
+    def test_chaos_injects_via_same_v1_path_as_real_corruption(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Chaos NaN injection fires the same M2 DROP event
+        (error_type=probability_nan) as a real ONNX NaN output."""
+        from sovyx.voice import vad as vad_mod
+        from sovyx.voice._chaos import _ENABLED_ENV_VAR, _RATE_ENV_VAR_PREFIX
+        from sovyx.voice._stage_metrics import StageEventKind, VoiceStage
+
+        recorded: list[tuple[Any, Any, Any]] = []
+
+        def _capture(stage: Any, kind: Any, *, error_type: str | None = None) -> None:
+            recorded.append((stage, kind, error_type))
+
+        monkeypatch.setattr(vad_mod, "record_stage_event", _capture)
+        monkeypatch.setenv(_ENABLED_ENV_VAR, "true")
+        monkeypatch.setenv(f"{_RATE_ENV_VAR_PREFIX}VAD_CORRUPTION_PCT", "100")
+
+        vad = _build_vad([0.5])
+        vad.process_frame(_speech_frame())
+
+        assert (VoiceStage.VAD, StageEventKind.DROP, "probability_nan") in recorded
