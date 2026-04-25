@@ -23,11 +23,13 @@ from hypothesis import strategies as st
 from sovyx.voice.tts_kokoro import (
     _MODEL_FULL,
     _MODEL_Q8,
+    _TTS_RMS_FLOOR_DBFS,
     _VOICES_FILE,
     AudioChunk,
     KokoroConfig,
     KokoroTTS,
     TTSEngine,
+    _compute_rms_dbfs,
     _split_sentences,
     _validate_config,
 )
@@ -814,3 +816,189 @@ class TestPropertyBased:
         if speed < 0.1 or speed > 5.0:
             with pytest.raises(ValueError, match="speed"):
                 _validate_config(KokoroConfig(speed=speed))
+
+
+# ===========================================================================
+# T2: Ring 5 output-energy validation (zero-energy detection + chunk flag)
+# ===========================================================================
+#
+# Pre-T2 ``synthesize_with`` returned whatever Kokoro produced, including
+# silent buffers from a corrupt voice file or a degenerate ONNX session.
+# T2 measures the post-synthesis RMS dBFS and flags the chunk +
+# emits ``voice.tts.zero_energy_synthesis`` when the output is below
+# the perceptual silence floor for non-empty input.
+#
+# Reference: MISSION-voice-mixer-enterprise-refactor-2026-04-25 §3.4, T2.
+
+_TTS_LOGGER = "sovyx.voice.tts_kokoro"
+
+
+def _tts_events_of(
+    caplog: pytest.LogCaptureFixture,
+    event_name: str,
+) -> list[dict[str, object]]:
+    return [
+        r.msg
+        for r in caplog.records
+        if r.name == _TTS_LOGGER and isinstance(r.msg, dict) and r.msg.get("event") == event_name
+    ]
+
+
+class TestComputeRMSDbfsPure:
+    """Pure-function RMS dBFS computation."""
+
+    def test_empty_array_returns_neg_inf(self) -> None:
+        assert _compute_rms_dbfs(np.zeros(0, dtype=np.int16)) == float("-inf")
+
+    def test_all_zero_returns_neg_inf(self) -> None:
+        assert _compute_rms_dbfs(np.zeros(1000, dtype=np.int16)) == float("-inf")
+
+    def test_full_scale_sine_near_zero_dbfs(self) -> None:
+        """A full-scale int16 sine produces RMS near 0 dBFS (within ~3 dB)."""
+        t = np.arange(8000, dtype=np.float64) / 8000
+        sine = (32000 * np.sin(2 * np.pi * 440 * t)).astype(np.int16)
+        rms = _compute_rms_dbfs(sine)
+        # Sine RMS = peak / sqrt(2) → ~ -3 dBFS for full-scale.
+        assert rms > -10.0
+        assert rms < 0.0
+
+    def test_quiet_signal_well_below_floor(self) -> None:
+        """A signal at -80 dBFS is well below the -60 floor."""
+        # Very quiet sine ~ 1 LSB.
+        t = np.arange(8000, dtype=np.float64) / 8000
+        quiet_sine = (3 * np.sin(2 * np.pi * 440 * t)).astype(np.int16)
+        rms = _compute_rms_dbfs(quiet_sine)
+        assert rms < _TTS_RMS_FLOOR_DBFS
+
+    def test_object_without_size_returns_neg_inf(self) -> None:
+        """Defensive — non-array input doesn't crash, returns silence."""
+        assert _compute_rms_dbfs(None) == float("-inf")  # type: ignore[arg-type]
+
+
+class TestT2Constants:
+    def test_rms_floor_dbfs_value(self) -> None:
+        """Public-surface tuning — bumps must be deliberate."""
+        assert _TTS_RMS_FLOOR_DBFS == -60.0
+
+
+class TestKokoroT2EnergyValidation:
+    """End-to-end T2 monitor wired through ``synthesize_with``."""
+
+    @pytest.mark.asyncio()
+    async def test_normal_synthesis_flagged_ok(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Healthy synthesis with audible output produces no T2 warning."""
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_TTS_LOGGER)
+        # Default _make_mock_kokoro produces uniform[-0.5, 0.5] float32 →
+        # ~16k peak int16 → comfortably above the -60 dBFS floor.
+        kokoro, _ = _build_kokoro(tmp_path)
+        chunk = await kokoro.synthesize("hello world")
+        assert chunk.synthesis_health is None
+        assert _tts_events_of(caplog, "voice.tts.zero_energy_synthesis") == []
+
+    @pytest.mark.asyncio()
+    async def test_silent_synthesis_flagged_zero_energy(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """All-zero PCM output → flagged + WARNING fires."""
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_TTS_LOGGER)
+        # Build with a mock that ALWAYS returns zeros, even for non-empty
+        # text. Simulates corrupt voice file / ONNX returning silence.
+        _setup_model_dir(tmp_path)
+        kokoro = KokoroTTS(tmp_path, KokoroConfig())
+        silent_mock = MagicMock()
+
+        def _silent_create(
+            text: str,
+            voice: str = "af_bella",
+            speed: float = 1.0,
+            lang: str = "en-us",
+        ) -> tuple[np.ndarray, int]:
+            n = 4800 if text.strip() else 0
+            return np.zeros(n, dtype=np.float32), 24000
+
+        silent_mock.create = MagicMock(side_effect=_silent_create)
+        kokoro._kokoro = silent_mock
+        kokoro._initialized = True
+
+        chunk = await kokoro.synthesize("hello world")
+        assert chunk.synthesis_health == "zero_energy"
+        events = _tts_events_of(caplog, "voice.tts.zero_energy_synthesis")
+        assert len(events) == 1
+        assert events[0]["voice.measured_rms_dbfs"] == "-inf"
+        assert events[0]["voice.rms_floor_dbfs"] == _TTS_RMS_FLOOR_DBFS
+        assert "fallback_to_piper" in str(events[0]["voice.action_required"])
+
+    @pytest.mark.asyncio()
+    async def test_quiet_synthesis_flagged_zero_energy(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Audible-but-below-floor output → flagged."""
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_TTS_LOGGER)
+        _setup_model_dir(tmp_path)
+        kokoro = KokoroTTS(tmp_path, KokoroConfig())
+        quiet_mock = MagicMock()
+
+        def _quiet_create(
+            text: str,
+            voice: str = "af_bella",
+            speed: float = 1.0,
+            lang: str = "en-us",
+        ) -> tuple[np.ndarray, int]:
+            n = 4800 if text.strip() else 0
+            # Tiny amplitude → RMS well below -60 dBFS
+            return (np.full(n, 0.00001, dtype=np.float32)), 24000
+
+        quiet_mock.create = MagicMock(side_effect=_quiet_create)
+        kokoro._kokoro = quiet_mock
+        kokoro._initialized = True
+
+        chunk = await kokoro.synthesize("hello world")
+        assert chunk.synthesis_health == "zero_energy"
+
+    @pytest.mark.asyncio()
+    async def test_empty_input_skips_validation(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Empty text produces an empty chunk WITHOUT firing the
+        T2 warning — no synthesis happened, so silence is expected."""
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_TTS_LOGGER)
+        kokoro, _ = _build_kokoro(tmp_path)
+        chunk = await kokoro.synthesize("")
+        assert chunk.synthesis_health is None
+        assert chunk.audio.size == 0
+        assert _tts_events_of(caplog, "voice.tts.zero_energy_synthesis") == []
+
+    @pytest.mark.asyncio()
+    async def test_chunk_emitted_event_includes_synthesis_health(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The chunk_emitted event must always carry the health verdict
+        so the dashboard can attribute every chunk."""
+        import logging
+
+        caplog.set_level(logging.INFO, logger=_TTS_LOGGER)
+        kokoro, _ = _build_kokoro(tmp_path)
+        await kokoro.synthesize("hello world")
+        events = _tts_events_of(caplog, "voice.tts.chunk_emitted")
+        assert len(events) >= 1
+        assert events[-1]["voice.synthesis_health"] == "ok"

@@ -49,11 +49,25 @@ class AudioChunk:
         audio: int16 PCM samples (mono).
         sample_rate: Samples per second (typically 22050 for Piper, 24000 for Kokoro).
         duration_ms: Duration in milliseconds.
+        synthesis_health: T2 (Ring 5) output-energy validation token,
+            ``None`` for normal output. Stable taxonomy:
+
+            * ``"zero_energy"`` — measured RMS below the perceptual
+              silence floor for non-empty input text. Indicates the
+              synthesis pipeline produced effectively-silent output
+              (corrupt voice file, ONNX returning zeros, model
+              degeneration). The orchestrator reads this to trigger
+              the Piper fallback so the user hears *something*
+              instead of inexplicable silence.
+
+            Stable across minor versions — dashboards key on it.
+            Default ``None`` is backwards-compat for pre-T2 callers.
     """
 
     audio: np.ndarray  # int16 PCM
     sample_rate: int = _DEFAULT_SAMPLE_RATE
     duration_ms: float = 0.0
+    synthesis_health: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
