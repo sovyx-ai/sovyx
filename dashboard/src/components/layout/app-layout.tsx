@@ -24,6 +24,7 @@ const ROUTE_TITLE_KEYS: Record<string, string> = {
   "/about": "nav.about",
   "/voice": "nav.voice",
   "/voice/health": "nav.voiceHealth",
+  "/voice/platform-diagnostics": "nav.voicePlatformDiagnostics",
 };
 
 export function AppLayout() {

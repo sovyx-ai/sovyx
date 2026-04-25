@@ -8,6 +8,7 @@ import {
   Settings,
   Mic,
   AudioWaveform,
+  Server,
   Info,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -25,6 +26,10 @@ const ROUTE_MAP: Record<string, RouteInfo> = {
   "/settings": { labelKey: "nav.settings", icon: Settings },
   "/voice": { labelKey: "nav.voice", icon: Mic },
   "/voice/health": { labelKey: "nav.voiceHealth", icon: AudioWaveform },
+  "/voice/platform-diagnostics": {
+    labelKey: "nav.voicePlatformDiagnostics",
+    icon: Server,
+  },
   "/about": { labelKey: "nav.about", icon: Info },
 };
 

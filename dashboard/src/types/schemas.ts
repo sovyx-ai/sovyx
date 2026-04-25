@@ -913,3 +913,187 @@ export const MixerKbValidateResponseSchema = z.object({
   profile_version: z.number().int().nullable(),
   issues: z.array(MixerKbValidationIssueSchema),
 });
+
+// ── Platform Diagnostics — GET /api/voice/platform-diagnostics ──
+
+export const MicPermissionStatusSchema = z.enum([
+  "granted",
+  "denied",
+  "unknown",
+]);
+
+export const PlatformMicPermissionPayloadSchema = z.object({
+  status: MicPermissionStatusSchema,
+  machine_value: z.string().nullable(),
+  user_value: z.string().nullable(),
+  notes: z.array(z.string()),
+  remediation_hint: z.string(),
+});
+
+export const PipeWireStatusTokenSchema = z.enum([
+  "active",
+  "absent",
+  "degraded",
+  "unknown",
+]);
+
+export const PipeWirePayloadSchema = z.object({
+  status: PipeWireStatusTokenSchema,
+  socket_present: z.boolean(),
+  pactl_available: z.boolean(),
+  pactl_info_ok: z.boolean(),
+  server_name: z.string().nullable(),
+  modules_loaded: z.array(z.string()),
+  echo_cancel_loaded: z.boolean(),
+  notes: z.array(z.string()),
+});
+
+export const UcmStatusTokenSchema = z.enum([
+  "available",
+  "absent",
+  "no_ucm_for_card",
+  "unknown",
+]);
+
+export const UcmPayloadSchema = z.object({
+  status: UcmStatusTokenSchema,
+  card_id: z.string(),
+  alsaucm_available: z.boolean(),
+  verbs: z.array(z.string()),
+  active_verb: z.string().nullable(),
+  notes: z.array(z.string()),
+});
+
+export const WindowsServiceStateTokenSchema = z.enum([
+  "running",
+  "stopped",
+  "start_pending",
+  "stop_pending",
+  "paused",
+  "unknown",
+  "not_found",
+]);
+
+export const WindowsServicePayloadSchema = z.object({
+  name: z.string(),
+  state: WindowsServiceStateTokenSchema,
+  raw_state: z.string(),
+  notes: z.array(z.string()),
+});
+
+export const WindowsAudioServicePayloadSchema = z.object({
+  audiosrv: WindowsServicePayloadSchema,
+  audio_endpoint_builder: WindowsServicePayloadSchema,
+  all_healthy: z.boolean(),
+  degraded_services: z.array(z.string()),
+});
+
+export const EtwEventLevelTokenSchema = z.enum([
+  "critical",
+  "error",
+  "warning",
+  "information",
+  "verbose",
+  "unknown",
+]);
+
+export const EtwEventPayloadSchema = z.object({
+  channel: z.string(),
+  level: EtwEventLevelTokenSchema,
+  event_id: z.number().int(),
+  timestamp_iso: z.string(),
+  provider: z.string(),
+  description: z.string(),
+});
+
+export const EtwChannelPayloadSchema = z.object({
+  channel: z.string(),
+  events: z.array(EtwEventPayloadSchema),
+  lookback_seconds: z.number().int(),
+  notes: z.array(z.string()),
+});
+
+export const HalPluginCategoryTokenSchema = z.enum([
+  "virtual_audio",
+  "audio_enhancement",
+  "vendor",
+  "unknown",
+]);
+
+export const HalPluginPayloadSchema = z.object({
+  bundle_name: z.string(),
+  path: z.string(),
+  category: HalPluginCategoryTokenSchema,
+  friendly_label: z.string(),
+});
+
+export const HalPayloadSchema = z.object({
+  plugins: z.array(HalPluginPayloadSchema),
+  notes: z.array(z.string()),
+  virtual_audio_active: z.boolean(),
+  audio_enhancement_active: z.boolean(),
+});
+
+export const BluetoothAudioProfileTokenSchema = z.enum([
+  "a2dp",
+  "hfp",
+  "unknown",
+]);
+
+export const BluetoothDevicePayloadSchema = z.object({
+  name: z.string(),
+  address: z.string(),
+  profile: BluetoothAudioProfileTokenSchema,
+  is_input_capable: z.boolean(),
+  is_output_capable: z.boolean(),
+});
+
+export const BluetoothPayloadSchema = z.object({
+  devices: z.array(BluetoothDevicePayloadSchema),
+  notes: z.array(z.string()),
+});
+
+export const EntitlementVerdictTokenSchema = z.enum([
+  "present",
+  "absent",
+  "unsigned",
+  "unknown",
+]);
+
+export const CodeSigningPayloadSchema = z.object({
+  verdict: EntitlementVerdictTokenSchema,
+  executable_path: z.string(),
+  notes: z.array(z.string()),
+  remediation_hint: z.string(),
+});
+
+export const PlatformLinuxBranchSchema = z.object({
+  pipewire: PipeWirePayloadSchema,
+  alsa_ucm: UcmPayloadSchema,
+});
+
+export const PlatformWindowsBranchSchema = z.object({
+  audio_service: WindowsAudioServicePayloadSchema,
+  etw_audio_events: z.array(EtwChannelPayloadSchema),
+});
+
+export const PlatformMacOSBranchSchema = z.object({
+  hal_plugins: HalPayloadSchema,
+  bluetooth: BluetoothPayloadSchema,
+  code_signing: CodeSigningPayloadSchema,
+});
+
+export const PlatformTokenSchema = z.enum([
+  "linux",
+  "win32",
+  "darwin",
+  "other",
+]);
+
+export const PlatformDiagnosticsResponseSchema = z.object({
+  platform: PlatformTokenSchema,
+  mic_permission: PlatformMicPermissionPayloadSchema,
+  linux: PlatformLinuxBranchSchema.nullable(),
+  windows: PlatformWindowsBranchSchema.nullable(),
+  macos: PlatformMacOSBranchSchema.nullable(),
+});

@@ -1220,3 +1220,180 @@ export interface VoiceHealthPinResponse {
   endpoint_guid: string;
   pinned: boolean;
 }
+
+/* ── Platform Diagnostics — GET /api/voice/platform-diagnostics ──
+ *
+ * Cross-OS diagnostic surface aggregating MA1/MA2/MA5/MA6 (macOS),
+ * F3/F4 (Linux), WI1/WI2 (Windows) and the cross-platform mic
+ * permission probe into one auth-protected payload.
+ *
+ * Per-OS branches are nullable — only the branch matching the host
+ * `platform` is populated; the others arrive as `null`. Operators
+ * should switch on `platform` before reading branch-specific fields.
+ */
+
+export type MicPermissionStatus = "granted" | "denied" | "unknown";
+
+export interface PlatformMicPermissionPayload {
+  status: MicPermissionStatus;
+  machine_value: string | null;
+  user_value: string | null;
+  notes: string[];
+  remediation_hint: string;
+}
+
+export type PipeWireStatusToken =
+  | "active"
+  | "absent"
+  | "degraded"
+  | "unknown";
+
+export interface PipeWirePayload {
+  status: PipeWireStatusToken;
+  socket_present: boolean;
+  pactl_available: boolean;
+  pactl_info_ok: boolean;
+  server_name: string | null;
+  modules_loaded: string[];
+  echo_cancel_loaded: boolean;
+  notes: string[];
+}
+
+export type UcmStatusToken =
+  | "available"
+  | "absent"
+  | "no_ucm_for_card"
+  | "unknown";
+
+export interface UcmPayload {
+  status: UcmStatusToken;
+  card_id: string;
+  alsaucm_available: boolean;
+  verbs: string[];
+  active_verb: string | null;
+  notes: string[];
+}
+
+export type WindowsServiceStateToken =
+  | "running"
+  | "stopped"
+  | "start_pending"
+  | "stop_pending"
+  | "paused"
+  | "unknown"
+  | "not_found";
+
+export interface WindowsServicePayload {
+  name: string;
+  state: WindowsServiceStateToken;
+  raw_state: string;
+  notes: string[];
+}
+
+export interface WindowsAudioServicePayload {
+  audiosrv: WindowsServicePayload;
+  audio_endpoint_builder: WindowsServicePayload;
+  all_healthy: boolean;
+  degraded_services: string[];
+}
+
+export type EtwEventLevelToken =
+  | "critical"
+  | "error"
+  | "warning"
+  | "information"
+  | "verbose"
+  | "unknown";
+
+export interface EtwEventPayload {
+  channel: string;
+  level: EtwEventLevelToken;
+  event_id: number;
+  timestamp_iso: string;
+  provider: string;
+  description: string;
+}
+
+export interface EtwChannelPayload {
+  channel: string;
+  events: EtwEventPayload[];
+  lookback_seconds: number;
+  notes: string[];
+}
+
+export type HalPluginCategoryToken =
+  | "virtual_audio"
+  | "audio_enhancement"
+  | "vendor"
+  | "unknown";
+
+export interface HalPluginPayload {
+  bundle_name: string;
+  path: string;
+  category: HalPluginCategoryToken;
+  friendly_label: string;
+}
+
+export interface HalPayload {
+  plugins: HalPluginPayload[];
+  notes: string[];
+  virtual_audio_active: boolean;
+  audio_enhancement_active: boolean;
+}
+
+export type BluetoothAudioProfileToken =
+  | "a2dp"
+  | "hfp"
+  | "unknown";
+
+export interface BluetoothDevicePayload {
+  name: string;
+  address: string;
+  profile: BluetoothAudioProfileToken;
+  is_input_capable: boolean;
+  is_output_capable: boolean;
+}
+
+export interface BluetoothPayload {
+  devices: BluetoothDevicePayload[];
+  notes: string[];
+}
+
+export type EntitlementVerdictToken =
+  | "present"
+  | "absent"
+  | "unsigned"
+  | "unknown";
+
+export interface CodeSigningPayload {
+  verdict: EntitlementVerdictToken;
+  executable_path: string;
+  notes: string[];
+  remediation_hint: string;
+}
+
+export interface PlatformLinuxBranch {
+  pipewire: PipeWirePayload;
+  alsa_ucm: UcmPayload;
+}
+
+export interface PlatformWindowsBranch {
+  audio_service: WindowsAudioServicePayload;
+  etw_audio_events: EtwChannelPayload[];
+}
+
+export interface PlatformMacOSBranch {
+  hal_plugins: HalPayload;
+  bluetooth: BluetoothPayload;
+  code_signing: CodeSigningPayload;
+}
+
+export type PlatformToken = "linux" | "win32" | "darwin" | "other";
+
+export interface PlatformDiagnosticsResponse {
+  platform: PlatformToken;
+  mic_permission: PlatformMicPermissionPayload;
+  linux: PlatformLinuxBranch | null;
+  windows: PlatformWindowsBranch | null;
+  macos: PlatformMacOSBranch | null;
+}

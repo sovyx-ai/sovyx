@@ -194,5 +194,81 @@
         "watchdog": "Meanwhile, Sovyx fails over to the next viable capture device and re-checks the quarantined endpoint every few minutes."
       }
     }
+  },
+  "platform": {
+    "title": "Platform Diagnostics",
+    "subtitle": "Cross-OS audio stack visibility — microphone permission, host audio service state, and OS-specific anomalies surfaced from a single auth-protected probe.",
+    "loading": "Probing platform…",
+    "error": "Failed to load platform diagnostics",
+    "refresh": "Refresh",
+    "platformLabel": "Host platform",
+    "micSection": {
+      "heading": "Microphone permission",
+      "statusGranted": "Granted",
+      "statusDenied": "Denied",
+      "statusUnknown": "Unknown",
+      "machineValue": "Machine policy",
+      "userValue": "User policy",
+      "noHint": "No remediation needed.",
+      "notes": "Notes"
+    },
+    "linuxSection": {
+      "heading": "Linux",
+      "pipewireTitle": "PipeWire / WirePlumber",
+      "pipewireStatus": "Status",
+      "pipewireSocket": "Socket present",
+      "pipewirePactl": "pactl available",
+      "pipewireServer": "Server",
+      "pipewireModules": "Modules loaded",
+      "pipewireEchoCancel": "echo-cancel module",
+      "ucmTitle": "ALSA UCM verb selection",
+      "ucmStatus": "Status",
+      "ucmCard": "Card ID",
+      "ucmAlsaucm": "alsaucm available",
+      "ucmVerbs": "Available verbs",
+      "ucmActiveVerb": "Active verb"
+    },
+    "windowsSection": {
+      "heading": "Windows",
+      "audioServiceTitle": "Audio services",
+      "audioServiceState": "State",
+      "audioServiceAllHealthy": "All running",
+      "audioServiceDegraded": "Degraded — capture is structurally unavailable until both services return to RUNNING.",
+      "etwTitle": "Recent audio events (ETW)",
+      "etwEmpty": "No warning-or-higher audio events in the lookback window.",
+      "etwChannel": "Channel",
+      "etwEvent": "Event",
+      "etwEventId": "Event ID",
+      "etwLevel": "Level",
+      "etwTime": "Time",
+      "etwLookback": "Lookback {{seconds}}s"
+    },
+    "macosSection": {
+      "heading": "macOS",
+      "halTitle": "HAL plug-ins",
+      "halEmpty": "No third-party HAL plug-ins detected.",
+      "halVirtualActive": "Virtual audio device active",
+      "halEnhancementActive": "Audio enhancement active",
+      "halPlugin": "Plug-in",
+      "halPath": "Path",
+      "halCategory": "Category",
+      "bluetoothTitle": "Bluetooth audio",
+      "bluetoothEmpty": "No Bluetooth audio devices paired.",
+      "bluetoothDevice": "Device",
+      "bluetoothProfile": "Profile",
+      "bluetoothInput": "Input",
+      "bluetoothOutput": "Output",
+      "codeSigningTitle": "Hardened Runtime entitlement",
+      "codeSigningVerdict": "Verdict",
+      "codeSigningExecutable": "Executable",
+      "codeSigningHint": "No remediation needed."
+    },
+    "verdictColor": {
+      "ok": "ok",
+      "warn": "warn",
+      "error": "error",
+      "neutral": "neutral"
+    },
+    "noBranch": "Per-OS branch not populated for this host."
   }
 }

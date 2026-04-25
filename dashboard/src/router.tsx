@@ -28,6 +28,9 @@ const SettingsPage = lazy(() => import("@/pages/settings"));
 const AboutPage = lazy(() => import("@/pages/about"));
 const VoicePage = lazy(() => import("@/pages/voice"));
 const VoiceHealthPage = lazy(() => import("@/pages/voice-health"));
+const VoicePlatformDiagnosticsPage = lazy(
+  () => import("@/pages/voice-platform-diagnostics"),
+);
 const ChatPage = lazy(() => import("@/pages/chat"));
 const PluginsPage = lazy(() => import("@/pages/plugins"));
 const NotFoundPage = lazy(() => import("@/pages/not-found"));
@@ -165,6 +168,14 @@ export const router = createBrowserRouter([
         element: (
           <PageWrapper name="voice-health">
             <VoiceHealthPage />
+          </PageWrapper>
+        ),
+      },
+      {
+        path: "voice/platform-diagnostics",
+        element: (
+          <PageWrapper name="voice-platform-diagnostics">
+            <VoicePlatformDiagnosticsPage />
           </PageWrapper>
         ),
       },
