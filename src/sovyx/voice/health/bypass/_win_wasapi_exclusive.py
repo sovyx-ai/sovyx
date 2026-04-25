@@ -26,7 +26,7 @@ from sovyx.voice._capture_task import (
     ExclusiveRestartVerdict,
     SharedRestartVerdict,
 )
-from sovyx.voice.health.bypass._strategy import BypassApplyError
+from sovyx.voice.health.bypass._strategy import BypassApplyError, BypassRevertError
 from sovyx.voice.health.contract import Eligibility
 
 if TYPE_CHECKING:
@@ -158,13 +158,17 @@ class WindowsWASAPIExclusiveBypass:
                 sample_rate=result.sample_rate,
             )
             return
-        logger.warning(
-            "bypass_strategy_revert_failed",
-            strategy=_STRATEGY_NAME,
-            endpoint_guid=context.endpoint_guid,
-            verdict=result.verdict.value,
-            detail=result.detail,
-        )
+
+        # B3 (atomic revert): the pre-B3 contract logged a WARNING and
+        # silently returned, leaving the capture pipeline in an opaque
+        # half-applied state and burying the failure in stream-of-
+        # consciousness logs. Raise BypassRevertError with a stable
+        # reason so the coordinator emits the structured
+        # ``voice.bypass.revert_failed`` event and dashboards can
+        # attribute the failure to (strategy_name, reason).
+        reason = f"shared_restart_{result.verdict.value}"
+        detail = result.detail or f"shared restart verdict={result.verdict.value}"
+        raise BypassRevertError(detail, reason=reason)
 
 
 __all__ = ["WindowsWASAPIExclusiveBypass"]

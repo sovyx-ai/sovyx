@@ -42,6 +42,39 @@ class BypassApplyError(RuntimeError):
         self.reason = reason
 
 
+class BypassRevertError(RuntimeError):
+    """Raised by :meth:`PlatformBypassStrategy.revert` on a teardown failure (B3).
+
+    The pre-B3 contract was to log a WARNING and silently return — a
+    band-aid that left the capture pipeline in a half-applied state
+    while obscuring the failure from the coordinator's telemetry. The
+    coordinator's exception path could not distinguish a strategy bug
+    (raised RuntimeError) from a graceful revert that just couldn't
+    restore the original state (a recoverable event). With B3:
+
+    * Strategies raise ``BypassRevertError`` with a stable ``reason``
+      token whenever the platform-specific revert fails to restore the
+      pre-apply state. The coordinator catches this exception class
+      explicitly and emits ``voice.bypass.revert_failed`` so dashboards
+      can attribute it to the strategy + reason.
+    * Generic ``Exception`` from ``revert`` still falls through the
+      coordinator's defensive ``except`` (a strategy bug, not a
+      legitimate revert failure), but is now distinguishable from the
+      structured ``BypassRevertError`` path.
+
+    Attributes:
+        reason: Machine-readable token classifying the failure (e.g.
+            ``"shared_restart_downgraded"``,
+            ``"session_manager_restart_failed"``,
+            ``"capture_task_not_running"``). Stable across minor
+            versions so dashboards can key on it.
+    """
+
+    def __init__(self, message: str, *, reason: str = "unspecified") -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
 @runtime_checkable
 class PlatformBypassStrategy(Protocol):
     """Pluggable APO-bypass implementation for one platform path.
@@ -106,11 +139,22 @@ class PlatformBypassStrategy(Protocol):
         self,
         context: BypassContext,
     ) -> None:
-        """Reverse whatever :meth:`apply` did. Idempotent."""
+        """Reverse whatever :meth:`apply` did. Idempotent.
+
+        On a teardown failure that leaves the capture pipeline in a
+        non-restored state, raise :class:`BypassRevertError` with a
+        stable ``reason`` token. The coordinator translates the raise
+        into a structured ``voice.bypass.revert_failed`` event so the
+        failure is observable from the dashboard rather than buried in
+        a WARN log (the pre-B3 band-aid). When ``apply`` never
+        succeeded (NOT_APPLICABLE / FAILED_TO_APPLY) ``revert`` is a
+        no-op and must NOT raise.
+        """
         ...
 
 
 __all__ = [
     "BypassApplyError",
+    "BypassRevertError",
     "PlatformBypassStrategy",
 ]

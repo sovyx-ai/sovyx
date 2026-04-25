@@ -40,7 +40,7 @@ from sovyx.voice.health._metrics import (
     record_capture_integrity_verdict,
 )
 from sovyx.voice.health._quarantine import get_default_quarantine
-from sovyx.voice.health.bypass._strategy import BypassApplyError
+from sovyx.voice.health.bypass._strategy import BypassApplyError, BypassRevertError
 from sovyx.voice.health.contract import (
     BypassContext,
     BypassOutcome,
@@ -718,10 +718,28 @@ class CaptureIntegrityCoordinator:
                     reason=after.verdict.value,
                 )
                 # Revert so the next strategy starts from the pre-apply
-                # state rather than an opaque mix of A and B.
+                # state rather than an opaque mix of A and B. B3 splits
+                # the catch into two paths so we can distinguish a
+                # graceful revert failure (BypassRevertError raised
+                # with structured reason — emit observable event,
+                # advance to next strategy) from a strategy bug
+                # (generic Exception — log + advance).
                 try:
                     await strategy.revert(context)
-                except Exception:  # noqa: BLE001 — revert is best-effort
+                except BypassRevertError as exc:
+                    logger.warning(
+                        "voice.bypass.revert_failed",
+                        **{
+                            "voice.strategy": strategy.name,
+                            "voice.endpoint_guid": context.endpoint_guid,
+                            "voice.reason": exc.reason,
+                            "voice.detail": str(exc),
+                            "voice.action_required": (
+                                "next_strategy_starts_from_half_applied_state"
+                            ),
+                        },
+                    )
+                except Exception:  # noqa: BLE001 — strategy bug shield, NOT graceful revert failure
                     logger.exception(
                         "capture_integrity_coordinator_revert_crashed",
                         strategy=strategy.name,

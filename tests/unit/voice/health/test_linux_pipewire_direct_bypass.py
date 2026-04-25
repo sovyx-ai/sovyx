@@ -6,8 +6,8 @@ Covers:
   manager host, happy path.
 * ``apply`` — ALSA_HW_ENGAGED success, every verdict maps to a stable
   :class:`BypassApplyError.reason` token.
-* ``revert`` — SESSION_MANAGER_ENGAGED is a no-op, non-engaged verdict
-  is logged but does not raise.
+* ``revert`` — SESSION_MANAGER_ENGAGED is a no-op; non-engaged verdict
+  raises :class:`BypassRevertError` (B3 atomic-revert contract).
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from sovyx.voice.health.bypass import _linux_pipewire_direct as mod
 from sovyx.voice.health.bypass._linux_pipewire_direct import (
     LinuxPipeWireDirectBypass,
 )
-from sovyx.voice.health.bypass._strategy import BypassApplyError
+from sovyx.voice.health.bypass._strategy import BypassApplyError, BypassRevertError
 from sovyx.voice.health.contract import BypassContext
 
 
@@ -180,7 +180,9 @@ class TestRevert:
         await LinuxPipeWireDirectBypass().revert(_ctx(capture_task=task))
 
     @pytest.mark.asyncio()
-    async def test_non_engaged_revert_logs_and_returns(self) -> None:
+    async def test_non_engaged_revert_raises_bypass_revert_error(self) -> None:
+        """B3: revert failure must raise BypassRevertError with structured
+        reason — not log+swallow as in the pre-B3 band-aid."""
         task = _FakeCaptureTask(
             sm_result=SessionManagerRestartResult(
                 verdict=SessionManagerRestartVerdict.OPEN_FAILED_NO_STREAM,
@@ -191,6 +193,45 @@ class TestRevert:
                 detail="couldn't reopen",
             )
         )
-        with patch.object(mod.logger, "warning") as warn:
+        with pytest.raises(BypassRevertError) as exc:
             await LinuxPipeWireDirectBypass().revert(_ctx(capture_task=task))
-        warn.assert_called_once()
+        assert exc.value.reason == "session_manager_restart_open_failed_no_stream"
+        assert "couldn't reopen" in str(exc.value)
+
+    @pytest.mark.parametrize(
+        ("verdict", "expected_reason"),
+        [
+            (
+                SessionManagerRestartVerdict.OPEN_FAILED_NO_STREAM,
+                "session_manager_restart_open_failed_no_stream",
+            ),
+            (
+                SessionManagerRestartVerdict.NOT_RUNNING,
+                "session_manager_restart_not_running",
+            ),
+            (
+                SessionManagerRestartVerdict.NOT_LINUX,
+                "session_manager_restart_not_linux",
+            ),
+        ],
+    )
+    @pytest.mark.asyncio()
+    async def test_revert_reason_token_per_verdict(
+        self,
+        verdict: SessionManagerRestartVerdict,
+        expected_reason: str,
+    ) -> None:
+        """Every non-engaged verdict maps to a stable BypassRevertError reason."""
+        task = _FakeCaptureTask(
+            sm_result=SessionManagerRestartResult(
+                verdict=verdict,
+                engaged=False,
+                host_api=None,
+                device=None,
+                sample_rate=None,
+                detail=None,
+            )
+        )
+        with pytest.raises(BypassRevertError) as exc:
+            await LinuxPipeWireDirectBypass().revert(_ctx(capture_task=task))
+        assert exc.value.reason == expected_reason

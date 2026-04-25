@@ -18,6 +18,7 @@ Scenarios covered (mapped to TEST_PLAN.md D1):
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -158,6 +159,7 @@ class _FakeStrategy:
     applied: bool = False
     reverted: bool = False
     apply_raises: BaseException | None = None
+    revert_raises: BaseException | None = None  # B3: configurable revert failure
     on_apply: Any = None  # callable(fake_capture) invoked inside apply
 
     async def probe_eligibility(self, _ctx: BypassContext) -> Any:
@@ -174,6 +176,8 @@ class _FakeStrategy:
         return f"{self.name}:applied"
 
     async def revert(self, _ctx: BypassContext) -> None:
+        if self.revert_raises is not None:
+            raise self.revert_raises
         self.reverted = True
 
 
@@ -522,3 +526,128 @@ class TestFailureModesPreserved:
             "tap_frames_since_mark is only invoked on successful apply; "
             "a failed apply must not probe post-state."
         )
+
+
+# ── B3: BypassRevertError handling at the coordinator boundary ─────
+
+
+_COORD_LOGGER = "sovyx.voice.health.capture_integrity"
+
+
+def _events_of(
+    caplog: pytest.LogCaptureFixture,
+    event_name: str,
+) -> list[dict[str, Any]]:
+    """Filter caplog records by the structured ``event`` field."""
+    return [
+        r.msg
+        for r in caplog.records
+        if r.name == _COORD_LOGGER and isinstance(r.msg, dict) and r.msg.get("event") == event_name
+    ]
+
+
+class TestRevertAtomicityB3:
+    """Coordinator distinguishes structured BypassRevertError from a
+    strategy bug (generic Exception) — pre-B3 both fell through the
+    same ``except Exception`` path and were logged as exceptions, so
+    a graceful revert failure was indistinguishable from a crash.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_bypass_revert_error_emits_structured_event(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        from sovyx.voice.health.bypass._strategy import BypassRevertError
+
+        caplog.set_level(logging.WARNING, logger=_COORD_LOGGER)
+        before = _result(verdict=IntegrityVerdict.APO_DEGRADED, rolloff_hz=200.0)
+        # Force APPLIED_STILL_DEAD so revert is invoked.
+        after = _result(verdict=IntegrityVerdict.VAD_MUTE, rolloff_hz=210.0, vad_max=0.01)
+        strategy = _FakeStrategy(
+            revert_raises=BypassRevertError(
+                "shared restart downgraded",
+                reason="shared_restart_downgraded_to_exclusive",
+            ),
+        )
+        frames = np.zeros(int(3.0 * _SAMPLE_RATE), dtype=np.int16)
+        coordinator, _, _, _ = _make_coordinator(
+            before=before,
+            after=after,
+            post_apply_frames=frames,
+            strategy=strategy,
+        )
+        await coordinator.handle_deaf_signal()
+
+        events = _events_of(caplog, "voice.bypass.revert_failed")
+        assert len(events) == 1
+        evt = events[0]
+        assert evt["voice.strategy"] == strategy.name
+        assert evt["voice.reason"] == "shared_restart_downgraded_to_exclusive"
+        assert "downgraded" in evt["voice.detail"]
+        assert "next_strategy" in str(evt["voice.action_required"])
+
+    @pytest.mark.asyncio()
+    async def test_generic_exception_during_revert_falls_through_strategy_bug_path(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A non-BypassRevertError raise (strategy bug) must NOT be
+        emitted as a structured revert_failed event — it's a different
+        signal class and dashboards key on the distinction."""
+        caplog.set_level(logging.WARNING, logger=_COORD_LOGGER)
+        before = _result(verdict=IntegrityVerdict.APO_DEGRADED, rolloff_hz=200.0)
+        after = _result(verdict=IntegrityVerdict.VAD_MUTE, rolloff_hz=210.0, vad_max=0.01)
+        strategy = _FakeStrategy(
+            revert_raises=RuntimeError("strategy implementation bug"),
+        )
+        frames = np.zeros(int(3.0 * _SAMPLE_RATE), dtype=np.int16)
+        coordinator, _, _, _ = _make_coordinator(
+            before=before,
+            after=after,
+            post_apply_frames=frames,
+            strategy=strategy,
+        )
+        await coordinator.handle_deaf_signal()
+
+        # No structured revert_failed event for a strategy bug.
+        assert _events_of(caplog, "voice.bypass.revert_failed") == []
+        # But the generic crash logger DID fire (defensive fallthrough).
+        crashed_records = [
+            r
+            for r in caplog.records
+            if r.name == _COORD_LOGGER
+            and isinstance(r.msg, dict)
+            and r.msg.get("event") == "capture_integrity_coordinator_revert_crashed"
+        ]
+        assert len(crashed_records) == 1
+
+    @pytest.mark.asyncio()
+    async def test_revert_failure_does_not_abort_remaining_coordinator_flow(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Even when revert raises, the coordinator must still produce
+        the APPLIED_STILL_DEAD outcome and quarantine the endpoint —
+        revert failure is observable but non-fatal."""
+        from sovyx.voice.health.bypass._strategy import BypassRevertError
+
+        caplog.set_level(logging.WARNING, logger=_COORD_LOGGER)
+        before = _result(verdict=IntegrityVerdict.APO_DEGRADED, rolloff_hz=200.0)
+        after = _result(verdict=IntegrityVerdict.VAD_MUTE, rolloff_hz=210.0, vad_max=0.01)
+        strategy = _FakeStrategy(
+            revert_raises=BypassRevertError("oops", reason="test"),
+        )
+        frames = np.zeros(int(3.0 * _SAMPLE_RATE), dtype=np.int16)
+        coordinator, _, _, _ = _make_coordinator(
+            before=before,
+            after=after,
+            post_apply_frames=frames,
+            strategy=strategy,
+        )
+        outcomes = await coordinator.handle_deaf_signal()
+
+        # The APPLIED_STILL_DEAD outcome was still produced.
+        assert outcomes[-1].verdict is BypassVerdict.APPLIED_STILL_DEAD
+        # Coordinator marked itself resolved (quarantine path).
+        assert coordinator.is_resolved is True

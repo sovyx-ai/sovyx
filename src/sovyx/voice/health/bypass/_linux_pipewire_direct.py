@@ -43,7 +43,7 @@ from sovyx.voice._capture_task import (
     AlsaHwDirectRestartVerdict,
     SessionManagerRestartVerdict,
 )
-from sovyx.voice.health.bypass._strategy import BypassApplyError
+from sovyx.voice.health.bypass._strategy import BypassApplyError, BypassRevertError
 from sovyx.voice.health.contract import Eligibility
 
 if TYPE_CHECKING:
@@ -187,13 +187,16 @@ class LinuxPipeWireDirectBypass:
                 sample_rate=result.sample_rate,
             )
             return
-        logger.warning(
-            "bypass_strategy_revert_failed",
-            strategy=_STRATEGY_NAME,
-            endpoint_guid=context.endpoint_guid,
-            verdict=result.verdict.value,
-            detail=result.detail,
-        )
+
+        # B3 (atomic revert): see _win_wasapi_exclusive.revert for the
+        # rationale. Pre-B3 the failure was logged WARNING and swallowed,
+        # leaving the capture pipeline pinned to alsa_hw_direct with no
+        # observable signal. Raise BypassRevertError so the coordinator
+        # surfaces ``voice.bypass.revert_failed`` with the structured
+        # reason.
+        reason = f"session_manager_restart_{result.verdict.value}"
+        detail = result.detail or f"session_manager restart verdict={result.verdict.value}"
+        raise BypassRevertError(detail, reason=reason)
 
 
 __all__ = ["LinuxPipeWireDirectBypass"]
