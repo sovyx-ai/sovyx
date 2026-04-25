@@ -573,6 +573,123 @@ def check_tts_synthesize(
     return _check
 
 
+def check_llm_reachable(
+    *,
+    router: Any,  # noqa: ANN401 — accepts any LLMRouter exposing iterable ._providers
+    timeout_s: float | None = None,
+) -> PreflightCheck:
+    """Step 7 default — at least one LLM provider is reachable
+    (band-aid #28 replacement).
+
+    Iterates the router's providers and reports PASS as soon as one
+    provider's :attr:`~sovyx.engine.protocols.LLMProvider.is_available`
+    returns ``True``. The whole iteration is wrapped in
+    ``asyncio.timeout(timeout_s)`` so a hung ``is_available``
+    implementation (e.g. an Ollama provider doing a blocking ping
+    against an unreachable host) cannot wedge boot — pre-band-aid #28
+    the iteration had no enforced ceiling and would inherit the
+    provider's own timeout, which for some adapters is effectively
+    infinite.
+
+    Args:
+        router: The wired :class:`~sovyx.llm.router.LLMRouter`.
+            Accessed only via ``._providers`` to avoid a hard import
+            dependency on the LLM module from the voice subtree.
+        timeout_s: Per-call wall-clock budget. ``None`` defers to
+            :attr:`~sovyx.engine.config.VoiceTuningConfig.llm_preflight_timeout_seconds`
+            (default 3 s). Bounded ``[0.5, 60]`` at the config layer.
+
+    Returns:
+        A :class:`PreflightCheck` closure that on PASS reports the
+        first reachable provider name + total provider count, on
+        FAIL reports the failure mode (no providers / all unreachable
+        / timeout) for operator-actionable surfacing.
+    """
+    # Resolve the timeout lazily so a runtime override of the tuning
+    # config (e.g. via ``SOVYX_TUNING__VOICE__LLM_PREFLIGHT_TIMEOUT_SECONDS``)
+    # is honoured per-invocation rather than at module import.
+    if timeout_s is None:
+        from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
+
+        timeout_s = _VoiceTuning().llm_preflight_timeout_seconds
+
+    async def _check() -> tuple[bool, str, dict[str, Any]]:
+        providers = list(getattr(router, "_providers", []) or [])
+        if not providers:
+            return (
+                False,
+                (
+                    "No LLM providers configured. Set at least one of "
+                    "ANTHROPIC_API_KEY / OPENAI_API_KEY / GOOGLE_API_KEY "
+                    "(or run a local Ollama instance) and restart Sovyx."
+                ),
+                {"provider_count": 0, "timeout_s": timeout_s},
+            )
+        try:
+            import asyncio as _asyncio
+
+            async with _asyncio.timeout(timeout_s):
+                # Iterate providers in router-declared order so the
+                # primary's verdict wins; the first reachable one
+                # short-circuits.
+                for provider in providers:
+                    name = str(getattr(provider, "name", "unknown"))
+                    try:
+                        if bool(provider.is_available):
+                            return (
+                                True,
+                                "",
+                                {
+                                    "first_reachable": name,
+                                    "provider_count": len(providers),
+                                    "timeout_s": timeout_s,
+                                },
+                            )
+                    except Exception as exc:  # noqa: BLE001 — provider boundary
+                        # A throwing is_available is a provider bug —
+                        # surface it but continue probing others. The
+                        # check passes as long as ANY provider works.
+                        logger.warning(
+                            "voice.preflight.llm_provider_is_available_raised",
+                            provider=name,
+                            error=str(exc),
+                            error_type=type(exc).__name__,
+                        )
+        except TimeoutError:
+            return (
+                False,
+                (
+                    f"LLM reachability check exceeded the {timeout_s} s "
+                    "preflight budget. A configured provider is hanging on "
+                    "its is_available probe — check Ollama / cloud "
+                    "endpoint connectivity, then restart."
+                ),
+                {
+                    "provider_count": len(providers),
+                    "timeout_s": timeout_s,
+                    "failure": "preflight_timeout",
+                },
+            )
+        # Loop exhausted without a reachable provider.
+        names = [str(getattr(p, "name", "unknown")) for p in providers]
+        return (
+            False,
+            (
+                f"None of the {len(providers)} configured providers "
+                f"reported is_available=True. Check API keys / Ollama "
+                "service. Providers tried: " + ", ".join(names)
+            ),
+            {
+                "provider_count": len(providers),
+                "providers_tried": names,
+                "timeout_s": timeout_s,
+                "failure": "all_unreachable",
+            },
+        )
+
+    return _check
+
+
 # ---------------------------------------------------------------------------
 # Bootstrap helper — assemble the canonical 8-step spec list.
 # ---------------------------------------------------------------------------

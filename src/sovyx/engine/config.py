@@ -190,6 +190,15 @@ class VoiceTuningConfig(BaseSettings):
     # reconnects fits without rotation.
     combo_probe_history_max: int = Field(default=10, ge=1, le=1_000)
 
+    # Band-aid #28: LLM provider reachability preflight budget.
+    # The ADR §4.5 step 7 (LLM_UNREACHABLE) check has no enforced
+    # ceiling pre-band-aid #28 — a hung provider would block boot
+    # indefinitely. 3 s default matches the spec's "3 s HEAD ping"
+    # cadence; bounded ``[0.5, 60]`` so a misconfigured 0 doesn't
+    # instant-fail every call and a runaway 600 doesn't wedge the
+    # daemon past any operator's patience window.
+    llm_preflight_timeout_seconds: float = Field(default=3.0, ge=0.5, le=60.0)
+
     # AudioCaptureTask stream health — catches the silent-zeros failure
     # mode where sd.InputStream opens cleanly but delivers all-zero
     # frames (MME + unsupported rate, driver hang, privacy block). See
