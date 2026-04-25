@@ -1001,3 +1001,91 @@ class TestEdgeCases:
         original = set(text.replace(" ", ""))
         rejoined = set(" ".join(parts).replace(" ", ""))
         assert original <= rejoined
+
+
+# ---------------------------------------------------------------------------
+# M2 wire-up — RED + USE telemetry on Piper TTS
+# ---------------------------------------------------------------------------
+
+
+class TestPiperM2WireUp:
+    """PiperTTS.synthesize must emit M2 stage events.
+
+    Mirrors the Kokoro M2 wire-up (commit 840ec69). Both engines
+    emit consistent voice.stage.* events so dashboards see the
+    fallback path (Kokoro → Piper) without per-engine branching.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_success_path_records_success_event(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        recorded: list[tuple[Any, Any, Any]] = []
+
+        from sovyx.voice import tts_piper as piper_mod
+        from sovyx.voice._stage_metrics import StageEventKind, VoiceStage
+
+        def _capture(stage: Any, kind: Any, *, error_type: str | None = None) -> None:
+            recorded.append((stage, kind, error_type))
+
+        monkeypatch.setattr(piper_mod, "record_stage_event", _capture)
+
+        piper = _build_piper(tmp_path)
+        _, modules = _mock_phonemize_module([["h", "ɛ", "l", "oʊ"]])
+        with patch.dict("sys.modules", modules):
+            await piper.synthesize("hello world")
+
+        assert (VoiceStage.TTS, StageEventKind.SUCCESS, None) in recorded
+
+    @pytest.mark.asyncio()
+    async def test_empty_text_records_drop_with_reason(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        recorded: list[tuple[Any, Any, Any]] = []
+
+        from sovyx.voice import tts_piper as piper_mod
+        from sovyx.voice._stage_metrics import StageEventKind, VoiceStage
+
+        def _capture(stage: Any, kind: Any, *, error_type: str | None = None) -> None:
+            recorded.append((stage, kind, error_type))
+
+        monkeypatch.setattr(piper_mod, "record_stage_event", _capture)
+
+        piper = _build_piper(tmp_path)
+        await piper.synthesize("")
+
+        assert (VoiceStage.TTS, StageEventKind.DROP, "empty_text") in recorded
+
+    @pytest.mark.asyncio()
+    async def test_no_phonemes_records_drop_with_reason(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When the phonemiser produces no usable phonemes (e.g.
+        emoji-only text), the synth returns an empty AudioChunk and
+        emits DROP with error_type=no_phonemes — distinct from
+        empty_text so dashboards can attribute the rate of language-
+        layer rejections separately."""
+        recorded: list[tuple[Any, Any, Any]] = []
+
+        from sovyx.voice import tts_piper as piper_mod
+        from sovyx.voice._stage_metrics import StageEventKind, VoiceStage
+
+        def _capture(stage: Any, kind: Any, *, error_type: str | None = None) -> None:
+            recorded.append((stage, kind, error_type))
+
+        monkeypatch.setattr(piper_mod, "record_stage_event", _capture)
+
+        piper = _build_piper(tmp_path)
+        # Phonemiser returns [[]] — non-empty list of empty inner
+        # lists, which the synth filters out leaving all_audio empty.
+        _, modules = _mock_phonemize_module([[]])
+        with patch.dict("sys.modules", modules):
+            await piper.synthesize("non-empty text")
+
+        assert (VoiceStage.TTS, StageEventKind.DROP, "no_phonemes") in recorded

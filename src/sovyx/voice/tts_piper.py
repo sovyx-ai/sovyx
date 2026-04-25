@@ -17,6 +17,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from sovyx.observability.logging import get_logger
+from sovyx.voice._stage_metrics import (
+    StageEventKind,
+    VoiceStage,
+    measure_stage_duration,
+    record_stage_event,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -435,66 +441,92 @@ class PiperTTS(TTSEngine):
         sr = self.sample_rate
         text = text.strip()
 
-        if not text:
+        # Ring 6 RED + USE: mirrors the Kokoro M2 wire-up
+        # (commit 840ec69) so the dashboard sees consistent
+        # voice.stage.* events whether Kokoro or its Piper fallback
+        # produced the audio. Implicit error paths (ONNX exception,
+        # phonemiser failure) flow through measure_stage_duration's
+        # BaseException handler.
+        with measure_stage_duration(VoiceStage.TTS):
+            if not text:
+                # Empty input → DROP not SUCCESS (no audio produced).
+                # error_type=empty_text matches the Kokoro DROP label
+                # so dashboards don't need per-engine special-casing.
+                record_stage_event(
+                    VoiceStage.TTS,
+                    StageEventKind.DROP,
+                    error_type="empty_text",
+                )
+                return AudioChunk(
+                    audio=np.array([], dtype=np.int16),
+                    sample_rate=sr,
+                    duration_ms=0.0,
+                )
+
+            silence_samples = int(self._config.sentence_silence * sr)
+            silence = np.zeros(silence_samples, dtype=np.int16)
+
+            all_audio: list[np.ndarray] = []
+            sentence_phonemes = self._phonemize(text)
+
+            gen_start = time.monotonic()
+            for phonemes in sentence_phonemes:
+                if not phonemes:
+                    continue
+                ids = self._phonemes_to_ids(phonemes)
+                # Piper ONNX inference is CPU-bound — offload to a
+                # worker thread so concurrent dashboard / HTTP /
+                # pipeline tasks stay responsive while a sentence is
+                # being synthesized.
+                audio = await asyncio.to_thread(
+                    self._synthesize_ids,
+                    ids,
+                    speaker_id=self._config.speaker_id,
+                )
+                all_audio.append(audio)
+                all_audio.append(silence)
+            generation_ms = (time.monotonic() - gen_start) * 1000
+
+            if not all_audio:
+                # Phonemiser produced no usable phonemes — distinct
+                # rejection class from empty_text (input WAS non-
+                # empty, but the language layer couldn't process it,
+                # e.g. emoji-only text).
+                record_stage_event(
+                    VoiceStage.TTS,
+                    StageEventKind.DROP,
+                    error_type="no_phonemes",
+                )
+                return AudioChunk(
+                    audio=np.array([], dtype=np.int16),
+                    sample_rate=sr,
+                    duration_ms=0.0,
+                )
+
+            combined = np.concatenate(all_audio)
+            duration_ms = len(combined) / sr * 1000
+
+            self._chunk_counter += 1
+            logger.info(
+                "voice.tts.chunk_emitted",
+                **{
+                    "voice.chunk_index": self._chunk_counter,
+                    "voice.text_chars": len(text),
+                    "voice.audio_ms": round(duration_ms, 1),
+                    "voice.generation_ms": round(generation_ms, 1),
+                    "voice.model": "piper",
+                    "voice.voice": self._config.voice,
+                    "voice.sample_rate": sr,
+                    "voice.speaker_id": self._config.speaker_id,
+                },
+            )
+
+            record_stage_event(VoiceStage.TTS, StageEventKind.SUCCESS)
             return AudioChunk(
-                audio=np.array([], dtype=np.int16),
+                audio=combined,
                 sample_rate=sr,
-                duration_ms=0.0,
+                duration_ms=duration_ms,
             )
-
-        silence_samples = int(self._config.sentence_silence * sr)
-        silence = np.zeros(silence_samples, dtype=np.int16)
-
-        all_audio: list[np.ndarray] = []
-        sentence_phonemes = self._phonemize(text)
-
-        gen_start = time.monotonic()
-        for phonemes in sentence_phonemes:
-            if not phonemes:
-                continue
-            ids = self._phonemes_to_ids(phonemes)
-            # Piper ONNX inference is CPU-bound — offload to a worker
-            # thread so concurrent dashboard / HTTP / pipeline tasks
-            # stay responsive while a sentence is being synthesized.
-            audio = await asyncio.to_thread(
-                self._synthesize_ids,
-                ids,
-                speaker_id=self._config.speaker_id,
-            )
-            all_audio.append(audio)
-            all_audio.append(silence)
-        generation_ms = (time.monotonic() - gen_start) * 1000
-
-        if not all_audio:
-            return AudioChunk(
-                audio=np.array([], dtype=np.int16),
-                sample_rate=sr,
-                duration_ms=0.0,
-            )
-
-        combined = np.concatenate(all_audio)
-        duration_ms = len(combined) / sr * 1000
-
-        self._chunk_counter += 1
-        logger.info(
-            "voice.tts.chunk_emitted",
-            **{
-                "voice.chunk_index": self._chunk_counter,
-                "voice.text_chars": len(text),
-                "voice.audio_ms": round(duration_ms, 1),
-                "voice.generation_ms": round(generation_ms, 1),
-                "voice.model": "piper",
-                "voice.voice": self._config.voice,
-                "voice.sample_rate": sr,
-                "voice.speaker_id": self._config.speaker_id,
-            },
-        )
-
-        return AudioChunk(
-            audio=combined,
-            sample_rate=sr,
-            duration_ms=duration_ms,
-        )
 
     async def synthesize_streaming(
         self,
