@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
+from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.observability.logging import get_logger
 from sovyx.voice.health._combo_store_migrations import (
     CURRENT_SCHEMA_VERSION,
@@ -58,7 +59,13 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-_PROBE_HISTORY_MAX = 10
+_PROBE_HISTORY_MAX = _VoiceTuning().combo_probe_history_max
+"""Per-entry probe-history capacity. Sourced from
+:attr:`sovyx.engine.config.VoiceTuningConfig.combo_probe_history_max`
+at import time so ``SOVYX_TUNING__VOICE__COMBO_PROBE_HISTORY_MAX``
+overrides without reaching into the module. Anti-pattern #17 — every
+threshold via tuning config; never a hardcoded constant in a
+production code path."""
 _AGE_DEGRADED_DAYS = 30
 _AGE_STALE_DAYS = 90
 _RMS_DB_MIN = -90.0

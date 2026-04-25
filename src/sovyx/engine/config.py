@@ -180,6 +180,16 @@ class VoiceTuningConfig(BaseSettings):
     capture_reconnect_delay_seconds: float = 2.0
     capture_queue_maxsize: int = 256
 
+    # Band-aid #20: per-entry probe-history size in
+    # :class:`sovyx.voice.health.combo_store.ComboStore`. Default 10
+    # is appropriate for steady-state operation; raise for high-debug
+    # deployments collecting forensic history of recent reconnects;
+    # lower for memory-constrained embedded targets. Bounded ``[1,
+    # 1000]`` — at 1 the history is degenerate (single entry =
+    # current state only); at 1000 a 10-day session of hourly
+    # reconnects fits without rotation.
+    combo_probe_history_max: int = Field(default=10, ge=1, le=1_000)
+
     # AudioCaptureTask stream health — catches the silent-zeros failure
     # mode where sd.InputStream opens cleanly but delivers all-zero
     # frames (MME + unsupported rate, driver hang, privacy block). See

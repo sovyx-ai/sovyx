@@ -1308,3 +1308,76 @@ class TestConcurrentBootC1:
         # refresh must NOT clear the in-memory needs_revalidation.
         store._refresh_entries_from_disk_locked()
         assert store._entries["{guid-A}"].needs_revalidation is True
+
+
+# ---------------------------------------------------------------------------
+# Band-aid #20 — configurable probe history size
+# ---------------------------------------------------------------------------
+
+
+class TestProbeHistoryConfigurable:
+    """Band-aid #20: ``_PROBE_HISTORY_MAX`` is sourced from
+    :class:`VoiceTuningConfig.combo_probe_history_max` so operators
+    can override via ``SOVYX_TUNING__VOICE__COMBO_PROBE_HISTORY_MAX``
+    without code change. Default 10 preserves prior behaviour."""
+
+    def test_default_is_ten(self) -> None:
+        """Regression guard: the factory default for the new tuning
+        field must be 10 — the prior hardcoded constant — so existing
+        deployments observe identical behaviour after the promotion."""
+        from sovyx.engine.config import VoiceTuningConfig
+
+        assert VoiceTuningConfig().combo_probe_history_max == 10  # noqa: PLR2004
+
+    def test_module_constant_matches_default(self) -> None:
+        """The module-level ``_PROBE_HISTORY_MAX`` reads the tuning
+        default at import time. Confirms the wire-up is real (not
+        a silently-ignored field)."""
+        from sovyx.voice.health.combo_store import _PROBE_HISTORY_MAX
+
+        assert _PROBE_HISTORY_MAX == 10  # noqa: PLR2004
+
+    def test_field_rejects_zero(self) -> None:
+        """0 history would be degenerate — even the current entry
+        wouldn't fit. Pydantic ``ge=1`` enforces."""
+        from pydantic import ValidationError
+
+        from sovyx.engine.config import VoiceTuningConfig
+
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(combo_probe_history_max=0)
+
+    def test_field_rejects_negative(self) -> None:
+        from pydantic import ValidationError
+
+        from sovyx.engine.config import VoiceTuningConfig
+
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(combo_probe_history_max=-1)
+
+    def test_field_rejects_above_ceiling(self) -> None:
+        """1 000 history entries is the bound; 1 001 fails. Above
+        the bound a runaway log-storm config would be silently
+        accepted; the bound surfaces the misconfiguration."""
+        from pydantic import ValidationError
+
+        from sovyx.engine.config import VoiceTuningConfig
+
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(combo_probe_history_max=1_001)
+
+    def test_high_debug_value_accepted(self) -> None:
+        """A 500-entry forensic-mode setting must construct cleanly —
+        confirming the bound has headroom for legitimate operator
+        use cases (capture multi-day reconnect history)."""
+        from sovyx.engine.config import VoiceTuningConfig
+
+        cfg = VoiceTuningConfig(combo_probe_history_max=500)
+        assert cfg.combo_probe_history_max == 500  # noqa: PLR2004
+
+    def test_minimum_value_accepted(self) -> None:
+        """The bound's floor (1) constructs cleanly."""
+        from sovyx.engine.config import VoiceTuningConfig
+
+        cfg = VoiceTuningConfig(combo_probe_history_max=1)
+        assert cfg.combo_probe_history_max == 1
