@@ -18,6 +18,14 @@ import httpx
 
 from sovyx.engine.errors import VoiceError
 from sovyx.observability.logging import get_logger
+from sovyx.voice._hystrix_guard import (
+    BulkheadFullError,
+    CircuitOpenError,
+    HystrixGuard,
+    HystrixGuardConfig,
+    WatchdogFiredError,
+)
+from sovyx.voice._observability_pii import hash_pii
 from sovyx.voice._stage_metrics import (
     StageEventKind,
     VoiceStage,
@@ -212,6 +220,27 @@ class CloudSTT(STTEngine):
         self._config = config or CloudSTTConfig()
         self._state = STTState.UNINITIALIZED
         self._client: Any = None
+        # R1 — Hystrix triple-defense around the network call.
+        # Per-key isolation: keyed by api_base_url so a deployment
+        # using two upstream endpoints (e.g. OpenAI + a local Whisper
+        # gateway) gets a distinct CB / bulkhead per upstream.
+        # The endpoint URL is hashed via M1 hash_pii so the key
+        # carries no PII into the structured-log "key" field
+        # (matters when api_base_url embeds a tenant id).
+        # Watchdog timeout = api_timeout + 5s buffer so the httpx
+        # layer's own deadline fires first; the guard's watchdog is
+        # the secondary safety net for the case where httpx fails
+        # to honour its own timeout (network stack edge cases).
+        self._guard = HystrixGuard(
+            owner=VoiceStage.STT,
+            key=hash_pii(self._config.api_base_url, salt="voice.stt.cloud"),
+            config=HystrixGuardConfig(
+                failure_threshold=3,
+                recovery_timeout_s=30.0,
+                max_concurrent=4,
+                watchdog_timeout_s=self._config.api_timeout + 5.0,
+            ),
+        )
 
     @property
     def state(self) -> STTState:
@@ -313,8 +342,27 @@ class CloudSTT(STTEngine):
                 # Convert to WAV
                 wav_bytes = _audio_to_wav_bytes(audio, sample_rate)
 
-                # Call API
-                text = await self._call_whisper_api(wav_bytes)
+                # R1 — guarded network call. Circuit breaker fast-fails
+                # after 3 consecutive upstream failures; bulkhead caps
+                # to 4 concurrent in-flight transcribes per endpoint;
+                # watchdog (api_timeout + 5 s) is the secondary
+                # deadline if httpx's own timeout fails to fire.
+                # Guard-imposed failures translate to CloudSTTError so
+                # callers' existing ``except CloudSTTError`` clauses
+                # work unchanged — the original guard exception is
+                # chained via ``raise ... from`` for forensics.
+                try:
+                    async with self._guard.run():
+                        text = await self._call_whisper_api(wav_bytes)
+                except CircuitOpenError as exc:
+                    msg = "Cloud STT circuit breaker open"
+                    raise CloudSTTError(msg) from exc
+                except BulkheadFullError as exc:
+                    msg = "Cloud STT bulkhead full (too many concurrent calls)"
+                    raise CloudSTTError(msg) from exc
+                except WatchdogFiredError as exc:
+                    msg = "Cloud STT watchdog fired (deadline exceeded)"
+                    raise CloudSTTError(msg) from exc
                 elapsed_ms = (time.monotonic() - start) * 1000
 
                 logger.debug(

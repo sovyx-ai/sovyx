@@ -878,3 +878,91 @@ class TestCloudSTTM2WireUp:
             if s == VoiceStage.STT and k == StageEventKind.SUCCESS
         ]
         assert successes == []
+
+
+# ---------------------------------------------------------------------------
+# R1 wire-up — HystrixGuard around the network call
+# ---------------------------------------------------------------------------
+
+
+class TestCloudSTTR1WireUp:
+    """CloudSTT.transcribe must guard the network call with R1.
+
+    Triple-defense: circuit breaker (per api_base_url), bulkhead
+    (concurrent-call cap), watchdog (deadline). Guard-imposed
+    failures translate to CloudSTTError so callers' existing
+    except clauses keep working.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_circuit_open_translates_to_cloud_stt_error(
+        self,
+        config: CloudSTTConfig,
+        audio_1s: np.ndarray,
+    ) -> None:
+        """After failure_threshold consecutive API failures, the
+        circuit opens and subsequent calls fast-fail with
+        CloudSTTError (not the raw CircuitOpenError)."""
+        from sovyx.voice._hystrix_guard import CircuitState
+
+        # Mock httpx so the API call raises every time.
+        mock_client = AsyncMock()
+        mock_client.post.side_effect = RuntimeError("upstream broken")
+
+        with patch.object(_stt_mod, "httpx") as mock_httpx:
+            mock_httpx.AsyncClient.return_value = mock_client
+            mock_httpx.Timeout.return_value = MagicMock()
+            engine = CloudSTT(config)
+            await engine.initialize()
+
+            # Trip the breaker — default failure_threshold=3.
+            for _ in range(3):
+                with pytest.raises(CloudSTTError):
+                    await engine.transcribe(audio_1s)
+
+            # Circuit should now be OPEN.
+            assert engine._guard.state is CircuitState.OPEN
+
+            # Next call must fast-fail with the translated CloudSTTError.
+            with pytest.raises(CloudSTTError, match="circuit breaker open"):
+                await engine.transcribe(audio_1s)
+
+            await engine.close()
+
+    @pytest.mark.asyncio()
+    async def test_guard_keyed_by_api_base_url(
+        self,
+    ) -> None:
+        """Two CloudSTT instances with distinct api_base_urls get
+        distinct guard keys — an outage at one upstream doesn't
+        poison the other."""
+        from sovyx.voice._observability_pii import hash_pii
+
+        cfg_a = CloudSTTConfig(
+            api_key="sk-a",
+            api_base_url="https://api.openai.com/v1",
+        )
+        cfg_b = CloudSTTConfig(
+            api_key="sk-b",
+            api_base_url="https://gateway.example.com/v1",
+        )
+        engine_a = CloudSTT(cfg_a)
+        engine_b = CloudSTT(cfg_b)
+        assert engine_a._guard.key != engine_b._guard.key
+        # Keys must be the M1 hashed form (12 hex chars).
+        assert engine_a._guard.key == hash_pii(
+            cfg_a.api_base_url, salt="voice.stt.cloud"
+        )
+
+    @pytest.mark.asyncio()
+    async def test_watchdog_buffer_above_api_timeout(
+        self,
+    ) -> None:
+        """Guard watchdog must be slightly higher than api_timeout so
+        the httpx layer's own deadline fires first; the guard is the
+        secondary safety net for when httpx fails to honour its own
+        timeout."""
+        cfg = CloudSTTConfig(api_key="sk-x", api_timeout=10.0)
+        engine = CloudSTT(cfg)
+        # Watchdog == api_timeout + 5 s buffer.
+        assert engine._guard._config.watchdog_timeout_s == 15.0  # noqa: PLR2004
