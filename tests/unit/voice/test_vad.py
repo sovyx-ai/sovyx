@@ -1329,3 +1329,104 @@ class TestSchmittTriggerEndToEnd:
         evt3 = vad.process_frame(frame)
         # Still SPEECH — Schmitt's middle band absorbs the noise.
         assert evt3.state == VADState.SPEECH
+
+
+# ---------------------------------------------------------------------------
+# M2 wire-up — RED + USE telemetry on VAD
+# ---------------------------------------------------------------------------
+
+
+class TestVADM2WireUp:
+    """SileroVAD.process_frame must emit M2 stage events.
+
+    Mirrors STT/TTS/capture adoption — proves the M2 foundation is
+    wired in the VAD stage too. Corrupt-inference path emits DROP
+    with the corruption_kind as error_type so dashboards can
+    attribute the rate of ONNX corruption per kind without
+    parsing logs.
+    """
+
+    def test_clean_inference_records_success_event(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+
+        recorded: list[tuple[Any, Any, Any]] = []
+
+        from sovyx.voice import vad as vad_mod
+        from sovyx.voice._stage_metrics import StageEventKind, VoiceStage
+
+        def _capture(stage: Any, kind: Any, *, error_type: str | None = None) -> None:
+            recorded.append((stage, kind, error_type))
+
+        monkeypatch.setattr(vad_mod, "record_stage_event", _capture)
+
+        vad = _build_vad([0.5])
+        vad.process_frame(_speech_frame())
+
+        assert (VoiceStage.VAD, StageEventKind.SUCCESS, None) in recorded
+
+    def test_corrupt_inference_records_drop_with_kind(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+
+        recorded: list[tuple[Any, Any, Any]] = []
+
+        from sovyx.voice import vad as vad_mod
+        from sovyx.voice._stage_metrics import StageEventKind, VoiceStage
+
+        def _capture(stage: Any, kind: Any, *, error_type: str | None = None) -> None:
+            recorded.append((stage, kind, error_type))
+
+        monkeypatch.setattr(vad_mod, "record_stage_event", _capture)
+
+        # NaN probability → corruption kind "probability_nan".
+        cfg = VADConfig()
+        mock_session = _make_corruptable_session([(float("nan"), None)])
+        mock_ort = MagicMock()
+        mock_ort.SessionOptions.return_value = MagicMock()
+        mock_ort.GraphOptimizationLevel.ORT_ENABLE_ALL = 99
+        mock_ort.InferenceSession.return_value = mock_session
+        with patch.dict("sys.modules", {"onnxruntime": mock_ort}):
+            vad = SileroVAD(Path("/fake/model.onnx"), config=cfg)
+
+        vad.process_frame(_speech_frame())
+
+        assert (VoiceStage.VAD, StageEventKind.DROP, "probability_nan") in recorded
+        # SUCCESS must NOT have been recorded for this frame.
+        successes = [
+            (s, k, et)
+            for (s, k, et) in recorded
+            if s == VoiceStage.VAD and k == StageEventKind.SUCCESS
+        ]
+        assert successes == []
+
+    def test_bad_frame_shape_propagates_as_error(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Wrong window size → ValueError. Caught by
+        measure_stage_duration's BaseException handler and re-raised;
+        no SUCCESS or DROP event recorded (the stage never decided
+        an outcome — caller bug)."""
+
+        recorded: list[tuple[Any, Any, Any]] = []
+
+        from sovyx.voice import vad as vad_mod
+        from sovyx.voice._stage_metrics import VoiceStage
+
+        def _capture(stage: Any, kind: Any, *, error_type: str | None = None) -> None:
+            recorded.append((stage, kind, error_type))
+
+        monkeypatch.setattr(vad_mod, "record_stage_event", _capture)
+
+        vad = _build_vad([0.5])
+        bad = np.zeros(7, dtype=np.float32)  # not a valid window size
+        with pytest.raises(ValueError):  # noqa: PT011
+            vad.process_frame(bad)
+
+        # No event recorded — exception propagated before any
+        # record_stage_event call site.
+        vad_events = [(s, k, et) for (s, k, et) in recorded if s == VoiceStage.VAD]
+        assert vad_events == []

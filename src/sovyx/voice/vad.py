@@ -31,6 +31,12 @@ from enum import IntEnum, auto
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
+from sovyx.voice._stage_metrics import (
+    StageEventKind,
+    VoiceStage,
+    measure_stage_duration,
+    record_stage_event,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -484,107 +490,141 @@ class SileroVAD:
         """
         import numpy as np  # noqa: F811
 
-        expected = self._config.window_size
-        if audio_frame.shape != (expected,):
-            msg = f"Expected frame of {expected} samples, got shape {audio_frame.shape}"
-            raise ValueError(msg)
+        # Ring 6 RED + USE: every process_frame is one VAD-stage call.
+        # We open the measurement scope BEFORE the shape validation so
+        # that even a malformed frame (caller bug) is recorded as
+        # outcome=error via measure_stage_duration's BaseException
+        # handler. The corruption-recovery path inside the scope marks
+        # error explicitly via _stage_token; the success path emits
+        # SUCCESS just before the return.
+        with measure_stage_duration(VoiceStage.VAD) as _stage_token:
+            expected = self._config.window_size
+            if audio_frame.shape != (expected,):
+                msg = (
+                    f"Expected frame of {expected} samples, got shape {audio_frame.shape}"
+                )
+                raise ValueError(msg)
 
-        # Normalise to float32 [-1, 1]
-        if audio_frame.dtype == np.int16:
-            audio = audio_frame.astype(np.float32) / 32768.0
-        else:
-            audio = audio_frame.astype(np.float32)
+            # Normalise to float32 [-1, 1]
+            if audio_frame.dtype == np.int16:
+                audio = audio_frame.astype(np.float32) / 32768.0
+            else:
+                audio = audio_frame.astype(np.float32)
 
-        # ONNX inference
-        ort_inputs = {
-            "input": audio.reshape(1, -1),
-            "state": self._state,
-            "sr": self._sr,
-        }
-        output, raw_next_state = self._session.run(None, ort_inputs)[:2]
-        raw_probability = float(output[0][0])
+            # ONNX inference
+            ort_inputs = {
+                "input": audio.reshape(1, -1),
+                "state": self._state,
+                "sr": self._sr,
+            }
+            output, raw_next_state = self._session.run(None, ort_inputs)[:2]
+            raw_probability = float(output[0][0])
 
-        # ── V1 NaN/Inf guard (Ring 3 defense-in-depth) ───────────────
-        # ONNX runtime can return NaN/Inf when the LSTM state has been
-        # poisoned (e.g. by an underflow/overflow in a prior frame, a
-        # corrupted ``.onnx`` file, or a numerically pathological input
-        # like a single-sample DC step). Letting NaN reach the FSM is a
-        # silent-failure class: every comparison ``prob > threshold``
-        # returns False, so the FSM freezes in its current state forever
-        # and the user sees a "deaf microphone". The guard fail-closes:
-        # corrupt frame is treated as silence (probability=0.0) and the
-        # LSTM state is zeroed so the next frame starts from a known-
-        # clean baseline. The corruption itself is surfaced as a
-        # WARNING with a trace ID so dashboards can correlate; repeated
-        # corruption escalates to a single ERROR (``unrecoverable``)
-        # for upstream circuit-breaker consumption.
-        self._frames_processed += 1
-        is_corrupt, corruption_kind = _validate_inference_outputs(
-            raw_probability,
-            raw_next_state,
-        )
-        if is_corrupt:
-            self._on_inference_corruption(
-                corruption_kind=corruption_kind,
-                raw_probability=raw_probability,
+            # ── V1 NaN/Inf guard (Ring 3 defense-in-depth) ───────
+            # ONNX runtime can return NaN/Inf when the LSTM state has
+            # been poisoned (e.g. by an underflow/overflow in a prior
+            # frame, a corrupted ``.onnx`` file, or a numerically
+            # pathological input like a single-sample DC step).
+            # Letting NaN reach the FSM is a silent-failure class:
+            # every comparison ``prob > threshold`` returns False, so
+            # the FSM freezes in its current state forever and the
+            # user sees a "deaf microphone". The guard fail-closes:
+            # corrupt frame is treated as silence (probability=0.0)
+            # and the LSTM state is zeroed so the next frame starts
+            # from a known-clean baseline. The corruption itself is
+            # surfaced as a WARNING with a trace ID so dashboards can
+            # correlate; repeated corruption escalates to a single
+            # ERROR (``unrecoverable``) for upstream circuit-breaker
+            # consumption.
+            self._frames_processed += 1
+            is_corrupt, corruption_kind = _validate_inference_outputs(
+                raw_probability,
+                raw_next_state,
             )
-            probability = 0.0  # fail-closed: silence is the safe default
-        else:
-            self._state = raw_next_state
-            probability = raw_probability
-            self._on_inference_clean()
+            if is_corrupt:
+                self._on_inference_corruption(
+                    corruption_kind=corruption_kind,
+                    raw_probability=raw_probability,
+                )
+                probability = 0.0  # fail-closed: silence is the safe default
+                # M2: corruption is a soft failure — the frame still
+                # produces a (degraded) output but the inference was
+                # broken. DROP with the corruption kind as
+                # error_type so dashboards can attribute the rate of
+                # ONNX-output corruption per (probability_nan |
+                # probability_out_of_range | lstm_state_*) without
+                # parsing logs.
+                _stage_token.mark_error()
+                record_stage_event(
+                    VoiceStage.VAD,
+                    StageEventKind.DROP,
+                    error_type=corruption_kind,
+                )
+            else:
+                self._state = raw_next_state
+                probability = raw_probability
+                self._on_inference_clean()
 
-        # Rolling window — append before the FSM tick so the enrichment
-        # on a transition reflects the probabilities that *led to* it.
-        rms = float(np.sqrt(np.mean(audio * audio))) if audio.size else 0.0
-        self._prob_history.append(probability)
-        self._rms_history.append(rms)
+            # Rolling window — append before the FSM tick so the
+            # enrichment on a transition reflects the probabilities
+            # that *led to* it.
+            rms = float(np.sqrt(np.mean(audio * audio))) if audio.size else 0.0
+            self._prob_history.append(probability)
+            self._rms_history.append(rms)
 
-        # Per-frame telemetry (sampled by SamplingProcessor at the rate
-        # set in ObservabilitySamplingConfig.vad_frame_rate). Operators
-        # can disable sampling for live-debug by setting the rate to 0.
-        logger.info(
-            "voice.vad.frame",
-            **{
-                "voice.probability": round(probability, 4),
-                "voice.rms": round(rms, 4),
-                "voice.state": self._vad_state.name,
-                "voice.onset_threshold": self._config.onset_threshold,
-                "voice.offset_threshold": self._config.offset_threshold,
-            },
-        )
-
-        # FSM transition — log every state change so operators can see
-        # exactly when/why the orchestrator moved between silence and speech
-        # without guessing from the absence of downstream events.
-        prev_state = self._vad_state
-        is_speech = self._update_state(probability)
-        if self._vad_state != prev_state:
+            # Per-frame telemetry (sampled by SamplingProcessor at the
+            # rate set in ObservabilitySamplingConfig.vad_frame_rate).
+            # Operators can disable sampling for live-debug by setting
+            # the rate to 0.
             logger.info(
-                "vad_state_transition",
-                from_state=prev_state.name,
-                to_state=self._vad_state.name,
-                probability=round(probability, 3),
-            )
-            logger.info(
-                "voice.vad.state_changed",
+                "voice.vad.frame",
                 **{
-                    "voice.from_state": prev_state.name,
-                    "voice.to_state": self._vad_state.name,
                     "voice.probability": round(probability, 4),
                     "voice.rms": round(rms, 4),
+                    "voice.state": self._vad_state.name,
                     "voice.onset_threshold": self._config.onset_threshold,
                     "voice.offset_threshold": self._config.offset_threshold,
-                    "voice.prob_window": [round(p, 4) for p in self._prob_history],
-                    "voice.rms_window": [round(r, 4) for r in self._rms_history],
                 },
             )
 
-        return VADEvent(
-            is_speech=is_speech,
-            probability=probability,
-            state=self._vad_state,
-        )
+            # FSM transition — log every state change so operators
+            # can see exactly when/why the orchestrator moved between
+            # silence and speech without guessing from the absence
+            # of downstream events.
+            prev_state = self._vad_state
+            is_speech = self._update_state(probability)
+            if self._vad_state != prev_state:
+                logger.info(
+                    "vad_state_transition",
+                    from_state=prev_state.name,
+                    to_state=self._vad_state.name,
+                    probability=round(probability, 3),
+                )
+                logger.info(
+                    "voice.vad.state_changed",
+                    **{
+                        "voice.from_state": prev_state.name,
+                        "voice.to_state": self._vad_state.name,
+                        "voice.probability": round(probability, 4),
+                        "voice.rms": round(rms, 4),
+                        "voice.onset_threshold": self._config.onset_threshold,
+                        "voice.offset_threshold": self._config.offset_threshold,
+                        "voice.prob_window": [round(p, 4) for p in self._prob_history],
+                        "voice.rms_window": [round(r, 4) for r in self._rms_history],
+                    },
+                )
+
+            # M2: emit SUCCESS only on the clean inference path. The
+            # corruption branch above already emitted DROP +
+            # mark_error before reaching here.
+            if not is_corrupt:
+                record_stage_event(VoiceStage.VAD, StageEventKind.SUCCESS)
+
+            return VADEvent(
+                is_speech=is_speech,
+                probability=probability,
+                state=self._vad_state,
+            )
 
     def reset(self) -> None:
         """Reset LSTM and FSM state (call between conversations).
