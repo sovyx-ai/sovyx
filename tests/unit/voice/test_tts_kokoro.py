@@ -1097,3 +1097,84 @@ class TestKokoroM2WireUp:
         await kokoro.synthesize("hello world")
 
         assert (VoiceStage.TTS, StageEventKind.DROP, "zero_energy") in recorded
+
+
+# ---------------------------------------------------------------------------
+# TS3 chaos wire-up — TTS_ZERO_ENERGY injection
+# ---------------------------------------------------------------------------
+
+
+class TestKokoroChaosWireUp:
+    """KokoroTTS.synthesize_with must honour the chaos injector.
+
+    Mirrors the STT_TIMEOUT (commit 448d8d4) and VAD_CORRUPTION
+    (commit f90c9c2) chaos wire-ups. With chaos enabled, the
+    synthesised audio is overwritten with zeros — fires the same
+    T2 zero-energy guard + M2 DROP event as a real silent
+    synthesis output (broken voice file, ONNX session degeneration).
+    """
+
+    @pytest.mark.asyncio()
+    async def test_chaos_disabled_no_injection(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from sovyx.voice._chaos import _ENABLED_ENV_VAR, _RATE_ENV_VAR_PREFIX
+
+        monkeypatch.delenv(_ENABLED_ENV_VAR, raising=False)
+        monkeypatch.setenv(
+            f"{_RATE_ENV_VAR_PREFIX}TTS_ZERO_ENERGY_PCT", "100"
+        )
+
+        kokoro, _ = _build_kokoro(tmp_path)
+        chunk = await kokoro.synthesize("hello world")
+        assert chunk.synthesis_health is None  # healthy
+
+    @pytest.mark.asyncio()
+    async def test_chaos_at_100_pct_zero_energy_synthesis(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from sovyx.voice._chaos import _ENABLED_ENV_VAR, _RATE_ENV_VAR_PREFIX
+
+        monkeypatch.setenv(_ENABLED_ENV_VAR, "true")
+        monkeypatch.setenv(
+            f"{_RATE_ENV_VAR_PREFIX}TTS_ZERO_ENERGY_PCT", "100"
+        )
+
+        kokoro, _ = _build_kokoro(tmp_path)
+        chunk = await kokoro.synthesize("hello world")
+        # Chaos zeroed the audio; T2 guard flagged it.
+        assert chunk.synthesis_health == "zero_energy"
+
+    @pytest.mark.asyncio()
+    async def test_chaos_injects_via_same_t2_path(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Chaos injection fires the same M2 DROP event
+        (error_type=zero_energy) as a real silent synthesis."""
+        from typing import Any
+
+        from sovyx.voice import tts_kokoro as kokoro_mod
+        from sovyx.voice._chaos import _ENABLED_ENV_VAR, _RATE_ENV_VAR_PREFIX
+        from sovyx.voice._stage_metrics import StageEventKind, VoiceStage
+
+        recorded: list[tuple[Any, Any, Any]] = []
+
+        def _capture(stage: Any, kind: Any, *, error_type: str | None = None) -> None:
+            recorded.append((stage, kind, error_type))
+
+        monkeypatch.setattr(kokoro_mod, "record_stage_event", _capture)
+        monkeypatch.setenv(_ENABLED_ENV_VAR, "true")
+        monkeypatch.setenv(
+            f"{_RATE_ENV_VAR_PREFIX}TTS_ZERO_ENERGY_PCT", "100"
+        )
+
+        kokoro, _ = _build_kokoro(tmp_path)
+        await kokoro.synthesize("hello world")
+
+        assert (VoiceStage.TTS, StageEventKind.DROP, "zero_energy") in recorded

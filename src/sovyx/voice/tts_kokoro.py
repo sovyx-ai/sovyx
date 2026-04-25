@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from sovyx.observability.logging import get_logger
+from sovyx.voice._chaos import ChaosInjector, ChaosSite
 from sovyx.voice._stage_metrics import (
     StageEventKind,
     VoiceStage,
@@ -206,6 +207,13 @@ class KokoroTTS(TTSEngine):
         self._kokoro: Any | None = None
         self._initialized = False
         self._chunk_counter = 0
+        # TS3 chaos injector — opt-in zero-energy injection at the
+        # TTS_ZERO_ENERGY site. Disabled by default; chaos test
+        # matrix sets the env vars to validate that the T2 energy-
+        # validation guard fires + M2 DROP event lands with
+        # error_type=zero_energy + the orchestrator triggers the
+        # Kokoro→Piper fallback.
+        self._chaos = ChaosInjector(site_id=ChaosSite.TTS_ZERO_ENERGY.value)
 
     # -- Properties --------------------------------------------------------
 
@@ -405,6 +413,19 @@ class KokoroTTS(TTSEngine):
                 -32768,
                 32767,
             ).astype(np.int16)
+
+            # TS3 chaos: opt-in zero-energy injection at the
+            # TTS_ZERO_ENERGY site. When SOVYX_CHAOS__ENABLED=true
+            # AND SOVYX_CHAOS__INJECT_TTS_ZERO_ENERGY_PCT > 0, the
+            # synthesised audio is overwritten with zeros — the T2
+            # RMS-floor check below will detect the silence, mark
+            # synthesis_health=zero_energy, and trigger the
+            # orchestrator's Piper fallback. Validates the T2 +
+            # M2-DROP + fallback path under realistic operating
+            # conditions, not just the unit-test mock that returns
+            # zeros deterministically.
+            if self._chaos.should_inject():
+                audio_int16 = np.zeros_like(audio_int16)
 
             duration_ms = len(audio_int16) / sample_rate * 1000
 
