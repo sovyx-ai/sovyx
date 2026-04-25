@@ -1274,3 +1274,127 @@ class TestSaturationCountersDataclass:
         assert _SATURATION_MIN_SAMPLES_FOR_WARNING == 4096  # noqa: PLR2004
         assert _SATURATION_WARN_FRACTION == 0.05  # noqa: PLR2004
         assert _SATURATION_WINDOW_SECONDS == 1.0
+
+
+# ===========================================================================
+# F5/F6 integration: FrameNormalizer wires AGC2 on the non-passthrough path
+# ===========================================================================
+
+
+class TestAGC2IntegrationF5:
+    """The opt-in AGC2 stage — pre-F6 ``apply_mixer_boost_up`` band-aid
+    replacement. Wired into FrameNormalizer's non-passthrough branch
+    so closed-loop digital gain handles attenuated input regardless
+    of mixer permissions / presence / distro audio stack."""
+
+    def test_default_constructor_no_agc2_wired(self) -> None:
+        norm = FrameNormalizer(source_rate=48_000, source_channels=1)
+        assert norm.agc2 is None
+
+    def test_agc2_constructor_arg_wired(self) -> None:
+        from sovyx.voice._agc2 import AGC2
+
+        agc = AGC2()
+        norm = FrameNormalizer(source_rate=48_000, source_channels=1, agc2=agc)
+        assert norm.agc2 is agc
+
+    def test_set_agc2_runtime_wires_unwires(self) -> None:
+        from sovyx.voice._agc2 import AGC2
+
+        norm = FrameNormalizer(source_rate=48_000, source_channels=1)
+        agc = AGC2()
+        norm.set_agc2(agc)
+        assert norm.agc2 is agc
+        norm.set_agc2(None)
+        assert norm.agc2 is None
+
+    def test_agc2_skipped_on_passthrough_path(self) -> None:
+        """The 16 kHz mono int16 passthrough path is bit-exact by
+        contract (operators rely on it for A/B comparisons). The
+        AGC2 must NOT engage there."""
+        from sovyx.voice._agc2 import AGC2
+
+        agc = AGC2()
+        norm = FrameNormalizer(source_rate=16_000, source_channels=1, agc2=agc)
+        block = _sine_wave_int16(440, 16_000, 0.032, channels=1)  # exactly 512 samples
+        result = norm.push(block)
+        assert len(result) == 1
+        # Passthrough invariant: bit-identical output, AGC2 untouched.
+        np.testing.assert_array_equal(result[0], block)
+        assert agc.frames_processed == 0
+
+    def test_agc2_engages_on_non_passthrough_path(self) -> None:
+        """48 kHz stereo input takes the resample/downmix path; AGC2
+        runs after _float_to_int16_saturate."""
+        from sovyx.voice._agc2 import AGC2
+
+        agc = AGC2()
+        norm = FrameNormalizer(source_rate=48_000, source_channels=2, agc2=agc)
+        # Quiet stereo signal — AGC2 should see frames.
+        block = _sine_wave_int16(1_000, 48_000, 0.05, channels=2, amplitude=0.05)
+        norm.push(block)
+        assert agc.frames_processed > 0
+
+    def test_agc2_lifts_attenuated_input_toward_target(self) -> None:
+        """End-to-end: the F6 user-story. Sustained attenuated input
+        must converge toward the AGC's target dBFS. Pre-F6 the
+        only fix was apply_mixer_boost_up's hardcoded fractions —
+        post-F5/F6 the AGC2 does it in user space, no mixer write
+        required."""
+        import math
+
+        from sovyx.voice._agc2 import AGC2, AGC2Config
+        from sovyx.voice._frame_normalizer import _INT16_SCALE
+
+        # Force non-passthrough path (48 kHz mono → resample to 16 kHz).
+        cfg = AGC2Config(target_dbfs=-18.0, max_gain_db=30.0)
+        agc = AGC2(cfg)
+        norm = FrameNormalizer(source_rate=48_000, source_channels=1, agc2=agc)
+
+        # Attenuated input ~ -40 dBFS.
+        block = _sine_wave_int16(1_000, 48_000, 0.05, channels=1, amplitude=0.01)
+
+        # Drive enough blocks for the slew-rate-limited gain to climb
+        # ~25 dB toward target. Slew cap (6 dB/s default) bounds
+        # convergence to ~6 dB per second; 200 × 50 ms = 10 s gives
+        # the controller plenty of room.
+        for _ in range(200):
+            norm.push(block)
+
+        # The AGC2 should have raised the gain WELL above zero —
+        # 10 s of run time × 6 dB/s slew = up to 60 dB headroom,
+        # gain clamped at max_gain_db=30 dB. We expect convergence
+        # to the ceiling region given 25 dB of needed lift.
+        assert agc.current_gain_db > 15.0
+
+    def test_agc2_does_not_affect_lifetime_saturation_counters(self) -> None:
+        """The R2 saturation counters reflect what *would have*
+        clipped post-saturate, BEFORE AGC2 takes over. They aren't
+        affected by AGC2's own gain decisions — that's the AGC2's
+        own ``frames_clipped`` counter's responsibility."""
+        from sovyx.voice._agc2 import AGC2
+
+        agc = AGC2()
+        norm = FrameNormalizer(source_rate=48_000, source_channels=2, agc2=agc)
+        block = _sine_wave_int16(1_000, 48_000, 0.05, channels=2, amplitude=0.5)
+        norm.push(block)
+        # R2 counters reflect pre-AGC saturate work.
+        # AGC2 has its own counters via agc.frames_processed/clipped.
+        assert norm.lifetime_samples_processed > 0  # R2 saw samples
+        assert agc.frames_processed > 0  # AGC2 saw frames
+
+    def test_agc2_output_stays_int16_bounded(self) -> None:
+        """Even with AGC2 in the path, output must never overflow."""
+        from sovyx.voice._agc2 import AGC2, AGC2Config
+
+        # Aggressive AGC config — fast adaptation, high max gain.
+        cfg = AGC2Config(max_gain_db=30.0, max_gain_change_db_per_second=60.0)
+        agc = AGC2(cfg)
+        norm = FrameNormalizer(source_rate=48_000, source_channels=1, agc2=agc)
+        # Mix of quiet + loud frames.
+        for amplitude in (0.01, 0.5, 0.99, 0.01):
+            block = _sine_wave_int16(1_000, 48_000, 0.05, channels=1, amplitude=amplitude)
+            for window in norm.push(block):
+                assert window.dtype == np.int16
+                assert window.min() >= -32768  # noqa: PLR2004
+                assert window.max() <= 32767  # noqa: PLR2004

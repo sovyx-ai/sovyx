@@ -78,6 +78,8 @@ if TYPE_CHECKING:
     import numpy as np
     import numpy.typing as npt
 
+    from sovyx.voice._agc2 import AGC2
+
 logger = get_logger(__name__)
 
 
@@ -203,6 +205,15 @@ class FrameNormalizer:
         ducking_ramp_ms: Duration of the linear ramp used when
             :meth:`set_ducking_gain_db` changes the target gain. Default
             10 ms, which is well under the ADR's 50 ms release bound.
+        agc2: Optional :class:`~sovyx.voice._agc2.AGC2` controller (F5).
+            When provided, every produced int16 frame is passed through
+            ``agc2.process`` before being rewindowed — closed-loop digital
+            gain replaces the band-aid ``apply_mixer_boost_up`` mixer-
+            mutation path. Wired opt-in (``None`` default) so existing
+            integrations behave identically; the future F6 commit flips
+            the factory default after pilot validation. AGC2 only runs
+            on the non-passthrough path (where there's actual DSP work
+            anyway); the passthrough fast-path stays bit-exact.
 
     Raises:
         ValueError: If ``source_rate`` ≤ 0, ``source_channels`` < 1,
@@ -217,6 +228,7 @@ class FrameNormalizer:
         *,
         source_format: str = "int16",
         ducking_ramp_ms: float = _DEFAULT_DUCKING_RAMP_MS,
+        agc2: AGC2 | None = None,
     ) -> None:
         if source_rate <= 0:
             msg = f"source_rate must be positive, got {source_rate}"
@@ -276,6 +288,12 @@ class FrameNormalizer:
         # Injectable clock for deterministic tests. Shape mirrors
         # ``time.monotonic``.
         self._monotonic: Callable[[], float] = time.monotonic
+
+        # F5/F6 AGC2 — opt-in closed-loop digital gain controller.
+        # Runs after _float_to_int16_saturate on the non-passthrough
+        # path (where there's already DSP work). When None the
+        # output is bit-identical to the pre-AGC2 behaviour.
+        self._agc2: AGC2 | None = agc2
 
         logger.debug(
             "frame_normalizer_created",
@@ -429,6 +447,14 @@ class FrameNormalizer:
             ducked = self._apply_ducking(resampled)
             as_int16, saturation = _float_to_int16_saturate(ducked)
             self._record_saturation(saturation)
+            # F5/F6: optional AGC2 post-process. Only on the
+            # non-passthrough path because the passthrough path is
+            # bit-exact by contract (operators rely on it for A/B
+            # comparisons + golden-recording playback). When the
+            # cascade negotiates 16 kHz mono int16, the user is
+            # already operating at the target — AGC isn't needed.
+            if self._agc2 is not None:
+                as_int16 = self._agc2.process(as_int16)
 
         self._output_buf = np.concatenate([self._output_buf, as_int16])
 
@@ -438,6 +464,23 @@ class FrameNormalizer:
             self._output_buf = self._output_buf[_TARGET_WINDOW:]
             windows.append(window)
         return windows
+
+    @property
+    def agc2(self) -> AGC2 | None:
+        """Currently-wired AGC2 controller, or ``None`` if disabled."""
+        return self._agc2
+
+    def set_agc2(self, agc2: AGC2 | None) -> None:
+        """Wire (or unwire) the AGC2 post-processor at runtime.
+
+        Enables operators / dashboards to enable AGC2 on a live
+        capture stream without rebuilding the FrameNormalizer (which
+        would lose the ducking ramp + output buffer). Pass ``None``
+        to disable, or a fresh :class:`~sovyx.voice._agc2.AGC2`
+        instance to enable. Replacing one AGC2 with another is
+        permitted (keeps the new instance's adaptation state).
+        """
+        self._agc2 = agc2
 
     def reset(self) -> None:
         """Drop any buffered samples and collapse ducking ramp to target.
