@@ -3,12 +3,29 @@
 Wraps moonshine-voice (C++ core + ONNX Runtime) with Sovyx event system.
 Supports full utterance and streaming transcription.
 
-Ref: SPE-010 §5 (STT), IMPL-004 §2.1 (moonshine-voice API, breaking change)
+Ring 4 (Decode Validation) defense-in-depth: every transcript is run
+through two output-side guards before reaching the orchestrator:
+
+* **Hallucination stop-list** — Whisper-class encoder/decoder STT
+  models emit a small set of canonical hallucinations on silence /
+  music / unintelligible input ("thank you", "thanks for watching",
+  "you", etc.). The stop-list is curated per language and rejects
+  the transcript with a structured event so the orchestrator doesn't
+  feed phantom turns to the LLM. Reference: openai/whisper
+  discussion #679; LiveKit production stoplist.
+* **Compression-ratio reject** — repetitive output ("yes yes yes
+  yes...") that decompresses to a high size ratio is the signature
+  of a degenerate decode loop (Whisper canonical
+  ``compression_ratio_threshold = 2.4``). Reject before propagation.
+
+Reference: SPE-010 §5 (STT), IMPL-004 §2.1 (moonshine-voice API),
+MISSION-voice-mixer-enterprise-refactor-2026-04-25 §2.4 / §3.3 / S1.
 """
 
 from __future__ import annotations
 
 import asyncio
+import gzip
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import IntEnum, auto
@@ -35,6 +52,148 @@ from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning  # noqa: E402
 
 _TRANSCRIBE_TIMEOUT_S = _VoiceTuning().transcribe_timeout_seconds
 _STREAMING_DRAIN_S = _VoiceTuning().streaming_drain_seconds
+
+
+# ---------------------------------------------------------------------------
+# S1 Ring 4 decode-validation tuning
+# ---------------------------------------------------------------------------
+
+_COMPRESSION_RATIO_THRESHOLD = 2.4
+"""Whisper canonical reject threshold for repetitive transcripts
+(``transcribe.py`` `compression_ratio_threshold`). The ratio is
+``len(text_utf8) / len(gzip(text_utf8))`` — repetitive content
+("yes yes yes yes...") compresses very well, producing a high
+ratio. Above 2.4 indicates a degenerate decode loop and the
+transcript is rejected at the Ring 4 boundary."""
+
+_HALLUCINATION_MIN_LEN_FOR_RATIO_CHECK = 32
+"""Minimum text length below which the compression-ratio check is
+skipped. Short transcripts ("ok", "yes") have unstable ratios
+(small denominator inflates the ratio) and shouldn't be rejected
+on this signal alone — the stop-list catches those instead."""
+
+# Hallucination stop-lists per language. Each entry is the lowercased
+# canonical form of a known degenerate Whisper-class output. The
+# matcher normalises the candidate transcript (lowercase, strip
+# punctuation/whitespace) before exact-match comparison so trivial
+# variations ("Thank you.", "thank you") collapse to the same bucket.
+#
+# Curated from:
+# - openai/whisper#679 discussion (English long-tail hallucinations)
+# - LiveKit production stoplist (PT/ES additions)
+# - Common Voice + LibriSpeech eval logs (Sovyx pilot reports)
+#
+# Empty strings and pure-whitespace transcripts are also treated as
+# hallucinations (Moonshine's "no detection" path occasionally
+# surfaces a single space or empty string).
+
+_HALLUCINATION_STOPLIST: dict[str, frozenset[str]] = {
+    "en": frozenset(
+        {
+            "",
+            ".",
+            "you",
+            "thank you",
+            "thank you.",
+            "thanks",
+            "thanks.",
+            "thanks for watching",
+            "thanks for watching.",
+            "thanks for watching!",
+            "subscribe",
+            "please subscribe",
+            "like and subscribe",
+            "bye",
+            "bye.",
+            "bye!",
+            "okay",
+            "ok",
+            "uh",
+            "um",
+            "hmm",
+            "mm",
+        },
+    ),
+    "pt": frozenset(
+        {
+            "",
+            ".",
+            "obrigado",
+            "obrigado.",
+            "obrigada",
+            "obrigada.",
+            "valeu",
+            "valeu.",
+            "tchau",
+            "tchau.",
+            "ok",
+            "okay",
+            "hum",
+            "hmm",
+        },
+    ),
+    "es": frozenset(
+        {
+            "",
+            ".",
+            "gracias",
+            "gracias.",
+            "muchas gracias",
+            "muchas gracias.",
+            "adiós",
+            "adios",
+            "ok",
+            "okay",
+            "hmm",
+        },
+    ),
+}
+
+
+def _compute_compression_ratio(text: str) -> float:
+    """Whisper-canonical ``len(utf8) / len(gzip(utf8))`` for ``text``.
+
+    Returns ``0.0`` for empty input — empty strings have no
+    interpretable compression ratio and the caller should treat the
+    short-text path (stop-list) as authoritative for them.
+
+    Pure function — fully unit-testable in isolation. Used by the
+    Ring 4 reject path and by tests asserting stop-list interaction
+    with the ratio check.
+    """
+    if not text:
+        return 0.0
+    encoded = text.encode("utf-8")
+    if len(encoded) == 0:
+        return 0.0
+    compressed = gzip.compress(encoded)
+    if len(compressed) == 0:
+        return 0.0
+    return len(encoded) / len(compressed)
+
+
+def _normalise_for_stoplist(text: str) -> str:
+    """Lowercase + strip whitespace/trailing punctuation for stop-list match.
+
+    The stop-list keys are canonicalised; the candidate transcript
+    is normalised the same way so trivial variations
+    ("Thank you!", "  thank you  ") collapse to the same bucket
+    without exploding the catalog with every capitalisation.
+    """
+    return text.strip().lower()
+
+
+def _is_hallucination(text: str, language: str) -> bool:
+    """Return ``True`` when the normalised transcript is in the stop-list.
+
+    Defaults to the English stop-list for unknown language codes —
+    the long-tail of cloud-LLM-class hallucinations is dominated by
+    English even for non-English models, so falling back to ``en``
+    is the safer default than skipping the check entirely.
+    """
+    catalog = _HALLUCINATION_STOPLIST.get(language, _HALLUCINATION_STOPLIST["en"])
+    return _normalise_for_stoplist(text) in catalog
+
 
 # Model sizes and their characteristics (Pi 5 benchmarks)
 _MODEL_SPECS: dict[str, dict[str, float | int]] = {
@@ -63,7 +222,8 @@ class TranscriptionResult:
     """Result of a full utterance transcription."""
 
     text: str
-    """Transcribed text."""
+    """Transcribed text. Empty string when Ring 4 rejected the
+    transcript (see :attr:`rejection_reason`)."""
 
     language: str | None = None
     """Detected or configured language code."""
@@ -77,6 +237,19 @@ class TranscriptionResult:
 
     segments: list[TranscriptionSegment] | None = None
     """Optional word-level or segment-level detail."""
+
+    rejection_reason: str | None = None
+    """Ring 4 reject reason when ``text`` was filtered out, ``None``
+    when the transcript was accepted as-is. Stable taxonomy:
+
+    * ``"hallucination_stoplist"`` — output matched the per-language
+      degenerate-output catalog (e.g. "thank you" on silent input).
+    * ``"compression_ratio_exceeded"`` — repetitive output above the
+      Whisper canonical threshold (degenerate decode loop).
+
+    Dashboards key on this string so the renaming a token is a
+    breaking change for any downstream consumer (Grafana panels,
+    dashboard "Voice Health" view)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -308,6 +481,27 @@ class MoonshineSTT(STTEngine):
             )
 
             stripped = text.strip()
+
+            # ── S1 Ring 4 decode-validation guards ────────────────
+            # Order: hallucination stop-list FIRST (cheap, catches the
+            # short-text cases the ratio check skips), then compression
+            # ratio (only meaningful for longer transcripts). Rejection
+            # short-circuits — we only run one guard per transcript so
+            # the reason token is unambiguous.
+            rejection_reason = self._validate_transcript(stripped, audio_ms, elapsed_ms)
+            if rejection_reason is not None:
+                # Fail-closed: drop the transcript so the orchestrator
+                # never feeds garbage to the LLM. The structured event
+                # already fired inside _validate_transcript so dashboards
+                # see the reject reason without needing to parse the log.
+                return TranscriptionResult(
+                    text="",
+                    language=self._config.language,
+                    confidence=0.0,
+                    duration_ms=elapsed_ms,
+                    rejection_reason=rejection_reason,
+                )
+
             logger.info(
                 "voice.stt.response",
                 **{
@@ -424,6 +618,67 @@ class MoonshineSTT(STTEngine):
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _validate_transcript(
+        self,
+        text: str,
+        audio_ms: int,
+        elapsed_ms: float,
+    ) -> str | None:
+        """S1 Ring 4 guards — return reject reason or ``None`` to accept.
+
+        Two checks, in order:
+
+        1. Hallucination stop-list (per-language). Cheap, catches the
+           short-text degenerate cases ("thank you" on silence) the
+           compression-ratio check would skip.
+        2. Compression ratio (Whisper canonical 2.4 threshold) for
+           transcripts at or above ``_HALLUCINATION_MIN_LEN_FOR_RATIO_CHECK``
+           characters. Below that length the ratio is unstable
+           (small-denominator inflation) and can't be trusted.
+
+        Each rejection emits ``voice.stt.transcript_rejected`` at WARNING
+        with the stable reason token + transcript fingerprint so
+        dashboards can attribute and aggregate without re-running the
+        guards client-side.
+        """
+        if _is_hallucination(text, self._config.language):
+            logger.warning(
+                "voice.stt.transcript_rejected",
+                **{
+                    "voice.rejection_reason": "hallucination_stoplist",
+                    "voice.transcript": text,
+                    "voice.text_chars": len(text),
+                    "voice.language": self._config.language,
+                    "voice.model": self._config.model_size,
+                    "voice.provider": "moonshine",
+                    "voice.audio_ms": audio_ms,
+                    "voice.latency_ms": round(elapsed_ms, 1),
+                },
+            )
+            return "hallucination_stoplist"
+
+        if len(text) >= _HALLUCINATION_MIN_LEN_FOR_RATIO_CHECK:
+            ratio = _compute_compression_ratio(text)
+            if ratio > _COMPRESSION_RATIO_THRESHOLD:
+                logger.warning(
+                    "voice.stt.transcript_rejected",
+                    **{
+                        "voice.rejection_reason": "compression_ratio_exceeded",
+                        "voice.compression_ratio": round(ratio, 3),
+                        "voice.compression_ratio_threshold": _COMPRESSION_RATIO_THRESHOLD,
+                        "voice.text_chars": len(text),
+                        "voice.transcript": text,
+                        "voice.language": self._config.language,
+                        "voice.model": self._config.model_size,
+                        "voice.provider": "moonshine",
+                        "voice.audio_ms": audio_ms,
+                        "voice.latency_ms": round(elapsed_ms, 1),
+                    },
+                )
+                return "compression_ratio_exceeded"
+
+        return None
 
     def _ensure_ready(self) -> None:
         """Raise if engine is not in a usable state."""

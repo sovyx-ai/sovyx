@@ -6,7 +6,7 @@ flow, streaming, error handling, and config validation without real models.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
 if TYPE_CHECKING:
@@ -18,7 +18,10 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from sovyx.voice.stt import (
+    _COMPRESSION_RATIO_THRESHOLD,
     _DEFAULT_SAMPLE_RATE,
+    _HALLUCINATION_MIN_LEN_FOR_RATIO_CHECK,
+    _HALLUCINATION_STOPLIST,
     _MODEL_SPECS,
     _STREAMING_DRAIN_S,
     _TRANSCRIBE_TIMEOUT_S,
@@ -28,6 +31,9 @@ from sovyx.voice.stt import (
     STTState,
     TranscriptionResult,
     TranscriptionSegment,
+    _compute_compression_ratio,
+    _is_hallucination,
+    _normalise_for_stoplist,
 )
 
 # ---------------------------------------------------------------------------
@@ -723,3 +729,215 @@ class TestEdgeCases:
     def test_constants(self) -> None:
         assert _TRANSCRIBE_TIMEOUT_S == 10.0
         assert _STREAMING_DRAIN_S == 0.5
+
+
+# ===========================================================================
+# S1: Ring 4 decode-validation guards (hallucination + compression-ratio)
+# ===========================================================================
+#
+# Pre-S1 every Moonshine output reached the orchestrator unfiltered.
+# Whisper-class STTs emit a small set of canonical hallucinations on
+# silence/music/unintelligible input ("thank you", "thanks for
+# watching"...) — those would cause the orchestrator to fire phantom
+# turns to the LLM, polluting context. S1 adds two output-side guards
+# at the Ring 4 boundary: a per-language stop-list and the
+# Whisper-canonical compression-ratio reject (2.4).
+#
+# Reference: MISSION-voice-mixer-enterprise-refactor-2026-04-25 §3.3, S1.
+
+_STT_LOGGER = "sovyx.voice.stt"
+
+
+def _stt_events_of(
+    caplog: pytest.LogCaptureFixture,
+    event_name: str,
+) -> list[dict[str, Any]]:
+    return [
+        r.msg
+        for r in caplog.records
+        if r.name == _STT_LOGGER and isinstance(r.msg, dict) and r.msg.get("event") == event_name
+    ]
+
+
+class TestComputeCompressionRatioPure:
+    """Pure-function compression-ratio diagnostics."""
+
+    def test_empty_returns_zero(self) -> None:
+        assert _compute_compression_ratio("") == 0.0
+
+    def test_short_text_returns_low_ratio(self) -> None:
+        # Very short text doesn't compress well — ratio < 1.0 is normal.
+        ratio = _compute_compression_ratio("hi")
+        assert ratio < 1.0
+
+    def test_repetitive_text_high_ratio(self) -> None:
+        """The signature failure mode: highly-repetitive output."""
+        ratio = _compute_compression_ratio("yes " * 200)
+        assert ratio > _COMPRESSION_RATIO_THRESHOLD
+
+    def test_natural_text_below_threshold(self) -> None:
+        """A natural-language sentence stays well below the threshold."""
+        ratio = _compute_compression_ratio(
+            "The quick brown fox jumps over the lazy dog near the riverbank."
+        )
+        assert ratio < _COMPRESSION_RATIO_THRESHOLD
+
+
+class TestNormaliseForStoplist:
+    def test_lowercases(self) -> None:
+        assert _normalise_for_stoplist("Thank You") == "thank you"
+
+    def test_strips_whitespace(self) -> None:
+        assert _normalise_for_stoplist("  thank you  ") == "thank you"
+
+
+class TestIsHallucination:
+    """Per-language stop-list contract."""
+
+    def test_english_thank_you_is_hallucination(self) -> None:
+        assert _is_hallucination("thank you", "en") is True
+        assert _is_hallucination("Thank You.", "en") is True
+        assert _is_hallucination("  THANK YOU  ", "en") is True
+
+    def test_english_real_speech_is_not_hallucination(self) -> None:
+        assert _is_hallucination("hello world how are you today", "en") is False
+
+    def test_portuguese_obrigado_is_hallucination(self) -> None:
+        assert _is_hallucination("obrigado", "pt") is True
+        assert _is_hallucination("Obrigada.", "pt") is True
+
+    def test_spanish_gracias_is_hallucination(self) -> None:
+        assert _is_hallucination("gracias", "es") is True
+        assert _is_hallucination("muchas gracias.", "es") is True
+
+    def test_unknown_language_falls_back_to_english(self) -> None:
+        # Sovyx defaults to en stoplist when the language is unmapped.
+        assert _is_hallucination("thank you", "ja") is True
+
+    def test_empty_string_is_hallucination(self) -> None:
+        assert _is_hallucination("", "en") is True
+        assert _is_hallucination("   ", "en") is True
+
+    def test_stoplist_has_required_languages(self) -> None:
+        """Public-surface invariant — these locales must be supported."""
+        assert "en" in _HALLUCINATION_STOPLIST
+        assert "pt" in _HALLUCINATION_STOPLIST
+        assert "es" in _HALLUCINATION_STOPLIST
+
+
+class TestSTTGuardsEndToEnd:
+    """Full round-trip: transcribe + reject + telemetry event."""
+
+    @pytest.mark.asyncio()
+    async def test_hallucination_transcript_rejected(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_STT_LOGGER)
+        stt, mock_mv = _build_stt(completed_text="thank you")
+        with patch.dict("sys.modules", {"moonshine_voice": mock_mv}):
+            await stt.initialize()
+            result = await stt.transcribe(np.zeros(16_000, dtype=np.float32))
+        assert result.text == ""
+        assert result.rejection_reason == "hallucination_stoplist"
+        events = _stt_events_of(caplog, "voice.stt.transcript_rejected")
+        assert len(events) == 1
+        assert events[0]["voice.rejection_reason"] == "hallucination_stoplist"
+        assert events[0]["voice.transcript"] == "thank you"
+
+    @pytest.mark.asyncio()
+    async def test_compression_ratio_transcript_rejected(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_STT_LOGGER)
+        # >32 chars + highly repetitive → triggers compression-ratio reject
+        repetitive = "yes " * 100
+        stt, mock_mv = _build_stt(completed_text=repetitive)
+        with patch.dict("sys.modules", {"moonshine_voice": mock_mv}):
+            await stt.initialize()
+            result = await stt.transcribe(np.zeros(16_000, dtype=np.float32))
+        assert result.text == ""
+        assert result.rejection_reason == "compression_ratio_exceeded"
+        events = _stt_events_of(caplog, "voice.stt.transcript_rejected")
+        assert len(events) == 1
+        assert events[0]["voice.rejection_reason"] == "compression_ratio_exceeded"
+        assert events[0]["voice.compression_ratio"] > _COMPRESSION_RATIO_THRESHOLD
+
+    @pytest.mark.asyncio()
+    async def test_short_repetitive_text_not_rejected_by_ratio_check(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Below _HALLUCINATION_MIN_LEN_FOR_RATIO_CHECK the ratio check
+        skips — we don't want short-text false positives. The chosen
+        short text is also NOT in the stop-list."""
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_STT_LOGGER)
+        # 12 chars, repetitive but below the ratio-check floor.
+        stt, mock_mv = _build_stt(completed_text="ab ab ab ab")
+        with patch.dict("sys.modules", {"moonshine_voice": mock_mv}):
+            await stt.initialize()
+            result = await stt.transcribe(np.zeros(16_000, dtype=np.float32))
+        assert result.rejection_reason is None
+        assert result.text == "ab ab ab ab"
+
+    @pytest.mark.asyncio()
+    async def test_natural_long_text_accepted(self) -> None:
+        stt, mock_mv = _build_stt(
+            completed_text="hello world today the weather is sunny and warm everyone"
+        )
+        with patch.dict("sys.modules", {"moonshine_voice": mock_mv}):
+            await stt.initialize()
+            result = await stt.transcribe(np.zeros(16_000, dtype=np.float32))
+        assert result.rejection_reason is None
+        assert result.text.startswith("hello world")
+        assert result.confidence > 0.0
+
+    @pytest.mark.asyncio()
+    async def test_hallucination_check_runs_before_ratio_check(self) -> None:
+        """The stop-list catches degenerate output first; ratio check
+        only fires for transcripts that PASSED the stop-list."""
+        # Empty string is in the stop-list — must reject as
+        # hallucination, NOT compression_ratio.
+        stt, mock_mv = _build_stt(completed_text="")
+        with patch.dict("sys.modules", {"moonshine_voice": mock_mv}):
+            await stt.initialize()
+            result = await stt.transcribe(np.zeros(16_000, dtype=np.float32))
+        assert result.rejection_reason == "hallucination_stoplist"
+
+    @pytest.mark.asyncio()
+    async def test_response_event_not_emitted_on_rejection(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """When transcript is rejected, the success-path
+        ``voice.stt.response`` event must NOT fire (would mislead
+        dashboards)."""
+        import logging
+
+        caplog.set_level(logging.INFO, logger=_STT_LOGGER)
+        stt, mock_mv = _build_stt(completed_text="thank you")
+        with patch.dict("sys.modules", {"moonshine_voice": mock_mv}):
+            await stt.initialize()
+            await stt.transcribe(np.zeros(16_000, dtype=np.float32))
+        rejected = _stt_events_of(caplog, "voice.stt.transcript_rejected")
+        assert len(rejected) == 1
+        responses = _stt_events_of(caplog, "voice.stt.response")
+        assert len(responses) == 0
+
+
+class TestS1Constants:
+    """Public-surface tuning values must not drift silently."""
+
+    def test_compression_ratio_threshold(self) -> None:
+        # Whisper canonical from openai/whisper transcribe.py.
+        assert _COMPRESSION_RATIO_THRESHOLD == 2.4  # noqa: PLR2004
+
+    def test_min_len_for_ratio_check(self) -> None:
+        assert _HALLUCINATION_MIN_LEN_FOR_RATIO_CHECK == 32  # noqa: PLR2004
