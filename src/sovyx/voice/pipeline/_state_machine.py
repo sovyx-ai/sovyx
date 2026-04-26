@@ -47,10 +47,15 @@ from __future__ import annotations
 
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
 from sovyx.voice.pipeline._state import VoicePipelineState
+
+if TYPE_CHECKING:
+    from sovyx.voice.pipeline._frame_types import PipelineFrame
 
 logger = get_logger(__name__)
 
@@ -207,6 +212,12 @@ class _MachineState:
     transition_count: int = 0
     invalid_transition_count: int = 0
     history: list[TransitionRecord] = field(default_factory=list)
+    # Step 12 — frame-history bounded ring buffer. ``deque(maxlen=N)``
+    # is O(1) append + O(1) eviction so the orchestrator can record
+    # frames in the heartbeat-hot path without measurable overhead.
+    # The deque is constructed in ``__init__`` (not here) so the
+    # capacity matches the constructor argument.
+    frame_history: deque[PipelineFrame] = field(default_factory=lambda: deque(maxlen=256))
 
 
 # ── Public surface ─────────────────────────────────────────────────
@@ -287,6 +298,10 @@ class PipelineStateMachine:
         self._state = _MachineState(
             current=VoicePipelineState.IDLE,
             entered_monotonic=self._monotonic(),
+            # Same capacity as the transition history. The two histories
+            # mirror each other (one transition can produce one frame),
+            # so a single capacity knob is operator-friendly.
+            frame_history=deque(maxlen=history_capacity),
         )
 
     # ── Read-only state surface ────────────────────────────────
@@ -341,6 +356,36 @@ class PipelineStateMachine:
         """Snapshot of the bounded transition history (oldest first)."""
         with self._lock:
             return list(self._state.history)
+
+    # ── Frame history (Step 12) ────────────────────────────────────
+
+    def record_frame(self, frame: PipelineFrame) -> None:
+        """Append a frame to the bounded frame-history ring buffer.
+
+        Mission §1.1 Hybrid Option C — observability layer over the
+        existing state-machine. The frame is recorded under the same
+        :class:`threading.Lock` that protects the transition history
+        so observers see a consistent (transitions, frames) pair.
+
+        ``frame`` is a frozen dataclass (see
+        :mod:`sovyx.voice.pipeline._frame_types`); the deque takes a
+        reference, no copy. The bounded ring buffer
+        (``maxlen=history_capacity``) ensures memory stays constant
+        for long-running daemons (anti-pattern #15 equivalent).
+        """
+        with self._lock:
+            self._state.frame_history.append(frame)
+
+    def frame_history(self) -> tuple[PipelineFrame, ...]:
+        """Snapshot of the bounded frame history (oldest first).
+
+        Returns a tuple (immutable, no caller mutation can leak back
+        into the deque). Same lock as :meth:`history` so observers
+        querying both at the same heartbeat tick see a consistent
+        slice.
+        """
+        with self._lock:
+            return tuple(self._state.frame_history)
 
     # ── Mutation surface ───────────────────────────────────────
 
@@ -426,6 +471,7 @@ class PipelineStateMachine:
             self._state = _MachineState(
                 current=VoicePipelineState.IDLE,
                 entered_monotonic=self._monotonic(),
+                frame_history=deque(maxlen=self._history_capacity),
             )
 
     def fire_watchdog(

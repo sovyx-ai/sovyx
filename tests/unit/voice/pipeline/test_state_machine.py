@@ -321,3 +321,117 @@ class TestThreadSafety:
             t.join()
         assert errors == []
         assert m.transition_count == n_threads * per_thread
+
+
+# ── Step 12: frame history ──────────────────────────────────────────
+
+
+class TestFrameHistory:
+    """Pin the bounded frame ring buffer added in Step 12."""
+
+    def test_record_frame_appends_to_history(self) -> None:
+        from sovyx.voice.pipeline._frame_types import EndFrame
+
+        m = PipelineStateMachine()
+        frame = EndFrame(
+            frame_type="End",
+            timestamp_monotonic=1.0,
+            reason="reset",
+        )
+        m.record_frame(frame)
+        history = m.frame_history()
+        assert len(history) == 1
+        assert history[0] is frame
+
+    def test_frame_history_bounded_at_capacity(self) -> None:
+        from sovyx.voice.pipeline._frame_types import EndFrame
+
+        m = PipelineStateMachine(history_capacity=3)
+        for i in range(10):
+            m.record_frame(
+                EndFrame(
+                    frame_type="End",
+                    timestamp_monotonic=float(i),
+                    reason=f"reset-{i}",
+                ),
+            )
+        history = m.frame_history()
+        # Bounded at 3; oldest dropped, newest 3 preserved.
+        assert len(history) == 3
+        # The deque keeps newest at the right; the snapshot tuple
+        # returns the deque iteration order (oldest-first).
+        assert history[0].timestamp_monotonic == 7.0
+        assert history[2].timestamp_monotonic == 9.0
+
+    def test_frame_history_returns_immutable_tuple(self) -> None:
+        """Caller mutations must not leak back into the deque."""
+        from sovyx.voice.pipeline._frame_types import EndFrame
+
+        m = PipelineStateMachine()
+        m.record_frame(
+            EndFrame(
+                frame_type="End",
+                timestamp_monotonic=1.0,
+                reason="reset",
+            ),
+        )
+        history = m.frame_history()
+        assert isinstance(history, tuple)
+        # Tuple is immutable so the assignment below would itself
+        # raise — but the contract is that the snapshot is decoupled
+        # from the deque. Add a fresh frame, re-snapshot, verify the
+        # earlier snapshot still has length 1.
+        m.record_frame(
+            EndFrame(
+                frame_type="End",
+                timestamp_monotonic=2.0,
+                reason="reset-2",
+            ),
+        )
+        assert len(history) == 1
+        assert len(m.frame_history()) == 2
+
+    def test_reset_clears_frame_history(self) -> None:
+        from sovyx.voice.pipeline._frame_types import EndFrame
+
+        m = PipelineStateMachine()
+        m.record_frame(
+            EndFrame(
+                frame_type="End",
+                timestamp_monotonic=1.0,
+                reason="reset",
+            ),
+        )
+        assert len(m.frame_history()) == 1
+        m.reset()
+        assert m.frame_history() == ()
+
+    def test_record_frame_thread_safe(self) -> None:
+        import threading
+
+        from sovyx.voice.pipeline._frame_types import EndFrame
+
+        m = PipelineStateMachine(history_capacity=10_000)
+        n_threads = 8
+        per_thread = 50
+        barrier = threading.Barrier(n_threads)
+
+        def worker(thread_id: int) -> None:
+            barrier.wait()
+            for i in range(per_thread):
+                m.record_frame(
+                    EndFrame(
+                        frame_type="End",
+                        timestamp_monotonic=float(thread_id * 1000 + i),
+                        reason=f"t{thread_id}-{i}",
+                    ),
+                )
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(n_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        history = m.frame_history()
+        assert len(history) == n_threads * per_thread
