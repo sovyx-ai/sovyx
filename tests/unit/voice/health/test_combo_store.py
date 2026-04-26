@@ -874,12 +874,18 @@ class TestAtomicWrite:
         store.load()
         _record(store)
 
-        from sovyx.voice.health import combo_store as cs
+        # Post-T06 split: ``acquire_file_lock`` is imported into the
+        # ``_store`` submodule's namespace where ComboStore methods
+        # actually call it. The package-level rebind in
+        # ``combo_store/__init__.py`` is a separate binding; patching
+        # it would be a silent no-op (anti-pattern #20). Patch the
+        # submodule path directly.
+        from sovyx.voice.health.combo_store import _store as cs_store
 
         def fake_acquire(lock_path: Any, **_: Any) -> Any:
             raise FileLockTimeoutError(lock_path, 0.1)
 
-        monkeypatch.setattr(cs, "acquire_file_lock", fake_acquire)
+        monkeypatch.setattr(cs_store, "acquire_file_lock", fake_acquire)
         with pytest.raises(FileLockTimeoutError):
             _record(store, "{guid-B}")
 
@@ -981,7 +987,11 @@ class TestRoundTrip:
 #
 # Reference: MISSION-voice-mixer-enterprise-refactor-2026-04-25 §3.8, C2.
 
-_C2_LOGGER = "sovyx.voice.health.combo_store"
+_C2_LOGGER = "sovyx.voice.health.combo_store._store"
+"""Post-T06 split: the ComboStore class lives in
+``sovyx.voice.health.combo_store._store`` and its ``logger =
+get_logger(__name__)`` binds to that namespace. Tests that filter
+caplog records by ``record.name`` must use the submodule name."""
 
 
 def _c2_events_of(caplog: pytest.LogCaptureFixture, event_name: str) -> list[dict[str, Any]]:
