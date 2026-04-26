@@ -257,6 +257,23 @@ class VoiceTuningConfig(BaseSettings):
     Sovyx instance — operators opt in when they've observed
     audio-service-related issues. Non-Windows platforms skip."""
 
+    voice_probe_windows_etw_events_enabled: bool = False
+    """WI1 wire-up (mission §1.5 Step 4): when True (Windows only),
+    voice factory queries the Microsoft-Windows-Audio* ETW operational
+    channels at boot and logs structured ``voice.windows.etw_events``
+    records.
+
+    Default False because the probe spawns three ``wevtutil.exe``
+    subprocesses (one per channel) with a 5 s timeout each — up to
+    15 s of additional cold-boot latency on a Windows host with a
+    busy event log. The cost is acceptable only when an operator is
+    actively debugging audio-service / APO chain issues.
+
+    Non-Windows platforms skip silently via the
+    :data:`Capability.ETW_AUDIO_PROVIDER` resolver gate, so enabling
+    this on Linux / macOS is a no-op (logged at INFO so operators
+    see the mismatch)."""
+
     voice_apo_dll_introspection_enabled: bool = False
     """WI3 wire-up: when True, the APO detector enriches each
     :class:`~sovyx.voice._apo_detector.CaptureApoReport` with

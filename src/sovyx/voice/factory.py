@@ -281,6 +281,81 @@ def _maybe_log_alsa_ucm_status(card_id: str = "0") -> None:
     )
 
 
+async def _maybe_log_recent_audio_etw_events() -> None:
+    """WI1 wire-up (Step 4): query Windows audio ETW operational
+    channels at boot and log structured ``voice.windows.etw_events``
+    records.
+
+    Opt-in via
+    :attr:`VoiceTuningConfig.voice_probe_windows_etw_events_enabled`
+    (default OFF — the probe spawns three ``wevtutil.exe``
+    subprocesses with 5 s timeouts each, up to 15 s of additional
+    cold-boot latency on busy Windows hosts).
+
+    Capability dispatch: gated by
+    :data:`Capability.ETW_AUDIO_PROVIDER`. The probe internally
+    requires Windows + ``wevtutil`` on PATH. Locked-down enterprise
+    images that strip the binary skip cleanly.
+
+    Failure isolation: subprocess / parse failures are absorbed into
+    per-channel notes by :func:`query_audio_etw_events` itself; this
+    wrapper additionally catches any unexpected exception so a buggy
+    probe never blocks pipeline boot.
+    """
+    from sovyx.engine.config import VoiceTuningConfig
+
+    tuning = VoiceTuningConfig()
+    if not tuning.voice_probe_windows_etw_events_enabled:
+        return
+    from sovyx.voice.health._capabilities import (  # noqa: PLC0415 — local import keeps factory cold-start lean
+        Capability,
+        get_default_resolver,
+    )
+
+    resolver = get_default_resolver()
+    if not resolver.has(Capability.ETW_AUDIO_PROVIDER):
+        logger.info(
+            "voice.factory.etw_probe_skipped_capability_absent",
+            **{
+                "voice.capability": Capability.ETW_AUDIO_PROVIDER.value,
+                "voice.platform": sys.platform,
+            },
+        )
+        return
+    try:
+        from sovyx.voice.health._windows_etw import query_audio_etw_events
+
+        results = await asyncio.to_thread(query_audio_etw_events)
+    except Exception as exc:  # noqa: BLE001 — observability gate isolation
+        logger.warning(
+            "voice.factory.etw_probe_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        return
+    for result in results:
+        if result.events:
+            logger.info(
+                "voice.windows.etw_events",
+                **{
+                    "voice.channel": result.channel,
+                    "voice.event_count": len(result.events),
+                    "voice.lookback_seconds": result.lookback_seconds,
+                    "voice.first_event_provider": result.events[0].provider,
+                    "voice.first_event_id": result.events[0].event_id,
+                    "voice.first_event_level": result.events[0].level.value,
+                },
+            )
+        if result.notes:
+            logger.debug(
+                "voice.windows.etw_query_notes",
+                **{
+                    "voice.channel": result.channel,
+                    "voice.notes": list(result.notes),
+                },
+            )
+
+
 async def _maybe_start_audio_service_watchdog() -> object | None:
     """WI2 wire-up: instantiate and start the Windows audio-service
     watchdog when opt-in. Returns the watchdog instance (so the
@@ -519,6 +594,7 @@ async def create_voice_pipeline(
     await _maybe_check_llm_reachable()
     _maybe_log_pipewire_status()
     _maybe_log_alsa_ucm_status()
+    await _maybe_log_recent_audio_etw_events()
     # Mission §9.1.1 / Gap 1b — boot-time deprecation surface for the
     # four ``linux_mixer_*_fraction`` knobs scheduled for removal in
     # v0.24.0. A stock install with no overrides emits nothing; an
