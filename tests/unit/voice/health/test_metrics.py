@@ -21,10 +21,17 @@ from sovyx.observability.metrics import (
 )
 from sovyx.voice.health._metrics import (
     METRIC_ACTIVE_ENDPOINT_CHANGES,
+    METRIC_BYPASS_TIER1_RAW_ATTEMPTED,
+    METRIC_BYPASS_TIER1_RAW_OUTCOME,
+    METRIC_BYPASS_TIER2_HOST_API_ROTATE_ATTEMPTED,
+    METRIC_BYPASS_TIER2_HOST_API_ROTATE_OUTCOME,
     METRIC_CASCADE_ATTEMPTS,
     METRIC_COMBO_STORE_HITS,
     METRIC_COMBO_STORE_INVALIDATIONS,
+    METRIC_HOTPLUG_LISTENER_REGISTERED,
+    METRIC_OPENER_HOST_API_ALIGNMENT,
     METRIC_PREFLIGHT_FAILURES,
+    METRIC_PROBE_COLD_SILENCE_REJECTED,
     METRIC_PROBE_DIAGNOSIS,
     METRIC_PROBE_DURATION,
     METRIC_PROBE_START_TIME_ERRORS,
@@ -33,8 +40,11 @@ from sovyx.voice.health._metrics import (
     METRIC_TIME_TO_FIRST_UTTERANCE,
     record_active_endpoint_change,
     record_cascade_attempt,
+    record_cold_silence_rejected,
     record_combo_store_hit,
     record_combo_store_invalidation,
+    record_hotplug_listener_registered,
+    record_opener_host_api_alignment,
     record_preflight_failure,
     record_probe_diagnosis,
     record_probe_duration,
@@ -42,6 +52,10 @@ from sovyx.voice.health._metrics import (
     record_recovery_attempt,
     record_self_feedback_block,
     record_start_time_error,
+    record_tier1_raw_attempted,
+    record_tier1_raw_outcome,
+    record_tier2_host_api_rotate_attempted,
+    record_tier2_host_api_rotate_outcome,
     record_time_to_first_utterance,
 )
 from sovyx.voice.health.contract import Combo, Diagnosis, ProbeMode, ProbeResult
@@ -122,6 +136,37 @@ class TestStableNameContract:
         # ``sovyx.voice.health.*`` namespace so existing Grafana panels
         # can fold it into the same VCHL boards.
         assert METRIC_PROBE_START_TIME_ERRORS == "sovyx.voice.health.probe.start_time_errors"
+
+    # ── Voice Windows Paranoid Mission counters (foundation v0.24.0) ─
+
+    def test_probe_cold_silence_rejected_name(self) -> None:
+        assert (
+            METRIC_PROBE_COLD_SILENCE_REJECTED == "sovyx.voice.health.probe.cold_silence_rejected"
+        )
+
+    def test_bypass_tier1_raw_attempted_name(self) -> None:
+        assert METRIC_BYPASS_TIER1_RAW_ATTEMPTED == "sovyx.voice.health.bypass.tier1_raw.attempted"
+
+    def test_bypass_tier1_raw_outcome_name(self) -> None:
+        assert METRIC_BYPASS_TIER1_RAW_OUTCOME == "sovyx.voice.health.bypass.tier1_raw.outcome"
+
+    def test_bypass_tier2_host_api_rotate_attempted_name(self) -> None:
+        assert (
+            METRIC_BYPASS_TIER2_HOST_API_ROTATE_ATTEMPTED
+            == "sovyx.voice.health.bypass.tier2_host_api_rotate.attempted"
+        )
+
+    def test_bypass_tier2_host_api_rotate_outcome_name(self) -> None:
+        assert (
+            METRIC_BYPASS_TIER2_HOST_API_ROTATE_OUTCOME
+            == "sovyx.voice.health.bypass.tier2_host_api_rotate.outcome"
+        )
+
+    def test_opener_host_api_alignment_name(self) -> None:
+        assert METRIC_OPENER_HOST_API_ALIGNMENT == "sovyx.voice.opener.host_api_alignment"
+
+    def test_hotplug_listener_registered_name(self) -> None:
+        assert METRIC_HOTPLUG_LISTENER_REGISTERED == "sovyx.voice.hotplug.listener.registered"
 
 
 # ── Record helpers ────────────────────────────────────────────────────────
@@ -430,6 +475,208 @@ class TestRecordStartTimeError:
         }
 
 
+# ── Voice Windows Paranoid Mission record helpers ─────────────────────────
+
+
+class TestRecordColdSilenceRejected:
+    """Furo W-1 telemetry — counts cold-probe silence-rejection events."""
+
+    def test_strict_reject_emits_one_point(
+        self,
+        registry: MetricsRegistry,
+        reader: InMemoryMetricReader,
+    ) -> None:
+        record_cold_silence_rejected(mode="strict_reject", host_api="MME")
+        metric = _find(_collect(reader), METRIC_PROBE_COLD_SILENCE_REJECTED)
+        assert metric is not None
+        assert len(metric["data_points"]) == 1
+        assert metric["data_points"][0]["attributes"] == {
+            "mode": "strict_reject",
+            "host_api": "MME",
+        }
+        assert metric["data_points"][0]["value"] == 1
+
+    def test_lenient_passthrough_separate_label(
+        self,
+        registry: MetricsRegistry,
+        reader: InMemoryMetricReader,
+    ) -> None:
+        record_cold_silence_rejected(mode="lenient_passthrough", host_api="Windows DirectSound")
+        metric = _find(_collect(reader), METRIC_PROBE_COLD_SILENCE_REJECTED)
+        assert metric is not None
+        attrs = metric["data_points"][0]["attributes"]
+        assert attrs["mode"] == "lenient_passthrough"
+        assert attrs["host_api"] == "Windows DirectSound"
+
+    def test_missing_host_api_defaults_to_unknown(
+        self,
+        registry: MetricsRegistry,
+        reader: InMemoryMetricReader,
+    ) -> None:
+        record_cold_silence_rejected(mode="strict_reject", host_api="")
+        metric = _find(_collect(reader), METRIC_PROBE_COLD_SILENCE_REJECTED)
+        assert metric is not None
+        assert metric["data_points"][0]["attributes"]["host_api"] == "unknown"
+
+
+class TestRecordTier1Raw:
+    """Tier 1 RAW + Communications bypass attempt + outcome counters."""
+
+    def test_attempted_emits_with_raw_supported_true(
+        self,
+        registry: MetricsRegistry,
+        reader: InMemoryMetricReader,
+    ) -> None:
+        record_tier1_raw_attempted(host_api="Windows WASAPI", raw_supported=True)
+        metric = _find(_collect(reader), METRIC_BYPASS_TIER1_RAW_ATTEMPTED)
+        assert metric is not None
+        assert metric["data_points"][0]["attributes"] == {
+            "host_api": "Windows WASAPI",
+            "raw_supported": "true",
+        }
+
+    def test_attempted_with_raw_supported_false(
+        self,
+        registry: MetricsRegistry,
+        reader: InMemoryMetricReader,
+    ) -> None:
+        record_tier1_raw_attempted(host_api="MME", raw_supported=False)
+        metric = _find(_collect(reader), METRIC_BYPASS_TIER1_RAW_ATTEMPTED)
+        assert metric is not None
+        assert metric["data_points"][0]["attributes"]["raw_supported"] == "false"
+
+    def test_outcome_records_verdict(
+        self,
+        registry: MetricsRegistry,
+        reader: InMemoryMetricReader,
+    ) -> None:
+        record_tier1_raw_outcome(verdict="raw_engaged", host_api="Windows WASAPI")
+        metric = _find(_collect(reader), METRIC_BYPASS_TIER1_RAW_OUTCOME)
+        assert metric is not None
+        assert metric["data_points"][0]["attributes"] == {
+            "verdict": "raw_engaged",
+            "host_api": "Windows WASAPI",
+        }
+
+
+class TestRecordTier2HostApiRotate:
+    """Tier 2 host_api_rotate-then-exclusive Phase A + combined-outcome counters."""
+
+    def test_attempted_records_source_and_target(
+        self,
+        registry: MetricsRegistry,
+        reader: InMemoryMetricReader,
+    ) -> None:
+        record_tier2_host_api_rotate_attempted(
+            source_host_api="MME",
+            target_host_api="Windows WASAPI",
+        )
+        metric = _find(_collect(reader), METRIC_BYPASS_TIER2_HOST_API_ROTATE_ATTEMPTED)
+        assert metric is not None
+        assert metric["data_points"][0]["attributes"] == {
+            "source_host_api": "MME",
+            "target_host_api": "Windows WASAPI",
+        }
+
+    def test_outcome_records_two_phase_verdicts(
+        self,
+        registry: MetricsRegistry,
+        reader: InMemoryMetricReader,
+    ) -> None:
+        record_tier2_host_api_rotate_outcome(
+            phase_a_verdict="rotated_success",
+            phase_b_verdict="exclusive_engaged",
+            resulting_host_api="Windows WASAPI",
+        )
+        metric = _find(_collect(reader), METRIC_BYPASS_TIER2_HOST_API_ROTATE_OUTCOME)
+        assert metric is not None
+        assert metric["data_points"][0]["attributes"] == {
+            "phase_a_verdict": "rotated_success",
+            "phase_b_verdict": "exclusive_engaged",
+            "resulting_host_api": "Windows WASAPI",
+        }
+
+    def test_outcome_with_skipped_phase_b(
+        self,
+        registry: MetricsRegistry,
+        reader: InMemoryMetricReader,
+    ) -> None:
+        """When Phase A fails, Phase B is skipped; the metric records that."""
+        record_tier2_host_api_rotate_outcome(
+            phase_a_verdict="no_target_sibling",
+            phase_b_verdict="skipped",
+        )
+        metric = _find(_collect(reader), METRIC_BYPASS_TIER2_HOST_API_ROTATE_OUTCOME)
+        assert metric is not None
+        assert metric["data_points"][0]["attributes"]["phase_b_verdict"] == "skipped"
+
+
+class TestRecordOpenerHostApiAlignment:
+    """Furo W-4 cascade ↔ runtime alignment SLI counter."""
+
+    def test_aligned_true_records_match(
+        self,
+        registry: MetricsRegistry,
+        reader: InMemoryMetricReader,
+    ) -> None:
+        record_opener_host_api_alignment(
+            aligned=True,
+            cascade_winner_host_api="Windows DirectSound",
+            runtime_chain_head_host_api="Windows DirectSound",
+        )
+        metric = _find(_collect(reader), METRIC_OPENER_HOST_API_ALIGNMENT)
+        assert metric is not None
+        attrs = metric["data_points"][0]["attributes"]
+        assert attrs["aligned"] == "true"
+        assert attrs["cascade_winner_host_api"] == "Windows DirectSound"
+        assert attrs["runtime_chain_head_host_api"] == "Windows DirectSound"
+
+    def test_aligned_false_records_drift(
+        self,
+        registry: MetricsRegistry,
+        reader: InMemoryMetricReader,
+    ) -> None:
+        """The bug signature: cascade picked DirectSound but runtime drifted to MME."""
+        record_opener_host_api_alignment(
+            aligned=False,
+            cascade_winner_host_api="Windows DirectSound",
+            runtime_chain_head_host_api="MME",
+        )
+        metric = _find(_collect(reader), METRIC_OPENER_HOST_API_ALIGNMENT)
+        assert metric is not None
+        assert metric["data_points"][0]["attributes"]["aligned"] == "false"
+
+
+class TestRecordHotplugListenerRegistered:
+    """IMMNotificationClient registration health counter."""
+
+    def test_registered_true(
+        self,
+        registry: MetricsRegistry,
+        reader: InMemoryMetricReader,
+    ) -> None:
+        record_hotplug_listener_registered(registered=True)
+        metric = _find(_collect(reader), METRIC_HOTPLUG_LISTENER_REGISTERED)
+        assert metric is not None
+        assert metric["data_points"][0]["attributes"] == {
+            "registered": "true",
+            "error": "none",
+        }
+
+    def test_registered_false_with_error(
+        self,
+        registry: MetricsRegistry,
+        reader: InMemoryMetricReader,
+    ) -> None:
+        record_hotplug_listener_registered(registered=False, error="comtypes_unavailable")
+        metric = _find(_collect(reader), METRIC_HOTPLUG_LISTENER_REGISTERED)
+        assert metric is not None
+        assert metric["data_points"][0]["attributes"] == {
+            "registered": "false",
+            "error": "comtypes_unavailable",
+        }
+
+
 # ── Graceful no-op when metrics are torn down ─────────────────────────────
 
 
@@ -453,3 +700,17 @@ class TestNoOpSafety:
             platform="win32",
         )
         record_time_to_first_utterance(duration_ms=200.0)
+        # Voice Windows Paranoid Mission counters — must also be no-op safe.
+        record_cold_silence_rejected(mode="strict_reject", host_api="MME")
+        record_tier1_raw_attempted(host_api="Windows WASAPI", raw_supported=True)
+        record_tier1_raw_outcome(verdict="raw_engaged", host_api="Windows WASAPI")
+        record_tier2_host_api_rotate_attempted(
+            source_host_api="MME",
+            target_host_api="Windows WASAPI",
+        )
+        record_tier2_host_api_rotate_outcome(
+            phase_a_verdict="rotated_success",
+            phase_b_verdict="exclusive_engaged",
+        )
+        record_opener_host_api_alignment(aligned=True)
+        record_hotplug_listener_registered(registered=True)

@@ -52,7 +52,11 @@ from typing import TYPE_CHECKING, Any
 from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.observability.logging import get_logger
 from sovyx.voice._frame_normalizer import FrameNormalizer
-from sovyx.voice.health._metrics import record_probe_result, record_start_time_error
+from sovyx.voice.health._metrics import (
+    record_cold_silence_rejected,
+    record_probe_result,
+    record_start_time_error,
+)
 from sovyx.voice.health.contract import (
     Combo,
     Diagnosis,
@@ -837,6 +841,7 @@ def _diagnose_cold(
             sample_format=combo.sample_format,
             exclusive=combo.exclusive,
         )
+        record_cold_silence_rejected(mode="strict_reject", host_api=combo.host_api)
         return Diagnosis.NO_SIGNAL
 
     logger.warning(
@@ -850,6 +855,7 @@ def _diagnose_cold(
         sample_format=combo.sample_format,
         exclusive=combo.exclusive,
     )
+    record_cold_silence_rejected(mode="lenient_passthrough", host_api=combo.host_api)
     return Diagnosis.HEALTHY
 
 

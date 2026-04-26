@@ -569,6 +569,72 @@ class MetricsRegistry:
             "attempts.",
         )
 
+        # ── Voice Windows Paranoid Mission (v0.24.0 → v0.26.0) ─────
+        # See docs-internal/missions/MISSION-voice-windows-paranoid-2026-04-26.md
+        # and docs-internal/ADR-voice-bypass-tier-system.md +
+        # ADR-voice-cascade-runtime-alignment.md +
+        # ADR-voice-imm-notification-recovery.md.
+        # Names are stable wire contracts — downstream dashboards /
+        # Grafana queries / Prometheus alerts depend on them.
+        self.voice_health_probe_cold_silence_rejected = self._counter(
+            "sovyx.voice.health.probe.cold_silence_rejected",
+            "Cold-probe silence-rejection events (labels: mode="
+            "strict_reject|lenient_passthrough, host_api). Furo W-1 "
+            "telemetry — when the lenient counter rate matches the "
+            "predicted silent-combo population on Voice Clarity rigs "
+            "the operator can flip "
+            "probe_cold_strict_validation_enabled=true safely.",
+        )
+        self.voice_health_bypass_tier1_raw_attempted = self._counter(
+            "sovyx.voice.health.bypass.tier1_raw.attempted",
+            "Tier 1 RAW + Communications bypass attempts on Windows "
+            "(labels: host_api, raw_supported=true|false). Pairs with "
+            "voice.health.bypass.tier1_raw.outcome for the Phase 2 → "
+            "Phase 3 promotion gate (Tier 1 success ≥60% on VC machines).",
+        )
+        self.voice_health_bypass_tier1_raw_outcome = self._counter(
+            "sovyx.voice.health.bypass.tier1_raw.outcome",
+            "Tier 1 RAW bypass outcomes on Windows (labels: verdict="
+            "raw_engaged|property_rejected_by_driver|"
+            "open_failed_no_stream|open_failed_fallback_to_plain|"
+            "not_running|not_win32, host_api). raw_engaged is the "
+            "success terminal state.",
+        )
+        self.voice_health_bypass_tier2_host_api_rotate_attempted = self._counter(
+            "sovyx.voice.health.bypass.tier2_host_api_rotate.attempted",
+            "Tier 2 host_api_rotate bypass Phase A (rotate) attempts "
+            "on Windows (labels: source_host_api, target_host_api). "
+            "Fires from WindowsHostApiRotateThenExclusiveBypass.apply "
+            "when source_host_api ∈ {MME, Windows DirectSound, Windows "
+            "WDM-KS}.",
+        )
+        self.voice_health_bypass_tier2_host_api_rotate_outcome = self._counter(
+            "sovyx.voice.health.bypass.tier2_host_api_rotate.outcome",
+            "Tier 2 host_api_rotate combined outcomes on Windows "
+            "(labels: phase_a_verdict — HostApiRotateVerdict, "
+            "phase_b_verdict — ExclusiveRestartVerdict or 'skipped' "
+            "when Phase A failed, resulting_host_api). Promotion gate: "
+            "rotated_then_exclusive_engaged ≥70% on machines where "
+            "Tier 1 failed.",
+        )
+        self.voice_opener_host_api_alignment = self._counter(
+            "sovyx.voice.opener.host_api_alignment",
+            "Cascade ↔ runtime opener alignment SLI (labels: aligned="
+            "true|false, cascade_winner_host_api, "
+            "runtime_chain_head_host_api). Furo W-4 telemetry — target "
+            "is 100% aligned; any drift signals the bug. NOT a "
+            "tunable — drift is a bug.",
+        )
+        self.voice_hotplug_listener_registered = self._counter(
+            "sovyx.voice.hotplug.listener.registered",
+            "IMMNotificationClient registration health (labels: "
+            "registered=true|false, error). Fires once at "
+            "AudioCaptureTask.start when "
+            "mm_notification_listener_enabled=True. Promotion gate: "
+            "registration success ≥99% on Win10/11 before flipping "
+            "the listener flag default to True in v0.26.0.",
+        )
+
         # ── Voice pipeline RED + USE (Ring 6 — M2) ──────────────────
         # Per-stage Rate / Errors / Duration plus Utilisation /
         # Saturation / Errors for every async queue between stages.
