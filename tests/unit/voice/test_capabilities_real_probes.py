@@ -245,7 +245,8 @@ class TestFactoryAudioServiceWatchdogDispatch:
         assert result is None
         # The skip-log fires with the new event name + capability label.
         skip_records = [
-            r for r in caplog.records
+            r
+            for r in caplog.records
             if "audio_service_watchdog_skipped_capability_absent" in str(r.msg)
         ]
         assert len(skip_records) >= 1

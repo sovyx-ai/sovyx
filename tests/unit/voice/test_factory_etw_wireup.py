@@ -84,8 +84,7 @@ class TestEtwWireupGates:
 
         assert result is None
         skip_records = [
-            r for r in caplog.records
-            if "etw_probe_skipped_capability_absent" in str(r.msg)
+            r for r in caplog.records if "etw_probe_skipped_capability_absent" in str(r.msg)
         ]
         assert len(skip_records) >= 1
 
@@ -163,9 +162,7 @@ class TestEtwWireupHappyPath:
             await _maybe_log_recent_audio_etw_events()
 
         # One INFO record for the Operational channel (it had events).
-        events_records = [
-            r for r in caplog.records if "voice.windows.etw_events" in str(r.msg)
-        ]
+        events_records = [r for r in caplog.records if "voice.windows.etw_events" in str(r.msg)]
         assert len(events_records) == 1
         # One DEBUG record for the PlaybackManager channel notes.
         notes_records = [

@@ -37,10 +37,10 @@ class TestDetectSandboxState:
     def test_sandboxed_binary_yields_sandboxed_verdict(self) -> None:
         sandboxed_output = (
             "Executable=/Applications/Sovyx.app/Contents/MacOS/sovyx\n"
-            "designated => identifier \"com.sovyx.app\" and "
+            'designated => identifier "com.sovyx.app" and '
             "anchor apple generic and certificate leaf[subject.CN] = "
-            "\"Apple Distribution: Sovyx LLC\" and "
-            "entitlement [\"com.apple.security.app-sandbox\"] = true"
+            '"Apple Distribution: Sovyx LLC" and '
+            'entitlement ["com.apple.security.app-sandbox"] = true'
         )
         mock_result = MagicMock(returncode=0, stdout="", stderr=sandboxed_output)
         with (
@@ -54,7 +54,9 @@ class TestDetectSandboxState:
                 return_value=mock_result,
             ),
         ):
-            report = detect_sandbox_state(executable="/Applications/Sovyx.app/Contents/MacOS/sovyx")
+            report = detect_sandbox_state(
+                executable="/Applications/Sovyx.app/Contents/MacOS/sovyx"
+            )
         assert report.verdict is SandboxVerdict.SANDBOXED
         # Hint includes the sandbox constraint explanation.
         assert "App Sandbox" in report.remediation_hint
@@ -62,7 +64,7 @@ class TestDetectSandboxState:
     def test_unsandboxed_binary_yields_unsandboxed_verdict(self) -> None:
         unsandboxed_output = (
             "Executable=/usr/local/bin/python3\n"
-            "designated => identifier \"org.python.python3\" and "
+            'designated => identifier "org.python.python3" and '
             "anchor apple generic"
         )
         mock_result = MagicMock(returncode=0, stdout="", stderr=unsandboxed_output)
