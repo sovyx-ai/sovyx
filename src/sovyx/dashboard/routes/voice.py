@@ -86,6 +86,130 @@ async def get_voice_frame_history(
     )
 
 
+@router.get("/restart-history")
+async def get_voice_restart_history(
+    request: Request,
+    limit: int = 50,
+) -> JSONResponse:
+    """Return recent ``CaptureRestartFrame`` entries from the pipeline ring buffer.
+
+    Voice Windows Paranoid Mission §C — capture-task restart events
+    (substrate change, APO bypass engaged, overflow, manual). The
+    dashboard's restart-history widget renders one timeline of "what
+    happened on the mic" for post-incident forensics.
+
+    v0.24.0 (foundation): the endpoint is wired but no emitters fire
+    yet, so the response always carries ``{"frames": [], "total": 0}``.
+    Wire-up in v0.25.0 (T32) populates the real payload from
+    ``VoicePipeline.frame_history`` filtered by ``frame_type ==
+    "CaptureRestart"``. Shipping the endpoint stub now lets the
+    frontend render the skeleton view without conditional logic and
+    pins the wire contract via ``VoiceRestartHistoryResponseSchema``
+    (``dashboard/src/types/schemas.ts``).
+
+    Args:
+        limit: Maximum number of restart frames to return. Bounds:
+            1-256. Out-of-range values are clamped at the boundary.
+
+    Returns:
+        JSON: ``{"frames": [...CaptureRestartFrame...], "total": int,
+        "limit": int}``. v0.24.0 always returns ``frames=[], total=0``.
+
+        Returns 503 when the engine registry is not yet available
+        (boot in progress or voice disabled).
+    """
+    bounded_limit = max(1, min(256, limit))
+    registry = getattr(request.app.state, "registry", None)
+    if registry is None:
+        return JSONResponse(
+            {"error": "Engine not running"},
+            status_code=HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    # v0.24.0 stub. Wire-up in v0.25.0:
+    #   from sovyx.voice.pipeline._frame_types import (
+    #       CaptureRestartFrame,
+    #       _frame_to_dict,
+    #   )
+    #   from sovyx.voice.pipeline._orchestrator import VoicePipeline
+    #   pipeline = registry.get(VoicePipeline)
+    #   restart_frames = [
+    #       f for f in pipeline.frame_history
+    #       if isinstance(f, CaptureRestartFrame)
+    #   ]
+    #   total = len(restart_frames)
+    #   selected = restart_frames[-bounded_limit:]
+    #   return JSONResponse({
+    #       "frames": [_frame_to_dict(f) for f in selected],
+    #       "total": total,
+    #       "limit": bounded_limit,
+    #   })
+    return JSONResponse(
+        {
+            "frames": [],
+            "total": 0,
+            "limit": bounded_limit,
+        },
+    )
+
+
+@router.get("/bypass-tier-status")
+async def get_voice_bypass_tier_status(request: Request) -> JSONResponse:
+    """Return current bypass-tier health snapshot (Tier 1 / 2 / 3).
+
+    Voice Windows Paranoid Mission §B — a single snapshot of which
+    bypass tier is currently engaged on the active capture endpoint
+    plus per-tier attempt / success counters since pipeline start.
+    The dashboard renders a "current bypass tier" badge + a per-tier
+    success-rate widget for operator validation pilots.
+
+    v0.24.0 (foundation): no bypass strategies are wired yet (Tier 1
+    + Tier 2 stubs land in T13/T14 of the wire-up phase). The
+    endpoint always returns the empty-state shape with
+    ``current_bypass_tier=null``. Wire-up in v0.25.0 populates from
+    the metric counters
+    (``voice.health.bypass.tier1_raw.{attempted,outcome}``,
+    ``voice.health.bypass.tier2_host_api_rotate.{attempted,outcome}``,
+    ``voice.health.bypass_strategy.verdicts``) and the
+    ``CaptureIntegrityCoordinator`` strategy state. Shipping the stub
+    now pins the wire contract via
+    ``VoiceBypassTierStatusResponseSchema``
+    (``dashboard/src/types/schemas.ts``).
+
+    Returns:
+        JSON: ``{"current_bypass_tier": null|1|2|3,
+        "tier1_raw_attempted": int, "tier1_raw_succeeded": int,
+        "tier2_host_api_rotate_attempted": int,
+        "tier2_host_api_rotate_succeeded": int,
+        "tier3_wasapi_exclusive_attempted": int,
+        "tier3_wasapi_exclusive_succeeded": int}``.
+
+        Returns 503 when the engine registry is not yet available.
+    """
+    registry = getattr(request.app.state, "registry", None)
+    if registry is None:
+        return JSONResponse(
+            {"error": "Engine not running"},
+            status_code=HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    # v0.24.0 stub. Wire-up in v0.25.0 reads the counter data points
+    # from the metrics registry and the active strategy from
+    # CaptureIntegrityCoordinator. Empty-state shape matches
+    # VoiceBypassTierStatusResponseSchema in dashboard zod.
+    return JSONResponse(
+        {
+            "current_bypass_tier": None,
+            "tier1_raw_attempted": 0,
+            "tier1_raw_succeeded": 0,
+            "tier2_host_api_rotate_attempted": 0,
+            "tier2_host_api_rotate_succeeded": 0,
+            "tier3_wasapi_exclusive_attempted": 0,
+            "tier3_wasapi_exclusive_succeeded": 0,
+        },
+    )
+
+
 @router.get("/status")
 async def get_voice_status_endpoint(request: Request) -> JSONResponse:
     """Voice pipeline status — running state, models, hardware tier."""
