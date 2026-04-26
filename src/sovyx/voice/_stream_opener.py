@@ -54,13 +54,17 @@ import contextlib
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.observability.logging import get_logger
 from sovyx.voice.device_test._protocol import ErrorCode
 from sovyx.voice.device_test._source import (
     AudioSourceError,
     _classify_portaudio_error,
 )
-from sovyx.voice.health._metrics import record_opener_attempt
+from sovyx.voice.health._metrics import (
+    record_opener_attempt,
+    record_opener_host_api_alignment,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -183,6 +187,8 @@ async def open_input_stream(
     sd_module: Any | None = None,  # noqa: ANN401 — sounddevice module stand-in
     enumerate_fn: Callable[[], list[DeviceEntry]] | None = None,
     validate_fn: Callable[..., Awaitable[float]] | None = None,
+    preferred_host_api: str | None = None,
+    fallback_host_apis: tuple[str, ...] | None = None,
 ) -> tuple[Any, StreamInfo]:
     """Open a PortAudio input stream with host-API × rate × channels fallback.
 
@@ -222,7 +228,22 @@ async def open_input_stream(
             detail) tuple in chronological order.
     """
     sd = sd_module if sd_module is not None else _import_sounddevice()
-    chain = _device_chain(device, enumerate_fn=enumerate_fn, kind="input")
+    # T16 — wire ``capture_fallback_host_apis`` into _device_chain (Furo W-4
+    # latent-bug fix). When the caller doesn't pass an explicit
+    # ``fallback_host_apis``, derive it from the tuning config so the
+    # opener honours the operator-ranked preference list. The field
+    # was defined at engine/config.py:437-447 since v0.20.x but had no
+    # consumers — _device_chain was the missing wire.
+    effective_fallback = fallback_host_apis
+    if effective_fallback is None and tuning.capture_fallback_host_apis:
+        effective_fallback = tuple(tuning.capture_fallback_host_apis)
+    chain = _device_chain(
+        device,
+        enumerate_fn=enumerate_fn,
+        kind="input",
+        preferred_host_api=preferred_host_api,
+        fallback_host_apis=effective_fallback,
+    )
 
     # Flatten the (entry, combo) pyramid so each failure can peek at the
     # next attempt and emit a structured ``audio.stream.fallback`` event
@@ -569,21 +590,67 @@ def _device_chain(
     *,
     enumerate_fn: Callable[[], list[DeviceEntry]] | None,
     kind: str,
+    preferred_host_api: str | None = None,
+    fallback_host_apis: tuple[str, ...] | None = None,
 ) -> list[DeviceEntry]:
     """Return the ordered list of device variants to try.
 
     Starts with ``starting``, then its siblings (same canonical_name)
-    in host-API preference order. Sort order comes from whichever
-    enumeration function the caller passed — we trust that
-    :func:`device_enum.enumerate_devices` already encodes the platform
-    preference, which the caller can override via
-    :attr:`VoiceTuningConfig.capture_fallback_host_apis`.
+    in host-API preference order.
 
-    T3 (cascade-candidate-set) will simplify this function to return
-    ``[starting]`` — sibling iteration moves to the cascade layer via
-    :func:`~sovyx.voice.health._candidate_builder.build_capture_candidates`.
-    Until T3 lands, behaviour is unchanged; T1 only adds observability.
+    Voice Windows Paranoid Mission §D4 — Furo W-4 cascade ↔ runtime
+    alignment. When ``preferred_host_api`` is supplied AND
+    ``cascade_host_api_alignment_enabled=True``, the function applies
+    a 3-tier bucket sort to the ``rest`` siblings:
+
+    * **Bucket 0** — preferred-host_api siblings (other DeviceEntry
+      instances of the cascade winner's host_api). Rare but valid on
+      multi-card endpoints exposing the same friendly name on two PCI
+      slots.
+    * **Bucket 1** — ranked ``fallback_host_apis`` siblings in the
+      configured order. Operators tune via
+      ``SOVYX_TUNING__VOICE__CAPTURE_FALLBACK_HOST_APIS``. Closes the
+      Furo W-4 latent bug: the field at ``engine/config.py:437-447``
+      was previously dead code; this wires it.
+    * **Bucket 2** — unranked siblings in PortAudio enumeration order
+      (legacy v0.23.x behaviour). Preserves backwards-compat when
+      operator's list is incomplete.
+
+    Both new params are Optional with default ``None`` — when either
+    is None or the alignment flag is False, behaviour is identical
+    to v0.23.x (legacy enum order). The flag is read at call time so
+    operator hot-flips take effect without daemon restart.
+
+    Args:
+        starting: DeviceEntry the runtime resolved — the cascade
+            winner's resolved DeviceEntry, possibly drifted off the
+            cascade-winning host_api on multi-host_api endpoints
+            (the Furo W-4 bug signature).
+        enumerate_fn: Injected device enumerator (tests). ``None`` =
+            delegate to :func:`device_enum.enumerate_devices`.
+        kind: ``"input"`` or ``"output"`` — gates the channel filter.
+        preferred_host_api: Cascade winner's host_api label. The
+            opener biases sibling iteration toward this host_api when
+            present; logs an alignment SLI sample comparing it to
+            ``starting.host_api_name`` so dashboards can surface
+            drift.
+        fallback_host_apis: Operator-ranked fallback host_api labels
+            (in preference order). Sourced from
+            ``VoiceTuningConfig.capture_fallback_host_apis`` by the
+            caller; passed down explicitly so this function stays
+            config-free.
+
+    Emits ``voice.opener.host_api_alignment`` counter with
+    ``aligned=true|false`` per call when ``preferred_host_api`` is
+    supplied — the SLI signal that closes the Furo W-4 feedback loop.
     """
+    # Read the alignment flag at call time so operator flag flips
+    # take effect without daemon restart. The module-level
+    # _CONST = _VoiceTuning().field pattern would force a restart;
+    # eligibility checks are hot-path so per-call read is correct
+    # here.
+    alignment_enabled = _VoiceTuning().cascade_host_api_alignment_enabled
+
     if enumerate_fn is None:
         from sovyx.voice.device_enum import enumerate_devices
 
@@ -600,7 +667,39 @@ def _device_chain(
     if not any(s.index == starting.index for s in siblings):
         siblings = [starting, *siblings]
     rest = [s for s in siblings if s.index != starting.index]
+
+    # 3-tier bucket sort — only when alignment flag is True AND
+    # preferred_host_api is supplied. v0.24.0 default is
+    # alignment_enabled=False so behaviour is unchanged unless the
+    # operator opts in.
+    if alignment_enabled and preferred_host_api is not None:
+
+        def _host_api_position(entry: DeviceEntry) -> tuple[int, int]:
+            api = entry.host_api_name
+            if api == preferred_host_api:
+                return (0, 0)
+            if fallback_host_apis is not None:
+                try:
+                    return (1, fallback_host_apis.index(api))
+                except ValueError:
+                    return (2, entry.index)
+            return (2, entry.index)
+
+        rest = sorted(rest, key=_host_api_position)
+
     chain = [starting, *rest]
+
+    # Furo W-4 SLI — sample the alignment signal on every call when
+    # preferred_host_api is supplied. ``aligned=False`` is the bug
+    # signature (cascade picked one host_api but the runtime resolved
+    # to a different sibling — chain[0] is from the wrong host_api).
+    if preferred_host_api is not None:
+        chain_head_host_api = chain[0].host_api_name
+        record_opener_host_api_alignment(
+            aligned=chain_head_host_api == preferred_host_api,
+            cascade_winner_host_api=preferred_host_api,
+            runtime_chain_head_host_api=chain_head_host_api,
+        )
 
     # T1 — Observability: make the chain explicit so log readers see
     # exactly which devices the opener will iterate, in order, and can
@@ -612,6 +711,8 @@ def _device_chain(
         starting_host_api=starting.host_api_name,
         starting_name=starting.name,
         chain_length=len(chain),
+        preferred_host_api=preferred_host_api or "",
+        alignment_enabled=alignment_enabled,
         chain=[
             {
                 "index": e.index,
