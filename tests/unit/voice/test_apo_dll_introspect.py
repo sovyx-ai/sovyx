@@ -109,6 +109,14 @@ class TestResolveClsid:
         assert path == ""
         assert any("non-windows" in n for n in notes)
 
+    @pytest.mark.skipif(
+        sys.platform != "win32",
+        reason=(
+            "os.path.expandvars expands %VAR% syntax only on Windows; "
+            "on POSIX it's a no-op so the assertion can't hold. The "
+            "non-windows path is covered by test_non_windows_returns_empty."
+        ),
+    )
     def test_windows_resolves_and_expands_envvars(
         self,
         monkeypatch: pytest.MonkeyPatch,

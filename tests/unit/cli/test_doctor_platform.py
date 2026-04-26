@@ -144,8 +144,36 @@ class TestProbeFailureIsolation:
         assert "verdict" in body["macos"]["code_signing"]
 
     def test_etw_crash_does_not_take_out_audio_service(self) -> None:
+        # The audio_service probe internally requires Windows + sc.exe
+        # on PATH. When this test runs on Linux/macOS CI runners the
+        # probe returns an UNKNOWN status with notes; the underlying
+        # subprocess call to sc.exe also fails, collapsing
+        # ``query_audio_service_status`` to None inside ``_safe``.
+        # We mock the probe to return a populated payload so the
+        # isolation contract (ETW crash does not take out audio
+        # service) is verifiable on every CI platform.
+        from sovyx.voice.health._windows_audio_service import (
+            AudioServiceStatus,
+            WindowsServiceReport,
+            WindowsServiceState,
+        )
+
+        healthy_status = AudioServiceStatus(
+            audiosrv=WindowsServiceReport(
+                name="Audiosrv",
+                state=WindowsServiceState.RUNNING,
+            ),
+            audio_endpoint_builder=WindowsServiceReport(
+                name="AudioEndpointBuilder",
+                state=WindowsServiceState.RUNNING,
+            ),
+        )
         with (
             patch.object(sys, "platform", "win32"),
+            patch(
+                "sovyx.voice.health._windows_audio_service.query_audio_service_status",
+                return_value=healthy_status,
+            ),
             patch(
                 "sovyx.voice.health._windows_etw.query_audio_etw_events",
                 side_effect=RuntimeError("etw boom"),

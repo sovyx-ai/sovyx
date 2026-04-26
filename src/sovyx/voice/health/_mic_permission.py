@@ -242,8 +242,21 @@ def _check_windows() -> MicPermissionReport:
         )
 
     notes: list[str] = []
-    machine_value = _read_consent(winreg, winreg.HKEY_LOCAL_MACHINE, scope="HKLM", notes=notes)
-    user_value = _read_consent(winreg, winreg.HKEY_CURRENT_USER, scope="HKCU", notes=notes)
+    # HKEY_LOCAL_MACHINE / HKEY_CURRENT_USER are Windows-only
+    # constants; mypy on Linux/macOS doesn't see them as attributes
+    # of the winreg module (which is conditionally importable).
+    machine_value = _read_consent(
+        winreg,
+        winreg.HKEY_LOCAL_MACHINE,  # type: ignore[attr-defined,unused-ignore]
+        scope="HKLM",
+        notes=notes,
+    )
+    user_value = _read_consent(
+        winreg,
+        winreg.HKEY_CURRENT_USER,  # type: ignore[attr-defined,unused-ignore]
+        scope="HKCU",
+        notes=notes,
+    )
 
     # HKLM machine policy wins if it explicitly denies.
     if _is_deny(machine_value):

@@ -120,7 +120,9 @@ class TestMicPermissionGate:
             _maybe_check_mic_permission()
         # Carries the structured fields the dashboard renders.
         assert exc_info.value.platform_status == "denied"
-        assert "Privacy & security" in exc_info.value.remediation_hint
+        # OS-conditional case ("Privacy & security" on Linux/Win,
+        # "Privacy & Security" on macOS) — match case-insensitively.
+        assert "privacy &" in exc_info.value.remediation_hint.lower()
         assert "all-zero frames" in str(exc_info.value)
 
     def test_enabled_unknown_logs_info_and_proceeds(
@@ -531,12 +533,21 @@ class TestAudioServiceWatchdog:
                 state=WindowsServiceState.RUNNING,
             ),
         )
+        # Step 3 capability dispatch: the gate is now
+        # ``resolver.has(Capability.AUDIOSRV_QUERY)`` which probes
+        # platform=win32 AND shutil.which("sc.exe") is not None. On
+        # the Linux CI runner sc.exe is absent, so we additionally
+        # patch shutil.which to simulate the Windows host.
         with (
             patch(
                 "sovyx.engine.config.VoiceTuningConfig",
                 return_value=MagicMock(voice_audio_service_watchdog_enabled=True),
             ),
             patch.object(sys, "platform", "win32"),
+            patch(
+                "sovyx.voice.health._capabilities.shutil.which",
+                return_value=r"C:\Windows\System32\sc.exe",
+            ),
             patch(
                 "sovyx.voice.health._windows_audio_service.query_audio_service_status",
                 return_value=healthy,
@@ -566,13 +577,19 @@ class TestAudioServiceWatchdog:
         import sys
 
         # Force the import inside the helper to fail by injecting a
-        # broken module surface.
+        # broken module surface. Step 3 capability gate also requires
+        # patched shutil.which (see test_enabled_windows_starts_watchdog
+        # for the rationale).
         with (
             patch(
                 "sovyx.engine.config.VoiceTuningConfig",
                 return_value=MagicMock(voice_audio_service_watchdog_enabled=True),
             ),
             patch.object(sys, "platform", "win32"),
+            patch(
+                "sovyx.voice.health._capabilities.shutil.which",
+                return_value=r"C:\Windows\System32\sc.exe",
+            ),
             patch(
                 "sovyx.voice.health._windows_audio_service.AudioServiceWatchdog",
                 side_effect=RuntimeError("ctor boom"),

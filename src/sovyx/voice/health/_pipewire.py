@@ -188,8 +188,7 @@ def detect_pipewire(*, runtime_dir: Path | None = None) -> PipeWireReport:
 
     # ── Step 2: pactl available ────────────────────────────────────
     pactl_path = shutil.which("pactl")
-    pactl_available = pactl_path is not None
-    if not pactl_available:
+    if pactl_path is None:
         notes.append("pactl binary not found on PATH")
         # Without pactl we can't enumerate or load modules. If the
         # socket exists, PipeWire is running but routing layer is
@@ -202,6 +201,9 @@ def detect_pipewire(*, runtime_dir: Path | None = None) -> PipeWireReport:
             pactl_available=False,
             notes=tuple(notes),
         )
+    # mypy narrowing — pactl_path is now str (not None) for the rest
+    # of the function. _query_pactl_info + _enumerate_modules both
+    # require str.
 
     # ── Step 3: pactl info ─────────────────────────────────────────
     info_ok, server_name = _query_pactl_info(pactl_path, notes)
@@ -358,7 +360,10 @@ def _xdg_runtime_dir() -> Path | None:
     if not raw:
         # systemd default: /run/user/<uid>
         try:
-            uid = os.getuid()  # type: ignore[attr-defined]
+            # POSIX-only attribute; mypy on Linux sees it (no ignore
+            # needed) but on Windows / cross-platform builds the
+            # attribute is absent.
+            uid = os.getuid()  # type: ignore[attr-defined,unused-ignore]
         except AttributeError:
             return None  # pragma: no cover — non-POSIX (impossible after sys.platform check)
         candidate = Path(f"/run/user/{uid}")

@@ -225,7 +225,10 @@ class TestMicPermissionReport:
         # The remediation must include the EXACT settings path users
         # navigate; a vague "fix permissions" message defeats the
         # whole point of the loud-fail.
-        assert "Privacy & security" in r.remediation_hint
+        # Settings panel name is OS-cased — Linux/Win uses "Privacy
+        # & security" while macOS uses "Privacy & Security". Match
+        # case-insensitively so the assertion holds on every platform.
+        assert "privacy &" in r.remediation_hint.lower()
         assert "Microphone" in r.remediation_hint
 
     def test_unknown_remediation_offers_manual_check(self) -> None:

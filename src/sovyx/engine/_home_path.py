@@ -62,7 +62,9 @@ def _user_suffix() -> str:
     point the fallback path becomes per-host shared, which is
     less ideal but still strictly better than crashing."""
     try:
-        return str(os.getuid())  # type: ignore[attr-defined]  # POSIX-only
+        # POSIX-only: os.getuid is absent on Windows. mypy on Linux
+        # sees it (no ignore needed); Windows mypy needs the ignore.
+        return str(os.getuid())  # type: ignore[attr-defined,unused-ignore]
     except AttributeError:
         # Windows path — getuid doesn't exist.
         username = os.environ.get("USERNAME") or os.environ.get("USER") or ""
