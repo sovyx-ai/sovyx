@@ -411,6 +411,93 @@ async def _maybe_log_macos_diagnostics() -> None:
                 **{"voice.notes": list(bt_report.notes)},
             )
 
+    # MA10 — coreaudiod daemon-state probe.
+    try:
+        from sovyx.voice.health._coreaudiod_recovery import (
+            CoreAudiodVerdict,
+            probe_coreaudiod_state,
+        )
+
+        coreaudiod_report = await asyncio.to_thread(probe_coreaudiod_state)
+    except Exception as exc:  # noqa: BLE001 — observability gate isolation
+        logger.warning(
+            "voice.factory.macos_coreaudiod_probe_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+    else:
+        # Always emit the verdict — RUNNING is a happy-path baseline,
+        # MISSING / UNKNOWN carry the remediation hint.
+        log_method = (
+            logger.warning
+            if coreaudiod_report.verdict is CoreAudiodVerdict.MISSING
+            else logger.info
+        )
+        log_method(
+            "voice.macos.coreaudiod_state",
+            **{
+                "voice.verdict": coreaudiod_report.verdict.value,
+                "voice.remediation_hint": coreaudiod_report.remediation_hint,
+            },
+        )
+
+    # MA13 — macOS App Sandbox detection.
+    try:
+        from sovyx.voice.health._macos_sandbox_detect import (
+            SandboxVerdict,
+            detect_sandbox_state,
+        )
+
+        sandbox_report = await asyncio.to_thread(detect_sandbox_state)
+    except Exception as exc:  # noqa: BLE001 — observability gate isolation
+        logger.warning(
+            "voice.factory.macos_sandbox_probe_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+    else:
+        # SANDBOXED is informational (constraint, not error). UNKNOWN
+        # at INFO too. Only log if not the standard UNSANDBOXED case.
+        if sandbox_report.verdict is not SandboxVerdict.UNSANDBOXED:
+            logger.info(
+                "voice.macos.sandbox_state",
+                **{
+                    "voice.verdict": sandbox_report.verdict.value,
+                    "voice.executable_path": sandbox_report.executable_path,
+                    "voice.remediation_hint": sandbox_report.remediation_hint,
+                },
+            )
+
+    # MA14 — recent audio events from unified logging (sysdiagnose
+    # subset). Default lookback 5 m + max 100 events.
+    try:
+        from sovyx.voice.health._macos_sysdiagnose import query_audio_log_events
+
+        log_result = await asyncio.to_thread(query_audio_log_events)
+    except Exception as exc:  # noqa: BLE001 — observability gate isolation
+        logger.warning(
+            "voice.factory.macos_sysdiagnose_probe_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+    else:
+        if log_result.events:
+            logger.info(
+                "voice.macos.recent_audio_events",
+                **{
+                    "voice.event_count": len(log_result.events),
+                    "voice.lookback": log_result.lookback,
+                    "voice.first_event_level": log_result.events[0].level.value,
+                    "voice.first_event_subsystem": log_result.events[0].subsystem,
+                    "voice.first_event_process": log_result.events[0].process,
+                },
+            )
+        if log_result.notes:
+            logger.debug(
+                "voice.macos.sysdiagnose_notes",
+                **{"voice.notes": list(log_result.notes)},
+            )
+
 
 async def _maybe_log_recent_audio_etw_events() -> None:
     """WI1 wire-up (Step 4): query Windows audio ETW operational
