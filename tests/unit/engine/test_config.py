@@ -934,3 +934,125 @@ class TestDeprecatedMixerOverridesWarning:
         triggered = warn_on_deprecated_mixer_overrides(cfg)
         roster_order = tuple(name for name, _ in _DEPRECATED_MIXER_FRACTIONS)
         assert triggered == roster_order
+
+
+class TestVoiceTuningParanoidMissionFlags:
+    """Voice Windows Paranoid Mission (v0.24.0) — 5 feature flags
+    + cross-validator.
+
+    See ``docs-internal/missions/MISSION-voice-windows-paranoid-2026-04-26.md``.
+    """
+
+    def _clear_voice_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        for key in list(os.environ):
+            if key.startswith("SOVYX_TUNING__VOICE__"):
+                monkeypatch.delenv(key, raising=False)
+
+    def test_paranoid_mission_flags_default_false(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Foundation phase (v0.24.0) ships every flag default-False —
+        plumbing without behaviour change."""
+        self._clear_voice_env(monkeypatch)
+        cfg = VoiceTuningConfig()
+        assert cfg.probe_cold_strict_validation_enabled is False
+        assert cfg.bypass_tier1_raw_enabled is False
+        assert cfg.bypass_tier2_host_api_rotate_enabled is False
+        assert cfg.mm_notification_listener_enabled is False
+        assert cfg.cascade_host_api_alignment_enabled is False
+
+    def test_probe_cold_strict_validation_env_override(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Single env-var rollback / opt-in for Furo W-1."""
+        monkeypatch.setenv("SOVYX_TUNING__VOICE__PROBE_COLD_STRICT_VALIDATION_ENABLED", "true")
+        assert VoiceTuningConfig().probe_cold_strict_validation_enabled is True
+
+    def test_bypass_tier1_raw_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SOVYX_TUNING__VOICE__BYPASS_TIER1_RAW_ENABLED", "true")
+        assert VoiceTuningConfig().bypass_tier1_raw_enabled is True
+
+    def test_bypass_tier2_host_api_rotate_env_override(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Tier 2 requires alignment — set both so the cross-validator passes.
+        monkeypatch.setenv("SOVYX_TUNING__VOICE__BYPASS_TIER2_HOST_API_ROTATE_ENABLED", "true")
+        monkeypatch.setenv("SOVYX_TUNING__VOICE__CASCADE_HOST_API_ALIGNMENT_ENABLED", "true")
+        cfg = VoiceTuningConfig()
+        assert cfg.bypass_tier2_host_api_rotate_enabled is True
+        assert cfg.cascade_host_api_alignment_enabled is True
+
+    def test_mm_notification_listener_env_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SOVYX_TUNING__VOICE__MM_NOTIFICATION_LISTENER_ENABLED", "true")
+        assert VoiceTuningConfig().mm_notification_listener_enabled is True
+
+    def test_cascade_host_api_alignment_env_override(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("SOVYX_TUNING__VOICE__CASCADE_HOST_API_ALIGNMENT_ENABLED", "true")
+        assert VoiceTuningConfig().cascade_host_api_alignment_enabled is True
+
+    def test_tier2_without_alignment_rejected_by_cross_validator(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Cross-validator rejects bypass_tier2_host_api_rotate_enabled=True
+        without cascade_host_api_alignment_enabled=True at boot.
+
+        Mission §D4: Tier 2 mutates host_api on the capture stream; without
+        the opener alignment fix the next device-error reopen reverts to the
+        legacy enumeration order and silently undoes the rotation.
+        """
+        self._clear_voice_env(monkeypatch)
+        with pytest.raises(Exception) as exc_info:
+            VoiceTuningConfig(
+                bypass_tier2_host_api_rotate_enabled=True,
+                cascade_host_api_alignment_enabled=False,
+            )
+        # pydantic wraps ValueError; assert on payload, not exact class
+        # (xdist-safe per CLAUDE.md anti-pattern #8).
+        msg = str(exc_info.value)
+        assert "bypass_tier2_host_api_rotate_enabled" in msg
+        assert "cascade_host_api_alignment_enabled" in msg
+        assert "SOVYX_TUNING__VOICE__CASCADE_HOST_API_ALIGNMENT_ENABLED" in msg, (
+            "remediation hint must include the env-var to flip"
+        )
+
+    def test_tier2_with_alignment_passes_cross_validator(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Tier 2 + alignment together is the supported wire-up combo."""
+        self._clear_voice_env(monkeypatch)
+        cfg = VoiceTuningConfig(
+            bypass_tier2_host_api_rotate_enabled=True,
+            cascade_host_api_alignment_enabled=True,
+        )
+        assert cfg.bypass_tier2_host_api_rotate_enabled is True
+        assert cfg.cascade_host_api_alignment_enabled is True
+
+    def test_tier2_disabled_alignment_either_way_passes(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Cross-validator only fires when Tier 2 is True; alignment alone
+        without Tier 2 is a valid foundation/wire-up configuration."""
+        self._clear_voice_env(monkeypatch)
+        cfg_alignment_only = VoiceTuningConfig(
+            bypass_tier2_host_api_rotate_enabled=False,
+            cascade_host_api_alignment_enabled=True,
+        )
+        assert cfg_alignment_only.cascade_host_api_alignment_enabled is True
+        cfg_neither = VoiceTuningConfig(
+            bypass_tier2_host_api_rotate_enabled=False,
+            cascade_host_api_alignment_enabled=False,
+        )
+        assert cfg_neither.bypass_tier2_host_api_rotate_enabled is False
+        assert cfg_neither.cascade_host_api_alignment_enabled is False
+
+    def test_engine_config_paranoid_mission_flags_via_nested_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``EngineConfig`` reads paranoid-mission flags through the nested
+        ``SOVYX_TUNING__VOICE__*`` surface — same as every other voice
+        tuning knob."""
+        monkeypatch.setenv("SOVYX_TUNING__VOICE__PROBE_COLD_STRICT_VALIDATION_ENABLED", "true")
+        monkeypatch.setenv("SOVYX_TUNING__VOICE__BYPASS_TIER1_RAW_ENABLED", "true")
+        cfg = EngineConfig()
+        assert cfg.tuning.voice.probe_cold_strict_validation_enabled is True
+        assert cfg.tuning.voice.bypass_tier1_raw_enabled is True

@@ -870,6 +870,106 @@ class VoiceTuningConfig(BaseSettings):
     # See ``voice-linux-cascade-root-fix`` T8 for the handoff contract.
     device_test_force_close_grace_s: float = 2.0
 
+    # ── Voice Windows Paranoid Mission (v0.24.0 → v0.26.0) feature flags.
+    # See docs-internal/missions/MISSION-voice-windows-paranoid-2026-04-26.md.
+    #
+    # Staged adoption: foundation lands in v0.24.0 with every flag default
+    # **False** (lenient / disabled). Wire-up in v0.25.0 flips
+    # ``probe_cold_strict_validation_enabled`` + ``cascade_host_api_alignment_enabled``;
+    # behaviour knobs (``bypass_tier1_raw_enabled``,
+    # ``bypass_tier2_host_api_rotate_enabled``, ``mm_notification_listener_enabled``)
+    # stay opt-in for early-adopter pilots. v0.26.0 default-flips the
+    # remaining three after promotion-gate telemetry validates the wire-up.
+    #
+    # Master kill switch lives at ``voice_clarity_autofix`` above — do not
+    # add a parallel master here (anti-pattern #12: one understood layer
+    # beats three mysterious ones).
+    probe_cold_strict_validation_enabled: bool = False
+    """Furo W-1 — cold-probe stricter signal validation.
+
+    When ``False`` (legacy v0.23.x behaviour) ``_diagnose_cold`` returns
+    ``Diagnosis.HEALTHY`` for any combo whose audio callback fires at
+    least once, regardless of RMS — which is exactly what lets a
+    Microsoft Voice Clarity APO destroy the signal upstream of PortAudio
+    yet have the silent combo persist as the winning ComboStore entry,
+    replicating the failure deterministically on every boot.
+
+    When ``True``, silent cold probes (``rms_db < probe_rms_db_no_signal``,
+    default −70 dBFS) return ``Diagnosis.NO_SIGNAL`` so the cascade
+    advances to the next combo and the silent winner never persists.
+
+    Lenient mode (``False``) still emits structured
+    ``voice.probe.cold_silence_rejected{mode=lenient_passthrough}``
+    events so operators can calibrate the rejection rate before
+    enabling. Default-flip planned for v0.25.0."""
+
+    bypass_tier1_raw_enabled: bool = False
+    """Furo W-2 Tier 1 — RAW + Communications bypass via
+    ``IAudioClient3::SetClientProperties`` (Windows only).
+
+    Cheapest bypass strategy: no exclusive lock, no admin, single
+    sub-millisecond COM call. Bypasses the MFX / SFX APO layers via the
+    MMDevice property surface, which is orthogonal to the PortAudio
+    host-API wrapper — so it covers MME / DirectSound / WDM-KS /
+    WASAPI-shared endpoints uniformly when the device reports
+    ``RawProcessingSupported=true``.
+
+    Default-flip planned for v0.26.0; opt-in flag for early-adopter
+    pilots in v0.25.0. See spec §D2 / Part 1 of mission doc."""
+
+    bypass_tier2_host_api_rotate_enabled: bool = False
+    """Furo W-2 Tier 2 — host-API rotate-then-exclusive bypass
+    (Windows only).
+
+    For endpoints whose runtime host_api is MME / DirectSound / WDM-KS
+    the strategy rotates the capture stream to ``Windows WASAPI`` then
+    engages exclusive mode, which bypasses every APO layer
+    (MFX / SFX / EFX) on the capture pipeline.
+
+    Requires ``cascade_host_api_alignment_enabled=True`` — the
+    cross-validator below rejects the contradictory configuration at
+    boot because the rotate path mutates ``self._host_api_name`` and
+    relies on the opener honouring it on subsequent device-error
+    reopens. Default-flip planned for v0.26.0."""
+
+    mm_notification_listener_enabled: bool = False
+    """IMMNotificationClient device-change listener (Windows only).
+
+    When enabled the capture task registers an
+    ``IMMNotificationClient`` via
+    ``RegisterEndpointNotificationCallback`` so the pipeline auto-
+    recovers on default-device changes (USB hot-plug, Sound Settings
+    panel flip) without operator intervention.
+
+    The COM callback contract is **non-blocking** (anti-pattern #29
+    enforced by ``tools/lint_imm_callbacks.py``): every event posts
+    onto the asyncio loop via ``call_soon_threadsafe`` and returns
+    ``S_OK`` within ~5 ms. Blocking inside the callback would deadlock
+    the entire Windows audio service.
+
+    Default-flip planned for v0.26.0. See spec §D5 / Part 3 of mission
+    doc."""
+
+    cascade_host_api_alignment_enabled: bool = False
+    """Cascade ↔ runtime host-API alignment (cross-platform).
+
+    Furo W-4 latent-bug fix: ``_stream_opener._device_chain`` currently
+    iterates siblings in raw PortAudio enumeration order even when the
+    cascade winner picked a specific host_api. This causes the runtime
+    opener to drift off the cascade winner on multi-host_api endpoints —
+    specifically reproducible on Razer BlackShark V2 Pro under Windows
+    Voice Clarity, where the cascade selects DirectSound and the opener
+    silently re-picks MME (which inherits the same APO chain).
+
+    When enabled, ``_device_chain`` consumes ``preferred_host_api``
+    (cascade winner) and ``capture_fallback_host_apis`` (currently dead
+    config) and applies a 3-tier bucket sort: Bucket 0 preferred,
+    Bucket 1 ranked fallbacks, Bucket 2 PortAudio enumeration order.
+
+    Pre-requisite for ``bypass_tier2_host_api_rotate_enabled``.
+    Default-flip planned for v0.25.0. See spec §D4 / Part 4 of mission
+    doc."""
+
     @model_validator(mode="after")
     def _enforce_settle_ge_probe(self) -> VoiceTuningConfig:
         """v1.3 §4.1 L4-A — guard-rail against probe-window regression.
@@ -946,6 +1046,44 @@ class VoiceTuningConfig(BaseSettings):
                 "skip is the CEILING. Equality eliminates the band "
                 "(width zero) and produces an ambiguous boundary at "
                 "the exact-equal score."
+            )
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _enforce_paranoid_mission_dependencies(self) -> VoiceTuningConfig:
+        """Voice Windows Paranoid Mission §D4 — Tier 2 host_api_rotate
+        depends on cascade ↔ runtime alignment.
+
+        Tier 2 ``WindowsHostApiRotateThenExclusiveBypass`` mutates the
+        capture stream's host_api by calling
+        ``request_host_api_rotate(target=WASAPI)`` and expects the
+        opener to keep honouring that host_api on subsequent device-
+        error reopens. Without
+        ``cascade_host_api_alignment_enabled=True`` the opener falls
+        back to its legacy PortAudio enumeration order on the next
+        reopen and silently undoes the rotation — the pipeline reports
+        ROTATED_SUCCESS while drifting back to the original (broken)
+        host_api on the next hiccup.
+
+        Reject the misconfiguration at boot with a remediation hint;
+        cheaper than shipping a strategy that silently undoes itself.
+        """
+        if (
+            self.bypass_tier2_host_api_rotate_enabled
+            and not self.cascade_host_api_alignment_enabled
+        ):
+            msg = (
+                "Invalid voice tuning: "
+                "bypass_tier2_host_api_rotate_enabled=True requires "
+                "cascade_host_api_alignment_enabled=True. The Tier 2 "
+                "rotate-then-exclusive strategy mutates the capture "
+                "stream's host_api; without the opener alignment fix "
+                "(_stream_opener._device_chain bucket-sort) the next "
+                "device-error reopen reverts to the legacy enumeration "
+                "order and silently undoes the rotation. Set "
+                "SOVYX_TUNING__VOICE__CASCADE_HOST_API_ALIGNMENT_ENABLED=true "
+                "to enable Tier 2."
             )
             raise ValueError(msg)
         return self
