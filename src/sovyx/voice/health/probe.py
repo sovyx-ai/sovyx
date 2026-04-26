@@ -99,6 +99,26 @@ _VAD_APO_DEGRADED_CEILING = _VoiceTuning().probe_vad_apo_degraded_ceiling
 _VAD_HEALTHY_FLOOR = _VoiceTuning().probe_vad_healthy_floor
 """Max VAD probability above which the warm probe is :attr:`Diagnosis.HEALTHY`."""
 
+_COLD_STRICT_VALIDATION_ENABLED = _VoiceTuning().probe_cold_strict_validation_enabled
+"""Voice Windows Paranoid Mission Furo W-1 — gate the strict-RMS path
+in :func:`_diagnose_cold`.
+
+When ``False`` (legacy v0.23.x behaviour, foundation-phase default in
+v0.24.0) the cold-probe accepts any combo with at least one callback
+even when ``rms_db < _RMS_DB_NO_SIGNAL_CEILING`` — which is exactly
+what lets a Microsoft Voice Clarity APO destroy the signal upstream of
+PortAudio yet have the silent combo persist as the winning ComboStore
+entry, replicating the failure deterministically on every boot.
+
+When ``True`` (default-flip planned for v0.25.0) silent cold probes
+return :attr:`Diagnosis.NO_SIGNAL` so the cascade advances to the next
+combo and the silent winner never persists.
+
+Lenient mode (``False``) still emits a structured
+``voice.probe.cold_silence_rejected{mode=lenient_passthrough}`` event
+so operators can calibrate the rejection rate before flipping the flag.
+"""
+
 _TARGET_PIPELINE_RATE = 16_000
 _TARGET_PIPELINE_WINDOW = 512
 
@@ -483,7 +503,11 @@ async def _run_probe(
     rms_db = _analyse_rms(collected, combo)
 
     if mode is ProbeMode.COLD:
-        diagnosis = _diagnose_cold(callbacks_fired=callbacks_fired)
+        diagnosis = _diagnose_cold(
+            callbacks_fired=callbacks_fired,
+            rms_db=rms_db,
+            combo=combo,
+        )
         return ProbeResult(
             diagnosis=diagnosis,
             mode=mode,
@@ -752,10 +776,80 @@ def _default_frame_normalizer_factory(
     )
 
 
-def _diagnose_cold(*, callbacks_fired: int) -> Diagnosis:
-    """Cold-mode diagnosis table (ADR §4.3)."""
+def _diagnose_cold(
+    *,
+    callbacks_fired: int,
+    rms_db: float,
+    combo: Combo,
+    vad_max_prob: float | None = None,
+) -> Diagnosis:
+    """Cold-mode diagnosis (ADR §4.3 — amended by Voice Windows
+    Paranoid Mission Furo W-1).
+
+    The cold probe runs without the VAD attached, so the diagnosis is a
+    function of how many audio callbacks the driver delivered and the
+    energy of the captured signal:
+
+    * ``callbacks_fired == 0``        →  :attr:`Diagnosis.NO_SIGNAL`
+    * silent (``rms_db < _RMS_DB_NO_SIGNAL_CEILING``):
+
+      * strict mode (post-fix, ``_COLD_STRICT_VALIDATION_ENABLED=True``)
+        → :attr:`Diagnosis.NO_SIGNAL` and emit
+        ``voice.probe.cold_silence_rejected{mode=strict_reject}``.
+      * lenient mode (legacy v0.23.x, foundation-phase default in
+        v0.24.0) → :attr:`Diagnosis.HEALTHY` (preserves prior
+        acceptance) and emit
+        ``voice.probe.cold_silence_rejected{mode=lenient_passthrough}``
+        for telemetry-only calibration.
+
+    * any other case → :attr:`Diagnosis.HEALTHY`.
+
+    The ``vad_max_prob`` keyword is accepted but ignored on the cold
+    path — the cold probe never runs the VAD (probe.py call site
+    explicitly skips it). The kwarg keeps the signature symmetric with
+    :func:`_diagnose_warm` so future refactoring can collapse the
+    branches without touching call sites.
+
+    Reuses ``probe_rms_db_no_signal`` (default −70 dBFS) — a level that
+    is 4 LSB at int16, well below the ambient room floor (−55 to −45
+    dBFS on typical desktops).
+    """
     if callbacks_fired == 0:
         return Diagnosis.NO_SIGNAL
+
+    if rms_db >= _RMS_DB_NO_SIGNAL_CEILING:
+        return Diagnosis.HEALTHY
+
+    # Silent cold probe — Voice Clarity-style upstream destruction
+    # leaves callbacks firing while PCM is exact zero. Strict mode
+    # rejects; lenient mode keeps legacy acceptance for one minor cycle
+    # but still surfaces telemetry so operators can validate the rate
+    # before flipping the flag.
+    if _COLD_STRICT_VALIDATION_ENABLED:
+        logger.warning(
+            "voice.probe.cold_silence_rejected",
+            mode="strict_reject",
+            rms_db=rms_db,
+            callbacks_fired=callbacks_fired,
+            host_api=combo.host_api,
+            sample_rate=combo.sample_rate,
+            channels=combo.channels,
+            sample_format=combo.sample_format,
+            exclusive=combo.exclusive,
+        )
+        return Diagnosis.NO_SIGNAL
+
+    logger.warning(
+        "voice.probe.cold_silence_rejected",
+        mode="lenient_passthrough",
+        rms_db=rms_db,
+        callbacks_fired=callbacks_fired,
+        host_api=combo.host_api,
+        sample_rate=combo.sample_rate,
+        channels=combo.channels,
+        sample_format=combo.sample_format,
+        exclusive=combo.exclusive,
+    )
     return Diagnosis.HEALTHY
 
 

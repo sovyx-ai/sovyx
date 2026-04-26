@@ -23,6 +23,7 @@ Test topology:
 from __future__ import annotations
 
 import asyncio
+import importlib
 import threading
 import time
 from dataclasses import dataclass
@@ -30,9 +31,19 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from sovyx.voice.health.contract import Combo, Diagnosis, ProbeMode
-from sovyx.voice.health.probe import _classify_open_error, probe
+from sovyx.voice.health.probe import _classify_open_error, _diagnose_cold, probe
+
+# ``sovyx.voice.health.__init__`` re-exports ``probe`` (the function),
+# which shadows attribute access ``sovyx.voice.health.probe``. ``import
+# x as alias`` resolves via attribute lookup, so the alias would bind
+# to the function, not the module. ``importlib.import_module`` reads
+# from ``sys.modules`` directly and gives us the module reference we
+# need for monkeypatching the strict-validation flag.
+probe_mod = importlib.import_module("sovyx.voice.health.probe")
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -1164,3 +1175,354 @@ class TestClassifyOpenErrorPriority:
         """Every combination in the fixture table matches the reference ``_expected``."""
         assert _classify_open_error(RuntimeError(text)) is expected
         assert self._expected(text) is expected
+
+
+# ---------------------------------------------------------------------------
+# Voice Windows Paranoid Mission — Furo W-1 cold-probe stricter validation
+# ---------------------------------------------------------------------------
+
+
+def _cold_combo(host_api: str = "Windows WASAPI") -> Combo:
+    """Reference cold-probe combo for the diagnosis-table tests."""
+    return Combo(
+        host_api=host_api,
+        sample_rate=16_000,
+        channels=1,
+        sample_format="int16",
+        exclusive=False,
+        auto_convert=False,
+        frames_per_buffer=512,
+        platform_key="win32",
+    )
+
+
+class TestDiagnoseCold:
+    """Furo W-1 — :func:`_diagnose_cold` strict-vs-lenient diagnosis table.
+
+    The function is the single point of acceptance for cold-mode probes.
+    In v0.23.x it returned :attr:`Diagnosis.HEALTHY` whenever
+    ``callbacks_fired > 0``, without inspecting RMS — which let a Voice
+    Clarity APO destroy the signal upstream of PortAudio yet have the
+    silent combo persist as the winning ComboStore entry.
+
+    Post-fix, ``_diagnose_cold`` reads ``rms_db`` and (in strict mode)
+    rejects silent probes as :attr:`Diagnosis.NO_SIGNAL`. Lenient mode
+    preserves legacy acceptance for one minor cycle but emits structured
+    telemetry so operators can observe the rejection rate before
+    flipping the flag.
+    """
+
+    def test_zero_callbacks_returns_no_signal(self) -> None:
+        """Driver delivered zero callbacks → no signal, regardless of mode."""
+        assert (
+            _diagnose_cold(callbacks_fired=0, rms_db=-30.0, combo=_cold_combo())
+            is Diagnosis.NO_SIGNAL
+        )
+
+    def test_zero_callbacks_silent_rms_returns_no_signal(self) -> None:
+        """Edge case: zero callbacks AND silent RMS — short-circuits on
+        callback count regardless of strict/lenient mode."""
+        assert (
+            _diagnose_cold(callbacks_fired=0, rms_db=float("-inf"), combo=_cold_combo())
+            is Diagnosis.NO_SIGNAL
+        )
+
+    def test_callbacks_with_signal_returns_healthy(self) -> None:
+        """Healthy RMS + callbacks → HEALTHY in any mode."""
+        assert (
+            _diagnose_cold(callbacks_fired=49, rms_db=-30.0, combo=_cold_combo())
+            is Diagnosis.HEALTHY
+        )
+
+    def test_threshold_boundary_just_above_returns_healthy(self) -> None:
+        """rms_db just above the no-signal ceiling → HEALTHY."""
+        assert (
+            _diagnose_cold(
+                callbacks_fired=49,
+                rms_db=probe_mod._RMS_DB_NO_SIGNAL_CEILING + 0.0001,
+                combo=_cold_combo(),
+            )
+            is Diagnosis.HEALTHY
+        )
+
+    def test_threshold_boundary_at_returns_healthy(self) -> None:
+        """rms_db == ceiling exactly → HEALTHY (inclusive comparison)."""
+        assert (
+            _diagnose_cold(
+                callbacks_fired=49,
+                rms_db=probe_mod._RMS_DB_NO_SIGNAL_CEILING,
+                combo=_cold_combo(),
+            )
+            is Diagnosis.HEALTHY
+        )
+
+    def test_threshold_boundary_just_below_strict_returns_no_signal(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """rms_db just below the ceiling in strict mode → NO_SIGNAL."""
+        monkeypatch.setattr(probe_mod, "_COLD_STRICT_VALIDATION_ENABLED", True)
+        assert (
+            _diagnose_cold(
+                callbacks_fired=49,
+                rms_db=probe_mod._RMS_DB_NO_SIGNAL_CEILING - 0.0001,
+                combo=_cold_combo(),
+            )
+            is Diagnosis.NO_SIGNAL
+        )
+
+    def test_silent_strict_returns_no_signal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Voice-Clarity-style silence (rms ≈ −96 dBFS) in strict mode
+        → NO_SIGNAL. Mirrors the user's actual bug repro inputs."""
+        monkeypatch.setattr(probe_mod, "_COLD_STRICT_VALIDATION_ENABLED", True)
+        assert (
+            _diagnose_cold(callbacks_fired=49, rms_db=-96.43, combo=_cold_combo())
+            is Diagnosis.NO_SIGNAL
+        )
+
+    def test_silent_lenient_returns_healthy_legacy_path(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """v0.23.x backward-compat: lenient mode still returns HEALTHY
+        for silent probes — telemetry-only flip."""
+        monkeypatch.setattr(probe_mod, "_COLD_STRICT_VALIDATION_ENABLED", False)
+        assert (
+            _diagnose_cold(callbacks_fired=49, rms_db=-96.43, combo=_cold_combo())
+            is Diagnosis.HEALTHY
+        )
+
+    def test_negative_infinity_rms_strict_returns_no_signal(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pure zero PCM (rms_db == -inf) in strict mode → NO_SIGNAL."""
+        monkeypatch.setattr(probe_mod, "_COLD_STRICT_VALIDATION_ENABLED", True)
+        assert (
+            _diagnose_cold(callbacks_fired=49, rms_db=float("-inf"), combo=_cold_combo())
+            is Diagnosis.NO_SIGNAL
+        )
+
+    def test_lenient_emits_warning_event(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Lenient passthrough still emits structured telemetry so
+        operators can calibrate the rejection rate.
+
+        Sovyx uses structlog with a KV processor — the LogRecord's
+        ``getMessage()`` renders the entire payload as a string. Test
+        asserts substring membership (same pattern as
+        ``test_probe_start_time_error_emits_event`` at line 1050) rather
+        than per-field attribute access, which is structlog-config
+        dependent."""
+        monkeypatch.setattr(probe_mod, "_COLD_STRICT_VALIDATION_ENABLED", False)
+        caplog.set_level("WARNING")
+        _diagnose_cold(
+            callbacks_fired=49,
+            rms_db=-96.43,
+            combo=_cold_combo(host_api="Windows DirectSound"),
+        )
+        matching = [
+            r for r in caplog.records if "voice.probe.cold_silence_rejected" in r.getMessage()
+        ]
+        assert matching, "lenient path must emit the telemetry event"
+        msg = matching[0].getMessage()
+        assert "lenient_passthrough" in msg
+        assert "Windows DirectSound" in msg
+        assert "-96.43" in msg
+        assert "callbacks_fired" in msg and "49" in msg
+
+    def test_strict_emits_warning_event(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Strict reject also emits structured telemetry — different
+        ``mode`` value so dashboards can split the two populations."""
+        monkeypatch.setattr(probe_mod, "_COLD_STRICT_VALIDATION_ENABLED", True)
+        caplog.set_level("WARNING")
+        _diagnose_cold(
+            callbacks_fired=49,
+            rms_db=-96.43,
+            combo=_cold_combo(host_api="MME"),
+        )
+        matching = [
+            r for r in caplog.records if "voice.probe.cold_silence_rejected" in r.getMessage()
+        ]
+        assert matching, "strict path must emit the telemetry event"
+        msg = matching[0].getMessage()
+        assert "strict_reject" in msg
+        assert "MME" in msg
+
+    def test_healthy_path_does_not_emit_event(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """No telemetry on the healthy path — would flood logs in the
+        common case where silence is the exception."""
+        monkeypatch.setattr(probe_mod, "_COLD_STRICT_VALIDATION_ENABLED", True)
+        caplog.set_level("WARNING")
+        _diagnose_cold(callbacks_fired=49, rms_db=-30.0, combo=_cold_combo())
+        matching = [
+            r for r in caplog.records if "voice.probe.cold_silence_rejected" in r.getMessage()
+        ]
+        assert matching == [], "healthy path must not emit cold-silence telemetry"
+
+    def test_vad_kwarg_is_ignored_on_cold_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The ``vad_max_prob`` kwarg is accepted but ignored — the cold
+        probe never runs the VAD; the parameter only exists for
+        signature symmetry with :func:`_diagnose_warm`."""
+        monkeypatch.setattr(probe_mod, "_COLD_STRICT_VALIDATION_ENABLED", True)
+        # Healthy RMS, dead VAD — still HEALTHY because cold ignores VAD.
+        assert (
+            _diagnose_cold(
+                callbacks_fired=49,
+                rms_db=-30.0,
+                combo=_cold_combo(),
+                vad_max_prob=0.0,
+            )
+            is Diagnosis.HEALTHY
+        )
+        # Silent RMS, even with high VAD prob, still NO_SIGNAL strict.
+        assert (
+            _diagnose_cold(
+                callbacks_fired=49,
+                rms_db=-96.43,
+                combo=_cold_combo(),
+                vad_max_prob=0.95,
+            )
+            is Diagnosis.NO_SIGNAL
+        )
+
+    def test_combo_field_passthrough_to_telemetry(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Every Combo field surfaces in telemetry so dashboards can
+        slice by host_api / sample_rate / format / exclusive."""
+        monkeypatch.setattr(probe_mod, "_COLD_STRICT_VALIDATION_ENABLED", True)
+        caplog.set_level("WARNING")
+        combo = Combo(
+            host_api="Windows WASAPI",
+            sample_rate=48_000,
+            channels=2,
+            sample_format="float32",
+            exclusive=True,
+            auto_convert=True,
+            frames_per_buffer=512,
+            platform_key="win32",
+        )
+        _diagnose_cold(callbacks_fired=128, rms_db=-90.0, combo=combo)
+        matching = [
+            r for r in caplog.records if "voice.probe.cold_silence_rejected" in r.getMessage()
+        ]
+        assert len(matching) == 1
+        msg = matching[0].getMessage()
+        assert "48000" in msg or "48_000" in msg
+        assert "channels" in msg and "2" in msg
+        assert "float32" in msg
+        assert "exclusive" in msg and "True" in msg
+
+    @given(
+        callbacks=st.integers(min_value=0, max_value=10_000),
+        rms_db=st.one_of(
+            st.just(float("-inf")),
+            st.floats(min_value=-120.0, max_value=20.0, allow_nan=False),
+        ),
+    )
+    @settings(max_examples=200, deadline=None)
+    def test_diagnose_cold_strict_invariants(self, callbacks: int, rms_db: float) -> None:
+        """Strict-mode invariants for every (callbacks, rms_db) combo:
+
+        * ``callbacks == 0``               → NO_SIGNAL
+        * silent (``rms_db < ceiling``)    → NO_SIGNAL
+        * otherwise                        → HEALTHY
+
+        Hypothesis-driven property test that pins the single source of
+        truth against ad-hoc parametrised fixtures.
+        """
+        # Direct calls — no monkeypatch needed; pass strict via the flag.
+        # Use a fresh Combo on every call to avoid Hypothesis caching state.
+        # Strict-mode behaviour is the post-fix contract.
+        original = probe_mod._COLD_STRICT_VALIDATION_ENABLED
+        probe_mod._COLD_STRICT_VALIDATION_ENABLED = True
+        try:
+            result = _diagnose_cold(
+                callbacks_fired=callbacks,
+                rms_db=rms_db,
+                combo=_cold_combo(),
+            )
+        finally:
+            probe_mod._COLD_STRICT_VALIDATION_ENABLED = original
+
+        if callbacks == 0:
+            assert result is Diagnosis.NO_SIGNAL
+        elif rms_db < probe_mod._RMS_DB_NO_SIGNAL_CEILING:
+            assert result is Diagnosis.NO_SIGNAL
+        else:
+            assert result is Diagnosis.HEALTHY
+
+
+class TestFuroW1UserReplay:
+    """Voice Windows Paranoid Mission — Furo W-1 user-bug regression test.
+
+    Hard-codes the exact inputs from the user's ``sovyx.log`` repro:
+
+    * ``callbacks_fired == 49`` (driver fired callbacks)
+    * ``rms_db == -96.43`` (Voice Clarity destroyed PCM upstream of PortAudio)
+    * combo: DirectSound on Windows (cascade-winning combo on user's rig)
+
+    Pre-fix: returns HEALTHY → ComboStore persists silent winner →
+    every subsequent boot loads the silent combo from disk and the
+    pipeline reads silence forever.
+
+    Post-fix (strict): returns NO_SIGNAL → cascade advances → silent
+    winner never persists.
+
+    This test guarantees the user's exact bug never returns. Lives in
+    the regression class even though it physically sits in test_probe.py
+    so the unit test discovery picks it up next to its sibling table.
+    """
+
+    def test_user_silent_combo_strict_returns_no_signal(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """The exact (callbacks=49, rms=-96.43, host=DirectSound) tuple
+        from the user's ``sovyx.log`` is rejected as NO_SIGNAL in strict
+        mode — and surfaces in telemetry."""
+        monkeypatch.setattr(probe_mod, "_COLD_STRICT_VALIDATION_ENABLED", True)
+        caplog.set_level("WARNING")
+        combo = Combo(
+            host_api="Windows DirectSound",
+            sample_rate=16_000,
+            channels=1,
+            sample_format="int16",
+            exclusive=False,
+            auto_convert=False,
+            frames_per_buffer=512,
+            platform_key="win32",
+        )
+        result = _diagnose_cold(callbacks_fired=49, rms_db=-96.43, combo=combo)
+        assert result is Diagnosis.NO_SIGNAL
+        matching = [
+            r for r in caplog.records if "voice.probe.cold_silence_rejected" in r.getMessage()
+        ]
+        assert len(matching) == 1
+        msg = matching[0].getMessage()
+        assert "strict_reject" in msg
+        assert "-96.43" in msg
+        assert "callbacks_fired" in msg and "49" in msg
+        assert "Windows DirectSound" in msg
+
+    def test_user_silent_combo_lenient_preserves_legacy_behavior(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """v0.23.x acceptance is preserved when the flag is False
+        (foundation phase default in v0.24.0)."""
+        monkeypatch.setattr(probe_mod, "_COLD_STRICT_VALIDATION_ENABLED", False)
+        combo = Combo(
+            host_api="Windows DirectSound",
+            sample_rate=16_000,
+            channels=1,
+            sample_format="int16",
+            exclusive=False,
+            auto_convert=False,
+            frames_per_buffer=512,
+            platform_key="win32",
+        )
+        # Pre-fix behaviour: HEALTHY despite −96 dBFS.
+        result = _diagnose_cold(callbacks_fired=49, rms_db=-96.43, combo=combo)
+        assert result is Diagnosis.HEALTHY
