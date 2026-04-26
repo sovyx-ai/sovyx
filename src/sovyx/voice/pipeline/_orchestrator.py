@@ -565,6 +565,33 @@ class VoicePipeline:
         return self._running
 
     @property
+    def frame_history(self) -> tuple[PipelineFrame, ...]:
+        """Public accessor for the bounded frame ring buffer (Step 15).
+
+        Returns a tuple snapshot (oldest-first) of every frame the
+        orchestrator has recorded since boot OR the last
+        :meth:`PipelineStateMachine.reset` call. The deque under the
+        hood is bounded at the state machine's ``history_capacity``
+        (default 256), so the snapshot is always at most that size.
+
+        Mission §1.1 Hybrid Option C — observability surface for the
+        Pipecat-aligned typed frames recorded at the 5 transition sites
+        (Step 13) plus the BargeInInterruptionFrame at every
+        cancel_speech_chain exit (Step 14).
+
+        Consumers:
+
+        * Dashboard ``GET /api/voice/frame-history`` (registered in
+          ``src/sovyx/dashboard/routes/voice.py``).
+        * Soak validation harness (Step 16).
+        * Operator forensics ("what frames fired during this turn?").
+
+        The snapshot is immutable — caller mutations cannot leak
+        back into the deque.
+        """
+        return self._state_machine.frame_history()
+
+    @property
     def vad(self) -> SileroVAD:
         """Voice activity detector used by this pipeline."""
         return self._vad

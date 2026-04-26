@@ -24,6 +24,68 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/api/voice", dependencies=[Depends(verify_token)])
 
 
+@router.get("/frame-history")
+async def get_voice_frame_history(
+    request: Request,
+    limit: int = 100,
+) -> JSONResponse:
+    """Return the recent typed frames recorded by the voice pipeline.
+
+    Mission §1.1 Hybrid Option C — Pipecat-aligned typed frames
+    (UserStartedSpeakingFrame, TranscriptionFrame, etc.) recorded at
+    the 5 transition sites + the BargeInInterruptionFrame emitted at
+    every cancel_speech_chain exit. The dashboard's call-flow widget
+    consumes this endpoint to render the per-utterance frame timeline.
+
+    Args:
+        limit: Maximum number of frames to return. Bounds: 1-256.
+            Out-of-range values are clamped at the boundary.
+
+    Returns:
+        JSON: ``{"frames": [{frame_type, timestamp_monotonic,
+        utterance_id, ...}, ...], "total_recorded": int}``.
+
+        ``total_recorded`` is the size of the bounded ring buffer at
+        snapshot time (≤ 256 by default); ``frames`` is the newest
+        ``limit`` frames in oldest-first order.
+
+        Returns 503 when the pipeline registry is not yet available
+        (boot in progress or voice disabled).
+    """
+    bounded_limit = max(1, min(256, limit))
+    registry = getattr(request.app.state, "registry", None)
+    if registry is None:
+        return JSONResponse(
+            {"error": "Engine not running"},
+            status_code=HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    try:
+        from sovyx.voice.pipeline._frame_types import _frame_to_dict
+        from sovyx.voice.pipeline._orchestrator import VoicePipeline
+
+        pipeline = registry.get(VoicePipeline)
+    except (KeyError, LookupError):
+        return JSONResponse(
+            {"error": "Voice pipeline not registered"},
+            status_code=HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    history = pipeline.frame_history
+    total = len(history)
+    # Newest-first slice: tail of the deque is newest, take last
+    # ``bounded_limit`` frames.
+    selected = history[-bounded_limit:] if bounded_limit < total else history
+    serialised = [_frame_to_dict(f) for f in selected]
+    return JSONResponse(
+        {
+            "frames": serialised,
+            "total_recorded": total,
+            "limit_applied": bounded_limit,
+        },
+    )
+
+
 @router.get("/status")
 async def get_voice_status_endpoint(request: Request) -> JSONResponse:
     """Voice pipeline status — running state, models, hardware tier."""
