@@ -37,13 +37,18 @@ from hypothesis import strategies as st
 from sovyx.voice.health.contract import Combo, Diagnosis, ProbeMode
 from sovyx.voice.health.probe import _classify_open_error, _diagnose_cold, probe
 
-# ``sovyx.voice.health.__init__`` re-exports ``probe`` (the function),
-# which shadows attribute access ``sovyx.voice.health.probe``. ``import
-# x as alias`` resolves via attribute lookup, so the alias would bind
-# to the function, not the module. ``importlib.import_module`` reads
-# from ``sys.modules`` directly and gives us the module reference we
-# need for monkeypatching the strict-validation flag.
-probe_mod = importlib.import_module("sovyx.voice.health.probe")
+# Post-T05 split (v0.24.x): ``sovyx.voice.health.probe`` is a
+# subpackage with submodules ``_classifier`` / ``_cold`` / ``_warm`` /
+# ``_dispatch``. Constants live in their owning submodule's namespace;
+# the package-level rebinds in ``__init__.py`` are read-only proxies
+# (mutating them does NOT propagate to the submodule's binding that
+# the diagnosis function actually reads). Monkeypatch-style tests
+# must target the submodule directly per CLAUDE.md anti-pattern #20.
+#
+# - ``_COLD_STRICT_VALIDATION_ENABLED`` lives in ``_cold.py``.
+# - ``_RMS_DB_NO_SIGNAL_CEILING`` lives in ``_classifier.py``.
+cold_mod = importlib.import_module("sovyx.voice.health.probe._cold")
+classifier_mod = importlib.import_module("sovyx.voice.health.probe._classifier")
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -1060,8 +1065,13 @@ class TestStartTimeErrorClassification:
         sd = _FakeSoundDevice(
             start_exc=RuntimeError("AUDCLNT_E_DEVICE_INVALIDATED"),
         )
+        # Post-T05 split: ``record_start_time_error`` is imported into
+        # the ``_dispatch`` submodule's namespace where ``_run_probe``
+        # reads it. The package-level rebind in ``__init__.py`` is a
+        # separate binding; patching it would be a silent no-op
+        # (anti-pattern #20). Patch the submodule path directly.
         with patch(
-            "sovyx.voice.health.probe.record_start_time_error",
+            "sovyx.voice.health.probe._dispatch.record_start_time_error",
         ) as mock_record:
             await probe(
                 combo=combo,
@@ -1239,7 +1249,7 @@ class TestDiagnoseCold:
         assert (
             _diagnose_cold(
                 callbacks_fired=49,
-                rms_db=probe_mod._RMS_DB_NO_SIGNAL_CEILING + 0.0001,
+                rms_db=classifier_mod._RMS_DB_NO_SIGNAL_CEILING + 0.0001,
                 combo=_cold_combo(),
             )
             is Diagnosis.HEALTHY
@@ -1250,7 +1260,7 @@ class TestDiagnoseCold:
         assert (
             _diagnose_cold(
                 callbacks_fired=49,
-                rms_db=probe_mod._RMS_DB_NO_SIGNAL_CEILING,
+                rms_db=classifier_mod._RMS_DB_NO_SIGNAL_CEILING,
                 combo=_cold_combo(),
             )
             is Diagnosis.HEALTHY
@@ -1260,11 +1270,11 @@ class TestDiagnoseCold:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """rms_db just below the ceiling in strict mode → NO_SIGNAL."""
-        monkeypatch.setattr(probe_mod, "_COLD_STRICT_VALIDATION_ENABLED", True)
+        monkeypatch.setattr(cold_mod, "_COLD_STRICT_VALIDATION_ENABLED", True)
         assert (
             _diagnose_cold(
                 callbacks_fired=49,
-                rms_db=probe_mod._RMS_DB_NO_SIGNAL_CEILING - 0.0001,
+                rms_db=classifier_mod._RMS_DB_NO_SIGNAL_CEILING - 0.0001,
                 combo=_cold_combo(),
             )
             is Diagnosis.NO_SIGNAL
@@ -1273,7 +1283,7 @@ class TestDiagnoseCold:
     def test_silent_strict_returns_no_signal(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Voice-Clarity-style silence (rms ≈ −96 dBFS) in strict mode
         → NO_SIGNAL. Mirrors the user's actual bug repro inputs."""
-        monkeypatch.setattr(probe_mod, "_COLD_STRICT_VALIDATION_ENABLED", True)
+        monkeypatch.setattr(cold_mod, "_COLD_STRICT_VALIDATION_ENABLED", True)
         assert (
             _diagnose_cold(callbacks_fired=49, rms_db=-96.43, combo=_cold_combo())
             is Diagnosis.NO_SIGNAL
@@ -1284,7 +1294,7 @@ class TestDiagnoseCold:
     ) -> None:
         """v0.23.x backward-compat: lenient mode still returns HEALTHY
         for silent probes — telemetry-only flip."""
-        monkeypatch.setattr(probe_mod, "_COLD_STRICT_VALIDATION_ENABLED", False)
+        monkeypatch.setattr(cold_mod, "_COLD_STRICT_VALIDATION_ENABLED", False)
         assert (
             _diagnose_cold(callbacks_fired=49, rms_db=-96.43, combo=_cold_combo())
             is Diagnosis.HEALTHY
@@ -1294,7 +1304,7 @@ class TestDiagnoseCold:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Pure zero PCM (rms_db == -inf) in strict mode → NO_SIGNAL."""
-        monkeypatch.setattr(probe_mod, "_COLD_STRICT_VALIDATION_ENABLED", True)
+        monkeypatch.setattr(cold_mod, "_COLD_STRICT_VALIDATION_ENABLED", True)
         assert (
             _diagnose_cold(callbacks_fired=49, rms_db=float("-inf"), combo=_cold_combo())
             is Diagnosis.NO_SIGNAL
@@ -1312,7 +1322,7 @@ class TestDiagnoseCold:
         ``test_probe_start_time_error_emits_event`` at line 1050) rather
         than per-field attribute access, which is structlog-config
         dependent."""
-        monkeypatch.setattr(probe_mod, "_COLD_STRICT_VALIDATION_ENABLED", False)
+        monkeypatch.setattr(cold_mod, "_COLD_STRICT_VALIDATION_ENABLED", False)
         caplog.set_level("WARNING")
         _diagnose_cold(
             callbacks_fired=49,
@@ -1334,7 +1344,7 @@ class TestDiagnoseCold:
     ) -> None:
         """Strict reject also emits structured telemetry — different
         ``mode`` value so dashboards can split the two populations."""
-        monkeypatch.setattr(probe_mod, "_COLD_STRICT_VALIDATION_ENABLED", True)
+        monkeypatch.setattr(cold_mod, "_COLD_STRICT_VALIDATION_ENABLED", True)
         caplog.set_level("WARNING")
         _diagnose_cold(
             callbacks_fired=49,
@@ -1354,7 +1364,7 @@ class TestDiagnoseCold:
     ) -> None:
         """No telemetry on the healthy path — would flood logs in the
         common case where silence is the exception."""
-        monkeypatch.setattr(probe_mod, "_COLD_STRICT_VALIDATION_ENABLED", True)
+        monkeypatch.setattr(cold_mod, "_COLD_STRICT_VALIDATION_ENABLED", True)
         caplog.set_level("WARNING")
         _diagnose_cold(callbacks_fired=49, rms_db=-30.0, combo=_cold_combo())
         matching = [
@@ -1366,7 +1376,7 @@ class TestDiagnoseCold:
         """The ``vad_max_prob`` kwarg is accepted but ignored — the cold
         probe never runs the VAD; the parameter only exists for
         signature symmetry with :func:`_diagnose_warm`."""
-        monkeypatch.setattr(probe_mod, "_COLD_STRICT_VALIDATION_ENABLED", True)
+        monkeypatch.setattr(cold_mod, "_COLD_STRICT_VALIDATION_ENABLED", True)
         # Healthy RMS, dead VAD — still HEALTHY because cold ignores VAD.
         assert (
             _diagnose_cold(
@@ -1393,7 +1403,7 @@ class TestDiagnoseCold:
     ) -> None:
         """Every Combo field surfaces in telemetry so dashboards can
         slice by host_api / sample_rate / format / exclusive."""
-        monkeypatch.setattr(probe_mod, "_COLD_STRICT_VALIDATION_ENABLED", True)
+        monkeypatch.setattr(cold_mod, "_COLD_STRICT_VALIDATION_ENABLED", True)
         caplog.set_level("WARNING")
         combo = Combo(
             host_api="Windows WASAPI",
@@ -1437,8 +1447,8 @@ class TestDiagnoseCold:
         # Direct calls — no monkeypatch needed; pass strict via the flag.
         # Use a fresh Combo on every call to avoid Hypothesis caching state.
         # Strict-mode behaviour is the post-fix contract.
-        original = probe_mod._COLD_STRICT_VALIDATION_ENABLED
-        probe_mod._COLD_STRICT_VALIDATION_ENABLED = True
+        original = cold_mod._COLD_STRICT_VALIDATION_ENABLED
+        cold_mod._COLD_STRICT_VALIDATION_ENABLED = True
         try:
             result = _diagnose_cold(
                 callbacks_fired=callbacks,
@@ -1446,11 +1456,11 @@ class TestDiagnoseCold:
                 combo=_cold_combo(),
             )
         finally:
-            probe_mod._COLD_STRICT_VALIDATION_ENABLED = original
+            cold_mod._COLD_STRICT_VALIDATION_ENABLED = original
 
         if callbacks == 0:
             assert result is Diagnosis.NO_SIGNAL
-        elif rms_db < probe_mod._RMS_DB_NO_SIGNAL_CEILING:
+        elif rms_db < classifier_mod._RMS_DB_NO_SIGNAL_CEILING:
             assert result is Diagnosis.NO_SIGNAL
         else:
             assert result is Diagnosis.HEALTHY
@@ -1483,7 +1493,7 @@ class TestFuroW1UserReplay:
         """The exact (callbacks=49, rms=-96.43, host=DirectSound) tuple
         from the user's ``sovyx.log`` is rejected as NO_SIGNAL in strict
         mode — and surfaces in telemetry."""
-        monkeypatch.setattr(probe_mod, "_COLD_STRICT_VALIDATION_ENABLED", True)
+        monkeypatch.setattr(cold_mod, "_COLD_STRICT_VALIDATION_ENABLED", True)
         caplog.set_level("WARNING")
         combo = Combo(
             host_api="Windows DirectSound",
@@ -1512,7 +1522,7 @@ class TestFuroW1UserReplay:
     ) -> None:
         """v0.23.x acceptance is preserved when the flag is False
         (foundation phase default in v0.24.0)."""
-        monkeypatch.setattr(probe_mod, "_COLD_STRICT_VALIDATION_ENABLED", False)
+        monkeypatch.setattr(cold_mod, "_COLD_STRICT_VALIDATION_ENABLED", False)
         combo = Combo(
             host_api="Windows DirectSound",
             sample_rate=16_000,

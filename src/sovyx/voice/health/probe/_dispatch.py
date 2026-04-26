@@ -1,59 +1,25 @@
-"""L3 — Voice Capture Health Lifecycle probe.
+"""Top-level probe orchestration — public :func:`probe` entry point,
+:func:`_run_probe` core loop, and the sounddevice / WASAPI stream
+lifecycle helpers.
 
-Single entry point for the two probe modes described in
-``docs-internal/ADR-voice-capture-health-lifecycle.md`` §4.3:
-
-* :attr:`~sovyx.voice.health.contract.ProbeMode.COLD` — boot-time
-  validation with no user speaking. Verifies that the stream opens
-  cleanly and that PortAudio callbacks are firing. Cannot tell a silent
-  room apart from a destroyed signal, so its diagnosis surface is
-  deliberately coarse (``HEALTHY`` / ``NO_SIGNAL`` / open-error family).
-
-* :attr:`~sovyx.voice.health.contract.ProbeMode.WARM` — wizard or
-  first-interaction validation where the user is asked to speak. Runs
-  the captured audio through :class:`~sovyx.voice._frame_normalizer.FrameNormalizer`
-  and :class:`~sovyx.voice.vad.SileroVAD` so the probe can derive the
-  full :class:`~sovyx.voice.health.contract.Diagnosis` surface (in
-  particular :attr:`~sovyx.voice.health.contract.Diagnosis.APO_DEGRADED`,
-  which requires signal *content* evidence — healthy RMS + dead VAD).
-
-Design constraints:
-
-* Open a stream with *exactly* the :class:`~sovyx.voice.health.contract.Combo`
-  the caller supplied. No internal fallback pyramid — the probe is the
-  atomic unit the cascade (L2) uses to evaluate a single combo. Host-API
-  / rate / channel fallback belongs to :mod:`sovyx.voice.health.cascade`,
-  not here.
-* Blocking PortAudio calls (``sd.InputStream`` constructor, ``.start()``,
-  ``.stop()``, ``.close()``) run on ``asyncio.to_thread`` so the event
-  loop never stalls (CLAUDE.md anti-pattern #14).
-* Hard 5 s wall-clock ceiling per probe via :func:`asyncio.wait_for` —
-  the ADR commits to this, and without it a misbehaving driver could
-  block the cascade indefinitely.
-* Open failures are classified into
-  :class:`~sovyx.voice.health.contract.Diagnosis` immediately so the
-  cascade can drive its fallthrough logic without having to inspect raw
-  exception text.
-* Dependency injection for ``sd_module`` / ``vad`` / ``frame_normalizer_factory``
-  keeps tests free of ``sys.modules`` patching (CLAUDE.md anti-pattern #2)
-  and of the real ONNX weights.
+This module is the only piece of the probe subpackage that touches
+PortAudio / sounddevice. The other submodules (``_classifier`` /
+``_cold`` / ``_warm``) are pure-Python diagnosis logic; keeping the
+audio I/O concentrated here makes the probe testable with a fake
+``sd_module`` injected at the boundary.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import math
 import sys
 import threading
 import time
 from typing import TYPE_CHECKING, Any
 
-from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.observability.logging import get_logger
-from sovyx.voice._frame_normalizer import FrameNormalizer
 from sovyx.voice.health._metrics import (
-    record_cold_silence_rejected,
     record_probe_result,
     record_start_time_error,
 )
@@ -63,21 +29,34 @@ from sovyx.voice.health.contract import (
     ProbeMode,
     ProbeResult,
 )
+from sovyx.voice.health.probe._classifier import (
+    _WARMUP_DISCARD_MS,
+)
+from sovyx.voice.health.probe._cold import (
+    _classify_open_error,
+    _diagnose_cold,
+)
+from sovyx.voice.health.probe._warm import (
+    _analyse_rms,
+    _analyse_vad,
+    _diagnose_warm,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     import numpy.typing as npt
 
+    from sovyx.voice._frame_normalizer import FrameNormalizer
     from sovyx.voice.vad import SileroVAD
 
 logger = get_logger(__name__)
 
 
-# ── Probe tuning defaults ───────────────────────────────────────────────
-#
-# Sourced from :class:`VoiceTuningConfig` so every knob is overridable via
-# ``SOVYX_TUNING__VOICE__PROBE_*`` env vars. CLAUDE.md anti-pattern #17.
+# ── Probe duration / timeout defaults ─────────────────────────────
+
+
+from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning  # noqa: E402
 
 _DEFAULT_COLD_DURATION_MS = _VoiceTuning().probe_cold_duration_ms
 """Cold probe target duration. ADR §4.3."""
@@ -85,46 +64,13 @@ _DEFAULT_COLD_DURATION_MS = _VoiceTuning().probe_cold_duration_ms
 _DEFAULT_WARM_DURATION_MS = _VoiceTuning().probe_warm_duration_ms
 """Warm probe target duration. ADR §4.3."""
 
-_WARMUP_DISCARD_MS = _VoiceTuning().probe_warmup_discard_ms
-"""Audio discarded at the start of every probe (VAD warmup + driver settle)."""
-
 _HARD_TIMEOUT_S = _VoiceTuning().probe_hard_timeout_s
 """Hard wall-clock ceiling per probe (ADR §4.3)."""
 
-_RMS_DB_NO_SIGNAL_CEILING = _VoiceTuning().probe_rms_db_no_signal
-"""Below this dBFS, warm-probe diagnosis is :attr:`Diagnosis.NO_SIGNAL`."""
+# ``_WARMUP_DISCARD_MS`` is re-exported for back-compat — some
+# external callers may import it via ``sovyx.voice.health.probe``.
+_ = _WARMUP_DISCARD_MS
 
-_RMS_DB_LOW_SIGNAL_CEILING = _VoiceTuning().probe_rms_db_low_signal
-"""Between no_signal and low-signal, diagnosis is :attr:`Diagnosis.LOW_SIGNAL`."""
-
-_VAD_APO_DEGRADED_CEILING = _VoiceTuning().probe_vad_apo_degraded_ceiling
-"""Max VAD probability below which a healthy-RMS signal is diagnosed as APO-corrupted."""
-
-_VAD_HEALTHY_FLOOR = _VoiceTuning().probe_vad_healthy_floor
-"""Max VAD probability above which the warm probe is :attr:`Diagnosis.HEALTHY`."""
-
-_COLD_STRICT_VALIDATION_ENABLED = _VoiceTuning().probe_cold_strict_validation_enabled
-"""Voice Windows Paranoid Mission Furo W-1 — gate the strict-RMS path
-in :func:`_diagnose_cold`.
-
-When ``False`` (legacy v0.23.x behaviour, foundation-phase default in
-v0.24.0) the cold-probe accepts any combo with at least one callback
-even when ``rms_db < _RMS_DB_NO_SIGNAL_CEILING`` — which is exactly
-what lets a Microsoft Voice Clarity APO destroy the signal upstream of
-PortAudio yet have the silent combo persist as the winning ComboStore
-entry, replicating the failure deterministically on every boot.
-
-When ``True`` (default-flip planned for v0.25.0) silent cold probes
-return :attr:`Diagnosis.NO_SIGNAL` so the cascade advances to the next
-combo and the silent winner never persists.
-
-Lenient mode (``False``) still emits a structured
-``voice.probe.cold_silence_rejected{mode=lenient_passthrough}`` event
-so operators can calibrate the rejection rate before flipping the flag.
-"""
-
-_TARGET_PIPELINE_RATE = 16_000
-_TARGET_PIPELINE_WINDOW = 512
 
 _FORMAT_TO_SD_DTYPE: dict[str, str] = {
     "int16": "int16",
@@ -137,54 +83,6 @@ _FORMAT_TO_SD_DTYPE: dict[str, str] = {
 ``paInt24`` and delivers int32 numpy buffers with 24-bit sign-extended
 payload (the scaling the FrameNormalizer expects).
 """
-
-# Keywords mapped to the ADR's open-error diagnoses. Matching is done
-# case-insensitively against the exception message after classification
-# attempts via the exception type.
-#
-# AUDCLNT_E_DEVICE_IN_USE / 0x8889000a / -2004287478 belongs to the
-# busy family: another process (or our own voice-test session) is
-# holding the endpoint in exclusive mode. Recovery is wait-and-retry
-# or close the competing owner — NOT the §4.4.7 fail-over path
-# (quarantining a busy device would falsely mark healthy hardware).
-_DEVICE_BUSY_KEYWORDS = (
-    "device unavailable",
-    "busy",
-    "exclusive",
-    "in use",
-    "audclnt_e_device_in_use",
-    "0x8889000a",
-    "-2004287478",
-)
-_PERMISSION_KEYWORDS = ("permission", "denied", "access", "not authoriz")
-_FORMAT_MISMATCH_KEYWORDS = (
-    "invalid sample rate",
-    "invalid samplerate",
-    "sample rate",
-    "samplerate",
-    "format",
-    "channels",
-    "invalid number of channels",
-    "unsupported",
-)
-# Kernel-invalidated IAudioClient state — see ADR §4.4.7 + the
-# forensic report in ``docs-internal/voice-capture-kernel-invalidated.md``.
-# PortAudio surfaces this as ``paInvalidDevice`` (-9996) because
-# ``IAudioClient::Initialize`` returns one of the AUDCLNT_E_DEVICE_*
-# HRESULTs, and sounddevice re-wraps that as "Invalid device". The PnP
-# layer still reports the endpoint as healthy (ConfigManagerErrorCode=0),
-# so this is *not* a hot-unplug — it's a stuck audio engine that no
-# user-mode call can revive. Cure is physical (replug / reboot). We
-# match text, hex and signed-decimal forms so we're resilient to
-# sounddevice message format drift.
-_KERNEL_INVALIDATED_KEYWORDS = (
-    "invalid device",
-    "paerrorcode -9996",
-    "pa_invalid_device",
-    "audclnt_e_device_invalidated",
-    "0x88890004",
-    "-2004287484",
-)
 
 
 SoundDeviceModule = Any
@@ -204,75 +102,7 @@ fakes in tests implement the same structural surface.
 """
 
 
-def _classify_open_error(exc: BaseException) -> Diagnosis:
-    """Map a PortAudio / OS exception to a :class:`Diagnosis`.
-
-    Exact string matching is fragile; we match keyword sets instead and
-    fall back to :attr:`Diagnosis.DRIVER_ERROR` for anything we don't
-    recognise (still actionable — the cascade treats DRIVER_ERROR as a
-    retry-with-different-combo signal).
-
-    Ordering rationale — kernel_invalidated checked *after* the
-    format-mismatch set so an "invalid sample rate" message (which
-    contains the token ``"invalid"``) doesn't false-positive as a
-    kernel invalidation. The ``_KERNEL_INVALIDATED_KEYWORDS`` strings
-    are narrower than their format counterparts; none of them overlap
-    with the format-mismatch tokens, but the priority still matters
-    if a future message gains a compound phrase.
-    """
-    msg = str(exc).lower()
-    if any(keyword in msg for keyword in _PERMISSION_KEYWORDS):
-        return Diagnosis.PERMISSION_DENIED
-    if any(keyword in msg for keyword in _DEVICE_BUSY_KEYWORDS):
-        return Diagnosis.DEVICE_BUSY
-    if any(keyword in msg for keyword in _FORMAT_MISMATCH_KEYWORDS):
-        return Diagnosis.FORMAT_MISMATCH
-    if any(keyword in msg for keyword in _KERNEL_INVALIDATED_KEYWORDS):
-        return Diagnosis.KERNEL_INVALIDATED
-    return Diagnosis.DRIVER_ERROR
-
-
-def _linear_to_db(linear: float) -> float:
-    """Convert a linear amplitude to dBFS. Returns ``-inf`` for zero."""
-    if linear <= 0.0:
-        return float("-inf")
-    return 20.0 * math.log10(linear)
-
-
-def _compute_rms_db(block: npt.NDArray[Any], scale: float) -> float:
-    """RMS of ``block`` expressed in dBFS.
-
-    ``scale`` normalises the input to the ``[-1, 1]`` range the dBFS
-    convention expects (``2**15`` for int16, ``2**23`` for int24,
-    ``1.0`` for float32).
-    """
-    import numpy as np
-
-    if block.size == 0:
-        return float("-inf")
-    arr = block.astype(np.float64) / scale
-    mean_sq = float(np.mean(arr * arr))
-    if mean_sq <= 0.0:
-        return float("-inf")
-    rms_linear = math.sqrt(mean_sq)
-    return _linear_to_db(rms_linear)
-
-
-def _format_scale(sample_format: str) -> float:
-    """Return the divisor that puts one sample in ``[-1, 1]``."""
-    if sample_format == "int16":
-        return float(1 << 15)
-    if sample_format == "int24":
-        return float(1 << 23)
-    if sample_format == "float32":
-        return 1.0
-    msg = f"unexpected sample_format={sample_format!r}"  # pragma: no cover
-    raise ValueError(msg)
-
-
-def _warmup_samples(combo: Combo) -> int:
-    """Count of source-rate samples to discard at probe start."""
-    return int(combo.sample_rate * _WARMUP_DISCARD_MS / 1000.0)
+# ── Public entry point ────────────────────────────────────────────
 
 
 async def probe(
@@ -549,6 +379,9 @@ async def _run_probe(
     )
 
 
+# ── Stream lifecycle helpers ──────────────────────────────────────
+
+
 def _open_input_stream(
     *,
     sd: SoundDeviceModule,
@@ -688,198 +521,6 @@ def _load_sounddevice() -> SoundDeviceModule:
     return sd
 
 
-def _analyse_rms(
-    blocks: list[npt.NDArray[Any]],
-    combo: Combo,
-) -> float:
-    """Compute dBFS over the post-warmup concatenation of ``blocks``."""
-    import numpy as np
-
-    if not blocks:
-        return float("-inf")
-
-    # Downmix multichannel blocks to mono for RMS — VAD does the same.
-    mono_blocks: list[npt.NDArray[Any]] = []
-    for b in blocks:
-        if b.ndim == 2:
-            mono_blocks.append(b.mean(axis=1))
-        else:
-            mono_blocks.append(b)
-
-    flat = np.concatenate(mono_blocks)
-    warmup = _warmup_samples(combo)
-    if flat.size <= warmup:
-        return float("-inf")
-    tail = flat[warmup:]
-    scale = _format_scale(combo.sample_format)
-    return _compute_rms_db(tail, scale)
-
-
-def _analyse_vad(
-    blocks: list[npt.NDArray[Any]],
-    *,
-    combo: Combo,
-    vad: SileroVAD,
-    frame_normalizer_factory: Callable[[int, int, str], FrameNormalizer] | None,
-) -> tuple[float, float]:
-    """Run the post-warmup audio through the resampler + VAD.
-
-    Returns ``(max_prob, mean_prob)``. Both are ``0.0`` when no full
-    16 kHz / 512-sample window could be assembled from the captured
-    audio (warmup-sized probe or empty stream).
-    """
-    import numpy as np
-
-    if not blocks:
-        return 0.0, 0.0
-
-    factory = frame_normalizer_factory or _default_frame_normalizer_factory
-    normalizer = factory(combo.sample_rate, combo.channels, combo.sample_format)
-
-    probabilities: list[float] = []
-    warmup_remaining = _warmup_samples(combo)
-
-    for block in blocks:
-        # Peel off warmup samples per-block so the VAD sees clean audio.
-        if warmup_remaining > 0:
-            if block.ndim == 1:
-                if block.shape[0] <= warmup_remaining:
-                    warmup_remaining -= block.shape[0]
-                    continue
-                block = block[warmup_remaining:]
-            else:
-                if block.shape[0] <= warmup_remaining:
-                    warmup_remaining -= block.shape[0]
-                    continue
-                block = block[warmup_remaining:, :]
-            warmup_remaining = 0
-
-        windows = normalizer.push(block)
-        for window in windows:
-            if window.shape != (_TARGET_PIPELINE_WINDOW,):
-                continue
-            event = vad.process_frame(window)
-            probabilities.append(float(event.probability))
-
-    if not probabilities:
-        return 0.0, 0.0
-
-    arr = np.asarray(probabilities, dtype=np.float32)
-    return float(arr.max()), float(arr.mean())
-
-
-def _default_frame_normalizer_factory(
-    source_rate: int,
-    source_channels: int,
-    source_format: str,
-) -> FrameNormalizer:
-    return FrameNormalizer(
-        source_rate=source_rate,
-        source_channels=source_channels,
-        source_format=source_format,
-    )
-
-
-def _diagnose_cold(
-    *,
-    callbacks_fired: int,
-    rms_db: float,
-    combo: Combo,
-    vad_max_prob: float | None = None,
-) -> Diagnosis:
-    """Cold-mode diagnosis (ADR §4.3 — amended by Voice Windows
-    Paranoid Mission Furo W-1).
-
-    The cold probe runs without the VAD attached, so the diagnosis is a
-    function of how many audio callbacks the driver delivered and the
-    energy of the captured signal:
-
-    * ``callbacks_fired == 0``        →  :attr:`Diagnosis.NO_SIGNAL`
-    * silent (``rms_db < _RMS_DB_NO_SIGNAL_CEILING``):
-
-      * strict mode (post-fix, ``_COLD_STRICT_VALIDATION_ENABLED=True``)
-        → :attr:`Diagnosis.NO_SIGNAL` and emit
-        ``voice.probe.cold_silence_rejected{mode=strict_reject}``.
-      * lenient mode (legacy v0.23.x, foundation-phase default in
-        v0.24.0) → :attr:`Diagnosis.HEALTHY` (preserves prior
-        acceptance) and emit
-        ``voice.probe.cold_silence_rejected{mode=lenient_passthrough}``
-        for telemetry-only calibration.
-
-    * any other case → :attr:`Diagnosis.HEALTHY`.
-
-    The ``vad_max_prob`` keyword is accepted but ignored on the cold
-    path — the cold probe never runs the VAD (probe.py call site
-    explicitly skips it). The kwarg keeps the signature symmetric with
-    :func:`_diagnose_warm` so future refactoring can collapse the
-    branches without touching call sites.
-
-    Reuses ``probe_rms_db_no_signal`` (default −70 dBFS) — a level that
-    is 4 LSB at int16, well below the ambient room floor (−55 to −45
-    dBFS on typical desktops).
-    """
-    if callbacks_fired == 0:
-        return Diagnosis.NO_SIGNAL
-
-    if rms_db >= _RMS_DB_NO_SIGNAL_CEILING:
-        return Diagnosis.HEALTHY
-
-    # Silent cold probe — Voice Clarity-style upstream destruction
-    # leaves callbacks firing while PCM is exact zero. Strict mode
-    # rejects; lenient mode keeps legacy acceptance for one minor cycle
-    # but still surfaces telemetry so operators can validate the rate
-    # before flipping the flag.
-    if _COLD_STRICT_VALIDATION_ENABLED:
-        logger.warning(
-            "voice.probe.cold_silence_rejected",
-            mode="strict_reject",
-            rms_db=rms_db,
-            callbacks_fired=callbacks_fired,
-            host_api=combo.host_api,
-            sample_rate=combo.sample_rate,
-            channels=combo.channels,
-            sample_format=combo.sample_format,
-            exclusive=combo.exclusive,
-        )
-        record_cold_silence_rejected(mode="strict_reject", host_api=combo.host_api)
-        return Diagnosis.NO_SIGNAL
-
-    logger.warning(
-        "voice.probe.cold_silence_rejected",
-        mode="lenient_passthrough",
-        rms_db=rms_db,
-        callbacks_fired=callbacks_fired,
-        host_api=combo.host_api,
-        sample_rate=combo.sample_rate,
-        channels=combo.channels,
-        sample_format=combo.sample_format,
-        exclusive=combo.exclusive,
-    )
-    record_cold_silence_rejected(mode="lenient_passthrough", host_api=combo.host_api)
-    return Diagnosis.HEALTHY
-
-
-def _diagnose_warm(
-    *,
-    rms_db: float,
-    vad_max_prob: float,
-    callbacks_fired: int,
-) -> Diagnosis:
-    """Warm-mode diagnosis table (ADR §4.3)."""
-    if callbacks_fired == 0:
-        return Diagnosis.NO_SIGNAL
-    if rms_db < _RMS_DB_NO_SIGNAL_CEILING:
-        return Diagnosis.NO_SIGNAL
-    if rms_db < _RMS_DB_LOW_SIGNAL_CEILING:
-        return Diagnosis.LOW_SIGNAL
-    # rms_db ≥ -55 dB: decide on VAD.
-    if vad_max_prob >= _VAD_HEALTHY_FLOOR:
-        return Diagnosis.HEALTHY
-    if vad_max_prob < _VAD_APO_DEGRADED_CEILING:
-        return Diagnosis.APO_DEGRADED
-    return Diagnosis.VAD_INSENSITIVE
-
-
 def _combo_tag(combo: Combo) -> str:
     """Short string for log events (avoid full Combo repr in tight loops)."""
     return (
@@ -888,4 +529,17 @@ def _combo_tag(combo: Combo) -> str:
     )
 
 
-__all__ = ["probe"]
+__all__ = [
+    "InputStreamLike",
+    "SoundDeviceModule",
+    "_DEFAULT_COLD_DURATION_MS",
+    "_DEFAULT_WARM_DURATION_MS",
+    "_FORMAT_TO_SD_DTYPE",
+    "_HARD_TIMEOUT_S",
+    "_build_probe_wasapi_settings",
+    "_combo_tag",
+    "_load_sounddevice",
+    "_open_input_stream",
+    "_run_probe",
+    "probe",
+]
