@@ -494,3 +494,53 @@ class TestApplyAttenuationRegime:
         assert strat._applied_snapshot is None  # noqa: SLF001
         # Reason token surfaced for coordinator telemetry.
         assert exc_info.value.reason == "apply_overcorrected_to_saturation"
+
+
+class TestBandAidDeprecationWarn:
+    """Mission §9.1.1 / Gap 1a — every successful band-aid apply emits
+    a structured WARN so dashboards / log search can identify
+    deployments still relying on the legacy fraction-based path.
+
+    The WARN is the operator-visible deprecation surface; it does NOT
+    change behaviour (the band-aid still applies and reverts as
+    before). Removal target: v0.24.0, after the L2.5 KB-driven preset
+    cascade (Layer 3) covers the codecs reported via this WARN.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_saturation_apply_emits_band_aid_warn(self) -> None:
+        """A successful saturation-regime apply emits exactly one
+        ``voice.mixer.alsa_band_aid_used`` WARN with regime="saturation"
+        and the operator-actionable message naming KB profile
+        contribution as the future-proof path. Spied on the module
+        logger so the test is invariant to structlog → stdlib bridge
+        configuration state (which caplog otherwise depends on)."""
+        from unittest.mock import MagicMock
+
+        strat = LinuxALSAMixerResetBypass()
+        snap = MixerApplySnapshot(
+            card_index=1,
+            reverted_controls=(("Capture", 31),),
+            applied_controls=(("Capture", 15),),
+        )
+        spy = MagicMock()
+        with (
+            patch.object(mod, "enumerate_alsa_mixer_snapshots", return_value=[_card()]),
+            patch.object(mod, "apply_mixer_reset", new=AsyncMock(return_value=snap)),
+            patch.object(mod, "logger", spy),
+        ):
+            await strat.apply(_context())
+
+        # The strategy emits 2 warning calls only on overshoot rollback
+        # (which we did not set up here) — so the only warning fired
+        # is the deprecation surface.
+        deprecation_calls = [
+            call
+            for call in spy.warning.call_args_list
+            if call.args and call.args[0] == "voice.mixer.alsa_band_aid_used"
+        ]
+        assert len(deprecation_calls) == 1
+        kwargs = deprecation_calls[0].kwargs
+        assert kwargs["voice.regime"] == "saturation"
+        assert kwargs["voice.removal_target"] == "v0.24.0"
+        assert "voice.action_required" in kwargs

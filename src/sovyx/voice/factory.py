@@ -501,6 +501,15 @@ async def create_voice_pipeline(
     await _maybe_check_llm_reachable()
     _maybe_log_pipewire_status()
     _maybe_log_alsa_ucm_status()
+    # Mission §9.1.1 / Gap 1b — boot-time deprecation surface for the
+    # four ``linux_mixer_*_fraction`` knobs scheduled for removal in
+    # v0.24.0. A stock install with no overrides emits nothing; an
+    # operator who set a non-default value via YAML or env gets ONE
+    # structured WARN per non-default knob so they have a full minor-
+    # version cycle to migrate to the L2.5 KB-driven preset cascade.
+    from sovyx.engine.config import warn_on_deprecated_mixer_overrides
+
+    warn_on_deprecated_mixer_overrides()
 
     # ── 1. SileroVAD (auto-download) ──────────────────────────
     logger.info("voice_factory_creating_vad")
