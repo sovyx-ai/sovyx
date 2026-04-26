@@ -32,6 +32,7 @@ candidate — L2.5 defers, cascade proceeds unchanged.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import platform
 import re
@@ -333,16 +334,20 @@ def _detect_audio_stack(
     if xdg_runtime_dir is not None:
         pipewire_sock = xdg_runtime_dir / "pipewire-0"
         pulse_sock = xdg_runtime_dir / "pulse" / "native"
-        try:
+        with contextlib.suppress(OSError):
             if pipewire_sock.exists():
                 return "pipewire"
-        except OSError:
-            pass
-        try:
+        logger.debug(
+            "voice.hardware_detector.pipewire_socket_probe_failed",
+            path=str(pipewire_sock),
+        )
+        with contextlib.suppress(OSError):
             if pulse_sock.exists():
                 return "pulseaudio"
-        except OSError:
-            pass
+        logger.debug(
+            "voice.hardware_detector.pulse_socket_probe_failed",
+            path=str(pulse_sock),
+        )
     # Fallback: if ALSA's /proc interface is live, call it ALSA.
     try:
         if (_PROC_ASOUND / "pcm").exists():

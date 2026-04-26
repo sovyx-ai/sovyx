@@ -267,16 +267,28 @@ def _read_string_fields(
     # Each entry is a (language, codepage) tuple.
     lang, codepage = translations[0]
     prefix = rf"\StringFileInfo\{lang:04x}{codepage:04x}"
+    missing: list[str] = []
     for field_name in canonical:
-        try:
+        # ``pywintypes.error`` is the canonical error class but importing
+        # it would force a ``pywin32`` dependency on every code path —
+        # the fallback ``Exception`` catch keeps us decoupled while the
+        # narrowed scope (single GetFileVersionInfo call, well-known
+        # failure modes) preserves the "no silent ignore" contract.
+        with contextlib.suppress(Exception):  # noqa: BLE001
             value = win32api_mod.GetFileVersionInfo(  # type: ignore[attr-defined]
                 dll_path,
                 rf"{prefix}\{field_name}",
             )
-        except Exception:  # noqa: BLE001 — missing field is normal
-            continue
-        if isinstance(value, str) and value:
-            out[field_name] = value.strip()
+            if isinstance(value, str) and value:
+                out[field_name] = value.strip()
+                continue
+        missing.append(field_name)
+    if missing:
+        logger.debug(
+            "voice.apo_dll.fields_partial",
+            captured=sorted(out.keys()),
+            missing=missing,
+        )
     return out
 
 

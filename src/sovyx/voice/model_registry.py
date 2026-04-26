@@ -25,6 +25,7 @@ serve byte-exact copies of the primary.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -187,16 +188,14 @@ def detect_tts_engine() -> str:
 
     Priority: piper > kokoro > none.
     """
-    try:
+    with contextlib.suppress(ImportError):
         __import__("piper_phonemize")
         return "piper"
-    except ImportError:
-        pass
-    try:
+    logger.debug("voice.model_registry.piper_not_installed")
+    with contextlib.suppress(ImportError):
         __import__("kokoro_onnx")
         return "kokoro"
-    except ImportError:
-        pass
+    logger.debug("voice.model_registry.kokoro_not_installed")
     return "none"
 
 

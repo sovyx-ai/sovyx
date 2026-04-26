@@ -366,12 +366,11 @@ class ConsentLedger:
     @staticmethod
     def _release_file_lock(fh: Any) -> None:  # noqa: ANN401
         if sys.platform == "win32":
-            try:
+            with contextlib.suppress(OSError):
                 import msvcrt
 
                 msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
-            except OSError:
-                pass
+            logger.debug("voice.consent.win_unlock_attempted")
         else:
             import fcntl
 

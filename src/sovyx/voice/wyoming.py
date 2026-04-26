@@ -504,7 +504,7 @@ class WyomingClientHandler:
 
                 await self._dispatch(event)
         except (ConnectionError, asyncio.CancelledError):
-            pass
+            logger.debug("voice.wyoming.connection_dispatch_terminated")
         finally:
             await self.close()
 
@@ -513,11 +513,10 @@ class WyomingClientHandler:
         if self._closed:
             return
         self._closed = True
-        try:
+        with contextlib.suppress(ConnectionError, OSError):
             self._writer.close()
             await self._writer.wait_closed()
-        except (ConnectionError, OSError):
-            pass
+        logger.debug("voice.wyoming.connection_closed")
 
     async def _dispatch(self, event: WyomingEvent) -> None:
         """Route an incoming event to the appropriate handler."""

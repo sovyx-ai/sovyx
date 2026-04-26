@@ -10,6 +10,7 @@ Ref: IMPL-SUP-005 §SPEC-6 (VoiceModelAutoSelection), ADR-002 (hardware tiers)
 
 from __future__ import annotations
 
+import contextlib
 import os
 import platform
 import subprocess
@@ -176,7 +177,7 @@ def _detect_gpu() -> tuple[bool, int]:
     Returns:
         Tuple of (has_gpu, vram_mb).
     """
-    try:
+    with contextlib.suppress(FileNotFoundError, subprocess.TimeoutExpired, ValueError):
         result = subprocess.run(  # noqa: S603, S607
             ["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
             capture_output=True,
@@ -186,8 +187,7 @@ def _detect_gpu() -> tuple[bool, int]:
         if result.returncode == 0 and result.stdout.strip():
             vram = int(result.stdout.strip().split("\n")[0])
             return True, vram
-    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
-        pass
+    logger.debug("voice.auto_select.gpu_probe_skipped", reason="nvidia-smi absent or timed out")
     return False, 0
 
 
