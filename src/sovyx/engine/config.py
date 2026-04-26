@@ -257,6 +257,29 @@ class VoiceTuningConfig(BaseSettings):
     Sovyx instance — operators opt in when they've observed
     audio-service-related issues. Non-Windows platforms skip."""
 
+    voice_probe_macos_diagnostics_enabled: bool = True
+    """MA1+MA5+MA6 wire-up (mission §1.5 Step 5): when True (darwin
+    only), voice factory runs the macOS audio diagnostic trio at boot:
+
+    * :func:`sovyx.voice._hal_detector_mac.detect_hal_plugins` —
+      enumerates ``/Library/Audio/Plug-Ins/HAL/`` for virtual-audio
+      and audio-enhancement plug-ins (Krisp, BlackHole, Loopback,
+      etc.) that intercept capture before Sovyx sees it.
+    * :func:`sovyx.voice._codesign_verify_mac.verify_microphone_entitlement`
+      — confirms the running binary's Hardened-Runtime mic
+      entitlement.
+    * :func:`sovyx.voice._bluetooth_profile_mac.detect_bluetooth_audio_profile`
+      — flags A2DP-only headphones connected as input devices.
+
+    Default True: every probe is read-only filesystem-or-subprocess
+    observability. The Bluetooth probe spawns ``system_profiler``
+    (cold-start ~2-5 s) — the boot-time cost is acceptable for a
+    once-per-pipeline diagnostic on macOS, where these failure modes
+    are the load-bearing silent-failure paths the mission is designed
+    to surface. Capability-gated via :data:`Capability.COREAUDIO_VPIO`
+    (validates darwin + system_profiler on PATH); non-darwin platforms
+    skip silently."""
+
     voice_probe_windows_etw_events_enabled: bool = False
     """WI1 wire-up (mission §1.5 Step 4): when True (Windows only),
     voice factory queries the Microsoft-Windows-Audio* ETW operational

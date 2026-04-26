@@ -281,6 +281,137 @@ def _maybe_log_alsa_ucm_status(card_id: str = "0") -> None:
     )
 
 
+async def _maybe_log_macos_diagnostics() -> None:
+    """MA1+MA5+MA6 wire-up (Step 5): run the macOS audio diagnostic
+    trio at boot.
+
+    Three probes invoked sequentially via ``asyncio.to_thread`` so the
+    boot path stays async-clean (the Bluetooth probe in particular
+    spawns ``system_profiler`` which has a 2-5 s cold-start cost and
+    must not block the event loop):
+
+    1. :func:`detect_hal_plugins` — virtual-audio + audio-enhancement
+       HAL plug-ins that intercept capture (Krisp / BlackHole /
+       Loopback / SoundSource).
+    2. :func:`verify_microphone_entitlement` — Hardened-Runtime mic
+       entitlement verdict (PRESENT / ABSENT / UNSIGNED / UNKNOWN).
+    3. :func:`detect_bluetooth_audio_profile` — A2DP-only headphones
+       in input-device role (the canonical "user wonders why their
+       AirPods Pro can't be heard" failure mode).
+
+    Opt-in via
+    :attr:`VoiceTuningConfig.voice_probe_macos_diagnostics_enabled`
+    (default True — read-only observability). Capability-gated via
+    :data:`Capability.COREAUDIO_VPIO` (validates darwin +
+    ``system_profiler`` on PATH); non-darwin platforms skip silently.
+
+    Failure isolation: each probe internally absorbs its own
+    subprocess / parse failures into per-report notes. This wrapper
+    additionally catches any unexpected exception per probe so a
+    single broken detector never blocks the other two from running.
+    """
+    from sovyx.engine.config import VoiceTuningConfig
+
+    tuning = VoiceTuningConfig()
+    if not tuning.voice_probe_macos_diagnostics_enabled:
+        return
+    from sovyx.voice.health._capabilities import (  # noqa: PLC0415 — local import keeps factory cold-start lean
+        Capability,
+        get_default_resolver,
+    )
+
+    resolver = get_default_resolver()
+    if not resolver.has(Capability.COREAUDIO_VPIO):
+        # Non-darwin or system_profiler missing — no-op, no log
+        # (avoids polluting Windows + Linux boot output with a darwin
+        # capability-absent message). Operators on darwin who hit this
+        # branch see it via the existing capability resolver telemetry.
+        return
+
+    # MA1 — HAL plug-in enumeration.
+    try:
+        from sovyx.voice._hal_detector_mac import detect_hal_plugins
+
+        hal_report = await asyncio.to_thread(detect_hal_plugins)
+    except Exception as exc:  # noqa: BLE001 — observability gate isolation
+        logger.warning(
+            "voice.factory.macos_hal_probe_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+    else:
+        if hal_report.plugins:
+            logger.info(
+                "voice.macos.hal_plugins_detected",
+                **{
+                    "voice.plugin_count": len(hal_report.plugins),
+                    "voice.virtual_audio_active": hal_report.virtual_audio_active,
+                    "voice.audio_enhancement_active": hal_report.audio_enhancement_active,
+                    "voice.bundle_names": [p.bundle_name for p in hal_report.plugins],
+                    "voice.categories": list(hal_report.by_category.keys()),
+                },
+            )
+        if hal_report.notes:
+            logger.debug(
+                "voice.macos.hal_probe_notes",
+                **{"voice.notes": list(hal_report.notes)},
+            )
+
+    # MA5 — Hardened Runtime mic entitlement.
+    try:
+        from sovyx.voice._codesign_verify_mac import verify_microphone_entitlement
+
+        entitlement_report = await asyncio.to_thread(verify_microphone_entitlement)
+    except Exception as exc:  # noqa: BLE001 — observability gate isolation
+        logger.warning(
+            "voice.factory.macos_entitlement_probe_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+    else:
+        # Always log entitlement state — operators need to see
+        # PRESENT / ABSENT / UNSIGNED / UNKNOWN every boot for
+        # forensic attribution if capture later fails.
+        logger.info(
+            "voice.macos.entitlement_verified",
+            **{
+                "voice.verdict": entitlement_report.verdict.value,
+                "voice.executable_path": entitlement_report.executable_path,
+                "voice.remediation_hint": entitlement_report.remediation_hint,
+            },
+        )
+
+    # MA6 — Bluetooth audio profile.
+    try:
+        from sovyx.voice._bluetooth_profile_mac import detect_bluetooth_audio_profile
+
+        bt_report = await asyncio.to_thread(detect_bluetooth_audio_profile)
+    except Exception as exc:  # noqa: BLE001 — observability gate isolation
+        logger.warning(
+            "voice.factory.macos_bluetooth_probe_failed",
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+    else:
+        # Log every Bluetooth scan even when no devices found — the
+        # baseline-zero record helps operators distinguish "scan ran,
+        # no Bluetooth devices" from "scan never ran".
+        a2dp_only = bt_report.a2dp_only_devices
+        logger.info(
+            "voice.macos.bluetooth_profile_detected",
+            **{
+                "voice.device_count": len(bt_report.devices),
+                "voice.a2dp_only_input_count": len(a2dp_only),
+                "voice.a2dp_only_input_names": [d.name for d in a2dp_only],
+            },
+        )
+        if bt_report.notes:
+            logger.debug(
+                "voice.macos.bluetooth_probe_notes",
+                **{"voice.notes": list(bt_report.notes)},
+            )
+
+
 async def _maybe_log_recent_audio_etw_events() -> None:
     """WI1 wire-up (Step 4): query Windows audio ETW operational
     channels at boot and log structured ``voice.windows.etw_events``
@@ -595,6 +726,7 @@ async def create_voice_pipeline(
     _maybe_log_pipewire_status()
     _maybe_log_alsa_ucm_status()
     await _maybe_log_recent_audio_etw_events()
+    await _maybe_log_macos_diagnostics()
     # Mission §9.1.1 / Gap 1b — boot-time deprecation surface for the
     # four ``linux_mixer_*_fraction`` knobs scheduled for removal in
     # v0.24.0. A stock install with no overrides emits nothing; an
