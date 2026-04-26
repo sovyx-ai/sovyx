@@ -1397,3 +1397,49 @@ export interface PlatformDiagnosticsResponse {
   windows: PlatformWindowsBranch | null;
   macos: PlatformMacOSBranch | null;
 }
+
+// ── Voice Windows Paranoid Mission (v0.24.0 → v0.26.0) ──────────────
+// Compile-time TypeScript types matching the zod schemas in
+// schemas.ts. Both files MUST stay in sync — the zod schema is the
+// runtime validator, this file is the editor / IDE surface.
+
+export type CaptureRestartReason =
+  | "device_changed"
+  | "apo_degraded"
+  | "overflow"
+  | "manual";
+
+export interface CaptureRestartFrame {
+  // PipelineFrame base fields:
+  frame_type: "CaptureRestart";
+  timestamp_monotonic: number;
+  utterance_id?: string;
+  // CaptureRestart payload (all optional v0.24.0):
+  restart_reason?: CaptureRestartReason | string;
+  old_host_api?: string;
+  new_host_api?: string;
+  old_device_id?: string;
+  new_device_id?: string;
+  old_signal_processing_mode?: string;
+  new_signal_processing_mode?: string;
+  recovery_latency_ms?: number;
+  /** 0 when not bypass-related; 1 / 2 / 3 for Tier 1 RAW /
+   *  Tier 2 host_api_rotate / Tier 3 WASAPI exclusive. */
+  bypass_tier?: number;
+}
+
+export interface VoiceRestartHistoryResponse {
+  frames: CaptureRestartFrame[];
+  limit?: number;
+  total?: number;
+}
+
+export interface VoiceBypassTierStatusResponse {
+  current_bypass_tier?: number | null;
+  tier1_raw_attempted?: number;
+  tier1_raw_succeeded?: number;
+  tier2_host_api_rotate_attempted?: number;
+  tier2_host_api_rotate_succeeded?: number;
+  tier3_wasapi_exclusive_attempted?: number;
+  tier3_wasapi_exclusive_succeeded?: number;
+}

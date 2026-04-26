@@ -1097,3 +1097,61 @@ export const PlatformDiagnosticsResponseSchema = z.object({
   windows: PlatformWindowsBranchSchema.nullable(),
   macos: PlatformMacOSBranchSchema.nullable(),
 });
+
+// ── Voice Windows Paranoid Mission (v0.24.0 → v0.26.0) ──────────────
+// CaptureRestartFrame — observability layer for capture-task restarts.
+// Mirrors src/sovyx/voice/pipeline/_frame_types.py::CaptureRestartFrame.
+//
+// All payload fields are .optional() in v0.24.0 (foundation phase) so
+// safeParse tolerates the legacy frame-history shape that doesn't
+// include the new fields yet. v0.25.0 wire-up keeps the optional
+// surface; v0.26.0 considers promoting to required after one minor
+// cycle of telemetry observation in the wild (see master rollout
+// matrix in MISSION-voice-windows-paranoid-2026-04-26.md).
+
+export const CaptureRestartReasonSchema = z.enum([
+  "device_changed",
+  "apo_degraded",
+  "overflow",
+  "manual",
+]);
+
+export const CaptureRestartFrameSchema = z.object({
+  // PipelineFrame base fields:
+  frame_type: z.literal("CaptureRestart"),
+  timestamp_monotonic: z.number(),
+  utterance_id: z.string().optional(),
+  // CaptureRestart payload (all optional v0.24.0):
+  restart_reason: CaptureRestartReasonSchema.or(z.string()).optional(),
+  old_host_api: z.string().optional(),
+  new_host_api: z.string().optional(),
+  old_device_id: z.string().optional(),
+  new_device_id: z.string().optional(),
+  old_signal_processing_mode: z.string().optional(),
+  new_signal_processing_mode: z.string().optional(),
+  recovery_latency_ms: z.number().int().nonnegative().optional(),
+  bypass_tier: z.number().int().min(0).max(3).optional(),
+});
+
+// ``GET /api/voice/restart-history?limit=N`` payload — bounded list of
+// CaptureRestartFrame entries from the orchestrator's frame ring buffer.
+// The endpoint stub lands in T18 (returns empty array in v0.24.0); the
+// real payload arrives in v0.25.0 wire-up.
+export const VoiceRestartHistoryResponseSchema = z.object({
+  frames: z.array(CaptureRestartFrameSchema),
+  limit: z.number().int().positive().optional(),
+  total: z.number().int().nonnegative().optional(),
+});
+
+// ``GET /api/voice/bypass-tier-status`` — current bypass-tier health
+// snapshot (Tier 1 RAW / Tier 2 host_api_rotate / Tier 3 WASAPI excl).
+// Empty dict in v0.24.0 stub; real payload in v0.25.0.
+export const VoiceBypassTierStatusResponseSchema = z.object({
+  current_bypass_tier: z.number().int().min(0).max(3).nullable().optional(),
+  tier1_raw_attempted: z.number().int().nonnegative().optional(),
+  tier1_raw_succeeded: z.number().int().nonnegative().optional(),
+  tier2_host_api_rotate_attempted: z.number().int().nonnegative().optional(),
+  tier2_host_api_rotate_succeeded: z.number().int().nonnegative().optional(),
+  tier3_wasapi_exclusive_attempted: z.number().int().nonnegative().optional(),
+  tier3_wasapi_exclusive_succeeded: z.number().int().nonnegative().optional(),
+});

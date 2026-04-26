@@ -16,6 +16,8 @@ import pytest
 
 from sovyx.voice.pipeline._frame_types import (
     BargeInInterruptionFrame,
+    CaptureRestartFrame,
+    CaptureRestartReason,
     EndFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
@@ -180,3 +182,149 @@ class TestFrameToDict:
             "language",
         }
         assert set(d.keys()) == expected_keys
+
+
+class TestCaptureRestartReason:
+    """Voice Windows Paranoid Mission §C — restart-reason discriminator."""
+
+    def test_str_enum_value_equality(self) -> None:
+        """StrEnum values compare equal to their underlying string —
+        anti-pattern #9 immunity guarantee."""
+        assert CaptureRestartReason.DEVICE_CHANGED == "device_changed"
+        assert CaptureRestartReason.APO_DEGRADED == "apo_degraded"
+        assert CaptureRestartReason.OVERFLOW == "overflow"
+        assert CaptureRestartReason.MANUAL == "manual"
+
+    def test_all_four_variants_present(self) -> None:
+        """Pin the variant set so a future addition / rename is loud."""
+        assert {r.value for r in CaptureRestartReason} == {
+            "device_changed",
+            "apo_degraded",
+            "overflow",
+            "manual",
+        }
+
+
+class TestCaptureRestartFrame:
+    """Voice Windows Paranoid Mission §C — capture-restart frame shape."""
+
+    def test_default_construction_zero_field_values(self) -> None:
+        """Every payload field has a zero-value default — base-class
+        compatibility for the PipelineFrame inheritance contract."""
+        frame = CaptureRestartFrame(
+            frame_type="CaptureRestart",
+            timestamp_monotonic=42.0,
+        )
+        assert frame.restart_reason == ""
+        assert frame.old_host_api == ""
+        assert frame.new_host_api == ""
+        assert frame.old_device_id == ""
+        assert frame.new_device_id == ""
+        assert frame.old_signal_processing_mode == ""
+        assert frame.new_signal_processing_mode == ""
+        assert frame.recovery_latency_ms == 0
+        assert frame.bypass_tier == 0
+
+    def test_device_changed_population(self) -> None:
+        """IMMNotificationClient-driven substrate change — the
+        recovery_latency_ms field populates and bypass_tier stays 0."""
+        frame = CaptureRestartFrame(
+            frame_type="CaptureRestart",
+            timestamp_monotonic=100.0,
+            utterance_id="utt-1",
+            restart_reason=CaptureRestartReason.DEVICE_CHANGED.value,
+            old_host_api="Windows WASAPI",
+            new_host_api="Windows WASAPI",
+            old_device_id="{old-guid}",
+            new_device_id="{new-guid}",
+            old_signal_processing_mode="Default",
+            new_signal_processing_mode="Default",
+            recovery_latency_ms=312,
+            bypass_tier=0,
+        )
+        assert frame.restart_reason == "device_changed"
+        assert frame.old_device_id == "{old-guid}"
+        assert frame.new_device_id == "{new-guid}"
+        assert frame.recovery_latency_ms == 312
+        assert frame.bypass_tier == 0
+
+    def test_apo_degraded_population_with_bypass_tier(self) -> None:
+        """Coordinator-driven bypass — bypass_tier carries 1/2/3 to
+        let dashboards split bypass success rate per tier."""
+        frame = CaptureRestartFrame(
+            frame_type="CaptureRestart",
+            timestamp_monotonic=200.0,
+            restart_reason=CaptureRestartReason.APO_DEGRADED.value,
+            old_host_api="MME",
+            new_host_api="Windows WASAPI",
+            old_device_id="{guid}",
+            new_device_id="{guid}",
+            old_signal_processing_mode="Default",
+            new_signal_processing_mode="RAW",
+            bypass_tier=2,
+        )
+        assert frame.restart_reason == "apo_degraded"
+        assert frame.bypass_tier == 2
+        assert frame.old_host_api == "MME"
+        assert frame.new_host_api == "Windows WASAPI"
+        assert frame.old_signal_processing_mode == "Default"
+        assert frame.new_signal_processing_mode == "RAW"
+
+    def test_frozen_rejects_mutation(self) -> None:
+        """frozen=True / slots=True — observers can share the frame
+        across the state-machine lock + dashboard read path."""
+        frame = CaptureRestartFrame(
+            frame_type="CaptureRestart",
+            timestamp_monotonic=1.0,
+            restart_reason="manual",
+        )
+        with pytest.raises((AttributeError, TypeError, Exception)):
+            frame.restart_reason = "device_changed"  # type: ignore[misc]
+
+    def test_serialisation_round_trip(self) -> None:
+        """``_frame_to_dict`` must surface every payload field — it's
+        the wire contract for ``GET /api/voice/restart-history``."""
+        frame = CaptureRestartFrame(
+            frame_type="CaptureRestart",
+            timestamp_monotonic=42.0,
+            utterance_id="utt-2",
+            restart_reason=CaptureRestartReason.OVERFLOW.value,
+            old_host_api="Windows WASAPI",
+            new_host_api="Windows WASAPI",
+            old_device_id="{guid}",
+            new_device_id="{guid}",
+            old_signal_processing_mode="Default",
+            new_signal_processing_mode="Default",
+            recovery_latency_ms=120,
+            bypass_tier=0,
+        )
+        d = _frame_to_dict(frame)
+        assert d["frame_type"] == "CaptureRestart"
+        assert d["restart_reason"] == "overflow"
+        assert d["recovery_latency_ms"] == 120
+        assert d["bypass_tier"] == 0
+        # No leaked private fields:
+        expected = {
+            "frame_type",
+            "timestamp_monotonic",
+            "utterance_id",
+            "restart_reason",
+            "old_host_api",
+            "new_host_api",
+            "old_device_id",
+            "new_device_id",
+            "old_signal_processing_mode",
+            "new_signal_processing_mode",
+            "recovery_latency_ms",
+            "bypass_tier",
+        }
+        assert set(d.keys()) == expected
+
+    def test_inherits_pipeline_frame_base(self) -> None:
+        """Subclass must derive from PipelineFrame so the ring-buffer
+        consumer (PipelineStateMachine.record_frame) accepts it."""
+        frame = CaptureRestartFrame(
+            frame_type="CaptureRestart",
+            timestamp_monotonic=1.0,
+        )
+        assert isinstance(frame, PipelineFrame)

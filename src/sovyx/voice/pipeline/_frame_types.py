@@ -32,6 +32,7 @@ Pipecat frame docs: https://reference-server.pipecat.ai/en/stable/api/pipecat.fr
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any
 
 
@@ -190,6 +191,90 @@ class BargeInInterruptionFrame(PipelineFrame):
     step_results: dict[str, str] = field(default_factory=dict)
 
 
+class CaptureRestartReason(StrEnum):
+    """Discriminator for :class:`CaptureRestartFrame`.
+
+    Voice Windows Paranoid Mission §C — distinct restart classes that
+    the dashboard's restart-history widget colours separately:
+
+    * ``DEVICE_CHANGED`` — IMMNotificationClient observed an
+      OnDefaultDeviceChanged event for the capture endpoint and the
+      capture task swapped the substrate. Counted in the
+      device-change-recovery latency SLO; the
+      ``recovery_latency_ms`` field is populated.
+    * ``APO_DEGRADED`` — the deaf-signal coordinator engaged a bypass
+      strategy (Tier 1 RAW, Tier 2 host_api_rotate, Tier 3 WASAPI
+      exclusive). The ``bypass_tier`` field carries 1 / 2 / 3.
+    * ``OVERFLOW`` — capture-queue overflow forced
+      :meth:`AudioCaptureTask._reopen_stream_after_device_error`.
+      No bypass involvement; counted in the underrun-rate SLO.
+    * ``MANUAL`` — operator-driven restart from the dashboard or
+      ``sovyx doctor voice``. Excluded from automatic SLO counters.
+
+    StrEnum because of CLAUDE.md anti-pattern #9 — value-based
+    comparison + xdist namespace duplication immunity. The frame's
+    ``restart_reason`` field stores the string value for JSON
+    serialisation symmetry with the other observability frames.
+    """
+
+    DEVICE_CHANGED = "device_changed"
+    APO_DEGRADED = "apo_degraded"
+    OVERFLOW = "overflow"
+    MANUAL = "manual"
+
+
+@dataclass(frozen=True, slots=True)
+class CaptureRestartFrame(PipelineFrame):
+    """Capture-task restart event (Voice Windows Paranoid Mission §C).
+
+    Wraps every restart that mutates the capture substrate (default
+    device, host_api, exclusive/shared mode, or APO bypass) so the
+    dashboard's restart-history widget can render a single timeline
+    of "what happened on the mic" for post-incident forensics.
+
+    Emitted by :meth:`AudioCaptureTask.request_device_change_restart`
+    (substrate change), the bypass restart methods
+    (``request_exclusive_restart``, ``request_alsa_hw_direct_restart``,
+    ``request_host_api_rotate``), and the orchestrator's defensive
+    success branch in :meth:`_invoke_deaf_signal`. Wire-up lands in
+    Phase 2 (T32); this commit ships the type only — no emitters,
+    pure observability vocabulary.
+
+    Frame is recorded into
+    :class:`PipelineStateMachine` ring buffer (already capped at 256
+    entries) and surfaces via ``GET /api/voice/frame-history`` /
+    ``GET /api/voice/restart-history``.
+
+    Field semantics:
+
+    * ``restart_reason`` — :class:`CaptureRestartReason` value; the
+      discriminator dashboards split on. Default empty string for
+      :class:`PipelineFrame` base-class compatibility (constructor
+      callers must always populate; tests pin this).
+    * ``old_*`` / ``new_*`` — substrate snapshot before/after the
+      restart. Captured under the capture-task restart lock so the
+      pre/post pair is consistent.
+    * ``recovery_latency_ms`` — wall-clock from the originating
+      trigger (e.g. IMMNotificationClient callback ``t0``) to the
+      capture stream being usable again. Zero when the restart was
+      not triggered by an external event with a timestamp baseline.
+    * ``bypass_tier`` — 1 / 2 / 3 when ``restart_reason ==
+      "apo_degraded"``; 0 otherwise. Lets the dashboard split bypass
+      success rate per tier without joining against a separate
+      telemetry namespace.
+    """
+
+    restart_reason: str = ""
+    old_host_api: str = ""
+    new_host_api: str = ""
+    old_device_id: str = ""
+    new_device_id: str = ""
+    old_signal_processing_mode: str = ""
+    new_signal_processing_mode: str = ""
+    recovery_latency_ms: int = 0
+    bypass_tier: int = 0
+
+
 @dataclass(frozen=True, slots=True)
 class EndFrame(PipelineFrame):
     """Terminal IDLE transition (utterance complete).
@@ -210,6 +295,8 @@ class EndFrame(PipelineFrame):
 
 __all__ = [
     "BargeInInterruptionFrame",
+    "CaptureRestartFrame",
+    "CaptureRestartReason",
     "EndFrame",
     "LLMFullResponseEndFrame",
     "LLMFullResponseStartFrame",
