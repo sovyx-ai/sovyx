@@ -28,6 +28,14 @@ from sovyx.voice.pipeline._events import (
     TTSStartedEvent,
     WakeWordDetectedEvent,
 )
+from sovyx.voice.pipeline._frame_types import (
+    EndFrame,
+    LLMFullResponseStartFrame,
+    OutputAudioRawFrame,
+    PipelineFrame,
+    TranscriptionFrame,
+    UserStartedSpeakingFrame,
+)
 from sovyx.voice.pipeline._output_queue import AudioOutputQueue
 from sovyx.voice.pipeline._state import VoicePipelineState
 from sovyx.voice.pipeline._state_machine import PipelineStateMachine
@@ -386,6 +394,12 @@ class VoicePipeline:
         # rotation so dashboards can attribute over time.
         self._false_wake_rejected_count: int = 0
 
+        # ── Step 13 Ring 6 frame instrumentation ────────────────────
+        # Helper that stamps timestamp_monotonic + utterance_id on
+        # frame emissions so call sites stay short. The state machine
+        # records the frame in its bounded ring buffer; the dashboard's
+        # GET /api/voice/frame-history (Step 15) exposes the snapshot.
+
         # ── Per-utterance trace ID (Ring 6 trace contract) ──────────
         #
         # Mission §2.6 / §9.4.6 — every event in the capture → VAD →
@@ -400,6 +414,38 @@ class VoicePipeline:
         # dataclasses keeps tests and legacy bridges that construct
         # events without a trace context working unchanged.
         self._current_utterance_id: str = ""
+
+    # ── Step 13 Ring 6 frame instrumentation helper ─────────────────
+
+    def _record_frame(self, frame: PipelineFrame) -> None:
+        """Stamp utterance_id + record the frame on the state machine.
+
+        Mission §1.1 Hybrid Option C: observability-only. Frame
+        recording is best-effort — any exception during recording
+        (e.g. state machine lock contention under chaos injection) is
+        absorbed so the orchestrator's authoritative state mutation
+        path is never blocked.
+
+        Pre-condition: ``frame.timestamp_monotonic`` is set by the
+        caller (typically ``time.monotonic()`` at the call site so the
+        timestamp matches the real transition moment, not this helper's
+        invocation moment).
+        """
+        try:
+            # Frames are frozen dataclasses — to set utterance_id we
+            # construct a copy via dataclasses.replace. The cost is one
+            # allocation per recording, well below the bounded ring's
+            # heartbeat budget.
+            from dataclasses import replace
+
+            stamped = replace(frame, utterance_id=self._current_utterance_id)
+            self._state_machine.record_frame(stamped)
+        except Exception as exc:  # noqa: BLE001 — observability isolation
+            logger.debug(
+                "voice.pipeline.frame_record_skipped",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
 
     # -- State property + saga lifecycle ------------------------------------
 
@@ -446,6 +492,19 @@ class VoicePipeline:
             self._open_voice_turn_saga()
         elif new is VoicePipelineState.IDLE and old is not VoicePipelineState.IDLE:
             self._close_voice_turn_saga()
+            # Step 13 frame emission — terminal IDLE transition closes
+            # the per-utterance trace. Hooking into the state setter
+            # (rather than 9 separate call sites) keeps the wire-up
+            # exhaustive: every path back to IDLE produces an EndFrame.
+            # The reason field captures the prior state so dashboards
+            # can attribute "where the trace ended".
+            self._record_frame(
+                EndFrame(
+                    frame_type="End",
+                    timestamp_monotonic=time.monotonic(),
+                    reason=f"from_{old.name.lower()}",
+                ),
+            )
 
     def _open_voice_turn_saga(self) -> None:
         """Open the per-turn voice saga (called on IDLE→active transitions).
@@ -733,6 +792,16 @@ class VoicePipeline:
             # TTSStarted, TTSCompleted) stamps the same id until
             # _clear_utterance_id resets at the IDLE return.
             utterance_id = self._mint_new_utterance_id()
+            # Step 13 frame emission — wake-word fire is the canonical
+            # head of the per-utterance span. Mirrors Pipecat's
+            # UserStartedSpeakingFrame contract.
+            self._record_frame(
+                UserStartedSpeakingFrame(
+                    frame_type="UserStartedSpeaking",
+                    timestamp_monotonic=time.monotonic(),
+                    source="wake_word",
+                ),
+            )
             await self._emit(
                 WakeWordDetectedEvent(
                     mind_id=self._config.mind_id,
@@ -887,6 +956,16 @@ class VoicePipeline:
         self._utterance_frames = [frame]
         self._silence_counter = 0
         self._recording_counter = 1
+        # Step 13 frame emission — barge-in / no-wake recording start
+        # is also a "user started speaking" event; the source field
+        # discriminates from the wake-word path.
+        self._record_frame(
+            UserStartedSpeakingFrame(
+                frame_type="UserStartedSpeaking",
+                timestamp_monotonic=time.monotonic(),
+                source="barge_in_or_no_wake",
+            ),
+        )
         # Mission §2.6 Ring 6 — covers two paths:
         #   1. wake-word disabled (continuous listen) — no prior mint,
         #      so this is the head of the trace.
@@ -992,6 +1071,19 @@ class VoicePipeline:
                 utterance_id=utterance_id,
             )
         )
+        # Step 13 frame emission — STT decode boundary. The frame is
+        # emitted only after the S1/S2 + hallucination + logprob
+        # guards in the engine have run, so its text/confidence/
+        # language are validated values (not raw STT output).
+        self._record_frame(
+            TranscriptionFrame(
+                frame_type="Transcription",
+                timestamp_monotonic=time.monotonic(),
+                text=result.text[:512],  # bounded to keep ring memory predictable
+                confidence=float(result.confidence),
+                language=result.language or "",
+            ),
+        )
 
         if not result.text.strip():
             # S1/S2 wire-up: distinguish "user genuinely said nothing"
@@ -1076,6 +1168,18 @@ class VoicePipeline:
 
         # Feed perception
         self._state = VoicePipelineState.THINKING
+        # Step 13 frame emission — LLM dispatch boundary. The model +
+        # request_id will be filled by the cognitive bridge when it
+        # registers the LLM cancel hook; here we mark the start with
+        # the utterance_id so dashboards see the THINKING boundary.
+        self._record_frame(
+            LLMFullResponseStartFrame(
+                frame_type="LLMFullResponseStart",
+                timestamp_monotonic=time.monotonic(),
+                model="",  # filled by cognitive bridge per-call
+                request_id="",
+            ),
+        )
         if self._on_perception is not None:
             logger.info(
                 "voice_perception_invoked",
@@ -1120,6 +1224,21 @@ class VoicePipeline:
             text: Text to speak.
         """
         self._state = VoicePipelineState.SPEAKING
+        # Step 13 frame emission — TTS speak boundary. Per-chunk
+        # OutputAudioRawFrame frames will be emitted as chunks land
+        # in the output queue (subsequent commit). Here we record
+        # the speak entry as a chunk_index=0 marker so the
+        # frame_history reflects the full SPEAKING span.
+        self._record_frame(
+            OutputAudioRawFrame(
+                frame_type="OutputAudioRaw",
+                timestamp_monotonic=time.monotonic(),
+                chunk_index=0,
+                pcm_bytes=0,
+                sample_rate=0,
+                synthesis_health="speak_started",
+            ),
+        )
         if self._self_feedback_gate is not None:
             self._self_feedback_gate.on_tts_start()
         # External proactive ``speak`` (e.g. cognitive layer's
