@@ -301,12 +301,30 @@ async def _maybe_start_audio_service_watchdog() -> object | None:
     tuning = VoiceTuningConfig()
     if not tuning.voice_audio_service_watchdog_enabled:
         return None
-    if sys.platform != "win32":
-        # Opt-in but wrong platform — log INFO so operators see the
-        # mismatch instead of silently failing to instantiate.
+    # X1 Phase 3 (mission §9.1.2 spirit): capability dispatch replaces
+    # the raw ``sys.platform != "win32"`` gate. The
+    # :data:`Capability.AUDIOSRV_QUERY` probe validates BOTH that we
+    # are on Windows AND that ``sc.exe`` is on PATH — locked-down
+    # enterprise images that strip ``sc.exe`` get a clean fall-back
+    # (the watchdog skips activation; the legacy no-watchdog path
+    # is what every pre-WI2 release shipped, so degradation is safe).
+    from sovyx.voice.health._capabilities import (  # noqa: PLC0415 — local import keeps factory cold-start lean
+        Capability,
+        get_default_resolver,
+    )
+
+    resolver = get_default_resolver()
+    if not resolver.has(Capability.AUDIOSRV_QUERY):
+        # Opt-in but capability absent — log INFO so operators see the
+        # mismatch instead of silently failing to instantiate. Includes
+        # ``platform`` for parity with the legacy log shape (dashboards
+        # already filter on this field).
         logger.info(
-            "voice.factory.audio_service_watchdog_skipped_non_windows",
-            platform=sys.platform,
+            "voice.factory.audio_service_watchdog_skipped_capability_absent",
+            **{
+                "voice.capability": Capability.AUDIOSRV_QUERY.value,
+                "voice.platform": sys.platform,
+            },
         )
         return None
     try:

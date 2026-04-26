@@ -84,6 +84,7 @@ Reference: MISSION-voice-mixer-enterprise-refactor-2026-04-25 §3.11
 
 from __future__ import annotations
 
+import shutil
 import sys
 import threading
 from enum import StrEnum
@@ -196,13 +197,34 @@ def _probe_wasapi_exclusive() -> bool:
 
 
 def _probe_etw_audio_provider() -> bool:
-    """Stub — Phase 2 wires the real ETW provider query (WI1)."""
-    return False
+    """Real probe (Phase 2 / WI1) — Windows + ``wevtutil`` reachable.
+
+    Cheap presence check: validates platform is Windows AND the
+    ``wevtutil`` executable is discoverable on PATH. Does NOT spawn
+    a subprocess (subprocess validation deferred to first real query
+    in :mod:`sovyx.voice.health._windows_etw`). A locked-down
+    Windows image that strips ``wevtutil`` returns False here, which
+    is the correct safe-fallback behaviour for the boot-time probe.
+    """
+    if sys.platform != "win32":
+        return False
+    return shutil.which("wevtutil.exe") is not None or shutil.which("wevtutil") is not None
 
 
 def _probe_audiosrv_query() -> bool:
-    """Stub — Phase 2 wires the real SCM query (WI2)."""
-    return False
+    """Real probe (Phase 2 / WI2) — Windows + ``sc.exe`` reachable.
+
+    Cheap presence check: validates platform is Windows AND the
+    Service Control Manager command-line tool (``sc.exe``) is on
+    PATH. Same rationale as :func:`_probe_etw_audio_provider`:
+    locked-down enterprise images that strip ``sc.exe`` get a clean
+    ``False`` verdict; the audio-service watchdog skips its boot
+    activation; the legacy fallback (no watchdog) is what every
+    pre-WI2 release shipped, so degradation is observably-safe.
+    """
+    if sys.platform != "win32":
+        return False
+    return shutil.which("sc.exe") is not None or shutil.which("sc") is not None
 
 
 def _probe_pipewire_module_echo_cancel() -> bool:
@@ -221,8 +243,18 @@ def _probe_pulseaudio_running() -> bool:
 
 
 def _probe_coreaudio_vpio() -> bool:
-    """Stub — Phase 2 wires the real Audio Unit subtype query (MA4)."""
-    return False
+    """Real probe (Phase 2 / MA4) — darwin + ``system_profiler`` reachable.
+
+    Cheap presence check: validates platform is darwin AND
+    ``system_profiler`` is discoverable on PATH. The full Audio Unit
+    subtype query (``kAudioUnitSubType_VoiceProcessingIO``) is
+    deferred to the first real instantiation attempt — Phase 1 of
+    macOS support is observability + subprocess fallbacks, the
+    pyobjc-backed VPIO unit lands when MA6 ships.
+    """
+    if sys.platform != "darwin":
+        return False
+    return shutil.which("system_profiler") is not None
 
 
 def _probe_screen_capture_kit() -> bool:

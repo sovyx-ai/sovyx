@@ -18,6 +18,7 @@ This test file pins:
 from __future__ import annotations
 
 import logging
+from collections.abc import Generator
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -448,6 +449,25 @@ class TestVoicePermissionError:
 
 
 class TestAudioServiceWatchdog:
+    """Tests for the WI2 wire-up + Step 3 capability dispatch migration.
+
+    Each test resets the process-wide :class:`CapabilityResolver`
+    singleton so a probe verdict cached under a patched ``sys.platform``
+    (e.g., the non-windows skip test patching to ``"linux"``) does not
+    leak into the next test that expects a fresh probe under the real
+    platform.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_resolver_singleton(self) -> Generator[None, None, None]:
+        from sovyx.voice.health._capabilities import (
+            reset_default_resolver_for_tests,
+        )
+
+        reset_default_resolver_for_tests()
+        yield
+        reset_default_resolver_for_tests()
+
     @pytest.mark.asyncio
     async def test_disabled_returns_none(self) -> None:
         # Default config — watchdog is OFF.
@@ -461,6 +481,12 @@ class TestAudioServiceWatchdog:
     ) -> None:
         import sys
 
+        # Step 3 (X1 Phase 3): the gate now reads
+        # ``resolver.has(Capability.AUDIOSRV_QUERY)`` instead of
+        # ``sys.platform != "win32"``. The probe internally requires
+        # both Windows AND ``sc.exe`` on PATH; ``patch.object(sys,
+        # "platform", "linux")`` makes the probe return False, so the
+        # capability-absent skip path fires.
         with (
             patch(
                 "sovyx.engine.config.VoiceTuningConfig",
@@ -475,7 +501,8 @@ class TestAudioServiceWatchdog:
             r.msg
             for r in caplog.records
             if isinstance(r.msg, dict)
-            and r.msg.get("event") == "voice.factory.audio_service_watchdog_skipped_non_windows"
+            and r.msg.get("event")
+            == "voice.factory.audio_service_watchdog_skipped_capability_absent"
         ]
         assert len(skip_events) == 1
 
