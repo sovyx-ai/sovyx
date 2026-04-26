@@ -1,0 +1,79 @@
+schema_version: 1
+profile_id: conexant_sn6180_vaio_vjfe69
+profile_version: 1
+description: 'VAIO VJFE69F11X-B0221H + Conexant SN6180 codec. The pilot run that motivated
+  the entire voice mixer refactor (see docs-internal/diagnostics/MISSION-voice-mixer-enterprise-refactor-2026-04-25.md
+  §1.1). Factory ships with Mic Boost = 3/3 + Internal Mic Boost = 3/3 + Capture =
+  80/80 — saturating the codec to clipping. Sovyx''s first recovery attempt (v0.22.2)
+  used hardcoded fractions which over-corrected on attenuated cards (the regime flip
+  that motivated the L2.5 KB cascade). This profile pins the validated working preset:
+  Mic Boost = 1/3, Internal Mic Boost = 1/3, Capture = 40/80, with post-apply RMS
+  + Silero gates.
+
+  '
+codec_id_glob: '*14F1:5045*'
+driver_family: hda
+system_vendor_glob: Sony*
+system_product_glob: VJFE69F11X-B0221H
+match_threshold: 0.7
+factory_regime: saturation
+factory_signature:
+  capture_master:
+    expected_raw_range:
+    - 70
+    - 80
+  internal_mic_boost:
+    expected_raw_range:
+    - 3
+    - 3
+  preamp_boost:
+    expected_raw_range:
+    - 3
+    - 3
+recommended_preset:
+  controls:
+  - role: capture_master
+    value:
+      fraction: 0.5
+    channel_policy: all
+  - role: internal_mic_boost
+    value:
+      fraction: 0.33
+    channel_policy: all
+  - role: preamp_boost
+    value:
+      fraction: 0.33
+    channel_policy: all
+  auto_mute_mode: leave
+  runtime_pm_target: leave
+validation:
+  rms_dbfs_range:
+  - -38.0
+  - -12.0
+  peak_dbfs_max: -3.0
+  snr_db_vocal_band_min: 6.0
+  silero_prob_min: 0.5
+  wake_word_stage2_prob_min: 0.5
+verified_on:
+- system_product: VAIO VJFE69F11X-B0221H
+  codec_id: 14F1:5045
+  kernel: 6.8.0-50-generic
+  distro: ubuntu-24.04
+  verified_at: '2026-04-22'
+  verified_by: machinimus (analyst-paired with claude-opus-4-7)
+contributed_by: sovyx-team
+changelog:
+- version: 1
+  date: '2026-04-25'
+  change: 'Initial first-party profile (Step 8 of mission MISSION-voice-100pct-autonomous-2026-04-25.md).
+    Replaces the hardcoded ``linux_mixer_*_fraction`` band-aid path with a KB-driven
+    preset cascade.
+
+    '
+known_caveats:
+- 'The VAIO ships PipeWire + WirePlumber. After applying this preset the user must
+  NOT manually adjust ``Capture`` upward in pavucontrol or wpctl — that re-saturates
+  the chain. Sovyx logs a saturation drift WARN if the post-apply state regresses.
+
+  '
+signature: RAMwsFVa6Z0kRZDuVK19j04P+rIw3osDwBePSjOxvXyBPIhmtec71xWehVXOUAgTao3DVghTq+5FJwfs7NKKBQ==
