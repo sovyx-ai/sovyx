@@ -6,6 +6,139 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+## [0.24.0] — 2026-04-26
+
+### Voice Windows Paranoid Mission — Foundation phase
+
+This release lands the **foundation** layer of the Voice Windows
+Paranoid Mission (mission spec
+``docs-internal/missions/MISSION-voice-windows-paranoid-2026-04-26.md``).
+The mission addresses the production failure mode where Microsoft
+Voice Clarity APO (VocaEffectPack, shipped via Windows 11 25H2
+cumulative updates) destroys the capture signal upstream of PortAudio
+on USB-mic endpoints. Foundation phase ships **plumbing without
+behaviour change** — every new feature flag defaults False; the
+cure is operator-flippable today, default-on in v0.25.0 / v0.26.0
+per the staged-adoption rollout matrix.
+
+### Added
+
+- **5 new tuning flags on ``VoiceTuningConfig``** for the Paranoid
+  Mission's bypass / cascade / listener / cold-probe surface. All
+  default ``False`` (foundation-phase plumbing). Cross-validator
+  ``_enforce_paranoid_mission_dependencies`` rejects the contradictory
+  configuration ``bypass_tier2_host_api_rotate_enabled=True`` +
+  ``cascade_host_api_alignment_enabled=False`` at boot with a
+  remediation hint. Flags:
+  * ``probe_cold_strict_validation_enabled`` — Furo W-1 cold-probe
+    stricter signal validation (env: ``SOVYX_TUNING__VOICE__PROBE_COLD_STRICT_VALIDATION_ENABLED``)
+  * ``bypass_tier1_raw_enabled`` — Tier 1 RAW + Communications via
+    ``IAudioClient3::SetClientProperties`` (env: ``…BYPASS_TIER1_RAW_ENABLED``)
+  * ``bypass_tier2_host_api_rotate_enabled`` — Tier 2 host-API
+    rotate-then-exclusive (env: ``…BYPASS_TIER2_HOST_API_ROTATE_ENABLED``)
+  * ``mm_notification_listener_enabled`` — IMMNotificationClient
+    device-change auto-recovery (env: ``…MM_NOTIFICATION_LISTENER_ENABLED``)
+  * ``cascade_host_api_alignment_enabled`` — opener honours cascade
+    winner's ``host_api`` + ``capture_fallback_host_apis`` bucket sort
+    (env: ``…CASCADE_HOST_API_ALIGNMENT_ENABLED``)
+
+- **Cold-probe signal validation (Furo W-1 cure).** The
+  ``voice/health/probe.py::_diagnose_cold`` function now reads
+  ``rms_db`` and (in strict mode) returns ``Diagnosis.NO_SIGNAL`` when
+  the captured signal is silent (``rms_db < probe_rms_db_no_signal``,
+  default −70 dBFS). This closes the v0.23.x silent-combo persistence
+  loop that was the deterministic cause of the user's reported bug
+  (Razer + Win11 25H2 + Voice Clarity, silent combo with
+  ``rms=-96.43, callbacks=49`` persisting as the cascade winner across
+  every boot). Strict mode emits ``voice.probe.cold_silence_rejected
+  {mode=strict_reject}``; lenient mode (foundation-phase default)
+  preserves v0.23.x acceptance but emits ``mode=lenient_passthrough``
+  for telemetry-only calibration. ``vad_max_prob`` kwarg added for
+  signature symmetry with ``_diagnose_warm`` (cold path ignores it).
+
+- **``CaptureRestartFrame`` typed pipeline observability frame**
+  (``voice/pipeline/_frame_types.py``) wrapping every capture-task
+  restart that mutates the substrate (default device, host_api,
+  exclusive/shared mode, or APO bypass tier). 9 payload fields
+  (``restart_reason``, old/new ``host_api`` + ``device_id`` +
+  ``signal_processing_mode``, ``recovery_latency_ms``,
+  ``bypass_tier``) plus ``CaptureRestartReason`` ``StrEnum``
+  discriminator (DEVICE_CHANGED, APO_DEGRADED, OVERFLOW, MANUAL).
+  Pure observability layer — emitters land in v0.25.0 wire-up.
+
+- **Dashboard zod schemas + TypeScript types** for
+  ``CaptureRestartFrame``, ``VoiceRestartHistoryResponse``, and
+  ``VoiceBypassTierStatusResponse``. All payload fields ``.optional()``
+  in v0.24.0 per the master rollout matrix; promotion to required
+  considered v0.26.0 after one minor cycle of in-prod observation.
+  Forward-compat: ``restart_reason`` accepts the StrEnum values OR
+  any fallback string so a backend-side variant addition lands
+  without flooding ``safeParse`` mismatch warnings.
+
+- **CLAUDE.md anti-patterns 28 + 29.**
+  * AP-28 — Cold probe MUST validate signal energy, not just callback
+    count (Furo W-1 generalisation: any acceptance gate downstream of
+    a real-world signal source MUST verify the signal itself).
+  * AP-29 — ``CaptureRestartFrame`` is observability, NOT a state-
+    machine rewrite (extends Hybrid Option C lesson from AP-25).
+
+- **Public docs:** ``docs/modules/voice-troubleshooting-windows.md``
+  — operator-facing guide covering symptom table, every paranoid-
+  mission feature flag (env var, default per phase, when to flip),
+  master kill switch, doctor subcommand surface, telemetry events to
+  grep for, and the rollback procedure per flag.
+
+- **Internal ADRs (``docs-internal/``, gitignored):**
+  * ``ADR-voice-bypass-tier-system.md`` — design of the 3-tier
+    bypass coordinator (Tier 1 RAW / Tier 2 host_api_rotate / Tier 3
+    WASAPI exclusive).
+  * ``ADR-voice-cascade-runtime-alignment.md`` — design of the
+    opener's 3-tier bucket sort closing Furo W-4.
+  * ``ADR-voice-imm-notification-recovery.md`` — design of the
+    IMMNotificationClient device-change listener with the non-
+    blocking-post pattern + AST-level CI lint.
+
+### Tests
+
+- 9 new tests in ``TestVoiceTuningParanoidMissionFlags`` (defaults,
+  env-var override per flag, cross-validator rejection + both
+  successful combinations, EngineConfig nested-env path).
+- 17 new tests in ``TestDiagnoseCold`` and ``TestFuroW1UserReplay``
+  including 1 Hypothesis property test for the strict diagnosis-
+  table invariants and a regression test for the user's exact
+  silent-combo bug repro.
+- 7 new tests in ``TestCaptureRestartReason`` and
+  ``TestCaptureRestartFrame`` pinning the variant set + frame shape
+  + serialisation round trip + frozen-mutation rejection.
+- 15 new vitest tests in ``dashboard/src/types/schemas.test.ts``
+  pinning the wire contract for the new dashboard schemas.
+
+### Deferred to v0.24.1 — v0.25.0
+
+The following mission tasks ship in dedicated commits / minor
+versions, with each one getting its own focused commit + full CI
+per ``feedback_staged_adoption`` (no bundling foundation +
+wire-up):
+
+* T01-T06 — God-file splits (``contract.py``, ``cascade.py``,
+  ``factory.py``, ``_capture_task.py``, ``probe.py``,
+  ``combo_store.py``). Recon mapping (Wave 3) saved as the
+  blueprint for the v0.24.1 dedicated split mission.
+* T13/T14 — Tier 1 RAW + Tier 2 host_api_rotate strategy classes
+  (Windows ctypes COM bindings). Land in v0.25.0 wire-up.
+* T15/T16 — ``preferred_host_api`` opener param + wire
+  ``capture_fallback_host_apis`` config. Land in v0.25.0 wire-up.
+* T17 — IMMNotificationClient stub with comtypes COM bindings + AST
+  lint rule. Lands in v0.25.0 wire-up.
+* T10/T18 — Telemetry counter vocabulary + dashboard route stubs.
+  Lands in v0.25.0 wire-up.
+* Default flips of ``probe_cold_strict_validation_enabled`` and
+  ``cascade_host_api_alignment_enabled`` to ``True`` — v0.25.0,
+  after Phase 1 production telemetry validates the cold-probe
+  rejection rate stays within the predicted population.
+
+## [Unreleased — Linux mixer L2.5]
+
 ### Added
 
 - **L2.5 Voice Mixer Sanity — bidirectional ALSA mixer healing on
