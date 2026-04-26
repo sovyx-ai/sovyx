@@ -511,10 +511,28 @@ async def create_voice_pipeline(
 
     warn_on_deprecated_mixer_overrides()
 
+    # Ring 1 (Hardware/OS Isolation): capability dispatch + APO bypass +
+    # PipeWire/UCM detection + KB profile loader + AGC2 fallback +
+    # Windows audio service watchdog + macOS HAL detector. Ring marker
+    # fires after the boot-time observability probes so operators get a
+    # single structured signal that the OS-isolation layer is initialised.
+    logger.info(
+        "voice.ring_1.initialized",
+        **{"voice.ring": 1, "voice.ring_name": "hardware_os_isolation"},
+    )
+
     # ── 1. SileroVAD (auto-download) ──────────────────────────
     logger.info("voice_factory_creating_vad")
     vad_path = await ensure_silero_vad(models_dir)
     vad = await asyncio.to_thread(lambda: _self._create_vad(vad_path))
+    # Ring 3 (Decision Ensemble): VAD with NaN guard + Schmitt hysteresis +
+    # LSTM reset path. The ensemble layer (Silero + future LiveKit EOU)
+    # is the third defense ring after capabilities (Ring 1) and signal
+    # integrity (Ring 2 — instantiated below alongside the capture task).
+    logger.info(
+        "voice.ring_3.initialized",
+        **{"voice.ring": 3, "voice.ring_name": "decision_ensemble"},
+    )
 
     # ── 2. MoonshineSTT (auto-download via HF Hub) ───────────
     logger.info("voice_factory_creating_stt", language=language)
@@ -534,6 +552,12 @@ async def create_voice_pipeline(
                 f"{stt.state!r} — expected STTState.READY."
             )
             raise VoiceFactoryError(msg)
+    # Ring 4 (Decode Validation): STT with hallucination stoplist +
+    # logprob reject + compression-ratio guard + S1/S2 timeout taxonomy.
+    logger.info(
+        "voice.ring_4.initialized",
+        **{"voice.ring": 4, "voice.ring_name": "decode_validation"},
+    )
 
     # ── 3. TTS (Piper > Kokoro > error) ──────────────────────
     tts_engine = detect_tts_engine()
@@ -562,6 +586,18 @@ async def create_voice_pipeline(
                 {"name": "piper-tts or kokoro-onnx", "install_command": "pip install piper-tts"},
             ],
         )
+    # Ring 5 (Output Safety): TTS with atomic cancellation chain +
+    # output-energy validation + bounded queue + filler bank. The
+    # cancellation chain itself is wired in pipeline._orchestrator;
+    # this ring marker fires once the synthesiser is ready.
+    logger.info(
+        "voice.ring_5.initialized",
+        **{
+            "voice.ring": 5,
+            "voice.ring_name": "output_safety",
+            "voice.tts_engine": tts_engine,
+        },
+    )
 
     # ── 4. WakeWord (optional — skip if model absent) ────────
     wake = await asyncio.to_thread(_self._create_wake_word_stub)
@@ -721,6 +757,21 @@ async def create_voice_pipeline(
         endpoint_guid=resolved_endpoint_guid,
     )
     capture_holder["task"] = capture_task
+    # Ring 2 (Signal Integrity): RMS-floor watchdog + format-detection
+    # probe + saturation feedback + phase-inversion detector + AGC2
+    # post-process. The capture task owns the FrameNormalizer that
+    # implements every Ring 2 invariant; this marker fires once the
+    # task is constructed (the ring is "ready" — the stream opens at
+    # capture_task.start() which the caller invokes after registry).
+    logger.info(
+        "voice.ring_2.initialized",
+        **{
+            "voice.ring": 2,
+            "voice.ring_name": "signal_integrity",
+            "voice.endpoint_guid": resolved_endpoint_guid or "",
+            "voice.host_api": effective_host_api or "unknown",
+        },
+    )
 
     # Build the CaptureIntegrityCoordinator now that ``capture_task``
     # exists. The probe requires its *own* SileroVAD instance — sharing
@@ -744,6 +795,20 @@ async def create_voice_pipeline(
     coordinator_holder["coordinator"] = coordinator
 
     await pipeline.start()
+    # Ring 6 (Orchestration & Observability): state machine + atomic
+    # cancellation chain + per-utterance trace ID + RED+USE metrics +
+    # consent ledger + dwell watchdog. Ring marker fires once the
+    # pipeline is started (state machine seeded, locks initialised,
+    # observers ready to record transitions).
+    logger.info(
+        "voice.ring_6.initialized",
+        **{
+            "voice.ring": 6,
+            "voice.ring_name": "orchestration_observability",
+            "voice.mind_id": mind_id,
+            "voice.platform_key": platform_key,
+        },
+    )
 
     logger.info(
         "voice_pipeline_created",
