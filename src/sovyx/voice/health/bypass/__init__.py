@@ -51,6 +51,12 @@ if TYPE_CHECKING:
     from sovyx.voice.health.bypass._linux_session_manager_escape import (
         LinuxSessionManagerEscapeBypass,
     )
+    from sovyx.voice.health.bypass._win_host_api_rotate_then_exclusive import (
+        WindowsHostApiRotateThenExclusiveBypass,
+    )
+    from sovyx.voice.health.bypass._win_raw_communications import (
+        WindowsRawCommunicationsBypass,
+    )
     from sovyx.voice.health.bypass._win_wasapi_exclusive import (
         WindowsWASAPIExclusiveBypass,
     )
@@ -61,6 +67,8 @@ __all__ = [
     "LinuxPipeWireDirectBypass",
     "LinuxSessionManagerEscapeBypass",
     "PlatformBypassStrategy",
+    "WindowsHostApiRotateThenExclusiveBypass",
+    "WindowsRawCommunicationsBypass",
     "WindowsWASAPIExclusiveBypass",
 ]
 
@@ -75,6 +83,12 @@ _LAZY_EXPORTS: dict[str, str] = {
     "LinuxALSAMixerResetBypass": "sovyx.voice.health.bypass._linux_alsa_mixer",
     "LinuxPipeWireDirectBypass": "sovyx.voice.health.bypass._linux_pipewire_direct",
     "LinuxSessionManagerEscapeBypass": ("sovyx.voice.health.bypass._linux_session_manager_escape"),
+    "WindowsHostApiRotateThenExclusiveBypass": (
+        "sovyx.voice.health.bypass._win_host_api_rotate_then_exclusive"
+    ),
+    "WindowsRawCommunicationsBypass": (
+        "sovyx.voice.health.bypass._win_raw_communications"
+    ),
     "WindowsWASAPIExclusiveBypass": "sovyx.voice.health.bypass._win_wasapi_exclusive",
 }
 
