@@ -28,7 +28,6 @@ from sovyx.voice.pipeline._frame_types import (
 )
 from sovyx.voice.pipeline._orchestrator import VoicePipeline
 
-
 _TOKEN = "test-token-fixo"
 
 
