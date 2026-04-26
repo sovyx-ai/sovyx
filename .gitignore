@@ -91,3 +91,13 @@ erebus/
 
 # pilot tarballs received from operators (analyst-side workspace)
 incoming/
+
+# ── Code-signing private keys (never committed) ────────────────────────
+# The dev signing key v1 for KB profile signatures lives at
+# .signing-keys/sovyx_kb_v1.priv (gitignored). The PEM public key
+# v1.pub IS committed under
+# src/sovyx/voice/health/_mixer_kb/_trusted_keys/. Production key
+# rotation procedure documented in docs/contributing/voice-kb-rotation.md.
+.signing-keys/
+*.priv
+*.pem.priv
