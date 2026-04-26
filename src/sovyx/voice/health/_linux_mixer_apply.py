@@ -122,6 +122,30 @@ async def apply_mixer_reset(
             message includes the failing control name; the chained
             cause is the underlying subprocess error.
     """
+    # Step 17 — F6 deprecation surface. Mission §1.8: this function
+    # is on death row, scheduled for removal in v0.24.0 once the
+    # 3-OS pilot (B7/C5/E3) confirms the L2.5 KB cascade + AGC2
+    # closed-loop replaces the legacy band-aid path. The WARN fires
+    # at every entry so operators see the call-site graph in
+    # production telemetry; once the count hits zero across a full
+    # release window we know the deletion in v0.24.0 is safe.
+    logger.warning(
+        "voice.deprecation.legacy_mixer_band_aid_call",
+        **{
+            "voice.function": "apply_mixer_reset",
+            "voice.removal_target": "v0.24.0",
+            "voice.replacement": (
+                "L2.5 KB cascade (apply_mixer_preset) + AGC2 closed-loop "
+                "(Layer 4) — see docs/migration/voice-mixer-band-aid-removal.md"
+            ),
+            "voice.action_required": (
+                "Migrate the call site to apply_mixer_preset; until v0.24.0 "
+                "lands, the legacy path remains functional but emits this "
+                "WARN at every invocation."
+            ),
+        },
+    )
+
     if sys.platform != "linux":
         msg = f"apply_mixer_reset is Linux-only; running on {sys.platform}"
         raise BypassApplyError(msg, reason=REASON_NOT_LINUX)
@@ -207,6 +231,25 @@ async def apply_mixer_boost_up(
         BypassApplyError: same reason taxonomy as
             :func:`apply_mixer_reset`.
     """
+    # Step 17 — F6 deprecation surface. See apply_mixer_reset above
+    # for the full rationale. Same WARN, same removal target.
+    logger.warning(
+        "voice.deprecation.legacy_mixer_band_aid_call",
+        **{
+            "voice.function": "apply_mixer_boost_up",
+            "voice.removal_target": "v0.24.0",
+            "voice.replacement": (
+                "L2.5 KB cascade (apply_mixer_preset) + AGC2 closed-loop "
+                "(Layer 4) — see docs/migration/voice-mixer-band-aid-removal.md"
+            ),
+            "voice.action_required": (
+                "Migrate the call site to apply_mixer_preset; until v0.24.0 "
+                "lands, the legacy path remains functional but emits this "
+                "WARN at every invocation."
+            ),
+        },
+    )
+
     if sys.platform != "linux":
         msg = f"apply_mixer_boost_up is Linux-only; running on {sys.platform}"
         raise BypassApplyError(msg, reason=REASON_NOT_LINUX)
