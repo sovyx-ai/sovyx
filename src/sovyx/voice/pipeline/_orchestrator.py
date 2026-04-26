@@ -29,6 +29,7 @@ from sovyx.voice.pipeline._events import (
     WakeWordDetectedEvent,
 )
 from sovyx.voice.pipeline._frame_types import (
+    BargeInInterruptionFrame,
     EndFrame,
     LLMFullResponseStartFrame,
     OutputAudioRawFrame,
@@ -2086,6 +2087,26 @@ class VoicePipeline:
                     "voice.step_filler_and_gate": step_results["filler_and_gate"],
                     "voice.step_text_buffer_cleanup": step_results["text_buffer_cleanup"],
                 },
+            )
+            # Step 14 frame emission — the most semantically important
+            # frame in the entire mission. Captures the T1 atomic
+            # cancellation chain contract in one frozen object so
+            # post-incident forensics can answer "what failed during
+            # the barge-in" without crawling 5 separate
+            # voice.tts.cancellation_step_failed log lines.
+            #
+            # Recorded AT CHAIN EXIT with all 5 step verdicts populated.
+            # The frame is recorded INSIDE the cancellation lock so
+            # observers see a consistent (chain-complete, frame-emitted)
+            # state — concurrent barge-ins serialise on the lock + each
+            # produces its own terminal frame.
+            self._record_frame(
+                BargeInInterruptionFrame(
+                    frame_type="BargeInInterruption",
+                    timestamp_monotonic=time.monotonic(),
+                    reason=reason,
+                    step_results=dict(step_results),
+                ),
             )
 
     def reset(self) -> None:

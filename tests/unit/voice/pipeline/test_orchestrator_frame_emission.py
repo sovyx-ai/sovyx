@@ -171,3 +171,62 @@ class TestFrameTypesIntegrationSurface:
         assert LLMFullResponseStartFrame
         assert OutputAudioRawFrame
         assert EndFrame
+
+
+class TestBargeInInterruptionFrame:
+    """Step 14: cancel_speech_chain emits BargeInInterruptionFrame
+    with all 5 step verdicts populated."""
+
+    def _make_pipeline(self) -> VoicePipeline:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from sovyx.voice.pipeline._config import VoicePipelineConfig
+
+        return VoicePipeline(
+            config=VoicePipelineConfig(),
+            vad=MagicMock(),
+            wake_word=MagicMock(),
+            stt=AsyncMock(),
+            tts=AsyncMock(),
+            event_bus=None,
+        )
+
+    async def test_cancel_speech_chain_emits_barge_in_frame_with_all_steps(
+        self,
+    ) -> None:
+        from sovyx.voice.pipeline._frame_types import BargeInInterruptionFrame
+
+        pipeline = self._make_pipeline()
+        await pipeline.cancel_speech_chain(reason="barge_in")
+
+        frames = pipeline._state_machine.frame_history()
+        barge_in_frames = [f for f in frames if isinstance(f, BargeInInterruptionFrame)]
+        assert len(barge_in_frames) == 1
+        frame = barge_in_frames[0]
+        assert frame.reason == "barge_in"
+        # All 5 chain steps recorded (output_flush, tts_tasks_cancel,
+        # llm_cancel, filler_and_gate, text_buffer_cleanup).
+        expected_steps = {
+            "output_flush",
+            "tts_tasks_cancel",
+            "llm_cancel",
+            "filler_and_gate",
+            "text_buffer_cleanup",
+        }
+        assert set(frame.step_results.keys()) == expected_steps
+
+    async def test_concurrent_barge_ins_each_produce_a_frame(self) -> None:
+        import asyncio
+
+        from sovyx.voice.pipeline._frame_types import BargeInInterruptionFrame
+
+        pipeline = self._make_pipeline()
+        await asyncio.gather(
+            pipeline.cancel_speech_chain(reason="barge_in"),
+            pipeline.cancel_speech_chain(reason="shutdown"),
+        )
+        frames = pipeline._state_machine.frame_history()
+        barge_in_frames = [f for f in frames if isinstance(f, BargeInInterruptionFrame)]
+        assert len(barge_in_frames) == 2
+        reasons = {f.reason for f in barge_in_frames}
+        assert reasons == {"barge_in", "shutdown"}
