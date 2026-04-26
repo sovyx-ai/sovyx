@@ -1,0 +1,42 @@
+# Conexant SN6180 VAIO VJFE69F11X-B0221H — pre-apply amixer dump
+#
+# Captured during the v0.22.2 pilot run that motivated the L2.5 KB
+# cascade refactor. Sovyx detected a saturated capture chain at boot
+# (Silero max_prob ~ 0 across 30s of speech) and the recovery path
+# applied the recommended preset shipped in
+# conexant_sn6180_vaio_vjfe69.yaml.
+#
+# This dump is the "factory ships saturated" baseline. The corresponding
+# _after.txt captures the post-apply state; _capture.wav is the
+# 3-second validation audio.
+#
+# Format: ``amixer -c 0 contents`` output, normalised to LF line endings
+# for cross-platform consistency.
+
+numid=1,iface=MIXER,name='Capture Volume'
+  ; type=INTEGER,access=rw---R--,values=2,min=0,max=80,step=0
+  : values=80,80
+  | dBscale-min=-30.00dB,step=0.75dB,mute=0
+numid=2,iface=MIXER,name='Capture Switch'
+  ; type=BOOLEAN,access=rw------,values=2
+  : values=on,on
+numid=3,iface=MIXER,name='Mic Boost Volume'
+  ; type=INTEGER,access=rw---R--,values=2,min=0,max=3,step=0
+  : values=3,3
+  | dBscale-min=0.00dB,step=10.00dB,mute=0
+numid=4,iface=MIXER,name='Internal Mic Boost Volume'
+  ; type=INTEGER,access=rw---R--,values=2,min=0,max=3,step=0
+  : values=3,3
+  | dBscale-min=0.00dB,step=10.00dB,mute=0
+numid=5,iface=MIXER,name='Auto-Mute Mode'
+  ; type=ENUMERATED,access=rw------,values=1,items=2
+  ; Item #0 'Disabled'
+  ; Item #1 'Enabled'
+  : values=1
+numid=6,iface=MIXER,name='Master Playback Volume'
+  ; type=INTEGER,access=rw---R--,values=1,min=0,max=87,step=0
+  : values=87
+  | dBscale-min=-65.25dB,step=0.75dB,mute=0
+numid=7,iface=MIXER,name='Master Playback Switch'
+  ; type=BOOLEAN,access=rw------,values=1
+  : values=on
