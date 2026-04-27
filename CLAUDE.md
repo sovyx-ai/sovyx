@@ -67,6 +67,10 @@ src/sovyx/
 ├── tiers.py             # ServiceTier enum, feature/mind-limit maps (informational)
 ├── license.py           # LicenseValidator (Ed25519 public key JWT, offline)
 ├── voice/               # STT, TTS, VAD, wake word, Wyoming
+│   │                    # Multi-mind voice identity (Phase 8 of master mission):
+│   │                    # wake word, voice ID, language, accent, cadence are
+│   │                    # configurable per MindConfig. See Phase 8 of
+│   │                    # docs-internal/missions/MISSION-voice-final-skype-grade-2026.md
 │   └── pipeline/        # Split from pipeline.py: state machine + output queue + barge-in
 │       ├── _orchestrator.py, _output_queue.py, _barge_in.py
 │       ├── _state.py, _events.py, _config.py, _constants.py
@@ -274,6 +278,15 @@ When investigating bugs:
    - **Docker** — `docker.yml` builds + pushes image in parallel.
 5. If CI fails on a tagged commit, fix + commit + re-tag with `git tag -d vX.Y.Z && git tag vX.Y.Z && git push origin vX.Y.Z --force`.
 
+### Two-Tier GA Strategy (voice subsystem)
+
+The voice subsystem ships in two GA tiers per master mission `MISSION-voice-final-skype-grade-2026.md`:
+
+- **v0.30.0 — single-mind production GA.** Phase 1-7 complete (cold-probe, bypass tiers wire-up, telemetry/IMM listener, multi-platform Win/Linux/macOS). Operators MAY ship v0.30.0 without waiting for Phase 8.
+- **v0.31.0 — FINAL multi-mind GA.** Phase 8 complete (per-mind wake word, voice ID, language, accent, cadence — see Phase 8 task block in master mission).
+
+Phase 8 work goes into v0.30.x patches OR directly v0.31.0 — never blocking v0.30.0 release. Operators choose tier per their mind topology (single-mind use cases are fully supported by v0.30.0).
+
 ## Working Style
 
 When given a task:
@@ -296,9 +309,42 @@ When splitting a god file:
 3. **Migrate tests in the same commit** — any `patch("old.module.X")` target becomes a silent no-op once the split lands.
 4. **Preserve the public docstring** — move it to the parent module's `__init__.py` if the original class was the face of the module.
 
+## Mission Lifecycle
+
+Sovyx uses long-running structured missions to coordinate complex multi-version work (voice hardening, multi-mind, etc.). The lifecycle is:
+
+1. **Active missions** live in `docs-internal/missions/MISSION-*.md`. Each carries a status field, a numbered task list (T1.1, T1.2, …), and Phase boundaries that map to target versions. Active masters as of v0.24.0:
+   - `MISSION-voice-final-skype-grade-2026.md` (terminal, Phase 1-8)
+   - `MISSION-voice-windows-paranoid-2026-04-26.md` (companion, Phase 1-3 wire-up)
+   - `MISSION-voice-godfile-splits-v0.24.1.md` (companion, hygiene splits)
+2. **ADRs** live in `docs-internal/ADR-*.md`. They are CANONICAL — referenced from code docstrings (`combo_store/__init__.py:3 → ADR-combo-store-schema.md`, etc.). Never delete an ADR; supersede it via a new ADR that references the old one.
+3. **Completed missions** are ARCHIVED (NOT deleted) to `docs-internal/archive/missions-completed/` with a `## Archive Footer` block citing: status at archive (SHIPPED / SUPERSEDED / ABSORBED), code references where the work landed, predecessor + successor missions. Update `docs-internal/archive/INDEX.md` with the new entry.
+4. **Predecessor / superseded** missions follow the same archive flow with reason `"absorbed by <successor>"` or `"shipped via <commit-hash>"`. The archive INDEX is the audit-trail entry point.
+5. **Forensic resolution docs** (post-incident ADRs, RCA closures) go to `docs-internal/archive/forensics-resolved/` with the same footer convention.
+6. Never delete a mission or ADR that produced shipped code. Reference value > workspace cleanliness. Pure orphans (planning docs that never produced code, byte-identical duplicates) are the only valid DELETE targets.
+
+When closing a mission task in a commit, reference the mission file + task ID in the body (e.g. `Mission: docs-internal/missions/MISSION-voice-final-skype-grade-2026.md §Phase 1.T2`) and update the mission spec to mark the task ✅ shipped in a follow-up `docs(mission):` commit. This keeps the trail forense intact even when subsequent tasks hit blockers.
+
 ## Deep Reference
 - Public docs (MkDocs): `docs/` — architecture, getting-started, configuration, api-reference, security, per-module specs under `docs/modules/`.
 - Internal planning + audits: `docs-internal/` (gitignored, local only).
 - Backend specs (IMPL/SPE/ADR): live under `docs-internal/`, searchable by number.
 - Code patterns: look at existing tests for real examples — `tests/unit/` mirrors `src/sovyx/`.
 - Frontend types: `dashboard/src/types/api.ts` (compile-time) + `dashboard/src/types/schemas.ts` (runtime).
+
+## Persistent Memory
+
+Sovyx development uses an auto-memory system that persists across sessions:
+
+- **Location:** `C:\Users\guipe\.claude\projects\E--sovyx\memory\`
+- **Index file:** `MEMORY.md` — load every linked entry at session start.
+- **Authority:** memories tagged `feedback_*` carry the SAME authority as CLAUDE.md instructions and OVERRIDE default behavior. Critical entries:
+  - `feedback_enterprise_only` — fixes paliativos / band-aids são proibidos.
+  - `feedback_no_speculation` — zero suposição; só afirmar com 100% embasamento técnico.
+  - `feedback_staged_adoption` — never bundle "foundation + 5 call-site adoptions" in one commit; lenient default for new validators.
+  - `feedback_ci_watching` — after tag push, skip `gh run watch` on publish.yml.
+- **Project memories** (`project_*`) carry historical context: ongoing missions, incidents, paranoid investigations.
+- **User memories** (`user_*`) carry preferences and role context.
+- **Reference memories** (`reference_*`) point to external systems.
+
+Before recommending from memory, verify the referenced file/function still exists (memories can drift). Memory state at write time ≠ current state.
