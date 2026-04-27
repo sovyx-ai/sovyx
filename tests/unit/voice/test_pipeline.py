@@ -1244,6 +1244,96 @@ class TestPipelineSpeaking:
         assert pipeline._filler_task is not None
         pipeline._cancel_filler()  # Cleanup
 
+    @pytest.mark.asyncio
+    async def test_concurrent_stream_text_atomic_speaking_transition_t126(self) -> None:
+        """T1.26 — the check-then-act at ``stream_text`` line 1548-1551
+        (``if self._state != SPEAKING: self._state = SPEAKING; ...``)
+        MUST NOT race when called concurrently. Single-threaded
+        asyncio guarantees this because there's no ``await`` between
+        the check at line 1548 and the assignment + ``on_tts_start``
+        call at line 1549-1551 — the entire transition runs in a
+        single non-yielding sync block.
+
+        This test pins the contract: fire three concurrent
+        ``stream_text`` calls via ``asyncio.gather``, assert that
+        ``on_tts_start`` was called exactly once and exactly one
+        ``TTSStartedEvent`` was emitted. A future refactor that
+        added an ``await`` between the check and the act (e.g. an
+        ``await self._lock.acquire()`` for the wrong reasons) would
+        fail this test because both racing tasks would observe
+        ``state != SPEAKING`` and both would call ``on_tts_start``.
+        """
+        pipeline, refs = _make_pipeline()
+        await pipeline.start()
+
+        # Spy gate counting on_tts_start invocations.
+        on_tts_start_calls: list[None] = []
+
+        class _CountingGate:
+            def on_tts_start(self) -> None:
+                on_tts_start_calls.append(None)
+
+            def on_tts_end(self) -> None:
+                return None
+
+        pipeline._self_feedback_gate = _CountingGate()  # type: ignore[assignment]
+
+        # Fire three concurrent stream_text calls. Since asyncio
+        # serialises until the first await, the first task wins the
+        # SPEAKING transition; tasks 2 and 3 observe state=SPEAKING
+        # and skip the inner block.
+        await asyncio.gather(
+            pipeline.stream_text("alpha"),
+            pipeline.stream_text("beta"),
+            pipeline.stream_text("gamma"),
+        )
+
+        assert len(on_tts_start_calls) == 1, (
+            f"on_tts_start must fire exactly once across concurrent "
+            f"stream_text calls — got {len(on_tts_start_calls)} calls. "
+            f"A non-zero count > 1 means a future refactor broke the "
+            f"check-then-act atomicity by inserting an await between "
+            f"the state check and the assignment."
+        )
+
+        events = [call.args[0] for call in refs["bus"].emit.call_args_list]
+        tts_started = [e for e in events if isinstance(e, TTSStartedEvent)]
+        assert len(tts_started) == 1, (
+            f"exactly one TTSStartedEvent must be emitted across "
+            f"concurrent stream_text calls — got {len(tts_started)}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_start_thinking_no_spawn_to_assignment_race_t125(self) -> None:
+        """T1.25 — ``start_thinking`` MUST assign ``self._filler_task``
+        before returning, with no await window between
+        ``spawn(...)`` and the assignment that could leave a concurrent
+        observer seeing ``_filler_task = None`` while the coroutine is
+        already scheduled. The ``sovyx.observability.tasks.spawn``
+        helper is fully synchronous (returns
+        ``asyncio.create_task(...)`` immediately), so the assignment
+        happens within a single non-yielding sync block. This test
+        pins that ordering — a future refactor that swapped ``spawn``
+        for an awaitable factory would fail it.
+        """
+        pipeline, _ = _make_pipeline(fillers_enabled=True)
+        await pipeline.start()
+
+        # Pre-condition: no filler task yet.
+        assert pipeline._filler_task is None
+
+        # start_thinking MUST be a fast sync path through to the
+        # spawn + assignment with no awaits between them. After it
+        # returns, _filler_task MUST be a live asyncio.Task.
+        await pipeline.start_thinking()
+
+        assert pipeline._filler_task is not None
+        assert isinstance(pipeline._filler_task, asyncio.Task)
+        # The task is scheduled but may not have run yet — the
+        # important invariant is the REFERENCE is in place so any
+        # subsequent _cancel_filler caller can cancel it.
+        pipeline._cancel_filler()
+
 
 # ===========================================================================
 # VoicePipeline — barge-in
