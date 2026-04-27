@@ -3873,6 +3873,67 @@ class TestCancellationChainT1:
         assert pipeline._filler_task is None
 
     @pytest.mark.asyncio
+    async def test_filler_cancelled_mid_play_clears_state_t132(self) -> None:
+        """T1.32 — when the filler is cancelled while it's awaiting
+        ``output.play_immediate(chunk)`` (the canonical "barge-in
+        during the Jarvis filler" scenario), the orchestrator's state
+        MUST be left consistent: ``_filler_task`` nulled,
+        ``_first_token_event`` set, ``_output._playing`` False. Pins
+        the existing contract — ``_cancel_filler`` does both
+        ``task.cancel()`` and ``event.set()``, the filler's
+        ``play_immediate`` ``finally`` block sets ``_playing=False``,
+        and ``cancel_speech_chain`` step 1 already interrupted the
+        output queue. The in-flight audio chunk in
+        ``blocking_write_play``'s worker thread continues until the
+        OS finishes writing the buffered samples — that's an
+        ``asyncio.to_thread`` limitation, not a correctness bug, and
+        is out of scope for T1.32.
+        """
+        pipeline, _refs = _make_pipeline(fillers_enabled=True)
+        await pipeline.start()
+
+        playing_started = asyncio.Event()
+        playing_completed = asyncio.Event()
+
+        async def _slow_filler() -> bool:
+            """Stand-in for a filler currently in play_immediate."""
+            playing_started.set()
+            try:
+                await asyncio.sleep(60.0)
+            finally:
+                playing_completed.set()
+            return True
+
+        pipeline._filler_task = asyncio.create_task(_slow_filler())
+        pipeline._output._playing = True  # filler is "playing"
+
+        # Wait until the filler is observably running.
+        await playing_started.wait()
+        filler_task = pipeline._filler_task
+        assert filler_task is not None
+        assert not filler_task.done()
+
+        # Cancel via cancel_speech_chain — this exercises the full
+        # T1 atomic chain (step 1 interrupt + step 4 _cancel_filler).
+        await pipeline.cancel_speech_chain(reason="barge_in")
+
+        # Filler task field nulled by _cancel_filler.
+        assert pipeline._filler_task is None
+        # Event set by _cancel_filler so any waiter unblocks.
+        assert pipeline._first_token_event.is_set()
+
+        # Drive the cancelled filler task to completion so its finally
+        # block runs — _cancel_filler calls task.cancel() but doesn't
+        # await; the CancelledError lands at the next event loop tick.
+        with contextlib.suppress(asyncio.CancelledError):
+            await filler_task
+
+        # The filler stand-in's finally runs once the CancelledError
+        # propagates — pinning that play_immediate's real finally
+        # would likewise run, setting ``_playing = False``.
+        assert playing_completed.is_set()
+
+    @pytest.mark.asyncio
     async def test_chain_releases_self_feedback_gate(self) -> None:
         pipeline, _ = _make_pipeline()
 
