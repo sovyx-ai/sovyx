@@ -1403,6 +1403,21 @@ class VoicePipeline:
                     error=str(exc),
                     **{"voice.utterance_id": utterance_id},
                 )
+                # Mission Phase 1 / T1.20 — emit PipelineErrorEvent so
+                # the dashboard's error-banner widget surfaces the
+                # cognitive-layer failure (the log-only signal was
+                # invisible to bus-keyed widgets). The callback
+                # isolation contract still holds: the exception is
+                # swallowed so a buggy cognitive layer can't take down
+                # the voice pipeline; the event is the structured
+                # observability trail.
+                await self._emit(
+                    PipelineErrorEvent(
+                        mind_id=self._config.mind_id,
+                        error=f"perception_callback_failed: {exc}",
+                        utterance_id=utterance_id,
+                    )
+                )
         else:
             # No callback wired — transcription has nowhere to go. This
             # is the "voice enabled but cognitive loop not registered"

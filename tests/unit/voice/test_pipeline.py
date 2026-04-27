@@ -1771,6 +1771,43 @@ class TestEdgeCases:
         assert result["state"] == "THINKING"
 
     @pytest.mark.asyncio
+    async def test_perception_callback_error_emits_pipeline_error_event(self) -> None:
+        """T1.20 — a raising perception callback emits PipelineErrorEvent
+        on the bus so dashboards see the cognitive-layer failure
+        (the log-only signal was invisible to bus-keyed widgets).
+        Callback isolation contract still holds — the pipeline keeps
+        running.
+        """
+        cb = AsyncMock(side_effect=RuntimeError("callback boom"))
+        pipeline, refs = _make_pipeline(
+            vad_speech=True,
+            ww_detected=True,
+            stt_text="trigger",
+            on_perception=cb,
+        )
+        await pipeline.start()
+
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
+            await pipeline.feed_frame(_speech_frame())
+        await pipeline.feed_frame(_speech_frame())
+        refs["vad"].process_frame.return_value = _vad_event(False)
+        for _ in range(3):
+            await pipeline.feed_frame(_silence_frame())
+
+        events = [call.args[0] for call in refs["bus"].emit.call_args_list]
+        error_events = [
+            e
+            for e in events
+            if isinstance(e, PipelineErrorEvent) and "perception_callback_failed" in e.error
+        ]
+        assert len(error_events) == 1, (
+            f"expected exactly one perception PipelineErrorEvent; got "
+            f"{len(error_events)} (all_errors="
+            f"{[e.error for e in events if isinstance(e, PipelineErrorEvent)]})"
+        )
+        assert "callback boom" in error_events[0].error
+
+    @pytest.mark.asyncio
     async def test_event_bus_error_doesnt_crash(self) -> None:
         """EventBus emit failure doesn't crash the pipeline."""
         pipeline, refs = _make_pipeline(vad_speech=True, ww_detected=True)
