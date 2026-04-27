@@ -1168,6 +1168,10 @@ async def create_voice_pipeline(
     if boot_warnings:
         with contextlib.suppress(OSError):
             write_preflight_warnings_file(warnings=boot_warnings, data_dir=data_dir)
+        logger.debug(
+            "voice.factory.preflight_marker_write_attempted",
+            reason="best-effort persistence of preflight warnings",
+        )
         logger.info(
             "voice_preflight_marker_written",
             count=len(boot_warnings),
@@ -1176,6 +1180,10 @@ async def create_voice_pipeline(
     else:
         with contextlib.suppress(OSError):
             clear_preflight_warnings_file(data_dir=data_dir)
+        logger.debug(
+            "voice.factory.preflight_marker_clear_attempted",
+            reason="best-effort cleanup of stale preflight marker",
+        )
         logger.info(
             "voice_pipeline_boot_preflight_stale_marker_cleared",
             hint="preflight step 9 passed; any prior saturated-boot marker removed",
