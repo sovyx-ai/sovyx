@@ -1465,9 +1465,23 @@ class VoicePipeline:
                 # cancel_speech_chain. Stop iterating and let the
                 # next turn re-establish the LLM stream — the
                 # remaining segments belong to a discarded utterance.
+                #
+                # Mission Phase 1 / T1.15 — clear ``_text_buffer``
+                # directly in this handler. Pre-T1.15 the cleanup was
+                # assumed via cancel_speech_chain step 5, but this
+                # path can be reached without the chain running
+                # (cognitive-layer task cancellation, event-loop
+                # shutdown). Clearing locally makes the cleanup
+                # invariant hold regardless of which cancel source
+                # fired. ``cancel_speech_chain`` step 5 stays as the
+                # belt-and-suspenders cleanup for paths that don't
+                # touch ``stream_text`` at all.
+                buffered_chars = len(self._text_buffer)
+                self._text_buffer = ""
                 logger.info(
-                    "voice.tts.stream_segment_cancelled",
+                    "voice.tts.stream_text_cancelled",
                     mind_id=self._config.mind_id,
+                    buffered_text_chars=buffered_chars,
                 )
                 return
 

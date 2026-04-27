@@ -1486,6 +1486,58 @@ class TestPipelineLifecycleHardening:
         assert payload.get("tts_tasks_total") == 0
         assert payload.get("filler_was_active") is False
 
+    @pytest.mark.asyncio
+    async def test_stream_text_cancelled_clears_text_buffer(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """T1.15 — stream_text's CancelledError handler must clear the buffer.
+
+        Pre-T1.15 the buffer kept residual partial text after cancellation
+        outside of cancel_speech_chain's step-5 cleanup, so a cancel source
+        that bypassed the chain (cognitive-layer task cancel, event-loop
+        shutdown) leaked partial text into the next stream_text call.
+        """
+        pipeline, _refs = _make_pipeline()
+        await pipeline.start()
+
+        # Patch _synthesize_tracked directly — the wrapping create_task
+        # in the real implementation can absorb a CancelledError raised
+        # by the awaitable in some scheduling shapes; the contract under
+        # test is "stream_text's except-CancelledError clause clears the
+        # buffer", which is independent of whether the CancelledError
+        # came from the TTS engine or from cancel_speech_chain
+        # cancelling the synth task.
+        async def _raises_cancelled(_text: str) -> Any:
+            raise asyncio.CancelledError
+
+        pipeline._synthesize_tracked = _raises_cancelled  # type: ignore[method-assign]
+
+        # Stream a chunk with at least two complete sentences so
+        # ``segments[:-1]`` is non-empty and the synthesize loop
+        # actually iterates. Without ≥2 boundaries the for loop body
+        # never executes and the cancellation handler never runs.
+        text_chunk = "First sentence! Second sentence! Tail piece"
+        with caplog.at_level(logging.INFO):
+            await pipeline.stream_text(text_chunk)
+
+        # Buffer cleared by the T1.15 handler.
+        assert pipeline._text_buffer == ""
+
+        # Structured event emitted with the dropped char count.
+        events = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict) and r.msg.get("event") == "voice.tts.stream_text_cancelled"
+        ]
+        assert len(events) == 1
+        # The dropped count is the buffer size AT cancellation — the
+        # full appended chunk minus whatever the loop already trimmed.
+        # We pin only the >0 invariant; the exact value depends on the
+        # split_at_boundaries internal behaviour and could shift with
+        # future tokenizer changes.
+        assert events[0].get("buffered_text_chars", 0) > 0
+
 
 # ===========================================================================
 # VoicePipeline — events emitted
