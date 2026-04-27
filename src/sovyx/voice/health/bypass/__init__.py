@@ -86,9 +86,7 @@ _LAZY_EXPORTS: dict[str, str] = {
     "WindowsHostApiRotateThenExclusiveBypass": (
         "sovyx.voice.health.bypass._win_host_api_rotate_then_exclusive"
     ),
-    "WindowsRawCommunicationsBypass": (
-        "sovyx.voice.health.bypass._win_raw_communications"
-    ),
+    "WindowsRawCommunicationsBypass": ("sovyx.voice.health.bypass._win_raw_communications"),
     "WindowsWASAPIExclusiveBypass": "sovyx.voice.health.bypass._win_wasapi_exclusive",
 }
 
