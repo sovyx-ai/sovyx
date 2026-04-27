@@ -23,6 +23,7 @@ from sovyx.voice._stage_metrics import (
     measure_stage_duration,
     record_stage_event,
 )
+from sovyx.voice._tts_zero_energy import TTS_RMS_FLOOR_DBFS, compute_rms_dbfs
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -506,6 +507,37 @@ class PiperTTS(TTSEngine):
             combined = np.concatenate(all_audio)
             duration_ms = len(combined) / sr * 1000
 
+            # T2 Ring 5 output-energy validation (master mission Phase 1
+            # / T1.36). Symmetric with KokoroTTS's gate at the same point
+            # in synthesize_with — both engines apply the shared
+            # ``voice/_tts_zero_energy`` primitives so the dashboard
+            # attributes structural-output failures uniformly. Piper is
+            # itself the fallback engine for Kokoro, so a sub-floor
+            # reading here means the user would hear silence with no
+            # audible recovery path inside the local TTS chain — the
+            # chunk's ``synthesis_health`` field signals the orchestrator
+            # to escalate to cloud TTS or text-only mode.
+            rms_dbfs = compute_rms_dbfs(combined)
+            synthesis_health: str | None = None
+            if rms_dbfs < TTS_RMS_FLOOR_DBFS:
+                synthesis_health = "zero_energy"
+                logger.warning(
+                    "voice.tts.piper_zero_energy_synthesis",
+                    **{
+                        "voice.text_chars": len(text),
+                        "voice.audio_ms": round(duration_ms, 1),
+                        "voice.generation_ms": round(generation_ms, 1),
+                        "voice.measured_rms_dbfs": (
+                            round(rms_dbfs, 2) if rms_dbfs != float("-inf") else "-inf"
+                        ),
+                        "voice.rms_floor_dbfs": TTS_RMS_FLOOR_DBFS,
+                        "voice.model": "piper",
+                        "voice.voice": self._config.voice,
+                        "voice.sample_rate": sr,
+                        "voice.action_required": ("fallback_to_cloud_tts_or_text_only"),
+                    },
+                )
+
             self._chunk_counter += 1
             logger.info(
                 "voice.tts.chunk_emitted",
@@ -518,14 +550,24 @@ class PiperTTS(TTSEngine):
                     "voice.voice": self._config.voice,
                     "voice.sample_rate": sr,
                     "voice.speaker_id": self._config.speaker_id,
+                    "voice.synthesis_health": synthesis_health or "ok",
                 },
             )
 
-            record_stage_event(VoiceStage.TTS, StageEventKind.SUCCESS)
+            if synthesis_health == "zero_energy":
+                record_stage_event(
+                    VoiceStage.TTS,
+                    StageEventKind.DROP,
+                    error_type="zero_energy",
+                )
+            else:
+                record_stage_event(VoiceStage.TTS, StageEventKind.SUCCESS)
+
             return AudioChunk(
                 audio=combined,
                 sample_rate=sr,
                 duration_ms=duration_ms,
+                synthesis_health=synthesis_health,
             )
 
     async def synthesize_streaming(
