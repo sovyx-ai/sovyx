@@ -415,6 +415,132 @@ class TestAudioCallbackUncaughtRaiseT130:
             await task.stop()
 
 
+class TestConsumerLoopHeartbeatDriftT131:
+    """T1.31 — pin ``_maybe_emit_heartbeat`` against Windows clock drift.
+
+    Master mission Phase 1 / T1.31 asked for swapping
+    ``time.monotonic()`` for ``time.perf_counter()`` on Windows
+    because the default Windows monotonic clock ticks at ~15.6 ms
+    (CLAUDE.md anti-pattern #22). At HEAD the heartbeat interval is
+    2.0 seconds (``_HEARTBEAT_INTERVAL_S = capture_heartbeat_interval_seconds``,
+    defaults to 2.0 in :class:`VoiceTuningConfig`), so the worst-
+    case 15.6 ms tick boundary represents 0.78 % drift — well
+    within tolerance for an INFO-level diagnostic.
+
+    The strict ``<`` comparison in
+    ``_maybe_emit_heartbeat`` (``if now - self._last_heartbeat_monotonic < _HEARTBEAT_INTERVAL_S: return``)
+    correctly fires when ``now`` reaches exactly the deadline.
+    Same-tick repeated reads (the failure mode CLAUDE.md
+    anti-pattern #24 calls out for sub-tick TTLs) are not a
+    concern at 2.0-second granularity.
+
+    These tests pin the contract so a future refactor can't
+    silently regress (e.g. by tightening the interval to a
+    sub-tick value or by flipping ``<`` to ``>``).
+    """
+
+    def _build_task(self) -> AudioCaptureTask:
+        sd = _fake_sd()
+        sd.InputStream = MagicMock(return_value=MagicMock())  # type: ignore[attr-defined]
+        entry = _input_entry(index=5)
+        return AudioCaptureTask(
+            MagicMock(),
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [entry],
+        )
+
+    def test_heartbeat_does_not_fire_before_interval_elapsed(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A read inside the interval window MUST NOT fire the
+        heartbeat — the strict ``<`` comparison guarantees no early
+        emission even when the monotonic clock advances at coarse
+        15.6 ms ticks.
+        """
+        task = self._build_task()
+        task._last_heartbeat_monotonic = 1000.0  # noqa: SLF001
+        # 1.5s elapsed (well under the 2.0s default interval).
+        with (
+            patch("sovyx.voice._capture_task.time.monotonic", return_value=1001.5),
+            caplog.at_level("INFO", logger="sovyx.voice._capture_task"),
+        ):
+            task._maybe_emit_heartbeat()  # noqa: SLF001
+        assert not any(
+            isinstance(r.msg, dict) and r.msg.get("event") == "audio_capture_heartbeat"
+            for r in caplog.records
+        )
+
+    def test_heartbeat_fires_at_exact_interval_boundary(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Reading at exactly ``last + _HEARTBEAT_INTERVAL_S`` MUST
+        fire the heartbeat. The comparison is ``now - last <
+        _HEARTBEAT_INTERVAL_S`` (strict ``<``); ``2.0 < 2.0`` is
+        ``False`` so the body runs. Coarse-clock systems where
+        ``now`` lands a tick AFTER the deadline (e.g. 2.0156s on
+        Windows) also fire — both cases verified.
+        """
+        from sovyx.voice._capture_task import _HEARTBEAT_INTERVAL_S
+
+        task = self._build_task()
+        task._last_heartbeat_monotonic = 1000.0  # noqa: SLF001
+
+        # Exactly at the deadline.
+        with (
+            patch(
+                "sovyx.voice._capture_task.time.monotonic",
+                return_value=1000.0 + _HEARTBEAT_INTERVAL_S,
+            ),
+            caplog.at_level("INFO", logger="sovyx.voice._capture_task"),
+        ):
+            task._maybe_emit_heartbeat()  # noqa: SLF001
+        events_at_boundary = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict) and r.msg.get("event") == "audio_capture_heartbeat"
+        ]
+        assert len(events_at_boundary) == 1, (
+            f"heartbeat MUST fire at exact interval boundary "
+            f"(now - last = {_HEARTBEAT_INTERVAL_S}s, comparison "
+            f"is `<`); got {len(events_at_boundary)} events"
+        )
+
+    def test_heartbeat_fires_one_windows_tick_past_interval(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """One 15.6 ms Windows tick PAST the interval boundary MUST
+        also fire — pins the Windows-coarse-clock case explicitly.
+        Worst-case drift: ~0.78 % at 2.0 s interval, well within
+        tolerance for INFO-level diagnostic.
+        """
+        from sovyx.voice._capture_task import _HEARTBEAT_INTERVAL_S
+
+        task = self._build_task()
+        task._last_heartbeat_monotonic = 1000.0  # noqa: SLF001
+
+        # Worst-case Windows tick boundary: deadline + 15.6 ms.
+        with (
+            patch(
+                "sovyx.voice._capture_task.time.monotonic",
+                return_value=1000.0 + _HEARTBEAT_INTERVAL_S + 0.0156,
+            ),
+            caplog.at_level("INFO", logger="sovyx.voice._capture_task"),
+        ):
+            task._maybe_emit_heartbeat()  # noqa: SLF001
+        windows_tick_events = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict) and r.msg.get("event") == "audio_capture_heartbeat"
+        ]
+        assert len(windows_tick_events) == 1, (
+            "heartbeat MUST fire one Windows clock tick past the "
+            "interval — 0.78 % drift on a 2.0 s interval is within "
+            "tolerance for the INFO-level diagnostic"
+        )
+
+
 class TestAudioCaptureTaskReconnect:
     """Device disconnection in the consume loop triggers reopen via the opener."""
 
