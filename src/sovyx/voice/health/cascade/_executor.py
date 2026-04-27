@@ -1,39 +1,25 @@
-"""L2 — Cascading open strategies.
+"""Cascade execution loop — pinned/store/cascade walk.
 
-See ADR §4.2 + §5.5 + §5.6. Given an endpoint the cascade tries combos in
-priority order until a probe returns :attr:`~sovyx.voice.health.contract.Diagnosis.HEALTHY`:
+Split from the legacy ``cascade.py`` (CLAUDE.md anti-pattern #16
+hygiene) — see ``MISSION-voice-godfile-splits-v0.24.1.md`` Part 3 / T02.
 
-1. :class:`~sovyx.voice.health.capture_overrides.CaptureOverrides` — the
-   user-pinned combo for this endpoint, if one exists (source ``"pinned"``).
-2. :class:`~sovyx.voice.health.combo_store.ComboStore` fast path — the last
-   known-good combo for this endpoint, if one exists and isn't flagged
-   ``needs_revalidation`` (source ``"store"``).
-3. Platform cascade — :data:`WINDOWS_CASCADE` / :data:`LINUX_CASCADE` /
-   :data:`MACOS_CASCADE`, tried in declaration order (source ``"cascade"``).
+Owns the core cascade entry points (:func:`run_cascade`,
+:func:`run_cascade_for_candidates`), the per-attempt probe wrapper
+(:func:`_try_combo`), the structured-log helpers
+(:func:`_log_probe_call`, :func:`_log_probe_result`, :func:`_combo_tag`,
+:func:`_truncate_detail`, :data:`_LOG_DETAIL_MAX_CHARS`), and the
+:class:`ProbeCallable` Protocol that types the cascade's probe
+dependency.
 
-The cascade is wrapped in two safety rails:
+Composes:
 
-* **Lifecycle lock** (ADR §5.5). Per-endpoint :class:`asyncio.Lock`
-  stored in an :class:`~sovyx.engine._lock_dict.LRULockDict` so only one
-  cascade / invalidation / record-winning ever runs against a given
-  endpoint at a time. Prevents hot-plug races and doctor-vs-daemon
-  races. Bounded to 64 endpoints to satisfy CLAUDE.md anti-pattern #15.
+* :mod:`._planner` — platform cascade tables + per-device tailoring.
+* :mod:`._alignment` — pinned override / ComboStore fast-path lookups
+  + L2.5 mixer-sanity helper.
+* :mod:`._budget` — tuning constants + lifecycle locks +
+  quarantine/record-winner helpers.
 
-* **Time budget** (ADR §5.6). Total 30 s wall-clock for the whole
-  cascade (6 default attempts × ~5 s each, 8 for the opt-in aggressive
-  variant); per-attempt 5 s via the probe's hard timeout. On
-  total-budget exhaustion the cascade returns with
-  ``budget_exhausted=True`` and the best attempt so far (or none).
-
-On a HEALTHY winner the cascade records the combo to the ComboStore
-(unless the winner came from the store already) so the next boot hits
-the fast path.
-
-Cross-platform note: Linux and macOS cascade tables are defined here
-but marked empty for Sprint 1 — Tasks #27 / #28 populate them with the
-ALSA / CoreAudio-specific entries from ADR §4.2. A cascade on an
-unsupported platform returns ``source="none"`` with no attempts; the
-caller is expected to fall back to the legacy single-open path.
+All public names re-exported from :mod:`sovyx.voice.health.cascade`.
 """
 
 from __future__ import annotations
@@ -42,22 +28,37 @@ import asyncio
 import time
 from typing import TYPE_CHECKING, Protocol
 
-from sovyx.engine._lock_dict import LRULockDict
 from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 from sovyx.observability.logging import get_logger
 from sovyx.voice.health._metrics import (
     record_cascade_attempt,
     record_combo_store_hit,
-    record_kernel_invalidated_event,
     record_probe_result,
 )
 from sovyx.voice.health._quarantine import (
     EndpointQuarantine,
     get_default_quarantine,
 )
+from sovyx.voice.health.cascade._alignment import (
+    _lookup_override,
+    _lookup_store,
+    _run_mixer_sanity,
+)
+from sovyx.voice.health.cascade._budget import (
+    _DEFAULT_ATTEMPT_BUDGET_S,
+    _DEFAULT_TOTAL_BUDGET_S,
+    _VOICE_CLARITY_AUTOFIX_FIRST_ATTEMPT,
+    _default_locks,
+    _quarantine_endpoint,
+    _record_winner,
+)
+from sovyx.voice.health.cascade._planner import (
+    LINUX_CASCADE,
+    _platform_cascade,
+    build_linux_cascade_for_device,
+)
 from sovyx.voice.health.contract import (
     CandidateEndpoint,
-    CandidateSource,
     CascadeResult,
     Combo,
     Diagnosis,
@@ -74,474 +75,20 @@ from sovyx.voice.health.probe import (
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
+    from sovyx.engine._lock_dict import LRULockDict
     from sovyx.voice.health._mixer_sanity import MixerSanitySetup
     from sovyx.voice.health.capture_overrides import CaptureOverrides
     from sovyx.voice.health.combo_store import ComboStore
 
+
 logger = get_logger(__name__)
 
 
-# ── Cascade tuning defaults ─────────────────────────────────────────────
-#
-# Sourced from :class:`VoiceTuningConfig` so every knob is overridable via
-# ``SOVYX_TUNING__VOICE__CASCADE_*`` env vars. CLAUDE.md anti-pattern #17.
-
-_DEFAULT_TOTAL_BUDGET_S = _VoiceTuning().cascade_total_budget_s
-"""Total cascade wall-clock budget. ADR §5.6."""
-
-_DEFAULT_ATTEMPT_BUDGET_S = _VoiceTuning().cascade_attempt_budget_s
-"""Per-attempt budget passed to the probe's ``hard_timeout_s``. ADR §5.6."""
-
-_DEFAULT_WIZARD_TOTAL_BUDGET_S = _VoiceTuning().cascade_wizard_total_budget_s
-"""Wizard user-facing budget. ADR §5.6 — a human is watching."""
-
-_LIFECYCLE_LOCK_MAX = _VoiceTuning().cascade_lifecycle_lock_max
-"""Max concurrent endpoints tracked by the lifecycle lock dict."""
-
-_VOICE_CLARITY_AUTOFIX_FIRST_ATTEMPT = 3
-"""When ``voice_clarity_autofix=False``, skip indices 0..2 (WASAPI exclusive)
-and start at attempt 3 (shared best-effort). ADR §5.11/§5.12.
-
-This is a cascade-table index, not a tuning knob — changing it requires
-re-ordering the :data:`WINDOWS_CASCADE` tuple. It belongs here, not in
-:class:`VoiceTuningConfig`.
-"""
-
-
-# ── Platform cascade tables ─────────────────────────────────────────────
-
-
-def _windows_cascade() -> tuple[Combo, ...]:
-    """Build the default Windows cascade.
-
-    ``sample_rate`` is nominal — callers that need a device's actual
-    "native" rate (attempt 2) override the tuple entry at the call site
-    via ``cascade_override``. 48 kHz is the overwhelming default on
-    modern Windows hardware, so it doubles as attempt 2's nominal
-    native rate for the default cascade.
-
-    WDM-KS (kernel streaming) is intentionally *not* part of the default
-    cascade. See :func:`_windows_cascade_aggressive` for the opt-in tuple
-    that includes it and the rationale against the default.
-    """
-    w32 = "win32"
-    return (
-        Combo(
-            host_api="WASAPI",
-            sample_rate=16_000,
-            channels=1,
-            sample_format="int16",
-            exclusive=True,
-            auto_convert=False,
-            frames_per_buffer=480,
-            platform_key=w32,
-        ),
-        Combo(
-            host_api="WASAPI",
-            sample_rate=48_000,
-            channels=1,
-            sample_format="int16",
-            exclusive=True,
-            auto_convert=False,
-            frames_per_buffer=480,
-            platform_key=w32,
-        ),
-        Combo(
-            host_api="WASAPI",
-            sample_rate=48_000,
-            channels=1,
-            sample_format="int16",
-            exclusive=True,
-            auto_convert=False,
-            frames_per_buffer=960,
-            platform_key=w32,
-        ),
-        Combo(
-            host_api="WASAPI",
-            sample_rate=16_000,
-            channels=1,
-            sample_format="int16",
-            exclusive=False,
-            auto_convert=True,
-            frames_per_buffer=480,
-            platform_key=w32,
-        ),
-        Combo(
-            host_api="DirectSound",
-            sample_rate=16_000,
-            channels=1,
-            sample_format="int16",
-            exclusive=False,
-            auto_convert=False,
-            frames_per_buffer=480,
-            platform_key=w32,
-        ),
-        Combo(
-            host_api="MME",
-            sample_rate=16_000,
-            channels=1,
-            sample_format="int16",
-            exclusive=False,
-            auto_convert=False,
-            frames_per_buffer=480,
-            platform_key=w32,
-        ),
-    )
-
-
-def _windows_cascade_aggressive() -> tuple[Combo, ...]:
-    """Build the opt-in aggressive Windows cascade with WDM-KS.
-
-    Same as :func:`_windows_cascade` but with two additional WDM-KS
-    (Windows Driver Model Kernel Streaming) attempts inserted between
-    the WASAPI-exclusive trio and the shared-mode fallback chain.
-
-    WDM-KS issues IOCTLs directly to the audio miniport at kernel level.
-    On well-behaved drivers it provides another APO-bypass surface on
-    top of the WASAPI-exclusive path. On *misbehaving* drivers (notably
-    some USB-audio class drivers: Razer BlackShark V2 Pro / VID_1532 is
-    a confirmed case), an IOCTL on an endpoint whose upstream
-    ``IAudioClient::Initialize`` just failed with
-    ``AUDCLNT_E_DEVICE_INVALIDATED`` can leave the driver's event-queue
-    thread wedged. Windows then fires a kernel resource watchdog
-    (``LiveKernelEvent 0x1CC``) and hard-resets the machine
-    (``Kernel-Power 41``, ``BugcheckCode=0``, no dump).
-
-    Because WDM-KS attempts add *no* APO-bypass capability beyond what
-    WASAPI exclusive (attempts 0-2) already covers, they are off by
-    default. Callers wanting the aggressive table pass
-    ``cascade_override=WINDOWS_CASCADE_AGGRESSIVE`` to
-    :func:`run_cascade` — e.g. an opt-in aggressive wizard path for
-    operators who have verified their drivers are safe against WDM-KS.
-    """
-    base = _windows_cascade()
-    w32 = "win32"
-    kernel_streaming = (
-        Combo(
-            host_api="WDM-KS",
-            sample_rate=16_000,
-            channels=1,
-            sample_format="int16",
-            exclusive=False,
-            auto_convert=False,
-            frames_per_buffer=480,
-            platform_key=w32,
-        ),
-        Combo(
-            host_api="WDM-KS",
-            sample_rate=48_000,
-            channels=1,
-            sample_format="int16",
-            exclusive=False,
-            auto_convert=False,
-            frames_per_buffer=480,
-            platform_key=w32,
-        ),
-    )
-    # Insert kernel-streaming attempts between WASAPI-exclusive (0-2)
-    # and WASAPI-shared (3) so the aggressive table preserves the
-    # "exclusive → kernel → shared → legacy" ordering of the pre-v0.20.4
-    # default cascade.
-    return base[:3] + kernel_streaming + base[3:]
-
-
-WINDOWS_CASCADE: tuple[Combo, ...] = _windows_cascade()
-"""Default Windows 6-attempt cascade. Exclusive WASAPI → shared → legacy.
-
-Ordering rationale (ADR §4.2, updated 2026-04-20 after the Razer
-BlackShark V2 Pro / ``usbaudio`` kernel hard-reset incident — see
-:func:`_windows_cascade_aggressive` for the ``LiveKernelEvent 0x1CC``
-post-mortem):
-
-* Attempts 0-2: exclusive WASAPI bypasses the entire capture APO chain
-  (Voice Clarity, OEM DSPs). Most hostile environments resolve here.
-* Attempt 3: shared WASAPI with ``auto_convert`` — graceful fallback
-  when the driver rejects exclusive mode; used as the first attempt
-  when ``voice_clarity_autofix=False``.
-* Attempts 4-5: DirectSound + MME — legacy fallbacks for ancient
-  hardware. Signal still flows but resampler-rich and lossy.
-
-WDM-KS (kernel streaming) has been **removed from the default** because
-it adds no APO-bypass capability beyond WASAPI exclusive but can lock
-up fragile USB-audio drivers into a kernel resource timeout that the
-OS resolves with an unrecoverable hard-reset. The aggressive variant is
-still available via :data:`WINDOWS_CASCADE_AGGRESSIVE`.
-"""
-
-
-WINDOWS_CASCADE_AGGRESSIVE: tuple[Combo, ...] = _windows_cascade_aggressive()
-"""Opt-in 8-attempt Windows cascade including WDM-KS.
-
-Callers that explicitly want kernel streaming in the mix (aggressive
-wizard modes, power-user diagnostic runs) pass this as
-``cascade_override`` to :func:`run_cascade`. Never used as the default
-cascade — see :func:`_windows_cascade_aggressive` for why.
-"""
-
-
-def _linux_cascade() -> tuple[Combo, ...]:
-    """Build the Linux cascade per ADR §4.2.
-
-    Ordering rationale:
-
-    * Attempts 0-1: ALSA direct (``hw:``, ``exclusive=True``) bypasses
-      every user-space mixing layer — PulseAudio, PipeWire, or any
-      ``module-echo-cancel`` / ``filter-chain`` stage. On distros where
-      WebRTC-AEC is the default capture path this is the only way to
-      get a raw mic signal to Silero VAD.
-    * Attempt 2: JACK — low-latency pro-audio path, typically no AEC
-      inline. Only reachable when the user has ``jackd`` / ``pipewire-jack``
-      running; falls through silently otherwise.
-    * Attempts 3-4: PipeWire native — modern distro default. Shared access
-      through the session manager; ``auto_convert=True`` asks the server
-      to resample transparently so we don't depend on the node's native rate.
-    * Attempt 5: PulseAudio shared — last-resort fallback for systems
-      still running the legacy daemon. Almost always lossy (8 kHz
-      auto-resample on laptops) but signal still flows.
-    """
-    lnx = "linux"
-    return (
-        Combo(
-            host_api="ALSA",
-            sample_rate=16_000,
-            channels=1,
-            sample_format="int16",
-            exclusive=True,
-            auto_convert=False,
-            frames_per_buffer=480,
-            platform_key=lnx,
-        ),
-        Combo(
-            host_api="ALSA",
-            sample_rate=48_000,
-            channels=1,
-            sample_format="int16",
-            exclusive=True,
-            auto_convert=False,
-            frames_per_buffer=480,
-            platform_key=lnx,
-        ),
-        Combo(
-            host_api="JACK",
-            sample_rate=48_000,
-            channels=1,
-            sample_format="float32",
-            exclusive=False,
-            auto_convert=False,
-            frames_per_buffer=480,
-            platform_key=lnx,
-        ),
-        Combo(
-            host_api="PipeWire",
-            sample_rate=16_000,
-            channels=1,
-            sample_format="int16",
-            exclusive=False,
-            auto_convert=True,
-            frames_per_buffer=480,
-            platform_key=lnx,
-        ),
-        Combo(
-            host_api="PipeWire",
-            sample_rate=48_000,
-            channels=1,
-            sample_format="int16",
-            exclusive=False,
-            auto_convert=True,
-            frames_per_buffer=480,
-            platform_key=lnx,
-        ),
-        Combo(
-            host_api="PulseAudio",
-            sample_rate=16_000,
-            channels=1,
-            sample_format="int16",
-            exclusive=False,
-            auto_convert=True,
-            frames_per_buffer=480,
-            platform_key=lnx,
-        ),
-    )
-
-
-LINUX_CASCADE: tuple[Combo, ...] = _linux_cascade()
-"""Linux 6-attempt cascade. ALSA direct → JACK → PipeWire → PulseAudio.
-
-Ordering rationale (ADR §4.2): ALSA ``hw:`` bypasses every user-space
-APO (``module-echo-cancel``, PipeWire ``filter-chain``); JACK is the
-pro-audio escape hatch; PipeWire is the modern shared default;
-PulseAudio is the legacy last-resort.
-
-The ``exclusive`` flag on Linux is interpreted by the stream opener as
-"request direct ``hw:`` access" rather than mixed plughw/pulse access.
-``auto_convert`` signals "let the server resample/rechannel" on the
-mixing-layer entries.
-"""
-
-
-def build_linux_cascade_for_device(
-    device_default_samplerate: int,
-    device_kind: str,
-    *,
-    tuning: _VoiceTuning | None = None,
-) -> tuple[Combo, ...]:
-    """Return the Linux cascade with an optional native-rate prepend.
-
-    **VLX-005 fix.** ALSA ``hw:X,Y`` nodes that report a non-canonical
-    native sample rate (most commonly 44 100 Hz on HDMI audio and 32 000
-    Hz on some Bluetooth codecs) reject the cascade's default 16 000 Hz
-    first-attempt with ``paInvalidSampleRate`` (-9997), burning one
-    probe per combo before ever reaching the 48 000 Hz fallback. When
-    the device exposes a sensible native rate that the default cascade
-    doesn't already cover, we prepend a dedicated exclusive combo at
-    that rate so the first probe stands a chance.
-
-    Args:
-        device_default_samplerate: ``DeviceEntry.default_samplerate`` —
-            what PortAudio advertises as the hardware's native rate.
-        device_kind: :class:`~sovyx.voice.device_enum.DeviceKind` as a
-            string. Only HARDWARE devices get the prepend; session-
-            manager virtuals and OS-default aliases do their own
-            resampling internally and are happy with any rate in the
-            default table.
-        tuning: Optional :class:`VoiceTuningConfig` for the bounds
-            ``cascade_native_rate_min_hz`` / ``cascade_native_rate_max_hz``.
-            When ``None`` the current process tuning is read once.
-
-    Returns:
-        Either :data:`LINUX_CASCADE` unchanged (most common) or a new
-        tuple with a prepended native-rate combo. Never mutates
-        :data:`LINUX_CASCADE`.
-    """
-    if device_kind != "hardware":
-        return LINUX_CASCADE
-
-    effective_tuning = tuning or _VoiceTuning()
-    min_hz = effective_tuning.cascade_native_rate_min_hz
-    max_hz = effective_tuning.cascade_native_rate_max_hz
-
-    if not (min_hz <= device_default_samplerate <= max_hz):
-        # Driver reporting junk (0, 4, ultrasonic) or a rate higher than
-        # what the cascade table supports. Skip prepend; default table
-        # handles 16k and 48k fallbacks the usual way.
-        return LINUX_CASCADE
-
-    # Skip if the rate is already canonical — the default cascade's
-    # attempts 0 (16k) and 1 (48k) already cover those paths.
-    if device_default_samplerate in {16_000, 48_000}:
-        return LINUX_CASCADE
-
-    # Guard: the rate must be an allowed Combo rate (else Combo ctor
-    # raises). Rates outside ALLOWED_SAMPLE_RATES are silently dropped.
-    from sovyx.voice.health.contract import ALLOWED_SAMPLE_RATES
-
-    if device_default_samplerate not in ALLOWED_SAMPLE_RATES:
-        return LINUX_CASCADE
-
-    native_combo = Combo(
-        host_api="ALSA",
-        sample_rate=device_default_samplerate,
-        channels=1,
-        sample_format="int16",
-        exclusive=True,
-        auto_convert=False,
-        frames_per_buffer=480,
-        platform_key="linux",
-    )
-    return (native_combo, *LINUX_CASCADE)
-
-
-def _macos_cascade() -> tuple[Combo, ...]:
-    """Build the macOS cascade per ADR §4.2.
-
-    Ordering rationale:
-
-    * Attempt 0: 48 kHz int16 — native mixer rate on every modern
-      macOS build (CoreAudio mixes at 48 kHz internally since macOS 10.9).
-      The system doesn't insert voice-processing on a plain HAL input
-      unit, so PortAudio's default CoreAudio path is already bypass-clean.
-    * Attempt 1: 48 kHz float32 — Apple-silicon Macs and AirPods in
-      A2DP-sink mode default to floating-point. Same buffer size, so
-      the fallback is cheap.
-    * Attempt 2: 44.1 kHz int16 — legacy USB interfaces (Focusrite
-      Scarlett 1st-gen, older Presonus) lock to 44.1 kHz; stream opener
-      falls through to this rate before giving up.
-    * Attempt 3: 16 kHz int16 — last-resort narrow-band that matches
-      Bluetooth SCO/HFP's native rate. Only used when the HFP guard
-      (:mod:`sovyx.voice._hfp_guard`) has cleared the endpoint — we
-      never *intentionally* open HFP because the compression kills VAD.
-
-    macOS has no APO-chain to bypass (voice-processing is opt-in via
-    ``kAUVoiceIOProperty_BypassVoiceProcessing``; PortAudio never opts
-    in), so the cascade is purely a sample-rate / format fallback ladder
-    rather than a "try exclusive first" sequence.
-    """
-    mac = "darwin"
-    return (
-        Combo(
-            host_api="CoreAudio",
-            sample_rate=48_000,
-            channels=1,
-            sample_format="int16",
-            exclusive=False,
-            auto_convert=False,
-            frames_per_buffer=480,
-            platform_key=mac,
-        ),
-        Combo(
-            host_api="CoreAudio",
-            sample_rate=48_000,
-            channels=1,
-            sample_format="float32",
-            exclusive=False,
-            auto_convert=False,
-            frames_per_buffer=480,
-            platform_key=mac,
-        ),
-        Combo(
-            host_api="CoreAudio",
-            sample_rate=44_100,
-            channels=1,
-            sample_format="int16",
-            exclusive=False,
-            auto_convert=True,
-            frames_per_buffer=441,
-            platform_key=mac,
-        ),
-        Combo(
-            host_api="CoreAudio",
-            sample_rate=16_000,
-            channels=1,
-            sample_format="int16",
-            exclusive=False,
-            auto_convert=False,
-            frames_per_buffer=480,
-            platform_key=mac,
-        ),
-    )
-
-
-MACOS_CASCADE: tuple[Combo, ...] = _macos_cascade()
-"""macOS 4-attempt cascade. Native-rate CoreAudio with format fallbacks.
-
-Ordering rationale (ADR §4.2): CoreAudio at 48 kHz int16 → 48 kHz
-float32 → 44.1 kHz int16 → 16 kHz int16. No exclusive/shared
-distinction on macOS — HAL input units are single-client by default —
-so the ``exclusive`` flag is always ``False``. ``auto_convert`` is set
-only on the 44.1 kHz entry because that rate requires a sample-rate
-converter to reach the 16 kHz VAD pipeline downstream.
-
-The 16 kHz attempt exists for HFP/SCO interop; the stream opener must
-pair it with the :mod:`sovyx.voice._hfp_guard` check to avoid
-silently accepting the 8 kHz Bluetooth SCO compression on headset mics.
-"""
-
-
-_PLATFORM_CASCADES: dict[str, tuple[Combo, ...]] = {
-    "win32": WINDOWS_CASCADE,
-    "linux": LINUX_CASCADE,
-    "darwin": MACOS_CASCADE,
-}
+__all__ = [
+    "ProbeCallable",
+    "run_cascade",
+    "run_cascade_for_candidates",
+]
 
 
 # ── Probe callable typing ────────────────────────────────────────────────
@@ -1215,9 +762,6 @@ async def _run_cascade_locked(
 # ── helpers ─────────────────────────────────────────────────────────────
 
 
-_DEFAULT_LOCKS: LRULockDict[str] | None = None
-
-
 async def run_cascade_for_candidates(
     *,
     candidates: Sequence[CandidateEndpoint],
@@ -1346,7 +890,7 @@ async def run_cascade_for_candidates(
                 tuning=tuning,
             )
         except asyncio.CancelledError:
-            # Paranoid-QA CRITICAL #1: cancellation propagates.
+            # Paranoid-QA CRITICAL #1: cancel propagates.
             raise
         except Exception as exc:  # noqa: BLE001 — cascade must continue
             logger.warning(
@@ -1491,219 +1035,6 @@ async def run_cascade_for_candidates(
     )
 
 
-def _default_locks() -> LRULockDict[str]:
-    """Lazy singleton for callers that didn't pass a lock dict.
-
-    Created on first use so importing this module in environments that
-    don't need cascade locking (tests, doctor CLI sub-commands) doesn't
-    allocate anything.
-    """
-    global _DEFAULT_LOCKS  # noqa: PLW0603 — lazy singleton, not user-mutable state
-    if _DEFAULT_LOCKS is None:
-        _DEFAULT_LOCKS = LRULockDict(maxsize=_LIFECYCLE_LOCK_MAX)
-    return _DEFAULT_LOCKS
-
-
-def _platform_cascade(platform_key: str) -> tuple[Combo, ...]:
-    return _PLATFORM_CASCADES.get(platform_key, ())
-
-
-def _quarantine_endpoint(
-    *,
-    quarantine: EndpointQuarantine | None,
-    endpoint_guid: str,
-    device_friendly_name: str,
-    device_interface_name: str,
-    host_api: str,
-    platform_key: str,
-    reason: str,
-    physical_device_id: str = "",
-) -> bool:
-    """Add ``endpoint_guid`` to the §4.4.7 quarantine and emit the L4 metric.
-
-    Returns ``True`` when the endpoint was registered (caller short-circuits
-    the cascade and returns ``source="quarantined"``); ``False`` when no
-    quarantine store is configured (operator opted out via
-    :attr:`VoiceTuningConfig.kernel_invalidated_failover_enabled` ``=False``).
-
-    ``physical_device_id`` is the caller's best canonical-name identity
-    for the underlying microphone. When supplied, it is stored on the
-    quarantine entry so
-    :func:`~sovyx.voice.health._factory_integration.select_alternative_endpoint`
-    can reject every host-API alias of the same wedged driver during
-    fail-over, preventing the Razer-class kernel-reset failure mode.
-
-    Centralising this lets the cascade's three probe sites — pinned override,
-    ComboStore fast path, and platform cascade loop — all register quarantine
-    entries through one consistent path so the metric / log surface stays
-    uniform.
-    """
-    if quarantine is None:
-        return False
-    quarantine.add(
-        endpoint_guid=endpoint_guid,
-        device_friendly_name=device_friendly_name,
-        device_interface_name=device_interface_name,
-        host_api=host_api or "unknown",
-        reason=reason,
-        physical_device_id=physical_device_id,
-    )
-    record_kernel_invalidated_event(
-        platform=platform_key,
-        host_api=host_api or "unknown",
-        action="quarantine",
-    )
-    return True
-
-
-async def _run_mixer_sanity(
-    *,
-    mixer_sanity: MixerSanitySetup,
-    endpoint_guid: str,
-    device_index: int,
-    device_friendly_name: str,
-    combo_store: ComboStore | None,
-    capture_overrides: CaptureOverrides | None,
-    tuning: _VoiceTuning | None = None,
-) -> None:
-    """Invoke L2.5 ``check_and_maybe_heal`` for this endpoint.
-
-    Fire-and-forget from the cascade's perspective: the outcome is
-    logged + telemetry'd internally (via the ``_mixer_sanity`` module),
-    but we return no value — the cascade continues with its platform
-    walk regardless. L2.5 heals the ALSA mixer state; the platform
-    cascade still picks the PortAudio combo.
-
-    Builds a minimal :class:`CandidateEndpoint` on the fly so the
-    orchestrator has an endpoint identity to key telemetry on. Full
-    candidate metadata (source, preference_rank, canonical_name)
-    isn't needed for L2.5 — it operates on mixer state, not endpoint
-    enumeration.
-
-    Any unexpected error inside L2.5 is swallowed (already logged by
-    the orchestrator) so a misbehaving KB or probe cannot abort the
-    cascade — invariant P6 applied at the integration boundary.
-    """
-    from sovyx.voice.device_enum import (
-        DeviceKind,  # noqa: PLC0415 — lazy; only Linux path needs it
-    )
-    from sovyx.voice.health._mixer_sanity import (
-        check_and_maybe_heal,  # noqa: PLC0415 — lazy to avoid Linux import cost on Windows cold-start
-    )
-
-    endpoint = CandidateEndpoint(
-        device_index=device_index,
-        host_api_name="ALSA",
-        kind=DeviceKind.HARDWARE,
-        canonical_name=device_friendly_name or f"endpoint-{endpoint_guid}",
-        friendly_name=device_friendly_name or f"endpoint-{endpoint_guid}",
-        source=CandidateSource.USER_PREFERRED,
-        preference_rank=0,
-        endpoint_guid=endpoint_guid,
-    )
-    # Paranoid-QA CRITICAL #8: use the caller's tuning when
-    # provided — discarding it here would silently ignore every
-    # SOVYX_TUNING__VOICE__LINUX_MIXER_SANITY_* env override and
-    # violate anti-pattern #17 ("Hardcoded tuning constants").
-    effective_tuning = tuning if tuning is not None else _VoiceTuning()
-    try:
-        result = await check_and_maybe_heal(
-            endpoint,
-            mixer_sanity.hw,
-            kb_lookup=mixer_sanity.kb_lookup,
-            role_resolver=mixer_sanity.role_resolver,
-            validation_probe_fn=mixer_sanity.validation_probe_fn,
-            tuning=effective_tuning,
-            mixer_probe_fn=mixer_sanity.mixer_probe_fn,
-            mixer_apply_fn=mixer_sanity.mixer_apply_fn,
-            mixer_restore_fn=mixer_sanity.mixer_restore_fn,
-            persist_fn=mixer_sanity.persist_fn,
-            telemetry=mixer_sanity.telemetry,
-            combo_store=combo_store,
-            capture_overrides=capture_overrides,
-            half_heal_wal_path=mixer_sanity.half_heal_wal_path,
-        )
-    except asyncio.CancelledError:
-        # Paranoid-QA CRITICAL #1: cancel propagates past the cascade
-        # integration layer — the cascade itself decides whether to
-        # swallow or re-raise.
-        raise
-    except Exception as exc:  # noqa: BLE001 — Exception-only post-QA
-        logger.warning(
-            "voice_cascade_mixer_sanity_unexpected",
-            endpoint=endpoint_guid,
-            error_type=type(exc).__name__,
-            detail=str(exc)[:200],
-        )
-        return
-    logger.info(
-        "voice_cascade_mixer_sanity_outcome",
-        endpoint=endpoint_guid,
-        decision=result.decision.value,
-        matched_profile=result.matched_kb_profile,
-        score=round(result.kb_match_score, 3),
-        regime=result.regime,
-        apply_duration_ms=result.apply_duration_ms,
-        validation_passed=result.validation_passed,
-        error=result.error,
-    )
-
-
-def _lookup_override(
-    overrides: CaptureOverrides | None,
-    endpoint_guid: str,
-    platform_key: str,
-) -> Combo | None:
-    if overrides is None:
-        return None
-    try:
-        combo = overrides.get(endpoint_guid)
-    except Exception:  # noqa: BLE001 — cascade must fall through on any store-side failure (ADR I4)
-        logger.warning(
-            "voice_cascade_pinned_lookup_failed",
-            endpoint=endpoint_guid,
-            exc_info=True,
-        )
-        return None
-    if combo is None:
-        return None
-    # Sanity: reject an override that isn't valid for this platform.
-    if combo.platform_key and combo.platform_key != platform_key:
-        logger.warning(
-            "voice_cascade_pinned_platform_mismatch",
-            endpoint=endpoint_guid,
-            combo_platform=combo.platform_key,
-            runtime_platform=platform_key,
-        )
-        return None
-    return combo
-
-
-def _lookup_store(
-    combo_store: ComboStore | None,
-    endpoint_guid: str,
-) -> Combo | None:
-    if combo_store is None:
-        return None
-    try:
-        entry = combo_store.get(endpoint_guid)
-    except Exception:  # noqa: BLE001 — cascade must fall through on any store-side failure (ADR I4)
-        logger.warning(
-            "voice_cascade_store_lookup_failed",
-            endpoint=endpoint_guid,
-            exc_info=True,
-        )
-        return None
-    if entry is None:
-        return None
-    if combo_store.needs_revalidation(endpoint_guid):
-        logger.info(
-            "voice_cascade_store_needs_revalidation",
-            endpoint=endpoint_guid,
-        )
-    return entry.winning_combo
-
-
 async def _try_combo(
     *,
     probe_fn: ProbeCallable,
@@ -1773,41 +1104,6 @@ async def _try_combo(
         # appear in the same dashboards as first-class probe outcomes.
         record_probe_result(synthetic)
         return synthetic
-
-
-def _record_winner(
-    *,
-    combo_store: ComboStore | None,
-    endpoint_guid: str,
-    device_friendly_name: str,
-    device_interface_name: str,
-    device_class: str,
-    endpoint_fxproperties_sha: str,
-    detected_apos: Sequence[str],
-    combo: Combo,
-    probe: ProbeResult,
-    cascade_attempts_before_success: int,
-) -> None:
-    if combo_store is None:
-        return
-    try:
-        combo_store.record_winning(
-            endpoint_guid,
-            device_friendly_name=device_friendly_name,
-            device_interface_name=device_interface_name,
-            device_class=device_class,
-            endpoint_fxproperties_sha=endpoint_fxproperties_sha,
-            combo=combo,
-            probe=probe,
-            detected_apos=detected_apos,
-            cascade_attempts_before_success=cascade_attempts_before_success,
-        )
-    except Exception:  # noqa: BLE001 — persisting a win is advisory; don't crash the cascade
-        logger.warning(
-            "voice_cascade_record_winning_failed",
-            endpoint=endpoint_guid,
-            exc_info=True,
-        )
 
 
 def _make_result(
@@ -1911,15 +1207,3 @@ def _log_probe_result(
         duration_ms=result.duration_ms,
         error_detail=_truncate_detail(result.error),
     )
-
-
-__all__ = [
-    "LINUX_CASCADE",
-    "MACOS_CASCADE",
-    "WINDOWS_CASCADE",
-    "WINDOWS_CASCADE_AGGRESSIVE",
-    "ProbeCallable",
-    "build_linux_cascade_for_device",
-    "run_cascade",
-    "run_cascade_for_candidates",
-]
