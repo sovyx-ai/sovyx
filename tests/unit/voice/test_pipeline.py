@@ -1279,6 +1279,59 @@ class TestPipelineBargeIn:
         assert result["state"] == "SPEAKING"
 
     @pytest.mark.asyncio
+    async def test_barge_in_state_stays_speaking_until_chain_exits(self) -> None:
+        """T1.12 regression — `cancel_speech_chain` MUST observe SPEAKING.
+
+        Master mission Phase 1 / T1.12 invariant: during a barge-in the
+        orchestrator MUST run the cancellation chain BEFORE mutating
+        `self._state`. If state were flipped to IDLE first, callbacks
+        registered by the chain (LLM-cancel hook, dashboards keyed off
+        the BargeInEvent + the in-flight utterance id) would observe an
+        inconsistent state — "we're idle but tasks are still being
+        cancelled". The current code at `_handle_speaking` (line ~1117)
+        awaits the chain, then transitions via `_transition_to_recording`
+        which mutates state internally. This test pins that ordering so
+        a refactor cannot reintroduce the pre-T1 inline-cleanup bug.
+        """
+        pipeline, _refs = _make_pipeline(vad_speech=True, barge_in_enabled=True)
+        await pipeline.start()
+        pipeline._state = VoicePipelineState.SPEAKING
+        pipeline._output._playing = True
+
+        # Force the barge-in detector to fire on the first speech frame
+        # so this test pins the orchestrator-level ordering, not the
+        # detector's threshold-frames hysteresis.
+        from unittest.mock import AsyncMock
+
+        pipeline._barge_in.check_frame_async = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+        states_observed: list[tuple[str, str]] = []
+        original_cancel = pipeline.cancel_speech_chain
+
+        async def _instrumented_cancel(*, reason: str = "barge_in") -> None:
+            states_observed.append(("entry", pipeline._state.name))
+            await original_cancel(reason=reason)
+            states_observed.append(("exit", pipeline._state.name))
+
+        pipeline.cancel_speech_chain = _instrumented_cancel  # type: ignore[method-assign]
+
+        result = await pipeline.feed_frame(_speech_frame())
+
+        # Outcome contract — barge-in transitions to RECORDING.
+        assert result["state"] == "RECORDING"
+        # Ordering contract — the chain runs while the orchestrator is
+        # still in SPEAKING. State changes ONLY inside
+        # `_transition_to_recording`, which fires AFTER the chain.
+        assert states_observed == [
+            ("entry", "SPEAKING"),
+            ("exit", "SPEAKING"),
+        ], (
+            f"cancel_speech_chain observed unexpected state ordering during "
+            f"barge-in: {states_observed!r}. Expected SPEAKING at both entry "
+            f"and exit; state must transition AFTER the chain returns."
+        )
+
+    @pytest.mark.asyncio
     async def test_speaking_finished_returns_idle(self) -> None:
         """When TTS finishes playing → back to IDLE."""
         pipeline, refs = _make_pipeline(vad_speech=False)
