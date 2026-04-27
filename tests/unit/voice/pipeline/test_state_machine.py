@@ -56,6 +56,20 @@ class TestCanonicalTable:
             VoicePipelineState.RECORDING,
         )
 
+    def test_idle_to_recording_allowed_for_no_wake_word(self) -> None:
+        """Mission Phase 1 / T1.27 — direct IDLE → RECORDING is
+        legitimate when a user-initiated capture starts without a wake
+        word (push-to-talk via dashboard, or the barge-in handoff after
+        SPEAKING → RECORDING when the orchestrator's wake_word_enabled
+        config is False). Pin the table entry at `_state_machine.py:89`
+        so a future refactor cannot drop it silently — the comment
+        block at `_state_machine.py:86-89` documents the rationale.
+        """
+        assert is_transition_allowed(
+            VoicePipelineState.IDLE,
+            VoicePipelineState.RECORDING,
+        )
+
     def test_idle_to_thinking_rejected(self) -> None:
         """Mission §2.6 — no IDLE → THINKING shortcut."""
         assert not is_transition_allowed(

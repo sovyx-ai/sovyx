@@ -104,7 +104,48 @@ class PiperConfig:
 
 
 class TTSEngine(ABC):
-    """Abstract base for text-to-speech engines."""
+    """Abstract base for text-to-speech engines.
+
+    Streaming chunk + overlap contract (master mission Phase 1 / T1.40):
+
+    * **Chunk boundary** — :meth:`synthesize_streaming` yields one
+      :class:`AudioChunk` per *complete sentence* parsed out of the
+      incoming text stream. Sentence boundaries follow the
+      ``_SENTENCE_SPLIT_RE`` regex (``[.!?]`` followed by whitespace);
+      partial trailing text is buffered until either more text arrives
+      with a terminator or the upstream stream closes (the buffered
+      remainder is then flushed as a final chunk in either case).
+    * **Why per-sentence and not finer** — coarser granularity
+      (paragraphs) starves the Jarvis Illusion (perceived TTS-start
+      latency); finer granularity (per-word or per-clause) breaks
+      VITS prosody continuity, which depends on full-sentence phoneme
+      sequences for natural intonation. Per-sentence is the empirical
+      sweet spot validated against SPE-010 §6.2.
+    * **No overlap** — chunks are independent; the orchestrator's
+      output queue (:class:`AudioOutputQueue`) plays them
+      back-to-back without crossfade, click suppression, or
+      crossing-zero alignment. The intra-chunk
+      ``sentence_silence`` constant inside :meth:`synthesize` (Piper)
+      / :meth:`synthesize_with` (Kokoro) inserts a small silence
+      pause between sentences when a single ``synthesize`` call
+      receives multi-sentence input — in the streaming path that
+      pause is implicit in the consumer's playback gap between
+      yielded chunks, so no additional silence is injected here.
+    * **Empty / phonemiser-rejected sentences** — engines MUST skip
+      empty buffers and emit a DROP stage event with
+      ``error_type="empty_text"`` (or ``"no_phonemes"`` when the
+      phonemiser produced no usable phonemes for non-empty input).
+      The stream MUST NOT yield an empty :class:`AudioChunk` —
+      consumers rely on every yielded chunk having
+      ``audio.size > 0``.
+    * **Cancellation** — if the consumer stops iterating mid-stream,
+      the generator's ``GeneratorExit`` propagates to the engine's
+      ``async for text_chunk in text_stream`` loop. Engines MUST
+      release any pending buffer state on exit (the buffered text
+      is implicitly discarded; per T1.15 / `8faca52` the orchestrator
+      also clears its own ``_text_buffer`` on ``CancelledError`` to
+      prevent stale text from leaking into the next stream).
+    """
 
     @abstractmethod
     async def initialize(self) -> None:
@@ -120,7 +161,11 @@ class TTSEngine(ABC):
         self,
         text_stream: AsyncIterator[str],
     ) -> AsyncIterator[AudioChunk]:
-        """Streaming synthesis — yield audio per sentence as text arrives."""
+        """Streaming synthesis — yield audio per sentence as text arrives.
+
+        See the :class:`TTSEngine` class docstring for the full chunk +
+        overlap contract.
+        """
         ...  # pragma: no cover
         # Yield required for AsyncIterator typing
         if False:  # noqa: SIM108  # pragma: no cover
