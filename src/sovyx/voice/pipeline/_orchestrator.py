@@ -87,34 +87,23 @@ _DEAF_WARNINGS_BEFORE_EXCLUSIVE_RETRY = _VoiceTuning().deaf_warnings_before_excl
 # rolling-window cumulative-drift detector so sustained-degradation
 # conditions surface independently of any single-frame violation.
 
-_FRAME_DROP_ABSOLUTE_BUDGET_S = 0.064
-"""Absolute per-frame inter-arrival budget. 64 ms = 2× the nominal
-32 ms cadence at 16 kHz / 512-sample window — chosen to match the
-perceptual threshold above which a real-time voice loop gains
-audible latency artefacts (Bencina, "Real-Time Audio Programming
-101", 2020). A single frame exceeding this budget produces a
-``voice.frame.drop_detected`` WARNING with ``threshold_kind=
-"absolute_budget"``."""
+_FRAME_DROP_ABSOLUTE_BUDGET_S = _VoiceTuning().pipeline_frame_drop_absolute_budget_seconds
+"""Absolute per-frame inter-arrival budget — see
+``VoiceTuningConfig.pipeline_frame_drop_absolute_budget_seconds``
+for the canonical schema with bound-validators. Module-level
+binding captures the value at import for the per-frame hot path."""
 
-_FRAME_DROP_DRIFT_WINDOW_FRAMES = 32
-"""Rolling window over which the cumulative-drift detector averages
-inter-arrival times. 32 frames at 16 kHz / 512-sample window =
-~1.024 s of audio — long enough to suppress per-frame jitter while
-short enough to react to sustained drift before the user notices."""
+_FRAME_DROP_DRIFT_WINDOW_FRAMES = _VoiceTuning().pipeline_frame_drop_drift_window_frames
+"""Rolling window for the cumulative-drift detector — see
+``VoiceTuningConfig.pipeline_frame_drop_drift_window_frames``."""
 
-_FRAME_DROP_DRIFT_RATIO = 1.10
-"""Mean inter-arrival ÷ expected interval threshold above which the
-cumulative-drift detector fires. 1.10 = 10% sustained drift; chosen
-because consistent +10% scheduling jitter accumulates ~3 ms per
-frame, which over 32 frames = ~100 ms of cumulative latency —
-audible. Below this the drift is noise; above it the drift is
-structurally problematic."""
+_FRAME_DROP_DRIFT_RATIO = _VoiceTuning().pipeline_frame_drop_drift_ratio
+"""Cumulative-drift firing threshold — see
+``VoiceTuningConfig.pipeline_frame_drop_drift_ratio``."""
 
-_FRAME_DROP_DRIFT_RATE_LIMIT_S = 1.0
-"""Minimum gap between successive ``voice.frame.cumulative_drift_detected``
-emissions. A sustained drift produces one event per second, not one
-per window — the dashboard already aggregates by minute, so per-second
-firing is enough resolution to localise onset/offset."""
+_FRAME_DROP_DRIFT_RATE_LIMIT_S = _VoiceTuning().pipeline_frame_drop_drift_rate_limit_seconds
+"""Minimum gap between cumulative-drift emissions — see
+``VoiceTuningConfig.pipeline_frame_drop_drift_rate_limit_seconds``."""
 
 
 # ── Band-aid #50 — VAD inference timeout guard ──────────────────────
@@ -141,19 +130,16 @@ firing is enough resolution to localise onset/offset."""
 #   * Rate-limit the WARN per ``_VAD_INFERENCE_TIMEOUT_WARN_INTERVAL_S``
 #     so a sustained slow-VAD condition produces a drumbeat, not a
 #     flood (matches the band-aid #9 pattern for sustained-underrun).
-_VAD_INFERENCE_TIMEOUT_S = 0.250
-"""Per-frame VAD inference budget. Silero VAD on a modern CPU runs
-in ~5–20 ms; 250 ms is ~10× typical, generous enough that healthy
-deployments never trip but tight enough that a wedged inference
-doesn't stall the audio pipeline for >0.25 s. Below that floor a
-single GC pause would false-fire."""
+_VAD_INFERENCE_TIMEOUT_S = _VoiceTuning().pipeline_vad_inference_timeout_seconds
+"""Per-frame VAD inference budget — see
+``VoiceTuningConfig.pipeline_vad_inference_timeout_seconds``."""
 
-_VAD_INFERENCE_TIMEOUT_WARN_INTERVAL_S = 5.0
-"""Minimum gap between two ``voice.vad.inference_timeout`` WARN logs.
-A sustained slow-VAD condition (CPU pinned, ONNX stuck) produces
-one WARN every 5 s, not one per frame (~30 Hz unbounded would
-drown the dashboard). 5 s matches the heartbeat cadence so an
-operator sees the issue within the first frame batch after onset."""
+_VAD_INFERENCE_TIMEOUT_WARN_INTERVAL_S = (
+    _VoiceTuning().pipeline_vad_inference_timeout_warn_interval_seconds
+)
+"""Rate-limit window for ``voice.vad.inference_timeout`` WARN logs
+— see
+``VoiceTuningConfig.pipeline_vad_inference_timeout_warn_interval_seconds``."""
 
 
 # ---------------------------------------------------------------------------
@@ -172,34 +158,16 @@ operator sees the issue within the first frame batch after onset."""
 #
 # Reference: MISSION-voice-mixer-enterprise-refactor-2026-04-25 §3.4, T1.
 
-_CANCELLATION_TASK_TIMEOUT_S = 1.0
-"""Maximum wall-clock seconds to wait for an individual cancelled TTS
-task to actually finish (``await task`` with timeout). 1 second is
-the SRE-canonical "if it isn't dead by now it's hung" budget — long
-enough for a graceful CancelledError teardown (typical: <50 ms)
-but short enough that a wedged task doesn't block the next turn.
-On timeout the task is recorded as ``cancellation_timeout`` in
-the chain event so operators can attribute the wedge."""
+_CANCELLATION_TASK_TIMEOUT_S = _VoiceTuning().pipeline_cancellation_task_timeout_seconds
+"""T1 atomic-cancellation chain — per-task timeout for cancelled
+in-flight TTS tasks. See
+``VoiceTuningConfig.pipeline_cancellation_task_timeout_seconds``."""
 
 
-_CONSECUTIVE_TTS_FAILURE_THRESHOLD = 3
-"""Mission Phase 1 / T1.21 — abort the streaming TTS path after this
-many *consecutive* per-segment failures. Pre-T1.21 the
-:meth:`VoicePipeline.stream_text` loop logged each failure but kept
-iterating, so a TTS backend wedged in a hot-loop failure mode (model
-file corrupted, runtime OOM) silently burned compute on every
-incoming LLM segment with no audible output AND no abort signal to
-the cognitive layer.
-
-The threshold is consecutive: any successful segment resets the
-counter, so a transient hiccup mid-stream doesn't poison the rest
-of the response. 3 was chosen to absorb the typical "first inference
-warm-up failure" pattern (1-2 segment retries) while still aborting
-within ~3 segments × ~200 ms = ~600 ms when the backend is stuck.
-
-This is a behaviour-defining constant (not a tunable knob); the
-T1.28 hardcoded-constants migration will revisit promotion to
-``EngineConfig.tuning.voice`` if operator scenarios surface."""
+_CONSECUTIVE_TTS_FAILURE_THRESHOLD = _VoiceTuning().pipeline_consecutive_tts_failure_threshold
+"""Mission Phase 1 / T1.21 — streaming TTS abort threshold. See
+``VoiceTuningConfig.pipeline_consecutive_tts_failure_threshold`` for
+the canonical schema with bound-validators."""
 
 
 class VoicePipeline:

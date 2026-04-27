@@ -429,6 +429,89 @@ class VoiceTuningConfig(BaseSettings):
     bypass within ~100 s @ 5 s heartbeat (the user has already
     started troubleshooting by then; longer is operationally
     pointless)."""
+
+    # Mission Phase 1 / T1.28 — pipeline-tuning constants migrated from
+    # ``voice/pipeline/_orchestrator.py`` module-level. These knobs were
+    # originally hardcoded in the orchestrator; promotion here makes
+    # them discoverable via the centralised tuning schema, env-var
+    # overridable via ``SOVYX_TUNING__VOICE__<NAME>``, and bound-
+    # validated against operationally-meaningful ranges.
+
+    pipeline_frame_drop_absolute_budget_seconds: float = Field(default=0.064, ge=0.020, le=1.0)
+    """O3 frame-drop detector — per-frame absolute inter-arrival
+    budget. Default 64 ms = 2× the nominal 32 ms cadence at 16 kHz /
+    512-sample window — the perceptual threshold above which a
+    real-time voice loop gains audible latency artefacts (Bencina,
+    "Real-Time Audio Programming 101", 2020). Floor 20 ms prevents
+    constant misfire on any healthy host (40 ms / 16 kHz cadence
+    plus jitter); ceiling 1.0 s prevents a misconfigured value from
+    masking real frame drops entirely. A frame exceeding this budget
+    fires ``voice.frame.drop_detected`` with
+    ``threshold_kind=absolute_budget``."""
+
+    pipeline_frame_drop_drift_window_frames: int = Field(default=32, ge=8, le=256)
+    """O3 frame-drop detector — rolling-window size for the
+    cumulative-drift detector. 32 frames at 16 kHz / 512-sample
+    window = ~1.024 s of audio. Floor 8 prevents false-positives
+    from a single jittery frame; ceiling 256 keeps the window
+    short enough to react to sustained drift before the user
+    notices."""
+
+    pipeline_frame_drop_drift_ratio: float = Field(default=1.10, ge=1.05, le=3.0)
+    """O3 frame-drop detector — mean inter-arrival ÷ expected
+    interval threshold above which the cumulative-drift detector
+    fires. Default 1.10 = 10 % sustained drift. Floor 1.05 prevents
+    near-baseline jitter false-positives; ceiling 3.0 prevents
+    misconfiguration from disabling the detector entirely (any
+    sustained drift this large is structurally broken)."""
+
+    pipeline_frame_drop_drift_rate_limit_seconds: float = Field(default=1.0, ge=0.1, le=60.0)
+    """O3 frame-drop detector — minimum gap between successive
+    ``voice.frame.cumulative_drift_detected`` emissions. Default
+    1.0 s — sustained drift produces one event per second, not one
+    per window. Floor 0.1 s prevents log-storm; ceiling 60 s keeps
+    the cadence operationally useful."""
+
+    pipeline_vad_inference_timeout_seconds: float = Field(default=0.250, ge=0.050, le=2.0)
+    """Per-frame VAD inference budget. Silero VAD on a modern CPU
+    runs in ~5–20 ms; default 250 ms is ~10× typical, generous
+    enough that healthy deployments never trip but tight enough
+    that a wedged inference doesn't stall the pipeline for >0.25 s.
+    Floor 50 ms accommodates GC pauses without false-firing;
+    ceiling 2.0 s guards against the misconfigured-to-disable case."""
+
+    pipeline_vad_inference_timeout_warn_interval_seconds: float = Field(
+        default=5.0, ge=0.5, le=300.0
+    )
+    """Minimum gap between two ``voice.vad.inference_timeout`` WARN
+    logs. Default 5.0 s matches the heartbeat cadence so an operator
+    sees the issue within the first frame batch after onset. Floor
+    0.5 s prevents log-storm; ceiling 300 s prevents misconfiguration
+    from suppressing the signal entirely."""
+
+    pipeline_cancellation_task_timeout_seconds: float = Field(default=1.0, ge=0.1, le=30.0)
+    """T1 atomic-cancellation chain — per-task timeout when awaiting
+    a cancelled in-flight TTS task. Default 1.0 s is the SRE-canonical
+    "if it isn't dead by now it's hung" budget — long enough for a
+    graceful CancelledError teardown (typical: <50 ms) but short
+    enough that a wedged task doesn't block the next turn. Floor
+    0.1 s prevents misconfiguration from racing the normal teardown;
+    ceiling 30 s caps user-visible barge-in stall on the worst-case
+    wedged TTS backend."""
+
+    pipeline_consecutive_tts_failure_threshold: int = Field(default=3, ge=1, le=100)
+    """T1.21 streaming TTS abort threshold — number of consecutive
+    per-segment failures after which ``stream_text`` aborts the
+    streaming session. Default 3 absorbs the typical "first
+    inference warm-up failure" pattern (1-2 retries) while still
+    aborting within ~3 segments × ~200 ms = ~600 ms when the backend
+    is wedged. Floor 1 ensures the abort fires on the first
+    failure if the operator wants strict no-retry semantics;
+    ceiling 100 prevents misconfiguration from disabling the abort
+    entirely (which would re-introduce the pre-T1.21 silent
+    compute-burning failure mode). Counter resets on the first
+    successful segment so a transient mid-stream hiccup doesn't
+    poison the rest of the response."""
     # Ordered host-API preference for the opener's pyramid fallback.
     # VLX-007 added "PipeWire" + "PulseAudio" + "JACK" to cover builds
     # of PortAudio that expose those backends as standalone host APIs

@@ -785,6 +785,141 @@ class TestVoiceTuningPydanticBoundsB11:
         assert cfg.pipeline_heartbeat_interval_seconds == 5.0
 
 
+# ===========================================================================
+# Mission Phase 1 / T1.28 — pipeline-tuning constants migrated from
+# voice/pipeline/_orchestrator.py module-level
+# ===========================================================================
+#
+# Pre-T1.28 the orchestrator carried 8 hardcoded constants (frame-drop
+# detector, VAD inference timeout, T1 cancellation timeout, T1.21
+# consecutive-failure threshold). The migration promotes them to
+# ``VoiceTuningConfig`` so they're discoverable via the centralised
+# tuning schema, env-var overridable via ``SOVYX_TUNING__VOICE__<NAME>``,
+# and bound-validated against operationally-meaningful ranges.
+#
+# Reference: docs-internal/missions/MISSION-voice-final-skype-grade-2026.md
+# §Phase 1 / T1.28.
+
+
+class TestVoiceTuningT128Migration:
+    """Pydantic Field bounds + default values for the 8 T1.28 knobs."""
+
+    @staticmethod
+    def _clear_voice_env(monkeypatch: pytest.MonkeyPatch) -> None:
+        for key in list(os.environ):
+            if key.startswith("SOVYX_TUNING__VOICE__"):
+                monkeypatch.delenv(key, raising=False)
+
+    def test_defaults_match_pre_migration_hardcoded_values(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The T1.28 migration is structural — not a behaviour change.
+        Each new field's default MUST equal the pre-migration
+        module-level constant value in
+        ``voice/pipeline/_orchestrator.py``. This test pins every
+        default so a future config-schema edit can't silently drift
+        the runtime semantics.
+        """
+        self._clear_voice_env(monkeypatch)
+        cfg = VoiceTuningConfig()
+        assert cfg.pipeline_frame_drop_absolute_budget_seconds == 0.064
+        assert cfg.pipeline_frame_drop_drift_window_frames == 32  # noqa: PLR2004
+        assert cfg.pipeline_frame_drop_drift_ratio == 1.10
+        assert cfg.pipeline_frame_drop_drift_rate_limit_seconds == 1.0
+        assert cfg.pipeline_vad_inference_timeout_seconds == 0.250
+        assert cfg.pipeline_vad_inference_timeout_warn_interval_seconds == 5.0
+        assert cfg.pipeline_cancellation_task_timeout_seconds == 1.0
+        assert cfg.pipeline_consecutive_tts_failure_threshold == 3  # noqa: PLR2004
+
+    def test_frame_drop_absolute_budget_bounds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from pydantic import ValidationError
+
+        self._clear_voice_env(monkeypatch)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(pipeline_frame_drop_absolute_budget_seconds=0.001)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(pipeline_frame_drop_absolute_budget_seconds=2.0)
+
+    def test_frame_drop_drift_window_frames_bounds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from pydantic import ValidationError
+
+        self._clear_voice_env(monkeypatch)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(pipeline_frame_drop_drift_window_frames=4)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(pipeline_frame_drop_drift_window_frames=512)
+
+    def test_frame_drop_drift_ratio_bounds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from pydantic import ValidationError
+
+        self._clear_voice_env(monkeypatch)
+        # 1.0 = no drift detection ever fires; spec floor is 1.05.
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(pipeline_frame_drop_drift_ratio=1.0)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(pipeline_frame_drop_drift_ratio=5.0)
+
+    def test_frame_drop_drift_rate_limit_bounds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from pydantic import ValidationError
+
+        self._clear_voice_env(monkeypatch)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(pipeline_frame_drop_drift_rate_limit_seconds=0.05)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(pipeline_frame_drop_drift_rate_limit_seconds=120.0)
+
+    def test_vad_inference_timeout_bounds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from pydantic import ValidationError
+
+        self._clear_voice_env(monkeypatch)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(pipeline_vad_inference_timeout_seconds=0.010)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(pipeline_vad_inference_timeout_seconds=10.0)
+
+    def test_vad_inference_timeout_warn_interval_bounds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from pydantic import ValidationError
+
+        self._clear_voice_env(monkeypatch)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(pipeline_vad_inference_timeout_warn_interval_seconds=0.1)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(pipeline_vad_inference_timeout_warn_interval_seconds=600.0)
+
+    def test_cancellation_task_timeout_bounds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from pydantic import ValidationError
+
+        self._clear_voice_env(monkeypatch)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(pipeline_cancellation_task_timeout_seconds=0.05)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(pipeline_cancellation_task_timeout_seconds=120.0)
+
+    def test_consecutive_tts_failure_threshold_bounds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from pydantic import ValidationError
+
+        self._clear_voice_env(monkeypatch)
+        # 0 would disable the abort entirely (defeats T1.21).
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(pipeline_consecutive_tts_failure_threshold=0)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(pipeline_consecutive_tts_failure_threshold=200)
+
+    def test_env_var_override_roundtrip(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A representative env-var override loads cleanly and the
+        instantiated config reflects the overridden value. Pins the
+        ``SOVYX_TUNING__VOICE__<NAME>`` plumbing for the new fields.
+        """
+        self._clear_voice_env(monkeypatch)
+        monkeypatch.setenv("SOVYX_TUNING__VOICE__PIPELINE_VAD_INFERENCE_TIMEOUT_SECONDS", "0.5")
+        cfg = VoiceTuningConfig()
+        assert cfg.pipeline_vad_inference_timeout_seconds == 0.5
+
+
 class TestDeprecatedMixerOverridesWarning:
     """Mission §9.1.1 / Gap 1b — deprecation surface for the four
     ``linux_mixer_*_fraction`` knobs scheduled for removal in v0.24.0.
