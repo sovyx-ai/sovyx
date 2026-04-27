@@ -1578,6 +1578,37 @@ class TestPipelineEvents:
         assert any(isinstance(e, TranscriptionCompletedEvent) for e in events)
 
     @pytest.mark.asyncio
+    async def test_end_recording_emits_user_stopped_speaking_frame(self) -> None:
+        """T1.16 — RECORDING → TRANSCRIBING transition records a
+        UserStoppedSpeakingFrame so the frame_history span is
+        bracketed on both ends (UserStarted at recording-start +
+        UserStopped here). Mirrors the Pipecat reference frame set.
+        """
+        from sovyx.voice.pipeline._frame_types import UserStoppedSpeakingFrame
+
+        pipeline, refs = _make_pipeline(vad_speech=True, ww_detected=True, stt_text="hi")
+        await pipeline.start()
+
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
+            await pipeline.feed_frame(_speech_frame())
+        await pipeline.feed_frame(_speech_frame())
+
+        refs["vad"].process_frame.return_value = _vad_event(False)
+        for _ in range(3):
+            await pipeline.feed_frame(_silence_frame())
+
+        history = pipeline.frame_history
+        stopped_frames = [f for f in history if isinstance(f, UserStoppedSpeakingFrame)]
+        assert len(stopped_frames) == 1, (
+            f"expected exactly one UserStoppedSpeakingFrame at the "
+            f"recording → transcribing boundary; got "
+            f"{len(stopped_frames)} (history={[type(f).__name__ for f in history]})"
+        )
+        # Frame carries the per-spec field shape.
+        assert stopped_frames[0].frame_type == "UserStoppedSpeaking"
+        assert stopped_frames[0].timestamp_monotonic > 0.0
+
+    @pytest.mark.asyncio
     async def test_event_bus_none_doesnt_crash(self) -> None:
         """Pipeline works without an event bus."""
         config = VoicePipelineConfig(

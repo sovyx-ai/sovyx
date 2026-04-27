@@ -37,6 +37,7 @@ from sovyx.voice.pipeline._frame_types import (
     PipelineFrame,
     TranscriptionFrame,
     UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
 )
 from sovyx.voice.pipeline._output_queue import AudioOutputQueue
 from sovyx.voice.pipeline._state import VoicePipelineState
@@ -1120,6 +1121,25 @@ class VoicePipeline:
     async def _end_recording(self) -> dict[str, Any]:
         """End recording and transcribe the utterance."""
         import numpy as np
+
+        # Mission Phase 1 / T1.16 — Pipecat-aligned UserStoppedSpeaking
+        # frame at the RECORDING → TRANSCRIBING boundary. Mirrors the
+        # UserStartedSpeakingFrame emitted at WAKE_DETECTED → RECORDING
+        # (line 924) and at the no-wake / barge-in transition
+        # (line 1088), so the per-utterance frame_history span is
+        # bracketed on both ends. Emitted BEFORE the state mutation so
+        # the frame's monotonic timestamp lines up with the moment
+        # silence-end was detected (the trailing frames have already
+        # been counted in self._utterance_frames at this point). The
+        # silero_prob_snapshot carries the last observed VAD probability
+        # so dashboards can correlate the transition with the VAD curve.
+        self._record_frame(
+            UserStoppedSpeakingFrame(
+                frame_type="UserStoppedSpeaking",
+                timestamp_monotonic=time.monotonic(),
+                silero_prob_snapshot=self._max_vad_prob_since_heartbeat,
+            ),
+        )
 
         self._state = VoicePipelineState.TRANSCRIBING
         utterance_id = self._current_utterance_id
