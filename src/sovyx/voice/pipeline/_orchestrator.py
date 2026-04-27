@@ -182,6 +182,26 @@ On timeout the task is recorded as ``cancellation_timeout`` in
 the chain event so operators can attribute the wedge."""
 
 
+_CONSECUTIVE_TTS_FAILURE_THRESHOLD = 3
+"""Mission Phase 1 / T1.21 — abort the streaming TTS path after this
+many *consecutive* per-segment failures. Pre-T1.21 the
+:meth:`VoicePipeline.stream_text` loop logged each failure but kept
+iterating, so a TTS backend wedged in a hot-loop failure mode (model
+file corrupted, runtime OOM) silently burned compute on every
+incoming LLM segment with no audible output AND no abort signal to
+the cognitive layer.
+
+The threshold is consecutive: any successful segment resets the
+counter, so a transient hiccup mid-stream doesn't poison the rest
+of the response. 3 was chosen to absorb the typical "first inference
+warm-up failure" pattern (1-2 segment retries) while still aborting
+within ~3 segments × ~200 ms = ~600 ms when the backend is stuck.
+
+This is a behaviour-defining constant (not a tunable knob); the
+T1.28 hardcoded-constants migration will revisit promotion to
+``EngineConfig.tuning.voice`` if operator scenarios surface."""
+
+
 class VoicePipeline:
     """Orchestrates the complete voice pipeline.
 
@@ -388,6 +408,12 @@ class VoicePipeline:
         # for the WARN.
         self._vad_inference_timeouts: int = 0
         self._last_vad_timeout_warning_monotonic: float | None = None
+
+        # Mission Phase 1 / T1.21 — consecutive per-segment TTS
+        # failure counter for the streaming path. Reset on any
+        # successful synthesize-and-enqueue; triggers an abort when
+        # it crosses :data:`_CONSECUTIVE_TTS_FAILURE_THRESHOLD`.
+        self._consecutive_tts_segment_failures: int = 0
 
         # Mission Phase 1 / T1.18 — frame-drop counter for the
         # ``not_running`` early-return path in :meth:`feed_frame`.
@@ -1548,6 +1574,14 @@ class VoicePipeline:
             try:
                 chunk = await self._synthesize_tracked(segment)
                 await self._output.enqueue(chunk)
+                # Mission Phase 1 / T1.21 — successful segment resets
+                # the consecutive-failure counter so a transient
+                # hiccup mid-stream doesn't poison the rest of the
+                # response. Inlined here (rather than in a try-else
+                # clause) because the try block also has an
+                # ``except asyncio.CancelledError`` clause and Python
+                # forbids ``else`` between ``except`` clauses.
+                self._consecutive_tts_segment_failures = 0
             except (VoiceError, RuntimeError, OSError) as exc:
                 # Per-segment resilience during streaming: skip the
                 # bad segment, keep speaking the rest. Traceback
@@ -1557,6 +1591,53 @@ class VoicePipeline:
                     error=str(exc),
                     exc_info=True,
                 )
+                # Mission Phase 1 / T1.21 — track consecutive failures
+                # and abort the stream when the TTS backend is wedged
+                # (model corrupt, runtime OOM, infinite-loop bug).
+                # Pre-T1.21 the loop kept iterating forever burning
+                # compute on every incoming LLM segment with no
+                # audible output. ``_consecutive_tts_segment_failures``
+                # resets on the first successful segment below.
+                self._consecutive_tts_segment_failures += 1
+                if self._consecutive_tts_segment_failures >= _CONSECUTIVE_TTS_FAILURE_THRESHOLD:
+                    buffered_chars = len(self._text_buffer)
+                    self._text_buffer = ""
+                    logger.error(
+                        "voice.tts.stream_aborted_consecutive_failures",
+                        **{
+                            "voice.mind_id": self._config.mind_id,
+                            "voice.consecutive_failures": (self._consecutive_tts_segment_failures),
+                            "voice.threshold": _CONSECUTIVE_TTS_FAILURE_THRESHOLD,
+                            "voice.last_error": str(exc)[:200],
+                            "voice.last_error_type": type(exc).__name__,
+                            "voice.buffered_text_chars_dropped": buffered_chars,
+                            "voice.action_required": (
+                                "TTS backend produced consecutive errors. "
+                                "Check the engine state (Piper model file "
+                                "integrity, Kokoro ONNX session, or cloud "
+                                "endpoint reachability via `sovyx doctor "
+                                "voice`). Stream aborted to release the "
+                                "cognitive layer; the next utterance will "
+                                "rebuild from a clean state."
+                            ),
+                        },
+                    )
+                    await self._emit(
+                        PipelineErrorEvent(
+                            mind_id=self._config.mind_id,
+                            error=(
+                                f"stream_aborted_consecutive_failures "
+                                f"(count={self._consecutive_tts_segment_failures}, "
+                                f"last={type(exc).__name__})"
+                            ),
+                            utterance_id=self._current_utterance_id,
+                        )
+                    )
+                    # Reset counter so the next stream_text call
+                    # starts clean — the abort already broke the
+                    # current stream's contract with the caller.
+                    self._consecutive_tts_segment_failures = 0
+                    return
             except asyncio.CancelledError:
                 # T1 barge-in cancelled this segment via
                 # cancel_speech_chain. Stop iterating and let the

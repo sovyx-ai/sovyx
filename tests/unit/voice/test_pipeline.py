@@ -1487,6 +1487,100 @@ class TestPipelineLifecycleHardening:
         assert payload.get("filler_was_active") is False
 
     @pytest.mark.asyncio
+    async def test_stream_text_aborts_after_consecutive_failures(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """T1.21 — wedged TTS backend (consecutive segment failures)
+        must abort the stream after _CONSECUTIVE_TTS_FAILURE_THRESHOLD
+        failures rather than burning compute forever.
+        """
+        from sovyx.voice.pipeline._orchestrator import (
+            _CONSECUTIVE_TTS_FAILURE_THRESHOLD,
+        )
+
+        pipeline, refs = _make_pipeline()
+        await pipeline.start()
+
+        # Patch _synthesize_tracked to always raise — simulates a
+        # wedged backend (Piper model corrupted / ONNX OOM /
+        # cloud endpoint unreachable).
+        async def _always_raises(_text: str) -> Any:
+            raise RuntimeError("synthesize wedged")
+
+        pipeline._synthesize_tracked = _always_raises  # type: ignore[method-assign]
+
+        # Stream a chunk with enough sentences for the loop to iterate
+        # past the threshold (3 segments + 1 trailing).
+        text = "First! Second! Third! Fourth! Tail"
+        with caplog.at_level(logging.ERROR):
+            await pipeline.stream_text(text)
+
+        # Counter is reset to 0 post-abort (so the next stream_text
+        # call starts clean). Buffer cleared.
+        assert pipeline._consecutive_tts_segment_failures == 0
+        assert pipeline._text_buffer == ""
+
+        # Single abort event emitted.
+        abort_events = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict)
+            and r.msg.get("event") == "voice.tts.stream_aborted_consecutive_failures"
+        ]
+        assert len(abort_events) == 1
+        evt = abort_events[0]
+        assert evt["voice.consecutive_failures"] == _CONSECUTIVE_TTS_FAILURE_THRESHOLD
+        assert evt["voice.threshold"] == _CONSECUTIVE_TTS_FAILURE_THRESHOLD
+        assert evt["voice.last_error_type"] == "RuntimeError"
+        assert evt["voice.buffered_text_chars_dropped"] >= 0
+
+        # PipelineErrorEvent emitted to the bus too.
+        events = [call.args[0] for call in refs["bus"].emit.call_args_list]
+        abort_bus_events = [
+            e
+            for e in events
+            if isinstance(e, PipelineErrorEvent)
+            and "stream_aborted_consecutive_failures" in e.error
+        ]
+        assert len(abort_bus_events) == 1
+
+    @pytest.mark.asyncio
+    async def test_stream_text_consecutive_counter_resets_on_success(self) -> None:
+        """T1.21 — a successful segment between failures resets the
+        consecutive counter so a transient hiccup doesn't trip the
+        abort threshold.
+        """
+        pipeline, _refs = _make_pipeline()
+        await pipeline.start()
+
+        # Manually set the counter to threshold-1, simulate a success.
+        pipeline._consecutive_tts_segment_failures = 2
+
+        async def _succeeds(_text: str) -> AudioChunk:
+            return AudioChunk(
+                audio=np.zeros(160, dtype=np.int16),
+                sample_rate=16_000,
+                duration_ms=10.0,
+            )
+
+        pipeline._synthesize_tracked = _succeeds  # type: ignore[method-assign]
+
+        # The output queue's enqueue is async + may raise on a real
+        # output; patch it for the test so the path stays in the
+        # successful branch.
+        pipeline._output.enqueue = AsyncMock()  # type: ignore[method-assign]
+
+        # Need at least two boundary-terminated segments so the loop
+        # iterates over a complete segment (segments[:-1] excludes
+        # the trailing one). "First! Second! Tail" → segments
+        # ["First!", "Second! Tail"] → loop processes "First!".
+        await pipeline.stream_text("First! Second! Tail")
+
+        # Counter reset to 0 by the success-path inline reset.
+        assert pipeline._consecutive_tts_segment_failures == 0
+
+    @pytest.mark.asyncio
     async def test_feed_frame_not_running_increments_drop_counter(
         self,
         caplog: pytest.LogCaptureFixture,
