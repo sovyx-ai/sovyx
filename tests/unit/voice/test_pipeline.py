@@ -3593,6 +3593,40 @@ class TestVADInferenceTimeoutGuard:
         assert "host CPU saturation" in evt["voice.action_required"]
 
     @pytest.mark.asyncio
+    async def test_vad_timeout_emits_pipeline_error_event(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """T1.19 — alongside the rate-limited WARN, a PipelineErrorEvent
+        fires on the event bus so dashboards keyed on the event stream
+        see the timeout (the WARN-only signal was invisible to them).
+        Gated on the same rate-limit window as the WARN so per-frame
+        50 Hz storms don't flood the bus.
+        """
+        pipeline, refs = _make_pipeline()
+        await pipeline.start()
+
+        from sovyx.voice.pipeline import _orchestrator as _orch_mod
+
+        async def _raise_timeout(coro: Any, *_args: Any, **_kwargs: Any) -> Any:
+            if hasattr(coro, "close"):
+                coro.close()
+            raise TimeoutError
+
+        with (
+            caplog.at_level(logging.WARNING),
+            patch.object(_orch_mod.asyncio, "wait_for", _raise_timeout),
+        ):
+            await pipeline.feed_frame(_silence_frame())
+
+        # Single PipelineErrorEvent emitted on the bus.
+        events = [call.args[0] for call in refs["bus"].emit.call_args_list]
+        error_events = [e for e in events if isinstance(e, PipelineErrorEvent)]
+        assert len(error_events) == 1
+        assert "vad_inference_timeout" in error_events[0].error
+        assert error_events[0].mind_id == "test-mind"
+
+    @pytest.mark.asyncio
     async def test_vad_timeout_warn_rate_limited(
         self,
         caplog: pytest.LogCaptureFixture,

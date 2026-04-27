@@ -911,6 +911,25 @@ class VoicePipeline:
                         ),
                     },
                 )
+                # Mission Phase 1 / T1.19 — emit PipelineErrorEvent so
+                # dashboards see the timeout in the structured event
+                # stream alongside the WARN (the WARN-only signal was
+                # invisible to widgets that key off the event bus).
+                # Gated on the rate-limit window so the per-frame 50 Hz
+                # storm under sustained CPU pressure produces one event
+                # per ``_VAD_INFERENCE_TIMEOUT_WARN_INTERVAL_S`` window
+                # rather than 50 events/sec on the bus.
+                await self._emit(
+                    PipelineErrorEvent(
+                        mind_id=self._config.mind_id,
+                        error=(
+                            f"vad_inference_timeout (timeout_s="
+                            f"{_VAD_INFERENCE_TIMEOUT_S}, "
+                            f"lifetime_count={self._vad_inference_timeouts})"
+                        ),
+                        utterance_id=self._current_utterance_id,
+                    )
+                )
             return {"state": self._state.name, "event": "vad_timeout"}
 
         self._track_vad_for_heartbeat(vad_event.probability)
