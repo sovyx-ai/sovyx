@@ -17,13 +17,13 @@ Sovereign Minds Engine — persistent AI companion with real memory, cognitive l
 uv lock --check                               # lockfile must match pyproject.toml
 uv run ruff check src/ tests/
 uv run ruff format --check src/ tests/
-uv run mypy src/                              # strict mode, 222 files
+uv run mypy src/                              # strict; ~400 files (drifts; verify `find src/ -name "*.py" | wc -l`)
 uv run bandit -r src/sovyx/ --configfile pyproject.toml
-uv run python -m pytest tests/ --ignore=tests/smoke --timeout=30   # ~7 960 tests
+uv run python -m pytest tests/ --ignore=tests/smoke --timeout=30   # ~12k tests (drifts; verify `pytest --collect-only -q | tail -3`)
 
 # Dashboard (from dashboard/)
 npx tsc -b tsconfig.app.json                  # zero new errors
-npx vitest run                                # ~820 tests
+npx vitest run                                # ~960 tests (drifts; verify `npx vitest run --reporter=verbose | grep Tests`)
 ```
 
 If ANY gate fails, fix before committing. Never skip.
@@ -58,7 +58,7 @@ src/sovyx/
 ├── cli/                 # Typer CLI: sovyx start/stop/init/logs/doctor
 ├── dashboard/           # FastAPI server
 │   ├── server.py        # ~700 LOC — wires routers only; endpoints live in routes/
-│   └── routes/          # 21 APIRouter modules (split from the old 2 134 LOC server.py)
+│   └── routes/          # ~25 APIRouter modules (split from the old 2 134 LOC server.py)
 │       ├── activity, brain, channels, chat, config, conversation_import,
 │       ├── conversations, data, emotions, logs, onboarding, plugins,
 │       ├── providers, safety, settings, setup, status, telemetry,
