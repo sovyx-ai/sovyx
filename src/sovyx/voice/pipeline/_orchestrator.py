@@ -389,6 +389,20 @@ class VoicePipeline:
         self._vad_inference_timeouts: int = 0
         self._last_vad_timeout_warning_monotonic: float | None = None
 
+        # Mission Phase 1 / T1.18 — frame-drop counter for the
+        # ``not_running`` early-return path in :meth:`feed_frame`.
+        # Pre-T1.18 frames arriving while ``_running`` was False were
+        # silently discarded — a stale audio producer (capture task
+        # not yet stopped or restarted out-of-order) could push frames
+        # at 50 Hz with zero observability. The counter accumulates
+        # over a single pipeline lifetime; a structured
+        # ``voice.pipeline.frame_dropped_not_running`` event fires
+        # rate-limited once per
+        # :data:`_FRAME_DROP_DRIFT_RATE_LIMIT_S` window so dashboards
+        # see the misuse without log spam.
+        self._frames_dropped_not_running: int = 0
+        self._last_frame_drop_warning_monotonic: float | None = None
+
         # Band-aid #46 — false-wake rejection counter. Lifetime count
         # of utterances dropped by the STT-confidence gate (visible
         # via :attr:`false_wake_rejected_count`). Each rejection also
@@ -818,6 +832,35 @@ class VoicePipeline:
             Dict with ``state`` and optional ``event`` / ``transcription`` keys.
         """
         if not self._running:
+            # Mission Phase 1 / T1.18 — a frame arriving while
+            # ``_running`` is False indicates a stale producer (capture
+            # task not yet stopped after pipeline.stop, or restarted
+            # mid-cycle out of order). Count + rate-limited structured
+            # WARN so dashboards see the producer's misuse without
+            # per-frame log spam (the producer can hit this path at
+            # 50 Hz indefinitely).
+            self._frames_dropped_not_running += 1
+            now_drop = time.monotonic()
+            if (
+                self._last_frame_drop_warning_monotonic is None
+                or now_drop - self._last_frame_drop_warning_monotonic
+                >= _FRAME_DROP_DRIFT_RATE_LIMIT_S
+            ):
+                self._last_frame_drop_warning_monotonic = now_drop
+                logger.warning(
+                    "voice.pipeline.frame_dropped_not_running",
+                    **{
+                        "voice.mind_id": self._config.mind_id,
+                        "voice.dropped_count": self._frames_dropped_not_running,
+                        "voice.last_state": self._state.name,
+                        "voice.action_required": (
+                            "Audio producer is feeding frames after "
+                            "pipeline.stop() returned. Either stop the "
+                            "producer first or call pipeline.start() "
+                            "before feeding."
+                        ),
+                    },
+                )
             return {"state": self._state.name, "event": "not_running"}
 
         # O3 frame-drop detection — see _check_frame_drop_signals for

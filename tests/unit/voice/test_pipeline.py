@@ -1487,6 +1487,40 @@ class TestPipelineLifecycleHardening:
         assert payload.get("filler_was_active") is False
 
     @pytest.mark.asyncio
+    async def test_feed_frame_not_running_increments_drop_counter(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """T1.18 — feed_frame on a stopped pipeline counts the drop +
+        emits a rate-limited structured WARN. Pre-fix the early return
+        was silent; a runaway producer at 50 Hz had zero observability.
+        """
+        pipeline, _refs = _make_pipeline()
+        # Don't start — _running stays False from construction.
+        assert pipeline.is_running is False
+
+        with caplog.at_level(logging.WARNING):
+            for _ in range(5):
+                result = await pipeline.feed_frame(_silence_frame())
+
+        # Every call returns the not_running marker.
+        assert result["event"] == "not_running"
+        # Counter accumulates one per drop.
+        assert pipeline._frames_dropped_not_running == 5
+        # Rate-limited WARN — single emission within the 1.0s window
+        # despite 5 dropped frames.
+        warns = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict)
+            and r.msg.get("event") == "voice.pipeline.frame_dropped_not_running"
+        ]
+        assert len(warns) == 1, f"expected 1 rate-limited WARN, got {len(warns)}"
+        # Counter on the structured event reflects the lifetime total
+        # at emit time, not just the count since the last log.
+        assert warns[0].get("voice.dropped_count") == 1
+
+    @pytest.mark.asyncio
     async def test_stream_text_cancelled_clears_text_buffer(
         self,
         caplog: pytest.LogCaptureFixture,
