@@ -1670,6 +1670,23 @@ class VoicePipeline:
         """Flush remaining buffered text to TTS.
 
         Call when the LLM stream ends to synthesize the last segment.
+
+        T1.34 — every cancellation path in this method now interrupts
+        the output queue before exiting. Pre-T1.34 the
+        ``except asyncio.CancelledError`` in the synthesize block
+        cleared the text buffer but left any audio already enqueued by
+        prior chunks of the streaming session sitting in the output
+        queue, and a cancellation landing on the final
+        ``await self._output.drain()`` likewise leaked queued audio.
+        ``cancel_speech_chain`` always interrupts the output queue at
+        step 1 BEFORE it cancels in-flight tasks (step 2), so the
+        normal barge-in path was already covered transitively. T1.34
+        closes the off-path cases — asyncio loop teardown during
+        daemon shutdown, an external task cancelling the flush via
+        ``task.cancel()`` without going through ``cancel_speech_chain``
+        — by making the interrupt explicit here. Belt + suspenders;
+        ``interrupt()`` is idempotent so the upstream
+        ``cancel_speech_chain`` path is unaffected.
         """
         if self._text_buffer.strip():
             try:
@@ -1680,6 +1697,15 @@ class VoicePipeline:
                 # discard the tail (the user already barged in) and
                 # let the next turn rebuild from a clean buffer.
                 self._text_buffer = ""
+                # T1.34 — clear any audio already enqueued during this
+                # flush_stream call so the next utterance starts with
+                # an empty output queue. ``interrupt()`` is idempotent
+                # against the cancel_speech_chain step-1 interrupt that
+                # routed us here in the barge-in case; on off-path
+                # cancellations (loop teardown, direct task.cancel())
+                # this is the ONLY interrupt that runs.
+                with contextlib.suppress(Exception):
+                    self._output.interrupt()
                 logger.info(
                     "voice.tts.flush_cancelled",
                     mind_id=self._config.mind_id,
@@ -1697,7 +1723,17 @@ class VoicePipeline:
         self._text_buffer = ""
 
         # Drain all queued audio
-        await self._output.drain()
+        try:
+            await self._output.drain()
+        except asyncio.CancelledError:
+            # T1.34 — drain was cancelled mid-flight. Clear remaining
+            # audio (drain WAITS for playback to finish; it does not
+            # itself empty the queue, so a cancel here leaves the
+            # queue non-empty). Interrupt + re-raise so the cancellation
+            # still propagates to the caller.
+            with contextlib.suppress(Exception):
+                self._output.interrupt()
+            raise
 
         completed_utterance_id = self._current_utterance_id
         self._state = VoicePipelineState.IDLE

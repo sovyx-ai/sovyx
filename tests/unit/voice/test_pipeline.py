@@ -2316,6 +2316,82 @@ class TestPipelineCoverageGaps:
         assert pipeline._text_buffer == ""
 
     @pytest.mark.asyncio
+    async def test_flush_stream_synthesize_cancel_clears_output_queue_t134(self) -> None:
+        """T1.34 — when ``_synthesize_tracked`` raises ``CancelledError``
+        inside ``flush_stream``, the output queue MUST be interrupted
+        before exit. Pre-T1.34 the buffer was cleared but any audio
+        already enqueued by prior chunks of the streaming session
+        leaked into the next utterance — only the
+        ``cancel_speech_chain`` step-1 interrupt covered the barge-in
+        path. Off-path cancellations (asyncio loop teardown, direct
+        ``task.cancel()``) leaked the queue.
+        """
+        pipeline, _refs = _make_pipeline()
+        await pipeline.start()
+        pipeline._state = VoicePipelineState.SPEAKING
+        pipeline._text_buffer = "pending text"
+
+        interrupt_calls: list[None] = []
+
+        def _spy_interrupt() -> None:
+            interrupt_calls.append(None)
+
+        pipeline._output.interrupt = _spy_interrupt  # type: ignore[method-assign]
+
+        async def _cancelled_synthesize(_text: str) -> Any:
+            raise asyncio.CancelledError
+
+        pipeline._synthesize_tracked = _cancelled_synthesize  # type: ignore[method-assign]
+
+        # The CancelledError is caught by the inner except — flush_stream
+        # itself returns normally (the buffer-clear early-return path).
+        await pipeline.flush_stream()
+
+        assert pipeline._text_buffer == ""
+        assert len(interrupt_calls) == 1, (
+            "output queue MUST be interrupted on flush_stream synthesize-cancel "
+            "path so off-path cancellations don't leak audio into the next "
+            f"utterance, got interrupt calls = {len(interrupt_calls)}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_flush_stream_drain_cancel_clears_output_queue_t134(self) -> None:
+        """T1.34 — when ``_output.drain()`` raises ``CancelledError``,
+        the output queue MUST be interrupted AND the CancelledError
+        MUST be re-raised (drain WAITS for playback to finish; it
+        does not itself empty the queue, so a cancel here leaves the
+        queue non-empty). The re-raise preserves the cancellation
+        propagation contract — the caller sees CancelledError as
+        expected.
+        """
+        pipeline, _refs = _make_pipeline()
+        await pipeline.start()
+        pipeline._state = VoicePipelineState.SPEAKING
+        # Empty buffer so synthesize is skipped — exercise the drain path.
+        pipeline._text_buffer = ""
+
+        interrupt_calls: list[None] = []
+
+        def _spy_interrupt() -> None:
+            interrupt_calls.append(None)
+
+        pipeline._output.interrupt = _spy_interrupt  # type: ignore[method-assign]
+
+        async def _cancelled_drain() -> None:
+            raise asyncio.CancelledError
+
+        pipeline._output.drain = _cancelled_drain  # type: ignore[method-assign]
+
+        with pytest.raises(asyncio.CancelledError):
+            await pipeline.flush_stream()
+
+        assert len(interrupt_calls) == 1, (
+            "output queue MUST be interrupted on flush_stream drain-cancel "
+            "path so the next utterance starts with an empty queue, got "
+            f"interrupt calls = {len(interrupt_calls)}"
+        )
+
+    @pytest.mark.asyncio
     async def test_transition_to_recording_barge_in(self) -> None:
         """_transition_to_recording sets up RECORDING state."""
         pipeline, refs = _make_pipeline()
