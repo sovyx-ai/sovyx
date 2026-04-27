@@ -321,6 +321,100 @@ class TestAudioCaptureTaskFrameDelivery:
             await task.stop()
 
 
+class TestAudioCallbackUncaughtRaiseT130:
+    """T1.30 — ``_audio_callback`` MUST swallow every exception.
+
+    PortAudio invokes the callback on a dedicated audio thread that
+    sounddevice manages. A raise propagating out of the callback puts
+    sounddevice into ``CallbackAbort`` and stops the entire stream
+    silently — the daemon goes deaf without a structured signal
+    upstream. Post-T1.30 the body is wrapped in
+    ``try/except BaseException``, the error is logged via
+    ``voice.audio_callback.uncaught_raise``, and an empty marker
+    frame is queued so the consumer's ``await self._queue.get()``
+    unblocks (FrameNormalizer.push handles size==0 as a no-op).
+    """
+
+    @pytest.mark.asyncio()
+    async def test_callback_swallows_unexpected_raise_and_queues_empty_marker(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Callback body raises (simulated via ``indata.copy()`` failure).
+        The callback MUST return cleanly + the consumer's queue must
+        receive an empty marker frame.
+        """
+        pipeline = MagicMock()
+        pipeline.feed_frame = AsyncMock(return_value={"state": "IDLE"})
+
+        captured: dict[str, Any] = {}
+
+        def stream_factory(**kwargs: Any) -> MagicMock:
+            captured["cb"] = kwargs["callback"]
+            return MagicMock()
+
+        sd = _fake_sd()
+        sd.InputStream = stream_factory  # type: ignore[attr-defined]
+        entry = _input_entry(index=5)
+
+        task = AudioCaptureTask(
+            pipeline,
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [entry],
+        )
+        # Stop the consumer loop from draining the queue so this test
+        # can directly assert the empty marker landed.
+        task._queue = asyncio.Queue(maxsize=8)  # noqa: SLF001
+
+        try:
+            await task.start()
+            # Drain anything the start path may have queued (e.g. the
+            # validation bootstrap) so the empty marker assertion below
+            # is unambiguous.
+            while not task._queue.empty():  # noqa: SLF001
+                task._queue.get_nowait()  # noqa: SLF001
+
+            cb = captured["cb"]
+            bad_indata = MagicMock()
+            bad_indata.copy.side_effect = RuntimeError("simulated callback failure")
+
+            with caplog.at_level("ERROR", logger="sovyx.voice._capture_task"):
+                # MUST NOT raise — pre-T1.30 this would propagate the
+                # RuntimeError up through PortAudio and CallbackAbort
+                # the stream.
+                cb(bad_indata, 512, None, None)
+
+            # Drain the asyncio loop so the queued empty marker
+            # materialises.
+            for _ in range(10):
+                await asyncio.sleep(0)
+                if not task._queue.empty():  # noqa: SLF001
+                    break
+
+            # Empty marker frame queued.
+            frame = task._queue.get_nowait()  # noqa: SLF001
+            assert frame.size == 0, (
+                f"expected empty marker frame on the error path, got size {frame.size}"
+            )
+            assert frame.dtype == np.int16
+
+            # Structured error event logged.
+            error_records = [
+                r
+                for r in caplog.records
+                if isinstance(r.msg, dict)
+                and r.msg.get("event") == "voice.audio_callback.uncaught_raise"
+            ]
+            assert len(error_records) == 1
+            payload = error_records[0].msg
+            assert payload["error_type"] == "RuntimeError"
+            assert "simulated callback failure" in str(payload["error"])
+        finally:
+            await task.stop()
+
+
 class TestAudioCaptureTaskReconnect:
     """Device disconnection in the consume loop triggers reopen via the opener."""
 

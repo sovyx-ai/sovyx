@@ -2459,24 +2459,65 @@ class AudioCaptureTask:
         is not thread-safe and therefore cannot be touched here. Drops
         frames when the queue is saturated rather than blocking the
         audio thread, which would cause device underruns.
+
+        T1.30 — the ENTIRE body is wrapped in ``try/except BaseException``
+        so any raise (``MemoryError`` on ``indata.copy()``, ``TypeError``
+        on a malformed status object, ``AttributeError`` on a transient
+        attribute glitch, etc.) is caught instead of propagating into
+        sounddevice's ``CallbackAbort`` path. Pre-T1.30 a stray exception
+        here either killed the audio thread silently or left
+        sounddevice in CallbackAbort state with the entire capture chain
+        stalled and no structured signal upstream. Post-T1.30 the
+        exception is logged and an empty marker frame is queued so the
+        consumer's ``await self._queue.get()`` unblocks. The empty
+        marker is a no-op for :class:`FrameNormalizer.push` (see line
+        579 of ``_frame_normalizer.py``: PortAudio occasionally
+        delivers zero-sized callbacks at stream open / close
+        boundaries, so the contract is already established).
+        ``BaseException`` rather than ``Exception`` because
+        ``KeyboardInterrupt`` / ``SystemExit`` are equally fatal to the
+        audio thread; both are delivered to the main thread by Python's
+        signal handler so catching them here is safe.
         """
-        if status:
-            # CallbackFlags: input overflow/underflow. Track for the
-            # per-stream ``audio.stream.closed`` event so operators can
-            # correlate xruns with kernel-mixer / USB-bus pressure.
-            if getattr(status, "input_overflow", False):
-                self._stream_overflows += 1
-            if getattr(status, "input_underflow", False):
-                self._stream_underruns += 1
-            logger.debug("audio_callback_status", status=str(status))
-        self._stream_callback_frames += 1
-        block = indata.copy()
-        loop = self._loop
-        if loop is None:
-            return
-        # Loop may be closed mid-shutdown — swallow that and move on.
-        with contextlib.suppress(RuntimeError):
-            loop.call_soon_threadsafe(self._enqueue, block)
+        try:
+            if status:
+                # CallbackFlags: input overflow/underflow. Track for the
+                # per-stream ``audio.stream.closed`` event so operators
+                # can correlate xruns with kernel-mixer / USB-bus
+                # pressure.
+                if getattr(status, "input_overflow", False):
+                    self._stream_overflows += 1
+                if getattr(status, "input_underflow", False):
+                    self._stream_underruns += 1
+                logger.debug("audio_callback_status", status=str(status))
+            self._stream_callback_frames += 1
+            block = indata.copy()
+            loop = self._loop
+            if loop is None:
+                return
+            # Loop may be closed mid-shutdown — swallow that and move on.
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(self._enqueue, block)
+        except BaseException as exc:  # noqa: BLE001 — must NEVER raise out of PortAudio thread (T1.30)
+            with contextlib.suppress(Exception):
+                logger.error(
+                    "voice.audio_callback.uncaught_raise",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                    stream_id=self._stream_id,
+                )
+            # Queue an empty marker frame so the consumer unblocks.
+            # FrameNormalizer.push handles size==0 as a no-op
+            # (`_frame_normalizer.py:579`), so this doesn't crash
+            # anything downstream — it just nudges the queue out of a
+            # potentially-stalled await.
+            with contextlib.suppress(Exception):
+                loop = self._loop
+                if loop is not None:
+                    import numpy as np
+
+                    empty_marker = np.zeros(0, dtype=np.int16)
+                    loop.call_soon_threadsafe(self._enqueue, empty_marker)
 
     def _enqueue(self, frame: npt.NDArray[np.int16]) -> None:
         """Enqueue a frame; drop the oldest on overflow."""
