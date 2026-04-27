@@ -3126,6 +3126,119 @@ class TestDeafSignalAtomicityO2:
 
 
 # ===========================================================================
+# VoicePipeline — coordinator pending flag finally-reset (T1.23)
+# ===========================================================================
+#
+# Pre-T1.23 ``_coordinator_invocation_pending`` was reset at four
+# scattered sites inside ``_invoke_deaf_signal``:
+#
+#   1. ``callback is None`` early return  (line 1981)
+#   2. ``_coordinator_terminated`` dedup  (line 1988)
+#   3. ``_deaf_warnings_consecutive < threshold`` dedup  (line 1992)
+#   4. ``except Exception`` finally inside the inner try block  (line 2038)
+#
+# A ``CancelledError`` landing on ``async with self._coordinator_lock``
+# (or anywhere outside that inner try) leaked the flag, locking out
+# every subsequent deaf-signal trigger via the
+# ``_coordinator_invocation_pending`` short-circuit at
+# :meth:`_maybe_invoke_deaf_signal` line 1904. Post-T1.23 the entire
+# body is wrapped in an outer ``try/finally`` so the flag clears on
+# every exit path, including cancellation between spawn and lock
+# acquisition.
+#
+# Reference: docs-internal/missions/MISSION-voice-final-skype-grade-2026.md
+# §Phase 1 / T1.23.
+
+
+class TestDeafSignalCoordinatorFinallyResetT123:
+    """Pin the outer-finally flag-reset contract for every cancellation path."""
+
+    def _deaf_pipeline(
+        self,
+        *,
+        callback: Any,
+        threshold: int = 1,
+    ) -> VoicePipeline:
+        config = VoicePipelineConfig(
+            mind_id="test-mind",
+            wake_word_enabled=False,
+            barge_in_enabled=False,
+            fillers_enabled=False,
+            filler_delay_ms=100,
+            silence_frames_end=3,
+            max_recording_frames=10,
+        )
+        vad = _make_vad(speech=False)
+        vad.process_frame.return_value = VADEvent(
+            is_speech=False, probability=0.0, state=VADState.SILENCE
+        )
+        return VoicePipeline(
+            config=config,
+            vad=vad,
+            wake_word=_make_wake_word(detected=False),
+            stt=_make_stt(),
+            tts=_make_tts(),
+            event_bus=_make_event_bus(),
+            on_perception=None,
+            on_deaf_signal=callback,
+            voice_clarity_active=True,
+            auto_bypass_enabled=True,
+            auto_bypass_threshold=threshold,
+        )
+
+    @pytest.mark.asyncio
+    async def test_flag_clears_when_cancelled_before_lock_acquired(self) -> None:
+        """Spawned task cancelled while waiting on ``_coordinator_lock``
+        MUST still clear the pending flag — pre-T1.23 the lock-wait
+        was outside the inner try/finally so cancellation here leaked
+        the flag and locked out every subsequent deaf-signal trigger.
+        """
+        callback = AsyncMock(return_value=[])
+        pipeline = self._deaf_pipeline(callback=callback, threshold=1)
+        pipeline._deaf_warnings_consecutive = 5
+        pipeline._coordinator_invocation_pending = True  # pre-set as the trigger does
+
+        # Hold the lock from the test so the spawned task blocks on
+        # acquisition. This reproduces the cancellation-between-
+        # spawn-and-lock scenario the outer finally fixes.
+        await pipeline._coordinator_lock.acquire()
+        try:
+            task = asyncio.create_task(pipeline._invoke_deaf_signal())
+            # Yield once so the task runs up to the lock-await.
+            await asyncio.sleep(0)
+            assert not task.done()  # blocked on lock
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        finally:
+            pipeline._coordinator_lock.release()
+
+        # The outer finally MUST have cleared the flag — the lock-wait
+        # was the canonical leak path pre-T1.23.
+        assert pipeline._coordinator_invocation_pending is False
+        callback.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_flag_clears_when_callback_raises_cancelled_error(self) -> None:
+        """Callback raising ``CancelledError`` (the BaseException subclass
+        that ``except Exception`` doesn't catch) MUST still clear the
+        flag — both pre- and post-T1.23 covered this via the inner /
+        outer finally respectively. Pin the contract so the outer-
+        finally consolidation doesn't silently regress it.
+        """
+        callback = AsyncMock(side_effect=asyncio.CancelledError())
+        pipeline = self._deaf_pipeline(callback=callback, threshold=1)
+        pipeline._deaf_warnings_consecutive = 5
+        pipeline._coordinator_invocation_pending = True
+
+        with contextlib.suppress(asyncio.CancelledError):
+            await pipeline._invoke_deaf_signal()
+
+        assert pipeline._coordinator_invocation_pending is False
+        callback.assert_awaited_once()
+
+
+# ===========================================================================
 # VoicePipeline — self-feedback gate wiring (ADR §4.4.6)
 # ===========================================================================
 
