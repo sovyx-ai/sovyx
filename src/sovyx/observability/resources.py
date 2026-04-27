@@ -51,12 +51,23 @@ class QueueSnapshot(NamedTuple):
 QueueProvider = Callable[[], tuple[int, int | None]]
 
 
-def _capture_psutil_metrics() -> dict[str, object]:
+def _capture_psutil_metrics(*, skip_expensive: bool = False) -> dict[str, object]:
     """Return ``psutil``-derived process metrics, or ``None`` fields on miss.
 
     Emits a one-time WARNING when ``psutil`` cannot be imported so the
     dependency gap is visible in the log stream without spamming every
     snapshot tick.
+
+    ``skip_expensive`` skips ``proc.open_files()`` and ``proc.net_connections()``
+    — both iterate the kernel handle table and on Windows call
+    ``os.stat()`` on each handle. During async teardown (e.g. pytest
+    ``_cancel_all_tasks`` invoking the snapshotter's
+    :class:`asyncio.CancelledError` branch), handles in a closing state
+    cause ``os.stat()`` to block indefinitely, hanging shutdown. The
+    ``try/except`` wrappers below catch raised exceptions but not OS
+    blocking — so the only safe option for the final shutdown snapshot
+    is to skip these calls entirely. Best-effort metrics are accepted
+    in shutdown by design.
     """
     global _PSUTIL_WARNED  # noqa: PLW0603 — module-level latch for "warn once".
     try:
@@ -116,15 +127,23 @@ def _capture_psutil_metrics() -> dict[str, object]:
     # ``open_files()`` and ``connections()`` can be expensive on
     # Windows (each call enumerates the kernel handle table). Wrap in
     # try/except and accept ``None`` if the OS denies access — the
-    # snapshot is best-effort, not a forensic capture.
-    try:
-        open_files_count: int | None = len(proc.open_files())
-    except Exception:  # noqa: BLE001
+    # snapshot is best-effort, not a forensic capture. Skip entirely
+    # during shutdown to avoid the ``os.stat()`` hang on closing
+    # handles documented in :func:`_capture_psutil_metrics`.
+    open_files_count: int | None
+    connections_count: int | None
+    if skip_expensive:
         open_files_count = None
-    try:
-        connections_count: int | None = len(proc.net_connections(kind="inet"))
-    except Exception:  # noqa: BLE001
         connections_count = None
+    else:
+        try:
+            open_files_count = len(proc.open_files())
+        except Exception:  # noqa: BLE001
+            open_files_count = None
+        try:
+            connections_count = len(proc.net_connections(kind="inet"))
+        except Exception:  # noqa: BLE001
+            connections_count = None
 
     return {
         "process.rss_bytes": rss_bytes,
@@ -274,8 +293,13 @@ class ResourceSnapshotter:
         Failures inside the capture helpers are absorbed there; this
         function only fails if the structured logger itself raises,
         which is treated as a bug worth surfacing.
+
+        On the ``final=True`` path (shutdown), expensive psutil calls
+        (``open_files``/``net_connections``) are skipped to avoid a
+        Windows-specific ``os.stat()`` hang on closing handles during
+        async teardown — see :func:`_capture_psutil_metrics`.
         """
-        psutil_metrics = _capture_psutil_metrics()
+        psutil_metrics = _capture_psutil_metrics(skip_expensive=final)
         asyncio_metrics = _capture_asyncio_metrics()
         queues = _capture_queue_metrics(self._providers)
 
