@@ -3237,6 +3237,56 @@ class TestDeafSignalCoordinatorFinallyResetT123:
         assert pipeline._coordinator_invocation_pending is False
         callback.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_lock_released_when_cancelled_inside_lock_body_t133(self) -> None:
+        """T1.33 — ``self._coordinator_lock`` MUST release on every
+        cancellation path including cancellation INSIDE the lock body
+        (i.e. while the spawned task is awaiting the user-supplied
+        callback). This is structurally guaranteed by Python's
+        ``async with`` semantics — ``Lock.__aexit__`` releases on every
+        exit including ``CancelledError`` propagation — but pinning it
+        with a regression test prevents a future refactor from swapping
+        ``async with`` for a manual ``acquire()`` / ``release()`` pair
+        that would silently lose the cancel-safety property.
+        """
+        callback_started = asyncio.Event()
+
+        async def _slow_callback() -> list[Any]:
+            callback_started.set()
+            await asyncio.sleep(60)
+            return []
+
+        callback = AsyncMock(side_effect=_slow_callback)
+        pipeline = self._deaf_pipeline(callback=callback, threshold=1)
+        pipeline._deaf_warnings_consecutive = 5
+        pipeline._coordinator_invocation_pending = True
+
+        task = asyncio.create_task(pipeline._invoke_deaf_signal())
+
+        # Wait until the spawned task is INSIDE the callback (which
+        # means it has already acquired the lock and is awaiting).
+        await callback_started.wait()
+        assert pipeline._coordinator_lock.locked(), (
+            "lock must be held while the callback is in flight"
+        )
+
+        # Cancel mid-callback — the CancelledError propagates out of
+        # ``await callback()``, through the inner ``except Exception``
+        # (which doesn't catch BaseException), through the
+        # ``async with`` block (which releases the lock via
+        # ``Lock.__aexit__``), and out of the outer ``try/finally``
+        # (which clears the pending flag per T1.23).
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        # Lock released — concurrent deaf-signal spawns can now acquire.
+        assert not pipeline._coordinator_lock.locked(), (
+            "lock leaked across cancellation — async with __aexit__ should have released it"
+        )
+        # Flag cleared per T1.23 outer finally.
+        assert pipeline._coordinator_invocation_pending is False
+
 
 # ===========================================================================
 # VoicePipeline — self-feedback gate wiring (ADR §4.4.6)
