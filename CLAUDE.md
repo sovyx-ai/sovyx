@@ -105,7 +105,7 @@ tests/
 docs/                    # Public docs — MkDocs source
 ├── getting-started.md, architecture.md, api-reference.md,
 ├── configuration.md, contributing.md, faq.md, security.md,
-├── llm-router.md, roadmap.md
+├── llm-router.md
 ├── modules/             # Per-module public docs
 └── _meta/               # Tooling output (gitignored)
 

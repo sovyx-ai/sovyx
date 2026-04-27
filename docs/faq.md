@@ -147,9 +147,9 @@ same format.
 It depends on the definition of production. The cognitive core, brain,
 persistence, observability, and dashboard are at version **0.16** and have
 ~8,780 tests behind them (~7,960 backend, ~820 frontend). We run Sovyx
-ourselves every day. The public API surface is stable and SemVer'd. What is
-labelled "planned" in `roadmap.md` is not yet implemented — treat it
-accordingly.
+ourselves every day. The public API surface is stable and SemVer'd. Features
+explicitly labelled "planned" in the changelog or release notes are not yet
+implemented — treat them accordingly.
 
 The v1.0 cut is the general-availability milestone: it includes a third-party
 security audit, a fuller sandbox, and a 99.9% cloud SLA.

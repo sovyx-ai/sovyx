@@ -129,6 +129,3 @@ release:
   72-hour notification webhook without editing YAML.
 * Internal TLS gate for the dashboard so a misconfigured reverse
   proxy can no longer expose plain HTTP.
-
-Each of those has a corresponding entry in the public roadmap
-(`docs/roadmap.md`).

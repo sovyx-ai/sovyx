@@ -61,7 +61,6 @@ nav:
     - Licensing: modules/licensing.md
     - Benchmarks: modules/benchmarks.md
   - FAQ: faq.md
-  - Roadmap: roadmap.md
   - Contributing: contributing.md
 
 markdown_extensions:
