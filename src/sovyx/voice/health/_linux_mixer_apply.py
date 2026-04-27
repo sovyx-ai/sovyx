@@ -91,6 +91,46 @@ values and interpolate the dB curve.
 """
 
 
+_LEGACY_BAND_AID_REPLACEMENT = (
+    "L2.5 KB cascade (apply_mixer_preset) + AGC2 closed-loop "
+    "(Layer 4) — see docs/migration/voice-mixer-band-aid-removal.md"
+)
+"""Replacement guidance shipped in every legacy-band-aid deprecation log.
+
+Migration target was originally v0.24.0; deferred to v0.27.0 (Phase 4 —
+AEC + audio quality) per ``MISSION-voice-final-skype-grade-2026.md``
+because the bypass-coordinator wire-up gating Phase 2 + 3 must land
+first. The two legacy entry points
+(:func:`apply_mixer_reset`, :func:`apply_mixer_boost_up`) remain
+functional but emit a structured WARN at every invocation so call-site
+graphs are visible in production telemetry.
+"""
+
+
+def _emit_legacy_band_aid_warning(function_name: str) -> None:
+    """Emit the standard deprecation WARN shared by the two legacy entries.
+
+    Centralised per ``MISSION-voice-final-skype-grade-2026.md`` T1.52 —
+    previously the same dict literal was duplicated at the head of
+    ``apply_mixer_reset`` and ``apply_mixer_boost_up`` (~13 lines each).
+    Any change to the WARN shape (key names, removal target, replacement
+    pointer) now happens once.
+    """
+    logger.warning(
+        "voice.deprecation.legacy_mixer_band_aid_call",
+        **{
+            "voice.function": function_name,
+            "voice.removal_target": "v0.27.0",
+            "voice.replacement": _LEGACY_BAND_AID_REPLACEMENT,
+            "voice.action_required": (
+                "Migrate the call site to apply_mixer_preset; until "
+                "v0.27.0 lands, the legacy path remains functional but "
+                "emits this WARN at every invocation."
+            ),
+        },
+    )
+
+
 async def apply_mixer_reset(
     card_index: int,
     controls_to_reset: Sequence[MixerControlSnapshot],
@@ -123,28 +163,12 @@ async def apply_mixer_reset(
             cause is the underlying subprocess error.
     """
     # Step 17 — F6 deprecation surface. Mission §1.8: this function
-    # is on death row, scheduled for removal in v0.24.0 once the
-    # 3-OS pilot (B7/C5/E3) confirms the L2.5 KB cascade + AGC2
-    # closed-loop replaces the legacy band-aid path. The WARN fires
-    # at every entry so operators see the call-site graph in
-    # production telemetry; once the count hits zero across a full
-    # release window we know the deletion in v0.24.0 is safe.
-    logger.warning(
-        "voice.deprecation.legacy_mixer_band_aid_call",
-        **{
-            "voice.function": "apply_mixer_reset",
-            "voice.removal_target": "v0.24.0",
-            "voice.replacement": (
-                "L2.5 KB cascade (apply_mixer_preset) + AGC2 closed-loop "
-                "(Layer 4) — see docs/migration/voice-mixer-band-aid-removal.md"
-            ),
-            "voice.action_required": (
-                "Migrate the call site to apply_mixer_preset; until v0.24.0 "
-                "lands, the legacy path remains functional but emits this "
-                "WARN at every invocation."
-            ),
-        },
-    )
+    # is on death row, scheduled for removal in v0.27.0 (Phase 4 —
+    # see _emit_legacy_band_aid_warning for the bumped target rationale).
+    # The WARN fires at every entry so operators see the call-site graph
+    # in production telemetry; once the count hits zero across a full
+    # release window we know the deletion is safe.
+    _emit_legacy_band_aid_warning("apply_mixer_reset")
 
     if sys.platform != "linux":
         msg = f"apply_mixer_reset is Linux-only; running on {sys.platform}"
@@ -233,22 +257,7 @@ async def apply_mixer_boost_up(
     """
     # Step 17 — F6 deprecation surface. See apply_mixer_reset above
     # for the full rationale. Same WARN, same removal target.
-    logger.warning(
-        "voice.deprecation.legacy_mixer_band_aid_call",
-        **{
-            "voice.function": "apply_mixer_boost_up",
-            "voice.removal_target": "v0.24.0",
-            "voice.replacement": (
-                "L2.5 KB cascade (apply_mixer_preset) + AGC2 closed-loop "
-                "(Layer 4) — see docs/migration/voice-mixer-band-aid-removal.md"
-            ),
-            "voice.action_required": (
-                "Migrate the call site to apply_mixer_preset; until v0.24.0 "
-                "lands, the legacy path remains functional but emits this "
-                "WARN at every invocation."
-            ),
-        },
-    )
+    _emit_legacy_band_aid_warning("apply_mixer_boost_up")
 
     if sys.platform != "linux":
         msg = f"apply_mixer_boost_up is Linux-only; running on {sys.platform}"
