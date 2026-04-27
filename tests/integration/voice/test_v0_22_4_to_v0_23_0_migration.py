@@ -74,7 +74,12 @@ class TestRingInitEventsPersistedInFactorySource:
 
     def test_six_ring_events_in_factory_source(self) -> None:
         factory_src = (
-            Path(__file__).resolve().parents[3] / "src" / "sovyx" / "voice" / "factory.py"
+            Path(__file__).resolve().parents[3]
+            / "src"
+            / "sovyx"
+            / "voice"
+            / "factory"
+            / "__init__.py"
         ).read_text(encoding="utf-8")
 
         for ring_num in range(1, 7):
