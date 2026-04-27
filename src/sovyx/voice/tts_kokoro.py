@@ -11,7 +11,6 @@ Ref: SPE-010 §6.2, IMPL-004 §2.3 (kokoro-onnx wrapper)
 from __future__ import annotations
 
 import asyncio
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -23,6 +22,9 @@ from sovyx.voice._stage_metrics import (
     VoiceStage,
     measure_stage_duration,
     record_stage_event,
+)
+from sovyx.voice._tts_sentence_split import (
+    split_sentences as _split_sentences,
 )
 from sovyx.voice._tts_zero_energy import (
     TTS_RMS_FLOOR_DBFS as _TTS_RMS_FLOOR_DBFS,
@@ -44,7 +46,6 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 _DEFAULT_SAMPLE_RATE = 24000
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
 # Model file names
 _MODEL_FULL = "kokoro-v1.0.onnx"
@@ -141,12 +142,6 @@ def _validate_config(config: KokoroConfig) -> None:
     if not config.language:
         msg = "language must be a non-empty string"
         raise ValueError(msg)
-
-
-def _split_sentences(text: str) -> list[str]:
-    """Split text on sentence boundaries (``.``, ``!``, ``?`` followed by whitespace)."""
-    parts = _SENTENCE_SPLIT_RE.split(text)
-    return parts if parts else [text]
 
 
 # ---------------------------------------------------------------------------

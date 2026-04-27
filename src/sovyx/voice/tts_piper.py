@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +21,9 @@ from sovyx.voice._stage_metrics import (
     VoiceStage,
     measure_stage_duration,
     record_stage_event,
+)
+from sovyx.voice._tts_sentence_split import (
+    split_sentences as _split_sentences,
 )
 from sovyx.voice._tts_zero_energy import TTS_RMS_FLOOR_DBFS, compute_rms_dbfs
 
@@ -110,11 +112,14 @@ class TTSEngine(ABC):
 
     * **Chunk boundary** — :meth:`synthesize_streaming` yields one
       :class:`AudioChunk` per *complete sentence* parsed out of the
-      incoming text stream. Sentence boundaries follow the
-      ``_SENTENCE_SPLIT_RE`` regex (``[.!?]`` followed by whitespace);
-      partial trailing text is buffered until either more text arrives
-      with a terminator or the upstream stream closes (the buffered
-      remainder is then flushed as a final chunk in either case).
+      incoming text stream by
+      :func:`sovyx.voice._tts_sentence_split.split_sentences` (greedy
+      ``(?<=[.!?])\\s+`` split + abbreviation merge-back so ``Dr.``,
+      ``Mr.``, ``U.S.A.``, ``e.g.``, ``Ph.D.``, etc. don't fragment a
+      sentence mid-stream). Partial trailing text is buffered until
+      either more text arrives with a terminator or the upstream
+      stream closes (the buffered remainder is then flushed as a final
+      chunk in either case).
     * **Why per-sentence and not finer** — coarser granularity
       (paragraphs) starves the Jarvis Illusion (perceived TTS-start
       latency); finer granularity (per-word or per-clause) breaks
@@ -202,19 +207,6 @@ def _validate_config(config: PiperConfig) -> None:
     if config.speaker_id is not None and config.speaker_id < 0:
         msg = f"speaker_id must be >= 0, got {config.speaker_id}"
         raise ValueError(msg)
-
-
-# ---------------------------------------------------------------------------
-# Sentence splitting
-# ---------------------------------------------------------------------------
-
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])[ \t]+")
-
-
-def _split_sentences(text: str) -> list[str]:
-    """Split text on sentence boundaries (`.`, `!`, `?` followed by whitespace)."""
-    parts = _SENTENCE_SPLIT_RE.split(text)
-    return parts if parts else [text]
 
 
 # ---------------------------------------------------------------------------
