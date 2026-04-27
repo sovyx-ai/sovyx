@@ -10,6 +10,7 @@ Ref: SPE-010 §8, §10, §13 — full state machine + barge-in + timing.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import threading
 from typing import Any
@@ -1338,6 +1339,152 @@ class TestPipelineLifecycle:
         assert pipeline.stt is refs["stt"]
         assert pipeline.tts is refs["tts"]
         assert pipeline.wake_word is refs["ww"]
+
+
+class TestPipelineLifecycleHardening:
+    """Mission Phase 1 T1.10 + T1.11 — start/stop drain semantics.
+
+    Pre-fix behaviour:
+      * stop() returned immediately after setting _running=False, leaving
+        any in-flight TTS task to push audio onto a closed pipeline.
+      * start() called twice orphaned the first pre-cache + filler tasks.
+
+    Post-fix contract verified here:
+      * start() on a running pipeline is a no-op + emits a WARN-equivalent
+        info log (no orphaned filler/pre-cache).
+      * stop() drains the in-flight TTS task set + the filler task before
+        returning, with a per-task budget so a wedged TTS backend can't
+        stall the call.
+    """
+
+    @pytest.mark.asyncio
+    async def test_double_start_is_noop_and_logs(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        pipeline, refs = _make_pipeline()
+        await pipeline.start()
+        # pre_cache should fire exactly once for the first start.
+        first_pre_cache_calls = refs["tts"].synthesize.await_count
+        assert pipeline.is_running is True
+
+        with caplog.at_level(logging.INFO):
+            await pipeline.start()
+
+        assert pipeline.is_running is True
+        # No additional pre_cache work (filler stub is best-effort —
+        # check via tts.synthesize call delta which jarvis pre_cache
+        # uses if fillers_enabled; default fillers_enabled=False so
+        # the count is stable, but we still pin the no-op contract).
+        assert refs["tts"].synthesize.await_count == first_pre_cache_calls
+        # Log surface preserved per spec — structlog routes the
+        # event name into the dict at record.msg["event"].
+        events = [r.msg.get("event") for r in caplog.records if isinstance(r.msg, dict)]
+        assert "voice.pipeline.start_already_running_ignored" in events
+
+    @pytest.mark.asyncio
+    async def test_stop_drains_in_flight_tts_task(self) -> None:
+        """A long-running TTS task at stop() time gets cancelled + awaited."""
+        pipeline, _refs = _make_pipeline()
+        await pipeline.start()
+
+        # Inject a pretend in-flight TTS task that sleeps "forever" — the
+        # stop() drain path must cancel + await it within
+        # _CANCELLATION_TASK_TIMEOUT_S (1.0s).
+        async def _slow_tts() -> None:
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                # Honour cancellation immediately — this is the
+                # well-behaved-task happy path.
+                raise
+
+        task = asyncio.create_task(_slow_tts(), name="test-fake-tts")
+        pipeline._track_tts_task(task)
+        assert task in pipeline._in_flight_tts_tasks
+        assert not task.done()
+
+        await pipeline.stop()
+
+        assert task.done()
+        assert task.cancelled()
+        assert pipeline.is_running is False
+
+    @pytest.mark.asyncio
+    async def test_stop_with_wedged_tts_returns_within_budget(self) -> None:
+        """A TTS task that ignores cancellation must NOT stall stop().
+
+        The drain path bounds each task at _CANCELLATION_TASK_TIMEOUT_S
+        (1.0s) so a wedged backend leaves the orchestrator in a clean
+        IDLE state even if the rogue task is still alive.
+        """
+        pipeline, _refs = _make_pipeline()
+        await pipeline.start()
+
+        async def _wedged_tts() -> None:
+            # Swallow the first cancel so the task lives past the drain
+            # budget. Real-world analogue: a TTS backend in a sync
+            # subprocess wait that doesn't honour asyncio cancellation.
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                # Sleep for longer than the drain budget so the test
+                # observes the timeout-but-progress behaviour.
+                await asyncio.sleep(2.0)
+
+        task = asyncio.create_task(_wedged_tts(), name="test-wedged-tts")
+        pipeline._track_tts_task(task)
+
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        await pipeline.stop()
+        elapsed = loop.time() - t0
+
+        # Budget is 1.0s; allow a small slack for scheduling jitter.
+        assert elapsed < 2.0, f"stop() took {elapsed:.3f}s — drain budget exceeded"
+        assert pipeline.is_running is False
+        assert pipeline.state == VoicePipelineState.IDLE
+        # Cleanup — let the wedged task drain so pytest doesn't warn
+        # about un-awaited tasks. Cancelled / timed-out are both fine;
+        # the task lifetime is owned by the test.
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, TimeoutError):
+            await asyncio.wait_for(task, timeout=3.0)
+
+    @pytest.mark.asyncio
+    async def test_stop_emits_begin_and_complete_events(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        pipeline, _refs = _make_pipeline()
+        await pipeline.start()
+        with caplog.at_level(logging.INFO):
+            await pipeline.stop()
+        events = [r.msg.get("event") for r in caplog.records if isinstance(r.msg, dict)]
+        assert "voice.pipeline.stop_begin" in events
+        assert "voice.pipeline.stop_complete" in events
+
+    @pytest.mark.asyncio
+    async def test_stop_with_no_tts_or_filler_still_emits_complete(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """stop_complete must fire even on the trivial idle path."""
+        pipeline, _refs = _make_pipeline()
+        await pipeline.start()
+        with caplog.at_level(logging.INFO):
+            await pipeline.stop()
+        complete = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict) and r.msg.get("event") == "voice.pipeline.stop_complete"
+        ]
+        assert len(complete) == 1
+        payload = complete[0]
+        # Drain counters present on the structured event.
+        assert payload.get("tts_tasks_drained") == 0
+        assert payload.get("tts_tasks_total") == 0
+        assert payload.get("filler_was_active") is False
 
 
 # ===========================================================================

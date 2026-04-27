@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -678,8 +679,22 @@ class VoicePipeline:
     async def start(self) -> None:
         """Initialize the pipeline and pre-cache fillers.
 
-        Call this before feeding frames.
+        Call this before feeding frames. Double-start is a no-op
+        — every existing in-flight task / pre-cached filler / state
+        from the prior :meth:`start` is preserved and the second
+        invocation logs ``voice.pipeline.start_already_running_ignored``
+        so dashboards see the misuse without a crash. Mission Phase 1
+        T1.11 — guards against orphaned filler tasks + duplicated
+        pre-cache work that the spec's "start() called twice orphans
+        first saga + tasks" finding documented.
         """
+        if self._running:
+            logger.info(
+                "voice.pipeline.start_already_running_ignored",
+                mind_id=self._config.mind_id,
+                state=self._state.name,
+            )
+            return
         await self._jarvis.pre_cache()
         self._running = True
         self._state = VoicePipelineState.IDLE
@@ -691,16 +706,99 @@ class VoicePipeline:
         )
 
     async def stop(self) -> None:
-        """Stop the pipeline and clean up."""
+        """Stop the pipeline and drain in-flight work before returning.
+
+        Mission Phase 1 T1.10 — pre-fix the call set ``_running=False``
+        and returned immediately, leaving any in-flight TTS synthesis
+        task to push audio onto a closed pipeline (the user heard
+        stale audio after explicit stop). Post-fix sequence:
+
+        1. Emit ``voice.pipeline.stop_begin`` so dashboards see the
+           tear-down boundary.
+        2. Set ``_running=False`` so :meth:`feed_frame` short-circuits
+           with ``"not_running"`` for any concurrent producer.
+        3. Snapshot ``_filler_task`` BEFORE :meth:`_cancel_filler`
+           nulls it out, then await the cancellation with a
+           ``_CANCELLATION_TASK_TIMEOUT_S`` budget.
+        4. Interrupt the output queue (idempotent).
+        5. Snapshot ``_in_flight_tts_tasks``, cancel each, await with
+           the same per-task budget. ``CancelledError`` + ``TimeoutError``
+           both count as "drained" so a wedged TTS backend doesn't
+           stall :meth:`stop`; unexpected exceptions log a structured
+           WARN but don't propagate.
+        6. Reset state, release the self-feedback duck, emit
+           ``voice.pipeline.stop_complete`` with drain counters.
+        """
+        logger.info("voice.pipeline.stop_begin", mind_id=self._config.mind_id)
+
         self._running = False
+
+        # Snapshot the filler task BEFORE _cancel_filler() nulls it.
+        filler_task = self._filler_task
+        filler_was_active = filler_task is not None and not filler_task.done()
         self._cancel_filler()
+        if filler_was_active and filler_task is not None:
+            # CancelledError is the expected outcome of cancel();
+            # TimeoutError means the filler ignored cancellation within
+            # budget — tracked via filler_was_active so the
+            # stop_complete log surfaces it. Both terminate the wait
+            # without propagating; see AP-27 for the suppress pattern.
+            with contextlib.suppress(asyncio.CancelledError, TimeoutError):
+                await asyncio.wait_for(
+                    asyncio.shield(filler_task),
+                    timeout=_CANCELLATION_TASK_TIMEOUT_S,
+                )
+            logger.debug(
+                "voice.pipeline.stop_filler_drain_attempted",
+                reason="best-effort wait for filler cancellation",
+            )
+
+        # Interrupt active playback (idempotent).
         self._output.interrupt()
+
+        # Snapshot the in-flight TTS set so iteration is stable while
+        # tasks self-remove via _untrack_tts_task in their finally
+        # blocks (same pattern as cancel_speech_chain step 2).
+        tts_snapshot = tuple(self._in_flight_tts_tasks)
+        tts_drained = 0
+        for task in tts_snapshot:
+            if task.done():
+                tts_drained += 1
+                continue
+            task.cancel()
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(task),
+                    timeout=_CANCELLATION_TASK_TIMEOUT_S,
+                )
+                tts_drained += 1
+            except (asyncio.CancelledError, TimeoutError):
+                # Both count as drained — CancelledError is the
+                # success path; TimeoutError means we asked nicely
+                # within budget and the task didn't honour it, but
+                # we still leave the orchestrator in a quiesced state.
+                tts_drained += 1
+            except Exception as exc:  # noqa: BLE001 — stop must never raise
+                logger.warning(
+                    "voice.pipeline.stop_tts_task_unexpected",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
         self._state = VoicePipelineState.IDLE
         self._utterance_frames.clear()
         if self._self_feedback_gate is not None:
             # Release the duck so a mid-TTS stop doesn't leave the
             # capture normalizer attenuated for the next session.
             self._self_feedback_gate.on_tts_end()
+
+        logger.info(
+            "voice.pipeline.stop_complete",
+            mind_id=self._config.mind_id,
+            tts_tasks_drained=tts_drained,
+            tts_tasks_total=len(tts_snapshot),
+            filler_was_active=filler_was_active,
+        )
         logger.info("VoicePipeline stopped", mind_id=self._config.mind_id)
 
     # -- Frame processing (main loop) ----------------------------------------
