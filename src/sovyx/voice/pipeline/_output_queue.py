@@ -171,9 +171,32 @@ class AudioOutputQueue:
             )
 
     def interrupt(self) -> None:
-        """Stop current playback and clear the queue (barge-in)."""
+        """Stop current playback and clear the queue (barge-in).
+
+        T1.22 contract — infallible + idempotent + mute-flag-first.
+
+        The first statement sets ``self._interrupted = True``
+        unconditionally, which is the fallback mute mechanism: even
+        if every subsequent operation in this method failed (the
+        ``while not self._queue.empty()`` loop, the
+        ``self._queue.get_nowait()`` calls, the
+        ``self._pending_audio_ms`` assignment), the drain loop in
+        :meth:`drain` would still observe ``_interrupted=True`` on
+        its next iteration and short-circuit playback. Callers
+        therefore do not need to wrap this method in defensive
+        ``try/except`` blocks; the
+        ``cancel_speech_chain`` step-1 ``except Exception`` shield in
+        :mod:`_orchestrator` is paranoid-only and never fires at
+        HEAD. Idempotent against repeated calls — the second call
+        observes the queue already empty and the flag already set,
+        and silently no-ops.
+        """
+        # Set the mute flag FIRST so a failure in any subsequent
+        # operation can't leave the queue accepting playback.
         self._interrupted = True
-        # Drain queue without awaiting
+        # Drain queue without awaiting. ``QueueEmpty`` can race in
+        # if a concurrent ``enqueue`` raced this drain — break and
+        # accept whatever we got.
         while not self._queue.empty():
             try:
                 self._queue.get_nowait()

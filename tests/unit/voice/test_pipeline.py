@@ -2035,6 +2035,68 @@ class TestAudioOutputQueueEdgeCases:
         q.clear()  # no items — hits QueueEmpty in loop
 
     @pytest.mark.asyncio
+    async def test_interrupt_is_idempotent_t122(self) -> None:
+        """T1.22 — interrupt() called multiple times in a row leaves
+        the queue in the same final state. Pinned because
+        cancel_speech_chain step 1 + flush_stream's T1.34 cancel paths
+        + manual debugger calls can all collide on a single barge-in,
+        and the contract must remain "second call is a silent no-op".
+        """
+        q = AudioOutputQueue()
+        await q.enqueue(_audio_chunk(10))
+        await q.enqueue(_audio_chunk(10))
+
+        q.interrupt()
+        assert q._interrupted is True
+        assert q._queue.empty()
+        first_pending = q._pending_audio_ms
+
+        # Second + third call: must not raise, must leave state identical.
+        q.interrupt()
+        q.interrupt()
+        assert q._interrupted is True
+        assert q._queue.empty()
+        assert q._pending_audio_ms == first_pending
+
+    @pytest.mark.asyncio
+    async def test_interrupt_sets_mute_flag_before_queue_drain_t122(self) -> None:
+        """T1.22 — the mute flag (``_interrupted=True``) is set BEFORE
+        any queue operation. If a future refactor swaps the order, the
+        drain loop in :meth:`drain` could process additional chunks
+        between the get_nowait calls and the flag-set, producing audio
+        AFTER the user barged in. The contract is mute-flag-first;
+        this test pins it.
+        """
+        q = AudioOutputQueue()
+        # Replace the queue with one whose ``empty()`` raises so the
+        # while-loop's first check throws — proving the flag was set
+        # BEFORE the loop runs.
+        original_queue = q._queue
+
+        class _ExplodingQueue:
+            def empty(self) -> bool:
+                msg = "simulated queue corruption"
+                raise RuntimeError(msg)
+
+            def get_nowait(self) -> None:
+                msg = "should never reach get_nowait when empty() raises"
+                raise AssertionError(msg)
+
+        q._queue = _ExplodingQueue()  # type: ignore[assignment]
+
+        try:
+            with pytest.raises(RuntimeError, match="simulated queue corruption"):
+                q.interrupt()
+            # Despite the queue-op failure, the mute flag was set.
+            assert q._interrupted is True, (
+                "interrupt() must set _interrupted=True BEFORE any "
+                "queue operation — this is the fallback mute mechanism "
+                "T1.22 contracts"
+            )
+        finally:
+            q._queue = original_queue
+
+    @pytest.mark.asyncio
     async def test_play_audio_sounddevice_path(self) -> None:
         """_play_audio opens an OutputStream and writes the chunk.
 
