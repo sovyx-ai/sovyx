@@ -380,7 +380,7 @@ class TestAudioCallbackUncaughtRaiseT130:
             bad_indata = MagicMock()
             bad_indata.copy.side_effect = RuntimeError("simulated callback failure")
 
-            with caplog.at_level("ERROR", logger="sovyx.voice._capture_task"):
+            with caplog.at_level("ERROR", logger="sovyx.voice.capture._loop_mixin"):
                 # MUST NOT raise — pre-T1.30 this would propagate the
                 # RuntimeError up through PortAudio and CallbackAbort
                 # the stream.
@@ -464,7 +464,7 @@ class TestConsumerLoopHeartbeatDriftT131:
         # 1.5s elapsed (well under the 2.0s default interval).
         with (
             patch("sovyx.voice.capture._loop_mixin.time.monotonic", return_value=1001.5),
-            caplog.at_level("INFO", logger="sovyx.voice._capture_task"),
+            caplog.at_level("INFO", logger="sovyx.voice.capture._loop_mixin"),
         ):
             task._maybe_emit_heartbeat()  # noqa: SLF001
         assert not any(
@@ -490,10 +490,10 @@ class TestConsumerLoopHeartbeatDriftT131:
         # Exactly at the deadline.
         with (
             patch(
-                "sovyx.voice._capture_task.time.monotonic",
+                "sovyx.voice.capture._loop_mixin.time.monotonic",
                 return_value=1000.0 + _HEARTBEAT_INTERVAL_S,
             ),
-            caplog.at_level("INFO", logger="sovyx.voice._capture_task"),
+            caplog.at_level("INFO", logger="sovyx.voice.capture._loop_mixin"),
         ):
             task._maybe_emit_heartbeat()  # noqa: SLF001
         events_at_boundary = [
@@ -523,10 +523,10 @@ class TestConsumerLoopHeartbeatDriftT131:
         # Worst-case Windows tick boundary: deadline + 15.6 ms.
         with (
             patch(
-                "sovyx.voice._capture_task.time.monotonic",
+                "sovyx.voice.capture._loop_mixin.time.monotonic",
                 return_value=1000.0 + _HEARTBEAT_INTERVAL_S + 0.0156,
             ),
-            caplog.at_level("INFO", logger="sovyx.voice._capture_task"),
+            caplog.at_level("INFO", logger="sovyx.voice.capture._loop_mixin"),
         ):
             task._maybe_emit_heartbeat()  # noqa: SLF001
         windows_tick_events = [
@@ -1536,7 +1536,7 @@ class TestSustainedUnderrunDetection:
         task._stream_underruns = 20  # noqa: SLF001
         with caplog.at_level(logging.WARNING):
             with patch(
-                "sovyx.voice._capture_task.time.monotonic",
+                "sovyx.voice.capture._loop_mixin.time.monotonic",
                 return_value=11.0,
             ):
                 task._check_sustained_underrun_rate()  # noqa: SLF001
@@ -1544,7 +1544,7 @@ class TestSustainedUnderrunDetection:
             task._stream_callback_frames = 400  # noqa: SLF001
             task._stream_underruns = 40  # noqa: SLF001
             with patch(
-                "sovyx.voice._capture_task.time.monotonic",
+                "sovyx.voice.capture._loop_mixin.time.monotonic",
                 return_value=22.0,
             ):
                 task._check_sustained_underrun_rate()  # noqa: SLF001
