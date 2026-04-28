@@ -102,6 +102,17 @@ from sovyx.voice.capture._contention import (
     _suggest_session_manager_alternatives as _suggest_session_manager_alternatives,
 )
 
+# T1.4 step 4 — pure helpers (RMS dBFS, dBFS regex parsing, device-
+# entry resolver) extracted to ``voice/capture/_helpers``. Re-exported
+# via the explicit ``import X as X`` pattern so existing imports —
+# particularly ``test_capture_task.py`` which imports
+# ``_extract_peak_db`` and ``_resolve_input_entry`` directly — keep
+# working without an import-path migration.
+# T1.4 step 6 — first mixin landed. Subsequent steps add more
+# mixins to the composition root per
+# ``docs-internal/T1.4-step-6-mixin-surgery-plan.md``.
+from sovyx.voice.capture._epoch import EpochMixin
+
 # T1.4 step 2 — exception class hierarchy extracted to
 # ``voice/capture/_exceptions``. Re-exported via the explicit
 # ``import X as X`` pattern so existing imports like
@@ -118,13 +129,6 @@ from sovyx.voice.capture._exceptions import (
 from sovyx.voice.capture._exceptions import (
     CaptureSilenceError as CaptureSilenceError,
 )
-
-# T1.4 step 4 — pure helpers (RMS dBFS, dBFS regex parsing, device-
-# entry resolver) extracted to ``voice/capture/_helpers``. Re-exported
-# via the explicit ``import X as X`` pattern so existing imports —
-# particularly ``test_capture_task.py`` which imports
-# ``_extract_peak_db`` and ``_resolve_input_entry`` directly — keep
-# working without an import-path migration.
 from sovyx.voice.capture._helpers import _PEAK_DB_RE as _PEAK_DB_RE
 from sovyx.voice.capture._helpers import _RMS_FLOOR_DB as _RMS_FLOOR_DB
 from sovyx.voice.capture._helpers import _extract_peak_db as _extract_peak_db
@@ -192,8 +196,17 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-class AudioCaptureTask:
+class AudioCaptureTask(EpochMixin):
     """Microphone → VoicePipeline bridge.
+
+    Composition root for the capture-task mixin pattern (T1.4):
+
+    * :class:`~sovyx.voice.capture._epoch.EpochMixin` — owns
+      :meth:`samples_written_mark`, the atomic
+      ``(epoch, samples_written)`` decomposition.
+    * Future steps land additional mixins (``RingMixin``,
+      ``RestartMixin``, ``LoopMixin``) per
+      ``docs-internal/T1.4-step-6-mixin-surgery-plan.md``.
 
     Owns a ``sounddevice.InputStream`` running at 16 kHz / int16 /
     512-sample blocks — the exact frame shape the pipeline expects.
@@ -1698,26 +1711,13 @@ class AudioCaptureTask:
         return out
 
     # -- v1.3 §4.2 L4-B — mark-based tap -------------------------------
-
-    def samples_written_mark(self) -> tuple[int, int]:
-        """Return an opaque ``(epoch, samples_written)`` pair.
-
-        Atomic decomposition of the packed :attr:`_ring_state` into the
-        two logical components the coordinator needs:
-
-        1. Single ``LOAD_ATTR`` of ``_ring_state`` copies both components
-           into a local name in one bytecode step — no cross-loop race
-           can split the epoch from the samples.
-        2. The returned tuple is therefore guaranteed to reflect one
-           consistent state generation, satisfying the
-           :class:`~sovyx.voice.health.contract.CaptureTaskProto`
-           contract.
-
-        Callers treat the tuple as opaque. See the Protocol docstring
-        for the contract's rationale.
-        """
-        state = self._ring_state  # single atomic LOAD_ATTR
-        return (state >> _RING_EPOCH_SHIFT, state & _RING_SAMPLES_MASK)
+    # T1.4 step 6 — ``samples_written_mark`` moved to the
+    # :class:`~sovyx.voice.capture._epoch.EpochMixin` from which
+    # :class:`AudioCaptureTask` inherits. The method resolves via MRO
+    # so external callers (CIC at ``capture_integrity.py:564``,
+    # tests at ``test_capture_task.py``, the Protocol at
+    # ``health/contract/_probe_result.py:192``) see the same callable
+    # surface.
 
     async def tap_frames_since_mark(
         self,

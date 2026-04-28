@@ -38,6 +38,7 @@ from sovyx.voice.capture._contention import (
     _is_session_manager_contention_pattern,
     _suggest_session_manager_alternatives,
 )
+from sovyx.voice.capture._epoch import EpochMixin
 from sovyx.voice.capture._exceptions import (
     CaptureDeviceContendedError,
     CaptureError,
@@ -77,6 +78,7 @@ __all__ = [
     "CaptureError",
     "CaptureInoperativeError",
     "CaptureSilenceError",
+    "EpochMixin",
     "ExclusiveRestartResult",
     "ExclusiveRestartVerdict",
     "SessionManagerRestartResult",
