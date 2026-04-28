@@ -52,6 +52,7 @@ from sovyx.voice.capture._helpers import (
     _resolve_input_entry,
     _rms_db_int16,
 )
+from sovyx.voice.capture._lifecycle_mixin import LifecycleMixin
 from sovyx.voice.capture._restart import (
     _LINUX_ALSA_HOST_API,
     _LINUX_SESSION_MANAGER_HOST_APIS,
@@ -83,6 +84,7 @@ __all__ = [
     "EpochMixin",
     "ExclusiveRestartResult",
     "ExclusiveRestartVerdict",
+    "LifecycleMixin",
     "RestartMixin",
     "RingMixin",
     "SessionManagerRestartResult",

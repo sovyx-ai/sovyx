@@ -45,7 +45,6 @@ import contextlib
 import sys
 import time
 from typing import TYPE_CHECKING, Any
-from uuid import uuid4
 
 from sovyx.engine._backoff import BackoffPolicy, BackoffSchedule, JitterStrategy
 from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
@@ -134,6 +133,7 @@ from sovyx.voice.capture._helpers import _RMS_FLOOR_DB as _RMS_FLOOR_DB
 from sovyx.voice.capture._helpers import _extract_peak_db as _extract_peak_db
 from sovyx.voice.capture._helpers import _resolve_input_entry as _resolve_input_entry
 from sovyx.voice.capture._helpers import _rms_db_int16 as _rms_db_int16
+from sovyx.voice.capture._lifecycle_mixin import LifecycleMixin
 
 # T1.4 step 1 — restart-verdict types + dataclasses + metric emitters
 # extracted to ``voice/capture/_restart`` per master mission Phase 1
@@ -198,7 +198,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-class AudioCaptureTask(EpochMixin, RingMixin, RestartMixin):
+class AudioCaptureTask(EpochMixin, RingMixin, LifecycleMixin, RestartMixin):
     """Microphone → VoicePipeline bridge.
 
     Composition root for the capture-task mixin pattern (T1.4):
@@ -688,30 +688,6 @@ class AudioCaptureTask(EpochMixin, RingMixin, RestartMixin):
             self._queue.get_nowait()
         logger.info("audio_capture_task_stopped")
 
-    def _signal_consumer_shutdown(self) -> None:
-        """Mark the task dead and wake the consumer so it can exit.
-
-        Used by the terminal ``OPEN_FAILED_NO_STREAM`` branches of
-        :meth:`request_exclusive_restart` and
-        :meth:`request_shared_restart` — after both open paths have
-        failed, the stream is ``None`` and the consume loop would
-        otherwise stay parked on ``queue.get()`` forever (nothing can
-        enqueue, and the ``sd.PortAudioError`` reconnect branch cannot
-        fire without a live stream). Flipping ``_running`` + cancelling
-        the consumer task unblocks it and lets upstream supervisors
-        detect the dead state by observing the task's completion and
-        the returned verdict.
-
-        Safe to call from outside the consumer task (e.g. the
-        coordinator's bypass ``apply``/``revert`` path). Idempotent —
-        a second invocation after the consumer is already done is a
-        no-op.
-        """
-        self._running = False
-        consumer = self._consumer
-        if consumer is not None and not consumer.done():
-            consumer.cancel()
-
     async def _validate_stream(self) -> float:
         """Observe the freshly-opened stream for up to ``_VALIDATION_S`` seconds.
 
@@ -781,87 +757,6 @@ class AudioCaptureTask(EpochMixin, RingMixin, RestartMixin):
         from sovyx.voice.health._factory_integration import derive_endpoint_guid
 
         self._endpoint_guid = derive_endpoint_guid(entry)
-
-    def _emit_stream_opened(
-        self,
-        info: Any,  # noqa: ANN401 — StreamInfo dataclass, typed lazily
-        *,
-        apo_bypass_attempted: bool,
-    ) -> None:
-        """Generate a fresh stream_id and emit ``audio.stream.opened``.
-
-        Resets the per-stream lifecycle counters
-        (``_stream_underruns`` / ``_stream_overflows`` /
-        ``_stream_callback_frames``) so the matching
-        ``audio.stream.closed`` event reflects *this* stream only — not
-        cumulative activity from prior reopens.
-
-        ``apo_bypass_attempted`` is ``True`` only when the open was
-        triggered by :meth:`request_exclusive_restart` (the explicit
-        APO-bypass path); reverts and reconnects pass ``False``.
-        """
-        self._stream_id = uuid4().hex[:16]
-        self._stream_underruns = 0
-        self._stream_overflows = 0
-        self._stream_callback_frames = 0
-        # Band-aid #9 — reset sustained-underrun state per stream so
-        # the warn fires on the new stream's xrun rate, not a leftover
-        # snapshot from a prior reopened stream's state.
-        self._underrun_window_started_at = None
-        self._underrun_window_callbacks_at_start = 0
-        self._underrun_window_underruns_at_start = 0
-        self._last_underrun_warning_monotonic = None
-        sample_rate = int(getattr(info, "sample_rate", 0) or 0)
-        mode = "exclusive" if getattr(info, "exclusive_used", False) else "shared"
-        buffer_size_ms = int(self._blocksize * 1000 / sample_rate) if sample_rate else 0
-        logger.info(
-            "audio.stream.opened",
-            **{
-                "voice.stream_id": self._stream_id,
-                "voice.device_id": self._resolved_device_name or "default",
-                "voice.host_api": getattr(info, "host_api", None),
-                "voice.mode": mode,
-                "voice.sample_rate": sample_rate,
-                "voice.channels": int(getattr(info, "channels", 0) or 0),
-                "voice.buffer_size_ms": buffer_size_ms,
-                "voice.apo_bypass_attempted": apo_bypass_attempted,
-                "voice.fallback_depth": int(getattr(info, "fallback_depth", 0) or 0),
-                "voice.auto_convert_used": bool(getattr(info, "auto_convert_used", False)),
-            },
-        )
-
-    def _close_stream(self, reason: str = "unknown") -> None:
-        """Stop and close the stream — tolerant of already-closed streams.
-
-        Emits ``audio.stream.closed`` with the cumulative xrun counts
-        and frame total observed by the PortAudio callback for this
-        stream BEFORE tearing it down. ``reason`` is a stable tag
-        (``"shutdown"`` / ``"exclusive_restart"`` / ``"shared_restart"``
-        / ``"device_error"`` / ``"unknown"``) the dashboard uses to
-        distinguish operator-initiated tear-downs from device errors.
-        """
-        stream = self._stream
-        self._stream = None
-        if stream is None:
-            return
-        if self._stream_id:
-            logger.info(
-                "audio.stream.closed",
-                **{
-                    "voice.stream_id": self._stream_id,
-                    "voice.device_id": self._resolved_device_name or "default",
-                    "voice.reason": reason,
-                    "voice.underruns": self._stream_underruns,
-                    "voice.overflows": self._stream_overflows,
-                    "voice.frames_processed": self._stream_callback_frames,
-                },
-            )
-            self._stream_id = ""
-        try:
-            stream.stop()
-            stream.close()
-        except Exception:  # noqa: BLE001 — stream may already be dead
-            logger.debug("audio_capture_close_failed", exc_info=True)
 
     def _audio_callback(
         self,
