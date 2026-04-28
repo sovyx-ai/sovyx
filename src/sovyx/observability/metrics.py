@@ -661,6 +661,27 @@ class MetricsRegistry:
             "stage invocation including failed paths so the dashboard "
             "can compare success-path vs error-path tail latency.",
         )
+        # T1.37 — TTS synthesis latency bucketed by engine_family
+        # (e.g. "kokoro:af", "piper:en_US"). Cardinality-bounded ~25
+        # series via the family bucket; per-voice detail lives on the
+        # ``voice.tts.chunk_emitted`` structured log event (carries
+        # ``voice.voice`` per chunk + ``voice.synthesis_latency_ms``
+        # since T1.37). The naive per-voice label was rejected
+        # because Piper voices are operator-installable and would
+        # blow the cardinality budget. See
+        # ``docs-internal/T1.37-tts-latency-histogram-rfc.md`` Option
+        # B for the rationale + bucket function contract.
+        self.voice_tts_synthesis_latency = self._histogram(
+            "sovyx.voice.tts.synthesis_latency",
+            "Per-engine-family TTS synthesis duration in ms (labels: "
+            "engine_family=kokoro:<lang>|piper:<lang>, outcome="
+            "success|error). Per-voice detail lives on the "
+            "voice.tts.chunk_emitted log event with "
+            "voice.synthesis_latency_ms field — log-derived metrics "
+            "tools (Loki/Grafana, Datadog log search) cover the "
+            "per-voice dashboard need without paying the cardinality "
+            "cost at the metric layer.",
+        )
         self.voice_queue_depth = self._histogram(
             "sovyx.voice.queue.depth",
             "USE Utilisation — current depth of an async queue between "

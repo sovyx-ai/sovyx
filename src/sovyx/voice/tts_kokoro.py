@@ -22,6 +22,7 @@ from sovyx.voice._stage_metrics import (
     VoiceStage,
     measure_stage_duration,
     record_stage_event,
+    record_tts_synthesis_latency,
 )
 from sovyx.voice._tts_sentence_split import (
     split_sentences as _split_sentences,
@@ -444,6 +445,7 @@ class KokoroTTS(TTSEngine):
                     "voice.text_chars": len(text),
                     "voice.audio_ms": round(duration_ms, 1),
                     "voice.generation_ms": round(generation_ms, 1),
+                    "voice.synthesis_latency_ms": round(generation_ms, 1),
                     "voice.model": "kokoro",
                     "voice.voice": voice,
                     "voice.language": language,
@@ -451,6 +453,15 @@ class KokoroTTS(TTSEngine):
                     "voice.speed": resolved_speed,
                     "voice.synthesis_health": synthesis_health or "ok",
                 },
+            )
+            # T1.37 — bucketed-family histogram for per-language TTS
+            # latency (cardinality-bounded ~25 series). Per-voice
+            # detail lives on the chunk_emitted log above.
+            record_tts_synthesis_latency(
+                voice,
+                generation_ms,
+                engine="kokoro",
+                error=synthesis_health == "zero_energy",
             )
 
             # Zero-energy synthesis is a soft failure: the caller

@@ -30,9 +30,11 @@ from sovyx.voice._stage_metrics import (
     StageEventKind,
     StageOutcome,
     VoiceStage,
+    _bucket_engine_family,
     measure_stage_duration,
     record_queue_depth,
     record_stage_event,
+    record_tts_synthesis_latency,
     reset_error_type_bucket_for_tests,
 )
 
@@ -438,3 +440,153 @@ class TestRedUseEndToEnd:
         assert _find(metrics, "sovyx.voice.stage.duration") is not None
         assert _find(metrics, "sovyx.voice.queue.depth") is not None
         assert _find(metrics, "sovyx.voice.queue.saturation_pct") is not None
+
+
+# ── T1.37: TTS latency histogram (Option B — bucketed engine_family) ─
+
+
+class TestBucketEngineFamily:
+    """Pin the cardinality-bucket contract for the engine_family label.
+
+    T1.37 RFC §Option B requires that the bucket function:
+
+    * extract the language prefix from the voice_id per engine
+      naming convention (kokoro: ``<lang>_<name>``; piper:
+      ``<lang>-<name>-<size>``)
+    * return ``"<engine>:<family>"`` to keep the metric label
+      self-describing
+    * fall back gracefully on malformed inputs without raising
+      (a malformed voice_id is operator-controlled and must not
+      crash the synthesis path)
+    """
+
+    def test_kokoro_voice_buckets_by_underscore_prefix(self) -> None:
+        assert _bucket_engine_family("kokoro", "af_bella") == "kokoro:af"
+        assert _bucket_engine_family("kokoro", "am_michael") == "kokoro:am"
+        assert _bucket_engine_family("kokoro", "bf_alice") == "kokoro:bf"
+
+    def test_piper_voice_buckets_by_hyphen_prefix(self) -> None:
+        assert _bucket_engine_family("piper", "en_US-amy-medium") == "piper:en_US"
+        assert _bucket_engine_family("piper", "pt_BR-faber-medium") == "piper:pt_BR"
+        assert _bucket_engine_family("piper", "de_DE-thorsten-low") == "piper:de_DE"
+
+    def test_engine_lowercased_and_stripped(self) -> None:
+        assert _bucket_engine_family("KOKORO", "af_bella") == "kokoro:af"
+        assert _bucket_engine_family("  Piper  ", "en_US-amy-medium") == "piper:en_US"
+
+    def test_empty_engine_collapses_to_unknown(self) -> None:
+        assert _bucket_engine_family("", "af_bella") == "unknown:af_bella"
+
+    def test_empty_voice_id_collapses_to_unknown_suffix(self) -> None:
+        assert _bucket_engine_family("kokoro", "") == "kokoro:unknown"
+        assert _bucket_engine_family("piper", "") == "piper:unknown"
+        assert _bucket_engine_family("piper", "   ") == "piper:unknown"
+
+    def test_kokoro_voice_without_underscore_falls_back_to_full_id(self) -> None:
+        # A malformed Kokoro voice (no `<lang>_` prefix) shouldn't crash;
+        # bucket falls back to the full voice_id so dashboards still
+        # see the malformed value instead of silently dropping it.
+        assert _bucket_engine_family("kokoro", "malformed") == "kokoro:malformed"
+
+    def test_piper_voice_without_hyphen_falls_back_to_full_id(self) -> None:
+        assert _bucket_engine_family("piper", "malformed") == "piper:malformed"
+
+    def test_unknown_engine_uses_full_voice_id_as_family(self) -> None:
+        # Future engines surface as "<engine>:<voice_id>" until a
+        # convention is documented for that engine.
+        assert _bucket_engine_family("xtts", "speaker_0") == "xtts:speaker_0"
+
+
+class TestRecordTtsSynthesisLatency:
+    """Pin the histogram emission contract.
+
+    T1.37 — wired at the chunk_emitted call site in tts_kokoro.py
+    + tts_piper.py. The histogram MUST be labelled by
+    ``engine_family`` (not raw ``voice_id``) so cardinality stays
+    bounded regardless of operator-installed Piper voice count.
+    """
+
+    def test_records_under_engine_family_label(
+        self,
+        reader: InMemoryMetricReader,
+        registry: MetricsRegistry,  # noqa: ARG002
+    ) -> None:
+        record_tts_synthesis_latency("af_bella", 42.5, engine="kokoro")
+        metric = _find(_collect(reader), "sovyx.voice.tts.synthesis_latency")
+        assert metric is not None
+        points = list(metric.data.data_points)
+        assert len(points) == 1
+        attrs = dict(points[0].attributes)
+        assert attrs == {"engine_family": "kokoro:af", "outcome": "success"}
+        assert points[0].sum == 42.5
+
+    def test_error_outcome_when_error_flag_set(
+        self,
+        reader: InMemoryMetricReader,
+        registry: MetricsRegistry,  # noqa: ARG002
+    ) -> None:
+        record_tts_synthesis_latency("en_US-amy-medium", 99.9, engine="piper", error=True)
+        metric = _find(_collect(reader), "sovyx.voice.tts.synthesis_latency")
+        attrs = dict(next(iter(metric.data.data_points)).attributes)
+        assert attrs == {"engine_family": "piper:en_US", "outcome": "error"}
+
+    def test_distinct_families_create_distinct_series(
+        self,
+        reader: InMemoryMetricReader,
+        registry: MetricsRegistry,  # noqa: ARG002
+    ) -> None:
+        record_tts_synthesis_latency("af_bella", 10.0, engine="kokoro")
+        record_tts_synthesis_latency("am_michael", 20.0, engine="kokoro")
+        record_tts_synthesis_latency("en_US-amy-medium", 30.0, engine="piper")
+        metric = _find(_collect(reader), "sovyx.voice.tts.synthesis_latency")
+        families = {dict(p.attributes)["engine_family"] for p in metric.data.data_points}
+        assert families == {"kokoro:af", "kokoro:am", "piper:en_US"}
+
+    def test_same_family_different_voices_collapse_to_one_series(
+        self,
+        reader: InMemoryMetricReader,
+        registry: MetricsRegistry,  # noqa: ARG002
+    ) -> None:
+        """Cardinality bound — 100 distinct voices that share a family
+        produce ONE series, not 100. This is the whole point of
+        Option B over Option A (naive per-voice label)."""
+        for i in range(100):
+            record_tts_synthesis_latency(f"af_voice{i:03d}", float(i), engine="kokoro")
+        metric = _find(_collect(reader), "sovyx.voice.tts.synthesis_latency")
+        families = {dict(p.attributes)["engine_family"] for p in metric.data.data_points}
+        assert families == {"kokoro:af"}, (
+            f"100 distinct kokoro:af voices MUST collapse to one series; "
+            f"got {len(families)} series: {families}"
+        )
+
+    def test_negative_duration_clamped_to_zero(
+        self,
+        reader: InMemoryMetricReader,
+        registry: MetricsRegistry,  # noqa: ARG002
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Negative duration is a counting bug — clamp to 0 + log
+        WARN so the dashboard isn't poisoned by a nonsensical
+        sample."""
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            record_tts_synthesis_latency("af_bella", -5.0, engine="kokoro")
+        metric = _find(_collect(reader), "sovyx.voice.tts.synthesis_latency")
+        point = next(iter(metric.data.data_points))
+        assert point.sum == 0.0
+        # WARN with action_required.
+        warn_records = [
+            r
+            for r in caplog.records
+            if isinstance(r.msg, dict)
+            and r.msg.get("event") == "voice.tts.synthesis_latency_negative"
+        ]
+        assert len(warn_records) == 1
+        assert "action_required" in warn_records[0].msg
+
+    def test_works_with_no_active_registry(self) -> None:
+        """No-op safety — the daemon must not crash if metrics
+        teardown happens before the last TTS chunk lands."""
+        teardown_metrics()
+        record_tts_synthesis_latency("af_bella", 10.0, engine="kokoro")

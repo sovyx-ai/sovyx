@@ -21,6 +21,7 @@ from sovyx.voice._stage_metrics import (
     VoiceStage,
     measure_stage_duration,
     record_stage_event,
+    record_tts_synthesis_latency,
 )
 from sovyx.voice._tts_sentence_split import (
     split_sentences as _split_sentences,
@@ -583,12 +584,22 @@ class PiperTTS(TTSEngine):
                     "voice.text_chars": len(text),
                     "voice.audio_ms": round(duration_ms, 1),
                     "voice.generation_ms": round(generation_ms, 1),
+                    "voice.synthesis_latency_ms": round(generation_ms, 1),
                     "voice.model": "piper",
                     "voice.voice": self._config.voice,
                     "voice.sample_rate": sr,
                     "voice.speaker_id": self._config.speaker_id,
                     "voice.synthesis_health": synthesis_health or "ok",
                 },
+            )
+            # T1.37 — bucketed-family histogram for per-language TTS
+            # latency (cardinality-bounded ~25 series). Per-voice
+            # detail lives on the chunk_emitted log above.
+            record_tts_synthesis_latency(
+                self._config.voice,
+                generation_ms,
+                engine="piper",
+                error=synthesis_health == "zero_energy",
             )
 
             if synthesis_health == "zero_energy":
