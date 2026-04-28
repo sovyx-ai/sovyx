@@ -571,7 +571,15 @@ class TestAudioCaptureTaskReconnect:
         sd.InputStream = stream_factory  # type: ignore[attr-defined]
         entry = _input_entry(index=5)
 
-        monkeypatch.setattr("sovyx.voice._capture_task._RECONNECT_DELAY_S", 0.0)
+        # T1.4 step 9b — _consume_loop moved to LoopMixin and imports
+        # _RECONNECT_DELAY_S directly from `voice/capture/_constants`.
+        # The local binding in `_loop_mixin` is what the consume loop
+        # reads, so the monkeypatch must target that path (CLAUDE.md
+        # anti-pattern #20). Pre-fix this patched
+        # `_capture_task._RECONNECT_DELAY_S` and was a silent no-op:
+        # the test passed only because the 5 s poll window was wide
+        # enough to cover the unpatched 2 s default + jitter.
+        monkeypatch.setattr("sovyx.voice.capture._loop_mixin._RECONNECT_DELAY_S", 0.0)
 
         task = AudioCaptureTask(
             pipeline,
