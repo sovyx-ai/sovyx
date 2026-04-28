@@ -1601,3 +1601,99 @@ class TestSustainedUnderrunDetection:
         assert task._underrun_window_started_at == 11.0  # noqa: SLF001
         assert task._underrun_window_callbacks_at_start == 100  # noqa: SLF001
         assert task._underrun_window_underruns_at_start == 1  # noqa: SLF001
+
+
+class TestMixinMroResolution:
+    """Pin CLAUDE.md anti-pattern #32 — mixin method-via-MRO stub trap.
+
+    T1.4 step 9b caught a subtle bug where a naive ``def
+    _reopen_stream_after_device_error(self) -> None: ...`` stub on
+    LoopMixin shadowed the real method on RestartMixin (which sits
+    AFTER LoopMixin in ``AudioCaptureTask`` MRO). The stub WINS MRO
+    resolution and silently returns ``None`` — the consume-loop
+    reconnect path then completes "successfully" without ever
+    calling the unified opener.
+
+    Fix shipped in commit ``7e16ad8``: declare the cross-mixin
+    reference inside ``if TYPE_CHECKING:`` so the body is type-
+    check-only and erased at runtime, letting MRO fall through to
+    RestartMixin. These tests pin the contract so a future refactor
+    that replaces the TYPE_CHECKING-block declaration with a real
+    ``def`` stub is caught immediately.
+    """
+
+    def test_reopen_stream_resolves_to_restart_mixin_not_loop_mixin(self) -> None:
+        """``AudioCaptureTask._reopen_stream_after_device_error`` MUST
+        resolve to :class:`RestartMixin` via MRO — not to a stub on
+        :class:`LoopMixin`. If a future change adds a ``def`` stub to
+        LoopMixin, MRO would resolve to that stub (since LoopMixin is
+        earlier than RestartMixin) and the test catches it.
+        """
+        from sovyx.voice.capture._restart_mixin import RestartMixin
+
+        method = AudioCaptureTask._reopen_stream_after_device_error  # noqa: SLF001
+        # qualname carries the class where the method is DEFINED, so
+        # this is the cleanest cross-Python-version check that MRO
+        # found RestartMixin's real implementation.
+        assert method.__qualname__ == "RestartMixin._reopen_stream_after_device_error", (
+            f"Expected MRO to resolve _reopen_stream_after_device_error to "
+            f"RestartMixin (real implementation), but got {method.__qualname__!r}. "
+            f"This typically means a stub method was added to LoopMixin or another "
+            f"mixin earlier in MRO. See CLAUDE.md anti-pattern #32 — cross-mixin "
+            f"references whose target lives AFTER the calling mixin in MRO must "
+            f"use `if TYPE_CHECKING:` blocks, NOT real `def` stubs."
+        )
+        # Defence-in-depth: confirm the resolved method is the same
+        # function object as RestartMixin's class attribute.
+        assert method is RestartMixin._reopen_stream_after_device_error  # noqa: SLF001
+
+    def test_loop_mixin_does_not_define_reopen_stream_at_runtime(self) -> None:
+        """:class:`LoopMixin` MUST NOT have a runtime
+        ``_reopen_stream_after_device_error`` attribute on its class
+        ``__dict__``. The TYPE_CHECKING-block declaration is erased at
+        runtime (``TYPE_CHECKING`` is ``False`` outside type-check
+        passes), so the attribute should not appear in
+        ``LoopMixin.__dict__``. If a refactor accidentally moves the
+        declaration outside the TYPE_CHECKING block, this test fails
+        and the MRO trap returns.
+        """
+        from sovyx.voice.capture._loop_mixin import LoopMixin
+
+        assert "_reopen_stream_after_device_error" not in LoopMixin.__dict__, (
+            "LoopMixin defines _reopen_stream_after_device_error at runtime; "
+            "this WILL shadow RestartMixin's real implementation via MRO. "
+            "Move the declaration inside `if TYPE_CHECKING:` per CLAUDE.md "
+            "anti-pattern #32."
+        )
+
+    def test_audio_capture_task_mro_order_loop_before_restart(self) -> None:
+        """The MRO trap detection only matters when LoopMixin precedes
+        RestartMixin. Pin the current order so a future inheritance
+        re-shuffle that swaps them is caught — at that point the
+        TYPE_CHECKING-block trick on LoopMixin becomes unnecessary
+        (the regression-test invariants would adjust accordingly).
+        """
+        from sovyx.voice.capture._lifecycle_mixin import LifecycleMixin
+        from sovyx.voice.capture._loop_mixin import LoopMixin
+        from sovyx.voice.capture._restart_mixin import RestartMixin
+
+        mro = AudioCaptureTask.__mro__
+        loop_idx = mro.index(LoopMixin)
+        restart_idx = mro.index(RestartMixin)
+        lifecycle_idx = mro.index(LifecycleMixin)
+        # LoopMixin precedes RestartMixin → the trap exists, the
+        # TYPE_CHECKING-block fix is required.
+        assert loop_idx < restart_idx, (
+            f"AudioCaptureTask MRO has LoopMixin at {loop_idx} but RestartMixin "
+            f"at {restart_idx} — expected LoopMixin first. If the order is now "
+            f"reversed, the cross-mixin TYPE_CHECKING-block declaration in "
+            f"LoopMixin can be replaced with a regular `def` stub."
+        )
+        # LifecycleMixin precedes LoopMixin so LoopMixin's `_close_stream`
+        # stub is safely shadowed by LifecycleMixin's real method.
+        assert lifecycle_idx < loop_idx, (
+            f"AudioCaptureTask MRO has LifecycleMixin at {lifecycle_idx} but "
+            f"LoopMixin at {loop_idx} — expected LifecycleMixin first so its "
+            f"_close_stream / _emit_stream_opened / _signal_consumer_shutdown "
+            f"shadow LoopMixin's stubs."
+        )
