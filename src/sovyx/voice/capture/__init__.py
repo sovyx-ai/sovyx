@@ -18,6 +18,12 @@ The split is structurally compatible with CLAUDE.md anti-pattern #16
 
 from __future__ import annotations
 
+from sovyx.voice.capture._exceptions import (
+    CaptureDeviceContendedError,
+    CaptureError,
+    CaptureInoperativeError,
+    CaptureSilenceError,
+)
 from sovyx.voice.capture._restart import (
     _LINUX_ALSA_HOST_API,
     _LINUX_SESSION_MANAGER_HOST_APIS,
@@ -40,6 +46,10 @@ __all__ = [
     "_LINUX_SESSION_MANAGER_HOST_APIS",
     "AlsaHwDirectRestartResult",
     "AlsaHwDirectRestartVerdict",
+    "CaptureDeviceContendedError",
+    "CaptureError",
+    "CaptureInoperativeError",
+    "CaptureSilenceError",
     "ExclusiveRestartResult",
     "ExclusiveRestartVerdict",
     "SessionManagerRestartResult",
