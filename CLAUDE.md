@@ -71,6 +71,16 @@ src/sovyx/
 │   │                    # wake word, voice ID, language, accent, cadence are
 │   │                    # configurable per MindConfig. See Phase 8 of
 │   │                    # docs-internal/missions/MISSION-voice-final-skype-grade-2026.md
+│   ├── _capture_task.py # ~760 LOC — orchestration root: AudioCaptureTask
+│   │                    # composes 5 mixins from capture/, public start/stop +
+│   │                    # validation helpers, legacy re-exports for back-compat
+│   ├── capture/         # Split from _capture_task.py per T1.4 (was 2785 LOC):
+│   │   ├── _constants.py, _exceptions.py, _helpers.py, _contention.py, _restart.py
+│   │   ├── _epoch.py            # EpochMixin (ring-buffer epoch packing)
+│   │   ├── _ring.py             # RingMixin (ring-buffer state + tap helpers)
+│   │   ├── _lifecycle_mixin.py  # LifecycleMixin (stream open/close/shutdown)
+│   │   ├── _loop_mixin.py       # LoopMixin (audio thread + consume loop)
+│   │   └── _restart_mixin.py    # RestartMixin (5 restart strategies)
 │   └── pipeline/        # Split from pipeline.py: state machine + output queue + barge-in
 │       ├── _orchestrator.py, _output_queue.py, _barge_in.py
 │       ├── _state.py, _events.py, _config.py, _constants.py
@@ -159,7 +169,7 @@ docs-internal/           # Internal planning, audits, specs — gitignored
 13. **Plugin imports via SandboxedHttpClient, not raw httpx:** Every official plugin in `plugins/official/` MUST instantiate `SandboxedHttpClient` and call `.get()`/`.post()` on it. Raw `httpx.AsyncClient(...)` from plugin code bypasses allowed-domains + rate-limit + size-cap enforcement and turns the sandbox into theater.
 14. **Sync CPU-bound in `async def` blocks the event loop:** ONNX inference (Piper, Kokoro, Silero, Moonshine, OpenWakeWord), `boto3` calls, and any other blocking CPU/IO MUST be wrapped in `asyncio.to_thread(fn, *args)`. A naked `self._sess.run(...)` inside an async handler stalls every other coroutine (voice pipeline, bridge, dashboard WS) for the inference duration.
 15. **Unbounded `defaultdict(asyncio.Lock)` leaks memory:** One-lock-per-key patterns must use `sovyx.engine._lock_dict.LRULockDict(maxsize=N)` so keys that stop appearing get evicted. Raw `defaultdict(asyncio.Lock)` grows forever over a long-lived daemon.
-16. **God files (>500 LOC with mixed responsibilities):** Don't let a single module accumulate orchestration + helpers + types + models. Once it's hard to navigate, split into a subpackage (see `cognitive/safety/`, `cognitive/reflect/`, `voice/pipeline/`, `dashboard/routes/` as references — each sub-file owns one responsibility, `__init__.py` re-exports the public surface for back-compat).
+16. **God files (>500 LOC with mixed responsibilities):** Don't let a single module accumulate orchestration + helpers + types + models. Once it's hard to navigate, split into a subpackage (see `cognitive/safety/`, `cognitive/reflect/`, `voice/pipeline/`, `voice/capture/`, `dashboard/routes/` as references — each sub-file owns one responsibility, `__init__.py` re-exports the public surface for back-compat). The `voice/capture/` reference is the most aggressive worked example: 2785 → 760 LOC across 12 commits via 5 mixins on a multi-mixin host (`AudioCaptureTask(EpochMixin, RingMixin, LifecycleMixin, LoopMixin, RestartMixin)`) — pattern proven for refactoring a single-class megafile while keeping public surface stable + every test patch path follows the split (anti-pattern #20).
 17. **Hardcoded tuning constants:** Thresholds, timeouts, URLs, SHAs, etc. go in `EngineConfig.tuning.{safety,brain,voice}` (pydantic-settings). Module-level `_CONST = _TuningCls().field` pattern keeps import-time access while allowing `SOVYX_TUNING__*` env overrides. Never hardcode in a `.py` constant.
 18. **Raw `fetch()` in the frontend:** Every network call MUST go through `src/lib/api.ts`. `api.*` wraps JSON + auth + retry + timeout + schema validation; `apiFetch` wraps raw-Response cases. A loose `fetch("/api/…")` drifts from the auth header injection and 401 handler.
 19. **`localStorage` for auth tokens:** XSS-exposed. Use `sessionStorage` (tab-scoped) + in-memory fallback, which is what `src/lib/api.ts` already does. A token migrator reads any legacy `localStorage` entries into `sessionStorage` on boot.
