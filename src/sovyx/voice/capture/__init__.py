@@ -68,6 +68,7 @@ from sovyx.voice.capture._restart import (
     _emit_session_manager_restart_metric,
     _emit_shared_restart_metric,
 )
+from sovyx.voice.capture._ring import RingMixin
 
 __all__ = [
     "_LINUX_ALSA_HOST_API",
@@ -81,6 +82,7 @@ __all__ = [
     "EpochMixin",
     "ExclusiveRestartResult",
     "ExclusiveRestartVerdict",
+    "RingMixin",
     "SessionManagerRestartResult",
     "SessionManagerRestartVerdict",
     "SharedRestartResult",
