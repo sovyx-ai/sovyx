@@ -463,7 +463,7 @@ class TestConsumerLoopHeartbeatDriftT131:
         task._last_heartbeat_monotonic = 1000.0  # noqa: SLF001
         # 1.5s elapsed (well under the 2.0s default interval).
         with (
-            patch("sovyx.voice._capture_task.time.monotonic", return_value=1001.5),
+            patch("sovyx.voice.capture._loop_mixin.time.monotonic", return_value=1001.5),
             caplog.at_level("INFO", logger="sovyx.voice._capture_task"),
         ):
             task._maybe_emit_heartbeat()  # noqa: SLF001
@@ -1457,13 +1457,13 @@ class TestSustainedUnderrunDetection:
 
         task = _bare_task_with_underrun_state()
         # Arm window at t=0.
-        with patch("sovyx.voice._capture_task.time.monotonic", return_value=0.0):
+        with patch("sovyx.voice.capture._loop_mixin.time.monotonic", return_value=0.0):
             task._check_sustained_underrun_rate()  # noqa: SLF001
         # Roll the window AFTER 11 s (>10 s window) but only 10 callbacks
         # observed, all underruns. Below 50-callback floor → no warn.
         task._stream_callback_frames = 10  # noqa: SLF001
         task._stream_underruns = 10  # noqa: SLF001
-        with patch("sovyx.voice._capture_task.time.monotonic", return_value=11.0):
+        with patch("sovyx.voice.capture._loop_mixin.time.monotonic", return_value=11.0):
             task._check_sustained_underrun_rate()  # noqa: SLF001
         assert task._last_underrun_warning_monotonic is None  # noqa: SLF001
 
@@ -1473,12 +1473,12 @@ class TestSustainedUnderrunDetection:
         from unittest.mock import patch
 
         task = _bare_task_with_underrun_state()
-        with patch("sovyx.voice._capture_task.time.monotonic", return_value=0.0):
+        with patch("sovyx.voice.capture._loop_mixin.time.monotonic", return_value=0.0):
             task._check_sustained_underrun_rate()  # noqa: SLF001
         # 100 callbacks, 1 underrun = 1% — below 5% threshold.
         task._stream_callback_frames = 100  # noqa: SLF001
         task._stream_underruns = 1  # noqa: SLF001
-        with patch("sovyx.voice._capture_task.time.monotonic", return_value=11.0):
+        with patch("sovyx.voice.capture._loop_mixin.time.monotonic", return_value=11.0):
             task._check_sustained_underrun_rate()  # noqa: SLF001
         assert task._last_underrun_warning_monotonic is None  # noqa: SLF001
 
@@ -1491,14 +1491,14 @@ class TestSustainedUnderrunDetection:
         from unittest.mock import patch
 
         task = _bare_task_with_underrun_state()
-        with patch("sovyx.voice._capture_task.time.monotonic", return_value=0.0):
+        with patch("sovyx.voice.capture._loop_mixin.time.monotonic", return_value=0.0):
             task._check_sustained_underrun_rate()  # noqa: SLF001
         # 200 callbacks, 20 underruns = 10% — above 5% threshold.
         task._stream_callback_frames = 200  # noqa: SLF001
         task._stream_underruns = 20  # noqa: SLF001
         with (
             caplog.at_level(logging.WARNING),
-            patch("sovyx.voice._capture_task.time.monotonic", return_value=11.0),
+            patch("sovyx.voice.capture._loop_mixin.time.monotonic", return_value=11.0),
         ):
             task._check_sustained_underrun_rate()  # noqa: SLF001
         assert task._last_underrun_warning_monotonic == 11.0  # noqa: SLF001
@@ -1529,7 +1529,7 @@ class TestSustainedUnderrunDetection:
 
         task = _bare_task_with_underrun_state()
         # Arm window.
-        with patch("sovyx.voice._capture_task.time.monotonic", return_value=0.0):
+        with patch("sovyx.voice.capture._loop_mixin.time.monotonic", return_value=0.0):
             task._check_sustained_underrun_rate()  # noqa: SLF001
         # First breach → fires.
         task._stream_callback_frames = 200  # noqa: SLF001
@@ -1565,17 +1565,17 @@ class TestSustainedUnderrunDetection:
         from unittest.mock import patch
 
         task = _bare_task_with_underrun_state()
-        with patch("sovyx.voice._capture_task.time.monotonic", return_value=0.0):
+        with patch("sovyx.voice.capture._loop_mixin.time.monotonic", return_value=0.0):
             task._check_sustained_underrun_rate()  # noqa: SLF001
         task._stream_callback_frames = 200  # noqa: SLF001
         task._stream_underruns = 20  # noqa: SLF001
         with caplog.at_level(logging.WARNING):
-            with patch("sovyx.voice._capture_task.time.monotonic", return_value=11.0):
+            with patch("sovyx.voice.capture._loop_mixin.time.monotonic", return_value=11.0):
                 task._check_sustained_underrun_rate()  # noqa: SLF001
             # 35 s after first WARN — past the 30 s rate-limit gap.
             task._stream_callback_frames = 400  # noqa: SLF001
             task._stream_underruns = 40  # noqa: SLF001
-            with patch("sovyx.voice._capture_task.time.monotonic", return_value=46.0):
+            with patch("sovyx.voice.capture._loop_mixin.time.monotonic", return_value=46.0):
                 task._check_sustained_underrun_rate()  # noqa: SLF001
         events = [
             r.msg
@@ -1591,11 +1591,11 @@ class TestSustainedUnderrunDetection:
         from unittest.mock import patch
 
         task = _bare_task_with_underrun_state()
-        with patch("sovyx.voice._capture_task.time.monotonic", return_value=0.0):
+        with patch("sovyx.voice.capture._loop_mixin.time.monotonic", return_value=0.0):
             task._check_sustained_underrun_rate()  # noqa: SLF001
         task._stream_callback_frames = 100  # noqa: SLF001
         task._stream_underruns = 1  # 1% — below threshold.  # noqa: SLF001
-        with patch("sovyx.voice._capture_task.time.monotonic", return_value=11.0):
+        with patch("sovyx.voice.capture._loop_mixin.time.monotonic", return_value=11.0):
             task._check_sustained_underrun_rate()  # noqa: SLF001
         # Window snapshots advance even though no warn fired.
         assert task._underrun_window_started_at == 11.0  # noqa: SLF001
