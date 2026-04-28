@@ -331,6 +331,18 @@ class VoicePipeline:
         # iterates and cancels every entry under
         # :attr:`_cancellation_lock` so concurrent barge-ins serialise.
         self._in_flight_tts_tasks: set[asyncio.Task[Any]] = set()
+        # T1.13 — guard ``_in_flight_tts_tasks`` mutations + the
+        # cancel-chain snapshot. Pre-T1.13 the set was mutated via bare
+        # ``.add()`` / ``.discard()`` calls; CPython's GIL makes those
+        # atomic at HEAD, but a future refactor that introduced an
+        # await between read-and-write inside the mutation path would
+        # silently lose atomicity. The lock makes the contract
+        # explicit. Snapshot at ``cancel_speech_chain`` step 2 also
+        # acquires briefly so a concurrent ``_track_tts_task`` can't
+        # land mid-snapshot. The iteration over the snapshot runs
+        # OUTSIDE the lock — see the residual-race note in
+        # ``cancel_speech_chain``'s docstring.
+        self._task_tracking_lock = asyncio.Lock()
         self._cancellation_lock = asyncio.Lock()
         # Optional upstream LLM cancellation hook. Cognitive layer
         # registers an awaitable that signals the LLM client to stop
@@ -768,7 +780,12 @@ class VoicePipeline:
         # Snapshot the in-flight TTS set so iteration is stable while
         # tasks self-remove via _untrack_tts_task in their finally
         # blocks (same pattern as cancel_speech_chain step 2).
-        tts_snapshot = tuple(self._in_flight_tts_tasks)
+        #
+        # T1.13 — snapshot acquires ``_task_tracking_lock`` briefly to
+        # serialize against concurrent ``_track_tts_task``; iteration
+        # outside the lock for the same reason as cancel_speech_chain.
+        async with self._task_tracking_lock:
+            tts_snapshot = tuple(self._in_flight_tts_tasks)
         tts_drained = 0
         for task in tts_snapshot:
             if task.done():
@@ -2213,11 +2230,11 @@ class VoicePipeline:
             self._tts.synthesize(text),
             name=f"voice-tts-synth-{id(self) & 0xFFFF}",
         )
-        self._track_tts_task(task)
+        await self._track_tts_task(task)
         try:
             return await task
         finally:
-            self._untrack_tts_task(task)
+            await self._untrack_tts_task(task)
 
     # -- T1 atomic cancellation chain ---------------------------------------
 
@@ -2245,7 +2262,7 @@ class VoicePipeline:
         """
         self._llm_cancel_hook = hook
 
-    def _track_tts_task(self, task: asyncio.Task[Any]) -> None:
+    async def _track_tts_task(self, task: asyncio.Task[Any]) -> None:
         """Register an in-flight TTS synthesis task for T1 cancellation.
 
         Called by :meth:`speak`, :meth:`stream_text`, and
@@ -2253,12 +2270,24 @@ class VoicePipeline:
         task removes itself in its own ``finally`` via
         :meth:`_untrack_tts_task` so the set stays bounded by the
         in-flight set, not the lifetime of the daemon.
-        """
-        self._in_flight_tts_tasks.add(task)
 
-    def _untrack_tts_task(self, task: asyncio.Task[Any]) -> None:
-        """Remove ``task`` from the in-flight set. Safe to call multiple times."""
-        self._in_flight_tts_tasks.discard(task)
+        T1.13 — async + lock-guarded. The mutation itself is GIL-atomic
+        in CPython, but the lock makes the atomicity guarantee
+        explicit + survives a future refactor that would introduce an
+        await between read-and-write. Same lock as
+        :meth:`cancel_speech_chain`'s step-2 snapshot.
+        """
+        async with self._task_tracking_lock:
+            self._in_flight_tts_tasks.add(task)
+
+    async def _untrack_tts_task(self, task: asyncio.Task[Any]) -> None:
+        """Remove ``task`` from the in-flight set. Safe to call multiple times.
+
+        T1.13 — async + lock-guarded; same lock as :meth:`_track_tts_task`
+        and :meth:`cancel_speech_chain`'s step-2 snapshot.
+        """
+        async with self._task_tracking_lock:
+            self._in_flight_tts_tasks.discard(task)
 
     async def cancel_speech_chain(self, *, reason: str = "barge_in") -> None:
         """Run the four-step transactional cancellation chain (T1).
@@ -2315,7 +2344,16 @@ class VoicePipeline:
             # Step 2: cancel + await in-flight TTS tasks. Snapshot the
             # set so iteration is stable while tasks remove themselves
             # via _untrack_tts_task in their own finally blocks.
-            tasks_snapshot = tuple(self._in_flight_tts_tasks)
+            #
+            # T1.13 — snapshot acquires ``_task_tracking_lock`` briefly
+            # so a concurrent ``_track_tts_task`` cannot mutate the set
+            # mid-snapshot. Iteration runs OUTSIDE the lock so the
+            # awaits below don't block new TTS tasks indefinitely (the
+            # residual race — new tasks created during iteration are
+            # caught by the cognitive layer's LLM-cancel hook in
+            # step 3, not by this snapshot).
+            async with self._task_tracking_lock:
+                tasks_snapshot = tuple(self._in_flight_tts_tasks)
             cancelled_count = 0
             timeout_count = 0
             for task in tasks_snapshot:

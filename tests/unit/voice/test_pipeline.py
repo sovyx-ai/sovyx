@@ -1543,7 +1543,7 @@ class TestPipelineLifecycleHardening:
                 raise
 
         task = asyncio.create_task(_slow_tts(), name="test-fake-tts")
-        pipeline._track_tts_task(task)
+        await pipeline._track_tts_task(task)
         assert task in pipeline._in_flight_tts_tasks
         assert not task.done()
 
@@ -1576,7 +1576,7 @@ class TestPipelineLifecycleHardening:
                 await asyncio.sleep(2.0)
 
         task = asyncio.create_task(_wedged_tts(), name="test-wedged-tts")
-        pipeline._track_tts_task(task)
+        await pipeline._track_tts_task(task)
 
         loop = asyncio.get_running_loop()
         t0 = loop.time()
@@ -3913,12 +3913,12 @@ class TestCancellationChainT1:
             await asyncio.sleep(10.0)
 
         task = asyncio.create_task(_slow_synth())
-        pipeline._track_tts_task(task)
+        await pipeline._track_tts_task(task)
         try:
             await pipeline.cancel_speech_chain(reason="barge_in")
             assert task.cancelled() or task.done()
         finally:
-            pipeline._untrack_tts_task(task)
+            await pipeline._untrack_tts_task(task)
 
         events = _events_of(caplog, "voice.tts.cancellation_chain")
         assert len(events) == 1
@@ -4112,14 +4112,75 @@ class TestCancellationChainT1:
             return None
 
         task = asyncio.create_task(_noop())
-        pipeline._track_tts_task(task)
+        await pipeline._track_tts_task(task)
         assert task in pipeline._in_flight_tts_tasks
-        pipeline._untrack_tts_task(task)
+        await pipeline._untrack_tts_task(task)
         assert task not in pipeline._in_flight_tts_tasks
         # Untrack is idempotent.
-        pipeline._untrack_tts_task(task)
+        await pipeline._untrack_tts_task(task)
         assert task not in pipeline._in_flight_tts_tasks
         await task
+
+    @pytest.mark.asyncio
+    async def test_track_tts_task_lock_protects_concurrent_snapshot_t113(self) -> None:
+        """T1.13 — ``_track_tts_task`` and ``cancel_speech_chain``
+        step-2 snapshot share ``_task_tracking_lock``, so a snapshot
+        cannot interleave mid-mutation. This test holds the lock from
+        outside, fires both a track-attempt and a snapshot-attempt as
+        concurrent tasks, and asserts both block until the test
+        releases — proving the lock genuinely serializes the two
+        operations.
+
+        Pinning this contract guards against a future refactor that
+        swaps ``async with self._task_tracking_lock`` for an unguarded
+        bare-set-mutation (which would silently lose the atomicity
+        guarantee the spec requires).
+        """
+        pipeline, _ = _make_pipeline()
+
+        async def _noop() -> None:
+            return None
+
+        track_task_completed = asyncio.Event()
+        snapshot_completed = asyncio.Event()
+
+        async def _do_track() -> None:
+            new_task = asyncio.create_task(_noop())
+            await pipeline._track_tts_task(new_task)
+            track_task_completed.set()
+            await new_task  # cleanup
+
+        async def _do_snapshot() -> None:
+            async with pipeline._task_tracking_lock:
+                _ = tuple(pipeline._in_flight_tts_tasks)
+            snapshot_completed.set()
+
+        # Hold the lock from the test so both background tasks block.
+        await pipeline._task_tracking_lock.acquire()
+        try:
+            track_bg = asyncio.create_task(_do_track())
+            snapshot_bg = asyncio.create_task(_do_snapshot())
+
+            # Yield enough times for both to reach the lock-await.
+            for _ in range(5):
+                await asyncio.sleep(0)
+
+            assert not track_task_completed.is_set(), (
+                "_track_tts_task must block on _task_tracking_lock when "
+                "the test holds it — concurrent mutation is structurally "
+                "impossible"
+            )
+            assert not snapshot_completed.is_set(), (
+                "snapshot must block on _task_tracking_lock when the test holds it"
+            )
+        finally:
+            pipeline._task_tracking_lock.release()
+
+        # After release, both proceed.
+        await asyncio.wait_for(track_bg, timeout=1.0)
+        await asyncio.wait_for(snapshot_bg, timeout=1.0)
+        assert track_task_completed.is_set()
+        assert snapshot_completed.is_set()
 
     # ── Band-aid #15 final fix: text-buffer cleanup in chain ───
     @pytest.mark.asyncio
