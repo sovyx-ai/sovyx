@@ -42,8 +42,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import math
-import re
 import sys
 import time
 from typing import TYPE_CHECKING, Any
@@ -90,6 +88,18 @@ from sovyx.voice.capture._exceptions import (
 from sovyx.voice.capture._exceptions import (
     CaptureSilenceError as CaptureSilenceError,
 )
+
+# T1.4 step 4 — pure helpers (RMS dBFS, dBFS regex parsing, device-
+# entry resolver) extracted to ``voice/capture/_helpers``. Re-exported
+# via the explicit ``import X as X`` pattern so existing imports —
+# particularly ``test_capture_task.py`` which imports
+# ``_extract_peak_db`` and ``_resolve_input_entry`` directly — keep
+# working without an import-path migration.
+from sovyx.voice.capture._helpers import _PEAK_DB_RE as _PEAK_DB_RE
+from sovyx.voice.capture._helpers import _RMS_FLOOR_DB as _RMS_FLOOR_DB
+from sovyx.voice.capture._helpers import _extract_peak_db as _extract_peak_db
+from sovyx.voice.capture._helpers import _resolve_input_entry as _resolve_input_entry
+from sovyx.voice.capture._helpers import _rms_db_int16 as _rms_db_int16
 
 # T1.4 step 1 — restart-verdict types + dataclasses + metric emitters
 # extracted to ``voice/capture/_restart`` per master mission Phase 1
@@ -184,9 +194,6 @@ _HEARTBEAT_INTERVAL_S = _VoiceTuning().capture_heartbeat_interval_seconds
 _RING_EPOCH_SHIFT = 40
 _RING_SAMPLES_MASK = (1 << _RING_EPOCH_SHIFT) - 1
 
-# Floor for log10 — 32-bit PCM noise ≈ -96 dBFS, so -120 is safely below.
-_RMS_FLOOR_DB = -120.0
-
 
 # ── Band-aid #9 replacement — sustained-underrun detection ───────────
 #
@@ -246,23 +253,6 @@ fire one WARN per consumer-loop iteration, drowning the dashboard.
 30 s matches the typical operator response cadence — long enough
 that a recovering condition self-suppresses, short enough that an
 unattended outage produces a regular drumbeat in the log feed."""
-
-
-def _rms_db_int16(frame: Any) -> float:  # noqa: ANN401 — numpy int16 array; Any keeps numpy lazy-imported
-    """Compute dBFS RMS of an int16 buffer — safe for silent / empty buffers.
-
-    Returns ``_RMS_FLOOR_DB`` for empty or all-zero frames to keep the
-    output finite.
-    """
-    import numpy as np
-
-    if frame is None or len(frame) == 0:
-        return _RMS_FLOOR_DB
-    # int16 max magnitude = 32767 — normalise to [-1, 1] to get dBFS.
-    sample_sq = np.mean(np.square(frame.astype(np.float32) / 32768.0))
-    if sample_sq <= 0 or not math.isfinite(float(sample_sq)):
-        return _RMS_FLOOR_DB
-    return float(10.0 * math.log10(float(sample_sq)))
 
 
 class AudioCaptureTask:
@@ -2236,78 +2226,3 @@ class AudioCaptureTask:
         self._last_heartbeat_monotonic = now
         self._frames_since_heartbeat = 0
         self._silent_frames_since_heartbeat = 0
-
-
-_PEAK_DB_RE = re.compile(r"peak\s+(-?\d+(?:\.\d+)?)\s*dBFS", re.IGNORECASE)
-
-
-def _extract_peak_db(detail: str | None) -> float:
-    """Parse ``peak -XX.X dBFS`` out of an opener silence-attempt detail.
-
-    The opener formats silence attempts as
-    ``"silent stream (peak -96.0 dBFS < threshold -80.0 dBFS)"``.
-    Returns :data:`_RMS_FLOOR_DB` when the pattern is absent so callers
-    can still aggregate a worst-case peak across attempts.
-    """
-    if not detail:
-        return _RMS_FLOOR_DB
-    match = _PEAK_DB_RE.search(detail)
-    if match is None:
-        return _RMS_FLOOR_DB
-    try:
-        return float(match.group(1))
-    except ValueError:
-        return _RMS_FLOOR_DB
-
-
-def _resolve_input_entry(
-    *,
-    input_device: int | str | None,
-    enumerate_fn: Callable[[], list[DeviceEntry]] | None,
-    host_api_name: str | None,
-) -> DeviceEntry:
-    """Resolve a capture-task input selector to a live :class:`DeviceEntry`.
-
-    Matching order:
-
-    1. Exact PortAudio index (``int``) when provided.
-    2. Canonical device name (``str``) optionally refined by
-       ``host_api_name`` — lets the wizard persist a stable identifier
-       across reboots where indices shuffle.
-    3. First OS-default input, or the first available input entry.
-
-    Raises :class:`RuntimeError` when the host exposes no input devices
-    at all so :meth:`AudioCaptureTask.start` can fail loudly instead of
-    silently opening the OS default.
-    """
-    if enumerate_fn is not None:
-        entries = enumerate_fn()
-    else:
-        from sovyx.voice.device_enum import enumerate_devices
-
-        entries = enumerate_devices()
-
-    candidates = [e for e in entries if e.max_input_channels > 0]
-    if not candidates:
-        msg = "No audio input devices available"
-        raise RuntimeError(msg)
-
-    if isinstance(input_device, int):
-        for entry in candidates:
-            if entry.index == input_device:
-                return entry
-
-    if isinstance(input_device, str) and input_device:
-        from sovyx.voice.device_enum import _canonicalise
-
-        canonical = _canonicalise(input_device)
-        matches = [e for e in candidates if e.canonical_name == canonical]
-        if host_api_name:
-            for entry in matches:
-                if entry.host_api_name == host_api_name:
-                    return entry
-        if matches:
-            return matches[0]
-
-    defaults = [e for e in candidates if e.is_os_default]
-    return defaults[0] if defaults else candidates[0]

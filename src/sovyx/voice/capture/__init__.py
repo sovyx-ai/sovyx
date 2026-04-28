@@ -29,6 +29,13 @@ from sovyx.voice.capture._exceptions import (
     CaptureInoperativeError,
     CaptureSilenceError,
 )
+from sovyx.voice.capture._helpers import (
+    _PEAK_DB_RE,
+    _RMS_FLOOR_DB,
+    _extract_peak_db,
+    _resolve_input_entry,
+    _rms_db_int16,
+)
 from sovyx.voice.capture._restart import (
     _LINUX_ALSA_HOST_API,
     _LINUX_SESSION_MANAGER_HOST_APIS,
@@ -61,11 +68,16 @@ __all__ = [
     "SessionManagerRestartVerdict",
     "SharedRestartResult",
     "SharedRestartVerdict",
+    "_PEAK_DB_RE",
+    "_RMS_FLOOR_DB",
     "_SESSION_MANAGER_CONTENTION_ERROR_CODES",
     "_emit_alsa_hw_direct_restart_metric",
     "_emit_exclusive_restart_metric",
     "_emit_session_manager_restart_metric",
     "_emit_shared_restart_metric",
+    "_extract_peak_db",
     "_is_session_manager_contention_pattern",
+    "_resolve_input_entry",
+    "_rms_db_int16",
     "_suggest_session_manager_alternatives",
 ]
