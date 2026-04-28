@@ -528,6 +528,36 @@ class VoiceTuningConfig(BaseSettings):
     worst case. The watchdog uses an invocation-counter guard so a
     fired-late watchdog from a completed invocation cannot
     accidentally clear the flag of a SUBSEQUENT invocation."""
+
+    pipeline_speaker_consistency_enabled: bool = Field(default=True)
+    """T1.39 — gate the spectral-centroid drift detector. ``True``
+    enables :class:`sovyx.voice._speaker_consistency.SpeakerConsistencyMonitor`
+    on every successful TTS chunk synthesis (~50 µs DSP cost per chunk).
+    Default True; set ``False`` for resource-constrained deployments
+    (Pi, low-power embedded) that don't need the drift signal."""
+
+    pipeline_speaker_drift_window_size: int = Field(default=5, ge=2, le=50)
+    """T1.39 — rolling-window size for the spectral-centroid baseline.
+    The first N-1 chunks build the baseline (no alert); from chunk N
+    onward each new centroid is compared to the rolling mean. Default
+    5 is noise-resistant (a single anomalous chunk falls out of the
+    window after N synthesis cycles) yet quick to detect a sustained
+    drift. Floor 2 prevents single-sample baselines (any drift would
+    fire); ceiling 50 prevents a baseline so smooth that a real drift
+    takes minutes to surface."""
+
+    pipeline_speaker_drift_ratio_threshold: float = Field(default=0.05, ge=0.01, le=1.0)
+    """T1.39 — relative-drift threshold above which the WARN +
+    PipelineErrorEvent fires. Computed as
+    ``|centroid - baseline| / baseline > threshold``. Default 0.05
+    (5%) matches the spec text and is empirically the perceptual
+    threshold for "the voice changed" on a typical 2.0 kHz speech
+    centroid (≈ 100 Hz drift, comparable to a semitone). Operators
+    seeing false positives on high-variance voices (operatic,
+    expressive synthesis) should bump this; operators wanting a
+    tighter alert can reduce it. Floor 0.01 prevents alarm-storm on
+    natural variance; ceiling 1.0 is the upper-bound (a 100 % drift
+    means the centroid moved by an octave — pathological)."""
     # Ordered host-API preference for the opener's pyramid fallback.
     # VLX-007 added "PipeWire" + "PulseAudio" + "JACK" to cover builds
     # of PortAudio that expose those backends as standalone host APIs

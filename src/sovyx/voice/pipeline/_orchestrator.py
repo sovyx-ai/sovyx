@@ -14,6 +14,10 @@ from sovyx.observability.saga import SagaHandle, begin_saga, end_saga
 from sovyx.observability.tasks import spawn
 from sovyx.voice._chaos import ChaosInjector, ChaosSite
 from sovyx.voice._observability_pii import mint_utterance_id
+from sovyx.voice._speaker_consistency import (
+    SpeakerConsistencyMonitor,
+    compute_spectral_centroid,
+)
 from sovyx.voice.health._metrics import record_time_to_first_utterance
 from sovyx.voice.health.contract import BypassVerdict
 from sovyx.voice.jarvis import JarvisConfig, JarvisIllusion, split_at_boundaries
@@ -173,6 +177,19 @@ the canonical schema with bound-validators."""
 _COORDINATOR_PENDING_TIMEOUT_S = _VoiceTuning().pipeline_coordinator_pending_timeout_seconds
 """T1.14 watchdog deadline — see
 ``VoiceTuningConfig.pipeline_coordinator_pending_timeout_seconds``."""
+
+
+_SPEAKER_CONSISTENCY_ENABLED = _VoiceTuning().pipeline_speaker_consistency_enabled
+"""T1.39 — gate for the spectral-centroid drift detector. See
+``VoiceTuningConfig.pipeline_speaker_consistency_enabled``."""
+
+_SPEAKER_DRIFT_WINDOW_SIZE = _VoiceTuning().pipeline_speaker_drift_window_size
+"""T1.39 — rolling-window size. See
+``VoiceTuningConfig.pipeline_speaker_drift_window_size``."""
+
+_SPEAKER_DRIFT_RATIO_THRESHOLD = _VoiceTuning().pipeline_speaker_drift_ratio_threshold
+"""T1.39 — relative-drift threshold. See
+``VoiceTuningConfig.pipeline_speaker_drift_ratio_threshold``."""
 
 
 class VoicePipeline:
@@ -375,6 +392,23 @@ class VoicePipeline:
         # emission. Only the wake-word path contributes (barge-in uses a
         # different SpeechStartedEvent site in _transition_to_recording).
         self._wake_detected_monotonic: float | None = None
+
+        # T1.39 — spectral-centroid drift detector. Per-pipeline state
+        # so each pipeline instance has its own rolling window;
+        # ``reset()`` is called at every WAKE_DETECTED transition so a
+        # voice swap across sessions doesn't false-trigger on the first
+        # chunk of the new session. ``None`` when the gate is disabled
+        # via ``pipeline_speaker_consistency_enabled=False`` —
+        # downstream call sites guard with ``is not None`` so the
+        # disabled path is fully cost-free.
+        self._speaker_consistency: SpeakerConsistencyMonitor | None = (
+            SpeakerConsistencyMonitor(
+                window_size=_SPEAKER_DRIFT_WINDOW_SIZE,
+                drift_ratio_threshold=_SPEAKER_DRIFT_RATIO_THRESHOLD,
+            )
+            if _SPEAKER_CONSISTENCY_ENABLED
+            else None
+        )
 
         # Frame inter-arrival tracking. O3 splits the pre-existing
         # single relative threshold into two complementary detectors:
@@ -997,6 +1031,16 @@ class VoicePipeline:
         if ww_event.detected:
             self._state = VoicePipelineState.WAKE_DETECTED
             self._wake_detected_monotonic = time.monotonic()
+            # T1.39 — reset the spectral-centroid baseline on every
+            # session boundary. A new session may legitimately use a
+            # different voice (operator switched mind / cognitive
+            # layer picked a different persona); carrying the prior
+            # session's baseline across the boundary would surface a
+            # false-positive drift on the first chunk of the new
+            # session. Cheap (deque.clear()); no-op when the gate
+            # is disabled.
+            if self._speaker_consistency is not None:
+                self._speaker_consistency.reset()
             # Mission §2.6 Ring 6 — mint trace id BEFORE the first
             # event so WakeWordDetectedEvent is the head of the
             # per-utterance span set. Every downstream emission
@@ -1571,6 +1615,17 @@ class VoicePipeline:
             try:
                 chunk = await self._synthesize_tracked(segment)
                 await self._output.enqueue(chunk)
+                # T1.39 — observe the spectral-centroid drift on every
+                # successfully-emitted chunk. The DSP runs in a worker
+                # thread (CLAUDE.md anti-pattern #14 — keep CPU-bound
+                # work off the asyncio loop, even sub-millisecond
+                # bursts). On drift the WARN + PipelineErrorEvent
+                # mirror the T1.36 / T1.19 / T1.20 pattern; no
+                # automatic fallback (operator-disruptive without
+                # explicit opt-in). Skipped entirely when the gate is
+                # disabled so resource-constrained deployments pay
+                # zero DSP cost.
+                await self._observe_speaker_drift(chunk)
                 # Mission Phase 1 / T1.21 — successful segment resets
                 # the consecutive-failure counter so a transient
                 # hiccup mid-stream doesn't poison the rest of the
@@ -2316,6 +2371,71 @@ class VoicePipeline:
             self._filler_task.cancel()
             self._filler_task = None
         self._first_token_event.set()
+
+    async def _observe_speaker_drift(self, chunk: Any) -> None:  # noqa: ANN401 — TTS chunk type varies by engine
+        """Observe spectral-centroid drift on the freshly-emitted chunk.
+
+        T1.39 — runs the centroid DSP in a worker thread (CLAUDE.md
+        anti-pattern #14) and observes the result against the per-
+        session rolling-window baseline. On drift exceeding
+        :data:`_SPEAKER_DRIFT_RATIO_THRESHOLD` emits a structured
+        WARN + :class:`PipelineErrorEvent` and continues — no
+        automatic voice swap (too disruptive without operator opt-in;
+        operators wanting fallback wire it via the existing
+        ``synthesis_health`` field per T1.36).
+
+        No-op when the speaker-consistency gate is disabled, when the
+        chunk has no audio (zero-energy synthesis already covered by
+        T1.36's ``synthesis_health="zero_energy"`` path), or when the
+        rolling window is still warming up (first
+        ``window_size - 1`` chunks of every session).
+
+        The chunk type is engine-specific (``AudioChunk`` from
+        ``tts_kokoro`` / ``tts_piper``; the orchestrator works with
+        any value that has ``audio: npt.NDArray[np.int16]`` +
+        ``sample_rate: int``).
+        """
+        if self._speaker_consistency is None:
+            return
+        audio = getattr(chunk, "audio", None)
+        sample_rate = getattr(chunk, "sample_rate", 0)
+        if audio is None or sample_rate <= 0:
+            return
+        centroid = await asyncio.to_thread(
+            compute_spectral_centroid,
+            audio,
+            sample_rate,
+        )
+        drift, baseline, ratio = self._speaker_consistency.observe(centroid)
+        if not drift:
+            return
+        logger.warning(
+            "voice.tts.speaker_drift_detected",
+            **{
+                "voice.centroid_hz": round(centroid, 1),
+                "voice.baseline_hz": round(baseline, 1),
+                "voice.drift_ratio": round(ratio, 3),
+                "voice.threshold_ratio": _SPEAKER_DRIFT_RATIO_THRESHOLD,
+                "voice.window_size": _SPEAKER_DRIFT_WINDOW_SIZE,
+                "voice.utterance_id": self._current_utterance_id,
+                "voice.action_required": (
+                    "Spectral centroid drifted >"
+                    f"{int(_SPEAKER_DRIFT_RATIO_THRESHOLD * 100)}% from the "
+                    "rolling-window baseline. Likely causes: voice file "
+                    "partial download, ONNX session corruption, or a "
+                    "buggy caller passing a different voice_id mid-"
+                    "session. Check the TTS engine logs and run "
+                    "`sovyx doctor voice` to verify model integrity."
+                ),
+            },
+        )
+        await self._emit(
+            PipelineErrorEvent(
+                mind_id=self._config.mind_id,
+                error=(f"speaker_drift_detected (ratio={ratio:.3f}, baseline={baseline:.1f})"),
+                utterance_id=self._current_utterance_id,
+            )
+        )
 
     async def _synthesize_tracked(self, text: str) -> Any:  # noqa: ANN401 — TTS chunk type varies
         """Synthesise ``text`` via a tracked task so T1 can cancel it.
