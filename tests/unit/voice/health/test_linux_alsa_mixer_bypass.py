@@ -542,5 +542,10 @@ class TestBandAidDeprecationWarn:
         assert len(deprecation_calls) == 1
         kwargs = deprecation_calls[0].kwargs
         assert kwargs["voice.regime"] == "saturation"
-        assert kwargs["voice.removal_target"] == "v0.24.0"
+        # T1.51 — removal target bumped from v0.24.0 to v0.27.0 (Phase 4)
+        # because the bypass-coordinator wire-up gating Phase 2 + 3 must
+        # land first; aligned with the function-level deprecation WARN
+        # at ``_linux_mixer_apply.py::_emit_legacy_band_aid_warning``.
+        assert kwargs["voice.removal_target"] == "v0.27.0"
         assert "voice.action_required" in kwargs
+        assert "v0.27.0" in str(kwargs["voice.action_required"])

@@ -321,6 +321,226 @@ class TestAudioCaptureTaskFrameDelivery:
             await task.stop()
 
 
+class TestAudioCallbackUncaughtRaiseT130:
+    """T1.30 — ``_audio_callback`` MUST swallow every exception.
+
+    PortAudio invokes the callback on a dedicated audio thread that
+    sounddevice manages. A raise propagating out of the callback puts
+    sounddevice into ``CallbackAbort`` and stops the entire stream
+    silently — the daemon goes deaf without a structured signal
+    upstream. Post-T1.30 the body is wrapped in
+    ``try/except BaseException``, the error is logged via
+    ``voice.audio_callback.uncaught_raise``, and an empty marker
+    frame is queued so the consumer's ``await self._queue.get()``
+    unblocks (FrameNormalizer.push handles size==0 as a no-op).
+    """
+
+    @pytest.mark.asyncio()
+    async def test_callback_swallows_unexpected_raise_and_queues_empty_marker(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Callback body raises (simulated via ``indata.copy()`` failure).
+        The callback MUST return cleanly + the consumer's queue must
+        receive an empty marker frame.
+        """
+        pipeline = MagicMock()
+        pipeline.feed_frame = AsyncMock(return_value={"state": "IDLE"})
+
+        captured: dict[str, Any] = {}
+
+        def stream_factory(**kwargs: Any) -> MagicMock:
+            captured["cb"] = kwargs["callback"]
+            return MagicMock()
+
+        sd = _fake_sd()
+        sd.InputStream = stream_factory  # type: ignore[attr-defined]
+        entry = _input_entry(index=5)
+
+        task = AudioCaptureTask(
+            pipeline,
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [entry],
+        )
+        # Stop the consumer loop from draining the queue so this test
+        # can directly assert the empty marker landed.
+        task._queue = asyncio.Queue(maxsize=8)  # noqa: SLF001
+
+        try:
+            await task.start()
+            # Drain anything the start path may have queued (e.g. the
+            # validation bootstrap) so the empty marker assertion below
+            # is unambiguous.
+            while not task._queue.empty():  # noqa: SLF001
+                task._queue.get_nowait()  # noqa: SLF001
+
+            cb = captured["cb"]
+            bad_indata = MagicMock()
+            bad_indata.copy.side_effect = RuntimeError("simulated callback failure")
+
+            with caplog.at_level("ERROR", logger="sovyx.voice.capture._loop_mixin"):
+                # MUST NOT raise — pre-T1.30 this would propagate the
+                # RuntimeError up through PortAudio and CallbackAbort
+                # the stream.
+                cb(bad_indata, 512, None, None)
+
+            # Drain the asyncio loop so the queued empty marker
+            # materialises.
+            for _ in range(10):
+                await asyncio.sleep(0)
+                if not task._queue.empty():  # noqa: SLF001
+                    break
+
+            # Empty marker frame queued.
+            frame = task._queue.get_nowait()  # noqa: SLF001
+            assert frame.size == 0, (
+                f"expected empty marker frame on the error path, got size {frame.size}"
+            )
+            assert frame.dtype == np.int16
+
+            # Structured error event logged.
+            error_records = [
+                r
+                for r in caplog.records
+                if isinstance(r.msg, dict)
+                and r.msg.get("event") == "voice.audio_callback.uncaught_raise"
+            ]
+            assert len(error_records) == 1
+            payload = error_records[0].msg
+            assert payload["error_type"] == "RuntimeError"
+            assert "simulated callback failure" in str(payload["error"])
+        finally:
+            await task.stop()
+
+
+class TestConsumerLoopHeartbeatDriftT131:
+    """T1.31 — pin ``_maybe_emit_heartbeat`` against Windows clock drift.
+
+    Master mission Phase 1 / T1.31 asked for swapping
+    ``time.monotonic()`` for ``time.perf_counter()`` on Windows
+    because the default Windows monotonic clock ticks at ~15.6 ms
+    (CLAUDE.md anti-pattern #22). At HEAD the heartbeat interval is
+    2.0 seconds (``_HEARTBEAT_INTERVAL_S = capture_heartbeat_interval_seconds``,
+    defaults to 2.0 in :class:`VoiceTuningConfig`), so the worst-
+    case 15.6 ms tick boundary represents 0.78 % drift — well
+    within tolerance for an INFO-level diagnostic.
+
+    The strict ``<`` comparison in
+    ``_maybe_emit_heartbeat`` (``if now - self._last_heartbeat_monotonic < _HEARTBEAT_INTERVAL_S: return``)
+    correctly fires when ``now`` reaches exactly the deadline.
+    Same-tick repeated reads (the failure mode CLAUDE.md
+    anti-pattern #24 calls out for sub-tick TTLs) are not a
+    concern at 2.0-second granularity.
+
+    These tests pin the contract so a future refactor can't
+    silently regress (e.g. by tightening the interval to a
+    sub-tick value or by flipping ``<`` to ``>``).
+    """
+
+    def _build_task(self) -> AudioCaptureTask:
+        sd = _fake_sd()
+        sd.InputStream = MagicMock(return_value=MagicMock())  # type: ignore[attr-defined]
+        entry = _input_entry(index=5)
+        return AudioCaptureTask(
+            MagicMock(),
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [entry],
+        )
+
+    def test_heartbeat_does_not_fire_before_interval_elapsed(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A read inside the interval window MUST NOT fire the
+        heartbeat — the strict ``<`` comparison guarantees no early
+        emission even when the monotonic clock advances at coarse
+        15.6 ms ticks.
+        """
+        task = self._build_task()
+        task._last_heartbeat_monotonic = 1000.0  # noqa: SLF001
+        # 1.5s elapsed (well under the 2.0s default interval).
+        with (
+            patch("sovyx.voice.capture._loop_mixin.time.monotonic", return_value=1001.5),
+            caplog.at_level("INFO", logger="sovyx.voice.capture._loop_mixin"),
+        ):
+            task._maybe_emit_heartbeat()  # noqa: SLF001
+        assert not any(
+            isinstance(r.msg, dict) and r.msg.get("event") == "audio_capture_heartbeat"
+            for r in caplog.records
+        )
+
+    def test_heartbeat_fires_at_exact_interval_boundary(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Reading at exactly ``last + _HEARTBEAT_INTERVAL_S`` MUST
+        fire the heartbeat. The comparison is ``now - last <
+        _HEARTBEAT_INTERVAL_S`` (strict ``<``); ``2.0 < 2.0`` is
+        ``False`` so the body runs. Coarse-clock systems where
+        ``now`` lands a tick AFTER the deadline (e.g. 2.0156s on
+        Windows) also fire — both cases verified.
+        """
+        from sovyx.voice._capture_task import _HEARTBEAT_INTERVAL_S
+
+        task = self._build_task()
+        task._last_heartbeat_monotonic = 1000.0  # noqa: SLF001
+
+        # Exactly at the deadline.
+        with (
+            patch(
+                "sovyx.voice.capture._loop_mixin.time.monotonic",
+                return_value=1000.0 + _HEARTBEAT_INTERVAL_S,
+            ),
+            caplog.at_level("INFO", logger="sovyx.voice.capture._loop_mixin"),
+        ):
+            task._maybe_emit_heartbeat()  # noqa: SLF001
+        events_at_boundary = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict) and r.msg.get("event") == "audio_capture_heartbeat"
+        ]
+        assert len(events_at_boundary) == 1, (
+            f"heartbeat MUST fire at exact interval boundary "
+            f"(now - last = {_HEARTBEAT_INTERVAL_S}s, comparison "
+            f"is `<`); got {len(events_at_boundary)} events"
+        )
+
+    def test_heartbeat_fires_one_windows_tick_past_interval(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """One 15.6 ms Windows tick PAST the interval boundary MUST
+        also fire — pins the Windows-coarse-clock case explicitly.
+        Worst-case drift: ~0.78 % at 2.0 s interval, well within
+        tolerance for INFO-level diagnostic.
+        """
+        from sovyx.voice._capture_task import _HEARTBEAT_INTERVAL_S
+
+        task = self._build_task()
+        task._last_heartbeat_monotonic = 1000.0  # noqa: SLF001
+
+        # Worst-case Windows tick boundary: deadline + 15.6 ms.
+        with (
+            patch(
+                "sovyx.voice.capture._loop_mixin.time.monotonic",
+                return_value=1000.0 + _HEARTBEAT_INTERVAL_S + 0.0156,
+            ),
+            caplog.at_level("INFO", logger="sovyx.voice.capture._loop_mixin"),
+        ):
+            task._maybe_emit_heartbeat()  # noqa: SLF001
+        windows_tick_events = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict) and r.msg.get("event") == "audio_capture_heartbeat"
+        ]
+        assert len(windows_tick_events) == 1, (
+            "heartbeat MUST fire one Windows clock tick past the "
+            "interval — 0.78 % drift on a 2.0 s interval is within "
+            "tolerance for the INFO-level diagnostic"
+        )
+
+
 class TestAudioCaptureTaskReconnect:
     """Device disconnection in the consume loop triggers reopen via the opener."""
 
@@ -351,7 +571,15 @@ class TestAudioCaptureTaskReconnect:
         sd.InputStream = stream_factory  # type: ignore[attr-defined]
         entry = _input_entry(index=5)
 
-        monkeypatch.setattr("sovyx.voice._capture_task._RECONNECT_DELAY_S", 0.0)
+        # T1.4 step 9b — _consume_loop moved to LoopMixin and imports
+        # _RECONNECT_DELAY_S directly from `voice/capture/_constants`.
+        # The local binding in `_loop_mixin` is what the consume loop
+        # reads, so the monkeypatch must target that path (CLAUDE.md
+        # anti-pattern #20). Pre-fix this patched
+        # `_capture_task._RECONNECT_DELAY_S` and was a silent no-op:
+        # the test passed only because the 5 s poll window was wide
+        # enough to cover the unpatched 2 s default + jitter.
+        monkeypatch.setattr("sovyx.voice.capture._loop_mixin._RECONNECT_DELAY_S", 0.0)
 
         task = AudioCaptureTask(
             pipeline,
@@ -1237,13 +1465,13 @@ class TestSustainedUnderrunDetection:
 
         task = _bare_task_with_underrun_state()
         # Arm window at t=0.
-        with patch("sovyx.voice._capture_task.time.monotonic", return_value=0.0):
+        with patch("sovyx.voice.capture._loop_mixin.time.monotonic", return_value=0.0):
             task._check_sustained_underrun_rate()  # noqa: SLF001
         # Roll the window AFTER 11 s (>10 s window) but only 10 callbacks
         # observed, all underruns. Below 50-callback floor → no warn.
         task._stream_callback_frames = 10  # noqa: SLF001
         task._stream_underruns = 10  # noqa: SLF001
-        with patch("sovyx.voice._capture_task.time.monotonic", return_value=11.0):
+        with patch("sovyx.voice.capture._loop_mixin.time.monotonic", return_value=11.0):
             task._check_sustained_underrun_rate()  # noqa: SLF001
         assert task._last_underrun_warning_monotonic is None  # noqa: SLF001
 
@@ -1253,12 +1481,12 @@ class TestSustainedUnderrunDetection:
         from unittest.mock import patch
 
         task = _bare_task_with_underrun_state()
-        with patch("sovyx.voice._capture_task.time.monotonic", return_value=0.0):
+        with patch("sovyx.voice.capture._loop_mixin.time.monotonic", return_value=0.0):
             task._check_sustained_underrun_rate()  # noqa: SLF001
         # 100 callbacks, 1 underrun = 1% — below 5% threshold.
         task._stream_callback_frames = 100  # noqa: SLF001
         task._stream_underruns = 1  # noqa: SLF001
-        with patch("sovyx.voice._capture_task.time.monotonic", return_value=11.0):
+        with patch("sovyx.voice.capture._loop_mixin.time.monotonic", return_value=11.0):
             task._check_sustained_underrun_rate()  # noqa: SLF001
         assert task._last_underrun_warning_monotonic is None  # noqa: SLF001
 
@@ -1271,14 +1499,14 @@ class TestSustainedUnderrunDetection:
         from unittest.mock import patch
 
         task = _bare_task_with_underrun_state()
-        with patch("sovyx.voice._capture_task.time.monotonic", return_value=0.0):
+        with patch("sovyx.voice.capture._loop_mixin.time.monotonic", return_value=0.0):
             task._check_sustained_underrun_rate()  # noqa: SLF001
         # 200 callbacks, 20 underruns = 10% — above 5% threshold.
         task._stream_callback_frames = 200  # noqa: SLF001
         task._stream_underruns = 20  # noqa: SLF001
         with (
             caplog.at_level(logging.WARNING),
-            patch("sovyx.voice._capture_task.time.monotonic", return_value=11.0),
+            patch("sovyx.voice.capture._loop_mixin.time.monotonic", return_value=11.0),
         ):
             task._check_sustained_underrun_rate()  # noqa: SLF001
         assert task._last_underrun_warning_monotonic == 11.0  # noqa: SLF001
@@ -1309,14 +1537,14 @@ class TestSustainedUnderrunDetection:
 
         task = _bare_task_with_underrun_state()
         # Arm window.
-        with patch("sovyx.voice._capture_task.time.monotonic", return_value=0.0):
+        with patch("sovyx.voice.capture._loop_mixin.time.monotonic", return_value=0.0):
             task._check_sustained_underrun_rate()  # noqa: SLF001
         # First breach → fires.
         task._stream_callback_frames = 200  # noqa: SLF001
         task._stream_underruns = 20  # noqa: SLF001
         with caplog.at_level(logging.WARNING):
             with patch(
-                "sovyx.voice._capture_task.time.monotonic",
+                "sovyx.voice.capture._loop_mixin.time.monotonic",
                 return_value=11.0,
             ):
                 task._check_sustained_underrun_rate()  # noqa: SLF001
@@ -1324,7 +1552,7 @@ class TestSustainedUnderrunDetection:
             task._stream_callback_frames = 400  # noqa: SLF001
             task._stream_underruns = 40  # noqa: SLF001
             with patch(
-                "sovyx.voice._capture_task.time.monotonic",
+                "sovyx.voice.capture._loop_mixin.time.monotonic",
                 return_value=22.0,
             ):
                 task._check_sustained_underrun_rate()  # noqa: SLF001
@@ -1345,17 +1573,17 @@ class TestSustainedUnderrunDetection:
         from unittest.mock import patch
 
         task = _bare_task_with_underrun_state()
-        with patch("sovyx.voice._capture_task.time.monotonic", return_value=0.0):
+        with patch("sovyx.voice.capture._loop_mixin.time.monotonic", return_value=0.0):
             task._check_sustained_underrun_rate()  # noqa: SLF001
         task._stream_callback_frames = 200  # noqa: SLF001
         task._stream_underruns = 20  # noqa: SLF001
         with caplog.at_level(logging.WARNING):
-            with patch("sovyx.voice._capture_task.time.monotonic", return_value=11.0):
+            with patch("sovyx.voice.capture._loop_mixin.time.monotonic", return_value=11.0):
                 task._check_sustained_underrun_rate()  # noqa: SLF001
             # 35 s after first WARN — past the 30 s rate-limit gap.
             task._stream_callback_frames = 400  # noqa: SLF001
             task._stream_underruns = 40  # noqa: SLF001
-            with patch("sovyx.voice._capture_task.time.monotonic", return_value=46.0):
+            with patch("sovyx.voice.capture._loop_mixin.time.monotonic", return_value=46.0):
                 task._check_sustained_underrun_rate()  # noqa: SLF001
         events = [
             r.msg
@@ -1371,13 +1599,109 @@ class TestSustainedUnderrunDetection:
         from unittest.mock import patch
 
         task = _bare_task_with_underrun_state()
-        with patch("sovyx.voice._capture_task.time.monotonic", return_value=0.0):
+        with patch("sovyx.voice.capture._loop_mixin.time.monotonic", return_value=0.0):
             task._check_sustained_underrun_rate()  # noqa: SLF001
         task._stream_callback_frames = 100  # noqa: SLF001
         task._stream_underruns = 1  # 1% — below threshold.  # noqa: SLF001
-        with patch("sovyx.voice._capture_task.time.monotonic", return_value=11.0):
+        with patch("sovyx.voice.capture._loop_mixin.time.monotonic", return_value=11.0):
             task._check_sustained_underrun_rate()  # noqa: SLF001
         # Window snapshots advance even though no warn fired.
         assert task._underrun_window_started_at == 11.0  # noqa: SLF001
         assert task._underrun_window_callbacks_at_start == 100  # noqa: SLF001
         assert task._underrun_window_underruns_at_start == 1  # noqa: SLF001
+
+
+class TestMixinMroResolution:
+    """Pin CLAUDE.md anti-pattern #32 — mixin method-via-MRO stub trap.
+
+    T1.4 step 9b caught a subtle bug where a naive ``def
+    _reopen_stream_after_device_error(self) -> None: ...`` stub on
+    LoopMixin shadowed the real method on RestartMixin (which sits
+    AFTER LoopMixin in ``AudioCaptureTask`` MRO). The stub WINS MRO
+    resolution and silently returns ``None`` — the consume-loop
+    reconnect path then completes "successfully" without ever
+    calling the unified opener.
+
+    Fix shipped in commit ``7e16ad8``: declare the cross-mixin
+    reference inside ``if TYPE_CHECKING:`` so the body is type-
+    check-only and erased at runtime, letting MRO fall through to
+    RestartMixin. These tests pin the contract so a future refactor
+    that replaces the TYPE_CHECKING-block declaration with a real
+    ``def`` stub is caught immediately.
+    """
+
+    def test_reopen_stream_resolves_to_restart_mixin_not_loop_mixin(self) -> None:
+        """``AudioCaptureTask._reopen_stream_after_device_error`` MUST
+        resolve to :class:`RestartMixin` via MRO — not to a stub on
+        :class:`LoopMixin`. If a future change adds a ``def`` stub to
+        LoopMixin, MRO would resolve to that stub (since LoopMixin is
+        earlier than RestartMixin) and the test catches it.
+        """
+        from sovyx.voice.capture._restart_mixin import RestartMixin
+
+        method = AudioCaptureTask._reopen_stream_after_device_error  # noqa: SLF001
+        # qualname carries the class where the method is DEFINED, so
+        # this is the cleanest cross-Python-version check that MRO
+        # found RestartMixin's real implementation.
+        assert method.__qualname__ == "RestartMixin._reopen_stream_after_device_error", (
+            f"Expected MRO to resolve _reopen_stream_after_device_error to "
+            f"RestartMixin (real implementation), but got {method.__qualname__!r}. "
+            f"This typically means a stub method was added to LoopMixin or another "
+            f"mixin earlier in MRO. See CLAUDE.md anti-pattern #32 — cross-mixin "
+            f"references whose target lives AFTER the calling mixin in MRO must "
+            f"use `if TYPE_CHECKING:` blocks, NOT real `def` stubs."
+        )
+        # Defence-in-depth: confirm the resolved method is the same
+        # function object as RestartMixin's class attribute.
+        assert method is RestartMixin._reopen_stream_after_device_error  # noqa: SLF001
+
+    def test_loop_mixin_does_not_define_reopen_stream_at_runtime(self) -> None:
+        """:class:`LoopMixin` MUST NOT have a runtime
+        ``_reopen_stream_after_device_error`` attribute on its class
+        ``__dict__``. The TYPE_CHECKING-block declaration is erased at
+        runtime (``TYPE_CHECKING`` is ``False`` outside type-check
+        passes), so the attribute should not appear in
+        ``LoopMixin.__dict__``. If a refactor accidentally moves the
+        declaration outside the TYPE_CHECKING block, this test fails
+        and the MRO trap returns.
+        """
+        from sovyx.voice.capture._loop_mixin import LoopMixin
+
+        assert "_reopen_stream_after_device_error" not in LoopMixin.__dict__, (
+            "LoopMixin defines _reopen_stream_after_device_error at runtime; "
+            "this WILL shadow RestartMixin's real implementation via MRO. "
+            "Move the declaration inside `if TYPE_CHECKING:` per CLAUDE.md "
+            "anti-pattern #32."
+        )
+
+    def test_audio_capture_task_mro_order_loop_before_restart(self) -> None:
+        """The MRO trap detection only matters when LoopMixin precedes
+        RestartMixin. Pin the current order so a future inheritance
+        re-shuffle that swaps them is caught — at that point the
+        TYPE_CHECKING-block trick on LoopMixin becomes unnecessary
+        (the regression-test invariants would adjust accordingly).
+        """
+        from sovyx.voice.capture._lifecycle_mixin import LifecycleMixin
+        from sovyx.voice.capture._loop_mixin import LoopMixin
+        from sovyx.voice.capture._restart_mixin import RestartMixin
+
+        mro = AudioCaptureTask.__mro__
+        loop_idx = mro.index(LoopMixin)
+        restart_idx = mro.index(RestartMixin)
+        lifecycle_idx = mro.index(LifecycleMixin)
+        # LoopMixin precedes RestartMixin → the trap exists, the
+        # TYPE_CHECKING-block fix is required.
+        assert loop_idx < restart_idx, (
+            f"AudioCaptureTask MRO has LoopMixin at {loop_idx} but RestartMixin "
+            f"at {restart_idx} — expected LoopMixin first. If the order is now "
+            f"reversed, the cross-mixin TYPE_CHECKING-block declaration in "
+            f"LoopMixin can be replaced with a regular `def` stub."
+        )
+        # LifecycleMixin precedes LoopMixin so LoopMixin's `_close_stream`
+        # stub is safely shadowed by LifecycleMixin's real method.
+        assert lifecycle_idx < loop_idx, (
+            f"AudioCaptureTask MRO has LifecycleMixin at {lifecycle_idx} but "
+            f"LoopMixin at {loop_idx} — expected LifecycleMixin first so its "
+            f"_close_stream / _emit_stream_opened / _signal_consumer_shutdown "
+            f"shadow LoopMixin's stubs."
+        )

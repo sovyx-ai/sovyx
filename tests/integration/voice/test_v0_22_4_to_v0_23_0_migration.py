@@ -74,7 +74,12 @@ class TestRingInitEventsPersistedInFactorySource:
 
     def test_six_ring_events_in_factory_source(self) -> None:
         factory_src = (
-            Path(__file__).resolve().parents[3] / "src" / "sovyx" / "voice" / "factory.py"
+            Path(__file__).resolve().parents[3]
+            / "src"
+            / "sovyx"
+            / "voice"
+            / "factory"
+            / "__init__.py"
         ).read_text(encoding="utf-8")
 
         for ring_num in range(1, 7):
@@ -189,10 +194,16 @@ class TestDeprecationWarnFiresForLegacyMixer:
             / "health"
             / "_linux_mixer_apply.py"
         ).read_text(encoding="utf-8")
-        # The Step 17 deprecation block must appear in apply_mixer_reset.
+        # The Step 17 deprecation contract must remain wired. T1.52
+        # centralised the WARN body into _emit_legacy_band_aid_warning,
+        # so the source-level grep checks the helper's literals plus
+        # the per-function dispatch call rather than the inline dict.
         assert '"voice.deprecation.legacy_mixer_band_aid_call"' in src
-        assert '"voice.function": "apply_mixer_reset"' in src
-        assert '"voice.removal_target": "v0.24.0"' in src
+        # Removal target was bumped from v0.24.0 → v0.27.0 (Phase 4)
+        # because the bypass-coordinator wire-up gating Phase 2 + 3
+        # must land first per MISSION-voice-final-skype-grade-2026.md.
+        assert '"voice.removal_target": "v0.27.0"' in src
+        assert '_emit_legacy_band_aid_warning("apply_mixer_reset")' in src
 
     def test_apply_mixer_boost_up_source_emits_deprecation_event(self) -> None:
         from pathlib import Path
@@ -205,7 +216,7 @@ class TestDeprecationWarnFiresForLegacyMixer:
             / "health"
             / "_linux_mixer_apply.py"
         ).read_text(encoding="utf-8")
-        assert '"voice.function": "apply_mixer_boost_up"' in src
+        assert '_emit_legacy_band_aid_warning("apply_mixer_boost_up")' in src
 
 
 # ── Cross-step: pipeline boots with full v0.23.0 stack synthetically ─

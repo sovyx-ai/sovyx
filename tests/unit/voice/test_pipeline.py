@@ -10,6 +10,7 @@ Ref: SPE-010 §8, §10, §13 — full state machine + barge-in + timing.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import threading
 from typing import Any
@@ -1243,6 +1244,96 @@ class TestPipelineSpeaking:
         assert pipeline._filler_task is not None
         pipeline._cancel_filler()  # Cleanup
 
+    @pytest.mark.asyncio
+    async def test_concurrent_stream_text_atomic_speaking_transition_t126(self) -> None:
+        """T1.26 — the check-then-act at ``stream_text`` line 1548-1551
+        (``if self._state != SPEAKING: self._state = SPEAKING; ...``)
+        MUST NOT race when called concurrently. Single-threaded
+        asyncio guarantees this because there's no ``await`` between
+        the check at line 1548 and the assignment + ``on_tts_start``
+        call at line 1549-1551 — the entire transition runs in a
+        single non-yielding sync block.
+
+        This test pins the contract: fire three concurrent
+        ``stream_text`` calls via ``asyncio.gather``, assert that
+        ``on_tts_start`` was called exactly once and exactly one
+        ``TTSStartedEvent`` was emitted. A future refactor that
+        added an ``await`` between the check and the act (e.g. an
+        ``await self._lock.acquire()`` for the wrong reasons) would
+        fail this test because both racing tasks would observe
+        ``state != SPEAKING`` and both would call ``on_tts_start``.
+        """
+        pipeline, refs = _make_pipeline()
+        await pipeline.start()
+
+        # Spy gate counting on_tts_start invocations.
+        on_tts_start_calls: list[None] = []
+
+        class _CountingGate:
+            def on_tts_start(self) -> None:
+                on_tts_start_calls.append(None)
+
+            def on_tts_end(self) -> None:
+                return None
+
+        pipeline._self_feedback_gate = _CountingGate()  # type: ignore[assignment]
+
+        # Fire three concurrent stream_text calls. Since asyncio
+        # serialises until the first await, the first task wins the
+        # SPEAKING transition; tasks 2 and 3 observe state=SPEAKING
+        # and skip the inner block.
+        await asyncio.gather(
+            pipeline.stream_text("alpha"),
+            pipeline.stream_text("beta"),
+            pipeline.stream_text("gamma"),
+        )
+
+        assert len(on_tts_start_calls) == 1, (
+            f"on_tts_start must fire exactly once across concurrent "
+            f"stream_text calls — got {len(on_tts_start_calls)} calls. "
+            f"A non-zero count > 1 means a future refactor broke the "
+            f"check-then-act atomicity by inserting an await between "
+            f"the state check and the assignment."
+        )
+
+        events = [call.args[0] for call in refs["bus"].emit.call_args_list]
+        tts_started = [e for e in events if isinstance(e, TTSStartedEvent)]
+        assert len(tts_started) == 1, (
+            f"exactly one TTSStartedEvent must be emitted across "
+            f"concurrent stream_text calls — got {len(tts_started)}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_start_thinking_no_spawn_to_assignment_race_t125(self) -> None:
+        """T1.25 — ``start_thinking`` MUST assign ``self._filler_task``
+        before returning, with no await window between
+        ``spawn(...)`` and the assignment that could leave a concurrent
+        observer seeing ``_filler_task = None`` while the coroutine is
+        already scheduled. The ``sovyx.observability.tasks.spawn``
+        helper is fully synchronous (returns
+        ``asyncio.create_task(...)`` immediately), so the assignment
+        happens within a single non-yielding sync block. This test
+        pins that ordering — a future refactor that swapped ``spawn``
+        for an awaitable factory would fail it.
+        """
+        pipeline, _ = _make_pipeline(fillers_enabled=True)
+        await pipeline.start()
+
+        # Pre-condition: no filler task yet.
+        assert pipeline._filler_task is None
+
+        # start_thinking MUST be a fast sync path through to the
+        # spawn + assignment with no awaits between them. After it
+        # returns, _filler_task MUST be a live asyncio.Task.
+        await pipeline.start_thinking()
+
+        assert pipeline._filler_task is not None
+        assert isinstance(pipeline._filler_task, asyncio.Task)
+        # The task is scheduled but may not have run yet — the
+        # important invariant is the REFERENCE is in place so any
+        # subsequent _cancel_filler caller can cancel it.
+        pipeline._cancel_filler()
+
 
 # ===========================================================================
 # VoicePipeline — barge-in
@@ -1276,6 +1367,59 @@ class TestPipelineBargeIn:
 
         result = await pipeline.feed_frame(_speech_frame())
         assert result["state"] == "SPEAKING"
+
+    @pytest.mark.asyncio
+    async def test_barge_in_state_stays_speaking_until_chain_exits(self) -> None:
+        """T1.12 regression — `cancel_speech_chain` MUST observe SPEAKING.
+
+        Master mission Phase 1 / T1.12 invariant: during a barge-in the
+        orchestrator MUST run the cancellation chain BEFORE mutating
+        `self._state`. If state were flipped to IDLE first, callbacks
+        registered by the chain (LLM-cancel hook, dashboards keyed off
+        the BargeInEvent + the in-flight utterance id) would observe an
+        inconsistent state — "we're idle but tasks are still being
+        cancelled". The current code at `_handle_speaking` (line ~1117)
+        awaits the chain, then transitions via `_transition_to_recording`
+        which mutates state internally. This test pins that ordering so
+        a refactor cannot reintroduce the pre-T1 inline-cleanup bug.
+        """
+        pipeline, _refs = _make_pipeline(vad_speech=True, barge_in_enabled=True)
+        await pipeline.start()
+        pipeline._state = VoicePipelineState.SPEAKING
+        pipeline._output._playing = True
+
+        # Force the barge-in detector to fire on the first speech frame
+        # so this test pins the orchestrator-level ordering, not the
+        # detector's threshold-frames hysteresis.
+        from unittest.mock import AsyncMock
+
+        pipeline._barge_in.check_frame_async = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+        states_observed: list[tuple[str, str]] = []
+        original_cancel = pipeline.cancel_speech_chain
+
+        async def _instrumented_cancel(*, reason: str = "barge_in") -> None:
+            states_observed.append(("entry", pipeline._state.name))
+            await original_cancel(reason=reason)
+            states_observed.append(("exit", pipeline._state.name))
+
+        pipeline.cancel_speech_chain = _instrumented_cancel  # type: ignore[method-assign]
+
+        result = await pipeline.feed_frame(_speech_frame())
+
+        # Outcome contract — barge-in transitions to RECORDING.
+        assert result["state"] == "RECORDING"
+        # Ordering contract — the chain runs while the orchestrator is
+        # still in SPEAKING. State changes ONLY inside
+        # `_transition_to_recording`, which fires AFTER the chain.
+        assert states_observed == [
+            ("entry", "SPEAKING"),
+            ("exit", "SPEAKING"),
+        ], (
+            f"cancel_speech_chain observed unexpected state ordering during "
+            f"barge-in: {states_observed!r}. Expected SPEAKING at both entry "
+            f"and exit; state must transition AFTER the chain returns."
+        )
 
     @pytest.mark.asyncio
     async def test_speaking_finished_returns_idle(self) -> None:
@@ -1340,6 +1484,332 @@ class TestPipelineLifecycle:
         assert pipeline.wake_word is refs["ww"]
 
 
+class TestPipelineLifecycleHardening:
+    """Mission Phase 1 T1.10 + T1.11 — start/stop drain semantics.
+
+    Pre-fix behaviour:
+      * stop() returned immediately after setting _running=False, leaving
+        any in-flight TTS task to push audio onto a closed pipeline.
+      * start() called twice orphaned the first pre-cache + filler tasks.
+
+    Post-fix contract verified here:
+      * start() on a running pipeline is a no-op + emits a WARN-equivalent
+        info log (no orphaned filler/pre-cache).
+      * stop() drains the in-flight TTS task set + the filler task before
+        returning, with a per-task budget so a wedged TTS backend can't
+        stall the call.
+    """
+
+    @pytest.mark.asyncio
+    async def test_double_start_is_noop_and_logs(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        pipeline, refs = _make_pipeline()
+        await pipeline.start()
+        # pre_cache should fire exactly once for the first start.
+        first_pre_cache_calls = refs["tts"].synthesize.await_count
+        assert pipeline.is_running is True
+
+        with caplog.at_level(logging.INFO):
+            await pipeline.start()
+
+        assert pipeline.is_running is True
+        # No additional pre_cache work (filler stub is best-effort —
+        # check via tts.synthesize call delta which jarvis pre_cache
+        # uses if fillers_enabled; default fillers_enabled=False so
+        # the count is stable, but we still pin the no-op contract).
+        assert refs["tts"].synthesize.await_count == first_pre_cache_calls
+        # Log surface preserved per spec — structlog routes the
+        # event name into the dict at record.msg["event"].
+        events = [r.msg.get("event") for r in caplog.records if isinstance(r.msg, dict)]
+        assert "voice.pipeline.start_already_running_ignored" in events
+
+    @pytest.mark.asyncio
+    async def test_stop_drains_in_flight_tts_task(self) -> None:
+        """A long-running TTS task at stop() time gets cancelled + awaited."""
+        pipeline, _refs = _make_pipeline()
+        await pipeline.start()
+
+        # Inject a pretend in-flight TTS task that sleeps "forever" — the
+        # stop() drain path must cancel + await it within
+        # _CANCELLATION_TASK_TIMEOUT_S (1.0s).
+        async def _slow_tts() -> None:
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                # Honour cancellation immediately — this is the
+                # well-behaved-task happy path.
+                raise
+
+        task = asyncio.create_task(_slow_tts(), name="test-fake-tts")
+        await pipeline._track_tts_task(task)
+        assert task in pipeline._in_flight_tts_tasks
+        assert not task.done()
+
+        await pipeline.stop()
+
+        assert task.done()
+        assert task.cancelled()
+        assert pipeline.is_running is False
+
+    @pytest.mark.asyncio
+    async def test_stop_with_wedged_tts_returns_within_budget(self) -> None:
+        """A TTS task that ignores cancellation must NOT stall stop().
+
+        The drain path bounds each task at _CANCELLATION_TASK_TIMEOUT_S
+        (1.0s) so a wedged backend leaves the orchestrator in a clean
+        IDLE state even if the rogue task is still alive.
+        """
+        pipeline, _refs = _make_pipeline()
+        await pipeline.start()
+
+        async def _wedged_tts() -> None:
+            # Swallow the first cancel so the task lives past the drain
+            # budget. Real-world analogue: a TTS backend in a sync
+            # subprocess wait that doesn't honour asyncio cancellation.
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                # Sleep for longer than the drain budget so the test
+                # observes the timeout-but-progress behaviour.
+                await asyncio.sleep(2.0)
+
+        task = asyncio.create_task(_wedged_tts(), name="test-wedged-tts")
+        await pipeline._track_tts_task(task)
+
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        await pipeline.stop()
+        elapsed = loop.time() - t0
+
+        # Budget is 1.0s; allow a small slack for scheduling jitter.
+        assert elapsed < 2.0, f"stop() took {elapsed:.3f}s — drain budget exceeded"
+        assert pipeline.is_running is False
+        assert pipeline.state == VoicePipelineState.IDLE
+        # Cleanup — let the wedged task drain so pytest doesn't warn
+        # about un-awaited tasks. Cancelled / timed-out are both fine;
+        # the task lifetime is owned by the test.
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, TimeoutError):
+            await asyncio.wait_for(task, timeout=3.0)
+
+    @pytest.mark.asyncio
+    async def test_stop_emits_begin_and_complete_events(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        pipeline, _refs = _make_pipeline()
+        await pipeline.start()
+        with caplog.at_level(logging.INFO):
+            await pipeline.stop()
+        events = [r.msg.get("event") for r in caplog.records if isinstance(r.msg, dict)]
+        assert "voice.pipeline.stop_begin" in events
+        assert "voice.pipeline.stop_complete" in events
+
+    @pytest.mark.asyncio
+    async def test_stop_with_no_tts_or_filler_still_emits_complete(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """stop_complete must fire even on the trivial idle path."""
+        pipeline, _refs = _make_pipeline()
+        await pipeline.start()
+        with caplog.at_level(logging.INFO):
+            await pipeline.stop()
+        complete = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict) and r.msg.get("event") == "voice.pipeline.stop_complete"
+        ]
+        assert len(complete) == 1
+        payload = complete[0]
+        # Drain counters present on the structured event.
+        assert payload.get("tts_tasks_drained") == 0
+        assert payload.get("tts_tasks_total") == 0
+        assert payload.get("filler_was_active") is False
+
+    @pytest.mark.asyncio
+    async def test_stream_text_aborts_after_consecutive_failures(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """T1.21 — wedged TTS backend (consecutive segment failures)
+        must abort the stream after _CONSECUTIVE_TTS_FAILURE_THRESHOLD
+        failures rather than burning compute forever.
+        """
+        from sovyx.voice.pipeline._orchestrator import (
+            _CONSECUTIVE_TTS_FAILURE_THRESHOLD,
+        )
+
+        pipeline, refs = _make_pipeline()
+        await pipeline.start()
+
+        # Patch _synthesize_tracked to always raise — simulates a
+        # wedged backend (Piper model corrupted / ONNX OOM /
+        # cloud endpoint unreachable).
+        async def _always_raises(_text: str) -> Any:
+            raise RuntimeError("synthesize wedged")
+
+        pipeline._synthesize_tracked = _always_raises  # type: ignore[method-assign]
+
+        # Stream a chunk with enough sentences for the loop to iterate
+        # past the threshold (3 segments + 1 trailing).
+        text = "First! Second! Third! Fourth! Tail"
+        with caplog.at_level(logging.ERROR):
+            await pipeline.stream_text(text)
+
+        # Counter is reset to 0 post-abort (so the next stream_text
+        # call starts clean). Buffer cleared.
+        assert pipeline._consecutive_tts_segment_failures == 0
+        assert pipeline._text_buffer == ""
+
+        # Single abort event emitted.
+        abort_events = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict)
+            and r.msg.get("event") == "voice.tts.stream_aborted_consecutive_failures"
+        ]
+        assert len(abort_events) == 1
+        evt = abort_events[0]
+        assert evt["voice.consecutive_failures"] == _CONSECUTIVE_TTS_FAILURE_THRESHOLD
+        assert evt["voice.threshold"] == _CONSECUTIVE_TTS_FAILURE_THRESHOLD
+        assert evt["voice.last_error_type"] == "RuntimeError"
+        assert evt["voice.buffered_text_chars_dropped"] >= 0
+
+        # PipelineErrorEvent emitted to the bus too.
+        events = [call.args[0] for call in refs["bus"].emit.call_args_list]
+        abort_bus_events = [
+            e
+            for e in events
+            if isinstance(e, PipelineErrorEvent)
+            and "stream_aborted_consecutive_failures" in e.error
+        ]
+        assert len(abort_bus_events) == 1
+
+    @pytest.mark.asyncio
+    async def test_stream_text_consecutive_counter_resets_on_success(self) -> None:
+        """T1.21 — a successful segment between failures resets the
+        consecutive counter so a transient hiccup doesn't trip the
+        abort threshold.
+        """
+        pipeline, _refs = _make_pipeline()
+        await pipeline.start()
+
+        # Manually set the counter to threshold-1, simulate a success.
+        pipeline._consecutive_tts_segment_failures = 2
+
+        async def _succeeds(_text: str) -> AudioChunk:
+            return AudioChunk(
+                audio=np.zeros(160, dtype=np.int16),
+                sample_rate=16_000,
+                duration_ms=10.0,
+            )
+
+        pipeline._synthesize_tracked = _succeeds  # type: ignore[method-assign]
+
+        # The output queue's enqueue is async + may raise on a real
+        # output; patch it for the test so the path stays in the
+        # successful branch.
+        pipeline._output.enqueue = AsyncMock()  # type: ignore[method-assign]
+
+        # Need at least two boundary-terminated segments so the loop
+        # iterates over a complete segment (segments[:-1] excludes
+        # the trailing one). "First! Second! Tail" → segments
+        # ["First!", "Second! Tail"] → loop processes "First!".
+        await pipeline.stream_text("First! Second! Tail")
+
+        # Counter reset to 0 by the success-path inline reset.
+        assert pipeline._consecutive_tts_segment_failures == 0
+
+    @pytest.mark.asyncio
+    async def test_feed_frame_not_running_increments_drop_counter(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """T1.18 — feed_frame on a stopped pipeline counts the drop +
+        emits a rate-limited structured WARN. Pre-fix the early return
+        was silent; a runaway producer at 50 Hz had zero observability.
+        """
+        pipeline, _refs = _make_pipeline()
+        # Don't start — _running stays False from construction.
+        assert pipeline.is_running is False
+
+        with caplog.at_level(logging.WARNING):
+            for _ in range(5):
+                result = await pipeline.feed_frame(_silence_frame())
+
+        # Every call returns the not_running marker.
+        assert result["event"] == "not_running"
+        # Counter accumulates one per drop.
+        assert pipeline._frames_dropped_not_running == 5
+        # Rate-limited WARN — single emission within the 1.0s window
+        # despite 5 dropped frames.
+        warns = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict)
+            and r.msg.get("event") == "voice.pipeline.frame_dropped_not_running"
+        ]
+        assert len(warns) == 1, f"expected 1 rate-limited WARN, got {len(warns)}"
+        # Counter on the structured event reflects the lifetime total
+        # at emit time, not just the count since the last log.
+        assert warns[0].get("voice.dropped_count") == 1
+
+    @pytest.mark.asyncio
+    async def test_stream_text_cancelled_clears_text_buffer(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """T1.15 — stream_text's CancelledError handler must clear the buffer.
+
+        Pre-T1.15 the buffer kept residual partial text after cancellation
+        outside of cancel_speech_chain's step-5 cleanup, so a cancel source
+        that bypassed the chain (cognitive-layer task cancel, event-loop
+        shutdown) leaked partial text into the next stream_text call.
+        """
+        pipeline, _refs = _make_pipeline()
+        await pipeline.start()
+
+        # Patch _synthesize_tracked directly — the wrapping create_task
+        # in the real implementation can absorb a CancelledError raised
+        # by the awaitable in some scheduling shapes; the contract under
+        # test is "stream_text's except-CancelledError clause clears the
+        # buffer", which is independent of whether the CancelledError
+        # came from the TTS engine or from cancel_speech_chain
+        # cancelling the synth task.
+        async def _raises_cancelled(_text: str) -> Any:
+            raise asyncio.CancelledError
+
+        pipeline._synthesize_tracked = _raises_cancelled  # type: ignore[method-assign]
+
+        # Stream a chunk with at least two complete sentences so
+        # ``segments[:-1]`` is non-empty and the synthesize loop
+        # actually iterates. Without ≥2 boundaries the for loop body
+        # never executes and the cancellation handler never runs.
+        text_chunk = "First sentence! Second sentence! Tail piece"
+        with caplog.at_level(logging.INFO):
+            await pipeline.stream_text(text_chunk)
+
+        # Buffer cleared by the T1.15 handler.
+        assert pipeline._text_buffer == ""
+
+        # Structured event emitted with the dropped char count.
+        events = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict) and r.msg.get("event") == "voice.tts.stream_text_cancelled"
+        ]
+        assert len(events) == 1
+        # The dropped count is the buffer size AT cancellation — the
+        # full appended chunk minus whatever the loop already trimmed.
+        # We pin only the >0 invariant; the exact value depends on the
+        # split_at_boundaries internal behaviour and could shift with
+        # future tokenizer changes.
+        assert events[0].get("buffered_text_chars", 0) > 0
+
+
 # ===========================================================================
 # VoicePipeline — events emitted
 # ===========================================================================
@@ -1377,6 +1847,37 @@ class TestPipelineEvents:
         events = [call.args[0] for call in refs["bus"].emit.call_args_list]
         assert any(isinstance(e, SpeechEndedEvent) for e in events)
         assert any(isinstance(e, TranscriptionCompletedEvent) for e in events)
+
+    @pytest.mark.asyncio
+    async def test_end_recording_emits_user_stopped_speaking_frame(self) -> None:
+        """T1.16 — RECORDING → TRANSCRIBING transition records a
+        UserStoppedSpeakingFrame so the frame_history span is
+        bracketed on both ends (UserStarted at recording-start +
+        UserStopped here). Mirrors the Pipecat reference frame set.
+        """
+        from sovyx.voice.pipeline._frame_types import UserStoppedSpeakingFrame
+
+        pipeline, refs = _make_pipeline(vad_speech=True, ww_detected=True, stt_text="hi")
+        await pipeline.start()
+
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
+            await pipeline.feed_frame(_speech_frame())
+        await pipeline.feed_frame(_speech_frame())
+
+        refs["vad"].process_frame.return_value = _vad_event(False)
+        for _ in range(3):
+            await pipeline.feed_frame(_silence_frame())
+
+        history = pipeline.frame_history
+        stopped_frames = [f for f in history if isinstance(f, UserStoppedSpeakingFrame)]
+        assert len(stopped_frames) == 1, (
+            f"expected exactly one UserStoppedSpeakingFrame at the "
+            f"recording → transcribing boundary; got "
+            f"{len(stopped_frames)} (history={[type(f).__name__ for f in history]})"
+        )
+        # Frame carries the per-spec field shape.
+        assert stopped_frames[0].frame_type == "UserStoppedSpeaking"
+        assert stopped_frames[0].timestamp_monotonic > 0.0
 
     @pytest.mark.asyncio
     async def test_event_bus_none_doesnt_crash(self) -> None:
@@ -1507,6 +2008,43 @@ class TestEdgeCases:
         assert result["state"] == "THINKING"
 
     @pytest.mark.asyncio
+    async def test_perception_callback_error_emits_pipeline_error_event(self) -> None:
+        """T1.20 — a raising perception callback emits PipelineErrorEvent
+        on the bus so dashboards see the cognitive-layer failure
+        (the log-only signal was invisible to bus-keyed widgets).
+        Callback isolation contract still holds — the pipeline keeps
+        running.
+        """
+        cb = AsyncMock(side_effect=RuntimeError("callback boom"))
+        pipeline, refs = _make_pipeline(
+            vad_speech=True,
+            ww_detected=True,
+            stt_text="trigger",
+            on_perception=cb,
+        )
+        await pipeline.start()
+
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
+            await pipeline.feed_frame(_speech_frame())
+        await pipeline.feed_frame(_speech_frame())
+        refs["vad"].process_frame.return_value = _vad_event(False)
+        for _ in range(3):
+            await pipeline.feed_frame(_silence_frame())
+
+        events = [call.args[0] for call in refs["bus"].emit.call_args_list]
+        error_events = [
+            e
+            for e in events
+            if isinstance(e, PipelineErrorEvent) and "perception_callback_failed" in e.error
+        ]
+        assert len(error_events) == 1, (
+            f"expected exactly one perception PipelineErrorEvent; got "
+            f"{len(error_events)} (all_errors="
+            f"{[e.error for e in events if isinstance(e, PipelineErrorEvent)]})"
+        )
+        assert "callback boom" in error_events[0].error
+
+    @pytest.mark.asyncio
     async def test_event_bus_error_doesnt_crash(self) -> None:
         """EventBus emit failure doesn't crash the pipeline."""
         pipeline, refs = _make_pipeline(vad_speech=True, ww_detected=True)
@@ -1585,6 +2123,68 @@ class TestAudioOutputQueueEdgeCases:
         """clear() on empty queue doesn't raise."""
         q = AudioOutputQueue()
         q.clear()  # no items — hits QueueEmpty in loop
+
+    @pytest.mark.asyncio
+    async def test_interrupt_is_idempotent_t122(self) -> None:
+        """T1.22 — interrupt() called multiple times in a row leaves
+        the queue in the same final state. Pinned because
+        cancel_speech_chain step 1 + flush_stream's T1.34 cancel paths
+        + manual debugger calls can all collide on a single barge-in,
+        and the contract must remain "second call is a silent no-op".
+        """
+        q = AudioOutputQueue()
+        await q.enqueue(_audio_chunk(10))
+        await q.enqueue(_audio_chunk(10))
+
+        q.interrupt()
+        assert q._interrupted is True
+        assert q._queue.empty()
+        first_pending = q._pending_audio_ms
+
+        # Second + third call: must not raise, must leave state identical.
+        q.interrupt()
+        q.interrupt()
+        assert q._interrupted is True
+        assert q._queue.empty()
+        assert q._pending_audio_ms == first_pending
+
+    @pytest.mark.asyncio
+    async def test_interrupt_sets_mute_flag_before_queue_drain_t122(self) -> None:
+        """T1.22 — the mute flag (``_interrupted=True``) is set BEFORE
+        any queue operation. If a future refactor swaps the order, the
+        drain loop in :meth:`drain` could process additional chunks
+        between the get_nowait calls and the flag-set, producing audio
+        AFTER the user barged in. The contract is mute-flag-first;
+        this test pins it.
+        """
+        q = AudioOutputQueue()
+        # Replace the queue with one whose ``empty()`` raises so the
+        # while-loop's first check throws — proving the flag was set
+        # BEFORE the loop runs.
+        original_queue = q._queue
+
+        class _ExplodingQueue:
+            def empty(self) -> bool:
+                msg = "simulated queue corruption"
+                raise RuntimeError(msg)
+
+            def get_nowait(self) -> None:
+                msg = "should never reach get_nowait when empty() raises"
+                raise AssertionError(msg)
+
+        q._queue = _ExplodingQueue()  # type: ignore[assignment]
+
+        try:
+            with pytest.raises(RuntimeError, match="simulated queue corruption"):
+                q.interrupt()
+            # Despite the queue-op failure, the mute flag was set.
+            assert q._interrupted is True, (
+                "interrupt() must set _interrupted=True BEFORE any "
+                "queue operation — this is the fallback mute mechanism "
+                "T1.22 contracts"
+            )
+        finally:
+            q._queue = original_queue
 
     @pytest.mark.asyncio
     async def test_play_audio_sounddevice_path(self) -> None:
@@ -1866,6 +2466,82 @@ class TestPipelineCoverageGaps:
         # Should still transition to IDLE despite error
         assert pipeline.state == VoicePipelineState.IDLE
         assert pipeline._text_buffer == ""
+
+    @pytest.mark.asyncio
+    async def test_flush_stream_synthesize_cancel_clears_output_queue_t134(self) -> None:
+        """T1.34 — when ``_synthesize_tracked`` raises ``CancelledError``
+        inside ``flush_stream``, the output queue MUST be interrupted
+        before exit. Pre-T1.34 the buffer was cleared but any audio
+        already enqueued by prior chunks of the streaming session
+        leaked into the next utterance — only the
+        ``cancel_speech_chain`` step-1 interrupt covered the barge-in
+        path. Off-path cancellations (asyncio loop teardown, direct
+        ``task.cancel()``) leaked the queue.
+        """
+        pipeline, _refs = _make_pipeline()
+        await pipeline.start()
+        pipeline._state = VoicePipelineState.SPEAKING
+        pipeline._text_buffer = "pending text"
+
+        interrupt_calls: list[None] = []
+
+        def _spy_interrupt() -> None:
+            interrupt_calls.append(None)
+
+        pipeline._output.interrupt = _spy_interrupt  # type: ignore[method-assign]
+
+        async def _cancelled_synthesize(_text: str) -> Any:
+            raise asyncio.CancelledError
+
+        pipeline._synthesize_tracked = _cancelled_synthesize  # type: ignore[method-assign]
+
+        # The CancelledError is caught by the inner except — flush_stream
+        # itself returns normally (the buffer-clear early-return path).
+        await pipeline.flush_stream()
+
+        assert pipeline._text_buffer == ""
+        assert len(interrupt_calls) == 1, (
+            "output queue MUST be interrupted on flush_stream synthesize-cancel "
+            "path so off-path cancellations don't leak audio into the next "
+            f"utterance, got interrupt calls = {len(interrupt_calls)}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_flush_stream_drain_cancel_clears_output_queue_t134(self) -> None:
+        """T1.34 — when ``_output.drain()`` raises ``CancelledError``,
+        the output queue MUST be interrupted AND the CancelledError
+        MUST be re-raised (drain WAITS for playback to finish; it
+        does not itself empty the queue, so a cancel here leaves the
+        queue non-empty). The re-raise preserves the cancellation
+        propagation contract — the caller sees CancelledError as
+        expected.
+        """
+        pipeline, _refs = _make_pipeline()
+        await pipeline.start()
+        pipeline._state = VoicePipelineState.SPEAKING
+        # Empty buffer so synthesize is skipped — exercise the drain path.
+        pipeline._text_buffer = ""
+
+        interrupt_calls: list[None] = []
+
+        def _spy_interrupt() -> None:
+            interrupt_calls.append(None)
+
+        pipeline._output.interrupt = _spy_interrupt  # type: ignore[method-assign]
+
+        async def _cancelled_drain() -> None:
+            raise asyncio.CancelledError
+
+        pipeline._output.drain = _cancelled_drain  # type: ignore[method-assign]
+
+        with pytest.raises(asyncio.CancelledError):
+            await pipeline.flush_stream()
+
+        assert len(interrupt_calls) == 1, (
+            "output queue MUST be interrupted on flush_stream drain-cancel "
+            "path so the next utterance starts with an empty queue, got "
+            f"interrupt calls = {len(interrupt_calls)}"
+        )
 
     @pytest.mark.asyncio
     async def test_transition_to_recording_barge_in(self) -> None:
@@ -2678,6 +3354,365 @@ class TestDeafSignalAtomicityO2:
 
 
 # ===========================================================================
+# VoicePipeline — coordinator pending flag finally-reset (T1.23)
+# ===========================================================================
+#
+# Pre-T1.23 ``_coordinator_invocation_pending`` was reset at four
+# scattered sites inside ``_invoke_deaf_signal``:
+#
+#   1. ``callback is None`` early return  (line 1981)
+#   2. ``_coordinator_terminated`` dedup  (line 1988)
+#   3. ``_deaf_warnings_consecutive < threshold`` dedup  (line 1992)
+#   4. ``except Exception`` finally inside the inner try block  (line 2038)
+#
+# A ``CancelledError`` landing on ``async with self._coordinator_lock``
+# (or anywhere outside that inner try) leaked the flag, locking out
+# every subsequent deaf-signal trigger via the
+# ``_coordinator_invocation_pending`` short-circuit at
+# :meth:`_maybe_invoke_deaf_signal` line 1904. Post-T1.23 the entire
+# body is wrapped in an outer ``try/finally`` so the flag clears on
+# every exit path, including cancellation between spawn and lock
+# acquisition.
+#
+# Reference: docs-internal/missions/MISSION-voice-final-skype-grade-2026.md
+# §Phase 1 / T1.23.
+
+
+class TestDeafSignalCoordinatorFinallyResetT123:
+    """Pin the outer-finally flag-reset contract for every cancellation path."""
+
+    def _deaf_pipeline(
+        self,
+        *,
+        callback: Any,
+        threshold: int = 1,
+    ) -> VoicePipeline:
+        config = VoicePipelineConfig(
+            mind_id="test-mind",
+            wake_word_enabled=False,
+            barge_in_enabled=False,
+            fillers_enabled=False,
+            filler_delay_ms=100,
+            silence_frames_end=3,
+            max_recording_frames=10,
+        )
+        vad = _make_vad(speech=False)
+        vad.process_frame.return_value = VADEvent(
+            is_speech=False, probability=0.0, state=VADState.SILENCE
+        )
+        return VoicePipeline(
+            config=config,
+            vad=vad,
+            wake_word=_make_wake_word(detected=False),
+            stt=_make_stt(),
+            tts=_make_tts(),
+            event_bus=_make_event_bus(),
+            on_perception=None,
+            on_deaf_signal=callback,
+            voice_clarity_active=True,
+            auto_bypass_enabled=True,
+            auto_bypass_threshold=threshold,
+        )
+
+    @pytest.mark.asyncio
+    async def test_flag_clears_when_cancelled_before_lock_acquired(self) -> None:
+        """Spawned task cancelled while waiting on ``_coordinator_lock``
+        MUST still clear the pending flag — pre-T1.23 the lock-wait
+        was outside the inner try/finally so cancellation here leaked
+        the flag and locked out every subsequent deaf-signal trigger.
+        """
+        callback = AsyncMock(return_value=[])
+        pipeline = self._deaf_pipeline(callback=callback, threshold=1)
+        pipeline._deaf_warnings_consecutive = 5
+        pipeline._coordinator_invocation_pending = True  # pre-set as the trigger does
+
+        # Hold the lock from the test so the spawned task blocks on
+        # acquisition. This reproduces the cancellation-between-
+        # spawn-and-lock scenario the outer finally fixes.
+        await pipeline._coordinator_lock.acquire()
+        try:
+            task = asyncio.create_task(pipeline._invoke_deaf_signal())
+            # Yield once so the task runs up to the lock-await.
+            await asyncio.sleep(0)
+            assert not task.done()  # blocked on lock
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        finally:
+            pipeline._coordinator_lock.release()
+
+        # The outer finally MUST have cleared the flag — the lock-wait
+        # was the canonical leak path pre-T1.23.
+        assert pipeline._coordinator_invocation_pending is False
+        callback.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_flag_clears_when_callback_raises_cancelled_error(self) -> None:
+        """Callback raising ``CancelledError`` (the BaseException subclass
+        that ``except Exception`` doesn't catch) MUST still clear the
+        flag — both pre- and post-T1.23 covered this via the inner /
+        outer finally respectively. Pin the contract so the outer-
+        finally consolidation doesn't silently regress it.
+        """
+        callback = AsyncMock(side_effect=asyncio.CancelledError())
+        pipeline = self._deaf_pipeline(callback=callback, threshold=1)
+        pipeline._deaf_warnings_consecutive = 5
+        pipeline._coordinator_invocation_pending = True
+
+        with contextlib.suppress(asyncio.CancelledError):
+            await pipeline._invoke_deaf_signal()
+
+        assert pipeline._coordinator_invocation_pending is False
+        callback.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_lock_released_when_cancelled_inside_lock_body_t133(self) -> None:
+        """T1.33 — ``self._coordinator_lock`` MUST release on every
+        cancellation path including cancellation INSIDE the lock body
+        (i.e. while the spawned task is awaiting the user-supplied
+        callback). This is structurally guaranteed by Python's
+        ``async with`` semantics — ``Lock.__aexit__`` releases on every
+        exit including ``CancelledError`` propagation — but pinning it
+        with a regression test prevents a future refactor from swapping
+        ``async with`` for a manual ``acquire()`` / ``release()`` pair
+        that would silently lose the cancel-safety property.
+        """
+        callback_started = asyncio.Event()
+
+        async def _slow_callback() -> list[Any]:
+            callback_started.set()
+            await asyncio.sleep(60)
+            return []
+
+        callback = AsyncMock(side_effect=_slow_callback)
+        pipeline = self._deaf_pipeline(callback=callback, threshold=1)
+        pipeline._deaf_warnings_consecutive = 5
+        pipeline._coordinator_invocation_pending = True
+
+        task = asyncio.create_task(pipeline._invoke_deaf_signal())
+
+        # Wait until the spawned task is INSIDE the callback (which
+        # means it has already acquired the lock and is awaiting).
+        await callback_started.wait()
+        assert pipeline._coordinator_lock.locked(), (
+            "lock must be held while the callback is in flight"
+        )
+
+        # Cancel mid-callback — the CancelledError propagates out of
+        # ``await callback()``, through the inner ``except Exception``
+        # (which doesn't catch BaseException), through the
+        # ``async with`` block (which releases the lock via
+        # ``Lock.__aexit__``), and out of the outer ``try/finally``
+        # (which clears the pending flag per T1.23).
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        # Lock released — concurrent deaf-signal spawns can now acquire.
+        assert not pipeline._coordinator_lock.locked(), (
+            "lock leaked across cancellation — async with __aexit__ should have released it"
+        )
+        # Flag cleared per T1.23 outer finally.
+        assert pipeline._coordinator_invocation_pending is False
+
+
+# ===========================================================================
+# VoicePipeline — coordinator pending timeout watchdog (T1.14)
+# ===========================================================================
+#
+# T1.23 wraps ``_invoke_deaf_signal`` in an outer try/finally so the
+# pending flag clears on every exit path that the asyncio runtime CAN
+# observe (cancel, raise, normal return). T1.14 closes the residual
+# case: a wedge so deep that the asyncio task itself never completes
+# (e.g. the callback is in a sync OS call inside ``asyncio.to_thread``
+# that doesn't honour thread cancellation, and the awaiting task's
+# CancelledError is eaten upstream). The watchdog
+# ``_reset_coordinator_pending_after_timeout`` force-clears the flag
+# at the deadline so subsequent deaf-signal triggers can fire.
+
+
+class TestCoordinatorPendingTimeoutT114:
+    """Watchdog force-clears the pending flag on wedged invocations,
+    while leaving subsequent invocations' flags untouched."""
+
+    def _deaf_pipeline(
+        self,
+        *,
+        callback: Any,
+        threshold: int = 1,
+    ) -> VoicePipeline:
+        config = VoicePipelineConfig(
+            mind_id="test-mind",
+            wake_word_enabled=False,
+            barge_in_enabled=False,
+            fillers_enabled=False,
+            filler_delay_ms=100,
+            silence_frames_end=3,
+            max_recording_frames=10,
+        )
+        vad = _make_vad(speech=False)
+        vad.process_frame.return_value = VADEvent(
+            is_speech=False, probability=0.0, state=VADState.SILENCE
+        )
+        return VoicePipeline(
+            config=config,
+            vad=vad,
+            wake_word=_make_wake_word(detected=False),
+            stt=_make_stt(),
+            tts=_make_tts(),
+            event_bus=_make_event_bus(),
+            on_perception=None,
+            on_deaf_signal=callback,
+            voice_clarity_active=True,
+            auto_bypass_enabled=True,
+            auto_bypass_threshold=threshold,
+        )
+
+    @pytest.mark.asyncio
+    async def test_watchdog_force_clears_wedged_invocation_flag(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When the pending flag is still True at the watchdog
+        deadline AND the invocation count matches, the watchdog
+        force-clears the flag so subsequent triggers can fire.
+        """
+        from sovyx.voice.pipeline import _orchestrator as _orch_mod
+
+        # Shrink the timeout so the test runs fast.
+        monkeypatch.setattr(_orch_mod, "_COORDINATOR_PENDING_TIMEOUT_S", 0.05)
+
+        callback = AsyncMock(return_value=[])
+        pipeline = self._deaf_pipeline(callback=callback, threshold=1)
+        # Simulate a trigger that bumped the count + set the flag,
+        # then the spawned ``_invoke_deaf_signal`` wedged forever
+        # (we don't actually run it — we just leave the flag True
+        # and the count incremented to 1, then run the watchdog).
+        pipeline._coordinator_invocation_pending = True
+        pipeline._coordinator_invocation_count = 1
+
+        # Run the watchdog with the captured count = 1.
+        await pipeline._reset_coordinator_pending_after_timeout(1)
+
+        # Watchdog force-cleared the flag.
+        assert pipeline._coordinator_invocation_pending is False
+
+    @pytest.mark.asyncio
+    async def test_watchdog_does_not_clear_subsequent_invocation_flag(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """T1.14 counter guard — if the live invocation count differs
+        from the captured count, the watchdog must leave the flag
+        alone. Otherwise a fired-late watchdog from a completed
+        invocation would clear the flag of a SUBSEQUENT one,
+        breaking the new coordinator's lifecycle.
+        """
+        from sovyx.voice.pipeline import _orchestrator as _orch_mod
+
+        monkeypatch.setattr(_orch_mod, "_COORDINATOR_PENDING_TIMEOUT_S", 0.05)
+
+        callback = AsyncMock(return_value=[])
+        pipeline = self._deaf_pipeline(callback=callback, threshold=1)
+        # Simulate: invocation 1 completed (T1.23 cleared flag).
+        # Then invocation 2 fired and set the flag. Now invocation 1's
+        # watchdog wakes — its captured count was 1, but live is 2.
+        pipeline._coordinator_invocation_pending = True
+        pipeline._coordinator_invocation_count = 2  # newer invocation
+
+        # Watchdog from invocation 1 (count captured = 1).
+        await pipeline._reset_coordinator_pending_after_timeout(1)
+
+        # Flag MUST still be True — it belongs to invocation 2.
+        assert pipeline._coordinator_invocation_pending is True
+
+    @pytest.mark.asyncio
+    async def test_watchdog_no_op_when_flag_already_cleared(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Happy path: the original invocation completed cleanly via
+        T1.23 outer-finally, so the flag is already False. Watchdog
+        wakes, sees False, no-ops.
+        """
+        from sovyx.voice.pipeline import _orchestrator as _orch_mod
+
+        monkeypatch.setattr(_orch_mod, "_COORDINATOR_PENDING_TIMEOUT_S", 0.05)
+
+        callback = AsyncMock(return_value=[])
+        pipeline = self._deaf_pipeline(callback=callback, threshold=1)
+        pipeline._coordinator_invocation_pending = False  # T1.23 already cleared it
+        pipeline._coordinator_invocation_count = 1
+
+        # Watchdog runs but should observe flag False and not fire WARN.
+        await pipeline._reset_coordinator_pending_after_timeout(1)
+
+        # Still False (no spurious mutation).
+        assert pipeline._coordinator_invocation_pending is False
+
+    @pytest.mark.asyncio
+    async def test_watchdog_emits_structured_warn_on_force_clear(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Force-clear path emits ``voice.coordinator.pending_flag_timeout_reset``
+        with the spec field shape: timeout_seconds + invocation_count
+        + action_required.
+        """
+        import logging as _logging
+
+        from sovyx.voice.pipeline import _orchestrator as _orch_mod
+
+        monkeypatch.setattr(_orch_mod, "_COORDINATOR_PENDING_TIMEOUT_S", 0.05)
+
+        callback = AsyncMock(return_value=[])
+        pipeline = self._deaf_pipeline(callback=callback, threshold=1)
+        pipeline._coordinator_invocation_pending = True
+        pipeline._coordinator_invocation_count = 7
+
+        with caplog.at_level(_logging.WARNING, logger=_ORCH_LOGGER):
+            await pipeline._reset_coordinator_pending_after_timeout(7)
+
+        events = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict)
+            and r.msg.get("event") == "voice.coordinator.pending_flag_timeout_reset"
+        ]
+        assert len(events) == 1
+        payload = events[0]
+        assert payload["voice.invocation_count"] == 7  # noqa: PLR2004
+        assert payload["voice.timeout_seconds"] == 0.05  # noqa: PLR2004
+        assert "action_required" in str(payload).lower()
+
+    @pytest.mark.asyncio
+    async def test_watchdog_cancellation_returns_silently(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Cancelling the watchdog (loop teardown, etc.) MUST NOT
+        raise — the watchdog catches CancelledError + returns. A
+        fresh watchdog spawns on the next deaf-signal trigger.
+        """
+        from sovyx.voice.pipeline import _orchestrator as _orch_mod
+
+        # Long enough that we can cancel before the deadline fires.
+        monkeypatch.setattr(_orch_mod, "_COORDINATOR_PENDING_TIMEOUT_S", 30.0)
+
+        callback = AsyncMock(return_value=[])
+        pipeline = self._deaf_pipeline(callback=callback, threshold=1)
+        pipeline._coordinator_invocation_pending = True
+        pipeline._coordinator_invocation_count = 1
+
+        task = asyncio.create_task(pipeline._reset_coordinator_pending_after_timeout(1))
+        await asyncio.sleep(0)  # let the task start
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        # Flag stays as it was — the watchdog returned silently
+        # without firing the force-clear path.
+        assert pipeline._coordinator_invocation_pending is True
+
+
+# ===========================================================================
 # VoicePipeline — self-feedback gate wiring (ADR §4.4.6)
 # ===========================================================================
 
@@ -3074,12 +4109,12 @@ class TestCancellationChainT1:
             await asyncio.sleep(10.0)
 
         task = asyncio.create_task(_slow_synth())
-        pipeline._track_tts_task(task)
+        await pipeline._track_tts_task(task)
         try:
             await pipeline.cancel_speech_chain(reason="barge_in")
             assert task.cancelled() or task.done()
         finally:
-            pipeline._untrack_tts_task(task)
+            await pipeline._untrack_tts_task(task)
 
         events = _events_of(caplog, "voice.tts.cancellation_chain")
         assert len(events) == 1
@@ -3186,6 +4221,67 @@ class TestCancellationChainT1:
         assert pipeline._filler_task is None
 
     @pytest.mark.asyncio
+    async def test_filler_cancelled_mid_play_clears_state_t132(self) -> None:
+        """T1.32 — when the filler is cancelled while it's awaiting
+        ``output.play_immediate(chunk)`` (the canonical "barge-in
+        during the Jarvis filler" scenario), the orchestrator's state
+        MUST be left consistent: ``_filler_task`` nulled,
+        ``_first_token_event`` set, ``_output._playing`` False. Pins
+        the existing contract — ``_cancel_filler`` does both
+        ``task.cancel()`` and ``event.set()``, the filler's
+        ``play_immediate`` ``finally`` block sets ``_playing=False``,
+        and ``cancel_speech_chain`` step 1 already interrupted the
+        output queue. The in-flight audio chunk in
+        ``blocking_write_play``'s worker thread continues until the
+        OS finishes writing the buffered samples — that's an
+        ``asyncio.to_thread`` limitation, not a correctness bug, and
+        is out of scope for T1.32.
+        """
+        pipeline, _refs = _make_pipeline(fillers_enabled=True)
+        await pipeline.start()
+
+        playing_started = asyncio.Event()
+        playing_completed = asyncio.Event()
+
+        async def _slow_filler() -> bool:
+            """Stand-in for a filler currently in play_immediate."""
+            playing_started.set()
+            try:
+                await asyncio.sleep(60.0)
+            finally:
+                playing_completed.set()
+            return True
+
+        pipeline._filler_task = asyncio.create_task(_slow_filler())
+        pipeline._output._playing = True  # filler is "playing"
+
+        # Wait until the filler is observably running.
+        await playing_started.wait()
+        filler_task = pipeline._filler_task
+        assert filler_task is not None
+        assert not filler_task.done()
+
+        # Cancel via cancel_speech_chain — this exercises the full
+        # T1 atomic chain (step 1 interrupt + step 4 _cancel_filler).
+        await pipeline.cancel_speech_chain(reason="barge_in")
+
+        # Filler task field nulled by _cancel_filler.
+        assert pipeline._filler_task is None
+        # Event set by _cancel_filler so any waiter unblocks.
+        assert pipeline._first_token_event.is_set()
+
+        # Drive the cancelled filler task to completion so its finally
+        # block runs — _cancel_filler calls task.cancel() but doesn't
+        # await; the CancelledError lands at the next event loop tick.
+        with contextlib.suppress(asyncio.CancelledError):
+            await filler_task
+
+        # The filler stand-in's finally runs once the CancelledError
+        # propagates — pinning that play_immediate's real finally
+        # would likewise run, setting ``_playing = False``.
+        assert playing_completed.is_set()
+
+    @pytest.mark.asyncio
     async def test_chain_releases_self_feedback_gate(self) -> None:
         pipeline, _ = _make_pipeline()
 
@@ -3212,14 +4308,75 @@ class TestCancellationChainT1:
             return None
 
         task = asyncio.create_task(_noop())
-        pipeline._track_tts_task(task)
+        await pipeline._track_tts_task(task)
         assert task in pipeline._in_flight_tts_tasks
-        pipeline._untrack_tts_task(task)
+        await pipeline._untrack_tts_task(task)
         assert task not in pipeline._in_flight_tts_tasks
         # Untrack is idempotent.
-        pipeline._untrack_tts_task(task)
+        await pipeline._untrack_tts_task(task)
         assert task not in pipeline._in_flight_tts_tasks
         await task
+
+    @pytest.mark.asyncio
+    async def test_track_tts_task_lock_protects_concurrent_snapshot_t113(self) -> None:
+        """T1.13 — ``_track_tts_task`` and ``cancel_speech_chain``
+        step-2 snapshot share ``_task_tracking_lock``, so a snapshot
+        cannot interleave mid-mutation. This test holds the lock from
+        outside, fires both a track-attempt and a snapshot-attempt as
+        concurrent tasks, and asserts both block until the test
+        releases — proving the lock genuinely serializes the two
+        operations.
+
+        Pinning this contract guards against a future refactor that
+        swaps ``async with self._task_tracking_lock`` for an unguarded
+        bare-set-mutation (which would silently lose the atomicity
+        guarantee the spec requires).
+        """
+        pipeline, _ = _make_pipeline()
+
+        async def _noop() -> None:
+            return None
+
+        track_task_completed = asyncio.Event()
+        snapshot_completed = asyncio.Event()
+
+        async def _do_track() -> None:
+            new_task = asyncio.create_task(_noop())
+            await pipeline._track_tts_task(new_task)
+            track_task_completed.set()
+            await new_task  # cleanup
+
+        async def _do_snapshot() -> None:
+            async with pipeline._task_tracking_lock:
+                _ = tuple(pipeline._in_flight_tts_tasks)
+            snapshot_completed.set()
+
+        # Hold the lock from the test so both background tasks block.
+        await pipeline._task_tracking_lock.acquire()
+        try:
+            track_bg = asyncio.create_task(_do_track())
+            snapshot_bg = asyncio.create_task(_do_snapshot())
+
+            # Yield enough times for both to reach the lock-await.
+            for _ in range(5):
+                await asyncio.sleep(0)
+
+            assert not track_task_completed.is_set(), (
+                "_track_tts_task must block on _task_tracking_lock when "
+                "the test holds it — concurrent mutation is structurally "
+                "impossible"
+            )
+            assert not snapshot_completed.is_set(), (
+                "snapshot must block on _task_tracking_lock when the test holds it"
+            )
+        finally:
+            pipeline._task_tracking_lock.release()
+
+        # After release, both proceed.
+        await asyncio.wait_for(track_bg, timeout=1.0)
+        await asyncio.wait_for(snapshot_bg, timeout=1.0)
+        assert track_task_completed.is_set()
+        assert snapshot_completed.is_set()
 
     # ── Band-aid #15 final fix: text-buffer cleanup in chain ───
     @pytest.mark.asyncio
@@ -3327,6 +4484,40 @@ class TestVADInferenceTimeoutGuard:
         assert evt["voice.timeout_s"] == 0.250  # noqa: PLR2004
         assert evt["voice.lifetime_timeout_count"] == 1
         assert "host CPU saturation" in evt["voice.action_required"]
+
+    @pytest.mark.asyncio
+    async def test_vad_timeout_emits_pipeline_error_event(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """T1.19 — alongside the rate-limited WARN, a PipelineErrorEvent
+        fires on the event bus so dashboards keyed on the event stream
+        see the timeout (the WARN-only signal was invisible to them).
+        Gated on the same rate-limit window as the WARN so per-frame
+        50 Hz storms don't flood the bus.
+        """
+        pipeline, refs = _make_pipeline()
+        await pipeline.start()
+
+        from sovyx.voice.pipeline import _orchestrator as _orch_mod
+
+        async def _raise_timeout(coro: Any, *_args: Any, **_kwargs: Any) -> Any:
+            if hasattr(coro, "close"):
+                coro.close()
+            raise TimeoutError
+
+        with (
+            caplog.at_level(logging.WARNING),
+            patch.object(_orch_mod.asyncio, "wait_for", _raise_timeout),
+        ):
+            await pipeline.feed_frame(_silence_frame())
+
+        # Single PipelineErrorEvent emitted on the bus.
+        events = [call.args[0] for call in refs["bus"].emit.call_args_list]
+        error_events = [e for e in events if isinstance(e, PipelineErrorEvent)]
+        assert len(error_events) == 1
+        assert "vad_inference_timeout" in error_events[0].error
+        assert error_events[0].mind_id == "test-mind"
 
     @pytest.mark.asyncio
     async def test_vad_timeout_warn_rate_limited(

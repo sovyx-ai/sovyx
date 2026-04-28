@@ -143,9 +143,15 @@ class SoundDeviceInputSource:
                 return
             # Copy: the buffer is reused by PortAudio after callback returns.
             frame = indata[:, 0].copy() if indata.ndim > 1 else indata.copy()
-            with contextlib.suppress(RuntimeError):
-                # Loop closed — ignore.
+            try:
                 self._loop.call_soon_threadsafe(self._enqueue, frame)
+            except RuntimeError as exc:
+                # Loop closed mid-callback — narrow shutdown race past the
+                # pre-check above. Drop the frame (audio test is tearing down).
+                logger.debug(
+                    "voice.device_test.callback_post_skipped",
+                    reason=str(exc),
+                )
 
         try:
             stream, info = await open_input_stream(
@@ -187,8 +193,14 @@ class SoundDeviceInputSource:
         if self._queue.full():
             with contextlib.suppress(asyncio.QueueEmpty):
                 self._queue.get_nowait()
-        with contextlib.suppress(asyncio.QueueFull):
+        try:
             self._queue.put_nowait(frame)
+        except asyncio.QueueFull:
+            # Drop after another producer refilled the slot mid-call.
+            logger.debug(
+                "voice.device_test.queue_full_skipped",
+                reason="put_nowait after drop_oldest still full",
+            )
 
     async def close(self) -> None:
         if self._closed.is_set():

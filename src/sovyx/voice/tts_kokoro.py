@@ -11,7 +11,6 @@ Ref: SPE-010 §6.2, IMPL-004 §2.3 (kokoro-onnx wrapper)
 from __future__ import annotations
 
 import asyncio
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -23,6 +22,16 @@ from sovyx.voice._stage_metrics import (
     VoiceStage,
     measure_stage_duration,
     record_stage_event,
+    record_tts_synthesis_latency,
+)
+from sovyx.voice._tts_sentence_split import (
+    split_sentences as _split_sentences,
+)
+from sovyx.voice._tts_zero_energy import (
+    TTS_RMS_FLOOR_DBFS as _TTS_RMS_FLOOR_DBFS,
+)
+from sovyx.voice._tts_zero_energy import (
+    compute_rms_dbfs as _compute_rms_dbfs,
 )
 from sovyx.voice.tts_piper import AudioChunk, TTSEngine
 
@@ -38,7 +47,6 @@ logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 _DEFAULT_SAMPLE_RATE = 24000
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
 # Model file names
 _MODEL_FULL = "kokoro-v1.0.onnx"
@@ -59,40 +67,15 @@ _VOICES_FILE = "voices-v1.0.bin"
 # ``AudioChunk.synthesis_health`` field carries the same signal so the
 # orchestrator can trigger a Piper fallback (wired separately so this
 # commit stays surgical).
-
-_TTS_RMS_FLOOR_DBFS = -60.0
-"""Below this RMS the output is perceptually silent. -60 dBFS is the
-canonical "audio is gone" threshold from EBU R128 / ITU-R BS.1770
-loudness measurement and matches the noise floor of consumer
-playback devices — anything quieter is indistinguishable from
-silence in normal listening conditions. RMS is computed on the
-int16 PCM after saturation clip, so the value reflects what the
-playback path will actually emit, not the pre-clip float buffer."""
-
-
-def _compute_rms_dbfs(samples: object) -> float:
-    """Compute peak-normalised RMS in dBFS for an int16 PCM buffer.
-
-    Returns ``-inf`` for an empty or all-zero buffer (canonical
-    silence representation in dBFS-space). Pure function — fully
-    unit-testable in isolation. The caller (``synthesize_with``)
-    feeds this value into the T2 ``_TTS_RMS_FLOOR_DBFS`` gate.
-    """
-    import math
-
-    import numpy as np
-
-    if not hasattr(samples, "size") or samples.size == 0:
-        return float("-inf")
-    arr = np.asarray(samples, dtype=np.float64)
-    rms = float(np.sqrt(np.mean(arr * arr)))
-    if rms <= 0.0:
-        return float("-inf")
-    # int16 full-scale = 32768. Normalise so 0 dBFS = full-scale sine.
-    normalised = rms / 32768.0
-    if normalised <= 0.0:
-        return float("-inf")
-    return 20.0 * math.log10(normalised)
+#
+# The threshold + RMS computation now live in the shared module
+# ``sovyx.voice._tts_zero_energy`` (see T1.36 foundation, commit
+# `710e1f1`) so Piper TTS — which must apply the identical gate per
+# the master mission — can consume the same primitives without
+# copy-paste drift. The legacy underscore-prefixed names are kept as
+# import aliases above so the existing test suite at
+# ``tests/unit/voice/test_tts_kokoro.py`` and any downstream patches
+# keep working without an import-path migration.
 
 
 # Supported languages (kokoro-onnx)
@@ -160,12 +143,6 @@ def _validate_config(config: KokoroConfig) -> None:
     if not config.language:
         msg = "language must be a non-empty string"
         raise ValueError(msg)
-
-
-def _split_sentences(text: str) -> list[str]:
-    """Split text on sentence boundaries (``.``, ``!``, ``?`` followed by whitespace)."""
-    parts = _SENTENCE_SPLIT_RE.split(text)
-    return parts if parts else [text]
 
 
 # ---------------------------------------------------------------------------
@@ -468,6 +445,7 @@ class KokoroTTS(TTSEngine):
                     "voice.text_chars": len(text),
                     "voice.audio_ms": round(duration_ms, 1),
                     "voice.generation_ms": round(generation_ms, 1),
+                    "voice.synthesis_latency_ms": round(generation_ms, 1),
                     "voice.model": "kokoro",
                     "voice.voice": voice,
                     "voice.language": language,
@@ -475,6 +453,15 @@ class KokoroTTS(TTSEngine):
                     "voice.speed": resolved_speed,
                     "voice.synthesis_health": synthesis_health or "ok",
                 },
+            )
+            # T1.37 — bucketed-family histogram for per-language TTS
+            # latency (cardinality-bounded ~25 series). Per-voice
+            # detail lives on the chunk_emitted log above.
+            record_tts_synthesis_latency(
+                voice,
+                generation_ms,
+                engine="kokoro",
+                error=synthesis_health == "zero_energy",
             )
 
             # Zero-energy synthesis is a soft failure: the caller

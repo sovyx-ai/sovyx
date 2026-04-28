@@ -429,6 +429,135 @@ class VoiceTuningConfig(BaseSettings):
     bypass within ~100 s @ 5 s heartbeat (the user has already
     started troubleshooting by then; longer is operationally
     pointless)."""
+
+    # Mission Phase 1 / T1.28 — pipeline-tuning constants migrated from
+    # ``voice/pipeline/_orchestrator.py`` module-level. These knobs were
+    # originally hardcoded in the orchestrator; promotion here makes
+    # them discoverable via the centralised tuning schema, env-var
+    # overridable via ``SOVYX_TUNING__VOICE__<NAME>``, and bound-
+    # validated against operationally-meaningful ranges.
+
+    pipeline_frame_drop_absolute_budget_seconds: float = Field(default=0.064, ge=0.020, le=1.0)
+    """O3 frame-drop detector — per-frame absolute inter-arrival
+    budget. Default 64 ms = 2× the nominal 32 ms cadence at 16 kHz /
+    512-sample window — the perceptual threshold above which a
+    real-time voice loop gains audible latency artefacts (Bencina,
+    "Real-Time Audio Programming 101", 2020). Floor 20 ms prevents
+    constant misfire on any healthy host (40 ms / 16 kHz cadence
+    plus jitter); ceiling 1.0 s prevents a misconfigured value from
+    masking real frame drops entirely. A frame exceeding this budget
+    fires ``voice.frame.drop_detected`` with
+    ``threshold_kind=absolute_budget``."""
+
+    pipeline_frame_drop_drift_window_frames: int = Field(default=32, ge=8, le=256)
+    """O3 frame-drop detector — rolling-window size for the
+    cumulative-drift detector. 32 frames at 16 kHz / 512-sample
+    window = ~1.024 s of audio. Floor 8 prevents false-positives
+    from a single jittery frame; ceiling 256 keeps the window
+    short enough to react to sustained drift before the user
+    notices."""
+
+    pipeline_frame_drop_drift_ratio: float = Field(default=1.10, ge=1.05, le=3.0)
+    """O3 frame-drop detector — mean inter-arrival ÷ expected
+    interval threshold above which the cumulative-drift detector
+    fires. Default 1.10 = 10 % sustained drift. Floor 1.05 prevents
+    near-baseline jitter false-positives; ceiling 3.0 prevents
+    misconfiguration from disabling the detector entirely (any
+    sustained drift this large is structurally broken)."""
+
+    pipeline_frame_drop_drift_rate_limit_seconds: float = Field(default=1.0, ge=0.1, le=60.0)
+    """O3 frame-drop detector — minimum gap between successive
+    ``voice.frame.cumulative_drift_detected`` emissions. Default
+    1.0 s — sustained drift produces one event per second, not one
+    per window. Floor 0.1 s prevents log-storm; ceiling 60 s keeps
+    the cadence operationally useful."""
+
+    pipeline_vad_inference_timeout_seconds: float = Field(default=0.250, ge=0.050, le=2.0)
+    """Per-frame VAD inference budget. Silero VAD on a modern CPU
+    runs in ~5–20 ms; default 250 ms is ~10× typical, generous
+    enough that healthy deployments never trip but tight enough
+    that a wedged inference doesn't stall the pipeline for >0.25 s.
+    Floor 50 ms accommodates GC pauses without false-firing;
+    ceiling 2.0 s guards against the misconfigured-to-disable case."""
+
+    pipeline_vad_inference_timeout_warn_interval_seconds: float = Field(
+        default=5.0, ge=0.5, le=300.0
+    )
+    """Minimum gap between two ``voice.vad.inference_timeout`` WARN
+    logs. Default 5.0 s matches the heartbeat cadence so an operator
+    sees the issue within the first frame batch after onset. Floor
+    0.5 s prevents log-storm; ceiling 300 s prevents misconfiguration
+    from suppressing the signal entirely."""
+
+    pipeline_cancellation_task_timeout_seconds: float = Field(default=1.0, ge=0.1, le=30.0)
+    """T1 atomic-cancellation chain — per-task timeout when awaiting
+    a cancelled in-flight TTS task. Default 1.0 s is the SRE-canonical
+    "if it isn't dead by now it's hung" budget — long enough for a
+    graceful CancelledError teardown (typical: <50 ms) but short
+    enough that a wedged task doesn't block the next turn. Floor
+    0.1 s prevents misconfiguration from racing the normal teardown;
+    ceiling 30 s caps user-visible barge-in stall on the worst-case
+    wedged TTS backend."""
+
+    pipeline_consecutive_tts_failure_threshold: int = Field(default=3, ge=1, le=100)
+    """T1.21 streaming TTS abort threshold — number of consecutive
+    per-segment failures after which ``stream_text`` aborts the
+    streaming session. Default 3 absorbs the typical "first
+    inference warm-up failure" pattern (1-2 retries) while still
+    aborting within ~3 segments × ~200 ms = ~600 ms when the backend
+    is wedged. Floor 1 ensures the abort fires on the first
+    failure if the operator wants strict no-retry semantics;
+    ceiling 100 prevents misconfiguration from disabling the abort
+    entirely (which would re-introduce the pre-T1.21 silent
+    compute-burning failure mode). Counter resets on the first
+    successful segment so a transient mid-stream hiccup doesn't
+    poison the rest of the response."""
+
+    pipeline_coordinator_pending_timeout_seconds: float = Field(default=30.0, ge=1.0, le=300.0)
+    """T1.14 watchdog deadline — maximum wall-clock seconds the
+    ``_coordinator_invocation_pending`` flag may stay True before a
+    background watchdog force-clears it. Default 30.0 s is the SRE-
+    canonical "if it isn't dead by now it's hung" budget for an
+    asyncio coordinator task; long enough that a slow-but-progressing
+    coordinator (mixer probe, KB lookup, network round-trip) finishes
+    cleanly via the T1.23 outer-finally before the watchdog fires,
+    short enough that a wedged coordinator doesn't permanently lock
+    out subsequent deaf-signal handling. Floor 1.0 s prevents
+    misconfiguration from racing the normal teardown; ceiling 300 s
+    caps the operator-visible "deaf for 5 minutes after one wedge"
+    worst case. The watchdog uses an invocation-counter guard so a
+    fired-late watchdog from a completed invocation cannot
+    accidentally clear the flag of a SUBSEQUENT invocation."""
+
+    pipeline_speaker_consistency_enabled: bool = Field(default=True)
+    """T1.39 — gate the spectral-centroid drift detector. ``True``
+    enables :class:`sovyx.voice._speaker_consistency.SpeakerConsistencyMonitor`
+    on every successful TTS chunk synthesis (~50 µs DSP cost per chunk).
+    Default True; set ``False`` for resource-constrained deployments
+    (Pi, low-power embedded) that don't need the drift signal."""
+
+    pipeline_speaker_drift_window_size: int = Field(default=5, ge=2, le=50)
+    """T1.39 — rolling-window size for the spectral-centroid baseline.
+    The first N-1 chunks build the baseline (no alert); from chunk N
+    onward each new centroid is compared to the rolling mean. Default
+    5 is noise-resistant (a single anomalous chunk falls out of the
+    window after N synthesis cycles) yet quick to detect a sustained
+    drift. Floor 2 prevents single-sample baselines (any drift would
+    fire); ceiling 50 prevents a baseline so smooth that a real drift
+    takes minutes to surface."""
+
+    pipeline_speaker_drift_ratio_threshold: float = Field(default=0.05, ge=0.01, le=1.0)
+    """T1.39 — relative-drift threshold above which the WARN +
+    PipelineErrorEvent fires. Computed as
+    ``|centroid - baseline| / baseline > threshold``. Default 0.05
+    (5%) matches the spec text and is empirically the perceptual
+    threshold for "the voice changed" on a typical 2.0 kHz speech
+    centroid (≈ 100 Hz drift, comparable to a semitone). Operators
+    seeing false positives on high-variance voices (operatic,
+    expressive synthesis) should bump this; operators wanting a
+    tighter alert can reduce it. Floor 0.01 prevents alarm-storm on
+    natural variance; ceiling 1.0 is the upper-bound (a 100 % drift
+    means the centroid moved by an octave — pathological)."""
     # Ordered host-API preference for the opener's pyramid fallback.
     # VLX-007 added "PipeWire" + "PulseAudio" + "JACK" to cover builds
     # of PortAudio that expose those backends as standalone host APIs
@@ -728,12 +857,12 @@ class VoiceTuningConfig(BaseSettings):
     # default never changed.
     #
     # **Deprecated since v0.23.0** (Mission §9.1.1, Gap 1) — scheduled
-    # for removal in v0.24.0 once the L2.5 KB-driven preset cascade is
-    # the active runtime mitigation for both saturation and attenuation
-    # regimes. Until then this fraction continues to drive the legacy
-    # ``LinuxALSAMixerResetBypass`` band-aid; a non-default value
-    # surfaces a one-time WARN at boot via
-    # :func:`sovyx.engine.config.warn_on_deprecated_mixer_overrides`.
+    # for removal in v0.27.0 (Phase 4 — AEC + audio quality), bumped
+    # from v0.24.0 per T1.51 because the bypass-coordinator wire-up
+    # gating Phase 2 + 3 must land first. Until then this fraction
+    # continues to drive the legacy ``LinuxALSAMixerResetBypass``
+    # band-aid; a non-default value surfaces a one-time WARN at boot
+    # via :func:`sovyx.engine.config.warn_on_deprecated_mixer_overrides`.
     linux_mixer_boost_reset_fraction: float = 0.0
     # Fraction of ``max_raw`` to set Capture-class controls to on apply.
     # ``0.5`` ≈ 0 dB for most codecs with the 0..80 / -40..+30 dB range
@@ -781,7 +910,8 @@ class VoiceTuningConfig(BaseSettings):
     # -22 dB → -10 dB. Above VAD floor, well below saturation ceiling.
     #
     # **Deprecated since v0.23.0** (Mission §9.1.1, Gap 1) — scheduled
-    # for removal in v0.24.0. The attenuation regime is increasingly
+    # for removal in v0.27.0 (Phase 4 — AEC + audio quality), bumped
+    # from v0.24.0 per T1.51. The attenuation regime is increasingly
     # handled by the in-process AGC2 closed-loop digital gain
     # (Layer 4 of the Linux mixer cascade), which recovers below-VAD-
     # floor signals without mutating the OS-level mixer. The KB
@@ -1496,8 +1626,11 @@ _DEPRECATED_MIXER_FRACTIONS: tuple[tuple[str, float], ...] = (
 
 The four hardcoded mixer fractions that drive the legacy
 ``LinuxALSAMixerResetBypass`` band-aid. Scheduled for removal in
-v0.24.0 once the L2.5 KB-driven preset cascade (Layer 3) + in-process
-AGC2 (Layer 4) replace both the saturation and attenuation regimes.
+v0.27.0 (Phase 4 — AEC + audio quality), bumped from v0.24.0 per
+T1.51, once the L2.5 KB-driven preset cascade (Layer 3) + in-process
+AGC2 (Layer 4) replace both the saturation and attenuation regimes
+AND the bypass-coordinator wire-up gating Phase 2 + 3 has soaked
+through one minor-version cycle.
 
 Until then the fractions remain settable via
 ``SOVYX_TUNING__VOICE__LINUX_MIXER_*_FRACTION`` env vars per the
@@ -1513,16 +1646,17 @@ def warn_on_deprecated_mixer_overrides(
     """Emit one boot-time WARN per non-default deprecated mixer fraction.
 
     Mission §9.1.1 / Gap 1b — the four ``linux_mixer_*_fraction`` knobs
-    are scheduled for removal in v0.24.0. Operators who set them via
-    YAML or ``SOVYX_TUNING__VOICE__LINUX_MIXER_*_FRACTION`` env vars
-    get a structured WARN at boot so they have one full minor-version
-    cycle to migrate to the L2.5 KB-driven preset cascade
+    are scheduled for removal in v0.27.0 (bumped from v0.24.0 per
+    T1.51). Operators who set them via YAML or
+    ``SOVYX_TUNING__VOICE__LINUX_MIXER_*_FRACTION`` env vars get a
+    structured WARN at boot so they have multiple minor-version
+    cycles to migrate to the L2.5 KB-driven preset cascade
     (Layer 3) + in-process AGC2 (Layer 4) replacement path.
 
     The WARN is opt-in by virtue of the operator having set a
     non-default value — a stock install with no overrides emits
     nothing. The migration plan §8 contract is "deprecation warnings
-    only, no behaviour change" until v0.24.0.
+    only, no behaviour change" until v0.27.0.
 
     Args:
         tuning: Pre-instantiated :class:`VoiceTuningConfig` (tests
@@ -1556,15 +1690,25 @@ def warn_on_deprecated_mixer_overrides(
                 "voice.config.field": field_name,
                 "voice.config.value": float(actual),
                 "voice.config.default": float(default_value),
-                "voice.config.removal_target": "v0.24.0",
+                # T1.51 — removal target bumped from v0.24.0 to v0.27.0
+                # (Phase 4) per
+                # ``MISSION-voice-final-skype-grade-2026.md``: the
+                # bypass-coordinator wire-up gating Phase 2 + 3 must
+                # land first; until then the legacy fractions remain
+                # functional but emit this WARN. Aligned with the
+                # function-level deprecation WARN in
+                # ``voice/health/_linux_mixer_apply.py`` and the
+                # bypass-strategy WARN in
+                # ``voice/health/bypass/_linux_alsa_mixer.py``.
+                "voice.config.removal_target": "v0.27.0",
                 "voice.action_required": (
                     f"{field_name} is deprecated and scheduled for "
-                    "removal in v0.24.0. The L2.5 KB-driven preset "
-                    "cascade (Layer 3) + in-process AGC2 (Layer 4) "
-                    "replace both the saturation and attenuation "
-                    "regimes the legacy fractions targeted. To "
-                    "silence this warning, unset the env override "
-                    "(SOVYX_TUNING__VOICE__"
+                    "removal in v0.27.0 (Phase 4 — AEC + audio quality). "
+                    "The L2.5 KB-driven preset cascade (Layer 3) + "
+                    "in-process AGC2 (Layer 4) replace both the "
+                    "saturation and attenuation regimes the legacy "
+                    "fractions targeted. To silence this warning, unset "
+                    "the env override (SOVYX_TUNING__VOICE__"
                     f"{field_name.upper()}) and let the new cascade "
                     "drive remediation. KB profile contribution: see "
                     "docs/contributing/voice-mixer-kb-profiles.md."

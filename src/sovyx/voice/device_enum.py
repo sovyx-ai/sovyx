@@ -41,6 +41,16 @@ from sovyx.observability.logging import get_logger
 logger = get_logger(__name__)
 
 # Ordered host-API preference per platform. First match wins.
+#
+# DEPRECATION (mission MISSION-voice-final-skype-grade-2026.md / T1.43):
+# the trailing legacy entries (``Windows DirectSound``, ``Windows WDM-KS``,
+# ``MME``, ``OSS``) are scheduled for removal in v0.27.0 (Phase 4 — AEC +
+# audio quality). Phase 2 + Phase 3 ship the Tier 1 RAW + Tier 2
+# host_api_rotate bypass coordinator paths that obsolete the "fall back
+# to legacy host APIs because nothing else works" preference. Once the
+# bypass coordinator is default-on and operator-validated, these entries
+# can be dropped — they currently serve only as safety nets for the
+# pre-v0.24.0 cascade contract.
 _HOST_API_PREFERENCE: tuple[str, ...] = (
     "Windows WASAPI",  # Win: native rate conversion, works w/ USB headsets
     "Core Audio",  # macOS
@@ -51,10 +61,10 @@ _HOST_API_PREFERENCE: tuple[str, ...] = (
     "PipeWire",
     "PulseAudio",  # Linux user-session
     "JACK Audio Connection Kit",  # Linux pro audio
-    "Windows DirectSound",  # Win legacy fallback 1
+    "Windows DirectSound",  # Win legacy fallback 1 — REMOVE v0.27.0 (T1.43)
     "Windows WDM-KS",  # Win kernel streaming (exclusive, skip by default)
-    "MME",  # Win legacy last resort — breaks rate conversion
-    "OSS",  # BSD
+    "MME",  # Win legacy last resort — REMOVE v0.27.0 (T1.43; breaks rate conv.)
+    "OSS",  # BSD — REMOVE v0.27.0 (T1.43; effectively dead host API)
 )
 
 

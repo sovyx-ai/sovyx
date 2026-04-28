@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -13,6 +14,10 @@ from sovyx.observability.saga import SagaHandle, begin_saga, end_saga
 from sovyx.observability.tasks import spawn
 from sovyx.voice._chaos import ChaosInjector, ChaosSite
 from sovyx.voice._observability_pii import mint_utterance_id
+from sovyx.voice._speaker_consistency import (
+    SpeakerConsistencyMonitor,
+    compute_spectral_centroid,
+)
 from sovyx.voice.health._metrics import record_time_to_first_utterance
 from sovyx.voice.health.contract import BypassVerdict
 from sovyx.voice.jarvis import JarvisConfig, JarvisIllusion, split_at_boundaries
@@ -36,6 +41,7 @@ from sovyx.voice.pipeline._frame_types import (
     PipelineFrame,
     TranscriptionFrame,
     UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
 )
 from sovyx.voice.pipeline._output_queue import AudioOutputQueue
 from sovyx.voice.pipeline._state import VoicePipelineState
@@ -85,34 +91,23 @@ _DEAF_WARNINGS_BEFORE_EXCLUSIVE_RETRY = _VoiceTuning().deaf_warnings_before_excl
 # rolling-window cumulative-drift detector so sustained-degradation
 # conditions surface independently of any single-frame violation.
 
-_FRAME_DROP_ABSOLUTE_BUDGET_S = 0.064
-"""Absolute per-frame inter-arrival budget. 64 ms = 2× the nominal
-32 ms cadence at 16 kHz / 512-sample window — chosen to match the
-perceptual threshold above which a real-time voice loop gains
-audible latency artefacts (Bencina, "Real-Time Audio Programming
-101", 2020). A single frame exceeding this budget produces a
-``voice.frame.drop_detected`` WARNING with ``threshold_kind=
-"absolute_budget"``."""
+_FRAME_DROP_ABSOLUTE_BUDGET_S = _VoiceTuning().pipeline_frame_drop_absolute_budget_seconds
+"""Absolute per-frame inter-arrival budget — see
+``VoiceTuningConfig.pipeline_frame_drop_absolute_budget_seconds``
+for the canonical schema with bound-validators. Module-level
+binding captures the value at import for the per-frame hot path."""
 
-_FRAME_DROP_DRIFT_WINDOW_FRAMES = 32
-"""Rolling window over which the cumulative-drift detector averages
-inter-arrival times. 32 frames at 16 kHz / 512-sample window =
-~1.024 s of audio — long enough to suppress per-frame jitter while
-short enough to react to sustained drift before the user notices."""
+_FRAME_DROP_DRIFT_WINDOW_FRAMES = _VoiceTuning().pipeline_frame_drop_drift_window_frames
+"""Rolling window for the cumulative-drift detector — see
+``VoiceTuningConfig.pipeline_frame_drop_drift_window_frames``."""
 
-_FRAME_DROP_DRIFT_RATIO = 1.10
-"""Mean inter-arrival ÷ expected interval threshold above which the
-cumulative-drift detector fires. 1.10 = 10% sustained drift; chosen
-because consistent +10% scheduling jitter accumulates ~3 ms per
-frame, which over 32 frames = ~100 ms of cumulative latency —
-audible. Below this the drift is noise; above it the drift is
-structurally problematic."""
+_FRAME_DROP_DRIFT_RATIO = _VoiceTuning().pipeline_frame_drop_drift_ratio
+"""Cumulative-drift firing threshold — see
+``VoiceTuningConfig.pipeline_frame_drop_drift_ratio``."""
 
-_FRAME_DROP_DRIFT_RATE_LIMIT_S = 1.0
-"""Minimum gap between successive ``voice.frame.cumulative_drift_detected``
-emissions. A sustained drift produces one event per second, not one
-per window — the dashboard already aggregates by minute, so per-second
-firing is enough resolution to localise onset/offset."""
+_FRAME_DROP_DRIFT_RATE_LIMIT_S = _VoiceTuning().pipeline_frame_drop_drift_rate_limit_seconds
+"""Minimum gap between cumulative-drift emissions — see
+``VoiceTuningConfig.pipeline_frame_drop_drift_rate_limit_seconds``."""
 
 
 # ── Band-aid #50 — VAD inference timeout guard ──────────────────────
@@ -139,19 +134,16 @@ firing is enough resolution to localise onset/offset."""
 #   * Rate-limit the WARN per ``_VAD_INFERENCE_TIMEOUT_WARN_INTERVAL_S``
 #     so a sustained slow-VAD condition produces a drumbeat, not a
 #     flood (matches the band-aid #9 pattern for sustained-underrun).
-_VAD_INFERENCE_TIMEOUT_S = 0.250
-"""Per-frame VAD inference budget. Silero VAD on a modern CPU runs
-in ~5–20 ms; 250 ms is ~10× typical, generous enough that healthy
-deployments never trip but tight enough that a wedged inference
-doesn't stall the audio pipeline for >0.25 s. Below that floor a
-single GC pause would false-fire."""
+_VAD_INFERENCE_TIMEOUT_S = _VoiceTuning().pipeline_vad_inference_timeout_seconds
+"""Per-frame VAD inference budget — see
+``VoiceTuningConfig.pipeline_vad_inference_timeout_seconds``."""
 
-_VAD_INFERENCE_TIMEOUT_WARN_INTERVAL_S = 5.0
-"""Minimum gap between two ``voice.vad.inference_timeout`` WARN logs.
-A sustained slow-VAD condition (CPU pinned, ONNX stuck) produces
-one WARN every 5 s, not one per frame (~30 Hz unbounded would
-drown the dashboard). 5 s matches the heartbeat cadence so an
-operator sees the issue within the first frame batch after onset."""
+_VAD_INFERENCE_TIMEOUT_WARN_INTERVAL_S = (
+    _VoiceTuning().pipeline_vad_inference_timeout_warn_interval_seconds
+)
+"""Rate-limit window for ``voice.vad.inference_timeout`` WARN logs
+— see
+``VoiceTuningConfig.pipeline_vad_inference_timeout_warn_interval_seconds``."""
 
 
 # ---------------------------------------------------------------------------
@@ -170,14 +162,34 @@ operator sees the issue within the first frame batch after onset."""
 #
 # Reference: MISSION-voice-mixer-enterprise-refactor-2026-04-25 §3.4, T1.
 
-_CANCELLATION_TASK_TIMEOUT_S = 1.0
-"""Maximum wall-clock seconds to wait for an individual cancelled TTS
-task to actually finish (``await task`` with timeout). 1 second is
-the SRE-canonical "if it isn't dead by now it's hung" budget — long
-enough for a graceful CancelledError teardown (typical: <50 ms)
-but short enough that a wedged task doesn't block the next turn.
-On timeout the task is recorded as ``cancellation_timeout`` in
-the chain event so operators can attribute the wedge."""
+_CANCELLATION_TASK_TIMEOUT_S = _VoiceTuning().pipeline_cancellation_task_timeout_seconds
+"""T1 atomic-cancellation chain — per-task timeout for cancelled
+in-flight TTS tasks. See
+``VoiceTuningConfig.pipeline_cancellation_task_timeout_seconds``."""
+
+
+_CONSECUTIVE_TTS_FAILURE_THRESHOLD = _VoiceTuning().pipeline_consecutive_tts_failure_threshold
+"""Mission Phase 1 / T1.21 — streaming TTS abort threshold. See
+``VoiceTuningConfig.pipeline_consecutive_tts_failure_threshold`` for
+the canonical schema with bound-validators."""
+
+
+_COORDINATOR_PENDING_TIMEOUT_S = _VoiceTuning().pipeline_coordinator_pending_timeout_seconds
+"""T1.14 watchdog deadline — see
+``VoiceTuningConfig.pipeline_coordinator_pending_timeout_seconds``."""
+
+
+_SPEAKER_CONSISTENCY_ENABLED = _VoiceTuning().pipeline_speaker_consistency_enabled
+"""T1.39 — gate for the spectral-centroid drift detector. See
+``VoiceTuningConfig.pipeline_speaker_consistency_enabled``."""
+
+_SPEAKER_DRIFT_WINDOW_SIZE = _VoiceTuning().pipeline_speaker_drift_window_size
+"""T1.39 — rolling-window size. See
+``VoiceTuningConfig.pipeline_speaker_drift_window_size``."""
+
+_SPEAKER_DRIFT_RATIO_THRESHOLD = _VoiceTuning().pipeline_speaker_drift_ratio_threshold
+"""T1.39 — relative-drift threshold. See
+``VoiceTuningConfig.pipeline_speaker_drift_ratio_threshold``."""
 
 
 class VoicePipeline:
@@ -251,6 +263,13 @@ class VoicePipeline:
         self._deaf_warnings_consecutive = 0
         self._coordinator_terminated = False
         self._coordinator_invocation_pending = False
+        # T1.14 — monotonic invocation counter used by the watchdog
+        # (``_reset_coordinator_pending_after_timeout``) to distinguish
+        # "my invocation is wedged" from "a SUBSEQUENT invocation
+        # legitimately set the flag". A fired-late watchdog whose
+        # captured count differs from the live count must NOT clear
+        # the flag — it belongs to a newer invocation.
+        self._coordinator_invocation_count = 0
         # O2 (Ring 6 atomic deaf-signal handling): explicit asyncio.Lock
         # serialises the deaf-signal flow. The pre-O2 design relied on
         # asyncio's single-threaded execution + a sync flag check-and-set
@@ -341,6 +360,18 @@ class VoicePipeline:
         # iterates and cancels every entry under
         # :attr:`_cancellation_lock` so concurrent barge-ins serialise.
         self._in_flight_tts_tasks: set[asyncio.Task[Any]] = set()
+        # T1.13 — guard ``_in_flight_tts_tasks`` mutations + the
+        # cancel-chain snapshot. Pre-T1.13 the set was mutated via bare
+        # ``.add()`` / ``.discard()`` calls; CPython's GIL makes those
+        # atomic at HEAD, but a future refactor that introduced an
+        # await between read-and-write inside the mutation path would
+        # silently lose atomicity. The lock makes the contract
+        # explicit. Snapshot at ``cancel_speech_chain`` step 2 also
+        # acquires briefly so a concurrent ``_track_tts_task`` can't
+        # land mid-snapshot. The iteration over the snapshot runs
+        # OUTSIDE the lock — see the residual-race note in
+        # ``cancel_speech_chain``'s docstring.
+        self._task_tracking_lock = asyncio.Lock()
         self._cancellation_lock = asyncio.Lock()
         # Optional upstream LLM cancellation hook. Cognitive layer
         # registers an awaitable that signals the LLM client to stop
@@ -361,6 +392,23 @@ class VoicePipeline:
         # emission. Only the wake-word path contributes (barge-in uses a
         # different SpeechStartedEvent site in _transition_to_recording).
         self._wake_detected_monotonic: float | None = None
+
+        # T1.39 — spectral-centroid drift detector. Per-pipeline state
+        # so each pipeline instance has its own rolling window;
+        # ``reset()`` is called at every WAKE_DETECTED transition so a
+        # voice swap across sessions doesn't false-trigger on the first
+        # chunk of the new session. ``None`` when the gate is disabled
+        # via ``pipeline_speaker_consistency_enabled=False`` —
+        # downstream call sites guard with ``is not None`` so the
+        # disabled path is fully cost-free.
+        self._speaker_consistency: SpeakerConsistencyMonitor | None = (
+            SpeakerConsistencyMonitor(
+                window_size=_SPEAKER_DRIFT_WINDOW_SIZE,
+                drift_ratio_threshold=_SPEAKER_DRIFT_RATIO_THRESHOLD,
+            )
+            if _SPEAKER_CONSISTENCY_ENABLED
+            else None
+        )
 
         # Frame inter-arrival tracking. O3 splits the pre-existing
         # single relative threshold into two complementary detectors:
@@ -386,6 +434,26 @@ class VoicePipeline:
         # for the WARN.
         self._vad_inference_timeouts: int = 0
         self._last_vad_timeout_warning_monotonic: float | None = None
+
+        # Mission Phase 1 / T1.21 — consecutive per-segment TTS
+        # failure counter for the streaming path. Reset on any
+        # successful synthesize-and-enqueue; triggers an abort when
+        # it crosses :data:`_CONSECUTIVE_TTS_FAILURE_THRESHOLD`.
+        self._consecutive_tts_segment_failures: int = 0
+
+        # Mission Phase 1 / T1.18 — frame-drop counter for the
+        # ``not_running`` early-return path in :meth:`feed_frame`.
+        # Pre-T1.18 frames arriving while ``_running`` was False were
+        # silently discarded — a stale audio producer (capture task
+        # not yet stopped or restarted out-of-order) could push frames
+        # at 50 Hz with zero observability. The counter accumulates
+        # over a single pipeline lifetime; a structured
+        # ``voice.pipeline.frame_dropped_not_running`` event fires
+        # rate-limited once per
+        # :data:`_FRAME_DROP_DRIFT_RATE_LIMIT_S` window so dashboards
+        # see the misuse without log spam.
+        self._frames_dropped_not_running: int = 0
+        self._last_frame_drop_warning_monotonic: float | None = None
 
         # Band-aid #46 — false-wake rejection counter. Lifetime count
         # of utterances dropped by the STT-confidence gate (visible
@@ -678,8 +746,22 @@ class VoicePipeline:
     async def start(self) -> None:
         """Initialize the pipeline and pre-cache fillers.
 
-        Call this before feeding frames.
+        Call this before feeding frames. Double-start is a no-op
+        — every existing in-flight task / pre-cached filler / state
+        from the prior :meth:`start` is preserved and the second
+        invocation logs ``voice.pipeline.start_already_running_ignored``
+        so dashboards see the misuse without a crash. Mission Phase 1
+        T1.11 — guards against orphaned filler tasks + duplicated
+        pre-cache work that the spec's "start() called twice orphans
+        first saga + tasks" finding documented.
         """
+        if self._running:
+            logger.info(
+                "voice.pipeline.start_already_running_ignored",
+                mind_id=self._config.mind_id,
+                state=self._state.name,
+            )
+            return
         await self._jarvis.pre_cache()
         self._running = True
         self._state = VoicePipelineState.IDLE
@@ -691,16 +773,104 @@ class VoicePipeline:
         )
 
     async def stop(self) -> None:
-        """Stop the pipeline and clean up."""
+        """Stop the pipeline and drain in-flight work before returning.
+
+        Mission Phase 1 T1.10 — pre-fix the call set ``_running=False``
+        and returned immediately, leaving any in-flight TTS synthesis
+        task to push audio onto a closed pipeline (the user heard
+        stale audio after explicit stop). Post-fix sequence:
+
+        1. Emit ``voice.pipeline.stop_begin`` so dashboards see the
+           tear-down boundary.
+        2. Set ``_running=False`` so :meth:`feed_frame` short-circuits
+           with ``"not_running"`` for any concurrent producer.
+        3. Snapshot ``_filler_task`` BEFORE :meth:`_cancel_filler`
+           nulls it out, then await the cancellation with a
+           ``_CANCELLATION_TASK_TIMEOUT_S`` budget.
+        4. Interrupt the output queue (idempotent).
+        5. Snapshot ``_in_flight_tts_tasks``, cancel each, await with
+           the same per-task budget. ``CancelledError`` + ``TimeoutError``
+           both count as "drained" so a wedged TTS backend doesn't
+           stall :meth:`stop`; unexpected exceptions log a structured
+           WARN but don't propagate.
+        6. Reset state, release the self-feedback duck, emit
+           ``voice.pipeline.stop_complete`` with drain counters.
+        """
+        logger.info("voice.pipeline.stop_begin", mind_id=self._config.mind_id)
+
         self._running = False
+
+        # Snapshot the filler task BEFORE _cancel_filler() nulls it.
+        filler_task = self._filler_task
+        filler_was_active = filler_task is not None and not filler_task.done()
         self._cancel_filler()
+        if filler_was_active and filler_task is not None:
+            # CancelledError is the expected outcome of cancel();
+            # TimeoutError means the filler ignored cancellation within
+            # budget — tracked via filler_was_active so the
+            # stop_complete log surfaces it. Both terminate the wait
+            # without propagating; see AP-27 for the suppress pattern.
+            with contextlib.suppress(asyncio.CancelledError, TimeoutError):
+                await asyncio.wait_for(
+                    asyncio.shield(filler_task),
+                    timeout=_CANCELLATION_TASK_TIMEOUT_S,
+                )
+            logger.debug(
+                "voice.pipeline.stop_filler_drain_attempted",
+                reason="best-effort wait for filler cancellation",
+            )
+
+        # Interrupt active playback (idempotent).
         self._output.interrupt()
+
+        # Snapshot the in-flight TTS set so iteration is stable while
+        # tasks self-remove via _untrack_tts_task in their finally
+        # blocks (same pattern as cancel_speech_chain step 2).
+        #
+        # T1.13 — snapshot acquires ``_task_tracking_lock`` briefly to
+        # serialize against concurrent ``_track_tts_task``; iteration
+        # outside the lock for the same reason as cancel_speech_chain.
+        async with self._task_tracking_lock:
+            tts_snapshot = tuple(self._in_flight_tts_tasks)
+        tts_drained = 0
+        for task in tts_snapshot:
+            if task.done():
+                tts_drained += 1
+                continue
+            task.cancel()
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(task),
+                    timeout=_CANCELLATION_TASK_TIMEOUT_S,
+                )
+                tts_drained += 1
+            except (asyncio.CancelledError, TimeoutError):
+                # Both count as drained — CancelledError is the
+                # success path; TimeoutError means we asked nicely
+                # within budget and the task didn't honour it, but
+                # we still leave the orchestrator in a quiesced state.
+                tts_drained += 1
+            except Exception as exc:  # noqa: BLE001 — stop must never raise
+                logger.warning(
+                    "voice.pipeline.stop_tts_task_unexpected",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
         self._state = VoicePipelineState.IDLE
         self._utterance_frames.clear()
         if self._self_feedback_gate is not None:
             # Release the duck so a mid-TTS stop doesn't leave the
             # capture normalizer attenuated for the next session.
             self._self_feedback_gate.on_tts_end()
+
+        logger.info(
+            "voice.pipeline.stop_complete",
+            mind_id=self._config.mind_id,
+            tts_tasks_drained=tts_drained,
+            tts_tasks_total=len(tts_snapshot),
+            filler_was_active=filler_was_active,
+        )
         logger.info("VoicePipeline stopped", mind_id=self._config.mind_id)
 
     # -- Frame processing (main loop) ----------------------------------------
@@ -719,6 +889,35 @@ class VoicePipeline:
             Dict with ``state`` and optional ``event`` / ``transcription`` keys.
         """
         if not self._running:
+            # Mission Phase 1 / T1.18 — a frame arriving while
+            # ``_running`` is False indicates a stale producer (capture
+            # task not yet stopped after pipeline.stop, or restarted
+            # mid-cycle out of order). Count + rate-limited structured
+            # WARN so dashboards see the producer's misuse without
+            # per-frame log spam (the producer can hit this path at
+            # 50 Hz indefinitely).
+            self._frames_dropped_not_running += 1
+            now_drop = time.monotonic()
+            if (
+                self._last_frame_drop_warning_monotonic is None
+                or now_drop - self._last_frame_drop_warning_monotonic
+                >= _FRAME_DROP_DRIFT_RATE_LIMIT_S
+            ):
+                self._last_frame_drop_warning_monotonic = now_drop
+                logger.warning(
+                    "voice.pipeline.frame_dropped_not_running",
+                    **{
+                        "voice.mind_id": self._config.mind_id,
+                        "voice.dropped_count": self._frames_dropped_not_running,
+                        "voice.last_state": self._state.name,
+                        "voice.action_required": (
+                            "Audio producer is feeding frames after "
+                            "pipeline.stop() returned. Either stop the "
+                            "producer first or call pipeline.start() "
+                            "before feeding."
+                        ),
+                    },
+                )
             return {"state": self._state.name, "event": "not_running"}
 
         # O3 frame-drop detection — see _check_frame_drop_signals for
@@ -769,6 +968,25 @@ class VoicePipeline:
                         ),
                     },
                 )
+                # Mission Phase 1 / T1.19 — emit PipelineErrorEvent so
+                # dashboards see the timeout in the structured event
+                # stream alongside the WARN (the WARN-only signal was
+                # invisible to widgets that key off the event bus).
+                # Gated on the rate-limit window so the per-frame 50 Hz
+                # storm under sustained CPU pressure produces one event
+                # per ``_VAD_INFERENCE_TIMEOUT_WARN_INTERVAL_S`` window
+                # rather than 50 events/sec on the bus.
+                await self._emit(
+                    PipelineErrorEvent(
+                        mind_id=self._config.mind_id,
+                        error=(
+                            f"vad_inference_timeout (timeout_s="
+                            f"{_VAD_INFERENCE_TIMEOUT_S}, "
+                            f"lifetime_count={self._vad_inference_timeouts})"
+                        ),
+                        utterance_id=self._current_utterance_id,
+                    )
+                )
             return {"state": self._state.name, "event": "vad_timeout"}
 
         self._track_vad_for_heartbeat(vad_event.probability)
@@ -813,6 +1031,16 @@ class VoicePipeline:
         if ww_event.detected:
             self._state = VoicePipelineState.WAKE_DETECTED
             self._wake_detected_monotonic = time.monotonic()
+            # T1.39 — reset the spectral-centroid baseline on every
+            # session boundary. A new session may legitimately use a
+            # different voice (operator switched mind / cognitive
+            # layer picked a different persona); carrying the prior
+            # session's baseline across the boundary would surface a
+            # false-positive drift on the first chunk of the new
+            # session. Cheap (deque.clear()); no-op when the gate
+            # is disabled.
+            if self._speaker_consistency is not None:
+                self._speaker_consistency.reset()
             # Mission §2.6 Ring 6 — mint trace id BEFORE the first
             # event so WakeWordDetectedEvent is the head of the
             # per-utterance span set. Every downstream emission
@@ -1023,6 +1251,25 @@ class VoicePipeline:
         """End recording and transcribe the utterance."""
         import numpy as np
 
+        # Mission Phase 1 / T1.16 — Pipecat-aligned UserStoppedSpeaking
+        # frame at the RECORDING → TRANSCRIBING boundary. Mirrors the
+        # UserStartedSpeakingFrame emitted at WAKE_DETECTED → RECORDING
+        # (line 924) and at the no-wake / barge-in transition
+        # (line 1088), so the per-utterance frame_history span is
+        # bracketed on both ends. Emitted BEFORE the state mutation so
+        # the frame's monotonic timestamp lines up with the moment
+        # silence-end was detected (the trailing frames have already
+        # been counted in self._utterance_frames at this point). The
+        # silero_prob_snapshot carries the last observed VAD probability
+        # so dashboards can correlate the transition with the VAD curve.
+        self._record_frame(
+            UserStoppedSpeakingFrame(
+                frame_type="UserStoppedSpeaking",
+                timestamp_monotonic=time.monotonic(),
+                silero_prob_snapshot=self._max_vad_prob_since_heartbeat,
+            ),
+        )
+
         self._state = VoicePipelineState.TRANSCRIBING
         utterance_id = self._current_utterance_id
 
@@ -1223,6 +1470,21 @@ class VoicePipeline:
                     error=str(exc),
                     **{"voice.utterance_id": utterance_id},
                 )
+                # Mission Phase 1 / T1.20 — emit PipelineErrorEvent so
+                # the dashboard's error-banner widget surfaces the
+                # cognitive-layer failure (the log-only signal was
+                # invisible to bus-keyed widgets). The callback
+                # isolation contract still holds: the exception is
+                # swallowed so a buggy cognitive layer can't take down
+                # the voice pipeline; the event is the structured
+                # observability trail.
+                await self._emit(
+                    PipelineErrorEvent(
+                        mind_id=self._config.mind_id,
+                        error=f"perception_callback_failed: {exc}",
+                        utterance_id=utterance_id,
+                    )
+                )
         else:
             # No callback wired — transcription has nowhere to go. This
             # is the "voice enabled but cognitive loop not registered"
@@ -1353,6 +1615,25 @@ class VoicePipeline:
             try:
                 chunk = await self._synthesize_tracked(segment)
                 await self._output.enqueue(chunk)
+                # T1.39 — observe the spectral-centroid drift on every
+                # successfully-emitted chunk. The DSP runs in a worker
+                # thread (CLAUDE.md anti-pattern #14 — keep CPU-bound
+                # work off the asyncio loop, even sub-millisecond
+                # bursts). On drift the WARN + PipelineErrorEvent
+                # mirror the T1.36 / T1.19 / T1.20 pattern; no
+                # automatic fallback (operator-disruptive without
+                # explicit opt-in). Skipped entirely when the gate is
+                # disabled so resource-constrained deployments pay
+                # zero DSP cost.
+                await self._observe_speaker_drift(chunk)
+                # Mission Phase 1 / T1.21 — successful segment resets
+                # the consecutive-failure counter so a transient
+                # hiccup mid-stream doesn't poison the rest of the
+                # response. Inlined here (rather than in a try-else
+                # clause) because the try block also has an
+                # ``except asyncio.CancelledError`` clause and Python
+                # forbids ``else`` between ``except`` clauses.
+                self._consecutive_tts_segment_failures = 0
             except (VoiceError, RuntimeError, OSError) as exc:
                 # Per-segment resilience during streaming: skip the
                 # bad segment, keep speaking the rest. Traceback
@@ -1362,14 +1643,75 @@ class VoicePipeline:
                     error=str(exc),
                     exc_info=True,
                 )
+                # Mission Phase 1 / T1.21 — track consecutive failures
+                # and abort the stream when the TTS backend is wedged
+                # (model corrupt, runtime OOM, infinite-loop bug).
+                # Pre-T1.21 the loop kept iterating forever burning
+                # compute on every incoming LLM segment with no
+                # audible output. ``_consecutive_tts_segment_failures``
+                # resets on the first successful segment below.
+                self._consecutive_tts_segment_failures += 1
+                if self._consecutive_tts_segment_failures >= _CONSECUTIVE_TTS_FAILURE_THRESHOLD:
+                    buffered_chars = len(self._text_buffer)
+                    self._text_buffer = ""
+                    logger.error(
+                        "voice.tts.stream_aborted_consecutive_failures",
+                        **{
+                            "voice.mind_id": self._config.mind_id,
+                            "voice.consecutive_failures": (self._consecutive_tts_segment_failures),
+                            "voice.threshold": _CONSECUTIVE_TTS_FAILURE_THRESHOLD,
+                            "voice.last_error": str(exc)[:200],
+                            "voice.last_error_type": type(exc).__name__,
+                            "voice.buffered_text_chars_dropped": buffered_chars,
+                            "voice.action_required": (
+                                "TTS backend produced consecutive errors. "
+                                "Check the engine state (Piper model file "
+                                "integrity, Kokoro ONNX session, or cloud "
+                                "endpoint reachability via `sovyx doctor "
+                                "voice`). Stream aborted to release the "
+                                "cognitive layer; the next utterance will "
+                                "rebuild from a clean state."
+                            ),
+                        },
+                    )
+                    await self._emit(
+                        PipelineErrorEvent(
+                            mind_id=self._config.mind_id,
+                            error=(
+                                f"stream_aborted_consecutive_failures "
+                                f"(count={self._consecutive_tts_segment_failures}, "
+                                f"last={type(exc).__name__})"
+                            ),
+                            utterance_id=self._current_utterance_id,
+                        )
+                    )
+                    # Reset counter so the next stream_text call
+                    # starts clean — the abort already broke the
+                    # current stream's contract with the caller.
+                    self._consecutive_tts_segment_failures = 0
+                    return
             except asyncio.CancelledError:
                 # T1 barge-in cancelled this segment via
                 # cancel_speech_chain. Stop iterating and let the
                 # next turn re-establish the LLM stream — the
                 # remaining segments belong to a discarded utterance.
+                #
+                # Mission Phase 1 / T1.15 — clear ``_text_buffer``
+                # directly in this handler. Pre-T1.15 the cleanup was
+                # assumed via cancel_speech_chain step 5, but this
+                # path can be reached without the chain running
+                # (cognitive-layer task cancellation, event-loop
+                # shutdown). Clearing locally makes the cleanup
+                # invariant hold regardless of which cancel source
+                # fired. ``cancel_speech_chain`` step 5 stays as the
+                # belt-and-suspenders cleanup for paths that don't
+                # touch ``stream_text`` at all.
+                buffered_chars = len(self._text_buffer)
+                self._text_buffer = ""
                 logger.info(
-                    "voice.tts.stream_segment_cancelled",
+                    "voice.tts.stream_text_cancelled",
                     mind_id=self._config.mind_id,
+                    buffered_text_chars=buffered_chars,
                 )
                 return
 
@@ -1380,6 +1722,23 @@ class VoicePipeline:
         """Flush remaining buffered text to TTS.
 
         Call when the LLM stream ends to synthesize the last segment.
+
+        T1.34 — every cancellation path in this method now interrupts
+        the output queue before exiting. Pre-T1.34 the
+        ``except asyncio.CancelledError`` in the synthesize block
+        cleared the text buffer but left any audio already enqueued by
+        prior chunks of the streaming session sitting in the output
+        queue, and a cancellation landing on the final
+        ``await self._output.drain()`` likewise leaked queued audio.
+        ``cancel_speech_chain`` always interrupts the output queue at
+        step 1 BEFORE it cancels in-flight tasks (step 2), so the
+        normal barge-in path was already covered transitively. T1.34
+        closes the off-path cases — asyncio loop teardown during
+        daemon shutdown, an external task cancelling the flush via
+        ``task.cancel()`` without going through ``cancel_speech_chain``
+        — by making the interrupt explicit here. Belt + suspenders;
+        ``interrupt()`` is idempotent so the upstream
+        ``cancel_speech_chain`` path is unaffected.
         """
         if self._text_buffer.strip():
             try:
@@ -1390,6 +1749,15 @@ class VoicePipeline:
                 # discard the tail (the user already barged in) and
                 # let the next turn rebuild from a clean buffer.
                 self._text_buffer = ""
+                # T1.34 — clear any audio already enqueued during this
+                # flush_stream call so the next utterance starts with
+                # an empty output queue. ``interrupt()`` is idempotent
+                # against the cancel_speech_chain step-1 interrupt that
+                # routed us here in the barge-in case; on off-path
+                # cancellations (loop teardown, direct task.cancel())
+                # this is the ONLY interrupt that runs.
+                with contextlib.suppress(Exception):
+                    self._output.interrupt()
                 logger.info(
                     "voice.tts.flush_cancelled",
                     mind_id=self._config.mind_id,
@@ -1407,7 +1775,17 @@ class VoicePipeline:
         self._text_buffer = ""
 
         # Drain all queued audio
-        await self._output.drain()
+        try:
+            await self._output.drain()
+        except asyncio.CancelledError:
+            # T1.34 — drain was cancelled mid-flight. Clear remaining
+            # audio (drain WAITS for playback to finish; it does not
+            # itself empty the queue, so a cancel here leaves the
+            # queue non-empty). Interrupt + re-raise so the cancellation
+            # still propagates to the caller.
+            with contextlib.suppress(Exception):
+                self._output.interrupt()
+            raise
 
         completed_utterance_id = self._current_utterance_id
         self._state = VoicePipelineState.IDLE
@@ -1619,6 +1997,10 @@ class VoicePipeline:
             return
 
         self._coordinator_invocation_pending = True
+        # T1.14 — bump the invocation counter BEFORE the spawn so the
+        # watchdog captures the same count the spawned task observes.
+        self._coordinator_invocation_count += 1
+        captured_invocation_count = self._coordinator_invocation_count
         logger.warning(
             "voice.deaf.detected",
             **{
@@ -1634,6 +2016,17 @@ class VoicePipeline:
         # Schedule the coordinator on the running loop — this helper
         # runs on the per-frame hot path and must not block.
         spawn(self._invoke_deaf_signal(), name="voice-pipeline-deaf-signal")
+        # T1.14 watchdog — if the spawned coordinator wedges (callback
+        # in a sync OS call wrapped in to_thread, etc.) the T1.23
+        # outer-finally never runs and the pending flag stays True
+        # forever, locking out subsequent deaf-signal handling. The
+        # watchdog force-clears the flag at
+        # ``_COORDINATOR_PENDING_TIMEOUT_S`` if it's still set AND
+        # belongs to THIS invocation (counter guard).
+        spawn(
+            self._reset_coordinator_pending_after_timeout(captured_invocation_count),
+            name="voice-pipeline-coord-pending-watchdog",
+        )
 
     async def _invoke_deaf_signal(self) -> None:
         """Invoke the deaf-signal callback and surface its outcomes (O2).
@@ -1686,152 +2079,252 @@ class VoicePipeline:
           :class:`EndpointQuarantine` so the factory fails over to
           another capture device on next boot.
         """
-        callback = self._on_deaf_signal
-        if callback is None:
-            self._coordinator_invocation_pending = False
-            return
-
-        async with self._coordinator_lock:
-            # Re-validate guards under the lock — between spawn and
-            # acquisition the world may have changed.
-            if self._coordinator_terminated:
-                self._coordinator_invocation_pending = False
-                self._record_coordinator_dedup("terminated_by_concurrent_task")
+        # T1.23 — outer try/finally wraps the entire body so the
+        # pending flag clears on EVERY exit path, including cancellation
+        # between spawn and lock acquisition. Pre-T1.23 the flag was
+        # cleared at four scattered sites (callback-None early return,
+        # terminated dedup, threshold dedup, callback-exception
+        # finally inside the lock); a CancelledError landing on
+        # ``async with self._coordinator_lock`` (or anywhere outside the
+        # inner try block) would leak the flag and lock out every
+        # subsequent deaf-signal trigger via the
+        # ``_coordinator_invocation_pending`` guard at
+        # :meth:`_maybe_invoke_deaf_signal` line 1904. Single outer
+        # finally is the canonical "always reset" pattern.
+        try:
+            callback = self._on_deaf_signal
+            if callback is None:
                 return
-            if self._deaf_warnings_consecutive < self._auto_bypass_threshold:
-                self._coordinator_invocation_pending = False
-                self._record_coordinator_dedup("threshold_no_longer_met")
-                return
 
-            # Snapshot + reset — see method docstring for the tight-retry
-            # rationale. The snapshot is what we report in telemetry so
-            # the recovery_attempted event reflects the counter that
-            # justified this specific invocation, not a value mutated
-            # mid-flight by concurrent heartbeats.
-            invocation_counter_snapshot = self._deaf_warnings_consecutive
-            self._deaf_warnings_consecutive = 0
+            async with self._coordinator_lock:
+                # Re-validate guards under the lock — between spawn and
+                # acquisition the world may have changed.
+                if self._coordinator_terminated:
+                    self._record_coordinator_dedup("terminated_by_concurrent_task")
+                    return
+                if self._deaf_warnings_consecutive < self._auto_bypass_threshold:
+                    self._record_coordinator_dedup("threshold_no_longer_met")
+                    return
 
-            logger.warning(
-                "voice.deaf.recovery_attempted",
-                **{
-                    "voice.mind_id": self._config.mind_id,
-                    "voice.consecutive_deaf_warnings": invocation_counter_snapshot,
-                    "voice.threshold": self._auto_bypass_threshold,
-                    "voice.voice_clarity_active": self._voice_clarity_active,
-                    "voice.auto_bypass_enabled": self._auto_bypass_enabled,
-                },
-            )
-            try:
-                outcomes = await callback()
-            except Exception as exc:  # noqa: BLE001 — callback is user-supplied; shield the pipeline
-                logger.error(
-                    "voice_apo_bypass_failed",
-                    mind_id=self._config.mind_id,
-                    error=str(exc),
-                    error_type=type(exc).__name__,
-                )
-                logger.error(
-                    "audio.apo.bypassed",
+                # Snapshot + reset — see method docstring for the tight-retry
+                # rationale. The snapshot is what we report in telemetry so
+                # the recovery_attempted event reflects the counter that
+                # justified this specific invocation, not a value mutated
+                # mid-flight by concurrent heartbeats.
+                invocation_counter_snapshot = self._deaf_warnings_consecutive
+                self._deaf_warnings_consecutive = 0
+
+                logger.warning(
+                    "voice.deaf.recovery_attempted",
                     **{
-                        "voice.verdict": "failure",
                         "voice.mind_id": self._config.mind_id,
-                        "voice.attempts": 0,
-                        "voice.strategies": [],
-                        "voice.outcomes": [],
-                        "voice.error": str(exc),
-                        "voice.error_type": type(exc).__name__,
+                        "voice.consecutive_deaf_warnings": invocation_counter_snapshot,
+                        "voice.threshold": self._auto_bypass_threshold,
                         "voice.voice_clarity_active": self._voice_clarity_active,
+                        "voice.auto_bypass_enabled": self._auto_bypass_enabled,
                     },
                 )
-                return
-            finally:
-                self._coordinator_invocation_pending = False
+                try:
+                    outcomes = await callback()
+                except Exception as exc:  # noqa: BLE001 — callback is user-supplied; shield the pipeline
+                    logger.error(
+                        "voice_apo_bypass_failed",
+                        mind_id=self._config.mind_id,
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                    )
+                    logger.error(
+                        "audio.apo.bypassed",
+                        **{
+                            "voice.verdict": "failure",
+                            "voice.mind_id": self._config.mind_id,
+                            "voice.attempts": 0,
+                            "voice.strategies": [],
+                            "voice.outcomes": [],
+                            "voice.error": str(exc),
+                            "voice.error_type": type(exc).__name__,
+                            "voice.voice_clarity_active": self._voice_clarity_active,
+                        },
+                    )
+                    return
 
-            if not outcomes:
-                # Coordinator short-circuited (false-alarm probe or prior
-                # resolution). Don't burn the terminal flag — we may still
-                # want to retry if deafness persists after a transient
-                # clear. The counter snapshot+reset above already broke
-                # the pre-O2 tight-retry pattern.
-                return
+                if not outcomes:
+                    # Coordinator short-circuited (false-alarm probe or prior
+                    # resolution). Don't burn the terminal flag — we may still
+                    # want to retry if deafness persists after a transient
+                    # clear. The counter snapshot+reset above already broke
+                    # the pre-O2 tight-retry pattern.
+                    return
 
-            self._coordinator_terminated = True
-            applied_healthy = next(
-                (o for o in outcomes if o.verdict is BypassVerdict.APPLIED_HEALTHY),
-                None,
-            )
-            if applied_healthy is not None:
-                logger.warning(
-                    "voice_apo_bypass_activated",
-                    mind_id=self._config.mind_id,
-                    strategy_name=applied_healthy.strategy_name,
-                    attempt_index=applied_healthy.attempt_index,
-                    reason=applied_healthy.detail,
-                    voice_clarity_active=self._voice_clarity_active,
-                    consecutive_deaf_warnings=invocation_counter_snapshot,
-                    threshold=self._auto_bypass_threshold,
-                    action="capture_integrity_coordinator",
+                self._coordinator_terminated = True
+                applied_healthy = next(
+                    (o for o in outcomes if o.verdict is BypassVerdict.APPLIED_HEALTHY),
+                    None,
                 )
-                logger.warning(
+                if applied_healthy is not None:
+                    logger.warning(
+                        "voice_apo_bypass_activated",
+                        mind_id=self._config.mind_id,
+                        strategy_name=applied_healthy.strategy_name,
+                        attempt_index=applied_healthy.attempt_index,
+                        reason=applied_healthy.detail,
+                        voice_clarity_active=self._voice_clarity_active,
+                        consecutive_deaf_warnings=invocation_counter_snapshot,
+                        threshold=self._auto_bypass_threshold,
+                        action="capture_integrity_coordinator",
+                    )
+                    logger.warning(
+                        "audio.apo.bypassed",
+                        **{
+                            "voice.verdict": "success",
+                            "voice.mind_id": self._config.mind_id,
+                            "voice.strategy_name": applied_healthy.strategy_name,
+                            "voice.attempt_index": applied_healthy.attempt_index,
+                            "voice.attempts": len(outcomes),
+                            "voice.strategies": [o.strategy_name for o in outcomes],
+                            "voice.outcomes": [o.verdict.value for o in outcomes],
+                            "voice.reason": applied_healthy.detail,
+                            "voice.voice_clarity_active": self._voice_clarity_active,
+                            "voice.consecutive_deaf_warnings": invocation_counter_snapshot,
+                            "voice.threshold": self._auto_bypass_threshold,
+                        },
+                    )
+                    return
+
+                # Every strategy either failed to apply or applied-but-still-dead.
+                # The coordinator has already quarantined the endpoint; surface a
+                # single operator-facing event so the dashboard / doctor can
+                # switch their messaging to "auto-fix could not recover — see
+                # manual remediation steps".
+                logger.error(
+                    "voice_apo_bypass_ineffective",
+                    mind_id=self._config.mind_id,
+                    attempts=len(outcomes),
+                    strategies=[o.strategy_name for o in outcomes],
+                    verdicts=[o.verdict.value for o in outcomes],
+                    voice_clarity_active=self._voice_clarity_active,
+                    hint=(
+                        "CaptureIntegrityCoordinator exhausted every eligible "
+                        "bypass strategy. Endpoint quarantined for apo_quarantine_s; "
+                        "factory will fail over to an alternate capture device on "
+                        "next boot. Likely causes: firmware-level DSP on the mic, "
+                        "a virtual audio cable with a fixed format, a damaged "
+                        "capture element, or an APO not yet covered by a "
+                        "platform strategy. Try manually disabling all "
+                        "enhancements in the OS sound settings or switch capture "
+                        "device."
+                    ),
+                )
+                # "partial" verdict: at least one strategy applied cleanly but
+                # the post-apply re-probe still classified the signal as dead;
+                # otherwise every strategy either failed-to-apply or was not
+                # applicable, which is a flat failure.
+                any_applied = any(o.verdict is BypassVerdict.APPLIED_STILL_DEAD for o in outcomes)
+                bypass_verdict = "partial" if any_applied else "failure"
+                logger.error(
                     "audio.apo.bypassed",
                     **{
-                        "voice.verdict": "success",
+                        "voice.verdict": bypass_verdict,
                         "voice.mind_id": self._config.mind_id,
-                        "voice.strategy_name": applied_healthy.strategy_name,
-                        "voice.attempt_index": applied_healthy.attempt_index,
                         "voice.attempts": len(outcomes),
                         "voice.strategies": [o.strategy_name for o in outcomes],
                         "voice.outcomes": [o.verdict.value for o in outcomes],
-                        "voice.reason": applied_healthy.detail,
                         "voice.voice_clarity_active": self._voice_clarity_active,
-                        "voice.consecutive_deaf_warnings": invocation_counter_snapshot,
-                        "voice.threshold": self._auto_bypass_threshold,
+                        "voice.quarantined": True,
                     },
                 )
-                return
+        finally:
+            # T1.23 — reset the pending flag on every exit path. The
+            # outer try wraps the entire body (callback-None early return,
+            # the lock acquisition, the re-validate guards, the snapshot
+            # + reset, the inner callback try/except, and the outcomes
+            # processing) so a CancelledError landing anywhere — including
+            # while waiting on ``self._coordinator_lock`` — clears the
+            # flag instead of leaking it. Pre-T1.23 a leaked flag locked
+            # out every subsequent deaf-signal trigger via the
+            # ``_coordinator_invocation_pending`` short-circuit at
+            # :meth:`_maybe_invoke_deaf_signal`.
+            self._coordinator_invocation_pending = False
 
-            # Every strategy either failed to apply or applied-but-still-dead.
-            # The coordinator has already quarantined the endpoint; surface a
-            # single operator-facing event so the dashboard / doctor can
-            # switch their messaging to "auto-fix could not recover — see
-            # manual remediation steps".
-            logger.error(
-                "voice_apo_bypass_ineffective",
-                mind_id=self._config.mind_id,
-                attempts=len(outcomes),
-                strategies=[o.strategy_name for o in outcomes],
-                verdicts=[o.verdict.value for o in outcomes],
-                voice_clarity_active=self._voice_clarity_active,
-                hint=(
-                    "CaptureIntegrityCoordinator exhausted every eligible "
-                    "bypass strategy. Endpoint quarantined for apo_quarantine_s; "
-                    "factory will fail over to an alternate capture device on "
-                    "next boot. Likely causes: firmware-level DSP on the mic, "
-                    "a virtual audio cable with a fixed format, a damaged "
-                    "capture element, or an APO not yet covered by a "
-                    "platform strategy. Try manually disabling all "
-                    "enhancements in the OS sound settings or switch capture "
-                    "device."
+    async def _reset_coordinator_pending_after_timeout(
+        self, captured_invocation_count: int
+    ) -> None:
+        """T1.14 watchdog — clear ``_coordinator_invocation_pending``
+        if a wedged ``_invoke_deaf_signal`` task never reaches its
+        T1.23 outer-finally.
+
+        T1.23 wraps ``_invoke_deaf_signal`` in an outer try/finally
+        that clears the pending flag on every exit path including
+        cancellation. That covers wedged callbacks the asyncio
+        runtime CAN cancel (e.g. ``await asyncio.sleep(...)`` inside
+        the callback). It does NOT cover wedges where the callback
+        is in a synchronous OS call wrapped in
+        ``asyncio.to_thread(...)`` and that OS call doesn't honour
+        thread cancellation — the awaiting asyncio task can be
+        cancelled but the worker thread keeps running, and if the
+        cancel happens to be eaten somewhere upstream, the flag
+        stays True. Net effect: deaf-signal handling locked out
+        until process restart.
+
+        This watchdog is the safety net. ``_maybe_invoke_deaf_signal``
+        spawns it alongside the coordinator task with the current
+        invocation count captured. After
+        :data:`_COORDINATOR_PENDING_TIMEOUT_S` (30 s default), the
+        watchdog wakes and:
+
+          * If ``self._coordinator_invocation_count !=
+            captured_invocation_count``, a SUBSEQUENT invocation
+            has fired since this watchdog was spawned. The current
+            flag belongs to that newer invocation, NOT to ours;
+            no-op (the newer invocation has its own watchdog).
+          * If the count matches AND
+            ``self._coordinator_invocation_pending`` is still True,
+            the original invocation IS wedged. Force-clear the flag
+            and emit ``voice.coordinator.pending_flag_timeout_reset``
+            so dashboards can attribute the unlock.
+          * If the count matches AND the flag is False, the original
+            invocation completed cleanly (T1.23 outer-finally
+            cleared it). No-op.
+
+        Cancellation: if the watchdog is itself cancelled (loop
+        teardown, etc.), suppress and return. The next deaf-signal
+        trigger spawns a fresh watchdog.
+        """
+        try:
+            await asyncio.sleep(_COORDINATOR_PENDING_TIMEOUT_S)
+        except asyncio.CancelledError:
+            return
+
+        if self._coordinator_invocation_count != captured_invocation_count:
+            # A newer invocation owns the live flag — leave it alone.
+            return
+        if not self._coordinator_invocation_pending:
+            # The original invocation completed cleanly via T1.23
+            # outer-finally; nothing to do.
+            return
+
+        # Wedged invocation. Force-clear the flag and emit the
+        # structured signal.
+        logger.warning(
+            "voice.coordinator.pending_flag_timeout_reset",
+            **{
+                "voice.mind_id": self._config.mind_id,
+                "voice.timeout_seconds": _COORDINATOR_PENDING_TIMEOUT_S,
+                "voice.invocation_count": captured_invocation_count,
+                "voice.action_required": (
+                    "Coordinator invocation wedged for "
+                    f"{_COORDINATOR_PENDING_TIMEOUT_S} s; force-clearing "
+                    "the pending flag so subsequent deaf-signal triggers "
+                    "can fire. The wedged task may still be running in a "
+                    "worker thread (asyncio cannot force-stop OS threads). "
+                    "Investigate via `sovyx doctor voice` and the deaf-"
+                    "signal callback's logs (typical cause: a sync OS "
+                    "call in the callback that doesn't honour "
+                    "asyncio.to_thread cancellation)."
                 ),
-            )
-            # "partial" verdict: at least one strategy applied cleanly but
-            # the post-apply re-probe still classified the signal as dead;
-            # otherwise every strategy either failed-to-apply or was not
-            # applicable, which is a flat failure.
-            any_applied = any(o.verdict is BypassVerdict.APPLIED_STILL_DEAD for o in outcomes)
-            bypass_verdict = "partial" if any_applied else "failure"
-            logger.error(
-                "audio.apo.bypassed",
-                **{
-                    "voice.verdict": bypass_verdict,
-                    "voice.mind_id": self._config.mind_id,
-                    "voice.attempts": len(outcomes),
-                    "voice.strategies": [o.strategy_name for o in outcomes],
-                    "voice.outcomes": [o.verdict.value for o in outcomes],
-                    "voice.voice_clarity_active": self._voice_clarity_active,
-                    "voice.quarantined": True,
-                },
-            )
+            },
+        )
+        self._coordinator_invocation_pending = False
 
     def _record_coordinator_dedup(self, reason: str) -> None:
         """Bump the dedup counter and emit the structured observability event.
@@ -1879,6 +2372,71 @@ class VoicePipeline:
             self._filler_task = None
         self._first_token_event.set()
 
+    async def _observe_speaker_drift(self, chunk: Any) -> None:  # noqa: ANN401 — TTS chunk type varies by engine
+        """Observe spectral-centroid drift on the freshly-emitted chunk.
+
+        T1.39 — runs the centroid DSP in a worker thread (CLAUDE.md
+        anti-pattern #14) and observes the result against the per-
+        session rolling-window baseline. On drift exceeding
+        :data:`_SPEAKER_DRIFT_RATIO_THRESHOLD` emits a structured
+        WARN + :class:`PipelineErrorEvent` and continues — no
+        automatic voice swap (too disruptive without operator opt-in;
+        operators wanting fallback wire it via the existing
+        ``synthesis_health`` field per T1.36).
+
+        No-op when the speaker-consistency gate is disabled, when the
+        chunk has no audio (zero-energy synthesis already covered by
+        T1.36's ``synthesis_health="zero_energy"`` path), or when the
+        rolling window is still warming up (first
+        ``window_size - 1`` chunks of every session).
+
+        The chunk type is engine-specific (``AudioChunk`` from
+        ``tts_kokoro`` / ``tts_piper``; the orchestrator works with
+        any value that has ``audio: npt.NDArray[np.int16]`` +
+        ``sample_rate: int``).
+        """
+        if self._speaker_consistency is None:
+            return
+        audio = getattr(chunk, "audio", None)
+        sample_rate = getattr(chunk, "sample_rate", 0)
+        if audio is None or sample_rate <= 0:
+            return
+        centroid = await asyncio.to_thread(
+            compute_spectral_centroid,
+            audio,
+            sample_rate,
+        )
+        drift, baseline, ratio = self._speaker_consistency.observe(centroid)
+        if not drift:
+            return
+        logger.warning(
+            "voice.tts.speaker_drift_detected",
+            **{
+                "voice.centroid_hz": round(centroid, 1),
+                "voice.baseline_hz": round(baseline, 1),
+                "voice.drift_ratio": round(ratio, 3),
+                "voice.threshold_ratio": _SPEAKER_DRIFT_RATIO_THRESHOLD,
+                "voice.window_size": _SPEAKER_DRIFT_WINDOW_SIZE,
+                "voice.utterance_id": self._current_utterance_id,
+                "voice.action_required": (
+                    "Spectral centroid drifted >"
+                    f"{int(_SPEAKER_DRIFT_RATIO_THRESHOLD * 100)}% from the "
+                    "rolling-window baseline. Likely causes: voice file "
+                    "partial download, ONNX session corruption, or a "
+                    "buggy caller passing a different voice_id mid-"
+                    "session. Check the TTS engine logs and run "
+                    "`sovyx doctor voice` to verify model integrity."
+                ),
+            },
+        )
+        await self._emit(
+            PipelineErrorEvent(
+                mind_id=self._config.mind_id,
+                error=(f"speaker_drift_detected (ratio={ratio:.3f}, baseline={baseline:.1f})"),
+                utterance_id=self._current_utterance_id,
+            )
+        )
+
     async def _synthesize_tracked(self, text: str) -> Any:  # noqa: ANN401 — TTS chunk type varies
         """Synthesise ``text`` via a tracked task so T1 can cancel it.
 
@@ -1899,11 +2457,11 @@ class VoicePipeline:
             self._tts.synthesize(text),
             name=f"voice-tts-synth-{id(self) & 0xFFFF}",
         )
-        self._track_tts_task(task)
+        await self._track_tts_task(task)
         try:
             return await task
         finally:
-            self._untrack_tts_task(task)
+            await self._untrack_tts_task(task)
 
     # -- T1 atomic cancellation chain ---------------------------------------
 
@@ -1931,7 +2489,7 @@ class VoicePipeline:
         """
         self._llm_cancel_hook = hook
 
-    def _track_tts_task(self, task: asyncio.Task[Any]) -> None:
+    async def _track_tts_task(self, task: asyncio.Task[Any]) -> None:
         """Register an in-flight TTS synthesis task for T1 cancellation.
 
         Called by :meth:`speak`, :meth:`stream_text`, and
@@ -1939,12 +2497,24 @@ class VoicePipeline:
         task removes itself in its own ``finally`` via
         :meth:`_untrack_tts_task` so the set stays bounded by the
         in-flight set, not the lifetime of the daemon.
-        """
-        self._in_flight_tts_tasks.add(task)
 
-    def _untrack_tts_task(self, task: asyncio.Task[Any]) -> None:
-        """Remove ``task`` from the in-flight set. Safe to call multiple times."""
-        self._in_flight_tts_tasks.discard(task)
+        T1.13 — async + lock-guarded. The mutation itself is GIL-atomic
+        in CPython, but the lock makes the atomicity guarantee
+        explicit + survives a future refactor that would introduce an
+        await between read-and-write. Same lock as
+        :meth:`cancel_speech_chain`'s step-2 snapshot.
+        """
+        async with self._task_tracking_lock:
+            self._in_flight_tts_tasks.add(task)
+
+    async def _untrack_tts_task(self, task: asyncio.Task[Any]) -> None:
+        """Remove ``task`` from the in-flight set. Safe to call multiple times.
+
+        T1.13 — async + lock-guarded; same lock as :meth:`_track_tts_task`
+        and :meth:`cancel_speech_chain`'s step-2 snapshot.
+        """
+        async with self._task_tracking_lock:
+            self._in_flight_tts_tasks.discard(task)
 
     async def cancel_speech_chain(self, *, reason: str = "barge_in") -> None:
         """Run the four-step transactional cancellation chain (T1).
@@ -2001,7 +2571,16 @@ class VoicePipeline:
             # Step 2: cancel + await in-flight TTS tasks. Snapshot the
             # set so iteration is stable while tasks remove themselves
             # via _untrack_tts_task in their own finally blocks.
-            tasks_snapshot = tuple(self._in_flight_tts_tasks)
+            #
+            # T1.13 — snapshot acquires ``_task_tracking_lock`` briefly
+            # so a concurrent ``_track_tts_task`` cannot mutate the set
+            # mid-snapshot. Iteration runs OUTSIDE the lock so the
+            # awaits below don't block new TTS tasks indefinitely (the
+            # residual race — new tasks created during iteration are
+            # caught by the cognitive layer's LLM-cancel hook in
+            # step 3, not by this snapshot).
+            async with self._task_tracking_lock:
+                tasks_snapshot = tuple(self._in_flight_tts_tasks)
             cancelled_count = 0
             timeout_count = 0
             for task in tasks_snapshot:

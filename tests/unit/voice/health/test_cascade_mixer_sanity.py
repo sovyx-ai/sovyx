@@ -111,7 +111,7 @@ class TestMixerSanityOptIn:
     async def test_none_preserves_pre_l25_behaviour(self) -> None:
         """mixer_sanity=None → L2.5 never touched, cascade works as before."""
         with patch(
-            "sovyx.voice.health.cascade._run_mixer_sanity",
+            "sovyx.voice.health.cascade._executor._run_mixer_sanity",
             new=AsyncMock(),
         ) as spy:
             result = await run_cascade(
@@ -129,7 +129,7 @@ class TestMixerSanityOptIn:
     async def test_non_linux_platform_skips_l25(self) -> None:
         """Even with mixer_sanity set, Windows/macOS doesn't invoke L2.5."""
         with patch(
-            "sovyx.voice.health.cascade._run_mixer_sanity",
+            "sovyx.voice.health.cascade._executor._run_mixer_sanity",
             new=AsyncMock(),
         ) as spy:
             await run_cascade(
@@ -146,7 +146,7 @@ class TestMixerSanityOptIn:
     async def test_linux_invokes_l25(self) -> None:
         """platform_key=='linux' + setup → _run_mixer_sanity awaited once."""
         with patch(
-            "sovyx.voice.health.cascade._run_mixer_sanity",
+            "sovyx.voice.health.cascade._executor._run_mixer_sanity",
             new=AsyncMock(),
         ) as spy:
             await run_cascade(
@@ -166,7 +166,7 @@ class TestMixerSanityCallSite:
         """_run_mixer_sanity receives the endpoint metadata + setup."""
         spy = AsyncMock()
         with patch(
-            "sovyx.voice.health.cascade._run_mixer_sanity",
+            "sovyx.voice.health.cascade._executor._run_mixer_sanity",
             new=spy,
         ):
             await run_cascade(
@@ -194,7 +194,7 @@ class TestMixerSanityCallSite:
             raise RuntimeError(msg)
 
         with patch(
-            "sovyx.voice.health.cascade._run_mixer_sanity",
+            "sovyx.voice.health.cascade._executor._run_mixer_sanity",
             new=raising_sanity,
         ):
             # The cascade should still complete without raising.
@@ -336,7 +336,7 @@ class TestBackwardCompat:
             reason="probe_kernel_invalidated",
         )
         with patch(
-            "sovyx.voice.health.cascade._run_mixer_sanity",
+            "sovyx.voice.health.cascade._executor._run_mixer_sanity",
             new=AsyncMock(),
         ) as spy:
             result = await run_cascade(
@@ -374,7 +374,7 @@ class TestPinnedFastPathWithL25:
         overrides.get.return_value = pinned
 
         with patch(
-            "sovyx.voice.health.cascade._run_mixer_sanity",
+            "sovyx.voice.health.cascade._executor._run_mixer_sanity",
             new=AsyncMock(),
         ) as spy:
             await run_cascade(

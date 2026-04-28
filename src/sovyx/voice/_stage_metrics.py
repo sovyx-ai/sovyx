@@ -336,6 +336,120 @@ def record_queue_depth(
     metrics_registry.voice_queue_saturation_pct.record(saturation_pct, attrs)
 
 
+def _bucket_engine_family(engine: str, voice_id: str) -> str:
+    """Bucket a (engine, voice_id) pair into a bounded ``engine_family`` label.
+
+    T1.37 — the metric layer's ``voice.tts.synthesis_latency``
+    histogram is labelled by ``engine_family`` rather than the raw
+    ``voice_id`` because Piper voices are operator-installable and
+    a naive per-voice label has unbounded cardinality. The bucket
+    key is the **language prefix** of the voice identifier:
+
+    ``kokoro:af_bella``        → ``"kokoro:af"``
+    ``kokoro:am_michael``      → ``"kokoro:am"``
+    ``piper:en_US-amy-medium`` → ``"piper:en_US"``
+    ``piper:pt_BR-faber``      → ``"piper:pt_BR"``
+
+    The shipped voice registries bound the family count at ~25
+    series total (Kokoro ships ~10 family prefixes; Piper covers
+    ~15 language codes in the public voice set). Operators who add
+    custom Piper voices for new languages contribute one new
+    series per language — bounded by the count of distinct
+    languages, not the count of voices.
+
+    Args:
+        engine: Engine identifier — ``"kokoro"`` or ``"piper"``.
+            Lowercased + stripped before use; an empty string
+            collapses to ``"unknown"``.
+        voice_id: Voice identifier as it appears in the engine's
+            voice registry. Kokoro convention is
+            ``<lang>_<name>`` (underscore separator); Piper
+            convention is ``<lang>-<name>-<size>`` (hyphen
+            separator). Falsy values collapse to ``"unknown"``.
+
+    Returns:
+        ``"<engine>:<family>"`` where ``<family>`` is the
+        language-prefix derived from the voice naming
+        convention. Malformed values without the expected
+        separator fall back to the full voice_id as the family
+        — bounded by the count of distinct malformed inputs,
+        which is operator-controlled but small in practice.
+    """
+    engine_clean = engine.strip().lower() or "unknown"
+    voice_clean = voice_id.strip()
+    if not voice_clean:
+        return f"{engine_clean}:unknown"
+    if engine_clean == "kokoro":
+        # Kokoro: <lang>_<name> — split on first underscore.
+        family, _sep, _rest = voice_clean.partition("_")
+        return f"{engine_clean}:{family}" if _sep else f"{engine_clean}:{voice_clean}"
+    if engine_clean == "piper":
+        # Piper: <lang>-<name>-<size> — split on first hyphen.
+        family, _sep, _rest = voice_clean.partition("-")
+        return f"{engine_clean}:{family}" if _sep else f"{engine_clean}:{voice_clean}"
+    # Unknown engine → use the full voice_id as the family suffix
+    # so future engines surface in dashboards as
+    # "<engine>:<voice_id>" until a bucket convention is defined.
+    return f"{engine_clean}:{voice_clean}"
+
+
+def record_tts_synthesis_latency(
+    voice_id: str,
+    duration_ms: float,
+    *,
+    engine: str,
+    error: bool = False,
+) -> None:
+    """Record TTS synthesis duration on the bucketed-family histogram.
+
+    T1.37 — wired at the same call sites as the
+    ``voice.tts.chunk_emitted`` log event in :class:`KokoroTTS`
+    and :class:`PiperTTS`. The ``engine_family`` label is bucketed
+    via :func:`_bucket_engine_family` so the metric series count
+    stays bounded regardless of how many Piper voices an operator
+    has installed. Per-voice detail lives on the matching log
+    event (``voice.synthesis_latency_ms`` field) — log-derived
+    metrics tools cover the per-voice dashboard need without
+    paying the cardinality cost.
+
+    The function is idempotent + thread-safe: the OTel histogram
+    is the same instance across calls, ``.record()`` carries no
+    inter-call state, and the bucket function is pure.
+
+    Args:
+        voice_id: Voice identifier as it appears in the engine's
+            voice registry (e.g. ``"af_bella"`` for Kokoro,
+            ``"en_US-amy-medium"`` for Piper).
+        duration_ms: Wall-clock synthesis duration in
+            milliseconds. Negative values indicate a counting
+            bug — clamped to 0 and logged at WARNING.
+        engine: Engine identifier — ``"kokoro"`` or ``"piper"``.
+            Used as the prefix for the ``engine_family`` bucket
+            key.
+        error: ``True`` if the synthesis path produced a degraded
+            result (zero-energy synthesis, decoder error, etc.).
+            Recorded as ``outcome=error`` so dashboards can split
+            the success-path tail from the error-path tail.
+    """
+    if duration_ms < 0:
+        logger.warning(
+            "voice.tts.synthesis_latency_negative",
+            engine=engine,
+            voice_id=voice_id,
+            duration_ms=duration_ms,
+            action_required="audit caller — duration_ms is monotonic by contract",
+        )
+        duration_ms = 0.0
+
+    family = _bucket_engine_family(engine, voice_id)
+    outcome = StageOutcome.ERROR if error else StageOutcome.SUCCESS
+    attrs: dict[str, str] = {
+        "engine_family": family,
+        "outcome": outcome.value,
+    }
+    get_metrics().voice_tts_synthesis_latency.record(duration_ms, attrs)
+
+
 def reset_error_type_bucket_for_tests() -> None:
     """Reset the process-wide error_type cardinality bucket.
 
@@ -361,5 +475,6 @@ __all__ = [
     "measure_stage_duration",
     "record_queue_depth",
     "record_stage_event",
+    "record_tts_synthesis_latency",
     "reset_error_type_bucket_for_tests",
 ]

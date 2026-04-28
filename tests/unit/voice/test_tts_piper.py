@@ -16,6 +16,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
+from sovyx.voice._tts_zero_energy import TTS_RMS_FLOOR_DBFS
 from sovyx.voice.tts_piper import (
     AudioChunk,
     PiperConfig,
@@ -1089,3 +1090,154 @@ class TestPiperM2WireUp:
             await piper.synthesize("non-empty text")
 
         assert (VoiceStage.TTS, StageEventKind.DROP, "no_phonemes") in recorded
+
+
+# ---------------------------------------------------------------------------
+# T2 Ring 5 — output-energy validation (master mission Phase 1 / T1.36)
+# ---------------------------------------------------------------------------
+
+_TTS_PIPER_LOGGER = "sovyx.voice.tts_piper"
+
+
+def _piper_events_of(
+    caplog: pytest.LogCaptureFixture,
+    event_name: str,
+) -> list[dict[str, object]]:
+    return [
+        r.msg
+        for r in caplog.records
+        if r.name == _TTS_PIPER_LOGGER
+        and isinstance(r.msg, dict)
+        and r.msg.get("event") == event_name
+    ]
+
+
+def _build_piper_with_audio_fill(
+    tmp_path: Path,
+    fill: float,
+    audio_length: int = 4410,
+) -> PiperTTS:
+    """Construct a PiperTTS whose ONNX session always returns a constant
+    fill value — convenience for the silent / quiet-amplitude tests.
+    """
+    piper = _build_piper(tmp_path, audio_length=audio_length)
+
+    def _fill_run(_names: object, _inputs: dict[str, Any]) -> list[Any]:
+        return [np.full((1, 1, audio_length), fill, dtype=np.float32)]
+
+    piper._session.run = _fill_run  # type: ignore[union-attr]
+    return piper
+
+
+class TestPiperT2EnergyValidation:
+    """End-to-end T2 monitor wired through ``PiperTTS.synthesize``.
+
+    Mirrors ``TestKokoroT2EnergyValidation`` so dashboards see consistent
+    ``voice.synthesis_health`` attribution regardless of which engine
+    produced the chunk.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_normal_synthesis_flagged_ok(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Healthy synthesis (uniform[-0.5, 0.5] mock) → ok, no warning."""
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_TTS_PIPER_LOGGER)
+        piper = _build_piper(tmp_path)
+        _, modules = _mock_phonemize_module([["h", "ɛ", "l", "oʊ"]])
+        with patch.dict("sys.modules", modules):
+            chunk = await piper.synthesize("hello")
+        assert chunk.synthesis_health is None
+        assert _piper_events_of(caplog, "voice.tts.piper_zero_energy_synthesis") == []
+
+    @pytest.mark.asyncio()
+    async def test_silent_synthesis_flagged_zero_energy(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """All-zero ONNX output → flagged + WARNING fires + DROP event."""
+        import logging
+
+        from sovyx.voice import tts_piper as piper_mod
+        from sovyx.voice._stage_metrics import StageEventKind, VoiceStage
+
+        caplog.set_level(logging.WARNING, logger=_TTS_PIPER_LOGGER)
+        recorded: list[tuple[Any, Any, Any]] = []
+
+        def _capture(stage: Any, kind: Any, *, error_type: str | None = None) -> None:
+            recorded.append((stage, kind, error_type))
+
+        piper = _build_piper_with_audio_fill(tmp_path, fill=0.0)
+        _, modules = _mock_phonemize_module([["h", "ɛ", "l", "oʊ"]])
+        with (
+            patch.dict("sys.modules", modules),
+            patch.object(piper_mod, "record_stage_event", _capture),
+        ):
+            chunk = await piper.synthesize("hello")
+
+        assert chunk.synthesis_health == "zero_energy"
+        events = _piper_events_of(caplog, "voice.tts.piper_zero_energy_synthesis")
+        assert len(events) == 1
+        assert events[0]["voice.measured_rms_dbfs"] == "-inf"
+        assert events[0]["voice.rms_floor_dbfs"] == TTS_RMS_FLOOR_DBFS
+        assert events[0]["voice.model"] == "piper"
+        assert "fallback" in str(events[0]["voice.action_required"])
+        assert (VoiceStage.TTS, StageEventKind.DROP, "zero_energy") in recorded
+
+    @pytest.mark.asyncio()
+    async def test_quiet_synthesis_flagged_zero_energy(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Audible-but-below-floor output (~ -86 dBFS) → flagged."""
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_TTS_PIPER_LOGGER)
+        # 0.00005 * 32768 → peak ~1.6 LSB → RMS well below -60 dBFS.
+        piper = _build_piper_with_audio_fill(tmp_path, fill=0.00005)
+        _, modules = _mock_phonemize_module([["h", "ɛ", "l", "oʊ"]])
+        with patch.dict("sys.modules", modules):
+            chunk = await piper.synthesize("hello")
+        assert chunk.synthesis_health == "zero_energy"
+
+    @pytest.mark.asyncio()
+    async def test_empty_input_skips_validation(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Empty text returns an empty AudioChunk WITHOUT firing the
+        T2 warning — no synthesis happened, so silence is expected.
+        """
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_TTS_PIPER_LOGGER)
+        piper = _build_piper(tmp_path)
+        chunk = await piper.synthesize("")
+        assert chunk.synthesis_health is None
+        assert chunk.audio.size == 0
+        assert _piper_events_of(caplog, "voice.tts.piper_zero_energy_synthesis") == []
+
+    @pytest.mark.asyncio()
+    async def test_chunk_emitted_event_carries_synthesis_health(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Every successful chunk_emitted log must carry the health verdict."""
+        import logging
+
+        caplog.set_level(logging.INFO, logger=_TTS_PIPER_LOGGER)
+        piper = _build_piper(tmp_path)
+        _, modules = _mock_phonemize_module([["h", "ɛ", "l", "oʊ"]])
+        with patch.dict("sys.modules", modules):
+            await piper.synthesize("hello")
+        events = _piper_events_of(caplog, "voice.tts.chunk_emitted")
+        assert len(events) >= 1
+        assert events[-1]["voice.synthesis_health"] == "ok"

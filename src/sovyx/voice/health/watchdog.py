@@ -351,18 +351,21 @@ class VoiceCaptureWatchdog:
             pending.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await pending
+            logger.debug("voice.watchdog.pending_cancel_drained", phase="stop")
         recheck = self._apo_recheck_task
         self._apo_recheck_task = None
         if recheck is not None and not recheck.done():
             recheck.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await recheck
+            logger.debug("voice.watchdog.apo_recheck_cancel_drained", phase="stop")
         waiter = self._audio_service_down_waiter
         self._audio_service_down_waiter = None
         if waiter is not None and not waiter.done():
             waiter.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await waiter
+            logger.debug("voice.watchdog.audio_service_waiter_cancel_drained", phase="stop")
         hotplug = self._hotplug
         self._hotplug = None
         if hotplug is not None:
@@ -801,6 +804,7 @@ class VoiceCaptureWatchdog:
             pending.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await pending
+            logger.debug("voice.watchdog.pending_cancel_drained", phase="suspend")
         # Any probe/cascade that races through suspend will just fail; we
         # simply want to make sure no new re-probe chain fires until resume.
         self._state = WatchdogState.BACKOFF
@@ -856,11 +860,16 @@ class VoiceCaptureWatchdog:
             pending.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await pending
+            logger.debug("voice.watchdog.pending_cancel_drained", phase="audio_service_down")
         waiter = self._audio_service_down_waiter
         if waiter is not None and not waiter.done():
             waiter.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await waiter
+            logger.debug(
+                "voice.watchdog.audio_service_waiter_cancel_drained",
+                phase="audio_service_down",
+            )
         self._audio_service_down_waiter = spawn(
             self._await_audio_service_restart(),
             name="voice-watchdog-audio-service-restart-waiter",

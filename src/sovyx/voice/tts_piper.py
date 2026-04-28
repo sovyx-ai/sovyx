@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,7 +21,12 @@ from sovyx.voice._stage_metrics import (
     VoiceStage,
     measure_stage_duration,
     record_stage_event,
+    record_tts_synthesis_latency,
 )
+from sovyx.voice._tts_sentence_split import (
+    split_sentences as _split_sentences,
+)
+from sovyx.voice._tts_zero_energy import TTS_RMS_FLOOR_DBFS, compute_rms_dbfs
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -103,7 +107,51 @@ class PiperConfig:
 
 
 class TTSEngine(ABC):
-    """Abstract base for text-to-speech engines."""
+    """Abstract base for text-to-speech engines.
+
+    Streaming chunk + overlap contract (master mission Phase 1 / T1.40):
+
+    * **Chunk boundary** — :meth:`synthesize_streaming` yields one
+      :class:`AudioChunk` per *complete sentence* parsed out of the
+      incoming text stream by
+      :func:`sovyx.voice._tts_sentence_split.split_sentences` (greedy
+      ``(?<=[.!?])\\s+`` split + abbreviation merge-back so ``Dr.``,
+      ``Mr.``, ``U.S.A.``, ``e.g.``, ``Ph.D.``, etc. don't fragment a
+      sentence mid-stream). Partial trailing text is buffered until
+      either more text arrives with a terminator or the upstream
+      stream closes (the buffered remainder is then flushed as a final
+      chunk in either case).
+    * **Why per-sentence and not finer** — coarser granularity
+      (paragraphs) starves the Jarvis Illusion (perceived TTS-start
+      latency); finer granularity (per-word or per-clause) breaks
+      VITS prosody continuity, which depends on full-sentence phoneme
+      sequences for natural intonation. Per-sentence is the empirical
+      sweet spot validated against SPE-010 §6.2.
+    * **No overlap** — chunks are independent; the orchestrator's
+      output queue (:class:`AudioOutputQueue`) plays them
+      back-to-back without crossfade, click suppression, or
+      crossing-zero alignment. The intra-chunk
+      ``sentence_silence`` constant inside :meth:`synthesize` (Piper)
+      / :meth:`synthesize_with` (Kokoro) inserts a small silence
+      pause between sentences when a single ``synthesize`` call
+      receives multi-sentence input — in the streaming path that
+      pause is implicit in the consumer's playback gap between
+      yielded chunks, so no additional silence is injected here.
+    * **Empty / phonemiser-rejected sentences** — engines MUST skip
+      empty buffers and emit a DROP stage event with
+      ``error_type="empty_text"`` (or ``"no_phonemes"`` when the
+      phonemiser produced no usable phonemes for non-empty input).
+      The stream MUST NOT yield an empty :class:`AudioChunk` —
+      consumers rely on every yielded chunk having
+      ``audio.size > 0``.
+    * **Cancellation** — if the consumer stops iterating mid-stream,
+      the generator's ``GeneratorExit`` propagates to the engine's
+      ``async for text_chunk in text_stream`` loop. Engines MUST
+      release any pending buffer state on exit (the buffered text
+      is implicitly discarded; per T1.15 / `8faca52` the orchestrator
+      also clears its own ``_text_buffer`` on ``CancelledError`` to
+      prevent stale text from leaking into the next stream).
+    """
 
     @abstractmethod
     async def initialize(self) -> None:
@@ -119,7 +167,11 @@ class TTSEngine(ABC):
         self,
         text_stream: AsyncIterator[str],
     ) -> AsyncIterator[AudioChunk]:
-        """Streaming synthesis — yield audio per sentence as text arrives."""
+        """Streaming synthesis — yield audio per sentence as text arrives.
+
+        See the :class:`TTSEngine` class docstring for the full chunk +
+        overlap contract.
+        """
         ...  # pragma: no cover
         # Yield required for AsyncIterator typing
         if False:  # noqa: SIM108  # pragma: no cover
@@ -156,19 +208,6 @@ def _validate_config(config: PiperConfig) -> None:
     if config.speaker_id is not None and config.speaker_id < 0:
         msg = f"speaker_id must be >= 0, got {config.speaker_id}"
         raise ValueError(msg)
-
-
-# ---------------------------------------------------------------------------
-# Sentence splitting
-# ---------------------------------------------------------------------------
-
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])[ \t]+")
-
-
-def _split_sentences(text: str) -> list[str]:
-    """Split text on sentence boundaries (`.`, `!`, `?` followed by whitespace)."""
-    parts = _SENTENCE_SPLIT_RE.split(text)
-    return parts if parts else [text]
 
 
 # ---------------------------------------------------------------------------
@@ -506,6 +545,37 @@ class PiperTTS(TTSEngine):
             combined = np.concatenate(all_audio)
             duration_ms = len(combined) / sr * 1000
 
+            # T2 Ring 5 output-energy validation (master mission Phase 1
+            # / T1.36). Symmetric with KokoroTTS's gate at the same point
+            # in synthesize_with — both engines apply the shared
+            # ``voice/_tts_zero_energy`` primitives so the dashboard
+            # attributes structural-output failures uniformly. Piper is
+            # itself the fallback engine for Kokoro, so a sub-floor
+            # reading here means the user would hear silence with no
+            # audible recovery path inside the local TTS chain — the
+            # chunk's ``synthesis_health`` field signals the orchestrator
+            # to escalate to cloud TTS or text-only mode.
+            rms_dbfs = compute_rms_dbfs(combined)
+            synthesis_health: str | None = None
+            if rms_dbfs < TTS_RMS_FLOOR_DBFS:
+                synthesis_health = "zero_energy"
+                logger.warning(
+                    "voice.tts.piper_zero_energy_synthesis",
+                    **{
+                        "voice.text_chars": len(text),
+                        "voice.audio_ms": round(duration_ms, 1),
+                        "voice.generation_ms": round(generation_ms, 1),
+                        "voice.measured_rms_dbfs": (
+                            round(rms_dbfs, 2) if rms_dbfs != float("-inf") else "-inf"
+                        ),
+                        "voice.rms_floor_dbfs": TTS_RMS_FLOOR_DBFS,
+                        "voice.model": "piper",
+                        "voice.voice": self._config.voice,
+                        "voice.sample_rate": sr,
+                        "voice.action_required": ("fallback_to_cloud_tts_or_text_only"),
+                    },
+                )
+
             self._chunk_counter += 1
             logger.info(
                 "voice.tts.chunk_emitted",
@@ -514,18 +584,38 @@ class PiperTTS(TTSEngine):
                     "voice.text_chars": len(text),
                     "voice.audio_ms": round(duration_ms, 1),
                     "voice.generation_ms": round(generation_ms, 1),
+                    "voice.synthesis_latency_ms": round(generation_ms, 1),
                     "voice.model": "piper",
                     "voice.voice": self._config.voice,
                     "voice.sample_rate": sr,
                     "voice.speaker_id": self._config.speaker_id,
+                    "voice.synthesis_health": synthesis_health or "ok",
                 },
             )
+            # T1.37 — bucketed-family histogram for per-language TTS
+            # latency (cardinality-bounded ~25 series). Per-voice
+            # detail lives on the chunk_emitted log above.
+            record_tts_synthesis_latency(
+                self._config.voice,
+                generation_ms,
+                engine="piper",
+                error=synthesis_health == "zero_energy",
+            )
 
-            record_stage_event(VoiceStage.TTS, StageEventKind.SUCCESS)
+            if synthesis_health == "zero_energy":
+                record_stage_event(
+                    VoiceStage.TTS,
+                    StageEventKind.DROP,
+                    error_type="zero_energy",
+                )
+            else:
+                record_stage_event(VoiceStage.TTS, StageEventKind.SUCCESS)
+
             return AudioChunk(
                 audio=combined,
                 sample_rate=sr,
                 duration_ms=duration_ms,
+                synthesis_health=synthesis_health,
             )
 
     async def synthesize_streaming(

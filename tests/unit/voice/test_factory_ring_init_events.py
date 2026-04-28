@@ -46,7 +46,12 @@ class TestRingInitEvents:
         from pathlib import Path
 
         factory_src = (
-            Path(__file__).resolve().parents[3] / "src" / "sovyx" / "voice" / "factory.py"
+            Path(__file__).resolve().parents[3]
+            / "src"
+            / "sovyx"
+            / "voice"
+            / "factory"
+            / "__init__.py"
         ).read_text(encoding="utf-8")
 
         for ring_num, ring_name in _RING_NAMES:
@@ -70,7 +75,12 @@ class TestRingInitEvents:
         from pathlib import Path
 
         factory_src = (
-            Path(__file__).resolve().parents[3] / "src" / "sovyx" / "voice" / "factory.py"
+            Path(__file__).resolve().parents[3]
+            / "src"
+            / "sovyx"
+            / "voice"
+            / "factory"
+            / "__init__.py"
         ).read_text(encoding="utf-8")
 
         positions = {}
@@ -114,7 +124,12 @@ class TestRingEventStructure:
         from pathlib import Path
 
         factory_src = (
-            Path(__file__).resolve().parents[3] / "src" / "sovyx" / "voice" / "factory.py"
+            Path(__file__).resolve().parents[3]
+            / "src"
+            / "sovyx"
+            / "voice"
+            / "factory"
+            / "__init__.py"
         ).read_text(encoding="utf-8")
 
         # The kwargs use **{"voice.ring": N, "voice.ring_name": "X"} pattern
