@@ -32,7 +32,7 @@ phase); promotion targets per the master rollout matrix in
 **Default:** `False` v0.24.0 → `True` v0.25.0 → `True` v0.26.0
 
 **What it does:** when `True`, the cold-probe diagnosis at
-`voice/health/probe.py::_diagnose_cold` rejects silent combos
+`voice/health/probe/_cold.py::_diagnose_cold` rejects silent combos
 (`rms_db < probe_rms_db_no_signal`, default −70 dBFS) as
 `Diagnosis.NO_SIGNAL` instead of accepting them as `HEALTHY`. The
 cascade then advances to the next combo and the silent winner never

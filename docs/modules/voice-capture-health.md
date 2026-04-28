@@ -30,7 +30,7 @@ concern and exposes a small, dependency-injected surface.
 | L7    | `dashboard/routes/voice.py`                           | REST surface for the React Voice Health panel.                                         |
 | L8    | `cli/commands/doctor.py`                              | `sovyx doctor voice` — preflight diagnosis from the terminal.                          |
 | L9    | `_telemetry`                                          | Anonymous, opt-in cascade-outcome rollup written to `data_dir`.                        |
-| L10   | Per-platform cascade tables in `cascade.py`           | `WINDOWS_CASCADE` / `LINUX_CASCADE` / `MACOS_CASCADE`.                                 |
+| L10   | Per-platform cascade tables in `voice/health/cascade/_planner.py` | `WINDOWS_CASCADE` / `LINUX_CASCADE` / `MACOS_CASCADE` (re-exported via `voice/health/cascade/__init__.py`). |
 | L11   | This file + `docs/modules/voice.md`                   | Documentation.                                                                         |
 | L12   | `tests/unit/voice/health/test_cascade_chaos.py`       | Failure injection — proves the cascade is resilient.                                   |
 
