@@ -512,6 +512,22 @@ class VoiceTuningConfig(BaseSettings):
     compute-burning failure mode). Counter resets on the first
     successful segment so a transient mid-stream hiccup doesn't
     poison the rest of the response."""
+
+    pipeline_coordinator_pending_timeout_seconds: float = Field(default=30.0, ge=1.0, le=300.0)
+    """T1.14 watchdog deadline — maximum wall-clock seconds the
+    ``_coordinator_invocation_pending`` flag may stay True before a
+    background watchdog force-clears it. Default 30.0 s is the SRE-
+    canonical "if it isn't dead by now it's hung" budget for an
+    asyncio coordinator task; long enough that a slow-but-progressing
+    coordinator (mixer probe, KB lookup, network round-trip) finishes
+    cleanly via the T1.23 outer-finally before the watchdog fires,
+    short enough that a wedged coordinator doesn't permanently lock
+    out subsequent deaf-signal handling. Floor 1.0 s prevents
+    misconfiguration from racing the normal teardown; ceiling 300 s
+    caps the operator-visible "deaf for 5 minutes after one wedge"
+    worst case. The watchdog uses an invocation-counter guard so a
+    fired-late watchdog from a completed invocation cannot
+    accidentally clear the flag of a SUBSEQUENT invocation."""
     # Ordered host-API preference for the opener's pyramid fallback.
     # VLX-007 added "PipeWire" + "PulseAudio" + "JACK" to cover builds
     # of PortAudio that expose those backends as standalone host APIs

@@ -170,6 +170,11 @@ _CONSECUTIVE_TTS_FAILURE_THRESHOLD = _VoiceTuning().pipeline_consecutive_tts_fai
 the canonical schema with bound-validators."""
 
 
+_COORDINATOR_PENDING_TIMEOUT_S = _VoiceTuning().pipeline_coordinator_pending_timeout_seconds
+"""T1.14 watchdog deadline — see
+``VoiceTuningConfig.pipeline_coordinator_pending_timeout_seconds``."""
+
+
 class VoicePipeline:
     """Orchestrates the complete voice pipeline.
 
@@ -241,6 +246,13 @@ class VoicePipeline:
         self._deaf_warnings_consecutive = 0
         self._coordinator_terminated = False
         self._coordinator_invocation_pending = False
+        # T1.14 — monotonic invocation counter used by the watchdog
+        # (``_reset_coordinator_pending_after_timeout``) to distinguish
+        # "my invocation is wedged" from "a SUBSEQUENT invocation
+        # legitimately set the flag". A fired-late watchdog whose
+        # captured count differs from the live count must NOT clear
+        # the flag — it belongs to a newer invocation.
+        self._coordinator_invocation_count = 0
         # O2 (Ring 6 atomic deaf-signal handling): explicit asyncio.Lock
         # serialises the deaf-signal flow. The pre-O2 design relied on
         # asyncio's single-threaded execution + a sync flag check-and-set
@@ -1930,6 +1942,10 @@ class VoicePipeline:
             return
 
         self._coordinator_invocation_pending = True
+        # T1.14 — bump the invocation counter BEFORE the spawn so the
+        # watchdog captures the same count the spawned task observes.
+        self._coordinator_invocation_count += 1
+        captured_invocation_count = self._coordinator_invocation_count
         logger.warning(
             "voice.deaf.detected",
             **{
@@ -1945,6 +1961,17 @@ class VoicePipeline:
         # Schedule the coordinator on the running loop — this helper
         # runs on the per-frame hot path and must not block.
         spawn(self._invoke_deaf_signal(), name="voice-pipeline-deaf-signal")
+        # T1.14 watchdog — if the spawned coordinator wedges (callback
+        # in a sync OS call wrapped in to_thread, etc.) the T1.23
+        # outer-finally never runs and the pending flag stays True
+        # forever, locking out subsequent deaf-signal handling. The
+        # watchdog force-clears the flag at
+        # ``_COORDINATOR_PENDING_TIMEOUT_S`` if it's still set AND
+        # belongs to THIS invocation (counter guard).
+        spawn(
+            self._reset_coordinator_pending_after_timeout(captured_invocation_count),
+            name="voice-pipeline-coord-pending-watchdog",
+        )
 
     async def _invoke_deaf_signal(self) -> None:
         """Invoke the deaf-signal callback and surface its outcomes (O2).
@@ -2163,6 +2190,86 @@ class VoicePipeline:
             # ``_coordinator_invocation_pending`` short-circuit at
             # :meth:`_maybe_invoke_deaf_signal`.
             self._coordinator_invocation_pending = False
+
+    async def _reset_coordinator_pending_after_timeout(
+        self, captured_invocation_count: int
+    ) -> None:
+        """T1.14 watchdog — clear ``_coordinator_invocation_pending``
+        if a wedged ``_invoke_deaf_signal`` task never reaches its
+        T1.23 outer-finally.
+
+        T1.23 wraps ``_invoke_deaf_signal`` in an outer try/finally
+        that clears the pending flag on every exit path including
+        cancellation. That covers wedged callbacks the asyncio
+        runtime CAN cancel (e.g. ``await asyncio.sleep(...)`` inside
+        the callback). It does NOT cover wedges where the callback
+        is in a synchronous OS call wrapped in
+        ``asyncio.to_thread(...)`` and that OS call doesn't honour
+        thread cancellation — the awaiting asyncio task can be
+        cancelled but the worker thread keeps running, and if the
+        cancel happens to be eaten somewhere upstream, the flag
+        stays True. Net effect: deaf-signal handling locked out
+        until process restart.
+
+        This watchdog is the safety net. ``_maybe_invoke_deaf_signal``
+        spawns it alongside the coordinator task with the current
+        invocation count captured. After
+        :data:`_COORDINATOR_PENDING_TIMEOUT_S` (30 s default), the
+        watchdog wakes and:
+
+          * If ``self._coordinator_invocation_count !=
+            captured_invocation_count``, a SUBSEQUENT invocation
+            has fired since this watchdog was spawned. The current
+            flag belongs to that newer invocation, NOT to ours;
+            no-op (the newer invocation has its own watchdog).
+          * If the count matches AND
+            ``self._coordinator_invocation_pending`` is still True,
+            the original invocation IS wedged. Force-clear the flag
+            and emit ``voice.coordinator.pending_flag_timeout_reset``
+            so dashboards can attribute the unlock.
+          * If the count matches AND the flag is False, the original
+            invocation completed cleanly (T1.23 outer-finally
+            cleared it). No-op.
+
+        Cancellation: if the watchdog is itself cancelled (loop
+        teardown, etc.), suppress and return. The next deaf-signal
+        trigger spawns a fresh watchdog.
+        """
+        try:
+            await asyncio.sleep(_COORDINATOR_PENDING_TIMEOUT_S)
+        except asyncio.CancelledError:
+            return
+
+        if self._coordinator_invocation_count != captured_invocation_count:
+            # A newer invocation owns the live flag — leave it alone.
+            return
+        if not self._coordinator_invocation_pending:
+            # The original invocation completed cleanly via T1.23
+            # outer-finally; nothing to do.
+            return
+
+        # Wedged invocation. Force-clear the flag and emit the
+        # structured signal.
+        logger.warning(
+            "voice.coordinator.pending_flag_timeout_reset",
+            **{
+                "voice.mind_id": self._config.mind_id,
+                "voice.timeout_seconds": _COORDINATOR_PENDING_TIMEOUT_S,
+                "voice.invocation_count": captured_invocation_count,
+                "voice.action_required": (
+                    "Coordinator invocation wedged for "
+                    f"{_COORDINATOR_PENDING_TIMEOUT_S} s; force-clearing "
+                    "the pending flag so subsequent deaf-signal triggers "
+                    "can fire. The wedged task may still be running in a "
+                    "worker thread (asyncio cannot force-stop OS threads). "
+                    "Investigate via `sovyx doctor voice` and the deaf-"
+                    "signal callback's logs (typical cause: a sync OS "
+                    "call in the callback that doesn't honour "
+                    "asyncio.to_thread cancellation)."
+                ),
+            },
+        )
+        self._coordinator_invocation_pending = False
 
     def _record_coordinator_dedup(self, reason: str) -> None:
         """Bump the dedup counter and emit the structured observability event.

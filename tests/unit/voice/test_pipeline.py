@@ -3517,6 +3517,202 @@ class TestDeafSignalCoordinatorFinallyResetT123:
 
 
 # ===========================================================================
+# VoicePipeline — coordinator pending timeout watchdog (T1.14)
+# ===========================================================================
+#
+# T1.23 wraps ``_invoke_deaf_signal`` in an outer try/finally so the
+# pending flag clears on every exit path that the asyncio runtime CAN
+# observe (cancel, raise, normal return). T1.14 closes the residual
+# case: a wedge so deep that the asyncio task itself never completes
+# (e.g. the callback is in a sync OS call inside ``asyncio.to_thread``
+# that doesn't honour thread cancellation, and the awaiting task's
+# CancelledError is eaten upstream). The watchdog
+# ``_reset_coordinator_pending_after_timeout`` force-clears the flag
+# at the deadline so subsequent deaf-signal triggers can fire.
+
+
+class TestCoordinatorPendingTimeoutT114:
+    """Watchdog force-clears the pending flag on wedged invocations,
+    while leaving subsequent invocations' flags untouched."""
+
+    def _deaf_pipeline(
+        self,
+        *,
+        callback: Any,
+        threshold: int = 1,
+    ) -> VoicePipeline:
+        config = VoicePipelineConfig(
+            mind_id="test-mind",
+            wake_word_enabled=False,
+            barge_in_enabled=False,
+            fillers_enabled=False,
+            filler_delay_ms=100,
+            silence_frames_end=3,
+            max_recording_frames=10,
+        )
+        vad = _make_vad(speech=False)
+        vad.process_frame.return_value = VADEvent(
+            is_speech=False, probability=0.0, state=VADState.SILENCE
+        )
+        return VoicePipeline(
+            config=config,
+            vad=vad,
+            wake_word=_make_wake_word(detected=False),
+            stt=_make_stt(),
+            tts=_make_tts(),
+            event_bus=_make_event_bus(),
+            on_perception=None,
+            on_deaf_signal=callback,
+            voice_clarity_active=True,
+            auto_bypass_enabled=True,
+            auto_bypass_threshold=threshold,
+        )
+
+    @pytest.mark.asyncio
+    async def test_watchdog_force_clears_wedged_invocation_flag(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When the pending flag is still True at the watchdog
+        deadline AND the invocation count matches, the watchdog
+        force-clears the flag so subsequent triggers can fire.
+        """
+        from sovyx.voice.pipeline import _orchestrator as _orch_mod
+
+        # Shrink the timeout so the test runs fast.
+        monkeypatch.setattr(_orch_mod, "_COORDINATOR_PENDING_TIMEOUT_S", 0.05)
+
+        callback = AsyncMock(return_value=[])
+        pipeline = self._deaf_pipeline(callback=callback, threshold=1)
+        # Simulate a trigger that bumped the count + set the flag,
+        # then the spawned ``_invoke_deaf_signal`` wedged forever
+        # (we don't actually run it — we just leave the flag True
+        # and the count incremented to 1, then run the watchdog).
+        pipeline._coordinator_invocation_pending = True
+        pipeline._coordinator_invocation_count = 1
+
+        # Run the watchdog with the captured count = 1.
+        await pipeline._reset_coordinator_pending_after_timeout(1)
+
+        # Watchdog force-cleared the flag.
+        assert pipeline._coordinator_invocation_pending is False
+
+    @pytest.mark.asyncio
+    async def test_watchdog_does_not_clear_subsequent_invocation_flag(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """T1.14 counter guard — if the live invocation count differs
+        from the captured count, the watchdog must leave the flag
+        alone. Otherwise a fired-late watchdog from a completed
+        invocation would clear the flag of a SUBSEQUENT one,
+        breaking the new coordinator's lifecycle.
+        """
+        from sovyx.voice.pipeline import _orchestrator as _orch_mod
+
+        monkeypatch.setattr(_orch_mod, "_COORDINATOR_PENDING_TIMEOUT_S", 0.05)
+
+        callback = AsyncMock(return_value=[])
+        pipeline = self._deaf_pipeline(callback=callback, threshold=1)
+        # Simulate: invocation 1 completed (T1.23 cleared flag).
+        # Then invocation 2 fired and set the flag. Now invocation 1's
+        # watchdog wakes — its captured count was 1, but live is 2.
+        pipeline._coordinator_invocation_pending = True
+        pipeline._coordinator_invocation_count = 2  # newer invocation
+
+        # Watchdog from invocation 1 (count captured = 1).
+        await pipeline._reset_coordinator_pending_after_timeout(1)
+
+        # Flag MUST still be True — it belongs to invocation 2.
+        assert pipeline._coordinator_invocation_pending is True
+
+    @pytest.mark.asyncio
+    async def test_watchdog_no_op_when_flag_already_cleared(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Happy path: the original invocation completed cleanly via
+        T1.23 outer-finally, so the flag is already False. Watchdog
+        wakes, sees False, no-ops.
+        """
+        from sovyx.voice.pipeline import _orchestrator as _orch_mod
+
+        monkeypatch.setattr(_orch_mod, "_COORDINATOR_PENDING_TIMEOUT_S", 0.05)
+
+        callback = AsyncMock(return_value=[])
+        pipeline = self._deaf_pipeline(callback=callback, threshold=1)
+        pipeline._coordinator_invocation_pending = False  # T1.23 already cleared it
+        pipeline._coordinator_invocation_count = 1
+
+        # Watchdog runs but should observe flag False and not fire WARN.
+        await pipeline._reset_coordinator_pending_after_timeout(1)
+
+        # Still False (no spurious mutation).
+        assert pipeline._coordinator_invocation_pending is False
+
+    @pytest.mark.asyncio
+    async def test_watchdog_emits_structured_warn_on_force_clear(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Force-clear path emits ``voice.coordinator.pending_flag_timeout_reset``
+        with the spec field shape: timeout_seconds + invocation_count
+        + action_required.
+        """
+        import logging as _logging
+
+        from sovyx.voice.pipeline import _orchestrator as _orch_mod
+
+        monkeypatch.setattr(_orch_mod, "_COORDINATOR_PENDING_TIMEOUT_S", 0.05)
+
+        callback = AsyncMock(return_value=[])
+        pipeline = self._deaf_pipeline(callback=callback, threshold=1)
+        pipeline._coordinator_invocation_pending = True
+        pipeline._coordinator_invocation_count = 7
+
+        with caplog.at_level(_logging.WARNING, logger=_ORCH_LOGGER):
+            await pipeline._reset_coordinator_pending_after_timeout(7)
+
+        events = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict)
+            and r.msg.get("event") == "voice.coordinator.pending_flag_timeout_reset"
+        ]
+        assert len(events) == 1
+        payload = events[0]
+        assert payload["voice.invocation_count"] == 7  # noqa: PLR2004
+        assert payload["voice.timeout_seconds"] == 0.05  # noqa: PLR2004
+        assert "action_required" in str(payload).lower()
+
+    @pytest.mark.asyncio
+    async def test_watchdog_cancellation_returns_silently(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Cancelling the watchdog (loop teardown, etc.) MUST NOT
+        raise — the watchdog catches CancelledError + returns. A
+        fresh watchdog spawns on the next deaf-signal trigger.
+        """
+        from sovyx.voice.pipeline import _orchestrator as _orch_mod
+
+        # Long enough that we can cancel before the deadline fires.
+        monkeypatch.setattr(_orch_mod, "_COORDINATOR_PENDING_TIMEOUT_S", 30.0)
+
+        callback = AsyncMock(return_value=[])
+        pipeline = self._deaf_pipeline(callback=callback, threshold=1)
+        pipeline._coordinator_invocation_pending = True
+        pipeline._coordinator_invocation_count = 1
+
+        task = asyncio.create_task(pipeline._reset_coordinator_pending_after_timeout(1))
+        await asyncio.sleep(0)  # let the task start
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+        # Flag stays as it was — the watchdog returned silently
+        # without firing the force-clear path.
+        assert pipeline._coordinator_invocation_pending is True
+
+
+# ===========================================================================
 # VoicePipeline — self-feedback gate wiring (ADR §4.4.6)
 # ===========================================================================
 

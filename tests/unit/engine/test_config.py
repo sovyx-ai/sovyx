@@ -830,6 +830,24 @@ class TestVoiceTuningT128Migration:
         assert cfg.pipeline_vad_inference_timeout_warn_interval_seconds == 5.0
         assert cfg.pipeline_cancellation_task_timeout_seconds == 1.0
         assert cfg.pipeline_consecutive_tts_failure_threshold == 3  # noqa: PLR2004
+        # T1.14 — coordinator-pending watchdog deadline default.
+        assert cfg.pipeline_coordinator_pending_timeout_seconds == 30.0  # noqa: PLR2004
+
+    def test_coordinator_pending_timeout_bounds_t114(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """T1.14 — `pipeline_coordinator_pending_timeout_seconds` bounds.
+        Floor 1.0s prevents misconfiguration from racing the normal
+        teardown; ceiling 300s caps the operator-visible "deaf for
+        5 minutes" worst case.
+        """
+        from pydantic import ValidationError
+
+        self._clear_voice_env(monkeypatch)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(pipeline_coordinator_pending_timeout_seconds=0.5)
+        with pytest.raises(ValidationError):
+            VoiceTuningConfig(pipeline_coordinator_pending_timeout_seconds=600.0)
 
     def test_frame_drop_absolute_budget_bounds(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from pydantic import ValidationError
