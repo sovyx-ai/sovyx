@@ -1705,3 +1705,161 @@ class TestMixinMroResolution:
             f"_close_stream / _emit_stream_opened / _signal_consumer_shutdown "
             f"shadow LoopMixin's stubs."
         )
+
+
+class TestCaptureRestartFrameEmissionT32:
+    """T32 — pin the CaptureRestartFrame emission contract on the
+    Windows-pair restart methods (``request_exclusive_restart`` +
+    ``request_shared_restart``).
+
+    Per CLAUDE.md anti-pattern #29 the frame is observability-only —
+    the dashboard's ``GET /api/voice/restart-history`` widget renders
+    one timeline of "what happened on the mic" for post-incident
+    forensics. The frame's authoritative-state-mutation siblings
+    (boolean flags + ``VoicePipelineState``) are unaffected.
+
+    These tests verify the frame is emitted with correct fields at
+    the correct moment (BEFORE the ring-buffer epoch increments), so
+    a future refactor that drops the emit call OR moves it past the
+    epoch boundary is caught immediately.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_request_exclusive_restart_emits_apo_degraded_frame(
+        self,
+    ) -> None:
+        """Happy path — successful exclusive engagement emits a
+        CaptureRestartFrame with reason=APO_DEGRADED + bypass_tier=3 +
+        new_signal_processing_mode=exclusive."""
+        from sovyx.voice.pipeline._frame_types import (
+            CaptureRestartFrame,
+            CaptureRestartReason,
+        )
+
+        pipeline = MagicMock()
+        pipeline.feed_frame = AsyncMock()
+        recorded: list[CaptureRestartFrame] = []
+        pipeline.record_capture_restart = MagicMock(side_effect=lambda f: recorded.append(f))
+
+        sd = _fake_sd()
+        sd.InputStream = lambda **_kwargs: MagicMock()  # type: ignore[attr-defined]
+        entry = _input_entry(index=7, rate=16_000, host_api="Windows WASAPI")
+
+        task = AudioCaptureTask(
+            pipeline,
+            input_device=7,
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [entry],
+        )
+        try:
+            await task.start()
+            recorded.clear()  # discard any frames from start
+
+            result = await task.request_exclusive_restart()
+
+            assert result.verdict is ExclusiveRestartVerdict.EXCLUSIVE_ENGAGED
+            assert len(recorded) == 1, (
+                f"expected exactly one CaptureRestartFrame; got {len(recorded)}"
+            )
+            frame = recorded[0]
+            assert frame.frame_type == "CaptureRestart"
+            assert frame.restart_reason == CaptureRestartReason.APO_DEGRADED.value
+            assert frame.bypass_tier == 3  # noqa: PLR2004
+            assert frame.new_signal_processing_mode == "exclusive"
+            assert frame.old_signal_processing_mode == "shared"
+            # Substrate identifiers should be populated.
+            assert frame.new_host_api == "Windows WASAPI"
+            assert frame.timestamp_monotonic > 0.0
+        finally:
+            await task.stop()
+
+    @pytest.mark.asyncio()
+    async def test_request_shared_restart_emits_manual_revert_frame(self) -> None:
+        """Revert path — request_shared_restart emits a
+        CaptureRestartFrame with reason=MANUAL + bypass_tier=0 +
+        new_signal_processing_mode=shared."""
+        from sovyx.voice.pipeline._frame_types import (
+            CaptureRestartFrame,
+            CaptureRestartReason,
+        )
+
+        pipeline = MagicMock()
+        pipeline.feed_frame = AsyncMock()
+        recorded: list[CaptureRestartFrame] = []
+        pipeline.record_capture_restart = MagicMock(side_effect=lambda f: recorded.append(f))
+
+        sd = _fake_sd()
+        sd.InputStream = lambda **_kwargs: MagicMock()  # type: ignore[attr-defined]
+        entry = _input_entry(index=8, rate=16_000, host_api="Windows WASAPI")
+
+        task = AudioCaptureTask(
+            pipeline,
+            input_device=8,
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [entry],
+        )
+        try:
+            await task.start()
+            recorded.clear()
+
+            result = await task.request_shared_restart()
+
+            assert result.verdict is SharedRestartVerdict.SHARED_ENGAGED
+            assert len(recorded) == 1
+            frame = recorded[0]
+            assert frame.frame_type == "CaptureRestart"
+            assert frame.restart_reason == CaptureRestartReason.MANUAL.value
+            assert frame.bypass_tier == 0
+            assert frame.new_signal_processing_mode == "shared"
+            assert frame.old_signal_processing_mode == "exclusive"
+        finally:
+            await task.stop()
+
+    @pytest.mark.asyncio()
+    async def test_no_frame_emitted_when_open_fails(self) -> None:
+        """Failed restart MUST NOT emit a CaptureRestartFrame —
+        the substrate didn't actually change. The frame is
+        observability of completed transitions, not attempts."""
+        pipeline = MagicMock()
+        pipeline.feed_frame = AsyncMock()
+        recorded: list[Any] = []
+        pipeline.record_capture_restart = MagicMock(side_effect=lambda f: recorded.append(f))
+
+        attempt = {"n": 0}
+
+        def stream_factory(**_kwargs: Any) -> MagicMock:
+            attempt["n"] += 1
+            if attempt["n"] == 1:
+                return MagicMock()  # initial start succeeds
+            raise sd.PortAudioError("device gone")  # type: ignore[attr-defined]
+
+        sd = _fake_sd()
+        sd.InputStream = stream_factory  # type: ignore[attr-defined]
+        entry = _input_entry(index=9, rate=16_000, host_api="Windows WASAPI")
+
+        task = AudioCaptureTask(
+            pipeline,
+            input_device=9,
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [entry],
+        )
+        try:
+            await task.start()
+            recorded.clear()
+
+            result = await task.request_exclusive_restart()
+
+            # All open attempts fail → no frame emitted at all.
+            assert result.verdict in {
+                ExclusiveRestartVerdict.OPEN_FAILED_NO_STREAM,
+                ExclusiveRestartVerdict.OPEN_FAILED_SHARED_FALLBACK,
+            }
+            assert len(recorded) == 0, f"expected zero frames on failure path; got {len(recorded)}"
+        finally:
+            await task.stop()

@@ -46,6 +46,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import sys
+import time
 from typing import TYPE_CHECKING, Any
 
 from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
@@ -69,6 +70,10 @@ from sovyx.voice.capture._restart import (
     _emit_session_manager_restart_metric,
     _emit_shared_restart_metric,
 )
+from sovyx.voice.pipeline._frame_types import (
+    CaptureRestartFrame,
+    CaptureRestartReason,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -79,6 +84,7 @@ if TYPE_CHECKING:
 
     from sovyx.engine.config import VoiceTuningConfig
     from sovyx.voice.device_enum import DeviceEntry
+    from sovyx.voice.pipeline._orchestrator import VoicePipeline
 
 
 logger = get_logger(__name__)
@@ -119,6 +125,7 @@ class RestartMixin:
     _sd_module: ModuleType | None
     _normalizer: FrameNormalizer | None
     _resolved_device_name: str | None
+    _pipeline: VoicePipeline
 
     # Method-via-MRO declarations — these live on AudioCaptureTask
     # (or future LoopMixin) and resolve through the composed
@@ -184,6 +191,17 @@ class RestartMixin:
             enumerate_fn=self._enumerate_fn,
             host_api_name=self._host_api_name,
         )
+        # T32 — snapshot pre-restart substrate for the
+        # CaptureRestartFrame emission. Capturing here (before the
+        # close + reopen sequence) means old_* fields reflect the
+        # substrate that was about to fail / be replaced; the new_*
+        # fields are filled in below from the StreamInfo returned by
+        # the opener. CLAUDE.md anti-pattern #29 — frame is
+        # observability layer, NOT state-machine; the authoritative
+        # substrate state still lives in the AudioCaptureTask
+        # attributes that are mutated below.
+        old_host_api = self._host_api_name or ""
+        old_device_id = self._resolved_device_name or str(self._input_device or "")
         logger.warning(
             "audio_capture_exclusive_restart_begin",
             device=self._input_device,
@@ -273,6 +291,31 @@ class RestartMixin:
                 enabled=_agc2_tuning.agc2_enabled,
                 sample_rate=info.sample_rate,
             ),
+        )
+        # T32 — emit CaptureRestartFrame BEFORE the ring epoch
+        # increment so the dashboard's restart-history timeline
+        # receives the substrate transition AT the actual moment of
+        # change. APO_DEGRADED + bypass_tier=3 (WASAPI exclusive is
+        # the Tier 3 strategy in the bypass coordinator's pyramid).
+        # ``new_signal_processing_mode`` carries the WASAPI mode
+        # ("exclusive" if the opener honoured the request, "shared"
+        # otherwise — the v0.20.2 / Bug C downgrade case is detected
+        # below and the frame value matches reality even when the
+        # request was rejected).
+        new_mode = "exclusive" if info.exclusive_used else "shared"
+        self._pipeline.record_capture_restart(
+            CaptureRestartFrame(
+                frame_type="CaptureRestart",
+                timestamp_monotonic=time.monotonic(),
+                restart_reason=CaptureRestartReason.APO_DEGRADED.value,
+                old_host_api=old_host_api,
+                new_host_api=self._host_api_name or "",
+                old_device_id=old_device_id,
+                new_device_id=self._resolved_device_name or str(self._input_device or ""),
+                old_signal_processing_mode="shared",
+                new_signal_processing_mode=new_mode,
+                bypass_tier=3,
+            )
         )
         # Reset the ring buffer so the bypass coordinator's post-apply
         # integrity probe only sees frames from the reopened stream.
@@ -421,6 +464,16 @@ class RestartMixin:
             enumerate_fn=self._enumerate_fn,
             host_api_name=self._host_api_name,
         )
+        # T32 — snapshot pre-restart substrate. The revert path
+        # ("shared restart") is operator-initiated (the bypass
+        # coordinator's revert hook OR an explicit dashboard unpin),
+        # so the frame's ``restart_reason`` is MANUAL and
+        # ``bypass_tier`` resets to 0. The previous ``new_*``
+        # substrate of the matching ``request_exclusive_restart``
+        # frame is THIS frame's ``old_*`` — the timeline forms a
+        # coherent transition pair on the dashboard.
+        old_host_api = self._host_api_name or ""
+        old_device_id = self._resolved_device_name or str(self._input_device or "")
         logger.warning(
             "audio_capture_shared_restart_begin",
             device=self._input_device,
@@ -487,6 +540,25 @@ class RestartMixin:
                 enabled=_agc2_tuning.agc2_enabled,
                 sample_rate=info.sample_rate,
             ),
+        )
+        # T32 — emit CaptureRestartFrame for the revert pair. MANUAL
+        # reason because the shared restart is always initiated by an
+        # external policy decision (operator unpin, coordinator
+        # revert) — never an automatic bypass. ``bypass_tier=0``
+        # signals to the dashboard that no tier is currently active.
+        self._pipeline.record_capture_restart(
+            CaptureRestartFrame(
+                frame_type="CaptureRestart",
+                timestamp_monotonic=time.monotonic(),
+                restart_reason=CaptureRestartReason.MANUAL.value,
+                old_host_api=old_host_api,
+                new_host_api=self._host_api_name or "",
+                old_device_id=old_device_id,
+                new_device_id=self._resolved_device_name or str(self._input_device or ""),
+                old_signal_processing_mode="exclusive",
+                new_signal_processing_mode="shared",
+                bypass_tier=0,
+            )
         )
         self._allocate_ring_buffer(shared_tuning)
         self._emit_stream_opened(info, apo_bypass_attempted=False)

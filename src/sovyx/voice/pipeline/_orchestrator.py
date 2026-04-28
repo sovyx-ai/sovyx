@@ -35,6 +35,7 @@ from sovyx.voice.pipeline._events import (
 )
 from sovyx.voice.pipeline._frame_types import (
     BargeInInterruptionFrame,
+    CaptureRestartFrame,
     EndFrame,
     LLMFullResponseStartFrame,
     OutputAudioRawFrame,
@@ -515,6 +516,36 @@ class VoicePipeline:
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
+
+    def record_capture_restart(self, frame: CaptureRestartFrame) -> None:
+        """Public cross-component channel for :class:`CaptureRestartFrame`.
+
+        T32 — the capture-task restart methods (``request_*_restart``
+        on :class:`RestartMixin`) live OUTSIDE the orchestrator but
+        emit observability frames into the same bounded ring buffer
+        the orchestrator owns. Per CLAUDE.md anti-pattern #29 the
+        frame is observability-only — does NOT replace the
+        boolean-flag + ``VoicePipelineState`` authoritative state.
+
+        Method is kept narrow on purpose: it accepts ONLY
+        :class:`CaptureRestartFrame` instances rather than the
+        general ``PipelineFrame`` parent class, so the public
+        cross-component surface stays minimal. Other frame types
+        continue to flow through the orchestrator-internal
+        :meth:`_record_frame` path.
+
+        Best-effort recording per :meth:`_record_frame`'s contract —
+        any exception during state-machine record (lock contention,
+        ring overflow under chaos injection) is absorbed so the
+        capture-task restart path is never blocked by observability.
+
+        Args:
+            frame: The :class:`CaptureRestartFrame` to record. Caller
+                MUST set ``timestamp_monotonic`` at the actual
+                transition moment (typically just before the
+                ring-buffer epoch increment in the restart method).
+        """
+        self._record_frame(frame)
 
     # -- State property + saga lifecycle ------------------------------------
 
