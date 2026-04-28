@@ -46,8 +46,6 @@ import math
 import re
 import sys
 import time
-from dataclasses import dataclass
-from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -59,6 +57,54 @@ from sovyx.voice._agc2 import build_agc2_if_enabled
 from sovyx.voice._chaos import ChaosInjector, ChaosSite
 from sovyx.voice._frame_normalizer import FrameNormalizer
 from sovyx.voice._stream_opener import _import_sounddevice
+
+# T1.4 step 1 — restart-verdict types + dataclasses + metric emitters
+# extracted to ``voice/capture/_restart`` per master mission Phase 1
+# / T1.4. Re-exported here via the explicit ``import X as X`` pattern
+# (mypy strict requires this form for an import to count as a public
+# re-export) so legacy imports + the 13 timing-primitive test patches
+# (per spec) keep working without an import-path migration (CLAUDE.md
+# anti-pattern #20).
+from sovyx.voice.capture._restart import _LINUX_ALSA_HOST_API as _LINUX_ALSA_HOST_API
+from sovyx.voice.capture._restart import (
+    _LINUX_SESSION_MANAGER_HOST_APIS as _LINUX_SESSION_MANAGER_HOST_APIS,
+)
+from sovyx.voice.capture._restart import (
+    AlsaHwDirectRestartResult as AlsaHwDirectRestartResult,
+)
+from sovyx.voice.capture._restart import (
+    AlsaHwDirectRestartVerdict as AlsaHwDirectRestartVerdict,
+)
+from sovyx.voice.capture._restart import (
+    ExclusiveRestartResult as ExclusiveRestartResult,
+)
+from sovyx.voice.capture._restart import (
+    ExclusiveRestartVerdict as ExclusiveRestartVerdict,
+)
+from sovyx.voice.capture._restart import (
+    SessionManagerRestartResult as SessionManagerRestartResult,
+)
+from sovyx.voice.capture._restart import (
+    SessionManagerRestartVerdict as SessionManagerRestartVerdict,
+)
+from sovyx.voice.capture._restart import (
+    SharedRestartResult as SharedRestartResult,
+)
+from sovyx.voice.capture._restart import (
+    SharedRestartVerdict as SharedRestartVerdict,
+)
+from sovyx.voice.capture._restart import (
+    _emit_alsa_hw_direct_restart_metric as _emit_alsa_hw_direct_restart_metric,
+)
+from sovyx.voice.capture._restart import (
+    _emit_exclusive_restart_metric as _emit_exclusive_restart_metric,
+)
+from sovyx.voice.capture._restart import (
+    _emit_session_manager_restart_metric as _emit_session_manager_restart_metric,
+)
+from sovyx.voice.capture._restart import (
+    _emit_shared_restart_metric as _emit_shared_restart_metric,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -376,389 +422,6 @@ class CaptureDeviceContendedError(CaptureError):
         self.suggested_actions = list(suggested_actions)
         self.contending_process_hint = contending_process_hint
         self.attempts = list(attempts) if attempts else []
-
-
-class ExclusiveRestartVerdict(StrEnum):
-    """Verdict of :meth:`AudioCaptureTask.request_exclusive_restart`.
-
-    Pre-v0.20.2 the method returned ``None`` and always logged
-    ``audio_capture_exclusive_restart_ok`` when the reopen succeeded —
-    even when WASAPI silently handed back a shared-mode stream (e.g.
-    the device was held by another exclusive-mode app, or Windows
-    policy denied exclusive access). Callers could not distinguish
-    "APO bypassed" from "APO still active, we just reopened the same
-    deaf pipe". This enum makes the outcome inspectable:
-
-    Members:
-        EXCLUSIVE_ENGAGED: Stream reopened and WASAPI confirmed
-            exclusive engagement (``info.exclusive_used=True``). The
-            APO chain is bypassed — the user's mic is now reaching
-            PortAudio untouched.
-        DOWNGRADED_TO_SHARED: Stream reopened successfully, but
-            ``info.exclusive_used=False``. WASAPI returned shared
-            mode (the only combos that survived fallback were shared
-            variants) — the APO chain is still in the signal path,
-            so the deaf condition that triggered the bypass remains.
-        OPEN_FAILED_SHARED_FALLBACK: The exclusive reopen raised a
-            :class:`StreamOpenError` and the secondary shared-mode
-            :meth:`_reopen_stream_after_device_error` recovered. The
-            pipeline is alive but deaf (same as before the request).
-        OPEN_FAILED_NO_STREAM: Both the exclusive reopen and the
-            shared-mode fallback raised. The stream is closed *and*
-            the consumer task has been signalled to exit
-            (``_running=False`` + consumer cancelled) — ``_consume_loop``
-            cannot self-recover from this state (it would be parked on
-            ``queue.get()`` with no callback feeding it), so upstream
-            supervisors MUST detect the dead state via the returned
-            verdict and rebuild the task.
-        NOT_RUNNING: Called while the task is stopped — no-op.
-    """
-
-    EXCLUSIVE_ENGAGED = "exclusive_engaged"
-    DOWNGRADED_TO_SHARED = "downgraded_to_shared"
-    OPEN_FAILED_SHARED_FALLBACK = "open_failed_shared_fallback"
-    OPEN_FAILED_NO_STREAM = "open_failed_no_stream"
-    NOT_RUNNING = "not_running"
-
-
-class SharedRestartVerdict(StrEnum):
-    """Verdict of :meth:`AudioCaptureTask.request_shared_restart`.
-
-    Symmetric revert of :class:`ExclusiveRestartVerdict` — re-opens the
-    stream in shared mode when the APO-bypass experiment needs to be
-    rolled back (e.g. a strategy proved ineffective and the coordinator
-    wants the pipeline returned to its pre-bypass configuration before
-    trying the next strategy, or the user explicitly unpins exclusive
-    mode in the wizard).
-
-    Members:
-        SHARED_ENGAGED: Stream reopened successfully in shared mode; the
-            platform APO chain is back in the signal path. Equivalent to
-            the pre-bypass state.
-        OPEN_FAILED_NO_STREAM: The shared-mode reopen raised and no
-            stream is live. The consumer task has been signalled to
-            exit (``_running=False`` + consumer cancelled) because
-            ``_consume_loop`` cannot self-recover from this state —
-            it would be parked on ``queue.get()`` with no callback
-            feeding it. Upstream supervisors MUST detect the dead
-            state via the returned verdict and rebuild the capture
-            task (or issue an explicit
-            :meth:`request_exclusive_restart`).
-        NOT_RUNNING: Called while the task is stopped — no-op.
-    """
-
-    SHARED_ENGAGED = "shared_engaged"
-    OPEN_FAILED_NO_STREAM = "open_failed_no_stream"
-    NOT_RUNNING = "not_running"
-
-
-@dataclass(frozen=True, slots=True)
-class ExclusiveRestartResult:
-    """Structured outcome of :meth:`AudioCaptureTask.request_exclusive_restart`.
-
-    Attributes:
-        verdict: The :class:`ExclusiveRestartVerdict` describing what
-            happened. Callers should treat anything other than
-            :attr:`ExclusiveRestartVerdict.EXCLUSIVE_ENGAGED` as an
-            unsuccessful bypass — the APO chain is still in place.
-        engaged: Convenience flag — ``True`` iff
-            ``verdict == EXCLUSIVE_ENGAGED``.
-        host_api: Host API of the resulting stream (or ``None`` when
-            :attr:`OPEN_FAILED_NO_STREAM` / :attr:`NOT_RUNNING`).
-        device: Resolved PortAudio device index of the resulting
-            stream.
-        sample_rate: Effective sample rate of the resulting stream.
-        detail: Human-readable error / downgrade reason for logs and
-            the dashboard UI. ``None`` on a successful engagement.
-    """
-
-    verdict: ExclusiveRestartVerdict
-    engaged: bool
-    host_api: str | None = None
-    device: int | str | None = None
-    sample_rate: int | None = None
-    detail: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class SharedRestartResult:
-    """Structured outcome of :meth:`AudioCaptureTask.request_shared_restart`.
-
-    Attributes:
-        verdict: The :class:`SharedRestartVerdict` describing what
-            happened. ``SHARED_ENGAGED`` means the revert worked and the
-            pipeline is now running on the default shared-mode pipe;
-            anything else means the stream is down.
-        engaged: Convenience flag — ``True`` iff
-            ``verdict == SHARED_ENGAGED``.
-        host_api: Host API of the resulting stream (or ``None`` when
-            :attr:`OPEN_FAILED_NO_STREAM` / :attr:`NOT_RUNNING`).
-        device: Resolved PortAudio device index of the resulting stream.
-        sample_rate: Effective sample rate of the resulting stream.
-        detail: Human-readable error / downgrade reason for logs and
-            the dashboard UI. ``None`` on a successful engagement.
-    """
-
-    verdict: SharedRestartVerdict
-    engaged: bool
-    host_api: str | None = None
-    device: int | str | None = None
-    sample_rate: int | None = None
-    detail: str | None = None
-
-
-class AlsaHwDirectRestartVerdict(StrEnum):
-    """Verdict of :meth:`AudioCaptureTask.request_alsa_hw_direct_restart`.
-
-    Linux-specific twin of :class:`ExclusiveRestartVerdict`. The
-    ``LinuxPipeWireDirectBypass`` strategy requests this restart when it
-    wants to bypass a misbehaving PipeWire/PulseAudio filter chain and
-    talk to the kernel ALSA device directly. PortAudio's ``ALSA`` host
-    API opens the device without traversing the session manager.
-
-    Members:
-        ALSA_HW_ENGAGED: Stream reopened and PortAudio confirmed the
-            winning attempt targets the ``ALSA`` host API. The session
-            manager is no longer in the signal path.
-        DOWNGRADED_TO_SESSION_MANAGER: Stream reopened but the opener
-            fell back to a sibling device that routes through
-            PipeWire/PulseAudio (no ALSA-direct sibling survived). The
-            session-manager chain is still in the signal path.
-        NO_ALSA_SIBLING: Enumeration yielded no ``ALSA``-host-API
-            sibling for the currently active device — some distros ship
-            PortAudio builds with ALSA compiled out, or the ALSA device
-            is held by another exclusive client. Existing stream
-            preserved; no mutation occurred.
-        OPEN_FAILED_NO_STREAM: Both the ALSA-direct open and the
-            session-manager fallback raised. The stream is closed and
-            the consumer task has been signalled to exit — upstream
-            supervisors MUST rebuild the capture task.
-        NOT_LINUX: Called on a non-Linux host — no-op, preserves the
-            existing stream. Strategies must gate on
-            ``platform_key == "linux"`` but the method is defensive.
-        NOT_RUNNING: Called while the task is stopped — no-op.
-    """
-
-    ALSA_HW_ENGAGED = "alsa_hw_engaged"
-    DOWNGRADED_TO_SESSION_MANAGER = "downgraded_to_session_manager"
-    NO_ALSA_SIBLING = "no_alsa_sibling"
-    OPEN_FAILED_NO_STREAM = "open_failed_no_stream"
-    NOT_LINUX = "not_linux"
-    NOT_RUNNING = "not_running"
-
-
-class SessionManagerRestartVerdict(StrEnum):
-    """Verdict of :meth:`AudioCaptureTask.request_session_manager_restart`.
-
-    Linux-specific twin of :class:`SharedRestartVerdict`. Called by the
-    ``LinuxPipeWireDirectBypass`` strategy during ``revert`` to return
-    the stream to PipeWire/PulseAudio after an ALSA-direct experiment.
-
-    Members:
-        SESSION_MANAGER_ENGAGED: Stream reopened against a sibling
-            device served by PulseAudio or PipeWire; the session
-            manager is back in the signal path.
-        DOWNGRADED_TO_ALSA_HW: Enumeration yielded no
-            PulseAudio/PipeWire sibling — the device is only reachable
-            via ALSA direct. The stream is alive but still bypasses the
-            session manager (same state as before the request).
-        OPEN_FAILED_NO_STREAM: The session-manager reopen raised and no
-            stream is live. Consumer task signalled to exit; supervisor
-            must rebuild.
-        NOT_LINUX: Called on a non-Linux host — no-op.
-        NOT_RUNNING: Called while the task is stopped — no-op.
-    """
-
-    SESSION_MANAGER_ENGAGED = "session_manager_engaged"
-    DOWNGRADED_TO_ALSA_HW = "downgraded_to_alsa_hw"
-    OPEN_FAILED_NO_STREAM = "open_failed_no_stream"
-    NOT_LINUX = "not_linux"
-    NOT_RUNNING = "not_running"
-
-
-@dataclass(frozen=True, slots=True)
-class AlsaHwDirectRestartResult:
-    """Structured outcome of :meth:`AudioCaptureTask.request_alsa_hw_direct_restart`.
-
-    Attributes:
-        verdict: The :class:`AlsaHwDirectRestartVerdict` describing what
-            happened. Callers should treat anything other than
-            :attr:`AlsaHwDirectRestartVerdict.ALSA_HW_ENGAGED` as an
-            unsuccessful bypass — the session-manager chain is still in
-            place or the stream is gone.
-        engaged: Convenience flag — ``True`` iff
-            ``verdict == ALSA_HW_ENGAGED``.
-        host_api: Host API of the resulting stream. ``"ALSA"`` on
-            successful engagement; ``None`` when the stream is down.
-        device: Resolved PortAudio device index of the resulting stream.
-        sample_rate: Effective sample rate of the resulting stream.
-        detail: Human-readable error / downgrade reason for logs and
-            the dashboard UI. ``None`` on successful engagement.
-    """
-
-    verdict: AlsaHwDirectRestartVerdict
-    engaged: bool
-    host_api: str | None = None
-    device: int | str | None = None
-    sample_rate: int | None = None
-    detail: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class SessionManagerRestartResult:
-    """Structured outcome of :meth:`AudioCaptureTask.request_session_manager_restart`.
-
-    Attributes:
-        verdict: The :class:`SessionManagerRestartVerdict` describing
-            what happened. ``SESSION_MANAGER_ENGAGED`` means the revert
-            worked and the pipeline is now running through PipeWire or
-            PulseAudio again.
-        engaged: Convenience flag — ``True`` iff
-            ``verdict == SESSION_MANAGER_ENGAGED``.
-        host_api: Host API of the resulting stream.
-        device: Resolved PortAudio device index of the resulting stream.
-        sample_rate: Effective sample rate of the resulting stream.
-        detail: Human-readable error / downgrade reason for logs and
-            the dashboard UI. ``None`` on successful engagement.
-    """
-
-    verdict: SessionManagerRestartVerdict
-    engaged: bool
-    host_api: str | None = None
-    device: int | str | None = None
-    sample_rate: int | None = None
-    detail: str | None = None
-
-
-_LINUX_ALSA_HOST_API = "ALSA"
-"""PortAudio's label for the direct-to-kernel ALSA host API on Linux."""
-
-
-_LINUX_SESSION_MANAGER_HOST_APIS: frozenset[str] = frozenset({"PulseAudio", "PipeWire", "JACK"})
-"""Host APIs that route through a Linux session manager.
-
-A device served by any of these is considered non-direct for the
-purpose of :meth:`request_alsa_hw_direct_restart` — the strategy wants
-to route *around* these layers, not through them.
-"""
-
-
-def _emit_exclusive_restart_metric(result: ExclusiveRestartResult) -> None:
-    """Record a ``voice.capture.exclusive_restart.verdicts`` counter event.
-
-    Lazy-imports :mod:`sovyx.observability.metrics` so module-load in
-    unit suites that swap the metrics provider still works. Failures
-    in the metrics pipeline never bubble up to the caller — instead we
-    log at DEBUG and continue, so an OTel exporter hiccup cannot break
-    the capture task's reopen path.
-    """
-    try:
-        import sys
-
-        from sovyx.observability.metrics import get_metrics
-
-        registry = get_metrics()
-        counter = getattr(registry, "voice_capture_exclusive_restart_verdicts", None)
-        if counter is None:
-            return
-        counter.add(
-            1,
-            attributes={
-                "verdict": result.verdict.value,
-                "host_api": result.host_api or "none",
-                "platform": sys.platform,
-            },
-        )
-    except Exception:  # noqa: BLE001 — metrics must never break capture
-        logger.debug("voice_capture_exclusive_restart_metric_failed", exc_info=True)
-
-
-def _emit_shared_restart_metric(result: SharedRestartResult) -> None:
-    """Record a ``voice.capture.shared_restart.verdicts`` counter event.
-
-    Symmetric twin of :func:`_emit_exclusive_restart_metric`; separate
-    counter name so dashboards can distinguish engagements from reverts
-    without parsing labels.
-    """
-    try:
-        import sys
-
-        from sovyx.observability.metrics import get_metrics
-
-        registry = get_metrics()
-        counter = getattr(registry, "voice_capture_shared_restart_verdicts", None)
-        if counter is None:
-            return
-        counter.add(
-            1,
-            attributes={
-                "verdict": result.verdict.value,
-                "host_api": result.host_api or "none",
-                "platform": sys.platform,
-            },
-        )
-    except Exception:  # noqa: BLE001 — metrics must never break capture
-        logger.debug("voice_capture_shared_restart_metric_failed", exc_info=True)
-
-
-def _emit_alsa_hw_direct_restart_metric(result: AlsaHwDirectRestartResult) -> None:
-    """Record a ``voice.capture.alsa_hw_direct_restart.verdicts`` counter event.
-
-    Linux-specific twin of :func:`_emit_exclusive_restart_metric`. The
-    counter is emitted regardless of whether the strategy engaged so
-    dashboards can tell "Linux direct bypass never got a chance"
-    (``NO_ALSA_SIBLING`` / ``NOT_LINUX``) apart from "direct bypass was
-    tried and the session manager was bypassed" (``ALSA_HW_ENGAGED``)
-    without scraping logs.
-    """
-    try:
-        import sys
-
-        from sovyx.observability.metrics import get_metrics
-
-        registry = get_metrics()
-        counter = getattr(registry, "voice_capture_alsa_hw_direct_restart_verdicts", None)
-        if counter is None:
-            return
-        counter.add(
-            1,
-            attributes={
-                "verdict": result.verdict.value,
-                "host_api": result.host_api or "none",
-                "platform": sys.platform,
-            },
-        )
-    except Exception:  # noqa: BLE001 — metrics must never break capture
-        logger.debug("voice_capture_alsa_hw_direct_restart_metric_failed", exc_info=True)
-
-
-def _emit_session_manager_restart_metric(
-    result: SessionManagerRestartResult,
-) -> None:
-    """Record a ``voice.capture.session_manager_restart.verdicts`` counter event.
-
-    Symmetric twin of :func:`_emit_alsa_hw_direct_restart_metric` for
-    the revert side of the Linux PipeWire-direct strategy.
-    """
-    try:
-        import sys
-
-        from sovyx.observability.metrics import get_metrics
-
-        registry = get_metrics()
-        counter = getattr(registry, "voice_capture_session_manager_restart_verdicts", None)
-        if counter is None:
-            return
-        counter.add(
-            1,
-            attributes={
-                "verdict": result.verdict.value,
-                "host_api": result.host_api or "none",
-                "platform": sys.platform,
-            },
-        )
-    except Exception:  # noqa: BLE001 — metrics must never break capture
-        logger.debug("voice_capture_session_manager_restart_metric_failed", exc_info=True)
 
 
 def _rms_db_int16(frame: Any) -> float:  # noqa: ANN401 — numpy int16 array; Any keeps numpy lazy-imported
