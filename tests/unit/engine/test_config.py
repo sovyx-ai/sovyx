@@ -984,7 +984,18 @@ class TestDeprecatedMixerOverridesWarning:
         assert call.args[0] == "voice.config.deprecated_mixer_fraction_in_use"
         kwargs = call.kwargs
         assert kwargs["voice.config.field"] == "linux_mixer_capture_reset_fraction"
-        assert kwargs["voice.config.removal_target"] == "v0.24.0"
+        # T1.51 — removal target bumped from v0.24.0 to v0.27.0 (Phase 4).
+        # Three deprecation surfaces share this target:
+        # 1. ``voice.config.deprecated_mixer_fraction_in_use`` (this WARN,
+        #    on the config-knob side).
+        # 2. ``voice.deprecation.legacy_mixer_band_aid_call`` (function-
+        #    level WARN at ``_linux_mixer_apply.py::_emit_legacy_band_aid_warning``).
+        # 3. ``voice.mixer.alsa_band_aid_used`` (bypass-strategy WARN at
+        #    ``_linux_alsa_mixer.py``).
+        # All three MUST stay aligned for operator dashboards to render
+        # a coherent deprecation roadmap.
+        assert kwargs["voice.config.removal_target"] == "v0.27.0"
+        assert "v0.27.0" in str(kwargs["voice.action_required"])
 
     def test_all_four_overrides_emit_four_warns(
         self,

@@ -811,12 +811,12 @@ class VoiceTuningConfig(BaseSettings):
     # default never changed.
     #
     # **Deprecated since v0.23.0** (Mission §9.1.1, Gap 1) — scheduled
-    # for removal in v0.24.0 once the L2.5 KB-driven preset cascade is
-    # the active runtime mitigation for both saturation and attenuation
-    # regimes. Until then this fraction continues to drive the legacy
-    # ``LinuxALSAMixerResetBypass`` band-aid; a non-default value
-    # surfaces a one-time WARN at boot via
-    # :func:`sovyx.engine.config.warn_on_deprecated_mixer_overrides`.
+    # for removal in v0.27.0 (Phase 4 — AEC + audio quality), bumped
+    # from v0.24.0 per T1.51 because the bypass-coordinator wire-up
+    # gating Phase 2 + 3 must land first. Until then this fraction
+    # continues to drive the legacy ``LinuxALSAMixerResetBypass``
+    # band-aid; a non-default value surfaces a one-time WARN at boot
+    # via :func:`sovyx.engine.config.warn_on_deprecated_mixer_overrides`.
     linux_mixer_boost_reset_fraction: float = 0.0
     # Fraction of ``max_raw`` to set Capture-class controls to on apply.
     # ``0.5`` ≈ 0 dB for most codecs with the 0..80 / -40..+30 dB range
@@ -864,7 +864,8 @@ class VoiceTuningConfig(BaseSettings):
     # -22 dB → -10 dB. Above VAD floor, well below saturation ceiling.
     #
     # **Deprecated since v0.23.0** (Mission §9.1.1, Gap 1) — scheduled
-    # for removal in v0.24.0. The attenuation regime is increasingly
+    # for removal in v0.27.0 (Phase 4 — AEC + audio quality), bumped
+    # from v0.24.0 per T1.51. The attenuation regime is increasingly
     # handled by the in-process AGC2 closed-loop digital gain
     # (Layer 4 of the Linux mixer cascade), which recovers below-VAD-
     # floor signals without mutating the OS-level mixer. The KB
@@ -1579,8 +1580,11 @@ _DEPRECATED_MIXER_FRACTIONS: tuple[tuple[str, float], ...] = (
 
 The four hardcoded mixer fractions that drive the legacy
 ``LinuxALSAMixerResetBypass`` band-aid. Scheduled for removal in
-v0.24.0 once the L2.5 KB-driven preset cascade (Layer 3) + in-process
-AGC2 (Layer 4) replace both the saturation and attenuation regimes.
+v0.27.0 (Phase 4 — AEC + audio quality), bumped from v0.24.0 per
+T1.51, once the L2.5 KB-driven preset cascade (Layer 3) + in-process
+AGC2 (Layer 4) replace both the saturation and attenuation regimes
+AND the bypass-coordinator wire-up gating Phase 2 + 3 has soaked
+through one minor-version cycle.
 
 Until then the fractions remain settable via
 ``SOVYX_TUNING__VOICE__LINUX_MIXER_*_FRACTION`` env vars per the
@@ -1596,16 +1600,17 @@ def warn_on_deprecated_mixer_overrides(
     """Emit one boot-time WARN per non-default deprecated mixer fraction.
 
     Mission §9.1.1 / Gap 1b — the four ``linux_mixer_*_fraction`` knobs
-    are scheduled for removal in v0.24.0. Operators who set them via
-    YAML or ``SOVYX_TUNING__VOICE__LINUX_MIXER_*_FRACTION`` env vars
-    get a structured WARN at boot so they have one full minor-version
-    cycle to migrate to the L2.5 KB-driven preset cascade
+    are scheduled for removal in v0.27.0 (bumped from v0.24.0 per
+    T1.51). Operators who set them via YAML or
+    ``SOVYX_TUNING__VOICE__LINUX_MIXER_*_FRACTION`` env vars get a
+    structured WARN at boot so they have multiple minor-version
+    cycles to migrate to the L2.5 KB-driven preset cascade
     (Layer 3) + in-process AGC2 (Layer 4) replacement path.
 
     The WARN is opt-in by virtue of the operator having set a
     non-default value — a stock install with no overrides emits
     nothing. The migration plan §8 contract is "deprecation warnings
-    only, no behaviour change" until v0.24.0.
+    only, no behaviour change" until v0.27.0.
 
     Args:
         tuning: Pre-instantiated :class:`VoiceTuningConfig` (tests
@@ -1639,15 +1644,25 @@ def warn_on_deprecated_mixer_overrides(
                 "voice.config.field": field_name,
                 "voice.config.value": float(actual),
                 "voice.config.default": float(default_value),
-                "voice.config.removal_target": "v0.24.0",
+                # T1.51 — removal target bumped from v0.24.0 to v0.27.0
+                # (Phase 4) per
+                # ``MISSION-voice-final-skype-grade-2026.md``: the
+                # bypass-coordinator wire-up gating Phase 2 + 3 must
+                # land first; until then the legacy fractions remain
+                # functional but emit this WARN. Aligned with the
+                # function-level deprecation WARN in
+                # ``voice/health/_linux_mixer_apply.py`` and the
+                # bypass-strategy WARN in
+                # ``voice/health/bypass/_linux_alsa_mixer.py``.
+                "voice.config.removal_target": "v0.27.0",
                 "voice.action_required": (
                     f"{field_name} is deprecated and scheduled for "
-                    "removal in v0.24.0. The L2.5 KB-driven preset "
-                    "cascade (Layer 3) + in-process AGC2 (Layer 4) "
-                    "replace both the saturation and attenuation "
-                    "regimes the legacy fractions targeted. To "
-                    "silence this warning, unset the env override "
-                    "(SOVYX_TUNING__VOICE__"
+                    "removal in v0.27.0 (Phase 4 — AEC + audio quality). "
+                    "The L2.5 KB-driven preset cascade (Layer 3) + "
+                    "in-process AGC2 (Layer 4) replace both the "
+                    "saturation and attenuation regimes the legacy "
+                    "fractions targeted. To silence this warning, unset "
+                    "the env override (SOVYX_TUNING__VOICE__"
                     f"{field_name.upper()}) and let the new cascade "
                     "drive remediation. KB profile contribution: see "
                     "docs/contributing/voice-mixer-kb-profiles.md."

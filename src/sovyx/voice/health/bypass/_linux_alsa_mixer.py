@@ -315,9 +315,18 @@ class LinuxALSAMixerResetBypass:
         # still relying on the legacy fraction-based path. The metric
         # rolls up across all installs to prioritise KB profile
         # authoring (highest-volume codecs win the next contribution
-        # slot). Removal target: v0.24.0, after the L2.5 KB-driven
-        # preset cascade (Layer 3) covers the same regimes for the
-        # codecs reported via this WARN.
+        # slot).
+        #
+        # Removal target: v0.27.0 (Phase 4 — AEC + audio quality),
+        # deferred from v0.24.0 per
+        # ``MISSION-voice-final-skype-grade-2026.md`` because the
+        # bypass-coordinator wire-up gating Phase 2 + 3 must land
+        # first; until that cycle completes the L2.5 KB cascade
+        # cannot be the sole path. The function-level deprecation
+        # WARN at ``_linux_mixer_apply.py::_emit_legacy_band_aid_warning``
+        # carries the same target — both must stay aligned for
+        # operator dashboards to render a coherent deprecation
+        # roadmap.
         logger.warning(
             "voice.mixer.alsa_band_aid_used",
             **{
@@ -328,16 +337,17 @@ class LinuxALSAMixerResetBypass:
                 "voice.card_longname": target.card_longname or "",
                 "voice.controls_count": len(snapshot.applied_controls),
                 "voice.endpoint_guid": context.endpoint_guid,
-                "voice.removal_target": "v0.24.0",
+                "voice.removal_target": "v0.27.0",
                 "voice.action_required": (
                     "The legacy ALSA-mixer band-aid (apply_mixer_reset / "
                     "apply_mixer_boost_up) successfully resolved a saturation "
                     "or attenuation pathology on this endpoint. The path is "
-                    "scheduled for removal in v0.24.0; until then it is the "
-                    "fallback when no L2.5 KB profile matches this card. To "
-                    "future-proof THIS deployment: contribute a Mixer KB "
-                    "profile for card_id=" + (target.card_id or "<unknown>") + " "
-                    "via docs/contributing/voice-mixer-kb-profiles.md. The "
+                    "scheduled for removal in v0.27.0 (Phase 4 — AEC + audio "
+                    "quality); until then it is the fallback when no L2.5 KB "
+                    "profile matches this card. To future-proof THIS "
+                    "deployment: contribute a Mixer KB profile for card_id="
+                    + (target.card_id or "<unknown>")
+                    + " via docs/contributing/voice-mixer-kb-profiles.md. The "
                     "preset cascade applies cleanly without the regime-flip "
                     "rollback the band-aid carries."
                 ),
