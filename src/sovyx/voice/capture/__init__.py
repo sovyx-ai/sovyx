@@ -18,6 +18,11 @@ The split is structurally compatible with CLAUDE.md anti-pattern #16
 
 from __future__ import annotations
 
+from sovyx.voice.capture._contention import (
+    _SESSION_MANAGER_CONTENTION_ERROR_CODES,
+    _is_session_manager_contention_pattern,
+    _suggest_session_manager_alternatives,
+)
 from sovyx.voice.capture._exceptions import (
     CaptureDeviceContendedError,
     CaptureError,
@@ -56,8 +61,11 @@ __all__ = [
     "SessionManagerRestartVerdict",
     "SharedRestartResult",
     "SharedRestartVerdict",
+    "_SESSION_MANAGER_CONTENTION_ERROR_CODES",
     "_emit_alsa_hw_direct_restart_metric",
     "_emit_exclusive_restart_metric",
     "_emit_session_manager_restart_metric",
     "_emit_shared_restart_metric",
+    "_is_session_manager_contention_pattern",
+    "_suggest_session_manager_alternatives",
 ]
