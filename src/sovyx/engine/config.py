@@ -1153,6 +1153,58 @@ class VoiceTuningConfig(BaseSettings):
     aggressive). Bounded ``[-1.0, 1.0]`` per the NCC algebraic
     range — values outside reject at config validation."""
 
+    voice_noise_suppression_enabled: bool = False
+    """Noise suppression master switch (Phase 4 / T4.11 — foundation).
+
+    When True the FrameNormalizer's NS stage runs the configured
+    :attr:`voice_noise_suppression_engine` over every emitted
+    capture window. Foundation default ``False`` per
+    ``feedback_staged_adoption`` — operators flip after pilot
+    validation confirms the SNR improvement on their hardware
+    (the spectral-gating engine targets ~5-10 dB on stationary
+    background noise).
+
+    Default-flip planned for v0.27.0 once NS promotion gate
+    closes (master mission §Phase 4 / T4.14)."""
+
+    voice_noise_suppression_engine: Literal["off", "spectral_gating"] = "spectral_gating"
+    """Concrete NS implementation when ``voice_noise_suppression_enabled=True``.
+
+    * ``"off"`` — explicit no-op (also reachable via the master
+      switch); kept for "engine selected but disabled" semantics.
+    * ``"spectral_gating"`` — frequency-domain magnitude gate via
+      pure NumPy + scipy. Zero new dependencies. Effective on
+      stationary background noise (HVAC, fans), less effective on
+      non-stationary noise (keyboard, traffic). Documented quality
+      tradeoff vs RNNoise; upgrade path to a custom librnnoise
+      ctypes shim is reserved for v0.28.0+ if production telemetry
+      shows the SNR gap matters.
+
+    Future ``"rnnoise"`` engine slot is intentionally absent — the
+    enum will be widened only when the librnnoise shim ships."""
+
+    voice_noise_suppression_floor_db: float = Field(default=-50.0, ge=-120.0, le=0.0)
+    """Per-bin magnitude floor (dBFS) below which the spectral gate attenuates.
+
+    Bins whose magnitude sits below this floor are multiplied by
+    :attr:`voice_noise_suppression_attenuation_db`. Higher (closer
+    to 0 dBFS) means more aggressive gating — louder bins still
+    get attenuated. Lower (more negative) means more permissive —
+    only the quietest bins get gated.
+
+    Default -50 dBFS sits between typical room ambient noise
+    (~-60 dBFS in a quiet office) and active speech (~-30 dBFS),
+    so the gate naturally cuts the noise floor while preserving
+    speech harmonics."""
+
+    voice_noise_suppression_attenuation_db: float = Field(default=-20.0, ge=-60.0, le=0.0)
+    """Attenuation applied to bins below the magnitude floor (dBFS).
+
+    -20 dB = 10× quieter (linear gain 0.1). 0 dB = passthrough
+    (no NS effect). Values outside ``[-60, 0]`` reject at config
+    validation: above 0 would amplify noise; below -60 produces
+    audible ringing on transient bins."""
+
     cascade_host_api_alignment_enabled: bool = False
     """Cascade ↔ runtime host-API alignment (cross-platform).
 
