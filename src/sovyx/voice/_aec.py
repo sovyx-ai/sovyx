@@ -141,6 +141,35 @@ class NullRenderProvider:
 
 
 @runtime_checkable
+class RenderPcmSink(Protocol):
+    """Write-side counterpart to :class:`RenderPcmProvider`.
+
+    The TTS playback path (:mod:`sovyx.voice.pipeline._output_queue`)
+    is the producer; it calls :meth:`feed` immediately before the
+    playback dispatch so the buffered render PCM aligns with what
+    the speaker is about to emit. The capture path then reads via
+    :meth:`RenderPcmProvider.get_aligned_window`.
+
+    Concrete implementation: :class:`sovyx.voice._render_pcm_buffer.RenderPcmBuffer`
+    implements both :class:`RenderPcmProvider` and
+    :class:`RenderPcmSink` so a single buffer instance bridges the
+    producer/consumer pair. Tests can mock either side
+    independently via the Protocol contracts.
+    """
+
+    def feed(self, pcm: np.ndarray, sample_rate: int) -> None:
+        """Append the next chunk of render PCM to the buffer.
+
+        Args:
+            pcm: Source PCM array. Mono ``(N,)`` or stereo
+                ``(N, C)``. Implementation downmixes + resamples to
+                the FrameNormalizer's 16 kHz mono invariant.
+            sample_rate: Source rate in Hz.
+        """
+        ...
+
+
+@runtime_checkable
 class AecProcessor(Protocol):
     """Minimal AEC interface.
 
@@ -472,6 +501,7 @@ __all__ = [
     "NoOpAec",
     "NullRenderProvider",
     "RenderPcmProvider",
+    "RenderPcmSink",
     "SpeexAecProcessor",
     "build_aec_processor",
     "build_frame_normalizer_aec",

@@ -10,6 +10,7 @@ from sovyx.voice._chaos import ChaosInjector, ChaosSite
 from sovyx.voice._stage_metrics import VoiceStage, record_queue_depth
 
 if TYPE_CHECKING:
+    from sovyx.voice._aec import RenderPcmSink
     from sovyx.voice.tts_piper import AudioChunk
 
 logger = get_logger(__name__)
@@ -45,6 +46,7 @@ class AudioOutputQueue:
         self,
         *,
         usage_capacity_reference: int = _DEFAULT_USAGE_CAPACITY_REFERENCE,
+        render_buffer: RenderPcmSink | None = None,
     ) -> None:
         """Construct an audio output queue.
 
@@ -56,6 +58,12 @@ class AudioOutputQueue:
                 ("at the depth we'd consider abnormal"). Tuneable per
                 deployment if a particular workload routinely runs
                 deeper than the default 256.
+            render_buffer: Optional Phase 4 / T4.4.c AEC reference
+                sink. When provided, every ``AudioChunk`` is fed to
+                the buffer's :meth:`feed` BEFORE the playback dispatch
+                so the FrameNormalizer's AEC stage has a time-aligned
+                reference for echo cancellation. Default ``None``
+                preserves the pre-AEC playback contract bit-exactly.
         """
         self._queue: asyncio.Queue[AudioChunk] = asyncio.Queue()
         self._playing = False
@@ -66,6 +74,7 @@ class AudioOutputQueue:
         # large multi-paragraph pre-renders).
         self._pending_audio_ms = 0.0
         self._usage_capacity_reference = usage_capacity_reference
+        self._render_buffer: RenderPcmSink | None = render_buffer
         # TS3 chaos injector — opt-in saturation simulation at the
         # OUTPUT_QUEUE_DROP site. Disabled by default; chaos test
         # matrix sets the env vars to validate that the M2 USE
@@ -136,6 +145,7 @@ class AudioOutputQueue:
         """
         self._playing = True
         try:
+            self._feed_render_buffer(chunk)
             await _play_audio(chunk)
         finally:
             self._playing = False
@@ -152,6 +162,7 @@ class AudioOutputQueue:
                 self._pending_audio_ms = max(
                     0.0, self._pending_audio_ms - float(chunk.duration_ms)
                 )
+                self._feed_render_buffer(chunk)
                 await _play_audio(chunk)
                 chunks_drained += 1
                 audio_ms_drained += float(chunk.duration_ms)
@@ -212,6 +223,42 @@ class AudioOutputQueue:
             except asyncio.QueueEmpty:
                 break
         self._pending_audio_ms = 0.0
+
+    def set_render_buffer(self, buffer: RenderPcmSink | None) -> None:
+        """Wire (or unwire) the AEC render-PCM sink at runtime.
+
+        Mirrors the FrameNormalizer's :meth:`set_render_provider` —
+        the orchestrator constructs a single
+        :class:`~sovyx.voice._render_pcm_buffer.RenderPcmBuffer`
+        instance and registers it on both sides (queue=sink,
+        normalizer=provider) so render-PCM flows producer→consumer
+        through the same ring.
+        """
+        self._render_buffer = buffer
+
+    def _feed_render_buffer(self, chunk: AudioChunk) -> None:
+        """Forward ``chunk.audio`` to the AEC render buffer if wired.
+
+        Best-effort: render-buffer feed failures must NOT block
+        playback. The buffer's contract guarantees no exceptions for
+        well-formed chunks (validated dtype + sample_rate at the TTS
+        engine boundary), but a malformed chunk reaching this site
+        is logged and swallowed so ``_play_audio`` still runs.
+        Anti-pattern #14 doesn't apply because feed is sync + fast
+        (lock-protected ring write); no asyncio.to_thread needed.
+        """
+        if self._render_buffer is None:
+            return
+        try:
+            self._render_buffer.feed(chunk.audio, chunk.sample_rate)
+        except Exception:
+            logger.exception(
+                "voice.output_queue.render_buffer_feed_failed",
+                **{
+                    "voice.chunk_audio_ms": round(float(chunk.duration_ms), 1),
+                    "voice.chunk_sample_rate": chunk.sample_rate,
+                },
+            )
 
 
 async def _play_audio(chunk: AudioChunk) -> None:

@@ -27,7 +27,7 @@ import time
 import numpy as np
 import pytest
 
-from sovyx.voice._aec import RenderPcmProvider
+from sovyx.voice._aec import RenderPcmProvider, RenderPcmSink
 from sovyx.voice._render_pcm_buffer import RenderPcmBuffer
 
 # ── Construction ─────────────────────────────────────────────────────────
@@ -58,6 +58,14 @@ class TestConstruction:
     def test_implements_render_pcm_provider_protocol(self) -> None:
         buf = RenderPcmBuffer()
         assert isinstance(buf, RenderPcmProvider)
+
+    def test_implements_render_pcm_sink_protocol(self) -> None:
+        # T4.4.c — same instance bridges producer→consumer; one buffer
+        # registers on the OutputAudioQueue (sink) AND the FrameNormalizer
+        # (provider) so playback flows producer→consumer through the
+        # same ring.
+        buf = RenderPcmBuffer()
+        assert isinstance(buf, RenderPcmSink)
 
 
 # ── feed: input formats + resampling ─────────────────────────────────────
