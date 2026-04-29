@@ -88,6 +88,7 @@ if TYPE_CHECKING:
     from sovyx.voice._agc2 import AGC2
     from sovyx.voice._double_talk_detector import DoubleTalkDetector
     from sovyx.voice._noise_suppression import NoiseSuppressor
+    from sovyx.voice._snr_estimator import SnrEstimator
 
 logger = get_logger(__name__)
 
@@ -367,6 +368,7 @@ class FrameNormalizer:
         render_provider: RenderPcmProvider | None = None,
         double_talk_detector: DoubleTalkDetector | None = None,
         noise_suppressor: NoiseSuppressor | None = None,
+        snr_estimator: SnrEstimator | None = None,
     ) -> None:
         if source_rate <= 0:
             msg = f"source_rate must be positive, got {source_rate}"
@@ -481,6 +483,14 @@ class FrameNormalizer:
         # background-noise residual on the cleaned signal). Default
         # ``None`` preserves the pre-NS contract bit-exactly.
         self._noise_suppressor: NoiseSuppressor | None = noise_suppressor
+        # Phase 4 / T4.32 — SNR estimator. Observability-only:
+        # called AFTER NS on the cleaned window, emits
+        # ``voice.audio.snr_db`` per measurement, doesn't mutate
+        # the signal. Default ``None`` preserves the pre-SNR
+        # contract bit-exactly. The estimator's silent-frame
+        # branch (returns _SNR_FLOOR_DB) suppresses the histogram
+        # emission so silent windows don't pollute p50.
+        self._snr_estimator: SnrEstimator | None = snr_estimator
 
         logger.debug(
             "frame_normalizer_created",
@@ -680,6 +690,15 @@ class FrameNormalizer:
                 # the wired suppressor is :class:`NoOpNoiseSuppressor`.
                 if self._noise_suppressor is not None:
                     window = self._apply_ns_to_window(window)
+                # Phase 4 / T4.32 — SNR observation runs LAST on
+                # the cleaned window so the metric reflects what
+                # downstream stages (VAD/STT) actually see. The
+                # estimator only emits a histogram sample for
+                # measurable frames (silent frames return
+                # _SNR_FLOOR_DB and are filtered out — see
+                # _apply_snr_to_window).
+                if self._snr_estimator is not None:
+                    self._apply_snr_to_window(window)
                 windows.append(window)
 
             record_stage_event(VoiceStage.CAPTURE, StageEventKind.SUCCESS)
@@ -816,6 +835,32 @@ class FrameNormalizer:
 
         return cleaned
 
+    def _apply_snr_to_window(
+        self,
+        window: npt.NDArray[np.int16],
+    ) -> None:
+        """Compute + emit per-window SNR (T4.33 telemetry).
+
+        Observability-only — does NOT mutate the audio signal.
+        Skips emission for silent windows (estimator returns
+        :data:`_SNR_FLOOR_DB`) and for the degenerate first-frame
+        anchor (estimator returns 0.0 because the only sample IS
+        the noise floor) so the histogram p50 isn't poisoned with
+        synthetic floor values.
+        """
+        from sovyx.voice._snr_estimator import _SNR_FLOOR_DB
+        from sovyx.voice.health._metrics import record_audio_snr_db
+
+        assert self._snr_estimator is not None  # gated by caller
+        snr_db = self._snr_estimator.estimate(window)
+        # _SNR_FLOOR_DB signals "silent frame, no measurement".
+        # 0.0 is the first-frame anchor (signal == noise floor by
+        # construction); emitting it would distort the p50 with a
+        # synthetic floor sample. Emit only real measurements.
+        if snr_db <= _SNR_FLOOR_DB or snr_db == 0.0:
+            return
+        record_audio_snr_db(snr_db=snr_db)
+
     @property
     def noise_suppressor(self) -> NoiseSuppressor | None:
         """Currently-wired NS processor, or ``None`` if disabled."""
@@ -831,6 +876,22 @@ class FrameNormalizer:
         instance to enable.
         """
         self._noise_suppressor = ns
+
+    @property
+    def snr_estimator(self) -> SnrEstimator | None:
+        """Currently-wired SNR estimator, or ``None`` if disabled."""
+        return self._snr_estimator
+
+    def set_snr_estimator(self, estimator: SnrEstimator | None) -> None:
+        """Wire (or unwire) the SNR estimator at runtime.
+
+        Mirrors :meth:`set_noise_suppressor`. Resetting an
+        existing estimator's noise tracker requires calling
+        :meth:`SnrEstimator.reset` directly — flipping in a new
+        instance via this method effectively resets too because
+        the new estimator starts with an empty noise window.
+        """
+        self._snr_estimator = estimator
 
     @property
     def agc2(self) -> AGC2 | None:

@@ -80,6 +80,7 @@ if TYPE_CHECKING:
     from sovyx.voice._double_talk_detector import DoubleTalkDetector
     from sovyx.voice._noise_suppression import NoiseSuppressor
     from sovyx.voice._render_pcm_buffer import RenderPcmBuffer
+    from sovyx.voice._snr_estimator import SnrEstimator
     from sovyx.voice.health.contract import BypassOutcome
     from sovyx.voice.pipeline._orchestrator import VoicePipeline
 
@@ -94,6 +95,7 @@ __all__ = [
     "_build_aec_wiring",
     "_build_double_talk_detector",
     "_build_noise_suppressor",
+    "_build_snr_estimator",
     "_create_kokoro_tts",
     "_create_piper_tts",
     "_create_stt",
@@ -274,6 +276,41 @@ def _build_noise_suppressor(
         },
     )
     return suppressor
+
+
+def _build_snr_estimator(
+    tuning: VoiceTuningConfig,
+) -> SnrEstimator | None:
+    """Build the per-frame SNR estimator when its tuning flag is on.
+
+    Phase 4 / T4.32 wire-up. Returns ``None`` when
+    ``voice_snr_estimation_enabled=False`` (foundation default per
+    ``feedback_staged_adoption``); operators flip after pilot
+    validation confirms the noise-window length matches their
+    environment.
+
+    When active, returns a fresh
+    :class:`~sovyx.voice._snr_estimator.SnrEstimator` pinned to the
+    FrameNormalizer's 16 kHz / 512-sample invariants.
+    """
+    if not tuning.voice_snr_estimation_enabled:
+        return None
+
+    from sovyx.voice._snr_estimator import build_frame_normalizer_snr_estimator
+
+    estimator = build_frame_normalizer_snr_estimator(
+        enabled=True,
+        noise_window_seconds=tuning.voice_snr_noise_window_seconds,
+        silence_floor_db=tuning.voice_snr_silence_floor_db,
+    )
+    logger.info(
+        "voice.snr.wired",
+        **{
+            "voice.snr.noise_window_seconds": tuning.voice_snr_noise_window_seconds,
+            "voice.snr.silence_floor_db": tuning.voice_snr_silence_floor_db,
+        },
+    )
+    return estimator
 
 
 def _build_double_talk_detector(
@@ -703,6 +740,7 @@ async def create_voice_pipeline(
         tuning,
         resolved_name=(resolved.name if resolved is not None else None),
     )
+    snr_estimator = _build_snr_estimator(tuning)
 
     capture_task = AudioCaptureTask(
         pipeline,
@@ -713,6 +751,7 @@ async def create_voice_pipeline(
         render_provider=render_buffer,
         double_talk_detector=double_talk_detector,
         noise_suppressor=noise_suppressor,
+        snr_estimator=snr_estimator,
     )
     capture_holder["task"] = capture_task
     # Ring 2 (Signal Integrity): RMS-floor watchdog + format-detection

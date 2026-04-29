@@ -695,6 +695,23 @@ class MetricsRegistry:
             unit="dB",
         )
 
+        # ── Phase 4 / T4.33 — SNR observability ─────────────────────
+        # Per-window SNR estimate from the SnrEstimator's
+        # spectral-subtraction formula. Gives the dashboard a real
+        # signal-vs-noise distribution per session. Promotion gate
+        # (master mission §Phase 4 / T4.35): alert when p50 < 9 dB
+        # (Moonshine STT degradation threshold).
+        self.voice_audio_snr_db = self._histogram(
+            "sovyx.voice.audio.snr_db",
+            "Per-window SNR estimate in dB. Computed by the "
+            "SnrEstimator's sliding-window minimum noise tracker "
+            "per emitted 512-sample window when SNR estimation is "
+            "wired. Excludes silent frames (those carry no signal "
+            "to ratio). Bucketing tracks: 17 dB+ excellent, 9-17 dB "
+            "good, <9 dB degraded (per T4.40 documentation).",
+            unit="dB",
+        )
+
         # ── Voice pipeline RED + USE (Ring 6 — M2) ──────────────────
         # Per-stage Rate / Errors / Duration plus Utilisation /
         # Saturation / Errors for every async queue between stages.

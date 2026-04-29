@@ -118,6 +118,9 @@ METRIC_AEC_DOUBLE_TALK = "sovyx.voice.aec.double_talk"
 METRIC_NS_WINDOWS = "sovyx.voice.ns.windows"
 METRIC_NS_SUPPRESSION_DB = "sovyx.voice.ns.suppression_db"
 
+# ── Phase 4 — SNR observability (T4.33) ─────────────────────────────────
+METRIC_AUDIO_SNR_DB = "sovyx.voice.audio.snr_db"
+
 
 # ── Label enums (closed sets for low-cardinality guarantees) ─────────────
 # Using string literals here keeps the module dependency-free; the ADR
@@ -760,6 +763,31 @@ def record_ns_window(*, state: str) -> None:
     counter.add(1, attributes={"state": state})
 
 
+def record_audio_snr_db(*, snr_db: float) -> None:
+    """Record one per-window SNR estimate in dB (Phase 4 / T4.33).
+
+    Fires when the SNR estimator returned a real measurement
+    (i.e. the frame was above the silence floor and the noise
+    tracker had at least one prior observation). Silent frames
+    + degenerate first-frame zero-SNR samples should NOT be
+    routed here — they distort the histogram p50 with floor
+    noise.
+
+    Promotion gate (master mission §Phase 4 / T4.35): alert when
+    p50 drops below 9 dB (Moonshine STT degradation threshold).
+
+    Args:
+        snr_db: SNR measurement in dB. Capped at +120 dB inside
+            :class:`SnrEstimator.estimate` to keep histogram
+            buckets stable when the noise floor approaches the
+            silence-floor limit.
+    """
+    histogram = getattr(get_metrics(), "voice_audio_snr_db", None)
+    if histogram is None:
+        return
+    histogram.record(float(snr_db))
+
+
 def record_ns_suppression_db(*, suppression_db: float) -> None:
     """Record one NS suppression sample in dB (Phase 4 / T4.16).
 
@@ -812,6 +840,7 @@ __all__ = [
     "METRIC_AEC_ERLE_DB",
     "METRIC_AEC_WINDOWS",
     "METRIC_APO_DEGRADED_EVENTS",
+    "METRIC_AUDIO_SNR_DB",
     "METRIC_BYPASS_IMPROVEMENT_RESOLUTION",
     "METRIC_BYPASS_PROBE_WAIT_MS",
     "METRIC_BYPASS_PROBE_WINDOW_CONTAMINATED",
@@ -842,6 +871,7 @@ __all__ = [
     "record_aec_erle",
     "record_aec_window",
     "record_apo_degraded_event",
+    "record_audio_snr_db",
     "record_bypass_improvement_resolution",
     "record_bypass_probe_wait_ms",
     "record_bypass_probe_window_contaminated",
