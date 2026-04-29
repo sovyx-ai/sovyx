@@ -1205,6 +1205,43 @@ class VoiceTuningConfig(BaseSettings):
     validation: above 0 would amplify noise; below -60 produces
     audible ringing on transient bins."""
 
+    voice_snr_estimation_enabled: bool = False
+    """Per-frame SNR estimator master switch (Phase 4 / T4.31).
+
+    When True the FrameNormalizer's SNR stage tracks a sliding-
+    window minimum of frame mean-square power as the noise floor
+    estimate and emits per-VAD-positive-frame
+    :data:`voice.audio.snr_db` histogram samples (T4.33 wire-up).
+
+    Default ``False`` per ``feedback_staged_adoption`` — operators
+    flip after pilot validation confirms the noise-window length
+    matches their environment (see
+    :attr:`voice_snr_noise_window_seconds`)."""
+
+    voice_snr_noise_window_seconds: float = Field(default=5.0, ge=0.5, le=60.0)
+    """Sliding-window length for the noise-floor minimum tracker.
+
+    The estimator assumes that within any window of this length
+    at least one frame is genuine background silence — typical
+    speech has 200-500 ms inter-utterance gaps, so 5 s comfortably
+    captures multiple silence opportunities. Shorter windows
+    (e.g. 1 s) react faster to room changes but risk anchoring
+    to a continuously-active speaker; longer windows (30 s+) are
+    stale during room transitions (operator walks into a quieter
+    room). Bounded ``[0.5, 60.0]`` s."""
+
+    voice_snr_silence_floor_db: float = Field(default=-90.0, ge=-120.0, le=-40.0)
+    """Mean-square power floor (dBFS) below which a frame is skipped.
+
+    Frames whose power sits below this floor carry no useful SNR
+    information AND would pollute the minimum-tracker with
+    sub-detection noise (LSB-quantization residuals on int16
+    frames). -90 dBFS sits at ~1 LSB² which is the canonical
+    "below detection" threshold for 16-bit PCM. Bounded
+    ``[-120, -40]`` — values outside reject at config validation:
+    above -40 dBFS would skip real ambient room tone; below -120
+    dBFS is below the int16 quantization rail."""
+
     voice_use_os_dsp_when_available: bool = False
     """Defer NS to the OS DSP stack when one is detected (Phase 4 / T4.20).
 
