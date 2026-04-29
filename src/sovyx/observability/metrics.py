@@ -712,6 +712,24 @@ class MetricsRegistry:
             unit="dB",
         )
 
+        # ── Phase 4 / T4.44.b — Wiener entropy observability ─────
+        # Per-frame signal-destruction verdict from the Wiener
+        # entropy detector. The destroyed/total ratio reveals how
+        # often the operator's hardware delivers usable audio vs
+        # noise-dominated garbage; sustained > 0.5 ratio signals
+        # a hardware / driver problem upstream of Sovyx.
+        self.voice_audio_signal_destroyed = self._counter(
+            "sovyx.voice.audio.signal_destroyed",
+            "Per-frame Wiener-entropy destruction verdict (labels: "
+            "state=destroyed|clean). 'destroyed' fires when frame "
+            "entropy exceeds the threshold (default 0.5 — signal "
+            "too noise-like for downstream DSP). 'clean' fires "
+            "otherwise. Foundation: observability-only — the "
+            "destroyed signal still flows through the pipeline. "
+            "Future commit may add skip-action when sustained ratio "
+            "indicates the operator should investigate hardware.",
+        )
+
         # ── Voice pipeline RED + USE (Ring 6 — M2) ──────────────────
         # Per-stage Rate / Errors / Duration plus Utilisation /
         # Saturation / Errors for every async queue between stages.

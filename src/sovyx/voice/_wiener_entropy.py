@@ -85,11 +85,26 @@ class WienerEntropyConfig:
     destruction_threshold: float
 
 
+_ACCEPTED_DTYPES = (np.int16, np.float32, np.float64)
+"""Spectral flatness is amplitude-scale invariant.
+
+The geo/arith ratio is preserved when every bin is multiplied by
+the same constant — so the absolute amplitude scale doesn't
+matter. Accepts the three Sovyx-internal PCM dtypes (int16 from
+capture, float32 from resample stage, float64 from intermediate
+DSP). Other dtypes (int32 sign-extended int24, float16 lossy)
+reject explicitly so a future call site doesn't silently get
+nonsense entropy.
+"""
+
+
 def compute_wiener_entropy(frame: np.ndarray) -> float:
     """Return the Wiener entropy (spectral flatness) of ``frame``.
 
     Args:
-        frame: int16 PCM frame. Empty + all-zero inputs return
+        frame: PCM frame as ``int16`` (capture-side), ``float32``
+            (post-resample / pre-int16-conversion) or ``float64``
+            (intermediate DSP). Empty + all-zero inputs return
             ``0.0`` (treats true silence as "tone-like" / not
             destroyed by convention — there's no signal to call
             destroyed).
@@ -97,16 +112,22 @@ def compute_wiener_entropy(frame: np.ndarray) -> float:
     Returns:
         Float in ``[0.0, 1.0]``. ``0.0`` = pure tone /
         deterministic. ``1.0`` = white noise / fully random.
+
+    Raises:
+        ValueError: ``frame.dtype`` not in ``{int16, float32,
+            float64}``.
     """
-    if frame.dtype != np.int16:
-        msg = f"frame dtype must be int16, got {frame.dtype}"
+    if frame.dtype not in _ACCEPTED_DTYPES:
+        msg = f"frame dtype must be int16, float32 or float64, got {frame.dtype}"
         raise ValueError(msg)
     if frame.size == 0:
         return 0.0
 
     # Real-FFT yields N//2+1 complex bins for an N-sample real input.
     # We work in float64 throughout — int16 squares overflow if
-    # naively summed at large frame sizes.
+    # naively summed at large frame sizes; float32 spectrum has
+    # ample dynamic range but float64 keeps the mean-stability for
+    # the geo/arith ratio rounding.
     f64 = frame.astype(np.float64)
     spectrum = np.fft.rfft(f64)
     power = np.square(np.abs(spectrum))

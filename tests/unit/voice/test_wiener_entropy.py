@@ -34,9 +34,30 @@ class TestComputeWienerEntropy:
     def test_empty_returns_zero(self) -> None:
         assert compute_wiener_entropy(np.array([], dtype=np.int16)) == 0.0
 
-    def test_rejects_non_int16(self) -> None:
-        with pytest.raises(ValueError, match="int16"):
-            compute_wiener_entropy(np.zeros(512, dtype=np.float32))
+    def test_accepts_float32(self) -> None:
+        # T4.44.b — float32 is the resample-stage dtype. Entropy
+        # is amplitude-scale invariant so the float vs int16 input
+        # for the same signal yields the same entropy.
+        n = 512
+        t = np.arange(n) / 16_000.0
+        tone_int = (np.sin(2 * np.pi * 1_000 * t) * 8_000).astype(np.int16)
+        tone_f32 = (np.sin(2 * np.pi * 1_000 * t) * 0.25).astype(np.float32)
+        e_int = compute_wiener_entropy(tone_int)
+        e_f32 = compute_wiener_entropy(tone_f32)
+        # Same signal, same entropy (within numerical tolerance).
+        assert abs(e_int - e_f32) < 0.01
+
+    def test_accepts_float64(self) -> None:
+        e = compute_wiener_entropy(np.zeros(512, dtype=np.float64))
+        assert e == 0.0
+
+    def test_rejects_int32(self) -> None:
+        with pytest.raises(ValueError, match="int16, float32 or float64"):
+            compute_wiener_entropy(np.zeros(512, dtype=np.int32))
+
+    def test_rejects_float16(self) -> None:
+        with pytest.raises(ValueError, match="int16, float32 or float64"):
+            compute_wiener_entropy(np.zeros(512, dtype=np.float16))
 
     def test_pure_tone_near_zero(self) -> None:
         # 1 kHz sine at 16 kHz → energy concentrated in the bin

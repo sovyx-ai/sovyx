@@ -121,6 +121,9 @@ METRIC_NS_SUPPRESSION_DB = "sovyx.voice.ns.suppression_db"
 # ── Phase 4 — SNR observability (T4.33) ─────────────────────────────────
 METRIC_AUDIO_SNR_DB = "sovyx.voice.audio.snr_db"
 
+# ── Phase 4 — Wiener entropy destruction detector (T4.44.b) ─────────────
+METRIC_AUDIO_SIGNAL_DESTROYED = "sovyx.voice.audio.signal_destroyed"
+
 
 # ── Label enums (closed sets for low-cardinality guarantees) ─────────────
 # Using string literals here keeps the module dependency-free; the ADR
@@ -763,6 +766,23 @@ def record_ns_window(*, state: str) -> None:
     counter.add(1, attributes={"state": state})
 
 
+def record_audio_signal_destroyed(*, state: str) -> None:
+    """Record one Wiener-entropy destruction verdict (Phase 4 / T4.44.b).
+
+    Fires once per processed frame (post-downmix, pre-resample)
+    when the entropy detector is wired. The destroyed/total ratio
+    is the primary destruction-rate signal for the dashboard.
+
+    Args:
+        state: ``"destroyed"`` (entropy > threshold) or
+            ``"clean"`` (entropy ≤ threshold).
+    """
+    counter = getattr(get_metrics(), "voice_audio_signal_destroyed", None)
+    if counter is None:
+        return
+    counter.add(1, attributes={"state": state})
+
+
 def record_audio_snr_db(*, snr_db: float) -> None:
     """Record one per-window SNR estimate in dB (Phase 4 / T4.33).
 
@@ -840,6 +860,7 @@ __all__ = [
     "METRIC_AEC_ERLE_DB",
     "METRIC_AEC_WINDOWS",
     "METRIC_APO_DEGRADED_EVENTS",
+    "METRIC_AUDIO_SIGNAL_DESTROYED",
     "METRIC_AUDIO_SNR_DB",
     "METRIC_BYPASS_IMPROVEMENT_RESOLUTION",
     "METRIC_BYPASS_PROBE_WAIT_MS",
@@ -871,6 +892,7 @@ __all__ = [
     "record_aec_erle",
     "record_aec_window",
     "record_apo_degraded_event",
+    "record_audio_signal_destroyed",
     "record_audio_snr_db",
     "record_bypass_improvement_resolution",
     "record_bypass_probe_wait_ms",

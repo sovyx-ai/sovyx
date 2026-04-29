@@ -372,6 +372,8 @@ class FrameNormalizer:
         dither_enabled: bool = False,
         dither_amplitude_lsb: float = 1.0,
         dither_rng: np.random.Generator | None = None,
+        wiener_entropy_check_enabled: bool = False,
+        wiener_entropy_threshold: float = 0.5,
     ) -> None:
         if source_rate <= 0:
             msg = f"source_rate must be positive, got {source_rate}"
@@ -509,6 +511,15 @@ class FrameNormalizer:
 
             dither_rng = _np.random.default_rng()
         self._dither_rng: np.random.Generator | None = dither_rng
+        # Phase 4 / T4.44.b — Wiener-entropy destruction detector.
+        # Observability-only foundation: when enabled, computes
+        # entropy on the post-downmix mono signal once per push()
+        # and emits ``voice.audio.signal_destroyed{state}``. The
+        # frame still flows through the pipeline normally — the
+        # skip-action is reserved for a follow-up commit once
+        # production data validates the threshold.
+        self._wiener_entropy_check_enabled: bool = wiener_entropy_check_enabled
+        self._wiener_entropy_threshold: float = wiener_entropy_threshold
 
         logger.debug(
             "frame_normalizer_created",
@@ -672,6 +683,16 @@ class FrameNormalizer:
                 as_int16 = block if block.ndim == 1 else block[:, 0].copy()
             else:
                 mono_f32 = self._downmix(block)
+                # Phase 4 / T4.44.b — entropy detector runs once
+                # per push() AFTER downmix (so it sees the
+                # mixed-down mono signal that downstream stages
+                # consume) and BEFORE resample (so a "destroyed"
+                # verdict could short-circuit downstream CPU
+                # spend in a future commit). Foundation here is
+                # observability-only: emit ``voice.audio.signal_destroyed``
+                # but always continue processing.
+                if self._wiener_entropy_check_enabled:
+                    self._observe_wiener_entropy(mono_f32)
                 resampled = mono_f32 if self._passthrough else self._resample(mono_f32)
                 ducked = self._apply_ducking(resampled)
                 # Phase 4 / T4.43.b — pass the dither rng when
@@ -860,6 +881,26 @@ class FrameNormalizer:
             record_ns_window(state="passthrough")
 
         return cleaned
+
+    def _observe_wiener_entropy(
+        self,
+        mono_f32: npt.NDArray[np.float32],
+    ) -> None:
+        """Emit ``voice.audio.signal_destroyed{state}`` for one frame.
+
+        T4.44.b foundation wire-up — observability-only. The
+        destroyed signal still flows through resample + AEC + NS +
+        emission. Operators see the destruction rate via the
+        dashboard counter; a future commit may add a skip-action
+        once production data validates the threshold for their
+        hardware.
+        """
+        from sovyx.voice._wiener_entropy import compute_wiener_entropy
+        from sovyx.voice.health._metrics import record_audio_signal_destroyed
+
+        entropy = compute_wiener_entropy(mono_f32)
+        state = "destroyed" if entropy > self._wiener_entropy_threshold else "clean"
+        record_audio_signal_destroyed(state=state)
 
     def _apply_snr_to_window(
         self,
