@@ -1102,12 +1102,16 @@ export const PlatformDiagnosticsResponseSchema = z.object({
 // CaptureRestartFrame — observability layer for capture-task restarts.
 // Mirrors src/sovyx/voice/pipeline/_frame_types.py::CaptureRestartFrame.
 //
-// All payload fields are .optional() in v0.24.0 (foundation phase) so
-// safeParse tolerates the legacy frame-history shape that doesn't
-// include the new fields yet. v0.25.0 wire-up keeps the optional
-// surface; v0.26.0 considers promoting to required after one minor
-// cycle of telemetry observation in the wild (see master rollout
-// matrix in MISSION-voice-windows-paranoid-2026-04-26.md).
+// Phase 3 / T3.12 (v0.26.0 prep, 2026-04-29): ALL payload fields
+// promoted from .optional() to required after T32 wire-up shipped
+// (commits a21d8bf + ab2720f) and demonstrated in the production
+// payload. The Python dataclass at _frame_types.py defines defaults
+// (empty strings, 0 ints) for every field — dataclasses.asdict()
+// always produces them — so the wire contract is "fields are
+// always present even when their values are zero/empty". Required
+// schema rejects payloads that drop fields, catching backend
+// regression at the safeParse boundary instead of letting None
+// propagate into the dashboard's TypeScript layer.
 
 export const CaptureRestartReasonSchema = z.enum([
   "device_changed",
@@ -1120,27 +1124,29 @@ export const CaptureRestartFrameSchema = z.object({
   // PipelineFrame base fields:
   frame_type: z.literal("CaptureRestart"),
   timestamp_monotonic: z.number(),
-  utterance_id: z.string().optional(),
-  // CaptureRestart payload (all optional v0.24.0):
-  restart_reason: CaptureRestartReasonSchema.or(z.string()).optional(),
-  old_host_api: z.string().optional(),
-  new_host_api: z.string().optional(),
-  old_device_id: z.string().optional(),
-  new_device_id: z.string().optional(),
-  old_signal_processing_mode: z.string().optional(),
-  new_signal_processing_mode: z.string().optional(),
-  recovery_latency_ms: z.number().int().nonnegative().optional(),
-  bypass_tier: z.number().int().min(0).max(3).optional(),
+  utterance_id: z.string(),
+  // CaptureRestart payload (T3.12 — all required, defaults to
+  // empty-string / 0 in the Python dataclass; always serialised).
+  restart_reason: CaptureRestartReasonSchema.or(z.string()),
+  old_host_api: z.string(),
+  new_host_api: z.string(),
+  old_device_id: z.string(),
+  new_device_id: z.string(),
+  old_signal_processing_mode: z.string(),
+  new_signal_processing_mode: z.string(),
+  recovery_latency_ms: z.number().int().nonnegative(),
+  bypass_tier: z.number().int().min(0).max(3),
 });
 
 // ``GET /api/voice/restart-history?limit=N`` payload — bounded list of
 // CaptureRestartFrame entries from the orchestrator's frame ring buffer.
-// The endpoint stub lands in T18 (returns empty array in v0.24.0); the
-// real payload arrives in v0.25.0 wire-up.
+// T33 (commit 773a2ff) wired the endpoint to the real ``frame_history``
+// payload; T3.12 promotes ``limit`` + ``total`` to required since the
+// endpoint always populates them post-T33.
 export const VoiceRestartHistoryResponseSchema = z.object({
   frames: z.array(CaptureRestartFrameSchema),
-  limit: z.number().int().positive().optional(),
-  total: z.number().int().nonnegative().optional(),
+  limit: z.number().int().positive(),
+  total: z.number().int().nonnegative(),
 });
 
 // ``GET /api/voice/bypass-tier-status`` — current bypass-tier health
