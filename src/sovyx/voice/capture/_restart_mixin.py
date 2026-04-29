@@ -227,6 +227,11 @@ class RestartMixin:
                 sd_module=self._sd_module,
                 enumerate_fn=self._enumerate_fn,
                 validate_fn=None,
+                # T29 — preserve cascade-aligned host_api on
+                # restart. ``self._host_api_name`` carries either
+                # the cascade winner (initial start) or the
+                # post-restart host_api (subsequent calls).
+                preferred_host_api=self._host_api_name or None,
             )
         except StreamOpenError as exc:
             logger.error(
@@ -395,6 +400,12 @@ class RestartMixin:
                 sd_module=self._sd_module,
                 enumerate_fn=self._enumerate_fn,
                 validate_fn=None,  # reconnect path skips validation
+                # T29 — preserve cascade alignment after device-error
+                # reconnect. Without this the opener's sibling chain
+                # would re-pick PortAudio enumeration order on the
+                # USB-yank reconnect path, drifting away from the
+                # cascade winner.
+                preferred_host_api=self._host_api_name or None,
             )
         except StreamOpenError as exc:
             raise RuntimeError(str(exc)) from exc
@@ -498,6 +509,8 @@ class RestartMixin:
                 sd_module=self._sd_module,
                 enumerate_fn=self._enumerate_fn,
                 validate_fn=None,
+                # T29 — symmetric to request_exclusive_restart.
+                preferred_host_api=self._host_api_name or None,
             )
         except StreamOpenError as exc:
             logger.error(
@@ -688,6 +701,13 @@ class RestartMixin:
                 sd_module=self._sd_module,
                 enumerate_fn=self._enumerate_fn,
                 validate_fn=None,
+                # T29 — explicit ALSA preference for the
+                # PipeWire/PulseAudio bypass. The opener's
+                # sibling-chain falls back to ALSA-prefixed siblings
+                # first if the explicit ``alsa_entry`` device fails,
+                # before trying session-manager siblings (which
+                # would silently undo the bypass).
+                preferred_host_api=_LINUX_ALSA_HOST_API,
             )
         except StreamOpenError as exc:
             logger.error(
@@ -934,6 +954,12 @@ class RestartMixin:
                 sd_module=self._sd_module,
                 enumerate_fn=self._enumerate_fn,
                 validate_fn=None,
+                # T29 — explicit session-manager preference. The
+                # bypass target's host_api (PipeWire / PulseAudio)
+                # is the resolution priority for sibling-chain
+                # fallback so a flaky kernel-ALSA endpoint doesn't
+                # silently win the chain back.
+                preferred_host_api=session_entry.host_api_name,
             )
         except StreamOpenError as exc:
             logger.error(

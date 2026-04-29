@@ -512,6 +512,18 @@ class AudioCaptureTask(EpochMixin, RingMixin, LifecycleMixin, LoopMixin, Restart
                 sd_module=self._sd_module,
                 enumerate_fn=self._enumerate_fn,
                 validate_fn=validate_fn,
+                # T29 — pass the cascade winner's host_api so the
+                # opener's sibling-chain fallback respects the
+                # cascade preference. Furo W-4 fix: pre-T29 the
+                # opener iterated siblings in raw PortAudio
+                # enumeration order even when the cascade chose a
+                # specific host_api (Razer + Voice Clarity drift
+                # case). The opener's alignment is gated by
+                # ``cascade_host_api_alignment_enabled`` (default
+                # False in v0.24.0; planned default-flip in
+                # v0.25.0) so this wire-up is a no-op until the
+                # operator opts in.
+                preferred_host_api=self._host_api_name or None,
             )
         except StreamOpenError as exc:
             self._raise_classified_open_error(exc, entry)
