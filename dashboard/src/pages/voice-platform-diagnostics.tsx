@@ -21,6 +21,7 @@ import {
   Loader2Icon,
   MicIcon,
   RefreshCwIcon,
+  ShieldCheckIcon,
 } from "lucide-react";
 import { ApiError, api, isAbortError } from "@/lib/api";
 import type {
@@ -32,9 +33,13 @@ import type {
   PlatformMacOSBranch,
   PlatformMicPermissionPayload,
   PlatformWindowsBranch,
+  VoiceBypassTierStatusResponse,
   WindowsAudioServicePayload,
 } from "@/types/api";
-import { PlatformDiagnosticsResponseSchema } from "@/types/schemas";
+import {
+  PlatformDiagnosticsResponseSchema,
+  VoiceBypassTierStatusResponseSchema,
+} from "@/types/schemas";
 
 /* ── Helpers ───────────────────────────────────────────────────── */
 
@@ -545,6 +550,183 @@ function MacOSBranchCard({ branch }: { branch: PlatformMacOSBranch }) {
   );
 }
 
+/* ── Section: bypass-tier health (Voice Windows Paranoid Mission §B) ─── */
+
+function tierTone(succeeded: number, attempted: number): Tone {
+  if (attempted === 0) return "neutral";
+  const rate = succeeded / attempted;
+  if (rate >= 0.8) return "ok";
+  if (rate >= 0.5) return "warn";
+  return "error";
+}
+
+function formatRate(succeeded: number, attempted: number): string {
+  if (attempted === 0) return "—";
+  const pct = Math.round((succeeded / attempted) * 100);
+  return `${pct}%`;
+}
+
+function BypassTierRow({
+  label,
+  attempted,
+  succeeded,
+  description,
+}: {
+  label: string;
+  attempted: number;
+  succeeded: number;
+  description: string;
+}) {
+  const tone = tierTone(succeeded, attempted);
+  const rate = formatRate(succeeded, attempted);
+  return (
+    <div
+      className="flex items-start justify-between gap-3 rounded-[var(--svx-radius-md)] border border-[var(--svx-color-border)] p-3"
+      data-testid={`bypass-tier-row-${label.toLowerCase().replace(/\s+/g, "-")}`}
+    >
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-semibold">{label}</p>
+        <p className="mt-0.5 text-[11px] text-[var(--svx-color-text-tertiary)]">
+          {description}
+        </p>
+        <p className="mt-2 font-mono text-[11px] text-[var(--svx-color-text-secondary)]">
+          {succeeded} / {attempted}
+        </p>
+      </div>
+      <StatusPill tone={tone} label={rate} />
+    </div>
+  );
+}
+
+export function BypassTierStatusCard() {
+  const { t } = useTranslation("voice");
+  const [snapshot, setSnapshot] = useState<VoiceBypassTierStatusResponse | null>(
+    null,
+  );
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchSnapshot = useCallback(async (signal?: AbortSignal) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await api.get<VoiceBypassTierStatusResponse>(
+        "/api/voice/bypass-tier-status",
+        { signal, schema: VoiceBypassTierStatusResponseSchema },
+      );
+      setSnapshot(data);
+    } catch (err) {
+      if (isAbortError(err)) return;
+      const msg =
+        err instanceof ApiError
+          ? `HTTP ${err.status}: ${err.message}`
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void fetchSnapshot(controller.signal);
+    return () => controller.abort();
+  }, [fetchSnapshot]);
+
+  if (loading && !snapshot) {
+    return (
+      <section
+        className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border)] bg-[var(--svx-color-surface-primary)] p-4"
+        data-testid="bypass-tier-loading"
+      >
+        <p className="flex items-center gap-2 text-xs text-[var(--svx-color-text-tertiary)]">
+          <Loader2Icon className="size-3 animate-spin" />
+          {t("bypassTier.loading")}
+        </p>
+      </section>
+    );
+  }
+
+  if (!snapshot) {
+    return (
+      <section
+        className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-status-red)]/40 bg-[var(--svx-color-status-red)]/10 p-4"
+        data-testid="bypass-tier-error"
+      >
+        <p className="text-xs text-[var(--svx-color-status-red)]">
+          {error ?? t("bypassTier.error")}
+        </p>
+      </section>
+    );
+  }
+
+  const tier3Engaged = snapshot.current_bypass_tier === 3;
+  const tier2Engaged = snapshot.current_bypass_tier === 2;
+  const tier1Engaged = snapshot.current_bypass_tier === 1;
+  const noEngaged =
+    snapshot.current_bypass_tier === null ||
+    snapshot.current_bypass_tier === undefined ||
+    snapshot.current_bypass_tier === 0;
+
+  return (
+    <section
+      aria-labelledby="bypass-tier-heading"
+      className="space-y-3"
+      data-testid="bypass-tier-status-card"
+    >
+      <div className="flex items-center justify-between gap-3">
+        <h2
+          id="bypass-tier-heading"
+          className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-[var(--svx-color-text-secondary)]"
+        >
+          <ShieldCheckIcon className="size-4" />
+          {t("bypassTier.heading")}
+        </h2>
+        {tier3Engaged ? (
+          <StatusPill tone="ok" label={t("bypassTier.engagedTier3")} />
+        ) : tier2Engaged ? (
+          <StatusPill tone="ok" label={t("bypassTier.engagedTier2")} />
+        ) : tier1Engaged ? (
+          <StatusPill tone="ok" label={t("bypassTier.engagedTier1")} />
+        ) : noEngaged ? (
+          <StatusPill tone="neutral" label={t("bypassTier.engagedNone")} />
+        ) : null}
+      </div>
+
+      <div
+        className="rounded-[var(--svx-radius-lg)] border border-[var(--svx-color-border)] bg-[var(--svx-color-surface-primary)] p-4"
+        data-testid="bypass-tier-content"
+      >
+        <p className="mb-3 text-xs text-[var(--svx-color-text-tertiary)]">
+          {t("bypassTier.subtitle")}
+        </p>
+        <div className="space-y-2">
+          <BypassTierRow
+            label={t("bypassTier.tier1Label")}
+            description={t("bypassTier.tier1Description")}
+            attempted={snapshot.tier1_raw_attempted}
+            succeeded={snapshot.tier1_raw_succeeded}
+          />
+          <BypassTierRow
+            label={t("bypassTier.tier2Label")}
+            description={t("bypassTier.tier2Description")}
+            attempted={snapshot.tier2_host_api_rotate_attempted}
+            succeeded={snapshot.tier2_host_api_rotate_succeeded}
+          />
+          <BypassTierRow
+            label={t("bypassTier.tier3Label")}
+            description={t("bypassTier.tier3Description")}
+            attempted={snapshot.tier3_wasapi_exclusive_attempted}
+            succeeded={snapshot.tier3_wasapi_exclusive_succeeded}
+          />
+        </div>
+      </div>
+    </section>
+  );
+}
+
 /* ── Page ──────────────────────────────────────────────────────── */
 
 export default function VoicePlatformDiagnosticsPage() {
@@ -653,6 +835,8 @@ export default function VoicePlatformDiagnosticsPage() {
       {snapshot.linux && <LinuxBranchCard branch={snapshot.linux} />}
       {snapshot.windows && <WindowsBranchCard branch={snapshot.windows} />}
       {snapshot.macos && <MacOSBranchCard branch={snapshot.macos} />}
+
+      <BypassTierStatusCard />
 
       {!snapshot.linux && !snapshot.windows && !snapshot.macos && (
         <div className="rounded-[var(--svx-radius-lg)] border border-dashed border-[var(--svx-color-border)] bg-[var(--svx-color-surface-secondary)] p-6 text-center text-sm text-[var(--svx-color-text-tertiary)]">

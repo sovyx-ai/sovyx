@@ -1151,13 +1151,20 @@ export const VoiceRestartHistoryResponseSchema = z.object({
 
 // ``GET /api/voice/bypass-tier-status`` — current bypass-tier health
 // snapshot (Tier 1 RAW / Tier 2 host_api_rotate / Tier 3 WASAPI excl).
-// Empty dict in v0.24.0 stub; real payload in v0.25.0.
+// v0.26.0 wire-up (commit 2dbe913): the endpoint reads a deterministic
+// ``BypassTierSnapshot`` mirror that always populates every counter, so
+// the schema promotes counters from .optional() to required. Backend
+// regression (e.g. dropped field) is now caught at the zod boundary
+// in CI rather than silent at runtime.
+// ``current_bypass_tier`` stays nullable+optional — coordinator-side
+// engaged-tier tracking is staged for a follow-up commit (the v0.26.0
+// snapshot always emits the key but with value ``null``).
 export const VoiceBypassTierStatusResponseSchema = z.object({
   current_bypass_tier: z.number().int().min(0).max(3).nullable().optional(),
-  tier1_raw_attempted: z.number().int().nonnegative().optional(),
-  tier1_raw_succeeded: z.number().int().nonnegative().optional(),
-  tier2_host_api_rotate_attempted: z.number().int().nonnegative().optional(),
-  tier2_host_api_rotate_succeeded: z.number().int().nonnegative().optional(),
-  tier3_wasapi_exclusive_attempted: z.number().int().nonnegative().optional(),
-  tier3_wasapi_exclusive_succeeded: z.number().int().nonnegative().optional(),
+  tier1_raw_attempted: z.number().int().nonnegative(),
+  tier1_raw_succeeded: z.number().int().nonnegative(),
+  tier2_host_api_rotate_attempted: z.number().int().nonnegative(),
+  tier2_host_api_rotate_succeeded: z.number().int().nonnegative(),
+  tier3_wasapi_exclusive_attempted: z.number().int().nonnegative(),
+  tier3_wasapi_exclusive_succeeded: z.number().int().nonnegative(),
 });

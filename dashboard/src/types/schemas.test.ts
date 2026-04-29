@@ -187,18 +187,35 @@ describe("VoiceRestartHistoryResponseSchema", () => {
   });
 });
 
+// v0.26.0 wire-up: every counter field is now required at the zod
+// boundary because the endpoint reads a deterministic ``BypassTierSnapshot``
+// mirror that always populates them. Tests use this helper to build a
+// fully-defaulted payload.
+const bypassTierStatusDefaults = () => ({
+  tier1_raw_attempted: 0,
+  tier1_raw_succeeded: 0,
+  tier2_host_api_rotate_attempted: 0,
+  tier2_host_api_rotate_succeeded: 0,
+  tier3_wasapi_exclusive_attempted: 0,
+  tier3_wasapi_exclusive_succeeded: 0,
+});
+
 describe("VoiceBypassTierStatusResponseSchema", () => {
-  it("parses the v0.24.0 stub payload (empty)", () => {
-    expect(VoiceBypassTierStatusResponseSchema.parse({})).toEqual({});
+  it("parses the v0.26.0 zero-state payload (all counters present)", () => {
+    const payload = VoiceBypassTierStatusResponseSchema.parse({
+      ...bypassTierStatusDefaults(),
+      current_bypass_tier: null,
+    });
+    expect(payload.tier1_raw_attempted).toBe(0);
+    expect(payload.current_bypass_tier).toBeNull();
   });
 
   it("parses a populated tier-status payload", () => {
     const payload = VoiceBypassTierStatusResponseSchema.parse({
+      ...bypassTierStatusDefaults(),
       current_bypass_tier: 1,
       tier1_raw_attempted: 5,
       tier1_raw_succeeded: 4,
-      tier2_host_api_rotate_attempted: 0,
-      tier2_host_api_rotate_succeeded: 0,
       tier3_wasapi_exclusive_attempted: 1,
       tier3_wasapi_exclusive_succeeded: 1,
     });
@@ -207,14 +224,32 @@ describe("VoiceBypassTierStatusResponseSchema", () => {
   });
 
   it("accepts current_bypass_tier=null (no bypass currently engaged)", () => {
-    expect(
-      VoiceBypassTierStatusResponseSchema.parse({ current_bypass_tier: null }),
-    ).toEqual({ current_bypass_tier: null });
+    const payload = VoiceBypassTierStatusResponseSchema.parse({
+      ...bypassTierStatusDefaults(),
+      current_bypass_tier: null,
+    });
+    expect(payload.current_bypass_tier).toBeNull();
   });
 
   it("rejects current_bypass_tier outside [0, 3]", () => {
     expect(() =>
-      VoiceBypassTierStatusResponseSchema.parse({ current_bypass_tier: 7 }),
+      VoiceBypassTierStatusResponseSchema.parse({
+        ...bypassTierStatusDefaults(),
+        current_bypass_tier: 7,
+      }),
+    ).toThrow();
+  });
+
+  it("rejects payloads missing required counters (v0.26.0 wire-up boundary)", () => {
+    // Pre-v0.26.0 these were .optional() so a minimal {} payload would
+    // pass. Post-wire-up the schema rejects — backend regression
+    // (e.g. dropped field) is caught at the zod boundary in CI.
+    expect(() => VoiceBypassTierStatusResponseSchema.parse({})).toThrow();
+    expect(() =>
+      VoiceBypassTierStatusResponseSchema.parse({
+        tier1_raw_attempted: 0,
+        // missing tier1_raw_succeeded + tier2/3 counters
+      }),
     ).toThrow();
   });
 });

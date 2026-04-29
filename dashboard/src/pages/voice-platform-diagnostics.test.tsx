@@ -166,8 +166,36 @@ const DARWIN_RESPONSE: PlatformDiagnosticsResponse = {
   },
 };
 
+/* ── Bypass-tier status default zero-snapshot ───────────────────── */
+
+// The page now embeds <BypassTierStatusCard /> which fires its own
+// GET /api/voice/bypass-tier-status on mount (commit 2dbe913 wired the
+// endpoint to a real counter mirror). Tests that previously mocked only
+// the platform-diagnostics call would have the bypass-tier fetch fall
+// through to undefined and crash. Dispatch by URL: bypass-tier returns
+// a zero snapshot by default; tests can override via mockImplementation
+// to assert tier-specific rendering.
+const BYPASS_TIER_ZERO_SNAPSHOT = {
+  current_bypass_tier: null,
+  tier1_raw_attempted: 0,
+  tier1_raw_succeeded: 0,
+  tier2_host_api_rotate_attempted: 0,
+  tier2_host_api_rotate_succeeded: 0,
+  tier3_wasapi_exclusive_attempted: 0,
+  tier3_wasapi_exclusive_succeeded: 0,
+};
+
 beforeEach(() => {
   mockGet.mockReset();
+  // Default: return the zero snapshot for the bypass-tier endpoint so
+  // existing platform-diagnostics tests keep working without per-test
+  // bypass-tier setup. .mockResolvedValueOnce / .mockRejectedValueOnce
+  // calls take precedence over this default implementation.
+  mockGet.mockImplementation((url: string) =>
+    url === "/api/voice/bypass-tier-status"
+      ? Promise.resolve(BYPASS_TIER_ZERO_SNAPSHOT)
+      : new Promise(() => undefined),
+  );
 });
 
 /* ── Loading + error states ───────────────────────────────────── */
@@ -202,7 +230,10 @@ describe("VoicePlatformDiagnosticsPage — boot states", () => {
     await waitFor(() => {
       expect(screen.getByTestId("platform-diagnostics-page")).toBeInTheDocument();
     });
-    expect(mockGet).toHaveBeenCalledTimes(2);
+    // 1 reject (initial mount) + 1 retry (refresh click) on the platform
+    // endpoint, plus 1 mount-time fetch from the embedded
+    // BypassTierStatusCard once the page renders successfully.
+    expect(mockGet).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -314,15 +345,111 @@ describe("VoicePlatformDiagnosticsPage — unknown platform fallback", () => {
 
 describe("VoicePlatformDiagnosticsPage — refresh", () => {
   it("re-fetches when the refresh button is clicked", async () => {
-    mockGet.mockResolvedValue(LINUX_RESPONSE);
+    // mockResolvedValue would also feed the bypass-tier URL (which
+    // expects a different shape and would fail zod). Dispatch by URL:
+    // platform endpoint returns LINUX, bypass-tier returns the zero
+    // snapshot from beforeEach via mockImplementation precedence.
+    mockGet.mockImplementation((url: string) =>
+      url === "/api/voice/bypass-tier-status"
+        ? Promise.resolve(BYPASS_TIER_ZERO_SNAPSHOT)
+        : Promise.resolve(LINUX_RESPONSE),
+    );
     render(<VoicePlatformDiagnosticsPage />);
     await waitFor(() => {
       expect(screen.getByTestId("platform-diagnostics-page")).toBeInTheDocument();
     });
-    expect(mockGet).toHaveBeenCalledTimes(1);
+    // 1 platform-diagnostics + 1 bypass-tier-status mount-time fetch.
+    expect(mockGet).toHaveBeenCalledTimes(2);
     fireEvent.click(screen.getByTestId("platform-refresh"));
     await waitFor(() => {
-      expect(mockGet).toHaveBeenCalledTimes(2);
+      // Only the platform endpoint refetches (the refresh button is
+      // page-scoped); bypass-tier card has no refetch trigger.
+      expect(mockGet).toHaveBeenCalledTimes(3);
     });
+  });
+});
+
+/* ── BypassTierStatusCard rendering ───────────────────────────── */
+
+describe("BypassTierStatusCard", () => {
+  it("renders the three tier rows from a populated snapshot", async () => {
+    mockGet.mockImplementation((url: string) =>
+      url === "/api/voice/bypass-tier-status"
+        ? Promise.resolve({
+            current_bypass_tier: 3,
+            tier1_raw_attempted: 5,
+            tier1_raw_succeeded: 4,
+            tier2_host_api_rotate_attempted: 2,
+            tier2_host_api_rotate_succeeded: 1,
+            tier3_wasapi_exclusive_attempted: 10,
+            tier3_wasapi_exclusive_succeeded: 9,
+          })
+        : Promise.resolve(LINUX_RESPONSE),
+    );
+    render(<VoicePlatformDiagnosticsPage />);
+    await waitFor(() => {
+      expect(screen.getByTestId("bypass-tier-status-card")).toBeInTheDocument();
+    });
+    // The 3 tier rows render with their attempt/success ratios.
+    expect(
+      screen.getByText(/tier 1 — raw \+ communications/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/tier 2 — host-api rotate/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/tier 3 — wasapi exclusive/i)).toBeInTheDocument();
+    // current_bypass_tier=3 surfaces the "Tier 3 engaged" pill.
+    expect(screen.getByText(/tier 3 engaged/i)).toBeInTheDocument();
+  });
+
+  it("renders 'no bypass engaged' when current_bypass_tier is null", async () => {
+    mockGet.mockImplementation((url: string) =>
+      url === "/api/voice/bypass-tier-status"
+        ? Promise.resolve(BYPASS_TIER_ZERO_SNAPSHOT)
+        : Promise.resolve(LINUX_RESPONSE),
+    );
+    render(<VoicePlatformDiagnosticsPage />);
+    await waitFor(() => {
+      expect(screen.getByTestId("bypass-tier-status-card")).toBeInTheDocument();
+    });
+    expect(screen.getByText(/no bypass engaged/i)).toBeInTheDocument();
+  });
+
+  it("renders the success ratio em-dash when no attempts have been made", async () => {
+    mockGet.mockImplementation((url: string) =>
+      url === "/api/voice/bypass-tier-status"
+        ? Promise.resolve(BYPASS_TIER_ZERO_SNAPSHOT)
+        : Promise.resolve(LINUX_RESPONSE),
+    );
+    render(<VoicePlatformDiagnosticsPage />);
+    await waitFor(() => {
+      expect(screen.getByTestId("bypass-tier-status-card")).toBeInTheDocument();
+    });
+    // 3 tier rows × 1 em-dash each = 3 em-dashes when zero attempts.
+    const dashes = screen.getAllByText("—");
+    expect(dashes.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("renders the success ratio percentage for tiers with attempts", async () => {
+    mockGet.mockImplementation((url: string) =>
+      url === "/api/voice/bypass-tier-status"
+        ? Promise.resolve({
+            current_bypass_tier: null,
+            tier1_raw_attempted: 4,
+            tier1_raw_succeeded: 3,
+            tier2_host_api_rotate_attempted: 0,
+            tier2_host_api_rotate_succeeded: 0,
+            tier3_wasapi_exclusive_attempted: 10,
+            tier3_wasapi_exclusive_succeeded: 8,
+          })
+        : Promise.resolve(LINUX_RESPONSE),
+    );
+    render(<VoicePlatformDiagnosticsPage />);
+    await waitFor(() => {
+      expect(screen.getByTestId("bypass-tier-status-card")).toBeInTheDocument();
+    });
+    // Tier 1: 3/4 = 75%, Tier 3: 8/10 = 80%.
+    expect(screen.getByText("75%")).toBeInTheDocument();
+    expect(screen.getByText("80%")).toBeInTheDocument();
   });
 });

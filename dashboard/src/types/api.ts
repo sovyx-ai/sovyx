@@ -1436,10 +1436,10 @@ export interface VoiceRestartHistoryResponse {
 
 export interface VoiceBypassTierStatusResponse {
   current_bypass_tier?: number | null;
-  tier1_raw_attempted?: number;
-  tier1_raw_succeeded?: number;
-  tier2_host_api_rotate_attempted?: number;
-  tier2_host_api_rotate_succeeded?: number;
-  tier3_wasapi_exclusive_attempted?: number;
-  tier3_wasapi_exclusive_succeeded?: number;
+  tier1_raw_attempted: number;
+  tier1_raw_succeeded: number;
+  tier2_host_api_rotate_attempted: number;
+  tier2_host_api_rotate_succeeded: number;
+  tier3_wasapi_exclusive_attempted: number;
+  tier3_wasapi_exclusive_succeeded: number;
 }

@@ -270,5 +270,21 @@
       "neutral": "neutral"
     },
     "noBranch": "Per-OS branch not populated for this host."
+  },
+  "bypassTier": {
+    "heading": "Bypass tier health",
+    "subtitle": "Per-tier attempts and success rate since the daemon started. Tier 3 (WASAPI exclusive) is the durable Voice Clarity bypass; Tiers 1 and 2 are performance optimisations layered on top.",
+    "loading": "Loading bypass-tier status…",
+    "error": "Failed to load bypass-tier status.",
+    "engagedTier1": "Tier 1 engaged",
+    "engagedTier2": "Tier 2 engaged",
+    "engagedTier3": "Tier 3 engaged",
+    "engagedNone": "No bypass engaged",
+    "tier1Label": "Tier 1 — RAW + Communications",
+    "tier1Description": "IAudioClient3 RAW stream + Communications role on Windows. Performance optimisation for VoIP-grade endpoints; off by default in v0.26.0.",
+    "tier2Label": "Tier 2 — Host-API rotate then exclusive",
+    "tier2Description": "Rotates the device away from MME / DirectSound / WDM-KS to WASAPI then engages exclusive mode. Activates when the cascade winner is on a non-WASAPI host API.",
+    "tier3Label": "Tier 3 — WASAPI exclusive",
+    "tier3Description": "Exclusive-mode capture. Bypasses every per-endpoint capture APO including Microsoft Voice Clarity. The durable Voice Clarity fix per CLAUDE.md anti-pattern #21."
   }
 }
