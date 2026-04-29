@@ -75,7 +75,9 @@ class TestRestartHistoryRegistryAbsent:
 
 
 class TestRestartHistoryHappyPathV024Stub:
-    """v0.24.0 foundation: empty payload, wire-up in v0.25.0."""
+    """Empty-payload happy path — when no restart has occurred since the
+    daemon started OR the pipeline isn't registered yet, ``frames`` is
+    the empty list. The dashboard renders the empty-state placeholder."""
 
     def test_returns_empty_frames_array(self, client: TestClient) -> None:
         response = client.get("/api/voice/restart-history")
@@ -113,6 +115,149 @@ class TestRestartHistoryHappyPathV024Stub:
         # Required keys per the zod schema (frames is required;
         # limit + total are .optional() but always present here).
         assert set(body.keys()) == {"frames", "total", "limit"}
+
+
+class TestRestartHistoryWiredUpPayloadT33:
+    """T33 — pin the populated-payload contract.
+
+    When ``VoicePipeline`` is registered AND ``frame_history``
+    contains :class:`CaptureRestartFrame` instances (T32 emitters
+    fired), the endpoint MUST return them serialised via
+    ``_frame_to_dict`` in newest-first order with ``total`` reflecting
+    the unfiltered count and ``limit`` capping the slice.
+    """
+
+    @pytest.fixture
+    def pipeline_with_frames(self) -> Any:  # noqa: ANN401
+        """A MagicMock pipeline whose ``frame_history`` contains
+        three CaptureRestartFrames + two non-restart frames (to
+        verify the isinstance filter)."""
+        from sovyx.voice.pipeline._frame_types import (
+            CaptureRestartFrame,
+            CaptureRestartReason,
+            UserStartedSpeakingFrame,
+        )
+
+        frames = [
+            UserStartedSpeakingFrame(
+                frame_type="UserStartedSpeaking",
+                timestamp_monotonic=10.0,
+                source="wake_word",
+            ),
+            CaptureRestartFrame(
+                frame_type="CaptureRestart",
+                timestamp_monotonic=20.0,
+                restart_reason=CaptureRestartReason.APO_DEGRADED.value,
+                old_host_api="Windows WASAPI",
+                new_host_api="Windows WASAPI",
+                old_signal_processing_mode="shared",
+                new_signal_processing_mode="exclusive",
+                bypass_tier=3,
+            ),
+            UserStartedSpeakingFrame(
+                frame_type="UserStartedSpeaking",
+                timestamp_monotonic=30.0,
+                source="wake_word",
+            ),
+            CaptureRestartFrame(
+                frame_type="CaptureRestart",
+                timestamp_monotonic=40.0,
+                restart_reason=CaptureRestartReason.MANUAL.value,
+                old_signal_processing_mode="exclusive",
+                new_signal_processing_mode="shared",
+                bypass_tier=0,
+            ),
+            CaptureRestartFrame(
+                frame_type="CaptureRestart",
+                timestamp_monotonic=50.0,
+                restart_reason=CaptureRestartReason.APO_DEGRADED.value,
+                old_signal_processing_mode="session_manager",
+                new_signal_processing_mode="alsa_hw_direct",
+                bypass_tier=2,
+            ),
+        ]
+        pipeline = MagicMock()
+        pipeline.frame_history = tuple(frames)
+        return pipeline
+
+    @pytest.fixture
+    def app_with_pipeline(self, pipeline_with_frames: Any) -> Any:  # noqa: ANN401
+        """App whose registry is wired to return the populated
+        pipeline for ``VoicePipeline`` lookups."""
+        from sovyx.voice.pipeline._orchestrator import VoicePipeline
+
+        app = create_app(token=_TOKEN)
+        registry = MagicMock()
+        registry.is_registered = MagicMock(side_effect=lambda cls: cls is VoicePipeline)
+        registry.get = MagicMock(
+            side_effect=lambda cls: pipeline_with_frames if cls is VoicePipeline else None
+        )
+        app.state.registry = registry
+        return app
+
+    @pytest.fixture
+    def populated_client(self, app_with_pipeline: Any) -> TestClient:  # noqa: ANN401
+        return TestClient(
+            app_with_pipeline,
+            headers={"Authorization": f"Bearer {_TOKEN}"},
+        )
+
+    def test_returns_only_capture_restart_frames(self, populated_client: TestClient) -> None:
+        """Filter out non-CaptureRestart frames — the endpoint is
+        scoped to substrate-mutation events only."""
+        response = populated_client.get("/api/voice/restart-history")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["total"] == 3
+        assert len(body["frames"]) == 3
+        assert all(f["frame_type"] == "CaptureRestart" for f in body["frames"])
+
+    def test_returns_newest_first_order(self, populated_client: TestClient) -> None:
+        """Dashboard renders newest at the top — the endpoint MUST
+        deliver them in that order."""
+        response = populated_client.get("/api/voice/restart-history")
+        body = response.json()
+        timestamps = [f["timestamp_monotonic"] for f in body["frames"]]
+        assert timestamps == [50.0, 40.0, 20.0], (
+            f"Expected newest-first ordering [50, 40, 20]; got {timestamps}"
+        )
+
+    def test_limit_caps_response_but_total_unfiltered(self, populated_client: TestClient) -> None:
+        """``total`` reflects the FULL count of restart frames in the
+        ring buffer; ``frames`` is the limited slice. Operators
+        querying with a small limit can still see the true count for
+        capacity planning."""
+        response = populated_client.get("/api/voice/restart-history?limit=2")
+        body = response.json()
+        assert body["total"] == 3
+        assert len(body["frames"]) == 2
+        assert body["limit"] == 2
+
+    def test_serialised_frame_carries_all_capturerestart_fields(
+        self, populated_client: TestClient
+    ) -> None:
+        """The serialiser (_frame_to_dict via dataclasses.asdict)
+        MUST emit every CaptureRestartFrame field so the dashboard's
+        zod schema validation passes."""
+        response = populated_client.get("/api/voice/restart-history")
+        body = response.json()
+        first = body["frames"][0]
+        # Every CaptureRestartFrame field MUST be present.
+        for field in (
+            "frame_type",
+            "timestamp_monotonic",
+            "utterance_id",
+            "restart_reason",
+            "old_host_api",
+            "new_host_api",
+            "old_device_id",
+            "new_device_id",
+            "old_signal_processing_mode",
+            "new_signal_processing_mode",
+            "recovery_latency_ms",
+            "bypass_tier",
+        ):
+            assert field in first, f"missing field {field!r} in serialised frame"
 
 
 # ── /api/voice/bypass-tier-status ───────────────────────────────────

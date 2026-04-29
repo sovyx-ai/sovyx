@@ -98,14 +98,14 @@ async def get_voice_restart_history(
     dashboard's restart-history widget renders one timeline of "what
     happened on the mic" for post-incident forensics.
 
-    v0.24.0 (foundation): the endpoint is wired but no emitters fire
-    yet, so the response always carries ``{"frames": [], "total": 0}``.
-    Wire-up in v0.25.0 (T32) populates the real payload from
-    ``VoicePipeline.frame_history`` filtered by ``frame_type ==
-    "CaptureRestart"``. Shipping the endpoint stub now lets the
-    frontend render the skeleton view without conditional logic and
-    pins the wire contract via ``VoiceRestartHistoryResponseSchema``
-    (``dashboard/src/types/schemas.ts``).
+    Wired-up in T33 (v0.25.0) — emitters in
+    :class:`sovyx.voice.capture.RestartMixin` populate the ring
+    buffer at every successful restart (T32 wire-up). Frames are
+    filtered to ``CaptureRestartFrame`` subclass instances and
+    serialised via :func:`_frame_to_dict` (which delegates to
+    :func:`dataclasses.asdict`) so every dataclass field reaches
+    the wire — the dashboard's
+    ``VoiceRestartHistoryResponseSchema`` pins the contract.
 
     Args:
         limit: Maximum number of restart frames to return. Bounds:
@@ -113,7 +113,14 @@ async def get_voice_restart_history(
 
     Returns:
         JSON: ``{"frames": [...CaptureRestartFrame...], "total": int,
-        "limit": int}``. v0.24.0 always returns ``frames=[], total=0``.
+        "limit": int}``. ``total`` is the FULL count of restart
+        frames in the bounded ring buffer (≤ 256 by default);
+        ``frames`` is the newest ``limit`` frames in newest-first
+        order so the dashboard's timeline can render top-down.
+
+        Returns 200 with ``frames=[], total=0`` when no restart has
+        occurred since the daemon started OR the pipeline is not
+        yet registered (boot still in progress).
 
         Returns 503 when the engine registry is not yet available
         (boot in progress or voice disabled).
@@ -126,28 +133,42 @@ async def get_voice_restart_history(
             status_code=HTTP_503_SERVICE_UNAVAILABLE,
         )
 
-    # v0.24.0 stub. Wire-up in v0.25.0:
-    #   from sovyx.voice.pipeline._frame_types import (
-    #       CaptureRestartFrame,
-    #       _frame_to_dict,
-    #   )
-    #   from sovyx.voice.pipeline._orchestrator import VoicePipeline
-    #   pipeline = registry.get(VoicePipeline)
-    #   restart_frames = [
-    #       f for f in pipeline.frame_history
-    #       if isinstance(f, CaptureRestartFrame)
-    #   ]
-    #   total = len(restart_frames)
-    #   selected = restart_frames[-bounded_limit:]
-    #   return JSONResponse({
-    #       "frames": [_frame_to_dict(f) for f in selected],
-    #       "total": total,
-    #       "limit": bounded_limit,
-    #   })
+    # T33 — wire-up to the real payload. Filters
+    # ``VoicePipeline.frame_history`` for ``CaptureRestartFrame``
+    # subclass instances (T32 emitters land them as the substrate
+    # mutates), serialises via the canonical ``_frame_to_dict``
+    # helper, and returns the most recent ``bounded_limit`` entries.
+    #
+    # Empty-frame-history fallback: when the pipeline isn't
+    # registered yet (boot in progress) OR when no restart has
+    # occurred since the daemon started, ``frames`` is the empty
+    # list and ``total`` is 0. The dashboard's restart-history
+    # widget renders the empty-state placeholder in that case.
+    from sovyx.voice.pipeline._frame_types import (
+        CaptureRestartFrame,
+        _frame_to_dict,
+    )
+    from sovyx.voice.pipeline._orchestrator import VoicePipeline
+
+    if not registry.is_registered(VoicePipeline):
+        return JSONResponse(
+            {
+                "frames": [],
+                "total": 0,
+                "limit": bounded_limit,
+            },
+        )
+    pipeline = registry.get(VoicePipeline)
+    restart_frames = [f for f in pipeline.frame_history if isinstance(f, CaptureRestartFrame)]
+    total = len(restart_frames)
+    # Most recent first — the dashboard's timeline renders newest at
+    # the top by default. ``frame_history`` is a deque ordered by
+    # insertion (oldest first), so we take the tail and reverse.
+    selected = list(reversed(restart_frames[-bounded_limit:]))
     return JSONResponse(
         {
-            "frames": [],
-            "total": 0,
+            "frames": [_frame_to_dict(f) for f in selected],
+            "total": total,
             "limit": bounded_limit,
         },
     )
