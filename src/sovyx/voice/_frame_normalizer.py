@@ -679,7 +679,7 @@ class FrameNormalizer:
                 # default per ``feedback_staged_adoption``) or when
                 # the wired suppressor is :class:`NoOpNoiseSuppressor`.
                 if self._noise_suppressor is not None:
-                    window = self._noise_suppressor.process(window)
+                    window = self._apply_ns_to_window(window)
                 windows.append(window)
 
             record_stage_event(VoiceStage.CAPTURE, StageEventKind.SUCCESS)
@@ -777,6 +777,44 @@ class FrameNormalizer:
         rebuilding the FrameNormalizer.
         """
         self._render_provider = provider
+
+    def _apply_ns_to_window(
+        self,
+        window: npt.NDArray[np.int16],
+    ) -> npt.NDArray[np.int16]:
+        """Run one 512-sample window through the NS stage.
+
+        T4.16 telemetry: emits
+        :data:`sovyx.voice.ns.windows{state}` per window and
+        :data:`sovyx.voice.ns.suppression_db` per processed window
+        for the dashboard's NS quality panel.
+        """
+        from sovyx.voice._noise_suppression import estimate_frame_dbfs
+        from sovyx.voice.health._metrics import (
+            record_ns_suppression_db,
+            record_ns_window,
+        )
+
+        assert self._noise_suppressor is not None  # gated by caller
+
+        in_dbfs = estimate_frame_dbfs(window)
+        cleaned = self._noise_suppressor.process(window)
+        out_dbfs = estimate_frame_dbfs(cleaned)
+        suppression_db = in_dbfs - out_dbfs
+
+        # 0.5 dB threshold separates real attenuation from FFT
+        # round-trip noise. Below this, NS effectively passed
+        # through; firing 'processed' for sub-LSB drift would
+        # poison the histogram p50 with floor-level noise.
+        if suppression_db > 0.5:
+            record_ns_window(state="processed")
+            # Cap at +120 dB so a near-perfect-zero residual on
+            # synthetic test inputs doesn't blow histogram buckets.
+            record_ns_suppression_db(suppression_db=min(suppression_db, 120.0))
+        else:
+            record_ns_window(state="passthrough")
+
+        return cleaned
 
     @property
     def noise_suppressor(self) -> NoiseSuppressor | None:

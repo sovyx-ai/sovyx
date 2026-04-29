@@ -114,6 +114,10 @@ METRIC_AEC_ERLE_DB = "sovyx.voice.aec.erle_db"
 METRIC_AEC_WINDOWS = "sovyx.voice.aec.windows"
 METRIC_AEC_DOUBLE_TALK = "sovyx.voice.aec.double_talk"
 
+# ── Phase 4 — NS observability (T4.16) ──────────────────────────────────
+METRIC_NS_WINDOWS = "sovyx.voice.ns.windows"
+METRIC_NS_SUPPRESSION_DB = "sovyx.voice.ns.suppression_db"
+
 
 # ── Label enums (closed sets for low-cardinality guarantees) ─────────────
 # Using string literals here keeps the module dependency-free; the ADR
@@ -736,6 +740,47 @@ def record_aec_window(*, state: str) -> None:
     counter.add(1, attributes={"state": state})
 
 
+def record_ns_window(*, state: str) -> None:
+    """Record one NS stage outcome (Phase 4 / T4.16).
+
+    Fires once per emitted capture window when the NS stage is
+    wired. The processed/total ratio reveals how often NS actually
+    attenuated something — a session in a quiet room approaches
+    0% processed; a session with HVAC running approaches 100%.
+
+    Args:
+        state: ``"processed"`` (NS attenuated the window — input
+            dBFS > output dBFS by > 0.5 dB) or ``"passthrough"``
+            (NS ran but found nothing to gate — every bin sat
+            above the magnitude floor).
+    """
+    counter = getattr(get_metrics(), "voice_ns_windows", None)
+    if counter is None:
+        return
+    counter.add(1, attributes={"state": state})
+
+
+def record_ns_suppression_db(*, suppression_db: float) -> None:
+    """Record one NS suppression sample in dB (Phase 4 / T4.16).
+
+    Fires only on ``processed`` windows (passthrough windows have
+    suppression ≈ 0 dB by definition and would distort the
+    histogram p50 with a flat-zero spike).
+
+    Args:
+        suppression_db: ``input_dbfs - output_dbfs`` per window.
+            Positive values mean NS reduced the frame energy
+            (typical 5-20 dB range for spectral gating). Capped at
+            +120 dB inside the FrameNormalizer's emission helper to
+            keep histogram buckets stable when the gate produces a
+            near-zero residual.
+    """
+    histogram = getattr(get_metrics(), "voice_ns_suppression_db", None)
+    if histogram is None:
+        return
+    histogram.record(float(suppression_db))
+
+
 def record_aec_double_talk(*, state: str) -> None:
     """Record one double-talk detector verdict (Phase 4 / T4.9).
 
@@ -781,6 +826,8 @@ __all__ = [
     "METRIC_COMBO_STORE_INVALIDATIONS",
     "METRIC_HOTPLUG_LISTENER_REGISTERED",
     "METRIC_KERNEL_INVALIDATED_EVENTS",
+    "METRIC_NS_SUPPRESSION_DB",
+    "METRIC_NS_WINDOWS",
     "METRIC_OPENER_HOST_API_ALIGNMENT",
     "METRIC_PREFLIGHT_FAILURES",
     "METRIC_PROBE_COLD_SILENCE_REJECTED",
@@ -806,6 +853,8 @@ __all__ = [
     "record_combo_store_invalidation",
     "record_hotplug_listener_registered",
     "record_kernel_invalidated_event",
+    "record_ns_suppression_db",
+    "record_ns_window",
     "record_opener_attempt",
     "record_opener_host_api_alignment",
     "record_preflight_failure",

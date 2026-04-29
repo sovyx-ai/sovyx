@@ -672,6 +672,29 @@ class MetricsRegistry:
             "fires when either signal is silent (NCC undefined).",
         )
 
+        # ── Phase 4 / T4.16 — NS observability ──────────────────────
+        # Mirrors voice.aec.windows + voice.aec.erle_db for the
+        # noise-suppression stage. The pair gives the dashboard
+        # symmetric AEC + NS quality panels.
+        self.voice_ns_windows = self._counter(
+            "sovyx.voice.ns.windows",
+            "Per-window NS processing counter (labels: state="
+            "processed|passthrough). 'processed' fires when NS "
+            "actually attenuated the window (suppression > 0.5 dB); "
+            "'passthrough' fires when NS ran but the gate found "
+            "nothing to attenuate (every bin above floor). The "
+            "processed/total ratio reveals how often NS engaged.",
+        )
+        self.voice_ns_suppression_db = self._histogram(
+            "sovyx.voice.ns.suppression_db",
+            "Per-window NS suppression in dB — positive values mean "
+            "NS reduced the frame energy. Computed as (input_dbfs - "
+            "output_dbfs) per emitted 512-sample window when NS is "
+            "wired. Promotion gate (master mission §Phase 4 / T4.16): "
+            "p50 ≥ 5 dB on stationary background noise.",
+            unit="dB",
+        )
+
         # ── Voice pipeline RED + USE (Ring 6 — M2) ──────────────────
         # Per-stage Rate / Errors / Duration plus Utilisation /
         # Saturation / Errors for every async queue between stages.
