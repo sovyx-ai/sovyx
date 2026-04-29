@@ -668,6 +668,81 @@ def _check_dependency_versions() -> DiagnosticResult:
     )
 
 
+def _bypass_tier_status() -> dict[str, Any]:
+    """Snapshot the current bypass-tier configuration for diagnostics.
+
+    T34 — surfaces which bypass strategies are currently armed via
+    feature flags so ``sovyx doctor voice_capture_apo`` can tell
+    operators not just "Voice Clarity is active" but also "and here
+    is what your config will do about it." The combination of
+    ``voice_clarity_autofix`` (master kill switch) + the four
+    paranoid-mission tier flags determines the actual bypass
+    behaviour at runtime.
+
+    Returns:
+        Dict with the per-tier flag state + the master autofix
+        switch + the cascade-alignment dependency. Embedded in the
+        capture-APO diagnostic's ``details`` dict.
+    """
+    from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
+
+    tuning = _VoiceTuning()
+    return {
+        "master_autofix": tuning.voice_clarity_autofix,
+        "tier_1_raw": {
+            "enabled": tuning.bypass_tier1_raw_enabled,
+            "description": "IAudioClient3 RAW + Communications bypass",
+        },
+        "tier_2_host_api_rotate": {
+            "enabled": tuning.bypass_tier2_host_api_rotate_enabled,
+            "description": "host-API rotate-then-exclusive (requires alignment)",
+        },
+        "tier_3_wasapi_exclusive": {
+            "enabled": tuning.capture_wasapi_exclusive,
+            "description": "WASAPI exclusive mode (full APO bypass)",
+        },
+        "cascade_host_api_alignment": {
+            "enabled": tuning.cascade_host_api_alignment_enabled,
+            "description": "cascade↔runtime alignment (Tier 2 prerequisite)",
+        },
+        "probe_cold_strict_validation": {
+            "enabled": tuning.probe_cold_strict_validation_enabled,
+            "description": "reject silent combos in cold probe",
+        },
+        "mm_notification_listener": {
+            "enabled": tuning.mm_notification_listener_enabled,
+            "description": "device-change auto-recovery",
+        },
+    }
+
+
+def _bypass_armed_summary(status: dict[str, Any]) -> tuple[bool, list[str]]:
+    """Did any bypass strategy fire when Voice Clarity is detected?
+
+    Two conditions the operator cares about:
+    1. ``voice_clarity_autofix=True`` (default) — the orchestrator
+       automatically flips ``capture_wasapi_exclusive=True`` on
+       repeated deaf heartbeats. So Tier 3 is effectively armed even
+       when the static flag reads False.
+    2. Any of the explicit tier flags is True — operator explicitly
+       opted into the bypass.
+
+    Returns ``(armed, names)``: ``armed`` is True iff at least one
+    bypass strategy will fire; ``names`` lists the armed tier(s) by
+    label for the diagnostic message.
+    """
+    armed_names: list[str] = []
+    if status["master_autofix"]:
+        armed_names.append("autofix→Tier 3 (WASAPI exclusive)")
+    if status["tier_1_raw"]["enabled"]:
+        armed_names.append("Tier 1 (RAW + Communications)")
+    if status["tier_2_host_api_rotate"]["enabled"]:
+        armed_names.append("Tier 2 (host-API rotate)")
+    if status["tier_3_wasapi_exclusive"]["enabled"]:
+        armed_names.append("Tier 3 (WASAPI exclusive)")
+    return (bool(armed_names), armed_names)
+
+
 def _check_voice_capture_apo() -> DiagnosticResult:
     """Scan the Windows capture-APO chain for the Voice Clarity package.
 
@@ -679,10 +754,21 @@ def _check_voice_capture_apo() -> DiagnosticResult:
     ``capture_wasapi_exclusive`` (which the orchestrator also flips
     automatically via ``voice_clarity_autofix=True``).
 
+    T34 — the diagnostic also reports the **bypass-tier
+    configuration** so operators can verify whether their config
+    will actually fire on the detected APO. The reported tiers
+    correspond to the bypass coordinator's pyramid (Tier 1 RAW →
+    Tier 2 host-API rotate → Tier 3 WASAPI exclusive); the master
+    ``voice_clarity_autofix`` switch arms Tier 3 by default even
+    when the static flag reads False.
+
     Always returns ``PASS`` on non-Windows platforms.
 
     Returns:
-        Diagnostic result for the capture-APO chain.
+        Diagnostic result for the capture-APO chain. The
+        ``details`` dict carries per-endpoint scan results AND the
+        ``bypass_status`` snapshot (one entry per tier flag with
+        enabled / description fields).
     """
     check_name = "voice_capture_apo"
     if sys.platform != "win32":
@@ -704,6 +790,9 @@ def _check_voice_capture_apo() -> DiagnosticResult:
             fix_suggestion="Ensure the HKLM MMDevices registry key is readable.",
         )
 
+    bypass_status = _bypass_tier_status()
+    bypass_armed, bypass_armed_names = _bypass_armed_summary(bypass_status)
+
     endpoints = [
         {
             "endpoint_id": r.endpoint_id,
@@ -720,27 +809,61 @@ def _check_voice_capture_apo() -> DiagnosticResult:
 
     if affected:
         names = ", ".join(affected)
+        # T34 — split the message based on whether a bypass is
+        # currently armed. If autofix or an explicit tier flag is
+        # set, the operator's config will already act on the
+        # detected APO; the WARN is informational. If nothing is
+        # armed, the WARN is actionable — the operator must enable
+        # at least one strategy.
+        if bypass_armed:
+            armed_label = ", ".join(bypass_armed_names)
+            message = (
+                f"Windows Voice Clarity APO active on: {names}. "
+                f"Bypass armed ({armed_label}); pipeline will engage "
+                "exclusive mode automatically on repeated deaf heartbeats."
+            )
+            fix_suggestion = (
+                "No action required — Sovyx will bypass the APO chain "
+                f"via {armed_label}. To verify, run the daemon and "
+                "watch for `audio_capture_exclusive_restart_ok` events "
+                "in the log."
+            )
+        else:
+            message = (
+                f"Windows Voice Clarity APO active on: {names}. "
+                "NO bypass strategy is currently armed — "
+                "voice_clarity_autofix is disabled AND no explicit "
+                "tier flag is set. The pipeline WILL be deaf on this "
+                "hardware."
+            )
+            fix_suggestion = (
+                "Enable at least one bypass strategy: "
+                "(1) leave `SOVYX_TUNING__VOICE__VOICE_CLARITY_AUTOFIX=true` "
+                "(default — autofix arms Tier 3 on deaf heartbeats), OR "
+                "(2) set `SOVYX_TUNING__VOICE__CAPTURE_WASAPI_EXCLUSIVE=true` "
+                "to engage Tier 3 immediately at boot. "
+                "Alternatively, disable 'Voice isolation' / 'Voice "
+                "Clarity' in Windows Sound settings for the affected "
+                "device."
+            )
         return DiagnosticResult(
             check=check_name,
             status=DiagnosticStatus.WARN,
-            message=(
-                f"Windows Voice Clarity APO active on: {names}. "
-                "Post-APO signal frequently blocks VAD."
-            ),
-            fix_suggestion=(
-                "Set SOVYX_TUNING__VOICE__CAPTURE_WASAPI_EXCLUSIVE=true "
-                "(or leave voice_clarity_autofix=true — default) so Sovyx "
-                "opens the mic in WASAPI exclusive mode and bypasses the APO "
-                "chain. Alternatively, disable 'Voice isolation' / 'Voice "
-                "Clarity' in Windows Sound settings for the affected device."
-            ),
-            details={"endpoints": endpoints, "affected": affected},
+            message=message,
+            fix_suggestion=fix_suggestion,
+            details={
+                "endpoints": endpoints,
+                "affected": affected,
+                "bypass_status": bypass_status,
+                "bypass_armed": bypass_armed,
+                "bypass_armed_names": bypass_armed_names,
+            },
         )
     return DiagnosticResult(
         check=check_name,
         status=DiagnosticStatus.PASS,
         message=f"No Voice Clarity APO detected across {len(reports)} active endpoint(s).",
-        details={"endpoints": endpoints},
+        details={"endpoints": endpoints, "bypass_status": bypass_status},
     )
 
 

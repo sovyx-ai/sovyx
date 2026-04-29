@@ -851,8 +851,11 @@ class TestVoiceCaptureApoCheck:
         assert result.details is not None
         assert result.details["endpoints"] == []
 
-    def test_voice_clarity_active_warns(self) -> None:
-        """Active Voice Clarity on any endpoint yields WARN with fix."""
+    def test_voice_clarity_active_with_default_autofix_reports_armed(self) -> None:
+        """T34 — active Voice Clarity + default ``voice_clarity_autofix=True``
+        yields WARN with the **armed** message (Tier 3 will engage
+        automatically on deaf heartbeats); fix_suggestion is
+        informational, not actionable."""
         from sovyx.voice._apo_detector import CaptureApoReport
 
         rep = CaptureApoReport(
@@ -875,10 +878,74 @@ class TestVoiceCaptureApoCheck:
             result = _check_voice_capture_apo()
         assert result.status == DiagnosticStatus.WARN
         assert "Razer BlackShark" in result.message
+        # Default autofix=True → bypass armed → message is informational
+        assert "Bypass armed" in result.message
+        assert "autofix" in result.message
         assert result.fix_suggestion is not None
-        assert "CAPTURE_WASAPI_EXCLUSIVE" in result.fix_suggestion
+        assert "No action required" in result.fix_suggestion
         assert result.details is not None
         assert result.details["affected"] == ["Microfone (Razer BlackShark V2 Pro)"]
+        # T34 — bypass_status snapshot in details.
+        assert result.details["bypass_armed"] is True
+        assert "autofix→Tier 3 (WASAPI exclusive)" in result.details["bypass_armed_names"]
+        bypass = result.details["bypass_status"]
+        assert bypass["master_autofix"] is True
+        # Tier flags are False by default (paranoid mission flag defaults).
+        assert bypass["tier_1_raw"]["enabled"] is False
+        assert bypass["tier_2_host_api_rotate"]["enabled"] is False
+        assert bypass["tier_3_wasapi_exclusive"]["enabled"] is False
+
+    def test_voice_clarity_active_with_autofix_disabled_reports_actionable(self) -> None:
+        """T34 — when ``voice_clarity_autofix=False`` AND no explicit
+        tier flag is set, the diagnostic emits an actionable
+        fix_suggestion telling the operator to enable at least one
+        bypass strategy."""
+        from sovyx.engine.config import VoiceTuningConfig
+        from sovyx.voice._apo_detector import CaptureApoReport
+
+        rep = CaptureApoReport(
+            endpoint_id="{endpoint-guid}",
+            endpoint_name="Microfone (Razer BlackShark V2 Pro)",
+            enumerator="USB",
+            fx_binding_count=3,
+            known_apos=["Windows Voice Clarity"],
+            raw_clsids=["{CF1DDA2C-3B93-4EFE-8AA9-DEB6F8D4FDF1}"],
+            voice_clarity_active=True,
+        )
+        # Construct a tuning where autofix is OFF and every tier flag
+        # is False — the operator's worst-case config.
+        all_off = VoiceTuningConfig(
+            voice_clarity_autofix=False,
+            bypass_tier1_raw_enabled=False,
+            bypass_tier2_host_api_rotate_enabled=False,
+            capture_wasapi_exclusive=False,
+        )
+        with (
+            patch.object(_doctor_mod, "sys") as mock_sys,
+            patch(
+                "sovyx.voice._apo_detector.detect_capture_apos",
+                return_value=[rep],
+            ),
+            # ``_bypass_tier_status`` re-imports VoiceTuningConfig
+            # via ``from sovyx.engine.config import VoiceTuningConfig
+            # as _VoiceTuning`` and instantiates it with no args. The
+            # patch substitutes the constructor so the test sees the
+            # all-off config.
+            patch(
+                "sovyx.engine.config.VoiceTuningConfig",
+                return_value=all_off,
+            ),
+        ):
+            mock_sys.platform = "win32"
+            result = _check_voice_capture_apo()
+        assert result.status == DiagnosticStatus.WARN
+        assert "NO bypass strategy is currently armed" in result.message
+        assert result.fix_suggestion is not None
+        # The actionable message names the env var operators must set.
+        assert "VOICE_CLARITY_AUTOFIX" in result.fix_suggestion
+        assert "CAPTURE_WASAPI_EXCLUSIVE" in result.fix_suggestion
+        assert result.details["bypass_armed"] is False
+        assert result.details["bypass_armed_names"] == []
 
     def test_inactive_voice_clarity_passes(self) -> None:
         """APOs present but Voice Clarity inactive → PASS."""
