@@ -201,6 +201,7 @@ if TYPE_CHECKING:
 
     from sovyx.engine._backoff import BackoffSchedule
     from sovyx.engine.config import VoiceTuningConfig
+    from sovyx.voice._aec import AecProcessor, RenderPcmProvider
     from sovyx.voice.device_enum import DeviceEntry
     from sovyx.voice.pipeline._orchestrator import VoicePipeline
 
@@ -255,6 +256,8 @@ class AudioCaptureTask(EpochMixin, RingMixin, LifecycleMixin, LoopMixin, Restart
         sd_module: Any | None = None,  # noqa: ANN401 — DI for tests
         enumerate_fn: Callable[[], list[DeviceEntry]] | None = None,
         endpoint_guid: str | None = None,
+        aec: AecProcessor | None = None,
+        render_provider: RenderPcmProvider | None = None,
     ) -> None:
         self._pipeline = pipeline
         self._input_device = input_device
@@ -265,6 +268,12 @@ class AudioCaptureTask(EpochMixin, RingMixin, LifecycleMixin, LoopMixin, Restart
         self._tuning = tuning
         self._sd_module = sd_module
         self._enumerate_fn = enumerate_fn
+        # Phase 4 / T4.4.d — AEC processor + render reference. Stored
+        # so every FrameNormalizer construction site (initial open +
+        # all 6 RestartMixin paths) can pass them through. Default
+        # ``None`` preserves the pre-AEC behaviour bit-exactly.
+        self._aec: AecProcessor | None = aec
+        self._render_provider: RenderPcmProvider | None = render_provider
         self._queue: asyncio.Queue[npt.NDArray[np.int16]] = asyncio.Queue(maxsize=_QUEUE_MAXSIZE)
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stream: Any = None
@@ -558,6 +567,8 @@ class AudioCaptureTask(EpochMixin, RingMixin, LifecycleMixin, LoopMixin, Restart
                 enabled=_agc2_tuning.agc2_enabled,
                 sample_rate=info.sample_rate,
             ),
+            aec=self._aec,
+            render_provider=self._render_provider,
         )
         if not self._normalizer.is_passthrough:
             logger.info(

@@ -55,6 +55,7 @@ if TYPE_CHECKING:
     import numpy.typing as npt
 
     from sovyx.engine.events import EventBus
+    from sovyx.voice._aec import RenderPcmSink
     from sovyx.voice.health._self_feedback import SelfFeedbackGate
     from sovyx.voice.health.contract import BypassOutcome
     from sovyx.voice.stt import STTEngine
@@ -652,6 +653,22 @@ class VoicePipeline:
     def output(self) -> AudioOutputQueue:
         """Audio output queue."""
         return self._output
+
+    def set_render_buffer(self, buffer: RenderPcmSink | None) -> None:
+        """Wire (or unwire) the AEC render-PCM sink at the orchestrator level.
+
+        Phase 4 / T4.4.d wiring helper. Delegates to
+        :meth:`AudioOutputQueue.set_render_buffer` so the factory only
+        needs one call to register the shared
+        :class:`~sovyx.voice._render_pcm_buffer.RenderPcmBuffer`
+        instance with the playback path. The capture-side registration
+        (FrameNormalizer's render_provider) is plumbed separately
+        through :class:`AudioCaptureTask` at construction time —
+        the same buffer instance implements both Protocols, so a
+        single buffer flows producer→consumer through the queue and
+        the normalizer.
+        """
+        self._output.set_render_buffer(buffer)
 
     @property
     def jarvis(self) -> JarvisIllusion:

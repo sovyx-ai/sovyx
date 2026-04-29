@@ -86,6 +86,7 @@ if TYPE_CHECKING:
     import numpy.typing as npt
 
     from sovyx.engine.config import VoiceTuningConfig
+    from sovyx.voice._aec import AecProcessor, RenderPcmProvider
     from sovyx.voice.device_enum import DeviceEntry
     from sovyx.voice.pipeline._orchestrator import VoicePipeline
 
@@ -127,6 +128,8 @@ class RestartMixin:
     _blocksize: int
     _sd_module: ModuleType | None
     _normalizer: FrameNormalizer | None
+    _aec: AecProcessor | None
+    _render_provider: RenderPcmProvider | None
     _resolved_device_name: str | None
     _pipeline: VoicePipeline
 
@@ -299,6 +302,8 @@ class RestartMixin:
                 enabled=_agc2_tuning.agc2_enabled,
                 sample_rate=info.sample_rate,
             ),
+            aec=self._aec,
+            render_provider=self._render_provider,
         )
         # T32 — emit CaptureRestartFrame BEFORE the ring epoch
         # increment so the dashboard's restart-history timeline
@@ -431,6 +436,8 @@ class RestartMixin:
                 enabled=_agc2_tuning.agc2_enabled,
                 sample_rate=info.sample_rate,
             ),
+            aec=self._aec,
+            render_provider=self._render_provider,
         )
         # Reset the ring buffer — stale frames from the pre-error stream
         # would mislead any integrity probe issued immediately after the
@@ -556,6 +563,8 @@ class RestartMixin:
                 enabled=_agc2_tuning.agc2_enabled,
                 sample_rate=info.sample_rate,
             ),
+            aec=self._aec,
+            render_provider=self._render_provider,
         )
         # T32 — emit CaptureRestartFrame for the revert pair. MANUAL
         # reason because the shared restart is always initiated by an
@@ -771,6 +780,8 @@ class RestartMixin:
                 enabled=_agc2_tuning.agc2_enabled,
                 sample_rate=info.sample_rate,
             ),
+            aec=self._aec,
+            render_provider=self._render_provider,
         )
         # T32 — emit CaptureRestartFrame BEFORE the ring-buffer
         # epoch increment. APO_DEGRADED + bypass_tier=2
@@ -1000,6 +1011,8 @@ class RestartMixin:
                 enabled=_agc2_tuning.agc2_enabled,
                 sample_rate=info.sample_rate,
             ),
+            aec=self._aec,
+            render_provider=self._render_provider,
         )
         # T32 — emit CaptureRestartFrame for the Linux revert pair.
         # Two legitimate semantics: (a) revert from a prior
@@ -1288,6 +1301,8 @@ class RestartMixin:
                 enabled=_agc2_tuning.agc2_enabled,
                 sample_rate=info.sample_rate,
             ),
+            aec=self._aec,
+            render_provider=self._render_provider,
         )
         # T32 — emit CaptureRestartFrame for the rotation. Tier 2
         # bypass = APO_DEGRADED reason + bypass_tier=2.
