@@ -73,8 +73,11 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from pathlib import Path
 
+    from sovyx.engine.config import VoiceTuningConfig
     from sovyx.engine.events import EventBus
+    from sovyx.voice._aec import AecProcessor
     from sovyx.voice._capture_task import AudioCaptureTask
+    from sovyx.voice._render_pcm_buffer import RenderPcmBuffer
     from sovyx.voice.health.contract import BypassOutcome
     from sovyx.voice.pipeline._orchestrator import VoicePipeline
 
@@ -86,6 +89,7 @@ __all__ = [
     "VoiceBundle",
     "VoiceFactoryError",
     "VoicePermissionError",
+    "_build_aec_wiring",
     "_create_kokoro_tts",
     "_create_piper_tts",
     "_create_stt",
@@ -138,6 +142,69 @@ class VoiceBundle:
     capture_task: AudioCaptureTask
     boot_preflight_warnings: tuple[dict[str, object], ...] = field(default_factory=tuple)
     audio_service_watchdog: object = None  # AudioServiceWatchdog | None
+
+
+def _build_aec_wiring(
+    tuning: VoiceTuningConfig,
+) -> tuple[RenderPcmBuffer | None, AecProcessor | None]:
+    """Build the AEC reference buffer + processor from tuning config.
+
+    Phase 4 / T4.4.e — single decision point for whether the
+    AEC plumbing is active. Returns a ``(buffer, processor)`` pair
+    that the factory threads through both the orchestrator
+    (``pipeline.set_render_buffer(buffer)``) and the capture task
+    (``AudioCaptureTask(..., aec=processor, render_provider=buffer)``).
+
+    Activation matrix:
+
+    * ``voice_aec_enabled=False`` (foundation default per
+      ``feedback_staged_adoption``) → returns ``(None, None)``;
+      the FrameNormalizer + AudioOutputQueue stay in the pre-AEC
+      passthrough path bit-exactly.
+    * ``voice_aec_enabled=True`` AND ``voice_aec_engine != "off"`` →
+      constructs a fresh :class:`RenderPcmBuffer` (default 2 s ring)
+      and the configured AEC engine via
+      :func:`build_frame_normalizer_aec`. The same buffer instance
+      registers on both ends — the playback path feeds it (via
+      :class:`RenderPcmSink`) and the capture path reads it (via
+      :class:`RenderPcmProvider`).
+    * ``voice_aec_enabled=True`` AND ``voice_aec_engine="off"`` →
+      degenerate config, treated identically to disabled. We avoid
+      allocating the buffer when the engine cannot consume it.
+
+    Args:
+        tuning: Active :class:`VoiceTuningConfig`. Read fields:
+            ``voice_aec_enabled``, ``voice_aec_engine``,
+            ``voice_aec_filter_length_ms``.
+
+    Returns:
+        ``(render_buffer, aec_processor)``. Both are ``None`` when
+        AEC is not active. When active, ``render_buffer`` implements
+        both :class:`RenderPcmSink` (write) and
+        :class:`RenderPcmProvider` (read) Protocols.
+    """
+    from sovyx.voice._aec import build_frame_normalizer_aec
+
+    if not tuning.voice_aec_enabled or tuning.voice_aec_engine == "off":
+        return None, None
+
+    from sovyx.voice._render_pcm_buffer import RenderPcmBuffer
+
+    render_buffer = RenderPcmBuffer()
+    aec_processor = build_frame_normalizer_aec(
+        enabled=True,
+        engine=tuning.voice_aec_engine,
+        filter_length_ms=tuning.voice_aec_filter_length_ms,
+    )
+    logger.info(
+        "voice.aec.wired",
+        **{
+            "voice.aec.engine": tuning.voice_aec_engine,
+            "voice.aec.filter_length_ms": tuning.voice_aec_filter_length_ms,
+            "voice.aec.buffer_capacity_samples": render_buffer.capacity_samples,
+        },
+    )
+    return render_buffer, aec_processor
 
 
 async def create_voice_pipeline(
@@ -466,11 +533,23 @@ async def create_voice_pipeline(
             logger.debug("voice_factory_endpoint_guid_derivation_failed", exc_info=True)
             resolved_endpoint_guid = None
 
+    # Phase 4 / T4.4.e — AEC wiring. The helper returns ``(None, None)``
+    # when ``voice_aec_enabled=False`` (foundation default per
+    # ``feedback_staged_adoption``) so the existing pre-AEC contract is
+    # preserved bit-exactly. When enabled, the same RenderPcmBuffer
+    # instance bridges the playback path (``set_render_buffer``) and the
+    # capture path (``AudioCaptureTask.render_provider``).
+    render_buffer, aec_processor = _build_aec_wiring(tuning)
+    if render_buffer is not None:
+        pipeline.set_render_buffer(render_buffer)
+
     capture_task = AudioCaptureTask(
         pipeline,
         input_device=effective_index,
         host_api_name=effective_host_api,
         endpoint_guid=resolved_endpoint_guid,
+        aec=aec_processor,
+        render_provider=render_buffer,
     )
     capture_holder["task"] = capture_task
     # Ring 2 (Signal Integrity): RMS-floor watchdog + format-detection
