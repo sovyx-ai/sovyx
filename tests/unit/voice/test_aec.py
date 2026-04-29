@@ -29,11 +29,13 @@ from sovyx.voice._aec import (
     AecLoadError,
     AecProcessor,
     NoOpAec,
+    NullRenderProvider,
+    RenderPcmProvider,
     SpeexAecProcessor,
     build_aec_processor,
+    build_frame_normalizer_aec,
     compute_erle,
 )
-
 
 # ── AecConfig ────────────────────────────────────────────────────────────
 
@@ -333,3 +335,65 @@ class TestComputeErle:
         cleaned = np.zeros(160, dtype=np.int16)
         with pytest.raises(ValueError, match="render/capture"):
             compute_erle(render, original, cleaned)
+
+
+# ── T4.4 — RenderPcmProvider + NullRenderProvider ────────────────────────
+
+
+class TestNullRenderProvider:
+    """No-op provider returns zeros at the requested length."""
+
+    def test_implements_protocol(self) -> None:
+        provider = NullRenderProvider()
+        assert isinstance(provider, RenderPcmProvider)
+
+    def test_returns_zeros_at_requested_length(self) -> None:
+        provider = NullRenderProvider()
+        out = provider.get_aligned_window(512)
+        assert out.shape == (512,)
+        assert out.dtype == np.int16
+        assert np.all(out == 0)
+
+    def test_returns_independent_buffer_per_call(self) -> None:
+        provider = NullRenderProvider()
+        a = provider.get_aligned_window(160)
+        b = provider.get_aligned_window(160)
+        # No aliasing — caller can mutate one without affecting future.
+        a[0] = 12345
+        assert b[0] == 0
+
+
+# ── T4.4 — build_frame_normalizer_aec helper ─────────────────────────────
+
+
+class TestBuildFrameNormalizerAec:
+    """The 16 kHz / 512-sample factory pins the FrameNormalizer invariants."""
+
+    def test_disabled_returns_noop(self) -> None:
+        aec = build_frame_normalizer_aec(
+            enabled=False,
+            engine="speex",
+            filter_length_ms=128,
+        )
+        assert isinstance(aec, NoOpAec)
+
+    def test_engine_off_returns_noop(self) -> None:
+        aec = build_frame_normalizer_aec(
+            enabled=True,
+            engine="off",
+            filter_length_ms=128,
+        )
+        assert isinstance(aec, NoOpAec)
+
+    def test_enabled_speex_returns_speex(self) -> None:
+        aec = build_frame_normalizer_aec(
+            enabled=True,
+            engine="speex",
+            filter_length_ms=64,
+        )
+        assert isinstance(aec, SpeexAecProcessor)
+        # Verify the FrameNormalizer-mandated frame_size = 512.
+        cap = np.zeros(512, dtype=np.int16)
+        ref = np.zeros(512, dtype=np.int16)
+        out = aec.process(cap, ref)
+        assert out.shape == (512,)

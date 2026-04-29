@@ -84,6 +84,7 @@ if TYPE_CHECKING:
     import numpy as np
     import numpy.typing as npt
 
+    from sovyx.voice._aec import AecProcessor, RenderPcmProvider
     from sovyx.voice._agc2 import AGC2
 
 logger = get_logger(__name__)
@@ -360,6 +361,8 @@ class FrameNormalizer:
         source_format: str = "int16",
         ducking_ramp_ms: float = _DEFAULT_DUCKING_RAMP_MS,
         agc2: AGC2 | None = None,
+        aec: AecProcessor | None = None,
+        render_provider: RenderPcmProvider | None = None,
     ) -> None:
         if source_rate <= 0:
             msg = f"source_rate must be positive, got {source_rate}"
@@ -446,6 +449,19 @@ class FrameNormalizer:
         # path (where there's already DSP work). When None the
         # output is bit-identical to the pre-AGC2 behaviour.
         self._agc2: AGC2 | None = agc2
+
+        # Phase 4 / T4.4 — Acoustic Echo Cancellation. Operates on
+        # complete 512-sample windows AFTER rewindowing, before
+        # emission. Stays None until an operator explicitly wires an
+        # :class:`~sovyx.voice._aec.AecProcessor` (default lenient
+        # per ``feedback_staged_adoption``). When present, the
+        # ``render_provider`` is consulted for each emitted window —
+        # see :meth:`_apply_aec_to_window`. Wire-up is bit-exact
+        # passthrough whenever the provider returns silence (TTS
+        # idle), so wiring AEC before the T4.4.b render-PCM capture
+        # infra lands costs nothing in practice.
+        self._aec: AecProcessor | None = aec
+        self._render_provider: RenderPcmProvider | None = render_provider
 
         logger.debug(
             "frame_normalizer_created",
@@ -628,10 +644,67 @@ class FrameNormalizer:
             while len(self._output_buf) >= _TARGET_WINDOW:
                 window = self._output_buf[:_TARGET_WINDOW].copy()
                 self._output_buf = self._output_buf[_TARGET_WINDOW:]
+                # Phase 4 / T4.4 — AEC runs on the complete 512-sample
+                # window AFTER rewindowing so the Speex frame_size
+                # matches the FrameNormalizer's _TARGET_WINDOW
+                # invariant. Bit-exact passthrough when ``self._aec``
+                # is None or the render provider returns silence
+                # (NoOpAec / NullRenderProvider both reach this
+                # passthrough branch in the foundation default
+                # configuration).
+                if self._aec is not None:
+                    window = self._apply_aec_to_window(window)
                 windows.append(window)
 
             record_stage_event(VoiceStage.CAPTURE, StageEventKind.SUCCESS)
             return windows
+
+    def _apply_aec_to_window(
+        self,
+        window: npt.NDArray[np.int16],
+    ) -> npt.NDArray[np.int16]:
+        """Run one 512-sample capture window through the AEC stage.
+
+        Pulls the time-aligned render reference from
+        :attr:`_render_provider` (zeros when the provider is None or
+        TTS is idle). The :class:`SpeexAecProcessor` short-circuits
+        on silent reference frames so the early-return path is the
+        common case until T4.4.b wires the playback PCM capture.
+        """
+        import numpy as np
+
+        if self._render_provider is not None:
+            render_window = self._render_provider.get_aligned_window(_TARGET_WINDOW)
+        else:
+            render_window = np.zeros(_TARGET_WINDOW, dtype=np.int16)
+        assert self._aec is not None  # called only when guarded above
+        return self._aec.process(window, render_window)
+
+    @property
+    def aec(self) -> AecProcessor | None:
+        """Currently-wired AEC processor, or ``None`` if disabled."""
+        return self._aec
+
+    def set_aec(self, aec: AecProcessor | None) -> None:
+        """Wire (or unwire) the AEC processor at runtime.
+
+        Mirrors :meth:`set_agc2` — operators / dashboards can flip
+        AEC on/off without rebuilding the FrameNormalizer (which
+        would lose the ducking ramp + output buffer + AGC2 state).
+        Pass ``None`` to disable, a fresh processor instance to
+        enable.
+        """
+        self._aec = aec
+
+    def set_render_provider(self, provider: RenderPcmProvider | None) -> None:
+        """Wire (or unwire) the render-PCM provider at runtime.
+
+        The provider source is decoupled from the AEC processor so
+        the playback path (T4.4.b — :mod:`sovyx.voice.pipeline._output_queue`)
+        can register a concrete buffer once it lands without
+        rebuilding the FrameNormalizer.
+        """
+        self._render_provider = provider
 
     @property
     def agc2(self) -> AGC2 | None:

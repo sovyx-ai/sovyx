@@ -91,6 +91,56 @@ class AecConfig:
 
 
 @runtime_checkable
+class RenderPcmProvider(Protocol):
+    """Source of render-side reference PCM for AEC.
+
+    The capture-side pipeline is the consumer; the playback path is
+    the producer. Concrete implementations buffer recent TTS render
+    PCM and return the slice that aligns in time with the current
+    capture window.
+
+    Foundation phase (T4.4) ships only the interface + the no-op
+    fallback :class:`NullRenderProvider`. The concrete buffer that
+    captures TTS playback PCM and timestamps it for capture
+    alignment is staged for T4.4.b (render-PCM capture
+    infrastructure in :mod:`sovyx.voice.pipeline._output_queue`).
+    Until then the wire-up always sees zeros render → AEC
+    short-circuits to passthrough. Wiring the abstraction NOW pins
+    the contract so the future provider doesn't reshape the
+    FrameNormalizer surface.
+    """
+
+    def get_aligned_window(self, n_samples: int) -> np.ndarray:
+        """Return ``n_samples`` int16 PCM aligned with the next capture window.
+
+        Args:
+            n_samples: Number of samples requested. Matches the
+                capture window size (typically 512 = 32 ms @ 16 kHz).
+
+        Returns:
+            int16 ndarray of length ``n_samples``. Implementations
+            MUST return zeros when no render data is currently being
+            played back (TTS idle); short-circuit logic in the AEC
+            relies on the all-zero signature to skip filter updates.
+        """
+        ...
+
+
+class NullRenderProvider:
+    """No-op render provider — always returns zeros.
+
+    Used as the foundation default until the T4.4.b render-PCM
+    capture infrastructure lands. Returning zeros means AEC sees no
+    echo to cancel and short-circuits to passthrough; safe to wire
+    everywhere even before the playback path produces real reference
+    PCM.
+    """
+
+    def get_aligned_window(self, n_samples: int) -> np.ndarray:
+        return np.zeros(n_samples, dtype=np.int16)
+
+
+@runtime_checkable
 class AecProcessor(Protocol):
     """Minimal AEC interface.
 
@@ -385,12 +435,45 @@ def compute_erle(
     return 10.0 * float(np.log10(original_power / cleaned_power))
 
 
+def build_frame_normalizer_aec(
+    *,
+    enabled: bool,
+    engine: Literal["off", "speex"],
+    filter_length_ms: int,
+) -> AecProcessor:
+    """Build an :class:`AecProcessor` configured for the FrameNormalizer.
+
+    Convenience over :func:`build_aec_processor` — pins the
+    sample-rate + frame-size to the FrameNormalizer invariants
+    (16 kHz, 512-sample windows) so call sites only forward the
+    operator-tunable knobs from :class:`VoiceTuningConfig`.
+
+    Args:
+        enabled: Master switch (mirrors ``voice_aec_enabled``).
+        engine: Concrete engine selector
+            (mirrors ``voice_aec_engine``).
+        filter_length_ms: Adaptive filter length in ms
+            (mirrors ``voice_aec_filter_length_ms``).
+    """
+    config = AecConfig(
+        enabled=enabled,
+        engine=engine,
+        sample_rate=16_000,
+        frame_size_samples=512,
+        filter_length_ms=filter_length_ms,
+    )
+    return build_aec_processor(config)
+
+
 __all__ = [
     "AecConfig",
     "AecLoadError",
     "AecProcessor",
     "NoOpAec",
+    "NullRenderProvider",
+    "RenderPcmProvider",
     "SpeexAecProcessor",
     "build_aec_processor",
+    "build_frame_normalizer_aec",
     "compute_erle",
 ]

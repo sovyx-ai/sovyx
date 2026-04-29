@@ -1902,3 +1902,189 @@ class TestFormatDetectionProbeFloat32Magnitude:
         # Exactly one WARN emitted; counter still bumped 100 times.
         assert len(drift_logs) == 1
         assert norm.format_drift_count == 100  # noqa: PLR2004
+
+
+# ── Phase 4 / T4.4 — AEC wire-up ─────────────────────────────────────────
+
+
+class _RecordingAec:
+    """Test stub that records every (capture, render) call.
+
+    Implements the :class:`AecProcessor` Protocol without depending
+    on the Speex binding so the wire-up tests run identically on
+    every platform regardless of pyaec availability.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[np.ndarray, np.ndarray]] = []
+        self.reset_count: int = 0
+
+    def process(
+        self,
+        capture: np.ndarray,
+        render: np.ndarray,
+    ) -> np.ndarray:
+        self.calls.append((capture.copy(), render.copy()))
+        return capture
+
+    def reset(self) -> None:
+        self.reset_count += 1
+
+
+class _ConstantRenderProvider:
+    """Render provider that returns a fixed PCM buffer every call."""
+
+    def __init__(self, sample_value: int = 0) -> None:
+        self.sample_value = sample_value
+
+    def get_aligned_window(self, n_samples: int) -> np.ndarray:
+        return np.full(n_samples, self.sample_value, dtype=np.int16)
+
+
+class TestFrameNormalizerAecConstruction:
+    """T4.4 — AEC parameters land on the public ``__init__`` surface."""
+
+    def test_default_aec_is_none(self) -> None:
+        norm = FrameNormalizer(source_rate=16_000, source_channels=1)
+        assert norm.aec is None
+
+    def test_default_render_provider_is_unset(self) -> None:
+        # No public getter — assert via push behaviour: with aec=None the
+        # provider is irrelevant and push works normally.
+        norm = FrameNormalizer(source_rate=16_000, source_channels=1)
+        windows = norm.push(np.zeros(512, dtype=np.int16))
+        assert len(windows) == 1
+
+    def test_set_aec_assigns_processor(self) -> None:
+        norm = FrameNormalizer(source_rate=16_000, source_channels=1)
+        stub = _RecordingAec()
+        norm.set_aec(stub)
+        assert norm.aec is stub
+
+    def test_set_aec_can_unwire(self) -> None:
+        norm = FrameNormalizer(
+            source_rate=16_000,
+            source_channels=1,
+            aec=_RecordingAec(),
+        )
+        norm.set_aec(None)
+        assert norm.aec is None
+
+    def test_constructs_with_aec_and_provider(self) -> None:
+        stub = _RecordingAec()
+        provider = _ConstantRenderProvider(sample_value=0)
+        norm = FrameNormalizer(
+            source_rate=16_000,
+            source_channels=1,
+            aec=stub,
+            render_provider=provider,
+        )
+        assert norm.aec is stub
+
+
+class TestFrameNormalizerAecWireUp:
+    """T4.4 — AEC.process is invoked once per emitted 512-sample window."""
+
+    def test_aec_called_once_per_emitted_window(self) -> None:
+        stub = _RecordingAec()
+        norm = FrameNormalizer(
+            source_rate=16_000,
+            source_channels=1,
+            aec=stub,
+            render_provider=_ConstantRenderProvider(),
+        )
+        # 1024 samples → 2 windows of 512 each.
+        block = np.zeros(1024, dtype=np.int16)
+        windows = norm.push(block)
+        assert len(windows) == 2
+        assert len(stub.calls) == 2
+
+    def test_aec_called_with_target_window_size(self) -> None:
+        stub = _RecordingAec()
+        norm = FrameNormalizer(
+            source_rate=16_000,
+            source_channels=1,
+            aec=stub,
+            render_provider=_ConstantRenderProvider(),
+        )
+        norm.push(np.zeros(512, dtype=np.int16))
+        capture, render = stub.calls[0]
+        # _TARGET_WINDOW = 512 samples is the AEC frame contract.
+        assert capture.size == 512
+        assert render.size == 512
+
+    def test_aec_receives_render_from_provider(self) -> None:
+        stub = _RecordingAec()
+        norm = FrameNormalizer(
+            source_rate=16_000,
+            source_channels=1,
+            aec=stub,
+            render_provider=_ConstantRenderProvider(sample_value=1234),
+        )
+        norm.push(np.zeros(512, dtype=np.int16))
+        _, render = stub.calls[0]
+        assert int(render[0]) == 1234
+        assert np.all(render == 1234)
+
+    def test_aec_receives_zeros_when_provider_is_none(self) -> None:
+        # Foundation safety: aec wired but provider absent → AEC sees
+        # zeros (silent reference). SpeexAecProcessor short-circuits
+        # to passthrough; _RecordingAec records the zeros for assert.
+        stub = _RecordingAec()
+        norm = FrameNormalizer(
+            source_rate=16_000,
+            source_channels=1,
+            aec=stub,
+        )
+        norm.push(np.zeros(512, dtype=np.int16))
+        _, render = stub.calls[0]
+        assert np.all(render == 0)
+
+    def test_aec_disabled_path_preserves_passthrough(self) -> None:
+        # No AEC wired → window content is bit-exact passthrough.
+        # This is the critical regression-guard: the foundation
+        # commit must not change the existing default behaviour.
+        norm = FrameNormalizer(source_rate=16_000, source_channels=1)
+        block = np.array([100, -200, 300, -400] * 128, dtype=np.int16)
+        windows = norm.push(block)
+        assert len(windows) == 1
+        np.testing.assert_array_equal(windows[0], block)
+
+    def test_set_aec_runtime_swap_starts_processing(self) -> None:
+        norm = FrameNormalizer(source_rate=16_000, source_channels=1)
+        # Initial state: no AEC.
+        norm.push(np.zeros(512, dtype=np.int16))
+        # Wire AEC at runtime.
+        stub = _RecordingAec()
+        norm.set_aec(stub)
+        norm.set_render_provider(_ConstantRenderProvider())
+        norm.push(np.zeros(512, dtype=np.int16))
+        # First push had no AEC → 0 calls; second push → 1 call.
+        assert len(stub.calls) == 1
+
+    def test_aec_returns_processed_window(self) -> None:
+        # When AEC's process() returns a different signal, the
+        # FrameNormalizer must emit AEC's output (not the original
+        # window). Verifies the wire-up actually substitutes the
+        # cleaned signal into the emission stream.
+
+        class _MutatingAec:
+            def process(
+                self,
+                capture: np.ndarray,
+                render: np.ndarray,  # noqa: ARG002
+            ) -> np.ndarray:
+                # Halve every sample so the emission is visibly mutated.
+                return (capture.astype(np.int32) // 2).astype(np.int16)
+
+            def reset(self) -> None: ...
+
+        norm = FrameNormalizer(
+            source_rate=16_000,
+            source_channels=1,
+            aec=_MutatingAec(),
+        )
+        block = np.full(512, 1000, dtype=np.int16)
+        windows = norm.push(block)
+        assert len(windows) == 1
+        np.testing.assert_array_equal(windows[0], np.full(512, 500, dtype=np.int16))
