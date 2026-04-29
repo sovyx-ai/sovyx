@@ -52,6 +52,7 @@ from sovyx.voice.health.combo_store._constants import (
     _PROBE_HISTORY_MAX,
     _RMS_DB_MAX,
     _RMS_DB_MIN,
+    _RMS_DB_R14_SILENT_CEILING,
     _VAD_MAX,
     _VAD_MIN,
 )
@@ -272,6 +273,42 @@ class ComboStore:
                     endpoint=guid,
                     field=exc.field,
                     value=str(exc.value),
+                )
+                dropped += 1
+                continue
+
+            # R14 — Phase 3 / T3.6 — silent_combo_evict.
+            #
+            # Legacy v0.23.x-and-earlier silent winners (rms_db <
+            # -70 dBFS) persisted to disk before the cold-probe
+            # strict signal validation landed in T11 (commit
+            # ``c888c2b``). Post-T11 the probe REJECTS such combos
+            # at validation time so fresh writes cannot re-introduce
+            # them, but legacy entries still on disk would replicate
+            # the Furo W-1 deaf state on every boot (the cascade
+            # picks the silent winner by GUID, opens the same APO-
+            # destroyed substrate, and the user hears nothing).
+            #
+            # R14 evicts those entries on load. Idempotent because
+            # post-T11 there is no path to write a replacement; on
+            # the second boot the ComboStore has no silent entries
+            # left and R14 fires zero times. The structured event
+            # mirrors the R12 sanity-failed pattern so dashboards
+            # can correlate eviction telemetry with the W-1 cure
+            # rollout.
+            if live.rms_db_at_validation < _RMS_DB_R14_SILENT_CEILING:
+                rules.append(("R14", guid))
+                logger.warning(
+                    "combo_store_r14_silent_evicted",
+                    endpoint=guid,
+                    rms_db_at_validation=live.rms_db_at_validation,
+                    threshold_db=_RMS_DB_R14_SILENT_CEILING,
+                    last_boot_diagnosis=live.last_boot_diagnosis.value,
+                    action_taken=(
+                        "evicted as legacy silent winner pre-Furo-W-1 cure; "
+                        "next probe will validate a fresh combo via the "
+                        "post-T11 strict cold path"
+                    ),
                 )
                 dropped += 1
                 continue

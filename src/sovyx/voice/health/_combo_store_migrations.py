@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 
 class MigrationError(RuntimeError):
@@ -186,9 +186,41 @@ def _migrate_v2_to_v3(
     return out
 
 
+def _migrate_v3_to_v4(
+    raw: dict[str, Any],
+    *,
+    audio_subsystem_fingerprint_factory: Callable[[], dict[str, Any]],  # noqa: ARG001
+    endpoint_fxproperties_sha_for: Callable[[str], str],  # noqa: ARG001
+) -> dict[str, Any]:
+    """Phase 3 / T3.10 — schema bump to v4.
+
+    No field reshape. The version bump exists to mark the schema
+    boundary at which Sovyx began applying R14 (silent_combo_evict)
+    on every load. Pre-v4 stores may carry legacy silent winners
+    (``rms_db_at_validation < -70 dBFS``) persisted before the
+    Furo W-1 fix landed in T11 (commit ``c888c2b``); the v4 boot
+    sees R14 evict them, and post-v4 the cold-probe strict path
+    forbids fresh silent writes — so R14 self-extinguishes.
+
+    The migration is a pure version-bump pass-through. Unrelated
+    fields are preserved verbatim. A malformed ``entries`` block
+    raises :class:`MigrationError` (handled by the caller's
+    archive path).
+    """
+    entries = raw.get("entries")
+    if not isinstance(entries, dict):
+        msg = f"v3 entries field is not a dict (got {type(entries).__name__})"
+        raise MigrationError(msg)
+
+    out: dict[str, Any] = dict(raw)
+    out["schema_version"] = 4
+    return out
+
+
 _MIGRATIONS: dict[int, Callable[..., dict[str, Any]]] = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
+    3: _migrate_v3_to_v4,
 }
 
 

@@ -317,15 +317,18 @@ class TestCurrentVersionIdempotent:
     def test_already_current_returns_unchanged_dict(self) -> None:
         from sovyx.voice.health._combo_store_migrations import migrate_to_current
 
-        v3_already_current = dict(_v2_snapshot())
-        v3_already_current["schema_version"] = 3
-        # Add candidate_kind to satisfy the v3 contract.
-        for entry in v3_already_current["entries"].values():
+        v4_already_current = dict(_v2_snapshot())
+        # Phase 3 / T3.10 bumped CURRENT_SCHEMA_VERSION 3→4. The
+        # idempotency contract still holds: a dict already at
+        # CURRENT must not be mutated.
+        v4_already_current["schema_version"] = 4
+        # Add candidate_kind to satisfy the v3+ contract.
+        for entry in v4_already_current["entries"].values():
             entry["candidate_kind"] = "hardware"
 
-        before = json.dumps(v3_already_current, sort_keys=True)
+        before = json.dumps(v4_already_current, sort_keys=True)
         out = migrate_to_current(
-            v3_already_current,
+            v4_already_current,
             audio_subsystem_fingerprint_factory=lambda: {},
             endpoint_fxproperties_sha_for=lambda guid: "",
         )

@@ -704,13 +704,141 @@ class TestRule13EndpointMissing:
         assert store2.get("{guid-A}") is not None
 
 
+# ── R14 silent_combo_evict (Phase 3 / T3.6) ─────────────────────────
+
+
+class TestRule14SilentComboEvict:
+    """R14 evicts legacy silent winners (rms_db < -70 dBFS) on load.
+
+    The rule replicates the structural invariant that the post-T11
+    cold-probe strict signal validation establishes — combos with
+    near-silent RMS at validation cannot be HEALTHY because the
+    capture endpoint was producing post-APO silence (Furo W-1).
+    Pre-T11 such entries persisted to disk; R14 evicts them on the
+    first post-upgrade boot and self-extinguishes (post-T11 the
+    probe forbids fresh silent writes).
+    """
+
+    def test_silent_legacy_combo_evicted_on_load(self, tmp_path: Path) -> None:
+        """A legacy silent winner with RMS in R14's exclusive range
+        (-90 < rms < -70 — passes R12 sanity but fails R14) gets
+        evicted on load. The user's actual Furo W-1 repro value
+        (-96.43) lives below R12's -90 floor and is caught by R12
+        sanity instead — R14 covers the "silent but structurally
+        sane" range above the R12 floor."""
+        store = _make_store(tmp_path)
+        store.load()
+        _record(store)
+        # Mutate the persisted entry to simulate a legacy v0.23.x
+        # silent winner that pre-dates the cold-probe strict fix.
+        # -85 is between R12's floor (-90) and R14's ceiling (-70).
+        data = json.loads((tmp_path / "capture_combos.json").read_text(encoding="utf-8"))
+        data["entries"]["{guid-A}"]["rms_db_at_validation"] = -85.0
+        (tmp_path / "capture_combos.json").write_text(json.dumps(data), encoding="utf-8")
+
+        store2 = _make_store(tmp_path)
+        rep = store2.load()
+
+        assert ("R14", "{guid-A}") in rep.rules_applied
+        assert rep.entries_loaded == 0
+        assert rep.entries_dropped == 1
+        assert store2.get("{guid-A}") is None
+
+    def test_threshold_boundary_minus_70_inclusive(self, tmp_path: Path) -> None:
+        """Strict ``<`` comparison: an entry exactly AT the ceiling
+        (-70.0) is preserved; only STRICTLY below evicts. Mirrors the
+        cold-probe classifier's threshold semantics so the two
+        layers agree on the boundary."""
+        store = _make_store(tmp_path)
+        store.load()
+        _record(store)
+        data = json.loads((tmp_path / "capture_combos.json").read_text(encoding="utf-8"))
+        data["entries"]["{guid-A}"]["rms_db_at_validation"] = -70.0
+        (tmp_path / "capture_combos.json").write_text(json.dumps(data), encoding="utf-8")
+
+        store2 = _make_store(tmp_path)
+        rep = store2.load()
+
+        assert not any(code == "R14" for code, _ in rep.rules_applied)
+        assert rep.entries_loaded == 1
+        assert store2.get("{guid-A}") is not None
+
+    def test_threshold_boundary_just_below_evicts(self, tmp_path: Path) -> None:
+        """An entry one ULP below the ceiling (-70.001) IS evicted —
+        symmetric proof of the strict-less-than contract."""
+        store = _make_store(tmp_path)
+        store.load()
+        _record(store)
+        data = json.loads((tmp_path / "capture_combos.json").read_text(encoding="utf-8"))
+        data["entries"]["{guid-A}"]["rms_db_at_validation"] = -70.001
+        (tmp_path / "capture_combos.json").write_text(json.dumps(data), encoding="utf-8")
+
+        store2 = _make_store(tmp_path)
+        rep = store2.load()
+
+        assert ("R14", "{guid-A}") in rep.rules_applied
+        assert rep.entries_loaded == 0
+
+    def test_self_extinguishing_on_second_boot(self, tmp_path: Path) -> None:
+        """Idempotency contract — after R14 evicts a silent entry on
+        the first post-upgrade boot, the on-disk store has no silent
+        entries left and R14 fires zero times on subsequent boots."""
+        store = _make_store(tmp_path)
+        store.load()
+        _record(store)
+        # Plant a legacy silent entry.
+        data = json.loads((tmp_path / "capture_combos.json").read_text(encoding="utf-8"))
+        data["entries"]["{guid-A}"]["rms_db_at_validation"] = -85.0
+        (tmp_path / "capture_combos.json").write_text(json.dumps(data), encoding="utf-8")
+
+        # First boot — R14 evicts.
+        store2 = _make_store(tmp_path)
+        rep1 = store2.load()
+        assert ("R14", "{guid-A}") in rep1.rules_applied
+        # The eviction is in-memory; persist the now-empty state to
+        # disk so the second boot starts from the post-evict snapshot
+        # (mirrors what the daemon's natural shutdown does after a
+        # subsequent record_winning or just normal lifecycle).
+        store2._write_atomic()  # noqa: SLF001 — testing the lifecycle invariant
+
+        # Second boot — file no longer has the silent entry; R14
+        # fires zero times.
+        store3 = _make_store(tmp_path)
+        rep2 = store3.load()
+        assert not any(code == "R14" for code, _ in rep2.rules_applied)
+        assert rep2.entries_dropped == 0
+
+    def test_loud_entry_not_affected(self, tmp_path: Path) -> None:
+        """Defensive — entries above the ceiling (e.g. -30 dBFS,
+        normal speech RMS) are preserved exactly. R14 must not
+        false-positive on healthy combos."""
+        store = _make_store(tmp_path)
+        store.load()
+        _record(store)
+        data = json.loads((tmp_path / "capture_combos.json").read_text(encoding="utf-8"))
+        data["entries"]["{guid-A}"]["rms_db_at_validation"] = -30.0
+        (tmp_path / "capture_combos.json").write_text(json.dumps(data), encoding="utf-8")
+
+        store2 = _make_store(tmp_path)
+        rep = store2.load()
+
+        assert not any(code == "R14" for code, _ in rep.rules_applied)
+        assert rep.entries_loaded == 1
+
+
 # ── Sanity validator boundary tests ──────────────────────────────────────
 
 
 class TestSanityBoundaries:
     @pytest.mark.parametrize(
         ("rms", "valid"),
-        [(-90.0, True), (0.0, True), (-91.0, False), (0.1, False)],
+        # -60.0 instead of -90.0 to stay within both the R12 sanity
+        # range AND the R14 silent_combo_evict ceiling (-70 dBFS).
+        # Phase 3 / T3.6 added R14 which would evict entries below
+        # -70 — using -90 here would cross both the R12 boundary AND
+        # the R14 ceiling, conflating two separate concerns. R14 has
+        # its own dedicated tests in TestR14SilentComboEvict below.
+        [(-60.0, True), (0.0, True), (-91.0, False), (0.1, False)],
     )
     def test_rms_db_boundary(self, tmp_path: Path, rms: float, valid: bool) -> None:
         store = _make_store(tmp_path)
