@@ -17,8 +17,10 @@ import pytest
 
 from sovyx.engine.config import VoiceTuningConfig
 from sovyx.voice._capture_task import (
+    AlsaHwDirectRestartVerdict,
     AudioCaptureTask,
     ExclusiveRestartVerdict,
+    SessionManagerRestartVerdict,
     SharedRestartVerdict,
     _extract_peak_db,
     _resolve_input_entry,
@@ -1816,6 +1818,168 @@ class TestCaptureRestartFrameEmissionT32:
             assert frame.bypass_tier == 0
             assert frame.new_signal_processing_mode == "shared"
             assert frame.old_signal_processing_mode == "exclusive"
+        finally:
+            await task.stop()
+
+    @pytest.mark.asyncio()
+    async def test_request_alsa_hw_direct_restart_emits_apo_degraded_frame_tier_2(
+        self,
+    ) -> None:
+        """Linux pair — request_alsa_hw_direct_restart on a Linux
+        platform emits APO_DEGRADED + bypass_tier=2 (the
+        LinuxPipeWireDirectBypass strategy in the bypass coordinator
+        is Tier 2)."""
+        from sovyx.voice.pipeline._frame_types import (
+            CaptureRestartFrame,
+            CaptureRestartReason,
+        )
+
+        pipeline = MagicMock()
+        pipeline.feed_frame = AsyncMock()
+        recorded: list[CaptureRestartFrame] = []
+        pipeline.record_capture_restart = MagicMock(side_effect=lambda f: recorded.append(f))
+
+        sd = _fake_sd()
+        sd.InputStream = lambda **_kwargs: MagicMock()  # type: ignore[attr-defined]
+        alsa_entry = _input_entry(index=10, name="usbmic", host_api="ALSA", rate=48_000)
+        pulse_entry = _input_entry(index=11, name="usbmic", host_api="PulseAudio", rate=48_000)
+
+        task = AudioCaptureTask(
+            pipeline,
+            input_device=11,
+            host_api_name="PulseAudio",
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [alsa_entry, pulse_entry],
+        )
+        try:
+            with patch("sovyx.voice.capture._restart_mixin.sys.platform", "linux"):
+                await task.start()
+                recorded.clear()
+
+                result = await task.request_alsa_hw_direct_restart()
+
+            assert result.verdict in {
+                AlsaHwDirectRestartVerdict.ALSA_HW_ENGAGED,
+                AlsaHwDirectRestartVerdict.DOWNGRADED_TO_SESSION_MANAGER,
+            }
+            assert len(recorded) == 1
+            frame = recorded[0]
+            assert frame.frame_type == "CaptureRestart"
+            assert frame.restart_reason == CaptureRestartReason.APO_DEGRADED.value
+            assert frame.bypass_tier == 2  # noqa: PLR2004
+            assert frame.old_signal_processing_mode == "session_manager"
+            assert frame.new_signal_processing_mode in {
+                "alsa_hw_direct",
+                "session_manager",
+            }
+        finally:
+            await task.stop()
+
+    @pytest.mark.asyncio()
+    async def test_request_session_manager_restart_revert_emits_manual_tier_0(
+        self,
+    ) -> None:
+        """Linux pair — request_session_manager_restart called WITHOUT
+        target_device is the revert path (operator unpin / coordinator
+        revert). MANUAL + bypass_tier=0."""
+        from sovyx.voice.pipeline._frame_types import (
+            CaptureRestartFrame,
+            CaptureRestartReason,
+        )
+
+        pipeline = MagicMock()
+        pipeline.feed_frame = AsyncMock()
+        recorded: list[CaptureRestartFrame] = []
+        pipeline.record_capture_restart = MagicMock(side_effect=lambda f: recorded.append(f))
+
+        sd = _fake_sd()
+        sd.InputStream = lambda **_kwargs: MagicMock()  # type: ignore[attr-defined]
+        alsa_entry = _input_entry(index=12, name="usbmic", host_api="ALSA", rate=48_000)
+        pulse_entry = _input_entry(index=13, name="usbmic", host_api="PulseAudio", rate=48_000)
+
+        task = AudioCaptureTask(
+            pipeline,
+            input_device=12,
+            host_api_name="ALSA",
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [alsa_entry, pulse_entry],
+        )
+        try:
+            with patch("sovyx.voice.capture._restart_mixin.sys.platform", "linux"):
+                await task.start()
+                recorded.clear()
+
+                result = await task.request_session_manager_restart()
+
+            assert result.verdict in {
+                SessionManagerRestartVerdict.SESSION_MANAGER_ENGAGED,
+                SessionManagerRestartVerdict.DOWNGRADED_TO_ALSA_HW,
+            }
+            assert len(recorded) == 1
+            frame = recorded[0]
+            assert frame.frame_type == "CaptureRestart"
+            assert frame.restart_reason == CaptureRestartReason.MANUAL.value
+            assert frame.bypass_tier == 0
+            assert frame.old_signal_processing_mode == "alsa_hw_direct"
+            assert frame.new_signal_processing_mode == "session_manager"
+        finally:
+            await task.stop()
+
+    @pytest.mark.asyncio()
+    async def test_request_session_manager_restart_escape_emits_apo_degraded_tier_1(
+        self,
+    ) -> None:
+        """Linux pair — request_session_manager_restart called WITH
+        explicit target_device is the LinuxSessionManagerEscapeBypass
+        apply path (T6 voice-linux-cascade-root-fix). APO_DEGRADED +
+        bypass_tier=1."""
+        from sovyx.voice.pipeline._frame_types import (
+            CaptureRestartFrame,
+            CaptureRestartReason,
+        )
+
+        pipeline = MagicMock()
+        pipeline.feed_frame = AsyncMock()
+        recorded: list[CaptureRestartFrame] = []
+        pipeline.record_capture_restart = MagicMock(side_effect=lambda f: recorded.append(f))
+
+        sd = _fake_sd()
+        sd.InputStream = lambda **_kwargs: MagicMock()  # type: ignore[attr-defined]
+        alsa_entry = _input_entry(index=14, name="badcard", host_api="ALSA", rate=48_000)
+        pipewire_entry = _input_entry(index=15, name="pipewire", host_api="PipeWire", rate=48_000)
+
+        task = AudioCaptureTask(
+            pipeline,
+            input_device=14,
+            host_api_name="ALSA",
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [alsa_entry, pipewire_entry],
+        )
+        try:
+            with patch("sovyx.voice.capture._restart_mixin.sys.platform", "linux"):
+                await task.start()
+                recorded.clear()
+
+                result = await task.request_session_manager_restart(
+                    target_device=pipewire_entry,
+                )
+
+            assert result.verdict in {
+                SessionManagerRestartVerdict.SESSION_MANAGER_ENGAGED,
+                SessionManagerRestartVerdict.DOWNGRADED_TO_ALSA_HW,
+            }
+            assert len(recorded) == 1
+            frame = recorded[0]
+            assert frame.restart_reason == CaptureRestartReason.APO_DEGRADED.value
+            assert frame.bypass_tier == 1
+            assert frame.old_signal_processing_mode == "session_manager"
+            assert frame.new_signal_processing_mode == "session_manager"
         finally:
             await task.stop()
 

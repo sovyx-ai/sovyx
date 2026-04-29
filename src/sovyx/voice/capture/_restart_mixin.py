@@ -655,6 +655,13 @@ class RestartMixin:
         from sovyx.voice._stream_opener import StreamOpenError, open_input_stream
 
         tuning = self._tuning if self._tuning is not None else _VoiceTuning()
+        # T32 — snapshot pre-restart substrate (session-manager-backed
+        # endpoint) before the close + ALSA-direct reopen sequence. The
+        # frame's old_signal_processing_mode is a Linux-specific label
+        # (``"session_manager"``) describing the PipeWire/PulseAudio
+        # filter chain that's about to be bypassed.
+        old_host_api = self._host_api_name or ""
+        old_device_id = self._resolved_device_name or str(self._input_device or "")
         logger.warning(
             "audio_capture_alsa_hw_direct_restart_begin",
             device=self._input_device,
@@ -741,6 +748,31 @@ class RestartMixin:
                 enabled=_agc2_tuning.agc2_enabled,
                 sample_rate=info.sample_rate,
             ),
+        )
+        # T32 — emit CaptureRestartFrame BEFORE the ring-buffer
+        # epoch increment. APO_DEGRADED + bypass_tier=2
+        # (LinuxPipeWireDirectBypass is the Tier 2 strategy for the
+        # Linux signal-processing-degradation case). The
+        # new_signal_processing_mode reflects whether the opener
+        # honoured the ALSA-direct request — if WASAPI-style
+        # downgrade applies on Linux too (opener falls back to a
+        # session-manager sibling), the field reads
+        # ``"session_manager"`` so the dashboard can render the
+        # downgrade case correctly.
+        new_mode = "alsa_hw_direct" if info.host_api == _LINUX_ALSA_HOST_API else "session_manager"
+        self._pipeline.record_capture_restart(
+            CaptureRestartFrame(
+                frame_type="CaptureRestart",
+                timestamp_monotonic=time.monotonic(),
+                restart_reason=CaptureRestartReason.APO_DEGRADED.value,
+                old_host_api=old_host_api,
+                new_host_api=self._host_api_name or "",
+                old_device_id=old_device_id,
+                new_device_id=self._resolved_device_name or str(self._input_device or ""),
+                old_signal_processing_mode="session_manager",
+                new_signal_processing_mode=new_mode,
+                bypass_tier=2,
+            )
         )
         self._allocate_ring_buffer(tuning)
         self._emit_stream_opened(info, apo_bypass_attempted=True)
@@ -874,6 +906,11 @@ class RestartMixin:
         from sovyx.voice._stream_opener import StreamOpenError, open_input_stream
 
         tuning = self._tuning if self._tuning is not None else _VoiceTuning()
+        # T32 — snapshot pre-restart substrate (typically the
+        # ALSA-direct kernel device the bypass was using) before the
+        # close + session-manager reopen.
+        old_host_api = self._host_api_name or ""
+        old_device_id = self._resolved_device_name or str(self._input_device or "")
         logger.warning(
             "audio_capture_session_manager_restart_begin",
             device=self._input_device,
@@ -934,6 +971,36 @@ class RestartMixin:
                 enabled=_agc2_tuning.agc2_enabled,
                 sample_rate=info.sample_rate,
             ),
+        )
+        # T32 — emit CaptureRestartFrame for the Linux revert pair.
+        # Two legitimate semantics: (a) revert from a prior
+        # ALSA-direct bypass (operator unpin / coordinator revert) →
+        # MANUAL; (b) the LinuxSessionManagerEscapeBypass apply path
+        # using ``target_device`` to escape a misbehaving plain ALSA
+        # endpoint by routing through PipeWire/PulseAudio instead →
+        # APO_DEGRADED. The discriminator is whether ``target_device``
+        # was supplied: explicit-target = the Tier 1 escape strategy;
+        # None = the Tier 2 revert. Bypass tier matches.
+        is_escape = target_device is not None
+        self._pipeline.record_capture_restart(
+            CaptureRestartFrame(
+                frame_type="CaptureRestart",
+                timestamp_monotonic=time.monotonic(),
+                restart_reason=(
+                    CaptureRestartReason.APO_DEGRADED.value
+                    if is_escape
+                    else CaptureRestartReason.MANUAL.value
+                ),
+                old_host_api=old_host_api,
+                new_host_api=self._host_api_name or "",
+                old_device_id=old_device_id,
+                new_device_id=self._resolved_device_name or str(self._input_device or ""),
+                old_signal_processing_mode=(
+                    "alsa_hw_direct" if not is_escape else "session_manager"
+                ),
+                new_signal_processing_mode="session_manager",
+                bypass_tier=1 if is_escape else 0,
+            )
         )
         self._allocate_ring_buffer(tuning)
         self._emit_stream_opened(info, apo_bypass_attempted=False)
