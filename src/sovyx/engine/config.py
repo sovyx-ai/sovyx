@@ -1267,6 +1267,35 @@ class VoiceTuningConfig(BaseSettings):
     on their hardware (typically inaudible on dense speech;
     audible on near-silence room tone)."""
 
+    voice_wiener_entropy_skip_enabled: bool = False
+    """Wiener-entropy signal-destruction detector (Phase 4 / T4.44).
+
+    When True the FrameNormalizer's resample stage computes the
+    per-frame Wiener entropy and skips the resample (returns the
+    input unchanged) when entropy > ``voice_wiener_entropy_skip_threshold``.
+    Empirically: spectra above the threshold are too noise-like
+    for downstream DSP to extract useful content from — better
+    to skip processing than waste CPU on lost-cause data.
+
+    Default ``False`` per ``feedback_staged_adoption``. Operators
+    flip after pilot validation confirms the threshold matches
+    their hardware (a too-high threshold misses real destruction;
+    too-low gates real speech)."""
+
+    voice_wiener_entropy_skip_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    """Wiener-entropy boundary for the destruction detector.
+
+    Frames with entropy > this value are skipped. Master-mission
+    spec default 0.5 — empirically the boundary above which
+    resample/AEC/STT extract no useful content. Range:
+
+    * 0.0 → 0.3 — pure-tone / structured speech
+    * 0.3 → 0.5 — typical voice with formants
+    * 0.5 → 0.7 — degraded / heavy-noise
+    * 0.7 → 1.0 — white-noise dominated (signal destroyed)
+
+    Bounded ``[0.0, 1.0]``."""
+
     voice_dither_amplitude_lsb: float = Field(default=1.0, ge=0.0, le=4.0)
     """Peak-to-peak TPDF dither amplitude in int16 LSBs.
 
