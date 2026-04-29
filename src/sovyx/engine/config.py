@@ -1080,6 +1080,53 @@ class VoiceTuningConfig(BaseSettings):
     Default-flip planned for v0.26.0. See spec §D5 / Part 3 of mission
     doc."""
 
+    voice_aec_enabled: bool = False
+    """Acoustic Echo Cancellation (Phase 4 / T4.1 — foundation).
+
+    Master switch for the in-process AEC stage that lives in
+    :mod:`sovyx.voice._aec`. When True the FrameNormalizer runs the
+    selected ``voice_aec_engine`` over each incoming capture frame
+    using the most recent render PCM (TTS playback) as the echo
+    reference; when False AEC is bypassed entirely (NoOp processor).
+
+    Foundation default is ``False`` per ``feedback_staged_adoption`` —
+    new validators ship lenient. Operators flip to ``True`` after
+    pilot validation confirms ERLE ≥ 25 dB on their hardware.
+    Default-flip planned for v0.27.0 once promotion gates close
+    (master mission §Phase 4 — AEC ERLE ≥ 30 dB sustained when
+    render+capture both active)."""
+
+    voice_aec_engine: Literal["off", "speex"] = "speex"
+    """Concrete AEC implementation when ``voice_aec_enabled=True``.
+
+    * ``"off"`` — explicit no-op (also reachable via
+      ``voice_aec_enabled=False``); kept as a separate value so the
+      operator can pin "AEC engine selected but disabled" semantics.
+    * ``"speex"`` — Speex Echo Canceller via the ``pyaec`` package.
+      NLMS-based MDF (Multi-Delay block Frequency adaptive filter).
+      Ships as a single bundled DLL/SO; works on Windows / Linux /
+      macOS without a build environment. Typical ERLE in production:
+      20-25 dB. Below the Phase 4 promotion gate of 30 dB but
+      sufficient for headphones + most desktop speakers; documented
+      tradeoff in the master mission §Phase 4 ADR.
+
+    Future engine ``"webrtc"`` (WebRTC AEC3 via custom ctypes shim)
+    is planned for v0.28.0+ once Speex telemetry confirms the ERLE
+    gap. The mission's preferred ``webrtc-audio-processing`` PyPI
+    binding does not currently ship Windows wheels and fails to
+    build from source under MSVC, so v0.27.0 ships with Speex while
+    the WebRTC path is researched."""
+
+    voice_aec_filter_length_ms: int = Field(default=128, ge=32, le=512)
+    """AEC adaptive filter length in milliseconds.
+
+    Speex AEC convention: filter_length should match the longest
+    echo tail expected (room reverb + render-to-capture loop time).
+    128 ms covers typical office speakers + headphones. Headphones
+    have shorter tails (~32-64 ms); large open rooms with reflective
+    surfaces may need 256-512 ms. The implementation rounds to the
+    nearest power of two internally."""
+
     cascade_host_api_alignment_enabled: bool = False
     """Cascade ↔ runtime host-API alignment (cross-platform).
 

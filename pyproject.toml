@@ -74,6 +74,15 @@ voice = [
     # Lin/macOS use _hotplug_linux.py + _hotplug_mac.py for the
     # equivalent push-based device-change detection.
     "comtypes>=1.4; sys_platform == 'win32'",
+    # Phase 4 / T4.1 — Speex Echo Canceller binding (cross-platform,
+    # ships its own bundled native library so no build environment is
+    # required at install time). The mission spec's preferred
+    # ``webrtc-audio-processing`` package does not currently ship
+    # Windows wheels and fails to build from source under MSVC;
+    # ``pyaec`` is the documented fallback engine for v0.27.0
+    # foundation. Used by sovyx.voice._aec.SpeexAecProcessor; lazy-
+    # imported so non-AEC daemons don't pay the load cost.
+    "pyaec>=1.0",
 ]
 otel = [
     "opentelemetry-exporter-otlp>=1.20",

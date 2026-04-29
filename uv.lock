@@ -2351,6 +2351,19 @@ wheels = [
 ]
 
 [[package]]
+name = "pyaec"
+version = "1.0.1"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ed/65/ebf6ce37c5a4d1d68174111eef2c3713e813f82a6536ddf1801669d6f65f/pyaec-1.0.1-py3-none-macosx_10_12_x86_64.whl", hash = "sha256:c8de8202f01224094cfe3f2b19af477ee9e795ea70b2d9042f633ede46ec4622", size = 204629, upload-time = "2024-12-08T07:49:39.672Z" },
+    { url = "https://files.pythonhosted.org/packages/40/22/f79e36d60c871ade5239d8b35e883ffd7f9665c5cd159f01358d3cc64bd0/pyaec-1.0.1-py3-none-macosx_11_0_arm64.whl", hash = "sha256:d10a3e2332e32c1b4f93da51462b3957321b2b554cb2f981bd2614e76f4bfd75", size = 194362, upload-time = "2024-12-08T07:49:37.059Z" },
+    { url = "https://files.pythonhosted.org/packages/77/f1/dbd418412018c6ecf768f211e30644cb99276ea6455c70fddafdb8444906/pyaec-1.0.1-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:c5634c753896cfd3c4fe1d8e20e6a5bc1839acb03c659c79d40ec5de84657068", size = 236738, upload-time = "2024-12-08T07:49:38.85Z" },
+    { url = "https://files.pythonhosted.org/packages/b3/8b/e999331764587854f0372151588a8fce961466c8114e2e42b625cd9dcd72/pyaec-1.0.1-py3-none-manylinux_2_28_aarch64.whl", hash = "sha256:04ca37f176c057c0607bf72e1dee5bf65c6978e655ff528380364b7facaaa674", size = 230118, upload-time = "2024-12-08T07:49:39.141Z" },
+    { url = "https://files.pythonhosted.org/packages/67/91/96a00471a8e9bb1d0228e47a48039f2b36df962a78a531f64edbc10ea6df/pyaec-1.0.1-py3-none-win_amd64.whl", hash = "sha256:b33fbe0dde1ef686d3036b8b1d594e8a9843a1ec57826841af0b916ef86982b6", size = 82832, upload-time = "2024-12-08T07:50:05.12Z" },
+    { url = "https://files.pythonhosted.org/packages/3d/93/3e16353d060d5a25b0c520724b5f4abae1ab7883aa0583066a68eb9632aa/pyaec-1.0.1-py3-none-win_arm64.whl", hash = "sha256:795aff2946fa575076fd38d8818e21addc53a5bee31ad66e9791773f73dfcec0", size = 80684, upload-time = "2024-12-08T07:50:12.073Z" },
+]
+
+[[package]]
 name = "pycparser"
 version = "3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3370,6 +3383,7 @@ voice = [
     { name = "kokoro-onnx" },
     { name = "moonshine-voice" },
     { name = "piper-tts" },
+    { name = "pyaec" },
     { name = "scipy" },
     { name = "sounddevice" },
 ]
@@ -3407,6 +3421,7 @@ requires-dist = [
     { name = "piper-tts", marker = "extra == 'voice'", specifier = ">=1.4" },
     { name = "prompt-toolkit", specifier = ">=3.0" },
     { name = "psutil", specifier = ">=5.9" },
+    { name = "pyaec", marker = "extra == 'voice'", specifier = ">=1.0" },
     { name = "pydantic", specifier = ">=2.6" },
     { name = "pydantic-settings", specifier = ">=2.2" },
     { name = "pyjwt", specifier = ">=2.8" },
