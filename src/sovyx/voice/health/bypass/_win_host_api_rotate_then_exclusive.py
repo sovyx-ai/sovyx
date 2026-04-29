@@ -253,35 +253,145 @@ class WindowsHostApiRotateThenExclusiveBypass:
         self,
         context: BypassContext,
     ) -> str:
-        # v0.24.0 placeholder: AudioCaptureTask.request_host_api_rotate
-        # lands in v0.25.0 wire-up (mission task T28). Until then any
-        # apply path raises with a stable reason token so the
-        # coordinator records a structured FAILED_TO_APPLY outcome.
+        """T28 wire-up — 2-phase rotate-then-exclusive bypass.
+
+        Phase A: rotate the capture stream from MME / DirectSound /
+        WDM-KS to ``Windows WASAPI`` via
+        :meth:`AudioCaptureTask.request_host_api_rotate`. This step
+        moves the stream onto the WASAPI shared graph but does NOT
+        yet bypass the APO chain (WASAPI shared still traverses MFX
+        / SFX / EFX).
+
+        Phase B: only if Phase A engaged, call
+        :meth:`AudioCaptureTask.request_exclusive_restart` to engage
+        WASAPI exclusive mode on the rotated stream. Exclusive mode
+        does NOT traverse the APO graph at all — the actual MFX/SFX/
+        EFX bypass that Tier 2 promises.
+
+        Return tags (caller is the coordinator's apply driver):
+
+        * ``rotated_then_exclusive_engaged`` — both phases engaged
+        * ``rotated_then_exclusive_downgraded`` — Phase A engaged
+          but Phase B fell back to shared (still better than the
+          original MME / DirectSound / WDM-KS path because WASAPI
+          shared has fewer APO layers than legacy host APIs)
+
+        Raises:
+            BypassApplyError: with a stable ``reason`` token on each
+                failure mode. Coordinator translates into a
+                structured ``BypassVerdict.FAILED_TO_APPLY``.
+        """
+        capture_task = context.capture_task
+        if capture_task is None:
+            raise BypassApplyError(
+                "BypassContext.capture_task is None — coordinator wire-up bug",
+                reason="capture_task_not_running",
+            )
+
+        # Snapshot the source host_api BEFORE the rotation so revert
+        # can restore the pre-apply state. Per-coordinator-session
+        # strategy instance state is safe (see class docstring).
+        self._source_host_api = getattr(capture_task, "_host_api_name", None)
+
+        # Phase A — rotate to WASAPI (shared mode for now; Phase B
+        # engages exclusive separately so each phase has its own
+        # verdict for clean telemetry).
+        rotate_result = await capture_task.request_host_api_rotate(
+            target_host_api="Windows WASAPI",
+            target_exclusive=False,
+        )
+        if not rotate_result.engaged:
+            logger.warning(
+                "voice.bypass.win_host_api_rotate_then_exclusive.rotate_failed",
+                strategy=_STRATEGY_NAME,
+                endpoint_guid=context.endpoint_guid,
+                source_host_api=context.host_api_name,
+                rotate_verdict=rotate_result.verdict.value,
+                rotate_detail=rotate_result.detail,
+            )
+            detail = rotate_result.detail or rotate_result.verdict.value
+            raise BypassApplyError(
+                f"host-api rotate to Windows WASAPI failed: {detail}",
+                reason=f"rotate_{rotate_result.verdict.value}",
+            )
+
+        # Phase B — engage exclusive on the rotated stream.
+        excl_result = await capture_task.request_exclusive_restart()
+        if excl_result.engaged:
+            logger.info(
+                "voice.bypass.win_host_api_rotate_then_exclusive.engaged",
+                strategy=_STRATEGY_NAME,
+                endpoint_guid=context.endpoint_guid,
+                source_host_api=self._source_host_api,
+                target_host_api="Windows WASAPI",
+            )
+            return "rotated_then_exclusive_engaged"
+
+        # Phase B downgrade — Phase A's rotation took (we're on
+        # WASAPI shared) but the exclusive engagement fell to shared.
+        # Still net-positive: WASAPI shared has fewer APO layers
+        # than MME / DirectSound / WDM-KS.
         logger.warning(
-            "voice.bypass.win_host_api_rotate_then_exclusive.apply_not_yet_wired",
+            "voice.bypass.win_host_api_rotate_then_exclusive.exclusive_downgraded",
             strategy=_STRATEGY_NAME,
             endpoint_guid=context.endpoint_guid,
-            host_api=context.host_api_name,
-            target_version="v0.25.0",
-            reason=(
-                "v0.24.0 ships the strategy class + eligibility logic; the "
-                "2-phase rotate-then-exclusive apply (request_host_api_rotate "
-                "+ request_exclusive_restart) lands in v0.25.0 wire-up "
-                "(mission task T28)."
-            ),
+            source_host_api=self._source_host_api,
+            exclusive_verdict=excl_result.verdict.value,
+            exclusive_detail=excl_result.detail,
         )
-        raise BypassApplyError(
-            "WindowsHostApiRotateThenExclusiveBypass apply path not wired in v0.24.0",
-            reason="strategy_disabled",
-        )
+        return "rotated_then_exclusive_downgraded"
 
     async def revert(
         self,
         context: BypassContext,
     ) -> None:
-        # v0.24.0 placeholder: apply never engages, so revert is a
-        # no-op. Idempotent per the PlatformBypassStrategy contract.
-        del context  # intentionally unused in v0.24.0
+        """T28 wire-up — 2-step inverse of apply.
+
+        Step 1: revert exclusive mode (if it was engaged) via
+        :meth:`AudioCaptureTask.request_shared_restart`.
+        Step 2: rotate back to the source host_api (captured during
+        apply) via :meth:`AudioCaptureTask.request_host_api_rotate`.
+
+        Idempotent + best-effort: any failure is logged but does NOT
+        raise. The coordinator's revert is called on a teardown path
+        that must complete; raising would leave the pipeline in an
+        inconsistent state.
+        """
+        capture_task = context.capture_task
+        if capture_task is None:
+            return
+        # Step 1 — revert to shared mode. Best-effort.
+        try:
+            await capture_task.request_shared_restart()
+        except Exception as exc:  # noqa: BLE001 — revert is best-effort
+            logger.warning(
+                "voice.bypass.win_host_api_rotate_then_exclusive.revert_shared_failed",
+                strategy=_STRATEGY_NAME,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+
+        # Step 2 — rotate back to source host_api. Skip when the
+        # apply was never called (``self._source_host_api`` is None)
+        # or when the source was already WASAPI (no rotation
+        # performed; rotating back is a no-op).
+        if self._source_host_api is None:
+            return
+        if self._source_host_api == "Windows WASAPI":
+            return
+        try:
+            await capture_task.request_host_api_rotate(
+                target_host_api=self._source_host_api,
+                target_exclusive=False,
+            )
+        except Exception as exc:  # noqa: BLE001 — revert is best-effort
+            logger.warning(
+                "voice.bypass.win_host_api_rotate_then_exclusive.revert_rotate_failed",
+                strategy=_STRATEGY_NAME,
+                error=str(exc),
+                error_type=type(exc).__name__,
+                source_host_api=self._source_host_api,
+            )
 
 
 __all__ = ["WindowsHostApiRotateThenExclusiveBypass"]

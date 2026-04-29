@@ -326,7 +326,9 @@ class TestWindowsMMNotificationListenerV025WireUp:
         fake_comtypes = MagicMock(name="comtypes")
         fake_comtypes.COMObject = mock_com_object
         fake_comtypes_client = MagicMock(name="comtypes.client")
-        fake_comtypes.client = fake_comtypes_client  # bind so import comtypes.client returns the mock
+        fake_comtypes.client = (
+            fake_comtypes_client  # bind so import comtypes.client returns the mock
+        )
         fake_comtypes_client.CreateObject = MagicMock(return_value=mock_enumerator)
 
         with (
@@ -377,7 +379,9 @@ class TestWindowsMMNotificationListenerV025WireUp:
         fake_comtypes = MagicMock()
         fake_comtypes.COMObject = MagicMock()
         fake_comtypes_client = MagicMock()
-        fake_comtypes.client = fake_comtypes_client  # bind so import comtypes.client returns the mock
+        fake_comtypes.client = (
+            fake_comtypes_client  # bind so import comtypes.client returns the mock
+        )
         fake_comtypes_client.CreateObject = MagicMock(side_effect=OSError("COM error"))
 
         with (
@@ -427,7 +431,9 @@ class TestWindowsMMNotificationListenerV025WireUp:
         fake_comtypes = MagicMock()
         fake_comtypes.COMObject = MagicMock()
         fake_comtypes_client = MagicMock()
-        fake_comtypes.client = fake_comtypes_client  # bind so import comtypes.client returns the mock
+        fake_comtypes.client = (
+            fake_comtypes_client  # bind so import comtypes.client returns the mock
+        )
         fake_comtypes_client.CreateObject = MagicMock(return_value=mock_enumerator)
 
         with (
@@ -474,7 +480,9 @@ class TestWindowsMMNotificationListenerV025WireUp:
         fake_comtypes = MagicMock()
         fake_comtypes.COMObject = MagicMock()
         fake_comtypes_client = MagicMock()
-        fake_comtypes.client = fake_comtypes_client  # bind so import comtypes.client returns the mock
+        fake_comtypes.client = (
+            fake_comtypes_client  # bind so import comtypes.client returns the mock
+        )
         fake_comtypes_client.CreateObject = MagicMock(return_value=mock_enumerator)
 
         with (
@@ -520,7 +528,9 @@ class TestWindowsMMNotificationListenerV025WireUp:
         fake_comtypes = MagicMock()
         fake_comtypes.COMObject = MagicMock()
         fake_comtypes_client = MagicMock()
-        fake_comtypes.client = fake_comtypes_client  # bind so import comtypes.client returns the mock
+        fake_comtypes.client = (
+            fake_comtypes_client  # bind so import comtypes.client returns the mock
+        )
         fake_comtypes_client.CreateObject = MagicMock(return_value=mock_enumerator)
 
         with (

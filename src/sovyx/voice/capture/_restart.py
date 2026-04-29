@@ -42,12 +42,15 @@ __all__ = [
     "AlsaHwDirectRestartVerdict",
     "ExclusiveRestartResult",
     "ExclusiveRestartVerdict",
+    "HostApiRotateResult",
+    "HostApiRotateVerdict",
     "SessionManagerRestartResult",
     "SessionManagerRestartVerdict",
     "SharedRestartResult",
     "SharedRestartVerdict",
     "_emit_alsa_hw_direct_restart_metric",
     "_emit_exclusive_restart_metric",
+    "_emit_host_api_rotate_metric",
     "_emit_session_manager_restart_metric",
     "_emit_shared_restart_metric",
 ]
@@ -434,3 +437,123 @@ def _emit_session_manager_restart_metric(
         )
     except Exception:  # noqa: BLE001 — metrics must never break capture
         logger.debug("voice_capture_session_manager_restart_metric_failed", exc_info=True)
+
+
+class HostApiRotateVerdict(StrEnum):
+    """Verdict of :meth:`AudioCaptureTask.request_host_api_rotate`.
+
+    T28 — drives the Tier 2 ``WindowsHostApiRotateThenExclusive``
+    bypass strategy. The strategy applies in 2 phases: rotate the
+    capture stream to a target host_api (typically ``Windows
+    WASAPI``), then engage exclusive mode on the rotated stream.
+    Each phase reports its own verdict; this enum covers Phase A
+    (rotate). Phase B reuses :class:`ExclusiveRestartVerdict`.
+
+    Members:
+        ROTATED_SUCCESS: Stream reopened against a sibling device on
+            the requested target host_api. ``self._host_api_name``
+            now reflects the new host_api so subsequent reopens (via
+            ``_reopen_stream_after_device_error``) honour the rotate.
+            The cascade-alignment-enabled opener (Furo W-4 fix) is a
+            prerequisite — without it, the next reopen drifts back.
+        DOWNGRADED_TO_SOURCE: Opener fell back to the source
+            host_api during the unified-opener fallback chain — the
+            stream is alive but the rotation didn't take. The
+            strategy SHOULD treat this as a not-engaged outcome and
+            advance to the next tier.
+        NO_TARGET_SIBLING: Enumeration yielded no DeviceEntry on the
+            requested target host_api. Existing stream preserved; no
+            mutation occurred. Common on systems where PortAudio's
+            WASAPI build excludes the active endpoint (rare but
+            documented for legacy hardware).
+        OPEN_FAILED_NO_STREAM: Both the target-host_api open and the
+            source-fallback open raised. The stream is closed and
+            the consumer task has been signalled to exit — upstream
+            supervisors MUST rebuild the capture task. Mirrors the
+            ``OPEN_FAILED_NO_STREAM`` semantics of the existing
+            restart methods.
+        NOT_WIN32: Called on a non-Windows host. The Windows-only
+            Tier 2 strategy gates eligibility on ``platform_key ==
+            "win32"``, but this method is defensive — direct
+            invocation on a non-Windows host returns this verdict
+            and preserves the existing stream.
+        NOT_RUNNING: Called while the task is stopped. No-op.
+    """
+
+    ROTATED_SUCCESS = "rotated_success"
+    DOWNGRADED_TO_SOURCE = "downgraded_to_source"
+    NO_TARGET_SIBLING = "no_target_sibling"
+    OPEN_FAILED_NO_STREAM = "open_failed_no_stream"
+    NOT_WIN32 = "not_win32"
+    NOT_RUNNING = "not_running"
+
+
+@dataclass(frozen=True, slots=True)
+class HostApiRotateResult:
+    """Structured outcome of :meth:`AudioCaptureTask.request_host_api_rotate`.
+
+    Attributes:
+        verdict: The :class:`HostApiRotateVerdict` describing what
+            happened. Anything other than
+            :attr:`HostApiRotateVerdict.ROTATED_SUCCESS` means the
+            rotation didn't take and the strategy should advance.
+        engaged: Convenience flag — ``True`` iff
+            ``verdict == ROTATED_SUCCESS``.
+        target_host_api: The requested target host_api (e.g.
+            ``"Windows WASAPI"``). Echoed in the result for
+            downstream telemetry symmetry.
+        source_host_api: ``self._host_api_name`` BEFORE the rotate
+            call. Strategy implementations capture this so the
+            revert path can rotate back; Tier 2's ``revert`` reads
+            it to restore the pre-bypass host_api.
+        host_api: Effective host_api of the resulting stream. Equal
+            to ``target_host_api`` on ``ROTATED_SUCCESS``; falls
+            back to the source host_api on ``DOWNGRADED_TO_SOURCE``;
+            ``None`` when the stream is down.
+        device: Resolved PortAudio device index of the resulting
+            stream.
+        sample_rate: Effective sample rate of the resulting stream.
+        detail: Human-readable error / downgrade reason. ``None`` on
+            successful engagement.
+    """
+
+    verdict: HostApiRotateVerdict
+    engaged: bool
+    target_host_api: str = ""
+    source_host_api: str | None = None
+    host_api: str | None = None
+    device: int | str | None = None
+    sample_rate: int | None = None
+    detail: str | None = None
+
+
+def _emit_host_api_rotate_metric(result: HostApiRotateResult) -> None:
+    """Record a ``voice.capture.host_api_rotate.verdicts`` counter event.
+
+    T28 — symmetric twin of :func:`_emit_exclusive_restart_metric`
+    for the Tier 2 rotate-then-exclusive strategy. The counter is
+    emitted regardless of whether the rotation engaged so
+    dashboards can split "rotation tried + engaged" vs "rotation
+    tried + downgraded" vs "rotation never got a chance" without
+    scraping logs.
+    """
+    try:
+        import sys
+
+        from sovyx.observability.metrics import get_metrics
+
+        registry = get_metrics()
+        counter = getattr(registry, "voice_capture_host_api_rotate_verdicts", None)
+        if counter is None:
+            return
+        counter.add(
+            1,
+            attributes={
+                "verdict": result.verdict.value,
+                "target_host_api": result.target_host_api or "none",
+                "host_api": result.host_api or "none",
+                "platform": sys.platform,
+            },
+        )
+    except Exception:  # noqa: BLE001 — metrics must never break capture
+        logger.debug("voice_capture_host_api_rotate_metric_failed", exc_info=True)

@@ -158,6 +158,12 @@ from sovyx.voice.capture._restart import (
     ExclusiveRestartVerdict as ExclusiveRestartVerdict,
 )
 from sovyx.voice.capture._restart import (
+    HostApiRotateResult as HostApiRotateResult,
+)
+from sovyx.voice.capture._restart import (
+    HostApiRotateVerdict as HostApiRotateVerdict,
+)
+from sovyx.voice.capture._restart import (
     SessionManagerRestartResult as SessionManagerRestartResult,
 )
 from sovyx.voice.capture._restart import (
@@ -174,6 +180,9 @@ from sovyx.voice.capture._restart import (
 )
 from sovyx.voice.capture._restart import (
     _emit_exclusive_restart_metric as _emit_exclusive_restart_metric,
+)
+from sovyx.voice.capture._restart import (
+    _emit_host_api_rotate_metric as _emit_host_api_rotate_metric,
 )
 from sovyx.voice.capture._restart import (
     _emit_session_manager_restart_metric as _emit_session_manager_restart_metric,

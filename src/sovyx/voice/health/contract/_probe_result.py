@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from sovyx.voice._capture_task import (
         AlsaHwDirectRestartResult,
         ExclusiveRestartResult,
+        HostApiRotateResult,
         SessionManagerRestartResult,
         SharedRestartResult,
     )
@@ -183,6 +184,13 @@ class CaptureTaskProto(Protocol):
         self,
         target_device: DeviceEntry | None = None,
     ) -> SessionManagerRestartResult: ...
+
+    async def request_host_api_rotate(
+        self,
+        target_host_api: str,
+        *,
+        target_exclusive: bool = False,
+    ) -> HostApiRotateResult: ...
 
     async def tap_recent_frames(
         self,

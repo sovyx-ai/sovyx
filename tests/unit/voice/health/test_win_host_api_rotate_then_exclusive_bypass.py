@@ -204,59 +204,246 @@ class TestEligibilityHostApiFilter:
 # ── Apply (v0.24.0 placeholder) ─────────────────────────────────────
 
 
-class TestApplyV024Placeholder:
-    """v0.24.0 apply path always raises with stable reason token."""
+class TestApplyV025WireUp:
+    """T28 wire-up — 2-phase rotate-then-exclusive apply.
+
+    Phase A (request_host_api_rotate) and Phase B
+    (request_exclusive_restart) each have their own verdict; the
+    strategy translates the combined outcome into one of:
+
+    * ``rotated_then_exclusive_engaged`` (both phases engaged)
+    * ``rotated_then_exclusive_downgraded`` (Phase A engaged but
+      Phase B fell to shared)
+
+    On Phase A failure, raises ``BypassApplyError(reason=rotate_*)``
+    so the coordinator records FAILED_TO_APPLY.
+    """
+
+    def _make_fake_capture_task(
+        self,
+        rotate_engaged: bool = True,
+        rotate_verdict_value: str = "rotated_success",
+        rotate_detail: str | None = None,
+        exclusive_engaged: bool = True,
+    ) -> Any:
+        """Build a mock capture_task whose phase-A and phase-B
+        outcomes are configurable — covers happy / downgrade /
+        failure paths uniformly."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        rotate_verdict = MagicMock()
+        rotate_verdict.value = rotate_verdict_value
+
+        rotate_result = MagicMock()
+        rotate_result.engaged = rotate_engaged
+        rotate_result.verdict = rotate_verdict
+        rotate_result.detail = rotate_detail
+
+        excl_verdict = MagicMock()
+        excl_verdict.value = "exclusive_engaged" if exclusive_engaged else "downgraded_to_shared"
+        excl_result = MagicMock()
+        excl_result.engaged = exclusive_engaged
+        excl_result.verdict = excl_verdict
+        excl_result.detail = None
+
+        task = MagicMock()
+        task._host_api_name = "MME"  # initial source host_api
+        task.request_host_api_rotate = AsyncMock(return_value=rotate_result)
+        task.request_exclusive_restart = AsyncMock(return_value=excl_result)
+        task.request_shared_restart = AsyncMock()
+        return task
 
     @pytest.mark.asyncio()
-    async def test_apply_raises_strategy_disabled_default(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        bypass = WindowsHostApiRotateThenExclusiveBypass()
-        caplog.set_level("WARNING")
-        with pytest.raises(BypassApplyError) as exc_info:
-            await bypass.apply(_ctx(host_api_name="MME"))
-        assert exc_info.value.reason == "strategy_disabled"
-        matching = [
-            r
-            for r in caplog.records
-            if "voice.bypass.win_host_api_rotate_then_exclusive.apply_not_yet_wired"
-            in r.getMessage()
-        ]
-        assert len(matching) == 1
-        msg = matching[0].getMessage()
-        assert "v0.25.0" in msg
-        assert "T28" in msg
-
-    @pytest.mark.asyncio()
-    async def test_apply_raises_strategy_disabled_with_both_flags_enabled(
+    async def test_apply_returns_engaged_when_both_phases_succeed(
         self, both_flags_enabled: None
     ) -> None:
-        """Even when an operator flips both flags in v0.24.0, the
-        apply path raises ``strategy_disabled`` —
-        ``request_host_api_rotate`` doesn't exist on AudioCaptureTask
-        until v0.25.0."""
         del both_flags_enabled
         bypass = WindowsHostApiRotateThenExclusiveBypass()
+        task = self._make_fake_capture_task(rotate_engaged=True, exclusive_engaged=True)
+        ctx = BypassContext(
+            endpoint_guid="{guid-A}",
+            endpoint_friendly_name="Test Mic",
+            host_api_name="MME",
+            platform_key="win32",
+            capture_task=task,
+            probe_fn=lambda: None,  # type: ignore[arg-type,return-value]
+        )
+        result = await bypass.apply(ctx)
+        assert result == "rotated_then_exclusive_engaged"
+        task.request_host_api_rotate.assert_awaited_once_with(
+            target_host_api="Windows WASAPI",
+            target_exclusive=False,
+        )
+        task.request_exclusive_restart.assert_awaited_once()
+        # Source host_api captured for revert.
+        assert bypass._source_host_api == "MME"  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio()
+    async def test_apply_returns_downgraded_when_phase_b_fails(
+        self, both_flags_enabled: None
+    ) -> None:
+        """Phase A engaged, Phase B fell to shared — still net-positive
+        because WASAPI shared has fewer APO layers than legacy host
+        APIs."""
+        del both_flags_enabled
+        bypass = WindowsHostApiRotateThenExclusiveBypass()
+        task = self._make_fake_capture_task(rotate_engaged=True, exclusive_engaged=False)
+        ctx = BypassContext(
+            endpoint_guid="{guid-B}",
+            endpoint_friendly_name="Test Mic",
+            host_api_name="DirectSound",
+            platform_key="win32",
+            capture_task=task,
+            probe_fn=lambda: None,  # type: ignore[arg-type,return-value]
+        )
+        result = await bypass.apply(ctx)
+        assert result == "rotated_then_exclusive_downgraded"
+
+    @pytest.mark.asyncio()
+    async def test_apply_raises_when_phase_a_fails(self, both_flags_enabled: None) -> None:
+        """Phase A failure → BypassApplyError with stable
+        ``rotate_<verdict>`` reason token. Coordinator records
+        FAILED_TO_APPLY."""
+        del both_flags_enabled
+        bypass = WindowsHostApiRotateThenExclusiveBypass()
+        task = self._make_fake_capture_task(
+            rotate_engaged=False,
+            rotate_verdict_value="no_target_sibling",
+            rotate_detail="no Windows WASAPI sibling for endpoint",
+        )
+        ctx = BypassContext(
+            endpoint_guid="{guid-C}",
+            endpoint_friendly_name="Test Mic",
+            host_api_name="MME",
+            platform_key="win32",
+            capture_task=task,
+            probe_fn=lambda: None,  # type: ignore[arg-type,return-value]
+        )
         with pytest.raises(BypassApplyError) as exc_info:
-            await bypass.apply(_ctx(host_api_name="MME"))
-        assert exc_info.value.reason == "strategy_disabled"
+            await bypass.apply(ctx)
+        assert exc_info.value.reason == "rotate_no_target_sibling"
+        # Phase B never invoked when Phase A failed.
+        task.request_exclusive_restart.assert_not_awaited()
+
+    @pytest.mark.asyncio()
+    async def test_apply_raises_capture_task_not_running_when_none(
+        self, both_flags_enabled: None
+    ) -> None:
+        """Defensive — coordinator wire-up bug that passes None
+        capture_task surfaces as a structured failure."""
+        del both_flags_enabled
+        bypass = WindowsHostApiRotateThenExclusiveBypass()
+        ctx = BypassContext(
+            endpoint_guid="{guid-D}",
+            endpoint_friendly_name="Test Mic",
+            host_api_name="MME",
+            platform_key="win32",
+            capture_task=None,  # type: ignore[arg-type]
+            probe_fn=lambda: None,  # type: ignore[arg-type,return-value]
+        )
+        with pytest.raises(BypassApplyError) as exc_info:
+            await bypass.apply(ctx)
+        assert exc_info.value.reason == "capture_task_not_running"
 
 
 # ── Revert (v0.24.0 no-op) ─────────────────────────────────────────
 
 
-class TestRevertV024Noop:
-    @pytest.mark.asyncio()
-    async def test_revert_returns_none(self) -> None:
-        bypass = WindowsHostApiRotateThenExclusiveBypass()
-        result = await bypass.revert(_ctx())
-        assert result is None
+class TestRevertV025WireUp:
+    """T28 wire-up — 2-step revert: request_shared_restart +
+    request_host_api_rotate(target=source_host_api). Best-effort:
+    swallows individual step failures so the coordinator's teardown
+    completes."""
 
     @pytest.mark.asyncio()
-    async def test_revert_idempotent(self) -> None:
+    async def test_revert_calls_shared_then_rotate_back(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
         bypass = WindowsHostApiRotateThenExclusiveBypass()
-        await bypass.revert(_ctx())
-        await bypass.revert(_ctx())
+        bypass._source_host_api = "MME"  # type: ignore[attr-defined]
+
+        task = MagicMock()
+        task.request_shared_restart = AsyncMock()
+        task.request_host_api_rotate = AsyncMock()
+        ctx = BypassContext(
+            endpoint_guid="{guid-A}",
+            endpoint_friendly_name="Test Mic",
+            host_api_name="Windows WASAPI",
+            platform_key="win32",
+            capture_task=task,
+            probe_fn=lambda: None,  # type: ignore[arg-type,return-value]
+        )
+        await bypass.revert(ctx)
+        task.request_shared_restart.assert_awaited_once()
+        task.request_host_api_rotate.assert_awaited_once_with(
+            target_host_api="MME",
+            target_exclusive=False,
+        )
+
+    @pytest.mark.asyncio()
+    async def test_revert_skips_rotate_when_source_was_wasapi(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        bypass = WindowsHostApiRotateThenExclusiveBypass()
+        # Source already on WASAPI — apply would have been a no-op
+        # rotation; revert skips the rotate-back step too.
+        bypass._source_host_api = "Windows WASAPI"  # type: ignore[attr-defined]
+
+        task = MagicMock()
+        task.request_shared_restart = AsyncMock()
+        task.request_host_api_rotate = AsyncMock()
+        ctx = BypassContext(
+            endpoint_guid="{guid-B}",
+            endpoint_friendly_name="Test Mic",
+            host_api_name="Windows WASAPI",
+            platform_key="win32",
+            capture_task=task,
+            probe_fn=lambda: None,  # type: ignore[arg-type,return-value]
+        )
+        await bypass.revert(ctx)
+        task.request_shared_restart.assert_awaited_once()
+        # Rotate-back skipped.
+        task.request_host_api_rotate.assert_not_awaited()
+
+    @pytest.mark.asyncio()
+    async def test_revert_swallows_shared_restart_failure(self) -> None:
+        """Best-effort revert — request_shared_restart raise must NOT
+        propagate; the coordinator's teardown must complete."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        bypass = WindowsHostApiRotateThenExclusiveBypass()
+        bypass._source_host_api = "MME"  # type: ignore[attr-defined]
+
+        task = MagicMock()
+        task.request_shared_restart = AsyncMock(side_effect=RuntimeError("teardown"))
+        task.request_host_api_rotate = AsyncMock()
+        ctx = BypassContext(
+            endpoint_guid="{guid-C}",
+            endpoint_friendly_name="Test Mic",
+            host_api_name="Windows WASAPI",
+            platform_key="win32",
+            capture_task=task,
+            probe_fn=lambda: None,  # type: ignore[arg-type,return-value]
+        )
+        # Must NOT raise.
+        await bypass.revert(ctx)
+        task.request_host_api_rotate.assert_awaited_once()
+
+    @pytest.mark.asyncio()
+    async def test_revert_idempotent_without_apply(self) -> None:
+        """Calling revert before apply (defensive shutdown path) is
+        a no-op + no errors."""
+        bypass = WindowsHostApiRotateThenExclusiveBypass()
+        # _source_host_api stays None; revert short-circuits.
+        ctx = BypassContext(
+            endpoint_guid="{guid-D}",
+            endpoint_friendly_name="Test Mic",
+            host_api_name="Windows WASAPI",
+            platform_key="win32",
+            capture_task=None,  # type: ignore[arg-type]
+            probe_fn=lambda: None,  # type: ignore[arg-type,return-value]
+        )
+        await bypass.revert(ctx)  # no error
 
 
 # ── State preservation slot for v0.25.0 wire-up ────────────────────

@@ -61,12 +61,15 @@ from sovyx.voice.capture._restart import (
     AlsaHwDirectRestartVerdict,
     ExclusiveRestartResult,
     ExclusiveRestartVerdict,
+    HostApiRotateResult,
+    HostApiRotateVerdict,
     SessionManagerRestartResult,
     SessionManagerRestartVerdict,
     SharedRestartResult,
     SharedRestartVerdict,
     _emit_alsa_hw_direct_restart_metric,
     _emit_exclusive_restart_metric,
+    _emit_host_api_rotate_metric,
     _emit_session_manager_restart_metric,
     _emit_shared_restart_metric,
 )
@@ -1064,6 +1067,294 @@ class RestartMixin:
             sample_rate=self._sample_rate,
         )
         _emit_session_manager_restart_metric(result)
+        return result
+
+    async def request_host_api_rotate(
+        self,
+        target_host_api: str,
+        *,
+        target_exclusive: bool = False,
+    ) -> HostApiRotateResult:
+        """Pivot the capture stream to a sibling on ``target_host_api``.
+
+        T28 — drives the Tier 2 ``WindowsHostApiRotateThenExclusive``
+        bypass strategy. For endpoints whose runtime ``host_api_name``
+        is ``MME`` / ``Windows DirectSound`` / ``Windows WDM-KS``, the
+        rotation moves the capture stream to ``Windows WASAPI`` so a
+        subsequent :meth:`request_exclusive_restart` can engage
+        exclusive mode (which bypasses every APO layer).
+
+        Cross-platform safety: the strategy itself gates on
+        ``platform_key == "win32"`` but this method is defensive —
+        direct invocation on a non-Windows host returns
+        :attr:`HostApiRotateVerdict.NOT_WIN32` with the existing
+        stream preserved.
+
+        Twin-pair pattern: this method mutates ``self._host_api_name``
+        on success so subsequent device-error reopens through
+        :meth:`_reopen_stream_after_device_error` honour the rotated
+        host_api. The cascade-alignment-enabled opener (Furo W-4 fix
+        in ``_stream_opener._device_chain``) is a prerequisite —
+        without it, the next reopen drifts back to PortAudio
+        enumeration order and silently undoes the rotation. The
+        cross-validator at
+        :func:`engine/config.py::_enforce_paranoid_mission_dependencies`
+        rejects the contradictory configuration at boot.
+
+        Args:
+            target_host_api: Host_api label of the target sibling
+                (typically ``"Windows WASAPI"``). The method resolves
+                a :class:`DeviceEntry` whose ``canonical_name`` matches
+                the current endpoint AND whose ``host_api_name``
+                equals this argument; that entry is handed to the
+                unified opener.
+            target_exclusive: When ``True``, the rotated stream opens
+                in WASAPI exclusive mode atomically — saves a second
+                close/reopen cycle compared to ``rotate; then
+                request_exclusive_restart``. Default ``False`` for
+                the Tier 2 2-phase strategy (Phase A rotates shared,
+                Phase B engages exclusive separately).
+
+        Returns:
+            A :class:`HostApiRotateResult` describing the outcome.
+            ``ROTATED_SUCCESS`` is the only "engaged" verdict;
+            everything else means the rotation didn't take or was
+            never attempted.
+        """
+        source_host_api = self._host_api_name
+        if not self._running:
+            logger.debug("audio_capture_host_api_rotate_skipped_not_running")
+            result = HostApiRotateResult(
+                verdict=HostApiRotateVerdict.NOT_RUNNING,
+                engaged=False,
+                target_host_api=target_host_api,
+                source_host_api=source_host_api,
+                detail="capture task is not running",
+            )
+            _emit_host_api_rotate_metric(result)
+            return result
+        if sys.platform != "win32":
+            logger.debug(
+                "audio_capture_host_api_rotate_skipped_not_win32",
+                platform=sys.platform,
+            )
+            result = HostApiRotateResult(
+                verdict=HostApiRotateVerdict.NOT_WIN32,
+                engaged=False,
+                target_host_api=target_host_api,
+                source_host_api=source_host_api,
+                host_api=self._host_api_name,
+                device=self._input_device,
+                sample_rate=self._sample_rate,
+                detail=(f"request_host_api_rotate is Windows-only; running on {sys.platform}"),
+            )
+            _emit_host_api_rotate_metric(result)
+            return result
+
+        # Resolve a sibling on the target host_api. The sibling
+        # discovery walks the current device's canonical_name peers
+        # filtered to ``target_host_api``. No sibling = no rotation
+        # possible (e.g. WASAPI build excludes the active endpoint).
+        target_entry = self._find_sibling_with_host_api(target_host_api)
+        if target_entry is None:
+            logger.warning(
+                "audio_capture_host_api_rotate_no_sibling",
+                device=self._input_device,
+                source_host_api=source_host_api,
+                target_host_api=target_host_api,
+            )
+            result = HostApiRotateResult(
+                verdict=HostApiRotateVerdict.NO_TARGET_SIBLING,
+                engaged=False,
+                target_host_api=target_host_api,
+                source_host_api=source_host_api,
+                host_api=self._host_api_name,
+                device=self._input_device,
+                sample_rate=self._sample_rate,
+                detail=(
+                    f"no {target_host_api!r}-host-API sibling found for "
+                    f"current endpoint (PortAudio build without that "
+                    f"backend, or device held exclusive)"
+                ),
+            )
+            _emit_host_api_rotate_metric(result)
+            return result
+
+        from sovyx.voice._stream_opener import StreamOpenError, open_input_stream
+
+        base_tuning = self._tuning if self._tuning is not None else _VoiceTuning()
+        rotate_tuning = base_tuning.model_copy(
+            update={"capture_wasapi_exclusive": target_exclusive}
+        )
+        # T32 — snapshot pre-rotation substrate for the
+        # CaptureRestartFrame emission.
+        old_host_api = self._host_api_name or ""
+        old_device_id = self._resolved_device_name or str(self._input_device or "")
+        logger.warning(
+            "audio_capture_host_api_rotate_begin",
+            device=self._input_device,
+            source_host_api=source_host_api,
+            target_host_api=target_host_api,
+            target_device_index=target_entry.index,
+            target_exclusive=target_exclusive,
+        )
+
+        # Tear down the existing stream on the PortAudio thread before
+        # re-opening on the target host_api — some backends reject a
+        # second client even for read-only capture (mirrors the close
+        # pattern used by request_exclusive_restart).
+        await asyncio.to_thread(self._close_stream, "host_api_rotate")
+        while not self._queue.empty():
+            with contextlib.suppress(asyncio.QueueEmpty):
+                self._queue.get_nowait()
+
+        try:
+            stream, info = await open_input_stream(
+                device=target_entry,
+                target_rate=self._sample_rate,
+                blocksize=self._blocksize,
+                callback=self._audio_callback,
+                tuning=rotate_tuning,
+                sd_module=self._sd_module,
+                enumerate_fn=self._enumerate_fn,
+                validate_fn=None,
+                # Critical: the opener's preferred_host_api MUST be
+                # the rotation target so the sibling-chain fallback
+                # respects the strategy's intent — without this the
+                # opener could fall back to the source host_api and
+                # silently undo the rotation.
+                preferred_host_api=target_host_api,
+            )
+        except StreamOpenError as exc:
+            logger.error(
+                "audio_capture_host_api_rotate_failed",
+                error=str(exc),
+                device=self._input_device,
+                source_host_api=source_host_api,
+                target_host_api=target_host_api,
+            )
+            # Mirror the exclusive-fallback behaviour: try to recover
+            # the pipeline through the source host_api so the user is
+            # not left with a dead stream.
+            try:
+                await self._reopen_stream_after_device_error()
+            except Exception as fallback_exc:  # noqa: BLE001
+                logger.error(
+                    "audio_capture_host_api_rotate_fallback_failed",
+                    error=str(fallback_exc),
+                )
+                self._signal_consumer_shutdown()
+                result = HostApiRotateResult(
+                    verdict=HostApiRotateVerdict.OPEN_FAILED_NO_STREAM,
+                    engaged=False,
+                    target_host_api=target_host_api,
+                    source_host_api=source_host_api,
+                    detail=(
+                        f"host-api rotate open failed ({exc}); source-"
+                        f"host-api fallback also failed ({fallback_exc})"
+                    ),
+                )
+                _emit_host_api_rotate_metric(result)
+                return result
+            result = HostApiRotateResult(
+                verdict=HostApiRotateVerdict.DOWNGRADED_TO_SOURCE,
+                engaged=False,
+                target_host_api=target_host_api,
+                source_host_api=source_host_api,
+                host_api=self._host_api_name,
+                device=self._input_device,
+                sample_rate=self._sample_rate,
+                detail=(
+                    f"target {target_host_api!r} open failed ({exc}); "
+                    f"recovered to source {source_host_api!r}"
+                ),
+            )
+            _emit_host_api_rotate_metric(result)
+            return result
+
+        self._stream = stream
+        self._sample_rate = info.sample_rate
+        self._input_device = info.device_index
+        self._host_api_name = info.host_api
+        self._resolved_device_name = target_entry.name
+        # F5/F6: AGC2 default-on per VoiceTuningConfig.agc2_enabled
+        # (commit 2e36893). Operators can revert via
+        # SOVYX_TUNING__VOICE__AGC2_ENABLED=false.
+        _agc2_tuning = self._tuning if self._tuning is not None else _VoiceTuning()
+        self._normalizer = FrameNormalizer(
+            source_rate=info.sample_rate,
+            source_channels=info.channels,
+            agc2=build_agc2_if_enabled(
+                enabled=_agc2_tuning.agc2_enabled,
+                sample_rate=info.sample_rate,
+            ),
+        )
+        # T32 — emit CaptureRestartFrame for the rotation. Tier 2
+        # bypass = APO_DEGRADED reason + bypass_tier=2.
+        new_mode = "exclusive" if info.exclusive_used else "shared"
+        self._pipeline.record_capture_restart(
+            CaptureRestartFrame(
+                frame_type="CaptureRestart",
+                timestamp_monotonic=time.monotonic(),
+                restart_reason=CaptureRestartReason.APO_DEGRADED.value,
+                old_host_api=old_host_api,
+                new_host_api=self._host_api_name or "",
+                old_device_id=old_device_id,
+                new_device_id=self._resolved_device_name or str(self._input_device or ""),
+                old_signal_processing_mode="shared",
+                new_signal_processing_mode=new_mode,
+                bypass_tier=2,
+            )
+        )
+        self._allocate_ring_buffer(rotate_tuning)
+        self._emit_stream_opened(info, apo_bypass_attempted=True)
+
+        # Defensive: even when the opener honoured the target
+        # host_api, double-check the resulting info matches — a
+        # future opener regression that ignored preferred_host_api
+        # silently would otherwise show as ROTATED_SUCCESS while the
+        # actual stream stayed on the source host_api.
+        if info.host_api != target_host_api:
+            logger.error(
+                "audio_capture_host_api_rotate_downgraded",
+                device=self._input_device,
+                source_host_api=source_host_api,
+                target_host_api=target_host_api,
+                resulting_host_api=info.host_api,
+            )
+            result = HostApiRotateResult(
+                verdict=HostApiRotateVerdict.DOWNGRADED_TO_SOURCE,
+                engaged=False,
+                target_host_api=target_host_api,
+                source_host_api=source_host_api,
+                host_api=self._host_api_name,
+                device=self._input_device,
+                sample_rate=self._sample_rate,
+                detail=(
+                    f"opener fell back to {info.host_api!r} — target "
+                    f"{target_host_api!r} not in resulting signal path"
+                ),
+            )
+            _emit_host_api_rotate_metric(result)
+            return result
+        logger.warning(
+            "audio_capture_host_api_rotate_ok",
+            device=self._input_device,
+            source_host_api=source_host_api,
+            target_host_api=target_host_api,
+            sample_rate=self._sample_rate,
+            channels=info.channels,
+        )
+        result = HostApiRotateResult(
+            verdict=HostApiRotateVerdict.ROTATED_SUCCESS,
+            engaged=True,
+            target_host_api=target_host_api,
+            source_host_api=source_host_api,
+            host_api=self._host_api_name,
+            device=self._input_device,
+            sample_rate=self._sample_rate,
+        )
+        _emit_host_api_rotate_metric(result)
         return result
 
     def _find_sibling_with_host_api(self, host_api: str) -> DeviceEntry | None:

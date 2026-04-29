@@ -2027,3 +2027,173 @@ class TestCaptureRestartFrameEmissionT32:
             assert len(recorded) == 0, f"expected zero frames on failure path; got {len(recorded)}"
         finally:
             await task.stop()
+
+
+class TestRequestHostApiRotateT28:
+    """T28 — pin the request_host_api_rotate contract.
+
+    The method drives the Tier 2 ``WindowsHostApiRotateThenExclusive``
+    bypass strategy. It pivots the capture stream's host_api by
+    resolving a sibling :class:`DeviceEntry` on the target host_api
+    and handing it to the unified opener, with
+    ``preferred_host_api`` set to the rotation target so the
+    sibling-chain fallback respects the strategy's intent.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_rotate_to_wasapi_succeeds_when_sibling_exists(self) -> None:
+        """Happy path — endpoint has a WASAPI sibling, rotation
+        engages, ``self._host_api_name`` is updated, frame emitted."""
+        from sovyx.voice._capture_task import HostApiRotateVerdict
+        from sovyx.voice.pipeline._frame_types import (
+            CaptureRestartFrame,
+            CaptureRestartReason,
+        )
+
+        pipeline = MagicMock()
+        pipeline.feed_frame = AsyncMock()
+        recorded: list[CaptureRestartFrame] = []
+        pipeline.record_capture_restart = MagicMock(side_effect=lambda f: recorded.append(f))
+
+        sd = _fake_sd()
+        sd.InputStream = lambda **_kwargs: MagicMock()  # type: ignore[attr-defined]
+        # Two siblings — same canonical_name, different host_api.
+        # When the unified opener picks one, it returns info.host_api
+        # matching that sibling's host_api. We start on MME and
+        # request rotation to WASAPI.
+        mme_entry = _input_entry(index=20, name="usbmic", host_api="MME", rate=16_000)
+        wasapi_entry = _input_entry(
+            index=21, name="usbmic", host_api="Windows WASAPI", rate=16_000
+        )
+
+        with patch("sovyx.voice.capture._restart_mixin.sys.platform", "win32"):
+            task = AudioCaptureTask(
+                pipeline,
+                input_device=20,
+                host_api_name="MME",
+                validate_on_start=False,
+                tuning=_tuning_no_wasapi_extra(),
+                sd_module=sd,
+                enumerate_fn=lambda: [mme_entry, wasapi_entry],
+            )
+            try:
+                await task.start()
+                recorded.clear()
+
+                result = await task.request_host_api_rotate(
+                    target_host_api="Windows WASAPI",
+                    target_exclusive=False,
+                )
+
+                assert result.verdict is HostApiRotateVerdict.ROTATED_SUCCESS
+                assert result.engaged is True
+                assert result.target_host_api == "Windows WASAPI"
+                assert result.source_host_api == "MME"
+                assert result.host_api == "Windows WASAPI"
+                # State mutation pinned.
+                assert task._host_api_name == "Windows WASAPI"  # noqa: SLF001
+                # Frame emitted with bypass_tier=2.
+                assert len(recorded) == 1
+                frame = recorded[0]
+                assert frame.frame_type == "CaptureRestart"
+                assert frame.restart_reason == CaptureRestartReason.APO_DEGRADED.value
+                assert frame.bypass_tier == 2  # noqa: PLR2004
+            finally:
+                await task.stop()
+
+    @pytest.mark.asyncio()
+    async def test_rotate_returns_no_target_sibling_when_target_absent(
+        self,
+    ) -> None:
+        """Endpoint has no sibling on the target host_api → rotation
+        not attempted, existing stream preserved."""
+        from sovyx.voice._capture_task import HostApiRotateVerdict
+
+        pipeline = MagicMock()
+        pipeline.feed_frame = AsyncMock()
+        pipeline.record_capture_restart = MagicMock()
+
+        sd = _fake_sd()
+        sd.InputStream = lambda **_kwargs: MagicMock()  # type: ignore[attr-defined]
+        # ONLY MME entry — no WASAPI sibling exists.
+        mme_entry = _input_entry(index=22, name="usbmic", host_api="MME", rate=16_000)
+
+        with patch("sovyx.voice.capture._restart_mixin.sys.platform", "win32"):
+            task = AudioCaptureTask(
+                pipeline,
+                input_device=22,
+                host_api_name="MME",
+                validate_on_start=False,
+                tuning=_tuning_no_wasapi_extra(),
+                sd_module=sd,
+                enumerate_fn=lambda: [mme_entry],
+            )
+            try:
+                await task.start()
+                pipeline.record_capture_restart.reset_mock()
+
+                result = await task.request_host_api_rotate(
+                    target_host_api="Windows WASAPI",
+                )
+
+                assert result.verdict is HostApiRotateVerdict.NO_TARGET_SIBLING
+                assert result.engaged is False
+                # Stream preserved (still on MME).
+                assert task._host_api_name == "MME"  # noqa: SLF001
+                # No frame emitted because no rotation occurred.
+                pipeline.record_capture_restart.assert_not_called()
+            finally:
+                await task.stop()
+
+    @pytest.mark.asyncio()
+    async def test_rotate_returns_not_win32_on_non_windows(self) -> None:
+        """Defensive — direct invocation on non-Windows preserves the
+        existing stream."""
+        from sovyx.voice._capture_task import HostApiRotateVerdict
+
+        pipeline = MagicMock()
+        pipeline.feed_frame = AsyncMock()
+        pipeline.record_capture_restart = MagicMock()
+
+        sd = _fake_sd()
+        sd.InputStream = lambda **_kwargs: MagicMock()  # type: ignore[attr-defined]
+        entry = _input_entry(index=23, host_api="ALSA", rate=48_000)
+
+        with patch("sovyx.voice.capture._restart_mixin.sys.platform", "linux"):
+            task = AudioCaptureTask(
+                pipeline,
+                input_device=23,
+                host_api_name="ALSA",
+                validate_on_start=False,
+                tuning=_tuning_no_wasapi_extra(),
+                sd_module=sd,
+                enumerate_fn=lambda: [entry],
+            )
+            try:
+                await task.start()
+
+                result = await task.request_host_api_rotate(
+                    target_host_api="Windows WASAPI",
+                )
+
+                assert result.verdict is HostApiRotateVerdict.NOT_WIN32
+                assert result.engaged is False
+            finally:
+                await task.stop()
+
+    @pytest.mark.asyncio()
+    async def test_rotate_returns_not_running_when_stopped(self) -> None:
+        """Calling before start() returns NOT_RUNNING with no side
+        effects."""
+        from sovyx.voice._capture_task import HostApiRotateVerdict
+
+        pipeline = MagicMock()
+        with patch("sovyx.voice.capture._restart_mixin.sys.platform", "win32"):
+            task = AudioCaptureTask(pipeline)
+
+            result = await task.request_host_api_rotate(
+                target_host_api="Windows WASAPI",
+            )
+
+        assert result.verdict is HostApiRotateVerdict.NOT_RUNNING
+        assert result.engaged is False
