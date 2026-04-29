@@ -264,6 +264,8 @@ class AudioCaptureTask(EpochMixin, RingMixin, LifecycleMixin, LoopMixin, Restart
         double_talk_detector: DoubleTalkDetector | None = None,
         noise_suppressor: NoiseSuppressor | None = None,
         snr_estimator: SnrEstimator | None = None,
+        dither_enabled: bool = False,
+        dither_amplitude_lsb: float = 1.0,
     ) -> None:
         self._pipeline = pipeline
         self._input_device = input_device
@@ -283,6 +285,8 @@ class AudioCaptureTask(EpochMixin, RingMixin, LifecycleMixin, LoopMixin, Restart
         self._double_talk_detector: DoubleTalkDetector | None = double_talk_detector
         self._noise_suppressor: NoiseSuppressor | None = noise_suppressor
         self._snr_estimator: SnrEstimator | None = snr_estimator
+        self._dither_enabled: bool = dither_enabled
+        self._dither_amplitude_lsb: float = dither_amplitude_lsb
         self._queue: asyncio.Queue[npt.NDArray[np.int16]] = asyncio.Queue(maxsize=_QUEUE_MAXSIZE)
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stream: Any = None
@@ -589,6 +593,8 @@ class AudioCaptureTask(EpochMixin, RingMixin, LifecycleMixin, LoopMixin, Restart
             double_talk_detector=self._double_talk_detector,
             noise_suppressor=self._noise_suppressor,
             snr_estimator=self._snr_estimator,
+            dither_enabled=self._dither_enabled,
+            dither_amplitude_lsb=self._dither_amplitude_lsb,
         )
         if not self._normalizer.is_passthrough:
             logger.info(

@@ -369,6 +369,9 @@ class FrameNormalizer:
         double_talk_detector: DoubleTalkDetector | None = None,
         noise_suppressor: NoiseSuppressor | None = None,
         snr_estimator: SnrEstimator | None = None,
+        dither_enabled: bool = False,
+        dither_amplitude_lsb: float = 1.0,
+        dither_rng: np.random.Generator | None = None,
     ) -> None:
         if source_rate <= 0:
             msg = f"source_rate must be positive, got {source_rate}"
@@ -491,6 +494,21 @@ class FrameNormalizer:
         # branch (returns _SNR_FLOOR_DB) suppresses the histogram
         # emission so silent windows don't pollute p50.
         self._snr_estimator: SnrEstimator | None = snr_estimator
+        # Phase 4 / T4.43.b — TPDF dither for the float→int16
+        # conversion. Off by default (foundation lenient per
+        # ``feedback_staged_adoption``); when enabled, a single
+        # ``np.random.Generator`` instance is reused across all
+        # ``_float_to_int16_saturate`` calls so the dither
+        # sequence is reproducible per FrameNormalizer lifetime.
+        # Tests pass a seeded generator; production uses
+        # ``np.random.default_rng()`` (system entropy).
+        self._dither_enabled: bool = dither_enabled
+        self._dither_amplitude_lsb: float = dither_amplitude_lsb
+        if dither_enabled and dither_rng is None:
+            import numpy as _np
+
+            dither_rng = _np.random.default_rng()
+        self._dither_rng: np.random.Generator | None = dither_rng
 
         logger.debug(
             "frame_normalizer_created",
@@ -656,7 +674,15 @@ class FrameNormalizer:
                 mono_f32 = self._downmix(block)
                 resampled = mono_f32 if self._passthrough else self._resample(mono_f32)
                 ducked = self._apply_ducking(resampled)
-                as_int16, saturation = _float_to_int16_saturate(ducked)
+                # Phase 4 / T4.43.b — pass the dither rng when
+                # enabled. Disabled path is bit-exact pre-T4.43
+                # behaviour (the saturate fn short-circuits when
+                # ``dither_rng is None``).
+                as_int16, saturation = _float_to_int16_saturate(
+                    ducked,
+                    dither_rng=self._dither_rng if self._dither_enabled else None,
+                    dither_amplitude_lsb=self._dither_amplitude_lsb,
+                )
                 self._record_saturation(saturation)
                 # F5/F6: optional AGC2 post-process. Only on the
                 # non-passthrough path because the passthrough path is
@@ -1305,6 +1331,9 @@ class FrameNormalizer:
 
 def _float_to_int16_saturate(
     samples: npt.NDArray[np.float32],
+    *,
+    dither_rng: np.random.Generator | None = None,
+    dither_amplitude_lsb: float = 1.0,
 ) -> tuple[npt.NDArray[np.int16], SaturationCounters]:
     """Convert ``float32`` in [-1, 1] to ``int16`` with saturation clip.
 
@@ -1319,6 +1348,14 @@ def _float_to_int16_saturate(
     ``voice.audio.saturation_clipping`` event when the fraction crosses
     the warning threshold. Pre-R2 callers that ignored the saturation
     silently — and the band-aid that produced — are now extinct.
+
+    Phase 4 / T4.43.b — when ``dither_rng`` is supplied, TPDF dither
+    is added to the scaled signal BEFORE the clip + cast. The dither
+    decorrelates the quantization error from the signal, eliminating
+    harmonic distortion on quiet sustained tones at the cost of
+    +4.77 dB of broadband noise (canonical TPDF dither penalty).
+    Saturation counting still works post-dither — a dithered sample
+    pushed over the rail by the +1 LSB noise legitimately clipped.
 
     The function is pure (no side effects, no instance state): the
     counter logic that drives observability lives in the aggregator,
@@ -1343,6 +1380,17 @@ def _float_to_int16_saturate(
         )
 
     scaled = samples * 32768.0
+    if dither_rng is not None:
+        # Inline TPDF dither: avoids the import overhead in the
+        # zero-dither hot path. The same algebra as
+        # :func:`sovyx.voice._dither.tpdf_noise` — sum of two
+        # uniforms, scaled to int16-LSB amplitude, added to the
+        # already-at-int16-magnitude ``scaled`` array.
+        u1 = dither_rng.random(scaled.size, dtype=np.float64)
+        u2 = dither_rng.random(scaled.size, dtype=np.float64)
+        noise = (u1 - u2) * dither_amplitude_lsb
+        scaled = scaled.astype(np.float64) + noise.reshape(scaled.shape)
+
     # Count BEFORE the clamp — these are the values that would have
     # wrapped if the clip wasn't there. Counting after the clamp would
     # always yield zero (every sample is in-range post-clip).

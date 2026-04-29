@@ -741,6 +741,13 @@ async def create_voice_pipeline(
         resolved_name=(resolved.name if resolved is not None else None),
     )
     snr_estimator = _build_snr_estimator(tuning)
+    if tuning.voice_dither_enabled:
+        logger.info(
+            "voice.dither.wired",
+            **{
+                "voice.dither.amplitude_lsb": tuning.voice_dither_amplitude_lsb,
+            },
+        )
 
     capture_task = AudioCaptureTask(
         pipeline,
@@ -752,6 +759,8 @@ async def create_voice_pipeline(
         double_talk_detector=double_talk_detector,
         noise_suppressor=noise_suppressor,
         snr_estimator=snr_estimator,
+        dither_enabled=tuning.voice_dither_enabled,
+        dither_amplitude_lsb=tuning.voice_dither_amplitude_lsb,
     )
     capture_holder["task"] = capture_task
     # Ring 2 (Signal Integrity): RMS-floor watchdog + format-detection

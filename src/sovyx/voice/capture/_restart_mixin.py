@@ -136,6 +136,8 @@ class RestartMixin:
     _double_talk_detector: DoubleTalkDetector | None
     _noise_suppressor: NoiseSuppressor | None
     _snr_estimator: SnrEstimator | None
+    _dither_enabled: bool
+    _dither_amplitude_lsb: float
     _resolved_device_name: str | None
     _pipeline: VoicePipeline
 
@@ -321,6 +323,8 @@ class RestartMixin:
             double_talk_detector=self._double_talk_detector,
             noise_suppressor=self._noise_suppressor,
             snr_estimator=self._snr_estimator,
+            dither_enabled=self._dither_enabled,
+            dither_amplitude_lsb=self._dither_amplitude_lsb,
         )
         # T32 — emit CaptureRestartFrame BEFORE the ring epoch
         # increment so the dashboard's restart-history timeline
@@ -466,6 +470,8 @@ class RestartMixin:
             double_talk_detector=self._double_talk_detector,
             noise_suppressor=self._noise_suppressor,
             snr_estimator=self._snr_estimator,
+            dither_enabled=self._dither_enabled,
+            dither_amplitude_lsb=self._dither_amplitude_lsb,
         )
         # Reset the ring buffer — stale frames from the pre-error stream
         # would mislead any integrity probe issued immediately after the
@@ -604,6 +610,8 @@ class RestartMixin:
             double_talk_detector=self._double_talk_detector,
             noise_suppressor=self._noise_suppressor,
             snr_estimator=self._snr_estimator,
+            dither_enabled=self._dither_enabled,
+            dither_amplitude_lsb=self._dither_amplitude_lsb,
         )
         # T32 — emit CaptureRestartFrame for the revert pair. MANUAL
         # reason because the shared restart is always initiated by an
@@ -832,6 +840,8 @@ class RestartMixin:
             double_talk_detector=self._double_talk_detector,
             noise_suppressor=self._noise_suppressor,
             snr_estimator=self._snr_estimator,
+            dither_enabled=self._dither_enabled,
+            dither_amplitude_lsb=self._dither_amplitude_lsb,
         )
         # T32 — emit CaptureRestartFrame BEFORE the ring-buffer
         # epoch increment. APO_DEGRADED + bypass_tier=2
@@ -1074,6 +1084,8 @@ class RestartMixin:
             double_talk_detector=self._double_talk_detector,
             noise_suppressor=self._noise_suppressor,
             snr_estimator=self._snr_estimator,
+            dither_enabled=self._dither_enabled,
+            dither_amplitude_lsb=self._dither_amplitude_lsb,
         )
         # T32 — emit CaptureRestartFrame for the Linux revert pair.
         # Two legitimate semantics: (a) revert from a prior
@@ -1375,6 +1387,8 @@ class RestartMixin:
             double_talk_detector=self._double_talk_detector,
             noise_suppressor=self._noise_suppressor,
             snr_estimator=self._snr_estimator,
+            dither_enabled=self._dither_enabled,
+            dither_amplitude_lsb=self._dither_amplitude_lsb,
         )
         # T32 — emit CaptureRestartFrame for the rotation. Tier 2
         # bypass = APO_DEGRADED reason + bypass_tier=2.
