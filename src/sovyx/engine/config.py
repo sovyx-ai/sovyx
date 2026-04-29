@@ -1230,6 +1230,37 @@ class VoiceTuningConfig(BaseSettings):
     stale during room transitions (operator walks into a quieter
     room). Bounded ``[0.5, 60.0]`` s."""
 
+    voice_agc2_adaptive_floor_enabled: bool = False
+    """AGC2 adaptive noise-floor master switch (Phase 4 / T4.51).
+
+    When True the AGC2 silence gate uses the first-quartile of
+    frame RMS over the last
+    :attr:`voice_agc2_adaptive_floor_window_seconds` instead of
+    the fixed ``silence_floor_dbfs`` (-60 dBFS default). Adapts
+    the gate to the actual room noise floor — tighter in quiet
+    rooms (less missed transients) and looser in noisy
+    environments (less false-positive gating of background talk).
+
+    Default ``False`` per ``feedback_staged_adoption``. Pre-T4.51
+    fixed-floor behaviour preserved bit-exactly when off."""
+
+    voice_agc2_adaptive_floor_window_seconds: float = Field(default=10.0, ge=1.0, le=60.0)
+    """Sliding-window length for the AGC2 first-quartile noise tracker.
+
+    Master mission §Phase 4 / T4.51 default 10 s. Shorter windows
+    react faster to room changes (operator walks rooms) but risk
+    anchoring to a continuously-active speaker; longer windows
+    are stale during transitions. Bounded ``[1.0, 60.0]`` s."""
+
+    voice_agc2_adaptive_floor_quantile: float = Field(default=0.25, gt=0.0, lt=1.0)
+    """Quantile of the RMS history used as the noise-floor estimate.
+
+    0.25 = first quartile (Q1) — robust under the assumption that
+    25%+ of frames are background-only. Operators may tune lower
+    (more aggressive — gate engages earlier) or higher (more
+    conservative — gate engages later). Strict ``(0.0, 1.0)`` —
+    extremes are degenerate (0.0 = min-tracker, 1.0 = max)."""
+
     voice_snr_silence_floor_db: float = Field(default=-90.0, ge=-120.0, le=-40.0)
     """Mean-square power floor (dBFS) below which a frame is skipped.
 

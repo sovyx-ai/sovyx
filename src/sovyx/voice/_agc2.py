@@ -60,6 +60,8 @@ if TYPE_CHECKING:
     import numpy as np
     import numpy.typing as npt
 
+    from sovyx.voice._agc2_adaptive_floor import AdaptiveNoiseFloorTracker
+
 logger = get_logger(__name__)
 
 
@@ -231,7 +233,12 @@ class AGC2:
             faster than attack — would pump up the noise floor).
     """
 
-    def __init__(self, config: AGC2Config | None = None) -> None:
+    def __init__(
+        self,
+        config: AGC2Config | None = None,
+        *,
+        adaptive_floor: AdaptiveNoiseFloorTracker | None = None,
+    ) -> None:
         cfg = config or AGC2Config()
         _validate_config(cfg)
         self._config = cfg
@@ -250,12 +257,19 @@ class AGC2:
         self._frames_processed: int = 0
         self._frames_silenced: int = 0  # below silence floor, not adapted
         self._frames_clipped: int = 0  # saturation protector engaged
+        # Phase 4 / T4.51 — adaptive noise-floor tracker. When wired,
+        # the per-frame silence gate uses the tracker's first-quartile
+        # estimate over the sliding window instead of the fixed
+        # ``silence_floor_dbfs``. ``None`` preserves the pre-T4.51
+        # behaviour bit-exactly.
+        self._adaptive_floor: AdaptiveNoiseFloorTracker | None = adaptive_floor
         logger.debug(
             "agc2_initialised",
             target_dbfs=cfg.target_dbfs,
             max_gain_db=cfg.max_gain_db,
             min_gain_db=cfg.min_gain_db,
             sample_rate=cfg.sample_rate,
+            adaptive_floor=bool(adaptive_floor),
         )
 
     @property
@@ -297,6 +311,26 @@ class AGC2:
         protecting against a hot-input transient; chronic non-zero
         = the configured ``max_gain_db`` is too high."""
         return self._frames_clipped
+
+    @property
+    def adaptive_floor(self) -> AdaptiveNoiseFloorTracker | None:
+        """Currently-wired adaptive-floor tracker, or ``None`` (fixed gate)."""
+        return self._adaptive_floor
+
+    @property
+    def effective_silence_floor_dbfs(self) -> float:
+        """Active gate threshold in dBFS.
+
+        Returns the adaptive tracker's Q1 estimate when wired AND
+        bootstrapped (≥1 sample observed); otherwise the fixed
+        ``config.silence_floor_dbfs``. Useful for dashboards that
+        want to render the live gate position vs the noise floor.
+        """
+        if self._adaptive_floor is not None:
+            adaptive = self._adaptive_floor.floor_db
+            if adaptive is not None:
+                return adaptive
+        return self._config.silence_floor_dbfs
 
     def process(
         self,
@@ -351,7 +385,19 @@ class AGC2:
             rms_dbfs = 20.0 * math.log10(rms_linear / _INT16_FULL_SCALE)
 
         # Step 2: speech-level estimator update (gated by floor).
-        if rms_dbfs >= self._config.silence_floor_dbfs:
+        # T4.51: when the adaptive tracker is wired, feed it every
+        # frame's RMS (the first-quartile estimator needs to see
+        # silent frames in its window for Q1 to be meaningful) and
+        # use its current estimate as the gate. Falls back to the
+        # fixed ``silence_floor_dbfs`` until the tracker has
+        # observed at least one sample.
+        floor_dbfs = self._config.silence_floor_dbfs
+        if self._adaptive_floor is not None:
+            self._adaptive_floor.update(rms_dbfs)
+            adaptive = self._adaptive_floor.floor_db
+            if adaptive is not None:
+                floor_dbfs = adaptive
+        if rms_dbfs >= floor_dbfs:
             self._update_speech_level(rms_dbfs, samples_in_frame=samples.size)
         else:
             self._frames_silenced += 1
@@ -484,6 +530,7 @@ def build_agc2_if_enabled(
     *,
     enabled: bool,
     sample_rate: int = 16_000,
+    adaptive_floor: AdaptiveNoiseFloorTracker | None = None,
 ) -> AGC2 | None:
     """Construct an :class:`AGC2` if ``enabled``, else return ``None``.
 
@@ -527,7 +574,7 @@ def build_agc2_if_enabled(
     if not enabled:
         return None
     cfg = AGC2Config(sample_rate=sample_rate)
-    return AGC2(cfg)
+    return AGC2(cfg, adaptive_floor=adaptive_floor)
 
 
 __all__ = ["AGC2", "AGC2Config", "build_agc2_if_enabled"]

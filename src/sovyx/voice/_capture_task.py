@@ -569,12 +569,20 @@ class AudioCaptureTask(EpochMixin, RingMixin, LifecycleMixin, LoopMixin, Restart
         # returns None when disabled — FrameNormalizer accepts None
         # as the no-op default so the call site needs no ``if`` branch.
         _agc2_tuning = self._tuning if self._tuning is not None else _VoiceTuning()
+        from sovyx.voice._agc2_adaptive_floor import build_agc2_adaptive_floor
+
         self._normalizer = FrameNormalizer(
             source_rate=info.sample_rate,
             source_channels=info.channels,
             agc2=build_agc2_if_enabled(
                 enabled=_agc2_tuning.agc2_enabled,
                 sample_rate=info.sample_rate,
+                adaptive_floor=build_agc2_adaptive_floor(
+                    enabled=_agc2_tuning.voice_agc2_adaptive_floor_enabled,
+                    window_seconds=_agc2_tuning.voice_agc2_adaptive_floor_window_seconds,
+                    quantile=_agc2_tuning.voice_agc2_adaptive_floor_quantile,
+                    sample_rate=info.sample_rate,
+                ),
             ),
             aec=self._aec,
             render_provider=self._render_provider,
