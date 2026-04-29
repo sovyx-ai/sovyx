@@ -203,6 +203,7 @@ if TYPE_CHECKING:
     from sovyx.engine.config import VoiceTuningConfig
     from sovyx.voice._aec import AecProcessor, RenderPcmProvider
     from sovyx.voice._double_talk_detector import DoubleTalkDetector
+    from sovyx.voice._noise_suppression import NoiseSuppressor
     from sovyx.voice.device_enum import DeviceEntry
     from sovyx.voice.pipeline._orchestrator import VoicePipeline
 
@@ -260,6 +261,7 @@ class AudioCaptureTask(EpochMixin, RingMixin, LifecycleMixin, LoopMixin, Restart
         aec: AecProcessor | None = None,
         render_provider: RenderPcmProvider | None = None,
         double_talk_detector: DoubleTalkDetector | None = None,
+        noise_suppressor: NoiseSuppressor | None = None,
     ) -> None:
         self._pipeline = pipeline
         self._input_device = input_device
@@ -277,6 +279,7 @@ class AudioCaptureTask(EpochMixin, RingMixin, LifecycleMixin, LoopMixin, Restart
         self._aec: AecProcessor | None = aec
         self._render_provider: RenderPcmProvider | None = render_provider
         self._double_talk_detector: DoubleTalkDetector | None = double_talk_detector
+        self._noise_suppressor: NoiseSuppressor | None = noise_suppressor
         self._queue: asyncio.Queue[npt.NDArray[np.int16]] = asyncio.Queue(maxsize=_QUEUE_MAXSIZE)
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stream: Any = None
@@ -573,6 +576,7 @@ class AudioCaptureTask(EpochMixin, RingMixin, LifecycleMixin, LoopMixin, Restart
             aec=self._aec,
             render_provider=self._render_provider,
             double_talk_detector=self._double_talk_detector,
+            noise_suppressor=self._noise_suppressor,
         )
         if not self._normalizer.is_passthrough:
             logger.info(

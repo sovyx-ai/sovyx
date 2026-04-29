@@ -78,6 +78,7 @@ if TYPE_CHECKING:
     from sovyx.voice._aec import AecProcessor
     from sovyx.voice._capture_task import AudioCaptureTask
     from sovyx.voice._double_talk_detector import DoubleTalkDetector
+    from sovyx.voice._noise_suppression import NoiseSuppressor
     from sovyx.voice._render_pcm_buffer import RenderPcmBuffer
     from sovyx.voice.health.contract import BypassOutcome
     from sovyx.voice.pipeline._orchestrator import VoicePipeline
@@ -92,6 +93,7 @@ __all__ = [
     "VoicePermissionError",
     "_build_aec_wiring",
     "_build_double_talk_detector",
+    "_build_noise_suppressor",
     "_create_kokoro_tts",
     "_create_piper_tts",
     "_create_stt",
@@ -144,6 +146,46 @@ class VoiceBundle:
     capture_task: AudioCaptureTask
     boot_preflight_warnings: tuple[dict[str, object], ...] = field(default_factory=tuple)
     audio_service_watchdog: object = None  # AudioServiceWatchdog | None
+
+
+def _build_noise_suppressor(
+    tuning: VoiceTuningConfig,
+) -> NoiseSuppressor | None:
+    """Build the NS processor when its tuning flag is on.
+
+    Phase 4 / T4.13 wire-up. Returns ``None`` when
+    ``voice_noise_suppression_enabled=False`` (foundation default
+    per ``feedback_staged_adoption``) or when the engine is
+    explicitly ``"off"`` — in either case the FrameNormalizer's NS
+    stage stays in the bit-exact passthrough branch.
+
+    When active, returns a concrete
+    :class:`~sovyx.voice._noise_suppression.SpectralGatingSuppressor`
+    pinned to the FrameNormalizer's 16 kHz / 512-sample invariants.
+    """
+    if (
+        not tuning.voice_noise_suppression_enabled
+        or tuning.voice_noise_suppression_engine == "off"
+    ):
+        return None
+
+    from sovyx.voice._noise_suppression import build_frame_normalizer_noise_suppressor
+
+    suppressor = build_frame_normalizer_noise_suppressor(
+        enabled=True,
+        engine=tuning.voice_noise_suppression_engine,
+        floor_db=tuning.voice_noise_suppression_floor_db,
+        attenuation_db=tuning.voice_noise_suppression_attenuation_db,
+    )
+    logger.info(
+        "voice.ns.wired",
+        **{
+            "voice.ns.engine": tuning.voice_noise_suppression_engine,
+            "voice.ns.floor_db": tuning.voice_noise_suppression_floor_db,
+            "voice.ns.attenuation_db": tuning.voice_noise_suppression_attenuation_db,
+        },
+    )
+    return suppressor
 
 
 def _build_double_talk_detector(
@@ -569,6 +611,7 @@ async def create_voice_pipeline(
     if render_buffer is not None:
         pipeline.set_render_buffer(render_buffer)
     double_talk_detector = _build_double_talk_detector(tuning)
+    noise_suppressor = _build_noise_suppressor(tuning)
 
     capture_task = AudioCaptureTask(
         pipeline,
@@ -578,6 +621,7 @@ async def create_voice_pipeline(
         aec=aec_processor,
         render_provider=render_buffer,
         double_talk_detector=double_talk_detector,
+        noise_suppressor=noise_suppressor,
     )
     capture_holder["task"] = capture_task
     # Ring 2 (Signal Integrity): RMS-floor watchdog + format-detection

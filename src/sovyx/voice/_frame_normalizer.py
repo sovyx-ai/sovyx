@@ -87,6 +87,7 @@ if TYPE_CHECKING:
     from sovyx.voice._aec import AecProcessor, RenderPcmProvider
     from sovyx.voice._agc2 import AGC2
     from sovyx.voice._double_talk_detector import DoubleTalkDetector
+    from sovyx.voice._noise_suppression import NoiseSuppressor
 
 logger = get_logger(__name__)
 
@@ -365,6 +366,7 @@ class FrameNormalizer:
         aec: AecProcessor | None = None,
         render_provider: RenderPcmProvider | None = None,
         double_talk_detector: DoubleTalkDetector | None = None,
+        noise_suppressor: NoiseSuppressor | None = None,
     ) -> None:
         if source_rate <= 0:
             msg = f"source_rate must be positive, got {source_rate}"
@@ -472,6 +474,13 @@ class FrameNormalizer:
         # measures the NCC distribution so operators can calibrate
         # the threshold before the freeze action lands.
         self._double_talk_detector: DoubleTalkDetector | None = double_talk_detector
+        # Phase 4 / T4.13 — Noise suppression. Operates on the
+        # complete 512-sample window AFTER AEC and BEFORE emission
+        # (the "AEC → NS" order matches Skype/Zoom/Teams VoIP
+        # pipelines: AEC removes the echo first, NS attenuates the
+        # background-noise residual on the cleaned signal). Default
+        # ``None`` preserves the pre-NS contract bit-exactly.
+        self._noise_suppressor: NoiseSuppressor | None = noise_suppressor
 
         logger.debug(
             "frame_normalizer_created",
@@ -664,6 +673,13 @@ class FrameNormalizer:
                 # configuration).
                 if self._aec is not None:
                     window = self._apply_aec_to_window(window)
+                # Phase 4 / T4.13 — NS runs AFTER AEC on the same
+                # 512-sample window. Bit-exact passthrough when
+                # ``self._noise_suppressor`` is None (foundation
+                # default per ``feedback_staged_adoption``) or when
+                # the wired suppressor is :class:`NoOpNoiseSuppressor`.
+                if self._noise_suppressor is not None:
+                    window = self._noise_suppressor.process(window)
                 windows.append(window)
 
             record_stage_event(VoiceStage.CAPTURE, StageEventKind.SUCCESS)
@@ -761,6 +777,22 @@ class FrameNormalizer:
         rebuilding the FrameNormalizer.
         """
         self._render_provider = provider
+
+    @property
+    def noise_suppressor(self) -> NoiseSuppressor | None:
+        """Currently-wired NS processor, or ``None`` if disabled."""
+        return self._noise_suppressor
+
+    def set_noise_suppressor(self, ns: NoiseSuppressor | None) -> None:
+        """Wire (or unwire) the noise suppressor at runtime.
+
+        Mirrors :meth:`set_aec` — operators / dashboards can flip
+        NS on/off without rebuilding the FrameNormalizer (which
+        would lose the ducking ramp + output buffer + AGC2 + AEC
+        state). Pass ``None`` to disable, a fresh suppressor
+        instance to enable.
+        """
+        self._noise_suppressor = ns
 
     @property
     def agc2(self) -> AGC2 | None:

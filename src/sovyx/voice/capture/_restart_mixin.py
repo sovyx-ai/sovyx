@@ -88,6 +88,7 @@ if TYPE_CHECKING:
     from sovyx.engine.config import VoiceTuningConfig
     from sovyx.voice._aec import AecProcessor, RenderPcmProvider
     from sovyx.voice._double_talk_detector import DoubleTalkDetector
+    from sovyx.voice._noise_suppression import NoiseSuppressor
     from sovyx.voice.device_enum import DeviceEntry
     from sovyx.voice.pipeline._orchestrator import VoicePipeline
 
@@ -132,6 +133,7 @@ class RestartMixin:
     _aec: AecProcessor | None
     _render_provider: RenderPcmProvider | None
     _double_talk_detector: DoubleTalkDetector | None
+    _noise_suppressor: NoiseSuppressor | None
     _resolved_device_name: str | None
     _pipeline: VoicePipeline
 
@@ -307,6 +309,7 @@ class RestartMixin:
             aec=self._aec,
             render_provider=self._render_provider,
             double_talk_detector=self._double_talk_detector,
+            noise_suppressor=self._noise_suppressor,
         )
         # T32 — emit CaptureRestartFrame BEFORE the ring epoch
         # increment so the dashboard's restart-history timeline
@@ -442,6 +445,7 @@ class RestartMixin:
             aec=self._aec,
             render_provider=self._render_provider,
             double_talk_detector=self._double_talk_detector,
+            noise_suppressor=self._noise_suppressor,
         )
         # Reset the ring buffer — stale frames from the pre-error stream
         # would mislead any integrity probe issued immediately after the
@@ -570,6 +574,7 @@ class RestartMixin:
             aec=self._aec,
             render_provider=self._render_provider,
             double_talk_detector=self._double_talk_detector,
+            noise_suppressor=self._noise_suppressor,
         )
         # T32 — emit CaptureRestartFrame for the revert pair. MANUAL
         # reason because the shared restart is always initiated by an
@@ -788,6 +793,7 @@ class RestartMixin:
             aec=self._aec,
             render_provider=self._render_provider,
             double_talk_detector=self._double_talk_detector,
+            noise_suppressor=self._noise_suppressor,
         )
         # T32 — emit CaptureRestartFrame BEFORE the ring-buffer
         # epoch increment. APO_DEGRADED + bypass_tier=2
@@ -1020,6 +1026,7 @@ class RestartMixin:
             aec=self._aec,
             render_provider=self._render_provider,
             double_talk_detector=self._double_talk_detector,
+            noise_suppressor=self._noise_suppressor,
         )
         # T32 — emit CaptureRestartFrame for the Linux revert pair.
         # Two legitimate semantics: (a) revert from a prior
@@ -1311,6 +1318,7 @@ class RestartMixin:
             aec=self._aec,
             render_provider=self._render_provider,
             double_talk_detector=self._double_talk_detector,
+            noise_suppressor=self._noise_suppressor,
         )
         # T32 — emit CaptureRestartFrame for the rotation. Tier 2
         # bypass = APO_DEGRADED reason + bypass_tier=2.
