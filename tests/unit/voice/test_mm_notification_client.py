@@ -201,9 +201,13 @@ class TestNoopMMNotificationListener:
 # ── WindowsMMNotificationListener (v0.24.0 placeholder) ────────────
 
 
-class TestWindowsMMNotificationListenerV024Placeholder:
-    """v0.24.0 placeholder — register() logs the not-yet-wired WARN
-    and records the metric. v0.25.0 wire-up replaces the body."""
+class TestWindowsMMNotificationListenerV025WireUp:
+    """v0.25.0 wire-up (T31) — register() lazy-imports comtypes,
+    activates IMMDeviceEnumerator, registers the COMObject. Every
+    COM boundary is wrapped in try/except BaseException with
+    fallback to a no-op + structured WARN. The tests below pin the
+    contract via :func:`_build_com_bindings` mocking so they run on
+    any platform regardless of comtypes installation."""
 
     def _make(self, loop: asyncio.AbstractEventLoop) -> WindowsMMNotificationListener:
         return WindowsMMNotificationListener(
@@ -213,45 +217,66 @@ class TestWindowsMMNotificationListenerV024Placeholder:
             on_property_value_changed=AsyncMock(),
         )
 
-    def test_register_logs_not_wired_warn(
+    def test_register_falls_through_when_comtypes_unavailable(
         self, loop: asyncio.AbstractEventLoop, caplog: pytest.LogCaptureFixture
     ) -> None:
-        listener = self._make(loop)
-        caplog.set_level("WARNING")
-        listener.register()
+        """Missing comtypes → WARN + ``comtypes_import_failed`` metric.
+        Non-Windows / slim-CI hosts hit this path. Daemon does NOT
+        crash; the watchdog polling fallback keeps device-change
+        detection alive at 5 s resolution."""
+        with patch(
+            "sovyx.voice._mm_notification_client._build_com_bindings",
+            return_value=None,
+        ):
+            listener = self._make(loop)
+            caplog.set_level("WARNING")
+            listener.register()
         matching = [
             r
             for r in caplog.records
-            if "voice.mm_notification_client.windows_register_not_wired" in r.getMessage()
+            if "voice.mm_notification_client.comtypes_unavailable" in r.getMessage()
         ]
         assert len(matching) == 1
-        msg = matching[0].getMessage()
-        assert "v0.25.0" in msg
-        assert "T31" in msg
+        # listener is "registered" in the sense that idempotency
+        # latches — a second register() is a no-op.
+        assert listener._registered is True  # type: ignore[attr-defined]
 
-    def test_register_records_not_yet_wired_metric(self, loop: asyncio.AbstractEventLoop) -> None:
-        with patch(
-            "sovyx.voice._mm_notification_client.record_hotplug_listener_registered"
-        ) as mock_record:
+    def test_register_records_comtypes_import_failed_metric(
+        self, loop: asyncio.AbstractEventLoop
+    ) -> None:
+        with (
+            patch(
+                "sovyx.voice._mm_notification_client._build_com_bindings",
+                return_value=None,
+            ),
+            patch(
+                "sovyx.voice._mm_notification_client.record_hotplug_listener_registered"
+            ) as mock_record,
+        ):
             listener = self._make(loop)
             listener.register()
             mock_record.assert_called_once_with(
                 registered=False,
-                error="not_yet_wired_v024",
+                error="comtypes_import_failed",
             )
 
     def test_register_is_idempotent(
         self, loop: asyncio.AbstractEventLoop, caplog: pytest.LogCaptureFixture
     ) -> None:
-        listener = self._make(loop)
-        caplog.set_level("WARNING")
-        listener.register()
-        listener.register()
-        listener.register()
+        """Second / third register() → no-op once latched."""
+        with patch(
+            "sovyx.voice._mm_notification_client._build_com_bindings",
+            return_value=None,
+        ):
+            listener = self._make(loop)
+            caplog.set_level("WARNING")
+            listener.register()
+            listener.register()
+            listener.register()
         matching = [
             r
             for r in caplog.records
-            if "voice.mm_notification_client.windows_register_not_wired" in r.getMessage()
+            if "voice.mm_notification_client.comtypes_unavailable" in r.getMessage()
         ]
         assert len(matching) == 1
 
@@ -265,32 +290,263 @@ class TestWindowsMMNotificationListenerV024Placeholder:
     def test_unregister_after_register_resets_state(
         self, loop: asyncio.AbstractEventLoop, caplog: pytest.LogCaptureFixture
     ) -> None:
-        """After unregister, calling register again should re-emit
-        the WARN — the lifecycle is not "fire once forever"."""
-        listener = self._make(loop)
-        caplog.set_level("WARNING")
-        listener.register()
-        listener.unregister()
-        listener.register()
+        """After unregister, calling register again should re-attempt
+        the wire-up — the lifecycle is not "fire once forever"."""
+        with patch(
+            "sovyx.voice._mm_notification_client._build_com_bindings",
+            return_value=None,
+        ):
+            listener = self._make(loop)
+            caplog.set_level("WARNING")
+            listener.register()
+            listener.unregister()
+            listener.register()
         matching = [
             r
             for r in caplog.records
-            if "voice.mm_notification_client.windows_register_not_wired" in r.getMessage()
+            if "voice.mm_notification_client.comtypes_unavailable" in r.getMessage()
         ]
         assert len(matching) == 2
 
-    def test_does_not_attempt_comtypes_import(self, loop: asyncio.AbstractEventLoop) -> None:
-        """v0.24.0 must not import comtypes — non-Windows imports of
-        this module would fail on the CI Linux runner. The lazy
-        comtypes import lands in v0.25.0 wire-up inside register()."""
-        # Sentinel: if the placeholder somehow ended up importing
-        # comtypes, sys.modules would carry it after construction.
-        # We can't fully assert non-import (some other test could have
-        # imported comtypes already), but we can construct without
-        # raising on a Linux worker.
-        listener = self._make(loop)
-        listener.register()  # must not raise on non-Windows test runners
-        listener.unregister()
+    def test_register_records_success_metric_on_happy_path(
+        self, loop: asyncio.AbstractEventLoop, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Happy-path — COM activation + registration succeed →
+        registered=True metric + ``voice.mm_notification_client.registered``
+        INFO."""
+        # Build mock COM bindings + mock comtypes.client.CreateObject.
+        mock_iface = MagicMock(name="IMMNotificationClient")
+        mock_enum_cls = MagicMock(name="IMMDeviceEnumerator")
+        mock_propkey = MagicMock(name="PROPERTYKEY")
+        mock_enumerator = MagicMock(name="enumerator-instance")
+        mock_com_object = MagicMock(name="COMObject-base")
+
+        # Synthesize a fake comtypes module so the lazy
+        # ``from comtypes import COMObject`` succeeds.
+        fake_comtypes = MagicMock(name="comtypes")
+        fake_comtypes.COMObject = mock_com_object
+        fake_comtypes_client = MagicMock(name="comtypes.client")
+        fake_comtypes.client = fake_comtypes_client  # bind so import comtypes.client returns the mock
+        fake_comtypes_client.CreateObject = MagicMock(return_value=mock_enumerator)
+
+        with (
+            patch(
+                "sovyx.voice._mm_notification_client._build_com_bindings",
+                return_value=(mock_iface, mock_enum_cls, mock_propkey),
+            ),
+            patch.dict(
+                sys.modules,
+                {
+                    "comtypes": fake_comtypes,
+                    "comtypes.client": fake_comtypes_client,
+                },
+            ),
+            patch(
+                "sovyx.voice._mm_notification_client.record_hotplug_listener_registered"
+            ) as mock_record,
+        ):
+            listener = self._make(loop)
+            caplog.set_level("INFO")
+            listener.register()
+
+        # Success metric.
+        mock_record.assert_called_once_with(registered=True)
+        # Success log.
+        matching = [
+            r
+            for r in caplog.records
+            if "voice.mm_notification_client.registered" in r.getMessage()
+            and "voice.mm_notification_client.comtypes_unavailable" not in r.getMessage()
+        ]
+        assert len(matching) >= 1
+        # COM activation actually called.
+        fake_comtypes_client.CreateObject.assert_called_once()
+        # COM register actually called.
+        mock_enumerator.RegisterEndpointNotificationCallback.assert_called_once()
+
+    def test_register_falls_through_on_create_object_failure(
+        self, loop: asyncio.AbstractEventLoop, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """``CreateObject`` raises COMError / OSError → defensive
+        catch → ``create_object_failed`` metric + ERROR log. Daemon
+        does NOT crash."""
+        mock_iface = MagicMock()
+        mock_enum_cls = MagicMock()
+        mock_propkey = MagicMock()
+
+        fake_comtypes = MagicMock()
+        fake_comtypes.COMObject = MagicMock()
+        fake_comtypes_client = MagicMock()
+        fake_comtypes.client = fake_comtypes_client  # bind so import comtypes.client returns the mock
+        fake_comtypes_client.CreateObject = MagicMock(side_effect=OSError("COM error"))
+
+        with (
+            patch(
+                "sovyx.voice._mm_notification_client._build_com_bindings",
+                return_value=(mock_iface, mock_enum_cls, mock_propkey),
+            ),
+            patch.dict(
+                sys.modules,
+                {
+                    "comtypes": fake_comtypes,
+                    "comtypes.client": fake_comtypes_client,
+                },
+            ),
+            patch(
+                "sovyx.voice._mm_notification_client.record_hotplug_listener_registered"
+            ) as mock_record,
+        ):
+            listener = self._make(loop)
+            caplog.set_level("ERROR")
+            listener.register()  # MUST NOT raise
+        mock_record.assert_called_once_with(
+            registered=False,
+            error="create_object_failed",
+        )
+        matching = [
+            r
+            for r in caplog.records
+            if "voice.mm_notification_client.create_object_failed" in r.getMessage()
+        ]
+        assert len(matching) == 1
+        assert listener._registered is True  # type: ignore[attr-defined]
+
+    def test_register_falls_through_on_register_callback_failure(
+        self, loop: asyncio.AbstractEventLoop, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """``RegisterEndpointNotificationCallback`` raises → defensive
+        catch → ``register_callback_failed`` metric + ERROR log."""
+        mock_iface = MagicMock()
+        mock_enum_cls = MagicMock()
+        mock_propkey = MagicMock()
+        mock_enumerator = MagicMock()
+        mock_enumerator.RegisterEndpointNotificationCallback = MagicMock(
+            side_effect=OSError("driver bug"),
+        )
+
+        fake_comtypes = MagicMock()
+        fake_comtypes.COMObject = MagicMock()
+        fake_comtypes_client = MagicMock()
+        fake_comtypes.client = fake_comtypes_client  # bind so import comtypes.client returns the mock
+        fake_comtypes_client.CreateObject = MagicMock(return_value=mock_enumerator)
+
+        with (
+            patch(
+                "sovyx.voice._mm_notification_client._build_com_bindings",
+                return_value=(mock_iface, mock_enum_cls, mock_propkey),
+            ),
+            patch.dict(
+                sys.modules,
+                {
+                    "comtypes": fake_comtypes,
+                    "comtypes.client": fake_comtypes_client,
+                },
+            ),
+            patch(
+                "sovyx.voice._mm_notification_client.record_hotplug_listener_registered"
+            ) as mock_record,
+        ):
+            listener = self._make(loop)
+            caplog.set_level("ERROR")
+            listener.register()  # MUST NOT raise
+        mock_record.assert_called_once_with(
+            registered=False,
+            error="register_callback_failed",
+        )
+        matching = [
+            r
+            for r in caplog.records
+            if "voice.mm_notification_client.register_callback_failed" in r.getMessage()
+        ]
+        assert len(matching) == 1
+
+    def test_unregister_releases_com_resources_on_happy_path(
+        self, loop: asyncio.AbstractEventLoop
+    ) -> None:
+        """After successful register, unregister calls
+        ``UnregisterEndpointNotificationCallback`` and clears the
+        held COM resources."""
+        mock_iface = MagicMock()
+        mock_enum_cls = MagicMock()
+        mock_propkey = MagicMock()
+        mock_enumerator = MagicMock()
+
+        fake_comtypes = MagicMock()
+        fake_comtypes.COMObject = MagicMock()
+        fake_comtypes_client = MagicMock()
+        fake_comtypes.client = fake_comtypes_client  # bind so import comtypes.client returns the mock
+        fake_comtypes_client.CreateObject = MagicMock(return_value=mock_enumerator)
+
+        with (
+            patch(
+                "sovyx.voice._mm_notification_client._build_com_bindings",
+                return_value=(mock_iface, mock_enum_cls, mock_propkey),
+            ),
+            patch.dict(
+                sys.modules,
+                {
+                    "comtypes": fake_comtypes,
+                    "comtypes.client": fake_comtypes_client,
+                },
+            ),
+        ):
+            listener = self._make(loop)
+            listener.register()
+            assert listener._enumerator is mock_enumerator  # type: ignore[attr-defined]
+            assert listener._com_client is not None  # type: ignore[attr-defined]
+
+            listener.unregister()
+
+        mock_enumerator.UnregisterEndpointNotificationCallback.assert_called_once()
+        # COM resources released.
+        assert listener._enumerator is None  # type: ignore[attr-defined]
+        assert listener._com_client is None  # type: ignore[attr-defined]
+        assert listener._registered is False  # type: ignore[attr-defined]
+
+    def test_unregister_swallows_com_failure_on_shutdown(
+        self, loop: asyncio.AbstractEventLoop, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Wedged COM thread on shutdown → ``Unregister`` raises →
+        defensive catch + WARN. Daemon shutdown continues
+        regardless."""
+        mock_iface = MagicMock()
+        mock_enum_cls = MagicMock()
+        mock_propkey = MagicMock()
+        mock_enumerator = MagicMock()
+        mock_enumerator.UnregisterEndpointNotificationCallback = MagicMock(
+            side_effect=OSError("wedged COM thread"),
+        )
+
+        fake_comtypes = MagicMock()
+        fake_comtypes.COMObject = MagicMock()
+        fake_comtypes_client = MagicMock()
+        fake_comtypes.client = fake_comtypes_client  # bind so import comtypes.client returns the mock
+        fake_comtypes_client.CreateObject = MagicMock(return_value=mock_enumerator)
+
+        with (
+            patch(
+                "sovyx.voice._mm_notification_client._build_com_bindings",
+                return_value=(mock_iface, mock_enum_cls, mock_propkey),
+            ),
+            patch.dict(
+                sys.modules,
+                {
+                    "comtypes": fake_comtypes,
+                    "comtypes.client": fake_comtypes_client,
+                },
+            ),
+        ):
+            listener = self._make(loop)
+            listener.register()
+            caplog.set_level("WARNING")
+            listener.unregister()  # MUST NOT raise
+
+        matching = [
+            r
+            for r in caplog.records
+            if "voice.mm_notification_client.unregister_callback_failed" in r.getMessage()
+        ]
+        assert len(matching) == 1
 
     def test_satisfies_protocol(self, loop: asyncio.AbstractEventLoop) -> None:
         listener = self._make(loop)

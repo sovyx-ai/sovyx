@@ -67,6 +67,13 @@ voice = [
     "sounddevice>=0.5",
     "kokoro-onnx>=0.4",
     "scipy>=1.11",
+    # Windows-only — used by IMMNotificationClient registration in
+    # voice/_mm_notification_client.py for sub-second default-device
+    # change detection (paranoid mission §C / T31). Lazy-imported at
+    # register() time so non-Windows daemons don't pay the import cost.
+    # Lin/macOS use _hotplug_linux.py + _hotplug_mac.py for the
+    # equivalent push-based device-change detection.
+    "comtypes>=1.4; sys_platform == 'win32'",
 ]
 otel = [
     "opentelemetry-exporter-otlp>=1.20",
@@ -169,6 +176,12 @@ module = [
     "dateutil.*",
     "icalendar.*",
     "defusedxml.*",
+    # comtypes is Windows-only (sys_platform == "win32" extras
+    # marker) so non-Windows mypy CI runners need to ignore the
+    # missing import. Production code lazy-imports inside
+    # WindowsMMNotificationListener.register() with try/except
+    # ImportError so non-Windows / slim-CI builds run cleanly.
+    "comtypes.*",
     # Optional sovyx[otel] extras — installed only when operators wire
     # an OTLP collector. Lazy-imported inside ``observability.otel`` so
     # the engine works without them; mypy needs the override since the
