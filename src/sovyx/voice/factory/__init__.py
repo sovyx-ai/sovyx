@@ -99,6 +99,7 @@ __all__ = [
     "_create_stt",
     "_create_vad",
     "_create_wake_word_stub",
+    "_detect_os_noise_suppression",
     "_detect_voice_clarity_active",
     "_maybe_check_llm_reachable",
     "_maybe_check_mic_permission",
@@ -148,26 +149,113 @@ class VoiceBundle:
     audio_service_watchdog: object = None  # AudioServiceWatchdog | None
 
 
+def _detect_os_noise_suppression(*, resolved_name: str | None = None) -> bool:
+    """Detect whether the current capture path has OS-level NS active.
+
+    Phase 4 / T4.18 — single cross-platform helper that aggregates
+    the existing per-platform probes into a boolean verdict the
+    factory can branch on:
+
+    * Windows: ``voice_clarity_active`` from
+      :func:`sovyx.voice._apo_detector.detect_capture_apos` for
+      ``resolved_name``. Voice Clarity is the canonical Windows
+      capture-APO that runs an aggressive NN-based denoiser
+      ahead of PortAudio (per CLAUDE.md anti-pattern #21).
+    * Linux: ``echo_cancel_loaded`` from
+      :func:`sovyx.voice.health._pipewire.detect_pipewire`.
+      ``module-echo-cancel`` is the PipeWire/PulseAudio module
+      that runs WebRTC AEC + NS server-side.
+    * macOS: ``virtual_audio_active`` OR
+      ``audio_enhancement_active`` from
+      :func:`sovyx.voice.health._macos.detect_hal_plugins`. Krisp,
+      BlackHole, Loopback all surface here.
+
+    Detection failures are swallowed → return ``False``. The OS-NS
+    deference is an operator opt-in convenience; refusing to load
+    in-process NS because the detector crashed would surprise
+    operators who explicitly enabled the feature.
+
+    Args:
+        resolved_name: The cascade-resolved capture device name
+            (Windows-specific endpoint match). ``None`` falls
+            back to "any active endpoint" semantics on Windows;
+            Linux + macOS detectors are device-agnostic.
+
+    Returns:
+        ``True`` iff the current capture path's OS DSP stack
+        reports an active denoiser. ``False`` on no detection
+        OR on detector errors.
+    """
+    import sys
+
+    platform = sys.platform
+
+    try:
+        if platform == "win32":
+            return _detect_voice_clarity_active(resolved_name)
+        if platform.startswith("linux"):
+            from sovyx.voice.health._pipewire import detect_pipewire
+
+            return bool(detect_pipewire().echo_cancel_loaded)
+        if platform == "darwin":
+            from sovyx.voice._hal_detector_mac import detect_hal_plugins
+
+            report = detect_hal_plugins()
+            return bool(report.virtual_audio_active or report.audio_enhancement_active)
+    except Exception:  # noqa: BLE001 — detector must never break boot
+        logger.debug("voice.os_ns_detection_failed", exc_info=True)
+        return False
+    return False
+
+
 def _build_noise_suppressor(
     tuning: VoiceTuningConfig,
+    *,
+    resolved_name: str | None = None,
 ) -> NoiseSuppressor | None:
     """Build the NS processor when its tuning flag is on.
 
-    Phase 4 / T4.13 wire-up. Returns ``None`` when
-    ``voice_noise_suppression_enabled=False`` (foundation default
-    per ``feedback_staged_adoption``) or when the engine is
-    explicitly ``"off"`` — in either case the FrameNormalizer's NS
-    stage stays in the bit-exact passthrough branch.
+    Phase 4 / T4.13 wire-up + T4.18 OS-NS auto-disable. Returns
+    ``None`` when:
+
+    * ``voice_noise_suppression_enabled=False`` (foundation default
+      per ``feedback_staged_adoption``); OR
+    * ``voice_noise_suppression_engine="off"`` (degenerate config); OR
+    * (T4.18) ``voice_use_os_dsp_when_available=True`` AND the
+      OS-NS detector reports an active stack on the resolved
+      capture endpoint.
 
     When active, returns a concrete
     :class:`~sovyx.voice._noise_suppression.SpectralGatingSuppressor`
     pinned to the FrameNormalizer's 16 kHz / 512-sample invariants.
+
+    Args:
+        tuning: Active :class:`VoiceTuningConfig`.
+        resolved_name: The cascade-resolved capture device name —
+            forwarded to
+            :func:`_detect_os_noise_suppression` for the Windows
+            endpoint match. ``None`` is safe (Linux + macOS
+            detectors are device-agnostic; Windows falls back to
+            any-endpoint semantics).
     """
     if (
         not tuning.voice_noise_suppression_enabled
         or tuning.voice_noise_suppression_engine == "off"
     ):
         return None
+
+    if tuning.voice_use_os_dsp_when_available:
+        os_ns_active = _detect_os_noise_suppression(resolved_name=resolved_name)
+        if os_ns_active:
+            logger.info(
+                "voice.ns.deferred_to_os_dsp",
+                **{
+                    "voice.ns.engine": tuning.voice_noise_suppression_engine,
+                    "voice.ns.os_dsp_detected": True,
+                    "voice.ns.resolved_name": resolved_name or "",
+                },
+            )
+            return None
 
     from sovyx.voice._noise_suppression import build_frame_normalizer_noise_suppressor
 
@@ -611,7 +699,10 @@ async def create_voice_pipeline(
     if render_buffer is not None:
         pipeline.set_render_buffer(render_buffer)
     double_talk_detector = _build_double_talk_detector(tuning)
-    noise_suppressor = _build_noise_suppressor(tuning)
+    noise_suppressor = _build_noise_suppressor(
+        tuning,
+        resolved_name=(resolved.name if resolved is not None else None),
+    )
 
     capture_task = AudioCaptureTask(
         pipeline,

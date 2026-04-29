@@ -1205,6 +1205,34 @@ class VoiceTuningConfig(BaseSettings):
     validation: above 0 would amplify noise; below -60 produces
     audible ringing on transient bins."""
 
+    voice_use_os_dsp_when_available: bool = False
+    """Defer NS to the OS DSP stack when one is detected (Phase 4 / T4.20).
+
+    Default ``False`` per master-mission §Phase 4 / T4.19 — Sovyx
+    prefers in-process NS for predictability (the OS DSP is opaque
+    + version-dependent, especially Windows Voice Clarity which
+    destroys VAD signal per CLAUDE.md anti-pattern #21). Operators
+    explicitly flip to ``True`` to opt out of in-process NS when
+    they trust the OS path on their hardware.
+
+    When ``True`` AND
+    :attr:`voice_noise_suppression_enabled=True` AND the OS-NS
+    detector reports an active stack on the resolved capture
+    endpoint, the factory's
+    :func:`_build_noise_suppressor` returns ``None`` + logs
+    :data:`voice.ns.deferred_to_os_dsp` so the operator sees the
+    auto-disable in startup logs.
+
+    Detection sources:
+
+    * Windows: :data:`voice_clarity_active` from the
+      :mod:`sovyx.voice._apo_detector` capture-APO report.
+    * Linux: :data:`echo_cancel_loaded` from the
+      :mod:`sovyx.voice.health._pipewire` report.
+    * macOS: :data:`virtual_audio_active` OR
+      :data:`audio_enhancement_active` from the
+      :mod:`sovyx.voice.health._macos` HAL plug-in report."""
+
     cascade_host_api_alignment_enabled: bool = False
     """Cascade ↔ runtime host-API alignment (cross-platform).
 
