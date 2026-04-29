@@ -670,15 +670,39 @@ class FrameNormalizer:
         TTS is idle). The :class:`SpeexAecProcessor` short-circuits
         on silent reference frames so the early-return path is the
         common case until T4.4.b wires the playback PCM capture.
+
+        T4.7 + T4.8 telemetry: emit
+        :data:`sovyx.voice.aec.windows{state}` per window and
+        :data:`sovyx.voice.aec.erle_db` per processed (non-silent
+        render) window for the dashboard's AEC quality panel.
         """
         import numpy as np
+
+        from sovyx.voice._aec import compute_erle
+        from sovyx.voice.health._metrics import (
+            record_aec_erle,
+            record_aec_window,
+        )
 
         if self._render_provider is not None:
             render_window = self._render_provider.get_aligned_window(_TARGET_WINDOW)
         else:
             render_window = np.zeros(_TARGET_WINDOW, dtype=np.int16)
         assert self._aec is not None  # called only when guarded above
-        return self._aec.process(window, render_window)
+
+        if not np.any(render_window):
+            # Render reference silent → AEC short-circuits to the
+            # passthrough branch. ERLE is undefined in this state
+            # (no echo to measure); only the windows counter fires
+            # so the dashboard can compute the processed/total ratio.
+            cleaned = self._aec.process(window, render_window)
+            record_aec_window(state="render_silent")
+            return cleaned
+
+        cleaned = self._aec.process(window, render_window)
+        record_aec_window(state="processed")
+        record_aec_erle(erle_db=compute_erle(render_window, window, cleaned))
+        return cleaned
 
     @property
     def aec(self) -> AecProcessor | None:

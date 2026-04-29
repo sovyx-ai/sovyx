@@ -109,6 +109,10 @@ METRIC_BYPASS_TIER2_HOST_API_ROTATE_OUTCOME = (
 METRIC_OPENER_HOST_API_ALIGNMENT = "sovyx.voice.opener.host_api_alignment"
 METRIC_HOTPLUG_LISTENER_REGISTERED = "sovyx.voice.hotplug.listener.registered"
 
+# ── Phase 4 — AEC observability (T4.7 + T4.8) ───────────────────────────
+METRIC_AEC_ERLE_DB = "sovyx.voice.aec.erle_db"
+METRIC_AEC_WINDOWS = "sovyx.voice.aec.windows"
+
 
 # ── Label enums (closed sets for low-cardinality guarantees) ─────────────
 # Using string literals here keeps the module dependency-free; the ADR
@@ -685,8 +689,56 @@ def record_hotplug_listener_registered(*, registered: bool, error: str = "") -> 
     )
 
 
+# ── Phase 4 / T4.7-T4.8 — AEC observability ─────────────────────────────
+
+
+def record_aec_erle(*, erle_db: float) -> None:
+    """Record one Echo Return Loss Enhancement sample (Phase 4 / T4.7).
+
+    Fires once per emitted 512-sample capture window when the AEC
+    stage processed a non-silent render reference. Silent windows
+    are NOT recorded — ERLE is undefined when there's no echo to
+    cancel and a flat 0 dB sample would distort the histogram p50.
+
+    Promotion gate (master mission §Phase 4): p50 ≥ 35 dB,
+    p95 ≥ 30 dB sustained when render+capture both active.
+
+    Args:
+        erle_db: ERLE measurement in dB. Capped at +120 dB inside
+            :func:`sovyx.voice._aec.compute_erle` to keep histogram
+            buckets stable.
+    """
+    histogram = getattr(get_metrics(), "voice_aec_erle_db", None)
+    if histogram is None:
+        return
+    histogram.record(float(erle_db))
+
+
+def record_aec_window(*, state: str) -> None:
+    """Record one AEC stage outcome (Phase 4 / T4.8).
+
+    Fires once per emitted capture window when the AEC stage is
+    wired (engine != "off"). The processed/total ratio reveals how
+    often AEC actually had echo to cancel — a session with
+    constant TTS playback approaches 100 % processed; a session
+    with mostly silent listener runs approaches 0 %.
+
+    Args:
+        state: ``"processed"`` (AEC engaged on non-silent render) or
+            ``"render_silent"`` (AEC short-circuited because the
+            render reference was zero — see
+            :class:`SpeexAecProcessor.process` early-return).
+    """
+    counter = getattr(get_metrics(), "voice_aec_windows", None)
+    if counter is None:
+        return
+    counter.add(1, attributes={"state": state})
+
+
 __all__ = [
     "METRIC_ACTIVE_ENDPOINT_CHANGES",
+    "METRIC_AEC_ERLE_DB",
+    "METRIC_AEC_WINDOWS",
     "METRIC_APO_DEGRADED_EVENTS",
     "METRIC_BYPASS_IMPROVEMENT_RESOLUTION",
     "METRIC_BYPASS_PROBE_WAIT_MS",
@@ -712,6 +764,8 @@ __all__ = [
     "METRIC_SELF_FEEDBACK_BLOCKS",
     "METRIC_TIME_TO_FIRST_UTTERANCE",
     "record_active_endpoint_change",
+    "record_aec_erle",
+    "record_aec_window",
     "record_apo_degraded_event",
     "record_bypass_improvement_resolution",
     "record_bypass_probe_wait_ms",

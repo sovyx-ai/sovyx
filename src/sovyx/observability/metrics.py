@@ -635,6 +635,34 @@ class MetricsRegistry:
             "the listener flag default to True in v0.26.0.",
         )
 
+        # ── Phase 4 / T4.7-T4.8 — AEC observability ─────────────────
+        # ERLE histogram + windows counter give the dashboard a real
+        # picture of acoustic-echo cancellation quality in production.
+        # Promotion gate (master mission §Phase 4): ERLE ≥ 30 dB
+        # sustained when render+capture both active. The histogram's
+        # p50 / p95 surfaces this directly; the counter shows what
+        # fraction of capture windows actually had echo to cancel.
+        self.voice_aec_erle_db = self._histogram(
+            "sovyx.voice.aec.erle_db",
+            "Per-window Echo Return Loss Enhancement in dB (ITU-T "
+            "G.168 §6.2). Fires once per emitted 512-sample capture "
+            "window when AEC is wired AND the render reference is "
+            "non-silent (silent windows skip ERLE since echo is "
+            "undefined when there's no reference signal). Promotion "
+            "gate: p50 ≥ 35 dB, p95 ≥ 30 dB sustained.",
+            unit="dB",
+        )
+        self.voice_aec_windows = self._counter(
+            "sovyx.voice.aec.windows",
+            "Per-window AEC processing counter (labels: state="
+            "processed|render_silent). 'processed' fires when AEC "
+            "engaged (render non-silent + filter ran); "
+            "'render_silent' fires when AEC short-circuited "
+            "(SpeexAecProcessor early-returns on zero-render to "
+            "avoid filter drift). The processed/total ratio reveals "
+            "how often the AEC stage actually had echo to cancel.",
+        )
+
         # ── Voice pipeline RED + USE (Ring 6 — M2) ──────────────────
         # Per-stage Rate / Errors / Duration plus Utilisation /
         # Saturation / Errors for every async queue between stages.
