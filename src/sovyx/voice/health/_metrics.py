@@ -53,6 +53,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from sovyx.observability.metrics import get_metrics
+from sovyx.voice.health import _bypass_tier_state
 from sovyx.voice.health._telemetry import (
     record_cascade_outcome as _record_cascade_outcome_telemetry,
 )
@@ -372,6 +373,7 @@ def record_bypass_strategy_verdict(
             unset. Stable across minor versions so dashboards can
             key on it.
     """
+    _bypass_tier_state.mark_strategy_verdict(strategy=strategy, verdict=verdict)
     counter = getattr(get_metrics(), "voice_health_bypass_strategy_verdicts", None)
     if counter is None:
         return
@@ -546,6 +548,7 @@ def record_tier1_raw_attempted(*, host_api: str, raw_supported: bool) -> None:
     ``IAudioClient3::SetClientProperties`` call. Pairs with
     :func:`record_tier1_raw_outcome` for an attempts-vs-success ratio.
     """
+    _bypass_tier_state.mark_tier1_raw_attempted()
     counter = getattr(get_metrics(), "voice_health_bypass_tier1_raw_attempted", None)
     if counter is None:
         return
@@ -568,6 +571,7 @@ def record_tier1_raw_outcome(*, verdict: str, host_api: str) -> None:
         host_api: post-apply host_api (informational — the strategy
             doesn't mutate it; included for slice-by-host_api dashboards).
     """
+    _bypass_tier_state.mark_tier1_raw_outcome(verdict)
     counter = getattr(get_metrics(), "voice_health_bypass_tier1_raw_outcome", None)
     if counter is None:
         return
@@ -586,6 +590,7 @@ def record_tier2_host_api_rotate_attempted(*, source_host_api: str, target_host_
     Fired by ``WindowsHostApiRotateThenExclusiveBypass.apply`` Phase A
     (rotate) before ``request_host_api_rotate``.
     """
+    _bypass_tier_state.mark_tier2_host_api_rotate_attempted()
     counter = getattr(get_metrics(), "voice_health_bypass_tier2_host_api_rotate_attempted", None)
     if counter is None:
         return
@@ -615,6 +620,10 @@ def record_tier2_host_api_rotate_outcome(
             after both phases — may differ from the target if the
             opener pyramid drifted.
     """
+    _bypass_tier_state.mark_tier2_host_api_rotate_outcome(
+        phase_a_verdict=phase_a_verdict,
+        phase_b_verdict=phase_b_verdict,
+    )
     counter = getattr(get_metrics(), "voice_health_bypass_tier2_host_api_rotate_outcome", None)
     if counter is None:
         return

@@ -36,6 +36,20 @@ from sovyx.dashboard.server import create_app
 _TOKEN = "test-token-fixo"
 
 
+@pytest.fixture(autouse=True)
+def _reset_bypass_tier_state() -> None:
+    """Isolate every test against a clean global counter mirror.
+
+    The mirror is module-level state (see ``_bypass_tier_state.py``);
+    earlier tests may have incremented counters via the wire-up tests
+    in ``test_metrics.py``. Reset before every dashboard test for
+    deterministic empty-state assertions.
+    """
+    from sovyx.voice.health._bypass_tier_state import reset_for_tests
+
+    reset_for_tests()
+
+
 @pytest.fixture
 def app_with_registry() -> Any:  # noqa: ANN401 — fixture returns Starlette app
     """App with a stub registry attached. The stubs don't touch the
@@ -339,3 +353,71 @@ class TestBypassTierStatusHappyPathV024Stub:
         body = response.json()
         value = body["current_bypass_tier"]
         assert value is None or (isinstance(value, int) and 0 <= value <= 3)
+
+
+class TestBypassTierStatusV026WireUp:
+    """v0.26.0 wire-up — counter mirror at
+    :mod:`sovyx.voice.health._bypass_tier_state` is read by the endpoint;
+    each ``record_tier*_*`` helper updates the mirror. Pin that the
+    endpoint reflects post-fire state (not the empty stub).
+    """
+
+    def test_tier1_attempt_visible_in_payload(self, client: TestClient) -> None:
+        from sovyx.voice.health._metrics import record_tier1_raw_attempted
+
+        record_tier1_raw_attempted(host_api="Windows WASAPI", raw_supported=True)
+        response = client.get("/api/voice/bypass-tier-status")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["tier1_raw_attempted"] == 1
+        assert body["tier1_raw_succeeded"] == 0
+
+    def test_tier2_success_visible_in_payload(self, client: TestClient) -> None:
+        from sovyx.voice.health._metrics import (
+            record_tier2_host_api_rotate_attempted,
+            record_tier2_host_api_rotate_outcome,
+        )
+
+        record_tier2_host_api_rotate_attempted(
+            source_host_api="MME",
+            target_host_api="Windows WASAPI",
+        )
+        record_tier2_host_api_rotate_outcome(
+            phase_a_verdict="rotated_success",
+            phase_b_verdict="exclusive_engaged",
+        )
+        response = client.get("/api/voice/bypass-tier-status")
+        body = response.json()
+        assert body["tier2_host_api_rotate_attempted"] == 1
+        assert body["tier2_host_api_rotate_succeeded"] == 1
+
+    def test_tier3_success_via_strategy_verdict_visible(self, client: TestClient) -> None:
+        from sovyx.voice.health._metrics import record_bypass_strategy_verdict
+
+        record_bypass_strategy_verdict(
+            strategy="win.wasapi_exclusive",
+            verdict="applied_healthy",
+        )
+        response = client.get("/api/voice/bypass-tier-status")
+        body = response.json()
+        assert body["tier3_wasapi_exclusive_attempted"] == 1
+        assert body["tier3_wasapi_exclusive_succeeded"] == 1
+
+    def test_non_tier3_strategy_does_not_pollute_tier3(self, client: TestClient) -> None:
+        from sovyx.voice.health._metrics import record_bypass_strategy_verdict
+
+        # Tier 1 + Tier 2 strategies fire their own helpers; the
+        # coordinator-level verdict hook MUST filter strictly to
+        # win.wasapi_exclusive so we don't double-count.
+        record_bypass_strategy_verdict(
+            strategy="win.raw_communications",
+            verdict="applied_healthy",
+        )
+        record_bypass_strategy_verdict(
+            strategy="linux.alsa_hw_direct",
+            verdict="applied_healthy",
+        )
+        response = client.get("/api/voice/bypass-tier-status")
+        body = response.json()
+        assert body["tier3_wasapi_exclusive_attempted"] == 0
+        assert body["tier3_wasapi_exclusive_succeeded"] == 0

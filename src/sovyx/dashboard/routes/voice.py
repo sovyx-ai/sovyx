@@ -12,6 +12,7 @@ from starlette.status import HTTP_503_SERVICE_UNAVAILABLE
 
 from sovyx.dashboard.routes._deps import verify_token
 from sovyx.observability.logging import get_logger
+from sovyx.voice.health._bypass_tier_state import snapshot as _bypass_tier_snapshot
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -184,16 +185,16 @@ async def get_voice_bypass_tier_status(request: Request) -> JSONResponse:
     The dashboard renders a "current bypass tier" badge + a per-tier
     success-rate widget for operator validation pilots.
 
-    v0.24.0 (foundation): no bypass strategies are wired yet (Tier 1
-    + Tier 2 stubs land in T13/T14 of the wire-up phase). The
-    endpoint always returns the empty-state shape with
-    ``current_bypass_tier=null``. Wire-up in v0.25.0 populates from
-    the metric counters
-    (``voice.health.bypass.tier1_raw.{attempted,outcome}``,
-    ``voice.health.bypass.tier2_host_api_rotate.{attempted,outcome}``,
-    ``voice.health.bypass_strategy.verdicts``) and the
-    ``CaptureIntegrityCoordinator`` strategy state. Shipping the stub
-    now pins the wire contract via
+    v0.26.0 wire-up: reads the in-memory counter mirror at
+    :mod:`sovyx.voice.health._bypass_tier_state`. The mirror is updated
+    synchronously inside every ``record_tier*_*`` and
+    ``record_bypass_strategy_verdict`` helper (see
+    :mod:`sovyx.voice.health._metrics`) so the dashboard observes the
+    same counts that flow to the OTel exporter. ``current_bypass_tier``
+    remains ``None`` for v0.26.0 — coordinator-side engaged-tier
+    tracking is staged for a follow-up commit per the
+    ``feedback_staged_adoption`` rule (don't bundle "foundation +
+    coordinator state machine" in one commit). Shape matches
     ``VoiceBypassTierStatusResponseSchema``
     (``dashboard/src/types/schemas.ts``).
 
@@ -214,21 +215,7 @@ async def get_voice_bypass_tier_status(request: Request) -> JSONResponse:
             status_code=HTTP_503_SERVICE_UNAVAILABLE,
         )
 
-    # v0.24.0 stub. Wire-up in v0.25.0 reads the counter data points
-    # from the metrics registry and the active strategy from
-    # CaptureIntegrityCoordinator. Empty-state shape matches
-    # VoiceBypassTierStatusResponseSchema in dashboard zod.
-    return JSONResponse(
-        {
-            "current_bypass_tier": None,
-            "tier1_raw_attempted": 0,
-            "tier1_raw_succeeded": 0,
-            "tier2_host_api_rotate_attempted": 0,
-            "tier2_host_api_rotate_succeeded": 0,
-            "tier3_wasapi_exclusive_attempted": 0,
-            "tier3_wasapi_exclusive_succeeded": 0,
-        },
-    )
+    return JSONResponse(_bypass_tier_snapshot())
 
 
 @router.get("/status")

@@ -714,3 +714,66 @@ class TestNoOpSafety:
         )
         record_opener_host_api_alignment(aligned=True)
         record_hotplug_listener_registered(registered=True)
+
+
+class TestBypassTierStateWireUp:
+    """v0.26.0 §Phase 3.T3.13 — every tier record helper updates the
+    in-memory mirror at :mod:`sovyx.voice.health._bypass_tier_state`
+    BEFORE firing the OTel counter, so the dashboard endpoint observes
+    the same counts even when no OTel exporter is wired.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _reset_bypass_tier_state(self) -> None:
+        from sovyx.voice.health._bypass_tier_state import reset_for_tests
+
+        reset_for_tests()
+
+    def test_record_tier1_raw_attempted_updates_mirror(self) -> None:
+        from sovyx.voice.health._bypass_tier_state import snapshot
+
+        record_tier1_raw_attempted(host_api="Windows WASAPI", raw_supported=True)
+        record_tier1_raw_attempted(host_api="MME", raw_supported=False)
+        assert snapshot()["tier1_raw_attempted"] == 2
+
+    def test_record_tier1_raw_outcome_updates_mirror(self) -> None:
+        from sovyx.voice.health._bypass_tier_state import snapshot
+
+        record_tier1_raw_outcome(verdict="raw_engaged", host_api="Windows WASAPI")
+        record_tier1_raw_outcome(verdict="property_rejected_by_driver", host_api="MME")
+        s = snapshot()
+        assert s["tier1_raw_succeeded"] == 1
+
+    def test_record_tier2_host_api_rotate_attempted_updates_mirror(self) -> None:
+        from sovyx.voice.health._bypass_tier_state import snapshot
+
+        record_tier2_host_api_rotate_attempted(
+            source_host_api="MME",
+            target_host_api="Windows WASAPI",
+        )
+        assert snapshot()["tier2_host_api_rotate_attempted"] == 1
+
+    def test_record_tier2_host_api_rotate_outcome_success_updates_mirror(self) -> None:
+        from sovyx.voice.health._bypass_tier_state import snapshot
+
+        record_tier2_host_api_rotate_outcome(
+            phase_a_verdict="rotated_success",
+            phase_b_verdict="exclusive_engaged",
+        )
+        record_tier2_host_api_rotate_outcome(
+            phase_a_verdict="no_target_sibling",
+            phase_b_verdict="skipped",
+        )
+        assert snapshot()["tier2_host_api_rotate_succeeded"] == 1
+
+    def test_record_bypass_strategy_verdict_filters_to_tier3(self) -> None:
+        from sovyx.voice.health._bypass_tier_state import snapshot
+        from sovyx.voice.health._metrics import record_bypass_strategy_verdict
+
+        record_bypass_strategy_verdict(strategy="win.wasapi_exclusive", verdict="applied_healthy")
+        record_bypass_strategy_verdict(
+            strategy="win.raw_communications", verdict="applied_healthy"
+        )
+        s = snapshot()
+        assert s["tier3_wasapi_exclusive_attempted"] == 1
+        assert s["tier3_wasapi_exclusive_succeeded"] == 1
