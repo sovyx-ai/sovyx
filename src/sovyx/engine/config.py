@@ -1252,6 +1252,29 @@ class VoiceTuningConfig(BaseSettings):
     anchoring to a continuously-active speaker; longer windows
     are stale during transitions. Bounded ``[1.0, 60.0]`` s."""
 
+    voice_dither_enabled: bool = False
+    """TPDF dither on int16 quantization (Phase 4 / T4.43).
+
+    When True the FrameNormalizer's float→int16 conversion adds
+    triangular-PDF dither before saturation, decorrelating the
+    quantization error from the signal. Adds ~+4.77 dB of
+    broadband noise to the floor (canonical TPDF "dither
+    penalty") in exchange for elimination of quantization
+    harmonics on quiet sustained tones.
+
+    Default ``False`` per ``feedback_staged_adoption``. Operators
+    flip after pilot validation confirms the audible improvement
+    on their hardware (typically inaudible on dense speech;
+    audible on near-silence room tone)."""
+
+    voice_dither_amplitude_lsb: float = Field(default=1.0, ge=0.0, le=4.0)
+    """Peak-to-peak TPDF dither amplitude in int16 LSBs.
+
+    1.0 = textbook TPDF (Lipshitz 1992 §3). Values < 1 reduce
+    decorrelation; values > 1 lift the noise floor visibly.
+    Bounded ``[0.0, 4.0]`` — anything beyond 4 LSB is audible
+    noise on the quiet path."""
+
     voice_agc2_adaptive_floor_quantile: float = Field(default=0.25, gt=0.0, lt=1.0)
     """Quantile of the RMS history used as the noise-floor estimate.
 
