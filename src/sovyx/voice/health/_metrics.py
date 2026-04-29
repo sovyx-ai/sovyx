@@ -109,9 +109,10 @@ METRIC_BYPASS_TIER2_HOST_API_ROTATE_OUTCOME = (
 METRIC_OPENER_HOST_API_ALIGNMENT = "sovyx.voice.opener.host_api_alignment"
 METRIC_HOTPLUG_LISTENER_REGISTERED = "sovyx.voice.hotplug.listener.registered"
 
-# ── Phase 4 — AEC observability (T4.7 + T4.8) ───────────────────────────
+# ── Phase 4 — AEC observability (T4.7 + T4.8 + T4.9) ────────────────────
 METRIC_AEC_ERLE_DB = "sovyx.voice.aec.erle_db"
 METRIC_AEC_WINDOWS = "sovyx.voice.aec.windows"
+METRIC_AEC_DOUBLE_TALK = "sovyx.voice.aec.double_talk"
 
 
 # ── Label enums (closed sets for low-cardinality guarantees) ─────────────
@@ -735,8 +736,34 @@ def record_aec_window(*, state: str) -> None:
     counter.add(1, attributes={"state": state})
 
 
+def record_aec_double_talk(*, state: str) -> None:
+    """Record one double-talk detector verdict (Phase 4 / T4.9).
+
+    Fires once per emitted capture window when the double-talk
+    detector is wired (``voice_double_talk_detection_enabled=True``).
+    The detected/(detected+absent) ratio reveals how often the user
+    was speaking during TTS playback — a calm dictation session
+    approaches 0 %, an interruption-heavy conversation pushes it
+    towards 100 %.
+
+    Args:
+        state: ``"detected"`` (NCC < threshold — user speaking
+            during TTS), ``"absent"`` (NCC ≥ threshold — pure
+            echo, filter can converge), or ``"undecided"`` (NCC
+            undefined because either signal was silent — typically
+            the same windows that fire ``voice.aec.windows{
+            render_silent}``, kept separate for cardinality
+            symmetry).
+    """
+    counter = getattr(get_metrics(), "voice_aec_double_talk", None)
+    if counter is None:
+        return
+    counter.add(1, attributes={"state": state})
+
+
 __all__ = [
     "METRIC_ACTIVE_ENDPOINT_CHANGES",
+    "METRIC_AEC_DOUBLE_TALK",
     "METRIC_AEC_ERLE_DB",
     "METRIC_AEC_WINDOWS",
     "METRIC_APO_DEGRADED_EVENTS",
@@ -764,6 +791,7 @@ __all__ = [
     "METRIC_SELF_FEEDBACK_BLOCKS",
     "METRIC_TIME_TO_FIRST_UTTERANCE",
     "record_active_endpoint_change",
+    "record_aec_double_talk",
     "record_aec_erle",
     "record_aec_window",
     "record_apo_degraded_event",

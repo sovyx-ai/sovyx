@@ -1127,6 +1127,32 @@ class VoiceTuningConfig(BaseSettings):
     surfaces may need 256-512 ms. The implementation rounds to the
     nearest power of two internally."""
 
+    voice_double_talk_detection_enabled: bool = False
+    """Double-talk detector (Phase 4 / T4.9 — foundation observability).
+
+    When True the FrameNormalizer's AEC stage runs the
+    :class:`~sovyx.voice._double_talk_detector.DoubleTalkDetector`
+    on every processed window and emits
+    :data:`sovyx.voice.aec.double_talk{state}` so operators can
+    measure the rate of user-speaking-during-TTS in their
+    deployment. The freeze-the-AEC-filter action is staged for a
+    follow-up commit (Speex's ``pyaec`` doesn't expose adaptation
+    control) — this foundation phase is observability-only.
+
+    Default ``False`` per ``feedback_staged_adoption``. Operators
+    flip after pilot validation confirms the NCC distribution
+    matches their hardware (the threshold
+    :attr:`voice_double_talk_ncc_threshold` may need tuning per
+    deployment)."""
+
+    voice_double_talk_ncc_threshold: float = Field(default=0.5, ge=-1.0, le=1.0)
+    """NCC value below which double-talk is declared.
+
+    Standard NLMS-divergence threshold from AEC literature. Tune
+    higher (more permissive — fewer freezes) or lower (more
+    aggressive). Bounded ``[-1.0, 1.0]`` per the NCC algebraic
+    range — values outside reject at config validation."""
+
     cascade_host_api_alignment_enabled: bool = False
     """Cascade ↔ runtime host-API alignment (cross-platform).
 

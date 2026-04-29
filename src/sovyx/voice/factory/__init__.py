@@ -77,6 +77,7 @@ if TYPE_CHECKING:
     from sovyx.engine.events import EventBus
     from sovyx.voice._aec import AecProcessor
     from sovyx.voice._capture_task import AudioCaptureTask
+    from sovyx.voice._double_talk_detector import DoubleTalkDetector
     from sovyx.voice._render_pcm_buffer import RenderPcmBuffer
     from sovyx.voice.health.contract import BypassOutcome
     from sovyx.voice.pipeline._orchestrator import VoicePipeline
@@ -90,6 +91,7 @@ __all__ = [
     "VoiceFactoryError",
     "VoicePermissionError",
     "_build_aec_wiring",
+    "_build_double_talk_detector",
     "_create_kokoro_tts",
     "_create_piper_tts",
     "_create_stt",
@@ -142,6 +144,30 @@ class VoiceBundle:
     capture_task: AudioCaptureTask
     boot_preflight_warnings: tuple[dict[str, object], ...] = field(default_factory=tuple)
     audio_service_watchdog: object = None  # AudioServiceWatchdog | None
+
+
+def _build_double_talk_detector(
+    tuning: VoiceTuningConfig,
+) -> DoubleTalkDetector | None:
+    """Build the double-talk detector when its tuning flag is on.
+
+    Phase 4 / T4.9 — observability-only foundation. Returns ``None``
+    when ``voice_double_talk_detection_enabled=False`` (foundation
+    default per ``feedback_staged_adoption``); operators flip after
+    pilot validation calibrates the NCC threshold for their hardware.
+
+    Note: the detector only fires from the FrameNormalizer's AEC
+    stage, so passing it through has no effect when AEC itself is
+    disabled. Callers don't need to gate on
+    ``voice_aec_enabled`` — the FrameNormalizer's
+    ``_apply_aec_to_window`` only runs when ``self._aec is not None``.
+    """
+    if not tuning.voice_double_talk_detection_enabled:
+        return None
+
+    from sovyx.voice._double_talk_detector import DoubleTalkDetector
+
+    return DoubleTalkDetector(threshold=tuning.voice_double_talk_ncc_threshold)
 
 
 def _build_aec_wiring(
@@ -542,6 +568,7 @@ async def create_voice_pipeline(
     render_buffer, aec_processor = _build_aec_wiring(tuning)
     if render_buffer is not None:
         pipeline.set_render_buffer(render_buffer)
+    double_talk_detector = _build_double_talk_detector(tuning)
 
     capture_task = AudioCaptureTask(
         pipeline,
@@ -550,6 +577,7 @@ async def create_voice_pipeline(
         endpoint_guid=resolved_endpoint_guid,
         aec=aec_processor,
         render_provider=render_buffer,
+        double_talk_detector=double_talk_detector,
     )
     capture_holder["task"] = capture_task
     # Ring 2 (Signal Integrity): RMS-floor watchdog + format-detection

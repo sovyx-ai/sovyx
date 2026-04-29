@@ -20,8 +20,9 @@ from sovyx.voice._aec import (
     RenderPcmSink,
     SpeexAecProcessor,
 )
+from sovyx.voice._double_talk_detector import DoubleTalkDetector
 from sovyx.voice._render_pcm_buffer import RenderPcmBuffer
-from sovyx.voice.factory import _build_aec_wiring
+from sovyx.voice.factory import _build_aec_wiring, _build_double_talk_detector
 
 # ── Disabled path ───────────────────────────────────────────────────────
 
@@ -193,3 +194,39 @@ class TestLogging:
             _build_aec_wiring(tuning)
         wired_logs = [r for r in caplog.records if "voice.aec.wired" in r.getMessage()]
         assert len(wired_logs) == 1
+
+
+# ── T4.9 — Double-talk detector factory wire-up ─────────────────────────
+
+
+class TestBuildDoubleTalkDetector:
+    """Factory builds the detector when its tuning flag is on."""
+
+    def test_default_disabled_returns_none(self) -> None:
+        tuning = VoiceTuningConfig()
+        assert tuning.voice_double_talk_detection_enabled is False
+        assert _build_double_talk_detector(tuning) is None
+
+    def test_enabled_returns_real_detector(self) -> None:
+        tuning = VoiceTuningConfig(
+            voice_double_talk_detection_enabled=True,
+        )
+        detector = _build_double_talk_detector(tuning)
+        assert isinstance(detector, DoubleTalkDetector)
+
+    def test_threshold_propagates_to_detector(self) -> None:
+        tuning = VoiceTuningConfig(
+            voice_double_talk_detection_enabled=True,
+            voice_double_talk_ncc_threshold=0.7,
+        )
+        detector = _build_double_talk_detector(tuning)
+        assert detector is not None
+        assert detector.threshold == 0.7
+
+    def test_each_call_returns_independent_instance(self) -> None:
+        tuning = VoiceTuningConfig(voice_double_talk_detection_enabled=True)
+        a = _build_double_talk_detector(tuning)
+        b = _build_double_talk_detector(tuning)
+        assert a is not None
+        assert b is not None
+        assert a is not b

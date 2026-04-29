@@ -662,6 +662,15 @@ class MetricsRegistry:
             "avoid filter drift). The processed/total ratio reveals "
             "how often the AEC stage actually had echo to cancel.",
         )
+        self.voice_aec_double_talk = self._counter(
+            "sovyx.voice.aec.double_talk",
+            "Per-window double-talk detector verdict (labels: state="
+            "detected|absent|undecided). 'detected' fires when the "
+            "DoubleTalkDetector's NCC < threshold (user speaking "
+            "during TTS); 'absent' fires when NCC ≥ threshold (pure "
+            "echo, AEC filter can converge cleanly); 'undecided' "
+            "fires when either signal is silent (NCC undefined).",
+        )
 
         # ── Voice pipeline RED + USE (Ring 6 — M2) ──────────────────
         # Per-stage Rate / Errors / Duration plus Utilisation /

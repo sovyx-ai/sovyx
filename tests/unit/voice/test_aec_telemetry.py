@@ -24,10 +24,13 @@ from sovyx.observability.metrics import (
     setup_metrics,
     teardown_metrics,
 )
+from sovyx.voice._double_talk_detector import DoubleTalkDetector
 from sovyx.voice._frame_normalizer import FrameNormalizer
 from sovyx.voice.health._metrics import (
+    METRIC_AEC_DOUBLE_TALK,
     METRIC_AEC_ERLE_DB,
     METRIC_AEC_WINDOWS,
+    record_aec_double_talk,
     record_aec_erle,
     record_aec_window,
 )
@@ -300,3 +303,93 @@ class TestFrameNormalizerEmitsAecMetrics:
         # Single (state="processed") data point with value=5.
         assert len(windows_metric["data_points"]) == 1
         assert windows_metric["data_points"][0]["value"] == 5
+
+
+# ── T4.9 — Double-talk detector telemetry ────────────────────────────────
+
+
+class TestRecordAecDoubleTalk:
+    def test_records_state_label(
+        self,
+        registry: MetricsRegistry,
+        reader: InMemoryMetricReader,
+    ) -> None:
+        record_aec_double_talk(state="detected")
+        record_aec_double_talk(state="absent")
+        record_aec_double_talk(state="undecided")
+        metric = _find(_collect(reader), METRIC_AEC_DOUBLE_TALK)
+        assert metric is not None
+        states = sorted(dp["attributes"]["state"] for dp in metric["data_points"])
+        assert states == ["absent", "detected", "undecided"]
+
+    def test_no_op_without_registry(self) -> None:
+        # Foundation safety: torn-down registry must no-op.
+        record_aec_double_talk(state="detected")  # must not raise
+
+
+class TestFrameNormalizerEmitsDoubleTalkMetric:
+    """The detector wired on FrameNormalizer emits per-window verdicts."""
+
+    def test_no_double_talk_metric_when_detector_unwired(
+        self,
+        registry: MetricsRegistry,
+        reader: InMemoryMetricReader,
+    ) -> None:
+        # Regression-guard: AEC wired but detector NOT wired → no
+        # double_talk metric emitted (foundation default).
+        norm = FrameNormalizer(
+            source_rate=16_000,
+            source_channels=1,
+            aec=_RecordingAec(),
+            render_provider=_ConstantRenderProvider(value=1000),
+        )
+        norm.push(np.full(512, 2000, dtype=np.int16))
+        assert _find(_collect(reader), METRIC_AEC_DOUBLE_TALK) is None
+
+    def test_detected_state_when_capture_uncorrelated_with_render(
+        self,
+        registry: MetricsRegistry,
+        reader: InMemoryMetricReader,
+    ) -> None:
+        # Render = constant → capture = independent random → NCC ≈ 0
+        # → detected=True at default threshold 0.5.
+        rng = np.random.default_rng(11)
+        render_value = 1000  # constant render
+        capture = (rng.standard_normal(512) * 2000).astype(np.int16)
+
+        norm = FrameNormalizer(
+            source_rate=16_000,
+            source_channels=1,
+            aec=_RecordingAec(),
+            render_provider=_ConstantRenderProvider(value=render_value),
+            double_talk_detector=DoubleTalkDetector(),
+        )
+        norm.push(capture)
+
+        metric = _find(_collect(reader), METRIC_AEC_DOUBLE_TALK)
+        assert metric is not None
+        states = [dp["attributes"]["state"] for dp in metric["data_points"]]
+        # Constant render is NOT correlated with random capture.
+        # NCC near 0 → detected.
+        assert states == ["detected"]
+
+    def test_undecided_state_when_render_silent(
+        self,
+        registry: MetricsRegistry,
+        reader: InMemoryMetricReader,
+    ) -> None:
+        # Silent render → render_silent branch in _apply_aec_to_window
+        # AND undecided in double-talk metric (NCC undefined).
+        norm = FrameNormalizer(
+            source_rate=16_000,
+            source_channels=1,
+            aec=_RecordingAec(),
+            render_provider=_ConstantRenderProvider(value=0),
+            double_talk_detector=DoubleTalkDetector(),
+        )
+        norm.push(np.full(512, 2000, dtype=np.int16))
+
+        metric = _find(_collect(reader), METRIC_AEC_DOUBLE_TALK)
+        assert metric is not None
+        states = [dp["attributes"]["state"] for dp in metric["data_points"]]
+        assert states == ["undecided"]

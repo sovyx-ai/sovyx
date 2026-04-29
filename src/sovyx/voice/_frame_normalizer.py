@@ -86,6 +86,7 @@ if TYPE_CHECKING:
 
     from sovyx.voice._aec import AecProcessor, RenderPcmProvider
     from sovyx.voice._agc2 import AGC2
+    from sovyx.voice._double_talk_detector import DoubleTalkDetector
 
 logger = get_logger(__name__)
 
@@ -363,6 +364,7 @@ class FrameNormalizer:
         agc2: AGC2 | None = None,
         aec: AecProcessor | None = None,
         render_provider: RenderPcmProvider | None = None,
+        double_talk_detector: DoubleTalkDetector | None = None,
     ) -> None:
         if source_rate <= 0:
             msg = f"source_rate must be positive, got {source_rate}"
@@ -462,6 +464,14 @@ class FrameNormalizer:
         # infra lands costs nothing in practice.
         self._aec: AecProcessor | None = aec
         self._render_provider: RenderPcmProvider | None = render_provider
+        # Phase 4 / T4.9 — observability-only double-talk detector.
+        # When wired, runs on every ``processed`` window and emits
+        # ``voice.aec.double_talk{state}``. The freeze-the-AEC-filter
+        # action is staged for a follow-up commit (Speex's pyaec
+        # binding doesn't expose adaptation control); foundation
+        # measures the NCC distribution so operators can calibrate
+        # the threshold before the freeze action lands.
+        self._double_talk_detector: DoubleTalkDetector | None = double_talk_detector
 
         logger.debug(
             "frame_normalizer_created",
@@ -680,6 +690,7 @@ class FrameNormalizer:
 
         from sovyx.voice._aec import compute_erle
         from sovyx.voice.health._metrics import (
+            record_aec_double_talk,
             record_aec_erle,
             record_aec_window,
         )
@@ -697,11 +708,32 @@ class FrameNormalizer:
             # so the dashboard can compute the processed/total ratio.
             cleaned = self._aec.process(window, render_window)
             record_aec_window(state="render_silent")
+            if self._double_talk_detector is not None:
+                # Render side silent → NCC undefined; emit
+                # ``undecided`` so the dashboard symmetry between
+                # voice.aec.windows + voice.aec.double_talk holds.
+                record_aec_double_talk(state="undecided")
             return cleaned
 
         cleaned = self._aec.process(window, render_window)
         record_aec_window(state="processed")
         record_aec_erle(erle_db=compute_erle(render_window, window, cleaned))
+
+        if self._double_talk_detector is not None:
+            # T4.9 observability: NCC of the PRE-AEC capture window
+            # against the render reference. Computed pre-AEC so the
+            # detector sees the user's voice contribution before the
+            # filter attenuates it; running on the cleaned signal
+            # would make the NCC almost always low (post-AEC
+            # capture is mostly residual noise, not echo).
+            decision = self._double_talk_detector.analyze(render_window, window)
+            if decision.ncc is None:
+                record_aec_double_talk(state="undecided")
+            elif decision.detected:
+                record_aec_double_talk(state="detected")
+            else:
+                record_aec_double_talk(state="absent")
+
         return cleaned
 
     @property
