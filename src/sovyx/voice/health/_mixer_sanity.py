@@ -2115,6 +2115,7 @@ async def build_mixer_sanity_setup(
     mixer_apply_fn: MixerApplyFn | None = None,
     mixer_restore_fn: MixerRestoreFn | None = None,
     persist_fn: PersistFn | None = None,
+    user_profiles_dir: Path | None = None,
 ) -> MixerSanitySetup | None:
     """Construct a :class:`MixerSanitySetup` for daemon boot.
 
@@ -2154,6 +2155,15 @@ async def build_mixer_sanity_setup(
             persist/apply/restore strategies saw the shipped
             defaults silently run instead. All four fields now
             flow through to the constructed :class:`MixerSanitySetup`.
+        user_profiles_dir: T5.39 wire-up. When provided, the KB
+            loader includes operator-contributed YAML profiles
+            from this directory alongside the shipped catalogue
+            via :meth:`MixerKBLookup.load_shipped_and_user`. ``None``
+            (default) preserves pre-wire-up behaviour: shipped-only
+            via :meth:`MixerKBLookup.load_shipped`. The factory
+            wires ``data_dir / "mixer_kb" / "user"`` when
+            :attr:`VoiceTuningConfig.voice_mixer_kb_user_profiles_enabled`
+            is True; tests inject a tmp_path directly.
     """
     # Lazy imports — these modules touch Linux-only subprocess /
     # /proc paths that we want to avoid importing on Windows / macOS
@@ -2186,7 +2196,17 @@ async def build_mixer_sanity_setup(
         effective_kb = kb_lookup
     else:
         try:
-            effective_kb = MixerKBLookup.load_shipped(resolver=effective_resolver)
+            # T5.39 — when the factory wired a user-profiles directory
+            # (gated on ``voice_mixer_kb_user_profiles_enabled``), the
+            # user-aware loader merges operator-contributed YAMLs.
+            # ``None`` skips user-side loading entirely (back-compat).
+            if user_profiles_dir is not None:
+                effective_kb = MixerKBLookup.load_shipped_and_user(
+                    user_profiles_dir,
+                    resolver=effective_resolver,
+                )
+            else:
+                effective_kb = MixerKBLookup.load_shipped(resolver=effective_resolver)
         except Exception as exc:  # noqa: BLE001 — KB load failure is best-effort
             logger.warning(
                 "mixer_sanity_setup_kb_load_failed",

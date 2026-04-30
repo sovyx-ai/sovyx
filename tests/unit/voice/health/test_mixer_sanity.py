@@ -1082,6 +1082,128 @@ class TestBuildMixerSanitySetupWalWiring:
             )
         assert setup.half_heal_wal_path is None
 
+    @pytest.mark.asyncio()
+    async def test_user_profiles_dir_none_uses_load_shipped(
+        self,
+        tmp_path: Path,  # noqa: ARG002
+    ) -> None:
+        """T5.39 — back-compat: ``user_profiles_dir=None`` (default)
+        routes through :meth:`MixerKBLookup.load_shipped`, NOT the
+        user-aware loader. Pre-T5.39 production behaviour preserved.
+        """
+        from sovyx.voice.health._mixer_sanity import build_mixer_sanity_setup
+        from sovyx.voice.health.probe import probe as _probe_fn
+
+        with (
+            patch.object(
+                MixerKBLookup,
+                "load_shipped",
+                wraps=MixerKBLookup.load_shipped,
+            ) as load_shipped_spy,
+            patch.object(
+                MixerKBLookup,
+                "load_shipped_and_user",
+                wraps=MixerKBLookup.load_shipped_and_user,
+            ) as load_user_spy,
+        ):
+            setup = await build_mixer_sanity_setup(
+                probe_fn=_probe_fn,
+                hw=_hw(),
+                role_resolver=MixerControlRoleResolver(),
+            )
+        if setup is None:
+            pytest.skip(
+                "build_mixer_sanity_setup returned None "
+                "(non-Linux or unknown driver family); nothing to assert"
+            )
+        assert load_shipped_spy.call_count == 1
+        assert load_user_spy.call_count == 0
+
+    @pytest.mark.asyncio()
+    async def test_user_profiles_dir_set_uses_load_shipped_and_user(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """T5.39 — ``user_profiles_dir=<path>`` routes through
+        :meth:`MixerKBLookup.load_shipped_and_user`, the user-aware
+        loader. The directory may be absent — the underlying
+        :func:`load_profiles_from_directory` handles that gracefully.
+        """
+        from sovyx.voice.health._mixer_sanity import build_mixer_sanity_setup
+        from sovyx.voice.health.probe import probe as _probe_fn
+
+        user_dir = tmp_path / "mixer_kb" / "user"  # NOT created — graceful skip.
+        with (
+            patch.object(
+                MixerKBLookup,
+                "load_shipped",
+                wraps=MixerKBLookup.load_shipped,
+            ) as load_shipped_spy,
+            patch.object(
+                MixerKBLookup,
+                "load_shipped_and_user",
+                wraps=MixerKBLookup.load_shipped_and_user,
+            ) as load_user_spy,
+        ):
+            setup = await build_mixer_sanity_setup(
+                probe_fn=_probe_fn,
+                hw=_hw(),
+                role_resolver=MixerControlRoleResolver(),
+                user_profiles_dir=user_dir,
+            )
+        if setup is None:
+            pytest.skip(
+                "build_mixer_sanity_setup returned None "
+                "(non-Linux or unknown driver family); nothing to assert"
+            )
+        assert load_shipped_spy.call_count == 0
+        assert load_user_spy.call_count == 1
+        load_user_spy.assert_called_once()
+        kwargs = load_user_spy.call_args.kwargs
+        positional = load_user_spy.call_args.args
+        # ``user_dir`` is the first positional arg per the loader signature.
+        assert positional[0] == user_dir
+        assert "resolver" in kwargs
+
+    @pytest.mark.asyncio()
+    async def test_user_profiles_dir_explicit_kb_lookup_bypasses_loader(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """When the caller provides ``kb_lookup`` directly (test path),
+        neither loader is invoked regardless of ``user_profiles_dir``.
+        """
+        from sovyx.voice.health._mixer_sanity import build_mixer_sanity_setup
+        from sovyx.voice.health.probe import probe as _probe_fn
+
+        user_dir = tmp_path / "mixer_kb" / "user"
+        with (
+            patch.object(
+                MixerKBLookup,
+                "load_shipped",
+                wraps=MixerKBLookup.load_shipped,
+            ) as load_shipped_spy,
+            patch.object(
+                MixerKBLookup,
+                "load_shipped_and_user",
+                wraps=MixerKBLookup.load_shipped_and_user,
+            ) as load_user_spy,
+        ):
+            setup = await build_mixer_sanity_setup(
+                probe_fn=_probe_fn,
+                hw=_hw(),
+                kb_lookup=_lookup_with(None),
+                role_resolver=MixerControlRoleResolver(),
+                user_profiles_dir=user_dir,
+            )
+        if setup is None:
+            pytest.skip(
+                "build_mixer_sanity_setup returned None "
+                "(non-Linux or unknown driver family); nothing to assert"
+            )
+        assert load_shipped_spy.call_count == 0
+        assert load_user_spy.call_count == 0
+
     def test_factory_integration_invokes_with_wal_path(self) -> None:
         """Paranoid-QA R3 HIGH-14 + R4 MEDIUM-5: AST-based invariant.
 
@@ -1943,3 +2065,109 @@ class TestBuildMixerSanitySetup:
         assert setup.kb_lookup is not None
         assert setup.role_resolver is not None
         assert setup.validation_probe_fn is not None
+
+
+# ── T5.39 — User-side mixer KB profile loading wire-up ─────────────
+
+
+class TestVoiceMixerKbUserProfilesTuningFlag:
+    """Engine config exposes a default-False staged-adoption gate."""
+
+    def test_default_is_false(self) -> None:
+        cfg = VoiceTuningConfig()
+        assert cfg.voice_mixer_kb_user_profiles_enabled is False
+
+    def test_can_be_enabled(self) -> None:
+        cfg = VoiceTuningConfig(voice_mixer_kb_user_profiles_enabled=True)
+        assert cfg.voice_mixer_kb_user_profiles_enabled is True
+
+
+class TestResolveMixerKbUserProfilesDir:
+    """``_resolve_mixer_kb_user_profiles_dir`` honours the tuning gate."""
+
+    def test_returns_none_when_flag_disabled(self, tmp_path: Path) -> None:
+        from sovyx.voice.health._factory_integration import (
+            _resolve_mixer_kb_user_profiles_dir,
+        )
+
+        tuning = VoiceTuningConfig(voice_mixer_kb_user_profiles_enabled=False)
+        assert _resolve_mixer_kb_user_profiles_dir(tmp_path, tuning) is None
+
+    def test_returns_data_dir_subpath_when_flag_enabled(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        from sovyx.voice.health._factory_integration import (
+            _resolve_mixer_kb_user_profiles_dir,
+        )
+
+        tuning = VoiceTuningConfig(voice_mixer_kb_user_profiles_enabled=True)
+        result = _resolve_mixer_kb_user_profiles_dir(tmp_path, tuning)
+        assert result == tmp_path / "mixer_kb" / "user"
+
+    def test_does_not_create_directory(self, tmp_path: Path) -> None:
+        # The helper resolves the path but MUST NOT create the dir —
+        # the loader handles missing dirs gracefully and creating it
+        # would litter the filesystem on every boot for operators
+        # who never opt in to user profiles.
+        from sovyx.voice.health._factory_integration import (
+            _resolve_mixer_kb_user_profiles_dir,
+        )
+
+        tuning = VoiceTuningConfig(voice_mixer_kb_user_profiles_enabled=True)
+        result = _resolve_mixer_kb_user_profiles_dir(tmp_path, tuning)
+        assert result is not None
+        assert not result.exists()
+
+
+class TestFactoryIntegrationInvokesUserProfilesDir:
+    """AST-based invariant — the call site MUST pass ``user_profiles_dir``.
+
+    Mirrors the ``half_heal_wal_path`` AST regression upstream. Without
+    this guard, silently deleting the kwarg ships production with the
+    user-profiles loader path effectively dead and every existing test
+    still passes.
+    """
+
+    def test_factory_integration_invokes_with_user_profiles_dir(self) -> None:
+        import ast
+        from pathlib import Path as _Path
+
+        repo_root = _Path(__file__).resolve().parents[4]
+        src = (
+            repo_root / "src" / "sovyx" / "voice" / "health" / "_factory_integration.py"
+        ).read_text(encoding="utf-8")
+        tree = ast.parse(src)
+
+        found_kwarg_value: ast.AST | None = None
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "build_mixer_sanity_setup"
+            ):
+                for kw in node.keywords:
+                    if kw.arg == "user_profiles_dir":
+                        found_kwarg_value = kw.value
+                        break
+                if found_kwarg_value is not None:
+                    break
+
+        assert found_kwarg_value is not None, (
+            "_factory_integration.py no longer calls "
+            "build_mixer_sanity_setup with a ``user_profiles_dir`` "
+            "kwarg — production has lost user-side KB loading. "
+            "Regression on T5.39 wire-up invariant."
+        )
+        assert isinstance(found_kwarg_value, ast.Call), (
+            f"user_profiles_dir kwarg is not a Call expression: "
+            f"got {type(found_kwarg_value).__name__}"
+        )
+        assert isinstance(found_kwarg_value.func, ast.Name), (
+            f"user_profiles_dir kwarg's callable is not a bare name: "
+            f"got {type(found_kwarg_value.func).__name__}"
+        )
+        assert found_kwarg_value.func.id == "_resolve_mixer_kb_user_profiles_dir", (
+            f"user_profiles_dir kwarg calls {found_kwarg_value.func.id}(), "
+            "not _resolve_mixer_kb_user_profiles_dir"
+        )

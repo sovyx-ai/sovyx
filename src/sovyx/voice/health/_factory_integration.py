@@ -32,6 +32,7 @@ import re
 import sys
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
@@ -43,7 +44,6 @@ from sovyx.voice.health.contract import CandidateEndpoint, CascadeResult, ProbeM
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
-    from pathlib import Path
 
     from sovyx.engine.config import VoiceTuningConfig
     from sovyx.voice._apo_detector import CaptureApoReport
@@ -56,6 +56,11 @@ logger = get_logger(__name__)
 # Relative paths under ``data_dir`` per ADR-combo-store-schema.md §2.
 _COMBO_STORE_FILENAME = "voice/capture_combos.json"
 _CAPTURE_OVERRIDES_FILENAME = "voice/capture_overrides.json"
+# T5.39 — operator-contributed mixer KB profiles directory. Convention
+# documented at :class:`MixerKBLookup.load_shipped_and_user` docstring
+# (``~/.sovyx/mixer_kb/user/``). Resolved from ``data_dir`` so test
+# harnesses with a tmp_path-rooted data dir get isolation.
+_MIXER_KB_USER_SUBDIR = Path("mixer_kb") / "user"
 
 
 def resolve_combo_store_path(data_dir: Path) -> Path:
@@ -66,6 +71,26 @@ def resolve_combo_store_path(data_dir: Path) -> Path:
 def resolve_capture_overrides_path(data_dir: Path) -> Path:
     """Return the canonical ``capture_overrides.json`` path under ``data_dir``."""
     return data_dir / _CAPTURE_OVERRIDES_FILENAME
+
+
+def _resolve_mixer_kb_user_profiles_dir(
+    data_dir: Path,
+    tuning: VoiceTuningConfig,
+) -> Path | None:
+    """Return the user-profiles directory per the T5.39 tuning gate.
+
+    Returns ``None`` when
+    :attr:`VoiceTuningConfig.voice_mixer_kb_user_profiles_enabled` is
+    False (default; back-compat). Returns
+    ``data_dir / "mixer_kb" / "user"`` otherwise. The directory is
+    NOT created here — :func:`load_profiles_from_directory` accepts
+    a missing path and returns an empty list, which is the
+    operator-friendly contract: dropping a profile is the only step
+    needed.
+    """
+    if not tuning.voice_mixer_kb_user_profiles_enabled:
+        return None
+    return data_dir / _MIXER_KB_USER_SUBDIR
 
 
 def _build_usb_fingerprint_resolver(
@@ -862,6 +887,14 @@ async def run_boot_cascade_for_candidates(
                 # mid-apply process crashes so the next cascade can
                 # restore pre-apply state before probing.
                 half_heal_wal_path=default_wal_path(data_dir),
+                # T5.39 — operator-contributed KB profiles. Lenient
+                # default: ``None`` skips user-side loading entirely.
+                # Flag-gated to keep production behaviour unchanged
+                # until operators opt in.
+                user_profiles_dir=_resolve_mixer_kb_user_profiles_dir(
+                    data_dir,
+                    tuning,
+                ),
             )
         except Exception:  # noqa: BLE001 — L2.5 setup must never block boot
             logger.warning(

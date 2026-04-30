@@ -1225,6 +1225,39 @@ class VoiceTuningConfig(BaseSettings):
     closes + telemetry confirms WMI events fire on real driver
     updates without false positives."""
 
+    voice_mixer_kb_user_profiles_enabled: bool = False
+    """Load operator-contributed mixer KB profiles from ``data_dir/mixer_kb/user/``.
+
+    T5.39 wire-up. The :class:`MixerKBLookup` foundation already
+    exposes :meth:`load_shipped_and_user`, but pre-wire-up production
+    only called :meth:`load_shipped` — operators who dropped custom
+    YAML profiles in ``~/.sovyx/mixer_kb/user/`` were silently
+    ignored. With this flag True, the L2.5 mixer-sanity factory
+    routes through the user-aware loader: shipped profiles + user
+    profiles are merged with the existing dedupe rule
+    (user-contributed profile_id wins over shipped same-id) and
+    user-contributed matches surface with the
+    ``MixerKBMatch.is_user_contributed=True`` provenance flag for
+    dashboard / telemetry partitioning.
+
+    Foundation default ``False`` per ``feedback_staged_adoption`` —
+    operators opt in once they've authored their first profile or
+    pulled from a community KB drop. Pre-flip pilot validates:
+
+    * The user directory is read once at boot (not per cascade).
+    * Malformed user YAML is skipped with a structured WARN, not a
+      crash.
+    * ``MixerKBMatch.is_user_contributed`` propagates to the
+      observability surface so accidental priority inversions
+      (community profile silently winning over a shipped tested
+      profile) are visible.
+
+    Default flip planned post-pilot once telemetry shows non-zero
+    user-profile load rate without false-positive cascade
+    selections. Linux-only behaviour per L2.5 scope; non-Linux
+    platforms ignore the flag.
+    """
+
     combo_store_usb_fingerprint_enabled: bool = False
     """Persist + match :class:`ComboStore` entries by stable USB fingerprint.
 
