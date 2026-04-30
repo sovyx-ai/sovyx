@@ -1519,3 +1519,449 @@ class TestProbeHistoryConfigurable:
 
         cfg = VoiceTuningConfig(combo_probe_history_max=1)
         assert cfg.combo_probe_history_max == 1
+
+
+# ── T5.43 + T5.51 wire-up: USB fingerprint persistence + lookup ──
+
+
+class TestUsbFingerprintPersistence:
+    """Schema + serialization additive contract for ``usb_fingerprint``."""
+
+    def test_default_none_when_resolver_absent(self, tmp_path: Path) -> None:
+        # Pre-wire-up behaviour: no resolver configured, no fingerprint
+        # persisted. Round-trip must preserve None.
+        store = _make_store(tmp_path)
+        store.load()
+        _record(store)
+
+        store2 = _make_store(tmp_path)
+        store2.load()
+        entry = store2.get("{guid-A}")
+        assert entry is not None
+        assert entry.usb_fingerprint is None
+
+    def test_resolver_populates_fingerprint_on_record(self, tmp_path: Path) -> None:
+        resolver_calls: list[str] = []
+
+        def _resolver(guid: str) -> str | None:
+            resolver_calls.append(guid)
+            return "usb-1532:0543"
+
+        store = _make_store(tmp_path, usb_fingerprint_resolver=_resolver)
+        store.load()
+        _record(store)
+
+        # Resolver was invoked exactly once at record_winning time.
+        assert resolver_calls == ["{guid-A}"]
+        # Reload and confirm the fingerprint persisted.
+        store2 = _make_store(tmp_path, usb_fingerprint_resolver=_resolver)
+        store2.load()
+        entry = store2.get("{guid-A}")
+        assert entry is not None
+        assert entry.usb_fingerprint == "usb-1532:0543"
+
+    def test_resolver_returning_none_persists_none(self, tmp_path: Path) -> None:
+        # Non-USB endpoint — resolver returns None, no fingerprint
+        # persisted. The combo store still works, the entry just lacks
+        # a fingerprint key.
+        store = _make_store(tmp_path, usb_fingerprint_resolver=lambda _: None)
+        store.load()
+        _record(store)
+
+        store2 = _make_store(tmp_path)
+        store2.load()
+        entry = store2.get("{guid-A}")
+        assert entry is not None
+        assert entry.usb_fingerprint is None
+
+    def test_resolver_exception_does_not_break_record(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        # Resolver raises (driver glitch / comtypes interop quirk) —
+        # the entry must still be recorded, fingerprint just stays
+        # None.
+        def _crashing_resolver(_: str) -> str | None:
+            msg = "simulated COM failure"
+            raise RuntimeError(msg)
+
+        store = _make_store(tmp_path, usb_fingerprint_resolver=_crashing_resolver)
+        store.load()
+        _record(store)
+
+        entry = store.get("{guid-A}")
+        assert entry is not None
+        assert entry.usb_fingerprint is None
+
+    def test_legacy_entry_without_field_loads_as_none(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        # Schema is additive — legacy v3 entries written before the
+        # wire-up don't carry usb_fingerprint and must read as None.
+        path = tmp_path / "capture_combos.json"
+        legacy = {
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "generated_by": "sovyx",
+            "last_updated": "2026-04-19T12:00:00+00:00",
+            "platform": "windows",
+            "os_build": "10.0.26200",
+            "vad_model_version": "",
+            "wake_word_model_version": "",
+            "stt_model_version": "",
+            "audio_subsystem_fingerprint": _fingerprint_to_dict(_fingerprint()),
+            "entries": {
+                "{guid-A}": {
+                    "endpoint_guid": "{guid-A}",
+                    "device_friendly_name": "Test Mic",
+                    "device_interface_name": "USB",
+                    "device_class": "microphone",
+                    "endpoint_fxproperties_sha": "ep-{guid-A}",
+                    "winning_combo": _combo_to_dict(_good_combo()),
+                    "validated_at": "2026-04-19T12:00:00+00:00",
+                    "validation_mode": "warm",
+                    "vad_max_prob_at_validation": 0.9,
+                    "vad_mean_prob_at_validation": 0.3,
+                    "rms_db_at_validation": -20.0,
+                    "probe_duration_ms": 1000,
+                    "detected_apos_at_validation": [],
+                    "cascade_attempts_before_success": 1,
+                    "boots_validated": 1,
+                    "last_boot_validated": "2026-04-19T12:00:00+00:00",
+                    "last_boot_diagnosis": "healthy",
+                    "probe_history": [],
+                    "pinned": False,
+                    "candidate_kind": "hardware",
+                    "consecutive_validation_failures": 0,
+                    # NOTE: no ``usb_fingerprint`` field — pre-wire-up legacy.
+                },
+            },
+        }
+        path.write_text(json.dumps(legacy), encoding="utf-8")
+
+        store = _make_store(tmp_path)
+        store.load()
+        entry = store.get("{guid-A}")
+        assert entry is not None
+        assert entry.usb_fingerprint is None
+
+    def test_corrupt_fingerprint_field_falls_back_to_none(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        # Hand-edited / corrupted JSON with a non-string fingerprint
+        # value must coerce to None rather than crash the load.
+        path = tmp_path / "capture_combos.json"
+        legacy = {
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "generated_by": "sovyx",
+            "last_updated": "2026-04-19T12:00:00+00:00",
+            "platform": "windows",
+            "os_build": "10.0.26200",
+            "vad_model_version": "",
+            "wake_word_model_version": "",
+            "stt_model_version": "",
+            "audio_subsystem_fingerprint": _fingerprint_to_dict(_fingerprint()),
+            "entries": {
+                "{guid-A}": {
+                    "endpoint_guid": "{guid-A}",
+                    "device_friendly_name": "Test Mic",
+                    "device_interface_name": "USB",
+                    "device_class": "microphone",
+                    "endpoint_fxproperties_sha": "ep-{guid-A}",
+                    "winning_combo": _combo_to_dict(_good_combo()),
+                    "validated_at": "2026-04-19T12:00:00+00:00",
+                    "validation_mode": "warm",
+                    "vad_max_prob_at_validation": 0.9,
+                    "vad_mean_prob_at_validation": 0.3,
+                    "rms_db_at_validation": -20.0,
+                    "probe_duration_ms": 1000,
+                    "detected_apos_at_validation": [],
+                    "cascade_attempts_before_success": 1,
+                    "boots_validated": 1,
+                    "last_boot_validated": "2026-04-19T12:00:00+00:00",
+                    "last_boot_diagnosis": "healthy",
+                    "probe_history": [],
+                    "pinned": False,
+                    "candidate_kind": "hardware",
+                    "consecutive_validation_failures": 0,
+                    "usb_fingerprint": 42,  # Wrong type — must coerce to None.
+                },
+            },
+        }
+        path.write_text(json.dumps(legacy), encoding="utf-8")
+
+        store = _make_store(tmp_path)
+        store.load()
+        entry = store.get("{guid-A}")
+        assert entry is not None
+        assert entry.usb_fingerprint is None
+
+
+class TestUsbFingerprintRecovery:
+    """Lookup precedence: GUID-primary, fingerprint-secondary."""
+
+    def test_no_resolver_no_fallback(self, tmp_path: Path) -> None:
+        # Pre-wire-up behaviour: a miss is a miss, no fingerprint
+        # scan attempted.
+        store = _make_store(tmp_path)
+        store.load()
+        _record(store, "{guid-A}")
+        # New endpoint_guid lookup misses — no resolver, no recovery.
+        assert store.get("{guid-B}") is None
+        # Stats reflect the miss.
+        assert store.stats().fast_path_misses >= 1
+
+    def test_primary_hit_skips_fingerprint_scan(self, tmp_path: Path) -> None:
+        # Resolver MUST NOT be invoked when primary GUID lookup hits —
+        # avoids COM round-trips on the steady-state fast path.
+        resolver_calls: list[str] = []
+
+        def _resolver(guid: str) -> str | None:
+            resolver_calls.append(guid)
+            return "usb-1532:0543"
+
+        store = _make_store(tmp_path, usb_fingerprint_resolver=_resolver)
+        store.load()
+        _record(store, "{guid-A}")
+        resolver_calls.clear()  # Clear the record_winning invocation.
+
+        entry = store.get("{guid-A}")
+        assert entry is not None
+        # Lookup fast-path hit didn't call the resolver.
+        assert resolver_calls == []
+
+    def test_replug_recovers_combo_via_fingerprint(self, tmp_path: Path) -> None:
+        # Scenario: user records winning combo for {guid-A} (mic on
+        # port A). User replugs to port B → new endpoint_guid {guid-B}.
+        # Both endpoint_guids resolve to the same USB fingerprint.
+        # Lookup for {guid-B} must recover {guid-A}'s combo.
+        guid_to_fp = {"{guid-A}": "usb-1532:0543", "{guid-B}": "usb-1532:0543"}
+
+        store = _make_store(
+            tmp_path,
+            usb_fingerprint_resolver=lambda g: guid_to_fp.get(g),
+        )
+        store.load()
+        _record(store, "{guid-A}")
+
+        # Lookup for {guid-B} (the new port). Primary misses,
+        # fingerprint scan recovers {guid-A}'s combo.
+        entry = store.get("{guid-B}")
+        assert entry is not None
+        # The recovered entry carries the OLD GUID — caller will
+        # re-validate via the cascade and record_winning under
+        # {guid-B}'s key.
+        assert entry.endpoint_guid == "{guid-A}"
+        assert entry.usb_fingerprint == "usb-1532:0543"
+
+    def test_recovery_works_for_unavailable_entries(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        # R13 marks the OLD endpoint_guid as available=False when it
+        # stops enumerating (post-replug). Fingerprint recovery MUST
+        # still match unavailable entries — they are exactly the ones
+        # that need recovery via the new GUID.
+        guid_to_fp = {"{guid-A}": "usb-1532:0543", "{guid-B}": "usb-1532:0543"}
+
+        store = _make_store(
+            tmp_path,
+            usb_fingerprint_resolver=lambda g: guid_to_fp.get(g),
+            live_guids=frozenset({"{guid-B}"}),  # {guid-A} no longer enumerated.
+        )
+        store.load()
+        # Use a separate write store (no live_guids gate) to seed
+        # {guid-A}; then reload via the gated store to apply R13.
+        write_store = _make_store(
+            tmp_path,
+            usb_fingerprint_resolver=lambda g: guid_to_fp.get(g),
+        )
+        write_store.load()
+        _record(write_store, "{guid-A}")
+        store.load()  # R13 applies — {guid-A} entry exists but available=False.
+
+        # Direct GUID lookup for {guid-A} should miss (R13 unavailable).
+        # Lookup for {guid-B} should recover via fingerprint despite
+        # the matching entry being unavailable.
+        recovered = store.get("{guid-B}")
+        assert recovered is not None
+        assert recovered.endpoint_guid == "{guid-A}"
+        # Recovery ALWAYS implies revalidation — the recovered combo was
+        # validated against the OLD endpoint, not the caller's NEW one.
+        assert recovered.needs_revalidation is True
+        # The cascade-side ``needs_revalidation(guid)`` query also
+        # reports True on the requested key so the existing log line
+        # ``voice_cascade_store_needs_revalidation`` fires.
+        assert store.needs_revalidation("{guid-B}") is True
+
+    def test_fingerprint_mismatch_does_not_recover(self, tmp_path: Path) -> None:
+        # Different physical device — fingerprints don't match,
+        # recovery must NOT cross-pollinate combos between unrelated
+        # USB hardware.
+        guid_to_fp = {
+            "{guid-A}": "usb-1532:0543",  # Razer mic.
+            "{guid-B}": "usb-046d:0a91",  # Logitech mic — different VID/PID.
+        }
+
+        store = _make_store(
+            tmp_path,
+            usb_fingerprint_resolver=lambda g: guid_to_fp.get(g),
+        )
+        store.load()
+        _record(store, "{guid-A}")
+
+        # Lookup for {guid-B} resolves to a different fingerprint —
+        # no recovery, no false-positive match.
+        assert store.get("{guid-B}") is None
+
+    def test_resolver_returns_none_no_recovery(self, tmp_path: Path) -> None:
+        # Non-USB endpoint at lookup time (PCI codec etc.) → resolver
+        # returns None → no fingerprint scan.
+        guid_to_fp: dict[str, str | None] = {
+            "{guid-A}": "usb-1532:0543",
+            "{guid-PCI}": None,  # Non-USB.
+        }
+
+        store = _make_store(
+            tmp_path,
+            usb_fingerprint_resolver=lambda g: guid_to_fp.get(g),
+        )
+        store.load()
+        _record(store, "{guid-A}")
+
+        assert store.get("{guid-PCI}") is None
+
+    def test_recovery_resolver_exception_falls_through(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        # Resolver throws on lookup — must degrade to a normal miss,
+        # not propagate the exception out of get().
+        first_call = {"done": False}
+
+        def _flaky_resolver(_: str) -> str | None:
+            if first_call["done"]:
+                msg = "simulated post-record COM glitch"
+                raise RuntimeError(msg)
+            first_call["done"] = True
+            return "usb-1532:0543"
+
+        store = _make_store(tmp_path, usb_fingerprint_resolver=_flaky_resolver)
+        store.load()
+        _record(store, "{guid-A}")  # First call (record path) succeeds.
+
+        # Second resolver call (lookup path) raises. get() must return None.
+        assert store.get("{guid-B}") is None
+
+    def test_recovery_marks_returned_entry_for_revalidation(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        # Recovery ALWAYS implies needs_revalidation=True — the
+        # recovered combo was validated against the OLD endpoint_guid;
+        # the caller asked about a NEW endpoint_guid; the cascade must
+        # re-validate before trusting the combo on the new key.
+        guid_to_fp = {"{guid-A}": "usb-1532:0543", "{guid-B}": "usb-1532:0543"}
+
+        store = _make_store(
+            tmp_path,
+            usb_fingerprint_resolver=lambda g: guid_to_fp.get(g),
+        )
+        store.load()
+        _record(store, "{guid-A}")  # Records HEALTHY → needs_revalidation=False.
+
+        recovered = store.get("{guid-B}")
+        assert recovered is not None
+        # The original {guid-A} entry was needs_revalidation=False, but
+        # the recovery overrides this on the returned ComboEntry.
+        assert recovered.needs_revalidation is True
+
+    def test_needs_revalidation_returns_false_when_recovery_unavailable(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        # No recovery match → needs_revalidation reports False (no
+        # entry to revalidate at all). Symmetric with get() returning
+        # None.
+        store = _make_store(
+            tmp_path,
+            usb_fingerprint_resolver=lambda _: "usb-NEVER-MATCHES",
+        )
+        store.load()
+        assert store.needs_revalidation("{guid-not-stored}") is False
+
+    def test_explicit_fingerprint_kwarg_overrides_resolver(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        # When the caller pre-resolved the fingerprint (e.g., the
+        # cascade computed it for some other reason), record_winning
+        # must NOT re-invoke the resolver.
+        resolver_calls: list[str] = []
+
+        def _resolver(guid: str) -> str | None:
+            resolver_calls.append(guid)
+            return "usb-RESOLVER-RESULT"
+
+        store = _make_store(tmp_path, usb_fingerprint_resolver=_resolver)
+        store.load()
+        store.record_winning(
+            "{guid-A}",
+            device_friendly_name="Test Mic",
+            device_interface_name="USB",
+            device_class="microphone",
+            endpoint_fxproperties_sha="ep-{guid-A}",
+            combo=_good_combo(),
+            probe=_good_probe(),
+            detected_apos=(),
+            cascade_attempts_before_success=1,
+            usb_fingerprint="usb-CALLER-PROVIDED",
+        )
+
+        assert resolver_calls == []  # Resolver bypassed.
+        entry = store.get("{guid-A}")
+        assert entry is not None
+        assert entry.usb_fingerprint == "usb-CALLER-PROVIDED"
+
+
+class TestComboStoreUsbFingerprintTuningFlag:
+    """Engine config exposes a default-False staged-adoption gate."""
+
+    def test_default_is_false(self) -> None:
+        from sovyx.engine.config import VoiceTuningConfig
+
+        cfg = VoiceTuningConfig()
+        assert cfg.combo_store_usb_fingerprint_enabled is False
+
+    def test_can_be_enabled(self) -> None:
+        from sovyx.engine.config import VoiceTuningConfig
+
+        cfg = VoiceTuningConfig(combo_store_usb_fingerprint_enabled=True)
+        assert cfg.combo_store_usb_fingerprint_enabled is True
+
+
+class TestFactoryIntegrationResolverBuilder:
+    """``_build_usb_fingerprint_resolver`` honours the tuning gate."""
+
+    def test_returns_none_when_flag_disabled(self) -> None:
+        from sovyx.engine.config import VoiceTuningConfig
+        from sovyx.voice.health._factory_integration import (
+            _build_usb_fingerprint_resolver,
+        )
+
+        tuning = VoiceTuningConfig(combo_store_usb_fingerprint_enabled=False)
+        assert _build_usb_fingerprint_resolver(tuning) is None
+
+    def test_returns_callable_when_flag_enabled(self) -> None:
+        from sovyx.engine.config import VoiceTuningConfig
+        from sovyx.voice.health._endpoint_fingerprint import (
+            resolve_endpoint_to_usb_fingerprint,
+        )
+        from sovyx.voice.health._factory_integration import (
+            _build_usb_fingerprint_resolver,
+        )
+
+        tuning = VoiceTuningConfig(combo_store_usb_fingerprint_enabled=True)
+        resolver = _build_usb_fingerprint_resolver(tuning)
+        assert resolver is resolve_endpoint_to_usb_fingerprint

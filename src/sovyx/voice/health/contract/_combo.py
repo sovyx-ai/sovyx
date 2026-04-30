@@ -362,6 +362,12 @@ class ComboEntry:
     # :class:`~sovyx.voice.device_enum.DeviceKind` value as string.
     # Back-compat default ``"unknown"`` preserves v2 entries as-is.
     candidate_kind: str = "unknown"
+    # T5.43 + T5.51 wire-up — stable USB fingerprint
+    # ``"usb-VVVV:PPPP[-SERIAL]"`` for cross-port / cross-firmware-update
+    # combo recovery. ``None`` for non-USB endpoints (PCI codecs,
+    # virtual loopback, Bluetooth A2DP) and for legacy entries written
+    # before the resolver was wired in. Additive — no schema bump.
+    usb_fingerprint: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -42,7 +42,7 @@ from sovyx.voice.health.combo_store import ComboStore
 from sovyx.voice.health.contract import CandidateEndpoint, CascadeResult, ProbeMode
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Sequence
+    from collections.abc import Callable, Iterable, Sequence
     from pathlib import Path
 
     from sovyx.engine.config import VoiceTuningConfig
@@ -66,6 +66,31 @@ def resolve_combo_store_path(data_dir: Path) -> Path:
 def resolve_capture_overrides_path(data_dir: Path) -> Path:
     """Return the canonical ``capture_overrides.json`` path under ``data_dir``."""
     return data_dir / _CAPTURE_OVERRIDES_FILENAME
+
+
+def _build_usb_fingerprint_resolver(
+    tuning: VoiceTuningConfig,
+) -> Callable[[str], str | None] | None:
+    """Return the ComboStore USB fingerprint resolver per tuning gate.
+
+    T5.43 + T5.51 wire-up. Returns ``None`` when
+    :attr:`VoiceTuningConfig.combo_store_usb_fingerprint_enabled` is
+    False (default; back-compat) — the store falls back to its
+    pre-wire-up endpoint-GUID-only behaviour. Returns the
+    cross-platform façade
+    :func:`sovyx.voice.health._endpoint_fingerprint.resolve_endpoint_to_usb_fingerprint`
+    when True.
+
+    Lazy-imports so non-Windows / slim-CI hosts that lack comtypes
+    don't pay the import cost when the flag is off.
+    """
+    if not tuning.combo_store_usb_fingerprint_enabled:
+        return None
+    from sovyx.voice.health._endpoint_fingerprint import (  # noqa: PLC0415 — lazy import per resolver flag
+        resolve_endpoint_to_usb_fingerprint,
+    )
+
+    return resolve_endpoint_to_usb_fingerprint
 
 
 async def _autofix_after_driver_watchdog_scan(
@@ -585,7 +610,10 @@ async def run_boot_cascade(
     overrides = capture_overrides
     if store is None:
         try:
-            store = ComboStore(resolve_combo_store_path(data_dir))
+            store = ComboStore(
+                resolve_combo_store_path(data_dir),
+                usb_fingerprint_resolver=_build_usb_fingerprint_resolver(tuning),
+            )
             store.load()
         except Exception:  # noqa: BLE001 — store failure must not block boot (ADR §5.11)
             logger.warning("voice_boot_cascade_combo_store_unavailable", exc_info=True)
@@ -756,7 +784,10 @@ async def run_boot_cascade_for_candidates(
     overrides = capture_overrides
     if store is None:
         try:
-            store = ComboStore(resolve_combo_store_path(data_dir))
+            store = ComboStore(
+                resolve_combo_store_path(data_dir),
+                usb_fingerprint_resolver=_build_usb_fingerprint_resolver(tuning),
+            )
             store.load()
         except Exception:  # noqa: BLE001 — store failure must not block boot (ADR §5.11)
             logger.warning("voice_boot_cascade_combo_store_unavailable", exc_info=True)

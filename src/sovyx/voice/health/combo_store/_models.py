@@ -97,6 +97,12 @@ class _LiveEntry:
     # field continue to compile — legacy v2 entries migrate to this
     # value via :func:`_migrate_v2_to_v3`.
     candidate_kind: str = "unknown"
+    # T5.43 + T5.51 wire-up — stable USB fingerprint
+    # ``"usb-VVVV:PPPP[-SERIAL]"`` for cross-port / cross-firmware-update
+    # combo recovery. Default ``None`` is back-compat: legacy entries
+    # written pre-T5.51 wire-up don't carry the field in their JSON and
+    # read as ``None``. Additive field, no schema version bump.
+    usb_fingerprint: str | None = None
 
     def to_immutable(self) -> ComboEntry:
         return ComboEntry(
@@ -121,6 +127,7 @@ class _LiveEntry:
             pinned=self.pinned,
             needs_revalidation=self.needs_revalidation,
             candidate_kind=self.candidate_kind,
+            usb_fingerprint=self.usb_fingerprint,
         )
 
 
@@ -198,6 +205,10 @@ def _entry_to_dict(live: _LiveEntry) -> dict[str, Any]:
         # C2 auto-unpin lifecycle (additive — no schema bump; default 0
         # on read keeps pre-C2 entries backwards-compat).
         "consecutive_validation_failures": live.consecutive_validation_failures,
+        # T5.43 + T5.51 wire-up. ``None`` writes as JSON ``null`` and
+        # reads back as ``None`` via ``raw_entry.get("usb_fingerprint")``;
+        # legacy entries that pre-date this field also read as ``None``.
+        "usb_fingerprint": live.usb_fingerprint,
     }
 
 

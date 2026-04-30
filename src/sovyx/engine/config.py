@@ -1225,6 +1225,36 @@ class VoiceTuningConfig(BaseSettings):
     closes + telemetry confirms WMI events fire on real driver
     updates without false positives."""
 
+    combo_store_usb_fingerprint_enabled: bool = False
+    """Persist + match :class:`ComboStore` entries by stable USB fingerprint.
+
+    T5.43 + T5.51 wire-up. When enabled the voice factory injects a
+    cross-platform resolver into :class:`ComboStore` that maps
+    ``endpoint_guid → "usb-VVVV:PPPP[-SERIAL]"`` (Windows via
+    :mod:`sovyx.voice.health._endpoint_fingerprint_win` IPropertyStore +
+    PKEY_Device_InstanceId; Linux via parsing of the
+    ``{linux-usb-VVVV:PPPP-...}`` synthetic guid shape). Side effects:
+
+    * :meth:`ComboStore.record_winning` resolves and persists the
+      fingerprint on every newly written entry.
+    * :meth:`ComboStore.get` falls back to a fingerprint scan when
+      the primary endpoint_guid lookup misses — recovering the
+      validated combo across port changes / firmware updates that
+      mint a new endpoint_guid for the SAME physical USB device.
+
+    Foundation default is ``False`` per ``feedback_staged_adoption``
+    — pre-wire-up entries lack the fingerprint field (back-compat),
+    and operators pilot the resolver before defaulting on. The
+    fallback-scan log line ``voice.combo_store.usb_fingerprint_recovery_hit``
+    surfaces real-world hit rate so the default flip to ``True`` can
+    be telemetry-driven.
+
+    Non-USB endpoints (PCI codecs, virtual loopback, Bluetooth A2DP)
+    return ``None`` from the resolver and are persisted without a
+    fingerprint — the existing endpoint_guid-only lookup is the
+    durable contract for those classes.
+    """
+
     audio_driver_update_recascade_enabled: bool = False
     """Trigger graceful re-cascade on detected driver updates (Windows only).
 

@@ -19,6 +19,7 @@ flag, anything else falls through to the L2 cascade.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import json
 import os
 import platform
@@ -86,6 +87,23 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+def _coerce_optional_str(value: object) -> str | None:
+    """Coerce a JSON-deserialized value into ``str | None``.
+
+    JSON ``null`` deserializes to Python ``None``; legacy entries
+    that lack the field also surface as ``None`` via ``dict.get``.
+    Non-string non-None values (corrupted writes, hand-edited JSON)
+    fall back to ``None`` rather than raising — combo-store reads
+    are best-effort, and a malformed optional-string field shouldn't
+    bubble up as a sanity error when the field has no validator.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value or None
+    return None
+
+
 class ComboStore:
     """Persistent memoization of validated capture combos.
 
@@ -114,6 +132,15 @@ class ComboStore:
             currently enumerated by PortAudio / OS APIs. R13 marks
             entries whose GUID is absent from this set as
             ``available=False`` but keeps them on disk.
+        usb_fingerprint_resolver: T5.43 + T5.51 wire-up. Optional
+            callable mapping ``endpoint_guid → "usb-VVVV:PPPP[-SERIAL]"``
+            (or ``None`` for non-USB endpoints). When configured,
+            :meth:`record_winning` resolves + persists the fingerprint
+            on each entry, and :meth:`get` falls back to a fingerprint
+            scan when the primary GUID lookup misses — recovering the
+            validated combo across port changes / firmware updates.
+            Default ``None`` (lenient) preserves pre-wire-up behaviour:
+            no fingerprint persisted, no fallback scan.
     """
 
     def __init__(
@@ -131,6 +158,7 @@ class ComboStore:
         stt_model_version: str = "",
         vad_model_version: str = "",
         live_endpoint_guids: Callable[[], frozenset[str]] | None = None,
+        usb_fingerprint_resolver: Callable[[str], str | None] | None = None,
     ) -> None:
         self._path = path
         self._lock_path = path.with_suffix(path.suffix + ".lock")
@@ -144,6 +172,7 @@ class ComboStore:
         self._stt_model_version = stt_model_version
         self._vad_model_version = vad_model_version
         self._live_endpoint_guids = live_endpoint_guids
+        self._usb_fingerprint_resolver = usb_fingerprint_resolver
         self._entries: dict[str, _LiveEntry] = {}
         self._stats = ComboStoreStats()
         self._loaded = False
@@ -367,16 +396,108 @@ class ComboStore:
     def get(self, endpoint_guid: str) -> ComboEntry | None:
         self._ensure_loaded()
         live = self._entries.get(endpoint_guid)
-        if live is None or not live.available:
-            self._stats.fast_path_misses += 1
+        if live is not None and live.available:
+            self._stats.fast_path_hits += 1
+            return live.to_immutable()
+        # T5.43 + T5.51 wire-up — fingerprint fallback. Either the
+        # endpoint_guid was never seen (replug landed on a NEW guid
+        # on Windows; surrogate hash drifted on Linux) or the entry
+        # exists but R13 marked it ``available=False`` (the OLD
+        # endpoint stopped enumerating). Both states mean "the
+        # cascade-validated combo for this physical USB device may
+        # exist under a different key" — the resolver derives the
+        # canonical USB fingerprint and we scan entries for a match.
+        recovered = self._fingerprint_recover(endpoint_guid)
+        if recovered is not None:
+            self._stats.fast_path_hits += 1
+            return recovered
+        self._stats.fast_path_misses += 1
+        return None
+
+    def _fingerprint_recover(self, endpoint_guid: str) -> ComboEntry | None:
+        """Second-chance lookup via stable USB fingerprint.
+
+        Returns ``None`` immediately when no resolver is configured
+        (default; back-compat). Otherwise resolves the requested
+        endpoint to a canonical ``"usb-VVVV:PPPP[-SERIAL]"`` shape
+        and scans the in-memory entries for one carrying the same
+        fingerprint.
+
+        Match criteria intentionally include ``available=False``
+        entries: post-replug the OLD endpoint_guid is no longer
+        enumerated (R13 marks it unavailable), so the unavailable
+        entry IS the one we want to recover. The cascade re-validates
+        the returned combo against the NEW endpoint anyway —
+        :class:`ComboStore` is advisory, not authoritative.
+
+        Returns the matched :class:`ComboEntry` or ``None`` when:
+
+        * No resolver wired (pre-wire-up default).
+        * Resolver returns ``None`` (non-USB endpoint, slim-CI host
+          without comtypes, missing sysfs path).
+        * No stored entry carries the resolved fingerprint.
+        * The stored entry's fingerprint matches but its endpoint_guid
+          equals the request (defensive — we already missed primary
+          lookup, so this can only happen in races).
+        """
+        if self._usb_fingerprint_resolver is None:
             return None
-        self._stats.fast_path_hits += 1
-        return live.to_immutable()
+        try:
+            fingerprint = self._usb_fingerprint_resolver(endpoint_guid)
+        except Exception as exc:  # noqa: BLE001 — resolver best-effort
+            logger.debug(
+                "voice.combo_store.usb_fingerprint_resolve_failed",
+                endpoint=endpoint_guid,
+                reason=str(exc),
+                exc_type=type(exc).__name__,
+            )
+            return None
+        if not fingerprint:
+            return None
+        for stored_guid, live in self._entries.items():
+            if live.usb_fingerprint != fingerprint:
+                continue
+            # Defensive — primary lookup already missed; if the GUIDs
+            # equal here the entry must be unavailable (R13) and we
+            # WANT to recover, otherwise it's a race and we'd be
+            # returning the same entry twice. Skip only the
+            # GUID-equal + available case (the racy one); the
+            # GUID-equal + unavailable case is the whole point of
+            # the fingerprint fallback.
+            if stored_guid == endpoint_guid and live.available:
+                continue
+            logger.info(
+                "voice.combo_store.usb_fingerprint_recovery_hit",
+                requested_endpoint=endpoint_guid,
+                matched_endpoint=stored_guid,
+                usb_fingerprint=fingerprint,
+                matched_available=live.available,
+                matched_needs_revalidation=live.needs_revalidation,
+            )
+            # Recovery always implies revalidation — the matched entry's
+            # combo was validated against the OLD endpoint_guid, the
+            # caller asked about a NEW endpoint_guid. The cascade
+            # re-validates before trusting the combo on the new key.
+            recovered = live.to_immutable()
+            return dataclasses.replace(recovered, needs_revalidation=True)
+        return None
 
     def needs_revalidation(self, endpoint_guid: str) -> bool:
         self._ensure_loaded()
         live = self._entries.get(endpoint_guid)
-        return bool(live and live.needs_revalidation)
+        if live is not None and live.available:
+            return live.needs_revalidation
+        # T5.43 + T5.51 wire-up — fingerprint recovery always implies
+        # revalidation (the recovered combo is keyed by a DIFFERENT
+        # endpoint_guid, so it has never been validated against the
+        # caller's endpoint). Symmetric with :meth:`get`'s recovery
+        # path so cascade-side logging fires correctly:
+        # ``needs_revalidation(guid)`` returns ``True`` on a recovery
+        # hit and the cascade emits ``voice_cascade_store_needs_revalidation``.
+        return (
+            self._usb_fingerprint_resolver is not None
+            and self._fingerprint_recover(endpoint_guid) is not None
+        )
 
     def entries(self) -> Iterator[ComboEntry]:
         self._ensure_loaded()
@@ -400,8 +521,26 @@ class ComboStore:
         probe: ProbeResult,
         detected_apos: Sequence[str],
         cascade_attempts_before_success: int,
+        usb_fingerprint: str | None = None,
     ) -> None:
         self._ensure_loaded()
+        # T5.43 + T5.51 wire-up: when the caller didn't pre-resolve
+        # the fingerprint (most call-sites don't) AND a resolver is
+        # configured, derive it best-effort from the endpoint_guid.
+        # Failures return ``None`` and the entry is persisted without
+        # a fingerprint — back-compat with pre-wire-up behaviour.
+        resolved_fingerprint = usb_fingerprint
+        if resolved_fingerprint is None and self._usb_fingerprint_resolver is not None:
+            try:
+                resolved_fingerprint = self._usb_fingerprint_resolver(endpoint_guid)
+            except Exception as exc:  # noqa: BLE001 — resolver is best-effort
+                logger.debug(
+                    "voice.combo_store.usb_fingerprint_resolve_failed",
+                    endpoint=endpoint_guid,
+                    reason=str(exc),
+                    exc_type=type(exc).__name__,
+                )
+                resolved_fingerprint = None
         with acquire_file_lock(self._lock_path):
             # C1: refresh from disk inside the lock so concurrent
             # writes from another daemon process are merged, not
@@ -439,6 +578,7 @@ class ComboStore:
                 pinned=False,
                 needs_revalidation=False,
                 available=True,
+                usb_fingerprint=resolved_fingerprint,
             )
             self._write_atomic()
 
@@ -903,6 +1043,7 @@ class ComboStore:
             consecutive_validation_failures=int(
                 raw_entry.get("consecutive_validation_failures", 0),
             ),
+            usb_fingerprint=_coerce_optional_str(raw_entry.get("usb_fingerprint")),
         )
 
 
