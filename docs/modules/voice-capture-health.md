@@ -73,14 +73,11 @@ VAD_INSENSITIVE       → healthy RMS but VAD probability in (0.05, 0.5]
 APO_DEGRADED          → healthy RMS but VAD probability ≤ 0.05 (Voice Clarity etc.)
 DRIVER_ERROR          → PortAudio refused the combo
 DEVICE_BUSY           → exclusive contention with another process
-HOT_UNPLUGGED         → endpoint vanished mid-attempt
-SELF_FEEDBACK         → wake-word fired during TTS playback (caught by L4.4.6)
 PERMISSION_DENIED     → OS blocked microphone access
 MIXER_ZEROED          → L2.5: attenuation regime (Capture attenuated + boost at zero)
 MIXER_SATURATED       → L2.5: saturation regime (boost chain clipping internally)
 MIXER_UNKNOWN_PATTERN → L2.5: out-of-range mixer state with no KB match
 MIXER_CUSTOMIZED      → L2.5: intentional user tuning detected; no action taken
-MIXER_CALIBRATION_NEEDED → L2.5: no KB, no customization — wizard recommended
 ```
 
 The diagnosis drives `RemediationHint` text shown in `sovyx doctor voice`

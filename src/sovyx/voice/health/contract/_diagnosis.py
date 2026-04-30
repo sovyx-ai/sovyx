@@ -32,8 +32,6 @@ class Diagnosis(StrEnum):
     VAD_INSENSITIVE = "vad_insensitive"
     DRIVER_ERROR = "driver_error"
     DEVICE_BUSY = "device_busy"
-    HOT_UNPLUGGED = "hot_unplugged"
-    SELF_FEEDBACK = "self_feedback"
     PERMISSION_DENIED = "permission_denied"
     # Kernel-side IAudioClient invalidated state: device enumerates as
     # healthy (PnP status=OK, ConfigManager=0) but every host API returns
@@ -72,11 +70,6 @@ class Diagnosis(StrEnum):
     """User customization detected (6-signal heuristic score > 0.75).
     L2.5 is a no-op; the user's intentional tuning is preserved per
     invariant I4.
-    """
-
-    MIXER_CALIBRATION_NEEDED = "mixer_calibration_needed"
-    """No KB match AND no customization signal — first-run candidate
-    hardware that needs the setup wizard to produce a validated preset.
     """
 
     UNKNOWN = "unknown"

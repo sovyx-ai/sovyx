@@ -1010,8 +1010,6 @@ export type VoiceHealthDiagnosis =
   | "vad_insensitive"
   | "driver_error"
   | "device_busy"
-  | "hot_unplugged"
-  | "self_feedback"
   | "permission_denied"
   | "kernel_invalidated"
   | "unknown";

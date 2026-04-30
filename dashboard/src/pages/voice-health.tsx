@@ -100,13 +100,11 @@ function diagnosisTone(
     case "vad_insensitive":
     case "format_mismatch":
     case "apo_degraded":
-    case "self_feedback":
       return "warn";
     case "muted":
     case "no_signal":
     case "driver_error":
     case "device_busy":
-    case "hot_unplugged":
     case "permission_denied":
       return "error";
     default:

@@ -343,7 +343,7 @@ class TestDegradedFlow:
 
     @pytest.mark.asyncio()
     async def test_no_signal_and_format_mismatch_also_trigger_cascade(self) -> None:
-        for diag in (Diagnosis.NO_SIGNAL, Diagnosis.FORMAT_MISMATCH, Diagnosis.SELF_FEEDBACK):
+        for diag in (Diagnosis.NO_SIGNAL, Diagnosis.FORMAT_MISMATCH):
             probe = _FakeProbe(result=_probe_result(diagnosis=diag))
             cascade = _FakeCascade(result=_cascade_result(winning_combo=_combo(exclusive=True)))
             wizard = VoiceSetupWizard(probe_fn=probe, cascade_fn=cascade)

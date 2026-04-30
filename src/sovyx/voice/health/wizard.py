@@ -26,7 +26,7 @@ Flow (ADR §4.6 steps 4-6):
    * :attr:`Diagnosis.PERMISSION_DENIED` →
      :attr:`WizardOutcome.PERMISSION_DENIED`.
    * Anything else (``NO_SIGNAL``, ``DRIVER_ERROR``, ``DEVICE_BUSY``,
-     ``HOT_UNPLUGGED``, ``UNKNOWN``) → :attr:`WizardOutcome.OTHER`
+     ``UNKNOWN``) → :attr:`WizardOutcome.OTHER`
      with the diagnosis verbatim in the details dict.
 
 4. Every outcome carries a localizable ``hint`` string matched to
@@ -335,7 +335,6 @@ class VoiceSetupWizard:
             Diagnosis.VAD_INSENSITIVE,
             Diagnosis.NO_SIGNAL,
             Diagnosis.FORMAT_MISMATCH,
-            Diagnosis.SELF_FEEDBACK,
         }
         if direct_probe.diagnosis not in degraded_diagnoses:
             return self._build_report(

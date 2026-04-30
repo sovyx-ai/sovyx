@@ -81,8 +81,6 @@ class TestDiagnosisEnum:
             "vad_insensitive",
             "driver_error",
             "device_busy",
-            "hot_unplugged",
-            "self_feedback",
             "permission_denied",
             "kernel_invalidated",
             # L2.5 mixer sanity diagnoses (ADR-voice-mixer-sanity-l2.5-bidirectional).
@@ -90,7 +88,6 @@ class TestDiagnosisEnum:
             "mixer_saturated",
             "mixer_unknown_pattern",
             "mixer_customized",
-            "mixer_calibration_needed",
             "unknown",
         }
         assert {d.value for d in Diagnosis} == expected
@@ -101,7 +98,6 @@ class TestDiagnosisEnum:
         assert Diagnosis.MIXER_SATURATED == "mixer_saturated"
         assert Diagnosis.MIXER_UNKNOWN_PATTERN == "mixer_unknown_pattern"
         assert Diagnosis.MIXER_CUSTOMIZED == "mixer_customized"
-        assert Diagnosis.MIXER_CALIBRATION_NEEDED == "mixer_calibration_needed"
 
     def test_mixer_l25_values_distinct_from_apo_degraded(self) -> None:
         # Regression guard — MIXER_SATURATED was split out of APO_DEGRADED

@@ -169,8 +169,6 @@
       "vad_insensitive": "VAD insensitive",
       "driver_error": "Driver error",
       "device_busy": "Device busy",
-      "hot_unplugged": "Hot-unplugged",
-      "self_feedback": "Self-feedback",
       "permission_denied": "Permission denied",
       "kernel_invalidated": "Kernel-invalidated",
       "unknown": "Unknown"
