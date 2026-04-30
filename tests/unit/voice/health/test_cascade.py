@@ -1277,3 +1277,100 @@ class TestDiagnosisHistogramEmission:
 
         assert _events_of(caplog, "voice_cascade_exhausted") == []
         assert _events_of(caplog, "voice_cascade_budget_exhausted") == []
+
+
+# ---------------------------------------------------------------------------
+# T6.12 — homogeneous-histogram user-actionable emission
+# ---------------------------------------------------------------------------
+
+
+class TestUserActionableEmission:
+    """T6.12 — homogeneous failure surfaces a dashboard-banner-ready hint."""
+
+    @pytest.mark.asyncio()
+    async def test_homogeneous_known_diagnosis_emits_user_actionable(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        caplog.set_level(logging.ERROR, logger=_CASCADE_EXECUTOR_LOGGER)
+        # Every cascade attempt returns DEVICE_BUSY → homogeneous +
+        # the diagnosis IS in the remediation map.
+        probe = _FakeProbe(plan=[(_match_all, Diagnosis.DEVICE_BUSY)])
+        result = await _run(probe_fn=probe)
+        assert result.source == "none"  # type: ignore[attr-defined]
+
+        events = _events_of(caplog, "voice_cascade_user_actionable")
+        assert len(events) == 1
+        evt = events[0]
+        assert evt["diagnosis"] == "device_busy"
+        # Spec example "Discord is using your microphone" — the actual
+        # hint is broader but must mention common culprit apps.
+        remediation = str(evt["remediation"])
+        assert "Discord" in remediation or "exclusive access" in remediation
+        assert evt["attempts"] == result.attempts_count  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio()
+    async def test_heterogeneous_diagnoses_does_not_emit_user_actionable(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        caplog.set_level(logging.ERROR, logger=_CASCADE_EXECUTOR_LOGGER)
+
+        # Mixed diagnoses — too ambiguous for a confident user-facing hint.
+        def _is_excl(c: Combo) -> bool:
+            return c.exclusive
+
+        probe = _FakeProbe(
+            plan=[
+                (_is_excl, Diagnosis.APO_DEGRADED),
+                (_match_all, Diagnosis.DEVICE_BUSY),
+            ],
+        )
+        await _run(probe_fn=probe)
+        # Histogram has 2+ keys → no homogeneous emission, even though
+        # both diagnoses individually have remediation entries.
+        assert _events_of(caplog, "voice_cascade_user_actionable") == []
+        # The routine exhausted log + histogram still fires.
+        assert len(_events_of(caplog, "voice_cascade_exhausted")) == 1
+
+    @pytest.mark.asyncio()
+    async def test_homogeneous_unmapped_diagnosis_does_not_emit(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Homogeneous UNKNOWN — diagnosis is not in the map → no hint.
+        import logging
+
+        caplog.set_level(logging.ERROR, logger=_CASCADE_EXECUTOR_LOGGER)
+        probe = _FakeProbe(plan=[(_match_all, Diagnosis.UNKNOWN)])
+        await _run(probe_fn=probe)
+        assert _events_of(caplog, "voice_cascade_user_actionable") == []
+
+    @pytest.mark.asyncio()
+    async def test_budget_exhausted_does_not_emit_user_actionable(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Budget-exhausted is partial-result territory — confidence is
+        # too low to surface a dashboard banner. T6.11 histogram still
+        # fires for operators; T6.12 stays silent.
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_CASCADE_EXECUTOR_LOGGER)
+
+        probe = _FakeProbe(plan=[(_match_all, Diagnosis.DEVICE_BUSY)])
+        t = {"now": 0.0}
+
+        def clock() -> float:
+            t["now"] += 4.0
+            return t["now"]
+
+        await _run(probe_fn=probe, total_budget_s=10.0, clock=clock)
+        # Budget-exhausted log fires (T6.11 histogram inside) but NOT
+        # the user-actionable event.
+        assert len(_events_of(caplog, "voice_cascade_budget_exhausted")) == 1
+        assert _events_of(caplog, "voice_cascade_user_actionable") == []

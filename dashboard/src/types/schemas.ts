@@ -729,7 +729,11 @@ export const PreflightWarningSchema = z.object({
 
 // ── Voice Capture Health (L7, ADR §4.7) ──
 
-/** T6.20 — `GET /api/voice/service-health` aggregated readiness response. */
+/** T6.20 — `GET /api/voice/service-health` aggregated readiness response.
+ *
+ * ``user_remediation`` (T6.12) is the operator-facing hint string mapped
+ * from ``last_diagnosis``. ``null`` when no actionable hint applies.
+ */
 export const VoiceServiceHealthResponseSchema = z.object({
   ready: z.boolean(),
   reason: z.enum([
@@ -741,6 +745,7 @@ export const VoiceServiceHealthResponseSchema = z.object({
   ]),
   last_diagnosis: z.string().nullable(),
   watchdog_state: z.string().nullable(),
+  user_remediation: z.string().nullable(),
 });
 
 export const VoiceHealthComboSchema = z.object({

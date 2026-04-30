@@ -1029,12 +1029,19 @@ export type VoiceServiceHealthReason =
   | "voice_pipeline_not_registered"
   | "last_diagnosis_unhealthy";
 
-/** T6.20 — aggregated readiness snapshot for monitoring. */
+/** T6.20 — aggregated readiness snapshot for monitoring.
+ *
+ * ``user_remediation`` (T6.12) is the operator-facing hint string
+ * mapped from ``last_diagnosis``. ``null`` when the diagnosis has no
+ * actionable hint (``healthy`` / ``unknown`` / mixer-sanity family)
+ * or when no diagnosis is yet stored.
+ */
 export interface VoiceServiceHealthResponse {
   ready: boolean;
   reason: VoiceServiceHealthReason;
   last_diagnosis: string | null;
   watchdog_state: string | null;
+  user_remediation: string | null;
 }
 
 export type VoiceHealthRemediationSeverity = "info" | "warn" | "error";

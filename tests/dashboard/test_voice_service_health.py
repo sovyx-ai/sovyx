@@ -336,17 +336,19 @@ class TestResilience:
 
 
 class TestResponseShape:
-    def test_response_carries_exactly_4_fields(self, tmp_path: Path) -> None:
+    def test_response_carries_exactly_5_fields(self, tmp_path: Path) -> None:
         app = _app_with_engine_config(tmp_path)
         client = TestClient(app, headers={"Authorization": f"Bearer {_TOKEN}"})
         response = client.get("/api/voice/service-health")
         body = response.json()
         # Stable wire contract — no extra fields creep in.
+        # T6.20 added 4 fields; T6.12 added user_remediation.
         assert set(body.keys()) == {
             "ready",
             "reason",
             "last_diagnosis",
             "watchdog_state",
+            "user_remediation",
         }
 
     def test_watchdog_state_always_none_pre_wireup(self, tmp_path: Path) -> None:
@@ -360,3 +362,86 @@ class TestResponseShape:
         client = TestClient(app, headers={"Authorization": f"Bearer {_TOKEN}"})
         response = client.get("/api/voice/service-health")
         assert response.json()["watchdog_state"] is None
+
+
+# ── T6.12 — user_remediation surfacing ───────────────────────────────
+
+
+class TestUserRemediation:
+    def test_healthy_path_user_remediation_is_none(self, tmp_path: Path) -> None:
+        # No combo entries → reason="ok", no user-facing hint applies.
+        app = _app_with_engine_config(tmp_path)
+        registry = MagicMock()
+        registry.is_registered.return_value = True
+        app.state.registry = registry
+        client = TestClient(app, headers={"Authorization": f"Bearer {_TOKEN}"})
+        response = client.get("/api/voice/service-health")
+        body = response.json()
+        assert body["reason"] == "ok"
+        assert body["user_remediation"] is None
+
+    def test_known_unhealthy_diagnosis_surfaces_remediation(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        # last_diagnosis=device_busy → reason=last_diagnosis_unhealthy +
+        # the user_remediation hint mentions Discord/exclusive access.
+        _seed_combo_store(tmp_path, diagnosis=Diagnosis.DEVICE_BUSY)
+        app = _app_with_engine_config(tmp_path)
+        registry = MagicMock()
+        registry.is_registered.return_value = True
+        app.state.registry = registry
+        client = TestClient(app, headers={"Authorization": f"Bearer {_TOKEN}"})
+        response = client.get("/api/voice/service-health")
+        body = response.json()
+        assert body["reason"] == "last_diagnosis_unhealthy"
+        assert body["last_diagnosis"] == "device_busy"
+        assert body["user_remediation"] is not None
+        assert (
+            "Discord" in body["user_remediation"] or "exclusive access" in body["user_remediation"]
+        )
+
+    def test_unmapped_diagnosis_returns_none_user_remediation(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        # UNKNOWN is non-HEALTHY (so reason=last_diagnosis_unhealthy)
+        # but has no remediation entry → user_remediation=None.
+        _seed_combo_store(tmp_path, diagnosis=Diagnosis.UNKNOWN)
+        app = _app_with_engine_config(tmp_path)
+        registry = MagicMock()
+        registry.is_registered.return_value = True
+        app.state.registry = registry
+        client = TestClient(app, headers={"Authorization": f"Bearer {_TOKEN}"})
+        response = client.get("/api/voice/service-health")
+        body = response.json()
+        assert body["reason"] == "last_diagnosis_unhealthy"
+        assert body["last_diagnosis"] == "unknown"
+        assert body["user_remediation"] is None
+
+    @pytest.mark.parametrize(
+        "diagnosis",
+        [
+            Diagnosis.PERMISSION_DENIED,
+            Diagnosis.APO_DEGRADED,
+            Diagnosis.KERNEL_INVALIDATED,
+            Diagnosis.NO_SIGNAL,
+            Diagnosis.DRIVER_ERROR,
+        ],
+    )
+    def test_each_mapped_diagnosis_surfaces_non_empty_hint(
+        self,
+        tmp_path: Path,
+        diagnosis: Diagnosis,
+    ) -> None:
+        _seed_combo_store(tmp_path, diagnosis=diagnosis)
+        app = _app_with_engine_config(tmp_path)
+        registry = MagicMock()
+        registry.is_registered.return_value = True
+        app.state.registry = registry
+        client = TestClient(app, headers={"Authorization": f"Bearer {_TOKEN}"})
+        response = client.get("/api/voice/service-health")
+        body = response.json()
+        assert body["last_diagnosis"] == diagnosis.value
+        assert body["user_remediation"] is not None
+        assert len(body["user_remediation"]) > 20

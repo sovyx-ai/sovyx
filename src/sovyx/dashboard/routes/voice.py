@@ -77,12 +77,20 @@ class ServiceHealthResponse(BaseModel):
       explicitly defers the wire-up). The field is held in the wire
       contract so monitoring tooling that already consumes it
       doesn't need a schema migration when the wire-up lands.
+    * ``user_remediation``: T6.12 — operator-facing hint string when
+      :func:`sovyx.voice.health._user_remediation.diagnosis_user_remediation`
+      maps the ``last_diagnosis`` to a known remediation. ``None``
+      when the diagnosis has no user-actionable hint
+      (``healthy`` / ``unknown`` / mixer-sanity family) OR the
+      diagnosis is not yet stored. Dashboard banner consumes this;
+      cron / Prometheus tooling can also route on it.
     """
 
     ready: bool
     reason: _ServiceHealthReason
     last_diagnosis: str | None = None
     watchdog_state: str | None = None
+    user_remediation: str | None = None
 
 
 def _resolve_engine_config(request: Request) -> EngineConfig | None:
@@ -196,6 +204,7 @@ async def _compose_service_health(request: Request) -> ServiceHealthResponse:
             reason="engine_not_running",
             last_diagnosis=None,
             watchdog_state=None,
+            user_remediation=None,
         )
 
     if not _voice_pipeline_registered(request):
@@ -204,6 +213,7 @@ async def _compose_service_health(request: Request) -> ServiceHealthResponse:
             reason="voice_pipeline_not_registered",
             last_diagnosis=None,
             watchdog_state=None,
+            user_remediation=None,
         )
 
     data_dir = _resolve_data_dir_for_health(request)
@@ -215,13 +225,23 @@ async def _compose_service_health(request: Request) -> ServiceHealthResponse:
             reason="ok",
             last_diagnosis=last_diagnosis,
             watchdog_state=None,
+            user_remediation=None,
         )
+
+    # T6.12 — surface the user-facing remediation hint when the
+    # last_diagnosis maps to a known one. ``None`` for diagnoses
+    # without a hint (mixer-sanity, unknown). Dashboard banner
+    # consumes this directly.
+    from sovyx.voice.health._user_remediation import (  # noqa: PLC0415
+        diagnosis_user_remediation,
+    )
 
     return ServiceHealthResponse(
         ready=False,
         reason="last_diagnosis_unhealthy",
         last_diagnosis=last_diagnosis,
         watchdog_state=None,
+        user_remediation=diagnosis_user_remediation(last_diagnosis),
     )
 
 

@@ -39,6 +39,9 @@ from sovyx.voice.health._quarantine import (
     EndpointQuarantine,
     get_default_quarantine,
 )
+from sovyx.voice.health._user_remediation import (
+    homogeneous_diagnosis_remediation,
+)
 from sovyx.voice.health.cascade._alignment import (
     _lookup_override,
     _lookup_store,
@@ -748,6 +751,7 @@ async def _run_cascade_locked(
                 source="cascade",
             )
 
+    histogram = _compute_diagnosis_histogram(attempts)
     logger.error(
         "voice_cascade_exhausted",
         endpoint=endpoint_guid,
@@ -758,8 +762,25 @@ async def _run_cascade_locked(
         # ``device_busy`` heavy → another app holds the mic;
         # ``apo_degraded`` heavy → Voice Clarity / similar APO chain;
         # ``permission_denied`` → OS gate; etc.
-        diagnosis_histogram=_compute_diagnosis_histogram(attempts),
+        diagnosis_histogram=histogram,
     )
+    # T6.12 — homogeneous-failure user-actionable signal. When EVERY
+    # cascade attempt died with the same diagnosis AND that diagnosis
+    # has a known user-facing remediation, emit the dedicated
+    # ``voice_cascade_user_actionable`` event so the dashboard banner
+    # can route on it WITHOUT scraping the histogram. Heterogeneous
+    # exhaustions OR homogeneous exhaustions on diagnoses without a
+    # remediation entry (HEALTHY, MIXER_*, UNKNOWN) skip the event.
+    homogeneous = homogeneous_diagnosis_remediation(histogram)
+    if homogeneous is not None:
+        diagnosis_value, remediation = homogeneous
+        logger.error(
+            "voice_cascade_user_actionable",
+            endpoint=endpoint_guid,
+            attempts=attempts_count,
+            diagnosis=diagnosis_value,
+            remediation=remediation,
+        )
     return _make_result(
         endpoint_guid=endpoint_guid,
         winning_combo=None,
