@@ -238,10 +238,18 @@ class AGC2:
         config: AGC2Config | None = None,
         *,
         adaptive_floor: AdaptiveNoiseFloorTracker | None = None,
+        vad_feedback_enabled: bool = False,
     ) -> None:
         cfg = config or AGC2Config()
         _validate_config(cfg)
         self._config = cfg
+        # Phase 4 / T4.52 — VAD-feedback gate. When True, AGC2's
+        # speech-level estimator update requires BOTH the existing
+        # RMS-floor gate AND a fresh "is_speech=True" verdict from
+        # the orchestrator's last VAD inference. Default False
+        # preserves pre-T4.52 behaviour bit-exactly.
+        self._vad_feedback_enabled: bool = vad_feedback_enabled
+        self._frames_vad_silenced: int = 0
         # Current applied gain (dB). Initialised at 0 dB so the first
         # frame is unaltered until the controller has a speech-level
         # estimate to act on.
@@ -302,6 +310,19 @@ class AGC2:
         ratio over a long window is normal (silences between
         utterances)."""
         return self._frames_silenced
+
+    @property
+    def frames_vad_silenced(self) -> int:
+        """Lifetime count of frames where the T4.52 VAD-feedback
+        gate vetoed an estimator update that the RMS-floor gate
+        alone would have allowed.
+
+        Non-zero implies the orchestrator's VAD declared "no
+        speech" while the frame's RMS sat above the silence
+        floor — typically ambient bursts (door, keyboard, fan
+        ramp-up) that classic AGC2 would mistakenly adapt to.
+        ``vad_feedback_enabled=False`` keeps this counter at 0."""
+        return self._frames_vad_silenced
 
     @property
     def frames_clipped(self) -> int:
@@ -397,8 +418,32 @@ class AGC2:
             adaptive = self._adaptive_floor.floor_db
             if adaptive is not None:
                 floor_dbfs = adaptive
-        if rms_dbfs >= floor_dbfs:
+        rms_above_floor = rms_dbfs >= floor_dbfs
+        # T4.52 — VAD-feedback gate. When enabled, the speech-
+        # level estimator update requires the orchestrator's
+        # last VAD verdict to also say "speech". A stale or
+        # absent verdict (None) falls back to RMS-only gating
+        # so AGC2 keeps adapting during the warm-up period
+        # before the first VAD inference completes (~32 ms).
+        # The gate is AND, not OR: we accept that VAD-says-yes-
+        # but-RMS-low (T4.39 paradox territory) will NOT update
+        # AGC2 either; that combination is handled by the
+        # quiet-signal gate at the VAD layer.
+        vad_says_speech: bool | None = None
+        if self._vad_feedback_enabled:
+            from sovyx.voice.health._vad_feedback import get_last_verdict
+
+            vad_says_speech = get_last_verdict()
+        update_estimator = rms_above_floor and (
+            vad_says_speech is not False  # None → fallback, True → update
+        )
+        if update_estimator:
             self._update_speech_level(rms_dbfs, samples_in_frame=samples.size)
+        elif rms_above_floor and vad_says_speech is False:
+            # RMS would have triggered an update, but VAD vetoed —
+            # count separately so operators can measure the
+            # T4.52 gate's effective rate.
+            self._frames_vad_silenced += 1
         else:
             self._frames_silenced += 1
 
@@ -531,6 +576,7 @@ def build_agc2_if_enabled(
     enabled: bool,
     sample_rate: int = 16_000,
     adaptive_floor: AdaptiveNoiseFloorTracker | None = None,
+    vad_feedback_enabled: bool = False,
 ) -> AGC2 | None:
     """Construct an :class:`AGC2` if ``enabled``, else return ``None``.
 
@@ -574,7 +620,11 @@ def build_agc2_if_enabled(
     if not enabled:
         return None
     cfg = AGC2Config(sample_rate=sample_rate)
-    return AGC2(cfg, adaptive_floor=adaptive_floor)
+    return AGC2(
+        cfg,
+        adaptive_floor=adaptive_floor,
+        vad_feedback_enabled=vad_feedback_enabled,
+    )
 
 
 __all__ = ["AGC2", "AGC2Config", "build_agc2_if_enabled"]

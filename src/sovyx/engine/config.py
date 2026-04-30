@@ -458,6 +458,31 @@ class VoiceTuningConfig(BaseSettings):
     outside reject at config validation rather than silently
     disable the alert."""
 
+    voice_agc2_vad_feedback_enabled: bool = False
+    """Phase 4 / T4.52 — gate AGC2's speech-level estimator
+    update on a fresh VAD verdict in addition to the RMS
+    floor. When True, the orchestrator publishes each VAD
+    verdict to a thread-safe feedback channel after every
+    inference; AGC2 reads the freshest verdict on the next
+    frame's ``process()`` call and only updates the speech-
+    level estimator when the verdict says "speech".
+
+    This eliminates the classic AGC2 noise-pumping failure
+    mode: ambient bursts above the RMS silence floor (door
+    slams, keyboard typing, HVAC ramp-up, kitchen sounds)
+    that pre-T4.52 AGC2 would adapt to as if they were quiet
+    speech, producing a few seconds of over-amplified silence
+    afterwards.
+
+    Default ``False`` per ``feedback_staged_adoption`` —
+    foundation behaviour is unchanged. Operators flip after
+    pilot validation confirms the orchestrator's VAD verdict
+    rate is reliable on their hardware (a flaky VAD that
+    misses real speech would freeze AGC2 mid-utterance).
+    Default-flip planned for v0.28.0+ once the gate-rate
+    floor (``frames_vad_silenced / frames_processed``) is
+    measured on a pilot fleet."""
+
     voice_noise_floor_drift_alert_enabled: bool = True
     """Phase 4 / T4.38 — emit a structured WARN
     ``voice_pipeline_noise_floor_drift_warning`` from

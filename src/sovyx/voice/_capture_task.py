@@ -595,6 +595,7 @@ class AudioCaptureTask(EpochMixin, RingMixin, LifecycleMixin, LoopMixin, Restart
                     quantile=_agc2_tuning.voice_agc2_adaptive_floor_quantile,
                     sample_rate=info.sample_rate,
                 ),
+                vad_feedback_enabled=_agc2_tuning.voice_agc2_vad_feedback_enabled,
             ),
             aec=self._aec,
             render_provider=self._render_provider,

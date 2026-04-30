@@ -98,6 +98,11 @@ _NOISE_FLOOR_DRIFT_CONSECUTIVE_HEARTBEATS = (
 """Phase 4 / T4.38 — same module-capture rationale as the SNR
 trio above."""
 
+_AGC2_VAD_FEEDBACK_ENABLED = _VoiceTuning().voice_agc2_vad_feedback_enabled
+"""Phase 4 / T4.52 — when True, every VAD inference publishes its
+verdict to :mod:`sovyx.voice.health._vad_feedback` so AGC2's next
+frame can gate the speech-level estimator update on the result."""
+
 # ---------------------------------------------------------------------------
 # O3 frame-drop detection tuning
 # ---------------------------------------------------------------------------
@@ -1072,6 +1077,17 @@ class VoicePipeline:
             return {"state": self._state.name, "event": "vad_timeout"}
 
         self._track_vad_for_heartbeat(vad_event.probability)
+
+        # Phase 4 / T4.52 — publish the VAD verdict to the
+        # AGC2 feedback channel. AGC2 consumes the freshest
+        # verdict on each subsequent frame's process() call,
+        # gating speech-level estimator updates so ambient
+        # noise above the RMS silence floor (door slams,
+        # keyboard, HVAC bursts) can't pump up the gain.
+        if _AGC2_VAD_FEEDBACK_ENABLED:
+            from sovyx.voice.health._vad_feedback import set_last_verdict
+
+            set_last_verdict(is_speech=vad_event.is_speech)
 
         if self._state == VoicePipelineState.IDLE:
             return await self._handle_idle(frame, vad_event)
