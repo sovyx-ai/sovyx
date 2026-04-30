@@ -374,6 +374,7 @@ class FrameNormalizer:
         dither_rng: np.random.Generator | None = None,
         wiener_entropy_check_enabled: bool = False,
         wiener_entropy_threshold: float = 0.5,
+        resample_peak_check_enabled: bool = False,
     ) -> None:
         if source_rate <= 0:
             msg = f"source_rate must be positive, got {source_rate}"
@@ -520,6 +521,14 @@ class FrameNormalizer:
         # production data validates the threshold.
         self._wiener_entropy_check_enabled: bool = wiener_entropy_check_enabled
         self._wiener_entropy_threshold: float = wiener_entropy_threshold
+        # Phase 4 / T4.45 — resample peak-clip detector. When
+        # enabled, fires once per push() (non-passthrough path
+        # only — passthrough never resamples) reporting whether
+        # the post-resample peak ≥ 1.0. Observability-only;
+        # mutual existence with R2 saturation counters is by
+        # design (different signal: this isolates resampler
+        # overshoot, R2 counts post-multiply int16 rail hits).
+        self._resample_peak_check_enabled: bool = resample_peak_check_enabled
 
         logger.debug(
             "frame_normalizer_created",
@@ -694,6 +703,15 @@ class FrameNormalizer:
                 if self._wiener_entropy_check_enabled:
                     self._observe_wiener_entropy(mono_f32)
                 resampled = mono_f32 if self._passthrough else self._resample(mono_f32)
+                # Phase 4 / T4.45 — resample peak-clip detector.
+                # Fires only on the non-passthrough path because
+                # passthrough never invokes the resampler (the
+                # input IS the output, no Gibbs phenomenon
+                # possible). Observability-only — the (possibly
+                # clipped) signal still flows through ducking +
+                # int16 conversion + emission.
+                if self._resample_peak_check_enabled and not self._passthrough:
+                    self._observe_resample_peak(resampled)
                 ducked = self._apply_ducking(resampled)
                 # Phase 4 / T4.43.b — pass the dither rng when
                 # enabled. Disabled path is bit-exact pre-T4.43
@@ -881,6 +899,28 @@ class FrameNormalizer:
             record_ns_window(state="passthrough")
 
         return cleaned
+
+    def _observe_resample_peak(
+        self,
+        resampled: npt.NDArray[np.float32],
+    ) -> None:
+        """Emit ``voice.audio.resample_peak_clip{state}`` for one frame.
+
+        T4.45 foundation wire-up — observability-only. The
+        clipped (or clean) frame still flows through ducking +
+        int16 conversion + emission. Operators see the rate via
+        the dashboard counter; sustained > 1% rate signals the
+        operator should escalate to T4.42 (higher-order resampler).
+        """
+        import numpy as np  # noqa: PLC0415 — local per module convention
+
+        from sovyx.voice.health._metrics import record_audio_resample_peak_clip
+
+        if resampled.size == 0:
+            return
+        peak = float(np.max(np.abs(resampled)))
+        state = "clip" if peak >= 1.0 else "clean"
+        record_audio_resample_peak_clip(state=state)
 
     def _observe_wiener_entropy(
         self,

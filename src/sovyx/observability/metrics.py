@@ -730,6 +730,25 @@ class MetricsRegistry:
             "indicates the operator should investigate hardware.",
         )
 
+        # ── Phase 4 / T4.45 — resample peak-clip detector ────────
+        # Counts frames where the polyphase resample stage produced
+        # values ≥ ±1.0 (i.e. introduced overshoot the original
+        # signal didn't have). Distinct from the R2 saturation
+        # counter which counts post-multiply int16 rail hits — a
+        # hot input that clipped at int16 conversion is normal,
+        # but the resampler adding overshoot to a sub-full-scale
+        # input is the canonical Gibbs-phenomenon signature that
+        # warrants T4.42 (higher-order polyphase / sinc resampler).
+        self.voice_audio_resample_peak_clip = self._counter(
+            "sovyx.voice.audio.resample_peak_clip",
+            "Per-frame resample peak-clip counter (labels: "
+            "state=clip|clean). 'clip' fires when post-resample "
+            "peak ≥ 1.0 (overshoot introduced by the resampler "
+            "Gibbs phenomenon). Sustained > 1% rate signals the "
+            "operator should escalate to T4.42 — upgrade to "
+            "higher-order polyphase or sinc resampler.",
+        )
+
         # ── Voice pipeline RED + USE (Ring 6 — M2) ──────────────────
         # Per-stage Rate / Errors / Duration plus Utilisation /
         # Saturation / Errors for every async queue between stages.

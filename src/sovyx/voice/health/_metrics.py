@@ -124,6 +124,9 @@ METRIC_AUDIO_SNR_DB = "sovyx.voice.audio.snr_db"
 # ── Phase 4 — Wiener entropy destruction detector (T4.44.b) ─────────────
 METRIC_AUDIO_SIGNAL_DESTROYED = "sovyx.voice.audio.signal_destroyed"
 
+# ── Phase 4 — Resample peak-clip detector (T4.45) ───────────────────────
+METRIC_AUDIO_RESAMPLE_PEAK_CLIP = "sovyx.voice.audio.resample_peak_clip"
+
 
 # ── Label enums (closed sets for low-cardinality guarantees) ─────────────
 # Using string literals here keeps the module dependency-free; the ADR
@@ -766,6 +769,26 @@ def record_ns_window(*, state: str) -> None:
     counter.add(1, attributes={"state": state})
 
 
+def record_audio_resample_peak_clip(*, state: str) -> None:
+    """Record one resample peak-clip verdict (Phase 4 / T4.45).
+
+    Fires once per push() when the resample-peak detector is
+    wired AND the FrameNormalizer is on the non-passthrough path
+    (resampling actually ran). Distinct from the R2 saturation
+    counter — this one isolates overshoot introduced by the
+    resampler Gibbs phenomenon, while R2 counts post-multiply
+    int16 rail hits (normal for hot inputs).
+
+    Args:
+        state: ``"clip"`` (post-resample peak ≥ 1.0) or
+            ``"clean"`` (peak < 1.0).
+    """
+    counter = getattr(get_metrics(), "voice_audio_resample_peak_clip", None)
+    if counter is None:
+        return
+    counter.add(1, attributes={"state": state})
+
+
 def record_audio_signal_destroyed(*, state: str) -> None:
     """Record one Wiener-entropy destruction verdict (Phase 4 / T4.44.b).
 
@@ -860,6 +883,7 @@ __all__ = [
     "METRIC_AEC_ERLE_DB",
     "METRIC_AEC_WINDOWS",
     "METRIC_APO_DEGRADED_EVENTS",
+    "METRIC_AUDIO_RESAMPLE_PEAK_CLIP",
     "METRIC_AUDIO_SIGNAL_DESTROYED",
     "METRIC_AUDIO_SNR_DB",
     "METRIC_BYPASS_IMPROVEMENT_RESOLUTION",
@@ -892,6 +916,7 @@ __all__ = [
     "record_aec_erle",
     "record_aec_window",
     "record_apo_degraded_event",
+    "record_audio_resample_peak_clip",
     "record_audio_signal_destroyed",
     "record_audio_snr_db",
     "record_bypass_improvement_resolution",

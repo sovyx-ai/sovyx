@@ -140,6 +140,7 @@ class RestartMixin:
     _dither_amplitude_lsb: float
     _wiener_entropy_check_enabled: bool
     _wiener_entropy_threshold: float
+    _resample_peak_check_enabled: bool
     _resolved_device_name: str | None
     _pipeline: VoicePipeline
 
@@ -329,6 +330,7 @@ class RestartMixin:
             dither_amplitude_lsb=self._dither_amplitude_lsb,
             wiener_entropy_check_enabled=self._wiener_entropy_check_enabled,
             wiener_entropy_threshold=self._wiener_entropy_threshold,
+            resample_peak_check_enabled=self._resample_peak_check_enabled,
         )
         # T32 — emit CaptureRestartFrame BEFORE the ring epoch
         # increment so the dashboard's restart-history timeline
@@ -478,6 +480,7 @@ class RestartMixin:
             dither_amplitude_lsb=self._dither_amplitude_lsb,
             wiener_entropy_check_enabled=self._wiener_entropy_check_enabled,
             wiener_entropy_threshold=self._wiener_entropy_threshold,
+            resample_peak_check_enabled=self._resample_peak_check_enabled,
         )
         # Reset the ring buffer — stale frames from the pre-error stream
         # would mislead any integrity probe issued immediately after the
@@ -620,6 +623,7 @@ class RestartMixin:
             dither_amplitude_lsb=self._dither_amplitude_lsb,
             wiener_entropy_check_enabled=self._wiener_entropy_check_enabled,
             wiener_entropy_threshold=self._wiener_entropy_threshold,
+            resample_peak_check_enabled=self._resample_peak_check_enabled,
         )
         # T32 — emit CaptureRestartFrame for the revert pair. MANUAL
         # reason because the shared restart is always initiated by an
@@ -852,6 +856,7 @@ class RestartMixin:
             dither_amplitude_lsb=self._dither_amplitude_lsb,
             wiener_entropy_check_enabled=self._wiener_entropy_check_enabled,
             wiener_entropy_threshold=self._wiener_entropy_threshold,
+            resample_peak_check_enabled=self._resample_peak_check_enabled,
         )
         # T32 — emit CaptureRestartFrame BEFORE the ring-buffer
         # epoch increment. APO_DEGRADED + bypass_tier=2
@@ -1098,6 +1103,7 @@ class RestartMixin:
             dither_amplitude_lsb=self._dither_amplitude_lsb,
             wiener_entropy_check_enabled=self._wiener_entropy_check_enabled,
             wiener_entropy_threshold=self._wiener_entropy_threshold,
+            resample_peak_check_enabled=self._resample_peak_check_enabled,
         )
         # T32 — emit CaptureRestartFrame for the Linux revert pair.
         # Two legitimate semantics: (a) revert from a prior
@@ -1403,6 +1409,7 @@ class RestartMixin:
             dither_amplitude_lsb=self._dither_amplitude_lsb,
             wiener_entropy_check_enabled=self._wiener_entropy_check_enabled,
             wiener_entropy_threshold=self._wiener_entropy_threshold,
+            resample_peak_check_enabled=self._resample_peak_check_enabled,
         )
         # T32 — emit CaptureRestartFrame for the rotation. Tier 2
         # bypass = APO_DEGRADED reason + bypass_tier=2.

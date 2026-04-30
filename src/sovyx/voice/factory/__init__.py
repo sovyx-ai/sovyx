@@ -755,6 +755,8 @@ async def create_voice_pipeline(
                 "voice.wiener_entropy.threshold": tuning.voice_wiener_entropy_skip_threshold,
             },
         )
+    if tuning.voice_resample_peak_check_enabled:
+        logger.info("voice.resample_peak_check.wired")
 
     capture_task = AudioCaptureTask(
         pipeline,
@@ -770,6 +772,7 @@ async def create_voice_pipeline(
         dither_amplitude_lsb=tuning.voice_dither_amplitude_lsb,
         wiener_entropy_check_enabled=tuning.voice_wiener_entropy_skip_enabled,
         wiener_entropy_threshold=tuning.voice_wiener_entropy_skip_threshold,
+        resample_peak_check_enabled=tuning.voice_resample_peak_check_enabled,
     )
     capture_holder["task"] = capture_task
     # Ring 2 (Signal Integrity): RMS-floor watchdog + format-detection

@@ -268,6 +268,7 @@ class AudioCaptureTask(EpochMixin, RingMixin, LifecycleMixin, LoopMixin, Restart
         dither_amplitude_lsb: float = 1.0,
         wiener_entropy_check_enabled: bool = False,
         wiener_entropy_threshold: float = 0.5,
+        resample_peak_check_enabled: bool = False,
     ) -> None:
         self._pipeline = pipeline
         self._input_device = input_device
@@ -291,6 +292,7 @@ class AudioCaptureTask(EpochMixin, RingMixin, LifecycleMixin, LoopMixin, Restart
         self._dither_amplitude_lsb: float = dither_amplitude_lsb
         self._wiener_entropy_check_enabled: bool = wiener_entropy_check_enabled
         self._wiener_entropy_threshold: float = wiener_entropy_threshold
+        self._resample_peak_check_enabled: bool = resample_peak_check_enabled
         self._queue: asyncio.Queue[npt.NDArray[np.int16]] = asyncio.Queue(maxsize=_QUEUE_MAXSIZE)
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stream: Any = None
@@ -601,6 +603,7 @@ class AudioCaptureTask(EpochMixin, RingMixin, LifecycleMixin, LoopMixin, Restart
             dither_amplitude_lsb=self._dither_amplitude_lsb,
             wiener_entropy_check_enabled=self._wiener_entropy_check_enabled,
             wiener_entropy_threshold=self._wiener_entropy_threshold,
+            resample_peak_check_enabled=self._resample_peak_check_enabled,
         )
         if not self._normalizer.is_passthrough:
             logger.info(

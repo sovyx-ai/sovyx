@@ -1282,6 +1282,18 @@ class VoiceTuningConfig(BaseSettings):
     their hardware (a too-high threshold misses real destruction;
     too-low gates real speech)."""
 
+    voice_resample_peak_check_enabled: bool = False
+    """Resample peak-clip detector master switch (Phase 4 / T4.45).
+
+    When True the FrameNormalizer's non-passthrough path emits
+    :data:`voice.audio.resample_peak_clip{state}` once per push
+    based on the post-resample peak amplitude. Distinct from the
+    R2 saturation counter — this one isolates overshoot
+    introduced by the polyphase Gibbs phenomenon, while R2
+    counts the final int16-rail hits (normal for hot inputs).
+
+    Default ``False`` per ``feedback_staged_adoption``."""
+
     voice_wiener_entropy_skip_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     """Wiener-entropy boundary for the destruction detector.
 
