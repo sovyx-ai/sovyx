@@ -671,6 +671,18 @@ class MetricsRegistry:
             "echo, AEC filter can converge cleanly); 'undecided' "
             "fires when either signal is silent (NCC undefined).",
         )
+        self.voice_aec_bypass_combo = self._counter(
+            "sovyx.voice.aec.bypass_combo",
+            "Boot-time AEC + WASAPI-exclusive combo detector "
+            "(Phase 4 T4.6 — labels: state=safe_shared|"
+            "safe_engaged|safe_belt_and_suspenders|dangerous|"
+            "auto_engaged). Fires once per voice pipeline "
+            "construction. 'dangerous' = exclusive bypasses OS "
+            "AEC AND in-process AEC is off — TTS leaks into ASR. "
+            "'auto_engaged' = same combo but voice_aec_auto_engage_"
+            "on_exclusive flipped True so the factory force-"
+            "engaged AEC.",
+        )
 
         # ── Phase 4 / T4.16 — NS observability ──────────────────────
         # Mirrors voice.aec.windows + voice.aec.erle_db for the

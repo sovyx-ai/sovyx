@@ -1153,6 +1153,33 @@ class VoiceTuningConfig(BaseSettings):
     aggressive). Bounded ``[-1.0, 1.0]`` per the NCC algebraic
     range — values outside reject at config validation."""
 
+    voice_aec_auto_engage_on_exclusive: bool = False
+    """Force in-process AEC on when WASAPI exclusive bypasses the
+    OS AEC chain (Phase 4 / T4.6 — foundation).
+
+    Background: ``capture_wasapi_exclusive=True`` (or runtime
+    auto-fix engaging exclusive on Voice Clarity APO hardware —
+    anti-pattern #21) bypasses every endpoint APO including the
+    Windows-shipped AEC. Without an in-process echo canceller, TTS
+    playback leaks into the capture stream and degrades both VAD
+    accuracy and ASR substitution rate.
+
+    When this flag is ``True`` and the boot-time detector observes
+    the dangerous combo (``capture_wasapi_exclusive=True`` AND
+    ``voice_aec_enabled=False``), the factory force-engages AEC
+    with the configured ``voice_aec_engine`` (defaulting to
+    ``"speex"`` if the operator pinned ``"off"``) and emits a
+    structured ``voice.aec.bypass_combo_auto_engaged`` log so the
+    override is auditable.
+
+    Default ``False`` per ``feedback_staged_adoption`` —
+    observability-only on day zero. The detector emits
+    ``sovyx.voice.aec.bypass_combo{state}`` regardless of this
+    flag's value, so operators can measure the dangerous-combo
+    rate in their fleet before enabling auto-engage. Default-flip
+    planned for v0.28.0 once Speex ERLE pilots close (master
+    mission §Phase 4)."""
+
     voice_noise_suppression_enabled: bool = False
     """Noise suppression master switch (Phase 4 / T4.11 — foundation).
 

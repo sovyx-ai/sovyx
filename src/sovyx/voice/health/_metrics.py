@@ -113,6 +113,7 @@ METRIC_HOTPLUG_LISTENER_REGISTERED = "sovyx.voice.hotplug.listener.registered"
 METRIC_AEC_ERLE_DB = "sovyx.voice.aec.erle_db"
 METRIC_AEC_WINDOWS = "sovyx.voice.aec.windows"
 METRIC_AEC_DOUBLE_TALK = "sovyx.voice.aec.double_talk"
+METRIC_AEC_BYPASS_COMBO = "sovyx.voice.aec.bypass_combo"
 
 # ── Phase 4 — NS observability (T4.16) ──────────────────────────────────
 METRIC_NS_WINDOWS = "sovyx.voice.ns.windows"
@@ -898,8 +899,45 @@ def record_aec_double_talk(*, state: str) -> None:
     counter.add(1, attributes={"state": state})
 
 
+def record_aec_bypass_combo(*, state: str) -> None:
+    """Record one boot-time AEC + WASAPI-exclusive combo verdict (T4.6).
+
+    Fires once per voice pipeline construction in
+    :func:`sovyx.voice.factory._build_aec_wiring`. Cardinality is
+    bounded to one event per process boot, so the counter doubles
+    as a feature-flag-state ledger across the fleet — useful when
+    rolling out the auto-engage default.
+
+    Args:
+        state: One of:
+            * ``"safe_shared"`` — exclusive=False, AEC=False. OS
+              AEC is in the chain; in-process AEC is the operator's
+              choice.
+            * ``"safe_engaged"`` — exclusive=True, AEC=True. OS
+              AEC bypassed but in-process AEC active. Recommended
+              configuration for WASAPI-exclusive deployments.
+            * ``"safe_belt_and_suspenders"`` — exclusive=False,
+              AEC=True. Both layers active. Redundant but safe;
+              minor CPU cost from double processing.
+            * ``"dangerous"`` — exclusive=True, AEC=False, auto-
+              engage=False. OS AEC bypassed AND in-process AEC
+              off. TTS leaks into ASR. WARN-level log fires
+              alongside this metric.
+            * ``"auto_engaged"`` — exclusive=True, AEC=False,
+              auto-engage=True. Same dangerous combo, but the
+              operator opted into ``voice_aec_auto_engage_on_
+              exclusive=True`` so the factory force-engaged AEC
+              with the configured engine.
+    """
+    counter = getattr(get_metrics(), "voice_aec_bypass_combo", None)
+    if counter is None:
+        return
+    counter.add(1, attributes={"state": state})
+
+
 __all__ = [
     "METRIC_ACTIVE_ENDPOINT_CHANGES",
+    "METRIC_AEC_BYPASS_COMBO",
     "METRIC_AEC_DOUBLE_TALK",
     "METRIC_AEC_ERLE_DB",
     "METRIC_AEC_WINDOWS",
@@ -934,6 +972,7 @@ __all__ = [
     "METRIC_SELF_FEEDBACK_BLOCKS",
     "METRIC_TIME_TO_FIRST_UTTERANCE",
     "record_active_endpoint_change",
+    "record_aec_bypass_combo",
     "record_aec_double_talk",
     "record_aec_erle",
     "record_aec_window",

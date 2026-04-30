@@ -96,6 +96,7 @@ __all__ = [
     "_build_double_talk_detector",
     "_build_noise_suppressor",
     "_build_snr_estimator",
+    "_evaluate_aec_bypass_combo",
     "_create_kokoro_tts",
     "_create_piper_tts",
     "_create_stt",
@@ -337,6 +338,67 @@ def _build_double_talk_detector(
     return DoubleTalkDetector(threshold=tuning.voice_double_talk_ncc_threshold)
 
 
+def _evaluate_aec_bypass_combo(
+    tuning: VoiceTuningConfig,
+) -> tuple[str, bool]:
+    """Classify the AEC + WASAPI-exclusive combo at boot (Phase 4 / T4.6).
+
+    WASAPI exclusive mode bypasses the entire endpoint APO chain
+    including the OS-shipped AEC. When operators flip
+    ``capture_wasapi_exclusive=True`` (statically or via the Voice
+    Clarity APO auto-fix — anti-pattern #21) without enabling
+    in-process AEC, TTS playback leaks into the capture stream
+    and degrades VAD + ASR quality. The reverse — exclusive=False
+    with AEC=True — is safe but redundant (OS AEC + in-process
+    AEC stacked).
+
+    This function classifies the combo at factory-construction
+    time and decides whether to force-engage AEC. It does NOT
+    mutate ``tuning``; the caller threads the decision through
+    its own AEC plumbing.
+
+    State labels (low cardinality — at most one event per process
+    boot per state):
+
+    * ``"safe_shared"`` — exclusive=False, AEC=False. Default
+      shipping config; OS AEC available.
+    * ``"safe_engaged"`` — exclusive=True, AEC=True. Recommended
+      for exclusive-mode deployments.
+    * ``"safe_belt_and_suspenders"`` — exclusive=False, AEC=True.
+      Both layers active; redundant but safe.
+    * ``"dangerous"`` — exclusive=True, AEC=False,
+      auto_engage=False. The combo this function exists to
+      detect. WARN-level log fires alongside the metric.
+    * ``"auto_engaged"`` — exclusive=True, AEC=False,
+      auto_engage=True. The operator opted into the override.
+
+    Args:
+        tuning: Active :class:`VoiceTuningConfig`. Read fields:
+            ``capture_wasapi_exclusive``, ``voice_aec_enabled``,
+            ``voice_aec_auto_engage_on_exclusive``.
+
+    Returns:
+        Tuple ``(state_label, force_engage)``. ``force_engage`` is
+        ``True`` only for the ``"auto_engaged"`` state — every
+        other state preserves the operator's
+        ``voice_aec_enabled`` choice.
+    """
+    exclusive = tuning.capture_wasapi_exclusive
+    aec_on = tuning.voice_aec_enabled
+    auto_engage = tuning.voice_aec_auto_engage_on_exclusive
+
+    if exclusive and aec_on:
+        return "safe_engaged", False
+    if not exclusive and aec_on:
+        return "safe_belt_and_suspenders", False
+    if not exclusive and not aec_on:
+        return "safe_shared", False
+    # exclusive=True, aec_on=False — the dangerous-combo branch.
+    if auto_engage:
+        return "auto_engaged", True
+    return "dangerous", False
+
+
 def _build_aec_wiring(
     tuning: VoiceTuningConfig,
 ) -> tuple[RenderPcmBuffer | None, AecProcessor | None]:
@@ -365,10 +427,22 @@ def _build_aec_wiring(
       degenerate config, treated identically to disabled. We avoid
       allocating the buffer when the engine cannot consume it.
 
+    Phase 4 / T4.6 — AEC bypass detection. Before resolving the
+    activation matrix, :func:`_evaluate_aec_bypass_combo` runs
+    once per call to record the combo state via
+    :func:`record_aec_bypass_combo` + structured log. When the
+    combo is ``"auto_engaged"`` (exclusive=True, AEC=False, but
+    ``voice_aec_auto_engage_on_exclusive=True``) the function
+    treats AEC as enabled regardless of ``voice_aec_enabled`` and
+    promotes ``voice_aec_engine="off"`` to ``"speex"`` so the
+    override produces a working AEC stage.
+
     Args:
         tuning: Active :class:`VoiceTuningConfig`. Read fields:
             ``voice_aec_enabled``, ``voice_aec_engine``,
-            ``voice_aec_filter_length_ms``.
+            ``voice_aec_filter_length_ms``,
+            ``voice_aec_auto_engage_on_exclusive``,
+            ``capture_wasapi_exclusive``.
 
     Returns:
         ``(render_buffer, aec_processor)``. Both are ``None`` when
@@ -377,8 +451,47 @@ def _build_aec_wiring(
         :class:`RenderPcmProvider` (read) Protocols.
     """
     from sovyx.voice._aec import build_frame_normalizer_aec
+    from sovyx.voice.health._metrics import record_aec_bypass_combo
 
-    if not tuning.voice_aec_enabled or tuning.voice_aec_engine == "off":
+    combo_state, force_engage = _evaluate_aec_bypass_combo(tuning)
+    record_aec_bypass_combo(state=combo_state)
+    if combo_state == "dangerous":
+        logger.warning(
+            "voice.aec.bypass_combo_dangerous",
+            **{
+                "voice.aec.bypass.state": combo_state,
+                "voice.capture.wasapi_exclusive": tuning.capture_wasapi_exclusive,
+                "voice.aec.enabled": tuning.voice_aec_enabled,
+                "voice.aec.auto_engage_on_exclusive": (tuning.voice_aec_auto_engage_on_exclusive),
+                "voice.aec.bypass.remediation": (
+                    "Set voice_aec_enabled=True OR "
+                    "voice_aec_auto_engage_on_exclusive=True to "
+                    "engage in-process AEC; OS AEC is bypassed in "
+                    "exclusive mode."
+                ),
+            },
+        )
+    elif combo_state == "auto_engaged":
+        logger.info(
+            "voice.aec.bypass_combo_auto_engaged",
+            **{
+                "voice.aec.bypass.state": combo_state,
+                "voice.aec.enabled.effective": True,
+            },
+        )
+
+    aec_engine = tuning.voice_aec_engine
+    aec_active = tuning.voice_aec_enabled
+    if force_engage:
+        aec_active = True
+        if aec_engine == "off":
+            # Operator pinned engine="off" but opted into auto-
+            # engage; promote to the default "speex" so the
+            # override actually produces an AEC stage. Logged
+            # above via bypass_combo_auto_engaged.
+            aec_engine = "speex"
+
+    if not aec_active or aec_engine == "off":
         return None, None
 
     from sovyx.voice._render_pcm_buffer import RenderPcmBuffer
@@ -386,15 +499,16 @@ def _build_aec_wiring(
     render_buffer = RenderPcmBuffer()
     aec_processor = build_frame_normalizer_aec(
         enabled=True,
-        engine=tuning.voice_aec_engine,
+        engine=aec_engine,
         filter_length_ms=tuning.voice_aec_filter_length_ms,
     )
     logger.info(
         "voice.aec.wired",
         **{
-            "voice.aec.engine": tuning.voice_aec_engine,
+            "voice.aec.engine": aec_engine,
             "voice.aec.filter_length_ms": tuning.voice_aec_filter_length_ms,
             "voice.aec.buffer_capacity_samples": render_buffer.capacity_samples,
+            "voice.aec.bypass.state": combo_state,
         },
     )
     return render_buffer, aec_processor
