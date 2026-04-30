@@ -252,11 +252,20 @@ class RestartMixin:
                 preferred_host_api=self._host_api_name or None,
             )
         except StreamOpenError as exc:
+            from sovyx.voice._exclusive_open_classifier import (
+                classify_exclusive_open_failure,
+            )
+
+            failure = classify_exclusive_open_failure(exc)
             logger.error(
                 "audio_capture_exclusive_restart_failed",
                 error=str(exc),
                 device=self._input_device,
                 host_api=self._host_api_name,
+                **{
+                    "voice.exclusive_open.failure_class": failure.failure_class.value,
+                    "voice.exclusive_open.remediation": failure.remediation,
+                },
             )
             # Fall back to shared mode so the pipeline keeps running
             # (deaf, but alive — the dashboard banner will still guide
