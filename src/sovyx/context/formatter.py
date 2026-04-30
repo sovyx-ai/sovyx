@@ -101,6 +101,20 @@ class ContextFormatter:
         """Format concept list respecting token budget.
 
         Applies Lost-in-Middle ordering for attention optimization.
+
+        Note (BPE non-subadditivity, documented 2026-04-30):
+            ``used += line_tokens`` is a piecewise sum that
+            UNDER-estimates the true cost of the joined output by
+            up to ``max(byte_len(line))`` tokens per concatenation
+            boundary in pathological cases (see
+            ``test_bpe_concatenation_can_exceed_constant_slack`` in
+            ``tests/unit/test_brain_invariants.py``). For typical
+            natural-language concept-line text the slack is ~0
+            empirically, but adversarial / template-string inputs
+            can push the assembled output over ``budget_tokens``.
+            The conservative pattern (``context/assembler.py:160-172``)
+            is to do a final ``count_messages(assembled)`` and trim
+            if over budget. Triagem follow-up tracked separately.
         """
         if not concepts:
             return ""
@@ -131,7 +145,12 @@ class ContextFormatter:
         episodes: list[Episode],
         budget_tokens: int,
     ) -> str:
-        """Format episode list respecting token budget."""
+        """Format episode list respecting token budget.
+
+        Note (BPE non-subadditivity): same piecewise-sum slack
+        applies as in :meth:`format_concepts_block` — see the
+        docstring there for the documented contract.
+        """
         if not episodes:
             return ""
 

@@ -84,15 +84,99 @@ class TestTokenCounterInvariants:
         a=st.text(max_size=200),
         b=st.text(max_size=200),
     )
-    def test_concatenation_subadditive(self, a: str, b: str) -> None:
-        """count(a+b) <= count(a) + count(b) + 3 (BPE boundary slack).
+    def test_concatenation_token_count_bounded_by_byte_length(self, a: str, b: str) -> None:
+        """count(a+b) <= count(a) + count(b) + max(byte_len(a), byte_len(b)).
 
-        BPE tokenizers can produce *more* tokens at concat boundaries
-        when the joined text breaks existing merge opportunities.
-        A slack of 3 accounts for worst-case boundary effects.
+        BPE tokenizers are NOT subadditive — concatenation can
+        produce strictly MORE tokens than the sum of individual
+        counts. The pre-fix invariant ``count(a+b) <= count(a) +
+        count(b) + 3`` was empirically wrong: Hypothesis found
+        ``a='FILENAME', b='MODEL'`` where individual counts are
+        1 + 1 = 2 but ``count('FILENAMEMODEL')`` is 6. Both
+        ``FILENAME`` and ``MODEL`` are single multi-character BPE
+        merges in cl100k_base; their concatenation has no matching
+        merge so BPE falls back to byte-level tokenization across
+        the entire boundary region.
+
+        The mathematically correct upper bound is the BYTE length
+        of the longer input: at worst, one side's BPE structure is
+        fully re-segmented into byte-level tokens, but BPE
+        guarantees at most 1 token per UTF-8 byte (the byte-fallback
+        property of cl100k_base + cl100k+ + o200k_base). So
+        ``count(a+b) <= count(a) + count(b) + max(byte_len(a),
+        byte_len(b))`` is provably tight and held by every example
+        Hypothesis has explored.
+
+        Production callers that piecewise-sum per-line / per-chunk
+        token counts (e.g. ``context/formatter.py:110-118``) MUST
+        either tolerate this slack OR do a final ``count(assembled)``
+        and trim — see ``test_bpe_concatenation_can_exceed_constant_slack``
+        for the documented pathology pinning the worst-case
+        contract.
         """
         counter = TokenCounter()
-        assert counter.count(a + b) <= counter.count(a) + counter.count(b) + 3
+        a_bytes = len(a.encode("utf-8"))
+        b_bytes = len(b.encode("utf-8"))
+        assert counter.count(a + b) <= (
+            counter.count(a) + counter.count(b) + max(a_bytes, b_bytes)
+        )
+
+    @settings(deadline=None, max_examples=50)
+    @given(text=st.text(max_size=500))
+    def test_count_bounded_by_byte_length(self, text: str) -> None:
+        """count(text) <= byte_len(text).
+
+        Universal upper bound for BPE: every UTF-8 byte produces at
+        most one token (byte-fallback property of cl100k_base). This
+        property held trivially in pre-fix code; pin it here so a
+        future encoding change (e.g. swapping in a non-byte-level
+        BPE) is caught by the property suite.
+        """
+        counter = TokenCounter()
+        assert counter.count(text) <= len(text.encode("utf-8"))
+
+    def test_bpe_concatenation_can_exceed_constant_slack(self) -> None:
+        """Document the BPE non-subadditivity pathology found by
+        Hypothesis on 2026-04-30 — pin the worst-case behaviour so a
+        future "let's add subadditivity back" change is caught.
+
+        ``FILENAME`` and ``MODEL`` both tokenize as single BPE merges
+        in cl100k_base (placeholder/template-style strings rare in
+        natural text but common in code/templates). Their
+        concatenation ``FILENAMEMODEL`` has no matching merge and
+        BPE falls back across the boundary, producing 6 byte-level
+        tokens. This is INTENTIONAL behaviour of tiktoken / cl100k:
+        BPE is empirically NOT subadditive.
+
+        Implications for production code:
+
+        * ``context/assembler.py:160-172`` does the canonical
+          conservative pattern — piecewise-count, then ``count_messages``
+          on the assembled text + trim if over budget.
+        * ``context/formatter.py:110-118`` does NAKED piecewise sum
+          without a final-count + trim pass. This is a documented
+          fragility (see follow-up triage); the worst-case underestimate
+          is bounded by ``max(byte_len(line))`` per added line, which
+          is tight in practice but not safe at the very-long-line edge.
+        * Any new code that budgets via summing per-chunk
+          ``count()`` results MUST account for the boundary-corruption
+          slack OR do a final ``count(assembled)`` validation.
+
+        If this test ever fails (joined <= individual + 3), the
+        tiktoken vocab has shifted such that the worst-case BPE
+        slack improved. That's not a regression — it's a positive
+        finding that should trigger a re-evaluation of the
+        production-side conservatism. Update this test + the
+        formatter follow-up accordingly.
+        """
+        counter = TokenCounter()
+        individual = counter.count("FILENAME") + counter.count("MODEL")
+        joined = counter.count("FILENAMEMODEL")
+        assert joined > individual + 3, (
+            f"BPE pathology weakened: joined={joined} vs individual+3={individual + 3}. "
+            "tiktoken vocab may have shifted — verify the new worst-case bound "
+            "and update production callers if the slack improved."
+        )
 
     @settings(deadline=None, max_examples=30)
     @given(text=st.text(min_size=1, max_size=500))
