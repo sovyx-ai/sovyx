@@ -710,6 +710,43 @@ def record_hotplug_listener_registered(*, registered: bool, error: str = "") -> 
     )
 
 
+# ── Phase 5 / T5.49 + new mission — driver-update detection ──────────
+
+
+_DRIVER_UPDATE_ACTIONS: frozenset[str] = frozenset({"detected", "skipped", "triggered"})
+
+
+def record_driver_update_detected(*, action: str) -> None:
+    """Record an audio driver-modification event from the WMI listener.
+
+    Counter dimension: ``action`` — one of ``detected`` (always
+    emitted by the handler on first sight of the event),
+    ``skipped`` (the recascade flag was False so the handler
+    deliberately did NOT trigger a re-cascade), or ``triggered``
+    (recascade flag was True; the handler emitted the would-
+    trigger event — actual cascade re-run plumbing lives in a
+    future commit per the new mission's Part 4.1).
+
+    Operators correlate spikes in
+    ``action=detected`` with ``voice.health.deaf.warnings_total``
+    to attribute deaf-signal incidents to regressed driver
+    releases (forensic value) rather than to Sovyx's bypass
+    logic. ``action=skipped`` vs ``triggered`` lets dashboards
+    track the operator's adoption of the recascade flag.
+
+    Args:
+        action: ``"detected"`` / ``"skipped"`` / ``"triggered"``.
+            Other values are coerced to ``"unknown"`` to keep the
+            label cardinality bounded.
+    """
+    if action not in _DRIVER_UPDATE_ACTIONS:
+        action = "unknown"
+    counter = getattr(get_metrics(), "voice_driver_update_detected", None)
+    if counter is None:
+        return
+    counter.add(1, attributes={"action": action})
+
+
 # ── Phase 4 / T4.7-T4.8 — AEC observability ─────────────────────────────
 
 

@@ -635,6 +635,28 @@ class MetricsRegistry:
             "the listener flag default to True in v0.26.0.",
         )
 
+        # ── Phase 5 / T5.49 + new mission Part 6 — driver-update detection ──
+        # Counter that fires every time the WMI listener (T5.49,
+        # `fb815a3`) detects an audio driver modification. Labels
+        # split the counter by what the handler decided to do:
+        #   action=detected  — the always-emit "saw the event" baseline
+        #   action=skipped   — recascade flag disabled (lenient mode)
+        #   action=triggered — recascade flag enabled (would-trigger today;
+        #                      future commits wire actual cascade re-run)
+        # Operators correlate this counter against
+        # `voice.health.deaf.warnings_total` for forensic
+        # attribution: a deaf-signal spike co-occurring with an
+        # ``action=detected`` event points at a regressed driver
+        # release rather than at Sovyx's bypass logic.
+        self.voice_driver_update_detected = self._counter(
+            "sovyx.voice.driver_update.detected",
+            "Audio driver modification events from the WMI listener "
+            "(labels: action=detected|skipped|triggered). Operators "
+            "correlate spikes with deaf-signal incidents to attribute "
+            "them to driver releases. Fires only on Windows when "
+            "audio_driver_update_listener_enabled=True.",
+        )
+
         # ── Phase 4 / T4.7-T4.8 — AEC observability ─────────────────
         # ERLE histogram + windows counter give the dashboard a real
         # picture of acoustic-echo cancellation quality in production.

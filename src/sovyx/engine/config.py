@@ -1186,8 +1186,67 @@ class VoiceTuningConfig(BaseSettings):
     ``S_OK`` within ~5 ms. Blocking inside the callback would deadlock
     the entire Windows audio service.
 
+    .. note::
+
+       As of 2026-04-30 this flag is defined but NOT load-bearing —
+       no production code reads it to register the listener. The
+       runtime wire-up lands via
+       ``MISSION-voice-runtime-listener-wireup-2026-04-30.md``
+       Phase 2. Until that ships, flipping the flag has no effect.
+       Phase 3 Gate 4 (operator backlog) is BLOCKED on the wire-up
+       landing first.
+
     Default-flip planned for v0.26.0. See spec §D5 / Part 3 of mission
     doc."""
+
+    audio_driver_update_listener_enabled: bool = False
+    """WMI subscription for Windows audio driver updates (Windows only).
+
+    When enabled the voice pipeline registers a
+    ``WindowsDriverUpdateListener`` (foundation shipped in T5.49 /
+    `fb815a3`) that subscribes to WMI
+    ``__InstanceModificationEvent`` filtered to the audio device
+    class GUID. The sink callback emits structured
+    ``voice.driver_update.detected`` events when Windows updates a
+    driver mid-session — letting operators correlate deaf-signal
+    incidents with regressed driver releases instead of blaming
+    Sovyx's bypass logic.
+
+    Foundation default is ``False`` per
+    ``feedback_staged_adoption`` — operators pilot the listener +
+    confirm WMI events fire correctly before the default flips to
+    ``True``. The detection is observability-only at the listener
+    layer; actual re-cascade decisions go through
+    :attr:`audio_driver_update_recascade_enabled` which is gated
+    independently.
+
+    Default-flip planned post-pilot once
+    ``MISSION-voice-runtime-listener-wireup-2026-04-30.md`` Phase 1
+    closes + telemetry confirms WMI events fire on real driver
+    updates without false positives."""
+
+    audio_driver_update_recascade_enabled: bool = False
+    """Trigger graceful re-cascade on detected driver updates (Windows only).
+
+    Gated independently from
+    :attr:`audio_driver_update_listener_enabled` per
+    ``feedback_staged_adoption`` — detection (the listener +
+    structured event emission) is observability and ships first;
+    the action (re-cascade on driver swap) is destructive + needs
+    its own pilot before defaulting on.
+
+    When the listener flag is True AND this flag is False (lenient
+    mode), the handler emits
+    ``voice.driver_update.recascade_skipped{reason=flag_disabled}``
+    so operators can verify detection without triggering the
+    re-cascade path. When this flag is True, the handler emits
+    ``voice.driver_update.recascade_would_trigger`` and (in a
+    future commit per mission §Part 4.1) invokes the orchestrator's
+    actual cascade re-run logic.
+
+    Foundation default is ``False``. Default-flip planned post-
+    pilot once detection telemetry confirms low false-positive rate
+    + cascade re-run plumbing lands in a future mission."""
 
     voice_aec_enabled: bool = False
     """Acoustic Echo Cancellation (Phase 4 / T4.1 — foundation).
