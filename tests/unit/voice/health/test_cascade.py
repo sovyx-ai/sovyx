@@ -1047,3 +1047,233 @@ class TestQuarantineKillSwitch:
 
         assert result.source == "quarantined"  # type: ignore[attr-defined]
         assert quarantine.is_quarantined("test-endpoint")
+
+
+# ---------------------------------------------------------------------------
+# T6.11 — diagnosis_histogram telemetry on cascade exhaustion
+# ---------------------------------------------------------------------------
+
+
+_CASCADE_EXECUTOR_LOGGER = "sovyx.voice.health.cascade._executor"
+
+
+def _events_of(
+    caplog: pytest.LogCaptureFixture,
+    event_name: str,
+) -> list[dict[str, object]]:
+    """Return all structlog dict-records matching ``event_name``."""
+    return [
+        r.msg
+        for r in caplog.records
+        if (
+            r.name == _CASCADE_EXECUTOR_LOGGER
+            and isinstance(r.msg, dict)
+            and r.msg.get("event") == event_name
+        )
+    ]
+
+
+class TestDiagnosisHistogramHelper:
+    """Unit-level coverage for ``_compute_diagnosis_histogram``."""
+
+    def test_empty_attempts_returns_empty_dict(self) -> None:
+        from sovyx.voice.health.cascade._executor import _compute_diagnosis_histogram
+
+        assert _compute_diagnosis_histogram([]) == {}
+
+    def test_single_attempt(self) -> None:
+        from sovyx.voice.health.cascade._executor import _compute_diagnosis_histogram
+
+        attempts = [
+            ProbeResult(
+                diagnosis=Diagnosis.DEVICE_BUSY,
+                mode=ProbeMode.COLD,
+                combo=_win_combo(),
+                vad_max_prob=0.0,
+                vad_mean_prob=0.0,
+                rms_db=-80.0,
+                callbacks_fired=0,
+                duration_ms=100,
+            ),
+        ]
+        assert _compute_diagnosis_histogram(attempts) == {"device_busy": 1}
+
+    def test_all_same_diagnosis(self) -> None:
+        from sovyx.voice.health.cascade._executor import _compute_diagnosis_histogram
+
+        attempts = [
+            ProbeResult(
+                diagnosis=Diagnosis.DEVICE_BUSY,
+                mode=ProbeMode.COLD,
+                combo=_win_combo(),
+                vad_max_prob=0.0,
+                vad_mean_prob=0.0,
+                rms_db=-80.0,
+                callbacks_fired=0,
+                duration_ms=100,
+            )
+            for _ in range(5)
+        ]
+        assert _compute_diagnosis_histogram(attempts) == {"device_busy": 5}
+
+    def test_mixed_diagnoses(self) -> None:
+        from sovyx.voice.health.cascade._executor import _compute_diagnosis_histogram
+
+        diagnoses = [
+            Diagnosis.DEVICE_BUSY,
+            Diagnosis.APO_DEGRADED,
+            Diagnosis.DEVICE_BUSY,
+            Diagnosis.NO_SIGNAL,
+            Diagnosis.APO_DEGRADED,
+            Diagnosis.DEVICE_BUSY,
+        ]
+        attempts = [
+            ProbeResult(
+                diagnosis=d,
+                mode=ProbeMode.COLD,
+                combo=_win_combo(),
+                vad_max_prob=0.0,
+                vad_mean_prob=0.0,
+                rms_db=-80.0,
+                callbacks_fired=0,
+                duration_ms=100,
+            )
+            for d in diagnoses
+        ]
+        assert _compute_diagnosis_histogram(attempts) == {
+            "device_busy": 3,
+            "apo_degraded": 2,
+            "no_signal": 1,
+        }
+
+
+class TestDiagnosisHistogramEmission:
+    """Integration — the histogram lands in the structured log line."""
+
+    @pytest.mark.asyncio()
+    async def test_table_exhaustion_emits_histogram(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        caplog.set_level(logging.ERROR, logger=_CASCADE_EXECUTOR_LOGGER)
+        # Every cascade entry returns DEVICE_BUSY → table exhausts.
+        probe = _FakeProbe(plan=[(_match_all, Diagnosis.DEVICE_BUSY)])
+        result = await _run(probe_fn=probe)
+        assert result.source == "none"  # type: ignore[attr-defined]
+        assert result.budget_exhausted is False  # type: ignore[attr-defined]
+
+        events = _events_of(caplog, "voice_cascade_exhausted")
+        assert len(events) == 1
+        histogram = events[0]["diagnosis_histogram"]
+        # Every attempt had the same diagnosis; histogram aggregates.
+        assert histogram == {"device_busy": len(WINDOWS_CASCADE)}
+
+    @pytest.mark.asyncio()
+    async def test_table_exhaustion_mixed_diagnoses_histogram(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        caplog.set_level(logging.ERROR, logger=_CASCADE_EXECUTOR_LOGGER)
+
+        # Plan: WASAPI/exclusive → APO_DEGRADED, everything else → DEVICE_BUSY.
+        # No HEALTHY anywhere → table exhausts; histogram surfaces the split.
+        def _is_wasapi_excl(c: Combo) -> bool:
+            return c.host_api == "WASAPI" and c.exclusive
+
+        probe = _FakeProbe(
+            plan=[
+                (_is_wasapi_excl, Diagnosis.APO_DEGRADED),
+                (_match_all, Diagnosis.DEVICE_BUSY),
+            ],
+        )
+        result = await _run(probe_fn=probe)
+        assert result.source == "none"  # type: ignore[attr-defined]
+
+        events = _events_of(caplog, "voice_cascade_exhausted")
+        assert len(events) == 1
+        histogram = events[0]["diagnosis_histogram"]
+        # Counts must sum to the number of attempts.
+        assert sum(histogram.values()) == result.attempts_count  # type: ignore[attr-defined]
+        # Both buckets present.
+        assert "device_busy" in histogram
+        assert "apo_degraded" in histogram
+
+    @pytest.mark.asyncio()
+    async def test_budget_exhaustion_emits_histogram_even_with_zero_attempts(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_CASCADE_EXECUTOR_LOGGER)
+
+        probe = _FakeProbe(plan=[(_match_all, Diagnosis.DEVICE_BUSY)])
+
+        # Clock advances past deadline immediately — zero attempts complete.
+        t = {"now": 0.0}
+
+        def clock() -> float:
+            t["now"] += 10.0
+            return t["now"]
+
+        result = await _run(probe_fn=probe, total_budget_s=5.0, clock=clock)
+        assert result.budget_exhausted is True  # type: ignore[attr-defined]
+        assert result.attempts_count == 0  # type: ignore[attr-defined]
+
+        events = _events_of(caplog, "voice_cascade_budget_exhausted")
+        assert len(events) == 1
+        # Empty histogram when no attempt completed before the deadline.
+        assert events[0]["diagnosis_histogram"] == {}
+
+    @pytest.mark.asyncio()
+    async def test_budget_exhaustion_mid_cascade_carries_partial_histogram(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_CASCADE_EXECUTOR_LOGGER)
+
+        probe = _FakeProbe(plan=[(_match_all, Diagnosis.NO_SIGNAL)])
+
+        # Advance 4s per clock read; budget=10s; cuts off mid-cascade.
+        t = {"now": 0.0}
+
+        def clock() -> float:
+            t["now"] += 4.0
+            return t["now"]
+
+        result = await _run(probe_fn=probe, total_budget_s=10.0, clock=clock)
+        assert result.budget_exhausted is True  # type: ignore[attr-defined]
+        assert result.attempts_count > 0  # type: ignore[attr-defined]
+        assert result.attempts_count < len(WINDOWS_CASCADE)  # type: ignore[attr-defined]
+
+        events = _events_of(caplog, "voice_cascade_budget_exhausted")
+        assert len(events) == 1
+        histogram = events[0]["diagnosis_histogram"]
+        # Partial run: histogram count == attempts that completed pre-cutoff.
+        assert sum(histogram.values()) == result.attempts_count  # type: ignore[attr-defined]
+        assert histogram.get("no_signal", 0) > 0
+
+    @pytest.mark.asyncio()
+    async def test_short_circuit_path_emits_no_exhaustion_log(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Sanity check — when the cascade succeeds, neither exhaustion
+        # log fires, so the histogram never surfaces. Guards against
+        # accidentally moving the emission to a path that fires on
+        # success (which would spam Prometheus with healthy noise).
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_CASCADE_EXECUTOR_LOGGER)
+
+        probe = _FakeProbe(plan=[(_match_all, Diagnosis.HEALTHY)])
+        await _run(probe_fn=probe)
+
+        assert _events_of(caplog, "voice_cascade_exhausted") == []
+        assert _events_of(caplog, "voice_cascade_budget_exhausted") == []

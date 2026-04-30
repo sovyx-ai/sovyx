@@ -625,6 +625,11 @@ async def _run_cascade_locked(
                 endpoint=endpoint_guid,
                 attempts_run=attempts_count,
                 total_budget_s=total_budget_s,
+                # T6.11 — diagnosis histogram for at-a-glance triage.
+                # Empty when the deadline trips before any attempt
+                # completes (first-iteration timeout). See
+                # :func:`_compute_diagnosis_histogram` for shape.
+                diagnosis_histogram=_compute_diagnosis_histogram(attempts),
             )
             return _make_result(
                 endpoint_guid=endpoint_guid,
@@ -747,6 +752,13 @@ async def _run_cascade_locked(
         "voice_cascade_exhausted",
         endpoint=endpoint_guid,
         attempts=attempts_count,
+        # T6.11 — diagnosis histogram. Cascade-table-exhausted is the
+        # critical case (every combo failed); the histogram surfaces
+        # WHICH failure modes dominated so operators can route alerts:
+        # ``device_busy`` heavy → another app holds the mic;
+        # ``apo_degraded`` heavy → Voice Clarity / similar APO chain;
+        # ``permission_denied`` → OS gate; etc.
+        diagnosis_histogram=_compute_diagnosis_histogram(attempts),
     )
     return _make_result(
         endpoint_guid=endpoint_guid,
@@ -1125,6 +1137,41 @@ def _make_result(
         budget_exhausted=budget_exhausted,
         source=source,
     )
+
+
+def _compute_diagnosis_histogram(attempts: Sequence[ProbeResult]) -> dict[str, int]:
+    """Build ``{diagnosis_value: count}`` from a list of cascade attempts.
+
+    Phase 6 / T6.20 — operators page on
+    :data:`voice.cascade.exhausted` and need ONE log line that
+    summarises the failure-mode distribution across N attempts. The
+    per-attempt ``voice_cascade_attempt`` lines + the existing
+    OTel ``voice_health_cascade_attempts`` counter give the drill-
+    down; the histogram is the at-a-glance triage signal.
+
+    Empty / missing attempts return ``{}`` defensively. The cascade
+    in production always has ≥ 1 attempt before exhaustion (every
+    platform cascade table is non-empty), but the budget-exhausted
+    site can fire with zero attempts when the deadline trips on the
+    first iteration — the empty histogram is the correct surface
+    for that case.
+
+    Diagnosis enum values are :class:`StrEnum` so ``.value`` returns
+    the canonical lowercase wire form (``"healthy"``, ``"no_signal"``,
+    etc.) — same shape monitoring tooling already consumes from the
+    per-attempt log lines.
+
+    Returns:
+        Dict mapping diagnosis-value strings to integer counts.
+        Iteration order matches first-seen order in ``attempts``;
+        ``json.dumps`` sorts by key, so the wire shape is stable
+        across boots regardless of attempt-order randomness.
+    """
+    histogram: dict[str, int] = {}
+    for attempt in attempts:
+        key = attempt.diagnosis.value
+        histogram[key] = histogram.get(key, 0) + 1
+    return histogram
 
 
 def _combo_tag(combo: Combo) -> str:
