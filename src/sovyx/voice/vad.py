@@ -38,6 +38,7 @@ from sovyx.voice._stage_metrics import (
     measure_stage_duration,
     record_stage_event,
 )
+from sovyx.voice.health._metrics import record_vad_quiet_signal_gated
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -61,6 +62,13 @@ _SAMPLE_RATE_8K = 8000
 _WINDOW_16K = 512
 _WINDOW_8K = 256
 _LSTM_STATE_SHAPE = (2, 1, 128)
+
+_DBFS_FLOOR = -120.0
+"""Lowest dBFS reportable when a frame's RMS is exactly zero —
+guards ``20 * log10(rms)`` against ``-inf`` propagation into the
+quiet-signal gate (T4.39). -120 dBFS sits below int16 quantisation
+floor (~-90 dBFS) so any real signal will never be confused with
+the floor sentinel."""
 
 # ---------------------------------------------------------------------------
 # Ring 3 NaN/Inf guard tuning (V1)
@@ -212,6 +220,56 @@ class VADConfig:
 
     sample_rate: int = _SAMPLE_RATE_16K
     """Audio sample rate — only 8000 or 16000 supported."""
+
+    quiet_signal_gate_enabled: bool = False
+    """Anti-hallucination per-frame quiet-signal gate (Phase 4 / T4.39).
+
+    When True, every frame whose RMS falls below
+    :attr:`quiet_signal_gate_rms_dbfs` AND whose post-V1 probability
+    sits above :attr:`quiet_signal_gate_prob_threshold` has its
+    probability force-clamped to ``0.0`` BEFORE the hysteresis FSM
+    runs. The combination "very quiet signal + high speech
+    probability" is paradoxical — it indicates the LSTM is
+    hallucinating speech onto a near-silent buffer (typically
+    after a long silence run that drove the network into an
+    unstable state, or at the boundary of a recovered LSTM reset).
+    Forcing the FSM to read silence in that frame breaks the
+    hallucination loop without disturbing genuinely-loud speech.
+
+    Default ``False`` per ``feedback_staged_adoption`` — operators
+    flip after measuring the gate rate via the
+    ``sovyx.voice.vad.quiet_signal_gated`` counter on their
+    deployment. The gate is observability-instrumented even when
+    the action is disabled, so the rate measurement does not
+    require flipping the action.
+
+    Default-flip planned for v0.28.0+ once the gate-rate floor
+    (≤0.1 % of all frames on healthy mics) is validated on a
+    pilot fleet."""
+
+    quiet_signal_gate_rms_dbfs: float = -70.0
+    """RMS threshold below which the quiet-signal gate engages.
+
+    -70 dBFS sits well below the ambient floor of any healthy
+    capture path (-55 to -65 dBFS for typical office mics) but
+    above the int16 quantisation floor (-90 dBFS). A frame at
+    -70 dBFS contains essentially no speech-band energy — any
+    high VAD probability on such a frame is a hallucination.
+
+    Bounded ``[-120, 0]`` dBFS by :func:`_validate_config`."""
+
+    quiet_signal_gate_prob_threshold: float = 0.8
+    """Probability threshold above which the quiet-signal gate engages.
+
+    Combined with :attr:`quiet_signal_gate_rms_dbfs` to form the
+    paradox detector: the gate fires only when the LSTM claims
+    high confidence (``prob > 0.8``) on a near-silent buffer
+    (``rms < -70 dBFS``). The 0.8 threshold sits well above the
+    canonical onset (0.5) so the gate doesn't mask legitimate
+    "marginal" detections — it targets ONLY the hallucination
+    signature.
+
+    Bounded ``[0, 1]`` by :func:`_validate_config`."""
 
     @property
     def window_size(self) -> int:
@@ -378,6 +436,19 @@ def _validate_config(config: VADConfig) -> None:
         raise ValueError(msg)
     if config.min_offset_frames < 1:
         msg = f"min_offset_frames must be >= 1, got {config.min_offset_frames}"
+        raise ValueError(msg)
+    # T4.39 — quiet-signal gate bounds.
+    if not -120.0 <= config.quiet_signal_gate_rms_dbfs <= 0.0:
+        msg = (
+            f"quiet_signal_gate_rms_dbfs must be in [-120, 0] dBFS, "
+            f"got {config.quiet_signal_gate_rms_dbfs}"
+        )
+        raise ValueError(msg)
+    if not 0.0 <= config.quiet_signal_gate_prob_threshold <= 1.0:
+        msg = (
+            f"quiet_signal_gate_prob_threshold must be in [0, 1], "
+            f"got {config.quiet_signal_gate_prob_threshold}"
+        )
         raise ValueError(msg)
     # Validate sample rate eagerly
     _ = config.window_size
@@ -624,6 +695,54 @@ class SileroVAD:
             # enrichment on a transition reflects the probabilities
             # that *led to* it.
             rms = float(np.sqrt(np.mean(audio * audio))) if audio.size else 0.0
+
+            # ── T4.39 quiet-signal gate (anti-hallucination) ───
+            # Detects the paradoxical "near-silent buffer + high
+            # speech probability" combo that signals the LSTM is
+            # hallucinating onto silence — typically after a long
+            # silence run drives the network into an unstable
+            # state, or at the boundary of a recovered LSTM
+            # reset (V1 path). The gate forces probability to 0.0
+            # for that frame so the FSM reads silence; the rest
+            # of the LSTM state continues unchanged so a real
+            # onset on the NEXT frame still fires normally.
+            #
+            # Foundation per feedback_staged_adoption: the
+            # detector ALWAYS observes (counter increments with
+            # state="would_gate" when the action is disabled),
+            # the action only mutates probability when the flag
+            # is True. Operators measure the rate via the counter
+            # before enabling the action.
+            if not is_corrupt and audio.size:
+                rms_dbfs = 20.0 * float(np.log10(rms)) if rms > 0.0 else _DBFS_FLOOR
+                paradox = (
+                    rms_dbfs < self._config.quiet_signal_gate_rms_dbfs
+                    and probability > self._config.quiet_signal_gate_prob_threshold
+                )
+                if paradox:
+                    if self._config.quiet_signal_gate_enabled:
+                        record_vad_quiet_signal_gated(state="gated")
+                        logger.info(
+                            "voice.vad.quiet_signal_gated",
+                            **{
+                                "voice.rms_dbfs": round(rms_dbfs, 2),
+                                "voice.probability_pre_gate": round(probability, 4),
+                                "voice.gate_rms_dbfs": (self._config.quiet_signal_gate_rms_dbfs),
+                                "voice.gate_prob_threshold": (
+                                    self._config.quiet_signal_gate_prob_threshold
+                                ),
+                            },
+                        )
+                        probability = 0.0
+                    else:
+                        # Observability-only path: detector saw
+                        # the paradox but the action is disabled
+                        # so the FSM still consumes the raw
+                        # probability. Operators use this counter
+                        # to measure the would-gate rate before
+                        # enabling the action.
+                        record_vad_quiet_signal_gated(state="would_gate")
+
             self._prob_history.append(probability)
             self._rms_history.append(rms)
 

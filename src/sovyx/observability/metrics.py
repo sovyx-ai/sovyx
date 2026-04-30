@@ -671,6 +671,17 @@ class MetricsRegistry:
             "echo, AEC filter can converge cleanly); 'undecided' "
             "fires when either signal is silent (NCC undefined).",
         )
+        self.voice_vad_quiet_signal_gated = self._counter(
+            "sovyx.voice.vad.quiet_signal_gated",
+            "Per-frame VAD quiet-signal gate verdict (Phase 4 T4.39 — "
+            "labels: state=gated|would_gate). 'gated' fires when the "
+            "anti-hallucination gate clamped probability to 0.0 "
+            "because the frame paradoxically combined low RMS "
+            "(<gate_rms_dbfs) with high speech probability "
+            "(>gate_prob_threshold). 'would_gate' fires on the same "
+            "paradox when quiet_signal_gate_enabled=False so the "
+            "rate is observable before flipping the action.",
+        )
         self.voice_aec_bypass_combo = self._counter(
             "sovyx.voice.aec.bypass_combo",
             "Boot-time AEC + WASAPI-exclusive combo detector "

@@ -114,6 +114,7 @@ METRIC_AEC_ERLE_DB = "sovyx.voice.aec.erle_db"
 METRIC_AEC_WINDOWS = "sovyx.voice.aec.windows"
 METRIC_AEC_DOUBLE_TALK = "sovyx.voice.aec.double_talk"
 METRIC_AEC_BYPASS_COMBO = "sovyx.voice.aec.bypass_combo"
+METRIC_VAD_QUIET_SIGNAL_GATED = "sovyx.voice.vad.quiet_signal_gated"
 
 # ── Phase 4 — NS observability (T4.16) ──────────────────────────────────
 METRIC_NS_WINDOWS = "sovyx.voice.ns.windows"
@@ -899,6 +900,33 @@ def record_aec_double_talk(*, state: str) -> None:
     counter.add(1, attributes={"state": state})
 
 
+def record_vad_quiet_signal_gated(*, state: str) -> None:
+    """Record one VAD quiet-signal gate verdict (Phase 4 / T4.39).
+
+    Fires from inside :meth:`SileroVAD.process_frame` whenever the
+    paradox detector observes a frame with RMS below the configured
+    dBFS gate AND VAD probability above the configured threshold.
+    The detector ALWAYS observes — the action (force probability
+    to 0.0) only fires when ``VADConfig.quiet_signal_gate_enabled``
+    is True.
+
+    Args:
+        state: One of:
+            * ``"gated"`` — the action engaged: probability was
+              force-clamped to 0.0 before the FSM read it. Implies
+              the operator has flipped ``quiet_signal_gate_enabled``
+              to True.
+            * ``"would_gate"`` — the detector saw the paradox but
+              the action is disabled (foundation default). The
+              counter still fires so operators can measure the
+              base rate before opting in.
+    """
+    counter = getattr(get_metrics(), "voice_vad_quiet_signal_gated", None)
+    if counter is None:
+        return
+    counter.add(1, attributes={"state": state})
+
+
 def record_aec_bypass_combo(*, state: str) -> None:
     """Record one boot-time AEC + WASAPI-exclusive combo verdict (T4.6).
 
@@ -971,6 +999,7 @@ __all__ = [
     "METRIC_RECOVERY_ATTEMPTS",
     "METRIC_SELF_FEEDBACK_BLOCKS",
     "METRIC_TIME_TO_FIRST_UTTERANCE",
+    "METRIC_VAD_QUIET_SIGNAL_GATED",
     "record_active_endpoint_change",
     "record_aec_bypass_combo",
     "record_aec_double_talk",
@@ -1008,4 +1037,5 @@ __all__ = [
     "record_tier2_host_api_rotate_attempted",
     "record_tier2_host_api_rotate_outcome",
     "record_time_to_first_utterance",
+    "record_vad_quiet_signal_gated",
 ]
