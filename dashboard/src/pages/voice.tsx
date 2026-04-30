@@ -29,6 +29,7 @@ import {
 import { api, isAbortError } from "@/lib/api";
 import { VoiceSetupModal } from "@/components/setup-wizard";
 import { LinuxMicGainCard } from "@/components/voice/linux-mic-gain-card";
+import { VoiceQualityPanel } from "@/components/voice/VoiceQualityPanel";
 
 /* ── Types ── */
 
@@ -409,6 +410,13 @@ export default function VoicePage() {
         under Settings where the banner historically lived.
       */}
       <LinuxMicGainCard />
+
+      {/* Phase 4 / T4.26 + T4.37 — voice quality observables. SNR
+          distribution + MOS proxy + noise-floor drift + AGC2
+          controller state. Polls /api/voice/quality-snapshot every
+          5 s; falls back gracefully when the engine registry isn't
+          ready (cold boot before voice enable). */}
+      <VoiceQualityPanel />
 
       {/* Status grid */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

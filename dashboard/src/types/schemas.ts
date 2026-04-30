@@ -1168,3 +1168,41 @@ export const VoiceBypassTierStatusResponseSchema = z.object({
   tier3_wasapi_exclusive_attempted: z.number().int().nonnegative(),
   tier3_wasapi_exclusive_succeeded: z.number().int().nonnegative(),
 });
+
+// ``GET /api/voice/quality-snapshot`` — Phase 4 / T4.26 + T4.37.
+// Single read of the rolling SNR buffer + noise-floor drift state
+// + AGC2 verdict counters. ``dnsmos_extras_installed`` distinguishes
+// "true MOS available" (T4.21+ extras) from "SNR-proxy MOS only".
+export const VoiceQualityVerdictSchema = z.enum([
+  "excellent",
+  "good",
+  "degraded",
+  "poor",
+  "no_signal",
+]);
+
+export const VoiceNoiseFloorBlockSchema = z.object({
+  short_avg_db: z.number().nullable(),
+  long_avg_db: z.number().nullable(),
+  drift_db: z.number().nullable(),
+  ready: z.boolean(),
+  short_sample_count: z.number().int().nonnegative(),
+  long_sample_count: z.number().int().nonnegative(),
+});
+
+export const VoiceAgc2BlockSchema = z.object({
+  frames_processed: z.number().int().nonnegative(),
+  frames_silenced: z.number().int().nonnegative(),
+  frames_vad_silenced: z.number().int().nonnegative(),
+  current_gain_db: z.number(),
+  speech_level_dbfs: z.number(),
+});
+
+export const VoiceQualitySnapshotResponseSchema = z.object({
+  snr_p50_db: z.number().nullable(),
+  snr_sample_count: z.number().int().nonnegative(),
+  snr_verdict: VoiceQualityVerdictSchema,
+  noise_floor: VoiceNoiseFloorBlockSchema,
+  agc2: VoiceAgc2BlockSchema.nullable(),
+  dnsmos_extras_installed: z.boolean(),
+});

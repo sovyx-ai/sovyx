@@ -1443,3 +1443,37 @@ export interface VoiceBypassTierStatusResponse {
   tier3_wasapi_exclusive_attempted: number;
   tier3_wasapi_exclusive_succeeded: number;
 }
+
+/** Phase 4 / T4.26 + T4.37 — quality observables snapshot. */
+export type VoiceQualityVerdict =
+  | "excellent"
+  | "good"
+  | "degraded"
+  | "poor"
+  | "no_signal";
+
+export interface VoiceNoiseFloorBlock {
+  short_avg_db: number | null;
+  long_avg_db: number | null;
+  drift_db: number | null;
+  ready: boolean;
+  short_sample_count: number;
+  long_sample_count: number;
+}
+
+export interface VoiceAgc2Block {
+  frames_processed: number;
+  frames_silenced: number;
+  frames_vad_silenced: number;
+  current_gain_db: number;
+  speech_level_dbfs: number;
+}
+
+export interface VoiceQualitySnapshotResponse {
+  snr_p50_db: number | null;
+  snr_sample_count: number;
+  snr_verdict: VoiceQualityVerdict;
+  noise_floor: VoiceNoiseFloorBlock;
+  agc2: VoiceAgc2Block | null;
+  dnsmos_extras_installed: boolean;
+}

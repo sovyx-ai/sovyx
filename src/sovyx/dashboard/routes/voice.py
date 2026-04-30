@@ -218,6 +218,138 @@ async def get_voice_bypass_tier_status(request: Request) -> JSONResponse:
     return JSONResponse(_bypass_tier_snapshot())
 
 
+@router.get("/quality-snapshot")
+async def get_voice_quality_snapshot(request: Request) -> JSONResponse:
+    """Return a single snapshot of the voice-quality observables.
+
+    Phase 4 / T4.26 + T4.37 dashboard backing endpoint. Reads the
+    same in-memory aggregators the orchestrator's heartbeat path
+    consumes (single source of truth):
+
+    * Recent SNR rolling window (T4.36 — ``voice/health/_recent_snr``).
+    * Noise-floor drift state (T4.38 — ``voice/health/_noise_floor_trending``).
+    * Per-window AGC2 verdict counters (read off the configured
+      AGC2 instance when one is wired; ``None`` when AGC2 is
+      disabled).
+
+    The snapshot is intentionally a one-shot read — the dashboard
+    panels poll on a 5 s cadence which the rolling buffers
+    accommodate without contention. Histograms / time-series live
+    in the OTel pipeline; this endpoint is the small "current
+    state" view operators check while validating a pilot.
+
+    Returns:
+        JSON shape (matches ``VoiceQualitySnapshotResponseSchema``
+        in dashboard/src/types/schemas.ts):
+        ``{"snr_p50_db": float|null, "snr_sample_count": int,
+        "snr_verdict": "excellent"|"good"|"degraded"|"poor"|"no_signal",
+        "noise_floor": {"short_avg_db": float|null,
+                        "long_avg_db": float|null,
+                        "drift_db": float|null,
+                        "ready": bool},
+        "agc2": {"frames_processed": int, "frames_silenced": int,
+                 "frames_vad_silenced": int,
+                 "current_gain_db": float, "speech_level_dbfs": float}|null,
+        "dnsmos_extras_installed": bool}``.
+
+        ``dnsmos_extras_installed`` lets the dashboard distinguish
+        "true MOS available" (T4.21+ extras) from "SNR-proxy MOS
+        only" (foundation default).
+
+        Returns 503 when the engine registry is not yet
+        available.
+    """
+    registry = getattr(request.app.state, "registry", None)
+    if registry is None:
+        return JSONResponse(
+            {"error": "Engine not running"},
+            status_code=HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    from sovyx.voice.health._noise_floor_trending import compute_drift
+    from sovyx.voice.health._recent_snr import window_summary
+
+    snr = window_summary()
+    drift = compute_drift()
+
+    snr_p50: float | None
+    if snr.count == 0:
+        snr_p50 = None
+        snr_verdict = "no_signal"
+    else:
+        snr_p50 = round(snr.p50_db, 2)
+        if snr.p50_db >= 17.0:
+            snr_verdict = "excellent"
+        elif snr.p50_db >= 9.0:
+            snr_verdict = "good"
+        elif snr.p50_db >= 3.0:
+            snr_verdict = "degraded"
+        else:
+            snr_verdict = "poor"
+
+    # Drift: ready=False maps to "no_signal" semantically — the
+    # dashboard renders "warming up" for the first 5 minutes.
+    noise_floor: dict[str, Any]
+    if drift.ready:
+        noise_floor = {
+            "short_avg_db": round(drift.short_avg_db, 2),
+            "long_avg_db": round(drift.long_avg_db, 2),
+            "drift_db": round(drift.drift_db, 2),
+            "ready": True,
+            "short_sample_count": drift.short_count,
+            "long_sample_count": drift.long_count,
+        }
+    else:
+        noise_floor = {
+            "short_avg_db": None,
+            "long_avg_db": None,
+            "drift_db": None,
+            "ready": False,
+            "short_sample_count": drift.short_count,
+            "long_sample_count": drift.long_count,
+        }
+
+    # AGC2 state — read from the active capture task's normalizer
+    # if one is wired. Best-effort: a registry without an active
+    # voice pipeline returns None for the agc2 section.
+    agc2_payload: dict[str, Any] | None = None
+    capture_task = getattr(registry, "voice_capture_task", None)
+    if capture_task is not None:
+        normalizer = getattr(capture_task, "_normalizer", None)
+        if normalizer is not None:
+            agc2 = getattr(normalizer, "agc2", None)
+            if agc2 is not None:
+                agc2_payload = {
+                    "frames_processed": int(agc2.frames_processed),
+                    "frames_silenced": int(agc2.frames_silenced),
+                    "frames_vad_silenced": int(agc2.frames_vad_silenced),
+                    "current_gain_db": round(float(agc2.current_gain_db), 2),
+                    "speech_level_dbfs": round(float(agc2.speech_level_dbfs), 2),
+                }
+
+    # DNSMOS extras presence — probe the lazy loader without
+    # raising. The extras flag drives the dashboard's "MOS shown
+    # is SNR-proxy" disclaimer.
+    dnsmos_installed = False
+    try:
+        import importlib.util
+
+        dnsmos_installed = importlib.util.find_spec("dnsmos") is not None
+    except Exception:  # noqa: BLE001 — probe is observability-only
+        dnsmos_installed = False
+
+    return JSONResponse(
+        {
+            "snr_p50_db": snr_p50,
+            "snr_sample_count": snr.count,
+            "snr_verdict": snr_verdict,
+            "noise_floor": noise_floor,
+            "agc2": agc2_payload,
+            "dnsmos_extras_installed": dnsmos_installed,
+        }
+    )
+
+
 @router.get("/status")
 async def get_voice_status_endpoint(request: Request) -> JSONResponse:
     """Voice pipeline status — running state, models, hardware tier."""
