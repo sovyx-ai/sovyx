@@ -1016,6 +1016,27 @@ export type VoiceHealthDiagnosis =
 
 export type VoiceHealthProbeMode = "cold" | "warm";
 
+/** T6.20 — closed enum for ``GET /api/voice/service-health`` ``reason`` field.
+ *
+ * Stable codes for monitoring tooling (Prometheus / cron / external
+ * health checks). Adding new values is fine; renaming or repurposing
+ * is a breaking change to monitoring contracts.
+ */
+export type VoiceServiceHealthReason =
+  | "ok"
+  | "voice_disabled"
+  | "engine_not_running"
+  | "voice_pipeline_not_registered"
+  | "last_diagnosis_unhealthy";
+
+/** T6.20 — aggregated readiness snapshot for monitoring. */
+export interface VoiceServiceHealthResponse {
+  ready: boolean;
+  reason: VoiceServiceHealthReason;
+  last_diagnosis: string | null;
+  watchdog_state: string | null;
+}
+
 export type VoiceHealthRemediationSeverity = "info" | "warn" | "error";
 
 export type VoiceHealthPinSource = "user" | "wizard" | "cli";

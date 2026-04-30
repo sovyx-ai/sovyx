@@ -729,6 +729,20 @@ export const PreflightWarningSchema = z.object({
 
 // ── Voice Capture Health (L7, ADR §4.7) ──
 
+/** T6.20 — `GET /api/voice/service-health` aggregated readiness response. */
+export const VoiceServiceHealthResponseSchema = z.object({
+  ready: z.boolean(),
+  reason: z.enum([
+    "ok",
+    "voice_disabled",
+    "engine_not_running",
+    "voice_pipeline_not_registered",
+    "last_diagnosis_unhealthy",
+  ]),
+  last_diagnosis: z.string().nullable(),
+  watchdog_state: z.string().nullable(),
+});
+
 export const VoiceHealthComboSchema = z.object({
   host_api: z.string(),
   sample_rate: z.number().int(),

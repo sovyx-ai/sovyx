@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from starlette.status import HTTP_503_SERVICE_UNAVAILABLE
 
 from sovyx.dashboard.routes._deps import verify_token
@@ -17,12 +19,210 @@ from sovyx.voice.health._bypass_tier_state import snapshot as _bypass_tier_snaps
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from sovyx.engine.config import EngineConfig
     from sovyx.voice.cognitive_bridge import VoiceCognitiveBridge
     from sovyx.voice.health.contract import MixerCardSnapshot
 
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/voice", dependencies=[Depends(verify_token)])
+
+
+# ── T6.20 — aggregated voice service health ──────────────────────────
+
+
+_ServiceHealthReason = Literal[
+    "ok",
+    "voice_disabled",
+    "engine_not_running",
+    "voice_pipeline_not_registered",
+    "last_diagnosis_unhealthy",
+]
+"""Stable reason codes for monitoring tooling.
+
+Operators consume the ``reason`` field via Prometheus / cron / log
+aggregators and route on its value (alerting, dashboarding). Adding
+new values is fine; renaming or repurposing existing values is a
+breaking change to monitoring contracts. Documented as a closed enum
+on the wire so the ``ServiceHealthResponse`` schema rejects typos
+at request time rather than letting drift propagate.
+"""
+
+
+class ServiceHealthResponse(BaseModel):
+    """T6.20 aggregated readiness snapshot.
+
+    Distinct shape from the existing ``GET /api/voice/health``
+    snapshot endpoint (``HealthSnapshotResponse`` — combo-store +
+    overrides + quarantine count + data_dir + voice_enabled). This
+    endpoint serves Prometheus/cron-style monitoring: a tight,
+    stable, low-cost readiness probe.
+
+    Fields:
+
+    * ``ready``: ``True`` iff the engine is running, the voice
+      pipeline is registered, AND the most recent probe diagnosis
+      (when any exists) is HEALTHY.
+    * ``reason``: stable code describing the verdict. ``"ok"`` when
+      ready; one of the failure codes otherwise. See
+      :data:`_ServiceHealthReason`.
+    * ``last_diagnosis``: most-recently-validated combo-store entry's
+      :class:`Diagnosis` value (the ``"healthy"``-style string), or
+      ``None`` when the store has no validated entries yet (fresh
+      install / no probe has run).
+    * ``watchdog_state``: :class:`WatchdogState` value or ``None``.
+      ``None`` is the current production state because
+      :class:`VoiceCaptureWatchdog` is not yet wired in
+      (``MISSION-voice-runtime-listener-wireup-2026-04-30.md`` §4.3
+      explicitly defers the wire-up). The field is held in the wire
+      contract so monitoring tooling that already consumes it
+      doesn't need a schema migration when the wire-up lands.
+    """
+
+    ready: bool
+    reason: _ServiceHealthReason
+    last_diagnosis: str | None = None
+    watchdog_state: str | None = None
+
+
+def _resolve_engine_config(request: Request) -> EngineConfig | None:
+    """Pull EngineConfig from the FastAPI app state (best-effort)."""
+    return getattr(request.app.state, "engine_config", None)
+
+
+def _resolve_data_dir_for_health(request: Request) -> Path:
+    """Return the data directory from EngineConfig or the default."""
+    engine_config = _resolve_engine_config(request)
+    if engine_config is not None:
+        return engine_config.database.data_dir
+    return Path.home() / ".sovyx"
+
+
+def _voice_pipeline_registered(request: Request) -> bool:
+    """Whether the VoicePipeline is registered in the engine registry."""
+    registry = getattr(request.app.state, "registry", None)
+    if registry is None:
+        return False
+    try:
+        from sovyx.voice.pipeline._orchestrator import VoicePipeline  # noqa: PLC0415
+
+        return bool(registry.is_registered(VoicePipeline))
+    except Exception:  # noqa: BLE001 — registry introspection is best-effort
+        return False
+
+
+def _read_last_combo_diagnosis_sync(data_dir: Path) -> str | None:
+    """Read the most-recently-validated combo entry's diagnosis.
+
+    Sync helper — wrapped in :func:`asyncio.to_thread` by the caller.
+    Returns ``None`` when the store is empty, missing, corrupt, or
+    when any entry parsing fails. Best-effort by design — the
+    monitoring endpoint must never 5xx because of a transient
+    filesystem hiccup.
+    """
+    try:
+        from sovyx.voice.health._factory_integration import (  # noqa: PLC0415
+            resolve_combo_store_path,
+        )
+        from sovyx.voice.health.combo_store import ComboStore  # noqa: PLC0415
+
+        store = ComboStore(resolve_combo_store_path(data_dir))
+        store.load()
+        entries = list(store.entries())
+    except Exception:  # noqa: BLE001 — best-effort; absence is reportable as None
+        return None
+    if not entries:
+        return None
+    # Sort by last_boot_validated descending; an entry with a missing
+    # / malformed timestamp sorts last (stable for empty strings).
+    entries.sort(key=lambda e: e.last_boot_validated, reverse=True)
+    return entries[0].last_boot_diagnosis.value
+
+
+@router.get("/service-health", response_model=ServiceHealthResponse)
+async def get_voice_service_health(request: Request) -> ServiceHealthResponse:
+    """Return the aggregated voice service readiness snapshot.
+
+    T6.20 — operators monitoring via Prometheus / cron / external
+    health-check tooling consume this endpoint. The 4-field response
+    is the smallest stable contract that lets a monitor:
+
+    * Page on ``ready=False`` immediately (single bool).
+    * Route alerts by ``reason`` (closed enum; stable codes).
+    * Include ``last_diagnosis`` + ``watchdog_state`` in alert
+      payloads for first-line triage without opening the dashboard.
+
+    Distinct path from the existing ``GET /api/voice/health``
+    snapshot endpoint (which serves the dashboard's voice-health
+    page with combo-store + overrides + quarantine details). The
+    snapshot endpoint stays unchanged — this is the new tight
+    monitoring surface.
+
+    Always returns 200 with a populated ``ServiceHealthResponse``.
+    Failure modes degrade gracefully via the ``reason`` field
+    (e.g., ``engine_not_running`` during boot, ``voice_pipeline_not_registered``
+    when voice failed to construct). Never raises HTTP errors —
+    monitors that page on 5xx would false-fire on benign boot
+    transients.
+    """
+    return await _compose_service_health(request)
+
+
+async def _compose_service_health(request: Request) -> ServiceHealthResponse:
+    """Compose the aggregated readiness verdict from authoritative sources.
+
+    Decision tree (ordered — first match wins):
+
+    1. No engine registry on app.state → ``engine_not_running``.
+    2. Engine present but VoicePipeline not registered →
+       ``voice_pipeline_not_registered``.
+    3. Pipeline registered + last combo-store diagnosis is HEALTHY
+       (or no diagnosis yet — fresh install) → ``ok``.
+    4. Pipeline registered + last diagnosis is non-HEALTHY →
+       ``last_diagnosis_unhealthy`` (the value stays in
+       ``last_diagnosis`` for triage).
+
+    The ``voice_disabled`` reason is reserved for a future wire-up
+    that surfaces operator-disabled voice via a config flag. Today
+    the closest signal is "pipeline not registered", which collapses
+    into ``voice_pipeline_not_registered`` — the more precise
+    distinction lands when there's an authoritative
+    ``engine_config.voice.enabled`` to read.
+    """
+    registry = getattr(request.app.state, "registry", None)
+    if registry is None:
+        return ServiceHealthResponse(
+            ready=False,
+            reason="engine_not_running",
+            last_diagnosis=None,
+            watchdog_state=None,
+        )
+
+    if not _voice_pipeline_registered(request):
+        return ServiceHealthResponse(
+            ready=False,
+            reason="voice_pipeline_not_registered",
+            last_diagnosis=None,
+            watchdog_state=None,
+        )
+
+    data_dir = _resolve_data_dir_for_health(request)
+    last_diagnosis = await asyncio.to_thread(_read_last_combo_diagnosis_sync, data_dir)
+
+    if last_diagnosis is None or last_diagnosis == "healthy":
+        return ServiceHealthResponse(
+            ready=True,
+            reason="ok",
+            last_diagnosis=last_diagnosis,
+            watchdog_state=None,
+        )
+
+    return ServiceHealthResponse(
+        ready=False,
+        reason="last_diagnosis_unhealthy",
+        last_diagnosis=last_diagnosis,
+        watchdog_state=None,
+    )
 
 
 @router.get("/frame-history")
