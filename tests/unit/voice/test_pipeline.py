@@ -2659,6 +2659,129 @@ class TestPipelineHeartbeat:
         assert pipeline._max_vad_prob_since_heartbeat == pytest.approx(0.05)
         assert pipeline._vad_frames_since_heartbeat == 1
 
+    @pytest.mark.asyncio
+    async def test_heartbeat_includes_snr_p50_p95_when_samples_present(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Phase 4 / T4.34 — when FrameNormalizer-side SNR samples
+        landed in the heartbeat aggregator before emission, the
+        heartbeat MUST include ``snr_p50_db`` / ``snr_p95_db`` /
+        ``snr_sample_count`` fields with the drained values."""
+        from sovyx.voice.health._snr_heartbeat import (
+            record_snr_sample,
+            reset_for_tests,
+        )
+        from sovyx.voice.pipeline import _orchestrator as orch_mod
+
+        reset_for_tests()
+        caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
+        pipeline, refs = _make_pipeline(wake_word_enabled=False, vad_speech=False)
+        await pipeline.start()
+        pipeline._last_heartbeat_monotonic = 0.0
+
+        # Simulate the FrameNormalizer feeding 5 SNR samples
+        # between two heartbeats. Median of [10, 14, 18, 22, 30]
+        # is 18 (idx 2); p95 idx = int(5*0.95)=4 → 30.
+        for snr in (10.0, 14.0, 18.0, 22.0, 30.0):
+            record_snr_sample(snr_db=snr)
+
+        refs["vad"].process_frame.return_value = VADEvent(
+            is_speech=False, probability=0.1, state=VADState.SILENCE
+        )
+        with patch.object(
+            orch_mod.time, "monotonic", return_value=orch_mod._HEARTBEAT_INTERVAL_S + 1.0
+        ):
+            await pipeline.feed_frame(_silence_frame())
+
+        heartbeats = _events_of(caplog, "voice_pipeline_heartbeat")
+        assert len(heartbeats) == 1
+        assert heartbeats[0]["snr_sample_count"] == 5  # noqa: PLR2004
+        assert heartbeats[0]["snr_p50_db"] == 18.0  # noqa: PLR2004
+        assert heartbeats[0]["snr_p95_db"] == 30.0  # noqa: PLR2004
+
+        reset_for_tests()
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_omits_snr_fields_when_no_samples(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Phase 4 / T4.34 — when no SNR samples accumulated (silent
+        window or pre-first-speech boot), the heartbeat MUST NOT
+        emit synthetic zero values for the SNR fields. Dashboards
+        graph the fields' presence/absence to distinguish "no
+        signal" from "0 dB signal"."""
+        from sovyx.voice.health._snr_heartbeat import reset_for_tests
+        from sovyx.voice.pipeline import _orchestrator as orch_mod
+
+        reset_for_tests()
+        caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
+        pipeline, refs = _make_pipeline(wake_word_enabled=False, vad_speech=False)
+        await pipeline.start()
+        pipeline._last_heartbeat_monotonic = 0.0
+
+        refs["vad"].process_frame.return_value = VADEvent(
+            is_speech=False, probability=0.1, state=VADState.SILENCE
+        )
+        with patch.object(
+            orch_mod.time, "monotonic", return_value=orch_mod._HEARTBEAT_INTERVAL_S + 1.0
+        ):
+            await pipeline.feed_frame(_silence_frame())
+
+        heartbeats = _events_of(caplog, "voice_pipeline_heartbeat")
+        assert len(heartbeats) == 1
+        assert "snr_p50_db" not in heartbeats[0]
+        assert "snr_p95_db" not in heartbeats[0]
+        assert "snr_sample_count" not in heartbeats[0]
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_drain_isolates_consecutive_windows(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Phase 4 / T4.34 — drain semantics: each heartbeat reads
+        only samples that arrived since the previous heartbeat. A
+        sample fed BEFORE heartbeat 1 must not appear in heartbeat
+        2's percentiles."""
+        from sovyx.voice.health._snr_heartbeat import (
+            record_snr_sample,
+            reset_for_tests,
+        )
+        from sovyx.voice.pipeline import _orchestrator as orch_mod
+
+        reset_for_tests()
+        caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
+        pipeline, refs = _make_pipeline(wake_word_enabled=False, vad_speech=False)
+        await pipeline.start()
+        pipeline._last_heartbeat_monotonic = 0.0
+        refs["vad"].process_frame.return_value = VADEvent(
+            is_speech=False, probability=0.1, state=VADState.SILENCE
+        )
+
+        # Window 1: feed 3 samples around 20 dB.
+        for snr in (18.0, 20.0, 22.0):
+            record_snr_sample(snr_db=snr)
+        with patch.object(
+            orch_mod.time, "monotonic", return_value=orch_mod._HEARTBEAT_INTERVAL_S + 1.0
+        ):
+            await pipeline.feed_frame(_silence_frame())
+        caplog.clear()
+
+        # Window 2: feed 3 samples around 5 dB. The window-1
+        # median (20) MUST NOT contaminate the window-2 p50.
+        for snr in (3.0, 5.0, 7.0):
+            record_snr_sample(snr_db=snr)
+        with patch.object(
+            orch_mod.time, "monotonic", return_value=orch_mod._HEARTBEAT_INTERVAL_S * 2 + 1.0
+        ):
+            await pipeline.feed_frame(_silence_frame())
+
+        heartbeats = _events_of(caplog, "voice_pipeline_heartbeat")
+        assert len(heartbeats) == 1
+        # Sorted [3, 5, 7], p50 idx=1 → 5.
+        assert heartbeats[0]["snr_p50_db"] == 5.0  # noqa: PLR2004
+        assert heartbeats[0]["snr_sample_count"] == 3  # noqa: PLR2004
+
+        reset_for_tests()
+
 
 class TestRecordingLifecycleLogs:
     """``voice_recording_started`` / ``voice_recording_ended`` frame the STT window."""

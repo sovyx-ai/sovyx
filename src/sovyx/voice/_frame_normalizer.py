@@ -994,6 +994,7 @@ class FrameNormalizer:
         """
         from sovyx.voice._snr_estimator import _SNR_FLOOR_DB
         from sovyx.voice.health._metrics import record_audio_snr_db
+        from sovyx.voice.health._snr_heartbeat import record_snr_sample
 
         assert self._snr_estimator is not None  # gated by caller
         snr_db = self._snr_estimator.estimate(window)
@@ -1004,6 +1005,13 @@ class FrameNormalizer:
         if snr_db <= _SNR_FLOOR_DB or snr_db == 0.0:
             return
         record_audio_snr_db(snr_db=snr_db)
+        # T4.34 — feed the orchestrator's heartbeat-window
+        # aggregator so per-session p50/p95 land in
+        # ``voice_pipeline_heartbeat``. Same filter as the
+        # OTel histogram above (caller guarantees finite,
+        # non-floor samples) so the percentile pair stays
+        # consistent with the metric.
+        record_snr_sample(snr_db=snr_db)
 
     @property
     def noise_suppressor(self) -> NoiseSuppressor | None:

@@ -1967,12 +1967,26 @@ class VoicePipeline:
         now = time.monotonic()
         if now - self._last_heartbeat_monotonic < _HEARTBEAT_INTERVAL_S:
             return
+        # Phase 4 / T4.34 — drain the per-window SNR buffer for
+        # the heartbeat. The fields are conditionally added to the
+        # log: when count == 0 (sustained silence or pre-first-
+        # speech) we OMIT them rather than emit synthetic zeros so
+        # dashboards don't graph misleading floor values.
+        from sovyx.voice.health._snr_heartbeat import drain_window_stats
+
+        snr_window = drain_window_stats()
+        heartbeat_extra: dict[str, object] = {}
+        if snr_window.count > 0:
+            heartbeat_extra["snr_p50_db"] = round(snr_window.p50_db, 2)
+            heartbeat_extra["snr_p95_db"] = round(snr_window.p95_db, 2)
+            heartbeat_extra["snr_sample_count"] = snr_window.count
         logger.info(
             "voice_pipeline_heartbeat",
             mind_id=self._config.mind_id,
             state=self._state.name,
             max_vad_probability=round(self._max_vad_prob_since_heartbeat, 3),
             frames_processed=self._vad_frames_since_heartbeat,
+            **heartbeat_extra,
         )
         is_deaf = (
             self._vad_frames_since_heartbeat >= _DEAF_MIN_FRAMES
