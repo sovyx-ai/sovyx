@@ -307,6 +307,76 @@ class TestBackoff:
         assert wd.state == WatchdogState.DEGRADED
 
     @pytest.mark.asyncio()
+    async def test_permanently_degraded_log_carries_last_diagnosis(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # T6.14 — operators paging on ``voice_capture_permanently_degraded``
+        # need ``last_diagnosis`` so they can route on cause without
+        # scraping per-attempt ``voice_watchdog_reprobe_result`` lines.
+        import logging
+
+        caplog.set_level(logging.ERROR, logger="sovyx.voice.health.watchdog")
+
+        rp = _ReProbeRecorder(
+            diagnoses=[
+                Diagnosis.NO_SIGNAL,
+                Diagnosis.NO_SIGNAL,
+                Diagnosis.APO_DEGRADED,  # last attempt → routes the alert.
+            ],
+        )
+        wd, _, _, _ = _make_watchdog(re_probe=rp)
+        await wd.start(_FakeHotplug())
+        await wd.report_deafness()
+        await _drain_pending(wd)
+
+        records = [
+            r.msg
+            for r in caplog.records
+            if (
+                r.name == "sovyx.voice.health.watchdog"
+                and isinstance(r.msg, dict)
+                and r.msg.get("event") == "voice_capture_permanently_degraded"
+            )
+        ]
+        assert len(records) == 1
+        assert records[0]["last_diagnosis"] == "apo_degraded"
+        assert records[0]["attempts"] == 3
+
+    @pytest.mark.asyncio()
+    async def test_permanently_degraded_log_handles_all_raises(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # T6.14 — when EVERY re-probe attempt raised before producing
+        # a result, ``last_diagnosis`` surfaces as ``None``. Operator
+        # then knows to inspect ``voice_watchdog_reprobe_raised`` lines.
+        import logging
+
+        caplog.set_level(logging.ERROR, logger="sovyx.voice.health.watchdog")
+
+        rp = _ReProbeRecorder(
+            diagnoses=[Diagnosis.NO_SIGNAL] * 3,
+            raise_on_indices={0, 1, 2},
+        )
+        wd, _, _, _ = _make_watchdog(re_probe=rp)
+        await wd.start(_FakeHotplug())
+        await wd.report_deafness()
+        await _drain_pending(wd)
+
+        records = [
+            r.msg
+            for r in caplog.records
+            if (
+                r.name == "sovyx.voice.health.watchdog"
+                and isinstance(r.msg, dict)
+                and r.msg.get("event") == "voice_capture_permanently_degraded"
+            )
+        ]
+        assert len(records) == 1
+        assert records[0]["last_diagnosis"] is None
+
+    @pytest.mark.asyncio()
     async def test_probe_exception_does_not_kill_chain(self) -> None:
         rp = _ReProbeRecorder(
             diagnoses=[Diagnosis.NO_SIGNAL, Diagnosis.NO_SIGNAL, Diagnosis.HEALTHY],

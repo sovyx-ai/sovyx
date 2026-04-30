@@ -651,3 +651,175 @@ class TestRevertAtomicityB3:
         assert outcomes[-1].verdict is BypassVerdict.APPLIED_STILL_DEAD
         # Coordinator marked itself resolved (quarantine path).
         assert coordinator.is_resolved is True
+
+
+# ── T6.15 — all-strategies-NOT_APPLICABLE fallback emission ────────
+
+
+@dataclass
+class _NotApplicableStrategy:
+    """Strategy stand-in whose ``probe_eligibility`` always declines."""
+
+    name: str = "fake.not_applicable"
+    reason: str = "no upstream APO chain matches this bypass"
+
+    async def probe_eligibility(self, _ctx: BypassContext) -> Any:
+        from sovyx.voice.health.contract import Eligibility
+
+        return Eligibility(applicable=False, reason=self.reason, estimated_cost_ms=0)
+
+    async def apply(self, _ctx: BypassContext) -> str:  # pragma: no cover
+        msg = "apply must not be invoked when not_applicable"
+        raise AssertionError(msg)
+
+    async def revert(self, _ctx: BypassContext) -> None:  # pragma: no cover
+        msg = "revert must not be invoked when not_applicable"
+        raise AssertionError(msg)
+
+
+_CAPTURE_INTEGRITY_LOGGER = "sovyx.voice.health.capture_integrity"
+
+
+def _records_named(
+    caplog: pytest.LogCaptureFixture,
+    event_name: str,
+) -> list[dict[str, object]]:
+    return [
+        r.msg
+        for r in caplog.records
+        if (
+            r.name == _CAPTURE_INTEGRITY_LOGGER
+            and isinstance(r.msg, dict)
+            and r.msg.get("event") == event_name
+        )
+    ]
+
+
+class TestUnrecoverableEmission:
+    """T6.15 — bypass coordinator emits when ALL strategies decline."""
+
+    @pytest.mark.asyncio()
+    async def test_all_not_applicable_emits_unrecoverable(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        caplog.set_level(logging.ERROR, logger=_CAPTURE_INTEGRITY_LOGGER)
+
+        before = _result(verdict=IntegrityVerdict.APO_DEGRADED)
+        after = _result(verdict=IntegrityVerdict.HEALTHY)
+        frames = np.zeros(int(3.0 * _SAMPLE_RATE), dtype=np.int16)
+        capture = _FakeCaptureTask(post_apply_frames=frames)
+        probe = _FakeProbe(before=before, after=after)
+        strategies: list[Any] = [
+            _NotApplicableStrategy(name="strat.alpha"),
+            _NotApplicableStrategy(name="strat.beta"),
+        ]
+        coordinator = CaptureIntegrityCoordinator(
+            probe=probe,  # type: ignore[arg-type]
+            strategies=strategies,
+            capture_task=capture,  # type: ignore[arg-type]
+            platform_key="win32",
+            tuning=VoiceTuningConfig(),
+        )
+
+        outcomes = await coordinator.handle_deaf_signal()
+
+        assert all(o.verdict is BypassVerdict.NOT_APPLICABLE for o in outcomes)
+        assert len(outcomes) == 2
+
+        events = _records_named(caplog, "voice_capture_integrity_unrecoverable")
+        assert len(events) == 1
+        evt = events[0]
+        assert evt["platform"] == "win32"
+        assert evt["strategy_count"] == 2
+        assert evt["strategies_tried"] == ["strat.alpha", "strat.beta"]
+        # Windows hint mentions Voice Clarity per master mission spec.
+        assert "Voice Clarity" in str(evt["remediation"])
+
+    @pytest.mark.asyncio()
+    async def test_mixed_verdicts_does_not_emit_unrecoverable(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # When one strategy WAS applicable but failed (APPLIED_STILL_DEAD
+        # / FAILED_TO_APPLY), the unrecoverable event must NOT fire —
+        # the cause is different (we tried; hardware persists) and the
+        # operator remediation differs (driver/HW investigation, not
+        # OS audio-enhancement disablement).
+        import logging
+
+        caplog.set_level(logging.ERROR, logger=_CAPTURE_INTEGRITY_LOGGER)
+
+        before = _result(verdict=IntegrityVerdict.APO_DEGRADED)
+        # ``after`` is non-HEALTHY → APPLIED_STILL_DEAD verdict.
+        after = _result(verdict=IntegrityVerdict.APO_DEGRADED)
+        frames = np.zeros(int(3.0 * _SAMPLE_RATE), dtype=np.int16)
+        capture = _FakeCaptureTask(post_apply_frames=frames)
+        probe = _FakeProbe(before=before, after=after)
+        strategies: list[Any] = [
+            _NotApplicableStrategy(name="strat.alpha"),
+            _FakeStrategy(name="strat.applicable"),
+        ]
+        coordinator = CaptureIntegrityCoordinator(
+            probe=probe,  # type: ignore[arg-type]
+            strategies=strategies,
+            capture_task=capture,  # type: ignore[arg-type]
+            platform_key="win32",
+            tuning=VoiceTuningConfig(),
+        )
+
+        await coordinator.handle_deaf_signal()
+        events = _records_named(caplog, "voice_capture_integrity_unrecoverable")
+        assert events == []
+
+    @pytest.mark.asyncio()
+    async def test_remediation_hint_routes_per_platform(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        caplog.set_level(logging.ERROR, logger=_CAPTURE_INTEGRITY_LOGGER)
+
+        before = _result(verdict=IntegrityVerdict.APO_DEGRADED)
+        after = _result(verdict=IntegrityVerdict.HEALTHY)
+
+        for platform_key, expected_token in [
+            ("linux", "echo-cancel"),
+            ("darwin", "Voice Isolation"),
+            ("win32", "Voice Clarity"),
+        ]:
+            caplog.clear()
+            frames = np.zeros(int(3.0 * _SAMPLE_RATE), dtype=np.int16)
+            capture = _FakeCaptureTask(post_apply_frames=frames)
+            probe = _FakeProbe(before=before, after=after)
+            coordinator = CaptureIntegrityCoordinator(
+                probe=probe,  # type: ignore[arg-type]
+                strategies=[_NotApplicableStrategy()],
+                capture_task=capture,  # type: ignore[arg-type]
+                platform_key=platform_key,
+                tuning=VoiceTuningConfig(),
+            )
+            await coordinator.handle_deaf_signal()
+            events = _records_named(
+                caplog,
+                "voice_capture_integrity_unrecoverable",
+            )
+            assert len(events) == 1, f"platform={platform_key}"
+            remediation = str(events[0]["remediation"])
+            assert expected_token in remediation, (
+                f"platform={platform_key} remediation missing {expected_token!r}: {remediation!r}"
+            )
+
+    def test_unknown_platform_remediation_is_generic(self) -> None:
+        # Direct helper test — exercising via coordinator would force
+        # building an unknown-platform setup which adds setup noise.
+        from sovyx.voice.health.capture_integrity import (
+            _unrecoverable_remediation_hint,
+        )
+
+        hint = _unrecoverable_remediation_hint("freebsd")
+        assert "freebsd" in hint
+        assert "no user-mode bypass" in hint

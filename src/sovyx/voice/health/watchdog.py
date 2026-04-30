@@ -411,6 +411,16 @@ class VoiceCaptureWatchdog:
             )
 
     async def _backoff_chain(self) -> None:
+        # T6.14 — track the most recent probe diagnosis observed across
+        # the backoff chain. Falls into the
+        # ``voice_capture_permanently_degraded`` emission so operators
+        # can see WHY the chain ended permanently DEGRADED instead of
+        # scraping the per-attempt ``voice_watchdog_reprobe_result``
+        # log lines. ``None`` when EVERY attempt raised before
+        # producing a result (re-probe was non-functional throughout
+        # the schedule) — surfaces as ``last_diagnosis=null`` and
+        # operators know to inspect ``voice_watchdog_reprobe_raised``.
+        last_diagnosis: Diagnosis | None = None
         for attempt_idx, delay in enumerate(self._schedule):
             try:
                 await asyncio.sleep(delay)
@@ -429,6 +439,7 @@ class VoiceCaptureWatchdog:
                     exc_info=True,
                 )
                 continue
+            last_diagnosis = result.diagnosis
             logger.info(
                 "voice_watchdog_reprobe_result",
                 endpoint=self._endpoint,
@@ -452,6 +463,7 @@ class VoiceCaptureWatchdog:
             "voice_capture_permanently_degraded",
             endpoint=self._endpoint,
             attempts=self._max_attempts,
+            last_diagnosis=last_diagnosis.value if last_diagnosis is not None else None,
         )
 
     # ── §4.1 / Phase 1 — APO-quarantine periodic recheck ─────────────────

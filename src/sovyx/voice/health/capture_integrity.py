@@ -746,6 +746,36 @@ class CaptureIntegrityCoordinator:
                         endpoint_guid=context.endpoint_guid,
                     )
 
+            # T6.15 — bypass coordinator all-strategies-NOT_APPLICABLE
+            # fallback. When EVERY registered strategy returned
+            # NOT_APPLICABLE (no apply attempt ever ran), the cause is
+            # different from "we tried, hardware persists in failed
+            # state" — no bypass strategy understands the hardware
+            # configuration on this host. Operators need a different
+            # remediation path: manual disablement of the upstream
+            # audio enhancement (Voice Clarity APO on Win, module-
+            # echo-cancel on Linux, Voice Isolation on macOS).
+            #
+            # Emitted BEFORE the quarantine call so monitoring tooling
+            # sees the more-specific diagnostic upstream of the routine
+            # ``capture_integrity_coordinator_quarantined`` line.
+            if outcomes and all(o.verdict is BypassVerdict.NOT_APPLICABLE for o in outcomes):
+                logger.error(
+                    "voice_capture_integrity_unrecoverable",
+                    endpoint_guid=context.endpoint_guid,
+                    friendly_name=self._capture_task.active_device_name,
+                    host_api=self._capture_task.host_api_name or "",
+                    # ``platform`` (not ``platform_key``) so the
+                    # observability secret-masker doesn't trip on the
+                    # substring "key" — aligns with the convention used
+                    # by ``record_cascade_attempt`` /
+                    # ``record_apo_degraded_event``.
+                    platform=self._platform_key,
+                    strategies_tried=[o.strategy_name for o in outcomes],
+                    strategy_count=len(outcomes),
+                    remediation=_unrecoverable_remediation_hint(self._platform_key),
+                )
+
             # Strategy list exhausted without a HEALTHY outcome —
             # quarantine the endpoint so the factory fails over.
             self._quarantine_endpoint(before, tuning)
@@ -806,6 +836,62 @@ class CaptureIntegrityCoordinator:
             endpoint_guid=last_probe.endpoint_guid,
             reason="apo_degraded",
         )
+
+
+def _unrecoverable_remediation_hint(platform_key: str) -> str:
+    """Return the operator-facing remediation hint for T6.15.
+
+    Each platform has a distinct upstream audio-enhancement chain that
+    no in-process bypass strategy can disable cleanly. The hint surfaces
+    via ``voice_capture_integrity_unrecoverable`` so monitors can route
+    the alert to platform-appropriate remediation:
+
+    * **Windows** — Voice Clarity APO (``VocaEffectPack``,
+      ``voiceclarityep``) + per-device "Audio enhancements" toggle.
+      Disabling needs the OS Settings UI (no documented user-mode
+      API path that a daemon can drive).
+    * **Linux** — PulseAudio / PipeWire ``module-echo-cancel`` or
+      similar SWIFT-engine echo cancellation. ``pactl unload-module``
+      removes a loaded module but the hint is informational.
+    * **macOS** — Voice Isolation Mic Mode (Control Center). Disabling
+      is per-app per-session, not OS-wide; the operator must adjust
+      the active microphone preference.
+
+    Unknown platforms get a generic hint pointing at OS-level audio
+    settings — better than silence but less actionable.
+    """
+    if platform_key == "win32":
+        return (
+            "All bypass strategies returned NOT_APPLICABLE. The upstream "
+            "audio-enhancement chain (Voice Clarity APO / per-device "
+            "enhancements) is not user-mode-bypassable on this hardware. "
+            "Operator action: Settings → Sound → Microphone Properties → "
+            "Enhancements → uncheck 'Audio enhancements'. On Windows 11 "
+            "25H2+ also disable Voice Clarity in the same panel."
+        )
+    if platform_key == "linux":
+        return (
+            "All bypass strategies returned NOT_APPLICABLE. The upstream "
+            "echo-cancel / SWIFT module is not user-mode-bypassable on "
+            "this hardware. Operator action: identify the loaded module "
+            "via `pactl list modules | grep -E 'echo|swift|filter'` and "
+            "either `pactl unload-module <id>` for the session, or edit "
+            "`/etc/pulse/default.pa` (PulseAudio) or `~/.config/"
+            "pipewire/pipewire.conf.d/` (PipeWire) for persistence."
+        )
+    if platform_key == "darwin":
+        return (
+            "All bypass strategies returned NOT_APPLICABLE. The upstream "
+            "Voice Isolation Mic Mode is not user-mode-bypassable on "
+            "this hardware. Operator action: Control Center → Mic Mode "
+            "→ select 'Standard' (NOT 'Voice Isolation'). The setting is "
+            "per-app and per-session — re-apply if it reverts."
+        )
+    return (
+        "All bypass strategies returned NOT_APPLICABLE on platform "
+        f"{platform_key!r}. Investigate OS-level audio enhancement "
+        "settings; no user-mode bypass is available for this hardware."
+    )
 
 
 __all__ = [
