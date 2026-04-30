@@ -39,6 +39,7 @@ from sovyx.voice.factory._capture import (
 )
 from sovyx.voice.factory._diagnostics import (
     _emit_capture_apo_detection,
+    _emit_group_policy_detection,
     _emit_linux_capture_apo_detection,
     _maybe_log_alsa_ucm_status,
     _maybe_log_macos_diagnostics,
@@ -962,6 +963,11 @@ async def create_voice_pipeline(
     _emit_linux_capture_apo_detection(
         resolved_name=resolved.name if resolved is not None else None,
     )
+    # Phase 5 / T5.46 + T5.47 — Windows Group Policy detection.
+    # No-op on non-Windows; on Windows surfaces enterprise GP
+    # restrictions (DisallowExclusiveDevice etc.) so operators
+    # see them at boot rather than mid-incident.
+    _emit_group_policy_detection()
 
     # ── 7. v1.3 §4.6 L6 boot preflight step 9 + §4.8 L7 marker file ──
     #

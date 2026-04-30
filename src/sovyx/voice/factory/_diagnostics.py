@@ -34,6 +34,7 @@ logger = get_logger(__name__)
 
 __all__ = [
     "_emit_capture_apo_detection",
+    "_emit_group_policy_detection",
     "_emit_linux_capture_apo_detection",
     "_maybe_log_alsa_ucm_status",
     "_maybe_log_macos_diagnostics",
@@ -542,6 +543,39 @@ def _emit_capture_apo_detection(*, resolved_name: str | None) -> None:
             "voice.active_endpoint_name": active.endpoint_name if active else None,
         },
     )
+
+
+def _emit_group_policy_detection() -> None:
+    """Log ``voice.group_policy.*`` once per pipeline boot (T5.46 + T5.47).
+
+    Reads voice-affecting Windows Group Policy keys via
+    :mod:`sovyx.voice._group_policy_detector`. On non-Windows
+    hosts the function is a no-op. Errors during the registry
+    probe surface as a structured WARN with a probe-failure
+    reason so operators can distinguish "no GP set" from
+    "couldn't read GP".
+
+    The most operator-actionable case is
+    ``DisallowExclusiveDevice=1`` (enterprise fleet blocks
+    WASAPI exclusive mode). Sovyx's Tier 3 bypass becomes a
+    no-op in that scenario; Tier 1 (RAW) and Tier 2
+    (host_api_rotate) handle Voice Clarity-class incidents
+    instead. Surfacing the policy at boot gives operators a
+    chance to coordinate with their Windows admin BEFORE
+    debugging cryptic PortAudio -9988 errors mid-incident.
+    """
+    from sovyx.voice._group_policy_detector import (
+        detect_group_policies,
+        log_group_policy_snapshot,
+    )
+
+    try:
+        snapshot = detect_group_policies()
+    except Exception:  # noqa: BLE001 — detector MUST never break startup
+        logger.debug("voice.group_policy.detection_failed", exc_info=True)
+        return
+
+    log_group_policy_snapshot(snapshot)
 
 
 def _emit_linux_capture_apo_detection(*, resolved_name: str | None) -> None:
