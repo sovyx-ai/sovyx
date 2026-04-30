@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import datetime as _dt
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sovyx.engine.types import ConceptCategory
@@ -16,6 +16,11 @@ from sovyx.observability.logging import get_logger
 if TYPE_CHECKING:
     from sovyx.brain.models import Concept, Episode
     from sovyx.context.tokenizer import TokenCounter
+
+# TypeVar for `_trim_to_budget` — the helper is identical for
+# concepts and episodes; both pass a list of (item, line) tuples
+# and the trimming logic only inspects the line side.
+_TrimItem = TypeVar("_TrimItem")
 
 logger = get_logger(__name__)
 
@@ -102,43 +107,90 @@ class ContextFormatter:
 
         Applies Lost-in-Middle ordering for attention optimization.
 
-        Note (BPE non-subadditivity, documented 2026-04-30):
-            ``used += line_tokens`` is a piecewise sum that
-            UNDER-estimates the true cost of the joined output by
-            up to ``max(byte_len(line))`` tokens per concatenation
-            boundary in pathological cases (see
-            ``test_bpe_concatenation_can_exceed_constant_slack`` in
-            ``tests/unit/test_brain_invariants.py``). For typical
-            natural-language concept-line text the slack is ~0
-            empirically, but adversarial / template-string inputs
-            can push the assembled output over ``budget_tokens``.
-            The conservative pattern (``context/assembler.py:160-172``)
-            is to do a final ``count_messages(assembled)`` and trim
-            if over budget. Triagem follow-up tracked separately.
+        Two-phase budget enforcement (BPE non-subadditivity safe):
+
+        1. **Piecewise admit** — iterate ordered concepts, admitting
+           each one whose individual ``count(line)`` keeps the
+           running sum under ``budget_tokens``. This is the cheap
+           first-pass filter.
+        2. **Final-count + trim** — count the actual joined output
+           via ``count("\\n".join(...))``. BPE is NOT subadditive
+           (see ``test_bpe_concatenation_can_exceed_constant_slack``
+           in ``tests/unit/test_brain_invariants.py``); the joined
+           output can carry up to ``max(byte_len(line))`` extra
+           tokens per concatenation boundary in pathological cases.
+           Pop concepts from the END of the admitted list (least-
+           relevant per Lost-in-Middle ordering — same direction the
+           piecewise pass would have stopped) until the joined count
+           fits. Mirrors the canonical pattern in
+           ``assembler.py:160-172``.
+
+        Metadata bumps for ``context_inclusion_count`` happen ONLY
+        after both passes settle, so a concept the BPE-correction
+        pass trims back out doesn't accumulate a stale inclusion
+        count.
         """
         if not concepts:
             return ""
 
+        header = "## What you know about this person:"
         ordered = self._order_for_attention(concepts)
-        lines = ["## What you know about this person:"]
-        used = self._counter.count(lines[0])
+
+        admitted: list[tuple[Concept, str]] = []
+        used = self._counter.count(header)
 
         for item, score in ordered:
             line = self.format_concept(item, score)
             line_tokens = self._counter.count(line)
             if used + line_tokens > budget_tokens:
                 break
-            lines.append(line)
+            admitted.append((item, line))
             used += line_tokens
 
-            # Feedback loop: track context inclusion in metadata
+        admitted = self._trim_to_budget(header, admitted, budget_tokens)
+        if not admitted:
+            return ""
+
+        for item, _ in admitted:
             inc_raw = item.metadata.get("context_inclusion_count", 0)
             inc = int(inc_raw) if isinstance(inc_raw, (int, float, str)) else 0
             item.metadata["context_inclusion_count"] = inc + 1
 
-        if len(lines) <= 1:
-            return ""
-        return "\n".join(lines)
+        return "\n".join([header, *(line for _, line in admitted)])
+
+    def _trim_to_budget(
+        self,
+        header: str,
+        admitted: list[tuple[_TrimItem, str]],
+        budget_tokens: int,
+    ) -> list[tuple[_TrimItem, str]]:
+        """Final-count + trim pass for the joined output.
+
+        Iteratively pops items from the END of ``admitted`` until
+        ``count("\\n".join([header, *lines])) <= budget_tokens``.
+
+        Args:
+            header: The block's leading header line (counted as
+                part of the output).
+            admitted: Items the piecewise pass admitted, paired
+                with their formatted lines. Generic over the item
+                type — concepts and episodes both flow through
+                this single helper.
+            budget_tokens: Hard upper bound for the joined output's
+                token count.
+
+        Returns:
+            The (possibly shorter) admitted list. Empty list when
+            even the header alone exceeds the budget OR when no
+            single line can fit alongside the header (caller must
+            handle this by returning an empty block).
+        """
+        while admitted:
+            joined = "\n".join([header, *(line for _, line in admitted)])
+            if self._counter.count(joined) <= budget_tokens:
+                return admitted
+            admitted = admitted[:-1]
+        return admitted
 
     def format_episodes_block(
         self,
@@ -147,27 +199,29 @@ class ContextFormatter:
     ) -> str:
         """Format episode list respecting token budget.
 
-        Note (BPE non-subadditivity): same piecewise-sum slack
-        applies as in :meth:`format_concepts_block` — see the
-        docstring there for the documented contract.
+        Same two-phase budget enforcement as
+        :meth:`format_concepts_block` — see that method's docstring
+        for the BPE non-subadditivity rationale.
         """
         if not episodes:
             return ""
 
-        lines = ["## Recent conversations:"]
-        used = self._counter.count(lines[0])
+        header = "## Recent conversations:"
+        admitted: list[tuple[Episode, str]] = []
+        used = self._counter.count(header)
 
         for episode in episodes:
             line = self.format_episode(episode)
             line_tokens = self._counter.count(line)
             if used + line_tokens > budget_tokens:
                 break
-            lines.append(line)
+            admitted.append((episode, line))
             used += line_tokens
 
-        if len(lines) <= 1:
+        admitted = self._trim_to_budget(header, admitted, budget_tokens)
+        if not admitted:
             return ""
-        return "\n".join(lines)
+        return "\n".join([header, *(line for _, line in admitted)])
 
     def format_temporal(self, timezone: str = "UTC") -> str:
         """Current temporal context (SPE-006 §format_temporal).

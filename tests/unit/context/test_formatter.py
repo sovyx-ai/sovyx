@@ -244,6 +244,122 @@ class TestFormatEpisodesBlock:
         assert result == "" or "Recent conversations" in result
 
 
+class TestBpeNonSubadditivityCorrection:
+    """Pin the post-fix two-phase budget enforcement contract.
+
+    BPE is NOT subadditive — piecewise sum of per-line ``count()``
+    values can underestimate the true joined token count by up to
+    ``max(byte_len(line))`` per concatenation boundary in
+    pathological cases (see
+    ``tests/unit/test_brain_invariants.py::test_bpe_concatenation_can_exceed_constant_slack``).
+
+    The ``_trim_to_budget`` final-count + trim pass corrects this
+    by counting the actual joined output and popping items from
+    the end until under budget.
+    """
+
+    def test_concepts_block_final_count_never_exceeds_budget(
+        self, formatter: ContextFormatter
+    ) -> None:
+        """Joined output's actual token count never exceeds budget,
+        regardless of BPE boundary effects between concepts.
+
+        Stress with content built from BPE-pathological strings:
+        ``FILENAME`` + ``MODEL`` are single cl100k_base merges that
+        fragment to 6 tokens when concatenated. Multiple concepts
+        with such content concatenated by the formatter should
+        never push the joined output past ``budget_tokens``.
+        """
+        concepts = [
+            (
+                _concept(f"c{i}", "FILENAMEMODEL" * 5, ConceptCategory.FACT),
+                float(i),
+            )
+            for i in range(20)
+        ]
+        budget = 100
+        result = formatter.format_concepts_block(concepts, budget)
+        counter = TokenCounter()
+        # The hard contract: post-fix the joined output ALWAYS fits.
+        # Pre-fix this would occasionally exceed budget when the
+        # piecewise sum underestimated the true joined cost.
+        assert counter.count(result) <= budget
+
+    def test_episodes_block_final_count_never_exceeds_budget(
+        self, formatter: ContextFormatter
+    ) -> None:
+        """Same contract for episodes — joined output never exceeds
+        ``budget_tokens`` regardless of BPE non-subadditivity.
+        """
+        episodes = [_episode("FILENAMEMODEL" * 5) for _ in range(20)]
+        budget = 100
+        result = formatter.format_episodes_block(episodes, budget)
+        counter = TokenCounter()
+        assert counter.count(result) <= budget
+
+    def test_inclusion_count_not_bumped_for_items_trimmed_by_bpe_correction(
+        self, formatter: ContextFormatter
+    ) -> None:
+        """The metadata bump must reflect the FINAL admitted set
+        (post-trim), not the piecewise-admit set. A concept that
+        the piecewise loop tentatively admitted but the BPE-
+        correction pass trimmed back out must NOT have its
+        ``context_inclusion_count`` bumped — otherwise we'd over-
+        count exposure in the feedback loop.
+
+        Construction: two concepts with content that exposes BPE
+        non-subadditivity. Tight budget forces the BPE-correction
+        to trim at least one. The trimmed concept's metadata must
+        be unchanged.
+        """
+        c1 = _concept("c1", "FILENAMEMODEL" * 8, ConceptCategory.FACT)
+        c1.metadata = {}
+        c2 = _concept("c2", "FILENAMEMODEL" * 8, ConceptCategory.FACT)
+        c2.metadata = {}
+
+        # Budget that fits ONE of them with comfortable headroom but
+        # not both joined (BPE non-subadditivity widens the gap).
+        # The exact threshold depends on tiktoken vocab; the
+        # invariant we pin is: total bumps == admitted concepts in
+        # the final output, never more.
+        result = formatter.format_concepts_block([(c1, 0.9), (c2, 0.8)], 50)
+
+        counter = TokenCounter()
+        joined_count = counter.count(result)
+        assert joined_count <= 50  # noqa: PLR2004 — see budget above
+
+        bumps_total = c1.metadata.get("context_inclusion_count", 0) + c2.metadata.get(
+            "context_inclusion_count", 0
+        )
+        # Count "##" occurrences as a proxy for "header was emitted"
+        # (1 if any concepts admitted, else 0).
+        admitted_count = result.count("📋") if result else 0
+        assert bumps_total == admitted_count, (
+            f"metadata bump mismatch — bumps={bumps_total}, "
+            f"admitted in final output={admitted_count}. The "
+            "BPE-correction trim must revert metadata bumps for items "
+            "that didn't survive the final-count pass."
+        )
+
+    def test_trim_to_budget_returns_empty_when_header_alone_exceeds(
+        self, formatter: ContextFormatter
+    ) -> None:
+        """Edge case: budget so small that even the header alone is
+        over budget. ``_trim_to_budget`` pops everything (including
+        the header isn't in the admitted list — only items are);
+        the result is empty list. Caller returns ``""``.
+        """
+        # Header "## What you know about this person:" is ~10 tokens.
+        # Budget of 3 — header alone exceeds. Result should be "".
+        c = _concept("c", "anything")
+        c.metadata = {}
+        result = formatter.format_concepts_block([(c, 0.9)], 3)
+        assert result == ""
+        # Critical: metadata MUST NOT be bumped for an item that
+        # never made it into the output.
+        assert c.metadata.get("context_inclusion_count", 0) == 0
+
+
 class TestFormatTemporal:
     """Temporal context."""
 
