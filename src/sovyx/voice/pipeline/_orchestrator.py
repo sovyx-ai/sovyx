@@ -19,6 +19,7 @@ from sovyx.voice._speaker_consistency import (
     compute_spectral_centroid,
 )
 from sovyx.voice.health._metrics import (
+    record_noise_floor_drift_alert,
     record_snr_low_alert,
     record_time_to_first_utterance,
 )
@@ -88,6 +89,14 @@ _SNR_LOW_ALERT_CONSECUTIVE_HEARTBEATS = _VoiceTuning().voice_snr_low_alert_conse
 docstrings. Module-level capture mirrors the existing pipeline
 tuning pattern so the orchestrator's hot path doesn't re-parse
 the config on every heartbeat."""
+
+_NOISE_FLOOR_DRIFT_ALERT_ENABLED = _VoiceTuning().voice_noise_floor_drift_alert_enabled
+_NOISE_FLOOR_DRIFT_THRESHOLD_DB = _VoiceTuning().voice_noise_floor_drift_threshold_db
+_NOISE_FLOOR_DRIFT_CONSECUTIVE_HEARTBEATS = (
+    _VoiceTuning().voice_noise_floor_drift_consecutive_heartbeats
+)
+"""Phase 4 / T4.38 — same module-capture rationale as the SNR
+trio above."""
 
 # ---------------------------------------------------------------------------
 # O3 frame-drop detection tuning
@@ -408,6 +417,11 @@ class VoicePipeline:
         # heartbeat (mirrors the deaf-warning pattern).
         self._snr_low_consecutive_heartbeats: int = 0
         self._snr_low_alert_active: bool = False
+
+        # Phase 4 / T4.38 — noise-floor drift de-flap counter +
+        # latch. Same pattern as the SNR low-alert above.
+        self._noise_floor_drift_consecutive_heartbeats: int = 0
+        self._noise_floor_drift_alert_active: bool = False
 
         # §5.14 KPI — time-to-first-utterance. Wall-clock captured at
         # WakeWordDetectedEvent emission, measured at SpeechStartedEvent
@@ -2058,6 +2072,64 @@ class VoicePipeline:
                         threshold_db=_SNR_LOW_ALERT_THRESHOLD_DB,
                     )
                 self._snr_low_consecutive_heartbeats = 0
+
+        # Phase 4 / T4.38 — noise-floor drift alert. Reads the
+        # rolling buffer without clearing (drain pattern is for
+        # SNR; the noise-floor trend wants a stable horizon).
+        if _NOISE_FLOOR_DRIFT_ALERT_ENABLED:
+            from sovyx.voice.health._noise_floor_trending import compute_drift
+
+            drift = compute_drift()
+            if drift.ready:
+                if drift.drift_db > _NOISE_FLOOR_DRIFT_THRESHOLD_DB:
+                    self._noise_floor_drift_consecutive_heartbeats += 1
+                    if (
+                        not self._noise_floor_drift_alert_active
+                        and self._noise_floor_drift_consecutive_heartbeats
+                        >= _NOISE_FLOOR_DRIFT_CONSECUTIVE_HEARTBEATS
+                    ):
+                        self._noise_floor_drift_alert_active = True
+                        record_noise_floor_drift_alert(state="warned")
+                        logger.warning(
+                            "voice_pipeline_noise_floor_drift_warning",
+                            mind_id=self._config.mind_id,
+                            state=self._state.name,
+                            short_avg_db=round(drift.short_avg_db, 2),
+                            long_avg_db=round(drift.long_avg_db, 2),
+                            drift_db=round(drift.drift_db, 2),
+                            short_sample_count=drift.short_count,
+                            long_sample_count=drift.long_count,
+                            threshold_db=_NOISE_FLOOR_DRIFT_THRESHOLD_DB,
+                            consecutive_heartbeats=(
+                                self._noise_floor_drift_consecutive_heartbeats
+                            ),
+                            hint=(
+                                "Sustained noise-floor rise vs the rolling "
+                                "5-min baseline. Likely causes: HVAC / fan "
+                                "started, occupancy increased, mic moved "
+                                "closer to a noise source, or capture "
+                                "device gain auto-raised. Check "
+                                "voice.audio.snr_db to see if speech-band "
+                                "SNR also dropped (room actually got noisier "
+                                "for speech) vs stayed flat (only the "
+                                "non-speech floor changed)."
+                            ),
+                        )
+                else:
+                    if self._noise_floor_drift_alert_active:
+                        self._noise_floor_drift_alert_active = False
+                        record_noise_floor_drift_alert(state="cleared")
+                        logger.info(
+                            "voice_pipeline_noise_floor_drift_cleared",
+                            mind_id=self._config.mind_id,
+                            state=self._state.name,
+                            short_avg_db=round(drift.short_avg_db, 2),
+                            long_avg_db=round(drift.long_avg_db, 2),
+                            drift_db=round(drift.drift_db, 2),
+                            threshold_db=_NOISE_FLOOR_DRIFT_THRESHOLD_DB,
+                        )
+                    self._noise_floor_drift_consecutive_heartbeats = 0
+
         is_deaf = (
             self._vad_frames_since_heartbeat >= _DEAF_MIN_FRAMES
             and self._max_vad_prob_since_heartbeat < _DEAF_VAD_MAX_THRESHOLD

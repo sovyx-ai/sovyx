@@ -458,6 +458,48 @@ class VoiceTuningConfig(BaseSettings):
     outside reject at config validation rather than silently
     disable the alert."""
 
+    voice_noise_floor_drift_alert_enabled: bool = True
+    """Phase 4 / T4.38 — emit a structured WARN
+    ``voice_pipeline_noise_floor_drift_warning`` from
+    :class:`VoicePipeline._track_vad_for_heartbeat` when the
+    rolling noise-floor short-window average exceeds the long-
+    window baseline by
+    :attr:`voice_noise_floor_drift_threshold_db` for
+    :attr:`voice_noise_floor_drift_consecutive_heartbeats`
+    consecutive heartbeats.
+
+    Default ``True``: pure observability, no behaviour change.
+    Operators on hardware with naturally-drifty floors (laptop
+    fans cycling, mobile use cases) can flip to False if the
+    alert spam outweighs the diagnostic value."""
+
+    voice_noise_floor_drift_threshold_db: float = Field(default=10.0, ge=1.0, le=60.0)
+    """Decibels of upward floor drift (short-window avg minus
+    long-window avg) that triggers the alert.
+
+    10 dB is the master mission's §Phase 4 / T4.38 contract —
+    "alert if floor raised >10 dB (room got noisier)". 10 dB =
+    10× linear-power increase, well outside the natural
+    variation of a steady environment (typical floor jitter
+    is ±2 dB).
+
+    Operators in noisy environments may raise this to 15 dB
+    (suppress alarms during routine HVAC cycles) or lower it
+    to 6 dB for studio-quality deployments where any drift
+    matters. Bounds ``[1, 60]`` reject values below 1 dB
+    (would alert on every breath) or above 60 dB (would never
+    alert in practice)."""
+
+    voice_noise_floor_drift_consecutive_heartbeats: int = Field(default=3, ge=1, le=60)
+    """Number of consecutive heartbeats with drift above
+    threshold before the alert WARN fires.
+
+    Default 3 ≈ 90 s at the 30 s heartbeat interval —
+    matches the T4.35 SNR low-alert de-flap to keep operator
+    intuition uniform across the heartbeat-driven alert family.
+    Floor 1 = alert on first sustained crossing; ceiling 60
+    caps the wait."""
+
     voice_snr_low_alert_consecutive_heartbeats: int = Field(default=3, ge=1, le=60)
     """Number of consecutive heartbeats with SNR p50 below the
     threshold before the alert WARN fires.

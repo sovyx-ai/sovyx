@@ -116,6 +116,7 @@ METRIC_AEC_DOUBLE_TALK = "sovyx.voice.aec.double_talk"
 METRIC_AEC_BYPASS_COMBO = "sovyx.voice.aec.bypass_combo"
 METRIC_VAD_QUIET_SIGNAL_GATED = "sovyx.voice.vad.quiet_signal_gated"
 METRIC_PIPELINE_SNR_LOW_ALERTS = "sovyx.voice.pipeline.snr_low_alerts"
+METRIC_PIPELINE_NOISE_FLOOR_DRIFT_ALERTS = "sovyx.voice.pipeline.noise_floor_drift_alerts"
 
 # ── Phase 4 — NS observability (T4.16) ──────────────────────────────────
 METRIC_NS_WINDOWS = "sovyx.voice.ns.windows"
@@ -901,6 +902,30 @@ def record_aec_double_talk(*, state: str) -> None:
     counter.add(1, attributes={"state": state})
 
 
+def record_noise_floor_drift_alert(*, state: str) -> None:
+    """Record one noise-floor drift alert state transition (T4.38).
+
+    Fires from :meth:`VoicePipeline._track_vad_for_heartbeat`
+    once per state transition (open ⟶ alerted, alerted ⟶
+    resolved). Cardinality bounded to two events per incident.
+
+    Args:
+        state: One of:
+            * ``"warned"`` — consecutive heartbeats with rolling
+              noise-floor short-window average exceeding the
+              long-window baseline by the threshold (default
+              10 dB) hit the de-flap count. Orchestrator fired
+              ``voice_pipeline_noise_floor_drift_warning``.
+            * ``"cleared"`` — the next clean heartbeat resolved
+              the drift. Orchestrator fired
+              ``voice_pipeline_noise_floor_drift_cleared``.
+    """
+    counter = getattr(get_metrics(), "voice_pipeline_noise_floor_drift_alerts", None)
+    if counter is None:
+        return
+    counter.add(1, attributes={"state": state})
+
+
 def record_snr_low_alert(*, state: str) -> None:
     """Record one SNR low-alert state transition (Phase 4 / T4.35).
 
@@ -1017,6 +1042,7 @@ __all__ = [
     "METRIC_KERNEL_INVALIDATED_EVENTS",
     "METRIC_NS_SUPPRESSION_DB",
     "METRIC_NS_WINDOWS",
+    "METRIC_PIPELINE_NOISE_FLOOR_DRIFT_ALERTS",
     "METRIC_PIPELINE_SNR_LOW_ALERTS",
     "METRIC_OPENER_HOST_API_ALIGNMENT",
     "METRIC_PREFLIGHT_FAILURES",
@@ -1058,6 +1084,7 @@ __all__ = [
     "record_probe_duration",
     "record_probe_result",
     "record_recovery_attempt",
+    "record_noise_floor_drift_alert",
     "record_self_feedback_block",
     "record_snr_low_alert",
     "record_start_time_error",

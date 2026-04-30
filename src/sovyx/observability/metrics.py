@@ -671,6 +671,19 @@ class MetricsRegistry:
             "echo, AEC filter can converge cleanly); 'undecided' "
             "fires when either signal is silent (NCC undefined).",
         )
+        self.voice_pipeline_noise_floor_drift_alerts = self._counter(
+            "sovyx.voice.pipeline.noise_floor_drift_alerts",
+            "Per-mind orchestrator noise-floor drift alert state-"
+            "transition counter (Phase 4 T4.38 — labels: state="
+            "warned|cleared). 'warned' fires once when consecutive "
+            "heartbeats with rolling-window noise-floor rise above "
+            "voice_noise_floor_drift_threshold_db reaches "
+            "voice_noise_floor_drift_consecutive_heartbeats; "
+            "'cleared' fires once when the next clean heartbeat "
+            "resolves the incident. The pair is symmetric so "
+            "dashboards graph open drift incidents as warned − "
+            "cleared.",
+        )
         self.voice_pipeline_snr_low_alerts = self._counter(
             "sovyx.voice.pipeline.snr_low_alerts",
             "Per-mind orchestrator SNR low-alert state-transition "

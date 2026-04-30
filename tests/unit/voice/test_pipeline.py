@@ -2909,6 +2909,106 @@ class TestPipelineHeartbeat:
         reset_for_tests()
 
     @pytest.mark.asyncio
+    async def test_noise_floor_drift_alert_fires_after_consecutive_threshold(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Phase 4 / T4.38 — sustained upward drift in the rolling
+        noise-floor average emits a single WARN
+        ``voice_pipeline_noise_floor_drift_warning``."""
+        from sovyx.voice.health._noise_floor_trending import (
+            _LONG_WINDOW_SAMPLES,
+            _SHORT_WINDOW_SAMPLES,
+            record_noise_floor_sample,
+        )
+        from sovyx.voice.health._noise_floor_trending import (
+            reset_for_tests as floor_reset,
+        )
+        from sovyx.voice.pipeline import _orchestrator as orch_mod
+
+        floor_reset()
+        caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
+        pipeline, refs = _make_pipeline(wake_word_enabled=False, vad_speech=False)
+        await pipeline.start()
+        pipeline._last_heartbeat_monotonic = 0.0
+        refs["vad"].process_frame.return_value = VADEvent(
+            is_speech=False, probability=0.1, state=VADState.SILENCE
+        )
+
+        # Pre-load the buffer with a -55 dB baseline (long window)
+        # then layer a -40 dB short window on top → drift ≈ +12 dB,
+        # comfortably above the 10 dB threshold.
+        baseline_count = _LONG_WINDOW_SAMPLES - _SHORT_WINDOW_SAMPLES
+        for _ in range(baseline_count):
+            record_noise_floor_sample(noise_floor_db=-55.0)
+        for _ in range(_SHORT_WINDOW_SAMPLES):
+            record_noise_floor_sample(noise_floor_db=-40.0)
+
+        # Drive ``_NOISE_FLOOR_DRIFT_CONSECUTIVE_HEARTBEATS``
+        # heartbeats; the drift sustains because compute_drift is
+        # read-only.
+        n_consecutive = orch_mod._NOISE_FLOOR_DRIFT_CONSECUTIVE_HEARTBEATS
+        for k in range(n_consecutive):
+            with patch.object(
+                orch_mod.time,
+                "monotonic",
+                return_value=orch_mod._HEARTBEAT_INTERVAL_S * (k + 1) + 1.0,
+            ):
+                await pipeline.feed_frame(_silence_frame())
+
+        warns = _events_of(caplog, "voice_pipeline_noise_floor_drift_warning")
+        assert len(warns) == 1
+        assert warns[0]["drift_db"] > orch_mod._NOISE_FLOOR_DRIFT_THRESHOLD_DB
+        assert warns[0]["consecutive_heartbeats"] == n_consecutive
+        assert warns[0]["threshold_db"] == orch_mod._NOISE_FLOOR_DRIFT_THRESHOLD_DB
+        assert pipeline._noise_floor_drift_alert_active is True
+
+        floor_reset()
+
+    @pytest.mark.asyncio
+    async def test_noise_floor_drift_alert_skipped_until_baseline_ready(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Pre-``ready`` heartbeats (long window not yet populated)
+        MUST NOT increment the drift consecutive counter — early
+        boot has unstable averages by definition."""
+        from sovyx.voice.health._noise_floor_trending import (
+            _LONG_WINDOW_SAMPLES,
+            record_noise_floor_sample,
+        )
+        from sovyx.voice.health._noise_floor_trending import (
+            reset_for_tests as floor_reset,
+        )
+        from sovyx.voice.pipeline import _orchestrator as orch_mod
+
+        floor_reset()
+        caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
+        pipeline, refs = _make_pipeline(wake_word_enabled=False, vad_speech=False)
+        await pipeline.start()
+        pipeline._last_heartbeat_monotonic = 0.0
+        refs["vad"].process_frame.return_value = VADEvent(
+            is_speech=False, probability=0.1, state=VADState.SILENCE
+        )
+
+        # Half-fill the long window — ready=False at compute_drift.
+        for _ in range(_LONG_WINDOW_SAMPLES // 2):
+            record_noise_floor_sample(noise_floor_db=-30.0)
+
+        for k in range(5):
+            with patch.object(
+                orch_mod.time,
+                "monotonic",
+                return_value=orch_mod._HEARTBEAT_INTERVAL_S * (k + 1) + 1.0,
+            ):
+                await pipeline.feed_frame(_silence_frame())
+
+        warns = _events_of(caplog, "voice_pipeline_noise_floor_drift_warning")
+        assert warns == []
+        assert pipeline._noise_floor_drift_consecutive_heartbeats == 0
+        assert pipeline._noise_floor_drift_alert_active is False
+
+        floor_reset()
+
+    @pytest.mark.asyncio
     async def test_heartbeat_drain_isolates_consecutive_windows(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:

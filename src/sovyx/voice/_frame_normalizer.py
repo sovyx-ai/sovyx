@@ -992,8 +992,13 @@ class FrameNormalizer:
         the noise floor) so the histogram p50 isn't poisoned with
         synthetic floor values.
         """
-        from sovyx.voice._snr_estimator import _SNR_FLOOR_DB
+        import numpy as np
+
+        from sovyx.voice._snr_estimator import _INT16_FULL_SCALE_SQ, _SNR_FLOOR_DB
         from sovyx.voice.health._metrics import record_audio_snr_db
+        from sovyx.voice.health._noise_floor_trending import (
+            record_noise_floor_sample,
+        )
         from sovyx.voice.health._snr_heartbeat import record_snr_sample
 
         assert self._snr_estimator is not None  # gated by caller
@@ -1012,6 +1017,19 @@ class FrameNormalizer:
         # non-floor samples) so the percentile pair stays
         # consistent with the metric.
         record_snr_sample(snr_db=snr_db)
+        # T4.38 — feed the long-horizon noise-floor trend
+        # tracker. The estimator's ``noise_floor_estimate``
+        # property exposes the linear minimum-power tracker
+        # over the noise window; we convert to dBFS via the
+        # int16 full-scale reference and hand it to the
+        # rolling buffer. Sampling once per emitted window
+        # gives ~31 samples/s — enough to populate the 5-min
+        # baseline window before the orchestrator's first
+        # alertable heartbeat.
+        noise_power = self._snr_estimator.noise_floor_estimate
+        if noise_power is not None and noise_power > 0.0:
+            noise_floor_db = float(10.0 * np.log10(noise_power / _INT16_FULL_SCALE_SQ))
+            record_noise_floor_sample(noise_floor_db=noise_floor_db)
 
     @property
     def noise_suppressor(self) -> NoiseSuppressor | None:
