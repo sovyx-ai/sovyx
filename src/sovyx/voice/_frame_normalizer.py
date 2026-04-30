@@ -242,6 +242,31 @@ cadence and is short enough that operators see the issue within
 the first failed utterance."""
 
 
+_PHASE_RECOVERY_ENGAGE_THRESHOLD = 3
+"""Consecutive inverted blocks before L-only recovery latches in.
+
+Single-block transients (a noise burst that happens to phase-cancel
+across L+R for one block) shouldn't kick the operator into L-only
+mode — that would jitter back and forth. Three blocks ≈ 30-90 ms at
+typical PortAudio block sizes (10-30 ms each), which is below the
+human-perceptible audio gap (~150 ms) yet long enough that any
+genuine phase-inverted hardware (USB stereo with channel-swap bug,
+buggy ANC headset reference channel) will easily reach the
+threshold within the first audio frame."""
+
+
+_PHASE_RECOVERY_REVERT_THRESHOLD = 50
+"""Consecutive clean blocks before L-only recovery reverts to mean.
+
+Once recovery is engaged (latched on L-only), the gate for going
+back to mean-downmix is more conservative. ~50 blocks ≈ 0.5-1.5 s
+of clean signal — long enough to confirm the hardware actually
+recovered (e.g. operator unplugged the bad headset and connected a
+working mic), short enough that the operator doesn't stay in L-only
+mode unnecessarily. Asymmetric attack/revert thresholds match the
+AGC2 / NS pattern: react fast to problems, recover slowly."""
+
+
 # ── #7 — Format-detection probe (extends #40 dtype validation) ──
 #
 # #40 caught the dtype-mismatch case (caller declares ``float32`` but
@@ -375,6 +400,7 @@ class FrameNormalizer:
         wiener_entropy_check_enabled: bool = False,
         wiener_entropy_threshold: float = 0.5,
         resample_peak_check_enabled: bool = False,
+        phase_inversion_auto_recovery_enabled: bool = False,
     ) -> None:
         if source_rate <= 0:
             msg = f"source_rate must be positive, got {source_rate}"
@@ -529,6 +555,17 @@ class FrameNormalizer:
         # design (different signal: this isolates resampler
         # overshoot, R2 counts post-multiply int16 rail hits).
         self._resample_peak_check_enabled: bool = resample_peak_check_enabled
+        # Phase 4 / T4.46 — phase-inversion auto-recovery state.
+        # Asymmetric attack/revert: latch L-only after a few
+        # consecutive inverted blocks, revert to mean after many
+        # clean blocks. Pre-T4.46 detector (Band-aid #8) is
+        # untouched — it still emits the WARN log regardless of
+        # this flag so operators who want only observability
+        # don't lose the diagnostic.
+        self._phase_recovery_enabled: bool = phase_inversion_auto_recovery_enabled
+        self._phase_recovery_engaged: bool = False
+        self._phase_recovery_consecutive_inverted: int = 0
+        self._phase_recovery_consecutive_clean: int = 0
 
         logger.debug(
             "frame_normalizer_created",
@@ -1262,14 +1299,101 @@ class FrameNormalizer:
             # relationship; the L/R-only case is the silent-
             # cancellation pathology this guard exists to flag).
             if block_f.shape[1] == 2:
-                self._maybe_flag_phase_inversion(
-                    left=block_f[:, 0],
-                    right=block_f[:, 1],
-                )
+                left = block_f[:, 0]
+                right = block_f[:, 1]
+                self._maybe_flag_phase_inversion(left=left, right=right)
+                # T4.46 — promote the detector to a recovery action
+                # when ``voice_phase_inversion_auto_recovery_enabled``.
+                # The state machine returns the channel(s) the
+                # downmix should use this block; the detector's WARN
+                # log fires regardless (operators who only want
+                # observability keep the flag off).
+                if self._phase_recovery_enabled:
+                    return self._phase_recovery_downmix(left=left, right=right)
             avg: npt.NDArray[np.float32] = block_f.mean(axis=1).astype(np.float32)
             return avg
         msg = f"block must be 1-D or 2-D, got ndim={block_f.ndim}"
         raise ValueError(msg)
+
+    def _phase_recovery_downmix(
+        self,
+        *,
+        left: npt.NDArray[np.float32],
+        right: npt.NDArray[np.float32],
+    ) -> npt.NDArray[np.float32]:
+        """Return the recovered downmix and update the recovery state.
+
+        Asymmetric attack/revert state machine (T4.46):
+
+        * ``phase_recovery_engaged=False`` (default):
+            - inverted block (correlation < threshold) → bump
+              ``consecutive_inverted``.
+            - clean block → reset ``consecutive_inverted = 0``.
+            - When ``consecutive_inverted`` reaches the engage
+              threshold, latch ``engaged=True`` + emit
+              ``voice.audio.phase_inversion_recovery{state=engaged}``.
+        * ``phase_recovery_engaged=True``:
+            - inverted block → bump ``consecutive_inverted``,
+              reset ``consecutive_clean = 0``. Stay engaged.
+            - clean block → bump ``consecutive_clean``, reset
+              ``consecutive_inverted = 0``.
+            - When ``consecutive_clean`` reaches the revert
+              threshold, latch ``engaged=False`` + emit
+              ``voice.audio.phase_inversion_recovery{state=reverted}``.
+
+        Output: ``left`` channel only when engaged, mean of L+R
+        otherwise. Choosing L (vs R) when both channels are
+        present-but-inverted is convention — operators with
+        firmware that swaps the channels can normalise via the
+        OS mixer, but Sovyx itself must pick one deterministically.
+
+        Telemetry fires only on engage / revert TRANSITIONS, not
+        per block — a sustained inverted stream produces one
+        ``engaged`` event followed by zero events until it
+        recovers, which keeps cardinality bounded.
+        """
+        import numpy as np  # noqa: PLC0415 — local per module convention
+
+        from sovyx.voice.health._metrics import record_audio_phase_inversion_recovery
+
+        correlation = _channel_correlation(left, right)
+        is_inverted = correlation < _PHASE_INVERSION_CORR_THRESHOLD
+
+        if is_inverted:
+            self._phase_recovery_consecutive_inverted += 1
+            self._phase_recovery_consecutive_clean = 0
+            if (
+                not self._phase_recovery_engaged
+                and self._phase_recovery_consecutive_inverted >= _PHASE_RECOVERY_ENGAGE_THRESHOLD
+            ):
+                self._phase_recovery_engaged = True
+                record_audio_phase_inversion_recovery(state="engaged")
+                logger.info(
+                    "voice.audio.phase_inversion_recovery_engaged",
+                    **{
+                        "voice.correlation": round(correlation, 4),
+                        "voice.consecutive_inverted": self._phase_recovery_consecutive_inverted,
+                    },
+                )
+        else:
+            self._phase_recovery_consecutive_inverted = 0
+            if self._phase_recovery_engaged:
+                self._phase_recovery_consecutive_clean += 1
+                if self._phase_recovery_consecutive_clean >= _PHASE_RECOVERY_REVERT_THRESHOLD:
+                    self._phase_recovery_engaged = False
+                    self._phase_recovery_consecutive_clean = 0
+                    record_audio_phase_inversion_recovery(state="reverted")
+                    logger.info(
+                        "voice.audio.phase_inversion_recovery_reverted",
+                        **{
+                            "voice.correlation": round(correlation, 4),
+                            "voice.consecutive_clean": _PHASE_RECOVERY_REVERT_THRESHOLD,
+                        },
+                    )
+
+        if self._phase_recovery_engaged:
+            return left.astype(np.float32, copy=False)
+        return (left + right).astype(np.float32) * 0.5
 
     def _maybe_flag_phase_inversion(
         self,

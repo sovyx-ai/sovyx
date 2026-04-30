@@ -1316,6 +1316,26 @@ class VoiceTuningConfig(BaseSettings):
     pesq + pypesq packages fail Windows MSVC build per T4.21
     discovery)."""
 
+    voice_phase_inversion_auto_recovery_enabled: bool = False
+    """L-only auto-recovery on phase-inverted stereo input (Phase 4 / T4.46).
+
+    When True the FrameNormalizer's _downmix latches the output to
+    L-only after sustained L/R destructive correlation (3 consecutive
+    inverted blocks per :data:`_PHASE_RECOVERY_ENGAGE_THRESHOLD`),
+    and reverts to mean-downmix after sustained clean signal (50
+    consecutive blocks per :data:`_PHASE_RECOVERY_REVERT_THRESHOLD`).
+
+    Promotes the long-standing Band-aid #8 phase-inversion DETECTOR
+    (observability-only) to a recovery ACTION. The detector still
+    fires its WARN log unchanged regardless of this flag —
+    operators who want only observability keep this flag off; those
+    who want the daemon to self-heal on broken stereo hardware flip
+    it on. Telemetry counter ``voice.audio.phase_inversion_recovery``
+    fires on engage / revert transitions for dashboard forensics.
+
+    Default ``False`` per ``feedback_staged_adoption``. Pre-T4.46
+    behaviour (mean-downmix always) preserved bit-exactly when off."""
+
     voice_resample_peak_check_enabled: bool = False
     """Resample peak-clip detector master switch (Phase 4 / T4.45).
 

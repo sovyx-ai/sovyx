@@ -127,6 +127,9 @@ METRIC_AUDIO_SIGNAL_DESTROYED = "sovyx.voice.audio.signal_destroyed"
 # ── Phase 4 — Resample peak-clip detector (T4.45) ───────────────────────
 METRIC_AUDIO_RESAMPLE_PEAK_CLIP = "sovyx.voice.audio.resample_peak_clip"
 
+# ── Phase 4 — Phase-inversion auto-recovery (T4.46) ─────────────────────
+METRIC_AUDIO_PHASE_INVERSION_RECOVERY = "sovyx.voice.audio.phase_inversion_recovery"
+
 
 # ── Label enums (closed sets for low-cardinality guarantees) ─────────────
 # Using string literals here keeps the module dependency-free; the ADR
@@ -769,6 +772,24 @@ def record_ns_window(*, state: str) -> None:
     counter.add(1, attributes={"state": state})
 
 
+def record_audio_phase_inversion_recovery(*, state: str) -> None:
+    """Record one phase-inversion recovery state transition (Phase 4 / T4.46).
+
+    Fires only on engage/revert transitions (NOT once per block);
+    the dashboard's transition rate is the primary signal for
+    hardware-fault forensics.
+
+    Args:
+        state: ``"engaged"`` (L-only fallback latched in after
+            sustained inversion) or ``"reverted"`` (downmix
+            returned to L+R mean after sustained clean signal).
+    """
+    counter = getattr(get_metrics(), "voice_audio_phase_inversion_recovery", None)
+    if counter is None:
+        return
+    counter.add(1, attributes={"state": state})
+
+
 def record_audio_resample_peak_clip(*, state: str) -> None:
     """Record one resample peak-clip verdict (Phase 4 / T4.45).
 
@@ -883,6 +904,7 @@ __all__ = [
     "METRIC_AEC_ERLE_DB",
     "METRIC_AEC_WINDOWS",
     "METRIC_APO_DEGRADED_EVENTS",
+    "METRIC_AUDIO_PHASE_INVERSION_RECOVERY",
     "METRIC_AUDIO_RESAMPLE_PEAK_CLIP",
     "METRIC_AUDIO_SIGNAL_DESTROYED",
     "METRIC_AUDIO_SNR_DB",
@@ -916,6 +938,7 @@ __all__ = [
     "record_aec_erle",
     "record_aec_window",
     "record_apo_degraded_event",
+    "record_audio_phase_inversion_recovery",
     "record_audio_resample_peak_clip",
     "record_audio_signal_destroyed",
     "record_audio_snr_db",

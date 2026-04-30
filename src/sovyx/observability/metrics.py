@@ -749,6 +749,25 @@ class MetricsRegistry:
             "higher-order polyphase or sinc resampler.",
         )
 
+        # ── Phase 4 / T4.46 — phase-inversion auto-recovery ─────
+        # State-transition events when the FrameNormalizer's
+        # phase-inversion detector latches L-only mode (after N
+        # consecutive inverted blocks) or reverts to mean-downmix
+        # (after M consecutive clean blocks). Operators see the
+        # transition events on the dashboard for hardware-fault
+        # forensics — repeated engage/revert cycles signal a
+        # genuinely unstable mic that needs replacement.
+        self.voice_audio_phase_inversion_recovery = self._counter(
+            "sovyx.voice.audio.phase_inversion_recovery",
+            "Phase-inversion auto-recovery state-transition events "
+            "(labels: state=engaged|reverted). 'engaged' fires when "
+            "the L-only fallback latches in after sustained L/R "
+            "destructive correlation. 'reverted' fires when the "
+            "downmix returns to L+R mean after sustained clean "
+            "signal. Each transition pair represents one detected + "
+            "recovered hardware fault.",
+        )
+
         # ── Voice pipeline RED + USE (Ring 6 — M2) ──────────────────
         # Per-stage Rate / Errors / Duration plus Utilisation /
         # Saturation / Errors for every async queue between stages.
