@@ -84,6 +84,19 @@ voice = [
     # imported so non-AEC daemons don't pay the load cost.
     "pyaec>=1.0",
 ]
+voice-quality = [
+    # Phase 4 / T4.21 — opt-in DNSMOS / AEC-MOS / PLC-MOS perceptual
+    # quality estimators. Pulled in via the
+    # ``DnsmosQualityEstimator`` lazy import; default voice install
+    # ships with NoOpQualityEstimator (zero deps) so the heavy
+    # librosa + numba + scikit-learn transitive load (~ 100 MB) is
+    # only paid by operators who explicitly opt in via
+    # ``pip install sovyx[voice-quality]``. The numba native DLL is
+    # also blocked by Windows Application Control on locked-down
+    # endpoints, which is another reason to keep this as opt-in.
+    "speechmos>=0.0.1.1",
+    "librosa>=0.11",
+]
 otel = [
     "opentelemetry-exporter-otlp>=1.20",
     "opentelemetry-instrumentation-httpx>=0.41b0",

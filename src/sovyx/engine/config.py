@@ -1282,6 +1282,40 @@ class VoiceTuningConfig(BaseSettings):
     their hardware (a too-high threshold misses real destruction;
     too-low gates real speech)."""
 
+    voice_quality_metrics_enabled: bool = False
+    """Perceptual voice-quality estimator master switch (Phase 4 / T4.21).
+
+    When True the FrameNormalizer's quality stage runs the
+    configured ``voice_quality_engine`` over fixed-size capture
+    windows. Foundation default ``False`` per
+    ``feedback_staged_adoption``. Operators who want real DNSMOS
+    must ALSO install the ``[voice-quality]`` extras::
+
+        pip install sovyx[voice-quality]
+
+    The default voice install ships with the
+    :class:`~sovyx.voice._quality_metrics.NoOpQualityEstimator`
+    which returns NaN scores — the heavy librosa + numba +
+    scikit-learn transitive deps are NOT pulled into every
+    daemon. See the engine choice rationale at
+    :mod:`sovyx.voice._quality_metrics`."""
+
+    voice_quality_engine: Literal["off", "dnsmos"] = "off"
+    """Concrete quality engine when ``voice_quality_metrics_enabled=True``.
+
+    * ``"off"`` — explicit no-op (also reachable via the master
+      switch); kept for "engine selected but disabled" semantics.
+    * ``"dnsmos"`` — Microsoft DNSMOS via the ``speechmos``
+      package. Returns 4 sub-scores: OVRL / SIG / BAK / P808.
+      Requires ``[voice-quality]`` extras — raises
+      :class:`QualityEstimatorLoadError` at construction
+      otherwise.
+
+    Future engine slot ``"pesq"`` will be widened when a
+    Windows-shippable PESQ binding becomes available (current
+    pesq + pypesq packages fail Windows MSVC build per T4.21
+    discovery)."""
+
     voice_resample_peak_check_enabled: bool = False
     """Resample peak-clip detector master switch (Phase 4 / T4.45).
 
