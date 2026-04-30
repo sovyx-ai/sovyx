@@ -380,3 +380,150 @@ class TestPipeWireReportContract:
         assert r.notes == ()
         assert r.echo_cancel_loaded is False
         assert r.server_name is None
+
+    def test_phase5_fields_default_safe(self) -> None:
+        # Phase 5 / T5.31 + T5.34 — new fields default to "no
+        # signal" so legacy callers that ignore them keep working.
+        r = PipeWireReport(status=PipeWireStatus.ABSENT)
+        assert r.pipewire_version is None
+        assert r.pipewire_major_version is None
+        assert r.hybrid_pulseaudio_conflict is False
+
+
+# ── Phase 5 / T5.31 — version extraction ──────────────────────────
+
+
+class TestExtractPipeWireVersion:
+    """The version is parsed from ``pactl info``'s server-name
+    string (e.g. ``"PulseAudio (on PipeWire 1.0.5)"``)."""
+
+    def test_full_three_part_version(self) -> None:
+        from sovyx.voice.health._pipewire import _extract_pipewire_version
+
+        version, major = _extract_pipewire_version(
+            "PulseAudio (on PipeWire 1.0.5)",
+        )
+        assert version == "1.0.5"
+        assert major == 1
+
+    def test_legacy_zero_three_branch(self) -> None:
+        from sovyx.voice.health._pipewire import _extract_pipewire_version
+
+        version, major = _extract_pipewire_version(
+            "PulseAudio (on PipeWire 0.3.65)",
+        )
+        assert version == "0.3.65"
+        assert major == 0
+
+    def test_two_part_version_fallback(self) -> None:
+        # Some PipeWire builds emit "PipeWire X.Y" without patch.
+        from sovyx.voice.health._pipewire import _extract_pipewire_version
+
+        version, major = _extract_pipewire_version("PipeWire 1.2")
+        assert version == "1.2"
+        assert major == 1
+
+    def test_real_pulseaudio_returns_none(self) -> None:
+        # A real PulseAudio (no PipeWire) doesn't carry the
+        # PipeWire substring — version extraction returns None.
+        from sovyx.voice.health._pipewire import _extract_pipewire_version
+
+        version, major = _extract_pipewire_version("PulseAudio (Mock daemon)")
+        assert version is None
+        assert major is None
+
+    def test_none_server_name_returns_none(self) -> None:
+        from sovyx.voice.health._pipewire import _extract_pipewire_version
+
+        version, major = _extract_pipewire_version(None)
+        assert version is None
+        assert major is None
+
+
+# ── Phase 5 / T5.34 — hybrid PulseAudio + PipeWire conflict ───────
+
+
+class TestHybridConflictDetector:
+    """A real ``pulseaudio`` process running alongside PipeWire
+    breaks echo-cancel + module routing. The detector
+    distinguishes a real PA from the ``pipewire-pulse`` compat
+    layer (whose argv mentions PipeWire)."""
+
+    def _run_pgrep(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        stdout: str,
+        returncode: int = 0,
+    ) -> None:
+        from sovyx.voice.health import _pipewire as pw
+
+        def _fake(*_args: object, **_kwargs: object) -> object:
+            class _Result:
+                pass
+
+            r = _Result()
+            r.stdout = stdout
+            r.returncode = returncode
+            return r
+
+        monkeypatch.setattr(pw.subprocess, "run", _fake)
+
+    def test_no_pulseaudio_running(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from sovyx.voice.health._pipewire import _detect_hybrid_pulseaudio_conflict
+
+        # pgrep returns 1 when nothing matches.
+        self._run_pgrep(monkeypatch, stdout="", returncode=1)
+        notes: list[str] = []
+        assert _detect_hybrid_pulseaudio_conflict(notes) is False
+        assert notes == []
+
+    def test_pipewire_pulse_compat_layer_does_not_count(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # pipewire-pulse impersonates PA via pulseaudio binary
+        # alias on some distros; its cmdline mentions PipeWire.
+        from sovyx.voice.health._pipewire import _detect_hybrid_pulseaudio_conflict
+
+        self._run_pgrep(
+            monkeypatch,
+            stdout="1234 /usr/bin/pulseaudio --enable-pipewire-compat\n",
+            returncode=0,
+        )
+        notes: list[str] = []
+        assert _detect_hybrid_pulseaudio_conflict(notes) is False
+
+    def test_real_pulseaudio_flagged_as_conflict(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from sovyx.voice.health._pipewire import _detect_hybrid_pulseaudio_conflict
+
+        self._run_pgrep(
+            monkeypatch,
+            stdout="5678 /usr/bin/pulseaudio --daemonize\n",
+            returncode=0,
+        )
+        notes: list[str] = []
+        assert _detect_hybrid_pulseaudio_conflict(notes) is True
+        # Diagnostic note carries the PID for forensics.
+        assert any("real_pulseaudio_detected" in n for n in notes)
+
+    def test_subprocess_failure_collapses_to_false(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from sovyx.voice.health import _pipewire as pw
+
+        def _raise(*_args: object, **_kwargs: object) -> None:
+            raise OSError("simulated pgrep crash")
+
+        monkeypatch.setattr(pw.subprocess, "run", _raise)
+        notes: list[str] = []
+        assert pw._detect_hybrid_pulseaudio_conflict(notes) is False
+        # Failure is surfaced as a note for telemetry.
+        assert any("hybrid_conflict_probe_failed" in n for n in notes)

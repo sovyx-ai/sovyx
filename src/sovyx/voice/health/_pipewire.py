@@ -139,6 +139,28 @@ class PipeWireReport:
     """Per-step diagnostic notes (e.g. parse failures, OS errors)
     that don't change the verdict but help operators trace the probe."""
 
+    pipewire_version: str | None = None
+    """Phase 5 / T5.31 — full PipeWire version string parsed
+    from :attr:`server_name` (e.g. ``"1.0.5"``, ``"0.3.65"``).
+    ``None`` when the version couldn't be extracted (older
+    PipeWire builds OR a non-PW PulseAudio daemon)."""
+
+    pipewire_major_version: int | None = None
+    """Phase 5 / T5.31 — major version digit. ``0`` for the
+    legacy PW 0.3.x line (Mint 21, older Ubuntu LTS), ``1`` for
+    the PW 1.0+ line (Mint 22, current Fedora/Arch). Used by
+    operator-facing surfaces to gate on schema-incompatible
+    features without re-parsing the version string."""
+
+    hybrid_pulseaudio_conflict: bool = False
+    """Phase 5 / T5.34 — True when BOTH a real ``pulseaudio``
+    daemon process AND PipeWire are detected on the same
+    session. The combination produces unpredictable echo-cancel
+    + module routing because both stacks try to manage the
+    audio graph; the operator must pick ONE
+    (``systemctl --user mask pulseaudio.service`` is the
+    canonical fix on modern distros)."""
+
 
 class PipeWireRoutingError(Exception):
     """Raised when an explicit routing operation
@@ -226,6 +248,15 @@ def detect_pipewire(*, runtime_dir: Path | None = None) -> PipeWireReport:
     else:
         verdict = PipeWireStatus.UNKNOWN
 
+    # Phase 5 / T5.31 — version extraction from the server
+    # name string. Format: "PulseAudio (on PipeWire 1.0.5)".
+    pw_version, pw_major = _extract_pipewire_version(server_name)
+
+    # Phase 5 / T5.34 — hybrid PA + PW conflict detection.
+    # Best-effort + read-only; failure collapses to False so a
+    # broken /proc never blocks boot.
+    hybrid_conflict = _detect_hybrid_pulseaudio_conflict(notes)
+
     return PipeWireReport(
         status=verdict,
         socket_present=socket_present,
@@ -235,7 +266,90 @@ def detect_pipewire(*, runtime_dir: Path | None = None) -> PipeWireReport:
         modules_loaded=tuple(sorted(modules)),
         echo_cancel_loaded=echo_cancel,
         notes=tuple(notes),
+        pipewire_version=pw_version,
+        pipewire_major_version=pw_major,
+        hybrid_pulseaudio_conflict=hybrid_conflict,
     )
+
+
+def _extract_pipewire_version(server_name: str | None) -> tuple[str | None, int | None]:
+    """Extract ``(full_version, major)`` from the server-name string.
+
+    PipeWire emits ``"PulseAudio (on PipeWire 1.0.5)"`` via the
+    pulseaudio compat layer. Older installs may emit just
+    ``"PulseAudio"`` (real PA, no PW) — return ``(None, None)``.
+
+    Args:
+        server_name: ``Server Name:`` value from ``pactl info``.
+
+    Returns:
+        Tuple of (version-string-or-None, major-int-or-None).
+    """
+    if not server_name:
+        return None, None
+    # Match the literal "PipeWire X.Y.Z" substring; tolerate
+    # parens / extra qualifiers around it.
+    import re
+
+    match = re.search(r"PipeWire\s+(\d+)\.(\d+)\.(\d+)", server_name)
+    if match is None:
+        # Some PipeWire builds emit "PipeWire X.Y" (no patch).
+        match = re.search(r"PipeWire\s+(\d+)\.(\d+)", server_name)
+        if match is None:
+            return None, None
+        version = f"{match.group(1)}.{match.group(2)}"
+        return version, int(match.group(1))
+    version = f"{match.group(1)}.{match.group(2)}.{match.group(3)}"
+    return version, int(match.group(1))
+
+
+def _detect_hybrid_pulseaudio_conflict(notes: list[str]) -> bool:
+    """Detect a real ``pulseaudio`` daemon running alongside PipeWire.
+
+    The pulseaudio compat layer (``pipewire-pulse``) is NOT a
+    "real" pulseaudio process — it's the PipeWire daemon
+    impersonating PA's IPC. This function looks for a
+    ``pulseaudio`` process whose ``cmdline`` does NOT contain
+    ``pipewire`` (the compat layer's argv mentions PipeWire so
+    we can distinguish them).
+
+    Best-effort + read-only; subprocess / parse failures collapse
+    to ``False`` so a broken ``/proc`` walk never blocks boot.
+
+    Args:
+        notes: Mutable note buffer for diagnostic attribution.
+
+    Returns:
+        True iff a non-PipeWire pulseaudio process is running.
+    """
+    try:
+        result = subprocess.run(  # noqa: S603 — fixed argv to trusted pgrep
+            ["pgrep", "-a", "-x", "pulseaudio"],
+            capture_output=True,
+            text=True,
+            timeout=_PACTL_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        notes.append(f"hybrid_conflict_probe_failed: {exc}")
+        return False
+    if result.returncode != 0:
+        # pgrep returns 1 when no matches found — that's the
+        # healthy "no real PA running" path, NOT a probe failure.
+        return False
+    for line in result.stdout.splitlines():
+        # pgrep -a output: "PID command-line"; we want the cmdline.
+        parts = line.split(maxsplit=1)
+        if len(parts) < 2:  # noqa: PLR2004
+            continue
+        cmdline = parts[1].lower()
+        if "pipewire" in cmdline:
+            # This is the compat layer — not a real PA daemon.
+            continue
+        # Real PA found alongside PW.
+        notes.append(f"real_pulseaudio_detected: {parts[0]}")
+        return True
+    return False
 
 
 def enumerate_pipewire_modules() -> tuple[str, ...]:
