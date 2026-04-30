@@ -23,6 +23,7 @@ import math
 import numpy as np
 import pytest
 
+from sovyx.voice import _quality_metrics as _qm
 from sovyx.voice._quality_metrics import (
     DnsmosQualityEstimator,
     NoOpQualityEstimator,
@@ -30,6 +31,7 @@ from sovyx.voice._quality_metrics import (
     QualityEstimatorLoadError,
     QualityScore,
     build_quality_estimator,
+    compute_pesq,
 )
 
 # ── QualityScore ─────────────────────────────────────────────────────────
@@ -290,3 +292,170 @@ class TestBuildQualityEstimator:
         )
         with pytest.raises(QualityEstimatorLoadError):
             build_quality_estimator(enabled=True, engine="dnsmos")
+
+
+# ── compute_pesq (T4.22) ────────────────────────────────────────────────
+
+
+class _StubPesq:
+    """In-memory pesq lookalike for shape tests."""
+
+    @staticmethod
+    def pesq(rate: int, reference: np.ndarray, degraded: np.ndarray, mode: str) -> float:
+        # ITU-T P.862 returns MOS-LQO in [1.0, 4.5/4.64] depending
+        # on mode. Stub returns a deterministic 3.5 so tests can
+        # assert the wire contract.
+        _ = rate
+        _ = reference
+        _ = degraded
+        _ = mode
+        return 3.5
+
+
+class TestComputePesqInputValidation:
+    def test_shape_mismatch_rejected(self) -> None:
+        with pytest.raises(ValueError, match="shape mismatch"):
+            compute_pesq(
+                np.zeros(8_000, dtype=np.float32),
+                np.zeros(4_000, dtype=np.float32),
+                sample_rate=16_000,
+                mode="wb",
+            )
+
+    def test_non_float32_reference_rejected(self) -> None:
+        with pytest.raises(ValueError, match="float32"):
+            compute_pesq(
+                np.zeros(8_000, dtype=np.int16),
+                np.zeros(8_000, dtype=np.float32),
+                sample_rate=16_000,
+                mode="wb",
+            )
+
+    def test_non_float32_degraded_rejected(self) -> None:
+        with pytest.raises(ValueError, match="float32"):
+            compute_pesq(
+                np.zeros(8_000, dtype=np.float32),
+                np.zeros(8_000, dtype=np.int16),
+                sample_rate=16_000,
+                mode="wb",
+            )
+
+    def test_invalid_mode_rejected(self) -> None:
+        with pytest.raises(ValueError, match="mode must be"):
+            compute_pesq(
+                np.zeros(16_000, dtype=np.float32),
+                np.zeros(16_000, dtype=np.float32),
+                sample_rate=16_000,
+                mode="bogus",  # type: ignore[arg-type]
+            )
+
+    def test_wb_requires_16k(self) -> None:
+        with pytest.raises(ValueError, match="16000"):
+            compute_pesq(
+                np.zeros(8_000, dtype=np.float32),
+                np.zeros(8_000, dtype=np.float32),
+                sample_rate=8_000,
+                mode="wb",
+            )
+
+    def test_nb_requires_8k(self) -> None:
+        with pytest.raises(ValueError, match="8000"):
+            compute_pesq(
+                np.zeros(16_000, dtype=np.float32),
+                np.zeros(16_000, dtype=np.float32),
+                sample_rate=16_000,
+                mode="nb",
+            )
+
+
+class TestComputePesqLazyImport:
+    """Lazy-import contract — pesq is opt-in / CI-only."""
+
+    def test_load_error_when_pesq_missing(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def _raise() -> object:
+            raise ImportError("pesq not installed (simulated)")
+
+        monkeypatch.setattr(_qm, "_load_pesq_module", _raise)
+        with pytest.raises(QualityEstimatorLoadError, match="pesq"):
+            compute_pesq(
+                np.zeros(16_000, dtype=np.float32),
+                np.zeros(16_000, dtype=np.float32),
+                sample_rate=16_000,
+                mode="wb",
+            )
+
+    def test_load_error_message_includes_install_hint(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        def _raise() -> object:
+            raise ImportError("simulated")
+
+        monkeypatch.setattr(_qm, "_load_pesq_module", _raise)
+        try:
+            compute_pesq(
+                np.zeros(16_000, dtype=np.float32),
+                np.zeros(16_000, dtype=np.float32),
+                sample_rate=16_000,
+                mode="wb",
+            )
+        except QualityEstimatorLoadError as exc:
+            # Mensaging includes Linux install hint + the
+            # "synthetic test corpora" use-case clarification
+            # so a developer hitting this on Windows knows it's
+            # OK to skip rather than panic.
+            assert "pip install pesq" in str(exc)
+            assert "Windows" in str(exc)
+        else:
+            pytest.fail("expected QualityEstimatorLoadError")
+
+
+class TestComputePesqHappyPath:
+    """With a stub pesq module wired in, compute_pesq returns the score."""
+
+    def test_returns_float(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(_qm, "_load_pesq_module", lambda: _StubPesq())
+        score = compute_pesq(
+            np.zeros(16_000, dtype=np.float32),
+            np.zeros(16_000, dtype=np.float32),
+            sample_rate=16_000,
+            mode="wb",
+        )
+        assert isinstance(score, float)
+        assert score == 3.5
+
+    def test_nb_mode_wires_correct_rate(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        captured: dict[str, object] = {}
+
+        class _CapturingPesq:
+            @staticmethod
+            def pesq(
+                rate: int,
+                reference: np.ndarray,
+                degraded: np.ndarray,
+                mode: str,
+            ) -> float:
+                captured["rate"] = rate
+                captured["mode"] = mode
+                _ = reference
+                _ = degraded
+                return 4.0
+
+        monkeypatch.setattr(_qm, "_load_pesq_module", lambda: _CapturingPesq())
+        compute_pesq(
+            np.zeros(8_000, dtype=np.float32),
+            np.zeros(8_000, dtype=np.float32),
+            sample_rate=8_000,
+            mode="nb",
+        )
+        assert captured["rate"] == 8_000
+        assert captured["mode"] == "nb"

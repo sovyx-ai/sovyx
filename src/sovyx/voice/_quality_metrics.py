@@ -248,6 +248,125 @@ class QualityEstimatorLoadError(RuntimeError):
     """
 
 
+# ── Reference-based PESQ (Phase 4 / T4.22) ───────────────────────────────
+
+
+_PESQ_MODE_NB = "nb"
+"""Narrowband PESQ mode — 8 kHz audio, MOS-LQO 1-4.5."""
+
+_PESQ_MODE_WB = "wb"
+"""Wideband PESQ mode — 16 kHz audio, MOS-LQO 1.04-4.64."""
+
+
+def _load_pesq_module() -> object:
+    """Lazy-import the optional ``pesq`` package.
+
+    Separated so tests can monkeypatch the import without
+    touching ``sys.modules``. ``ImportError`` is the contract;
+    callers translate it to :class:`QualityEstimatorLoadError`.
+
+    The ``pesq`` package fails MSVC build on Windows (verified
+    2026-04-29 — see :mod:`sovyx.voice._quality_metrics`
+    docstring rationale). Linux CI installs cleanly. Operators
+    who want PESQ on Windows would need to source a pre-built
+    wheel manually; PESQ is reference-based and only useful for
+    synthetic test corpora, NOT production observation, so
+    Sovyx doesn't ship it as an extras requirement.
+    """
+    import pesq  # type: ignore[import-not-found]  # noqa: PLC0415 — lazy by design
+
+    return pesq
+
+
+def compute_pesq(
+    reference: np.ndarray,
+    degraded: np.ndarray,
+    *,
+    sample_rate: int,
+    mode: Literal["nb", "wb"] = "wb",
+) -> float:
+    """Reference-based PESQ MOS-LQO score (Phase 4 / T4.22).
+
+    PESQ (ITU-T P.862) compares a degraded signal against a
+    clean reference and returns a single MOS-LQO value
+    estimating the perceptual quality. Range:
+
+    * NB (narrowband, 8 kHz): MOS-LQO 1.00 - 4.50
+    * WB (wideband, 16 kHz): MOS-LQO 1.04 - 4.64
+
+    PESQ is **reference-based** — it requires the original clean
+    audio to score the degraded version. This makes it
+    fundamentally a TEST-CORPUS tool, not a production
+    observation tool (production captures don't have a "clean
+    reference" to compare against). Use :class:`DnsmosQualityEstimator`
+    for production observability; use :func:`compute_pesq` in CI
+    fixtures comparing AEC / NS / resampler output against the
+    pristine input.
+
+    Args:
+        reference: Clean reference signal as ``float32`` in
+            ``[-1, 1]``. Sovyx test fixtures generate this from
+            golden audio files.
+        degraded: Degraded signal — same length as ``reference``,
+            same dtype + range.
+        sample_rate: 8 000 (NB) or 16 000 (WB). The pesq package
+            rejects other rates with a runtime error.
+        mode: ``"nb"`` for 8 kHz narrowband, ``"wb"`` for 16 kHz
+            wideband. Default ``"wb"`` matches the Sovyx
+            FrameNormalizer's 16 kHz output rate.
+
+    Returns:
+        MOS-LQO score in the documented range above. Higher =
+        better perceptual quality.
+
+    Raises:
+        QualityEstimatorLoadError: ``pesq`` package not installed.
+            On Windows the operator can rarely install pesq
+            (MSVC build failure); on Linux + macOS ``pip install pesq``
+            usually works. CI typically pre-installs it for the
+            fixture tests; developers who don't run those tests
+            can ignore this gracefully.
+        ValueError: shape / dtype mismatch, unsupported sample
+            rate, or unknown mode.
+    """
+    if reference.shape != degraded.shape:
+        msg = f"shape mismatch: reference={reference.shape} vs degraded={degraded.shape}"
+        raise ValueError(msg)
+    if reference.dtype != np.float32 or degraded.dtype != np.float32:
+        msg = (
+            f"reference + degraded must be float32, got "
+            f"reference={reference.dtype}, degraded={degraded.dtype}"
+        )
+        raise ValueError(msg)
+    if mode not in (_PESQ_MODE_NB, _PESQ_MODE_WB):
+        msg = f"mode must be 'nb' or 'wb', got {mode!r}"
+        raise ValueError(msg)
+    expected_rate = 8_000 if mode == _PESQ_MODE_NB else 16_000
+    if sample_rate != expected_rate:
+        msg = f"sample_rate must be {expected_rate} for mode={mode!r}, got {sample_rate}"
+        raise ValueError(msg)
+
+    try:
+        pesq_module = _load_pesq_module()
+    except ImportError as exc:
+        raise QualityEstimatorLoadError(
+            "PESQ requires the 'pesq' package — "
+            "'pip install pesq' on Linux/macOS. Windows MSVC build "
+            "fails as of 2026-04-29; Sovyx does not ship pesq as a "
+            "default dependency. PESQ is reference-based and only "
+            "useful for synthetic test corpora, not production.",
+        ) from exc
+
+    return float(
+        pesq_module.pesq(  # type: ignore[attr-defined]
+            sample_rate,
+            reference,
+            degraded,
+            mode,
+        ),
+    )
+
+
 # ── Factory ──────────────────────────────────────────────────────────────
 
 
@@ -284,4 +403,5 @@ __all__ = [
     "QualityEstimatorLoadError",
     "QualityScore",
     "build_quality_estimator",
+    "compute_pesq",
 ]
