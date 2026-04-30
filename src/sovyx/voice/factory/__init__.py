@@ -41,6 +41,7 @@ from sovyx.voice.factory._diagnostics import (
     _emit_capture_apo_detection,
     _emit_group_policy_detection,
     _emit_linux_capture_apo_detection,
+    _emit_linux_sandbox_detection,
     _maybe_log_alsa_ucm_status,
     _maybe_log_macos_diagnostics,
     _maybe_log_pipewire_status,
@@ -968,6 +969,10 @@ async def create_voice_pipeline(
     # restrictions (DisallowExclusiveDevice etc.) so operators
     # see them at boot rather than mid-incident.
     _emit_group_policy_detection()
+    # Phase 5 / T5.45 — Linux sandbox detection. No-op on
+    # non-Linux; on Linux logs whether Sovyx is running inside
+    # Flatpak / Snap / AppImage with mic-permission remediation.
+    _emit_linux_sandbox_detection()
 
     # ── 7. v1.3 §4.6 L6 boot preflight step 9 + §4.8 L7 marker file ──
     #

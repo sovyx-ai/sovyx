@@ -36,6 +36,7 @@ __all__ = [
     "_emit_capture_apo_detection",
     "_emit_group_policy_detection",
     "_emit_linux_capture_apo_detection",
+    "_emit_linux_sandbox_detection",
     "_maybe_log_alsa_ucm_status",
     "_maybe_log_macos_diagnostics",
     "_maybe_log_pipewire_status",
@@ -543,6 +544,28 @@ def _emit_capture_apo_detection(*, resolved_name: str | None) -> None:
             "voice.active_endpoint_name": active.endpoint_name if active else None,
         },
     )
+
+
+def _emit_linux_sandbox_detection() -> None:
+    """Log ``voice.sandbox.detected`` once per pipeline boot (T5.45).
+
+    Reads :func:`sovyx.voice.health._sandbox_detector.detect_linux_sandbox`
+    + emits the structured event. No-op on non-Linux. Best-effort
+    + non-fatal — detector errors are swallowed at DEBUG so
+    sandbox-detection bugs never block startup.
+    """
+    from sovyx.voice.health._sandbox_detector import (
+        detect_linux_sandbox,
+        log_sandbox_snapshot,
+    )
+
+    try:
+        snapshot = detect_linux_sandbox()
+    except Exception:  # noqa: BLE001 — detector MUST never break startup
+        logger.debug("voice.sandbox.detection_failed", exc_info=True)
+        return
+
+    log_sandbox_snapshot(snapshot)
 
 
 def _emit_group_policy_detection() -> None:

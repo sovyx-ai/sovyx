@@ -168,16 +168,42 @@ def _friendly_name(device: Any) -> str:  # noqa: ANN401 — pyudev.Device is ext
     return str(getattr(device, "device_path", "") or "")
 
 
+_pyudev_warning_emitted: bool = False
+"""Module-level latch so the T5.44 missing-pyudev WARN fires
+EXACTLY ONCE per process lifetime, not on every voice-pipeline
+construction. Restart loops would otherwise produce log spam +
+mask the actual incident the operator is trying to debug."""
+
+
 def build_linux_hotplug_listener() -> HotplugListener:
-    """Return a :class:`LinuxHotplugListener`, or no-op when ``pyudev`` is absent."""
+    """Return a :class:`LinuxHotplugListener`, or no-op when ``pyudev`` is absent.
+
+    Phase 5 / T5.44 — when ``pyudev`` is missing the function
+    returns a :class:`NoopHotplugListener` and emits
+    ``voice_hotplug_listener_unavailable`` at WARN with a
+    remediation hint. The WARN fires EXACTLY ONCE per process
+    lifetime (gated by :data:`_pyudev_warning_emitted`); subsequent
+    calls return the Noop silently so a restart loop doesn't
+    produce log spam.
+    """
+    global _pyudev_warning_emitted
     try:
         import pyudev  # type: ignore[import-not-found]
     except ImportError:
-        logger.warning(
-            "voice_hotplug_listener_unavailable",
-            platform="linux",
-            reason="pyudev_not_installed",
-        )
+        if not _pyudev_warning_emitted:
+            logger.warning(
+                "voice_hotplug_listener_unavailable",
+                platform="linux",
+                reason="pyudev_not_installed",
+                remediation=(
+                    "Hot-plug detection (mic added/removed at runtime) "
+                    "is disabled. Install pyudev — `pip install pyudev` "
+                    "OR your distribution's `python3-pyudev` package — "
+                    "to enable. Sovyx remains fully functional without "
+                    "it; only the live-replug recovery path is degraded."
+                ),
+            )
+            _pyudev_warning_emitted = True
         return NoopHotplugListener(reason="pyudev not installed")
     return LinuxHotplugListener(pyudev_module=pyudev)
 
