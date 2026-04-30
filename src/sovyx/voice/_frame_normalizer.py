@@ -1017,6 +1017,16 @@ class FrameNormalizer:
         # non-floor samples) so the percentile pair stays
         # consistent with the metric.
         record_snr_sample(snr_db=snr_db)
+        # T4.36 — feed the read-only rolling buffer the
+        # orchestrator queries at transcription completion
+        # to compute the SNR-aware confidence factor. The
+        # buffer is independent of the heartbeat drain so
+        # the transcription path always has recent context.
+        from sovyx.voice.health._recent_snr import (
+            record_sample as record_recent_snr,
+        )
+
+        record_recent_snr(snr_db=snr_db)
         # T4.38 — feed the long-horizon noise-floor trend
         # tracker. The estimator's ``noise_floor_estimate``
         # property exposes the linear minimum-power tracker

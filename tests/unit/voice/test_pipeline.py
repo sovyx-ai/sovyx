@@ -1907,6 +1907,127 @@ class TestPipelineEvents:
             result = await pipeline.feed_frame(_speech_frame())
         assert result["state"] == "WAKE_DETECTED"
 
+    @pytest.mark.asyncio
+    async def test_transcription_event_carries_snr_confidence_factor_high(
+        self,
+    ) -> None:
+        """Phase 4 / T4.36 — when the rolling SNR buffer holds
+        excellent-range samples (≥17 dB), the transcription event's
+        ``snr_confidence_factor`` clamps to 1.0 (no downgrade)."""
+        from sovyx.voice.health._recent_snr import (
+            record_sample,
+            reset_for_tests,
+        )
+
+        reset_for_tests()
+        # Pre-load the buffer with samples at 20 dB → factor → 1.0.
+        for _ in range(20):
+            record_sample(snr_db=20.0)
+
+        pipeline, refs = _make_pipeline(vad_speech=True, ww_detected=True, stt_text="hi")
+        await pipeline.start()
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
+            await pipeline.feed_frame(_speech_frame())
+        await pipeline.feed_frame(_speech_frame())
+        refs["vad"].process_frame.return_value = _vad_event(False)
+        for _ in range(3):
+            await pipeline.feed_frame(_silence_frame())
+
+        events = [call.args[0] for call in refs["bus"].emit.call_args_list]
+        transcription = next(e for e in events if isinstance(e, TranscriptionCompletedEvent))
+        assert transcription.snr_p50_db == 20.0  # noqa: PLR2004
+        assert transcription.snr_confidence_factor == 1.0
+
+        reset_for_tests()
+
+    @pytest.mark.asyncio
+    async def test_transcription_event_downgrades_factor_on_low_snr(
+        self,
+    ) -> None:
+        """Phase 4 / T4.36 — at 8 dB the factor drops to ~0.47
+        (linear ramp 8/17), so consumers can downgrade STT
+        confidence accordingly."""
+        from sovyx.voice.health._recent_snr import (
+            record_sample,
+            reset_for_tests,
+        )
+
+        reset_for_tests()
+        for _ in range(20):
+            record_sample(snr_db=8.0)
+
+        pipeline, refs = _make_pipeline(vad_speech=True, ww_detected=True, stt_text="hi")
+        await pipeline.start()
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
+            await pipeline.feed_frame(_speech_frame())
+        await pipeline.feed_frame(_speech_frame())
+        refs["vad"].process_frame.return_value = _vad_event(False)
+        for _ in range(3):
+            await pipeline.feed_frame(_silence_frame())
+
+        events = [call.args[0] for call in refs["bus"].emit.call_args_list]
+        transcription = next(e for e in events if isinstance(e, TranscriptionCompletedEvent))
+        assert transcription.snr_p50_db == 8.0  # noqa: PLR2004
+        assert transcription.snr_confidence_factor == pytest.approx(8.0 / 17.0)
+
+        reset_for_tests()
+
+    @pytest.mark.asyncio
+    async def test_transcription_event_clamps_factor_to_zero_below_floor(
+        self,
+    ) -> None:
+        """Phase 4 / T4.36 — at 0 dB or below the factor clamps to
+        0 so consumers can outright reject the transcript."""
+        from sovyx.voice.health._recent_snr import (
+            record_sample,
+            reset_for_tests,
+        )
+
+        reset_for_tests()
+        for _ in range(20):
+            record_sample(snr_db=-2.0)
+
+        pipeline, refs = _make_pipeline(vad_speech=True, ww_detected=True, stt_text="hi")
+        await pipeline.start()
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
+            await pipeline.feed_frame(_speech_frame())
+        await pipeline.feed_frame(_speech_frame())
+        refs["vad"].process_frame.return_value = _vad_event(False)
+        for _ in range(3):
+            await pipeline.feed_frame(_silence_frame())
+
+        events = [call.args[0] for call in refs["bus"].emit.call_args_list]
+        transcription = next(e for e in events if isinstance(e, TranscriptionCompletedEvent))
+        assert transcription.snr_p50_db == -2.0  # noqa: PLR2004
+        assert transcription.snr_confidence_factor == 0.0
+
+        reset_for_tests()
+
+    @pytest.mark.asyncio
+    async def test_transcription_event_omits_snr_when_buffer_empty(
+        self,
+    ) -> None:
+        """Phase 4 / T4.36 — empty rolling buffer (count=0) → factor
+        defaults to 1.0 (strict downgrade contract: never inflate
+        confidence above STT-engine value) and ``snr_p50_db`` is
+        ``None`` so consumers know there's no SNR signal."""
+        from sovyx.voice.health._recent_snr import reset_for_tests
+
+        reset_for_tests()  # ensure empty
+        pipeline, refs = _make_pipeline(vad_speech=True, ww_detected=True, stt_text="hi")
+        await pipeline.start()
+        with patch.object(_pipeline_mod, "_play_audio", new_callable=AsyncMock):
+            await pipeline.feed_frame(_speech_frame())
+        await pipeline.feed_frame(_speech_frame())
+        refs["vad"].process_frame.return_value = _vad_event(False)
+        for _ in range(3):
+            await pipeline.feed_frame(_silence_frame())
+
+        events = [call.args[0] for call in refs["bus"].emit.call_args_list]
+        transcription = next(e for e in events if isinstance(e, TranscriptionCompletedEvent))
+        assert transcription.snr_p50_db is None
+        assert transcription.snr_confidence_factor == 1.0
+
 
 # ===========================================================================
 # VoicePipeline — full cycle

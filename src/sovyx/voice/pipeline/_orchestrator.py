@@ -1435,6 +1435,32 @@ class VoicePipeline:
             latency_ms=round(latency_ms, 1),
             **{"voice.utterance_id": utterance_id},
         )
+        # Phase 4 / T4.36 — query the rolling SNR window so
+        # downstream consumers can downgrade STT confidence on
+        # noisy capture conditions. The factor is a strict
+        # downgrade ([0, 1] multiplier); empty buffer ⇒ 1.0
+        # (no SNR data, leave confidence unmodified).
+        from sovyx.voice.health._recent_snr import window_summary
+
+        snr_summary = window_summary()
+        if snr_summary.count > 0:
+            snr_p50_db: float | None = snr_summary.p50_db
+            snr_factor = max(0.0, min(1.0, snr_summary.p50_db / 17.0))
+        else:
+            snr_p50_db = None
+            snr_factor = 1.0
+        if snr_factor < 1.0:
+            logger.info(
+                "voice.stt.confidence_gated",
+                mind_id=self._config.mind_id,
+                **{
+                    "voice.utterance_id": utterance_id,
+                    "voice.confidence_raw": round(result.confidence, 4),
+                    "voice.snr_p50_db": (round(snr_p50_db, 2) if snr_p50_db is not None else None),
+                    "voice.snr_confidence_factor": round(snr_factor, 4),
+                    "voice.confidence_effective": round(result.confidence * snr_factor, 4),
+                },
+            )
         await self._emit(
             TranscriptionCompletedEvent(
                 text=result.text,
@@ -1442,6 +1468,8 @@ class VoicePipeline:
                 language=result.language,
                 latency_ms=latency_ms,
                 utterance_id=utterance_id,
+                snr_p50_db=snr_p50_db,
+                snr_confidence_factor=snr_factor,
             )
         )
         # Step 13 frame emission — STT decode boundary. The frame is

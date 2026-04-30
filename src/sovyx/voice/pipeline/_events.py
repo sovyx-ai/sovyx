@@ -52,6 +52,29 @@ class TranscriptionCompletedEvent:
     language: str | None = None
     latency_ms: float = 0.0
     utterance_id: str = ""
+    snr_p50_db: float | None = None
+    """Phase 4 / T4.36 — median SNR (dB) over the recent rolling
+    window at transcription time. ``None`` when the rolling
+    buffer was empty (typical right after boot or during a long
+    silence run); downstream consumers should treat this as
+    "no SNR signal, fall back to STT confidence unmodified"."""
+
+    snr_confidence_factor: float = 1.0
+    """Phase 4 / T4.36 — multiplier in ``[0, 1]`` derived from
+    :attr:`snr_p50_db`. Represents how trustworthy the
+    transcription is given the room-noise context. Cognitive
+    layer multiplies this against :attr:`confidence` to obtain
+    the effective confidence before deciding to act on the
+    utterance.
+
+    Mapping (linear ramp + clamp):
+    * SNR ≥ 17 dB ("excellent" range) → 1.0
+    * SNR ≤ 0 dB → 0.0
+    * In between → linear interpolation (snr_db / 17.0)
+
+    ``1.0`` when ``snr_p50_db is None`` (no SNR data) so the
+    factor is a strict downgrade — never inflates confidence
+    above the STT engine's reported value."""
 
 
 @dataclass(frozen=True, slots=True)
