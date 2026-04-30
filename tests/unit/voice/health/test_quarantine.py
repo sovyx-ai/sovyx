@@ -422,3 +422,344 @@ class TestPhysicalDeviceScope:
         )
         assert e1 == e2
         assert hash(e1) == hash(e2)
+
+
+# ── T6.17 — ping-pong detection ──────────────────────────────────────
+
+
+_QUARANTINE_LOGGER = "sovyx.voice.health._quarantine"
+
+
+def _events_of(
+    caplog: pytest.LogCaptureFixture,
+    event_name: str,
+) -> list[dict[str, object]]:
+    """Return all structlog dict-records matching ``event_name``."""
+    return [
+        r.msg
+        for r in caplog.records
+        if (
+            r.name == _QUARANTINE_LOGGER
+            and isinstance(r.msg, dict)
+            and r.msg.get("event") == event_name
+        )
+    ]
+
+
+class TestPingpongConstructor:
+    """Constructor validation for the new T6.17 + T6.18 thresholds."""
+
+    def test_rejects_non_positive_pingpong_threshold(self) -> None:
+        with pytest.raises(ValueError, match="pingpong_threshold must be positive"):
+            EndpointQuarantine(quarantine_s=60.0, pingpong_threshold=0)
+        with pytest.raises(ValueError, match="pingpong_threshold must be positive"):
+            EndpointQuarantine(quarantine_s=60.0, pingpong_threshold=-3)
+
+    def test_rejects_non_positive_pingpong_window_s(self) -> None:
+        with pytest.raises(ValueError, match="pingpong_window_s must be positive"):
+            EndpointQuarantine(quarantine_s=60.0, pingpong_window_s=0.0)
+        with pytest.raises(ValueError, match="pingpong_window_s must be positive"):
+            EndpointQuarantine(quarantine_s=60.0, pingpong_window_s=-30.0)
+
+    def test_rejects_negative_rapid_requarantine_window_s(self) -> None:
+        # Zero IS allowed (effectively disables T6.18 emission); negative is not.
+        EndpointQuarantine(quarantine_s=60.0, rapid_requarantine_window_s=0.0)
+        with pytest.raises(ValueError, match="rapid_requarantine_window_s must be non-negative"):
+            EndpointQuarantine(quarantine_s=60.0, rapid_requarantine_window_s=-1.0)
+
+
+class TestPingpongDetection:
+    """T6.17 — re-quarantine count within window triggers the event."""
+
+    def test_below_threshold_no_emission(
+        self,
+        clock: _FakeClock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_QUARANTINE_LOGGER)
+
+        store = EndpointQuarantine(
+            quarantine_s=60.0,
+            clock=clock,
+            pingpong_threshold=3,
+            pingpong_window_s=300.0,
+        )
+        # 2 adds — under the threshold of 3.
+        store.add(endpoint_guid="{A}")
+        store.add(endpoint_guid="{A}")
+        assert _events_of(caplog, "voice_quarantine_re_quarantine_event") == []
+
+    def test_threshold_reached_emits_event(
+        self,
+        clock: _FakeClock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_QUARANTINE_LOGGER)
+
+        store = EndpointQuarantine(
+            quarantine_s=60.0,
+            clock=clock,
+            pingpong_threshold=3,
+            pingpong_window_s=300.0,
+        )
+        store.add(endpoint_guid="{A}", host_api="WASAPI")
+        store.add(endpoint_guid="{A}", host_api="WASAPI")
+        store.add(endpoint_guid="{A}", host_api="WASAPI")
+        events = _events_of(caplog, "voice_quarantine_re_quarantine_event")
+        assert len(events) == 1
+        assert events[0]["count_in_window"] == 3
+        assert events[0]["threshold"] == 3
+        assert events[0]["window_s"] == 300.0
+        assert events[0]["endpoint"] == "{A}"
+
+    def test_window_expiry_resets_count(
+        self,
+        clock: _FakeClock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_QUARANTINE_LOGGER)
+
+        store = EndpointQuarantine(
+            quarantine_s=60.0,
+            clock=clock,
+            pingpong_threshold=3,
+            pingpong_window_s=300.0,
+        )
+        # Two adds, then advance past the window, then one more — must
+        # NOT trigger because the older adds fall outside the window.
+        store.add(endpoint_guid="{A}")
+        store.add(endpoint_guid="{A}")
+        clock.advance(301.0)  # Past the 300 s window.
+        store.add(endpoint_guid="{A}")
+        assert _events_of(caplog, "voice_quarantine_re_quarantine_event") == []
+
+    def test_separate_endpoints_have_independent_counts(
+        self,
+        clock: _FakeClock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_QUARANTINE_LOGGER)
+
+        store = EndpointQuarantine(
+            quarantine_s=60.0,
+            clock=clock,
+            pingpong_threshold=3,
+            pingpong_window_s=300.0,
+        )
+        store.add(endpoint_guid="{A}")
+        store.add(endpoint_guid="{B}")
+        store.add(endpoint_guid="{A}")
+        store.add(endpoint_guid="{B}")
+        # Each endpoint at 2 — under threshold for both.
+        assert _events_of(caplog, "voice_quarantine_re_quarantine_event") == []
+
+    def test_threshold_triggers_on_every_add_after_first_hit(
+        self,
+        clock: _FakeClock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Once threshold is met, subsequent adds within the window
+        # also trigger — the event surfaces sustained ping-pong, not
+        # just the threshold-crossing edge. Operators get repeated
+        # signals if the condition persists.
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_QUARANTINE_LOGGER)
+
+        store = EndpointQuarantine(
+            quarantine_s=60.0,
+            clock=clock,
+            pingpong_threshold=3,
+            pingpong_window_s=300.0,
+        )
+        for _ in range(5):
+            store.add(endpoint_guid="{A}")
+        events = _events_of(caplog, "voice_quarantine_re_quarantine_event")
+        # Threshold met at add #3, then again at #4 and #5.
+        assert len(events) == 3
+
+
+# ── T6.18 — TTL-expiry rapid re-quarantine ──────────────────────────
+
+
+class TestRapidRequarantine:
+    """T6.18 — endpoint re-added shortly after TTL-expiry purge."""
+
+    def test_re_add_after_natural_expiry_within_window_emits(
+        self,
+        clock: _FakeClock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_QUARANTINE_LOGGER)
+
+        store = EndpointQuarantine(
+            quarantine_s=60.0,
+            clock=clock,
+            rapid_requarantine_window_s=60.0,
+        )
+        store.add(endpoint_guid="{A}", host_api="WASAPI")
+        # Advance past TTL — purge_expired records the expiry.
+        clock.advance(70.0)
+        store.purge_expired()
+        # Re-add shortly after — within rapid window.
+        clock.advance(30.0)
+        store.add(endpoint_guid="{A}", host_api="WASAPI")
+
+        events = _events_of(caplog, "voice_endpoint_repeatedly_failing")
+        assert len(events) == 1
+        assert events[0]["endpoint"] == "{A}"
+        assert events[0]["seconds_since_expiry"] == pytest.approx(30.0)
+
+    def test_re_add_after_window_does_not_emit(
+        self,
+        clock: _FakeClock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_QUARANTINE_LOGGER)
+
+        store = EndpointQuarantine(
+            quarantine_s=60.0,
+            clock=clock,
+            rapid_requarantine_window_s=60.0,
+        )
+        store.add(endpoint_guid="{A}")
+        clock.advance(70.0)
+        store.purge_expired()
+        # Re-add LONG after rapid window.
+        clock.advance(300.0)
+        store.add(endpoint_guid="{A}")
+
+        assert _events_of(caplog, "voice_endpoint_repeatedly_failing") == []
+
+    def test_lazy_purge_via_is_quarantined_records_expiry(
+        self,
+        clock: _FakeClock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # is_quarantined() lazily purges expired entries on lookup.
+        # The lazy-purge path must also feed _recent_expiries so a
+        # subsequent add() within the rapid window fires T6.18.
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_QUARANTINE_LOGGER)
+
+        store = EndpointQuarantine(
+            quarantine_s=60.0,
+            clock=clock,
+            rapid_requarantine_window_s=60.0,
+        )
+        store.add(endpoint_guid="{A}")
+        clock.advance(65.0)
+        # Lazy purge path — no purge_expired() call.
+        assert store.is_quarantined("{A}") is False
+        clock.advance(10.0)
+        store.add(endpoint_guid="{A}")
+        events = _events_of(caplog, "voice_endpoint_repeatedly_failing")
+        assert len(events) == 1
+
+    def test_first_add_does_not_emit(
+        self,
+        clock: _FakeClock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Sanity — the very first add for an endpoint can't be a "re-add".
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_QUARANTINE_LOGGER)
+
+        store = EndpointQuarantine(
+            quarantine_s=60.0,
+            clock=clock,
+            rapid_requarantine_window_s=60.0,
+        )
+        store.add(endpoint_guid="{NEW}")
+        assert _events_of(caplog, "voice_endpoint_repeatedly_failing") == []
+
+    def test_explicit_clear_does_not_trigger_rapid_event(
+        self,
+        clock: _FakeClock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # An operator-driven clear() (e.g., hot-plug recovery) is NOT
+        # an expiry — re-adding after a clear should NOT fire T6.18.
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_QUARANTINE_LOGGER)
+
+        store = EndpointQuarantine(
+            quarantine_s=60.0,
+            clock=clock,
+            rapid_requarantine_window_s=60.0,
+        )
+        store.add(endpoint_guid="{A}")
+        store.clear("{A}", reason="hotplug")
+        clock.advance(10.0)
+        store.add(endpoint_guid="{A}")
+        assert _events_of(caplog, "voice_endpoint_repeatedly_failing") == []
+
+    def test_replacement_during_active_quarantine_does_not_trigger(
+        self,
+        clock: _FakeClock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Re-adding while still quarantined (TTL not expired) is a
+        # routine refresh — must NOT fire T6.18 (which is specifically
+        # the "recovered then immediately re-failed" pattern).
+        import logging
+
+        caplog.set_level(logging.WARNING, logger=_QUARANTINE_LOGGER)
+
+        store = EndpointQuarantine(
+            quarantine_s=60.0,
+            clock=clock,
+            rapid_requarantine_window_s=60.0,
+        )
+        store.add(endpoint_guid="{A}")
+        clock.advance(10.0)
+        store.add(endpoint_guid="{A}")  # Still in quarantine; refresh.
+        assert _events_of(caplog, "voice_endpoint_repeatedly_failing") == []
+
+
+# ── Tuning flag wiring ──────────────────────────────────────────────
+
+
+class TestTuningFlagsExposed:
+    def test_default_pingpong_threshold_is_3(self) -> None:
+        from sovyx.engine.config import VoiceTuningConfig
+
+        cfg = VoiceTuningConfig()
+        assert cfg.quarantine_pingpong_threshold == 3
+
+    def test_default_pingpong_window_s_is_300(self) -> None:
+        from sovyx.engine.config import VoiceTuningConfig
+
+        cfg = VoiceTuningConfig()
+        assert cfg.quarantine_pingpong_window_s == 300.0
+
+    def test_default_rapid_requarantine_window_is_60(self) -> None:
+        from sovyx.engine.config import VoiceTuningConfig
+
+        cfg = VoiceTuningConfig()
+        assert cfg.quarantine_rapid_requarantine_window_s == 60.0
+
+    def test_singleton_picks_up_tuning_defaults(self) -> None:
+        # The factory-constructed singleton must wire all three knobs.
+        store = get_default_quarantine(quarantine_s=60.0)
+        # Internal access for the wire-check; production code never
+        # reads these directly. Regression guard against forgetting
+        # to plumb the kwargs through the factory.
+        assert store._pingpong_threshold == 3
+        assert store._pingpong_window_s == 300.0
+        assert store._rapid_requarantine_window_s == 60.0

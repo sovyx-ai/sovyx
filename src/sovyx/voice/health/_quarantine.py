@@ -128,12 +128,27 @@ class EndpointQuarantine:
         quarantine_s: float,
         maxsize: int = _DEFAULT_MAXSIZE,
         clock: Callable[[], float] | None = None,
+        pingpong_threshold: int = 3,
+        pingpong_window_s: float = 300.0,
+        rapid_requarantine_window_s: float = 60.0,
     ) -> None:
         if quarantine_s <= 0:
             msg = f"quarantine_s must be positive, got {quarantine_s}"
             raise ValueError(msg)
         if maxsize <= 0:
             msg = f"maxsize must be positive, got {maxsize}"
+            raise ValueError(msg)
+        if pingpong_threshold <= 0:
+            msg = f"pingpong_threshold must be positive, got {pingpong_threshold}"
+            raise ValueError(msg)
+        if pingpong_window_s <= 0:
+            msg = f"pingpong_window_s must be positive, got {pingpong_window_s}"
+            raise ValueError(msg)
+        if rapid_requarantine_window_s < 0:
+            msg = (
+                "rapid_requarantine_window_s must be non-negative, "
+                f"got {rapid_requarantine_window_s}"
+            )
             raise ValueError(msg)
         self._quarantine_s = quarantine_s
         self._maxsize = maxsize
@@ -142,6 +157,19 @@ class EndpointQuarantine:
         # single ``popitem(last=False)`` away. Lookups don't reorder —
         # expiry, not access recency, drives eviction.
         self._entries: OrderedDict[str, QuarantineEntry] = OrderedDict()
+        # T6.17 — per-endpoint rolling timestamp history of ``add()``
+        # calls. Trimmed to the active window on each add; bounded
+        # implicitly by the window size + caller add rate.
+        self._add_history: dict[str, list[float]] = {}
+        # T6.18 — record of recent TTL-expiry events keyed by
+        # endpoint_guid. Populated by ``purge_expired`` and
+        # ``is_quarantined`` on lazy purge; consumed by ``add`` to
+        # emit ``voice_endpoint_repeatedly_failing`` when an entry
+        # is re-added within the rapid-requarantine window.
+        self._recent_expiries: dict[str, float] = {}
+        self._pingpong_threshold = pingpong_threshold
+        self._pingpong_window_s = pingpong_window_s
+        self._rapid_requarantine_window_s = rapid_requarantine_window_s
 
     # ── Mutations ───────────────────────────────────────────────────────
 
@@ -176,6 +204,36 @@ class EndpointQuarantine:
             msg = "endpoint_guid must be a non-empty string"
             raise ValueError(msg)
         now = self._clock()
+        # T6.18 — rapid re-quarantine detection. If this endpoint's TTL
+        # expired within the last ``rapid_requarantine_window_s`` and
+        # we're now adding it back, the underlying condition recurs
+        # faster than the quarantine TTL allows for recovery. Surface
+        # before the standard ``voice_endpoint_quarantined`` so monitoring
+        # tooling has the more-specific event upstream of the routine
+        # one. Emission is FIRE-AND-FORGET — never gate the add on it.
+        recent_expiry = self._recent_expiries.pop(endpoint_guid, None)
+        if (
+            recent_expiry is not None
+            and (now - recent_expiry) <= self._rapid_requarantine_window_s
+        ):
+            logger.warning(
+                "voice_endpoint_repeatedly_failing",
+                endpoint=endpoint_guid,
+                friendly_name=device_friendly_name,
+                interface_name=device_interface_name,
+                host_api=host_api,
+                reason=reason,
+                physical_device_id=physical_device_id,
+                seconds_since_expiry=now - recent_expiry,
+                rapid_requarantine_window_s=self._rapid_requarantine_window_s,
+                remediation=(
+                    "TTL expired but underlying fault recurs immediately — "
+                    "quarantine TTL too short for actual recovery, OR the "
+                    "hardware/driver is in a stuck state physical replug "
+                    "would clear. Investigate driver/firmware update, "
+                    "extend quarantine_s if recovery genuinely needs longer."
+                ),
+            )
         entry = QuarantineEntry(
             endpoint_guid=endpoint_guid,
             device_friendly_name=device_friendly_name,
@@ -209,6 +267,41 @@ class EndpointQuarantine:
             physical_device_id=physical_device_id,
             quarantine_s=self._quarantine_s,
         )
+        # T6.17 — ping-pong detection. Maintain per-endpoint rolling
+        # timestamp history of recent ``add()`` calls; trim to entries
+        # within ``pingpong_window_s``; emit
+        # ``voice_quarantine_re_quarantine_event`` when the count meets
+        # ``pingpong_threshold``. Pure observability — never gates the
+        # add. The history dict's lifetime is bounded by ``maxsize``
+        # (cleaned alongside ``_entries`` capacity eviction below) +
+        # natural window-trim turnover.
+        history = self._add_history.setdefault(endpoint_guid, [])
+        history.append(now)
+        cutoff = now - self._pingpong_window_s
+        # In-place trim — cheap because monotonic timestamps are appended
+        # in order, so we can pop from the front while head < cutoff.
+        while history and history[0] < cutoff:
+            history.pop(0)
+        if len(history) >= self._pingpong_threshold:
+            logger.warning(
+                "voice_quarantine_re_quarantine_event",
+                endpoint=endpoint_guid,
+                friendly_name=device_friendly_name,
+                interface_name=device_interface_name,
+                host_api=host_api,
+                reason=reason,
+                physical_device_id=physical_device_id,
+                count_in_window=len(history),
+                threshold=self._pingpong_threshold,
+                window_s=self._pingpong_window_s,
+                remediation=(
+                    "Endpoint re-quarantined repeatedly — likely "
+                    "indicates an unrecoverable driver/hardware fault. "
+                    "Operator action: investigate driver health "
+                    "(`pnputil`, `lsusb`), check Event Viewer / dmesg "
+                    "for kernel-side errors, consider hardware replacement."
+                ),
+            )
         return entry
 
     def clear(self, endpoint_guid: str, *, reason: str = "") -> bool:
@@ -242,6 +335,9 @@ class EndpointQuarantine:
         for guid, entry in list(self._entries.items()):
             if entry.expires_at_monotonic <= now:
                 self._entries.pop(guid, None)
+                # T6.18 — record the expiry so a re-add inside the
+                # rapid-requarantine window can fire the warning.
+                self._recent_expiries[guid] = now
                 evicted.append(entry)
                 logger.info(
                     "voice_endpoint_quarantine_expired",
@@ -262,8 +358,12 @@ class EndpointQuarantine:
         entry = self._entries.get(endpoint_guid)
         if entry is None:
             return False
-        if entry.expires_at_monotonic <= self._clock():
+        now = self._clock()
+        if entry.expires_at_monotonic <= now:
             self._entries.pop(endpoint_guid, None)
+            # T6.18 — record the expiry so a re-add inside the
+            # rapid-requarantine window can fire the warning.
+            self._recent_expiries[endpoint_guid] = now
             logger.info(
                 "voice_endpoint_quarantine_expired",
                 endpoint=endpoint_guid,
@@ -308,6 +408,8 @@ class EndpointQuarantine:
         for guid in to_purge:
             evicted = self._entries.pop(guid, None)
             if evicted is not None:
+                # T6.18 — track the expiry for rapid-requarantine detection.
+                self._recent_expiries[guid] = now
                 logger.info(
                     "voice_endpoint_quarantine_expired",
                     endpoint=guid,
@@ -323,8 +425,11 @@ class EndpointQuarantine:
         entry = self._entries.get(endpoint_guid)
         if entry is None:
             return None
-        if entry.expires_at_monotonic <= self._clock():
+        now = self._clock()
+        if entry.expires_at_monotonic <= now:
             self._entries.pop(endpoint_guid, None)
+            # T6.18 — track the expiry for rapid-requarantine detection.
+            self._recent_expiries[endpoint_guid] = now
             return None
         return entry
 
@@ -342,6 +447,8 @@ class EndpointQuarantine:
         # drift from the snapshot.
         for guid in [g for g, e in list(self._entries.items()) if e.expires_at_monotonic <= now]:
             self._entries.pop(guid, None)
+            # T6.18 — track the expiry for rapid-requarantine detection.
+            self._recent_expiries[guid] = now
         return live
 
     def __len__(self) -> int:
@@ -398,10 +505,30 @@ def get_default_quarantine(
     if quarantine_s is None:
         from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
 
-        quarantine_s = _VoiceTuning().kernel_invalidated_quarantine_s
+        _tuning = _VoiceTuning()
+        quarantine_s = _tuning.kernel_invalidated_quarantine_s
+        # T6.17 + T6.18 — pull detection thresholds from the same
+        # tuning config instance so a single env override flips
+        # all three knobs consistently.
+        pingpong_threshold = _tuning.quarantine_pingpong_threshold
+        pingpong_window_s = _tuning.quarantine_pingpong_window_s
+        rapid_window_s = _tuning.quarantine_rapid_requarantine_window_s
+    else:
+        # Caller supplied an explicit quarantine_s (typical in tests).
+        # Read detection thresholds from a fresh tuning instance so the
+        # singleton still gets the configured defaults.
+        from sovyx.engine.config import VoiceTuningConfig as _VoiceTuning
+
+        _tuning = _VoiceTuning()
+        pingpong_threshold = _tuning.quarantine_pingpong_threshold
+        pingpong_window_s = _tuning.quarantine_pingpong_window_s
+        rapid_window_s = _tuning.quarantine_rapid_requarantine_window_s
     _SINGLETON = EndpointQuarantine(
         quarantine_s=quarantine_s,
         maxsize=maxsize if maxsize is not None else _DEFAULT_MAXSIZE,
+        pingpong_threshold=pingpong_threshold,
+        pingpong_window_s=pingpong_window_s,
+        rapid_requarantine_window_s=rapid_window_s,
     )
     return _SINGLETON
 

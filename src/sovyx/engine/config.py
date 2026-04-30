@@ -900,6 +900,39 @@ class VoiceTuningConfig(BaseSettings):
     apo_quarantine_s: float = 3_600.0
     apo_quarantine_recheck_interval_s: float = 300.0
 
+    # T6.17 — quarantine ping-pong detection. When the same endpoint is
+    # re-added to quarantine ``threshold`` times within ``window_s``,
+    # the layer emits ``voice_quarantine_re_quarantine_event`` so
+    # operators can identify endpoints whose underlying condition is
+    # fundamentally unrecoverable (driver bug, hardware fault). Pure
+    # observability — does not gate further quarantine adds.
+    quarantine_pingpong_threshold: int = 3
+    """T6.17 — re-quarantine count within
+    :attr:`quarantine_pingpong_window_s` that triggers the
+    ``voice_quarantine_re_quarantine_event`` emission. Set to a
+    large value (e.g. 10_000) to effectively disable the signal
+    without removing the wire-up; set to 1 to fire on every add
+    (debug only — high log volume)."""
+
+    quarantine_pingpong_window_s: float = 300.0
+    """T6.17 — rolling window for ping-pong detection. 5 min default
+    matches typical user iteration ("plug, fail, replug, fail,
+    replug, fail") without triggering on overnight quarantine
+    cycles. Tune up for slow-burn detection, down for tighter
+    bursts."""
+
+    # T6.18 — TTL-expiry rapid re-quarantine warning. When an entry
+    # whose TTL just expired (or expired within the last
+    # ``rapid_requarantine_window_s``) is re-added, the layer emits
+    # ``voice_endpoint_repeatedly_failing`` — the signal that the
+    # quarantine TTL is set too short for actual recovery OR the
+    # underlying condition recurs deterministically.
+    quarantine_rapid_requarantine_window_s: float = 60.0
+    """T6.18 — window after a TTL-expiry-triggered purge during
+    which a re-add fires the rapid-requarantine warning. 60 s
+    default matches the master mission spec ("within 1 minute of
+    expiry"). Pure observability."""
+
     # CaptureIntegrityCoordinator — iterates registered platform
     # strategies in ``cost_rank`` order. Hard cap per session guards
     # against pathological oscillation (strategy A applies, reverts,
