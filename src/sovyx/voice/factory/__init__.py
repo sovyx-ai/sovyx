@@ -822,6 +822,17 @@ async def create_voice_pipeline(
         auto_bypass_enabled=tuning.voice_clarity_autofix,
         auto_bypass_threshold=tuning.deaf_warnings_before_exclusive_retry,
         self_feedback_gate=self_feedback_gate,
+        # Mission `MISSION-voice-runtime-listener-wireup-2026-04-30.md`
+        # Phase 1b — runtime listener flags. The orchestrator builds
+        # + registers the listeners in ``start()``; here the factory
+        # just plumbs the tuning values through. Defaults are False
+        # per ``feedback_staged_adoption``; the
+        # ``mm_notification_listener_enabled`` flag was previously
+        # dead (see config.py docstring) and becomes load-bearing
+        # with this commit.
+        mm_notification_listener_enabled=tuning.mm_notification_listener_enabled,
+        audio_driver_update_listener_enabled=tuning.audio_driver_update_listener_enabled,
+        audio_driver_update_recascade_enabled=tuning.audio_driver_update_recascade_enabled,
     )
 
     # Derive the endpoint GUID up-front so the coordinator + bypass

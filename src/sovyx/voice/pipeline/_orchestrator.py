@@ -13,10 +13,21 @@ from sovyx.observability.logging import get_logger
 from sovyx.observability.saga import SagaHandle, begin_saga, end_saga
 from sovyx.observability.tasks import spawn
 from sovyx.voice._chaos import ChaosInjector, ChaosSite
+from sovyx.voice._mm_notification_client import (
+    MMNotificationListener,
+)
+from sovyx.voice._mm_notification_client import (
+    create_listener as create_mm_notification_listener,
+)
 from sovyx.voice._observability_pii import mint_utterance_id
 from sovyx.voice._speaker_consistency import (
     SpeakerConsistencyMonitor,
     compute_spectral_centroid,
+)
+from sovyx.voice.health._driver_update_handler import DriverUpdateHandler
+from sovyx.voice.health._driver_update_listener_win import (
+    DriverUpdateListener,
+    build_driver_update_listener,
 )
 from sovyx.voice.health._metrics import (
     record_noise_floor_drift_alert,
@@ -260,6 +271,9 @@ class VoicePipeline:
         auto_bypass_enabled: bool = False,
         auto_bypass_threshold: int = _DEAF_WARNINGS_BEFORE_EXCLUSIVE_RETRY,
         self_feedback_gate: SelfFeedbackGate | None = None,
+        mm_notification_listener_enabled: bool = False,
+        audio_driver_update_listener_enabled: bool = False,
+        audio_driver_update_recascade_enabled: bool = False,
     ) -> None:
         validate_config(config)
         self._config = config
@@ -270,6 +284,19 @@ class VoicePipeline:
         self._event_bus = event_bus
         self._on_perception = on_perception
         self._on_deaf_signal = on_deaf_signal
+
+        # Mission `MISSION-voice-runtime-listener-wireup-2026-04-30.md`
+        # Phase 1b — runtime listener wire-up. Captured at construction
+        # time; ``start()`` reads them when building/registering
+        # listeners, ``stop()`` reads ``self._listeners`` to unregister.
+        # Per the mission's failure-isolation contract, each listener
+        # registers in its own try/except so one failing doesn't block
+        # the other; failed registrations are NOT appended to the list,
+        # so a partial-success start has a partial-listener teardown.
+        self._mm_notification_listener_enabled = mm_notification_listener_enabled
+        self._audio_driver_update_listener_enabled = audio_driver_update_listener_enabled
+        self._audio_driver_update_recascade_enabled = audio_driver_update_recascade_enabled
+        self._listeners: list[MMNotificationListener | DriverUpdateListener] = []
 
         # Phase 1 APO-bypass context. ``voice_clarity_active`` is the
         # boot-time hint from :mod:`sovyx.voice._apo_detector` — retained
@@ -853,6 +880,15 @@ class VoicePipeline:
         self._running = True
         self._state = VoicePipelineState.IDLE
         self._last_heartbeat_monotonic = time.monotonic()
+
+        # Mission Phase 1b — register runtime listeners (MM notification
+        # + driver-update). Each listener registers in its own
+        # try/except via ``_register_listeners`` so one failing doesn't
+        # block the other. Failed registrations are not added to
+        # ``self._listeners`` so the symmetric ``_unregister_listeners``
+        # in ``stop()`` only sees successful registrations.
+        self._register_listeners()
+
         logger.info(
             "VoicePipeline started",
             mind_id=self._config.mind_id,
@@ -951,6 +987,12 @@ class VoicePipeline:
             # capture normalizer attenuated for the next session.
             self._self_feedback_gate.on_tts_end()
 
+        # Mission Phase 1b — unregister runtime listeners. Each
+        # unregister is best-effort + logged on failure so a wedged
+        # WMI service or COM marshalling glitch doesn't block pipeline
+        # shutdown.
+        self._unregister_listeners()
+
         logger.info(
             "voice.pipeline.stop_complete",
             mind_id=self._config.mind_id,
@@ -959,6 +1001,152 @@ class VoicePipeline:
             filler_was_active=filler_was_active,
         )
         logger.info("VoicePipeline stopped", mind_id=self._config.mind_id)
+
+    # -- Runtime listener wire-up (mission Phase 1b) -------------------------
+    #
+    # The MM notification listener + driver-update listener are
+    # constructed + registered here from ``start()`` and torn down
+    # from ``stop()``. The contract:
+    #
+    # * Each listener registers in its OWN try/except. A failure to
+    #   register one does NOT block the other — pipeline starts
+    #   nominally with degraded device-change awareness rather than
+    #   crashing.
+    # * Successful registrations are appended to ``self._listeners``;
+    #   ``_unregister_listeners`` iterates that list, so partial
+    #   successes have partial teardowns (no attempt to unregister a
+    #   listener that never registered).
+    # * The listeners take an asyncio loop at construction. We capture
+    #   it via ``asyncio.get_running_loop()`` inside ``start()`` (which
+    #   is always called from an async context, so the loop is
+    #   guaranteed to be running). If somehow there's no running loop,
+    #   listener registration is skipped with a structured WARN —
+    #   pipeline still works without device-change awareness.
+    # * The MM listener's 3 callbacks (default-capture / device-state /
+    #   property-changed) currently emit structured events ONLY. The
+    #   downstream wire-up that turns these events into capture-task
+    #   restart triggers is OUT OF SCOPE for Phase 1b per mission
+    #   Part 4.2 — that's a follow-up commit.
+
+    def _register_listeners(self) -> None:
+        """Build + register the runtime device-monitoring listeners.
+
+        Called once from :meth:`start`. Each listener registers
+        independently — failure of one does NOT block the others.
+        Successful registrations are appended to ``self._listeners``
+        for symmetric teardown in :meth:`_unregister_listeners`.
+
+        On any failure to obtain the asyncio loop (the listeners need
+        it for ``call_soon_threadsafe`` marshalling), the entire
+        registration step is skipped with a structured WARN. Pipeline
+        keeps working with degraded device-change awareness.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError as exc:
+            logger.warning(
+                "voice.pipeline.listener_registration_skipped",
+                reason="no_running_event_loop",
+                error=str(exc),
+            )
+            return
+
+        # MM notification listener — Windows COM device-change events.
+        try:
+            mm_listener = create_mm_notification_listener(
+                loop=loop,
+                on_default_capture_changed=self._on_default_capture_changed,
+                on_device_state_changed=self._on_device_state_changed,
+                enabled=self._mm_notification_listener_enabled,
+            )
+            mm_listener.register()
+            self._listeners.append(mm_listener)
+        except BaseException as exc:  # noqa: BLE001 — listener registration must NEVER block pipeline start
+            logger.warning(
+                "voice.pipeline.mm_listener_register_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+
+        # Driver-update listener — Windows WMI subscription.
+        # Independent of MM listener result per failure-isolation
+        # contract.
+        try:
+            handler = DriverUpdateHandler(
+                recascade_enabled=self._audio_driver_update_recascade_enabled,
+            )
+            driver_update_listener = build_driver_update_listener(
+                loop=loop,
+                on_driver_changed=handler.handle_driver_update,
+                enabled=self._audio_driver_update_listener_enabled,
+            )
+            driver_update_listener.register()
+            self._listeners.append(driver_update_listener)
+        except BaseException as exc:  # noqa: BLE001 — see MM listener rationale above
+            logger.warning(
+                "voice.pipeline.driver_update_listener_register_failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+
+    def _unregister_listeners(self) -> None:
+        """Tear down all registered runtime listeners.
+
+        Called once from :meth:`stop`. Each unregister is wrapped in
+        try/except so a wedged WMI service / COM marshalling glitch
+        on one listener doesn't block the pipeline shutdown path.
+        Idempotent — calling on an already-unregistered listener is
+        a no-op.
+
+        After this returns, ``self._listeners`` is empty. A subsequent
+        ``start()`` call (after a stop) will re-register fresh
+        listeners via :meth:`_register_listeners`.
+        """
+        for listener in self._listeners:
+            try:
+                listener.unregister()
+            except BaseException as exc:  # noqa: BLE001 — shutdown must never propagate
+                logger.warning(
+                    "voice.pipeline.listener_unregister_failed",
+                    listener_type=type(listener).__name__,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+        self._listeners.clear()
+
+    async def _on_default_capture_changed(self, device_id: str) -> None:
+        """Async callback for ``IMMNotificationClient.OnDefaultDeviceChanged``
+        events filtered to ``flow=eCapture, role=eCommunications``.
+
+        Mission Phase 1b emits the structured event ONLY. The
+        capture-task ``request_device_change_restart`` wire-up that
+        turns this signal into an actual restart is OUT OF SCOPE per
+        mission Part 4.2 — separate future commit.
+        """
+        logger.info(
+            "voice.default_capture_changed",
+            device_id=device_id,
+            mind_id=self._config.mind_id,
+        )
+
+    async def _on_device_state_changed(self, device_id: str, new_state: int) -> None:
+        """Async callback for ``IMMNotificationClient.OnDeviceStateChanged``.
+
+        Same scope contract as :meth:`_on_default_capture_changed` —
+        emit the structured event for now; downstream wire-up
+        deferred.
+
+        Args:
+            device_id: The endpoint GUID whose state changed.
+            new_state: ``DEVICE_STATE_*`` bitfield value (0x1=ACTIVE,
+                0x2=DISABLED, 0x4=NOT_PRESENT, 0x8=UNPLUGGED).
+        """
+        logger.info(
+            "voice.device_state_changed",
+            device_id=device_id,
+            new_state=hex(new_state & 0xFFFFFFFF),
+            mind_id=self._config.mind_id,
+        )
 
     # -- Frame processing (main loop) ----------------------------------------
 
