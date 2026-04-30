@@ -7,6 +7,7 @@ without requiring actual model files or espeak-ng installed.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -997,10 +998,21 @@ class TestEdgeCases:
         self,
         text: str,
     ) -> None:
-        """Splitting+joining preserves all content."""
+        """Splitting+joining preserves every non-ASCII-whitespace char.
+
+        Whitespace classification must align with the splitter's
+        contract (``_GREEDY_SPLIT_RE`` matches ``[ \\t\\n\\r]+``):
+        only ASCII whitespace is consumed at sentence boundaries.
+        Unicode separators (``\\xa0``, ``\\u2003``, ``\\u200b``,
+        ``\\u3000``, etc.) are CONTENT and must survive the round-
+        trip — pre-fix the test stripped only ``" "`` from both
+        sides, which incorrectly accepted Unicode-whitespace loss
+        as "expected normalisation".
+        """
+        ascii_ws = re.compile(r"[ \t\n\r]+")
         parts = _split_sentences(text)
-        original = set(text.replace(" ", ""))
-        rejoined = set(" ".join(parts).replace(" ", ""))
+        original = set(ascii_ws.sub("", text))
+        rejoined = set(ascii_ws.sub("", " ".join(parts)))
         assert original <= rejoined
 
 

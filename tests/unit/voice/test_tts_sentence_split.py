@@ -127,6 +127,97 @@ class TestEdgeCases:
         assert set(text.replace(" ", "")) <= set(joined.replace(" ", ""))
 
 
+class TestUnicodeWhitespaceContract:
+    """Pin the post-fix contract: the splitter consumes ONLY ASCII
+    whitespace (``[ \\t\\n\\r]+``) at sentence boundaries. Unicode
+    separators are CONTENT and must round-trip unchanged.
+
+    Pre-fix bug (Hypothesis-found): ``_GREEDY_SPLIT_RE = r"(?<=[.!?])\\s+"``
+    treated NBSP / em-space / zero-width-space as boundaries and
+    silently consumed the character. Real-world impact: Portuguese
+    typographic conventions (``Sr.\\xa0Silva``, ``10\\xa0000``) lost
+    the NBSP at TTS time, fragmenting prosody. This test class pins
+    the canonical behaviour so a future regex regression is caught.
+    """
+
+    def test_nbsp_preserved_as_content(self) -> None:
+        """``\\xa0`` (NO-BREAK SPACE) is intentional author markup —
+        ``Sr.\\xa0Silva`` keeps the title bound to the surname. The
+        splitter must NOT split here; the NBSP stays in the chunk.
+        """
+        result = split_sentences("Sr.\xa0Silva said hello.")
+        assert result == ["Sr.\xa0Silva said hello."]
+
+    def test_lone_nbsp_after_terminator_preserved(self) -> None:
+        """Hypothesis falsifying example: ``".\\xa0"`` round-trips
+        with the NBSP intact rather than being consumed.
+        """
+        result = split_sentences(".\xa0")
+        assert result == [".\xa0"]
+
+    def test_em_space_preserved_as_content(self) -> None:
+        """``\\u2003`` (EM SPACE) is typographic, never a sentence
+        boundary. Must round-trip as content."""
+        result = split_sentences("Hello. More text")
+        assert result == ["Hello. More text"]
+
+    def test_en_space_preserved_as_content(self) -> None:
+        """``\\u2002`` (EN SPACE) — typographic separator."""
+        result = split_sentences("Hello. More text")
+        assert result == ["Hello. More text"]
+
+    def test_zero_width_space_preserved_as_content(self) -> None:
+        """``\\u200b`` (ZERO WIDTH SPACE) — invisible, never a
+        sentence boundary. CSS / Unicode use it for joining."""
+        result = split_sentences("Hello.​More text")
+        assert result == ["Hello.​More text"]
+
+    def test_ideographic_space_preserved_as_content(self) -> None:
+        """``\\u3000`` (IDEOGRAPHIC SPACE) — CJK convention, not a
+        boundary in our ASCII-Latin sentence model."""
+        result = split_sentences("Hello.　More text")
+        assert result == ["Hello.　More text"]
+
+    def test_newline_still_splits_normally(self) -> None:
+        """Regression guard: ``\\n`` is ASCII whitespace and MUST
+        still trigger a sentence boundary."""
+        assert split_sentences("Hello.\nWorld.") == ["Hello.", "World."]
+
+    def test_tab_still_splits_normally(self) -> None:
+        """``\\t`` is ASCII whitespace and MUST still trigger."""
+        assert split_sentences("Hello.\tWorld.") == ["Hello.", "World."]
+
+    def test_crlf_still_splits_normally(self) -> None:
+        """CRLF (``\\r\\n``) is ASCII whitespace and MUST still
+        trigger; the regex matches the whole CRLF run as one
+        boundary."""
+        assert split_sentences("Hello.\r\nWorld.") == ["Hello.", "World."]
+
+    def test_regular_space_still_splits(self) -> None:
+        """Sanity: the canonical between-sentence space still works."""
+        assert split_sentences("Hello. World.") == ["Hello.", "World."]
+
+    def test_mixed_ascii_and_nbsp_partial_split(self) -> None:
+        """Period + regular space + NBSP + word: split on the regular
+        space, leave the NBSP attached to the second sentence as
+        content.
+        """
+        result = split_sentences("Hello. \xa0World.")
+        assert result == ["Hello.", "\xa0World."]
+
+    def test_portuguese_nbsp_business_pattern(self) -> None:
+        """Real-world PT pattern: ``"Sr. Silva foi à reunião."`` with
+        NBSP preserves the title-name binding through TTS chunking.
+        Combined with the abbreviation merge (``Sr.`` is in the
+        abbreviation set), the entire sentence stays in one chunk.
+        """
+        text = "Sr.\xa0Silva foi à reunião com a Dra.\xa0Costa."
+        result = split_sentences(text)
+        # No mid-sentence split — the NBSP keeps title+name attached
+        # AND the abbreviation merge keeps the period attached.
+        assert result == [text]
+
+
 @pytest.mark.parametrize(
     ("text", "expected_count"),
     [

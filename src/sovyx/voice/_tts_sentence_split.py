@@ -55,7 +55,41 @@ import re
 __all__ = ["split_sentences"]
 
 
-_GREEDY_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_GREEDY_SPLIT_RE = re.compile(r"(?<=[.!?])[ \t\n\r]+")
+"""Sentence-boundary regex — ASCII whitespace class only.
+
+The boundary is "sentence terminator (``.``/``!``/``?``) followed by
+ASCII whitespace (space, tab, LF, CR)". The earlier T1.38 shape used
+``\\s+`` (Python's full Unicode whitespace class), which incorrectly
+treated several Unicode separators as sentence boundaries:
+
+* ``\\xa0`` (NO-BREAK SPACE) — authors use this *intentionally* to
+  keep tokens together (``Sr.\\xa0Silva``, ``10\\xa0000``,
+  ``Mr.\\xa0Brown``). Treating it as a sentence boundary loses the
+  character + fragments the breath group.
+* ``\\u2003`` (EM SPACE), ``\\u2002`` (EN SPACE), ``\\u2009``
+  (THIN SPACE) — typographic separators, not sentence boundaries.
+* ``\\u200b`` (ZERO WIDTH SPACE), ``\\u2060`` (WORD JOINER) — never
+  break-points; CSS / Unicode use them for invisible joining.
+* ``\\u3000`` (IDEOGRAPHIC SPACE) — CJK convention, not sentence
+  boundary.
+
+Pre-fix symptom (Hypothesis-found counter-example): input ``".\\xa0"``
+returned ``[".", ""]`` and the ``\\xa0`` was permanently lost. After
+the fix the input returns ``[".\\xa0"]`` (single chunk) and the
+character is preserved.
+
+Whitespace classes that DO trigger sentence boundaries:
+
+* `` `` (regular space) — the canonical between-sentence separator.
+* ``\\t`` (TAB) — code samples, tabular content.
+* ``\\n`` (LF) — Unix line break.
+* ``\\r`` (CR) — pre-Mac-OSX style; still appears in CRLF inputs.
+
+This matches the canonical NLP convention (NLTK Punkt, spaCy, CLD3
+all treat Unicode separators as content rather than boundaries) and
+keeps the post-fix behaviour deterministic across locale-rich input.
+"""
 
 
 _ABBREVIATIONS: frozenset[str] = frozenset(
