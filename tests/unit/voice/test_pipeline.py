@@ -2734,6 +2734,181 @@ class TestPipelineHeartbeat:
         assert "snr_sample_count" not in heartbeats[0]
 
     @pytest.mark.asyncio
+    async def test_snr_low_alert_fires_after_consecutive_threshold(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Phase 4 / T4.35 — sustained low SNR p50 over the
+        configured consecutive-heartbeats count emits a single
+        WARN ``voice_pipeline_snr_low_alert``."""
+        from sovyx.voice.health._snr_heartbeat import (
+            record_snr_sample,
+            reset_for_tests,
+        )
+        from sovyx.voice.pipeline import _orchestrator as orch_mod
+
+        reset_for_tests()
+        caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
+        pipeline, refs = _make_pipeline(wake_word_enabled=False, vad_speech=False)
+        await pipeline.start()
+        pipeline._last_heartbeat_monotonic = 0.0
+        refs["vad"].process_frame.return_value = VADEvent(
+            is_speech=False, probability=0.1, state=VADState.SILENCE
+        )
+
+        # Drive 3 consecutive heartbeats with p50 < threshold (9 dB).
+        # Each window: feed 3 samples whose p50 lands at 4 dB.
+        n_consecutive = orch_mod._SNR_LOW_ALERT_CONSECUTIVE_HEARTBEATS
+        for k in range(n_consecutive):
+            for v in (2.0, 4.0, 6.0):
+                record_snr_sample(snr_db=v)
+            with patch.object(
+                orch_mod.time,
+                "monotonic",
+                return_value=orch_mod._HEARTBEAT_INTERVAL_S * (k + 1) + 1.0,
+            ):
+                await pipeline.feed_frame(_silence_frame())
+
+        warns = _events_of(caplog, "voice_pipeline_snr_low_alert")
+        assert len(warns) == 1
+        assert warns[0]["snr_p50_db"] == 4.0  # noqa: PLR2004
+        assert warns[0]["consecutive_heartbeats"] == n_consecutive
+        assert warns[0]["threshold_db"] == orch_mod._SNR_LOW_ALERT_THRESHOLD_DB
+
+        reset_for_tests()
+
+    @pytest.mark.asyncio
+    async def test_snr_low_alert_does_not_fire_below_consecutive_threshold(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A single low-SNR heartbeat MUST NOT fire the alert
+        when the consecutive threshold is > 1 (de-flap contract)."""
+        from sovyx.voice.health._snr_heartbeat import (
+            record_snr_sample,
+            reset_for_tests,
+        )
+        from sovyx.voice.pipeline import _orchestrator as orch_mod
+
+        # Skip on configurations where de-flap=1 (alert is
+        # immediate and this test premise doesn't apply).
+        if orch_mod._SNR_LOW_ALERT_CONSECUTIVE_HEARTBEATS <= 1:
+            pytest.skip("de-flap=1 makes a single low heartbeat trip the alert")
+
+        reset_for_tests()
+        caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
+        pipeline, refs = _make_pipeline(wake_word_enabled=False, vad_speech=False)
+        await pipeline.start()
+        pipeline._last_heartbeat_monotonic = 0.0
+        refs["vad"].process_frame.return_value = VADEvent(
+            is_speech=False, probability=0.1, state=VADState.SILENCE
+        )
+
+        # One low-SNR heartbeat — counter goes to 1, alert NOT
+        # active.
+        for v in (2.0, 4.0, 6.0):
+            record_snr_sample(snr_db=v)
+        with patch.object(
+            orch_mod.time, "monotonic", return_value=orch_mod._HEARTBEAT_INTERVAL_S + 1.0
+        ):
+            await pipeline.feed_frame(_silence_frame())
+
+        warns = _events_of(caplog, "voice_pipeline_snr_low_alert")
+        assert warns == []
+        assert pipeline._snr_low_consecutive_heartbeats == 1
+        assert pipeline._snr_low_alert_active is False
+
+        reset_for_tests()
+
+    @pytest.mark.asyncio
+    async def test_snr_low_alert_clears_on_recovery(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """After a warn, a clean heartbeat fires
+        ``voice_pipeline_snr_low_alert_cleared`` exactly once."""
+        from sovyx.voice.health._snr_heartbeat import (
+            record_snr_sample,
+            reset_for_tests,
+        )
+        from sovyx.voice.pipeline import _orchestrator as orch_mod
+
+        reset_for_tests()
+        caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
+        pipeline, refs = _make_pipeline(wake_word_enabled=False, vad_speech=False)
+        await pipeline.start()
+        pipeline._last_heartbeat_monotonic = 0.0
+        refs["vad"].process_frame.return_value = VADEvent(
+            is_speech=False, probability=0.1, state=VADState.SILENCE
+        )
+
+        # Trip the alert.
+        n_consecutive = orch_mod._SNR_LOW_ALERT_CONSECUTIVE_HEARTBEATS
+        for k in range(n_consecutive):
+            for v in (2.0, 4.0, 6.0):
+                record_snr_sample(snr_db=v)
+            with patch.object(
+                orch_mod.time,
+                "monotonic",
+                return_value=orch_mod._HEARTBEAT_INTERVAL_S * (k + 1) + 1.0,
+            ):
+                await pipeline.feed_frame(_silence_frame())
+        assert pipeline._snr_low_alert_active is True
+        caplog.clear()
+
+        # Recovery heartbeat: high SNR.
+        for v in (25.0, 30.0, 35.0):
+            record_snr_sample(snr_db=v)
+        with patch.object(
+            orch_mod.time,
+            "monotonic",
+            return_value=orch_mod._HEARTBEAT_INTERVAL_S * (n_consecutive + 1) + 1.0,
+        ):
+            await pipeline.feed_frame(_silence_frame())
+
+        cleared = _events_of(caplog, "voice_pipeline_snr_low_alert_cleared")
+        assert len(cleared) == 1
+        assert cleared[0]["snr_p50_db"] == 30.0  # noqa: PLR2004
+        assert pipeline._snr_low_alert_active is False
+        assert pipeline._snr_low_consecutive_heartbeats == 0
+
+        reset_for_tests()
+
+    @pytest.mark.asyncio
+    async def test_snr_low_alert_skipped_when_no_samples(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Sustained-silence heartbeats (count==0) MUST NOT
+        increment the consecutive counter — silence has undefined
+        SNR."""
+        from sovyx.voice.health._snr_heartbeat import reset_for_tests
+        from sovyx.voice.pipeline import _orchestrator as orch_mod
+
+        reset_for_tests()
+        caplog.set_level(logging.INFO, logger=_ORCH_LOGGER)
+        pipeline, refs = _make_pipeline(wake_word_enabled=False, vad_speech=False)
+        await pipeline.start()
+        pipeline._last_heartbeat_monotonic = 0.0
+        refs["vad"].process_frame.return_value = VADEvent(
+            is_speech=False, probability=0.1, state=VADState.SILENCE
+        )
+
+        # Drive 5 consecutive heartbeats with NO SNR samples — the
+        # consecutive counter must stay at 0 (silence is not
+        # low-SNR; SNR is undefined).
+        for k in range(5):
+            with patch.object(
+                orch_mod.time,
+                "monotonic",
+                return_value=orch_mod._HEARTBEAT_INTERVAL_S * (k + 1) + 1.0,
+            ):
+                await pipeline.feed_frame(_silence_frame())
+
+        warns = _events_of(caplog, "voice_pipeline_snr_low_alert")
+        assert warns == []
+        assert pipeline._snr_low_consecutive_heartbeats == 0
+        assert pipeline._snr_low_alert_active is False
+
+        reset_for_tests()
+
+    @pytest.mark.asyncio
     async def test_heartbeat_drain_isolates_consecutive_windows(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:

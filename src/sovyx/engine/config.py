@@ -430,6 +430,48 @@ class VoiceTuningConfig(BaseSettings):
     started troubleshooting by then; longer is operationally
     pointless)."""
 
+    voice_snr_low_alert_enabled: bool = True
+    """Phase 4 / T4.35 — emit a structured WARN
+    ``voice_pipeline_snr_low_alert`` from
+    :class:`VoicePipeline._track_vad_for_heartbeat` when the
+    drained SNR p50 stays below
+    :attr:`voice_snr_low_alert_threshold_db` for
+    :attr:`voice_snr_low_alert_consecutive_heartbeats` consecutive
+    heartbeats.
+
+    Default ``True``: this is OBSERVABILITY (no behaviour change),
+    so the foundation ships enabled. Operators on noisy fleets
+    can either flip the threshold (looser bound) or disable
+    entirely until calibration completes."""
+
+    voice_snr_low_alert_threshold_db: float = Field(default=9.0, ge=-60.0, le=60.0)
+    """Per-heartbeat SNR p50 floor below which the low-SNR alert
+    accumulates a consecutive-heartbeat counter.
+
+    9 dB is the canonical Moonshine STT degradation threshold per
+    master mission §Phase 4 / T4.35 — below it the substitution
+    rate climbs sharply. Operators using a different STT engine
+    can raise the floor (e.g. 12 dB for Whisper-tiny) or lower it
+    (e.g. 6 dB for fine-tuned models tolerant of room noise).
+
+    Bounds ``[-60, 60]`` dB cover every realistic SNR; values
+    outside reject at config validation rather than silently
+    disable the alert."""
+
+    voice_snr_low_alert_consecutive_heartbeats: int = Field(default=3, ge=1, le=60)
+    """Number of consecutive heartbeats with SNR p50 below the
+    threshold before the alert WARN fires.
+
+    Default 3: at the 30 s heartbeat interval that's ~90 s of
+    sustained low SNR, well past any transient (door slam, fan
+    spike) that would otherwise produce false-positive WARN
+    storms. Mirrors the de-flap pattern used by
+    :attr:`deaf_warnings_before_exclusive_retry`.
+
+    Floor 1 = alert on the first low heartbeat (no de-flap, for
+    very latency-sensitive deployments); ceiling 60 caps the wait
+    at half an hour so a chronically-noisy mic still surfaces."""
+
     # Mission Phase 1 / T1.28 — pipeline-tuning constants migrated from
     # ``voice/pipeline/_orchestrator.py`` module-level. These knobs were
     # originally hardcoded in the orchestrator; promotion here makes

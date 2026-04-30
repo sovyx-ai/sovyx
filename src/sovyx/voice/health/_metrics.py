@@ -115,6 +115,7 @@ METRIC_AEC_WINDOWS = "sovyx.voice.aec.windows"
 METRIC_AEC_DOUBLE_TALK = "sovyx.voice.aec.double_talk"
 METRIC_AEC_BYPASS_COMBO = "sovyx.voice.aec.bypass_combo"
 METRIC_VAD_QUIET_SIGNAL_GATED = "sovyx.voice.vad.quiet_signal_gated"
+METRIC_PIPELINE_SNR_LOW_ALERTS = "sovyx.voice.pipeline.snr_low_alerts"
 
 # ── Phase 4 — NS observability (T4.16) ──────────────────────────────────
 METRIC_NS_WINDOWS = "sovyx.voice.ns.windows"
@@ -900,6 +901,32 @@ def record_aec_double_talk(*, state: str) -> None:
     counter.add(1, attributes={"state": state})
 
 
+def record_snr_low_alert(*, state: str) -> None:
+    """Record one SNR low-alert state transition (Phase 4 / T4.35).
+
+    Fires from :meth:`VoicePipeline._track_vad_for_heartbeat` once
+    per state transition (open ⟶ alerted, alerted ⟶ resolved).
+    Cardinality is bounded to two events per incident so the
+    counter pair tracks open incidents over time as
+    ``warned − cleared``.
+
+    Args:
+        state: One of:
+            * ``"warned"`` — consecutive low-SNR heartbeats hit the
+              de-flap threshold. The orchestrator fired
+              ``voice_pipeline_snr_low_alert`` and latched the
+              alert as active.
+            * ``"cleared"`` — the next clean heartbeat resolved
+              the incident. The orchestrator fired
+              ``voice_pipeline_snr_low_alert_cleared`` and reset
+              the latch.
+    """
+    counter = getattr(get_metrics(), "voice_pipeline_snr_low_alerts", None)
+    if counter is None:
+        return
+    counter.add(1, attributes={"state": state})
+
+
 def record_vad_quiet_signal_gated(*, state: str) -> None:
     """Record one VAD quiet-signal gate verdict (Phase 4 / T4.39).
 
@@ -990,6 +1017,7 @@ __all__ = [
     "METRIC_KERNEL_INVALIDATED_EVENTS",
     "METRIC_NS_SUPPRESSION_DB",
     "METRIC_NS_WINDOWS",
+    "METRIC_PIPELINE_SNR_LOW_ALERTS",
     "METRIC_OPENER_HOST_API_ALIGNMENT",
     "METRIC_PREFLIGHT_FAILURES",
     "METRIC_PROBE_COLD_SILENCE_REJECTED",
@@ -1031,6 +1059,7 @@ __all__ = [
     "record_probe_result",
     "record_recovery_attempt",
     "record_self_feedback_block",
+    "record_snr_low_alert",
     "record_start_time_error",
     "record_tier1_raw_attempted",
     "record_tier1_raw_outcome",

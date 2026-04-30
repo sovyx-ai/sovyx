@@ -18,7 +18,10 @@ from sovyx.voice._speaker_consistency import (
     SpeakerConsistencyMonitor,
     compute_spectral_centroid,
 )
-from sovyx.voice.health._metrics import record_time_to_first_utterance
+from sovyx.voice.health._metrics import (
+    record_snr_low_alert,
+    record_time_to_first_utterance,
+)
 from sovyx.voice.health.contract import BypassVerdict
 from sovyx.voice.jarvis import JarvisConfig, JarvisIllusion, split_at_boundaries
 from sovyx.voice.pipeline._barge_in import BargeInDetector
@@ -77,6 +80,14 @@ _HEARTBEAT_INTERVAL_S = _VoiceTuning().pipeline_heartbeat_interval_seconds
 _DEAF_MIN_FRAMES = _VoiceTuning().pipeline_deaf_min_frames
 _DEAF_VAD_MAX_THRESHOLD = _VoiceTuning().pipeline_deaf_vad_max_threshold
 _DEAF_WARNINGS_BEFORE_EXCLUSIVE_RETRY = _VoiceTuning().deaf_warnings_before_exclusive_retry
+
+_SNR_LOW_ALERT_ENABLED = _VoiceTuning().voice_snr_low_alert_enabled
+_SNR_LOW_ALERT_THRESHOLD_DB = _VoiceTuning().voice_snr_low_alert_threshold_db
+_SNR_LOW_ALERT_CONSECUTIVE_HEARTBEATS = _VoiceTuning().voice_snr_low_alert_consecutive_heartbeats
+"""Phase 4 / T4.35 — see :class:`VoiceTuningConfig` for full
+docstrings. Module-level capture mirrors the existing pipeline
+tuning pattern so the orchestrator's hot path doesn't re-parse
+the config on every heartbeat."""
 
 # ---------------------------------------------------------------------------
 # O3 frame-drop detection tuning
@@ -388,6 +399,15 @@ class VoicePipeline:
         self._max_vad_prob_since_heartbeat: float = 0.0
         self._vad_frames_since_heartbeat: int = 0
         self._last_heartbeat_monotonic: float = 0.0
+
+        # Phase 4 / T4.35 — SNR low-alert de-flap counter. Counts
+        # consecutive heartbeats whose drained SNR p50 sits below
+        # the configured floor; once it reaches the consecutive-
+        # heartbeats tuning, a single structured WARN fires +
+        # counter increments. Resets to zero on the first clean
+        # heartbeat (mirrors the deaf-warning pattern).
+        self._snr_low_consecutive_heartbeats: int = 0
+        self._snr_low_alert_active: bool = False
 
         # §5.14 KPI — time-to-first-utterance. Wall-clock captured at
         # WakeWordDetectedEvent emission, measured at SpeechStartedEvent
@@ -1988,6 +2008,56 @@ class VoicePipeline:
             frames_processed=self._vad_frames_since_heartbeat,
             **heartbeat_extra,
         )
+        # Phase 4 / T4.35 — SNR low-alert. Only consider windows
+        # with real SNR samples (count > 0); a count==0 window
+        # means sustained silence, where SNR is undefined and a
+        # "low" verdict would be a false alarm.
+        if _SNR_LOW_ALERT_ENABLED and snr_window.count > 0:
+            if snr_window.p50_db < _SNR_LOW_ALERT_THRESHOLD_DB:
+                self._snr_low_consecutive_heartbeats += 1
+                if (
+                    not self._snr_low_alert_active
+                    and self._snr_low_consecutive_heartbeats
+                    >= _SNR_LOW_ALERT_CONSECUTIVE_HEARTBEATS
+                ):
+                    self._snr_low_alert_active = True
+                    record_snr_low_alert(state="warned")
+                    logger.warning(
+                        "voice_pipeline_snr_low_alert",
+                        mind_id=self._config.mind_id,
+                        state=self._state.name,
+                        snr_p50_db=round(snr_window.p50_db, 2),
+                        snr_p95_db=round(snr_window.p95_db, 2),
+                        snr_sample_count=snr_window.count,
+                        threshold_db=_SNR_LOW_ALERT_THRESHOLD_DB,
+                        consecutive_heartbeats=(self._snr_low_consecutive_heartbeats),
+                        hint=(
+                            "Sustained low SNR p50 below the configured "
+                            "floor (Moonshine STT degrades sharply <9 dB). "
+                            "Likely causes: ambient room noise raised, "
+                            "speaker moved further from mic, fan / HVAC "
+                            "started, or in-process NS disabled while "
+                            "OS NS bypassed. Check `voice.audio.snr_db` "
+                            "histogram + `voice.ns.suppression_db` for "
+                            "the underlying signal."
+                        ),
+                    )
+            else:
+                # Clean heartbeat — reset the de-flap counter and,
+                # if the alert was active, emit a single CLEARED
+                # event so dashboards close the incident.
+                if self._snr_low_alert_active:
+                    self._snr_low_alert_active = False
+                    record_snr_low_alert(state="cleared")
+                    logger.info(
+                        "voice_pipeline_snr_low_alert_cleared",
+                        mind_id=self._config.mind_id,
+                        state=self._state.name,
+                        snr_p50_db=round(snr_window.p50_db, 2),
+                        snr_sample_count=snr_window.count,
+                        threshold_db=_SNR_LOW_ALERT_THRESHOLD_DB,
+                    )
+                self._snr_low_consecutive_heartbeats = 0
         is_deaf = (
             self._vad_frames_since_heartbeat >= _DEAF_MIN_FRAMES
             and self._max_vad_prob_since_heartbeat < _DEAF_VAD_MAX_THRESHOLD

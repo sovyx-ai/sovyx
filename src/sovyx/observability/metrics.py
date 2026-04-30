@@ -671,6 +671,18 @@ class MetricsRegistry:
             "echo, AEC filter can converge cleanly); 'undecided' "
             "fires when either signal is silent (NCC undefined).",
         )
+        self.voice_pipeline_snr_low_alerts = self._counter(
+            "sovyx.voice.pipeline.snr_low_alerts",
+            "Per-mind orchestrator SNR low-alert state-transition "
+            "counter (Phase 4 T4.35 — labels: state=warned|cleared). "
+            "'warned' fires once when consecutive heartbeats with "
+            "SNR p50 below voice_snr_low_alert_threshold_db reaches "
+            "voice_snr_low_alert_consecutive_heartbeats; 'cleared' "
+            "fires once when the next clean heartbeat resolves the "
+            "incident. The pair is symmetric (warned == cleared "
+            "in steady state) so dashboards graph open SNR-low "
+            "incidents as warned − cleared.",
+        )
         self.voice_vad_quiet_signal_gated = self._counter(
             "sovyx.voice.vad.quiet_signal_gated",
             "Per-frame VAD quiet-signal gate verdict (Phase 4 T4.39 — "
