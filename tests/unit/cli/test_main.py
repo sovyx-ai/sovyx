@@ -149,6 +149,106 @@ class TestMindCommands:
         assert result.exit_code == 1
 
 
+class TestMindForget:
+    """``sovyx mind forget`` — Phase 8 / T8.21 step 4."""
+
+    @staticmethod
+    def _report(**overrides: int) -> dict[str, object]:
+        """Build a complete report dict for the mocked _run return."""
+        defaults: dict[str, object] = {
+            "mind_id": "aria",
+            "concepts_purged": 5,
+            "relations_purged": 3,
+            "episodes_purged": 4,
+            "concept_embeddings_purged": 5,
+            "episode_embeddings_purged": 4,
+            "conversation_imports_purged": 0,
+            "consolidation_log_purged": 1,
+            "conversations_purged": 2,
+            "conversation_turns_purged": 6,
+            "daily_stats_purged": 1,
+            "consent_ledger_purged": 7,
+            "total_brain_rows_purged": 22,
+            "total_conversations_rows_purged": 8,
+            "total_system_rows_purged": 1,
+            "total_rows_purged": 31,
+            "dry_run": False,
+        }
+        defaults.update(overrides)
+        return defaults
+
+    def test_forget_no_daemon(self) -> None:
+        with patch("sovyx.cli.main._get_client") as mock:
+            mock.return_value.is_daemon_running.return_value = False
+            result = runner.invoke(app, ["mind", "forget", "aria"])
+        assert result.exit_code == 1
+        assert "Daemon not running" in result.stdout
+
+    def test_forget_empty_mind_id_rejected(self) -> None:
+        with patch("sovyx.cli.main._get_client") as mock:
+            mock.return_value.is_daemon_running.return_value = True
+            result = runner.invoke(app, ["mind", "forget", "  "])
+        assert result.exit_code == 2  # noqa: PLR2004
+        assert "non-empty" in result.stdout
+
+    def test_forget_dry_run_skips_confirmation_prompt(self) -> None:
+        """``--dry-run`` does not require confirmation — the operator
+        is just previewing counts; no destructive action happens."""
+        with (
+            patch("sovyx.cli.main._get_client") as mock,
+            patch(
+                "sovyx.cli.main._run",
+                return_value=self._report(dry_run=True),
+            ),
+        ):
+            mock.return_value.is_daemon_running.return_value = True
+            # No "yes" input piped — confirmation must NOT be prompted.
+            result = runner.invoke(app, ["mind", "forget", "aria", "--dry-run"])
+        assert result.exit_code == 0
+        assert "would purge" in result.stdout
+        assert "31 relational rows" in result.stdout
+
+    def test_forget_yes_flag_skips_confirmation(self) -> None:
+        with (
+            patch("sovyx.cli.main._get_client") as mock,
+            patch("sovyx.cli.main._run", return_value=self._report()),
+        ):
+            mock.return_value.is_daemon_running.return_value = True
+            result = runner.invoke(app, ["mind", "forget", "aria", "--yes"])
+        assert result.exit_code == 0
+        assert "purged" in result.stdout
+
+    def test_forget_renders_per_table_breakdown(self) -> None:
+        """Non-zero per-table counts surface in the output;
+        zero-count tables are omitted to keep the output useful."""
+        with (
+            patch("sovyx.cli.main._get_client") as mock,
+            patch("sovyx.cli.main._run", return_value=self._report()),
+        ):
+            mock.return_value.is_daemon_running.return_value = True
+            result = runner.invoke(app, ["mind", "forget", "aria", "--yes"])
+        assert "concepts_purged" in result.stdout
+        assert "5" in result.stdout
+        # conversation_imports_purged is 0 in the default report —
+        # MUST NOT surface (keeps the breakdown signal-dense).
+        assert "conversation_imports_purged" not in result.stdout
+
+    def test_forget_no_confirmation_aborts(self) -> None:
+        """Without --yes / --dry-run, declining the prompt aborts
+        with exit 1 + 'aborted' message."""
+        with (
+            patch("sovyx.cli.main._get_client") as mock,
+            patch("sovyx.cli.main._run") as run_mock,
+        ):
+            mock.return_value.is_daemon_running.return_value = True
+            # Pipe "n\n" to the confirmation prompt.
+            result = runner.invoke(app, ["mind", "forget", "aria"], input="n\n")
+        assert result.exit_code == 1
+        assert "aborted" in result.stdout
+        # The RPC was NEVER called.
+        run_mock.assert_not_called()
+
+
 @pytest.mark.skip(
     reason="deadlock on CI — leaks async resources that hang next test's collection; tracked separately"
 )

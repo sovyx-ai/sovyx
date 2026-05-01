@@ -312,7 +312,7 @@ class TestRunReplFullSession:
 
 
 class TestRpcHandlerRegistration:
-    def test_register_cli_handlers_adds_three_methods(self) -> None:
+    def test_register_cli_handlers_adds_expected_methods(self) -> None:
         from sovyx.engine._rpc_handlers import register_cli_handlers
         from sovyx.engine.rpc_server import DaemonRPCServer
 
@@ -321,9 +321,10 @@ class TestRpcHandlerRegistration:
         register_cli_handlers(rpc, registry)
 
         # Direct attribute access — it's a private dict, but the
-        # handler set is a public contract: chat, mind.list, config.get.
+        # handler set is a public contract: chat, mind.list,
+        # mind.forget (T8.21), config.get.
         registered = set(rpc._methods.keys())  # noqa: SLF001
-        assert {"chat", "mind.list", "config.get"} <= registered
+        assert {"chat", "mind.list", "mind.forget", "config.get"} <= registered
 
 
 @pytest.mark.asyncio
@@ -370,3 +371,102 @@ class TestRpcHandlerBehavior:
         register_cli_handlers(rpc, registry)
         result = await rpc._methods["config.get"]()  # noqa: SLF001
         assert result == {"mind_id": "aria", "available": False}
+
+    async def test_mind_forget_returns_serialisable_report(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Daemon-side ``mind.forget`` resolves the live pools +
+        ledger from the registry, runs the wipe, and returns a
+        JSON-serialisable dict with every report field. Phase 8 /
+        T8.21 step 4."""
+        from sovyx.engine._rpc_handlers import register_cli_handlers
+        from sovyx.engine.config import EngineConfig
+        from sovyx.engine.rpc_server import DaemonRPCServer
+        from sovyx.persistence.manager import DatabaseManager
+
+        # Real pools + schemas — the brain pool needs vec0 and migrations
+        # to mirror the daemon environment.
+        from sovyx.persistence.migrations import MigrationRunner
+        from sovyx.persistence.pool import DatabasePool
+        from sovyx.persistence.schemas.brain import get_brain_migrations
+        from sovyx.persistence.schemas.conversations import get_conversation_migrations
+        from sovyx.persistence.schemas.system import get_system_migrations
+
+        brain = DatabasePool(
+            db_path=tmp_path / "brain.db",
+            read_pool_size=1,
+            load_extensions=["vec0"],
+        )
+        await brain.initialize()
+        runner = MigrationRunner(brain)
+        await runner.initialize()
+        await runner.run_migrations(
+            get_brain_migrations(has_sqlite_vec=brain.has_sqlite_vec),
+        )
+
+        conv = DatabasePool(db_path=tmp_path / "conversations.db", read_pool_size=1)
+        await conv.initialize()
+        crunner = MigrationRunner(conv)
+        await crunner.initialize()
+        await crunner.run_migrations(get_conversation_migrations())
+
+        system = DatabasePool(db_path=tmp_path / "system.db", read_pool_size=1)
+        await system.initialize()
+        srunner = MigrationRunner(system)
+        await srunner.initialize()
+        await srunner.run_migrations(get_system_migrations())
+
+        try:
+            db_manager = MagicMock(spec=DatabaseManager)
+            db_manager.get_brain_pool = MagicMock(return_value=brain)
+            db_manager.get_conversation_pool = MagicMock(return_value=conv)
+            db_manager.get_system_pool = MagicMock(return_value=system)
+
+            config = MagicMock(spec=EngineConfig)
+            config.data_dir = tmp_path
+
+            async def _resolve(svc):  # noqa: ANN001 — registry mock
+                if svc is EngineConfig:
+                    return config
+                if svc is DatabaseManager:
+                    return db_manager
+                msg = f"unexpected resolve target: {svc}"
+                raise AssertionError(msg)
+
+            registry = MagicMock()
+            registry.resolve = AsyncMock(side_effect=_resolve)
+
+            rpc = DaemonRPCServer()
+            register_cli_handlers(rpc, registry)
+
+            # Empty mind, but the handler still returns a well-formed
+            # zero-count report — pins the JSON shape contract.
+            result = await rpc._methods["mind.forget"](mind_id="aria", dry_run=True)  # noqa: SLF001
+
+            assert isinstance(result, dict)
+            assert result["mind_id"] == "aria"
+            assert result["dry_run"] is True
+            for field in (
+                "concepts_purged",
+                "relations_purged",
+                "episodes_purged",
+                "concept_embeddings_purged",
+                "episode_embeddings_purged",
+                "conversation_imports_purged",
+                "consolidation_log_purged",
+                "conversations_purged",
+                "conversation_turns_purged",
+                "daily_stats_purged",
+                "consent_ledger_purged",
+                "total_brain_rows_purged",
+                "total_conversations_rows_purged",
+                "total_system_rows_purged",
+                "total_rows_purged",
+            ):
+                assert field in result, f"missing report field: {field}"
+                assert isinstance(result[field], int)
+        finally:
+            await brain.close()
+            await conv.close()
+            await system.close()

@@ -439,3 +439,99 @@ def mind_status(
             console.print(result)
     except Exception as e:  # noqa: BLE001 — CLI boundary — renders error and exits; pragma: no cover
         console.print(f"[red]Error: {e}[/red]")
+
+
+@mind_app.command("forget")
+def mind_forget(
+    mind_id: str = typer.Argument(..., help="Mind identifier to wipe"),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Preview what would be wiped without writing.",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip the interactive confirmation prompt (scripted use).",
+    ),
+) -> None:
+    """Right-to-erasure for a mind (GDPR Art. 17 / LGPD Art. 18 VI).
+
+    Wipes every per-mind row across the brain DB (concepts, episodes,
+    relations, embeddings, consolidation log, conversation_imports),
+    the conversations DB (conversations + turns), the system DB
+    (daily_stats), and the voice consent ledger. The mind's
+    configuration is preserved — only its data is destroyed, so the
+    operator can re-onboard the mind without re-creating it.
+
+    The command requires the daemon to be running (the daemon owns
+    the database pools). For scripted use, pass ``--yes`` to skip
+    the confirmation prompt; pair with ``--dry-run`` to preview the
+    counts before committing.
+
+    Phase 8 / T8.21 step 4.
+    """
+    client = _get_client()
+    if not client.is_daemon_running():
+        console.print(
+            "[red]Daemon not running — start with `sovyx start` first[/red]",
+        )
+        raise typer.Exit(1)
+
+    if not mind_id.strip():
+        console.print("[red]error:[/red] mind_id must be a non-empty string")
+        raise typer.Exit(2)
+
+    if not dry_run and not yes:
+        confirm = typer.confirm(
+            f"This will permanently wipe ALL data for mind={mind_id!r} "
+            f"(brain + conversations + system + voice consent ledger). "
+            f"The mind's configuration is preserved. Continue?",
+            default=False,
+        )
+        if not confirm:
+            console.print("[yellow]aborted[/yellow]")
+            raise typer.Exit(1)
+
+    try:
+        result = _run(
+            client.call(
+                "mind.forget",
+                {"mind_id": mind_id, "dry_run": dry_run},
+            ),
+        )
+    except Exception as e:  # noqa: BLE001 — CLI boundary — renders error and exits; pragma: no cover
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    if not isinstance(result, dict):
+        console.print(result)
+        return
+
+    verb = "would purge" if result.get("dry_run") else "purged"
+    total = int(result.get("total_rows_purged", 0))
+    consent = int(result.get("consent_ledger_purged", 0))
+    console.print(
+        f"[green]{verb}[/green] [bold]{total}[/bold] relational rows + "
+        f"[bold]{consent}[/bold] consent-ledger records for mind={mind_id!r}",
+    )
+    # Per-table breakdown — only print non-zero rows so the output
+    # stays useful when most tables are empty.
+    breakdown_keys = (
+        "concepts_purged",
+        "relations_purged",
+        "episodes_purged",
+        "concept_embeddings_purged",
+        "episode_embeddings_purged",
+        "conversation_imports_purged",
+        "consolidation_log_purged",
+        "conversations_purged",
+        "conversation_turns_purged",
+        "daily_stats_purged",
+        "consent_ledger_purged",
+    )
+    for key in breakdown_keys:
+        count = int(result.get(key, 0))
+        if count:
+            console.print(f"  {key}: [cyan]{count}[/cyan]")

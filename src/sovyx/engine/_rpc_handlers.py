@@ -127,7 +127,85 @@ def register_cli_handlers(
             },
         }
 
+    async def _mind_forget(
+        mind_id: str,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Right-to-erasure: wipe every per-mind row across all pools.
+
+        Phase 8 / T8.21 step 4 — daemon-side surface for the
+        ``sovyx mind forget <mind_id>`` CLI. Resolves the live
+        :class:`DatabaseManager` + :class:`EngineConfig` from the
+        registry, builds a :class:`MindForgetService` against the
+        target mind's pools + the shared system pool + the consent
+        ledger, and runs the wipe.
+
+        Args:
+            mind_id: Target mind. Empty / whitespace is rejected by
+                the underlying service.
+            dry_run: When True, return the count report without
+                writing. CLI's ``--dry-run`` confirmation flow.
+
+        Returns:
+            JSON-serialisable dict mirroring :class:`MindForgetReport`
+            field-for-field. Every count is an int; ``dry_run`` is
+            a bool.
+        """
+        from sovyx.engine.config import EngineConfig  # noqa: PLC0415
+        from sovyx.engine.types import MindId  # noqa: PLC0415
+        from sovyx.mind.forget import MindForgetService  # noqa: PLC0415
+        from sovyx.persistence.manager import DatabaseManager  # noqa: PLC0415
+        from sovyx.voice._consent_ledger import ConsentLedger  # noqa: PLC0415
+
+        config = await registry.resolve(EngineConfig)
+        db_manager = await registry.resolve(DatabaseManager)
+
+        mid = MindId(mind_id)
+        # The brain + conversations pools are per-mind so resolving
+        # them validates that the mind actually exists; a missing
+        # mind raises DatabaseConnectionError which the RPC layer
+        # surfaces to the operator as a clear error.
+        brain_pool = db_manager.get_brain_pool(mid)
+        conv_pool = db_manager.get_conversation_pool(mid)
+        system_pool = db_manager.get_system_pool()
+
+        # ConsentLedger is path-resolved (no registry instance);
+        # missing file is treated as an empty ledger by the service
+        # so the path is always passed even when the file doesn't
+        # exist yet.
+        ledger_path = config.data_dir / "voice" / "consent.jsonl"
+        ledger = ConsentLedger(path=ledger_path)
+
+        service = MindForgetService(
+            brain_pool=brain_pool,
+            conversations_pool=conv_pool,
+            system_pool=system_pool,
+            ledger=ledger,
+        )
+        report = await service.forget_mind(mid, dry_run=dry_run)
+
+        return {
+            "mind_id": str(report.mind_id),
+            "concepts_purged": report.concepts_purged,
+            "relations_purged": report.relations_purged,
+            "episodes_purged": report.episodes_purged,
+            "concept_embeddings_purged": report.concept_embeddings_purged,
+            "episode_embeddings_purged": report.episode_embeddings_purged,
+            "conversation_imports_purged": report.conversation_imports_purged,
+            "consolidation_log_purged": report.consolidation_log_purged,
+            "conversations_purged": report.conversations_purged,
+            "conversation_turns_purged": report.conversation_turns_purged,
+            "daily_stats_purged": report.daily_stats_purged,
+            "consent_ledger_purged": report.consent_ledger_purged,
+            "total_brain_rows_purged": report.total_brain_rows_purged,
+            "total_conversations_rows_purged": report.total_conversations_rows_purged,
+            "total_system_rows_purged": report.total_system_rows_purged,
+            "total_rows_purged": report.total_rows_purged,
+            "dry_run": report.dry_run,
+        }
+
     rpc.register_method("chat", _chat)
     rpc.register_method("mind.list", _mind_list)
+    rpc.register_method("mind.forget", _mind_forget)
     rpc.register_method("config.get", _config_get)
-    logger.debug("cli_rpc_handlers_registered", count=3)
+    logger.debug("cli_rpc_handlers_registered", count=4)
