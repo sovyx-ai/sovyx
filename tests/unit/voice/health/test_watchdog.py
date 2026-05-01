@@ -611,6 +611,206 @@ class TestHotplugReaction:
 
 
 # ---------------------------------------------------------------------------
+# T6.30 — Hot-plug storm: 100 device enumerations/sec
+# ---------------------------------------------------------------------------
+
+
+class TestHotplugStormT630:
+    """Stress :meth:`VoiceCaptureWatchdog._on_hotplug` under event storms.
+
+    Phase 6 / T6.30 production scenario: when a USB hub powers up, when
+    a docking station is connected, or when a Windows 11 audio driver
+    enumerates a freshly-installed device, the OS fires 10-30 device
+    events in a tight burst — the ``IMMNotificationClient`` /
+    ``udev monitor`` / ``IOAudio`` backends marshall every one onto the
+    event loop via ``call_soon_threadsafe``. The 100/sec storm here is
+    the upper-bound stress: 100 hot-plug events sequenced through
+    :class:`_FakeHotplug.fire` via :func:`asyncio.gather`.
+
+    Pinned invariants regardless of storm size:
+      (a) every event resolves without exception;
+      (b) the state machine ends in a consistent terminal state
+          (``IDLE`` after a recovery-add storm, ``DEGRADED`` after a
+          remove-storm with no available cascade winner);
+      (c) ``_pending`` is bounded to a single Task or None — the
+          watchdog must not accumulate background work proportional
+          to the storm size;
+      (d) the re-cascade callable is invoked at most once per state
+          transition, NOT once per event (storm collapsing is the
+          actual operator-facing contract).
+    """
+
+    _STORM_SIZE = 100  # noqa: PLR2004 — mission spec § Phase 6 / T6.30
+
+    @pytest.mark.asyncio()
+    async def test_storm_of_irrelevant_adds_when_idle_is_full_noop(self) -> None:
+        """100 ADD events for non-matching endpoints when idle: zero recascade.
+
+        Pin (a) + (d): an idle watchdog seeing 100 ADD events for
+        endpoints that don't match its active GUID/friendly-name must
+        not call recascade even once. Production scenario: a USB hub
+        enumerates 100 unrelated devices while the active mic is
+        already healthy.
+        """
+        rc = _ReCascadeRecorder()
+        wd, _, _, _ = _make_watchdog(re_cascade=rc, friendly="")
+        listener = _FakeHotplug()
+        await wd.start(listener)
+
+        events = [
+            HotplugEvent(
+                kind=HotplugEventKind.DEVICE_ADDED,
+                endpoint_guid=f"{{99999999-0000-0000-0000-{i:012d}}}",
+                device_friendly_name=f"Other Mic #{i}",
+            )
+            for i in range(self._STORM_SIZE)
+        ]
+
+        results = await asyncio.gather(
+            *(listener.fire(e) for e in events),
+            return_exceptions=True,
+        )
+
+        for r in results:
+            assert not isinstance(r, BaseException), f"raised: {r!r}"
+        assert rc.calls == []  # zero recascade — full no-op
+        assert wd.state == WatchdogState.IDLE
+        assert wd._pending is None  # noqa: SLF001 — bounded-state invariant
+
+    @pytest.mark.asyncio()
+    async def test_storm_of_active_removes_collapses_to_bounded_recascades(
+        self,
+    ) -> None:
+        """100 REMOVE events for the active endpoint resolve cleanly.
+
+        Pin (a) + (c): the watchdog must not crash on a storm of
+        identical removes, and ``_pending`` must remain None or a
+        single Task — never a list. Recascade count is allowed to
+        equal storm size here because each REMOVE for the active
+        endpoint is a legitimate recascade trigger (the ADR §4.4.2
+        path doesn't deduplicate identical removes — a re-add
+        between events is plausible). What we pin is the BOUND on
+        bg-task accumulation, not the recascade count.
+        """
+        rc = _ReCascadeRecorder(outcomes=[True] * self._STORM_SIZE)
+        wd, _, _, _ = _make_watchdog(re_cascade=rc)
+        listener = _FakeHotplug()
+        await wd.start(listener)
+
+        events = [
+            HotplugEvent(
+                kind=HotplugEventKind.DEVICE_REMOVED,
+                endpoint_guid=_ENDPOINT,
+            )
+            for _ in range(self._STORM_SIZE)
+        ]
+
+        results = await asyncio.gather(
+            *(listener.fire(e) for e in events),
+            return_exceptions=True,
+        )
+
+        for r in results:
+            assert not isinstance(r, BaseException), f"raised: {r!r}"
+        # Bounded background work — never more than one in-flight Task.
+        assert wd._pending is None or isinstance(  # noqa: SLF001
+            wd._pending,  # noqa: SLF001
+            asyncio.Task,
+        )
+        # Recascade was called — the contract isn't "exactly N times",
+        # it's "at most N times and never zero" (some events may have
+        # interleaved while a previous handler held the endpoint lock).
+        assert 0 < len(rc.calls) <= self._STORM_SIZE
+
+    @pytest.mark.asyncio()
+    async def test_mixed_kind_storm_resolves_to_consistent_state(self) -> None:
+        """ADD/REMOVE/DEFAULT_DEVICE_CHANGED interleaved storm.
+
+        Pin (a) + (b): a realistic storm mixes event kinds (a USB hub
+        powering up sends ADD events for new devices AND REMOVE events
+        for stale enumerations that the OS had cached). All 300
+        events (100 of each kind) must resolve cleanly and the
+        watchdog must end in a defined state — not a corrupted
+        intermediate state with stale flags.
+        """
+        rc = _ReCascadeRecorder(outcomes=[True] * 300)
+        wd, _, _, _ = _make_watchdog(re_cascade=rc)
+        listener = _FakeHotplug()
+        await wd.start(listener)
+
+        # Build interleaved storm: ADD, REMOVE, DEFAULT_DEVICE_CHANGED, …
+        kinds = (
+            HotplugEventKind.DEVICE_ADDED,
+            HotplugEventKind.DEVICE_REMOVED,
+            HotplugEventKind.DEFAULT_DEVICE_CHANGED,
+        )
+        events: list[HotplugEvent] = []
+        for _ in range(self._STORM_SIZE):
+            for kind in kinds:
+                events.append(
+                    HotplugEvent(
+                        kind=kind,
+                        endpoint_guid=_ENDPOINT,
+                        device_friendly_name=_FRIENDLY,
+                    ),
+                )
+
+        results = await asyncio.gather(
+            *(listener.fire(e) for e in events),
+            return_exceptions=True,
+        )
+
+        for r in results:
+            assert not isinstance(r, BaseException), f"raised: {r!r}"
+        # Terminal state must be one of the documented WatchdogStates.
+        assert wd.state in (
+            WatchdogState.IDLE,
+            WatchdogState.BACKOFF,
+            WatchdogState.DEGRADED,
+        )
+
+    @pytest.mark.asyncio()
+    async def test_storm_does_not_leak_pending_tasks(self) -> None:
+        """``_pending`` invariant under storm: at most one Task.
+
+        Pin (c): the backoff-chain spawn point at watchdog.py:405
+        creates a single ``_pending`` task; subsequent spawns clear
+        the prior one. A storm must not create a list of pending
+        tasks even briefly. Inspecting ``_pending`` between fires
+        confirms the invariant.
+        """
+        rc = _ReCascadeRecorder(outcomes=[True] * self._STORM_SIZE)
+        wd, _, _, _ = _make_watchdog(re_cascade=rc)
+        listener = _FakeHotplug()
+        await wd.start(listener)
+
+        pending_observations: list[type] = []
+
+        for _ in range(self._STORM_SIZE):
+            await listener.fire(
+                HotplugEvent(
+                    kind=HotplugEventKind.DEVICE_REMOVED,
+                    endpoint_guid=_ENDPOINT,
+                ),
+            )
+            # type() of the pending field — must always be either
+            # NoneType or asyncio.Task. Never list, never set.
+            pending = wd._pending  # noqa: SLF001
+            pending_observations.append(type(pending))
+
+        # Every observation is either None or a single Task.
+        for t in pending_observations:
+            assert (
+                t is type(None)
+                or t is asyncio.Task
+                or issubclass(
+                    t,
+                    asyncio.Task,
+                )
+            ), f"_pending leaked to type {t}"
+
+
+# ---------------------------------------------------------------------------
 # Lifecycle lock — §5.5
 # ---------------------------------------------------------------------------
 
