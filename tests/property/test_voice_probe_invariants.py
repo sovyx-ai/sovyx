@@ -173,6 +173,98 @@ class TestComputeRmsDbInvariants:
         # 20*log10(0.99997) ≈ -0.000265 dB. Bounded tolerance.
         assert -0.01 <= rms <= 0.01
 
+    # T6.34 — NaN/Inf chaos guard
+
+    @pytest.mark.parametrize(
+        ("desc", "values"),
+        [
+            ("single NaN", [float("nan")]),
+            ("NaN mixed with finites", [float("nan"), 0.5, -0.3]),
+            ("single +Inf", [float("inf")]),
+            ("+Inf mixed", [float("inf"), 0.1, 0.2]),
+            ("single -Inf", [float("-inf")]),
+            ("-Inf mixed", [float("-inf"), 0.1]),
+            ("NaN and Inf together", [float("nan"), float("inf"), 1.0]),
+            ("all NaN", [float("nan"), float("nan"), float("nan")]),
+            ("all +Inf", [float("inf"), float("inf")]),
+        ],
+    )
+    def test_nan_inf_input_clamps_to_minus_inf(
+        self,
+        desc: str,
+        values: list[float],
+    ) -> None:
+        # T6.34 — pathological float inputs (NaN / +Inf / -Inf) must
+        # produce the canonical no-signal sentinel ``-inf``, NOT a
+        # NaN or +Inf return value. Pre-T6.34 the function silently
+        # propagated NaN/+Inf, breaking downstream diagnosis logic
+        # (``rms < ceiling`` is False for NaN → misclassified as
+        # HEALTHY). The ``math.isfinite(mean_sq)`` guard collapses
+        # all non-finite cases to ``-inf``.
+        block = np.array(values, dtype=np.float32)
+        result = _compute_rms_db(block, 1.0)
+        assert result == float("-inf"), f"{desc}: got {result}, expected -inf"
+
+    @given(
+        finite=st.floats(min_value=-10.0, max_value=10.0, allow_nan=False),
+        n=st.integers(min_value=1, max_value=64),
+    )
+    @settings(max_examples=200)
+    def test_no_nan_or_positive_inf_in_output(
+        self,
+        finite: float,
+        n: int,
+    ) -> None:
+        # Property: for ANY finite input, the output is finite OR
+        # exactly -inf (the no-signal sentinel). Never NaN, never +Inf.
+        # Combined with the parametrized non-finite test above, this
+        # gives us total coverage: the output is always either a real
+        # number ≤ 0 dB or the -inf sentinel.
+        block = np.full(n, finite, dtype=np.float32)
+        result = _compute_rms_db(block, 1.0)
+        assert not math.isnan(result)
+        assert result != float("inf")
+        # Either -inf (zero amplitude) or a finite dBFS value.
+        assert result == float("-inf") or math.isfinite(result)
+
+    @given(
+        chaos_choices=st.lists(
+            st.sampled_from(
+                [
+                    float("nan"),
+                    float("inf"),
+                    float("-inf"),
+                    0.0,
+                    0.5,
+                    -0.5,
+                    1.0,
+                    -1.0,
+                ],
+            ),
+            min_size=1,
+            max_size=32,
+        ),
+    )
+    @settings(max_examples=300)
+    def test_arbitrary_chaos_input_never_returns_nan_or_positive_inf(
+        self,
+        chaos_choices: list[float],
+    ) -> None:
+        # Hypothesis-driven mix of finite + non-finite values in any
+        # combination. The output is always either ``-inf`` (no signal)
+        # OR a finite dBFS reading. Never NaN, never +Inf, never +Inf
+        # disguised as a finite number.
+        block = np.array(chaos_choices, dtype=np.float32)
+        result = _compute_rms_db(block, 1.0)
+        assert not math.isnan(result), (
+            f"NaN leaked through for input={chaos_choices!r}, got {result}"
+        )
+        assert result != float("inf"), (
+            f"+Inf leaked through for input={chaos_choices!r}, got {result}"
+        )
+        # Output is bounded: ≤ 0 dB (sub-unity normalised) OR -inf.
+        assert result <= 0.0 or result == float("-inf")
+
 
 # ── _classify_open_error ──────────────────────────────────────────────
 

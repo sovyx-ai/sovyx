@@ -63,6 +63,18 @@ def _compute_rms_db(block: npt.NDArray[Any], scale: float) -> float:
     ``scale`` normalises the input to the ``[-1, 1]`` range the dBFS
     convention expects (``2**15`` for int16, ``2**23`` for int24,
     ``1.0`` for float32).
+
+    Phase 6 / T6.34 chaos guard: when ``block`` contains NaN or Inf
+    (production: a buggy upstream layer leaks float garbage; chaos
+    test: ``np.array([np.nan, ...])``), ``np.mean`` produces a
+    non-finite ``mean_sq``. The pre-T6.34 implementation propagated
+    NaN through ``math.sqrt`` and ``math.log10``, returning NaN /
+    +Inf — which silently broke downstream diagnosis logic
+    (``rms < _RMS_DB_NO_SIGNAL_CEILING`` is ``False`` for NaN, so
+    a NaN-RMS frame was misclassified as HEALTHY). The
+    ``math.isfinite(mean_sq)`` guard collapses both cases to the
+    canonical ``-inf`` no-signal sentinel — same convention the
+    capture-integrity ``_compute_rms_db`` already enforces.
     """
     import numpy as np
 
@@ -70,7 +82,7 @@ def _compute_rms_db(block: npt.NDArray[Any], scale: float) -> float:
         return float("-inf")
     arr = block.astype(np.float64) / scale
     mean_sq = float(np.mean(arr * arr))
-    if mean_sq <= 0.0:
+    if mean_sq <= 0.0 or not math.isfinite(mean_sq):
         return float("-inf")
     rms_linear = math.sqrt(mean_sq)
     return _linear_to_db(rms_linear)
