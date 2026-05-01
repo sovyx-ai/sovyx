@@ -254,3 +254,163 @@ async def post_mind_forget(
         total_rows_purged=report.total_rows_purged,
         dry_run=report.dry_run,
     )
+
+
+# ── Retention prune endpoint — Phase 8 / T8.21 step 6 ────────────────
+
+
+class PruneRetentionRequest(BaseModel):
+    """Body for ``POST /api/mind/{mind_id}/retention/prune``."""
+
+    dry_run: bool = Field(
+        False,
+        description=(
+            "When true, returns the count report without writing. No "
+            "confirmation field is required because retention is a "
+            "scheduled-policy operation (not destructive in the "
+            "operator-invoked sense — it removes only records older "
+            "than configured horizons, not arbitrary rows)."
+        ),
+    )
+
+
+class PruneRetentionResponse(BaseModel):
+    """Response for ``POST /api/mind/{mind_id}/retention/prune`` —
+    mirrors :class:`MindRetentionReport` field-for-field plus the
+    four aggregate properties."""
+
+    mind_id: str
+    cutoff_utc: str
+    episodes_purged: int
+    conversations_purged: int
+    conversation_turns_purged: int
+    daily_stats_purged: int
+    consolidation_log_purged: int
+    consent_ledger_purged: int
+    effective_horizons: dict[str, int]
+    total_brain_rows_purged: int
+    total_conversations_rows_purged: int
+    total_system_rows_purged: int
+    total_rows_purged: int
+    dry_run: bool
+
+
+@router.post(
+    "/{mind_id}/retention/prune",
+    response_model=PruneRetentionResponse,
+)
+async def post_mind_retention_prune(
+    request: Request,
+    mind_id: str,
+    body: PruneRetentionRequest,
+) -> PruneRetentionResponse:
+    """Apply time-based retention policy to a single mind.
+
+    Sibling to ``POST /api/mind/{mind_id}/forget``. Where forget
+    wipes every per-mind row (right-to-erasure), retention prunes
+    only records older than per-surface horizons configured via
+    ``EngineConfig.tuning.retention.*`` + ``MindConfig.retention.*``
+    overrides.
+
+    Less destructive than forget — no ``confirm`` field required:
+    retention is a scheduled-policy operation that removes only
+    aged records, not arbitrary rows. The operator can preview via
+    ``dry_run=true`` before committing.
+
+    Args:
+        mind_id: Target mind (path parameter).
+        body: ``dry_run`` flag (default False).
+
+    Returns:
+        :class:`PruneRetentionResponse` — per-surface counts +
+        aggregate totals + ``effective_horizons`` map (so the UI
+        can render which horizons applied per surface).
+
+    Raises:
+        HTTPException 400: ``mind_id`` is empty / whitespace.
+        HTTPException 404: The mind has no per-mind databases.
+        HTTPException 503: DatabaseManager not registered yet.
+    """
+    if not mind_id.strip():
+        raise HTTPException(
+            status_code=HTTP_400_BAD_REQUEST,
+            detail="mind_id must be a non-empty string",
+        )
+
+    registry = getattr(request.app.state, "registry", None)
+    if registry is None:
+        raise HTTPException(
+            status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            detail="engine registry not available — daemon still booting",
+        )
+
+    from sovyx.engine.errors import DatabaseConnectionError  # noqa: PLC0415
+    from sovyx.engine.types import MindId  # noqa: PLC0415
+    from sovyx.mind.retention import MindRetentionService  # noqa: PLC0415
+    from sovyx.persistence.manager import DatabaseManager  # noqa: PLC0415
+    from sovyx.voice._consent_ledger import ConsentLedger  # noqa: PLC0415
+
+    if not registry.is_registered(DatabaseManager):
+        raise HTTPException(
+            status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            detail="DatabaseManager not registered — daemon still booting",
+        )
+
+    engine_config = _resolve_engine_config(request)
+    if engine_config is None:
+        raise HTTPException(
+            status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            detail="EngineConfig not available on app state",
+        )
+
+    db_manager = await registry.resolve(DatabaseManager)
+    mid = MindId(mind_id)
+
+    try:
+        brain_pool = db_manager.get_brain_pool(mid)
+        conv_pool = db_manager.get_conversation_pool(mid)
+    except DatabaseConnectionError as exc:
+        raise HTTPException(
+            status_code=HTTP_404_NOT_FOUND,
+            detail=f"mind not found: {mind_id}",
+        ) from exc
+
+    system_pool = db_manager.get_system_pool()
+
+    data_dir = _resolve_data_dir(request)
+    ledger = ConsentLedger(path=data_dir / "voice" / "consent.jsonl")
+
+    service = MindRetentionService(
+        engine_config=engine_config,
+        brain_pool=brain_pool,
+        conversations_pool=conv_pool,
+        system_pool=system_pool,
+        ledger=ledger,
+    )
+    report = await service.prune_mind(mid, dry_run=body.dry_run)
+
+    logger.info(
+        "mind.retention.via_dashboard",
+        mind_id=mind_id,
+        **{
+            "mind.dry_run": report.dry_run,
+            "mind.total_rows_purged": report.total_rows_purged,
+            "mind.consent_ledger_purged": report.consent_ledger_purged,
+        },
+    )
+    return PruneRetentionResponse(
+        mind_id=str(report.mind_id),
+        cutoff_utc=report.cutoff_utc,
+        episodes_purged=report.episodes_purged,
+        conversations_purged=report.conversations_purged,
+        conversation_turns_purged=report.conversation_turns_purged,
+        daily_stats_purged=report.daily_stats_purged,
+        consolidation_log_purged=report.consolidation_log_purged,
+        consent_ledger_purged=report.consent_ledger_purged,
+        effective_horizons=dict(report.effective_horizons),
+        total_brain_rows_purged=report.total_brain_rows_purged,
+        total_conversations_rows_purged=report.total_conversations_rows_purged,
+        total_system_rows_purged=report.total_system_rows_purged,
+        total_rows_purged=report.total_rows_purged,
+        dry_run=report.dry_run,
+    )
