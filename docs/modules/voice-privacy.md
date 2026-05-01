@@ -127,6 +127,80 @@ call finds no records to purge but still writes a fresh tombstone).
 
 ---
 
+## Time-based retention — GDPR Art. 5(1)(e) / LGPD Art. 16
+
+Phase 8 / T8.21 step 6 ships per-mind retention policy on top of the
+right-to-erasure surface. Retention enforces the **storage
+limitation** principle: records older than per-surface horizons are
+pruned automatically (or on-demand), independent of any subject's
+erasure request.
+
+The audit trail distinguishes the two:
+
+* `ConsentAction.DELETE` — operator-invoked erasure (someone hit
+  *Forget*).
+* `ConsentAction.RETENTION_PURGE` — scheduled-policy fired and
+  pruned aged records. The tombstone's `context.before_cutoff_iso`
+  records the cutoff for forensic reconstruction.
+
+### Default horizons
+
+| Surface             | Default | Rationale                                           |
+| ------------------- | ------- | --------------------------------------------------- |
+| Episodes            | 30 d    | Aligns with `LoggingConfig.retention_days` baseline  |
+| Conversations + turns | 30 d  | Same surface class as episodes                      |
+| Daily stats         | 365 d   | No PII; longer historical horizon for cost / usage  |
+| Consolidation log   | 90 d    | Quarterly diagnostic window                         |
+| Consent ledger      | 0 d     | Infinite — GDPR Art. 30 records-of-processing      |
+
+`0 = disabled / infinite`. Configured via `EngineConfig.tuning.retention.*`
+(global defaults) plus `MindConfig.retention.*` (per-mind overrides
+in `mind.yaml`).
+
+Concepts + relations are NOT subject to time-based retention here —
+they have their own importance-based decay via
+`MindConfig.brain.forgetting_enabled` + `decay_rate`; layering two
+policies on the same surface would double-delete.
+
+### Manual prune
+
+```bash
+# Preview what would be pruned (read-only)
+sovyx mind retention status <mind_id>
+
+# Apply the policy
+sovyx mind retention prune <mind_id>
+sovyx mind retention prune <mind_id> --dry-run    # preview
+sovyx mind retention prune <mind_id> --yes        # skip confirmation
+```
+
+Dashboard equivalent (no `confirm` field required — retention is
+less destructive than forget, removing only AGED records):
+
+```http
+POST /api/mind/{mind_id}/retention/prune
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{"dry_run": true}
+```
+
+### Auto-prune scheduler
+
+When `MindConfig.retention.auto_prune_enabled = true` (default
+**false** per the staged-adoption discipline — operator opts in
+after validating dry-run counts), the daemon's lifecycle starts a
+`RetentionScheduler` for that mind. The scheduler fires daily at
+`MindConfig.retention.prune_time` (default 03:00 in the mind's
+timezone, after the typical 02:00 dream_time) and invokes the same
+`MindRetentionService.prune_mind` primitive.
+
+Same JSONL atomic-write semantics + tombstone model as the manual
+paths — no race between the scheduler, the CLI, and the dashboard
+endpoint.
+
+---
+
 ## Configuration knobs
 
 These tuning flags live under `EngineConfig.tuning.voice` and
