@@ -512,3 +512,130 @@ class TestPerMindIsolation:
         aria_after = ledger.history(mind_id="aria")
         assert len(aria_after) == 1
         assert aria_after[0].action is ConsentAction.DELETE
+
+
+# ── Time-based retention purge (Phase 8 / T8.21 step 6) ──────────────
+
+
+class TestPruneOld:
+    """``prune_old`` — time-based retention purge with RETENTION_PURGE
+    tombstone (distinct from operator-invoked DELETE)."""
+
+    def test_purges_records_older_than_cutoff(self, tmp_path: Path) -> None:
+        """Old records are removed; recent records survive; tombstone
+        is RETENTION_PURGE not DELETE."""
+        path = tmp_path / "consent.jsonl"
+
+        # Seed with two records via injectable clocks at different times.
+        old_clock = _frozen_clock(datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC))
+        ledger_old = ConsentLedger(path, clock=old_clock)
+        ledger_old.append(user_id="u1", action=ConsentAction.WAKE, mind_id="aria")
+
+        new_clock = _frozen_clock(datetime(2026, 4, 1, 12, 0, 0, tzinfo=UTC))
+        ledger_new = ConsentLedger(path, clock=new_clock)
+        ledger_new.append(user_id="u1", action=ConsentAction.LISTEN, mind_id="aria")
+
+        # Cutoff between the two records.
+        cutoff_iso = "2026-03-01T00:00:00+00:00"
+        purged = ledger_new.prune_old(before=cutoff_iso, mind_id="aria")
+        assert purged == 1
+
+        # Surviving records: the LISTEN (April 1) + the
+        # RETENTION_PURGE tombstone written by the prune itself.
+        history = ledger_new.history(mind_id="aria")
+        actions = [r.action for r in history]
+        assert ConsentAction.LISTEN in actions
+        assert ConsentAction.RETENTION_PURGE in actions
+        assert ConsentAction.WAKE not in actions  # the old record gone
+        # Tombstone distinguishes from DELETE.
+        assert ConsentAction.DELETE not in actions
+
+    def test_mind_id_filter_respected(self, tmp_path: Path) -> None:
+        """``mind_id`` filter scopes the prune to a single mind's
+        audit trail. Other mind's old records survive."""
+        path = tmp_path / "consent.jsonl"
+        old_clock = _frozen_clock(datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC))
+        ledger = ConsentLedger(path, clock=old_clock)
+        ledger.append(user_id="u1", action=ConsentAction.WAKE, mind_id="aria")
+        ledger.append(user_id="u2", action=ConsentAction.WAKE, mind_id="luna")
+
+        # Cutoff in the future so both records are "old".
+        cutoff_iso = "2026-06-01T00:00:00+00:00"
+        purged = ledger.prune_old(before=cutoff_iso, mind_id="aria")
+        assert purged == 1
+
+        # luna's old record survives — only aria was scoped.
+        luna_after = ledger.history(mind_id="luna")
+        # Luna has 1 record (the original WAKE) — no tombstone since
+        # the prune only wrote a RETENTION_PURGE for aria.
+        assert len(luna_after) == 1
+        assert luna_after[0].action is ConsentAction.WAKE
+
+    def test_recent_records_preserved(self, tmp_path: Path) -> None:
+        """Records strictly newer than the cutoff are NEVER touched."""
+        path = tmp_path / "consent.jsonl"
+        clock = _frozen_clock(datetime(2026, 4, 1, 12, 0, 0, tzinfo=UTC))
+        ledger = ConsentLedger(path, clock=clock)
+        ledger.append(user_id="u1", action=ConsentAction.WAKE, mind_id="aria")
+
+        # Cutoff BEFORE the record's timestamp.
+        cutoff_iso = "2026-01-01T00:00:00+00:00"
+        purged = ledger.prune_old(before=cutoff_iso, mind_id="aria")
+        assert purged == 0
+
+        # The original WAKE survives + RETENTION_PURGE tombstone added.
+        records = ledger.history(mind_id="aria")
+        assert len(records) == 2  # noqa: PLR2004
+        actions = {r.action for r in records}
+        assert actions == {ConsentAction.WAKE, ConsentAction.RETENTION_PURGE}
+
+    def test_legacy_records_preserved_under_strict_mind_filter(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Records WITHOUT ``mind_id`` (legacy / pre-T8.21) never match
+        a strict mind_id prune — they predate per-mind audit and can't
+        be retroactively assigned."""
+        path = tmp_path / "consent.jsonl"
+        old_clock = _frozen_clock(datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC))
+        ledger = ConsentLedger(path, clock=old_clock)
+        ledger.append(user_id="u1", action=ConsentAction.WAKE)  # legacy
+        ledger.append(user_id="u1", action=ConsentAction.WAKE, mind_id="aria")
+
+        cutoff_iso = "2026-06-01T00:00:00+00:00"
+        purged = ledger.prune_old(before=cutoff_iso, mind_id="aria")
+        # Only the aria record purged; legacy preserved.
+        assert purged == 1
+
+        # Legacy WAKE still findable via wildcard query (mind_id=None
+        # is rejected by history; use user_id=None+mind_id=None? No,
+        # at-least-one-filter required. Use user_id="u1" instead.)
+        all_u1 = ledger.history(user_id="u1")
+        legacy = [r for r in all_u1 if r.action is ConsentAction.WAKE]
+        assert len(legacy) == 1
+        assert legacy[0].mind_id is None
+
+    def test_tombstone_carries_cutoff_in_context(self, tmp_path: Path) -> None:
+        """The RETENTION_PURGE tombstone records the cutoff for forensics."""
+        path = tmp_path / "consent.jsonl"
+        ledger = ConsentLedger(path, clock=_frozen_clock())
+        cutoff_iso = "2026-04-01T00:00:00+00:00"
+        ledger.prune_old(before=cutoff_iso, mind_id="aria")
+
+        history = ledger.history(mind_id="aria")
+        assert len(history) == 1
+        tombstone = history[0]
+        assert tombstone.action is ConsentAction.RETENTION_PURGE
+        assert tombstone.context["before_cutoff_iso"] == cutoff_iso
+        assert tombstone.context["purged_record_count"] == 0
+        assert tombstone.user_id == ""  # mind-scoped, not user-scoped
+
+    def test_empty_ledger_returns_zero(self, tmp_path: Path) -> None:
+        """Pruning an empty ledger writes a zero-count tombstone."""
+        path = tmp_path / "consent.jsonl"
+        ledger = ConsentLedger(path, clock=_frozen_clock())
+        purged = ledger.prune_old(
+            before="2026-04-01T00:00:00+00:00",
+            mind_id="aria",
+        )
+        assert purged == 0

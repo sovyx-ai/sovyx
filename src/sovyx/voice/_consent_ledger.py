@@ -421,6 +421,79 @@ class ConsentLedger:
         )
         return purged_total
 
+    def prune_old(
+        self,
+        *,
+        before: str,
+        mind_id: str | None = None,
+    ) -> int:
+        """Time-based retention purge — Phase 8 / T8.21 step 6.
+
+        Walks every segment and removes records whose ``timestamp_utc``
+        is strictly less than ``before``. Optionally filters by
+        ``mind_id`` so the prune is scoped to a single mind's audit
+        trail.
+
+        Distinguished from :meth:`forget` by:
+
+        * **Comparison axis** — ``forget`` filters by user_id /
+          mind_id (identity); ``prune_old`` filters by timestamp
+          (age).
+        * **Tombstone action** — ``forget`` writes
+          :data:`ConsentAction.DELETE`; ``prune_old`` writes
+          :data:`ConsentAction.RETENTION_PURGE` so an external
+          auditor can distinguish operator-invoked erasure from
+          scheduled-policy aging.
+
+        ``timestamp_utc`` is ISO-8601 UTC with second precision; ISO
+        strings sort lexicographically in chronological order, so the
+        ``< before`` comparison is a string compare with no datetime
+        parsing required.
+
+        Args:
+            before: ISO-8601 UTC cutoff. Records with
+                ``timestamp_utc < before`` are purged. Caller passes
+                e.g. ``(now - timedelta(days=N)).isoformat()``.
+            mind_id: When set, only purges records matching this
+                mind_id; when ``None``, purges across every mind
+                (legacy records without ``mind_id`` are kept — they
+                can't be retroactively assigned a per-mind boundary).
+
+        Returns:
+            Number of records purged (excludes the tombstone).
+        """
+        purged_total = 0
+        with self._lock:
+            for segment in self._iter_segments():
+                purged_total += self._rewrite_segment_excluding_old(
+                    segment,
+                    before=before,
+                    mind_id=mind_id,
+                )
+
+        # Tombstone: RETENTION_PURGE distinguishes "scheduled policy
+        # ran" from "operator hit Forget" (DELETE). user_id="" because
+        # retention is mind-scoped not user-scoped (one tombstone for
+        # the entire prune, not one per affected user).
+        self.append(
+            user_id="",
+            action=ConsentAction.RETENTION_PURGE,
+            context={
+                "purged_record_count": purged_total,
+                "before_cutoff_iso": before,
+            },
+            mind_id=mind_id,
+        )
+        logger.info(
+            "voice.consent.retention_purge",
+            **{
+                "voice.mind_id": mind_id or "",
+                "voice.before_cutoff_iso": before,
+                "voice.purged_record_count": purged_total,
+            },
+        )
+        return purged_total
+
     # ── internals ─────────────────────────────────────────────────────
 
     def _write_with_file_lock(self, line: str) -> None:
@@ -643,6 +716,69 @@ class ConsentLedger:
                         excluded += 1
                         continue
                     dst.write(raw)
+                dst.flush()
+                os.fsync(dst.fileno())
+        except OSError:
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
+            return 0
+        try:
+            os.replace(tmp, segment)
+        except OSError:
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
+            return 0
+        return excluded
+
+    def _rewrite_segment_excluding_old(
+        self,
+        segment: Path,
+        *,
+        before: str,
+        mind_id: str | None,
+    ) -> int:
+        """Rewrite ``segment`` omitting records older than ``before``.
+
+        Time-axis sibling of :meth:`_rewrite_segment_excluding`. Same
+        atomic-rewrite semantics. Records are matched when:
+
+        * ``timestamp_utc < before`` (string compare; ISO-8601 sorts
+          lexicographically the same as chronologically), AND
+        * ``mind_id`` filter passes (None = wildcard; set value = strict
+          match; legacy records without ``mind_id`` field never match a
+          strict mind_id query — same isolation contract as
+          :meth:`_record_matches`).
+
+        Records WITHOUT a ``timestamp_utc`` field (corrupt / malformed
+        / pre-schema) are preserved verbatim — retention should never
+        DELETE records it can't reason about.
+        """
+        tmp = segment.with_suffix(segment.suffix + ".tmp")
+        excluded = 0
+        try:
+            with (
+                open(segment, encoding="utf-8") as src,  # noqa: PTH123
+                open(tmp, "w", encoding="utf-8") as dst,  # noqa: PTH123
+            ):
+                for raw in src:
+                    line = raw.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        dst.write(raw)
+                        continue
+                    ts = data.get("timestamp_utc")
+                    if not isinstance(ts, str) or ts >= before:
+                        dst.write(raw)
+                        continue
+                    # Mind filter: strict match when set; legacy records
+                    # (no mind_id field) never match a strict mind query.
+                    if mind_id is not None and data.get("mind_id") != mind_id:
+                        dst.write(raw)
+                        continue
+                    excluded += 1
                 dst.flush()
                 os.fsync(dst.fileno())
         except OSError:
