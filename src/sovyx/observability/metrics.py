@@ -670,6 +670,24 @@ class MetricsRegistry:
             "Pair with voice_wake_word_detected_total for the engage "
             "rate.",
         )
+        # Phase 8 / T8.19 — detection-method counter. Increments at
+        # every confirmed wake-word detection, labeled by which
+        # detector class fired:
+        #   - method=onnx — standard WakeWordDetector via OpenWakeWord
+        #     ONNX inference. Latency ~5 ms / frame.
+        #   - method=stt_fallback — STT-based fallback when no ONNX
+        #     model is trained yet for this mind. Latency ~500 ms.
+        # Operator value: ratio of stt_fallback / total tells you how
+        # many minds are still waiting for T8.13 custom training to
+        # complete; spike = newly-named mind in pilot. After T8.18
+        # hot-swap completes for a mind, its detections shift from
+        # stt_fallback → onnx and the rate drops correspondingly.
+        self.voice_wake_word_detection_method = self._counter(
+            "sovyx.voice.wake_word.detection_method",
+            "Increments per confirmed wake-word detection. Labels: "
+            "method=onnx|stt_fallback, mind_id (cardinality bounded "
+            "by operator's MindRegistry).",
+        )
         self.voice_opener_attempts = self._counter(
             "sovyx.voice.opener.attempts",
             "Per-attempt outcomes of open_input_stream pyramid (labels: "

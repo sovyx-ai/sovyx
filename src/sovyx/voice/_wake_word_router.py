@@ -53,7 +53,7 @@ side switches mind context.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from sovyx.observability.logging import get_logger
 from sovyx.voice.wake_word import (
@@ -63,14 +63,37 @@ from sovyx.voice.wake_word import (
     WakeWordState,
 )
 
+
+class _WakeWordDetectorLike(Protocol):
+    """Duck-type interface the router fans frames to.
+
+    Both :class:`WakeWordDetector` (ONNX) and
+    :class:`STTWakeWordDetector` satisfy this Protocol structurally.
+    The router holds a heterogeneous mix and dispatches uniformly.
+    """
+
+    @property
+    def state(self) -> WakeWordState: ...
+
+    def process_frame(
+        self,
+        audio_frame: npt.NDArray[np.float32] | npt.NDArray[np.int16],
+    ) -> WakeWordEvent: ...
+
+    def reset(self) -> None: ...
+
+    def note_false_fire(self, *, monotonic_now: float | None = None) -> None: ...
+
+
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Callable, Iterable
     from pathlib import Path
 
     import numpy as np
     import numpy.typing as npt
 
     from sovyx.engine.types import MindId
+    from sovyx.voice._wake_word_stt_fallback import STTWakeWordConfig
     from sovyx.voice.wake_word import VerifierFn
 
 logger = get_logger(__name__)
@@ -125,7 +148,10 @@ class WakeWordRouter:
         # minds share a wake word phonetic neighbourhood (e.g. two
         # minds named "Aria" and "Aria-2" — the first registered
         # wins).
-        self._detectors: dict[MindId, WakeWordDetector] = {}
+        # The value type is the duck-type protocol so ONNX +
+        # STT-fallback detectors interleave transparently
+        # (T8.17-T8.18 hot-swap path).
+        self._detectors: dict[MindId, _WakeWordDetectorLike] = {}
 
     @property
     def registered_minds(self) -> tuple[MindId, ...]:
@@ -188,6 +214,62 @@ class WakeWordRouter:
             **{
                 "voice.mind_id": str(mind_id),
                 "voice.model_path": str(model_path),
+                "voice.registered_count": len(self._detectors),
+            },
+        )
+
+    def register_mind_stt_fallback(
+        self,
+        mind_id: MindId,
+        *,
+        transcribe_fn: Callable[[npt.NDArray[np.float32]], str],
+        config: STTWakeWordConfig,
+    ) -> None:
+        """Register an STT-based fallback detector for ``mind_id``.
+
+        T8.17-T8.18 hot-swap path: the operator initially registers
+        a mind via ``register_mind_stt_fallback`` (slow path,
+        ~500 ms latency) so wake-word detection works immediately
+        for newly-named minds. When T8.13 custom training completes
+        for that mind, the operator calls
+        :meth:`register_mind` with the new ONNX checkpoint —
+        re-registration replaces the STT detector with the
+        ONNX-based :class:`WakeWordDetector` (T8.18 hot-swap),
+        latency drops to ~80 ms, no daemon restart needed.
+
+        Symmetric with :meth:`register_mind` — same idempotent
+        replacement semantics, same empty-mind_id rejection, same
+        registration-order priority. The router fans frames to
+        BOTH ONNX and STT detectors uniformly via the duck-type
+        ``process_frame`` interface; T8.19 telemetry differentiates
+        which class fired via the ``method`` counter label.
+
+        Args:
+            mind_id: Stable mind identifier (matches MindConfig.id).
+            transcribe_fn: Synchronous callable from float32 audio
+                buffer → transcript text. Operators wire async STT
+                engines via a sync bridge (see STTWakeWordDetector
+                module docstring).
+            config: STT detector configuration.
+
+        Raises:
+            ValueError: If ``mind_id`` is empty.
+        """
+        if not mind_id:
+            msg = "mind_id must be a non-empty string"
+            raise ValueError(msg)
+        # Lazy import to keep STT module off the path of operators
+        # who don't use the fallback feature.
+        from sovyx.voice._wake_word_stt_fallback import (  # noqa: PLC0415
+            STTWakeWordDetector,
+        )
+
+        detector = STTWakeWordDetector(transcribe_fn=transcribe_fn, config=config)
+        self._detectors[mind_id] = detector
+        logger.info(
+            "voice.wake_word.router.mind_registered_stt_fallback",
+            **{
+                "voice.mind_id": str(mind_id),
                 "voice.registered_count": len(self._detectors),
             },
         )
@@ -259,11 +341,29 @@ class WakeWordRouter:
                 )
                 continue
             if event.detected:
+                # T8.19 — detection-method telemetry. Discriminate by
+                # detector class so dashboards split slow-path
+                # (stt_fallback) from fast-path (onnx) detection
+                # rates per mind. Lazy-import to avoid the metrics
+                # surface on non-voice daemons.
+                from sovyx.voice._wake_word_stt_fallback import (  # noqa: PLC0415
+                    STTWakeWordDetector,
+                )
+                from sovyx.voice.health._metrics import (  # noqa: PLC0415
+                    record_wake_word_detection_method,
+                )
+
+                method = "stt_fallback" if isinstance(detector, STTWakeWordDetector) else "onnx"
+                record_wake_word_detection_method(
+                    method=method,
+                    mind_id=str(mind_id),
+                )
                 logger.info(
                     "voice.wake_word.router.matched",
                     **{
                         "voice.mind_id": str(mind_id),
                         "voice.score": round(event.score, 4),
+                        "voice.detection_method": method,
                     },
                 )
                 return WakeWordRouterEvent(mind_id=mind_id, event=event)

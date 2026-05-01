@@ -683,6 +683,35 @@ def record_wake_word_false_fire(*, reason: str, mind_id: str = "") -> None:
     )
 
 
+def record_wake_word_detection_method(
+    *,
+    method: str,
+    mind_id: str = "",
+) -> None:
+    """Increment the T8.19 detection-method counter.
+
+    Fires at every confirmed wake-word detection, labeled by which
+    detector class fired. Operator pilot signal for the T8.18
+    hot-swap window — when a newly-named mind moves from
+    ``stt_fallback`` to ``onnx``, the rate ratio shifts and
+    operators see latency improve correspondingly in the
+    ``voice.wake_word.detection_latency`` histogram.
+
+    Args:
+        method: ``"onnx"`` (standard WakeWordDetector via OpenWakeWord
+            ONNX inference; ~5 ms/frame) or ``"stt_fallback"`` (STT-
+            based fallback when no ONNX model trained yet for this
+            mind; ~500 ms latency).
+        mind_id: Phase 8 / T8.9 mind identifier for per-mind
+            attribution. Empty default preserves the v0.30.0
+            single-mind contract.
+    """
+    get_metrics().voice_wake_word_detection_method.add(
+        1,
+        attributes={"method": method, "mind_id": mind_id},
+    )
+
+
 def record_wake_word_fast_path_engaged(*, score: float) -> None:
     """Increment the T7.4 fast-path engagement counter.
 
@@ -1316,6 +1345,7 @@ __all__ = [
     "record_time_to_first_utterance",
     "record_vad_quiet_signal_gated",
     "record_wake_word_confidence",
+    "record_wake_word_detection_method",
     "record_wake_word_detection_ms",
     "record_wake_word_false_fire",
     "record_wake_word_fast_path_engaged",
