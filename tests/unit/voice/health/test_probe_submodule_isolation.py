@@ -299,6 +299,61 @@ class TestAnalyseVad:
         assert vad.calls >= 1
         assert math.isclose(max_p, 0.4, abs_tol=1e-6)
 
+    def test_2d_block_fully_in_warmup_advances_remaining(self) -> None:
+        # Multichannel block whose FULL length fits inside the warmup
+        # window — entire block is discarded as warmup, no VAD call,
+        # warmup_remaining decreases by block.shape[0]. Pins the
+        # 2D `block.shape[0] <= warmup_remaining` branch in _warm.py.
+        combo = _combo(sample_rate=48_000, channels=2)
+        warmup = _warmup_samples(combo)
+        # Block carries warmup // 2 samples across 2 channels (well
+        # under the full warmup window).
+        block = np.zeros((max(1, warmup // 2), 2), dtype=np.int16)
+        vad = _FakeSileroVAD(probability=0.9)
+        result = _analyse_vad(
+            [block],
+            combo=combo,
+            vad=vad,  # type: ignore[arg-type]
+            frame_normalizer_factory=_FakeFrameNormalizer,  # type: ignore[arg-type]
+        )
+        # Entire block consumed by warmup → no VAD frames produced.
+        assert result == (0.0, 0.0)
+        assert vad.calls == 0
+
+    def test_misshaped_window_from_normalizer_is_skipped(self) -> None:
+        # The normalizer contract guarantees ``(_TARGET_PIPELINE_WINDOW,)``
+        # shaped windows; a faulty / future-divergent normalizer that
+        # yields a wrong-sized window must be skipped without crashing
+        # the probe. Pins the ``if window.shape != (_TARGET_PIPELINE_WINDOW,)``
+        # continue branch in _warm.py.
+        class _MisshapedFrameNormalizer:
+            def __init__(
+                self,
+                source_rate: int,  # noqa: ARG002
+                source_channels: int,  # noqa: ARG002
+                source_format: str,  # noqa: ARG002
+            ) -> None:
+                pass
+
+            def push(self, _block: npt.NDArray[Any]) -> list[npt.NDArray[Any]]:
+                # Wrong shape — half the pipeline window.
+                return [np.zeros(_TARGET_PIPELINE_WINDOW // 2, dtype=np.float32)]
+
+        combo = _combo(sample_rate=48_000)
+        warmup = _warmup_samples(combo)
+        # 2 × warmup samples so post-warmup data reaches the normalizer.
+        block = np.zeros(2 * warmup, dtype=np.int16)
+        vad = _FakeSileroVAD(probability=0.9)
+        result = _analyse_vad(
+            [block],
+            combo=combo,
+            vad=vad,  # type: ignore[arg-type]
+            frame_normalizer_factory=_MisshapedFrameNormalizer,  # type: ignore[arg-type]
+        )
+        # Mis-shaped windows skipped → no VAD frames → (0.0, 0.0).
+        assert result == (0.0, 0.0)
+        assert vad.calls == 0
+
 
 # ── _warm path: _diagnose_warm classification table ──────────────────
 
