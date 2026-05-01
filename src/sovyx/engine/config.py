@@ -912,6 +912,33 @@ class VoiceTuningConfig(BaseSettings):
     apo_quarantine_s: float = 3_600.0
     apo_quarantine_recheck_interval_s: float = 300.0
 
+    # T6.16 — post-apply INCONCLUSIVE retry. The
+    # ``CaptureIntegrityCoordinator`` post-apply probe can return
+    # INCONCLUSIVE on transient causes (tap timed out short before
+    # ``_MIN_SAMPLES_FOR_ANALYSIS``, user silent during the apply
+    # settle window, brief tap exception). Pre-T6.16 behaviour treated
+    # INCONCLUSIVE as APPLIED_STILL_DEAD → reverted strategies that
+    # may have actually worked. The retry path captures a FRESH mark
+    # after the first inconclusive tap and re-probes ONCE; if the
+    # retry yields a definitive verdict (HEALTHY / VAD_MUTE+improvement
+    # / APO_DEGRADED / DRIVER_SILENT), it drives the rest of the path.
+    # If retry also returns INCONCLUSIVE, the coordinator falls through
+    # to the canonical APPLIED_STILL_DEAD + revert flow (conservative
+    # default — same as pre-T6.16 behaviour). The retry's bounded cost
+    # (one extra probe ≈ probe_duration_s + jitter_margin_s, typically
+    # 1-2 s) is negligible vs the false-revert cost of dropping a
+    # working strategy.
+    capture_integrity_inconclusive_retry_enabled: bool = True
+    """T6.16 — single-retry on post-apply INCONCLUSIVE verdict in the
+    bypass coordinator. ``True`` (default) is strictly safer than
+    pre-T6.16 behaviour: recovers transient inconclusives (user silent
+    / tap-window timeout) without changing the deterministic STILL_DEAD
+    path. Operators wanting to restore pre-T6.16 single-probe behaviour
+    set ``SOVYX_TUNING__VOICE__CAPTURE_INTEGRITY_INCONCLUSIVE_RETRY_ENABLED=false``.
+    The retry decision is documented architecturally — flipping the
+    flag should be the rare exception, not a routine config change.
+    """
+
     # T6.17 — quarantine ping-pong detection. When the same endpoint is
     # re-added to quarantine ``threshold`` times within ``window_s``,
     # the layer emits ``voice_quarantine_re_quarantine_event`` so

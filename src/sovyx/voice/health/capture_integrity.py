@@ -653,6 +653,51 @@ class CaptureIntegrityCoordinator:
                     verdict=after.verdict.value,
                     phase="post_bypass",
                 )
+                # T6.16 — single retry on INCONCLUSIVE. Transient causes
+                # (tap timed out short, user silent during apply window,
+                # brief tap exception) shouldn't trigger a strategy
+                # revert. Capture a FRESH mark + re-tap to give the
+                # second window a chance at a definitive verdict.
+                # Conservative fall-through: if retry is also
+                # INCONCLUSIVE, the path reverts to the canonical
+                # APPLIED_STILL_DEAD branch below.
+                if (
+                    after.verdict is IntegrityVerdict.INCONCLUSIVE
+                    and tuning.capture_integrity_inconclusive_retry_enabled
+                ):
+                    retry_mark = self._capture_task.samples_written_mark()
+                    try:
+                        retry_frames = await self._capture_task.tap_frames_since_mark(
+                            retry_mark,
+                            probe_min_samples,
+                            probe_max_wait_s,
+                        )
+                        retry_after = await self._probe.analyse_raw(
+                            retry_frames,
+                            endpoint_guid=context.endpoint_guid,
+                        )
+                    except Exception as exc:  # noqa: BLE001 — retry is best-effort
+                        logger.debug(
+                            "capture_integrity_inconclusive_retry_failed",
+                            strategy=strategy.name,
+                            endpoint_guid=context.endpoint_guid,
+                            reason=str(exc)[:200],
+                            exc_type=type(exc).__name__,
+                        )
+                        retry_after = after  # Keep the original inconclusive.
+                    logger.info(
+                        "capture_integrity_inconclusive_retry",
+                        strategy=strategy.name,
+                        endpoint_guid=context.endpoint_guid,
+                        first_verdict=IntegrityVerdict.INCONCLUSIVE.value,
+                        retry_verdict=retry_after.verdict.value,
+                        retry_recovered=(retry_after.verdict is not IntegrityVerdict.INCONCLUSIVE),
+                    )
+                    record_capture_integrity_verdict(
+                        verdict=retry_after.verdict.value,
+                        phase="post_bypass_retry",
+                    )
+                    after = retry_after
                 elapsed_ms = (time.monotonic() - t0) * 1000.0
 
                 # v1.3 §4.2 L4-B improvement heuristic (§14.E2). When

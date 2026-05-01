@@ -823,3 +823,246 @@ class TestUnrecoverableEmission:
         hint = _unrecoverable_remediation_hint("freebsd")
         assert "freebsd" in hint
         assert "no user-mode bypass" in hint
+
+
+# ── T6.16 — post-apply INCONCLUSIVE retry ───────────────────────────
+
+
+@dataclass
+class _TwoPhaseProbe:
+    """Probe stand-in returning DIFFERENT verdicts on first vs retry call.
+
+    The coordinator's INCONCLUSIVE retry path issues two
+    ``analyse_raw`` calls with different ``post_apply_frames`` (the
+    fresh mark + tap pair). This stand-in returns the configured
+    verdict for each call, by call index — matching the production
+    contract that the retry sees a SECOND, fresh window.
+    """
+
+    before: IntegrityResult
+    after_sequence: list[IntegrityResult] = field(default_factory=list)
+    analyse_raw_calls: list[npt.NDArray[np.int16]] = field(default_factory=list)
+
+    async def probe_warm(self, _capture: Any) -> IntegrityResult:  # noqa: ANN401
+        return self.before
+
+    async def analyse_raw(
+        self,
+        frames: npt.NDArray[np.int16],
+        *,
+        endpoint_guid: str,  # noqa: ARG002
+    ) -> IntegrityResult:
+        idx = len(self.analyse_raw_calls)
+        self.analyse_raw_calls.append(frames)
+        if idx < len(self.after_sequence):
+            return self.after_sequence[idx]
+        # Past the configured sequence: reuse the last one.
+        return self.after_sequence[-1]
+
+
+class TestInconclusiveRetry:
+    """T6.16 — single retry on post-apply INCONCLUSIVE verdict."""
+
+    @pytest.mark.asyncio()
+    async def test_retry_recovers_to_healthy(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # First post-apply probe returns INCONCLUSIVE (e.g. tap timed
+        # out short during apply window). Retry succeeds with HEALTHY.
+        # Coordinator must resolve as APPLIED_HEALTHY, not revert.
+        caplog.set_level(logging.INFO, logger=_CAPTURE_INTEGRITY_LOGGER)
+
+        before = _result(verdict=IntegrityVerdict.APO_DEGRADED, rolloff_hz=192.0)
+        first_after = _result(verdict=IntegrityVerdict.INCONCLUSIVE)
+        retry_after = _result(verdict=IntegrityVerdict.HEALTHY, rolloff_hz=6000.0)
+        frames = np.zeros(int(3.0 * _SAMPLE_RATE), dtype=np.int16)
+        capture = _FakeCaptureTask(post_apply_frames=frames)
+        probe = _TwoPhaseProbe(
+            before=before,
+            after_sequence=[first_after, retry_after],
+        )
+        strategy = _FakeStrategy()
+        coordinator = CaptureIntegrityCoordinator(
+            probe=probe,  # type: ignore[arg-type]
+            strategies=[strategy],  # type: ignore[list-item]
+            capture_task=capture,  # type: ignore[arg-type]
+            platform_key="linux",
+            tuning=VoiceTuningConfig(),
+        )
+        outcomes = await coordinator.handle_deaf_signal()
+
+        # Two analyse_raw calls (initial + retry).
+        assert len(probe.analyse_raw_calls) == 2
+        # Retry log fires with retry_recovered=True.
+        retry_events = _records_named(caplog, "capture_integrity_inconclusive_retry")
+        assert len(retry_events) == 1
+        assert retry_events[0]["retry_recovered"] is True
+        assert retry_events[0]["retry_verdict"] == "healthy"
+        # Coordinator resolved as APPLIED_HEALTHY, not APPLIED_STILL_DEAD.
+        assert outcomes[-1].verdict is BypassVerdict.APPLIED_HEALTHY
+        # Strategy was NOT reverted — it actually fixed the signal.
+        assert strategy.reverted is False
+
+    @pytest.mark.asyncio()
+    async def test_retry_still_inconclusive_falls_through_to_still_dead(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Both probes return INCONCLUSIVE → conservative fall-through
+        # to APPLIED_STILL_DEAD + revert (pre-T6.16 behaviour preserved
+        # for genuinely inconclusive cases).
+        caplog.set_level(logging.INFO, logger=_CAPTURE_INTEGRITY_LOGGER)
+
+        before = _result(verdict=IntegrityVerdict.APO_DEGRADED)
+        inconclusive = _result(verdict=IntegrityVerdict.INCONCLUSIVE)
+        frames = np.zeros(int(3.0 * _SAMPLE_RATE), dtype=np.int16)
+        capture = _FakeCaptureTask(post_apply_frames=frames)
+        probe = _TwoPhaseProbe(
+            before=before,
+            after_sequence=[inconclusive, inconclusive],
+        )
+        strategy = _FakeStrategy()
+        coordinator = CaptureIntegrityCoordinator(
+            probe=probe,  # type: ignore[arg-type]
+            strategies=[strategy],  # type: ignore[list-item]
+            capture_task=capture,  # type: ignore[arg-type]
+            platform_key="linux",
+            tuning=VoiceTuningConfig(),
+        )
+        outcomes = await coordinator.handle_deaf_signal()
+
+        # Two analyse_raw calls (initial + retry); retry was INCONCLUSIVE.
+        assert len(probe.analyse_raw_calls) == 2
+        retry_events = _records_named(caplog, "capture_integrity_inconclusive_retry")
+        assert len(retry_events) == 1
+        assert retry_events[0]["retry_recovered"] is False
+        # APPLIED_STILL_DEAD path taken; strategy reverted.
+        assert outcomes[-1].verdict is BypassVerdict.APPLIED_STILL_DEAD
+        assert strategy.reverted is True
+
+    @pytest.mark.asyncio()
+    async def test_retry_disabled_falls_through_immediately(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Operator escape hatch — flag False restores pre-T6.16
+        # single-probe behaviour. No second analyse_raw call.
+        caplog.set_level(logging.INFO, logger=_CAPTURE_INTEGRITY_LOGGER)
+
+        before = _result(verdict=IntegrityVerdict.APO_DEGRADED)
+        first_after = _result(verdict=IntegrityVerdict.INCONCLUSIVE)
+        retry_after = _result(verdict=IntegrityVerdict.HEALTHY)
+        frames = np.zeros(int(3.0 * _SAMPLE_RATE), dtype=np.int16)
+        capture = _FakeCaptureTask(post_apply_frames=frames)
+        probe = _TwoPhaseProbe(
+            before=before,
+            after_sequence=[first_after, retry_after],
+        )
+        coordinator = CaptureIntegrityCoordinator(
+            probe=probe,  # type: ignore[arg-type]
+            strategies=[_FakeStrategy()],  # type: ignore[list-item]
+            capture_task=capture,  # type: ignore[arg-type]
+            platform_key="linux",
+            tuning=VoiceTuningConfig(
+                capture_integrity_inconclusive_retry_enabled=False,
+            ),
+        )
+        outcomes = await coordinator.handle_deaf_signal()
+
+        # Only ONE analyse_raw call — retry was disabled.
+        assert len(probe.analyse_raw_calls) == 1
+        # No retry log.
+        assert _records_named(caplog, "capture_integrity_inconclusive_retry") == []
+        # Falls into APPLIED_STILL_DEAD even though retry would have
+        # resolved HEALTHY.
+        assert outcomes[-1].verdict is BypassVerdict.APPLIED_STILL_DEAD
+
+    @pytest.mark.asyncio()
+    async def test_first_probe_definitive_skips_retry(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # First probe returns a DEFINITIVE verdict (HEALTHY) → retry
+        # path NOT taken. Guards against accidentally double-probing
+        # the success path.
+        caplog.set_level(logging.INFO, logger=_CAPTURE_INTEGRITY_LOGGER)
+
+        before = _result(verdict=IntegrityVerdict.APO_DEGRADED, rolloff_hz=192.0)
+        first_after = _result(verdict=IntegrityVerdict.HEALTHY, rolloff_hz=6000.0)
+        frames = np.zeros(int(3.0 * _SAMPLE_RATE), dtype=np.int16)
+        capture = _FakeCaptureTask(post_apply_frames=frames)
+        probe = _TwoPhaseProbe(
+            before=before,
+            after_sequence=[first_after],
+        )
+        coordinator = CaptureIntegrityCoordinator(
+            probe=probe,  # type: ignore[arg-type]
+            strategies=[_FakeStrategy()],  # type: ignore[list-item]
+            capture_task=capture,  # type: ignore[arg-type]
+            platform_key="linux",
+            tuning=VoiceTuningConfig(),
+        )
+        outcomes = await coordinator.handle_deaf_signal()
+
+        assert len(probe.analyse_raw_calls) == 1
+        assert _records_named(caplog, "capture_integrity_inconclusive_retry") == []
+        assert outcomes[-1].verdict is BypassVerdict.APPLIED_HEALTHY
+
+    @pytest.mark.asyncio()
+    async def test_retry_tap_exception_falls_through(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # If the retry tap itself raises (transient capture-task
+        # error), the coordinator must NOT crash — falls through with
+        # the original inconclusive verdict.
+        caplog.set_level(logging.DEBUG, logger=_CAPTURE_INTEGRITY_LOGGER)
+
+        before = _result(verdict=IntegrityVerdict.APO_DEGRADED)
+        first_after = _result(verdict=IntegrityVerdict.INCONCLUSIVE)
+        frames = np.zeros(int(3.0 * _SAMPLE_RATE), dtype=np.int16)
+        capture = _FakeCaptureTask(post_apply_frames=frames)
+        probe = _TwoPhaseProbe(
+            before=before,
+            after_sequence=[first_after],
+        )
+
+        # Patch the second tap call to raise.
+        original_tap = capture.tap_frames_since_mark
+        call_count = {"n": 0}
+
+        async def _flaky_tap(
+            mark: tuple[int, int],
+            min_samples: int,
+            max_wait_s: float,
+        ) -> npt.NDArray[np.int16]:
+            call_count["n"] += 1
+            if call_count["n"] == 2:
+                msg = "simulated transient tap failure"
+                raise RuntimeError(msg)
+            return await original_tap(mark, min_samples, max_wait_s)
+
+        capture.tap_frames_since_mark = _flaky_tap  # type: ignore[method-assign]
+
+        coordinator = CaptureIntegrityCoordinator(
+            probe=probe,  # type: ignore[arg-type]
+            strategies=[_FakeStrategy()],  # type: ignore[list-item]
+            capture_task=capture,  # type: ignore[arg-type]
+            platform_key="linux",
+            tuning=VoiceTuningConfig(),
+        )
+        outcomes = await coordinator.handle_deaf_signal()
+
+        # Retry tap raised → graceful fall-through to APPLIED_STILL_DEAD.
+        assert outcomes[-1].verdict is BypassVerdict.APPLIED_STILL_DEAD
+        # Defensive log fires at DEBUG level.
+        debug_events = _records_named(
+            caplog,
+            "capture_integrity_inconclusive_retry_failed",
+        )
+        assert len(debug_events) == 1
+        # Standard retry log STILL fires (with retry_recovered=False).
+        retry_events = _records_named(caplog, "capture_integrity_inconclusive_retry")
+        assert len(retry_events) == 1
+        assert retry_events[0]["retry_recovered"] is False
