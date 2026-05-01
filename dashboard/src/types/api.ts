@@ -1012,6 +1012,7 @@ export type VoiceHealthDiagnosis =
   | "device_busy"
   | "exclusive_mode_not_available"
   | "insufficient_buffer_size"
+  | "invalid_sample_rate_no_auto_convert"
   | "permission_denied"
   | "kernel_invalidated"
   | "stream_open_timeout"

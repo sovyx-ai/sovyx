@@ -89,6 +89,20 @@ _INSUFFICIENT_BUFFER_SIZE_KEYWORDS = (
     "-2004287464",
 )
 _PERMISSION_KEYWORDS = ("permission", "denied", "access", "not authoriz")
+# Phase 6 / T6.5 — sample-rate-specific subset of the FORMAT_MISMATCH
+# keywords. When one of these matches AND ``combo.auto_convert`` is
+# ``False``, the cascade can recover by re-running the same combo with
+# ``auto_convert=True`` (PortAudio/WASAPI does the resample) — a path
+# distinct from "try a different rate" which is what plain
+# FORMAT_MISMATCH signals. The subset is deliberately strict: it only
+# contains rate-only tokens so a "format" / "channels" message lands
+# in FORMAT_MISMATCH instead.
+_INVALID_SAMPLE_RATE_KEYWORDS = (
+    "invalid sample rate",
+    "invalid samplerate",
+    "sample rate",
+    "samplerate",
+)
 _FORMAT_MISMATCH_KEYWORDS = (
     "invalid sample rate",
     "invalid samplerate",
@@ -158,7 +172,10 @@ driver surfaces in one cascade attempt; long enough that the default
 # ── Open-error classification ─────────────────────────────────────
 
 
-def _classify_open_error(exc: BaseException) -> Diagnosis:
+def _classify_open_error(
+    exc: BaseException,
+    combo: Combo | None = None,
+) -> Diagnosis:
     """Map a PortAudio / OS exception to a :class:`Diagnosis`.
 
     Exact string matching is fragile; we match keyword sets instead and
@@ -187,8 +204,17 @@ def _classify_open_error(exc: BaseException) -> Diagnosis:
        ``frames_per_buffer`` value is the right path.
     4. ``DEVICE_BUSY`` — ``audclnt_e_device_in_use`` etc. Wait + retry
        is meaningful here (another app might release the lock).
-    5. ``FORMAT_MISMATCH`` — invalid sample rate / channels / format.
-    6. ``KERNEL_INVALIDATED`` — checked AFTER format-mismatch so an
+    5. ``INVALID_SAMPLE_RATE_NO_AUTO_CONVERT`` (T6.5) — rate-only
+       error AND ``combo.auto_convert is False``. Cascade should
+       enable auto_convert and retry the same rate, OR pick a
+       device-native rate. Distinct from FORMAT_MISMATCH which
+       signals "try a different rate" without the auto_convert
+       hint. Requires the optional ``combo`` argument; legacy
+       callers (combo=None) still land in FORMAT_MISMATCH for
+       backwards compatibility.
+    6. ``FORMAT_MISMATCH`` — invalid sample rate / channels / format
+       (the broader catch-all when T6.5 doesn't apply).
+    7. ``KERNEL_INVALIDATED`` — checked AFTER format-mismatch so an
        ``invalid sample rate`` message (containing ``"invalid"``)
        doesn't false-positive as kernel invalidation.
 
@@ -196,6 +222,13 @@ def _classify_open_error(exc: BaseException) -> Diagnosis:
     their format counterparts; none of them overlap with the
     format-mismatch tokens, but the priority still matters if a
     future message gains a compound phrase.
+
+    Args:
+        exc: The exception raised by PortAudio open / start.
+        combo: The combo being attempted, if known. Required to
+            distinguish T6.5 INVALID_SAMPLE_RATE_NO_AUTO_CONVERT
+            from generic FORMAT_MISMATCH; unsupplied callers fall
+            through to FORMAT_MISMATCH on rate-only errors.
     """
     msg = str(exc).lower()
     if any(keyword in msg for keyword in _PERMISSION_KEYWORDS):
@@ -206,6 +239,17 @@ def _classify_open_error(exc: BaseException) -> Diagnosis:
         return Diagnosis.INSUFFICIENT_BUFFER_SIZE
     if any(keyword in msg for keyword in _DEVICE_BUSY_KEYWORDS):
         return Diagnosis.DEVICE_BUSY
+    # T6.5 — rate-only error WITH a known combo whose auto_convert is
+    # False routes to the new diagnosis. The cascade can fix this
+    # without changing rate (just enable conversion). When combo is
+    # absent (legacy call) or auto_convert is True, fall through to
+    # FORMAT_MISMATCH which is the broader retry-different-rate path.
+    if (
+        combo is not None
+        and not combo.auto_convert
+        and any(keyword in msg for keyword in _INVALID_SAMPLE_RATE_KEYWORDS)
+    ):
+        return Diagnosis.INVALID_SAMPLE_RATE_NO_AUTO_CONVERT
     if any(keyword in msg for keyword in _FORMAT_MISMATCH_KEYWORDS):
         return Diagnosis.FORMAT_MISMATCH
     if any(keyword in msg for keyword in _KERNEL_INVALIDATED_KEYWORDS):
@@ -316,6 +360,7 @@ __all__ = [
     "_EXCLUSIVE_MODE_NOT_AVAILABLE_KEYWORDS",
     "_FORMAT_MISMATCH_KEYWORDS",
     "_INSUFFICIENT_BUFFER_SIZE_KEYWORDS",
+    "_INVALID_SAMPLE_RATE_KEYWORDS",
     "_KERNEL_INVALIDATED_KEYWORDS",
     "_PERMISSION_KEYWORDS",
     "_classify_open_error",

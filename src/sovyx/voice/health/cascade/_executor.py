@@ -1165,7 +1165,11 @@ async def _try_combo(
         # / "access" cannot be misclassified as a structured Diagnosis.
         # Non-OSError stays DRIVER_ERROR — the original cascade contract.
         if isinstance(exc, OSError):
-            diagnosis = _classify_open_error(exc)
+            # T6.5 — pass combo so a rate-only error with
+            # auto_convert=False routes to the
+            # INVALID_SAMPLE_RATE_NO_AUTO_CONVERT diagnosis instead
+            # of FORMAT_MISMATCH.
+            diagnosis = _classify_open_error(exc, combo=combo)
         else:
             diagnosis = Diagnosis.DRIVER_ERROR
         logger.error(

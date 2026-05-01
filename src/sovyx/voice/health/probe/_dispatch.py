@@ -258,7 +258,10 @@ async def _run_probe(
             callback=_callback,
         )
     except BaseException as exc:  # noqa: BLE001 — translate into Diagnosis
-        diagnosis = _classify_open_error(exc)
+        # T6.5 — pass combo so a rate-only error with auto_convert=False
+        # routes to INVALID_SAMPLE_RATE_NO_AUTO_CONVERT instead of the
+        # broader FORMAT_MISMATCH diagnosis.
+        diagnosis = _classify_open_error(exc, combo=combo)
         logger.info(
             "voice_probe_open_failed",
             mode=str(mode),
@@ -304,7 +307,8 @@ async def _run_probe(
             await asyncio.to_thread(stream.close)
 
     if start_time_error is not None:
-        diagnosis = _classify_open_error(start_time_error)
+        # T6.5 — pass combo for the same rate-vs-auto_convert routing.
+        diagnosis = _classify_open_error(start_time_error, combo=combo)
         logger.info(
             "voice_probe_start_failed",
             mode=str(mode),

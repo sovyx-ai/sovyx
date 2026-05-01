@@ -50,6 +50,14 @@ class Diagnosis(StrEnum):
     # different ``frames_per_buffer`` (typically the device's
     # ``DefaultDevicePeriod``); same combo retry is futile.
     INSUFFICIENT_BUFFER_SIZE = "insufficient_buffer_size"
+    # Phase 6 / T6.5 — distinct from FORMAT_MISMATCH: the requested
+    # sample_rate isn't natively supported by the device AND the
+    # combo's ``auto_convert`` is False so PortAudio cannot resample
+    # in software. Cascade should retry with ``auto_convert=True``
+    # (lossy but works) OR a different sample_rate. FORMAT_MISMATCH
+    # remains the catch-all for ``auto_convert=True`` paths or for
+    # channel/format-specific rejections.
+    INVALID_SAMPLE_RATE_NO_AUTO_CONVERT = "invalid_sample_rate_no_auto_convert"
     PERMISSION_DENIED = "permission_denied"
     # Phase 6 / T6.2 — stream opened + started but ZERO callbacks fired
     # within ``probe_stream_open_timeout_threshold_ms`` (default 5 s).

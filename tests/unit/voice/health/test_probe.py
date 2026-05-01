@@ -520,7 +520,13 @@ class TestOpenErrors:
             ("Device is exclusive-mode busy", Diagnosis.DEVICE_BUSY),
             ("Permission denied (microphone access blocked)", Diagnosis.PERMISSION_DENIED),
             ("Access not authorized", Diagnosis.PERMISSION_DENIED),
-            ("Invalid sample rate (48000) for this device", Diagnosis.FORMAT_MISMATCH),
+            # T6.5 — rate-only error with combo.auto_convert=False
+            # (the _combo() default) routes to the new T6.5 diagnosis.
+            # Auto-convert=True path is exercised by the property tests.
+            (
+                "Invalid sample rate (48000) for this device",
+                Diagnosis.INVALID_SAMPLE_RATE_NO_AUTO_CONVERT,
+            ),
             ("Invalid number of channels", Diagnosis.FORMAT_MISMATCH),
             ("Unsupported format", Diagnosis.FORMAT_MISMATCH),
             ("Unknown PortAudio internal failure XYZ", Diagnosis.DRIVER_ERROR),
@@ -974,9 +980,15 @@ class TestStartTimeErrorClassification:
         assert result.diagnosis is Diagnosis.DEVICE_BUSY
 
     @pytest.mark.asyncio()
-    async def test_invalid_sample_rate_at_start_classifies_as_format_mismatch(
+    async def test_invalid_sample_rate_at_start_classifies_as_t65(
         self,
     ) -> None:
+        # T6.5 — start-time rate error with combo.auto_convert=False
+        # routes to the new INVALID_SAMPLE_RATE_NO_AUTO_CONVERT
+        # diagnosis. The _classify_open_error wire-up at the
+        # start_time_error site receives ``combo=combo`` so the
+        # T6.5 branch fires correctly. Pre-T6.5 this routed to
+        # FORMAT_MISMATCH unconditionally.
         combo = _combo()
         sd = _FakeSoundDevice(
             start_exc=RuntimeError("Error starting stream: Invalid sample rate"),
@@ -988,7 +1000,7 @@ class TestStartTimeErrorClassification:
             duration_ms=200,
             sd_module=sd,
         )
-        assert result.diagnosis is Diagnosis.FORMAT_MISMATCH
+        assert result.diagnosis is Diagnosis.INVALID_SAMPLE_RATE_NO_AUTO_CONVERT
 
     @pytest.mark.asyncio()
     async def test_cancelled_error_propagates_through_start(self) -> None:

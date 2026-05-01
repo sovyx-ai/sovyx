@@ -102,6 +102,7 @@ function diagnosisTone(
     case "apo_degraded":
     case "exclusive_mode_not_available":
     case "insufficient_buffer_size":
+    case "invalid_sample_rate_no_auto_convert":
       return "warn";
     case "muted":
     case "no_signal":

@@ -99,6 +99,10 @@ class TestDiagnosisEnum:
             # (AUDCLNT_E_BUFFER_SIZE_*); format is fine, only
             # frames_per_buffer is wrong.
             "insufficient_buffer_size",
+            # Phase 6 / T6.5 — rate-only error with
+            # auto_convert=False; cascade enables conversion or
+            # picks a device-native rate.
+            "invalid_sample_rate_no_auto_convert",
             "unknown",
         }
         assert {d.value for d in Diagnosis} == expected

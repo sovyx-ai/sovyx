@@ -33,7 +33,7 @@ import pytest
 from hypothesis import HealthCheck, assume, given, settings
 from hypothesis import strategies as st
 
-from sovyx.voice.health.contract import Diagnosis
+from sovyx.voice.health.contract import Combo, Diagnosis
 from sovyx.voice.health.probe._classifier import _compute_rms_db
 from sovyx.voice.health.probe._cold import (
     _DEVICE_BUSY_KEYWORDS,
@@ -283,16 +283,21 @@ class TestClassifyOpenErrorTotality:
     @given(text=st.text(min_size=0, max_size=200))
     @settings(max_examples=300)
     def test_returned_diagnosis_is_in_known_set(self, text: str) -> None:
-        # The classifier returns ONLY one of 7 documented values:
+        # The classifier returns ONLY one of 8 documented values:
         # PERMISSION_DENIED / EXCLUSIVE_MODE_NOT_AVAILABLE (T6.3) /
         # INSUFFICIENT_BUFFER_SIZE (T6.4) / DEVICE_BUSY /
-        # FORMAT_MISMATCH / KERNEL_INVALIDATED / DRIVER_ERROR.
+        # INVALID_SAMPLE_RATE_NO_AUTO_CONVERT (T6.5) / FORMAT_MISMATCH /
+        # KERNEL_INVALIDATED / DRIVER_ERROR.
         # No other diagnosis leaks out. Guards against future map drift.
+        # Property test passes RuntimeError without combo, so the T6.5
+        # branch is unreachable here — but the diagnosis is still in
+        # the allowed set in case a caller passes combo in future.
         allowed = {
             Diagnosis.PERMISSION_DENIED,
             Diagnosis.EXCLUSIVE_MODE_NOT_AVAILABLE,
             Diagnosis.INSUFFICIENT_BUFFER_SIZE,
             Diagnosis.DEVICE_BUSY,
+            Diagnosis.INVALID_SAMPLE_RATE_NO_AUTO_CONVERT,
             Diagnosis.FORMAT_MISMATCH,
             Diagnosis.KERNEL_INVALIDATED,
             Diagnosis.DRIVER_ERROR,
@@ -479,6 +484,75 @@ class TestClassifyOpenErrorTotality:
             RuntimeError("invalid sample rate 192000"),
         )
         assert result is Diagnosis.FORMAT_MISMATCH
+
+    # T6.5 — INVALID_SAMPLE_RATE_NO_AUTO_CONVERT classification
+
+    def _combo(self, *, auto_convert: bool) -> Combo:
+        """Build a Combo with the requested auto_convert flag."""
+        return Combo(
+            host_api="WASAPI",
+            sample_rate=48_000,
+            channels=1,
+            sample_format="int16",
+            exclusive=False,
+            auto_convert=auto_convert,
+            frames_per_buffer=480,
+            platform_key="win32",
+        )
+
+    def test_rate_error_with_auto_convert_false_routes_to_t65(self) -> None:
+        # T6.5 — when auto_convert=False AND the error is rate-only,
+        # the new INVALID_SAMPLE_RATE_NO_AUTO_CONVERT diagnosis fires
+        # instead of generic FORMAT_MISMATCH. Cascade-actionable: enable
+        # auto_convert and retry the same rate.
+        result = _classify_open_error(
+            RuntimeError("invalid sample rate 192000"),
+            combo=self._combo(auto_convert=False),
+        )
+        assert result is Diagnosis.INVALID_SAMPLE_RATE_NO_AUTO_CONVERT
+
+    def test_rate_error_with_auto_convert_true_routes_to_format_mismatch(
+        self,
+    ) -> None:
+        # When auto_convert=True the conversion path is already taken;
+        # a rate error here means the device fundamentally rejects the
+        # conversion. Cascade should pick a different rate, hence the
+        # broader FORMAT_MISMATCH diagnosis.
+        result = _classify_open_error(
+            RuntimeError("invalid sample rate 192000"),
+            combo=self._combo(auto_convert=True),
+        )
+        assert result is Diagnosis.FORMAT_MISMATCH
+
+    def test_rate_error_without_combo_falls_back_to_format_mismatch(self) -> None:
+        # Backwards-compat: callers that don't pass combo still get the
+        # legacy FORMAT_MISMATCH classification.
+        result = _classify_open_error(RuntimeError("invalid sample rate 192000"))
+        assert result is Diagnosis.FORMAT_MISMATCH
+
+    def test_format_error_with_auto_convert_false_stays_format_mismatch(
+        self,
+    ) -> None:
+        # T6.5 only fires for rate-only errors. A "format" or
+        # "channels" error stays FORMAT_MISMATCH regardless of
+        # auto_convert (no software path enables it).
+        result = _classify_open_error(
+            RuntimeError("invalid number of channels"),
+            combo=self._combo(auto_convert=False),
+        )
+        assert result is Diagnosis.FORMAT_MISMATCH
+
+    def test_t65_priority_below_buffer_size(self) -> None:
+        # Priority guard — when a message contains BOTH "buffer size"
+        # and "sample rate" tokens, INSUFFICIENT_BUFFER_SIZE wins
+        # (it's the more-specific cascade-action). T6.5 only fires
+        # for pure rate-only errors that didn't match higher-priority
+        # buckets.
+        result = _classify_open_error(
+            RuntimeError("invalid sample rate AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED"),
+            combo=self._combo(auto_convert=False),
+        )
+        assert result is Diagnosis.INSUFFICIENT_BUFFER_SIZE
 
     @pytest.mark.parametrize("keyword", _KERNEL_INVALIDATED_KEYWORDS)
     def test_kernel_invalidated_routes_when_format_keywords_absent(

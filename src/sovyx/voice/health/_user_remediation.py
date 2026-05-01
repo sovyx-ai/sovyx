@@ -104,6 +104,16 @@ _REMEDIATION_BY_DIAGNOSIS: dict[str, str] = {
         "try selecting a different default input device, or replug "
         "the device to refresh its supported-formats list."
     ),
+    "invalid_sample_rate_no_auto_convert": (
+        "The microphone is locked at a sample rate sovyx didn't "
+        "request, and software resampling is disabled for this combo. "
+        "Sovyx will retry with auto-conversion enabled — no operator "
+        "action needed for normal use. If the cascade still fails, "
+        "the device's native rate is incompatible with the pipeline; "
+        "check the device's supported-formats list (Windows Sound "
+        "Settings → Properties → Advanced; Linux ``arecord -L``) and "
+        "select a device that exposes 16 kHz or 48 kHz natively."
+    ),
     "driver_error": (
         "The audio driver refused to open the device. Try replugging "
         "the device, or update the driver via Device Manager (Windows) "
