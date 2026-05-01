@@ -249,6 +249,141 @@ class TestMindForget:
         run_mock.assert_not_called()
 
 
+class TestMindRetention:
+    """``sovyx mind retention prune|status`` — Phase 8 / T8.21 step 6."""
+
+    @staticmethod
+    def _report(**overrides: object) -> dict[str, object]:
+        defaults: dict[str, object] = {
+            "mind_id": "aria",
+            "cutoff_utc": "2026-04-01T00:00:00+00:00",
+            "episodes_purged": 5,
+            "conversations_purged": 3,
+            "conversation_turns_purged": 6,
+            "daily_stats_purged": 0,
+            "consolidation_log_purged": 1,
+            "consent_ledger_purged": 2,
+            "effective_horizons": {
+                "episodes": 30,
+                "conversations": 30,
+                "consolidation_log": 90,
+                "daily_stats": 365,
+                "consent_ledger": 0,
+            },
+            "total_brain_rows_purged": 6,
+            "total_conversations_rows_purged": 9,
+            "total_system_rows_purged": 0,
+            "total_rows_purged": 15,
+            "dry_run": False,
+        }
+        defaults.update(overrides)
+        return defaults
+
+    def test_prune_no_daemon(self) -> None:
+        with patch("sovyx.cli.main._get_client") as mock:
+            mock.return_value.is_daemon_running.return_value = False
+            result = runner.invoke(app, ["mind", "retention", "prune", "aria"])
+        assert result.exit_code == 1
+        assert "Daemon not running" in result.stdout
+
+    def test_prune_empty_mind_id_rejected(self) -> None:
+        with patch("sovyx.cli.main._get_client") as mock:
+            mock.return_value.is_daemon_running.return_value = True
+            result = runner.invoke(app, ["mind", "retention", "prune", "  "])
+        assert result.exit_code == 2  # noqa: PLR2004
+        assert "non-empty" in result.stdout
+
+    def test_prune_dry_run_no_confirmation(self) -> None:
+        with (
+            patch("sovyx.cli.main._get_client") as mock,
+            patch(
+                "sovyx.cli.main._run",
+                return_value=self._report(dry_run=True),
+            ),
+        ):
+            mock.return_value.is_daemon_running.return_value = True
+            result = runner.invoke(
+                app,
+                ["mind", "retention", "prune", "aria", "--dry-run"],
+            )
+        assert result.exit_code == 0
+        assert "would prune" in result.stdout
+        assert "15 relational rows" in result.stdout
+
+    def test_prune_with_yes_flag(self) -> None:
+        with (
+            patch("sovyx.cli.main._get_client") as mock,
+            patch("sovyx.cli.main._run", return_value=self._report()),
+        ):
+            mock.return_value.is_daemon_running.return_value = True
+            result = runner.invoke(
+                app,
+                ["mind", "retention", "prune", "aria", "--yes"],
+            )
+        assert result.exit_code == 0
+        assert "pruned" in result.stdout
+
+    def test_prune_renders_per_surface_breakdown(self) -> None:
+        with (
+            patch("sovyx.cli.main._get_client") as mock,
+            patch("sovyx.cli.main._run", return_value=self._report()),
+        ):
+            mock.return_value.is_daemon_running.return_value = True
+            result = runner.invoke(
+                app,
+                ["mind", "retention", "prune", "aria", "--yes"],
+            )
+        # Non-zero counts surface; daily_stats=0 doesn't.
+        assert "episodes_purged" in result.stdout
+        assert "5" in result.stdout
+        assert "daily_stats_purged" not in result.stdout
+        # Effective horizons section rendered.
+        assert "Effective horizons" in result.stdout
+
+    def test_prune_no_confirmation_aborts(self) -> None:
+        with (
+            patch("sovyx.cli.main._get_client") as mock,
+            patch("sovyx.cli.main._run") as run_mock,
+        ):
+            mock.return_value.is_daemon_running.return_value = True
+            result = runner.invoke(
+                app,
+                ["mind", "retention", "prune", "aria"],
+                input="n\n",
+            )
+        assert result.exit_code == 1
+        assert "aborted" in result.stdout
+        run_mock.assert_not_called()
+
+    def test_status_returns_horizons_and_counts(self) -> None:
+        with (
+            patch("sovyx.cli.main._get_client") as mock,
+            patch(
+                "sovyx.cli.main._run",
+                return_value=self._report(dry_run=True),
+            ),
+        ):
+            mock.return_value.is_daemon_running.return_value = True
+            result = runner.invoke(
+                app,
+                ["mind", "retention", "status", "aria"],
+            )
+        assert result.exit_code == 0
+        assert "Retention status" in result.stdout
+        assert "Eligible to prune" in result.stdout
+        assert "Effective horizons" in result.stdout
+
+    def test_status_no_daemon(self) -> None:
+        with patch("sovyx.cli.main._get_client") as mock:
+            mock.return_value.is_daemon_running.return_value = False
+            result = runner.invoke(
+                app,
+                ["mind", "retention", "status", "aria"],
+            )
+        assert result.exit_code == 1
+        assert "Daemon not running" in result.stdout
+
+
 @pytest.mark.skip(
     reason="deadlock on CI — leaks async resources that hang next test's collection; tracked separately"
 )

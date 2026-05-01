@@ -30,6 +30,11 @@ app = typer.Typer(
 )
 brain_app = typer.Typer(name="brain", help="Brain memory commands")
 mind_app = typer.Typer(name="mind", help="Mind management commands")
+retention_app = typer.Typer(
+    name="retention",
+    help="Per-mind retention policy (GDPR Art. 5(1)(e) / LGPD Art. 16)",
+)
+mind_app.add_typer(retention_app)
 brain_app.add_typer(analyze_app)
 app.add_typer(brain_app)
 app.add_typer(mind_app)
@@ -535,3 +540,143 @@ def mind_forget(
         count = int(result.get(key, 0))
         if count:
             console.print(f"  {key}: [cyan]{count}[/cyan]")
+
+
+@retention_app.command("prune")
+def mind_retention_prune(
+    mind_id: str = typer.Argument(..., help="Mind identifier"),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Preview what would be pruned without writing.",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Skip the interactive confirmation prompt (scripted use).",
+    ),
+) -> None:
+    """Apply time-based retention policy to a mind.
+
+    Prunes records older than per-surface horizons configured via
+    ``EngineConfig.tuning.retention.*`` + ``MindConfig.retention.*``
+    overrides. Distinguished from ``sovyx mind forget``: forget
+    wipes EVERY record (right-to-erasure GDPR Art. 17 / LGPD Art.
+    18 VI), retention prunes only OLD records (storage limitation
+    GDPR Art. 5(1)(e) / LGPD Art. 16). Tombstone is RETENTION_PURGE
+    not DELETE so external auditors can distinguish the two.
+
+    Phase 8 / T8.21 step 6.
+    """
+    client = _get_client()
+    if not client.is_daemon_running():
+        console.print(
+            "[red]Daemon not running — start with `sovyx start` first[/red]",
+        )
+        raise typer.Exit(1)
+
+    if not mind_id.strip():
+        console.print("[red]error:[/red] mind_id must be a non-empty string")
+        raise typer.Exit(2)
+
+    if not dry_run and not yes:
+        confirm = typer.confirm(
+            f"Apply retention policy to mind={mind_id!r}? "
+            f"Old records (per configured horizons) will be permanently "
+            f"deleted. Continue?",
+            default=False,
+        )
+        if not confirm:
+            console.print("[yellow]aborted[/yellow]")
+            raise typer.Exit(1)
+
+    try:
+        result = _run(
+            client.call(
+                "mind.retention.prune",
+                {"mind_id": mind_id, "dry_run": dry_run},
+            ),
+        )
+    except Exception as e:  # noqa: BLE001 — CLI boundary; pragma: no cover
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    if not isinstance(result, dict):
+        console.print(result)
+        return
+
+    verb = "would prune" if result.get("dry_run") else "pruned"
+    total = int(result.get("total_rows_purged", 0))
+    consent = int(result.get("consent_ledger_purged", 0))
+    cutoff = result.get("cutoff_utc", "")
+    console.print(
+        f"[green]{verb}[/green] [bold]{total}[/bold] relational rows + "
+        f"[bold]{consent}[/bold] consent-ledger records for mind={mind_id!r}",
+    )
+    if cutoff:
+        console.print(f"  cutoff: [dim]{cutoff}[/dim]")
+    breakdown_keys = (
+        "episodes_purged",
+        "conversations_purged",
+        "conversation_turns_purged",
+        "consolidation_log_purged",
+        "daily_stats_purged",
+        "consent_ledger_purged",
+    )
+    for key in breakdown_keys:
+        count = int(result.get(key, 0))
+        if count:
+            console.print(f"  {key}: [cyan]{count}[/cyan]")
+    horizons = result.get("effective_horizons", {})
+    if isinstance(horizons, dict) and horizons:
+        console.print("  [dim]Effective horizons (days):[/dim]")
+        for surface, days in horizons.items():
+            label = "[dim]disabled[/dim]" if days == 0 else f"{days}d"
+            console.print(f"    {surface}: {label}")
+
+
+@retention_app.command("status")
+def mind_retention_status(
+    mind_id: str = typer.Argument(..., help="Mind identifier"),
+) -> None:
+    """Preview retention horizons + counts WITHOUT writing.
+
+    Equivalent to ``sovyx mind retention prune <mind_id> --dry-run --yes``
+    but with a clearer name + no confirmation prompt (read-only).
+    """
+    client = _get_client()
+    if not client.is_daemon_running():
+        console.print("[red]Daemon not running[/red]")
+        raise typer.Exit(1)
+
+    try:
+        result = _run(
+            client.call(
+                "mind.retention.prune",
+                {"mind_id": mind_id, "dry_run": True},
+            ),
+        )
+    except Exception as e:  # noqa: BLE001 — CLI boundary; pragma: no cover
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from None
+
+    if not isinstance(result, dict):
+        console.print(result)
+        return
+
+    total = int(result.get("total_rows_purged", 0))
+    consent = int(result.get("consent_ledger_purged", 0))
+    console.print(
+        f"[bold]Retention status — mind={mind_id!r}[/bold]",
+    )
+    console.print(
+        f"  Eligible to prune: [yellow]{total}[/yellow] relational + "
+        f"[yellow]{consent}[/yellow] consent-ledger records",
+    )
+    horizons = result.get("effective_horizons", {})
+    if isinstance(horizons, dict) and horizons:
+        console.print("  Effective horizons (days):")
+        for surface, days in horizons.items():
+            label = "[dim]disabled[/dim]" if days == 0 else f"{days}d"
+            console.print(f"    {surface}: {label}")

@@ -19,10 +19,49 @@ from typing import TYPE_CHECKING, Any
 from sovyx.observability.logging import get_logger
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from sovyx.engine.registry import ServiceRegistry
     from sovyx.engine.rpc_server import DaemonRPCServer
+    from sovyx.engine.types import MindId
+    from sovyx.mind.config import MindConfig
 
 logger = get_logger(__name__)
+
+
+def _load_mind_config_best_effort(
+    data_dir: Path,
+    mind_id: MindId,
+) -> MindConfig | None:
+    """Best-effort load of ``MindConfig`` from ``<data_dir>/<mind_id>/mind.yaml``.
+
+    Used by retention RPC handler to resolve per-mind retention
+    overrides. Returns ``None`` on any failure (missing file,
+    malformed YAML, schema violation) — the caller falls back to
+    global defaults; retention is still functional, just without
+    per-mind overrides.
+
+    The "best-effort" semantics matter because retention is a
+    privacy-sensitive scheduled operation: a malformed mind.yaml
+    must NOT block retention from running on the global defaults
+    (operator's compliance posture is more important than perfect
+    config resolution).
+    """
+    try:
+        import yaml  # noqa: PLC0415 — lazy
+
+        from sovyx.mind.config import MindConfig as _MindConfig  # noqa: PLC0415
+
+        path = data_dir / str(mind_id) / "mind.yaml"
+        if not path.exists():
+            return None
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            return None
+        return _MindConfig.model_validate(raw)
+    except Exception:  # noqa: BLE001 — best-effort by design
+        return None
+
 
 # Stable identity for every CLI session. PersonResolver attaches all
 # CLI traffic to the same person row regardless of which terminal the
@@ -204,8 +243,87 @@ def register_cli_handlers(
             "dry_run": report.dry_run,
         }
 
+    async def _mind_retention_prune(
+        mind_id: str,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Time-based retention prune for a mind.
+
+        Phase 8 / T8.21 step 6 — daemon-side surface for the
+        ``sovyx mind retention prune <mind_id>`` CLI. Sibling to
+        ``mind.forget``: wipes records older than per-surface
+        horizons (configured via ``EngineConfig.tuning.retention.*``
+        + ``MindConfig.retention.*`` overrides), writes a
+        :data:`ConsentAction.RETENTION_PURGE` tombstone (distinct
+        from the operator-invoked DELETE).
+
+        Args:
+            mind_id: Target mind.
+            dry_run: When True, return counts without writing.
+
+        Returns:
+            JSON-serialisable dict mirroring
+            :class:`MindRetentionReport` plus the four aggregate
+            properties.
+        """
+        from sovyx.engine.config import EngineConfig  # noqa: PLC0415
+        from sovyx.engine.types import MindId  # noqa: PLC0415
+        from sovyx.mind.retention import MindRetentionService  # noqa: PLC0415
+        from sovyx.persistence.manager import DatabaseManager  # noqa: PLC0415
+        from sovyx.voice._consent_ledger import ConsentLedger  # noqa: PLC0415
+
+        config = await registry.resolve(EngineConfig)
+        db_manager = await registry.resolve(DatabaseManager)
+
+        mid = MindId(mind_id)
+        brain_pool = db_manager.get_brain_pool(mid)
+        conv_pool = db_manager.get_conversation_pool(mid)
+        system_pool = db_manager.get_system_pool()
+
+        ledger_path = config.data_dir / "voice" / "consent.jsonl"
+        ledger = ConsentLedger(path=ledger_path)
+
+        # Per-mind retention overrides: best-effort load from
+        # ``<data_dir>/<mind_id>/mind.yaml`` so
+        # ``MindConfig.retention.<surface>_days`` is honoured. Falls
+        # back to global defaults from ``EngineConfig.tuning.retention``
+        # when the file is missing or malformed — the service is still
+        # functional, just without per-mind overrides.
+        mind_config = _load_mind_config_best_effort(config.data_dir, mid)
+
+        service = MindRetentionService(
+            engine_config=config,
+            brain_pool=brain_pool,
+            conversations_pool=conv_pool,
+            system_pool=system_pool,
+            ledger=ledger,
+        )
+        report = await service.prune_mind(
+            mid,
+            mind_config=mind_config,
+            dry_run=dry_run,
+        )
+
+        return {
+            "mind_id": str(report.mind_id),
+            "cutoff_utc": report.cutoff_utc,
+            "episodes_purged": report.episodes_purged,
+            "conversations_purged": report.conversations_purged,
+            "conversation_turns_purged": report.conversation_turns_purged,
+            "daily_stats_purged": report.daily_stats_purged,
+            "consolidation_log_purged": report.consolidation_log_purged,
+            "consent_ledger_purged": report.consent_ledger_purged,
+            "effective_horizons": dict(report.effective_horizons),
+            "total_brain_rows_purged": report.total_brain_rows_purged,
+            "total_conversations_rows_purged": report.total_conversations_rows_purged,
+            "total_system_rows_purged": report.total_system_rows_purged,
+            "total_rows_purged": report.total_rows_purged,
+            "dry_run": report.dry_run,
+        }
+
     rpc.register_method("chat", _chat)
     rpc.register_method("mind.list", _mind_list)
     rpc.register_method("mind.forget", _mind_forget)
+    rpc.register_method("mind.retention.prune", _mind_retention_prune)
     rpc.register_method("config.get", _config_get)
-    logger.debug("cli_rpc_handlers_registered", count=4)
+    logger.debug("cli_rpc_handlers_registered", count=5)
