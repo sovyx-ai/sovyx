@@ -855,6 +855,28 @@ class VoicePipeline:
         """
         self._current_utterance_id = ""
 
+    def _notify_wake_word_false_fire(self) -> None:
+        """Forward a false-fire signal to the wake-word detector.
+
+        Phase 7 / T7.8 — orchestrator → detector feedback for the
+        adaptive-cooldown sliding window. The detector accumulates
+        timestamps and elevates cooldown to ``cooldown_max_seconds``
+        when the rolling-window count crosses the threshold.
+
+        Best-effort: a wake-word detector that doesn't expose
+        ``note_false_fire`` (e.g. the factory's no-op stub when
+        ``wake_word_enabled=False``) is silently skipped. The
+        orchestrator's other false-fire paths (counter + log event)
+        still fire regardless.
+        """
+        notify = getattr(self._wake_word, "note_false_fire", None)
+        if notify is None:
+            return
+        try:
+            notify()
+        except Exception:  # noqa: BLE001 — observability path must not break the pipeline
+            logger.exception("voice.wake_word.note_false_fire_failed")
+
     # -- Lifecycle -----------------------------------------------------------
 
     async def start(self) -> None:
@@ -1691,6 +1713,11 @@ class VoicePipeline:
                 # the false-fire rate alongside empty-transcription
                 # and sub-confidence reasons.
                 record_wake_word_false_fire(reason="rejected_transcription")
+                # T7.8 — feed the false-fire signal to the wake-word
+                # detector so its adaptive cooldown can extend on
+                # dense recent false-fires. No-op when the detector
+                # has cooldown_adaptive_enabled=False.
+                self._notify_wake_word_false_fire()
                 logger.warning(
                     "voice.stt.transcription_dropped",
                     **{
@@ -1712,6 +1739,8 @@ class VoicePipeline:
             # T7.7 — wake fired but STT returned empty text → the
             # user never spoke (generic false-wake signal).
             record_wake_word_false_fire(reason="empty_transcription")
+            # T7.8 — feed the false-fire signal to the wake-word detector.
+            self._notify_wake_word_false_fire()
             logger.debug(
                 "Empty transcription — discarding",
                 **{"voice.utterance_id": utterance_id},
@@ -1745,6 +1774,8 @@ class VoicePipeline:
             # noise. Counts toward the false-fire rate alongside
             # empty-transcription and rejected-transcription paths.
             record_wake_word_false_fire(reason="sub_confidence")
+            # T7.8 — feed the false-fire signal to the wake-word detector.
+            self._notify_wake_word_false_fire()
             logger.warning(
                 "voice.wake.false_positive_rejected",
                 **{

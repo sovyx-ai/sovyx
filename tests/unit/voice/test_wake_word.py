@@ -1028,6 +1028,108 @@ class TestLatencyProfileT71:
             detector_below.process_frame(_frame())
         mock_record.assert_not_called()
 
+    # T7.8 — Adaptive cooldown driven by false-fire signal
+
+    def test_adaptive_cooldown_t78_disabled_by_default(self) -> None:
+        """Default ``cooldown_adaptive_enabled=False`` keeps static cooldown.
+
+        Without explicit opt-in the detector uses ``cooldown_seconds``
+        (legacy 2s default) regardless of false-fire history.
+        """
+        config = WakeWordConfig(cooldown_seconds=2.0)
+        detector = _make_detector([0.1], config=config)
+        # Note false-fires — should be silently recorded but not used.
+        detector.note_false_fire(monotonic_now=100.0)
+        detector.note_false_fire(monotonic_now=101.0)
+        detector.note_false_fire(monotonic_now=102.0)
+        # Compute the cooldown — adaptive disabled → falls back to
+        # static cooldown_seconds.
+        assert detector._adaptive_cooldown_seconds() == 2.0  # noqa: SLF001
+
+    def test_adaptive_cooldown_t78_below_threshold_uses_min(self) -> None:
+        """Recent false-fires < threshold → cooldown_min_seconds."""
+        config = WakeWordConfig(
+            cooldown_adaptive_enabled=True,
+            cooldown_min_seconds=2.0,
+            cooldown_max_seconds=5.0,
+            cooldown_adaptive_window_seconds=60.0,
+            cooldown_adaptive_threshold=3,
+        )
+        detector = _make_detector([0.1], config=config)
+        # Single false-fire — below threshold of 3.
+        detector.note_false_fire()
+        assert detector._adaptive_cooldown_seconds() == 2.0  # noqa: SLF001
+
+    def test_adaptive_cooldown_t78_at_or_above_threshold_uses_max(self) -> None:
+        """Recent false-fires ≥ threshold → cooldown_max_seconds."""
+        config = WakeWordConfig(
+            cooldown_adaptive_enabled=True,
+            cooldown_min_seconds=2.0,
+            cooldown_max_seconds=5.0,
+            cooldown_adaptive_window_seconds=60.0,
+            cooldown_adaptive_threshold=3,
+        )
+        detector = _make_detector([0.1], config=config)
+        # Three false-fires within the window — at the threshold.
+        for _ in range(3):
+            detector.note_false_fire()
+        assert detector._adaptive_cooldown_seconds() == 5.0  # noqa: SLF001
+
+    def test_adaptive_cooldown_t78_window_pruning(self) -> None:
+        """False-fires older than the window are dropped from the count."""
+        config = WakeWordConfig(
+            cooldown_adaptive_enabled=True,
+            cooldown_min_seconds=2.0,
+            cooldown_max_seconds=5.0,
+            cooldown_adaptive_window_seconds=60.0,
+            cooldown_adaptive_threshold=2,
+        )
+        detector = _make_detector([0.1], config=config)
+        # Two false-fires AT t=0 (would meet threshold).
+        detector.note_false_fire(monotonic_now=0.0)
+        detector.note_false_fire(monotonic_now=0.1)
+        # Now jump time forward 100s — both are outside the 60s window.
+        detector.note_false_fire(monotonic_now=100.0)
+        # Active count should be 1 (only the most-recent), below the 2-threshold.
+        assert detector._adaptive_cooldown_seconds() == 2.0  # noqa: SLF001
+
+    def test_adaptive_cooldown_t78_validation_rejects_max_below_min(self) -> None:
+        """``cooldown_max_seconds < cooldown_min_seconds`` rejected."""
+        bad_config = WakeWordConfig(
+            cooldown_adaptive_enabled=True,
+            cooldown_min_seconds=5.0,
+            cooldown_max_seconds=2.0,  # max < min
+        )
+        with pytest.raises(ValueError, match="cooldown_max_seconds"):
+            _make_detector([0.5], config=bad_config)
+
+    def test_adaptive_cooldown_t78_validation_rejects_threshold_below_one(self) -> None:
+        """``cooldown_adaptive_threshold < 1`` rejected."""
+        bad_config = WakeWordConfig(
+            cooldown_adaptive_enabled=True,
+            cooldown_adaptive_threshold=0,
+        )
+        with pytest.raises(ValueError, match="cooldown_adaptive_threshold"):
+            _make_detector([0.5], config=bad_config)
+
+    def test_adaptive_cooldown_t78_validation_skipped_when_disabled(self) -> None:
+        """When adaptive is disabled, max < min is allowed (fields ignored).
+
+        The static path doesn't consult the adaptive fields, so the
+        validator only enforces them when the operator opts in.
+        """
+        # Even with max < min, this should NOT raise because adaptive
+        # is disabled — the fields are dead.
+        ok_config = WakeWordConfig(
+            cooldown_adaptive_enabled=False,
+            cooldown_min_seconds=5.0,
+            cooldown_max_seconds=2.0,
+        )
+        # Construction succeeds.
+        detector = _make_detector([0.1], config=ok_config)
+        # Static path returns the legacy ``cooldown_seconds``.
+        assert detector._adaptive_cooldown_seconds() == ok_config.cooldown_seconds  # noqa: SLF001
+
     def test_structured_log_carries_breakdown_on_confirm(
         self,
         caplog: pytest.LogCaptureFixture,

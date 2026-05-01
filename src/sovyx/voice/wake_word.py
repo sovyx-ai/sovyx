@@ -38,6 +38,18 @@ _DEFAULT_STAGE1_THRESHOLD = 0.5
 _DEFAULT_STAGE2_THRESHOLD = 0.7
 _DEFAULT_STAGE2_WINDOW_S = 1.5
 _DEFAULT_COOLDOWN_S = 2.0
+# Phase 7 / T7.8 — adaptive cooldown. When enabled, the cooldown
+# duration adjusts based on recent false-fire density: if the
+# orchestrator reported ≥ ``cooldown_adaptive_threshold`` false-fires
+# within ``cooldown_adaptive_window_s``, use ``cooldown_max_seconds``;
+# otherwise use ``cooldown_min_seconds``. Default disabled
+# (``cooldown_adaptive_enabled=False``) preserves the legacy fixed
+# 2 s cooldown. Operator opt-in via explicit WakeWordConfig
+# construction; default-flip planned post-T7.7 pilot data.
+_DEFAULT_COOLDOWN_MIN_S = 2.0
+_DEFAULT_COOLDOWN_MAX_S = 5.0
+_DEFAULT_COOLDOWN_ADAPTIVE_WINDOW_S = 60.0
+_DEFAULT_COOLDOWN_ADAPTIVE_THRESHOLD = 2
 # Phase 7 / T7.4 — fast-path threshold. When stage-1 score crosses
 # this value, skip stage-2 entirely and emit ``WakeWordDetectedEvent``
 # on the same frame. Default 1.0 = DISABLED (no real OpenWakeWord
@@ -134,7 +146,39 @@ class WakeWordConfig:
     """
 
     cooldown_seconds: float = _DEFAULT_COOLDOWN_S
-    """Seconds to ignore after a confirmed detection."""
+    """Seconds to ignore after a confirmed detection.
+
+    Used as the static cooldown when ``cooldown_adaptive_enabled``
+    is False (the default — preserves legacy behaviour). When
+    adaptive is True, this field is ignored in favour of the
+    ``cooldown_min_seconds`` / ``cooldown_max_seconds`` pair.
+    """
+
+    cooldown_adaptive_enabled: bool = False
+    """Phase 7 / T7.8 — gate the adaptive-cooldown behaviour.
+
+    When False (default): legacy fixed cooldown via ``cooldown_seconds``.
+    When True: cooldown duration shifts between
+    ``cooldown_min_seconds`` (clean recent history) and
+    ``cooldown_max_seconds`` (dense recent false-fires) based on
+    the rolling window the orchestrator drives via
+    :meth:`WakeWordDetector.note_false_fire`. Default disabled per
+    ``feedback_staged_adoption`` — operators opt in via explicit
+    construction after piloting T7.7's false-fire counter to confirm
+    the threshold is calibrated for their environment.
+    """
+
+    cooldown_min_seconds: float = _DEFAULT_COOLDOWN_MIN_S
+    """Adaptive cooldown floor — used when recent false-fires < threshold."""
+
+    cooldown_max_seconds: float = _DEFAULT_COOLDOWN_MAX_S
+    """Adaptive cooldown ceiling — used when recent false-fires ≥ threshold."""
+
+    cooldown_adaptive_window_seconds: float = _DEFAULT_COOLDOWN_ADAPTIVE_WINDOW_S
+    """Sliding-window length over which false-fires are counted."""
+
+    cooldown_adaptive_threshold: int = _DEFAULT_COOLDOWN_ADAPTIVE_THRESHOLD
+    """Number of false-fires within the window to switch to max cooldown."""
 
     sample_rate: int = _SAMPLE_RATE
     """Audio sample rate — must be 16000."""
@@ -195,6 +239,32 @@ def _validate_config(config: WakeWordConfig) -> None:
             f"{config.stage1_high_confidence_threshold}"
         )
         raise ValueError(msg)
+    # T7.8 — adaptive cooldown bounds + window must be sensible.
+    # Only validated when adaptive is enabled (the static path doesn't
+    # consult these fields).
+    if config.cooldown_adaptive_enabled:
+        if config.cooldown_min_seconds < 0:
+            msg = f"cooldown_min_seconds must be >= 0, got {config.cooldown_min_seconds}"
+            raise ValueError(msg)
+        if config.cooldown_max_seconds < config.cooldown_min_seconds:
+            msg = (
+                f"cooldown_max_seconds ({config.cooldown_max_seconds}) "
+                f"must be >= cooldown_min_seconds "
+                f"({config.cooldown_min_seconds})"
+            )
+            raise ValueError(msg)
+        if config.cooldown_adaptive_window_seconds <= 0:
+            msg = (
+                f"cooldown_adaptive_window_seconds must be > 0, got "
+                f"{config.cooldown_adaptive_window_seconds}"
+            )
+            raise ValueError(msg)
+        if config.cooldown_adaptive_threshold < 1:
+            msg = (
+                f"cooldown_adaptive_threshold must be >= 1, got "
+                f"{config.cooldown_adaptive_threshold}"
+            )
+            raise ValueError(msg)
 
 
 # ---------------------------------------------------------------------------
@@ -317,6 +387,20 @@ class WakeWordDetector:
         # → confirmed-detection latency. ``None`` between detections.
         self._stage1_trigger_monotonic: float | None = None
 
+        # T7.8 — false-fire timestamps for the adaptive-cooldown
+        # sliding window. Orchestrator calls
+        # :meth:`note_false_fire` from each false-fire site;
+        # _enter_cooldown reads + prunes this list to compute the
+        # effective cooldown duration. List is bounded by the
+        # window-length pruning in _prune_false_fires so it can't
+        # grow without bound on a daemon left running for days.
+        self._false_fire_monotonics: list[float] = []
+        # T7.8 — current cycle's effective cooldown in frames.
+        # Initialised to the static ``cooldown_frames`` so
+        # ``_handle_cooldown`` works before any detection lands;
+        # _enter_cooldown overrides this on every transition.
+        self._effective_cooldown_frames = self._config.cooldown_frames
+
         # Audio buffer for stage-2 verification
         self._audio_buffer: list[npt.NDArray[np.float32]] = []
 
@@ -400,12 +484,45 @@ class WakeWordDetector:
         )
 
     def reset(self) -> None:
-        """Reset detector state (call between conversations)."""
+        """Reset detector state (call between conversations).
+
+        Note: ``_false_fire_monotonics`` is intentionally NOT cleared
+        on reset. Adaptive cooldown's sliding window spans
+        cross-detection history (the whole point: "have we had
+        recent false-fires?") so a reset between turns must preserve
+        the rolling state. Pruning happens age-based in
+        :meth:`_prune_false_fires`.
+        """
         self._state = WakeWordState.IDLE
         self._frame_counter = 0
         self._peak_score = 0.0
         self._audio_buffer.clear()
         self._stage1_trigger_monotonic = None
+
+    def note_false_fire(self, *, monotonic_now: float | None = None) -> None:
+        """Record a false-fire signal from the orchestrator.
+
+        Phase 7 / T7.8 — orchestrator calls this from each of its 3
+        false-fire emission sites (empty_transcription /
+        rejected_transcription / sub_confidence). The detector uses
+        the timestamp to drive adaptive cooldown: dense recent
+        false-fires push the cooldown to ``cooldown_max_seconds``,
+        clean history keeps it at ``cooldown_min_seconds``. When
+        ``cooldown_adaptive_enabled=False`` the call is a no-op
+        (signals are recorded but never consulted) — this is
+        intentional so the orchestrator can call unconditionally
+        without checking the flag.
+
+        Args:
+            monotonic_now: Override timestamp (tests). Defaults to
+                ``time.monotonic()``.
+        """
+        ts = monotonic_now if monotonic_now is not None else time.monotonic()
+        self._false_fire_monotonics.append(ts)
+        # Prune-on-add bounds memory regardless of the daemon's
+        # uptime. The window shifts forward continuously so any
+        # entry past the configured horizon is dead weight.
+        self._prune_false_fires(now=ts)
 
     @property
     def state(self) -> WakeWordState:
@@ -668,17 +785,73 @@ class WakeWordDetector:
         return False
 
     def _handle_cooldown(self, score: float) -> bool:
-        """Handle COOLDOWN state — ignore detections for cooldown period."""
+        """Handle COOLDOWN state — ignore detections for cooldown period.
+
+        T7.8: consults ``_effective_cooldown_frames`` (set by
+        :meth:`_enter_cooldown` from the adaptive computation) instead
+        of the static ``self._config.cooldown_frames`` so the
+        recently-elevated cooldown stays in effect for the full
+        adaptive window.
+        """
         _ = score  # Ignored during cooldown
         self._frame_counter += 1
-        if self._frame_counter >= self._config.cooldown_frames:
+        if self._frame_counter >= self._effective_cooldown_frames:
             self._state = WakeWordState.IDLE
             self._frame_counter = 0
             logger.debug("Wake word cooldown ended")
         return False
 
+    def _prune_false_fires(self, *, now: float) -> None:
+        """Drop false-fire timestamps older than the adaptive window.
+
+        Constant-time amortised: the list is append-only in entry
+        order, so old entries cluster at the front. We could use a
+        deque for O(1) popleft, but for the practical density (a few
+        false-fires per minute over a 60 s window = ~5 entries) a
+        list with slicing is simpler and faster.
+        """
+        cutoff = now - self._config.cooldown_adaptive_window_seconds
+        # Find first index whose timestamp is within the window.
+        kept_start = 0
+        for ts in self._false_fire_monotonics:
+            if ts >= cutoff:
+                break
+            kept_start += 1
+        if kept_start > 0:
+            self._false_fire_monotonics = self._false_fire_monotonics[kept_start:]
+
+    def _adaptive_cooldown_seconds(self) -> float:
+        """Compute the effective cooldown duration for the current cycle.
+
+        Static path (``cooldown_adaptive_enabled=False``): returns the
+        configured ``cooldown_seconds`` unchanged — legacy behaviour.
+
+        Adaptive path: prunes the false-fire window then picks
+        ``cooldown_max_seconds`` if the window has ≥ threshold
+        entries, otherwise ``cooldown_min_seconds``.
+        """
+        if not self._config.cooldown_adaptive_enabled:
+            return self._config.cooldown_seconds
+        now = time.monotonic()
+        self._prune_false_fires(now=now)
+        if len(self._false_fire_monotonics) >= self._config.cooldown_adaptive_threshold:
+            return self._config.cooldown_max_seconds
+        return self._config.cooldown_min_seconds
+
     def _enter_cooldown(self) -> None:
-        """Transition to COOLDOWN state."""
+        """Transition to COOLDOWN state.
+
+        T7.8: when ``cooldown_adaptive_enabled``, the cooldown
+        duration is recomputed per entry from the recent false-fire
+        density. Stored on ``self._effective_cooldown_frames`` so
+        ``_handle_cooldown`` consults it instead of the static
+        ``cooldown_frames`` property. The static path keeps the
+        legacy field-only behaviour for back-compat.
+        """
+        cooldown_s = self._adaptive_cooldown_seconds()
+        self._effective_cooldown_frames = int(
+            cooldown_s * self._config.sample_rate / _FRAME_SAMPLES,
+        )
         self._state = WakeWordState.COOLDOWN
         self._frame_counter = 0
         self._peak_score = 0.0

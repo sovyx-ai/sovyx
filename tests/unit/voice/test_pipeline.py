@@ -5592,12 +5592,15 @@ class TestFalseFireCounterT77:
             stt_text="",
         )
         await pipeline.start()
-        with patch(
-            "sovyx.voice.health._metrics.record_wake_word_false_fire",
-        ) as mock_record, patch.object(
-            _pipeline_mod,
-            "_play_audio",
-            new_callable=AsyncMock,
+        with (
+            patch(
+                "sovyx.voice.health._metrics.record_wake_word_false_fire",
+            ) as mock_record,
+            patch.object(
+                _pipeline_mod,
+                "_play_audio",
+                new_callable=AsyncMock,
+            ),
         ):
             await pipeline.feed_frame(_speech_frame())
             await pipeline.feed_frame(_speech_frame())
@@ -5639,12 +5642,15 @@ class TestFalseFireCounterT77:
             event_bus=bus,
         )
         await pipeline.start()
-        with patch(
-            "sovyx.voice.health._metrics.record_wake_word_false_fire",
-        ) as mock_record, patch.object(
-            _pipeline_mod,
-            "_play_audio",
-            new_callable=AsyncMock,
+        with (
+            patch(
+                "sovyx.voice.health._metrics.record_wake_word_false_fire",
+            ) as mock_record,
+            patch.object(
+                _pipeline_mod,
+                "_play_audio",
+                new_callable=AsyncMock,
+            ),
         ):
             await pipeline.feed_frame(_speech_frame())
             await pipeline.feed_frame(_speech_frame())
@@ -5669,12 +5675,15 @@ class TestFalseFireCounterT77:
             on_perception=cb,
         )
         await pipeline.start()
-        with patch(
-            "sovyx.voice.health._metrics.record_wake_word_false_fire",
-        ) as mock_record, patch.object(
-            _pipeline_mod,
-            "_play_audio",
-            new_callable=AsyncMock,
+        with (
+            patch(
+                "sovyx.voice.health._metrics.record_wake_word_false_fire",
+            ) as mock_record,
+            patch.object(
+                _pipeline_mod,
+                "_play_audio",
+                new_callable=AsyncMock,
+            ),
         ):
             await pipeline.feed_frame(_speech_frame())
             await pipeline.feed_frame(_speech_frame())
@@ -5696,12 +5705,15 @@ class TestFalseFireCounterT77:
             on_perception=cb,
         )
         await pipeline.start()
-        with patch(
-            "sovyx.voice.health._metrics.record_wake_word_false_fire",
-        ) as mock_record, patch.object(
-            _pipeline_mod,
-            "_play_audio",
-            new_callable=AsyncMock,
+        with (
+            patch(
+                "sovyx.voice.health._metrics.record_wake_word_false_fire",
+            ) as mock_record,
+            patch.object(
+                _pipeline_mod,
+                "_play_audio",
+                new_callable=AsyncMock,
+            ),
         ):
             await pipeline.feed_frame(_speech_frame())
             await pipeline.feed_frame(_speech_frame())
