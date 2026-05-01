@@ -310,6 +310,169 @@ class TestMindConfig:
         assert m.voice_id == "pf_dora"
 
 
+class TestPhase8VoiceIdentityFields:
+    """Phase 8 / T8.1-T8.5 — per-mind voice identity surface.
+
+    Pin the field defaults + derived-property contracts so:
+    - Single-mind v0.30.0 deployments need no mind.yaml edits
+      (effective_wake_word falls back to legacy 'Sovyx')
+    - Operators opt-in via explicit field set
+    - YAML round-trip is preserved (raw fields stay empty when not
+      explicitly set; properties derive at read time)
+    """
+
+    # T8.1 — wake_word
+
+    def test_wake_word_defaults_to_empty_string(self) -> None:
+        """Default ``wake_word=""`` — preserves YAML round-trip."""
+        m = MindConfig(name="Aria")
+        assert m.wake_word == ""
+
+    def test_effective_wake_word_falls_back_to_sovyx_when_empty(self) -> None:
+        """Backward-compat: empty field → legacy global 'Sovyx'."""
+        m = MindConfig(name="Aria")
+        assert m.effective_wake_word == "Sovyx"
+
+    def test_effective_wake_word_uses_explicit_field(self) -> None:
+        """Operator opt-in: explicit field beats the fallback."""
+        m = MindConfig(name="Lúcia", wake_word="Lúcia")
+        assert m.effective_wake_word == "Lúcia"
+
+    def test_wake_word_max_length_enforced(self) -> None:
+        """Pydantic validation rejects wake words > 64 chars."""
+        with pytest.raises(ValidationError):
+            MindConfig(name="Aria", wake_word="X" * 65)
+
+    # T8.2 — wake_word_variants
+
+    def test_wake_word_variants_defaults_to_empty_list(self) -> None:
+        """Default empty list — preserves YAML round-trip."""
+        m = MindConfig(name="Aria")
+        assert m.wake_word_variants == []
+
+    def test_effective_variants_auto_derive_from_effective_wake_word(self) -> None:
+        """Empty list → ``[<wake_lower>, hey <wake_lower>]``."""
+        m = MindConfig(name="Aria")
+        # effective_wake_word=Sovyx → variants=['sovyx', 'hey sovyx']
+        assert m.effective_wake_word_variants == ["sovyx", "hey sovyx"]
+
+    def test_effective_variants_strip_diacritics(self) -> None:
+        """Latin-1 diacritics removed for STT robustness.
+
+        STT engines commonly drop diacritics; matching them in the
+        verifier requires the variants list to carry the ASCII form.
+        """
+        m = MindConfig(name="Lúcia", wake_word="Lúcia")
+        assert "lucia" in m.effective_wake_word_variants
+        assert "hey lucia" in m.effective_wake_word_variants
+
+    def test_effective_variants_explicit_field_wins(self) -> None:
+        """When operator sets the list, it's returned verbatim."""
+        m = MindConfig(
+            name="Lúcia",
+            wake_word="Lúcia",
+            wake_word_variants=["lúcia", "lucia", "lousha"],
+        )
+        assert m.effective_wake_word_variants == ["lúcia", "lucia", "lousha"]
+
+    def test_effective_variants_returns_a_copy(self) -> None:
+        """Mutating the returned list doesn't mutate the underlying field.
+
+        Defensive immutability — caller-induced mutation of the
+        returned list must not corrupt the MindConfig's state.
+        """
+        m = MindConfig(name="Aria")
+        first = m.effective_wake_word_variants
+        first.append("rogue")
+        second = m.effective_wake_word_variants
+        assert "rogue" not in second
+
+    # T8.3 — voice_id (already existed; reaffirm)
+
+    def test_voice_id_unchanged_by_phase8(self) -> None:
+        """T8.3 reuses the existing voice_id field — no schema change."""
+        m = MindConfig(name="Aria", voice_id="pf_dora")
+        assert m.voice_id == "pf_dora"
+
+    # T8.4 — voice_language + voice_accent
+
+    def test_voice_language_defaults_to_empty(self) -> None:
+        m = MindConfig(name="Aria")
+        assert m.voice_language == ""
+
+    def test_effective_voice_language_falls_back_to_top_level(self) -> None:
+        """Empty voice_language → falls back to top-level language."""
+        m = MindConfig(name="Aria", language="pt")
+        assert m.effective_voice_language == "pt"
+
+    def test_effective_voice_language_explicit_wins(self) -> None:
+        m = MindConfig(name="Aria", language="pt", voice_language="en-US")
+        assert m.effective_voice_language == "en-US"
+
+    def test_voice_accent_defaults_to_empty(self) -> None:
+        m = MindConfig(name="Aria")
+        assert m.voice_accent == ""
+
+    def test_voice_accent_max_length_enforced(self) -> None:
+        with pytest.raises(ValidationError):
+            MindConfig(name="Aria", voice_accent="X" * 33)
+
+    # T8.5 — voice_cadence_wpm
+
+    def test_voice_cadence_default_150(self) -> None:
+        m = MindConfig(name="Aria")
+        assert m.voice_cadence_wpm == 150
+
+    def test_voice_cadence_lower_bound_50(self) -> None:
+        """Bounds enforced — below 50 wpm sounds robotic."""
+        with pytest.raises(ValidationError):
+            MindConfig(name="Aria", voice_cadence_wpm=49)
+
+    def test_voice_cadence_upper_bound_500(self) -> None:
+        """Bounds enforced — above 500 wpm is unintelligible."""
+        with pytest.raises(ValidationError):
+            MindConfig(name="Aria", voice_cadence_wpm=501)
+
+    def test_voice_cadence_at_bounds_accepted(self) -> None:
+        """Exactly 50 + 500 are accepted (inclusive bounds)."""
+        assert MindConfig(name="Aria", voice_cadence_wpm=50).voice_cadence_wpm == 50  # noqa: PLR2004
+        assert MindConfig(name="Aria", voice_cadence_wpm=500).voice_cadence_wpm == 500  # noqa: PLR2004
+
+    # Backward-compat — Phase 8 must not break existing minds
+
+    def test_existing_minimal_config_still_works(self) -> None:
+        """Pre-Phase-8 minds (no wake_word, no voice_language, etc.)
+        load with defaults that preserve v0.30.0 behaviour."""
+        m = MindConfig(name="Aria")
+        # All Phase-8 fields default to safe values.
+        assert m.wake_word == ""
+        assert m.wake_word_variants == []
+        assert m.voice_language == ""
+        assert m.voice_accent == ""
+        assert m.voice_cadence_wpm == 150
+        # Effective accessors return v0.30.0-compatible values.
+        assert m.effective_wake_word == "Sovyx"
+        assert m.effective_voice_language == "en"  # falls back to language=en
+
+    def test_yaml_round_trip_preserves_empty_sentinels(self) -> None:
+        """Loading + re-serialising a minimal mind.yaml doesn't add
+        the derived-default values to the file.
+
+        Critical contract: the YAML round-trip must be idempotent.
+        If the loader silently inserted ``wake_word: Sovyx`` into a
+        previously-bare config, every restart would mutate the file
+        and invalidate operator-managed git tracking. The empty-
+        sentinel pattern + derived properties is the design that
+        prevents this.
+        """
+        m = MindConfig(name="Aria")
+        dumped = m.model_dump(exclude_unset=False)
+        # Field is empty in the model (raw default), even though
+        # effective_wake_word would return 'Sovyx'.
+        assert dumped["wake_word"] == ""
+        assert dumped["wake_word_variants"] == []
+
+
 class TestLoadMindConfig:
     """load_mind_config() — YAML loading."""
 

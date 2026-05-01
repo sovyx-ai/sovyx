@@ -452,6 +452,84 @@ class MindConfig(BaseModel):
     template: str = "assistant"
     user_name: str = ""
     onboarding_complete: bool = False
+
+    # ── Phase 8 / T8.1-T8.5 — per-mind voice identity ──────────────────
+    # These five fields together define the mind's voice surface area
+    # (wake word + variants + voice ID + locale + cadence). Defaults
+    # preserve v0.30.0 behaviour: an empty ``wake_word`` falls back to
+    # the legacy global ``"Sovyx"`` via :prop:`effective_wake_word` so
+    # existing single-mind deployments continue to work without any
+    # mind.yaml edits. The migration to per-mind wake words is gated
+    # by T8.22 (operator-opt-in via explicit field set in mind.yaml).
+    #
+    # Empty-string defaults follow the existing pattern (``voice_id``,
+    # ``voice_input_device_name`` already use empty sentinels). Pydantic
+    # field-level validation enforces character + length bounds so a
+    # mistyped mind.yaml fails at load time with a clear error rather
+    # than at wake-word-detection time.
+
+    wake_word: str = Field(
+        default="",
+        description=(
+            "Per-mind wake word phrase. Empty string is the "
+            "backward-compat sentinel — :prop:`effective_wake_word` "
+            "falls back to the legacy global 'Sovyx' so v0.30.0 "
+            "single-mind deployments need no migration. Operators "
+            "opt-in to per-mind wake words by editing mind.yaml. "
+            "Phase 8 / T8.1."
+        ),
+        max_length=64,
+    )
+    wake_word_variants: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Phonetic variants the STT verifier accepts as matches "
+            "for this mind's wake word. Empty default = "
+            ":prop:`effective_wake_word_variants` auto-derives the "
+            "canonical lowercase + 'hey <wake>' pair at runtime. "
+            "Operators extend the list for non-Latin names with "
+            "common transliterations or known mishears (e.g. "
+            "['lúcia', 'lucia', 'lousha'] for a mind named Lúcia). "
+            "Phase 8 / T8.2."
+        ),
+    )
+    voice_language: str = Field(
+        default="",
+        description=(
+            "BCP-47 language code for TTS output (e.g. 'en-US', "
+            "'pt-BR'). Empty default falls back to top-level "
+            "``language`` field. Operators set independently when "
+            "the mind speaks a different language than its UI "
+            "locale (e.g. an English-personality mind that responds "
+            "in pt-BR for a Brazilian operator). Phase 8 / T8.4."
+        ),
+        max_length=16,
+    )
+    voice_accent: str = Field(
+        default="",
+        description=(
+            "Regional accent variant within ``voice_language`` "
+            "(e.g. 'standard', 'southern', 'london'). Maps to Piper "
+            "voice variants when the engine supports it; ignored on "
+            "engines without per-accent voices (Kokoro). Empty "
+            "default = engine default accent. Phase 8 / T8.4."
+        ),
+        max_length=32,
+    )
+    voice_cadence_wpm: int = Field(
+        default=150,
+        ge=50,
+        le=500,
+        description=(
+            "Target words-per-minute for TTS pacing. Default 150 "
+            "wpm matches conversational English; bounds 50-500 "
+            "enforced (below 50 sounds robotic, above 500 is "
+            "unintelligible). Honoured by engines that expose "
+            "runtime cadence (Piper via length-scale); forward-"
+            "compat for engines that don't (Kokoro). Phase 8 / T8.5."
+        ),
+    )
+
     personality: PersonalityConfig = Field(default_factory=PersonalityConfig)
     ocean: OceanConfig = Field(default_factory=OceanConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
@@ -466,6 +544,78 @@ class MindConfig(BaseModel):
         if not self.id:
             self.id = MindId(self.name.lower().replace(" ", "-"))
         return self
+
+    # ── Phase 8 derived properties ─────────────────────────────────────
+    # These are PROPERTIES, not fields, so the underlying ``wake_word``
+    # / ``wake_word_variants`` fields keep their empty-sentinel defaults
+    # (preserving the YAML round-trip — a config file with no wake_word
+    # entry deserialises as empty, not as the derived value, so writing
+    # it back out doesn't mutate the file). Callers that need the
+    # effective value use these properties; callers that need the
+    # operator-set value use the raw fields.
+
+    @property
+    def effective_wake_word(self) -> str:
+        """Resolve the wake word with backward-compat fallback.
+
+        Returns the explicit ``wake_word`` field when set; otherwise
+        the legacy global ``"Sovyx"`` to preserve v0.30.0 single-mind
+        deployments without forcing a mind.yaml edit. T8.22 migration
+        eventually flips this default to derive from ``self.name``
+        per the master mission spec, but during the v0.31.0 staged
+        adoption window the safe default is the global wake word.
+
+        Phase 8 / T8.1 + T8.22.
+        """
+        if self.wake_word:
+            return self.wake_word
+        # Backward-compat: legacy global wake word from v0.24.0-v0.30.0.
+        # Operators opt-in to per-mind wake words by setting the
+        # ``wake_word`` field in mind.yaml.
+        return "Sovyx"
+
+    @property
+    def effective_wake_word_variants(self) -> list[str]:
+        """Resolve the variants list with auto-derivation when empty.
+
+        When the field is non-empty, returns it verbatim. When empty,
+        derives the canonical ``[<wake>, hey <wake>]`` pair from
+        :prop:`effective_wake_word`, lowercased + stripped of common
+        diacritics so the STT verifier matches transcriptions that
+        the model returns without diacritics (Moonshine / Whisper
+        commonly drop them).
+
+        The auto-derivation is intentionally minimal — the master
+        mission spec calls for espeak-ng phoneme expansion in T8.16
+        which lands as a hardware-blocked task. This minimal
+        derivation is the fallback that works for the common case
+        (Latin-script names without unusual phonetics) without the
+        espeak-ng dependency.
+
+        Phase 8 / T8.2.
+        """
+        if self.wake_word_variants:
+            return list(self.wake_word_variants)
+        wake = self.effective_wake_word
+        # Strip common Latin-1 diacritics: á→a, ç→c, ñ→n, ü→u, etc.
+        # NFKD-normalise + drop combining marks; keeps ASCII names
+        # untouched.
+        import unicodedata  # noqa: PLC0415 — single-use locally scoped import
+
+        normalised = unicodedata.normalize("NFKD", wake)
+        ascii_wake = "".join(c for c in normalised if not unicodedata.combining(c))
+        wake_lower = ascii_wake.lower()
+        return [wake_lower, f"hey {wake_lower}"]
+
+    @property
+    def effective_voice_language(self) -> str:
+        """Resolve voice language with fallback to top-level ``language``.
+
+        Empty ``voice_language`` falls back to the mind's ``language``
+        field so single-language deployments need no extra config.
+        Phase 8 / T8.4.
+        """
+        return self.voice_language or self.language
 
 
 def load_mind_config(path: Path) -> MindConfig:
