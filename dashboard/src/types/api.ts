@@ -1010,6 +1010,7 @@ export type VoiceHealthDiagnosis =
   | "vad_insensitive"
   | "driver_error"
   | "device_busy"
+  | "exclusive_mode_not_available"
   | "permission_denied"
   | "kernel_invalidated"
   | "stream_open_timeout"

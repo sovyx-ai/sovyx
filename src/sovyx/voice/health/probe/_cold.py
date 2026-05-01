@@ -46,6 +46,23 @@ _DEVICE_BUSY_KEYWORDS = (
     "0x8889000a",
     "-2004287478",
 )
+# Phase 6 / T6.3 — AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED tokens. The
+# endpoint declines exclusive mode for a non-busy reason: driver
+# doesn't expose an exclusive endpoint, hardware doesn't support
+# it, OR Windows surfaces the substring without an
+# ``access denied`` companion (the GP-blocked variant lands in
+# PERMISSION_DENIED via the higher-priority permission keywords).
+#
+# Hex 0x88890017 ↔ signed-decimal -2004287465 — sounddevice may
+# surface either depending on its message-format version. We match
+# both to stay resilient to format drift.
+_EXCLUSIVE_MODE_NOT_AVAILABLE_KEYWORDS = (
+    "audclnt_e_exclusive_mode_not_allowed",
+    "exclusive mode not allowed",
+    "exclusive_mode_not_allowed",
+    "0x88890017",
+    "-2004287465",
+)
 _PERMISSION_KEYWORDS = ("permission", "denied", "access", "not authoriz")
 _FORMAT_MISMATCH_KEYWORDS = (
     "invalid sample rate",
@@ -124,17 +141,35 @@ def _classify_open_error(exc: BaseException) -> Diagnosis:
     recognise (still actionable — the cascade treats DRIVER_ERROR as a
     retry-with-different-combo signal).
 
-    Ordering rationale — kernel_invalidated checked *after* the
-    format-mismatch set so an "invalid sample rate" message (which
-    contains the token ``"invalid"``) doesn't false-positive as a
-    kernel invalidation. The ``_KERNEL_INVALIDATED_KEYWORDS`` strings
-    are narrower than their format counterparts; none of them overlap
-    with the format-mismatch tokens, but the priority still matters
-    if a future message gains a compound phrase.
+    Priority order (first match wins):
+
+    1. ``PERMISSION_DENIED`` — captures the GP-blocked exclusive-mode
+       case (``access denied`` companion to AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED)
+       BEFORE the new T6.3 EXCLUSIVE_MODE_NOT_AVAILABLE check, so the
+       Windows admin / Group Policy remediation path stays distinct.
+    2. ``EXCLUSIVE_MODE_NOT_AVAILABLE`` (T6.3) — standalone
+       ``audclnt_e_exclusive_mode_not_allowed`` without permission
+       companion. The ``"exclusive"`` substring in DEVICE_BUSY would
+       otherwise catch it; checking the more-specific set first
+       routes correctly to the permanent-not-supported diagnosis
+       instead of the wait-and-retry one.
+    3. ``DEVICE_BUSY`` — ``audclnt_e_device_in_use`` etc. Wait + retry
+       is meaningful here (another app might release the lock).
+    4. ``FORMAT_MISMATCH`` — invalid sample rate / channels / format.
+    5. ``KERNEL_INVALIDATED`` — checked AFTER format-mismatch so an
+       ``invalid sample rate`` message (containing ``"invalid"``)
+       doesn't false-positive as kernel invalidation.
+
+    The ``_KERNEL_INVALIDATED_KEYWORDS`` strings are narrower than
+    their format counterparts; none of them overlap with the
+    format-mismatch tokens, but the priority still matters if a
+    future message gains a compound phrase.
     """
     msg = str(exc).lower()
     if any(keyword in msg for keyword in _PERMISSION_KEYWORDS):
         return Diagnosis.PERMISSION_DENIED
+    if any(keyword in msg for keyword in _EXCLUSIVE_MODE_NOT_AVAILABLE_KEYWORDS):
+        return Diagnosis.EXCLUSIVE_MODE_NOT_AVAILABLE
     if any(keyword in msg for keyword in _DEVICE_BUSY_KEYWORDS):
         return Diagnosis.DEVICE_BUSY
     if any(keyword in msg for keyword in _FORMAT_MISMATCH_KEYWORDS):
@@ -244,6 +279,7 @@ def _diagnose_cold(
 __all__ = [
     "_COLD_STRICT_VALIDATION_ENABLED",
     "_DEVICE_BUSY_KEYWORDS",
+    "_EXCLUSIVE_MODE_NOT_AVAILABLE_KEYWORDS",
     "_FORMAT_MISMATCH_KEYWORDS",
     "_KERNEL_INVALIDATED_KEYWORDS",
     "_PERMISSION_KEYWORDS",

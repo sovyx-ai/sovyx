@@ -91,6 +91,10 @@ class TestDiagnosisEnum:
             # Phase 6 / T6.2 — driver accepted open + start but ZERO
             # callbacks fired within probe_stream_open_timeout_threshold_ms.
             "stream_open_timeout",
+            # Phase 6 / T6.3 — endpoint fundamentally lacks exclusive
+            # support (distinct from device_busy; cascade should
+            # immediately advance past exclusive combos).
+            "exclusive_mode_not_available",
             "unknown",
         }
         assert {d.value for d in Diagnosis} == expected

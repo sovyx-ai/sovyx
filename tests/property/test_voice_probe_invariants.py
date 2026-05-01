@@ -191,12 +191,14 @@ class TestClassifyOpenErrorTotality:
     @given(text=st.text(min_size=0, max_size=200))
     @settings(max_examples=300)
     def test_returned_diagnosis_is_in_known_set(self, text: str) -> None:
-        # The classifier returns ONLY one of 5 documented values:
-        # PERMISSION_DENIED / DEVICE_BUSY / FORMAT_MISMATCH /
-        # KERNEL_INVALIDATED / DRIVER_ERROR. No other diagnosis
-        # leaks out. Guards against future map drift.
+        # The classifier returns ONLY one of 6 documented values:
+        # PERMISSION_DENIED / EXCLUSIVE_MODE_NOT_AVAILABLE (T6.3) /
+        # DEVICE_BUSY / FORMAT_MISMATCH / KERNEL_INVALIDATED /
+        # DRIVER_ERROR. No other diagnosis leaks out. Guards against
+        # future map drift.
         allowed = {
             Diagnosis.PERMISSION_DENIED,
+            Diagnosis.EXCLUSIVE_MODE_NOT_AVAILABLE,
             Diagnosis.DEVICE_BUSY,
             Diagnosis.FORMAT_MISMATCH,
             Diagnosis.KERNEL_INVALIDATED,
@@ -229,9 +231,14 @@ class TestClassifyOpenErrorTotality:
         # something more specific in a future refactor.
         # Defensive — explicitly verify no keyword leaked through
         # the alphabet restriction (sanity check on the strategy).
+        from sovyx.voice.health.probe._cold import (
+            _EXCLUSIVE_MODE_NOT_AVAILABLE_KEYWORDS,
+        )
+
         msg_lower = text.lower()
         all_keywords = (
             *_PERMISSION_KEYWORDS,
+            *_EXCLUSIVE_MODE_NOT_AVAILABLE_KEYWORDS,
             *_DEVICE_BUSY_KEYWORDS,
             *_FORMAT_MISMATCH_KEYWORDS,
             *_KERNEL_INVALIDATED_KEYWORDS,
@@ -257,15 +264,72 @@ class TestClassifyOpenErrorTotality:
         keyword: str,
     ) -> None:
         # Property: DEVICE_BUSY keywords route correctly when no
-        # PERMISSION keyword is also present. We use a neutral
-        # prefix to avoid accidental keyword collisions.
+        # PERMISSION or EXCLUSIVE_MODE_NOT_AVAILABLE keyword is also
+        # present. We use a neutral prefix to avoid accidental
+        # keyword collisions.
+        from sovyx.voice.health.probe._cold import (
+            _EXCLUSIVE_MODE_NOT_AVAILABLE_KEYWORDS,
+        )
+
         msg = f"audio_engine: {keyword}"
         if any(kw in msg.lower() for kw in _PERMISSION_KEYWORDS):
             pytest.skip(
                 f"keyword {keyword!r} overlaps with PERMISSION priority — "
                 "covered by test_permission_keywords_route_to_permission_denied"
             )
+        if any(kw in msg.lower() for kw in _EXCLUSIVE_MODE_NOT_AVAILABLE_KEYWORDS):
+            pytest.skip(
+                f"keyword {keyword!r} overlaps with EXCLUSIVE_MODE_NOT_AVAILABLE "
+                "priority — covered by the dedicated T6.3 test"
+            )
         result = _classify_open_error(RuntimeError(msg))
+        assert result is Diagnosis.DEVICE_BUSY
+
+    def test_audclnt_e_exclusive_mode_not_allowed_routes_to_exclusive_mode_not_available(
+        self,
+    ) -> None:
+        # T6.3 — the standalone AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED
+        # message (no permission companion) must route to the new
+        # EXCLUSIVE_MODE_NOT_AVAILABLE diagnosis, NOT to DEVICE_BUSY
+        # (which the bare "exclusive" keyword in _DEVICE_BUSY_KEYWORDS
+        # would otherwise capture).
+        result = _classify_open_error(
+            RuntimeError("AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED"),
+        )
+        assert result is Diagnosis.EXCLUSIVE_MODE_NOT_AVAILABLE
+
+    def test_exclusive_mode_hex_routes_to_exclusive_mode_not_available(self) -> None:
+        # Hex form must route the same way.
+        result = _classify_open_error(RuntimeError("PortAudioError 0x88890017"))
+        assert result is Diagnosis.EXCLUSIVE_MODE_NOT_AVAILABLE
+
+    def test_exclusive_mode_signed_decimal_routes_correctly(self) -> None:
+        result = _classify_open_error(
+            RuntimeError("paErrorCode -2004287465 details unavailable"),
+        )
+        assert result is Diagnosis.EXCLUSIVE_MODE_NOT_AVAILABLE
+
+    def test_gp_blocked_exclusive_mode_routes_to_permission_denied(self) -> None:
+        # T6.3 priority pin — when access-denied appears WITH the
+        # exclusive-mode-not-allowed substring (the GP-blocked case),
+        # PERMISSION_DENIED takes priority. This is the documented
+        # Windows GP path: DisallowExclusiveDevice → E_ACCESSDENIED
+        # surfaced alongside the AUDCLNT message.
+        result = _classify_open_error(
+            RuntimeError(
+                "Access is denied (AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED via "
+                "DisallowExclusiveDevice policy)",
+            ),
+        )
+        assert result is Diagnosis.PERMISSION_DENIED
+
+    def test_audclnt_e_device_in_use_still_routes_to_device_busy(self) -> None:
+        # Regression guard — the DEVICE_BUSY path is still reachable.
+        # The AUDCLNT_E_DEVICE_IN_USE token has no overlap with the
+        # T6.3 keywords, so this must continue to route correctly.
+        result = _classify_open_error(
+            RuntimeError("AUDCLNT_E_DEVICE_IN_USE"),
+        )
         assert result is Diagnosis.DEVICE_BUSY
 
     @pytest.mark.parametrize("keyword", _KERNEL_INVALIDATED_KEYWORDS)

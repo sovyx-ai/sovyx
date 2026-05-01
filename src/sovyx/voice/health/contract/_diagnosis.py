@@ -32,6 +32,16 @@ class Diagnosis(StrEnum):
     VAD_INSENSITIVE = "vad_insensitive"
     DRIVER_ERROR = "driver_error"
     DEVICE_BUSY = "device_busy"
+    # Phase 6 / T6.3 — distinct from DEVICE_BUSY: the endpoint
+    # fundamentally doesn't permit exclusive mode (driver doesn't
+    # expose an exclusive endpoint, hardware doesn't support it,
+    # OR the OS-level GP-blocked path triggers
+    # AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED without an
+    # ``access denied`` companion). Cascade should immediately
+    # advance past every exclusive-mode combo for this endpoint;
+    # waiting + retry is futile (unlike DEVICE_BUSY where another
+    # app might release the lock).
+    EXCLUSIVE_MODE_NOT_AVAILABLE = "exclusive_mode_not_available"
     PERMISSION_DENIED = "permission_denied"
     # Phase 6 / T6.2 — stream opened + started but ZERO callbacks fired
     # within ``probe_stream_open_timeout_threshold_ms`` (default 5 s).

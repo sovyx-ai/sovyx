@@ -169,6 +169,7 @@
       "vad_insensitive": "VAD insensitive",
       "driver_error": "Driver error",
       "device_busy": "Device busy",
+      "exclusive_mode_not_available": "Exclusive mode not available",
       "permission_denied": "Permission denied",
       "stream_open_timeout": "Stream open timeout",
       "kernel_invalidated": "Kernel-invalidated",

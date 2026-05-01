@@ -72,7 +72,8 @@ NO_SIGNAL             → frames alive but RMS < -70 dB (or no callbacks at all)
 VAD_INSENSITIVE       → healthy RMS but VAD probability in (0.05, 0.5]
 APO_DEGRADED          → healthy RMS but VAD probability ≤ 0.05 (Voice Clarity etc.)
 DRIVER_ERROR          → PortAudio refused the combo
-DEVICE_BUSY           → exclusive contention with another process
+DEVICE_BUSY           → exclusive contention with another process (wait + retry meaningful)
+EXCLUSIVE_MODE_NOT_AVAILABLE → endpoint fundamentally lacks exclusive support (T6.3); cascade advances past every exclusive combo for this endpoint
 PERMISSION_DENIED     → OS blocked microphone access
 KERNEL_INVALIDATED    → kernel-side IAudioClient stuck (USB resource timeout, driver hot-swap, mid-stream PnP churn). No user-mode cure — replug or reboot. §4.4.7 quarantines the endpoint.
 STREAM_OPEN_TIMEOUT   → driver accepted open + start but ZERO callbacks fired in ≥ 5 s (T6.2). Same physical-cure class as KERNEL_INVALIDATED but observed via callback-not-fired surface instead of an open-time error.

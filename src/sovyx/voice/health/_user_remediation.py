@@ -44,6 +44,15 @@ _REMEDIATION_BY_DIAGNOSIS: dict[str, str] = {
         "for active capture sessions; on Linux, run "
         "`fuser -v /dev/snd/*` to identify the holding process."
     ),
+    "exclusive_mode_not_available": (
+        "The audio device fundamentally does not permit exclusive-mode "
+        "capture (driver doesn't expose an exclusive endpoint, or "
+        "hardware doesn't support it). Sovyx will fall back to shared "
+        "mode automatically — no operator action needed for normal use. "
+        "If shared mode also fails, try a different microphone OR "
+        "update the audio driver to a version that exposes exclusive "
+        "endpoints."
+    ),
     "permission_denied": (
         "The operating system blocked microphone access for sovyx. "
         "Grant permission in Settings → Privacy → Microphone (Windows / "
