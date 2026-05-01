@@ -74,10 +74,12 @@ APO_DEGRADED          → healthy RMS but VAD probability ≤ 0.05 (Voice Clarit
 DRIVER_ERROR          → PortAudio refused the combo
 DEVICE_BUSY           → exclusive contention with another process
 PERMISSION_DENIED     → OS blocked microphone access
+KERNEL_INVALIDATED    → kernel-side IAudioClient stuck (USB resource timeout, driver hot-swap, mid-stream PnP churn). No user-mode cure — replug or reboot. §4.4.7 quarantines the endpoint.
 MIXER_ZEROED          → L2.5: attenuation regime (Capture attenuated + boost at zero)
 MIXER_SATURATED       → L2.5: saturation regime (boost chain clipping internally)
 MIXER_UNKNOWN_PATTERN → L2.5: out-of-range mixer state with no KB match
 MIXER_CUSTOMIZED      → L2.5: intentional user tuning detected; no action taken
+MUTED                 → microphone muted at OS / hardware level
 ```
 
 The diagnosis drives `RemediationHint` text shown in `sovyx doctor voice`
@@ -367,6 +369,9 @@ sovyx doctor voice --json    # machine-parseable for automation
 ### REST
 
 ```text
+GET    /api/voice/service-health          # T6.20 — aggregated readiness probe (4-field, never 5xx)
+GET    /api/voice/health                  # ComboStore + overrides + quarantine snapshot
+GET    /api/voice/health/quarantine       # kernel-invalidated quarantine snapshot
 GET    /api/voice/health/snapshot         # current cascade + watchdog state
 GET    /api/voice/health/preflight        # rerun preflight on demand
 POST   /api/voice/health/cascade/reset    # clear ComboStore for an endpoint
@@ -378,6 +383,28 @@ GET    /api/voice/capture-diagnostics     # APO / HFP guard report
 `dashboard/src/pages/voice-health.tsx` renders the snapshot live via
 the regular dashboard auth + polling stack — no WebSocket because the
 data is low-cadence and bounded.
+
+## Phase 6 observability emissions
+
+Structured-log events emitted at terminal failure states. Every
+event carries the diagnostic context operators need to route alerts
+without scraping per-attempt logs. Stable wire-form contract —
+renames are breaking changes for monitoring tooling.
+
+| Event | Level | Source | Trigger |
+|-------|-------|--------|---------|
+| `voice_cascade_exhausted` | ERROR | cascade exhaustion | Every combo failed; carries `diagnosis_histogram` (T6.11). |
+| `voice_cascade_budget_exhausted` | WARNING | cascade timeout | Total budget expired mid-walk; carries `diagnosis_histogram` (T6.11). |
+| `voice_cascade_user_actionable` | ERROR | cascade exhaustion | Homogeneous histogram + diagnosis is in remediation map. Carries `diagnosis` + user-facing `remediation` text (T6.12). Distinct from `voice_cascade_exhausted` so dashboards subscribe to actionable failures only. |
+| `voice_capture_permanently_degraded` | ERROR | watchdog backoff exhaustion | Backoff schedule exhausted without HEALTHY. Carries `last_diagnosis` (T6.14). |
+| `voice_capture_integrity_unrecoverable` | ERROR | bypass coordinator | All bypass strategies returned `NOT_APPLICABLE`. Carries `platform` + platform-specific `remediation` (T6.15). |
+| `voice_quarantine_re_quarantine_event` | WARNING | quarantine add | Endpoint re-quarantined ≥ `quarantine_pingpong_threshold` times within `quarantine_pingpong_window_s` (T6.17). |
+| `voice_endpoint_repeatedly_failing` | WARNING | quarantine add | Endpoint re-added within `quarantine_rapid_requarantine_window_s` of TTL expiry (T6.18). |
+| `capture_integrity_inconclusive_retry` | INFO | bypass coordinator | Post-apply INCONCLUSIVE → retry attempted. Carries `retry_recovered` boolean (T6.16). |
+
+The `diagnosis_histogram` field on cascade exhaustion logs is a
+JSON object `{diagnosis_value: count}` — operators can grep one
+line and see the failure-mode distribution.
 
 ## OpenTelemetry metrics
 

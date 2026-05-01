@@ -96,6 +96,9 @@ Every response carries `X-Request-Id`. Include it when reporting bugs.
 | Method | Path                              | Description                                                           |
 | ------ | --------------------------------- | --------------------------------------------------------------------- |
 | GET    | `/api/voice/status`               | Voice pipeline state and device info.                                 |
+| GET    | `/api/voice/service-health`       | Aggregated readiness probe (T6.20). 4-field response for monitoring.  |
+| GET    | `/api/voice/health`               | ComboStore + overrides + quarantine snapshot (dashboard-grade).       |
+| GET    | `/api/voice/health/quarantine`    | Kernel-invalidated quarantine snapshot.                               |
 | GET    | `/api/voice/models`               | Installed STT/TTS/VAD model catalogue.                                |
 | GET    | `/api/voice/hardware-detect`      | Probe GPU/CPU and return the recommended voice profile.               |
 | POST   | `/api/voice/enable`               | Start the voice pipeline (downloads models on first run).             |
@@ -104,6 +107,15 @@ Every response carries `X-Request-Id`. Include it when reporting bugs.
 | WS     | `/api/voice/test/input`           | Live RMS/peak/hold meter stream for mic sanity-check.                 |
 | POST   | `/api/voice/test/output`          | Queue a TTS playback job on an output device.                         |
 | GET    | `/api/voice/test/output/{job_id}` | Poll playback job until `done` or `error`.                            |
+
+`GET /api/voice/service-health` returns
+`{ready: bool, reason: str, last_diagnosis: str | null, watchdog_state:
+str | null, user_remediation: str | null}` — never 5xx; failure modes
+degrade via the `reason` field (closed enum: `ok`, `voice_disabled`,
+`engine_not_running`, `voice_pipeline_not_registered`,
+`last_diagnosis_unhealthy`). `user_remediation` (T6.12) carries an
+operator-facing hint when `last_diagnosis` maps to a known
+remediation.
 
 See [`voice-device-test`](modules/voice-device-test.md) for the frame protocol,
 error taxonomy, rate-limits, and tuning knobs.
