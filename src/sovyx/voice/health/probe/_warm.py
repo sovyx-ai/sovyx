@@ -24,6 +24,7 @@ from sovyx.voice.health.probe._classifier import (
     _format_scale,
     _warmup_samples,
 )
+from sovyx.voice.health.probe._cold import _STREAM_OPEN_TIMEOUT_THRESHOLD_MS
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -136,9 +137,24 @@ def _diagnose_warm(
     rms_db: float,
     vad_max_prob: float,
     callbacks_fired: int,
+    elapsed_ms: int | None = None,
 ) -> Diagnosis:
-    """Warm-mode diagnosis table (ADR §4.3)."""
+    """Warm-mode diagnosis table (ADR §4.3 + Phase 6 / T6.2).
+
+    T6.2: when ``callbacks_fired == 0`` AND ``elapsed_ms ≥
+    _STREAM_OPEN_TIMEOUT_THRESHOLD_MS`` (default 5 000 ms), returns
+    :attr:`Diagnosis.STREAM_OPEN_TIMEOUT` instead of NO_SIGNAL.
+    Same threshold + semantics as :func:`_diagnose_cold` so the two
+    diagnosis tables stay symmetric on the timeout-vs-silent
+    distinction.
+
+    The ``elapsed_ms`` kwarg defaults to ``None`` for backwards
+    compatibility — pre-T6.2 callers that don't pass it stay on the
+    legacy NO_SIGNAL classification.
+    """
     if callbacks_fired == 0:
+        if elapsed_ms is not None and elapsed_ms >= _STREAM_OPEN_TIMEOUT_THRESHOLD_MS:
+            return Diagnosis.STREAM_OPEN_TIMEOUT
         return Diagnosis.NO_SIGNAL
     if rms_db < _RMS_DB_NO_SIGNAL_CEILING:
         return Diagnosis.NO_SIGNAL

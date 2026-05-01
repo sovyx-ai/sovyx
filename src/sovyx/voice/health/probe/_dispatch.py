@@ -341,6 +341,7 @@ async def _run_probe(
             callbacks_fired=callbacks_fired,
             rms_db=rms_db,
             combo=combo,
+            elapsed_ms=elapsed_ms,
         )
         return ProbeResult(
             diagnosis=diagnosis,
@@ -365,6 +366,7 @@ async def _run_probe(
         rms_db=rms_db,
         vad_max_prob=vad_max_prob,
         callbacks_fired=callbacks_fired,
+        elapsed_ms=elapsed_ms,
     )
     return ProbeResult(
         diagnosis=diagnosis,

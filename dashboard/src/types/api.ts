@@ -1012,6 +1012,7 @@ export type VoiceHealthDiagnosis =
   | "device_busy"
   | "permission_denied"
   | "kernel_invalidated"
+  | "stream_open_timeout"
   | "unknown";
 
 export type VoiceHealthProbeMode = "cold" | "warm";

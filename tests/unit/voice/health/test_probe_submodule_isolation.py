@@ -368,6 +368,129 @@ class TestDiagnoseWarm:
         )
         assert result is Diagnosis.NO_SIGNAL
 
+    # T6.2 — STREAM_OPEN_TIMEOUT distinction
+
+    def test_zero_callbacks_short_elapsed_is_no_signal(self) -> None:
+        # Below the 5 s threshold → still NO_SIGNAL (probe didn't wait
+        # long enough to claim STREAM_OPEN_TIMEOUT).
+        result = _diagnose_warm(
+            rms_db=-30.0,
+            vad_max_prob=0.0,
+            callbacks_fired=0,
+            elapsed_ms=1_500,  # default cold probe duration
+        )
+        assert result is Diagnosis.NO_SIGNAL
+
+    def test_zero_callbacks_long_elapsed_is_stream_open_timeout(self) -> None:
+        # ≥ 5 s elapsed without a callback → driver wedged → STREAM_OPEN_TIMEOUT.
+        result = _diagnose_warm(
+            rms_db=-30.0,
+            vad_max_prob=0.0,
+            callbacks_fired=0,
+            elapsed_ms=5_000,
+        )
+        assert result is Diagnosis.STREAM_OPEN_TIMEOUT
+
+    def test_zero_callbacks_no_elapsed_falls_back_to_no_signal(self) -> None:
+        # Backwards compat: pre-T6.2 callers don't pass elapsed_ms.
+        # Default behaviour stays NO_SIGNAL.
+        result = _diagnose_warm(
+            rms_db=-30.0,
+            vad_max_prob=0.0,
+            callbacks_fired=0,
+        )
+        assert result is Diagnosis.NO_SIGNAL
+
+    def test_callbacks_fired_skips_timeout_check(self) -> None:
+        # Even with elapsed >> threshold, ANY callback firing means
+        # the driver is alive — STREAM_OPEN_TIMEOUT does NOT fire.
+        # The downstream RMS / VAD path takes over. Drive RMS below
+        # the no-signal ceiling so the verdict is NO_SIGNAL via the
+        # RMS branch (NOT via the callbacks_fired==0 fall-through).
+        result = _diagnose_warm(
+            rms_db=-100.0,  # well below _RMS_DB_NO_SIGNAL_CEILING (-70)
+            vad_max_prob=0.0,
+            callbacks_fired=10,
+            elapsed_ms=10_000,
+        )
+        # callbacks ≥ 1 → STREAM_OPEN_TIMEOUT skipped; RMS branch takes
+        # over; rms < no_signal ceiling → NO_SIGNAL.
+        assert result is Diagnosis.NO_SIGNAL
+
+    def test_callbacks_fired_with_healthy_signal_returns_healthy(self) -> None:
+        # Symmetric companion: callbacks ≥ 1 + healthy RMS + healthy
+        # VAD → HEALTHY regardless of elapsed_ms. STREAM_OPEN_TIMEOUT
+        # is gated on callbacks==0 and never preempts the success path.
+        result = _diagnose_warm(
+            rms_db=_RMS_DB_LOW_SIGNAL_CEILING + 5.0,
+            vad_max_prob=_VAD_HEALTHY_FLOOR + 0.05,
+            callbacks_fired=49,
+            elapsed_ms=15_000,
+        )
+        assert result is Diagnosis.HEALTHY
+
+
+# ── T6.2 — STREAM_OPEN_TIMEOUT in cold path ────────────────────────
+
+
+class TestDiagnoseColdStreamOpenTimeout:
+    """T6.2 — _diagnose_cold honors the same elapsed_ms threshold as warm."""
+
+    def _cold_combo(self) -> Combo:
+        return _combo(host_api="WASAPI", sample_rate=16_000)
+
+    def test_zero_callbacks_short_elapsed_is_no_signal(self) -> None:
+        from sovyx.voice.health.probe._cold import _diagnose_cold
+
+        result = _diagnose_cold(
+            callbacks_fired=0,
+            rms_db=float("-inf"),
+            combo=self._cold_combo(),
+            elapsed_ms=1_500,
+        )
+        assert result is Diagnosis.NO_SIGNAL
+
+    def test_zero_callbacks_long_elapsed_is_stream_open_timeout(self) -> None:
+        from sovyx.voice.health.probe._cold import _diagnose_cold
+
+        result = _diagnose_cold(
+            callbacks_fired=0,
+            rms_db=float("-inf"),
+            combo=self._cold_combo(),
+            elapsed_ms=5_000,
+        )
+        assert result is Diagnosis.STREAM_OPEN_TIMEOUT
+
+    def test_zero_callbacks_no_elapsed_falls_back_to_no_signal(self) -> None:
+        # Backwards compat: pre-T6.2 callers (notably the existing
+        # property test in test_probe.py) don't pass elapsed_ms. The
+        # legacy NO_SIGNAL classification is preserved.
+        from sovyx.voice.health.probe._cold import _diagnose_cold
+
+        result = _diagnose_cold(
+            callbacks_fired=0,
+            rms_db=float("-inf"),
+            combo=self._cold_combo(),
+        )
+        assert result is Diagnosis.NO_SIGNAL
+
+    def test_callbacks_fired_skips_timeout_check(self) -> None:
+        # Healthy callback rate → STREAM_OPEN_TIMEOUT does NOT fire
+        # regardless of elapsed_ms. RMS / strict-validation path
+        # takes over per existing Furo W-1 logic.
+        from sovyx.voice.health.probe._cold import _diagnose_cold
+
+        result = _diagnose_cold(
+            callbacks_fired=49,
+            rms_db=-30.0,  # healthy RMS
+            combo=self._cold_combo(),
+            elapsed_ms=10_000,
+        )
+        # callbacks ≥1 + healthy RMS → HEALTHY (Furo W-1 lenient/strict
+        # acceptance — verified in test_probe.py); STREAM_OPEN_TIMEOUT
+        # is unreachable.
+        assert result is Diagnosis.HEALTHY
+
 
 # ── _dispatch helpers ─────────────────────────────────────────────────
 

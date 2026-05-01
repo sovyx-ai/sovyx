@@ -106,6 +106,7 @@ function diagnosisTone(
     case "driver_error":
     case "device_busy":
     case "permission_denied":
+    case "stream_open_timeout":
       return "error";
     default:
       return "neutral";

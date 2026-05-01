@@ -101,6 +101,18 @@ so operators can calibrate the rejection rate before flipping the flag.
 """
 
 
+_STREAM_OPEN_TIMEOUT_THRESHOLD_MS = _VoiceTuning().probe_stream_open_timeout_threshold_ms
+"""T6.2 — threshold for distinguishing :attr:`Diagnosis.STREAM_OPEN_TIMEOUT`
+from :attr:`Diagnosis.NO_SIGNAL` when ``callbacks_fired == 0``.
+
+Sourced from :attr:`VoiceTuningConfig.probe_stream_open_timeout_threshold_ms`
+at import time so ``SOVYX_TUNING__VOICE__PROBE_STREAM_OPEN_TIMEOUT_THRESHOLD_MS``
+overrides without code changes (anti-pattern #17). Default 5 000 ms
+matches the master mission spec — short enough that a wedged USB
+driver surfaces in one cascade attempt; long enough that the default
+1.5 s cold probe doesn't false-positive."""
+
+
 # ── Open-error classification ─────────────────────────────────────
 
 
@@ -141,15 +153,22 @@ def _diagnose_cold(
     rms_db: float,
     combo: Combo,
     vad_max_prob: float | None = None,
+    elapsed_ms: int | None = None,
 ) -> Diagnosis:
     """Cold-mode diagnosis (ADR §4.3 — amended by Voice Windows
-    Paranoid Mission Furo W-1).
+    Paranoid Mission Furo W-1, Phase 6 / T6.2).
 
     The cold probe runs without the VAD attached, so the diagnosis is a
     function of how many audio callbacks the driver delivered and the
     energy of the captured signal:
 
-    * ``callbacks_fired == 0``        →  :attr:`Diagnosis.NO_SIGNAL`
+    * T6.2: ``callbacks_fired == 0`` AND ``elapsed_ms ≥
+      _STREAM_OPEN_TIMEOUT_THRESHOLD_MS`` (default 5 000 ms) →
+      :attr:`Diagnosis.STREAM_OPEN_TIMEOUT`. The driver accepted the
+      stream + start but never delivered audio in a meaningful
+      window. Distinguishes from NO_SIGNAL (where the probe didn't
+      wait long enough to claim timeout).
+    * ``callbacks_fired == 0`` (default short probe) → :attr:`Diagnosis.NO_SIGNAL`.
     * silent (``rms_db < _RMS_DB_NO_SIGNAL_CEILING``):
 
       * strict mode (post-fix, ``_COLD_STRICT_VALIDATION_ENABLED=True``)
@@ -169,11 +188,19 @@ def _diagnose_cold(
     :func:`_diagnose_warm` so future refactoring can collapse the
     branches without touching call sites.
 
+    The ``elapsed_ms`` keyword (T6.2) defaults to ``None`` for
+    backwards compatibility — pre-T6.2 callers that don't pass it
+    fall through to the legacy ``NO_SIGNAL`` classification. Production
+    callers in :mod:`sovyx.voice.health.probe._dispatch` pass the
+    actual probe duration.
+
     Reuses ``probe_rms_db_no_signal`` (default −70 dBFS) — a level that
     is 4 LSB at int16, well below the ambient room floor (−55 to −45
     dBFS on typical desktops).
     """
     if callbacks_fired == 0:
+        if elapsed_ms is not None and elapsed_ms >= _STREAM_OPEN_TIMEOUT_THRESHOLD_MS:
+            return Diagnosis.STREAM_OPEN_TIMEOUT
         return Diagnosis.NO_SIGNAL
 
     if rms_db >= _RMS_DB_NO_SIGNAL_CEILING:

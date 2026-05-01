@@ -75,6 +75,7 @@ DRIVER_ERROR          → PortAudio refused the combo
 DEVICE_BUSY           → exclusive contention with another process
 PERMISSION_DENIED     → OS blocked microphone access
 KERNEL_INVALIDATED    → kernel-side IAudioClient stuck (USB resource timeout, driver hot-swap, mid-stream PnP churn). No user-mode cure — replug or reboot. §4.4.7 quarantines the endpoint.
+STREAM_OPEN_TIMEOUT   → driver accepted open + start but ZERO callbacks fired in ≥ 5 s (T6.2). Same physical-cure class as KERNEL_INVALIDATED but observed via callback-not-fired surface instead of an open-time error.
 MIXER_ZEROED          → L2.5: attenuation regime (Capture attenuated + boost at zero)
 MIXER_SATURATED       → L2.5: saturation regime (boost chain clipping internally)
 MIXER_UNKNOWN_PATTERN → L2.5: out-of-range mixer state with no KB match

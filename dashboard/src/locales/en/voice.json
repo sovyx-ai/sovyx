@@ -170,6 +170,7 @@
       "driver_error": "Driver error",
       "device_busy": "Device busy",
       "permission_denied": "Permission denied",
+      "stream_open_timeout": "Stream open timeout",
       "kernel_invalidated": "Kernel-invalidated",
       "unknown": "Unknown"
     },

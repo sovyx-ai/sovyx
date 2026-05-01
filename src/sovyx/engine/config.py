@@ -939,6 +939,34 @@ class VoiceTuningConfig(BaseSettings):
     flag should be the rare exception, not a routine config change.
     """
 
+    probe_stream_open_timeout_threshold_ms: int = Field(default=5_000, ge=500, le=60_000)
+    """T6.2 — threshold above which a probe with ``callbacks_fired == 0``
+    is classified as :attr:`Diagnosis.STREAM_OPEN_TIMEOUT` instead of
+    :attr:`Diagnosis.NO_SIGNAL`.
+
+    Distinguishes two failure modes that look identical at the
+    callback layer:
+
+    * **NO_SIGNAL** — probe duration shorter than the threshold (e.g.
+      1.5 s default cold probe): the absence of callbacks isn't
+      conclusive evidence of a wedged stream; the probe just didn't
+      wait long enough. Default cascade behaviour treats it as
+      transient and proceeds.
+    * **STREAM_OPEN_TIMEOUT** — probe duration ≥ threshold AND zero
+      callbacks: the driver accepted the open + start but never
+      delivered audio. Symptoms: USB resource timeout, IAudioClient
+      stuck mid-init, kernel-side wedge that doesn't surface as a
+      PortAudio error. Cure is physical (replug / reboot) — same
+      class as :attr:`Diagnosis.KERNEL_INVALIDATED` but observed
+      via the callback-not-fired surface.
+
+    Bound ``[500, 60_000]`` ms — at 500 ms the threshold is
+    aggressive (false-positives common for short cold probes); at
+    60 s the threshold is permissive (genuinely-wedged drivers
+    might still escape detection). 5 s default per master mission
+    spec — matches typical USB driver settle plus headroom.
+    """
+
     # T6.17 — quarantine ping-pong detection. When the same endpoint is
     # re-added to quarantine ``threshold`` times within ``window_s``,
     # the layer emits ``voice_quarantine_re_quarantine_event`` so

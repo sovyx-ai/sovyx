@@ -70,7 +70,7 @@ class TestDiagnosisEnum:
         assert Diagnosis.MUTED == "muted"
         assert Diagnosis.NO_SIGNAL.value == "no_signal"
 
-    def test_all_nineteen_values_present(self) -> None:
+    def test_diagnosis_value_set_present(self) -> None:
         expected = {
             "healthy",
             "muted",
@@ -88,6 +88,9 @@ class TestDiagnosisEnum:
             "mixer_saturated",
             "mixer_unknown_pattern",
             "mixer_customized",
+            # Phase 6 / T6.2 — driver accepted open + start but ZERO
+            # callbacks fired within probe_stream_open_timeout_threshold_ms.
+            "stream_open_timeout",
             "unknown",
         }
         assert {d.value for d in Diagnosis} == expected

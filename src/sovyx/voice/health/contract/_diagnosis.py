@@ -33,6 +33,15 @@ class Diagnosis(StrEnum):
     DRIVER_ERROR = "driver_error"
     DEVICE_BUSY = "device_busy"
     PERMISSION_DENIED = "permission_denied"
+    # Phase 6 / T6.2 — stream opened + started but ZERO callbacks fired
+    # within ``probe_stream_open_timeout_threshold_ms`` (default 5 s).
+    # Distinguishes from NO_SIGNAL: NO_SIGNAL means callbacks fired with
+    # silent/empty PCM (mic muted, signal-destroyed APO); STREAM_OPEN_TIMEOUT
+    # means the driver accepted the stream but never started delivering
+    # audio at all (USB resource timeout, IAudioClient stuck mid-init,
+    # kernel-side wedge that doesn't surface as an open-time error).
+    # Cure is physical — replug or reboot.
+    STREAM_OPEN_TIMEOUT = "stream_open_timeout"
     # Kernel-side IAudioClient invalidated state: device enumerates as
     # healthy (PnP status=OK, ConfigManager=0) but every host API returns
     # paInvalidDevice (-9996) on stream open because the IMMDevice's

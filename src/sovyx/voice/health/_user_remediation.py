@@ -99,6 +99,14 @@ _REMEDIATION_BY_DIAGNOSIS: dict[str, str] = {
         "caused by a USB resource timeout or a mid-session driver "
         "update."
     ),
+    "stream_open_timeout": (
+        "The audio driver accepted the stream but never started "
+        "delivering audio (5+ seconds elapsed without a single "
+        "callback). The driver is stuck mid-init — typically a USB "
+        "resource timeout or kernel-side IAudioClient wedge. Cure: "
+        "physically unplug and replug the device. If the symptom "
+        "recurs after replug, reboot to clear the kernel state."
+    ),
 }
 
 
