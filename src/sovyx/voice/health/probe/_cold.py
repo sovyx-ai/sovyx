@@ -186,6 +186,7 @@ probe. Setting to 0 disables the check (legacy behaviour)."""
 def _classify_open_error(
     exc: BaseException,
     combo: Combo | None = None,
+    context: str = "open",
 ) -> Diagnosis:
     """Map a PortAudio / OS exception to a :class:`Diagnosis`.
 
@@ -196,10 +197,16 @@ def _classify_open_error(
 
     Priority order (first match wins):
 
-    1. ``PERMISSION_DENIED`` — captures the GP-blocked exclusive-mode
-       case (``access denied`` companion to AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED)
-       BEFORE the new T6.3 EXCLUSIVE_MODE_NOT_AVAILABLE check, so the
-       Windows admin / Group Policy remediation path stays distinct.
+    1. ``PERMISSION_DENIED`` / ``PERMISSION_REVOKED_RUNTIME`` (T6.8) —
+       captures the GP-blocked exclusive-mode case (``access denied``
+       companion to AUDCLNT_E_EXCLUSIVE_MODE_NOT_ALLOWED) BEFORE the
+       new T6.3 EXCLUSIVE_MODE_NOT_AVAILABLE check, so the Windows
+       admin / Group Policy remediation path stays distinct. The
+       ``context`` arg distinguishes "open-time permission denial"
+       (default, "open") = PERMISSION_DENIED — "you never had
+       permission" — from "start-time permission failure" ("start")
+       = PERMISSION_REVOKED_RUNTIME — "open succeeded so permission
+       existed; start failed so permission was subsequently revoked".
     2. ``EXCLUSIVE_MODE_NOT_AVAILABLE`` (T6.3) — standalone
        ``audclnt_e_exclusive_mode_not_allowed`` without permission
        companion. The ``"exclusive"`` substring in DEVICE_BUSY would
@@ -240,9 +247,24 @@ def _classify_open_error(
             distinguish T6.5 INVALID_SAMPLE_RATE_NO_AUTO_CONVERT
             from generic FORMAT_MISMATCH; unsupplied callers fall
             through to FORMAT_MISMATCH on rate-only errors.
+        context: T6.8 — call-site context. ``"open"`` (default) is
+            for exceptions raised during stream open; ``"start"`` is
+            for exceptions raised during ``stream.start()`` (after
+            open succeeded). Permission errors at ``"start"`` route
+            to PERMISSION_REVOKED_RUNTIME instead of PERMISSION_DENIED.
+            The cascade-executor uses the default since probe-raised
+            exceptions don't carry the open/start distinction at that
+            site.
     """
     msg = str(exc).lower()
     if any(keyword in msg for keyword in _PERMISSION_KEYWORDS):
+        # T6.8 — start-time permission failure means open succeeded
+        # (permission existed) and was then revoked. Open-time and
+        # cascade-raised callers stay on the legacy PERMISSION_DENIED
+        # routing so user-facing remediation hint reflects the
+        # initial-grant flow, not the mid-session revocation flow.
+        if context == "start":
+            return Diagnosis.PERMISSION_REVOKED_RUNTIME
         return Diagnosis.PERMISSION_DENIED
     if any(keyword in msg for keyword in _EXCLUSIVE_MODE_NOT_AVAILABLE_KEYWORDS):
         return Diagnosis.EXCLUSIVE_MODE_NOT_AVAILABLE

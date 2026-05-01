@@ -107,6 +107,10 @@ class TestDiagnosisEnum:
             # silent for ≥ probe_heartbeat_silence_threshold_ms;
             # the driver delivered audio then wedged mid-probe.
             "heartbeat_timeout",
+            # Phase 6 / T6.8 — open succeeded then start failed
+            # with a permission error: open-time permission
+            # existed and was revoked between open and start.
+            "permission_revoked_runtime",
             "unknown",
         }
         assert {d.value for d in Diagnosis} == expected

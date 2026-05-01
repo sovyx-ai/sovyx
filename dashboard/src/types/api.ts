@@ -1014,6 +1014,7 @@ export type VoiceHealthDiagnosis =
   | "insufficient_buffer_size"
   | "invalid_sample_rate_no_auto_convert"
   | "permission_denied"
+  | "permission_revoked_runtime"
   | "kernel_invalidated"
   | "stream_open_timeout"
   | "heartbeat_timeout"

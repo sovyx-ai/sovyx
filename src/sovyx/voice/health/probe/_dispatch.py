@@ -315,7 +315,16 @@ async def _run_probe(
 
     if start_time_error is not None:
         # T6.5 — pass combo for the same rate-vs-auto_convert routing.
-        diagnosis = _classify_open_error(start_time_error, combo=combo)
+        # T6.8 — context="start" routes permission keywords to
+        # PERMISSION_REVOKED_RUNTIME instead of PERMISSION_DENIED.
+        # The open already succeeded (we got here past _open_input_stream),
+        # so a permission error during stream.start() means the OS
+        # revoked permission between open and start.
+        diagnosis = _classify_open_error(
+            start_time_error,
+            combo=combo,
+            context="start",
+        )
         logger.info(
             "voice_probe_start_failed",
             mode=str(mode),

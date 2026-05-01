@@ -173,6 +173,7 @@
       "insufficient_buffer_size": "Insufficient buffer size",
       "invalid_sample_rate_no_auto_convert": "Invalid sample rate (no auto-convert)",
       "permission_denied": "Permission denied",
+      "permission_revoked_runtime": "Permission revoked at runtime",
       "stream_open_timeout": "Stream open timeout",
       "heartbeat_timeout": "Heartbeat timeout",
       "kernel_invalidated": "Kernel-invalidated",

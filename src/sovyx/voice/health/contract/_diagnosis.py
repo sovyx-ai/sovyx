@@ -59,6 +59,20 @@ class Diagnosis(StrEnum):
     # channel/format-specific rejections.
     INVALID_SAMPLE_RATE_NO_AUTO_CONVERT = "invalid_sample_rate_no_auto_convert"
     PERMISSION_DENIED = "permission_denied"
+    # Phase 6 / T6.8 — permission was previously granted but revoked
+    # mid-session. Distinct from PERMISSION_DENIED (which fires when
+    # the OS rejects open at probe-open time = "you never had
+    # permission"): PERMISSION_REVOKED_RUNTIME fires when the OPEN
+    # phase succeeded (proving permission existed) but the START
+    # phase failed with a permission error (proving permission was
+    # subsequently revoked). Production patterns:
+    # - Windows: user toggles app off in Settings → Privacy → Microphone
+    # - macOS: user deauthorizes in Privacy & Security → Microphone
+    # - Linux: PulseAudio/PipeWire policy change (Flatpak portal revoke)
+    # Cascade routes to retry-different-combo (other endpoints may
+    # have separate permission grants); user remediation guides the
+    # user through OS settings rather than initial-grant flow.
+    PERMISSION_REVOKED_RUNTIME = "permission_revoked_runtime"
     # Phase 6 / T6.2 — stream opened + started but ZERO callbacks fired
     # within ``probe_stream_open_timeout_threshold_ms`` (default 5 s).
     # Distinguishes from NO_SIGNAL: NO_SIGNAL means callbacks fired with

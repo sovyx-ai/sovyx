@@ -67,6 +67,14 @@ _REMEDIATION_BY_DIAGNOSIS: dict[str, str] = {
         "Grant permission in Settings → Privacy → Microphone (Windows / "
         "macOS) or check the Flatpak/Snap portal permissions on Linux."
     ),
+    "permission_revoked_runtime": (
+        "Microphone access was granted earlier but has been revoked "
+        "during this session. Re-enable sovyx in Settings → Privacy → "
+        "Microphone (Windows / macOS) or check whether another "
+        "application or policy has reset the permission. If a managed "
+        "device, your organisation may have applied a Group Policy / "
+        "MDM profile change."
+    ),
     "muted": (
         "The microphone is muted at the OS / hardware level. Check the "
         "physical mute switch on the device, then the OS volume mixer "

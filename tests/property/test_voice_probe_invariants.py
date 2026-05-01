@@ -283,17 +283,20 @@ class TestClassifyOpenErrorTotality:
     @given(text=st.text(min_size=0, max_size=200))
     @settings(max_examples=300)
     def test_returned_diagnosis_is_in_known_set(self, text: str) -> None:
-        # The classifier returns ONLY one of 8 documented values:
-        # PERMISSION_DENIED / EXCLUSIVE_MODE_NOT_AVAILABLE (T6.3) /
+        # The classifier returns ONLY one of 9 documented values:
+        # PERMISSION_DENIED / PERMISSION_REVOKED_RUNTIME (T6.8) /
+        # EXCLUSIVE_MODE_NOT_AVAILABLE (T6.3) /
         # INSUFFICIENT_BUFFER_SIZE (T6.4) / DEVICE_BUSY /
         # INVALID_SAMPLE_RATE_NO_AUTO_CONVERT (T6.5) / FORMAT_MISMATCH /
         # KERNEL_INVALIDATED / DRIVER_ERROR.
         # No other diagnosis leaks out. Guards against future map drift.
-        # Property test passes RuntimeError without combo, so the T6.5
-        # branch is unreachable here — but the diagnosis is still in
-        # the allowed set in case a caller passes combo in future.
+        # Property test passes RuntimeError without combo / context, so
+        # the T6.5 + T6.8 branches are unreachable here — but their
+        # diagnoses are in the allowed set in case a caller passes
+        # those args in future.
         allowed = {
             Diagnosis.PERMISSION_DENIED,
+            Diagnosis.PERMISSION_REVOKED_RUNTIME,
             Diagnosis.EXCLUSIVE_MODE_NOT_AVAILABLE,
             Diagnosis.INSUFFICIENT_BUFFER_SIZE,
             Diagnosis.DEVICE_BUSY,
@@ -553,6 +556,61 @@ class TestClassifyOpenErrorTotality:
             combo=self._combo(auto_convert=False),
         )
         assert result is Diagnosis.INSUFFICIENT_BUFFER_SIZE
+
+    # T6.8 — PERMISSION_REVOKED_RUNTIME via context arg
+
+    def test_permission_at_open_context_routes_to_permission_denied(self) -> None:
+        # Default context is "open" — permission errors at probe-open
+        # time mean the OS rejected the open call → user never had
+        # permission. PERMISSION_DENIED is the right diagnosis +
+        # remediation (initial-grant flow).
+        result = _classify_open_error(
+            RuntimeError("Permission denied"),
+            context="open",
+        )
+        assert result is Diagnosis.PERMISSION_DENIED
+
+    def test_permission_at_start_context_routes_to_revoked_runtime(self) -> None:
+        # T6.8 — context="start" means open already succeeded (proving
+        # permission existed), so a permission error during stream.start()
+        # = mid-session revocation. PERMISSION_REVOKED_RUNTIME guides
+        # the user through re-enabling the permission, NOT through
+        # initial-grant.
+        result = _classify_open_error(
+            RuntimeError("Access denied"),
+            context="start",
+        )
+        assert result is Diagnosis.PERMISSION_REVOKED_RUNTIME
+
+    def test_permission_default_context_is_open(self) -> None:
+        # Backwards compat: legacy callers (no context arg) get the
+        # "open" context's behaviour = PERMISSION_DENIED. The cascade
+        # _executor.py site relies on this default since probe-raised
+        # exceptions don't carry the open/start distinction.
+        result = _classify_open_error(RuntimeError("permission denied"))
+        assert result is Diagnosis.PERMISSION_DENIED
+
+    def test_non_permission_error_at_start_context_unchanged(self) -> None:
+        # T6.8 only affects permission keywords. Other diagnoses
+        # (format mismatch, device busy, etc.) route the same way
+        # regardless of context.
+        result = _classify_open_error(
+            RuntimeError("invalid number of channels"),
+            context="start",
+        )
+        assert result is Diagnosis.FORMAT_MISMATCH
+
+    def test_t68_with_combo_arg_priorities_unchanged(self) -> None:
+        # The combo arg (T6.5) and context arg (T6.8) are independent.
+        # Both passed simultaneously: permission keyword + start
+        # context still routes to PERMISSION_REVOKED_RUNTIME (combo
+        # only matters for the rate-vs-format branch).
+        result = _classify_open_error(
+            RuntimeError("Access denied at runtime"),
+            combo=self._combo(auto_convert=False),
+            context="start",
+        )
+        assert result is Diagnosis.PERMISSION_REVOKED_RUNTIME
 
     @pytest.mark.parametrize("keyword", _KERNEL_INVALIDATED_KEYWORDS)
     def test_kernel_invalidated_routes_when_format_keywords_absent(
