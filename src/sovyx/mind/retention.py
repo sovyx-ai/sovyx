@@ -1,4 +1,4 @@
-"""Per-mind retention service — Phase 8 / T8.21 step 6.
+"""Per-mind retention service + scheduler — Phase 8 / T8.21 step 6.
 
 Time-based retention enforcer. Sibling to
 :class:`sovyx.mind.forget.MindForgetService`:
@@ -47,11 +47,16 @@ ratified); ``docs/compliance.md``;
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import random
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
+from datetime import time as dt_time
 from typing import TYPE_CHECKING
 
 from sovyx.observability.logging import get_logger
+from sovyx.observability.tasks import spawn
 
 if TYPE_CHECKING:
     from sovyx.engine.config import EngineConfig
@@ -492,7 +497,164 @@ class MindRetentionService:
         return parsed.date().isoformat()
 
 
+# ── Auto-prune scheduler ─────────────────────────────────────────────
+
+
+_FALLBACK_PRUNE_TIME = dt_time(hour=3, minute=0)
+"""Fallback when ``MindConfig.retention.prune_time`` is malformed —
+03:00 = 1 hour after typical dream_time of 02:00."""
+
+_MIN_SLEEP_S = 60.0
+"""Minimum sleep between cycles. Even if ``next prune`` is "right
+now" (clock skew, just-resumed laptop), we wait at least this long
+to prevent tight loops on edge cases. Mirrors DreamScheduler."""
+
+_PRUNE_JITTER_S = 900.0
+"""±15-minute jitter spreads retention runs across a 30-minute band
+on multi-mind deployments — prevents thundering herd if multiple
+minds share the same prune_time + timezone. Mirrors DreamScheduler."""
+
+
+def _parse_prune_time(raw: str) -> dt_time:
+    """Parse ``"HH:MM"`` into :class:`datetime.time`.
+
+    Falls back to 03:00 on parse failure — a malformed config must
+    not prevent the scheduler from starting (retention is a
+    privacy-sensitive surface; failing closed = no retention =
+    storage limitation breach risk).
+    """
+    try:
+        parts = raw.split(":")
+        if len(parts) != 2:  # noqa: PLR2004
+            raise ValueError("prune_time must be HH:MM")  # noqa: TRY301
+        hour = int(parts[0])
+        minute = int(parts[1])
+        return dt_time(hour=hour, minute=minute)
+    except (ValueError, TypeError):
+        logger.warning("retention.prune_time_invalid_fallback", raw=raw)
+        return _FALLBACK_PRUNE_TIME
+
+
+def _resolve_timezone(name: str) -> tzinfo:
+    """Resolve a tz name to a tzinfo, falling back to UTC on error."""
+    try:
+        from zoneinfo import ZoneInfo  # noqa: PLC0415
+
+        return ZoneInfo(name)
+    except Exception:  # noqa: BLE001
+        logger.warning("retention.timezone_invalid_fallback", name=name)
+        return UTC
+
+
+class RetentionScheduler:
+    """Run :meth:`MindRetentionService.prune_mind` daily at ``prune_time``.
+
+    Mirrors :class:`sovyx.brain.dream.DreamScheduler` lifecycle +
+    timing pattern (once-per-day at HH:MM in mind's timezone, with
+    ±15-minute jitter, surviving exceptions on a "tomorrow is another
+    day" basis). The DREAM cycle runs first (typical dream_time
+    02:00); retention runs after (default prune_time 03:00) so
+    consolidation_log entries from the night's DREAM are still
+    available for retention to evaluate.
+
+    The scheduler is **off by default** — ``MindConfig.retention.auto_prune_enabled``
+    must be True for the daemon's lifecycle to start it. This
+    follows the staged-adoption discipline (foundation lands;
+    operator opts in after validating dry-run counts).
+
+    Args:
+        service: :class:`MindRetentionService` to invoke each cycle.
+        mind_config: Mind config — passed to ``service.prune_mind``
+            so per-mind retention overrides are honoured.
+        prune_time: ``"HH:MM"`` in the mind's timezone.
+        timezone: IANA timezone name (e.g. ``"America/Sao_Paulo"``).
+            UTC fallback on parse failure.
+    """
+
+    def __init__(
+        self,
+        service: MindRetentionService,
+        *,
+        mind_config: MindConfig | None = None,
+        prune_time: str = "03:00",
+        timezone: str = "UTC",
+    ) -> None:
+        self._service = service
+        self._mind_config = mind_config
+        self._prune_time = _parse_prune_time(prune_time)
+        self._timezone = timezone
+        self._tzinfo = _resolve_timezone(timezone)
+        self._task: asyncio.Task[None] | None = None
+        self._running = False
+
+    async def start(self, mind_id: MindId) -> None:
+        """Start the background retention loop. Idempotent."""
+        if self._task is not None:
+            return
+        self._running = True
+        self._task = spawn(self._loop(mind_id), name="retention-scheduler")
+        logger.info(
+            "retention_scheduler_started",
+            mind_id=str(mind_id),
+            prune_time=self._prune_time.isoformat(timespec="minutes"),
+            timezone=self._timezone,
+        )
+
+    async def stop(self) -> None:
+        """Stop the background retention loop. Idempotent."""
+        self._running = False
+        if self._task is not None:
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._task
+            self._task = None
+        logger.info("retention_scheduler_stopped")
+
+    async def _loop(self, mind_id: MindId) -> None:
+        while self._running:
+            try:
+                delta = self._seconds_until_next_prune()
+                jitter = random.uniform(-_PRUNE_JITTER_S, _PRUNE_JITTER_S)  # nosec B311
+                await asyncio.sleep(max(_MIN_SLEEP_S, delta + jitter))
+                await self._service.prune_mind(
+                    mind_id,
+                    mind_config=self._mind_config,
+                )
+            except asyncio.CancelledError:
+                break
+            except Exception:  # noqa: BLE001
+                # Survive cycle exceptions — retention is best-effort
+                # daily; tomorrow is another day. A wedged prune cycle
+                # must not crash the daemon.
+                logger.exception("retention_cycle_failed", mind_id=str(mind_id))
+
+    def _seconds_until_next_prune(self, *, now: datetime | None = None) -> float:
+        """Seconds from ``now`` until the next ``prune_time`` occurrence.
+
+        Injectable ``now`` for deterministic testing. Mirror of
+        :meth:`DreamScheduler._seconds_until_next_dream`.
+        """
+        current = now if now is not None else datetime.now(self._tzinfo)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=self._tzinfo)
+        target_today = current.replace(
+            hour=self._prune_time.hour,
+            minute=self._prune_time.minute,
+            second=0,
+            microsecond=0,
+        )
+        if target_today <= current:
+            target_today = target_today + timedelta(days=1)
+        return (target_today - current).total_seconds()
+
+    @property
+    def is_running(self) -> bool:
+        """True when the scheduler's background task is alive."""
+        return self._running and self._task is not None
+
+
 __all__ = [
     "MindRetentionReport",
     "MindRetentionService",
+    "RetentionScheduler",
 ]

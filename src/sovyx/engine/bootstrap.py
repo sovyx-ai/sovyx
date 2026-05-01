@@ -579,6 +579,45 @@ async def bootstrap(
                 _closables.append(dream_scheduler)
                 registry.register_instance(DreamScheduler, dream_scheduler)
 
+            # ── Retention scheduler — Phase 8 / T8.21 step 6 ──────
+            # Auto-prune is OFF by default per ``feedback_staged_adoption``
+            # (operator opts in after validating dry-run counts). When
+            # disabled the scheduler is not instantiated at all — zero
+            # runtime cost.
+            if mind_config.retention.auto_prune_enabled:
+                from sovyx.mind.retention import (  # noqa: PLC0415
+                    MindRetentionService,
+                    RetentionScheduler,
+                )
+                from sovyx.voice._consent_ledger import (  # noqa: PLC0415
+                    ConsentLedger,
+                )
+
+                ledger_path = engine_config.data_dir / "voice" / "consent.jsonl"
+                retention_ledger = ConsentLedger(path=ledger_path)
+                # Per-mind conversations pool was initialized by
+                # ``initialize_mind_databases`` above (line 344).
+                retention_service = MindRetentionService(
+                    engine_config=engine_config,
+                    brain_pool=brain_pool,
+                    conversations_pool=db_manager.get_conversation_pool(mind_id),
+                    system_pool=db_manager.get_system_pool(),
+                    ledger=retention_ledger,
+                )
+                retention_scheduler = RetentionScheduler(
+                    retention_service,
+                    mind_config=mind_config,
+                    prune_time=mind_config.retention.prune_time,
+                    timezone=mind_config.timezone,
+                )
+                _closables.append(retention_scheduler)
+                registry.register_instance(RetentionScheduler, retention_scheduler)
+                logger.info(
+                    "retention_scheduler_registered",
+                    mind_id=str(mind_id),
+                    prune_time=mind_config.retention.prune_time,
+                )
+
             # Cognitive phases
             state_machine = CognitiveStateMachine()
             perceive = PerceivePhase()

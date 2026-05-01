@@ -466,6 +466,26 @@ class MindRetentionConfig(BaseModel):
     trail requirement; the operator is responsible for the legal-basis
     chain."""
 
+    prune_time: str = Field(default="03:00", max_length=8)
+    """Time-of-day (HH:MM) when the retention scheduler runs in the
+    mind's timezone. Default 03:00 — 1 hour after the typical
+    ``dream_time`` of 02:00, so DREAM consolidation finishes before
+    retention prunes its log. Phase 8 / T8.21 step 6."""
+
+    auto_prune_enabled: bool = False
+    """Kill switch for the auto-prune scheduler. When ``False``
+    (default), retention is invokable manually only (CLI / dashboard
+    / RPC). When ``True``, the daemon's lifecycle starts the
+    :class:`~sovyx.mind.retention.RetentionScheduler` for this mind
+    and prune fires daily at ``prune_time``.
+
+    Lenient default per ``feedback_staged_adoption``: a NEW
+    scheduled-write surface ships off-by-default so operators
+    explicitly opt in after validating retention horizons + dry-run
+    counts on their data. The same pattern is used by
+    ``voice_aec_enabled``, ``voice_check_mic_permission_enabled``,
+    etc."""
+
 
 class MindConfig(BaseModel):
     """Complete Mind configuration. Loaded from mind.yaml.

@@ -300,6 +300,7 @@ class LifecycleManager:
         from sovyx.cognitive.loop import CognitiveLoop
         from sovyx.engine.bootstrap import MindManager
         from sovyx.engine.types import MindId as MindIdType
+        from sovyx.mind.retention import RetentionScheduler
 
         # Start cognitive loop
         if self._registry.is_registered(CognitiveLoop):
@@ -311,13 +312,15 @@ class LifecycleManager:
             gate = await self._registry.resolve(CogLoopGate)
             await gate.start()
 
-        # Resolve active mind id once — shared by both schedulers. Only
+        # Resolve active mind id once — shared by all schedulers. Only
         # touch MindManager when at least one scheduler is registered, so
         # minimal lifecycle tests (which wire just the cognitive loop)
         # don't need to register MindManager just to call _start_services.
-        needs_mind_id = self._registry.is_registered(
-            ConsolidationScheduler
-        ) or self._registry.is_registered(DreamScheduler)
+        needs_mind_id = (
+            self._registry.is_registered(ConsolidationScheduler)
+            or self._registry.is_registered(DreamScheduler)
+            or self._registry.is_registered(RetentionScheduler)
+        )
         if needs_mind_id:
             mind_mgr = await self._registry.resolve(MindManager)
             mind_id = MindIdType(mind_mgr._active[0] if mind_mgr._active else "default")
@@ -333,6 +336,14 @@ class LifecycleManager:
             if self._registry.is_registered(DreamScheduler):
                 dream = await self._registry.resolve(DreamScheduler)
                 await dream.start(mind_id)
+
+            # Start retention scheduler (auto-prune of aged per-mind
+            # data; Phase 8 / T8.21 step 6). Default-OFF — only fires
+            # when the operator opted in via
+            # ``MindConfig.retention.auto_prune_enabled = True``.
+            if self._registry.is_registered(RetentionScheduler):
+                retention = await self._registry.resolve(RetentionScheduler)
+                await retention.start(mind_id)
 
         # Start bridge (channels connect last)
         if self._registry.is_registered(BridgeManager):

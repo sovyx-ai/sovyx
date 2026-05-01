@@ -686,3 +686,137 @@ class TestReport:
         )
         with pytest.raises((AttributeError, TypeError)):
             report.episodes_purged = 99  # type: ignore[misc]
+
+
+# ── RetentionScheduler — auto-prune cycle (Phase 8 / T8.21 step 6) ───
+
+
+class TestRetentionScheduler:
+    """``RetentionScheduler`` lifecycle + timing arithmetic.
+
+    Mirrors ``TestDreamScheduler`` patterns from the brain test
+    suite — start/stop idempotency + injectable ``now`` for
+    deterministic seconds-until-next-prune assertions.
+    """
+
+    @pytest.mark.asyncio
+    async def test_seconds_until_next_prune_today_future(
+        self,
+        tmp_path: Path,
+        brain_pool: DatabasePool,
+    ) -> None:
+        """When ``prune_time`` is later today, returns the delta."""
+        from sovyx.mind.retention import RetentionScheduler
+
+        config = _engine_config(tmp_path=tmp_path)
+        service = MindRetentionService(engine_config=config, brain_pool=brain_pool)
+        scheduler = RetentionScheduler(service, prune_time="03:00", timezone="UTC")
+        # 02:00 → 03:00 today is 3600 seconds.
+        now = datetime(2026, 5, 1, 2, 0, 0, tzinfo=UTC)
+        delta = scheduler._seconds_until_next_prune(now=now)  # noqa: SLF001
+        assert delta == 3600.0  # noqa: PLR2004
+
+    @pytest.mark.asyncio
+    async def test_seconds_until_next_prune_rolls_to_tomorrow(
+        self,
+        tmp_path: Path,
+        brain_pool: DatabasePool,
+    ) -> None:
+        from sovyx.mind.retention import RetentionScheduler
+
+        config = _engine_config(tmp_path=tmp_path)
+        service = MindRetentionService(engine_config=config, brain_pool=brain_pool)
+        scheduler = RetentionScheduler(service, prune_time="03:00", timezone="UTC")
+        # 04:00 → 03:00 tomorrow = 23 hours.
+        now = datetime(2026, 5, 1, 4, 0, 0, tzinfo=UTC)
+        delta = scheduler._seconds_until_next_prune(now=now)  # noqa: SLF001
+        assert delta == 23 * 3600.0  # noqa: PLR2004
+
+    @pytest.mark.asyncio
+    async def test_malformed_prune_time_falls_back_to_03_00(
+        self,
+        tmp_path: Path,
+        brain_pool: DatabasePool,
+    ) -> None:
+        """A garbage ``prune_time`` MUST NOT prevent the scheduler from
+        instantiating — retention is privacy-sensitive; failing closed
+        = no retention = storage limitation breach risk."""
+        from sovyx.mind.retention import RetentionScheduler
+
+        config = _engine_config(tmp_path=tmp_path)
+        service = MindRetentionService(engine_config=config, brain_pool=brain_pool)
+        scheduler = RetentionScheduler(service, prune_time="not-a-time", timezone="UTC")
+        # Fallback 03:00 → from 02:00 next prune is in 1 hour.
+        now = datetime(2026, 5, 1, 2, 0, 0, tzinfo=UTC)
+        delta = scheduler._seconds_until_next_prune(now=now)  # noqa: SLF001
+        assert delta == 3600.0  # noqa: PLR2004
+
+    @pytest.mark.asyncio
+    async def test_unknown_timezone_falls_back_to_utc(
+        self,
+        tmp_path: Path,
+        brain_pool: DatabasePool,
+    ) -> None:
+        from sovyx.mind.retention import RetentionScheduler
+
+        config = _engine_config(tmp_path=tmp_path)
+        service = MindRetentionService(engine_config=config, brain_pool=brain_pool)
+        scheduler = RetentionScheduler(
+            service,
+            prune_time="03:00",
+            timezone="Not/AReal_Timezone",
+        )
+        now = datetime(2026, 5, 1, 2, 0, 0, tzinfo=UTC)
+        delta = scheduler._seconds_until_next_prune(now=now)  # noqa: SLF001
+        assert delta == 3600.0  # noqa: PLR2004
+
+    @pytest.mark.asyncio
+    async def test_start_idempotent_does_not_spawn_two_tasks(
+        self,
+        tmp_path: Path,
+        brain_pool: DatabasePool,
+    ) -> None:
+        """Calling ``start`` twice is a no-op (matches DreamScheduler)."""
+        from sovyx.mind.retention import RetentionScheduler
+
+        config = _engine_config(tmp_path=tmp_path)
+        service = MindRetentionService(engine_config=config, brain_pool=brain_pool)
+        scheduler = RetentionScheduler(service, prune_time="03:00")
+        await scheduler.start(MIND_A)
+        first_task = scheduler._task  # noqa: SLF001
+        await scheduler.start(MIND_A)
+        assert scheduler._task is first_task  # noqa: SLF001
+        await scheduler.stop()
+
+    @pytest.mark.asyncio
+    async def test_stop_cancels_task_and_is_idempotent(
+        self,
+        tmp_path: Path,
+        brain_pool: DatabasePool,
+    ) -> None:
+        from sovyx.mind.retention import RetentionScheduler
+
+        config = _engine_config(tmp_path=tmp_path)
+        service = MindRetentionService(engine_config=config, brain_pool=brain_pool)
+        scheduler = RetentionScheduler(service, prune_time="03:00")
+        await scheduler.start(MIND_A)
+        assert scheduler.is_running is True
+        await scheduler.stop()
+        assert scheduler.is_running is False
+        # Second stop is a no-op.
+        await scheduler.stop()
+        assert scheduler.is_running is False
+
+    @pytest.mark.asyncio
+    async def test_stop_without_start_is_safe(
+        self,
+        tmp_path: Path,
+        brain_pool: DatabasePool,
+    ) -> None:
+        from sovyx.mind.retention import RetentionScheduler
+
+        config = _engine_config(tmp_path=tmp_path)
+        service = MindRetentionService(engine_config=config, brain_pool=brain_pool)
+        scheduler = RetentionScheduler(service, prune_time="03:00")
+        # Never started — stop should not raise.
+        await scheduler.stop()
