@@ -2305,6 +2305,105 @@ class TestRingFrameLoadStormT627:
             task._ring_write(frame)  # noqa: SLF001
 
 
+class TestQueueOverflowStormT627:
+    """T6.27 part 2 — bounded asyncio queue under producer flood.
+
+    Phase 6 / T6.27 sub-test 2 stresses the producer→consumer queue
+    between the audio_callback thread and the consume_loop coroutine.
+    Production scenario: a temporarily-stalled consumer (GC pause,
+    LLM completion blocking the loop, frame normalizer hot path
+    paged out) leaves the audio thread enqueueing frames faster than
+    the consumer drains. The queue's drop-oldest contract guarantees
+    the audio thread never blocks (which would cause real device
+    underruns) and memory stays bounded.
+
+    Pinned invariants:
+      (a) ``_enqueue`` never raises under flood — even when the
+          queue has been full for thousands of pushes;
+      (b) queue size is bounded by maxsize regardless of push count
+          — the asyncio.Queue's drop-oldest implementation in
+          :meth:`_enqueue` (LoopMixin) is the bound;
+      (c) the freshest frames win — after a flood of N pushes
+          where N > maxsize, draining the queue yields the LAST
+          ``maxsize`` frames (drop-oldest semantics);
+      (d) the audio-thread side never blocks — this is implicit
+          (``put_nowait`` raises QueueFull on a full queue, which
+          ``_enqueue`` avoids by pre-draining via get_nowait).
+    """
+
+    _FLOOD_SIZE = 10_000  # noqa: PLR2004 — 10K well exceeds 256-slot queue
+
+    @pytest.mark.asyncio()
+    async def test_flood_does_not_grow_queue_beyond_maxsize(self) -> None:
+        """Pin (b): qsize ≤ maxsize regardless of push count."""
+        import numpy as np
+
+        from sovyx.voice._capture_task import AudioCaptureTask
+
+        task = AudioCaptureTask.__new__(AudioCaptureTask)
+        task._queue = asyncio.Queue(maxsize=256)  # noqa: SLF001
+
+        frame = np.zeros(512, dtype=np.int16)
+        for i in range(self._FLOOD_SIZE):
+            # Inject a sentinel value so we can assert drop-oldest later.
+            frame_id = np.full(8, i, dtype=np.int16)
+            task._enqueue(frame_id)  # noqa: SLF001
+
+        # Queue size is bounded by maxsize.
+        assert task._queue.qsize() == 256  # noqa: SLF001
+
+    @pytest.mark.asyncio()
+    async def test_flood_keeps_freshest_frames(self) -> None:
+        """Pin (c): drop-oldest leaves the last maxsize frames in the queue.
+
+        After flooding with frame ids 0..N-1, the surviving frames are
+        ids N-maxsize..N-1 (the freshest 256). Reading them in FIFO
+        order yields them in ascending id sequence.
+        """
+        import numpy as np
+
+        from sovyx.voice._capture_task import AudioCaptureTask
+
+        maxsize = 256
+        task = AudioCaptureTask.__new__(AudioCaptureTask)
+        task._queue = asyncio.Queue(maxsize=maxsize)  # noqa: SLF001
+
+        for i in range(self._FLOOD_SIZE):
+            frame_id = np.full(8, i, dtype=np.int16)
+            task._enqueue(frame_id)  # noqa: SLF001
+
+        # Drain and read the first sample of each frame as the id.
+        ids: list[int] = []
+        while not task._queue.empty():  # noqa: SLF001
+            f = task._queue.get_nowait()  # noqa: SLF001
+            ids.append(int(f[0]))
+
+        assert len(ids) == maxsize
+        # The drained sequence is the last maxsize ids in ascending order.
+        expected_first = self._FLOOD_SIZE - maxsize
+        assert ids[0] == expected_first
+        assert ids[-1] == self._FLOOD_SIZE - 1
+        assert ids == list(range(expected_first, self._FLOOD_SIZE))
+
+    @pytest.mark.asyncio()
+    async def test_flood_does_not_raise(self) -> None:
+        """Pin (a): _enqueue is exception-free under sustained flood."""
+        import numpy as np
+
+        from sovyx.voice._capture_task import AudioCaptureTask
+
+        task = AudioCaptureTask.__new__(AudioCaptureTask)
+        task._queue = asyncio.Queue(maxsize=256)  # noqa: SLF001
+
+        frame = np.zeros(512, dtype=np.int16)
+        for _ in range(self._FLOOD_SIZE):
+            # Any raise here surfaces directly. _enqueue is sync — runs
+            # on the audio thread side via call_soon_threadsafe in
+            # production, but the contract is: never raise from this
+            # method, and never block.
+            task._enqueue(frame)  # noqa: SLF001
+
+
 class TestMixinMroResolution:
     """Pin CLAUDE.md anti-pattern #32 — mixin method-via-MRO stub trap.
 
