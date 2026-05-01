@@ -6,6 +6,128 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) 
 
 ## [Unreleased]
 
+### Voice Subsystem — Phase 4 + 5 (partial) + 6 since v0.26.0
+
+This unreleased surface accumulates 44 commits since v0.26.0 spanning
+three phases of the master mission
+``docs-internal/missions/MISSION-voice-final-skype-grade-2026.md``.
+The voice subsystem is software-complete for v0.30.0 GA-readiness
+per master mission acceptance criteria; only hardware-validation
+gates (operator-scheduled) remain.
+
+### Added
+
+- **Phase 4 — AEC + audio quality (T4.* series, 36 commits).**
+  WebRTC AEC3 wrapper (``voice/_aec.py``) + RNNoise NS wrapper
+  (``voice/_noise_suppression.py``) wired into ``FrameNormalizer``
+  with ERLE measurement, double-talk detection, and SNR-aware STT
+  confidence factor. Per-session SNR p50/p95 in heartbeat, low-SNR
+  alerts with de-flap, noise-floor drift trend alert, AGC2 VAD
+  feedback gate (suppresses noise pumping), A/B perceptual-quality
+  validation, dashboard quality-snapshot panel + endpoint. Tuning
+  flags ``voice_aec_enabled``, ``voice_noise_suppression_enabled``,
+  ``voice_use_os_dsp_when_available``.
+
+- **Phase 5 — Cross-platform parity (T5.* series, partial, 12
+  tasks).** Windows: WMI subscription for audio driver updates,
+  IMMDevice → stable USB fingerprint resolver, Group Policy
+  detection at boot + classified exclusive-open failures
+  (BUSY/UNSUPPORTED/GP_BLOCKED). Linux: PipeWire 1.0+ version
+  detection + hybrid PA conflict detection, pyudev once-per-process
+  WARN + Flatpak/Snap sandbox detection, stable USB-audio
+  fingerprint (vendor:product:serial), user-side mixer KB profile
+  loading. Remaining Phase 5 work (T5.1-T5.30 macOS native + T5.33
+  Linux mint test rigs + T5.40-T5.42 JACK/PA/Bluetooth) is
+  hardware-blocked.
+
+- **Phase 6 — Stress + chaos + soak (T6.* series, 35 commits).**
+  Six new ``Diagnosis`` variants closing observability gaps:
+  ``STREAM_OPEN_TIMEOUT`` (T6.2), ``EXCLUSIVE_MODE_NOT_AVAILABLE``
+  (T6.3), ``INSUFFICIENT_BUFFER_SIZE`` (T6.4),
+  ``INVALID_SAMPLE_RATE_NO_AUTO_CONVERT`` (T6.5),
+  ``HEARTBEAT_TIMEOUT`` (T6.6) — driver delivered audio briefly then
+  wedged mid-probe, ``PERMISSION_REVOKED_RUNTIME`` (T6.8) —
+  permission existed at open then revoked at start. Cascade
+  fallthrough mapping (T6.9). Production closures: diagnosis
+  histogram telemetry, user-actionable cascade banner, watchdog
+  ``last_diagnosis`` field, capture-integrity unrecoverable
+  emission, INCONCLUSIVE retry, quarantine ping-pong + rapid
+  re-quarantine detection, probe history default 10→100,
+  ``GET /api/voice/service-health`` endpoint with closed-enum
+  ``reason`` field.
+
+- **Watchdog DEGRADED periodic re-probe (T6.13).** Background loop
+  fires ``re_cascade`` every ``watchdog_degraded_reprobe_interval_s``
+  seconds (default 5 min) so the pipeline self-heals from transient
+  WASAPI / USB / CPU saturation root causes without waiting for
+  hot-plug.
+
+- **End-to-end pipeline test (T6.38).** Full IDLE → WAKE_DETECTED →
+  RECORDING → TRANSCRIBING → THINKING → SPEAKING → IDLE drive with
+  cognitive callback invoking ``pipeline.speak()`` to close the
+  LLM→TTS hand-off. Pins the operator-grade contract "the pipeline
+  can complete a full turn from cold IDLE to delivered TTS audio
+  with no hardware dependency."
+
+### Changed
+
+- **Cold + warm probe diagnosis tables** gain
+  ``silence_after_last_callback_ms`` parameter (T6.6) +
+  ``context`` parameter for OPEN vs START (T6.8). Backwards-compat
+  preserved via ``None`` / ``"open"`` defaults — pre-T6.6/T6.8
+  callers see legacy behaviour.
+
+- **``_classify_open_error``** signature gains optional ``combo``
+  (T6.5 routing) and ``context`` (T6.8 routing). Cascade-executor
+  + probe-open call sites use defaults; probe-start call site
+  passes ``context="start"``.
+
+- **Diagnosis enum** expanded from 17 to 23 values with the new
+  Phase 6 variants. ``Diagnosis`` remains ``StrEnum`` per
+  anti-pattern #9.
+
+- **Probe submodule coverage** raised to 99% — the last 3
+  uncovered statements in ``_warm.py::_analyse_vad`` were closed
+  via 2D-block warmup-only tests + mis-shaped-window skip tests.
+
+### Fixed
+
+- **NaN/Inf in RMS computation (T6.34).** ``_compute_rms_db`` now
+  guards ``mean_sq`` for finiteness; previously a buggy upstream
+  layer leaking float garbage propagated NaN through ``math.sqrt``
+  and ``math.log10``, returning NaN/+Inf which then misclassified
+  as HEALTHY (NaN < ceiling evaluates False). Fix mirrors the
+  capture-integrity ``_compute_rms_db`` finiteness guard.
+
+### Tests
+
+- **22 new test classes** spanning property tests, stress storms,
+  chaos injection, and E2E integration. Property tests for
+  ``_classify_open_error`` totality + RMS monotonicity. Stress
+  storms: 20-concurrent barge-in (T6.28), 100-event hot-plug
+  (T6.30), 50-cycle restart cascade (T6.27), 10K-frame load +
+  queue overflow (T6.27). Chaos: random ``PortAudioError`` /
+  ``StreamOpenError`` / ``BaseException`` audio-callback /
+  ``NaN/Inf RMS``. Total voice test count: 5167 passed (up from
+  ~5050).
+
+### CLAUDE.md anti-patterns
+
+- No new anti-patterns this surface; the existing AP-26 (KB profile
+  signing v0.24.x lenient → v0.25.0+ strict) remains overdue for
+  default flip pending operator-validated lenient telemetry.
+
+### Promotion gates remaining (operator-validation, hardware-required)
+
+- **T6.7** — Linux PipeWire mid-probe disconnect (HW: Linux PW rig)
+- **T6.35–T6.37** — Golden audio captures (Voice Clarity APO, ALSA
+  session-manager contention, WDM-KS hard-reset) — HW rigs needed
+- **T5.1–T5.30** — macOS native bypass strategies + listeners (HW:
+  macOS dev rig with PyObjC)
+- **AP-26 default flip** — KB profile signing Mode.LENIENT →
+  Mode.STRICT after one minor cycle of telemetry-validated lenient
+  mode (operator decision per ``feedback_staged_adoption``)
+
 ## [0.24.0] — 2026-04-26
 
 ### Voice Windows Paranoid Mission — Foundation phase
