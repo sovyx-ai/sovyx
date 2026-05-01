@@ -110,6 +110,7 @@ function diagnosisTone(
     case "device_busy":
     case "permission_denied":
     case "stream_open_timeout":
+    case "heartbeat_timeout":
       return "error";
     default:
       return "neutral";

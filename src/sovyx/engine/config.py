@@ -912,6 +912,20 @@ class VoiceTuningConfig(BaseSettings):
     apo_quarantine_s: float = 3_600.0
     apo_quarantine_recheck_interval_s: float = 300.0
 
+    # T6.6 — heartbeat-silence threshold for cold + warm probes.
+    # Callbacks are the probe's "heartbeat"; if the driver delivers a
+    # few buffers then goes silent for longer than this threshold the
+    # cold/warm probe returns HEARTBEAT_TIMEOUT instead of HEALTHY /
+    # NO_SIGNAL. Default 500 ms is well above the typical
+    # PortAudio buffer period (10-30 ms) so a single late callback
+    # doesn't false-positive; small enough to catch real wedges
+    # (WASAPI engine glitch, ALSA bus error) within a 1500 ms cold
+    # probe. Setting to 0 disables the check (legacy behaviour).
+    probe_heartbeat_silence_threshold_ms: int = 500
+    """T6.6 — silence-since-last-callback threshold above which a probe
+    returns :attr:`Diagnosis.HEARTBEAT_TIMEOUT`. Default 500 ms.
+    Override via ``SOVYX_TUNING__VOICE__PROBE_HEARTBEAT_SILENCE_THRESHOLD_MS``."""
+
     # T6.13 — DEGRADED state periodic re-probe. When the watchdog's
     # backoff schedule exhausts without recovery the state lands on
     # WatchdogState.DEGRADED and stays there until a hot-plug add

@@ -24,7 +24,10 @@ from sovyx.voice.health.probe._classifier import (
     _format_scale,
     _warmup_samples,
 )
-from sovyx.voice.health.probe._cold import _STREAM_OPEN_TIMEOUT_THRESHOLD_MS
+from sovyx.voice.health.probe._cold import (
+    _HEARTBEAT_SILENCE_THRESHOLD_MS,
+    _STREAM_OPEN_TIMEOUT_THRESHOLD_MS,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -138,24 +141,39 @@ def _diagnose_warm(
     vad_max_prob: float,
     callbacks_fired: int,
     elapsed_ms: int | None = None,
+    silence_after_last_callback_ms: int | None = None,
 ) -> Diagnosis:
-    """Warm-mode diagnosis table (ADR §4.3 + Phase 6 / T6.2).
+    """Warm-mode diagnosis table (ADR §4.3 + Phase 6 / T6.2 + T6.6).
 
     T6.2: when ``callbacks_fired == 0`` AND ``elapsed_ms ≥
     _STREAM_OPEN_TIMEOUT_THRESHOLD_MS`` (default 5 000 ms), returns
     :attr:`Diagnosis.STREAM_OPEN_TIMEOUT` instead of NO_SIGNAL.
-    Same threshold + semantics as :func:`_diagnose_cold` so the two
-    diagnosis tables stay symmetric on the timeout-vs-silent
-    distinction.
 
-    The ``elapsed_ms`` kwarg defaults to ``None`` for backwards
-    compatibility — pre-T6.2 callers that don't pass it stay on the
-    legacy NO_SIGNAL classification.
+    T6.6: when ``callbacks_fired > 0`` AND
+    ``silence_after_last_callback_ms ≥ _HEARTBEAT_SILENCE_THRESHOLD_MS``
+    (default 500 ms), returns :attr:`Diagnosis.HEARTBEAT_TIMEOUT` —
+    the driver delivered a few buffers then wedged mid-probe. Same
+    threshold + semantics as :func:`_diagnose_cold` so the two
+    diagnosis tables stay symmetric.
+
+    The ``elapsed_ms`` and ``silence_after_last_callback_ms`` kwargs
+    default to ``None`` for backwards compatibility — pre-T6.2/T6.6
+    callers that don't pass them stay on the legacy classifications.
     """
     if callbacks_fired == 0:
         if elapsed_ms is not None and elapsed_ms >= _STREAM_OPEN_TIMEOUT_THRESHOLD_MS:
             return Diagnosis.STREAM_OPEN_TIMEOUT
         return Diagnosis.NO_SIGNAL
+    # T6.6 — heartbeat-silence check fires after the zero-callback
+    # gate (so STREAM_OPEN_TIMEOUT / NO_SIGNAL keep their semantics)
+    # and before rms / VAD branches (a stream that wedged mid-probe
+    # would otherwise be classified by stale buffer content).
+    if (
+        _HEARTBEAT_SILENCE_THRESHOLD_MS > 0
+        and silence_after_last_callback_ms is not None
+        and silence_after_last_callback_ms >= _HEARTBEAT_SILENCE_THRESHOLD_MS
+    ):
+        return Diagnosis.HEARTBEAT_TIMEOUT
     if rms_db < _RMS_DB_NO_SIGNAL_CEILING:
         return Diagnosis.NO_SIGNAL
     if rms_db < _RMS_DB_LOW_SIGNAL_CEILING:

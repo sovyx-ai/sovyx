@@ -103,6 +103,10 @@ class TestDiagnosisEnum:
             # auto_convert=False; cascade enables conversion or
             # picks a device-native rate.
             "invalid_sample_rate_no_auto_convert",
+            # Phase 6 / T6.6 — callbacks fired briefly then went
+            # silent for ≥ probe_heartbeat_silence_threshold_ms;
+            # the driver delivered audio then wedged mid-probe.
+            "heartbeat_timeout",
             "unknown",
         }
         assert {d.value for d in Diagnosis} == expected

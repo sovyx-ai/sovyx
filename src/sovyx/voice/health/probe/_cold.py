@@ -169,6 +169,17 @@ driver surfaces in one cascade attempt; long enough that the default
 1.5 s cold probe doesn't false-positive."""
 
 
+_HEARTBEAT_SILENCE_THRESHOLD_MS = _VoiceTuning().probe_heartbeat_silence_threshold_ms
+"""T6.6 — silence-since-last-callback threshold above which a probe
+returns :attr:`Diagnosis.HEARTBEAT_TIMEOUT`.
+
+Sourced from :attr:`VoiceTuningConfig.probe_heartbeat_silence_threshold_ms`
+at import time. Default 500 ms is well above the typical PortAudio
+buffer period (10-30 ms) so a single late callback doesn't false-
+positive; small enough to catch real wedges within a 1500 ms cold
+probe. Setting to 0 disables the check (legacy behaviour)."""
+
+
 # ── Open-error classification ─────────────────────────────────────
 
 
@@ -267,9 +278,10 @@ def _diagnose_cold(
     combo: Combo,
     vad_max_prob: float | None = None,
     elapsed_ms: int | None = None,
+    silence_after_last_callback_ms: int | None = None,
 ) -> Diagnosis:
     """Cold-mode diagnosis (ADR §4.3 — amended by Voice Windows
-    Paranoid Mission Furo W-1, Phase 6 / T6.2).
+    Paranoid Mission Furo W-1, Phase 6 / T6.2 + T6.6).
 
     The cold probe runs without the VAD attached, so the diagnosis is a
     function of how many audio callbacks the driver delivered and the
@@ -316,6 +328,20 @@ def _diagnose_cold(
             return Diagnosis.STREAM_OPEN_TIMEOUT
         return Diagnosis.NO_SIGNAL
 
+    # T6.6 — heartbeat-silence check fires AFTER zero-callback gate
+    # (so STREAM_OPEN_TIMEOUT / NO_SIGNAL keep their semantics) and
+    # BEFORE rms-based HEALTHY classification (a stream that wedged
+    # mid-probe but had non-trivial RMS in its first few callbacks
+    # would otherwise false-positive as HEALTHY). The check is
+    # disabled when threshold is 0 or silence_after_last_callback_ms
+    # is None (legacy callers / pre-T6.6 paths).
+    if (
+        _HEARTBEAT_SILENCE_THRESHOLD_MS > 0
+        and silence_after_last_callback_ms is not None
+        and silence_after_last_callback_ms >= _HEARTBEAT_SILENCE_THRESHOLD_MS
+    ):
+        return Diagnosis.HEARTBEAT_TIMEOUT
+
     if rms_db >= _RMS_DB_NO_SIGNAL_CEILING:
         return Diagnosis.HEALTHY
 
@@ -359,6 +385,7 @@ __all__ = [
     "_DEVICE_BUSY_KEYWORDS",
     "_EXCLUSIVE_MODE_NOT_AVAILABLE_KEYWORDS",
     "_FORMAT_MISMATCH_KEYWORDS",
+    "_HEARTBEAT_SILENCE_THRESHOLD_MS",
     "_INSUFFICIENT_BUFFER_SIZE_KEYWORDS",
     "_INVALID_SAMPLE_RATE_KEYWORDS",
     "_KERNEL_INVALIDATED_KEYWORDS",

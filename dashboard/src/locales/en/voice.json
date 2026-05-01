@@ -174,6 +174,7 @@
       "invalid_sample_rate_no_auto_convert": "Invalid sample rate (no auto-convert)",
       "permission_denied": "Permission denied",
       "stream_open_timeout": "Stream open timeout",
+      "heartbeat_timeout": "Heartbeat timeout",
       "kernel_invalidated": "Kernel-invalidated",
       "unknown": "Unknown"
     },

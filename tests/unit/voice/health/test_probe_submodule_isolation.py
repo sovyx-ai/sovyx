@@ -484,6 +484,57 @@ class TestDiagnoseWarm:
         )
         assert result is Diagnosis.HEALTHY
 
+    # T6.6 — HEARTBEAT_TIMEOUT (callbacks fired, then went silent)
+
+    def test_heartbeat_silence_above_threshold_is_heartbeat_timeout(self) -> None:
+        # T6.6 — callbacks fired BUT silence_after_last_callback ≥
+        # threshold → HEARTBEAT_TIMEOUT. Even healthy RMS / VAD don't
+        # rescue this: the driver wedged mid-probe and the buffered
+        # data is stale.
+        result = _diagnose_warm(
+            rms_db=_RMS_DB_LOW_SIGNAL_CEILING + 5.0,
+            vad_max_prob=_VAD_HEALTHY_FLOOR + 0.05,
+            callbacks_fired=5,
+            elapsed_ms=1500,
+            silence_after_last_callback_ms=500,  # at threshold
+        )
+        assert result is Diagnosis.HEARTBEAT_TIMEOUT
+
+    def test_heartbeat_silence_below_threshold_falls_through(self) -> None:
+        # silence < threshold → T6.6 doesn't fire; the existing RMS /
+        # VAD branches take over. With healthy values → HEALTHY.
+        result = _diagnose_warm(
+            rms_db=_RMS_DB_LOW_SIGNAL_CEILING + 5.0,
+            vad_max_prob=_VAD_HEALTHY_FLOOR + 0.05,
+            callbacks_fired=49,
+            elapsed_ms=1500,
+            silence_after_last_callback_ms=100,  # below 500ms threshold
+        )
+        assert result is Diagnosis.HEALTHY
+
+    def test_heartbeat_check_skipped_on_zero_callbacks(self) -> None:
+        # Priority guard: zero-callback gate runs FIRST so
+        # HEARTBEAT_TIMEOUT never preempts STREAM_OPEN_TIMEOUT /
+        # NO_SIGNAL when there were no callbacks.
+        result = _diagnose_warm(
+            rms_db=-30.0,
+            vad_max_prob=0.0,
+            callbacks_fired=0,
+            elapsed_ms=5_000,
+            silence_after_last_callback_ms=10_000,  # huge but ignored
+        )
+        assert result is Diagnosis.STREAM_OPEN_TIMEOUT
+
+    def test_heartbeat_silence_none_is_legacy_passthrough(self) -> None:
+        # Backwards compat: pre-T6.6 callers omit
+        # silence_after_last_callback_ms; behaviour unchanged.
+        result = _diagnose_warm(
+            rms_db=_RMS_DB_LOW_SIGNAL_CEILING + 5.0,
+            vad_max_prob=_VAD_HEALTHY_FLOOR + 0.05,
+            callbacks_fired=49,
+        )
+        assert result is Diagnosis.HEALTHY
+
 
 # ── T6.2 — STREAM_OPEN_TIMEOUT in cold path ────────────────────────
 

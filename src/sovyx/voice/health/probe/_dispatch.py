@@ -235,6 +235,12 @@ async def _run_probe(
     blocks: list[npt.NDArray[Any]] = []
     blocks_lock = threading.Lock()
     callbacks_fired = 0
+    # T6.6 — track the last-callback timestamp so the diagnose phase
+    # can detect a heartbeat that started but went silent mid-probe.
+    # ``None`` until the first callback fires; transitions to a
+    # ``time.monotonic()`` snapshot inside the callback. Read after
+    # the probe duration to compute silence_since_last_callback_ms.
+    last_callback_monotonic: float | None = None
 
     def _callback(
         indata: npt.NDArray[Any],
@@ -242,8 +248,9 @@ async def _run_probe(
         _time_info: object,
         _status: object,
     ) -> None:
-        nonlocal callbacks_fired
+        nonlocal callbacks_fired, last_callback_monotonic
         callbacks_fired += 1
+        last_callback_monotonic = time.monotonic()
         # PortAudio reuses the incoming buffer; copy so we keep a
         # stable reference after the callback returns.
         with blocks_lock:
@@ -333,7 +340,20 @@ async def _run_probe(
             error=str(start_time_error),
         )
 
-    elapsed_ms = int((time.monotonic() - wall_start) * 1000)
+    wall_end = time.monotonic()
+    elapsed_ms = int((wall_end - wall_start) * 1000)
+    # T6.6 — silence-since-last-callback in ms. Computed once here
+    # from the monotonic snapshot the callback set + the probe-end
+    # timestamp; passed to both _diagnose_cold and _diagnose_warm
+    # so the heartbeat-silence branch fires consistently across
+    # modes. ``None`` when callbacks_fired == 0 (no callback ever
+    # set the snapshot — caller path already handles that via the
+    # zero-callback gate).
+    silence_after_last_callback_ms: int | None = (
+        int((wall_end - last_callback_monotonic) * 1000)
+        if last_callback_monotonic is not None
+        else None
+    )
 
     with blocks_lock:
         collected = list(blocks)
@@ -346,6 +366,7 @@ async def _run_probe(
             rms_db=rms_db,
             combo=combo,
             elapsed_ms=elapsed_ms,
+            silence_after_last_callback_ms=silence_after_last_callback_ms,
         )
         return ProbeResult(
             diagnosis=diagnosis,
@@ -371,6 +392,7 @@ async def _run_probe(
         vad_max_prob=vad_max_prob,
         callbacks_fired=callbacks_fired,
         elapsed_ms=elapsed_ms,
+        silence_after_last_callback_ms=silence_after_last_callback_ms,
     )
     return ProbeResult(
         diagnosis=diagnosis,

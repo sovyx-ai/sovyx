@@ -68,6 +68,16 @@ class Diagnosis(StrEnum):
     # kernel-side wedge that doesn't surface as an open-time error).
     # Cure is physical — replug or reboot.
     STREAM_OPEN_TIMEOUT = "stream_open_timeout"
+    # Phase 6 / T6.6 — callbacks fired briefly at probe start but went
+    # silent for at least ``probe_heartbeat_silence_threshold_ms``
+    # (default 500 ms) before probe end. Distinct from STREAM_OPEN_TIMEOUT
+    # (zero callbacks) and HEALTHY (callbacks throughout): the driver
+    # initially delivered audio then wedged mid-probe. Production
+    # patterns: WASAPI engine glitch after first buffer, ALSA bus error
+    # killing data flow, Voice Clarity APO that initialises briefly
+    # then stops feeding signal. Cascade should retry with a different
+    # combo (the current substrate is unstable).
+    HEARTBEAT_TIMEOUT = "heartbeat_timeout"
     # Kernel-side IAudioClient invalidated state: device enumerates as
     # healthy (PnP status=OK, ConfigManager=0) but every host API returns
     # paInvalidDevice (-9996) on stream open because the IMMDevice's

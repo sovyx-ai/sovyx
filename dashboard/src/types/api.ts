@@ -1016,6 +1016,7 @@ export type VoiceHealthDiagnosis =
   | "permission_denied"
   | "kernel_invalidated"
   | "stream_open_timeout"
+  | "heartbeat_timeout"
   | "unknown";
 
 export type VoiceHealthProbeMode = "cold" | "warm";

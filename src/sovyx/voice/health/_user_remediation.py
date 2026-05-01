@@ -135,6 +135,18 @@ _REMEDIATION_BY_DIAGNOSIS: dict[str, str] = {
         "physically unplug and replug the device. If the symptom "
         "recurs after replug, reboot to clear the kernel state."
     ),
+    "heartbeat_timeout": (
+        "The audio driver delivered a few audio buffers and then "
+        "went silent mid-probe. The substrate is unstable — typical "
+        "causes are a WASAPI engine glitch after the first buffer, "
+        "an ALSA bus error killing data flow, or a Voice Clarity APO "
+        "that initialises briefly then stops feeding signal. Sovyx "
+        "will retry with a different combo automatically. If every "
+        "combo hits this diagnosis, the driver itself is unstable — "
+        "update the audio driver via Device Manager (Windows) / your "
+        "distribution's package manager (Linux), or replug the "
+        "device to renegotiate USB power."
+    ),
 }
 
 
