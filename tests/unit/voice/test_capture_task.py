@@ -1605,6 +1605,51 @@ class TestLinuxRestartVerdictGuards:
         finally:
             await task.stop()
 
+    @pytest.mark.asyncio()
+    async def test_session_manager_restart_returns_downgraded_when_no_session_sibling(
+        self,
+    ) -> None:
+        # T6.24 — pin the DOWNGRADED_TO_ALSA_HW verdict deterministically.
+        # Existing tests at TestCaptureRestartFrameEmissionT32 assert
+        # ``verdict in {SESSION_MANAGER_ENGAGED, DOWNGRADED_TO_ALSA_HW}``
+        # which accepts either outcome — the ENGAGED path triggers
+        # _stream_opener mocking complexity that may flip on a future
+        # refactor and silently allow regressions to creep into the
+        # DOWNGRADED_TO_ALSA_HW branch. This test forces the downgrade
+        # path: target_device=None + enumeration has only ALSA entries
+        # (no PulseAudio / PipeWire sibling) → method short-circuits
+        # with DOWNGRADED_TO_ALSA_HW + existing stream preserved.
+        sd = _fake_sd()
+        sd.InputStream = lambda **_kwargs: MagicMock()  # type: ignore[attr-defined]
+        # Two ALSA entries, no session-manager sibling.
+        alsa_entry = _input_entry(index=11, name="usbmic", host_api="ALSA")
+        alsa_alt = _input_entry(index=12, name="builtin", host_api="ALSA")
+        task = AudioCaptureTask(
+            MagicMock(),
+            input_device=11,
+            host_api_name="ALSA",
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [alsa_entry, alsa_alt],
+        )
+        try:
+            with patch("sovyx.voice.capture._restart_mixin.sys.platform", "linux"):
+                await task.start()
+                # No target_device — triggers the sibling-discovery
+                # path that returns DOWNGRADED_TO_ALSA_HW when no
+                # PulseAudio / PipeWire entry is enumerable.
+                result = await task.request_session_manager_restart()
+            assert result.verdict is SessionManagerRestartVerdict.DOWNGRADED_TO_ALSA_HW
+            assert result.engaged is False
+            assert "no PulseAudio/PipeWire sibling" in result.detail
+            # Existing stream stays running — the docstring promise that
+            # "non-engaged verdict means the session-manager reopen was
+            # not feasible" implies the prior stream is preserved.
+            assert task.is_running is True
+        finally:
+            await task.stop()
+
 
 # ─────────────────────────────────────────────────────────────────────
 # v1.3 §4.2 L4-B — mark-based tap contract
