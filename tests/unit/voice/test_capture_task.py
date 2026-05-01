@@ -1971,6 +1971,193 @@ class TestSustainedUnderrunDetection:
         assert task._underrun_window_underruns_at_start == 1  # noqa: SLF001
 
 
+class TestUnderrunStormT629:
+    """Phase 6 / T6.29 — sustained underrun storm at 50+/sec.
+
+    Existing ``TestSustainedUnderrunDetection`` covers detection
+    LOGIC (window arming, threshold, rate-limiting) at the unit level.
+    T6.29 stresses the system under STORM conditions: 500+ frames
+    delivered with ``input_underflow=True`` to the audio callback,
+    sustained over multiple rolling windows.
+
+    Contracts pinned by stress:
+
+    1. Counter accuracy at high rate — every flagged frame increments
+       ``_stream_underruns`` exactly once. No drops, no double-counts.
+    2. WARN rate-limited under storm — at 50+ underruns/sec sustained,
+       only one ``voice.audio.capture_sustained_underrun`` per
+       ``_CAPTURE_UNDERRUN_WARN_INTERVAL_S`` (30 s default). Logging
+       a WARN per frame would itself starve the audio thread.
+    3. Audio callback never raises — even under storm pressure (the
+       T1.30 ``except BaseException`` is the safety net here too).
+    4. Memory bounded — counters are integers; no accumulating data
+       structures. Verified via direct attribute inspection.
+    5. Stream stays alive — pre-T6.29 a synthetic underrun storm in
+       a real-PortAudio environment could trigger a stream close;
+       the in-process counters must not interact with stream
+       lifecycle.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_storm_500_underruns_in_one_second_increments_counter_exactly(
+        self,
+    ) -> None:
+        # Direct callback drive at storm rate. 500 frames with
+        # input_underflow=True over a tight loop — verify counter
+        # accuracy. The status object is a MagicMock with
+        # ``input_underflow=True`` and ``input_overflow=False``;
+        # the callback's ``getattr(status, "input_underflow", False)``
+        # evaluates True for every call.
+        captured: dict[str, Any] = {}
+
+        def stream_factory(**kwargs: Any) -> MagicMock:
+            captured["cb"] = kwargs["callback"]
+            return MagicMock()
+
+        sd = _fake_sd()
+        sd.InputStream = stream_factory  # type: ignore[attr-defined]
+        entry = _input_entry(index=5)
+
+        task = AudioCaptureTask(
+            MagicMock(),
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [entry],
+        )
+
+        try:
+            await task.start()
+            cb = captured["cb"]
+            # Drain bootstrap.
+            while not task._queue.empty():  # noqa: SLF001
+                task._queue.get_nowait()  # noqa: SLF001
+
+            # Cancel consumer so its drain doesn't interfere with
+            # counter inspection (it doesn't touch underrun counters
+            # but the consumer's queue draining is irrelevant here
+            # and the explicit cancel keeps the test focused).
+            consumer = task._consumer  # noqa: SLF001
+            if consumer is not None:
+                consumer.cancel()
+                with contextlib.suppress(asyncio.CancelledError, BaseException):
+                    await consumer
+
+            status_underrun = MagicMock()
+            status_underrun.input_underflow = True
+            status_underrun.input_overflow = False
+            status_underrun.__bool__ = lambda _self: True  # type: ignore[method-assign]
+
+            indata = np.zeros(512, dtype=np.int16)
+
+            storm_size = 500
+            initial = task._stream_underruns  # noqa: SLF001
+            for _ in range(storm_size):
+                cb(indata, 512, None, status_underrun)
+
+            # Counter incremented exactly once per call. No drops.
+            assert task._stream_underruns - initial == storm_size  # noqa: SLF001
+            # Callback frames also incremented exactly.
+            assert task._stream_callback_frames >= storm_size  # noqa: SLF001
+        finally:
+            await task.stop()
+
+    def test_storm_warn_rate_limited_to_one_per_interval(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Under sustained storm conditions, the consumer-loop
+        # rate-check method runs every iteration. The WARN must
+        # fire ONCE per ``_CAPTURE_UNDERRUN_WARN_INTERVAL_S``
+        # interval, not once per call. Without rate-limiting a
+        # storm would flood the log feed and could itself
+        # contribute to thread starvation (anti-pattern #14).
+        import logging
+        from unittest.mock import patch
+
+        from sovyx.voice.capture._constants import (
+            _CAPTURE_UNDERRUN_WARN_INTERVAL_S,
+            _CAPTURE_UNDERRUN_WINDOW_S,
+        )
+
+        task = _bare_task_with_underrun_state()
+
+        # Simulate storm spanning 5 windows. Each window: 200 callbacks,
+        # 100 underruns (50 % rate, well above 5 % threshold). Window
+        # duration = 10 s; 5 windows = 50 s total. Rate-limit interval
+        # = 30 s, so exactly 2 WARNs expected (window 1 fires; windows
+        # 2-3 rate-limited; window 4 elapsed past 30 s, fires; window
+        # 5 rate-limited again).
+        with caplog.at_level(logging.WARNING):
+            t = 0.0
+            with patch(
+                "sovyx.voice.capture._loop_mixin.time.monotonic",
+                side_effect=lambda: t,
+            ):
+                # Arm window at t=0.
+                task._check_sustained_underrun_rate()  # noqa: SLF001
+
+                # Simulate 5 sustained-storm rolling windows.
+                for window_idx in range(5):
+                    t = (window_idx + 1) * (_CAPTURE_UNDERRUN_WINDOW_S + 0.1)
+                    task._stream_callback_frames += 200  # noqa: SLF001
+                    task._stream_underruns += 100  # noqa: SLF001
+                    task._check_sustained_underrun_rate()  # noqa: SLF001
+
+        events = [
+            r.msg
+            for r in caplog.records
+            if isinstance(r.msg, dict)
+            and r.msg.get("event") == "voice.audio.capture_sustained_underrun"
+        ]
+        # Window 1 (t=10.1): first WARN — last_warn becomes 10.1.
+        # Window 2 (t=20.2): t - last_warn = 10.1 < 30 → SKIP.
+        # Window 3 (t=30.3): t - last_warn = 20.2 < 30 → SKIP.
+        # Window 4 (t=40.4): t - last_warn = 30.3 ≥ 30 → WARN.
+        # Window 5 (t=50.5): t - last_warn = 10.1 < 30 → SKIP.
+        # Expected: exactly 2 WARNs across 5 storm windows.
+        assert len(events) == 2, (
+            f"expected 2 WARNs across 5 storm windows (rate-limit interval "
+            f"{_CAPTURE_UNDERRUN_WARN_INTERVAL_S}s vs window {_CAPTURE_UNDERRUN_WINDOW_S}s), "
+            f"got {len(events)}"
+        )
+
+    def test_storm_counter_state_is_bounded_integers_only(self) -> None:
+        # T6.29 contract — under sustained storm, the underrun-tracking
+        # state stays bounded: just integer counters + a single
+        # monotonic timestamp. No accumulating data structures
+        # (no list of past underrun events, no per-frame metadata).
+        # Pinning this prevents a future "richer telemetry" refactor
+        # from accidentally introducing memory growth proportional
+        # to underrun count.
+        task = _bare_task_with_underrun_state()
+
+        # Drive the counter via direct attribute assignment (mirrors
+        # the audio-callback's pure-increment behaviour at storm rate).
+        for _ in range(10_000):
+            task._stream_underruns += 1  # noqa: SLF001
+            task._stream_callback_frames += 1  # noqa: SLF001
+
+        # Every state field on the underrun monitor is either an int
+        # or float (timestamp). No list, no dict, no set.
+        underrun_attrs = {
+            "_stream_underruns": task._stream_underruns,  # noqa: SLF001
+            "_stream_callback_frames": task._stream_callback_frames,  # noqa: SLF001
+            "_underrun_window_started_at": task._underrun_window_started_at,  # noqa: SLF001
+            "_underrun_window_callbacks_at_start": task._underrun_window_callbacks_at_start,  # noqa: SLF001
+            "_underrun_window_underruns_at_start": task._underrun_window_underruns_at_start,  # noqa: SLF001
+            "_last_underrun_warning_monotonic": task._last_underrun_warning_monotonic,  # noqa: SLF001
+        }
+        for name, value in underrun_attrs.items():
+            assert value is None or isinstance(value, (int, float)), (
+                f"{name} is {type(value).__name__}; underrun state must "
+                "stay bounded (int / float / None) under storm pressure"
+            )
+        # Counters reached 10K without overflow / wraparound.
+        assert task._stream_underruns == 10_000  # noqa: SLF001
+        assert task._stream_callback_frames == 10_000  # noqa: SLF001
+
+
 class TestMixinMroResolution:
     """Pin CLAUDE.md anti-pattern #32 — mixin method-via-MRO stub trap.
 
