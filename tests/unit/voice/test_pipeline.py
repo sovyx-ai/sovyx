@@ -614,6 +614,248 @@ class TestAudioOutputQueueChaosWireUp:
 
 
 # ===========================================================================
+# T6.28 — Barge-in storm: 20+ concurrent interrupts pin the T1.22 contract
+# ===========================================================================
+
+
+class TestBargeInStormT628:
+    """Storm-test ``AudioOutputQueue.interrupt()`` under concurrent callers.
+
+    The T1.22 contract pinned in :meth:`AudioOutputQueue.interrupt` is
+    "infallible + idempotent + mute-flag-first". Phase 6 / T6.28
+    stresses that contract under a barge-in storm — 20+ concurrent
+    callers racing the same interrupt() — and proves the post-storm
+    state is identical to a single-call quiescent state. Production
+    scenario: rapid user interruptions (talk-over the assistant +
+    cancel + retry) cascading through the orchestrator's barge-in
+    listener, the dashboard "stop speaking" button, and the wake-word
+    re-trigger path can all fire interrupt() in tight succession from
+    multiple coroutines and threads.
+
+    Not covered here: interrupt() is sync, so asyncio.gather sequences
+    its calls on the event loop thread. The threading-from-callback
+    case is covered by capture-task chaos tests (T6.33). What this
+    suite pins is the asyncio storm contract: *N concurrent tasks
+    each calling interrupt() resolve cleanly, and the queue ends in
+    the documented terminal state regardless of N.*
+    """
+
+    _STORM_SIZE = 20  # noqa: PLR2004 — mission spec § Phase 6 / T6.28
+    _SECONDARY_STORM_SIZE = 64  # 3x — proves the contract scales
+    _CHUNKS_PRELOAD = 50  # noqa: PLR2004 — exceeds typical drain depth
+
+    @pytest.mark.asyncio
+    async def test_storm_interrupts_all_complete_without_exception(self) -> None:
+        """20 concurrent interrupt() calls all return cleanly.
+
+        The first promise of the T1.22 contract is *infallible* —
+        no caller observes an exception, even when racing the
+        same internal state. Critical: the orchestrator's barge-in
+        wire-up does not wrap interrupt() in try/except (the
+        cancel_speech_chain shield is paranoid-only per the docstring),
+        so an exception leak here would surface as an unhandled task
+        exception in production.
+        """
+        q = AudioOutputQueue()
+        for _ in range(self._CHUNKS_PRELOAD):
+            await q.enqueue(_audio_chunk(10))
+
+        async def _interrupt_once() -> None:
+            q.interrupt()
+
+        results = await asyncio.gather(
+            *(_interrupt_once() for _ in range(self._STORM_SIZE)),
+            return_exceptions=True,
+        )
+
+        for r in results:
+            assert not isinstance(r, BaseException), f"interrupt raised: {r!r}"
+
+    @pytest.mark.asyncio
+    async def test_storm_terminal_state_matches_single_call(self) -> None:
+        """N=20 concurrent interrupts and N=1 yield identical state.
+
+        Idempotence pin: the T1.22 docstring guarantees that "the
+        second call observes the queue already empty and the flag
+        already set, and silently no-ops". A storm of 20 calls is
+        just N second-calls; the post-storm state must be the
+        documented terminal state (queue empty, _interrupted=True,
+        _pending_audio_ms=0.0) — bit-identical to what one call
+        produces.
+        """
+        q_storm = AudioOutputQueue()
+        q_single = AudioOutputQueue()
+        for q in (q_storm, q_single):
+            for _ in range(self._CHUNKS_PRELOAD):
+                await q.enqueue(_audio_chunk(10))
+
+        # Reference: single call.
+        q_single.interrupt()
+
+        # Storm: 20 concurrent calls.
+        await asyncio.gather(
+            *(asyncio.to_thread(q_storm.interrupt) for _ in range(self._STORM_SIZE)),
+        )
+
+        assert q_storm._queue.empty() == q_single._queue.empty() is True
+        assert q_storm._interrupted == q_single._interrupted is True
+        assert q_storm._pending_audio_ms == q_single._pending_audio_ms == 0.0
+
+    @pytest.mark.asyncio
+    async def test_storm_scales_to_3x_storm_size(self) -> None:
+        """64 concurrent interrupts also resolve cleanly.
+
+        Storm size is a tunable threshold; the contract is
+        N-independent. A 3x storm proves the implementation does
+        not have a hidden N-quadratic or rate-limited path that
+        would break at higher concurrency. If a future contention
+        manager or rate-limiter is added to interrupt(), this test
+        catches it.
+        """
+        q = AudioOutputQueue()
+        for _ in range(self._CHUNKS_PRELOAD):
+            await q.enqueue(_audio_chunk(10))
+
+        await asyncio.gather(
+            *(asyncio.to_thread(q.interrupt) for _ in range(self._SECONDARY_STORM_SIZE)),
+        )
+
+        assert q._queue.empty()
+        assert q._interrupted is True
+        assert q._pending_audio_ms == 0.0
+
+    @pytest.mark.asyncio
+    async def test_mute_flag_set_first_under_storm(self) -> None:
+        """``_interrupted=True`` is set before queue drain begins.
+
+        Mute-flag-first pin: the T1.22 docstring promises the
+        ``_interrupted = True`` line is the *first* statement
+        executed, so even if a hypothetical exception in the
+        QueueEmpty drain loop interrupted execution, drain() would
+        still observe the flag and stop. This test pins that
+        observable property under storm: even with 20 callers
+        racing, every observation of the queue post-call sees the
+        flag set.
+        """
+        q = AudioOutputQueue()
+        for _ in range(self._CHUNKS_PRELOAD):
+            await q.enqueue(_audio_chunk(10))
+
+        flag_observations: list[bool] = []
+
+        async def _interrupt_and_observe() -> None:
+            q.interrupt()
+            # Immediately observe — under T1.22, the flag is set
+            # synchronously by interrupt() before it returns.
+            flag_observations.append(q._interrupted)
+
+        await asyncio.gather(
+            *(_interrupt_and_observe() for _ in range(self._STORM_SIZE)),
+        )
+
+        # Every single observation must see the mute flag set.
+        # If any caller saw False, the mute-flag-first contract is
+        # broken (interrupt() returned before setting the flag).
+        assert all(flag_observations)
+        assert len(flag_observations) == self._STORM_SIZE
+
+    @pytest.mark.asyncio
+    async def test_interleaved_enqueue_during_interrupt_storm(self) -> None:
+        """Concurrent enqueue + interrupt: never crashes, no negative pending.
+
+        Real-world scenario: a barge-in storm fires while the
+        orchestrator's pre-render task is mid-flight enqueueing a
+        new TTS chunk. The interrupt() drain loop and the enqueue's
+        ``_pending_audio_ms += chunk.duration_ms`` race. The
+        T1.22 contract does NOT promise queue-empty terminal state
+        under interleaved enqueue (the post-interrupt enqueue is a
+        valid new sentence), but it DOES promise:
+          (a) no caller raises;
+          (b) ``_pending_audio_ms`` is never negative — the
+              ``max(0.0, ...)`` guard in drain() and the unconditional
+              reset in interrupt() together hold this invariant under
+              all race orderings.
+        """
+        q = AudioOutputQueue()
+        for _ in range(10):
+            await q.enqueue(_audio_chunk(10))
+
+        async def _enqueue_one() -> None:
+            await q.enqueue(_audio_chunk(10))
+
+        async def _interrupt_one() -> None:
+            q.interrupt()
+
+        # Mix the storm: 20 interrupts + 10 enqueues, all racing.
+        # asyncio.gather schedules them on the event loop; the order
+        # in which they wake from `await` boundaries varies.
+        tasks = [_interrupt_one() for _ in range(self._STORM_SIZE)] + [
+            _enqueue_one() for _ in range(10)
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for r in results:
+            assert not isinstance(r, BaseException), f"raised: {r!r}"
+
+        # Pending-audio invariant: never negative regardless of race.
+        assert q._pending_audio_ms >= 0.0
+        # And never larger than the cumulative enqueue total
+        # (10 preload + 10 race = 20 chunks of 10 ms = 200 ms cap).
+        assert q._pending_audio_ms <= 200.0  # noqa: PLR2004
+
+    @pytest.mark.asyncio
+    async def test_storm_during_drain_short_circuits_playback(self) -> None:
+        """Interrupt storm fired during active drain() stops playback.
+
+        End-to-end pin: the drain() loop checks
+        ``not self._interrupted`` on every iteration. When 20
+        concurrent interrupts fire mid-drain, the very next loop
+        iteration after any single one of them executes will
+        short-circuit. This is the integration-level promise that
+        the orchestrator's barge-in handler relies on — once
+        interrupt() returns, no further chunks reach the playback
+        sink.
+        """
+        q = AudioOutputQueue()
+        for _ in range(self._CHUNKS_PRELOAD):
+            await q.enqueue(_audio_chunk(10))
+
+        played: list[AudioChunk] = []
+        storm_fired = asyncio.Event()
+
+        async def _slow_play(chunk: AudioChunk) -> None:
+            played.append(chunk)
+            # Yield to the event loop so the storm tasks scheduled
+            # via asyncio.gather can run between chunks. Without
+            # this yield, the synchronous-style drain loop would
+            # play every chunk before the storm tasks ever wake.
+            if len(played) == 1:
+                storm_fired.set()
+            await asyncio.sleep(0)
+
+        async def _fire_storm() -> None:
+            await storm_fired.wait()
+            await asyncio.gather(
+                *(asyncio.to_thread(q.interrupt) for _ in range(self._STORM_SIZE)),
+            )
+
+        with patch.object(_pipeline_mod, "_play_audio", side_effect=_slow_play):
+            await asyncio.gather(q.drain(), _fire_storm())
+
+        # Drain saw the interrupt before consuming the full preload.
+        assert len(played) < self._CHUNKS_PRELOAD
+        # Terminal state: queue drained, no pending audio.
+        # ``_interrupted`` is intentionally NOT asserted here — drain's
+        # finally clause resets it to False, but storm interrupt() calls
+        # may fire after that reset (asyncio.gather does not order
+        # them), so the post-test value depends on which task wakes
+        # last. The contract that matters (queue drained, no pending)
+        # is order-independent.
+        assert q._queue.empty()
+        assert q._pending_audio_ms == 0.0
+
+
+# ===========================================================================
 # O1 wire-up — PipelineStateMachine observer in the orchestrator
 # ===========================================================================
 
