@@ -656,7 +656,7 @@ def record_wake_word_confidence(
     )
 
 
-def record_wake_word_false_fire(*, reason: str) -> None:
+def record_wake_word_false_fire(*, reason: str, mind_id: str = "") -> None:
     """Increment the T7.7 false-fire counter.
 
     Fires when wake-word triggered but the resulting STT transcript
@@ -670,10 +670,16 @@ def record_wake_word_false_fire(*, reason: str) -> None:
             (STT engine rejected via hallucination filter / compression
             ratio / timeout), or ``"sub_confidence"`` (confidence below
             ``false_wake_min_confidence`` band-aid #46 gate).
+        mind_id: Phase 8 / T8.9 — mind identifier for per-mind
+            false-fire attribution. Empty string default preserves
+            the v0.30.0 single-mind contract; multi-mind v0.31.0+
+            deployments pass the routed mind ID so dashboards can
+            split per-mind false-fire rates. Cardinality bounded
+            by the operator's MindRegistry (typical 3-10 minds).
     """
     get_metrics().voice_wake_word_false_fire.add(
         1,
-        attributes={"reason": reason},
+        attributes={"reason": reason, "mind_id": mind_id},
     )
 
 
