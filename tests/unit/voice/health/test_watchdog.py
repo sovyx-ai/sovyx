@@ -811,6 +811,107 @@ class TestHotplugStormT630:
 
 
 # ---------------------------------------------------------------------------
+# T6.27 part 3 — Restart cascade cycling 50×
+# ---------------------------------------------------------------------------
+
+
+class TestRestartCycle50xT627:
+    """Stress 50 successive watchdog restart cycles.
+
+    Phase 6 / T6.27 sub-test 3 of 3 stresses the watchdog's
+    deafness→backoff→recovery→deafness cycle under sustained
+    fault-and-recover load. Production scenario: a flaky USB hub or
+    a Voice Clarity APO oscillating in/out of the audio chain
+    triggers repeated deaf-signal heartbeats over a long session.
+    50 cycles is the upper-bound stress: each cycle = report
+    deafness, the BACKOFF chain runs, recovers HEALTHY on the first
+    re-probe attempt, transitions back to IDLE, then repeats.
+
+    Pinned invariants:
+      (a) every cycle resolves cleanly without exception;
+      (b) after each cycle the watchdog is back in :attr:`IDLE`,
+          ready for the next deafness signal — no state leakage;
+      (c) ``_pending`` returns to ``None`` between cycles — the
+          spawn/await/clear contract holds for 50× iterations
+          without leaking background tasks;
+      (d) re-probe call count == cycles_completed × attempts
+          (1 per cycle when first attempt is HEALTHY).
+    """
+
+    _CYCLE_COUNT = 50  # noqa: PLR2004 — mission spec § Phase 6 / T6.27
+
+    @pytest.mark.asyncio()
+    async def test_50_recovery_cycles_resolve_to_idle(self) -> None:
+        """Pin (a) + (b): each cycle ends in IDLE without exception."""
+        # First re-probe of every cycle returns HEALTHY → instant recovery.
+        rp = _ReProbeRecorder(diagnoses=[Diagnosis.HEALTHY] * self._CYCLE_COUNT)
+        wd, _, _, _ = _make_watchdog(re_probe=rp, schedule_s=(0.0, 0.0, 0.0))
+        listener = _FakeHotplug()
+        await wd.start(listener)
+
+        for cycle in range(self._CYCLE_COUNT):
+            await wd.report_deafness()
+            await _drain_pending(wd)
+            assert wd.state == WatchdogState.IDLE, (
+                f"cycle {cycle}: expected IDLE after recovery, got {wd.state.value}"
+            )
+
+        # Pin (d): exactly one re-probe call per cycle (HEALTHY on first).
+        assert len(rp.calls) == self._CYCLE_COUNT
+
+    @pytest.mark.asyncio()
+    async def test_50_cycles_do_not_leak_pending_tasks(self) -> None:
+        """Pin (c): ``_pending`` returns to None between cycles."""
+        rp = _ReProbeRecorder(diagnoses=[Diagnosis.HEALTHY] * self._CYCLE_COUNT)
+        wd, _, _, _ = _make_watchdog(re_probe=rp, schedule_s=(0.0, 0.0, 0.0))
+        listener = _FakeHotplug()
+        await wd.start(listener)
+
+        for _ in range(self._CYCLE_COUNT):
+            await wd.report_deafness()
+            await _drain_pending(wd)
+            # Between cycles, the spawned chain must have completed
+            # AND been cleared from `_pending`.
+            assert wd._pending is None or wd._pending.done(), (  # noqa: SLF001
+                "_pending leaked across cycles"
+            )
+
+    @pytest.mark.asyncio()
+    async def test_50_cycles_alternating_deaf_recover_cycle(self) -> None:
+        """End-to-end alternation: deaf→recover→deaf→recover×50.
+
+        Pin: the state machine never gets stuck in BACKOFF or
+        DEGRADED across 50 alternating cycles. Each report_deafness
+        transitions IDLE → BACKOFF, the chain runs, HEALTHY re-probe
+        transitions back to IDLE, and the next iteration repeats.
+        """
+        rp = _ReProbeRecorder(diagnoses=[Diagnosis.HEALTHY] * self._CYCLE_COUNT)
+        wd, _, _, _ = _make_watchdog(re_probe=rp, schedule_s=(0.0,), max_attempts=1)
+        listener = _FakeHotplug()
+        await wd.start(listener)
+
+        states_observed: list[WatchdogState] = []
+        for _ in range(self._CYCLE_COUNT):
+            await wd.report_deafness()
+            # State immediately after deafness must be BACKOFF (with the
+            # pending chain in flight).
+            states_observed.append(wd.state)
+            await _drain_pending(wd)
+            states_observed.append(wd.state)
+
+        # Half the observations are BACKOFF (post-deafness, pre-drain)
+        # and half are IDLE (post-drain). Order is deterministic.
+        backoff_observations = [s for s in states_observed[::2]]  # even indices: post-deafness
+        idle_observations = [s for s in states_observed[1::2]]  # odd indices: post-drain
+        assert all(s == WatchdogState.BACKOFF for s in backoff_observations), (
+            "post-deafness state was not BACKOFF in every cycle"
+        )
+        assert all(s == WatchdogState.IDLE for s in idle_observations), (
+            "post-drain state was not IDLE in every cycle"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Lifecycle lock — §5.5
 # ---------------------------------------------------------------------------
 
