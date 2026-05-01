@@ -169,6 +169,7 @@ def _make_watchdog(
     schedule_s: tuple[float, ...] = (0.0, 0.0, 0.0),
     max_attempts: int = 3,
     friendly: str = _FRIENDLY,
+    degraded_reprobe_interval_s: float | None = None,
 ) -> tuple[VoiceCaptureWatchdog, _ReProbeRecorder, _ReCascadeRecorder, LRULockDict[str]]:
     rp = re_probe or _ReProbeRecorder()
     rc = re_cascade or _ReCascadeRecorder()
@@ -182,6 +183,7 @@ def _make_watchdog(
         lifecycle_locks=locks,
         schedule_s=schedule_s,
         max_attempts=max_attempts,
+        degraded_reprobe_interval_s=degraded_reprobe_interval_s,
     )
     return wd, rp, rc, locks
 
@@ -909,6 +911,170 @@ class TestRestartCycle50xT627:
         assert all(s == WatchdogState.IDLE for s in idle_observations), (
             "post-drain state was not IDLE in every cycle"
         )
+
+
+# ---------------------------------------------------------------------------
+# T6.13 — DEGRADED periodic re-probe loop
+# ---------------------------------------------------------------------------
+
+
+class TestDegradedReprobeLoopT613:
+    """Pin the T6.13 background re-cascade loop while DEGRADED.
+
+    Phase 6 / T6.13: when backoff exhausts the watchdog stays
+    DEGRADED until a hot-plug add (§4.4.2). For transient root
+    causes (brief WASAPI service blip, USB hub power renegotiation,
+    host CPU saturation) the device may recover spontaneously
+    without replug. A background loop runs ``re_cascade`` every
+    ``degraded_reprobe_interval_s`` seconds (default 5 min) so the
+    pipeline self-heals.
+
+    Pinned invariants:
+      (a) when in DEGRADED state, the loop fires re_cascade after
+          one interval and transitions back to IDLE on a winning
+          cascade;
+      (b) when in DEGRADED state and the cascade still fails, the
+          watchdog stays DEGRADED and the loop ticks again;
+      (c) when in IDLE state the loop is a no-op (no spurious
+          re_cascade calls);
+      (d) ``stop()`` cleanly cancels the loop;
+      (e) interval ``0`` disables the loop entirely (no task spawn).
+    """
+
+    @pytest.mark.asyncio()
+    async def test_degraded_loop_recovers_to_idle_on_winning_cascade(self) -> None:
+        # Drive into DEGRADED via exhausted backoff, then let the
+        # T6.13 loop tick. First re_cascade returns winning → IDLE.
+        rp = _ReProbeRecorder(diagnoses=[Diagnosis.NO_SIGNAL])
+        rc = _ReCascadeRecorder(outcomes=[True])
+        wd, _, _, _ = _make_watchdog(
+            re_probe=rp,
+            re_cascade=rc,
+            schedule_s=(0.0,),
+            max_attempts=1,
+            degraded_reprobe_interval_s=0.01,
+        )
+        listener = _FakeHotplug()
+        await wd.start(listener)
+        try:
+            await wd.report_deafness()
+            await _drain_pending(wd)
+            assert wd.state == WatchdogState.DEGRADED
+
+            # Wait for at least one tick of the T6.13 loop (interval=0.01s).
+            for _ in range(50):
+                await asyncio.sleep(0.02)
+                if wd.state == WatchdogState.IDLE:
+                    break
+            assert wd.state == WatchdogState.IDLE
+            assert rc.calls == [_ENDPOINT]
+        finally:
+            await wd.stop()
+
+    @pytest.mark.asyncio()
+    async def test_degraded_loop_stays_degraded_when_cascade_fails(self) -> None:
+        # Cascade returns non-winning → state stays DEGRADED.
+        # _ReCascadeRecorder defaults to True when outcomes runs out,
+        # so we provide enough False entries to cover the test's 0.1s
+        # window at 0.01s tick interval (100 ticks max).
+        rp = _ReProbeRecorder(diagnoses=[Diagnosis.NO_SIGNAL])
+        rc = _ReCascadeRecorder(outcomes=[False] * 100)
+        wd, _, _, _ = _make_watchdog(
+            re_probe=rp,
+            re_cascade=rc,
+            schedule_s=(0.0,),
+            max_attempts=1,
+            degraded_reprobe_interval_s=0.01,
+        )
+        listener = _FakeHotplug()
+        await wd.start(listener)
+        try:
+            await wd.report_deafness()
+            await _drain_pending(wd)
+            assert wd.state == WatchdogState.DEGRADED
+
+            # Let several ticks fire — state stays DEGRADED.
+            await asyncio.sleep(0.1)
+            assert wd.state == WatchdogState.DEGRADED
+            # At least one cascade call landed (could be more —
+            # the loop ticks while the state is DEGRADED).
+            assert len(rc.calls) >= 1
+        finally:
+            await wd.stop()
+
+    @pytest.mark.asyncio()
+    async def test_degraded_loop_noop_when_idle(self) -> None:
+        # IDLE state — the loop ticks but doesn't fire re_cascade.
+        rc = _ReCascadeRecorder()
+        wd, _, _, _ = _make_watchdog(
+            re_cascade=rc,
+            degraded_reprobe_interval_s=0.01,
+        )
+        listener = _FakeHotplug()
+        await wd.start(listener)
+        try:
+            assert wd.state == WatchdogState.IDLE
+            # Several ticks pass without firing cascade — IDLE state
+            # is not the loop's trigger.
+            await asyncio.sleep(0.05)
+            assert rc.calls == []
+        finally:
+            await wd.stop()
+
+    @pytest.mark.asyncio()
+    async def test_stop_cancels_degraded_loop_cleanly(self) -> None:
+        wd, _, _, _ = _make_watchdog(degraded_reprobe_interval_s=0.01)
+        listener = _FakeHotplug()
+        await wd.start(listener)
+        # Loop task spawned during start.
+        assert wd._degraded_reprobe_task is not None  # noqa: SLF001
+        await wd.stop()
+        # Stop clears the field and the task is done.
+        assert wd._degraded_reprobe_task is None  # noqa: SLF001
+
+    @pytest.mark.asyncio()
+    async def test_interval_zero_disables_loop(self) -> None:
+        # Interval=0 → no task spawned at start.
+        wd, _, _, _ = _make_watchdog(degraded_reprobe_interval_s=0.0)
+        listener = _FakeHotplug()
+        await wd.start(listener)
+        try:
+            assert wd._degraded_reprobe_task is None  # noqa: SLF001
+        finally:
+            await wd.stop()
+
+    @pytest.mark.asyncio()
+    async def test_loop_continues_after_cascade_raises(self) -> None:
+        # A re_cascade exception must NOT kill the loop — next tick
+        # tries again. This mirrors the apo_recheck loop's resilience.
+        rp = _ReProbeRecorder(diagnoses=[Diagnosis.NO_SIGNAL])
+        rc = _ReCascadeRecorder(
+            outcomes=[True],  # 2nd call wins (after the raise)
+            raise_on_indices={0},  # 1st call raises
+        )
+        wd, _, _, _ = _make_watchdog(
+            re_probe=rp,
+            re_cascade=rc,
+            schedule_s=(0.0,),
+            max_attempts=1,
+            degraded_reprobe_interval_s=0.01,
+        )
+        listener = _FakeHotplug()
+        await wd.start(listener)
+        try:
+            await wd.report_deafness()
+            await _drain_pending(wd)
+            assert wd.state == WatchdogState.DEGRADED
+
+            # Wait for both ticks: 1st raises, 2nd recovers.
+            for _ in range(50):
+                await asyncio.sleep(0.02)
+                if wd.state == WatchdogState.IDLE:
+                    break
+            assert wd.state == WatchdogState.IDLE
+            assert len(rc.calls) >= 2  # noqa: PLR2004
+        finally:
+            await wd.stop()
 
 
 # ---------------------------------------------------------------------------

@@ -129,6 +129,15 @@ _DEFAULT_AUDIO_SERVICE_RESTART_TIMEOUT_S = _VoiceTuning().watchdog_audio_service
 """§4.4.5 ceiling — when ``audiosrv`` stays DOWN past this, go DEGRADED."""
 
 _DEFAULT_APO_RECHECK_INTERVAL_S = _VoiceTuning().apo_quarantine_recheck_interval_s
+
+_DEFAULT_DEGRADED_REPROBE_INTERVAL_S = _VoiceTuning().watchdog_degraded_reprobe_interval_s
+"""T6.13 — interval between DEGRADED background re-cascades.
+
+Sourced from :attr:`VoiceTuningConfig.watchdog_degraded_reprobe_interval_s`
+at import time so ``SOVYX_TUNING__VOICE__WATCHDOG_DEGRADED_REPROBE_INTERVAL_S``
+overrides without code changes (anti-pattern #17). Default 300 s
+(5 min) balances responsiveness against probe cost. ``0`` disables
+the loop entirely."""
 """§4.1 / Phase 1 — APO-quarantine recheck cadence.
 
 Zero or negative disables the recheck loop. The loop iterates the
@@ -231,6 +240,7 @@ class VoiceCaptureWatchdog:
         audio_service_restart_timeout_s: float | None = None,
         quarantine: EndpointQuarantine | None = None,
         apo_recheck_interval_s: float | None = None,
+        degraded_reprobe_interval_s: float | None = None,
     ) -> None:
         if not active_endpoint_guid:
             msg = "active_endpoint_guid must be a non-empty string"
@@ -266,9 +276,15 @@ class VoiceCaptureWatchdog:
             if apo_recheck_interval_s is not None
             else _DEFAULT_APO_RECHECK_INTERVAL_S
         )
+        self._degraded_reprobe_interval_s = (
+            degraded_reprobe_interval_s
+            if degraded_reprobe_interval_s is not None
+            else _DEFAULT_DEGRADED_REPROBE_INTERVAL_S
+        )
         self._state: WatchdogState = WatchdogState.IDLE
         self._pending: asyncio.Task[None] | None = None
         self._apo_recheck_task: asyncio.Task[None] | None = None
+        self._degraded_reprobe_task: asyncio.Task[None] | None = None
         self._hotplug: HotplugListener | None = None
         self._power: PowerEventListener | None = None
         self._audio_service: AudioServiceMonitor | None = None
@@ -330,6 +346,11 @@ class VoiceCaptureWatchdog:
             self._apo_recheck_task = spawn(
                 self._apo_recheck_loop(), name="voice-watchdog-apo-recheck"
             )
+        if self._degraded_reprobe_interval_s > 0:
+            self._degraded_reprobe_task = spawn(
+                self._degraded_reprobe_loop(),
+                name="voice-watchdog-degraded-reprobe",
+            )
         self._started = True
         logger.info(
             "voice_watchdog_started",
@@ -340,6 +361,7 @@ class VoiceCaptureWatchdog:
             audio_service_enabled=audio_service is not None,
             default_device_enabled=default_device is not None,
             apo_recheck_interval_s=self._apo_recheck_interval_s,
+            degraded_reprobe_interval_s=self._degraded_reprobe_interval_s,
         )
 
     async def stop(self) -> None:
@@ -359,6 +381,13 @@ class VoiceCaptureWatchdog:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await recheck
             logger.debug("voice.watchdog.apo_recheck_cancel_drained", phase="stop")
+        degraded = self._degraded_reprobe_task
+        self._degraded_reprobe_task = None
+        if degraded is not None and not degraded.done():
+            degraded.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await degraded
+            logger.debug("voice.watchdog.degraded_reprobe_cancel_drained", phase="stop")
         waiter = self._audio_service_down_waiter
         self._audio_service_down_waiter = None
         if waiter is not None and not waiter.done():
@@ -558,6 +587,72 @@ class VoiceCaptureWatchdog:
                     endpoint=entry.endpoint_guid,
                     friendly_name=entry.device_friendly_name,
                     diagnosis=result.diagnosis.value,
+                )
+
+    # ── T6.13 — DEGRADED state periodic re-probe ────────────────────────
+
+    async def _degraded_reprobe_loop(self) -> None:
+        """Periodically re-cascade while in :attr:`WatchdogState.DEGRADED`.
+
+        T6.13 — when the backoff schedule exhausts without recovery the
+        watchdog stays DEGRADED until an OS hot-plug event forces a
+        re-cascade (§4.4.2). Some failure modes are transient: brief
+        WASAPI service blip, USB hub power renegotiation, host CPU
+        saturation that resolves within minutes. Without this loop the
+        pipeline waits indefinitely for replug.
+
+        Behaviour per tick:
+
+        1. Sleep for ``self._degraded_reprobe_interval_s`` seconds
+           (default 300 = 5 min).
+        2. If state is still DEGRADED, await
+           :attr:`_re_cascade` for the active endpoint.
+        3. On a winning cascade, transition to :attr:`IDLE` and stop
+           probing — the next failure starts a fresh schedule.
+        4. On a non-winning cascade, stay DEGRADED and try again
+           after the interval.
+
+        The loop is cancellation-safe: :meth:`stop` cancels the task
+        and a raised :class:`asyncio.CancelledError` exits cleanly.
+        Distinct from :meth:`_apo_recheck_loop` (which only targets
+        APO-quarantined entries) — this loop fires on the broader
+        DEGRADED state which covers any backoff-exhausted root cause.
+        """
+        while self._started:
+            try:
+                await asyncio.sleep(self._degraded_reprobe_interval_s)
+            except asyncio.CancelledError:
+                return
+            if not self._started:
+                return
+            if self._state != WatchdogState.DEGRADED:
+                continue
+            logger.info(
+                "voice_watchdog_degraded_reprobe_tick",
+                endpoint=self._endpoint,
+            )
+            try:
+                result = await self._re_cascade(self._endpoint)
+            except asyncio.CancelledError:
+                return
+            except Exception:  # noqa: BLE001 — one failing cascade must not stop the loop
+                logger.warning(
+                    "voice_watchdog_degraded_reprobe_raised",
+                    endpoint=self._endpoint,
+                    exc_info=True,
+                )
+                continue
+            if result.winning_combo is not None:
+                self._state = WatchdogState.IDLE
+                logger.info(
+                    "voice_watchdog_degraded_reprobe_recovered",
+                    endpoint=self._endpoint,
+                    source=result.source,
+                )
+            else:
+                logger.debug(
+                    "voice_watchdog_degraded_reprobe_still_degraded",
+                    endpoint=self._endpoint,
                 )
 
     # ── §4.4.2 Hot-plug reaction ─────────────────────────────────────────

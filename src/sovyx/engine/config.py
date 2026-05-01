@@ -912,6 +912,23 @@ class VoiceTuningConfig(BaseSettings):
     apo_quarantine_s: float = 3_600.0
     apo_quarantine_recheck_interval_s: float = 300.0
 
+    # T6.13 — DEGRADED state periodic re-probe. When the watchdog's
+    # backoff schedule exhausts without recovery the state lands on
+    # WatchdogState.DEGRADED and stays there until a hot-plug add
+    # arrives (§4.4.2). On environments where the cause is transient
+    # OS pressure (CPU saturation, driver paging, brief WASAPI service
+    # blip) the device may recover spontaneously without any user
+    # action. The DEGRADED loop runs a low-priority background
+    # re-cascade every ``watchdog_degraded_reprobe_interval_s``
+    # seconds (default 5 min) so the pipeline self-heals without
+    # waiting for replug. Set to 0 to disable; the apo_recheck loop
+    # already handles the APO-quarantine subset, this complements
+    # it by covering the broader DEGRADED state (max-attempts
+    # exhausted with non-APO root cause).
+    watchdog_degraded_reprobe_interval_s: float = 300.0
+    """T6.13 — interval between background re-cascades while the watchdog
+    is in :attr:`WatchdogState.DEGRADED`. Default 5 min. Disabled with 0."""
+
     # T6.16 — post-apply INCONCLUSIVE retry. The
     # ``CaptureIntegrityCoordinator`` post-apply probe can return
     # INCONCLUSIVE on transient causes (tap timed out short before
