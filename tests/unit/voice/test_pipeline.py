@@ -5560,6 +5560,158 @@ class TestFalseWakeRecovery:
 
 
 # ===========================================================================
+# T7.7 — False-fire counter wire-up
+# ===========================================================================
+
+
+class TestFalseFireCounterT77:
+    """Pin the T7.7 false-fire counter wire-up.
+
+    Phase 7 / T7.7 emits ``record_wake_word_false_fire`` from the
+    orchestrator at 3 sites where wake-word fired but the resulting
+    STT path discarded the transcript:
+
+    - ``empty_transcription`` — STT returned empty text (user never
+      spoke; generic false-wake signal)
+    - ``rejected_transcription`` — STT engine rejected via
+      hallucination filter / compression-ratio reject / timeout
+    - ``sub_confidence`` — STT confidence < ``false_wake_min_confidence``
+      band-aid #46 gate
+
+    The counter is the operator pilot signal for the T7.4 fast-path
+    threshold tuning + the v0.30.0 GA "false-fire rate stays below
+    v0.23.x baseline" promotion gate.
+    """
+
+    @pytest.mark.asyncio
+    async def test_empty_transcription_increments_false_fire(self) -> None:
+        """Empty STT text → false-fire counter fires with reason=empty."""
+        pipeline, refs = _make_pipeline(
+            vad_speech=True,
+            ww_detected=True,
+            stt_text="",
+        )
+        await pipeline.start()
+        with patch(
+            "sovyx.voice.health._metrics.record_wake_word_false_fire",
+        ) as mock_record, patch.object(
+            _pipeline_mod,
+            "_play_audio",
+            new_callable=AsyncMock,
+        ):
+            await pipeline.feed_frame(_speech_frame())
+            await pipeline.feed_frame(_speech_frame())
+            refs["vad"].process_frame.return_value = _vad_event(False)
+            for _ in range(3):
+                await pipeline.feed_frame(_silence_frame())
+        mock_record.assert_called_once()
+        assert mock_record.call_args.kwargs["reason"] == "empty_transcription"
+
+    @pytest.mark.asyncio
+    async def test_stt_rejection_increments_false_fire(self) -> None:
+        """STT rejection_reason → false-fire counter fires with reason=rejected.
+
+        Distinct from empty_transcription: the STT engine itself
+        rejected the transcript (hallucination filter, etc).
+        ``_make_pipeline`` doesn't expose a rejection_reason kwarg —
+        we wire the explicit STT mock manually.
+        """
+        config = VoicePipelineConfig(
+            mind_id="test-mind",
+            wake_word_enabled=True,
+            barge_in_enabled=True,
+            fillers_enabled=False,
+            filler_delay_ms=100,
+            silence_frames_end=3,
+            max_recording_frames=10,
+        )
+        vad = _make_vad(speech=True)
+        ww = _make_wake_word(detected=True)
+        stt = _make_stt(text="", rejection_reason="hallucination_stoplist")
+        tts = _make_tts()
+        bus = _make_event_bus()
+        pipeline = VoicePipeline(
+            config=config,
+            vad=vad,
+            wake_word=ww,
+            stt=stt,
+            tts=tts,
+            event_bus=bus,
+        )
+        await pipeline.start()
+        with patch(
+            "sovyx.voice.health._metrics.record_wake_word_false_fire",
+        ) as mock_record, patch.object(
+            _pipeline_mod,
+            "_play_audio",
+            new_callable=AsyncMock,
+        ):
+            await pipeline.feed_frame(_speech_frame())
+            await pipeline.feed_frame(_speech_frame())
+            vad.process_frame.return_value = _vad_event(False)
+            for _ in range(3):
+                await pipeline.feed_frame(_silence_frame())
+        mock_record.assert_called_once()
+        assert mock_record.call_args.kwargs["reason"] == "rejected_transcription"
+
+    @pytest.mark.asyncio
+    async def test_sub_confidence_increments_false_fire(self) -> None:
+        """Sub-confidence rejection → false-fire counter fires with reason=sub_confidence.
+
+        Band-aid #46 confidence gate path — STT returned text but
+        confidence below ``false_wake_min_confidence``.
+        """
+        cb = AsyncMock()
+        pipeline, refs = _make_pipeline_with_false_wake_threshold(
+            threshold=0.5,
+            stt_text="garbage text",
+            stt_confidence=0.2,
+            on_perception=cb,
+        )
+        await pipeline.start()
+        with patch(
+            "sovyx.voice.health._metrics.record_wake_word_false_fire",
+        ) as mock_record, patch.object(
+            _pipeline_mod,
+            "_play_audio",
+            new_callable=AsyncMock,
+        ):
+            await pipeline.feed_frame(_speech_frame())
+            await pipeline.feed_frame(_speech_frame())
+            refs["vad"].process_frame.return_value = _vad_event(False)
+            for _ in range(3):
+                await pipeline.feed_frame(_silence_frame())
+        mock_record.assert_called_once()
+        assert mock_record.call_args.kwargs["reason"] == "sub_confidence"
+        cb.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_successful_transcription_does_not_increment_false_fire(self) -> None:
+        """Real transcription that passes confidence gate → no false-fire counter."""
+        cb = AsyncMock()
+        pipeline, refs = _make_pipeline_with_false_wake_threshold(
+            threshold=0.5,
+            stt_text="real command",
+            stt_confidence=0.95,
+            on_perception=cb,
+        )
+        await pipeline.start()
+        with patch(
+            "sovyx.voice.health._metrics.record_wake_word_false_fire",
+        ) as mock_record, patch.object(
+            _pipeline_mod,
+            "_play_audio",
+            new_callable=AsyncMock,
+        ):
+            await pipeline.feed_frame(_speech_frame())
+            await pipeline.feed_frame(_speech_frame())
+            refs["vad"].process_frame.return_value = _vad_event(False)
+            for _ in range(3):
+                await pipeline.feed_frame(_silence_frame())
+        mock_record.assert_not_called()
+
+
+# ===========================================================================
 # Per-utterance trace ID (Ring 6 — Mission §2.6 / §9.4.6)
 # ===========================================================================
 

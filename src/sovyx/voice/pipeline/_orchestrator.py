@@ -1680,8 +1680,17 @@ class VoicePipeline:
             # filter, compression-ratio reject, timeout). Pre-S1/S2
             # both paths produced the same silent IDLE transition,
             # masking sustained STT degradation as normal silence.
+            from sovyx.voice.health._metrics import (  # noqa: PLC0415
+                record_wake_word_false_fire,
+            )
+
             rejection_reason = getattr(result, "rejection_reason", None)
             if rejection_reason is not None:
+                # T7.7 — STT engine rejected the transcript; the wake
+                # fired but no real command followed. Counts toward
+                # the false-fire rate alongside empty-transcription
+                # and sub-confidence reasons.
+                record_wake_word_false_fire(reason="rejected_transcription")
                 logger.warning(
                     "voice.stt.transcription_dropped",
                     **{
@@ -1700,6 +1709,9 @@ class VoicePipeline:
                     "event": "transcription_dropped",
                     "rejection_reason": rejection_reason,
                 }
+            # T7.7 — wake fired but STT returned empty text → the
+            # user never spoke (generic false-wake signal).
+            record_wake_word_false_fire(reason="empty_transcription")
             logger.debug(
                 "Empty transcription — discarding",
                 **{"voice.utterance_id": utterance_id},
@@ -1724,7 +1736,15 @@ class VoicePipeline:
             self._config.false_wake_min_confidence > 0.0
             and result.confidence < self._config.false_wake_min_confidence
         ):
+            from sovyx.voice.health._metrics import (  # noqa: PLC0415
+                record_wake_word_false_fire,
+            )
+
             self._false_wake_rejected_count += 1
+            # T7.7 — STT confidence below threshold = wake fired on
+            # noise. Counts toward the false-fire rate alongside
+            # empty-transcription and rejected-transcription paths.
+            record_wake_word_false_fire(reason="sub_confidence")
             logger.warning(
                 "voice.wake.false_positive_rejected",
                 **{

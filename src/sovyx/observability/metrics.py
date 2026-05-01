@@ -626,6 +626,31 @@ class MetricsRegistry:
             "distributions.",
             unit="1",
         )
+        # Phase 7 / T7.7 — false-fire counter. Increments every time
+        # the wake-word fired (a confirmed detection entered RECORDING)
+        # but the resulting STT transcript was discarded — indicating
+        # the wake-word triggered on noise / cross-talk that didn't
+        # carry a real command. Three reasons are tracked:
+        # - ``empty_transcription`` — STT returned empty text (user
+        #   never spoke; generic false-wake signal)
+        # - ``rejected_transcription`` — STT engine itself rejected
+        #   the transcript (hallucination filter, compression-ratio
+        #   reject, timeout)
+        # - ``sub_confidence`` — STT transcript came back but
+        #   confidence < ``false_wake_min_confidence`` (band-aid #46
+        #   confidence gate; opt-in only when threshold > 0.0)
+        # Pair with ``sovyx.voice.wake_word.fast_path_engaged`` total
+        # to compute the false-fire rate. The v0.30.0 GA promotion
+        # gate target is "false-fire rate stays below v0.23.x baseline
+        # while T7.4 fast-path engages on 70-90% of wakes".
+        self.voice_wake_word_false_fire = self._counter(
+            "sovyx.voice.wake_word.false_fire_count",
+            "Wake-word fired but the resulting STT transcript was "
+            "discarded. Labels: reason=empty_transcription|"
+            "rejected_transcription|sub_confidence. Operator pilot "
+            "signal for the T7.4 fast-path threshold tuning + the "
+            "v0.30.0 GA promotion gate.",
+        )
         # Phase 7 / T7.4 — fast-path engagement counter. Increments
         # every time a wake-word detection skips stage-2 because the
         # stage-1 score crossed ``stage1_high_confidence_threshold``.

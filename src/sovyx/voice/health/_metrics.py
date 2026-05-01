@@ -656,6 +656,27 @@ def record_wake_word_confidence(
     )
 
 
+def record_wake_word_false_fire(*, reason: str) -> None:
+    """Increment the T7.7 false-fire counter.
+
+    Fires when wake-word triggered but the resulting STT transcript
+    was discarded. Operator pilot signal for the T7.4 fast-path
+    threshold tuning + the v0.30.0 GA promotion gate "false-fire
+    rate stays below v0.23.x baseline".
+
+    Args:
+        reason: One of ``"empty_transcription"`` (STT returned empty
+            text — user never spoke), ``"rejected_transcription"``
+            (STT engine rejected via hallucination filter / compression
+            ratio / timeout), or ``"sub_confidence"`` (confidence below
+            ``false_wake_min_confidence`` band-aid #46 gate).
+    """
+    get_metrics().voice_wake_word_false_fire.add(
+        1,
+        attributes={"reason": reason},
+    )
+
+
 def record_wake_word_fast_path_engaged(*, score: float) -> None:
     """Increment the T7.4 fast-path engagement counter.
 
@@ -1290,6 +1311,7 @@ __all__ = [
     "record_vad_quiet_signal_gated",
     "record_wake_word_confidence",
     "record_wake_word_detection_ms",
+    "record_wake_word_false_fire",
     "record_wake_word_fast_path_engaged",
     "record_wake_word_stage1_inference_ms",
     "record_wake_word_stage2_collection_ms",
