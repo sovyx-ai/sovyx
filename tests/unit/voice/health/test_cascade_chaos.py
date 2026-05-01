@@ -301,20 +301,37 @@ class _FakePortAudioError(OSError):
     """
 
 
+def _default_portaudio_error_factory(message: str) -> Exception:
+    """Default chaos error factory — produces ``_FakePortAudioError``."""
+    return _FakePortAudioError(message)
+
+
 @dataclass
 class _RandomInjectionProbe:
-    """Probe that randomly raises ``_FakePortAudioError`` on a percentage
-    of attempts. The non-injected attempts return the configured
+    """Probe that randomly raises a chaos error on a percentage of
+    attempts. The non-injected attempts return the configured
     ``baseline`` diagnosis.
 
     Seeded ``random.Random`` for determinism — a flaky chaos test is
     worse than no chaos test.
+
+    ``error_factory`` lets tests pick the exception class injected at
+    each call site:
+
+    * ``_FakePortAudioError`` (T6.31 default) — mirrors the
+      sounddevice ``PortAudioError`` ``OSError`` inheritance.
+    * StreamOpenError factory (T6.32) — mirrors the unified-opener
+      pyramid exhaustion path; carries a typed ``ErrorCode`` and
+      attempts history.
     """
 
     baseline: Diagnosis = Diagnosis.HEALTHY
     injection_rate: float = 0.2
     seed: int = 0
     error_message: str = "AUDCLNT_E_DEVICE_IN_USE"
+    error_factory: Callable[[str], Exception] = field(
+        default=_default_portaudio_error_factory,
+    )
     calls: list[Combo] = field(default_factory=list)
     raised_calls: list[Combo] = field(default_factory=list)
     _rng: object = None  # initialised lazily in __post_init__
@@ -339,7 +356,7 @@ class _RandomInjectionProbe:
         assert rng is not None  # noqa: S101 — internal contract; never None at call time
         if rng.random() < self.injection_rate:  # type: ignore[attr-defined]
             self.raised_calls.append(combo)
-            raise _FakePortAudioError(self.error_message)
+            raise self.error_factory(self.error_message)
         return ProbeResult(
             diagnosis=self.baseline,
             mode=mode,
@@ -475,4 +492,177 @@ class TestRandomPortAudioErrorInjection:
             # the RNG implementation.
             assert len(probe.raised_calls) < 6, (
                 f"seed={seed} produced all-6-injected (statistical flake)"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Phase 6 / T6.32 — random StreamOpenError injection (10% of combos)
+# ---------------------------------------------------------------------------
+
+
+def _stream_open_error_factory(message: str) -> Exception:
+    """Build a ``StreamOpenError`` whose detail field carries ``message``.
+
+    The unified-opener pyramid raises this when every combination it
+    tried failed. ``code`` is an :class:`ErrorCode` enum; ``attempts``
+    is a list of :class:`OpenAttempt` records. For chaos testing we
+    pass an empty attempts list — the cascade's classifier consumes
+    only the ``str(exc)`` (the detail field) so the empty-history
+    case stays representative.
+    """
+    from sovyx.voice._stream_opener import StreamOpenError
+    from sovyx.voice.device_test._protocol import ErrorCode
+
+    # ErrorCode value chosen by the message content for realism — the
+    # cascade's classifier ignores the typed code and matches on
+    # detail-text substring, but sounddevice production paths
+    # synchronise the two; mirror that here.
+    if "BUFFER_SIZE" in message.upper():
+        code = ErrorCode.BUFFER_SIZE_INVALID
+    elif "DEVICE_IN_USE" in message.upper() or "BUSY" in message.upper():
+        code = ErrorCode.DEVICE_BUSY
+    elif "PERMISSION" in message.upper() or "DENIED" in message.upper():
+        code = ErrorCode.PERMISSION_DENIED
+    else:
+        code = ErrorCode.DEVICE_BUSY  # generic-fault fallback per protocol
+    return StreamOpenError(code=code, detail=message, attempts=[])
+
+
+class TestRandomStreamOpenErrorInjection:
+    """T6.32 — cascade survives intermittent ``StreamOpenError`` storms.
+
+    StreamOpenError is the unified-opener pyramid's exhaustion
+    sentinel. The cascade's probe path uses ``sd.InputStream``
+    directly (not the opener), so StreamOpenError doesn't fire on
+    the probe path in production today — but the cascade's
+    classifier-on-raised-exception fallback in ``_try_combo`` MUST
+    handle the StreamOpenError text correctly because:
+
+    1. A future refactor may route the probe through the unified
+       opener, surfacing StreamOpenError directly.
+    2. The capture-task post-cascade open path uses the opener; if
+       the opener regresses to leak StreamOpenError into a probe-
+       adjacent context, we want the contract pinned.
+    3. The classifier's substring-match approach means the typed
+       exception class doesn't matter — operators see the same
+       Diagnosis output for both PortAudioError and StreamOpenError
+       carrying the same root-cause text.
+
+    Tests parallel the T6.31 PortAudioError suite — same shape,
+    different exception class.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_ten_percent_injection_still_finds_winner(self) -> None:
+        # Spec injection rate is 10 % per the master mission — lower
+        # than T6.31's 20 % because StreamOpenError represents
+        # opener-pyramid exhaustion (rarer than per-call PortAudioError).
+        probe = _RandomInjectionProbe(
+            baseline=Diagnosis.HEALTHY,
+            injection_rate=0.1,
+            seed=0,
+            error_factory=_stream_open_error_factory,
+        )
+        result = await _run(probe_fn=probe)
+        assert result.winning_combo is not None  # type: ignore[attr-defined]
+        assert result.winning_probe.diagnosis is Diagnosis.HEALTHY  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio()
+    async def test_one_hundred_percent_stream_open_error_exhausts_cleanly(
+        self,
+    ) -> None:
+        # Every attempt raises StreamOpenError → cascade walks all 6
+        # combos, returns winning_combo=None. Pins the contract: the
+        # ``_try_combo`` Exception catch-all handles non-OSError
+        # exceptions too (StreamOpenError is a plain Exception, not
+        # an OSError subclass — different code path from PortAudioError).
+        probe = _RandomInjectionProbe(
+            baseline=Diagnosis.HEALTHY,
+            injection_rate=1.0,
+            seed=4,
+            error_factory=_stream_open_error_factory,
+        )
+        result = await _run(probe_fn=probe)
+        assert result.winning_combo is None  # type: ignore[attr-defined]
+        assert len(probe.calls) == 6
+        assert len(probe.raised_calls) == 6
+
+    @pytest.mark.asyncio()
+    @pytest.mark.parametrize(
+        "error_message",
+        [
+            "AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED on attempt 3",
+            "AUDCLNT_E_DEVICE_IN_USE during opener pyramid",
+            "AUDCLNT_E_DEVICE_INVALIDATED in opener",
+            "PERMISSION denied during open",
+        ],
+    )
+    async def test_stream_open_error_routes_to_driver_error_regardless_of_text(
+        self,
+        error_message: str,
+    ) -> None:
+        # PINNING THE DEFENSIVE-CLASSIFIER CONTRACT.
+        #
+        # ``_try_combo`` (cascade/_executor.py) deliberately gates the
+        # classifier-on-raised-exception fallback on ``isinstance(exc,
+        # OSError)``. StreamOpenError is a plain ``Exception``, NOT an
+        # OSError subclass — so the classifier is BYPASSED and every
+        # StreamOpenError raised at the probe layer becomes a synthetic
+        # ``Diagnosis.DRIVER_ERROR`` regardless of the detail text.
+        #
+        # This is intentional: an unrelated coding-bug ``TypeError`` /
+        # ``AttributeError`` whose message accidentally contains a
+        # diagnosis keyword (``"format"`` / ``"in use"`` / ``"access"``)
+        # cannot be misclassified as a structured Diagnosis. The
+        # ``OSError`` gate is the load-bearing safety net that keeps
+        # the classifier surface honest.
+        #
+        # Consequence: KERNEL_INVALIDATED text in a StreamOpenError
+        # does NOT trigger the T6.9 quarantine fast-path. Operators
+        # who deploy a future opener that leaks StreamOpenError must
+        # either (a) wrap the raise in an OSError subclass, or (b)
+        # change the gate. Either is a deliberate decision; this test
+        # surfaces the contract so the choice is forced rather than
+        # silently regressed.
+        from sovyx.voice.health._quarantine import EndpointQuarantine
+
+        quarantine = EndpointQuarantine(quarantine_s=300.0, maxsize=16)
+        probe = _RandomInjectionProbe(
+            baseline=Diagnosis.NO_SIGNAL,
+            injection_rate=1.0,
+            seed=5,
+            error_message=error_message,
+            error_factory=_stream_open_error_factory,
+        )
+        result = await _run(probe_fn=probe, quarantine=quarantine)
+
+        # Every probe raised StreamOpenError → every result is
+        # synthetic DRIVER_ERROR. Cascade walks all 6 combos; no
+        # quarantine short-circuit.
+        diagnoses = {r.diagnosis for r in result.attempts}  # type: ignore[attr-defined]
+        assert diagnoses == {Diagnosis.DRIVER_ERROR}, (
+            f"StreamOpenError({error_message!r}) leaked through the "
+            "OSError-gated classifier; got diagnoses={diagnoses}"
+        )
+        assert result.source == "none"  # type: ignore[attr-defined]
+        assert not quarantine.is_quarantined("chaos-endpoint")
+
+    @pytest.mark.asyncio()
+    @pytest.mark.parametrize("seed", [0, 7, 42, 137])
+    async def test_seeded_rng_breadth_at_ten_percent(self, seed: int) -> None:
+        # Hypothesis-style breadth at the spec's 10 % rate. P(all 6
+        # raise) = 0.1^6 = 1e-6 per seed → 4 seeds expect zero
+        # all-injected runs (1.6 sigma below).
+        probe = _RandomInjectionProbe(
+            baseline=Diagnosis.HEALTHY,
+            injection_rate=0.1,
+            seed=seed,
+            error_factory=_stream_open_error_factory,
+        )
+        result = await _run(probe_fn=probe)
+        # 10 % rate + HEALTHY baseline → every seed should find a winner.
+        if result.winning_combo is None:  # type: ignore[attr-defined]
+            assert len(probe.raised_calls) < 6, (
+                f"seed={seed} produced all-6-injected at 10 % rate "
+                "(statistically unreachable — investigate RNG)"
             )
