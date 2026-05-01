@@ -1225,3 +1225,55 @@ export const VoiceQualitySnapshotResponseSchema = z.object({
   agc2: VoiceAgc2BlockSchema.nullable(),
   dnsmos_extras_installed: z.boolean(),
 });
+
+/* ── Mind management runtime schemas ──
+ *
+ * Phase 8 / T8.21 dashboard endpoints:
+ *   POST /api/mind/{mind_id}/forget          (step 5)
+ *   POST /api/mind/{mind_id}/retention/prune (step 6)
+ *
+ * Pass ``{ schema: ForgetMindResponseSchema }`` to ``api.post`` so
+ * malformed responses are caught at the boundary instead of
+ * silently corrupting downstream UI state.
+ */
+
+export const ForgetMindResponseSchema = z.object({
+  mind_id: z.string(),
+  concepts_purged: z.number().int().nonnegative(),
+  relations_purged: z.number().int().nonnegative(),
+  episodes_purged: z.number().int().nonnegative(),
+  concept_embeddings_purged: z.number().int().nonnegative(),
+  episode_embeddings_purged: z.number().int().nonnegative(),
+  conversation_imports_purged: z.number().int().nonnegative(),
+  consolidation_log_purged: z.number().int().nonnegative(),
+  conversations_purged: z.number().int().nonnegative(),
+  conversation_turns_purged: z.number().int().nonnegative(),
+  daily_stats_purged: z.number().int().nonnegative(),
+  consent_ledger_purged: z.number().int().nonnegative(),
+  total_brain_rows_purged: z.number().int().nonnegative(),
+  total_conversations_rows_purged: z.number().int().nonnegative(),
+  total_system_rows_purged: z.number().int().nonnegative(),
+  total_rows_purged: z.number().int().nonnegative(),
+  dry_run: z.boolean(),
+});
+
+export const PruneRetentionResponseSchema = z.object({
+  mind_id: z.string(),
+  cutoff_utc: z.string(),
+  episodes_purged: z.number().int().nonnegative(),
+  conversations_purged: z.number().int().nonnegative(),
+  conversation_turns_purged: z.number().int().nonnegative(),
+  daily_stats_purged: z.number().int().nonnegative(),
+  consolidation_log_purged: z.number().int().nonnegative(),
+  consent_ledger_purged: z.number().int().nonnegative(),
+  /**
+   * Per-surface horizon (days) actually applied. ``0`` means the
+   * surface was skipped (retention disabled for it).
+   */
+  effective_horizons: z.record(z.string(), z.number().int().nonnegative()),
+  total_brain_rows_purged: z.number().int().nonnegative(),
+  total_conversations_rows_purged: z.number().int().nonnegative(),
+  total_system_rows_purged: z.number().int().nonnegative(),
+  total_rows_purged: z.number().int().nonnegative(),
+  dry_run: z.boolean(),
+});

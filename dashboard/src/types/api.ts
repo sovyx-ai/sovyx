@@ -1509,3 +1509,81 @@ export interface VoiceQualitySnapshotResponse {
   agc2: VoiceAgc2Block | null;
   dnsmos_extras_installed: boolean;
 }
+
+/* ── Mind management — POST /api/mind/{mind_id}/forget ──
+ *
+ * Phase 8 / T8.21 step 5. Right-to-erasure for a single mind
+ * (GDPR Art. 17 / LGPD Art. 18 VI). Wipes every per-mind row
+ * across the brain DB, conversations DB, system DB, and the
+ * voice consent ledger. Mind configuration is preserved.
+ *
+ * Defense-in-depth: ``confirm`` field MUST equal ``mind_id``
+ * exactly (GitHub-style "type the name to delete" pattern).
+ */
+
+export interface ForgetMindRequest {
+  /** The exact mind_id, typed verbatim by the operator. */
+  confirm: string;
+  /** When true, returns counts without writing. */
+  dry_run?: boolean;
+}
+
+export interface ForgetMindResponse {
+  mind_id: string;
+  concepts_purged: number;
+  relations_purged: number;
+  episodes_purged: number;
+  concept_embeddings_purged: number;
+  episode_embeddings_purged: number;
+  conversation_imports_purged: number;
+  consolidation_log_purged: number;
+  conversations_purged: number;
+  conversation_turns_purged: number;
+  daily_stats_purged: number;
+  consent_ledger_purged: number;
+  total_brain_rows_purged: number;
+  total_conversations_rows_purged: number;
+  total_system_rows_purged: number;
+  total_rows_purged: number;
+  dry_run: boolean;
+}
+
+/* ── Mind retention — POST /api/mind/{mind_id}/retention/prune ──
+ *
+ * Phase 8 / T8.21 step 6. Time-based per-mind prune (GDPR Art.
+ * 5(1)(e) "storage limitation" / LGPD Art. 16). Removes only
+ * records older than per-surface horizons; tombstone is
+ * RETENTION_PURGE not DELETE so external auditors can
+ * distinguish scheduled-policy purges from operator-invoked
+ * erasures.
+ *
+ * No ``confirm`` field required — retention is less destructive
+ * than forget; it removes only AGED records, not arbitrary rows.
+ */
+
+export interface PruneRetentionRequest {
+  /** When true, returns counts without writing. Default false. */
+  dry_run?: boolean;
+}
+
+export interface PruneRetentionResponse {
+  mind_id: string;
+  /** ISO-8601 UTC cutoff timestamp at the moment of the prune. */
+  cutoff_utc: string;
+  episodes_purged: number;
+  conversations_purged: number;
+  conversation_turns_purged: number;
+  daily_stats_purged: number;
+  consolidation_log_purged: number;
+  consent_ledger_purged: number;
+  /**
+   * Per-surface horizon (days) actually applied. ``0`` means the
+   * surface was skipped (retention disabled for it).
+   */
+  effective_horizons: Record<string, number>;
+  total_brain_rows_purged: number;
+  total_conversations_rows_purged: number;
+  total_system_rows_purged: number;
+  total_rows_purged: number;
+  dry_run: boolean;
+}
