@@ -71,6 +71,7 @@ if TYPE_CHECKING:
 
     from sovyx.engine.events import EventBus
     from sovyx.voice._aec import RenderPcmSink
+    from sovyx.voice._wake_word_router import WakeWordRouter
     from sovyx.voice.health._self_feedback import SelfFeedbackGate
     from sovyx.voice.health.contract import BypassOutcome
     from sovyx.voice.stt import STTEngine
@@ -274,6 +275,7 @@ class VoicePipeline:
         mm_notification_listener_enabled: bool = False,
         audio_driver_update_listener_enabled: bool = False,
         audio_driver_update_recascade_enabled: bool = False,
+        wake_word_router: WakeWordRouter | None = None,
     ) -> None:
         validate_config(config)
         self._config = config
@@ -284,6 +286,23 @@ class VoicePipeline:
         self._event_bus = event_bus
         self._on_perception = on_perception
         self._on_deaf_signal = on_deaf_signal
+        # Phase 8 / T8.10 — multi-mind wake-word routing. When set, the
+        # IDLE path routes detection through the router instead of the
+        # single ``self._wake_word`` instance. Default ``None`` preserves
+        # v0.30.0 single-mind behaviour bit-exactly. Operators wire the
+        # router by registering one detector per ENABLED mind via
+        # :meth:`WakeWordRouter.register_mind` before passing it to
+        # the orchestrator. The matched mind_id flows through to
+        # :class:`WakeWordDetectedEvent` so downstream cognitive
+        # dispatch can switch context within the documented ≤ 50 ms
+        # gate (the dispatch wall clock is recorded in the
+        # :data:`sovyx.voice.wake_word.router.dispatch_latency`
+        # histogram emitted at every router-driven detection).
+        self._wake_word_router = wake_word_router
+        # Per-turn matched mind_id — defaults to the orchestrator's
+        # config mind_id (single-mind backward-compat); router match
+        # overrides per turn; reset on IDLE return.
+        self._current_mind_id = config.mind_id
 
         # Mission `MISSION-voice-runtime-listener-wireup-2026-04-30.md`
         # Phase 1b — runtime listener wire-up. Captured at construction
@@ -852,8 +871,16 @@ class VoicePipeline:
         transcription) so the next utterance is guaranteed a fresh
         mint instead of re-using the prior trace. Idempotent —
         safe to call when already empty.
+
+        Phase 8 / T8.10 — also resets the per-turn ``_current_mind_id``
+        back to the orchestrator's config default. The next IDLE
+        path's wake-word detection re-resolves the matched mind via
+        the router (if wired) before the next downstream emission.
         """
         self._current_utterance_id = ""
+        # Reset per-turn mind context to the config default so the
+        # next turn's WakeWordDetectedEvent starts clean.
+        self._current_mind_id = self._config.mind_id
 
     def _notify_wake_word_false_fire(self) -> None:
         """Forward a false-fire signal to the wake-word detector.
@@ -1331,12 +1358,63 @@ class VoicePipeline:
 
         # Run wake word detector — wrap ONNX inference in to_thread so the
         # detection pass does not block the loop while audio chunks queue up.
+        # Phase 8 / T8.10: when ``self._wake_word_router`` is set, route
+        # through the multi-mind router; otherwise fall back to the single
+        # detector path (v0.30.0 backward-compat).
         import numpy as np
 
         audio_f32 = frame.astype(np.float32) / 32768.0
-        ww_event = await asyncio.to_thread(self._wake_word.process_frame, audio_f32)
+        matched_mind_id: str | None = None
+        dispatch_t0 = time.monotonic()
+        if self._wake_word_router is not None:
+            from sovyx.voice.wake_word import (  # noqa: PLC0415 — lazy: only used on the multi-mind path
+                WakeWordEvent,
+                WakeWordState,
+            )
+
+            router_event = await asyncio.to_thread(
+                self._wake_word_router.process_frame,
+                audio_f32,
+            )
+            if router_event is not None:
+                matched_mind_id = str(router_event.mind_id)
+                ww_event = router_event.event
+            else:
+                # No router match → synthesize an unmatched event so the
+                # downstream conditional uses a uniform shape.
+                ww_event = WakeWordEvent(
+                    detected=False,
+                    score=0.0,
+                    state=WakeWordState.IDLE,
+                )
+        else:
+            ww_event = await asyncio.to_thread(self._wake_word.process_frame, audio_f32)
 
         if ww_event.detected:
+            # Phase 8 / T8.10 — record router dispatch latency. Wall-clock
+            # from process_frame entry to detection-confirmed boundary;
+            # the v0.30.0 GA gate target is ≤ 50 ms (the cognitive layer
+            # then has its own budget for switching context). Only emit
+            # when the router is wired (single-detector path doesn't
+            # have the multi-mind dispatch concept).
+            if self._wake_word_router is not None:
+                dispatch_ms = (time.monotonic() - dispatch_t0) * 1000.0
+                logger.info(
+                    "voice.wake_word.router.dispatch",
+                    **{
+                        "voice.matched_mind_id": matched_mind_id or "",
+                        "voice.dispatch_ms": round(dispatch_ms, 2),
+                        "voice.score": round(ww_event.score, 4),
+                    },
+                )
+            # T8.10 — switch the per-turn mind context. Downstream
+            # WakeWordDetectedEvent + STT + perception path emissions
+            # carry this mind_id; reset to config.mind_id at the IDLE
+            # return so the next turn starts clean.
+            if matched_mind_id is not None:
+                self._current_mind_id = matched_mind_id
+            else:
+                self._current_mind_id = self._config.mind_id
             self._state = VoicePipelineState.WAKE_DETECTED
             self._wake_detected_monotonic = time.monotonic()
             # T1.39 — reset the spectral-centroid baseline on every
@@ -1368,13 +1446,13 @@ class VoicePipeline:
             )
             await self._emit(
                 WakeWordDetectedEvent(
-                    mind_id=self._config.mind_id,
+                    mind_id=self._current_mind_id,
                     utterance_id=utterance_id,
                 )
             )
             logger.info(
                 "Wake word detected",
-                mind_id=self._config.mind_id,
+                mind_id=self._current_mind_id,
                 **{"voice.utterance_id": utterance_id},
             )
 

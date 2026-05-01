@@ -388,6 +388,121 @@ class TestStateAccessor:
         assert router.state_for(MindId("aria")) == WakeWordState.IDLE
 
 
+class TestOrchestratorIntegrationT810:
+    """Pin the T8.10 orchestrator dispatch path.
+
+    When the router is wired into ``VoicePipeline``, wake-word
+    detections route through the router; the matched ``mind_id``
+    flows into ``WakeWordDetectedEvent`` (instead of the static
+    config mind_id); ``_current_mind_id`` is reset between turns
+    via ``_clear_utterance_id``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_router_wired_pipeline_starts_clean(self) -> None:
+        """A pipeline with a router but no minds registered behaves
+        as a no-wake pipeline (router.is_empty → no detection)."""
+        from unittest.mock import AsyncMock
+
+        from sovyx.voice.pipeline._config import VoicePipelineConfig
+        from sovyx.voice.pipeline._orchestrator import VoicePipeline
+
+        empty_router = WakeWordRouter()
+        config = VoicePipelineConfig(mind_id="default-mind")
+        pipeline = VoicePipeline(
+            config=config,
+            vad=MagicMock(),
+            wake_word=MagicMock(),
+            stt=AsyncMock(),
+            tts=AsyncMock(),
+            wake_word_router=empty_router,
+        )
+        # Construction succeeds + per-turn mind_id starts at config.
+        assert pipeline._current_mind_id == "default-mind"  # noqa: SLF001
+        assert pipeline._wake_word_router is empty_router  # noqa: SLF001
+
+    @pytest.mark.asyncio
+    async def test_router_match_overrides_mind_id(self) -> None:
+        """When router matches, ``_current_mind_id`` is set to the
+        matched mind for the duration of the turn."""
+        from unittest.mock import AsyncMock
+
+        import numpy as np
+
+        from sovyx.voice.pipeline._config import VoicePipelineConfig
+        from sovyx.voice.pipeline._orchestrator import VoicePipeline
+
+        # Build router with one mind that fires immediately.
+        config_ww = WakeWordConfig(
+            stage1_threshold=0.5,
+            stage2_threshold=0.5,
+            stage2_window_seconds=_FRAME / 16000,
+        )
+        router = _make_router_with_mind(
+            "matched-mind",
+            [0.95],
+            config=config_ww,
+            verifier=_verifier_true,
+        )
+
+        config = VoicePipelineConfig(mind_id="default-mind", wake_word_enabled=True)
+        pipeline = VoicePipeline(
+            config=config,
+            vad=MagicMock(),
+            wake_word=MagicMock(),
+            stt=AsyncMock(),
+            tts=AsyncMock(),
+            wake_word_router=router,
+        )
+        await pipeline.start()
+        try:
+            # Feed a frame at IDLE with router → detection fires for matched-mind.
+            from sovyx.voice.vad import VADEvent, VADState
+
+            pipeline._vad.process_frame.return_value = VADEvent(  # noqa: SLF001
+                is_speech=True,
+                probability=0.95,
+                state=VADState.SPEECH,
+            )
+
+            # WakeWordDetector requires 1280-sample frames. The
+            # production pipeline feeds 512-sample frames but the
+            # MagicMock detectors in the legacy integration tests
+            # accept any shape. Our real router-wrapped detector
+            # validates shape strictly.
+            frame_int16 = np.zeros(1280, dtype=np.int16)
+            await pipeline.feed_frame(frame_int16)
+
+            # Router-driven mind_id override took effect.
+            assert pipeline._current_mind_id == "matched-mind"  # noqa: SLF001
+        finally:
+            await pipeline.stop()
+
+    @pytest.mark.asyncio
+    async def test_clear_utterance_id_resets_current_mind_id(self) -> None:
+        """After a turn ends (back to IDLE), ``_current_mind_id`` is
+        reset to ``config.mind_id`` so the next turn's matched
+        router event re-resolves cleanly."""
+        from unittest.mock import AsyncMock
+
+        from sovyx.voice.pipeline._config import VoicePipelineConfig
+        from sovyx.voice.pipeline._orchestrator import VoicePipeline
+
+        config = VoicePipelineConfig(mind_id="default-mind")
+        pipeline = VoicePipeline(
+            config=config,
+            vad=MagicMock(),
+            wake_word=MagicMock(),
+            stt=AsyncMock(),
+            tts=AsyncMock(),
+        )
+        # Manually flip current_mind_id (simulates a router match).
+        pipeline._current_mind_id = "previous-turn-mind"  # noqa: SLF001
+        # Reset path.
+        pipeline._clear_utterance_id()  # noqa: SLF001
+        assert pipeline._current_mind_id == "default-mind"  # noqa: SLF001
+
+
 class TestResetAll:
     def test_reset_all_resets_every_detector(self) -> None:
         config = WakeWordConfig(
