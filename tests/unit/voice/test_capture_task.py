@@ -8,6 +8,7 @@ avoid ``sys.modules["sounddevice"]`` patching — see CLAUDE.md
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from types import ModuleType
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -413,6 +414,222 @@ class TestAudioCallbackUncaughtRaiseT130:
             payload = error_records[0].msg
             assert payload["error_type"] == "RuntimeError"
             assert "simulated callback failure" in str(payload["error"])
+        finally:
+            await task.stop()
+
+
+class TestAudioCallbackChaosInjectionT633:
+    """Phase 6 / T6.33 — sustained random BaseException injection.
+
+    The pre-T6.33 ``TestAudioCallbackUncaughtRaiseT130`` covered ONE
+    callback raise with explicit assertions. Production reality is
+    SUSTAINED chaos: USB driver glitches deliver malformed status
+    objects, low-level numpy operations occasionally fail under
+    memory pressure, etc. T6.33 proves the callback survives
+    randomised injection across many frames at the spec's 5 %
+    rate, with diverse BaseException subclasses (including the
+    ``BaseException`` extremes — ``KeyboardInterrupt`` /
+    ``SystemExit`` — that ``except BaseException`` MUST catch but
+    that ``except Exception`` would let propagate).
+
+    Seeded ``random.Random`` for determinism — same discipline as
+    the T6.31 / T6.32 cascade chaos tests.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_sustained_five_percent_raise_rate_keeps_stream_alive(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # 200 callback invocations at 5 % injection → expected ~10
+        # raises, ~190 healthy frames. Stream must NEVER receive an
+        # exception (would CallbackAbort it). Empty markers queued
+        # for each raise + healthy frames queued for each non-raise.
+        import logging
+        import random
+
+        rng = random.Random(0)  # noqa: S311 — test-only RNG
+        injection_rate = 0.05
+        total_frames = 200
+        expected_raises = 0
+        expected_healthy = 0
+
+        captured: dict[str, Any] = {}
+
+        def stream_factory(**kwargs: Any) -> MagicMock:
+            captured["cb"] = kwargs["callback"]
+            return MagicMock()
+
+        sd = _fake_sd()
+        sd.InputStream = stream_factory  # type: ignore[attr-defined]
+        entry = _input_entry(index=5)
+
+        task = AudioCaptureTask(
+            MagicMock(),
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [entry],
+        )
+        task._queue = asyncio.Queue(maxsize=total_frames * 2)  # noqa: SLF001
+
+        try:
+            await task.start()
+            # Cancel the consumer task so it doesn't drain the chaos
+            # frames we're about to enqueue. We're testing the
+            # callback's enqueueing contract, not the consumer's
+            # downstream pipeline. Without this cancel the consumer
+            # would race-drain the queue between callback firings,
+            # leaving the assertion non-deterministic.
+            consumer = task._consumer  # noqa: SLF001
+            if consumer is not None:
+                consumer.cancel()
+                with contextlib.suppress(asyncio.CancelledError, BaseException):
+                    await consumer
+            # Drain the validation bootstrap so the chaos sequence
+            # starts from an empty queue.
+            while not task._queue.empty():  # noqa: SLF001
+                task._queue.get_nowait()  # noqa: SLF001
+
+            cb = captured["cb"]
+            caplog.set_level(logging.ERROR, logger="sovyx.voice.capture._loop_mixin")
+
+            for _ in range(total_frames):
+                if rng.random() < injection_rate:
+                    expected_raises += 1
+                    bad_indata = MagicMock()
+                    bad_indata.copy.side_effect = RuntimeError("chaos: copy failed")
+                    # MUST NOT propagate — pre-T1.30 would CallbackAbort.
+                    cb(bad_indata, 512, None, None)
+                else:
+                    expected_healthy += 1
+                    good_indata = np.zeros(512, dtype=np.int16)
+                    cb(good_indata, 512, None, None)
+
+            # Drain pending threadsafe-call_soon callbacks.
+            for _ in range(50):
+                await asyncio.sleep(0)
+
+            # Both empty markers (raise path) and zero-content frames
+            # (healthy path with all-zero indata) reach the queue.
+            # We can't distinguish them by content (both are size==X
+            # but different X), so count by size.
+            queued: list[Any] = []
+            while not task._queue.empty():  # noqa: SLF001
+                queued.append(task._queue.get_nowait())  # noqa: SLF001
+
+            # Total queued = expected_raises (empty markers, size 0) +
+            # expected_healthy (zero-content frames, size 512).
+            empty_markers = [f for f in queued if f.size == 0]
+            healthy_frames = [f for f in queued if f.size == 512]
+            assert len(empty_markers) == expected_raises, (
+                f"chaos delivered {expected_raises} raises but queue "
+                f"has {len(empty_markers)} empty markers"
+            )
+            assert len(healthy_frames) == expected_healthy
+
+            # Structured error event for every raise.
+            error_records = [
+                r
+                for r in caplog.records
+                if isinstance(r.msg, dict)
+                and r.msg.get("event") == "voice.audio_callback.uncaught_raise"
+            ]
+            assert len(error_records) == expected_raises
+            # 5 % of 200 with seed=0 produces an empirically-bounded
+            # raise count. Sanity-check the rate is in a credible
+            # neighbourhood (not all-injected, not zero-injected).
+            assert 1 <= expected_raises <= 30
+        finally:
+            await task.stop()
+
+    @pytest.mark.asyncio()
+    @pytest.mark.parametrize(
+        "exc_class",
+        [
+            RuntimeError,
+            MemoryError,
+            AttributeError,
+            TypeError,
+            ValueError,
+            # ``BaseException`` subclasses outside ``Exception`` —
+            # the load-bearing reason ``except BaseException`` (NOT
+            # ``except Exception``) is in the production code.
+            KeyboardInterrupt,
+            SystemExit,
+        ],
+    )
+    async def test_diverse_exception_classes_all_swallowed(
+        self,
+        exc_class: type[BaseException],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # T6.33 contract: ``except BaseException`` in the callback
+        # catches ANY exception subclass. Property-test-ish coverage
+        # via parametrized exception classes — pins that a future
+        # refactor narrowing to ``except Exception`` would let
+        # ``KeyboardInterrupt`` / ``SystemExit`` propagate to the
+        # PortAudio thread (a real prod hazard during shutdown).
+        import logging
+
+        captured: dict[str, Any] = {}
+
+        def stream_factory(**kwargs: Any) -> MagicMock:
+            captured["cb"] = kwargs["callback"]
+            return MagicMock()
+
+        sd = _fake_sd()
+        sd.InputStream = stream_factory  # type: ignore[attr-defined]
+        entry = _input_entry(index=5)
+
+        task = AudioCaptureTask(
+            MagicMock(),
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [entry],
+        )
+        task._queue = asyncio.Queue(maxsize=8)  # noqa: SLF001
+
+        try:
+            await task.start()
+            while not task._queue.empty():  # noqa: SLF001
+                task._queue.get_nowait()  # noqa: SLF001
+
+            cb = captured["cb"]
+            caplog.set_level(logging.ERROR, logger="sovyx.voice.capture._loop_mixin")
+
+            bad_indata = MagicMock()
+            bad_indata.copy.side_effect = exc_class("chaos injection")
+
+            # MUST NOT propagate — even SystemExit / KeyboardInterrupt.
+            cb(bad_indata, 512, None, None)
+
+            # Drain pending threadsafe call_soon → wait until the empty
+            # marker materialises in the queue. Mirrors the T1.30 break
+            # pattern so the consumer task can't race ahead and drain
+            # the marker before the assertion. ``feed_frame`` is a
+            # plain MagicMock here (not AsyncMock) so awaiting it
+            # raises TypeError in the consumer — the consumer's own
+            # error handling stalls before the next ``get`` call,
+            # giving us a stable snapshot of the queue.
+            empty_marker_seen = False
+            for _ in range(10):
+                await asyncio.sleep(0)
+                if not task._queue.empty():  # noqa: SLF001
+                    empty_marker_seen = True
+                    break
+            assert empty_marker_seen, (
+                f"empty marker did not materialise in queue for {exc_class.__name__}"
+            )
+            error_records = [
+                r
+                for r in caplog.records
+                if isinstance(r.msg, dict)
+                and r.msg.get("event") == "voice.audio_callback.uncaught_raise"
+            ]
+            assert len(error_records) == 1
+            assert error_records[0].msg["error_type"] == exc_class.__name__
         finally:
             await task.stop()
 
