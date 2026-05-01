@@ -401,6 +401,8 @@ renames are breaking changes for monitoring tooling.
 | `voice_cascade_user_actionable` | ERROR | cascade exhaustion | Homogeneous histogram + diagnosis is in remediation map. Carries `diagnosis` + user-facing `remediation` text (T6.12). Distinct from `voice_cascade_exhausted` so dashboards subscribe to actionable failures only. |
 | `voice_capture_permanently_degraded` | ERROR | watchdog backoff exhaustion | Backoff schedule exhausted without HEALTHY. Carries `last_diagnosis` (T6.14). |
 | `voice_capture_integrity_unrecoverable` | ERROR | bypass coordinator | All bypass strategies returned `NOT_APPLICABLE`. Carries `platform` + platform-specific `remediation` (T6.15). |
+| `voice_cascade_physical_cure_required` | WARNING | cascade (3 sites) | Diagnosis ∈ {KERNEL_INVALIDATED, STREAM_OPEN_TIMEOUT}. Endpoint quarantined; cascade short-circuits because every alternative combo will fail identically until physical replug / reboot (T6.9). |
+| `voice_cascade_combo_skipped_exclusive_mode_not_available` | INFO | cascade loop | After observing EXCLUSIVE_MODE_NOT_AVAILABLE on an exclusive combo, every remaining exclusive combo for the same endpoint is skipped without probing. Saves cascade budget (T6.9). |
 | `voice_quarantine_re_quarantine_event` | WARNING | quarantine add | Endpoint re-quarantined ≥ `quarantine_pingpong_threshold` times within `quarantine_pingpong_window_s` (T6.17). |
 | `voice_endpoint_repeatedly_failing` | WARNING | quarantine add | Endpoint re-added within `quarantine_rapid_requarantine_window_s` of TTL expiry (T6.18). |
 | `capture_integrity_inconclusive_retry` | INFO | bypass coordinator | Post-apply INCONCLUSIVE → retry attempted. Carries `retry_recovered` boolean (T6.16). |

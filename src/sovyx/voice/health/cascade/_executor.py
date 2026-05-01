@@ -94,6 +94,25 @@ __all__ = [
 ]
 
 
+# T6.9 — diagnoses that share the "physical cure required" semantic
+# with KERNEL_INVALIDATED. The cascade short-circuits on these
+# (quarantine + return) instead of trying remaining combos because
+# the failure is below the host-API layer — every alternative combo
+# will fail identically until the user replugs / reboots.
+#
+# - KERNEL_INVALIDATED: IAudioClient::Initialize stuck, surfaces as
+#   paInvalidDevice / AUDCLNT_E_DEVICE_INVALIDATED (Windows-canonical).
+# - STREAM_OPEN_TIMEOUT (T6.2): driver accepted open + start but
+#   never delivered audio in ≥ 5 s. Same root-cause family observed
+#   via the callback-not-fired surface.
+_PHYSICAL_CURE_DIAGNOSES: frozenset[Diagnosis] = frozenset(
+    {
+        Diagnosis.KERNEL_INVALIDATED,
+        Diagnosis.STREAM_OPEN_TIMEOUT,
+    },
+)
+
+
 # ── Probe callable typing ────────────────────────────────────────────────
 
 
@@ -404,10 +423,13 @@ async def _run_cascade_locked(
                 budget_exhausted=False,
                 source="pinned",
             )
-        # §4.4.7 — kernel-invalidated state. Every host API will fail
-        # equally; trying the ComboStore or the cascade loop just wastes
-        # the user's time. Quarantine + short-circuit.
-        if result.diagnosis is Diagnosis.KERNEL_INVALIDATED and _quarantine_endpoint(
+        # §4.4.7 + T6.9 — physical-cure diagnoses. Every host API will
+        # fail equally; trying the ComboStore or the cascade loop just
+        # wastes the user's time. KERNEL_INVALIDATED + STREAM_OPEN_TIMEOUT
+        # share the same semantic (driver wedged at IAudioClient /
+        # callback layer, no user-mode cure available) and route to the
+        # same quarantine + short-circuit path.
+        if result.diagnosis in _PHYSICAL_CURE_DIAGNOSES and _quarantine_endpoint(
             quarantine=quarantine,
             endpoint_guid=endpoint_guid,
             device_friendly_name=device_friendly_name,
@@ -418,11 +440,12 @@ async def _run_cascade_locked(
             physical_device_id=physical_device_id,
         ):
             logger.warning(
-                "voice_cascade_kernel_invalidated",
+                "voice_cascade_physical_cure_required",
                 endpoint=endpoint_guid,
                 friendly_name=device_friendly_name,
                 host_api=pinned.host_api,
                 source="pinned",
+                diagnosis=result.diagnosis.value,
             )
             return _make_result(
                 endpoint_guid=endpoint_guid,
@@ -523,10 +546,11 @@ async def _run_cascade_locked(
                 budget_exhausted=False,
                 source="store",
             )
-        # §4.4.7 — kernel-invalidated state observed on the fast path.
+        # §4.4.7 + T6.9 — physical-cure state observed on the fast path.
         # Invalidate the (now misleading) store entry too, then quarantine
         # the endpoint and short-circuit the rest of the cascade.
-        if result.diagnosis is Diagnosis.KERNEL_INVALIDATED and _quarantine_endpoint(
+        # KERNEL_INVALIDATED + STREAM_OPEN_TIMEOUT both route here.
+        if result.diagnosis in _PHYSICAL_CURE_DIAGNOSES and _quarantine_endpoint(
             quarantine=quarantine,
             endpoint_guid=endpoint_guid,
             device_friendly_name=device_friendly_name,
@@ -537,13 +561,14 @@ async def _run_cascade_locked(
             physical_device_id=physical_device_id,
         ):
             if combo_store is not None:
-                combo_store.invalidate(endpoint_guid, reason="kernel_invalidated")
+                combo_store.invalidate(endpoint_guid, reason=result.diagnosis.value)
             logger.warning(
-                "voice_cascade_kernel_invalidated",
+                "voice_cascade_physical_cure_required",
                 endpoint=endpoint_guid,
                 friendly_name=device_friendly_name,
                 host_api=store_combo.host_api,
                 source="store",
+                diagnosis=result.diagnosis.value,
             )
             return _make_result(
                 endpoint_guid=endpoint_guid,
@@ -619,8 +644,26 @@ async def _run_cascade_locked(
         # voice_clarity_autofix is Windows-only; on Linux/macOS start at 0.
         start_idx = 0
 
+    # T6.9 — set when EXCLUSIVE_MODE_NOT_AVAILABLE is observed on a
+    # combo with ``exclusive=True``. Subsequent iterations skip every
+    # remaining combo with ``exclusive=True`` because the endpoint
+    # fundamentally doesn't permit exclusive mode — retrying other
+    # exclusive combos for the same endpoint just burns the
+    # per-attempt budget. Shared-mode combos (``exclusive=False``)
+    # are still tried because they take a different driver code path.
+    skip_remaining_exclusive = False
+
     for idx, combo in enumerate(cascade):
         if idx < start_idx:
+            continue
+        # T6.9 skip-remaining-exclusive optimisation.
+        if skip_remaining_exclusive and combo.exclusive:
+            logger.info(
+                "voice_cascade_combo_skipped_exclusive_mode_not_available",
+                endpoint=endpoint_guid,
+                attempt=idx,
+                combo=_combo_tag(combo),
+            )
             continue
         if clock() >= deadline:
             logger.warning(
@@ -679,12 +722,14 @@ async def _run_cascade_locked(
             success=result.diagnosis is Diagnosis.HEALTHY,
             source="cascade",
         )
-        # §4.4.7 — kernel-invalidated state. Every remaining host API in
-        # the cascade table will fail identically because the failure is
-        # at IAudioClient::Initialize, upstream of the host-API layer.
-        # Quarantine + break the loop instead of burning the per-attempt
-        # budget on combos we already know will fail.
-        if result.diagnosis is Diagnosis.KERNEL_INVALIDATED and _quarantine_endpoint(
+        # §4.4.7 + T6.9 — physical-cure state. Every remaining host API
+        # in the cascade table will fail identically because the failure
+        # is at IAudioClient::Initialize / kernel callback layer, upstream
+        # of the host-API layer. Quarantine + break the loop instead of
+        # burning the per-attempt budget on combos we already know will
+        # fail. KERNEL_INVALIDATED + STREAM_OPEN_TIMEOUT (T6.2) share
+        # this semantic.
+        if result.diagnosis in _PHYSICAL_CURE_DIAGNOSES and _quarantine_endpoint(
             quarantine=quarantine,
             endpoint_guid=endpoint_guid,
             device_friendly_name=device_friendly_name,
@@ -695,12 +740,13 @@ async def _run_cascade_locked(
             physical_device_id=physical_device_id,
         ):
             logger.warning(
-                "voice_cascade_kernel_invalidated",
+                "voice_cascade_physical_cure_required",
                 endpoint=endpoint_guid,
                 friendly_name=device_friendly_name,
                 host_api=combo.host_api,
                 source="cascade",
                 attempt=idx,
+                diagnosis=result.diagnosis.value,
             )
             return _make_result(
                 endpoint_guid=endpoint_guid,
@@ -711,6 +757,14 @@ async def _run_cascade_locked(
                 budget_exhausted=False,
                 source="quarantined",
             )
+        # T6.9 — once an exclusive-mode combo returns
+        # EXCLUSIVE_MODE_NOT_AVAILABLE, the endpoint definitively
+        # doesn't permit exclusive mode. Mark the rest of the loop
+        # to skip exclusive combos (saves wall-clock budget for
+        # shared-mode candidates that have a real chance). Other
+        # diagnoses are routine fall-through to the next combo.
+        if result.diagnosis is Diagnosis.EXCLUSIVE_MODE_NOT_AVAILABLE and combo.exclusive:
+            skip_remaining_exclusive = True
         if result.diagnosis is Diagnosis.HEALTHY:
             _record_winner(
                 combo_store=combo_store,

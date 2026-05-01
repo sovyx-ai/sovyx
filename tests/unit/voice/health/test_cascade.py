@@ -998,6 +998,176 @@ class TestQuarantineAtCascadeSite:
         assert quarantine.is_quarantined("test-endpoint")
 
 
+# ---------------------------------------------------------------------------
+# Phase 6 / T6.9 — physical-cure quarantine extensions + skip-exclusive
+# ---------------------------------------------------------------------------
+
+
+class TestStreamOpenTimeoutQuarantine:
+    """T6.9 — STREAM_OPEN_TIMEOUT routes to the same quarantine path as
+    KERNEL_INVALIDATED. The driver is wedged at the callback layer; no
+    other host API will recover until physical replug / reboot."""
+
+    @pytest.mark.asyncio()
+    async def test_pinned_stream_open_timeout_quarantines(self) -> None:
+        pinned = _win_combo(host_api="WASAPI")
+        overrides = _FakeOverrides()
+        overrides.pins["test-endpoint"] = pinned
+        probe = _FakeProbe(plan=[(_match_all, Diagnosis.STREAM_OPEN_TIMEOUT)])
+        quarantine = _fresh_quarantine()
+
+        result = await _run(
+            probe_fn=probe,
+            capture_overrides=overrides,
+            quarantine=quarantine,
+        )
+
+        assert result.source == "quarantined"  # type: ignore[attr-defined]
+        assert result.winning_combo is None  # type: ignore[attr-defined]
+        assert len(probe.calls) == 1  # cascade NOT probed
+        assert quarantine.is_quarantined("test-endpoint")
+
+    @pytest.mark.asyncio()
+    async def test_store_stream_open_timeout_quarantines_and_invalidates_store(
+        self,
+    ) -> None:
+        # Store-fast-path STREAM_OPEN_TIMEOUT must invalidate the store
+        # entry too — keeping a known-wedged combo in the store would
+        # send the next boot straight back into the same wedge.
+        store = _FakeComboStore()
+        store_combo = _win_combo(host_api="WASAPI")
+        store.entries["test-endpoint"] = store_combo
+        probe = _FakeProbe(plan=[(_match_all, Diagnosis.STREAM_OPEN_TIMEOUT)])
+        quarantine = _fresh_quarantine()
+
+        result = await _run(probe_fn=probe, combo_store=store, quarantine=quarantine)
+
+        assert result.source == "quarantined"  # type: ignore[attr-defined]
+        # Store invalidation reason carries the canonical diagnosis value
+        # so dashboards can route on the specific cause.
+        assert ("test-endpoint", "stream_open_timeout") in store.invalidate_calls
+        assert quarantine.is_quarantined("test-endpoint")
+        assert len(probe.calls) == 1
+
+    @pytest.mark.asyncio()
+    async def test_cascade_stream_open_timeout_aborts_remaining_combos(self) -> None:
+        probe = _FakeProbe(plan=[(_match_all, Diagnosis.STREAM_OPEN_TIMEOUT)])
+        quarantine = _fresh_quarantine()
+
+        result = await _run(probe_fn=probe, quarantine=quarantine)
+
+        assert result.source == "quarantined"  # type: ignore[attr-defined]
+        assert len(probe.calls) == 1
+        assert len(probe.calls) < len(WINDOWS_CASCADE)
+        assert quarantine.is_quarantined("test-endpoint")
+
+
+class TestSkipRemainingExclusiveOnExclusiveModeNotAvailable:
+    """T6.9 — once EXCLUSIVE_MODE_NOT_AVAILABLE is observed on an
+    exclusive combo, the cascade loop skips remaining exclusive combos
+    for the same endpoint. Shared combos are still tried because they
+    take a different driver code path."""
+
+    @pytest.mark.asyncio()
+    async def test_exclusive_mode_not_available_skips_remaining_exclusive(
+        self,
+    ) -> None:
+        # First attempt is WASAPI exclusive (per WINDOWS_CASCADE table).
+        # Plan: every exclusive combo returns EXCLUSIVE_MODE_NOT_AVAILABLE;
+        # every shared combo returns HEALTHY. Without T6.9 the cascade
+        # would probe all 3 exclusive combos before reaching the first
+        # shared one. With T6.9 it skips combos 2 + 3 (also exclusive)
+        # after combo 1 returns the diagnosis.
+        def _diag_for_combo(c: Combo) -> Diagnosis:
+            if c.exclusive:
+                return Diagnosis.EXCLUSIVE_MODE_NOT_AVAILABLE
+            return Diagnosis.HEALTHY
+
+        probe = _FakeProbe(plan=[(lambda _c: True, Diagnosis.HEALTHY)])
+
+        # Override the plan with a programmatic per-combo lookup.
+        async def _custom_probe(
+            *,
+            combo: Combo,
+            mode: ProbeMode,  # noqa: ARG001
+            device_index: int,  # noqa: ARG001
+            hard_timeout_s: float,  # noqa: ARG001
+        ) -> ProbeResult:
+            probe.calls.append(
+                _ProbeCall(
+                    combo=combo,
+                    mode=mode,
+                    device_index=0,
+                    hard_timeout_s=hard_timeout_s,
+                ),
+            )
+            diag = _diag_for_combo(combo)
+            return ProbeResult(
+                diagnosis=diag,
+                mode=mode,
+                combo=combo,
+                vad_max_prob=0.9 if diag is Diagnosis.HEALTHY else 0.0,
+                vad_mean_prob=0.5 if diag is Diagnosis.HEALTHY else 0.0,
+                rms_db=-20.0 if diag is Diagnosis.HEALTHY else -80.0,
+                callbacks_fired=50,
+                duration_ms=500,
+                error=None,
+            )
+
+        result = await _run(probe_fn=_custom_probe)
+
+        # WINDOWS_CASCADE has 3 exclusive combos followed by 3 shared.
+        # Without T6.9: would probe attempt 0 (excl, NOT_AVAILABLE) +
+        # attempt 1 (excl, NOT_AVAILABLE) + attempt 2 (excl, NOT_AVAILABLE)
+        # + attempt 3 (shared, HEALTHY) = 4 probes.
+        # With T6.9: attempt 0 (excl, NOT_AVAILABLE) sets the skip flag;
+        # attempts 1 + 2 (also excl) skipped without probing; attempt 3
+        # (shared, HEALTHY) wins on the 2nd probe.
+        assert result.winning_combo is not None  # type: ignore[attr-defined]
+        assert result.winning_combo.exclusive is False  # type: ignore[attr-defined]
+        # Only 2 actual probe calls — the exclusive skip saved 2 probes.
+        assert len(probe.calls) == 2
+        assert probe.calls[0].combo.exclusive is True
+        assert probe.calls[1].combo.exclusive is False
+
+    @pytest.mark.asyncio()
+    async def test_exclusive_mode_not_available_does_not_quarantine(self) -> None:
+        # Defensive — EXCLUSIVE_MODE_NOT_AVAILABLE must NOT trigger
+        # quarantine. The endpoint is healthy in shared mode; we just
+        # can't use exclusive. Quarantining would lock the user out
+        # entirely from a working device.
+        def _diag(c: Combo) -> Diagnosis:
+            return Diagnosis.EXCLUSIVE_MODE_NOT_AVAILABLE if c.exclusive else Diagnosis.HEALTHY
+
+        async def _custom_probe(
+            *,
+            combo: Combo,
+            mode: ProbeMode,
+            device_index: int,  # noqa: ARG001
+            hard_timeout_s: float,  # noqa: ARG001
+        ) -> ProbeResult:
+            return ProbeResult(
+                diagnosis=_diag(combo),
+                mode=mode,
+                combo=combo,
+                vad_max_prob=0.9 if _diag(combo) is Diagnosis.HEALTHY else 0.0,
+                vad_mean_prob=0.5,
+                rms_db=-20.0 if _diag(combo) is Diagnosis.HEALTHY else -80.0,
+                callbacks_fired=50,
+                duration_ms=500,
+                error=None,
+            )
+
+        quarantine = _fresh_quarantine()
+        result = await _run(probe_fn=_custom_probe, quarantine=quarantine)
+
+        # Healthy shared-mode winner found.
+        assert result.source == "cascade"  # type: ignore[attr-defined]
+        assert result.winning_combo is not None  # type: ignore[attr-defined]
+        # Endpoint is NOT quarantined — operator can still use shared mode.
+        assert quarantine.is_quarantined("test-endpoint") is False
+
+
 class TestQuarantineKillSwitch:
     """``kernel_invalidated_failover_enabled=False`` disables default quarantine.
 
