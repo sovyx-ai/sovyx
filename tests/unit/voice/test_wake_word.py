@@ -640,3 +640,224 @@ class TestEdgeCases:
             e = detector.process_frame(_frame())
             assert e.state == WakeWordState.IDLE
             assert not e.detected
+
+
+# ---------------------------------------------------------------------------
+# T7.1 — Wake-word latency profile (Phase 7 instrumentation)
+# ---------------------------------------------------------------------------
+
+
+class TestLatencyProfileT71:
+    """Pin the T7.1 latency-histogram instrumentation.
+
+    Phase 7 / T7.1 adds 4 OTel histograms decomposing the wake-word
+    detection latency:
+
+    - ``stage1_inference_latency`` — per-frame ONNX inference (every
+      ``process_frame`` call).
+    - ``stage2_collection_latency`` — STAGE1_TRIGGERED entry to
+      _evaluate_stage2 wall-clock (every evaluation).
+    - ``stage2_verifier_latency`` — verifier callable duration (only
+      when ``peak_score >= stage2_threshold``).
+    - ``detection_latency`` — end-to-end stage-1-trigger to confirmed
+      detection (only on ``verified=True``).
+
+    Each test patches the corresponding record helper and asserts
+    the emission contract: WHEN it fires, what attributes carry,
+    and that it doesn't fire on the wrong path.
+    """
+
+    def test_stage1_inference_recorded_every_frame(self) -> None:
+        """``record_wake_word_stage1_inference_ms`` fires once per frame."""
+        scores = [0.1, 0.2, 0.3]
+        detector = _make_detector(scores)
+        with patch(
+            "sovyx.voice.health._metrics.record_wake_word_stage1_inference_ms",
+        ) as mock_record:
+            for _ in range(3):
+                detector.process_frame(_frame())
+        assert mock_record.call_count == 3  # noqa: PLR2004
+        # Every call carries the model_name attribute.
+        for call in mock_record.call_args_list:
+            assert "model_name" in call.kwargs
+            assert call.kwargs["model_name"] == "model"
+            assert call.kwargs["duration_ms"] >= 0.0
+
+    def test_stage2_collection_outcome_confirmed(self) -> None:
+        """When verifier returns True, collection outcome is ``confirmed``."""
+        config = WakeWordConfig(
+            stage1_threshold=0.5,
+            stage2_threshold=0.5,
+            stage2_window_seconds=1280 / 16000,  # 1-frame window
+        )
+        detector = _make_detector([0.9], config=config, verifier=_verified_true)
+        with patch(
+            "sovyx.voice.health._metrics.record_wake_word_stage2_collection_ms",
+        ) as mock_record:
+            event = detector.process_frame(_frame())
+        assert event.detected
+        mock_record.assert_called_once()
+        assert mock_record.call_args.kwargs["outcome"] == "confirmed"
+
+    def test_stage2_collection_outcome_rejected_threshold(self) -> None:
+        """When peak_score < stage2_threshold, outcome is ``rejected_threshold``."""
+        config = WakeWordConfig(
+            stage1_threshold=0.5,
+            stage2_threshold=0.9,  # high bar — won't be met
+            stage2_window_seconds=1280 / 16000,
+        )
+        detector = _make_detector([0.6], config=config, verifier=_verified_true)
+        with patch(
+            "sovyx.voice.health._metrics.record_wake_word_stage2_collection_ms",
+        ) as mock_record:
+            event = detector.process_frame(_frame())
+        assert not event.detected
+        mock_record.assert_called_once()
+        assert mock_record.call_args.kwargs["outcome"] == "rejected_threshold"
+
+    def test_stage2_collection_outcome_rejected_verifier(self) -> None:
+        """When verifier returns False, outcome is ``rejected_verifier``."""
+        config = WakeWordConfig(
+            stage1_threshold=0.5,
+            stage2_threshold=0.5,
+            stage2_window_seconds=1280 / 16000,
+        )
+        detector = _make_detector([0.9], config=config, verifier=_verified_false)
+        with patch(
+            "sovyx.voice.health._metrics.record_wake_word_stage2_collection_ms",
+        ) as mock_record:
+            event = detector.process_frame(_frame())
+        assert not event.detected
+        mock_record.assert_called_once()
+        assert mock_record.call_args.kwargs["outcome"] == "rejected_verifier"
+
+    def test_stage2_verifier_only_fires_when_threshold_crossed(self) -> None:
+        """Verifier histogram is gated on peak_score crossing threshold."""
+        # Peak below threshold — verifier never runs, no record call.
+        config = WakeWordConfig(
+            stage1_threshold=0.5,
+            stage2_threshold=0.9,
+            stage2_window_seconds=1280 / 16000,
+        )
+        detector_low = _make_detector([0.6], config=config, verifier=_verified_true)
+        with patch(
+            "sovyx.voice.health._metrics.record_wake_word_stage2_verifier_ms",
+        ) as mock_record:
+            detector_low.process_frame(_frame())
+        assert mock_record.call_count == 0
+
+        # Peak above threshold — verifier runs, record fires.
+        config2 = WakeWordConfig(
+            stage1_threshold=0.5,
+            stage2_threshold=0.5,
+            stage2_window_seconds=1280 / 16000,
+        )
+        detector_high = _make_detector([0.9], config=config2, verifier=_verified_true)
+        with patch(
+            "sovyx.voice.health._metrics.record_wake_word_stage2_verifier_ms",
+        ) as mock_record:
+            detector_high.process_frame(_frame())
+        assert mock_record.call_count == 1
+        assert mock_record.call_args.kwargs["outcome"] == "verified"
+
+    def test_detection_latency_only_on_confirmed(self) -> None:
+        """``record_wake_word_detection_ms`` fires only on verified=True."""
+        config = WakeWordConfig(
+            stage1_threshold=0.5,
+            stage2_threshold=0.5,
+            stage2_window_seconds=1280 / 16000,
+        )
+
+        # Path 1: confirmed → record_wake_word_detection_ms fires.
+        detector_ok = _make_detector([0.9], config=config, verifier=_verified_true)
+        with patch(
+            "sovyx.voice.health._metrics.record_wake_word_detection_ms",
+        ) as mock_record:
+            event = detector_ok.process_frame(_frame())
+        assert event.detected
+        assert mock_record.call_count == 1
+
+        # Path 2: verifier rejects → record does NOT fire.
+        detector_rej = _make_detector([0.9], config=config, verifier=_verified_false)
+        with patch(
+            "sovyx.voice.health._metrics.record_wake_word_detection_ms",
+        ) as mock_record:
+            event = detector_rej.process_frame(_frame())
+        assert not event.detected
+        assert mock_record.call_count == 0
+
+        # Path 3: peak below threshold → record does NOT fire.
+        config_high = WakeWordConfig(
+            stage1_threshold=0.5,
+            stage2_threshold=0.9,
+            stage2_window_seconds=1280 / 16000,
+        )
+        detector_below = _make_detector(
+            [0.6],
+            config=config_high,
+            verifier=_verified_true,
+        )
+        with patch(
+            "sovyx.voice.health._metrics.record_wake_word_detection_ms",
+        ) as mock_record:
+            event = detector_below.process_frame(_frame())
+        assert not event.detected
+        assert mock_record.call_count == 0
+
+    def test_collection_latency_anchored_at_stage1_trigger(self) -> None:
+        """Multi-frame window: collection_ms reflects time across all frames."""
+        # 3-frame window — stage-1 triggers on frame 1, evaluation on frame 3.
+        config = WakeWordConfig(
+            stage1_threshold=0.5,
+            stage2_threshold=0.5,
+            stage2_window_seconds=3 * 1280 / 16000,
+        )
+        # All 3 frames score above threshold so peak is consistently high.
+        detector = _make_detector([0.9, 0.9, 0.9], config=config, verifier=_verified_true)
+        with patch(
+            "sovyx.voice.health._metrics.record_wake_word_stage2_collection_ms",
+        ) as mock_record:
+            for _ in range(3):
+                detector.process_frame(_frame())
+        # Exactly one collection record (one stage-2 evaluation).
+        mock_record.assert_called_once()
+        # Duration is non-negative (real time elapsed across the 3 frames).
+        assert mock_record.call_args.kwargs["duration_ms"] >= 0.0
+
+    def test_structured_log_carries_breakdown_on_confirm(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The ``voice.wake_word.detected`` log event carries 3 timing fields.
+
+        Dashboards consume the structured event for per-detection
+        breakdowns without scraping the OTel histograms. Pin the
+        contract so a future refactor that drops the fields fails
+        loudly. Structlog renders all keyword args into the log
+        record's ``message`` as a JSON-shaped dict — we search the
+        message string for each expected field name.
+        """
+        import logging
+
+        config = WakeWordConfig(
+            stage1_threshold=0.5,
+            stage2_threshold=0.5,
+            stage2_window_seconds=1280 / 16000,
+        )
+        detector = _make_detector([0.9], config=config, verifier=_verified_true)
+        with caplog.at_level(logging.INFO, logger="sovyx.voice.wake_word"):
+            event = detector.process_frame(_frame())
+        assert event.detected
+        # The structured event lands as the formatted message — find
+        # the record whose message contains the canonical event name.
+        detected_records = [
+            r for r in caplog.records if "voice.wake_word.detected" in r.getMessage()
+        ]
+        assert len(detected_records) == 1
+        message = detected_records[0].getMessage()
+        for key in (
+            "voice.stage2_collection_ms",
+            "voice.stage2_verifier_ms",
+            "voice.detection_ms",
+        ):
+            assert key in message, f"missing field {key} in {message}"

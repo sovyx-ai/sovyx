@@ -559,6 +559,51 @@ class MetricsRegistry:
             "User-perceived KPI — latency from WakeWordDetectedEvent to "
             "SpeechStartedEvent. ADR §5.14 target p95 ≤ 200 ms.",
         )
+        # Phase 7 / T7.1 — wake-word stage-by-stage latency profile.
+        # The 4 histograms together decompose the end-to-end "user spoke
+        # the wake word" → "pipeline observed WakeWordDetectedEvent"
+        # latency into operator-actionable stages so the v0.30.0 GA
+        # promotion gate (wake-word p95 ≤ 500 ms — matches Alexa /
+        # Google / Siri industry benchmark) can be tracked directly
+        # against each stage's contribution. Master mission
+        # MISSION-voice-final-skype-grade-2026.md §Phase 7 / T7.1.
+        self.voice_wake_word_stage1_inference_latency = self._histogram(
+            "sovyx.voice.wake_word.stage1_inference_latency",
+            "Wake-word stage-1 ONNX inference duration in ms. Per-frame "
+            "(80 ms at 16 kHz) — typically ~5 ms on Pi 5 / ~1 ms on N100. "
+            "Sustained p99 > 50 ms indicates host CPU saturation that "
+            "will starve the audio callback. Labels: model_name (the "
+            "ONNX checkpoint stem; cardinality-bounded by the small "
+            "set of installed wake-word variants).",
+        )
+        self.voice_wake_word_stage2_collection_latency = self._histogram(
+            "sovyx.voice.wake_word.stage2_collection_latency",
+            "Wake-word stage-2 audio-collection window duration in ms. "
+            "Wall-clock from STAGE1_TRIGGERED entry to _evaluate_stage2 "
+            "call — typically the configured stage2_window_seconds "
+            "(default 1500 ms) plus per-frame jitter. T7.2 reduces "
+            "the window from 1500 ms → 500 ms; this histogram is the "
+            "before/after measurement. Labels: outcome=confirmed|"
+            "rejected_threshold|rejected_verifier.",
+        )
+        self.voice_wake_word_stage2_verifier_latency = self._histogram(
+            "sovyx.voice.wake_word.stage2_verifier_latency",
+            "Wake-word stage-2 verifier (STT call) duration in ms. "
+            "Only emitted on stage-2 evaluations where peak_score ≥ "
+            "stage2_threshold (otherwise verifier never runs). "
+            "T7.5 replaces STT with phoneme matching; this histogram "
+            "is the before/after measurement. Labels: outcome="
+            "verified|rejected.",
+        )
+        self.voice_wake_word_detection_latency = self._histogram(
+            "sovyx.voice.wake_word.detection_latency",
+            "Wake-word end-to-end detection latency in ms. Wall-clock "
+            "from STAGE1_TRIGGERED entry to wake_word_detected event "
+            "emission (only emitted on confirmed detections). Sums "
+            "stage-2 collection + verifier durations + state-machine "
+            "overhead. The v0.30.0 GA promotion gate target is p95 "
+            "≤ 500 ms (Alexa/Google/Siri parity).",
+        )
         self.voice_opener_attempts = self._counter(
             "sovyx.voice.opener.attempts",
             "Per-attempt outcomes of open_input_stream pyramid (labels: "

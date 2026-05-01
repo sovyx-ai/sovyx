@@ -537,6 +537,98 @@ def record_time_to_first_utterance(*, duration_ms: float) -> None:
     get_metrics().voice_health_time_to_first_utterance.record(duration_ms)
 
 
+# ── Phase 7 / T7.1 — wake-word latency profile ─────────────────────────
+
+
+def record_wake_word_stage1_inference_ms(
+    *,
+    duration_ms: float,
+    model_name: str,
+) -> None:
+    """Record per-frame stage-1 ONNX inference duration.
+
+    Emitted from :meth:`WakeWordDetector._run_inference` for every
+    audio frame fed into the detector — runs at the 80 ms frame
+    cadence (12.5 Hz). Typical values: ~5 ms on Pi 5, ~1 ms on N100.
+    Sustained p99 > 50 ms indicates host CPU saturation that will
+    starve the audio callback before any wake-word user-experience
+    impact.
+
+    Args:
+        duration_ms: Wall-clock duration of the ONNX session.run call.
+        model_name: ONNX checkpoint file stem (e.g. ``"sovyx_v1"``).
+            Cardinality-bounded by the small set of installed wake-
+            word variants per the Phase 7 multi-language plan.
+    """
+    get_metrics().voice_wake_word_stage1_inference_latency.record(
+        duration_ms,
+        attributes={"model_name": model_name},
+    )
+
+
+def record_wake_word_stage2_collection_ms(
+    *,
+    duration_ms: float,
+    outcome: str,
+) -> None:
+    """Record stage-2 audio-collection window duration.
+
+    Emitted from :meth:`WakeWordDetector._evaluate_stage2` once per
+    stage-2 evaluation, regardless of outcome. The wall-clock
+    duration from ``STAGE1_TRIGGERED`` entry to evaluation should
+    closely track the configured ``stage2_window_seconds`` (default
+    1500 ms) plus per-frame jitter — T7.2 reduces this from 1500 ms
+    → 500 ms; this histogram is the before/after measurement.
+
+    Args:
+        duration_ms: Wall-clock time from stage-1 trigger to evaluation.
+        outcome: ``"confirmed"`` (verifier passed),
+            ``"rejected_threshold"`` (peak_score < stage2_threshold),
+            ``"rejected_verifier"`` (verifier failed).
+    """
+    get_metrics().voice_wake_word_stage2_collection_latency.record(
+        duration_ms,
+        attributes={"outcome": outcome},
+    )
+
+
+def record_wake_word_stage2_verifier_ms(
+    *,
+    duration_ms: float,
+    outcome: str,
+) -> None:
+    """Record stage-2 verifier (STT) call duration.
+
+    Emitted only on stage-2 evaluations where ``peak_score ≥
+    stage2_threshold`` (the verifier never runs below threshold).
+    T7.5 replaces STT with phoneme matching — this histogram is the
+    before/after measurement.
+
+    Args:
+        duration_ms: Wall-clock duration of the verifier callable.
+        outcome: ``"verified"`` (verifier returned True) or
+            ``"rejected"`` (verifier returned False).
+    """
+    get_metrics().voice_wake_word_stage2_verifier_latency.record(
+        duration_ms,
+        attributes={"outcome": outcome},
+    )
+
+
+def record_wake_word_detection_ms(*, duration_ms: float) -> None:
+    """Record end-to-end wake-word detection latency.
+
+    Emitted only on CONFIRMED detections. Wall-clock from
+    ``STAGE1_TRIGGERED`` entry to ``wake_word_detected`` event
+    emission. The v0.30.0 GA promotion gate target is p95 ≤ 500 ms
+    (Alexa / Google / Siri parity per master mission).
+
+    Args:
+        duration_ms: Wall-clock time from stage-1 trigger to confirm.
+    """
+    get_metrics().voice_wake_word_detection_latency.record(duration_ms)
+
+
 # ── Voice Windows Paranoid Mission record helpers ──────────────────────
 
 
@@ -1131,4 +1223,8 @@ __all__ = [
     "record_tier2_host_api_rotate_outcome",
     "record_time_to_first_utterance",
     "record_vad_quiet_signal_gated",
+    "record_wake_word_detection_ms",
+    "record_wake_word_stage1_inference_ms",
+    "record_wake_word_stage2_collection_ms",
+    "record_wake_word_stage2_verifier_ms",
 ]

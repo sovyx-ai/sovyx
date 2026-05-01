@@ -12,6 +12,7 @@ Ref: SPE-010 §4, IMPL-004 §2.5 (OpenWakeWord 2-stage)
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import IntEnum, auto
@@ -265,6 +266,12 @@ class WakeWordDetector:
         self._frame_counter = 0  # counts frames in current state
         self._peak_score = 0.0  # highest score during stage-1 collection
 
+        # T7.1 — wake-word latency profile. Records when STAGE1_TRIGGERED
+        # was entered so _evaluate_stage2 can compute the wall-clock
+        # collection-window duration + the end-to-end stage-1-trigger
+        # → confirmed-detection latency. ``None`` between detections.
+        self._stage1_trigger_monotonic: float | None = None
+
         # Audio buffer for stage-2 verification
         self._audio_buffer: list[npt.NDArray[np.float32]] = []
 
@@ -353,6 +360,7 @@ class WakeWordDetector:
         self._frame_counter = 0
         self._peak_score = 0.0
         self._audio_buffer.clear()
+        self._stage1_trigger_monotonic = None
 
     @property
     def state(self) -> WakeWordState:
@@ -369,12 +377,29 @@ class WakeWordDetector:
     # ------------------------------------------------------------------
 
     def _run_inference(self, audio: npt.NDArray[np.float32]) -> float:
-        """Run ONNX model and return wake word score."""
+        """Run ONNX model and return wake word score.
+
+        T7.1 latency profile: every call records the ONNX inference
+        duration to ``sovyx.voice.wake_word.stage1_inference_latency``
+        keyed by ``model_name``. Per-frame at the 80 ms frame cadence
+        (~12.5 Hz) — the measured budget against which the v0.30.0 GA
+        target ``wake-word p95 ≤ 500 ms end-to-end`` is built.
+        """
+        from sovyx.voice.health._metrics import (  # noqa: PLC0415 — metrics import is hot-path; lazy keeps module-load cost off non-voice daemons
+            record_wake_word_stage1_inference_ms,
+        )
+
+        t0 = time.monotonic()
         ort_inputs = {
             self._session.get_inputs()[0].name: audio.reshape(1, -1),
         }
         outputs = self._session.run(None, ort_inputs)
-        return float(outputs[0][0][0]) if outputs[0].ndim > 1 else float(outputs[0][0])
+        score = float(outputs[0][0][0]) if outputs[0].ndim > 1 else float(outputs[0][0])
+        record_wake_word_stage1_inference_ms(
+            duration_ms=(time.monotonic() - t0) * 1000.0,
+            model_name=self._model_name,
+        )
+        return score
 
     def _update_state(
         self,
@@ -404,6 +429,9 @@ class WakeWordDetector:
             self._frame_counter = 1
             self._peak_score = score
             self._audio_buffer = [audio.copy()]
+            # T7.1 — anchor stage-1 trigger time for the latency
+            # histograms recorded in _evaluate_stage2.
+            self._stage1_trigger_monotonic = time.monotonic()
             logger.debug("Wake word stage-1 triggered", score=score)
             # If window is just 1 frame, evaluate immediately
             if self._frame_counter >= self._config.stage2_window_frames:
@@ -427,14 +455,58 @@ class WakeWordDetector:
         return False
 
     def _evaluate_stage2(self) -> bool:
-        """Evaluate stage-2: check peak threshold + run verifier."""
+        """Evaluate stage-2: check peak threshold + run verifier.
+
+        T7.1 latency profile: emits 3 histograms per evaluation.
+        ``stage2_collection_latency`` records wall-clock from
+        STAGE1_TRIGGERED entry to this call (every evaluation,
+        keyed by outcome). ``stage2_verifier_latency`` records the
+        verifier callable duration (only when peak_score crosses
+        the threshold). ``detection_latency`` records the end-to-
+        end stage-1-trigger → confirmed-detection time (only on
+        ``verified=True`` returns).
+        """
         import numpy as np  # noqa: F811
+
+        from sovyx.voice.health._metrics import (  # noqa: PLC0415 — keep voice metrics off non-voice daemon import path
+            record_wake_word_detection_ms,
+            record_wake_word_stage2_collection_ms,
+            record_wake_word_stage2_verifier_ms,
+        )
+
+        # T7.1 — collection-latency wall clock. ``_stage1_trigger_monotonic``
+        # is set in _handle_idle when STAGE1_TRIGGERED entered; if it's
+        # None (defensive — _evaluate_stage2 should never be called
+        # without a prior _handle_idle), default to 0 ms so the metric
+        # records but is obvious as a calibration artifact.
+        now = time.monotonic()
+        collection_ms = (
+            (now - self._stage1_trigger_monotonic) * 1000.0
+            if self._stage1_trigger_monotonic is not None
+            else 0.0
+        )
 
         if self._peak_score >= self._config.stage2_threshold:
             combined_audio = np.concatenate(self._audio_buffer)
+            verifier_t0 = time.monotonic()
             result = self._verifier(combined_audio)
+            verifier_ms = (time.monotonic() - verifier_t0) * 1000.0
+            record_wake_word_stage2_verifier_ms(
+                duration_ms=verifier_ms,
+                outcome="verified" if result.verified else "rejected",
+            )
 
             if result.verified:
+                detection_ms = (
+                    (time.monotonic() - self._stage1_trigger_monotonic) * 1000.0
+                    if self._stage1_trigger_monotonic is not None
+                    else 0.0
+                )
+                record_wake_word_stage2_collection_ms(
+                    duration_ms=collection_ms,
+                    outcome="confirmed",
+                )
+                record_wake_word_detection_ms(duration_ms=detection_ms)
                 logger.info(
                     "Wake word CONFIRMED (2-stage)",
                     peak_score=self._peak_score,
@@ -449,17 +521,32 @@ class WakeWordDetector:
                         "voice.stage2_threshold": self._config.stage2_threshold,
                         "voice.transcription": result.transcription,
                         "voice.window_frames": self._frame_counter,
+                        # T7.1 — surface the same numbers on the
+                        # structured event so dashboards can render the
+                        # per-detection breakdown without scraping the
+                        # OTel histograms.
+                        "voice.stage2_collection_ms": round(collection_ms, 2),
+                        "voice.stage2_verifier_ms": round(verifier_ms, 2),
+                        "voice.detection_ms": round(detection_ms, 2),
                     },
                 )
                 self._enter_cooldown()
                 return True
 
+            record_wake_word_stage2_collection_ms(
+                duration_ms=collection_ms,
+                outcome="rejected_verifier",
+            )
             logger.debug(
                 "Wake word stage-2 REJECTED",
                 peak_score=self._peak_score,
                 transcription=result.transcription,
             )
         else:
+            record_wake_word_stage2_collection_ms(
+                duration_ms=collection_ms,
+                outcome="rejected_threshold",
+            )
             logger.debug(
                 "Wake word stage-2 threshold not met",
                 peak_score=self._peak_score,
@@ -471,6 +558,7 @@ class WakeWordDetector:
         self._frame_counter = 0
         self._peak_score = 0.0
         self._audio_buffer.clear()
+        self._stage1_trigger_monotonic = None
         return False
 
     def _handle_cooldown(self, score: float) -> bool:
@@ -489,3 +577,4 @@ class WakeWordDetector:
         self._frame_counter = 0
         self._peak_score = 0.0
         self._audio_buffer.clear()
+        self._stage1_trigger_monotonic = None
