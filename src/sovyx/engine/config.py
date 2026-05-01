@@ -187,15 +187,27 @@ class VoiceTuningConfig(BaseSettings):
     capture_reconnect_delay_seconds: float = 2.0
     capture_queue_maxsize: int = 256
 
-    # Band-aid #20: per-entry probe-history size in
-    # :class:`sovyx.voice.health.combo_store.ComboStore`. Default 10
-    # is appropriate for steady-state operation; raise for high-debug
-    # deployments collecting forensic history of recent reconnects;
-    # lower for memory-constrained embedded targets. Bounded ``[1,
-    # 1000]`` — at 1 the history is degenerate (single entry =
-    # current state only); at 1000 a 10-day session of hourly
-    # reconnects fits without rotation.
-    combo_probe_history_max: int = Field(default=10, ge=1, le=1_000)
+    # Band-aid #20 + Phase 6 / T6.19: per-entry probe-history size in
+    # :class:`sovyx.voice.health.combo_store.ComboStore`. Default raised
+    # from 10 to 100 in v0.28.0 — the previous value was tuned for
+    # memory-constrained embedded targets at the time of band-aid #20,
+    # but operators triaging recurring failures (T6.17 ping-pong, T6.18
+    # rapid re-quarantine) need deeper rolling history per endpoint.
+    # 100 entries at ~150 bytes per ``ProbeHistoryEntry`` = ~15 KB per
+    # endpoint. With the default 64-entry combo-store maxsize, that
+    # caps ComboStore at ~1 MB on disk + RAM — negligible.
+    #
+    # Cross-boot persistence is INHERENT to the design: ``probe_history``
+    # is serialised by ``_history_to_dict`` / ``_entry_to_dict`` and
+    # reloaded by ``_build_live_entry`` on every ``load()`` — no extra
+    # work needed for T6.19's "persist across reboots" sub-requirement.
+    #
+    # Lower bound 1 (degenerate single-entry mode for memory-tight
+    # embedded targets); upper bound 1000 (10-day session of hourly
+    # reconnects fits without rotation). Operators can downscale via
+    # ``SOVYX_TUNING__VOICE__COMBO_PROBE_HISTORY_MAX=10`` to restore
+    # pre-v0.28.0 behaviour without code change.
+    combo_probe_history_max: int = Field(default=100, ge=1, le=1_000)
 
     # Band-aid #28: LLM provider reachability preflight budget.
     # The ADR §4.5 step 7 (LLM_UNREACHABLE) check has no enforced

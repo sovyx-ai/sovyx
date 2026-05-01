@@ -882,15 +882,60 @@ class TestSanityBoundaries:
 
 
 class TestRecordProbe:
-    def test_ring_buffer_caps_at_10(self, tmp_path: Path) -> None:
+    def test_probe_history_persists_across_reload(self, tmp_path: Path) -> None:
+        # T6.19 — "persist history across reboots" sub-requirement.
+        # Cross-boot persistence is INHERENT to the design (history
+        # is serialised + reloaded on every store cycle); this
+        # regression test pins the contract so a future refactor
+        # that accidentally drops the field on read fails LOUDLY.
         store = _make_store(tmp_path)
         store.load()
         _record(store)
-        for _ in range(15):
+        # Record a few distinguishable probes — different RMS values
+        # so we can verify the same entries survive serialization.
+        rms_values = [-25.0, -22.5, -20.0, -18.5]
+        for rms in rms_values:
+            probe = ProbeResult(
+                diagnosis=Diagnosis.HEALTHY,
+                mode=ProbeMode.WARM,
+                combo=_good_combo(),
+                vad_max_prob=0.95,
+                vad_mean_prob=0.42,
+                rms_db=rms,
+                callbacks_fired=50,
+                duration_ms=1500,
+            )
+            store.record_probe("{guid-A}", probe)
+
+        # Re-open the store from disk (cross-boot simulation).
+        store2 = _make_store(tmp_path)
+        store2.load()
+        entry = store2.get("{guid-A}")
+        assert entry is not None
+        # 1 from _record() + 4 from the loop above.
+        assert len(entry.probe_history) == 5
+        # The exact RMS values flow through the serialize/deserialize
+        # round-trip — no field drops.
+        persisted_rms = [h.rms_db for h in entry.probe_history[1:]]  # skip _record entry
+        assert persisted_rms == rms_values
+
+    def test_ring_buffer_caps_at_default(self, tmp_path: Path) -> None:
+        # T6.19 — default raised 10 → 100 in v0.28.0. The cap matches
+        # the active ``combo_probe_history_max`` tuning value rather
+        # than a hardcoded literal so a future bump (or operator
+        # downscale via env override) doesn't silently break the test.
+        from sovyx.voice.health.combo_store import _PROBE_HISTORY_MAX
+
+        store = _make_store(tmp_path)
+        store.load()
+        _record(store)
+        for _ in range(_PROBE_HISTORY_MAX + 5):
             store.record_probe("{guid-A}", _good_probe())
         entry = store.get("{guid-A}")
         assert entry is not None
-        assert len(entry.probe_history) == 10
+        # +1 covers the initial _record() entry; the trim hits exactly
+        # _PROBE_HISTORY_MAX after extra appends roll through.
+        assert len(entry.probe_history) == _PROBE_HISTORY_MAX
 
     def test_record_probe_unknown_guid_is_noop(self, tmp_path: Path) -> None:
         store = _make_store(tmp_path)
@@ -1454,18 +1499,20 @@ class TestConcurrentBootC1:
 
 
 class TestProbeHistoryConfigurable:
-    """Band-aid #20: ``_PROBE_HISTORY_MAX`` is sourced from
-    :class:`VoiceTuningConfig.combo_probe_history_max` so operators
+    """Band-aid #20 + Phase 6 / T6.19: ``_PROBE_HISTORY_MAX`` is sourced
+    from :class:`VoiceTuningConfig.combo_probe_history_max` so operators
     can override via ``SOVYX_TUNING__VOICE__COMBO_PROBE_HISTORY_MAX``
-    without code change. Default 10 preserves prior behaviour."""
+    without code change. Default raised 10 → 100 in v0.28.0 to give
+    operators triaging recurring failures (T6.17 / T6.18) deeper rolling
+    history."""
 
-    def test_default_is_ten(self) -> None:
-        """Regression guard: the factory default for the new tuning
-        field must be 10 — the prior hardcoded constant — so existing
-        deployments observe identical behaviour after the promotion."""
+    def test_default_is_one_hundred(self) -> None:
+        """T6.19 — default raised 10 → 100 to support deeper forensic
+        history per endpoint. Operators wanting pre-v0.28.0 behaviour
+        downscale via ``SOVYX_TUNING__VOICE__COMBO_PROBE_HISTORY_MAX=10``."""
         from sovyx.engine.config import VoiceTuningConfig
 
-        assert VoiceTuningConfig().combo_probe_history_max == 10  # noqa: PLR2004
+        assert VoiceTuningConfig().combo_probe_history_max == 100  # noqa: PLR2004
 
     def test_module_constant_matches_default(self) -> None:
         """The module-level ``_PROBE_HISTORY_MAX`` reads the tuning
@@ -1473,7 +1520,7 @@ class TestProbeHistoryConfigurable:
         a silently-ignored field)."""
         from sovyx.voice.health.combo_store import _PROBE_HISTORY_MAX
 
-        assert _PROBE_HISTORY_MAX == 10  # noqa: PLR2004
+        assert _PROBE_HISTORY_MAX == 100  # noqa: PLR2004
 
     def test_field_rejects_zero(self) -> None:
         """0 history would be degenerate — even the current entry
