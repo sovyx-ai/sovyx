@@ -63,6 +63,31 @@ _EXCLUSIVE_MODE_NOT_AVAILABLE_KEYWORDS = (
     "0x88890017",
     "-2004287465",
 )
+# Phase 6 / T6.4 — WASAPI buffer-size rejection. The format
+# (rate / channels / sample_format) is fine; only the
+# ``frames_per_buffer`` value doesn't match the driver's expected
+# alignment or exceeds the device's max buffer. Cascade should
+# retry with a different ``frames_per_buffer`` for the same combo.
+#
+# AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED = 0x88890019 (-2004287463)
+# AUDCLNT_E_BUFFER_TOO_LARGE        = 0x88890011 (-2004287471)
+# AUDCLNT_E_BUFFER_SIZE_ERROR       = 0x88890018 (-2004287464)
+# Substring families also catch the spelled-out forms in
+# sounddevice messages.
+_INSUFFICIENT_BUFFER_SIZE_KEYWORDS = (
+    "audclnt_e_buffer_size_not_aligned",
+    "audclnt_e_buffer_too_large",
+    "audclnt_e_buffer_size_error",
+    "audclnt_e_buffer_size",
+    "buffer size",
+    "buffer_size",
+    "0x88890019",
+    "-2004287463",
+    "0x88890011",
+    "-2004287471",
+    "0x88890018",
+    "-2004287464",
+)
 _PERMISSION_KEYWORDS = ("permission", "denied", "access", "not authoriz")
 _FORMAT_MISMATCH_KEYWORDS = (
     "invalid sample rate",
@@ -153,10 +178,17 @@ def _classify_open_error(exc: BaseException) -> Diagnosis:
        otherwise catch it; checking the more-specific set first
        routes correctly to the permanent-not-supported diagnosis
        instead of the wait-and-retry one.
-    3. ``DEVICE_BUSY`` — ``audclnt_e_device_in_use`` etc. Wait + retry
+    3. ``INSUFFICIENT_BUFFER_SIZE`` (T6.4) — buffer-size-specific
+       AUDCLNT_E_BUFFER_* errors. The ``"buffer size"`` /
+       ``"buffer_size"`` substrings overlap with the
+       FORMAT_MISMATCH set's broad ``"format"`` token in some
+       compound messages, so the more-specific buffer check runs
+       BEFORE format. Cascade retry with a different
+       ``frames_per_buffer`` value is the right path.
+    4. ``DEVICE_BUSY`` — ``audclnt_e_device_in_use`` etc. Wait + retry
        is meaningful here (another app might release the lock).
-    4. ``FORMAT_MISMATCH`` — invalid sample rate / channels / format.
-    5. ``KERNEL_INVALIDATED`` — checked AFTER format-mismatch so an
+    5. ``FORMAT_MISMATCH`` — invalid sample rate / channels / format.
+    6. ``KERNEL_INVALIDATED`` — checked AFTER format-mismatch so an
        ``invalid sample rate`` message (containing ``"invalid"``)
        doesn't false-positive as kernel invalidation.
 
@@ -170,6 +202,8 @@ def _classify_open_error(exc: BaseException) -> Diagnosis:
         return Diagnosis.PERMISSION_DENIED
     if any(keyword in msg for keyword in _EXCLUSIVE_MODE_NOT_AVAILABLE_KEYWORDS):
         return Diagnosis.EXCLUSIVE_MODE_NOT_AVAILABLE
+    if any(keyword in msg for keyword in _INSUFFICIENT_BUFFER_SIZE_KEYWORDS):
+        return Diagnosis.INSUFFICIENT_BUFFER_SIZE
     if any(keyword in msg for keyword in _DEVICE_BUSY_KEYWORDS):
         return Diagnosis.DEVICE_BUSY
     if any(keyword in msg for keyword in _FORMAT_MISMATCH_KEYWORDS):
@@ -281,6 +315,7 @@ __all__ = [
     "_DEVICE_BUSY_KEYWORDS",
     "_EXCLUSIVE_MODE_NOT_AVAILABLE_KEYWORDS",
     "_FORMAT_MISMATCH_KEYWORDS",
+    "_INSUFFICIENT_BUFFER_SIZE_KEYWORDS",
     "_KERNEL_INVALIDATED_KEYWORDS",
     "_PERMISSION_KEYWORDS",
     "_classify_open_error",

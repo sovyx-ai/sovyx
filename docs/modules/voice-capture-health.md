@@ -74,6 +74,7 @@ APO_DEGRADED          → healthy RMS but VAD probability ≤ 0.05 (Voice Clarit
 DRIVER_ERROR          → PortAudio refused the combo
 DEVICE_BUSY           → exclusive contention with another process (wait + retry meaningful)
 EXCLUSIVE_MODE_NOT_AVAILABLE → endpoint fundamentally lacks exclusive support (T6.3); cascade advances past every exclusive combo for this endpoint
+INSUFFICIENT_BUFFER_SIZE → AUDCLNT_E_BUFFER_SIZE_* — driver rejects requested ``frames_per_buffer``; format itself is fine, retry with different buffer (T6.4)
 PERMISSION_DENIED     → OS blocked microphone access
 KERNEL_INVALIDATED    → kernel-side IAudioClient stuck (USB resource timeout, driver hot-swap, mid-stream PnP churn). No user-mode cure — replug or reboot. §4.4.7 quarantines the endpoint.
 STREAM_OPEN_TIMEOUT   → driver accepted open + start but ZERO callbacks fired in ≥ 5 s (T6.2). Same physical-cure class as KERNEL_INVALIDATED but observed via callback-not-fired surface instead of an open-time error.

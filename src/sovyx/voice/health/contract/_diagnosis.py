@@ -42,6 +42,14 @@ class Diagnosis(StrEnum):
     # waiting + retry is futile (unlike DEVICE_BUSY where another
     # app might release the lock).
     EXCLUSIVE_MODE_NOT_AVAILABLE = "exclusive_mode_not_available"
+    # Phase 6 / T6.4 — WASAPI rejected the requested buffer size
+    # (AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED / AUDCLNT_E_BUFFER_TOO_LARGE /
+    # AUDCLNT_E_BUFFER_SIZE_ERROR). Distinct from FORMAT_MISMATCH:
+    # format (rate / channels / sample_format) is fine, only the
+    # ``frames_per_buffer`` is wrong. Cascade should retry with a
+    # different ``frames_per_buffer`` (typically the device's
+    # ``DefaultDevicePeriod``); same combo retry is futile.
+    INSUFFICIENT_BUFFER_SIZE = "insufficient_buffer_size"
     PERMISSION_DENIED = "permission_denied"
     # Phase 6 / T6.2 — stream opened + started but ZERO callbacks fired
     # within ``probe_stream_open_timeout_threshold_ms`` (default 5 s).

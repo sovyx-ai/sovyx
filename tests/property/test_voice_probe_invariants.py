@@ -191,14 +191,15 @@ class TestClassifyOpenErrorTotality:
     @given(text=st.text(min_size=0, max_size=200))
     @settings(max_examples=300)
     def test_returned_diagnosis_is_in_known_set(self, text: str) -> None:
-        # The classifier returns ONLY one of 6 documented values:
+        # The classifier returns ONLY one of 7 documented values:
         # PERMISSION_DENIED / EXCLUSIVE_MODE_NOT_AVAILABLE (T6.3) /
-        # DEVICE_BUSY / FORMAT_MISMATCH / KERNEL_INVALIDATED /
-        # DRIVER_ERROR. No other diagnosis leaks out. Guards against
-        # future map drift.
+        # INSUFFICIENT_BUFFER_SIZE (T6.4) / DEVICE_BUSY /
+        # FORMAT_MISMATCH / KERNEL_INVALIDATED / DRIVER_ERROR.
+        # No other diagnosis leaks out. Guards against future map drift.
         allowed = {
             Diagnosis.PERMISSION_DENIED,
             Diagnosis.EXCLUSIVE_MODE_NOT_AVAILABLE,
+            Diagnosis.INSUFFICIENT_BUFFER_SIZE,
             Diagnosis.DEVICE_BUSY,
             Diagnosis.FORMAT_MISMATCH,
             Diagnosis.KERNEL_INVALIDATED,
@@ -233,12 +234,14 @@ class TestClassifyOpenErrorTotality:
         # the alphabet restriction (sanity check on the strategy).
         from sovyx.voice.health.probe._cold import (
             _EXCLUSIVE_MODE_NOT_AVAILABLE_KEYWORDS,
+            _INSUFFICIENT_BUFFER_SIZE_KEYWORDS,
         )
 
         msg_lower = text.lower()
         all_keywords = (
             *_PERMISSION_KEYWORDS,
             *_EXCLUSIVE_MODE_NOT_AVAILABLE_KEYWORDS,
+            *_INSUFFICIENT_BUFFER_SIZE_KEYWORDS,
             *_DEVICE_BUSY_KEYWORDS,
             *_FORMAT_MISMATCH_KEYWORDS,
             *_KERNEL_INVALIDATED_KEYWORDS,
@@ -331,6 +334,59 @@ class TestClassifyOpenErrorTotality:
             RuntimeError("AUDCLNT_E_DEVICE_IN_USE"),
         )
         assert result is Diagnosis.DEVICE_BUSY
+
+    # T6.4 — INSUFFICIENT_BUFFER_SIZE classification
+
+    def test_audclnt_buffer_size_not_aligned_routes_to_insufficient_buffer(
+        self,
+    ) -> None:
+        # T6.4 — buffer-size-specific token routes to the new diagnosis,
+        # NOT to FORMAT_MISMATCH (which the bare "format" keyword in
+        # _FORMAT_MISMATCH_KEYWORDS could otherwise capture if the
+        # message contained "format").
+        result = _classify_open_error(
+            RuntimeError("AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED"),
+        )
+        assert result is Diagnosis.INSUFFICIENT_BUFFER_SIZE
+
+    def test_audclnt_buffer_too_large_routes_correctly(self) -> None:
+        result = _classify_open_error(
+            RuntimeError("Stream open failed: AUDCLNT_E_BUFFER_TOO_LARGE"),
+        )
+        assert result is Diagnosis.INSUFFICIENT_BUFFER_SIZE
+
+    def test_buffer_size_hex_routes_correctly(self) -> None:
+        # 0x88890019 (signed-decimal -2004287463) — AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED.
+        result = _classify_open_error(RuntimeError("PortAudioError 0x88890019"))
+        assert result is Diagnosis.INSUFFICIENT_BUFFER_SIZE
+
+    def test_buffer_size_signed_decimal_routes_correctly(self) -> None:
+        result = _classify_open_error(
+            RuntimeError("paErrorCode -2004287463 details unavailable"),
+        )
+        assert result is Diagnosis.INSUFFICIENT_BUFFER_SIZE
+
+    def test_buffer_size_takes_priority_over_format_mismatch(self) -> None:
+        # T6.4 priority pin — when "buffer size" appears WITH a
+        # FORMAT_MISMATCH keyword, the buffer-size check fires first.
+        # Operators see the more-specific diagnosis instead of the
+        # broader format-error catch-all.
+        result = _classify_open_error(
+            RuntimeError(
+                "Invalid format: AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED in 48000 Hz",
+            ),
+        )
+        assert result is Diagnosis.INSUFFICIENT_BUFFER_SIZE
+
+    def test_format_mismatch_without_buffer_token_still_routes_correctly(
+        self,
+    ) -> None:
+        # Regression guard — a FORMAT_MISMATCH error without any
+        # buffer-size token continues to route to FORMAT_MISMATCH.
+        result = _classify_open_error(
+            RuntimeError("invalid sample rate 192000"),
+        )
+        assert result is Diagnosis.FORMAT_MISMATCH
 
     @pytest.mark.parametrize("keyword", _KERNEL_INVALIDATED_KEYWORDS)
     def test_kernel_invalidated_routes_when_format_keywords_absent(

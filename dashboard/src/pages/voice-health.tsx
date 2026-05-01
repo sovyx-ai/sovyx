@@ -101,6 +101,7 @@ function diagnosisTone(
     case "format_mismatch":
     case "apo_degraded":
     case "exclusive_mode_not_available":
+    case "insufficient_buffer_size":
       return "warn";
     case "muted":
     case "no_signal":

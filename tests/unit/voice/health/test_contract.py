@@ -95,6 +95,10 @@ class TestDiagnosisEnum:
             # support (distinct from device_busy; cascade should
             # immediately advance past exclusive combos).
             "exclusive_mode_not_available",
+            # Phase 6 / T6.4 — WASAPI buffer-size rejection
+            # (AUDCLNT_E_BUFFER_SIZE_*); format is fine, only
+            # frames_per_buffer is wrong.
+            "insufficient_buffer_size",
             "unknown",
         }
         assert {d.value for d in Diagnosis} == expected

@@ -1011,6 +1011,7 @@ export type VoiceHealthDiagnosis =
   | "driver_error"
   | "device_busy"
   | "exclusive_mode_not_available"
+  | "insufficient_buffer_size"
   | "permission_denied"
   | "kernel_invalidated"
   | "stream_open_timeout"

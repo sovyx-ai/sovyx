@@ -53,6 +53,15 @@ _REMEDIATION_BY_DIAGNOSIS: dict[str, str] = {
         "update the audio driver to a version that exposes exclusive "
         "endpoints."
     ),
+    "insufficient_buffer_size": (
+        "The audio driver rejected the requested buffer size (the "
+        "audio format itself was fine — only the buffer alignment / "
+        "size violates the driver's constraints). Sovyx will retry "
+        "with a different buffer size automatically. If the cascade "
+        "still fails after multiple attempts, the driver may have an "
+        "unusually strict buffer-period alignment; update the driver "
+        "or report the model + firmware to your vendor."
+    ),
     "permission_denied": (
         "The operating system blocked microphone access for sovyx. "
         "Grant permission in Settings → Privacy → Microphone (Windows / "
