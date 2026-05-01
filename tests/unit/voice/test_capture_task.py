@@ -1249,6 +1249,147 @@ class TestExclusiveRestart:
 
 
 # ─────────────────────────────────────────────────────────────────────
+# Phase 6 / T6.24 — untested verdict branches in restart paths
+# ─────────────────────────────────────────────────────────────────────
+
+
+class TestLinuxRestartVerdictGuards:
+    """Pin the early-return guard branches in the Linux-specific restart
+    methods that the existing capture-task suite never exercised
+    directly. Coverage lived only at the bypass-strategy mapping layer
+    (``test_linux_pipewire_direct_bypass.py``); the production-site
+    branches in ``_restart_mixin.py`` had no direct tests.
+
+    Branches pinned:
+
+    * ``request_alsa_hw_direct_restart``: ``NOT_RUNNING`` (called
+      before ``start()``), ``NOT_LINUX`` (running on win32 / darwin),
+      ``NO_ALSA_SIBLING`` (Linux but no ALSA-host-API sibling
+      enumerable for the current endpoint).
+    * ``request_session_manager_restart``: ``NOT_RUNNING``,
+      ``NOT_LINUX``.
+
+    Branches not covered here (already covered by other tests):
+
+    * ``ALSA_HW_ENGAGED`` / ``DOWNGRADED_TO_SESSION_MANAGER`` —
+      ``test_request_alsa_hw_direct_restart_emits_apo_degraded_frame_tier_2``.
+    * ``SESSION_MANAGER_ENGAGED`` / ``DOWNGRADED_TO_ALSA_HW`` —
+      ``test_request_session_manager_restart_*`` (3 variants).
+    * ``OPEN_FAILED_NO_STREAM`` — would require deep stream-opener
+      mocking; out of T6.24 spec scope per ``feedback_no_speculation``.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_alsa_hw_direct_restart_returns_not_running_before_start(
+        self,
+    ) -> None:
+        # Calling before ``start()`` is a documented no-op (idempotent
+        # contract). Mirrors the exclusive/shared NOT_RUNNING guards.
+        task = AudioCaptureTask(MagicMock())
+        result = await task.request_alsa_hw_direct_restart()
+        assert result.verdict is AlsaHwDirectRestartVerdict.NOT_RUNNING
+        assert result.engaged is False
+        assert result.detail == "capture task is not running"
+        assert task.is_running is False
+
+    @pytest.mark.asyncio()
+    async def test_alsa_hw_direct_restart_returns_not_linux_on_win32(
+        self,
+    ) -> None:
+        # Idempotent on non-Linux hosts — preserve the running stream
+        # rather than thrashing the substrate. Detail field carries the
+        # platform string so operators can verify the guard fired.
+        sd = _fake_sd()
+        sd.InputStream = lambda **_kwargs: MagicMock()  # type: ignore[attr-defined]
+        entry = _input_entry(index=11, name="usbmic", host_api="Windows WASAPI")
+        task = AudioCaptureTask(
+            MagicMock(),
+            input_device=11,
+            host_api_name="Windows WASAPI",
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [entry],
+        )
+        try:
+            with patch("sovyx.voice.capture._restart_mixin.sys.platform", "win32"):
+                await task.start()
+                result = await task.request_alsa_hw_direct_restart()
+            assert result.verdict is AlsaHwDirectRestartVerdict.NOT_LINUX
+            assert result.engaged is False
+            assert "win32" in result.detail
+        finally:
+            await task.stop()
+
+    @pytest.mark.asyncio()
+    async def test_alsa_hw_direct_restart_returns_no_alsa_sibling(self) -> None:
+        # On Linux but the device enumeration has no ALSA-host-API
+        # entry for the current endpoint — only PulseAudio. The guard
+        # must short-circuit with NO_ALSA_SIBLING so the bypass
+        # coordinator routes to the next strategy instead of opening
+        # a half-baked stream.
+        sd = _fake_sd()
+        sd.InputStream = lambda **_kwargs: MagicMock()  # type: ignore[attr-defined]
+        # Only PulseAudio entry — no ALSA sibling for canonical_name="usbmic".
+        pulse_entry = _input_entry(index=11, name="usbmic", host_api="PulseAudio")
+        task = AudioCaptureTask(
+            MagicMock(),
+            input_device=11,
+            host_api_name="PulseAudio",
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [pulse_entry],
+        )
+        try:
+            with patch("sovyx.voice.capture._restart_mixin.sys.platform", "linux"):
+                await task.start()
+                result = await task.request_alsa_hw_direct_restart()
+            assert result.verdict is AlsaHwDirectRestartVerdict.NO_ALSA_SIBLING
+            assert result.engaged is False
+            assert "no ALSA-host-API sibling" in result.detail
+            # Stream stays running (bypass declined cleanly).
+            assert task.is_running is True
+        finally:
+            await task.stop()
+
+    @pytest.mark.asyncio()
+    async def test_session_manager_restart_returns_not_running_before_start(
+        self,
+    ) -> None:
+        task = AudioCaptureTask(MagicMock())
+        result = await task.request_session_manager_restart()
+        assert result.verdict is SessionManagerRestartVerdict.NOT_RUNNING
+        assert result.engaged is False
+        assert result.detail == "capture task is not running"
+        assert task.is_running is False
+
+    @pytest.mark.asyncio()
+    async def test_session_manager_restart_returns_not_linux_on_win32(self) -> None:
+        sd = _fake_sd()
+        sd.InputStream = lambda **_kwargs: MagicMock()  # type: ignore[attr-defined]
+        entry = _input_entry(index=11, name="usbmic", host_api="Windows WASAPI")
+        task = AudioCaptureTask(
+            MagicMock(),
+            input_device=11,
+            host_api_name="Windows WASAPI",
+            validate_on_start=False,
+            tuning=_tuning_no_wasapi_extra(),
+            sd_module=sd,
+            enumerate_fn=lambda: [entry],
+        )
+        try:
+            with patch("sovyx.voice.capture._restart_mixin.sys.platform", "win32"):
+                await task.start()
+                result = await task.request_session_manager_restart()
+            assert result.verdict is SessionManagerRestartVerdict.NOT_LINUX
+            assert result.engaged is False
+            assert "win32" in result.detail
+        finally:
+            await task.stop()
+
+
+# ─────────────────────────────────────────────────────────────────────
 # v1.3 §4.2 L4-B — mark-based tap contract
 # ─────────────────────────────────────────────────────────────────────
 
